@@ -30,10 +30,18 @@ pub fn render_status(f: &mut Frame, area: Rect, state: &AppState) {
     };
 
     let elapsed = format_duration(state.session_started.elapsed().as_secs_f64());
+    let cost_str = if state.cumulative_cost > 0.001 {
+        format!(" ${:.4}", state.cumulative_cost)
+    } else if state.turn_cost > 0.0 {
+        format!(" ${:.4}", state.turn_cost)
+    } else {
+        String::new()
+    };
     let right_info = format!(
-        " ↑{} ↓{} │ {} ",
+        " ↑{} ↓{} {} │ {} ",
         format_token_count(state.tokens_sent),
         format_token_count(state.tokens_received),
+        cost_str,
         elapsed,
     );
 

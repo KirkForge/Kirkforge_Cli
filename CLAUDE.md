@@ -22,13 +22,13 @@ Native Ollama CLI coding agent in Rust. Static binary, TUI, potato hardware (8GB
 
 ## Project status
 
-All 8 milestones complete. 29 source files, ~3,700 lines of Rust. 18 unit tests, 8 integration tests (require Ollama, marked `#[ignore]`).
+All 10 milestones complete. 33 source files, ~5,100 lines of Rust. 69 unit tests, 7 integration tests (require Ollama, marked `#[ignore]`).
 
 ## Build
 
 - **0 errors, 0 warnings** (clippy `-D warnings`)
-- `cargo test` — 18 unit tests, all pass
-- `cargo test --test integration_test -- --ignored` — 8 integration tests against live Ollama
+- `cargo test` — 69 unit tests, all pass
+- `cargo test --test integration_test -- --ignored` — 7 integration tests against live Ollama
 - Release: 4.6 MB (gnu), 4.8 MB (musl static), LTO + panic=abort + strip
 
 ## Milestones
@@ -43,13 +43,18 @@ All 8 milestones complete. 29 source files, ~3,700 lines of Rust. 18 unit tests,
 | 6 | Session persistence (NDJSON logs) | ✅ |
 | 7 | Cross-compile CI (x86_64/aarch64/armv7 musl) | ✅ |
 | 8 | VFS prompt compression (minifier) | ✅ Wired into read_file + prompt builder |
+| 9 | Event bus + verifier slots | ✅ 9 event kinds, 4 verifier slots, correction loop |
+| 10 | Deny list + path safety | ✅ 6-layer path guard, read-before-edit, binary detection |
 
 ## Relevant paths
 
-- `docs/adr/` — architecture decision records
-- `tests/integration_test.rs` — 8 live Ollama integration tests
+- `docs/adr/` — architecture decision records (7 documents)
+- `tests/integration_test.rs` — 7 live Ollama integration tests
 - `~/.local/share/kirkforge/` — runtime data directory
 - `~/.ollama/` — Ollama server config (model storage, server settings)
+- `src/session/access.rs` — DenyList, PathGuard, ReadGate (Phase 2)
+- `src/session/event_bus.rs` — EventBus, EventHandler trait, 9 event kinds (Phase 3)
+- `src/session/verifier/` — VerifierSlots, CorrectionLoop, lint/security/git verifiers (Phase 4)
 
 ## graphify
 

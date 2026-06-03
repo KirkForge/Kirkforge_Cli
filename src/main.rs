@@ -1,3 +1,8 @@
+// Many modules expose stubs and helper APIs not yet wired into the main
+// execution path — suppress dead-code warnings so we keep the public API
+// surface clean for future callers.
+#![allow(dead_code)]
+
 mod adapters;
 mod session;
 mod shared;
@@ -66,6 +71,9 @@ async fn main() -> anyhow::Result<()> {
     if cli.auto_approve {
         config.auto_approve = true;
     }
+
+    // Persist config so CLI overrides (model, host, auto-approve) survive
+    let _ = session::config::save_config(&config);
 
     let ollama_host = &config.ollama_host;
 

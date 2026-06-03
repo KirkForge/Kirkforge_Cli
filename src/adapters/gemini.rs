@@ -1,13 +1,13 @@
-/// Gemini 3.0 Flash 1M adapter.
-///
-/// Through Ollama, Gemini uses the OpenAI-compatible `/v1/chat/completions` path.
-/// It doesn't have a thinking field or native tool calls — Ollama translates
-/// function calling into Gemini's tool format.
-///
-/// Gemini streams token-by-token with SSE (not NDJSON like `/api/chat`),
-/// and chunk boundaries differ from the other models. We use Ollama's
-/// `/api/chat` endpoint which normalizes the format, but Gemini still has
-/// distinct behavior: no thinking field, different tool call batching.
+//! Gemini 3.0 Flash 1M adapter.
+//!
+//! Through Ollama, Gemini uses the OpenAI-compatible `/v1/chat/completions` path.
+//! It doesn't have a thinking field or native tool calls — Ollama translates
+//! function calling into Gemini's tool format.
+//!
+//! Gemini streams token-by-token with SSE (not NDJSON like `/api/chat`),
+//! and chunk boundaries differ from the other models. We use Ollama's
+//! `/api/chat` endpoint which normalizes the format, but Gemini still has
+//! distinct behavior: no thinking field, different tool call batching.
 
 use crate::shared::{FinishReason, Message, ModelInfo, StreamEvent, ToolCallStyle, ToolInvocation, TokenUsage};
 use tokio_stream::StreamExt;

@@ -1,11 +1,11 @@
-/// OpenAI-compatible fallback adapter.
-///
-/// Uses `/v1/chat/completions` (SSE streaming) instead of `/api/chat` (NDJSON).
-/// Activated for any model that doesn't match GLM/DeepSeek/Gemini patterns,
-/// or explicitly via `--model-type openai`.
-///
-/// Parses SSE `data: {...}` lines. Supports tool calls in the
-/// OpenAI function-calling format.
+//! OpenAI-compatible fallback adapter.
+//!
+//! Uses `/v1/chat/completions` (SSE streaming) instead of `/api/chat` (NDJSON).
+//! Activated for any model that doesn't match GLM/DeepSeek/Gemini patterns,
+//! or explicitly via `--model-type openai`.
+//!
+//! Parses SSE `data: {...}` lines. Supports tool calls in the
+//! OpenAI function-calling format.
 
 use crate::shared::{FinishReason, Message, ModelInfo, StreamEvent, ToolCallStyle, ToolInvocation, TokenUsage};
 use tokio_stream::StreamExt;

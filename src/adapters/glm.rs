@@ -1,12 +1,12 @@
-/// GLM-5.1:Cloud adapter.
-///
-/// GLM emits a `thinking` field alongside `content` in `/api/chat` responses.
-/// This adapter splits them into separate StreamEvent variants so the TUI
-/// can show thinking in a collapsible panel and the session never feeds it
-/// back as input.
-///
-/// GLM also supports tool use via the standard Ollama tools field,
-/// but tool calls arrive as a complete block in the final chunk (`done: true`).
+//! GLM-5.1:Cloud adapter.
+//!
+//! GLM emits a `thinking` field alongside `content` in `/api/chat` responses.
+//! This adapter splits them into separate StreamEvent variants so the TUI
+//! can show thinking in a collapsible panel and the session never feeds it
+//! back as input.
+//!
+//! GLM also supports tool use via the standard Ollama tools field,
+//! but tool calls arrive as a complete block in the final chunk (`done: true`).
 
 use crate::shared::{FinishReason, Message, ModelInfo, StreamEvent, ToolCallStyle, ToolInvocation, TokenUsage};
 use tokio_stream::StreamExt;

@@ -120,7 +120,7 @@ fn find_matches(content: &str, pattern: &str, _file_path: &std::path::Path, cont
     for (i, line) in lines.iter().enumerate() {
         if line.contains(pattern) {
             // Capture context before
-            let before_start = if i >= context { i - context } else { 0 };
+            let before_start = i.saturating_sub(context);
             let context_before: Vec<String> = lines[before_start..i]
                 .iter()
                 .enumerate()

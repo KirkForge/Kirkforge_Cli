@@ -1,11 +1,11 @@
-/// DeepSeek-v4-Pro adapter.
-///
-/// DeepSeek sends tool calls as a complete block rather than streaming tokens.
-/// Through Ollama's `/api/chat`, tool calls arrive in the final chunk (`done: true`)
-/// as a `tool_calls` array on the message object.
-///
-/// DeepSeek also supports "chain-of-thought" which arrives as a `reasoning_content`
-/// field — analogous to GLM's `thinking`.
+//! DeepSeek-v4-Pro adapter.
+//!
+//! DeepSeek sends tool calls as a complete block rather than streaming tokens.
+//! Through Ollama's `/api/chat`, tool calls arrive in the final chunk (`done: true`)
+//! as a `tool_calls` array on the message object.
+//!
+//! DeepSeek also supports "chain-of-thought" which arrives as a `reasoning_content`
+//! field — analogous to GLM's `thinking`.
 
 use crate::shared::{FinishReason, Message, ModelInfo, StreamEvent, ToolCallStyle, ToolInvocation, TokenUsage};
 use tokio_stream::StreamExt;

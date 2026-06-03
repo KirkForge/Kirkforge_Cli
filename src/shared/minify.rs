@@ -71,52 +71,57 @@ fn minify_rust(source: &str) -> String {
 fn minify_python(source: &str) -> String {
     let mut out = String::with_capacity(source.len());
     let mut prev_was_newline = false;
-    let mut in_triple = false;
-    let mut triple_char = '"';
-    let mut triple_count = 0;
     let mut chars = source.chars().peekable();
-    let mut in_docstring = false;
 
     while let Some(ch) = chars.next() {
-        // Track triple-quoted strings
-        if !in_triple && (ch == '"' || ch == '\'') {
-            triple_count += 1;
-            if triple_count == 3 {
-                in_triple = true;
-                triple_char = ch;
-                // If this is at start of line / after indent → docstring
-                in_docstring = out.ends_with('\n') || out.is_empty() || out.trim().is_empty();
-            }
-        } else if !in_triple {
-            triple_count = 0;
+        // Line comment
+        if ch == '#' {
+            while chars.next().is_some() && chars.peek() != Some(&'\n') {}
+            continue;
         }
 
-        if in_triple {
-            if ch == triple_char {
-                triple_count += 1;
-                if triple_count == 3 {
-                    triple_count = 0;
-                    in_triple = false;
-                    if in_docstring {
-                        // skip the closing quotes
-                        continue;
+        // Triple-quoted string detection — peek ahead 2 chars
+        if (ch == '"' || ch == '\'')
+            && chars.peek() == Some(&ch)
+        {
+            let next2 = chars.clone().nth(1); // peek at second next
+            if next2 == Some(ch) {
+                // Found """ or '''
+                chars.next(); // consume second char
+                chars.next(); // consume third char
+
+                // Docstring = starts at the beginning of a line (no non-whitespace before)
+                let current_line = out.rsplit('\n').next().unwrap_or("");
+                let is_docstring = current_line.trim().is_empty();
+
+                if is_docstring {
+                    // Skip everything until closing triple
+                    let mut closing = false;
+                    let mut count = 0;
+                    for c in chars.by_ref() {
+                        if c == ch {
+                            count += 1;
+                            if count == 3 {
+                                closing = true;
+                                break;
+                            }
+                        } else {
+                            count = 0;
+                        }
                     }
-                    // Re-emit the closing triple
+                    if closing {
+                        continue; // skip the whole docstring
+                    }
+                    // Unterminated docstring — emit literally
                     out.push(ch);
-                } else {
-                    continue; // skip inside triple
-                }
-            } else {
-                triple_count = 0;
-                if !in_docstring {
                     out.push(ch);
+                    out.push(ch);
+                    continue;
                 }
-                continue;
-            }
-        } else {
-            // Line comment
-            if ch == '#' {
-                while chars.next().is_some() && chars.peek() != Some(&'\n') {}
+                // Regular triple-quoted string — emit literally
+                out.push(ch);
+                out.push(ch);
+                out.push(ch);
                 continue;
             }
         }
@@ -131,9 +136,7 @@ fn minify_python(source: &str) -> String {
             prev_was_newline = false;
         }
 
-        if !in_docstring {
-            out.push(ch);
-        }
+        out.push(ch);
     }
 
     out

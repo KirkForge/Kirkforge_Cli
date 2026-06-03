@@ -1,7 +1,7 @@
 use crate::shared::{ToolDef, ToolOutcome};
 use crate::tools::Tool;
 use std::time::Duration;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub struct Bash;
 
@@ -90,10 +90,10 @@ struct ShellOutput {
     stderr: String,
 }
 
-async fn run_shell(cmd: &str, workdir: &PathBuf) -> std::io::Result<ShellOutput> {
+async fn run_shell(cmd: &str, workdir: &Path) -> std::io::Result<ShellOutput> {
     // Spawn on a blocking thread to avoid blocking the async runtime
     let cmd = cmd.to_string();
-    let workdir = workdir.clone();
+    let workdir = workdir.to_path_buf();
 
     tokio::task::spawn_blocking(move || {
         let output = std::process::Command::new("/bin/sh")

@@ -2,6 +2,8 @@ pub mod read_file;
 pub mod write_file;
 pub mod edit_file;
 pub mod bash;
+pub mod bash_status;
+pub mod bash_cancel;
 pub mod grep;
 pub mod glob;
 
@@ -24,6 +26,8 @@ pub fn all_tools() -> Vec<Arc<dyn Tool>> {
         Arc::new(write_file::WriteFile),
         Arc::new(edit_file::EditFile),
         Arc::new(bash::Bash),
+        Arc::new(bash_status::BashStatus),
+        Arc::new(bash_cancel::BashCancel),
         Arc::new(grep::Grep),
         Arc::new(glob::Glob),
     ]

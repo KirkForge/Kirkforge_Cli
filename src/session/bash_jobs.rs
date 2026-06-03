@@ -6,6 +6,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::OnceLock;
 use tokio::sync::Mutex;
 
 /// Status of a background job.
@@ -41,6 +42,16 @@ impl BashJob {
             finished_at: None,
         }
     }
+}
+
+/// Global singleton BashJobRegistry, accessible from tools and TUI.
+static GLOBAL_REGISTRY: OnceLock<BashJobRegistry> = OnceLock::new();
+
+/// Get the global bash job registry, initializing on first access.
+pub fn global_registry() -> BashJobRegistry {
+    GLOBAL_REGISTRY
+        .get_or_init(BashJobRegistry::new)
+        .clone()
 }
 
 /// Registry of background bash jobs.

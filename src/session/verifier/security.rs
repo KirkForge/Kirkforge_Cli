@@ -1,7 +1,7 @@
-use crate::session::event_bus::{BusEvent, FileWriteEvent};
-/// Security verifier — scans file writes for dangerous patterns.
+use crate::session::event_bus::{BusEvent, EditEvent, FileWriteEvent};
+/// Security verifier — scans file writes and edits for dangerous patterns.
 ///
-/// Checks written files for:
+/// Checks written/edited files for:
 /// - Hardcoded API keys / secrets (substring matching)
 /// - Dangerous shell commands in scripts
 /// - Path traversal vulnerabilities
@@ -33,13 +33,24 @@ const DANGEROUS_SHELL_PATTERNS: &[&str] = &[
 ];
 
 /// Run the security verifier against an event.
+/// Handles FileWrite (full content scan) and Edit (post-edit content scan).
 pub async fn verify_security(event: &BusEvent) -> Verdict {
     let (path, content_length) = match event {
         BusEvent::FileWrite(FileWriteEvent {
             path,
             content_length,
         }) => (path.clone(), *content_length),
-        _ => return Verdict::Skipped("not a file write event".into()),
+        BusEvent::Edit(EditEvent { path, .. }) => {
+            // For edits, re-read the file after the edit to check for secrets/shell
+            let meta = match std::fs::metadata(path) {
+                Ok(m) => m,
+                Err(_) => {
+                    return Verdict::Skipped(format!("cannot stat edited file: {}", path.display()))
+                }
+            };
+            (path.clone(), meta.len() as usize)
+        }
+        _ => return Verdict::Skipped("not a file write or edit event".into()),
     };
 
     // Only scan if content is reasonable (under 1MB)
@@ -94,13 +105,48 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn test_skips_non_file_write_events() {
-        let event = BusEvent::Edit(crate::session::event_bus::EditEvent {
-            path: std::path::PathBuf::from("x.rs"),
-            diff: "".into(),
+    async fn test_skips_unrelated_events() {
+        // Only FileWrite and Edit are scanned; BashExec, FileRead, etc. should skip
+        let event = BusEvent::BashExec(crate::session::event_bus::BashExecEvent {
+            command: "echo hi".into(),
+            exit_code: 0,
+            stdout_len: 0,
+            stderr_len: 0,
         });
         let v = verify_security(&event).await;
         assert!(matches!(v, Verdict::Skipped(_)));
+    }
+
+    #[tokio::test]
+    async fn test_scans_edit_event() {
+        let dir = std::env::temp_dir();
+        let path = dir.join("kirkforge_sec_edit_check.txt");
+        std::fs::write(&path, "let x = 1;").unwrap();
+
+        let event = BusEvent::Edit(EditEvent {
+            path: path.clone(),
+            diff: "".into(),
+        });
+        let v = verify_security(&event).await;
+        // Clean file written and then edited should still pass
+        assert!(matches!(v, Verdict::Clean));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn test_edit_event_detects_key() {
+        let dir = std::env::temp_dir();
+        let path = dir.join("kirkforge_sec_edit_key.txt");
+        std::fs::write(&path, "api_key = \"sk-abc123def456\"").unwrap();
+
+        let event = BusEvent::Edit(EditEvent {
+            path: path.clone(),
+            diff: "".into(),
+        });
+        let v = verify_security(&event).await;
+        // Even though it's an Edit event, the file content should be scanned
+        assert!(matches!(v, Verdict::Unfixable(_)));
+        let _ = std::fs::remove_file(&path);
     }
 
     #[tokio::test]

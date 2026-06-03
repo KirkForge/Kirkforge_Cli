@@ -81,6 +81,11 @@ fn truncate_arg_preview(s: &str, max_width: usize) -> String {
     if s.len() <= max_width {
         s.to_string()
     } else {
-        format!("{}...", &s[..max_width.saturating_sub(3)])
+        let end = max_width.saturating_sub(3);
+        let mut boundary = end;
+        while !s.is_char_boundary(boundary) {
+            boundary -= 1;
+        }
+        format!("{}...", &s[..boundary])
     }
 }

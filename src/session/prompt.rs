@@ -175,9 +175,9 @@ impl PromptBuilder {
                 continue; // too short to bother
             }
 
-            // Minify the content
+            // Minify the content (safe variant — preserves test blocks the model has seen)
             let path = PathBuf::from(format!("message-{}.txt", i));
-            let minified = crate::shared::minify::minify_source(&path, &msg.content);
+            let minified = crate::shared::minify::minify_source_safe(&path, &msg.content);
             if minified.len() < msg.content.len() {
                 let savings = msg.content.len() - minified.len();
                 if savings > 20 {

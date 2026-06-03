@@ -22,7 +22,21 @@ const CACHE_CAPACITY: usize = 200;
 ///
 /// Results are cached in the VFS cache (keyed by path + mtime).
 /// Returns the original content unchanged for unknown languages.
+///
+/// When `preserve_tests` is true, test-only blocks are preserved
+/// (e.g. `#[cfg(test)]` in Rust). Use this for minifying conversation
+/// history where the model has already seen the test code.
 pub fn minify_source(path: &Path, content: &str) -> String {
+    minify_source_impl(path, content, false)
+}
+
+/// Like `minify_source` but preserves test blocks — safe for
+/// conversation history where the model has seen the content.
+pub fn minify_source_safe(path: &Path, content: &str) -> String {
+    minify_source_impl(path, content, true)
+}
+
+fn minify_source_impl(path: &Path, content: &str, preserve_tests: bool) -> String {
     // Check cache first (only for files that actually exist on disk)
     let mtime = match std::fs::metadata(path)
         .ok()
@@ -34,7 +48,7 @@ pub fn minify_source(path: &Path, content: &str) -> String {
         None => {
             // File doesn't exist on disk — skip caching, just minify directly
             let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-            return minify_content_by_ext(content, ext);
+            return minify_content_by_ext(content, ext, preserve_tests);
         }
     };
 
@@ -48,10 +62,10 @@ pub fn minify_source(path: &Path, content: &str) -> String {
 
     // Minify
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-    let result = minify_content_by_ext(content, ext);
+    let result = minify_content_by_ext(content, ext, preserve_tests);
 
-    // Store in cache
-    {
+    // Store in cache (only for non-preserve mode — safe variants skip cache)
+    if !preserve_tests {
         let mut cache = VFS_CACHE.lock().unwrap();
         cache.insert((path.to_path_buf(), mtime), result.clone());
         if cache.len() > CACHE_CAPACITY {
@@ -67,9 +81,9 @@ pub fn minify_source(path: &Path, content: &str) -> String {
 }
 
 /// Minify content based on file extension (no disk caching).
-fn minify_content_by_ext(content: &str, ext: &str) -> String {
+fn minify_content_by_ext(content: &str, ext: &str, preserve_tests: bool) -> String {
     match ext {
-        "rs" => minify_rust(content),
+        "rs" => minify_rust_inner(content, preserve_tests),
         "py" => minify_python(content),
         "js" | "jsx" | "ts" | "tsx" => minify_js_like(content),
         "go" => minify_go(content),
@@ -307,6 +321,10 @@ fn collapse_blank_lines(source: &str) -> String {
 // ── Rust ──────────────────────────────────────────────────────────
 
 fn minify_rust(source: &str) -> String {
+    minify_rust_inner(source, false)
+}
+
+fn minify_rust_inner(source: &str, preserve_tests: bool) -> String {
     let mut out = String::with_capacity(source.len());
     let mut chars = source.chars().peekable();
     let mut in_block_comment = false;
@@ -371,12 +389,10 @@ fn minify_rust(source: &str) -> String {
         out.push(ch);
     }
 
-    // Apply test-block stripping as a second pass
-    let s = strip_test_blocks(&out);
+    // Apply test-block stripping as a second pass (unless preserving tests)
+    let s = if preserve_tests { out } else { strip_test_blocks(&out) };
     collapse_blank_lines(&s)
 }
-
-// ── Python ────────────────────────────────────────────────────────
 
 fn minify_python(source: &str) -> String {
     let mut out = String::with_capacity(source.len());

@@ -70,7 +70,8 @@ impl BashJobRegistry {
     }
 
     /// Spawn a bash command in the background and return a job ID.
-    pub async fn spawn(&self, command: &str) -> anyhow::Result<u64> {
+    /// Optionally accepts a working directory and timeout (seconds, 0 = no timeout).
+    pub async fn spawn(&self, command: &str, workdir: Option<&str>, timeout_secs: Option<u64>) -> anyhow::Result<u64> {
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
 
         let job = BashJob::new(id, command.to_string());
@@ -80,23 +81,39 @@ impl BashJobRegistry {
 
         let registry = self.clone();
         let cmd = command.to_string();
+        let workdir = workdir.map(|s| s.to_string());
         tokio::spawn(async move {
-            let output = tokio::process::Command::new("sh")
-                .args(["-c", &cmd])
-                .output()
-                .await;
+            let mut proc = tokio::process::Command::new("sh");
+            proc.args(["-c", &cmd]);
+            if let Some(ref wd) = workdir {
+                proc.current_dir(wd);
+            }
 
-            let (status, stdout, stderr) = match output {
-                Ok(o) => {
-                    let exit_code = o.status.code().unwrap_or(-1);
-                    let stdout = String::from_utf8_lossy(&o.stdout).to_string();
-                    let stderr = String::from_utf8_lossy(&o.stderr).to_string();
-                    (JobStatus::Completed(exit_code), stdout, stderr)
-                }
-                Err(e) => {
-                    (JobStatus::Failed(e.to_string()), String::new(), String::new())
-                }
+            let output = if timeout_secs.is_some_and(|t| t > 0) {
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(timeout_secs.unwrap()),
+                    proc.output(),
+                ).await.map(|r| r.unwrap_or_else(|e| std::process::Output {
+                    status: std::process::ExitStatus::default(),
+                    stdout: Vec::new(),
+                    stderr: format!("Command failed: {}", e).into_bytes(),
+                })).unwrap_or_else(|_| std::process::Output {
+                    status: std::process::ExitStatus::default(),
+                    stdout: Vec::new(),
+                    stderr: b"Command timed out".to_vec(),
+                })
+            } else {
+                proc.output().await.unwrap_or_else(|e| std::process::Output {
+                    status: std::process::ExitStatus::default(),
+                    stdout: Vec::new(),
+                    stderr: format!("Command failed: {}", e).into_bytes(),
+                })
             };
+
+            let exit_code = output.status.code().unwrap_or(-1);
+            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            let status = JobStatus::Completed(exit_code);
 
             let mut jobs = registry.jobs.lock().await;
             if let Some(job) = jobs.get_mut(&id) {
@@ -168,7 +185,7 @@ mod tests {
     #[tokio::test]
     async fn test_spawn_and_complete() {
         let reg = BashJobRegistry::new();
-        let id = reg.spawn("echo hello").await.unwrap();
+        let id = reg.spawn("echo hello", None, None).await.unwrap();
         assert!(id > 0);
 
         // Wait for completion
@@ -183,7 +200,7 @@ mod tests {
     #[tokio::test]
     async fn test_spawn_and_check_running() {
         let reg = BashJobRegistry::new();
-        let id = reg.spawn("sleep 0.1 && echo done").await.unwrap();
+        let id = reg.spawn("sleep 0.1 && echo done", None, None).await.unwrap();
 
         // Immediately check — should be running
         let job = reg.get(id).await.unwrap();
@@ -194,8 +211,8 @@ mod tests {
     #[tokio::test]
     async fn test_job_list_and_count() {
         let reg = BashJobRegistry::new();
-        let _ = reg.spawn("echo a").await.unwrap();
-        let _ = reg.spawn("echo b").await.unwrap();
+        let _ = reg.spawn("echo a", None, None).await.unwrap();
+        let _ = reg.spawn("echo b", None, None).await.unwrap();
 
         tokio::time::sleep(std::time::Duration::from_millis(300)).await;
 
@@ -207,7 +224,7 @@ mod tests {
     #[tokio::test]
     async fn test_cancel_running_job() {
         let reg = BashJobRegistry::new();
-        let id = reg.spawn("sleep 5").await.unwrap();
+        let id = reg.spawn("sleep 5", None, None).await.unwrap();
 
         // Cancel while running
         assert!(reg.cancel(id).await);
@@ -219,7 +236,7 @@ mod tests {
     #[tokio::test]
     async fn test_remove_job() {
         let reg = BashJobRegistry::new();
-        let id = reg.spawn("echo test").await.unwrap();
+        let id = reg.spawn("echo test", None, None).await.unwrap();
         assert!(reg.remove(id).await);
         assert!(reg.get(id).await.is_none());
     }
@@ -227,8 +244,8 @@ mod tests {
     #[tokio::test]
     async fn test_clean_completed_jobs() {
         let reg = BashJobRegistry::new();
-        let _ = reg.spawn("echo a").await.unwrap();
-        let running_id = reg.spawn("sleep 5").await.unwrap();
+        let _ = reg.spawn("echo a", None, None).await.unwrap();
+        let running_id = reg.spawn("sleep 5", None, None).await.unwrap();
 
         tokio::time::sleep(std::time::Duration::from_millis(300)).await;
 

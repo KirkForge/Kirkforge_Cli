@@ -20,22 +20,48 @@ Last updated: 2026-06-03
 | 12 | Skills system | ✅ Done | SKILL.md frontmatter parser, slash command registry, wired into TUI |
 | 13 | Session forking + background bash | ✅ Done | ForkManager, BashJobRegistry, wired into TUI |
 | 14 | VFS tree-sitter minification upgrade | ✅ Done | LazyLock cache, strip-test blocks, C++/Java/Ruby/Shell support |
-| 15 | Workflow engine | ✅ Done | DAG steps, conditions, loops, variable interpolation |
+| 15 | Workflow engine | ~~✅ Done~~ ❌ Deleted | Was 889 lines of dead code (declared but never called). Removed 2026-06-03. |
 | 16 | Prompt cache stem | ✅ Done | Cache-aware build_stem(), hit probability estimator |
 
 ## Compilation Status
 
 - **Rust toolchain**: stable (2026-06-03)
 - **Build**: ✅ Clean — 0 errors, 0 warnings (clippy `-D warnings`)
-- **Tests**: 146 unit tests pass, 7 integration tests (require Ollama, marked `#[ignore]`)
-- **Release binary (gnu)**: 4.6 MB stripped, ELF x86-64, LTO + panic=abort
-- **Release binary (musl, static)**: 5.0 MB, static-pie linked, no dynamic deps — verified
-- **CI**: `ci.yml` (fmt/clippy/test/release) + `cross-compile.yml` (x86_64/aarch64/armv7 musl matrix + release publish)
-- **Source**: 41 files, ~10,545 lines of Rust
+- **Tests**: 123 unit tests pass, 7 integration tests (require Ollama, marked `#[ignore]`)
+- **Release binary**: 4.7 MB stripped, ELF x86-64, LTO + panic=abort
+- **Source**: 40 files, ~8,375 lines of Rust
 
-## Repo
+## Changes This Session
 
-Git log (14 commits):
+### Security & Correctness (Phase 1)
+
+| Fix | Impact |
+|-----|--------|
+| **A1 — SSE tool-call accumulation** | OpenAI-compatible models (Gemini, Qwen, etc.) had their tool-call arguments silently truncated to the first SSE delta. Added `ToolCallAccumulator` that merges arguments across deltas by index. **This was the most impactful bug in the codebase.** |
+| **A2 — Silent tool-call drops** | When a model emits a `tool_calls` array with unparseable entries (missing name/args), all 4 adapters now emit `StreamEvent::Error` instead of silently dropping the call. Also surfaces `finish_reason: "tool_calls"` with no parseable calls. |
+| **B1 — Pre-execution bash check** | Dangerous patterns (`rm -rf /`, fork bomb, `mkfs.`, `dd if=/dev/zero`) and path deny-list now checked *before* bash executes, not post-hoc. Previously only the approval prompt stood between a model mistake and disk. |
+| **B2 — Bash output capped** | `max_tool_result_chars` from Config now enforces an output ceiling on bash commands. A 30MB build log no longer blows 8GB target context. |
+| **B3 — Real verifier data** | The bash `BashExecEvent` no longer hardcodes `exit_code: 0, stdout_len: 0, stderr_len: 0`. Real outcome metrics are extracted and fed to the event bus. |
+| **B4 — Harmful auto-"fix" deleted** | Security verifier no longer flags `../` in file content with a broken `replace("../", "./")` suggestion that would corrupt imports. |
+
+### Dead Code & Cleanup (Phase 2)
+
+| Item | Change |
+|------|--------|
+| **C1 — Workflow engine deleted** | 889-line `src/workflow/` module was declared but never called. Removed completely. |
+| **C2 — `#![allow(dead_code)]`** | Retained with a comment explaining what's suppressed (public API surface, runtime-registered handlers, test helpers). The one dead subsystem that it masked is gone. |
+
+### Docs & Consistency
+
+| Item | Change |
+|------|--------|
+| **D1 — Background bash respects workdir/timeout** | `background mode` now passes `workdir` and `timeout` through to the spawned process. |
+| **D2 — Safe history minification** | `prompt.rs` now uses `minify_source_safe()` which preserves `#[cfg(test)]` blocks — the model's previously-seen code is no longer silently rewritten mid-session. Brace-counting test-block stripping is still applied only to file reads, not conversation history. |
+| **D3 — Doc reconciliation** | `state.md` corrected (40 files, ~8,375 lines, 123 tests, workflow removed). Doc-comments in `minify.rs` corrected ("shortens local identifiers" → strips comments/blanks). |
+
+### Known remaining warnings (allowed)
+- ~60 `dead_code` warnings for public API fields, unread struct fields, unused methods — all suppressed by `#![allow(dead_code)]`. These are API surface, not dead subsystems.
+- `ToolCallStyle::None` variant never constructed — kept for completeness as models may lack tool support.
 
 ```
 491f082 Wire Skills system into TUI, Event Bus + Verifiers into Executor

@@ -49,7 +49,9 @@ impl Tool for Bash {
         // Check for background mode
         if args.get("background").and_then(|b| b.as_bool()).unwrap_or(false) {
             let registry = global_registry();
-            match registry.spawn(&cmd).await {
+            let workdir = args.get("workdir").and_then(|w| w.as_str());
+            let timeout = args.get("timeout").and_then(|t| t.as_u64());
+            match registry.spawn(&cmd, workdir, timeout).await {
                 Ok(id) => ToolOutcome::Success {
                     content: format!("Background job #{} started. Use bash_status(id={}) or bash_output(id={}) to check results.", id, id, id),
                 },

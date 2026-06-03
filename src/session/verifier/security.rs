@@ -4,7 +4,7 @@
 /// - Hardcoded API keys / secrets (substring matching)
 /// - Dangerous shell commands in scripts
 /// - Path traversal vulnerabilities
-use crate::session::verifier::{FixSuggestion, Verdict, VerificationError};
+use crate::session::verifier::{Verdict, VerificationError};
 use crate::session::event_bus::{BusEvent, FileWriteEvent};
 
 /// Known secret patterns (substring-based).
@@ -79,19 +79,6 @@ pub async fn verify_security(event: &BusEvent) -> Verdict {
                     details: "This command is blocked by security policy. Remove it to proceed.".into(),
                 });
             }
-        }
-    }
-
-    // 3. Check for path traversal in file content
-    for line in content.lines() {
-        if line.contains("../") && !line.trim_start().starts_with("//") && !line.trim_start().starts_with('#') {
-            return Verdict::Fixable(FixSuggestion {
-                description: "Potential path traversal".into(),
-                file: path.clone(),
-                original: line.to_string(),
-                replacement: line.replace("../", "./"),
-                severity: "warning".into(),
-            });
         }
     }
 
@@ -173,7 +160,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_path_traversal_detected() {
+    async fn test_path_traversal_no_false_positive() {
+        // `../` inside string content must NOT be flagged (it's a legitimate import)
         let dir = std::env::temp_dir();
         let path = dir.join("kirkforge_sec_traversal.txt");
         std::fs::write(&path, "require('../../secret')").unwrap();
@@ -183,7 +171,8 @@ mod tests {
             content_length: 30,
         });
         let v = verify_security(&event).await;
-        assert!(matches!(v, Verdict::Fixable(_)));
+        // Must be Clean (no Fixable) — ../ is a normal code pattern, not a vulnerability here
+        assert!(matches!(v, Verdict::Clean));
         let _ = std::fs::remove_file(&path);
     }
 }

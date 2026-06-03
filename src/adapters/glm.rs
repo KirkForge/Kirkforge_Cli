@@ -116,6 +116,7 @@ impl ModelAdapter for GlmAdapter {
                                     // Collect tool calls (GLM sends them in the final chunk with done=true)
                                     if let Some(tcs) = json.get("message").and_then(|m| m.get("tool_calls")) {
                                         if let Some(calls) = tcs.as_array() {
+                                            let before = tool_calls_buffer.len();
                                             for tc in calls {
                                                 if let (Some(name), Some(args)) = (
                                                     tc.get("function").and_then(|f| f.get("name")).and_then(|n| n.as_str()),
@@ -127,6 +128,12 @@ impl ModelAdapter for GlmAdapter {
                                                         arguments: args.clone(),
                                                     });
                                                 }
+                                            }
+                                            let parsed = tool_calls_buffer.len() - before;
+                                            if !calls.is_empty() && parsed == 0 {
+                                                let _ = tx.send(StreamEvent::Error(
+                                                    "Model emitted tool_calls with no parseable entries".to_string()
+                                                )).await;
                                             }
                                         }
                                     }

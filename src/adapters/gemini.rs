@@ -102,17 +102,24 @@ impl ModelAdapter for GeminiAdapter {
                                         .and_then(|m| m.get("tool_calls"))
                                     {
                                         if let Some(calls) = tcs.as_array() {
+                                            let mut parsed_any = false;
                                             for tc in calls {
                                                 if let (Some(name), Some(args)) = (
                                                     tc.get("function").and_then(|f| f.get("name")).and_then(|n| n.as_str()),
                                                     tc.get("function").and_then(|f| f.get("arguments")),
                                                 ) {
+                                                    parsed_any = true;
                                                     let _ = tx.send(StreamEvent::ToolCall(ToolInvocation {
                                                         id: tc.get("id").and_then(|id| id.as_str()).unwrap_or("").to_string(),
                                                         name: name.to_string(),
                                                         arguments: args.clone(),
                                                     })).await;
                                                 }
+                                            }
+                                            if !calls.is_empty() && !parsed_any {
+                                                let _ = tx.send(StreamEvent::Error(
+                                                    "Model emitted tool_calls with no parseable entries".to_string()
+                                                )).await;
                                             }
                                         }
                                     }

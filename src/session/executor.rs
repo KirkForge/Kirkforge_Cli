@@ -400,13 +400,13 @@ impl Executor {
                                             let crs_args = updated_args.clone();
                                             let outcome = tool.run(updated_args).await;
                                             handle_tool_outcome(outcome, tc, &mut events, &mut self.conversation)?;
-                                            let crs = self.emit_tool_event_and_correct(tc, tool_name, &crs_args).await;
+                                            let crs = self.emit_tool_event_and_correct(tc, tool_name, &crs_args, None, None, None).await;
                                             emit_correction_results(crs, tc, &mut events, &mut self.conversation)?;
                                         } else {
                                             let args = tc.arguments.clone();
                                             let outcome = tool.run(tc.arguments.clone()).await;
                                             handle_tool_outcome(outcome, tc, &mut events, &mut self.conversation)?;
-                                            let crs = self.emit_tool_event_and_correct(tc, tool_name, &args).await;
+                                            let crs = self.emit_tool_event_and_correct(tc, tool_name, &args, None, None, None).await;
                                             emit_correction_results(crs, tc, &mut events, &mut self.conversation)?;
                                         }
                                         continue;
@@ -430,11 +430,39 @@ impl Executor {
                             }
 
                             // Non-file tools: bash, grep, glob — execute directly
+                            if tool_name == "bash" {
+                                if let Some(denied) = check_bash_command(&tc.arguments) {
+                                    events.push(TurnEvent::ToolResult {
+                                        name: tc.name.clone(),
+                                        output: denied.clone(),
+                                    });
+                                    self.conversation.append(Message {
+                                        role: Role::Tool,
+                                        content: denied,
+                                        tool_call_id: Some(tc.id.clone()),
+                                        tool_name: Some(tc.name.clone()),
+                                        ..Default::default()
+                                    })?;
+                                    continue;
+                                }
+                            }
+
                             let outcome = tool.run(tc.arguments.clone()).await;
+                            // Cap output for bash to avoid blowing context
+                            let (real_exit_code, real_stdout_len, real_stderr_len) = if tool_name == "bash" {
+                                extract_bash_metrics(&outcome)
+                            } else {
+                                (None, None, None)
+                            };
+                            let outcome = if tool_name == "bash" {
+                                truncate_tool_output(outcome, self.config.max_tool_result_chars)
+                            } else {
+                                outcome
+                            };
                             handle_tool_outcome(outcome, tc, &mut events, &mut self.conversation)?;
 
-                            // Emit event + run correction loop
-                            let crs = self.emit_tool_event_and_correct(tc, tool_name, &tc.arguments).await;
+                            // Emit event + run correction loop with real outcome data
+                            let crs = self.emit_tool_event_and_correct(tc, tool_name, &tc.arguments, real_exit_code, real_stdout_len, real_stderr_len).await;
                             emit_correction_results(crs, tc, &mut events, &mut self.conversation)?;
                         }
 
@@ -468,6 +496,9 @@ impl Executor {
         _tc: &ToolInvocation,
         tool_name: &str,
         args: &serde_json::Value,
+        real_exit_code: Option<i32>,
+        real_stdout_len: Option<usize>,
+        real_stderr_len: Option<usize>,
     ) -> Vec<CorrectionResult> {
         let bus_event = match tool_name {
             "read_file" => {
@@ -501,9 +532,9 @@ impl Executor {
                 let command = args.get("command").and_then(|v| v.as_str()).unwrap_or("").to_string();
                 Some(BusEvent::BashExec(crate::session::event_bus::BashExecEvent {
                     command,
-                    exit_code: 0,
-                    stdout_len: 0,
-                    stderr_len: 0,
+                    exit_code: real_exit_code.unwrap_or(0),
+                    stdout_len: real_stdout_len.unwrap_or(0),
+                    stderr_len: real_stderr_len.unwrap_or(0),
                 }))
             }
             _ => None,
@@ -563,6 +594,99 @@ pub enum TurnEvent {
     },
 }
 
+/// Dangerous shell command patterns (mirrors the list in verifier/security.rs).
+const DANGEROUS_SHELL_COMMANDS: &[&str] = &[
+    "rm -rf /",
+    "rm -rf /*",
+    ":(){ :|:& };:",
+    "> /dev/sda",
+    "mkfs.",
+    "dd if=/dev/zero of=",
+    "chmod -R 777 /",
+    "chmod 777 /",
+    "dd if=/dev/random",
+    "> /dev/null < /dev/sda",
+    "wget ",
+    "curl ",
+    "| sh",
+    "| bash",
+];
+
+/// Pre-execution bash command check — blocks dangerous patterns before they run.
+fn check_bash_command(args: &serde_json::Value) -> Option<String> {
+    let cmd = args.get("command").and_then(|c| c.as_str())?;
+
+    // 1. Metadata endpoint access (cloud provider metadata)
+    if cmd.contains("169.254.169.254") || cmd.contains("metadata.google") || cmd.contains("metadata.aws") {
+        return Some("🔒 Command blocked: contains reference to metadata endpoints".into());
+    }
+
+    // 2. Dangerous command patterns (the opposite of read-only)
+    for pattern in DANGEROUS_SHELL_COMMANDS {
+        if cmd.contains(pattern) {
+            return Some(format!(
+                "🔒 Command blocked: dangerous pattern '{}' detected", pattern
+            ));
+        }
+    }
+
+    // 3. Path deny-list (applied to paths appearing in the command)
+    for pat in ["/etc/shadow", "/etc/passwd", "/etc/sudoers", "~/.ssh", "/root/"] {
+        if cmd.contains(pat) {
+            return Some(format!(
+                "🔒 Command blocked: references denied path '{}'", pat
+            ));
+        }
+    }
+
+    None
+}
+
+/// Truncate tool output to a maximum number of characters.
+/// Applied to bash output to prevent context-window overflow.
+fn truncate_tool_output(outcome: ToolOutcome, max_chars: usize) -> ToolOutcome {
+    if max_chars == 0 {
+        return outcome;
+    }
+    match outcome {
+        ToolOutcome::Success { content } => {
+            if content.len() > max_chars {
+                let truncated = format!("{}...\n[output truncated to {} chars]", &content[..max_chars], max_chars);
+                ToolOutcome::Success { content: truncated }
+            } else {
+                ToolOutcome::Success { content }
+            }
+        }
+        ToolOutcome::Error { message } => ToolOutcome::Error { message },
+        other => other,
+    }
+}
+
+/// Extract bash execution metrics from a ToolOutcome.
+/// Returns (outcome, exit_code, stdout_len, stderr_len).
+/// For the verifier to see real data instead of hardcoded zeros.
+fn extract_bash_metrics(outcome: &ToolOutcome) -> (Option<i32>, Option<usize>, Option<usize>) {
+    match outcome {
+        ToolOutcome::Success { content } => {
+            (Some(0), Some(content.len()), Some(0))
+        }
+        ToolOutcome::Error { message } => {
+            let exit_code = if message.contains("exited with code") {
+                message.split("exited with code ")
+                    .nth(1).and_then(|s| s.split_whitespace().next())
+                    .and_then(|s| s.parse::<i32>().ok())
+            } else {
+                Some(1)
+            };
+            let (stdout_len, stderr_len) = message.find("\nstderr:\n")
+                .map(|pos| (pos, message[pos + 9..].len()))
+                .unwrap_or((message.len(), 0));
+            (exit_code, Some(stdout_len), Some(stderr_len))
+        }
+        _ => (None, None, None),
+    }
+}
+
 /// Helper: check deny list before running a tool.
 /// Returns Some(denial_message) if blocked, None if allowed.
 fn check_deny_list(deny_list: &DenyList, tool_name: &str, args: &serde_json::Value) -> Option<String> {
@@ -579,12 +703,9 @@ fn check_deny_list(deny_list: &DenyList, tool_name: &str, args: &serde_json::Val
             }
         }
         "bash" => {
-            if let Some(cmd) = args.get("command").and_then(|v| v.as_str()) {
-                // Check for dangerous patterns
-                if cmd.contains("169.254.169.254") || cmd.contains("metadata.google") {
-                    return Some("🔒 Command blocked: contains reference to metadata endpoints".into());
-                }
-            }
+            // Note: pre-execution dangerous-command check is in check_bash_command()
+            // which runs right before tool execution. This function only handles
+            // the generic deny-list (path patterns, URLs) for consistency.
         }
         "grep" | "glob" => {
             if let Some(path) = args.get("path").and_then(|v| v.as_str()) {
@@ -939,7 +1060,7 @@ mod tests {
                 StreamEvent::ToolCall(ToolInvocation {
                     id: "call-1".into(),
                     name: "bash".into(),
-                    arguments: serde_json::json!({"command": "rm -rf /"}),
+                    arguments: serde_json::json!({"command": "ls -la"}),
                 }),
                 StreamEvent::Done {
                     finish_reason: FinishReason::ToolCalls,

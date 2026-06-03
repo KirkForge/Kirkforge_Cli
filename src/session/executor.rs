@@ -49,15 +49,35 @@ impl Executor {
         }
     }
 
+    /// Run the executor as a long-lived background task.
+    ///
+    /// Listens for user input on `input_rx`, runs the full turn loop
+    /// (stream → tool calls → approval → execute), and forwards all
+    /// renderable events to the TUI via `event_tx`.
+    pub async fn run(
+        &mut self,
+        mut input_rx: mpsc::UnboundedReceiver<String>,
+        event_tx: mpsc::UnboundedSender<TurnEvent>,
+        approval_tx: mpsc::UnboundedSender<ApprovalRequest>,
+    ) -> anyhow::Result<()> {
+        while let Some(input) = input_rx.recv().await {
+            let events = self.run_turn(&input, &approval_tx).await?;
+            for ev in events {
+                if event_tx.send(ev).is_err() {
+                    // TUI closed — stop the executor
+                    return Ok(());
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Run a single turn: send the current conversation to the model,
     /// handle tool calls, return the assistant's response.
-    ///
-    /// Returns a list of events that the UI should render.
     pub async fn run_turn(
         &mut self,
         user_input: &str,
-        approval_sender: mpsc::UnboundedSender<ApprovalRequest>,
-        _approval_receiver: mpsc::UnboundedReceiver<ApprovalResponse>,
+        approval_sender: &mpsc::UnboundedSender<ApprovalRequest>,
     ) -> anyhow::Result<Vec<TurnEvent>> {
         // Append user message
         self.conversation.append(Message {
@@ -119,6 +139,7 @@ impl Executor {
                     }
                     StreamEvent::Done { finish_reason: _, usage } => {
                         // Save the assistant message
+                        let has_tool_calls = !pending_tool_calls.is_empty();
                         let msg = Message {
                             role: Role::Assistant,
                             content: assistant_content.clone(),
@@ -127,10 +148,10 @@ impl Executor {
                             } else {
                                 Some(assistant_thinking.clone())
                             },
-                            tool_calls: if pending_tool_calls.is_empty() {
-                                None
+                            tool_calls: if has_tool_calls {
+                                Some(pending_tool_calls.clone())
                             } else {
-                                Some(std::mem::take(&mut pending_tool_calls))
+                                None
                             },
                             tool_call_id: None,
                             tool_name: None,
@@ -138,8 +159,10 @@ impl Executor {
                         };
                         self.conversation.append(msg)?;
 
-                        // Process tool calls
-                        for tc in &pending_tool_calls {
+                        // Process tool calls (clone because pending_tool_calls is
+                        // reused in the outer loop if we continue for another turn)
+                        let tool_calls = std::mem::take(&mut pending_tool_calls);
+                        for tc in &tool_calls {
                             // Find the tool
                             let tool = match self.tools.iter().find(|t| t.def().name == tc.name) {
                                 Some(t) => t.clone(),
@@ -175,7 +198,8 @@ impl Executor {
                                     Ok(ApprovalResponse::Approved) => true,
                                     Ok(ApprovalResponse::Denied) => false,
                                     Ok(ApprovalResponse::AlwaysApprove) => {
-                                        true // and set auto_approve
+                                        self.config.auto_approve = true;
+                                        true
                                     }
                                     Err(_) => false,
                                 };
@@ -255,8 +279,7 @@ impl Executor {
                         }
 
                         // If there were tool calls, continue the loop for another model turn
-                        if !pending_tool_calls.is_empty() {
-                            pending_tool_calls.clear();
+                        if !tool_calls.is_empty() {
                             break; // break the event loop, continue the outer turn loop
                         }
 
@@ -318,5 +341,433 @@ fn format_grep_output(path: &std::path::Path, matches: &[crate::shared::Match]) 
         out.push('\n');
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::adapters::ModelAdapter;
+    use crate::shared::{ModelInfo, ToolCallStyle, ToolDef, StreamEvent, ToolOutcome, Message, Role, TokenUsage, FinishReason, ToolInvocation};
+    use std::sync::{Arc, Mutex};
+    use tokio::sync::mpsc;
+
+    // ── Mocks ──────────────────────────────────────────────────────
+
+    struct MockAdapter {
+        /// Events to emit on the first stream() call.
+        first_events: Vec<StreamEvent>,
+        /// Events to emit on subsequent stream() calls (e.g. empty to break tool-call loops).
+        followup_events: Vec<StreamEvent>,
+        info: ModelInfo,
+        call_count: Arc<Mutex<usize>>,
+    }
+
+    impl MockAdapter {
+        fn new(events: Vec<StreamEvent>, info: ModelInfo) -> Self {
+            Self {
+                first_events: events,
+                followup_events: vec![
+                    StreamEvent::Text("Done.".to_string()),
+                    StreamEvent::Done {
+                        finish_reason: FinishReason::Stop,
+                        usage: None,
+                    },
+                ],
+                info,
+                call_count: Arc::new(Mutex::new(0)),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ModelAdapter for MockAdapter {
+        fn model_info(&self) -> ModelInfo {
+            self.info.clone()
+        }
+
+        async fn stream(
+            &self,
+            _messages: &[Message],
+            _tools: &[ToolDef],
+        ) -> anyhow::Result<mpsc::Receiver<StreamEvent>> {
+            let mut count = self.call_count.lock().unwrap();
+            let is_first = *count == 0;
+            *count += 1;
+            drop(count);
+
+            let (tx, rx) = mpsc::channel(64);
+            let events = if is_first {
+                self.first_events.clone()
+            } else {
+                self.followup_events.clone()
+            };
+            tokio::spawn(async move {
+                for ev in events {
+                    let _ = tx.send(ev).await;
+                }
+            });
+            Ok(rx)
+        }
+    }
+
+    #[derive(Clone)]
+    struct MockTool {
+        def: ToolDef,
+        captured_args: Arc<Mutex<Option<serde_json::Value>>>,
+        outcome: ToolOutcome,
+    }
+
+    #[async_trait::async_trait]
+    impl Tool for MockTool {
+        fn def(&self) -> ToolDef {
+            self.def.clone()
+        }
+
+        async fn run(&self, args: serde_json::Value) -> ToolOutcome {
+            *self.captured_args.lock().unwrap() = Some(args);
+            self.outcome.clone()
+        }
+    }
+
+    fn make_info() -> ModelInfo {
+        ModelInfo {
+            name: "test-model".into(),
+            supports_thinking: false,
+            tool_call_format: ToolCallStyle::Native,
+            max_context_tokens: 8192,
+            recommended_temperature: 0.7,
+        }
+    }
+
+    fn make_config(auto_approve: bool) -> Config {
+        Config {
+            default_model: "test".into(),
+            ollama_host: "http://localhost:11434".into(),
+            auto_approve,
+            truncation_strategy: crate::shared::TruncationStrategy::KeepToolOnly,
+            max_tool_result_chars: 4000,
+        }
+    }
+
+    fn make_executor(adapter: Box<dyn ModelAdapter>, tools: Vec<Arc<dyn Tool>>, config: Config) -> Executor {
+        let temp_dir = std::env::temp_dir();
+        let log_path = temp_dir.join(format!("kirkforge-test-{}.ndjson", std::process::id()));
+        let _ = std::fs::remove_file(&log_path);
+        let conversation = ConversationLog::open(log_path).unwrap();
+        Executor::with_log(adapter, tools, config, conversation)
+    }
+
+    // ── Tests ─────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_basic_text_response() {
+        let adapter = MockAdapter::new(
+            vec![
+                StreamEvent::Text("Hello ".to_string()),
+                StreamEvent::Text("world!".to_string()),
+                StreamEvent::Done {
+                    finish_reason: FinishReason::Stop,
+                    usage: Some(TokenUsage {
+                        prompt_tokens: Some(10),
+                        completion_tokens: Some(5),
+                    }),
+                },
+            ],
+            make_info(),
+        );
+
+        let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
+        let mut exe = make_executor(Box::new(adapter), vec![], make_config(false));
+        let events = exe.run_turn("hello", &approval_tx).await.unwrap();
+
+        let tokens: Vec<_> = events.iter().filter_map(|e| match e {
+            TurnEvent::Token(t) => Some(t.as_str()),
+            _ => None,
+        }).collect();
+        assert_eq!(tokens, vec!["Hello ", "world!"]);
+
+        // Verify conversation was appended
+        let msgs = exe.conversation.all();
+        assert_eq!(msgs.len(), 2); // user + assistant
+        assert_eq!(msgs[0].role, Role::User);
+        assert_eq!(msgs[0].content, "hello");
+        assert_eq!(msgs[1].role, Role::Assistant);
+        assert_eq!(msgs[1].content, "Hello world!");
+        assert_eq!(msgs[1].token_count, Some(5));
+    }
+
+    #[tokio::test]
+    async fn test_tool_call_dispatch() {
+        let captured = Arc::new(Mutex::new(None));
+        let tool = MockTool {
+            def: ToolDef {
+                name: "echo",
+                description: "echo a value",
+                parameters: serde_json::json!({"type": "object", "properties": {"val": {"type": "string"}}}),
+            },
+            captured_args: captured.clone(),
+            outcome: ToolOutcome::Success {
+                content: "echoed!".into(),
+            },
+        };
+
+        let adapter = MockAdapter::new(
+            vec![
+                StreamEvent::Text("Calling tool...".to_string()),
+                StreamEvent::ToolCall(ToolInvocation {
+                    id: "call-1".into(),
+                    name: "echo".into(),
+                    arguments: serde_json::json!({"val": "test"}),
+                }),
+                StreamEvent::Done {
+                    finish_reason: FinishReason::ToolCalls,
+                    usage: None,
+                },
+            ],
+            make_info(),
+        );
+
+        let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
+        let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(true));
+        let events = exe.run_turn("use echo", &approval_tx).await.unwrap();
+
+        // Should have token + tool_start + tool_result
+        let has_token = events.iter().any(|e| matches!(e, TurnEvent::Token(_)));
+        let has_start = events.iter().any(|e| matches!(e, TurnEvent::ToolStart { name, .. } if name == "echo"));
+        let has_result = events.iter().any(|e| matches!(e, TurnEvent::ToolResult { name, output } if name == "echo" && output == "echoed!"));
+
+        assert!(has_token, "Should stream text before tool call");
+        assert!(has_start, "Should emit ToolStart");
+        assert!(has_result, "Should emit ToolResult");
+
+        // Verify tool was actually called with correct args
+        let called_with = captured.lock().unwrap().take();
+        assert!(called_with.is_some(), "Tool should have been called");
+        assert_eq!(
+            called_with.unwrap().get("val").and_then(|v| v.as_str()),
+            Some("test")
+        );
+
+        // Tool result should be in conversation
+        let msgs = exe.conversation.all();
+        let tool_msgs: Vec<_> = msgs.iter().filter(|m| m.role == Role::Tool).collect();
+        assert_eq!(tool_msgs.len(), 1);
+        assert_eq!(tool_msgs[0].content, "echoed!");
+    }
+
+    #[tokio::test]
+    async fn test_approval_required_for_destructive_tool() {
+        let captured = Arc::new(Mutex::new(None));
+        let tool = MockTool {
+            def: ToolDef {
+                name: "bash",
+                description: "run a command",
+                parameters: serde_json::json!({"type": "object", "properties": {"command": {"type": "string"}}}),
+            },
+            captured_args: captured.clone(),
+            outcome: ToolOutcome::Success {
+                content: "ran!".into(),
+            },
+        };
+
+        let adapter = MockAdapter::new(
+            vec![
+                StreamEvent::ToolCall(ToolInvocation {
+                    id: "call-1".into(),
+                    name: "bash".into(),
+                    arguments: serde_json::json!({"command": "rm -rf /"}),
+                }),
+                StreamEvent::Done {
+                    finish_reason: FinishReason::ToolCalls,
+                    usage: None,
+                },
+            ],
+            make_info(),
+        );
+
+        // auto_approve = false — should require approval
+        let (approval_tx, mut approval_rx) = mpsc::unbounded_channel();
+
+        // Spawn a task to respond to the approval request
+        let approval_handle = tokio::spawn(async move {
+            let req: ApprovalRequest = approval_rx.recv().await.unwrap();
+            assert_eq!(req.tool_name, "bash");
+            let _ = req.response.send(ApprovalResponse::Approved);
+        });
+
+        let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(false));
+        let events = exe.run_turn("run command", &approval_tx).await.unwrap();
+
+        approval_handle.await.unwrap();
+
+        // Should have ToolResult since we approved
+        let result = events.iter().find_map(|e| match e {
+            TurnEvent::ToolResult { name, output } => Some((name.as_str(), output.as_str())),
+            _ => None,
+        });
+        assert_eq!(result, Some(("bash", "ran!")));
+    }
+
+    #[tokio::test]
+    async fn test_approval_denied_for_destructive_tool() {
+        let captured = Arc::new(Mutex::new(None));
+        let tool = MockTool {
+            def: ToolDef {
+                name: "bash",
+                description: "run a command",
+                parameters: serde_json::json!({"type": "object", "properties": {"command": {"type": "string"}}}),
+            },
+            captured_args: captured.clone(),
+            outcome: ToolOutcome::Success {
+                content: "ran!".into(),
+            },
+        };
+
+        let adapter = MockAdapter::new(
+            vec![
+                StreamEvent::ToolCall(ToolInvocation {
+                    id: "call-1".into(),
+                    name: "bash".into(),
+                    arguments: serde_json::json!({"command": "rm -rf /"}),
+                }),
+                StreamEvent::Done {
+                    finish_reason: FinishReason::ToolCalls,
+                    usage: None,
+                },
+            ],
+            make_info(),
+        );
+
+        let (approval_tx, mut approval_rx) = mpsc::unbounded_channel();
+
+        let approval_handle = tokio::spawn(async move {
+            let req: ApprovalRequest = approval_rx.recv().await.unwrap();
+            let _ = req.response.send(ApprovalResponse::Denied);
+        });
+
+        let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(false));
+        let events = exe.run_turn("run command", &approval_tx).await.unwrap();
+
+        approval_handle.await.unwrap();
+
+        // Tool should NOT have been called (denied)
+        assert!(captured.lock().unwrap().is_none(), "Tool should not have been called when denied");
+
+        // Should have a denied-message result
+        let denied = events.iter().any(|e| matches!(e, TurnEvent::ToolResult { name, output } if name == "bash" && output.contains("denied")));
+        assert!(denied, "Should report that operation was denied");
+    }
+
+    #[tokio::test]
+    async fn test_error_event_forwarded() {
+        let adapter = MockAdapter::new(
+            vec![
+                StreamEvent::Text("Starting...".to_string()),
+                StreamEvent::Error("connection lost".to_string()),
+            ],
+            make_info(),
+        );
+
+        let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
+        let mut exe = make_executor(Box::new(adapter), vec![], make_config(false));
+        let events = exe.run_turn("do it", &approval_tx).await.unwrap();
+
+        let has_error = events.iter().any(|e| matches!(e, TurnEvent::Error(msg) if msg == "connection lost"));
+        assert!(has_error, "Error events should be forwarded");
+    }
+
+    #[tokio::test]
+    async fn test_unknown_tool_reported_as_error() {
+        let adapter = MockAdapter::new(
+            vec![
+                StreamEvent::ToolCall(ToolInvocation {
+                    id: "call-1".into(),
+                    name: "nonexistent_tool".into(),
+                    arguments: serde_json::json!({}),
+                }),
+                StreamEvent::Done {
+                    finish_reason: FinishReason::ToolCalls,
+                    usage: None,
+                },
+            ],
+            make_info(),
+        );
+
+        let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
+        let mut exe = make_executor(Box::new(adapter), vec![], make_config(false));
+        let events = exe.run_turn("use unknown tool", &approval_tx).await.unwrap();
+
+        let has_error = events.iter().any(|e| matches!(e, TurnEvent::Error(msg) if msg.contains("Unknown tool")));
+        assert!(has_error, "Unknown tools should produce error events");
+    }
+
+    #[tokio::test]
+    async fn test_tool_call_loop_capped() {
+        // A tool that returns success but causes the model to keep calling it
+        let captured = Arc::new(Mutex::new(None));
+        let tool = MockTool {
+            def: ToolDef {
+                name: "looper",
+                description: "keeps being called",
+                parameters: serde_json::json!({"type": "object", "properties": {"x": {"type": "string"}}}),
+            },
+            captured_args: captured.clone(),
+            outcome: ToolOutcome::Success {
+                content: "loop again".into(),
+            },
+        };
+
+        // Every turn, the model calls the tool again (emulate via MockAdapter returning
+        // the same ToolCall pattern each iteration)
+        // We need a more sophisticated mock for this. Let's use a custom adapter
+        // that returns a fresh tool-call stream every invocation.
+        struct LoopAdapter {
+            info: ModelInfo,
+            call_count: Arc<Mutex<usize>>,
+        }
+
+        #[async_trait::async_trait]
+        impl ModelAdapter for LoopAdapter {
+            fn model_info(&self) -> ModelInfo {
+                self.info.clone()
+            }
+
+            async fn stream(
+                &self,
+                _messages: &[Message],
+                _tools: &[ToolDef],
+            ) -> anyhow::Result<mpsc::Receiver<StreamEvent>> {
+                let (tx, rx) = mpsc::channel(64);
+                let count = *self.call_count.lock().unwrap();
+                *self.call_count.lock().unwrap() = count + 1;
+                tokio::spawn(async move {
+                    let _ = tx.send(StreamEvent::ToolCall(ToolInvocation {
+                        id: format!("call-{}", count),
+                        name: "looper".into(),
+                        arguments: serde_json::json!({"x": format!("round-{}", count)}),
+                    })).await;
+                    let _ = tx.send(StreamEvent::Done {
+                        finish_reason: FinishReason::ToolCalls,
+                        usage: None,
+                    }).await;
+                });
+                Ok(rx)
+            }
+        }
+
+        let call_count = Arc::new(Mutex::new(0usize));
+        let adapter = LoopAdapter {
+            info: make_info(),
+            call_count: call_count.clone(),
+        };
+
+        let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
+        let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(true));
+        let _events = exe.run_turn("loop", &approval_tx).await.unwrap();
+
+        // Should NOT have hit the limit (max_iterations = 10, and we'd get error if we did)
+        let tool_calls = *call_count.lock().unwrap();
+        assert!(tool_calls <= 10, "Should not exceed max_iterations (was {})", tool_calls);
+    }
 }
 

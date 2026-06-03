@@ -3,7 +3,7 @@ pub mod components;
 pub mod rendering;
 pub mod widgets;
 
-use app::{AppState, ConnectionState, PendingApproval};
+use app::{AppState, ConnectionState, ConversationEntry, PendingApproval};
 use components::approval::render_approval_dialog;
 use crate::session::executor::{self, ApprovalRequest, ApprovalResponse};
 use crate::session::conversation::ConversationLog;
@@ -52,24 +52,27 @@ pub async fn run_tui(
         since: Instant::now(),
     };
 
-    // Channel for receiving approval requests from executor
-    let mut approval_rx = {
-        let (tx, rx) = mpsc::unbounded_channel::<ApprovalRequest>();
-        // tx is given to the executor for sending approval requests
-        // but currently approval flow is simplified — will wire up fully in next pass
-        let _tx = tx;
-        rx
-    };
+    // ── Channels ──
+    // User input: TUI → Executor
+    let (input_tx, input_rx) = mpsc::unbounded_channel::<String>();
+    // Stream events: Executor → TUI
+    let (event_tx, mut event_rx) = mpsc::unbounded_channel::<executor::TurnEvent>();
+    // Approval requests: Executor → TUI
+    let (approval_tx, mut approval_rx) = mpsc::unbounded_channel::<ApprovalRequest>();
 
-    // Session — executor owns the conversation log
-    let mut executor = executor::Executor::with_log(adapter, tools, config, conversation_log);
+    // Spawn the executor on a background task
+    let mut exe = executor::Executor::with_log(adapter, tools, config, conversation_log);
+    tokio::spawn(async move {
+        let _ = exe.run(input_rx, event_tx, approval_tx).await;
+    });
 
     // Event loop
     let res = run_event_loop(
         &mut terminal,
         &mut state,
+        &mut event_rx,
         &mut approval_rx,
-        &mut executor,
+        &input_tx,
     ).await;
 
     // Cleanup
@@ -79,14 +82,88 @@ pub async fn run_tui(
     res
 }
 
-#[allow(unused_variables)]
 async fn run_event_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     state: &mut AppState,
+    event_rx: &mut mpsc::UnboundedReceiver<executor::TurnEvent>,
     approval_rx: &mut mpsc::UnboundedReceiver<ApprovalRequest>,
-    executor: &mut executor::Executor,
+    input_tx: &mpsc::UnboundedSender<String>,
 ) -> anyhow::Result<()> {
     loop {
+        // ── Drain pending stream events ──
+        while let Ok(ev) = event_rx.try_recv() {
+            match ev {
+                executor::TurnEvent::Token(t) => {
+                    // Accumulate into the last assistant entry, or create one
+                    let role_str = "assistant".to_string();
+                    if let Some(last) = state.messages.last_mut() {
+                        if last.role == role_str {
+                            last.content.push_str(&t);
+                        } else {
+                            state.messages.push(ConversationEntry {
+                                role: role_str,
+                                content: t,
+                                timestamp: chrono::Local::now(),
+                            });
+                        }
+                    } else {
+                        state.messages.push(ConversationEntry {
+                            role: role_str,
+                            content: t,
+                            timestamp: chrono::Local::now(),
+                        });
+                    }
+                }
+                executor::TurnEvent::Thinking(t) => {
+                    state.thinking_buffer.push(t);
+                }
+                executor::TurnEvent::ToolStart { name, args: _ } => {
+                    state.messages.push(ConversationEntry {
+                        role: "tool".into(),
+                        content: format!("🔧 {} ...", name),
+                        timestamp: chrono::Local::now(),
+                    });
+                }
+                executor::TurnEvent::ToolResult { name, output } => {
+                    // Update the last tool message with its output
+                    let label = format!("🔧 {} (done)", name);
+                    if let Some(last) = state.messages.last_mut() {
+                        if last.role == "tool" && last.content.starts_with("🔧") {
+                            last.content = format!("{}\n{}", label, output);
+                        } else {
+                            state.messages.push(ConversationEntry {
+                                role: "tool".into(),
+                                content: format!("{}\n{}", label, output),
+                                timestamp: chrono::Local::now(),
+                            });
+                        }
+                    } else {
+                        state.messages.push(ConversationEntry {
+                            role: "tool".into(),
+                            content: format!("{}\n{}", label, output),
+                            timestamp: chrono::Local::now(),
+                        });
+                    }
+                }
+                executor::TurnEvent::Error(e) => {
+                    state.messages.push(ConversationEntry {
+                        role: "system".into(),
+                        content: format!("Error: {}", e),
+                        timestamp: chrono::Local::now(),
+                    });
+                }
+            }
+        }
+
+        // ── Drain pending approval requests ──
+        while let Ok(req) = approval_rx.try_recv() {
+            state.pending_approval = Some(PendingApproval {
+                tool_name: req.tool_name.clone(),
+                args: req.args.clone(),
+                responder: Some(req.response),
+            });
+        }
+
         // ── Render ──
         terminal.draw(|f| {
             let size = f.area();
@@ -116,27 +193,21 @@ async fn run_event_loop(
                     if state.pending_approval.is_some() {
                         handle_approval_key(key, state);
                     } else {
-                        handle_input_key(key, state)?;
+                        handle_input_key(key, state, input_tx)?;
                     }
                 }
                 Event::Resize(_w, _h) => {}
                 _ => {}
             }
         }
-
-        // ── Check for approval requests ──
-        if let Ok(req) = approval_rx.try_recv() {
-            let (tx, _rx) = tokio::sync::oneshot::channel::<ApprovalResponse>();
-            state.pending_approval = Some(PendingApproval {
-                tool_name: req.tool_name.clone(),
-                args: req.args.clone(),
-                responder: Some(tx),
-            });
-        }
     }
 }
 
-fn handle_input_key(key: KeyEvent, state: &mut AppState) -> anyhow::Result<()> {
+fn handle_input_key(
+    key: KeyEvent,
+    state: &mut AppState,
+    input_tx: &mpsc::UnboundedSender<String>,
+) -> anyhow::Result<()> {
     match key.code {
         KeyCode::Char(c) => {
             if key.modifiers.contains(KeyModifiers::CONTROL) {
@@ -208,15 +279,49 @@ fn handle_input_key(key: KeyEvent, state: &mut AppState) -> anyhow::Result<()> {
             state.cursor_position = 0;
 
             if !input.is_empty() {
-                // Add to conversation display
-                state.messages.push(crate::tui::app::ConversationEntry {
-                    role: "user".into(),
-                    content: input.clone(),
-                    timestamp: chrono::Local::now(),
-                });
-
-                // Process the input as a command or message
-                process_input(input, state);
+                if input.starts_with('/') {
+                    // Command — handle locally
+                    let parts: Vec<&str> = input.splitn(2, ' ').collect();
+                    match parts[0] {
+                        "/help" | "/h" => {
+                            state.messages.push(ConversationEntry {
+                                role: "system".into(),
+                                content: "Commands: /help, /clear, /model, /exit".into(),
+                                timestamp: chrono::Local::now(),
+                            });
+                        }
+                        "/clear" => {
+                            state.messages.clear();
+                            state.thinking_buffer.clear();
+                        }
+                        "/model" => {
+                            let info = state.model_info.as_ref().map(|m| m.name.as_str()).unwrap_or("unknown");
+                            state.messages.push(ConversationEntry {
+                                role: "system".into(),
+                                content: format!("Current model: {}", info),
+                                timestamp: chrono::Local::now(),
+                            });
+                        }
+                        "/exit" | "/quit" => {
+                            std::process::exit(0);
+                        }
+                        other => {
+                            state.messages.push(ConversationEntry {
+                                role: "system".into(),
+                                content: format!("Unknown command: {}\nType /help for available commands.", other),
+                                timestamp: chrono::Local::now(),
+                            });
+                        }
+                    }
+                } else {
+                    // Regular message — push to display and send to executor
+                    state.messages.push(ConversationEntry {
+                        role: "user".into(),
+                        content: input.clone(),
+                        timestamp: chrono::Local::now(),
+                    });
+                    let _ = input_tx.send(input);
+                }
             }
         }
         KeyCode::Esc => {
@@ -261,7 +366,8 @@ fn handle_approval_key(key: KeyEvent, state: &mut AppState) {
 
     if let Some(resp) = response {
         if matches!(resp, ApprovalResponse::AlwaysApprove) {
-            // TODO: set auto_approve in config
+            state.config.auto_approve = true;
+            let _ = crate::session::config::save_config(&state.config);
         }
         if let Some(tx) = approval.responder {
             let _ = tx.send(resp);
@@ -269,48 +375,3 @@ fn handle_approval_key(key: KeyEvent, state: &mut AppState) {
     }
 }
 
-fn process_input(input: String, state: &mut AppState) {
-    if input.starts_with('/') {
-        // Command handling
-        let parts: Vec<&str> = input.splitn(2, ' ').collect();
-        match parts[0] {
-            "/help" | "/h" => {
-                state.messages.push(crate::tui::app::ConversationEntry {
-                    role: "system".into(),
-                    content: "Commands: /help, /connect <model>, /clear, /model, /exit".into(),
-                    timestamp: chrono::Local::now(),
-                });
-            }
-            "/clear" => {
-                state.messages.clear();
-                state.thinking_buffer.clear();
-            }
-            "/model" => {
-                let info = state.model_info.as_ref().map(|m| m.name.as_str()).unwrap_or("unknown");
-                state.messages.push(crate::tui::app::ConversationEntry {
-                    role: "system".into(),
-                    content: format!("Current model: {}", info),
-                    timestamp: chrono::Local::now(),
-                });
-            }
-            "/exit" | "/quit" => {
-                // TODO: graceful shutdown
-                std::process::exit(0);
-            }
-            other => {
-                state.messages.push(crate::tui::app::ConversationEntry {
-                    role: "system".into(),
-                    content: format!("Unknown command: {}\nType /help for available commands.", other),
-                    timestamp: chrono::Local::now(),
-                });
-            }
-        }
-    } else {
-        // Regular message — add as user message
-        state.messages.push(crate::tui::app::ConversationEntry {
-            role: "user".into(),
-            content: input,
-            timestamp: chrono::Local::now(),
-        });
-    }
-}

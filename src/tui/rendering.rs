@@ -1,5 +1,5 @@
-/// Rendering utilities — syntax highlighting, markdown rendering,
-/// and display helpers for the TUI.
+//! Rendering utilities — syntax highlighting, markdown rendering,
+//! and display helpers for the TUI.
 
 use syntect::highlighting::ThemeSet;
 use syntect::parsing::SyntaxSet;
@@ -10,13 +10,13 @@ use std::sync::OnceLock;
 /// Global syntax set (loaded once).
 fn syntax_set() -> &'static SyntaxSet {
     static SET: OnceLock<SyntaxSet> = OnceLock::new();
-    SET.get_or_init(|| SyntaxSet::load_defaults_newlines())
+    SET.get_or_init(SyntaxSet::load_defaults_newlines)
 }
 
 /// Global theme set (loaded once).
 fn theme_set() -> &'static ThemeSet {
     static SET: OnceLock<ThemeSet> = OnceLock::new();
-    SET.get_or_init(|| ThemeSet::load_defaults())
+    SET.get_or_init(ThemeSet::load_defaults)
 }
 
 /// Apply syntax highlighting to source code.

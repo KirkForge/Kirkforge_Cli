@@ -59,7 +59,7 @@ pub fn render_chat(f: &mut Frame, area: Rect, state: &AppState) {
 
         lines.push(Line::from(vec![
             Span::styled(format!(" {} ", time_str), Style::default().fg(Color::DarkGray)),
-            Span::styled(format!("{}", entry.role), role_style),
+            Span::styled(entry.role.to_string(), role_style),
         ]));
 
         // Wrap content to available width

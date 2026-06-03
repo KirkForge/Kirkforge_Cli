@@ -1,0 +1,14 @@
+# Cross.toml — configuration for `cross` (Docker-based cross-compilation)
+#
+# This project needs no special setup — the default cross Docker images
+# (ghcr.io/cross-rs/aarch64-unknown-linux-musl:0.2, etc.) include all
+# needed toolchain for Rust musl targets.
+#
+# Volumes: target/ is shared so incremental builds work. The repo root
+# is mounted at /project.
+
+[target.aarch64-unknown-linux-musl]
+# default image is ghcr.io/cross-rs/aarch64-unknown-linux-musl:main
+
+[target.armv7-unknown-linux-musleabihf]
+# default image is ghcr.io/cross-rs/armv7-unknown-linux-musleabihf:main

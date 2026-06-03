@@ -38,6 +38,10 @@ pub struct AppState {
     pub tokens_sent: usize,
     pub tokens_received: usize,
 
+    /// Cost tracking
+    pub turn_cost: f64,
+    pub cumulative_cost: f64,
+
     /// Session start time
     pub session_started: Instant,
 
@@ -59,6 +63,8 @@ impl AppState {
             pending_approval: None,
             tokens_sent: 0,
             tokens_received: 0,
+            turn_cost: 0.0,
+            cumulative_cost: 0.0,
             session_started: Instant::now(),
             config,
         }

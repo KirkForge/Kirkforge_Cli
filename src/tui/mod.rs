@@ -152,6 +152,12 @@ async fn run_event_loop(
                         timestamp: chrono::Local::now(),
                     });
                 }
+                executor::TurnEvent::CostStats { prompt_tokens, completion_tokens, turn_cost, cumulative_cost } => {
+                    state.tokens_sent = state.tokens_sent.wrapping_add(prompt_tokens);
+                    state.tokens_received = state.tokens_received.wrapping_add(completion_tokens);
+                    state.turn_cost = turn_cost;
+                    state.cumulative_cost = cumulative_cost;
+                }
             }
         }
 

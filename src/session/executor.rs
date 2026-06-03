@@ -5,6 +5,7 @@ use crate::shared::{
     Config, Message, Role, StreamEvent, ToolDef, ToolInvocation, ToolOutcome,
 };
 use crate::tools::Tool;
+use crate::session::access::{access_from_config, DenyList, GuardVerdict, PathGuard, ReadGate};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -19,6 +20,11 @@ pub struct Executor {
     prompt_builder: PromptBuilder,
     tools: Vec<Arc<dyn Tool>>,
     config: Config,
+    cost_tracking: crate::shared::CostTracking,
+    model_name: String,
+    deny_list: DenyList,
+    path_guard: PathGuard,
+    read_gate: ReadGate,
 }
 
 impl Executor {
@@ -40,12 +46,19 @@ impl Executor {
         config: Config,
         conversation: ConversationLog,
     ) -> Self {
+        let model_name = adapter.model_info().name.clone();
+        let (deny_list, path_guard, read_gate) = access_from_config(&config);
         Self {
             adapter,
             conversation,
             prompt_builder: PromptBuilder::new(),
             tools,
             config,
+            cost_tracking: crate::shared::CostTracking::default(),
+            model_name,
+            deny_list,
+            path_guard,
+            read_gate,
         }
     }
 
@@ -155,9 +168,23 @@ impl Executor {
                             },
                             tool_call_id: None,
                             tool_name: None,
-                            token_count: usage.and_then(|u| u.completion_tokens),
+                            token_count: usage.as_ref().and_then(|u| u.completion_tokens),
                         };
                         self.conversation.append(msg)?;
+
+                        // Record cost
+                        if let Some(ref u) = usage {
+                            let prompt = u.prompt_tokens.unwrap_or(0);
+                            let completion = u.completion_tokens.unwrap_or(0);
+                            let cost = crate::shared::calculate_cost(&self.model_name, prompt, completion);
+                            self.cost_tracking.record_turn(prompt, completion, cost);
+                            events.push(TurnEvent::CostStats {
+                                prompt_tokens: prompt,
+                                completion_tokens: completion,
+                                turn_cost: cost,
+                                cumulative_cost: self.cost_tracking.cumulative_cost,
+                            });
+                        }
 
                         // Process tool calls (clone because pending_tool_calls is
                         // reused in the outer loop if we continue for another turn)
@@ -226,56 +253,102 @@ impl Executor {
                                 args: tc.arguments.clone(),
                             });
 
-                            let outcome = tool.run(tc.arguments.clone()).await;
+                            // ── Access control checks ──────────────
+                            // 1. Deny list check (all tools)
+                            let tool_name = tc.name.as_str();
+                            if let Some(denied) = check_deny_list(&self.deny_list, tool_name, &tc.arguments) {
+                                events.push(TurnEvent::ToolResult {
+                                    name: tc.name.clone(),
+                                    output: denied.clone(),
+                                });
+                                self.conversation.append(Message {
+                                    role: Role::Tool,
+                                    content: denied,
+                                    tool_call_id: Some(tc.id.clone()),
+                                    tool_name: Some(tc.name.clone()),
+                                    ..Default::default()
+                                })?;
+                                continue;
+                            }
 
-                            match outcome {
-                                ToolOutcome::Success { content }
-                                | ToolOutcome::FileContent { content, .. }
-                                | ToolOutcome::FileEdit { diff: content, .. } => {
-                                    events.push(TurnEvent::ToolResult {
-                                        name: tc.name.clone(),
-                                        output: content.clone(),
-                                    });
-                                    self.conversation.append(Message {
-                                        role: Role::Tool,
-                                        content,
-                                        tool_call_id: Some(tc.id.clone()),
-                                        tool_name: Some(tc.name.clone()),
-                                        ..Default::default()
-                                    })?;
-                                }
-                                ToolOutcome::GrepMatches {
-                                    path,
-                                    matches,
-                                    total: _,
-                                } => {
-                                    let output = format_grep_output(&path, &matches);
-                                    events.push(TurnEvent::ToolResult {
-                                        name: tc.name.clone(),
-                                        output: output.clone(),
-                                    });
-                                    self.conversation.append(Message {
-                                        role: Role::Tool,
-                                        content: output,
-                                        tool_call_id: Some(tc.id.clone()),
-                                        tool_name: Some(tc.name.clone()),
-                                        ..Default::default()
-                                    })?;
-                                }
-                                ToolOutcome::Error { message } => {
-                                    events.push(TurnEvent::ToolResult {
-                                        name: tc.name.clone(),
-                                        output: format!("Error: {}", message),
-                                    });
-                                    self.conversation.append(Message {
-                                        role: Role::Tool,
-                                        content: format!("Error: {}", message),
-                                        tool_call_id: Some(tc.id.clone()),
-                                        tool_name: Some(tc.name.clone()),
-                                        ..Default::default()
-                                    })?;
+                            // 2. Path guard check for file tools
+                            if matches!(tool_name, "read_file" | "write_file" | "edit_file") {
+                                let path_str = tc.arguments.get("path")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("");
+                                let path = std::path::Path::new(path_str);
+
+                                let verdict = match tool_name {
+                                    "read_file" => self.path_guard.check_read(path),
+                                    "write_file" | "edit_file" => self.path_guard.check_write(path),
+                                    _ => unreachable!(),
+                                };
+
+                                match verdict {
+                                    GuardVerdict::Allowed(resolved) => {
+                                        // 3. Read-before-edit gate
+                                        if tool_name == "edit_file" {
+                                            match self.read_gate.check_edit(path) {
+                                                GuardVerdict::Allowed(_) => {}
+                                                GuardVerdict::Denied(msg) => {
+                                                    let denied = format!("🔒 Access denied: {msg}");
+                                                    events.push(TurnEvent::ToolResult {
+                                                        name: tc.name.clone(),
+                                                        output: denied.clone(),
+                                                    });
+                                                    self.conversation.append(Message {
+                                                        role: Role::Tool,
+                                                        content: denied,
+                                                        tool_call_id: Some(tc.id.clone()),
+                                                        tool_name: Some(tc.name.clone()),
+                                                        ..Default::default()
+                                                    })?;
+                                                    continue;
+                                                }
+                                            }
+                                        }
+
+                                        // 4. Mark as read if read_file
+                                        if tool_name == "read_file" {
+                                            self.read_gate.mark_read(&resolved);
+                                        }
+
+                                        // Stash resolved path back for the tool
+                                        if let Ok(path_obj) = serde_json::to_value(resolved.to_string_lossy().as_ref()) {
+                                            // Use the resolved path
+                                            let mut updated_args = tc.arguments.clone();
+                                            if let Some(obj) = updated_args.as_object_mut() {
+                                                obj.insert("path".into(), path_obj);
+                                            }
+                                            let outcome = tool.run(updated_args).await;
+                                            handle_tool_outcome(outcome, tc, &mut events, &mut self.conversation)?;
+                                        } else {
+                                            let outcome = tool.run(tc.arguments.clone()).await;
+                                            handle_tool_outcome(outcome, tc, &mut events, &mut self.conversation)?;
+                                        }
+                                        continue;
+                                    }
+                                    GuardVerdict::Denied(msg) => {
+                                        let denied = format!("🔒 Access denied: {msg}");
+                                        events.push(TurnEvent::ToolResult {
+                                            name: tc.name.clone(),
+                                            output: denied.clone(),
+                                        });
+                                        self.conversation.append(Message {
+                                            role: Role::Tool,
+                                            content: denied,
+                                            tool_call_id: Some(tc.id.clone()),
+                                            tool_name: Some(tc.name.clone()),
+                                            ..Default::default()
+                                        })?;
+                                        continue;
+                                    }
                                 }
                             }
+
+                            // Non-file tools: bash, grep, glob — execute directly
+                            let outcome = tool.run(tc.arguments.clone()).await;
+                            handle_tool_outcome(outcome, tc, &mut events, &mut self.conversation)?;
                         }
 
                         // If there were tool calls, continue the loop for another model turn
@@ -326,6 +399,109 @@ pub enum TurnEvent {
         output: String,
     },
     Error(String),
+    CostStats {
+        prompt_tokens: usize,
+        completion_tokens: usize,
+        turn_cost: f64,
+        cumulative_cost: f64,
+    },
+}
+
+/// Helper: check deny list before running a tool.
+/// Returns Some(denial_message) if blocked, None if allowed.
+fn check_deny_list(deny_list: &DenyList, tool_name: &str, args: &serde_json::Value) -> Option<String> {
+    match tool_name {
+        "read_file" | "write_file" | "edit_file" => {
+            if let Some(path) = args.get("path").and_then(|v| v.as_str()) {
+                let p = std::path::Path::new(path);
+                if deny_list.is_path_denied(p) {
+                    return Some(format!(
+                        "🔒 Path denied by deny list: {}",
+                        path
+                    ));
+                }
+            }
+        }
+        "bash" => {
+            if let Some(cmd) = args.get("command").and_then(|v| v.as_str()) {
+                // Check for dangerous patterns
+                if cmd.contains("169.254.169.254") || cmd.contains("metadata.google") {
+                    return Some("🔒 Command blocked: contains reference to metadata endpoints".into());
+                }
+            }
+        }
+        "grep" | "glob" => {
+            if let Some(path) = args.get("path").and_then(|v| v.as_str()) {
+                let p = std::path::Path::new(path);
+                if deny_list.is_path_denied(p) {
+                    return Some(format!(
+                        "🔒 Path denied by deny list: {}",
+                        path
+                    ));
+                }
+            }
+        }
+        _ => {}
+    }
+    None
+}
+
+/// Helper: process a tool outcome and push events/conversation entries.
+fn handle_tool_outcome(
+    outcome: ToolOutcome,
+    tc: &ToolInvocation,
+    events: &mut Vec<TurnEvent>,
+    conversation: &mut ConversationLog,
+) -> anyhow::Result<()> {
+    match outcome {
+        ToolOutcome::Success { content }
+        | ToolOutcome::FileContent { content, .. }
+        | ToolOutcome::FileEdit { diff: content, .. } => {
+            events.push(TurnEvent::ToolResult {
+                name: tc.name.clone(),
+                output: content.clone(),
+            });
+            conversation.append(Message {
+                role: Role::Tool,
+                content,
+                tool_call_id: Some(tc.id.clone()),
+                tool_name: Some(tc.name.clone()),
+                ..Default::default()
+            })?;
+        }
+        ToolOutcome::GrepMatches {
+            path,
+            matches,
+            total: _,
+        } => {
+            let output = format_grep_output(&path, &matches);
+            events.push(TurnEvent::ToolResult {
+                name: tc.name.clone(),
+                output: output.clone(),
+            });
+            conversation.append(Message {
+                role: Role::Tool,
+                content: output,
+                tool_call_id: Some(tc.id.clone()),
+                tool_name: Some(tc.name.clone()),
+                ..Default::default()
+            })?;
+        }
+        ToolOutcome::Error { message } => {
+            events.push(TurnEvent::ToolResult {
+                name: tc.name.clone(),
+                output: format!("Error: {}", message),
+            });
+            conversation.append(Message {
+                role: Role::Tool,
+                content: format!("Error: {}", message),
+                tool_call_id: Some(tc.id.clone()),
+                tool_name: Some(tc.name.clone()),
+                ..Default::default()
+            })?;
+        }
+    }
+    Ok(())
 }
 
 fn format_grep_output(path: &std::path::Path, matches: &[crate::shared::Match]) -> String {
@@ -446,6 +622,15 @@ mod tests {
             auto_approve,
             truncation_strategy: crate::shared::TruncationStrategy::KeepToolOnly,
             max_tool_result_chars: 4000,
+            deny_paths: vec![],
+            deny_urls: vec![],
+            deny_extensions: vec![],
+            allowed_write_dirs: vec![],
+            sandbox_dir: None,
+            block_dotfiles: false,
+            max_file_read_size: 1024 * 1024,
+            follow_symlinks: false,
+            block_binary_reads: false,
         }
     }
 

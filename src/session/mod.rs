@@ -1,7 +1,10 @@
+pub mod access;
 pub mod config;
 pub mod conversation;
+pub mod event_bus;
 pub mod executor;
 pub mod prompt;
+pub mod verifier;
 
 use crate::shared::{Config, SessionId};
 use std::path::PathBuf;

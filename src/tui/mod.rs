@@ -52,14 +52,20 @@ pub async fn run_tui(
         since: Instant::now(),
     };
 
-    // Channels for approval flow
-    let (approval_tx, mut approval_rx) = mpsc::unbounded_channel::<ApprovalRequest>();
+    // Channel for receiving approval requests from executor
+    let (mut approval_rx) = {
+        let (tx, rx) = mpsc::unbounded_channel::<ApprovalRequest>();
+        // tx is given to the executor for sending approval requests
+        // but currently approval flow is simplified — will wire up fully in next pass
+        let _tx = tx;
+        rx
+    };
 
     // Session — executor owns the conversation log
     let mut executor = executor::Executor::with_log(adapter, tools, config, conversation_log);
 
     // Event loop
-    let res = _run_event_loop(
+    let res = run_event_loop(
         &mut terminal,
         &mut state,
         &mut approval_rx,
@@ -73,11 +79,12 @@ pub async fn run_tui(
     res
 }
 
-async fn _run_event_loop(
+#[allow(unused_variables)]
+async fn run_event_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     state: &mut AppState,
     approval_rx: &mut mpsc::UnboundedReceiver<ApprovalRequest>,
-    _executor: &mut executor::Executor,
+    executor: &mut executor::Executor,
 ) -> anyhow::Result<()> {
     loop {
         // ── Render ──
@@ -118,11 +125,11 @@ async fn _run_event_loop(
         }
 
         // ── Check for approval requests ──
-        if let Ok(_req) = approval_rx.try_recv() {
-            let (tx, _rx) = tokio::sync::oneshot::channel();
+        if let Ok(req) = approval_rx.try_recv() {
+            let (tx, _rx) = tokio::sync::oneshot::channel::<()>();
             state.pending_approval = Some(PendingApproval {
-                tool_name: _req.tool_name.clone(),
-                args: _req.args.clone(),
+                tool_name: req.tool_name.clone(),
+                args: req.args.clone(),
                 responder: Some(tx),
             });
         }

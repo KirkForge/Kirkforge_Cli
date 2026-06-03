@@ -22,7 +22,7 @@ Native Ollama CLI coding agent in Rust. Static binary, TUI, potato hardware (8GB
 
 ## Project status
 
-All 10 milestones complete. 33 source files, ~5,100 lines of Rust. 69 unit tests, 7 integration tests (require Ollama, marked `#[ignore]`).
+All 10 milestones complete. 34 source files, ~6,500 lines of Rust. 146 unit tests, 7 integration tests (require Ollama, marked `#[ignore]`).
 
 ## Build
 
@@ -45,6 +45,12 @@ All 10 milestones complete. 33 source files, ~5,100 lines of Rust. 69 unit tests
 | 8 | VFS prompt compression (minifier) | ✅ Wired into read_file + prompt builder |
 | 9 | Event bus + verifier slots | ✅ 9 event kinds, 4 verifier slots, correction loop |
 | 10 | Deny list + path safety | ✅ 6-layer path guard, read-before-edit, binary detection |
+| 11 | Config bootstrap | ✅ Layered resolution, env var overrides, partial merge |
+| 12 | Skills system | ✅ SKILL.md frontmatter parser, slash command registry |
+| 13 | Session forking + background bash | ✅ ForkManager, BashJobRegistry |
+| 14 | VFS minification | ✅ LazyLock cache, strip-test blocks, C++/Java/Ruby/Shell |
+| 15 | Workflow engine | ✅ DAG steps, conditions, loops, variable interpolation |
+| 16 | Prompt cache stem | ✅ Cache-aware build_stem(), hit probability estimator |
 
 ## Relevant paths
 

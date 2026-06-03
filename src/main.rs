@@ -67,7 +67,7 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     // Load config
-    let mut config = session::load_or_create_config();
+    let mut config = session::config::load_or_create_config();
 
     // Apply CLI overrides
     if let Some(host) = &cli.host {

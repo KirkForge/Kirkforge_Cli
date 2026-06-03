@@ -1,3 +1,4 @@
+use crate::session::bash_jobs::global_registry;
 use crate::shared::{ToolDef, ToolOutcome};
 use crate::tools::Tool;
 use std::time::Duration;
@@ -10,7 +11,7 @@ impl Tool for Bash {
     fn def(&self) -> ToolDef {
         ToolDef {
             name: "bash",
-            description: "Execute a bash command. Use for running tests, builds, git operations, and file inspection. Output is captured and returned.",
+            description: "Execute a bash command. Use for running tests, builds, git operations, and file inspection. Output is captured and returned. Set \"background\": true to run long-lived commands in the background.",
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -27,6 +28,11 @@ impl Tool for Bash {
                         "type": "string",
                         "description": "Working directory (default: project root)",
                         "default": "."
+                    },
+                    "background": {
+                        "type": "boolean",
+                        "description": "Run in background. Use bash_status to check and bash_output to retrieve results.",
+                        "default": false
                     }
                 },
                 "required": ["command"]
@@ -40,46 +46,56 @@ impl Tool for Bash {
             None => return ToolOutcome::Error { message: "Missing 'command' argument".into() },
         };
 
-        let timeout_secs = args.get("timeout").and_then(|t| t.as_u64()).unwrap_or(30);
-        let workdir = args.get("workdir").and_then(|w| w.as_str()).unwrap_or(".");
+        // Check for background mode
+        if args.get("background").and_then(|b| b.as_bool()).unwrap_or(false) {
+            let registry = global_registry();
+            match registry.spawn(&cmd).await {
+                Ok(id) => ToolOutcome::Success {
+                    content: format!("Background job #{} started. Use bash_status(id={}) or bash_output(id={}) to check results.", id, id, id),
+                },
+                Err(e) => ToolOutcome::Error {
+                    message: format!("Failed to start background job: {}", e),
+                },
+            }
+        } else {
+            // Normal foreground execution
+            let timeout_secs = args.get("timeout").and_then(|t| t.as_u64()).unwrap_or(30);
+            let workdir = args.get("workdir").and_then(|w| w.as_str()).unwrap_or(".");
 
-        let workdir_path = PathBuf::from(shellexpand::tilde(workdir).as_ref());
+            let workdir_path = PathBuf::from(shellexpand::tilde(workdir).as_ref());
 
-        // Determine if this is likely read-only
-        let _is_readonly = is_readonly_command(&cmd);
+            let result = tokio::time::timeout(
+                Duration::from_secs(timeout_secs),
+                run_shell(&cmd, &workdir_path),
+            ).await;
 
-        // Run the command
-        let result = tokio::time::timeout(
-            Duration::from_secs(timeout_secs),
-            run_shell(&cmd, &workdir_path),
-        ).await;
-
-        match result {
-            Ok(Ok(output)) => {
-                if output.status.success() {
-                    ToolOutcome::Success { content: output.stdout }
-                } else {
-                    let stderr = if output.stderr.is_empty() {
-                        String::new()
+            match result {
+                Ok(Ok(output)) => {
+                    if output.status.success() {
+                        ToolOutcome::Success { content: output.stdout }
                     } else {
-                        format!("\nstderr:\n{}", output.stderr)
-                    };
-                    ToolOutcome::Error {
-                        message: format!(
-                            "Command exited with code {}{}\nstdout:\n{}",
-                            output.status.code().unwrap_or(-1),
-                            stderr,
-                            output.stdout
-                        ),
+                        let stderr = if output.stderr.is_empty() {
+                            String::new()
+                        } else {
+                            format!("\nstderr:\n{}", output.stderr)
+                        };
+                        ToolOutcome::Error {
+                            message: format!(
+                                "Command exited with code {}{}\nstdout:\n{}",
+                                output.status.code().unwrap_or(-1),
+                                stderr,
+                                output.stdout
+                            ),
+                        }
                     }
                 }
+                Ok(Err(e)) => ToolOutcome::Error {
+                    message: format!("Failed to execute command: {}", e),
+                },
+                Err(_) => ToolOutcome::Error {
+                    message: format!("Command timed out after {} seconds", timeout_secs),
+                },
             }
-            Ok(Err(e)) => ToolOutcome::Error {
-                message: format!("Failed to execute command: {}", e),
-            },
-            Err(_) => ToolOutcome::Error {
-                message: format!("Command timed out after {} seconds", timeout_secs),
-            },
         }
     }
 }
@@ -91,7 +107,6 @@ struct ShellOutput {
 }
 
 async fn run_shell(cmd: &str, workdir: &Path) -> std::io::Result<ShellOutput> {
-    // Spawn on a blocking thread to avoid blocking the async runtime
     let cmd = cmd.to_string();
     let workdir = workdir.to_path_buf();
 
@@ -113,25 +128,4 @@ async fn run_shell(cmd: &str, workdir: &Path) -> std::io::Result<ShellOutput> {
             stderr,
         })
     }).await.expect("spawn_blocking panicked")
-}
-
-/// Heuristic: detect read-only commands so the approval gate can auto-pass.
-/// This is not a security boundary — it's a UX optimization.
-fn is_readonly_command(cmd: &str) -> bool {
-    let trimmed = cmd.trim();
-
-    let read_only_prefixes = [
-        "ls ", "cat ", "head ", "tail ", "echo ", "printf ", "pwd",
-        "git status", "git log", "git diff", "git show", "git branch",
-        "grep ", "find ", "wc ", "sort ", "uniq ", "which ",
-        "cargo check", "cargo test", "npm test", "npm run",
-    ];
-
-    for prefix in read_only_prefixes {
-        if trimmed.starts_with(prefix) {
-            return true;
-        }
-    }
-
-    false
 }

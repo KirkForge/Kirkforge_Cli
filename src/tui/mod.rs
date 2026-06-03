@@ -52,6 +52,13 @@ pub async fn run_tui(
         since: Instant::now(),
     };
 
+    // Set up session forking metadata
+    let log_path = conversation_log.path().clone();
+    let session_id = crate::session::new_session_id().to_string();
+    state.log_path = Some(log_path.clone());
+    state.session_id = session_id.clone();
+    state.fork_manager = Some(crate::session::session_fork::ForkManager::new(&session_id, &log_path));
+
     // Initialize skill registry: scan for SKILL.md files
     state.skill_registry.add_scan_path(std::path::PathBuf::from(".claude/skills"));
     match state.skill_registry.scan_and_load() {
@@ -186,6 +193,9 @@ async fn run_event_loop(
             }
         }
 
+        // ── Check for completed background jobs ──
+        notify_completed_jobs(state);
+
         // ── Drain pending approval requests ──
         while let Ok(req) = approval_rx.try_recv() {
             state.pending_approval = Some(PendingApproval {
@@ -224,7 +234,7 @@ async fn run_event_loop(
                     if state.pending_approval.is_some() {
                         handle_approval_key(key, state);
                     } else {
-                        handle_input_key(key, state, input_tx)?;
+                        handle_input_key(key, state, input_tx).await?;
                     }
                 }
                 Event::Resize(_w, _h) => {}
@@ -234,7 +244,7 @@ async fn run_event_loop(
     }
 }
 
-fn handle_input_key(
+async fn handle_input_key(
     key: KeyEvent,
     state: &mut AppState,
     input_tx: &mpsc::UnboundedSender<String>,
@@ -328,7 +338,7 @@ fn handle_input_key(
                         }
                         "/help" | "/h" | "/?" => {
                             let mut help_text =
-                                "Built-in commands:\n  /clear  Clear conversation\n  /exit   Quit\n".to_string();
+                                "Built-in commands:\n  /clear  Clear conversation\n  /exit   Quit\n  /fork   Fork session: /fork list | <label> [count]\n  /jobs   List background bash jobs\n".to_string();
                             let skills = state.skill_registry.all();
                             if !skills.is_empty() {
                                 help_text.push_str("\nSkills:\n");
@@ -346,6 +356,24 @@ fn handle_input_key(
                             state.messages.push(ConversationEntry {
                                 role: "system".into(),
                                 content: help_text,
+                                timestamp: chrono::Local::now(),
+                            });
+                            return Ok(());
+                        }
+                        "/fork" => {
+                            let msg = handle_fork_command(args, state).await;
+                            state.messages.push(ConversationEntry {
+                                role: "system".into(),
+                                content: msg,
+                                timestamp: chrono::Local::now(),
+                            });
+                            return Ok(());
+                        }
+                        "/jobs" => {
+                            let msg = handle_jobs_command().await;
+                            state.messages.push(ConversationEntry {
+                                role: "system".into(),
+                                content: msg,
                                 timestamp: chrono::Local::now(),
                             });
                             return Ok(());
@@ -429,5 +457,97 @@ fn handle_approval_key(key: KeyEvent, state: &mut AppState) {
             let _ = tx.send(resp);
         }
     }
+}
+
+/// Handle /fork command: list forks or create a new one.
+async fn handle_fork_command(args: &str, state: &mut AppState) -> String {
+    let fm = match state.fork_manager.as_mut() {
+        Some(fm) => fm,
+        None => return "No fork manager available (session not initialized).".into(),
+    };
+
+    let trimmed = args.trim();
+    if trimmed.eq_ignore_ascii_case("list") || trimmed.is_empty() {
+        let forks = fm.list();
+        if forks.is_empty() {
+            return "No forks created yet. Use `/fork <label> [count]` to create one.".into();
+        }
+        let mut out = "Session forks:\n".to_string();
+        for f in forks {
+            out.push_str(&format!(
+                "  {} — {} (fork point: {}, created: {})\n",
+                f.id, f.label, f.fork_point, f.created_at
+            ));
+        }
+        return out;
+    }
+
+    // Parse: label [count]
+    let parts: Vec<&str> = trimmed.splitn(2, ' ').collect();
+    if parts.is_empty() || parts[0].is_empty() {
+        return "Usage: /fork list | /fork <label> [count]".into();
+    }
+
+    let label = parts[0];
+
+    // Build a fake ConversationLog from our messages for fork creation
+    // We use the conversation log path stored in state
+    let log_path = match &state.log_path {
+        Some(p) => p.clone(),
+        None => return "No log path available. Cannot create fork.".into(),
+    };
+
+    // Open the conversation log to read the latest state
+    match crate::session::conversation::ConversationLog::open(log_path) {
+        Ok(conv_log) => {
+            // Fork point: -1 (end) by default, or parse an optional count
+            let fork_point: i64 = parts.get(1)
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(-1);
+
+            match fm.create_fork(label, &conv_log, fork_point) {
+                Ok(fork) => format!(
+                    "✅ Created fork {} — \"{}\" at message #{} (path: {})",
+                    fork.id, fork.label, fork.fork_point, fork.path.display()
+                ),
+                Err(e) => format!("Error creating fork: {}", e),
+            }
+        }
+        Err(e) => format!("Error opening conversation log: {}", e),
+    }
+}
+
+/// Handle /jobs command: list background bash jobs.
+async fn handle_jobs_command() -> String {
+    let registry = crate::session::bash_jobs::global_registry();
+    let jobs = registry.list().await;
+    if jobs.is_empty() {
+        return "No background jobs.".into();
+    }
+    let mut out = "Background jobs:\n".to_string();
+    for job in &jobs {
+        let status = match &job.status {
+            crate::session::bash_jobs::JobStatus::Running => format!("⏳ running (id={})", job.id),
+            crate::session::bash_jobs::JobStatus::Completed(code) => format!("✅ completed #{} (exit {})", job.id, code),
+            crate::session::bash_jobs::JobStatus::Failed(e) => format!("❌ failed #{}: {}", job.id, e),
+            crate::session::bash_jobs::JobStatus::Cancelled => format!("🚫 cancelled #{}", job.id),
+        };
+        out.push_str(&format!("  {} — {}\n", status, job.command));
+    }
+    out.pop();
+    out
+}
+
+/// Check for recently-completed background jobs and push a notification.
+fn notify_completed_jobs(state: &mut AppState) {
+    // This runs synchronously in the event loop. We check via try_ methods
+    // but the BashJobRegistry requires async access. For the synchronous
+    // rendering path we rely on /jobs for status queries. Background job
+    // completion is handled by the executor/tool layer emitting events
+    // when jobs are polled.
+    //
+    // NOTE: The global registry is thread-safe; completed jobs are visible
+    // to the /jobs command at any time through handle_jobs_command().
+    let _ = state; // placeholder for future push-based notification
 }
 

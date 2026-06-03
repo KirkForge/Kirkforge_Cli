@@ -1,6 +1,8 @@
 /// Main application state and event handling.
+use crate::session::session_fork::ForkManager;
 use crate::session::skills::SkillRegistry;
 use crate::shared::{Config, ModelInfo};
+use std::path::PathBuf;
 use std::time::Instant;
 
 /// Represents the connection state for the status bar.
@@ -51,6 +53,14 @@ pub struct AppState {
 
     /// Skill registry for slash commands (loaded from SKILL.md files)
     pub skill_registry: SkillRegistry,
+
+    // ── Session forking (Phase 7) ───────────────────────────
+    /// Path to the conversation NDJSON log file.
+    pub log_path: Option<PathBuf>,
+    /// Session display ID (e.g. "2026-06-03-session-01").
+    pub session_id: String,
+    /// Fork manager for creating and listing conversation forks.
+    pub fork_manager: Option<ForkManager>,
 }
 
 impl AppState {
@@ -72,6 +82,9 @@ impl AppState {
             session_started: Instant::now(),
             config,
             skill_registry: SkillRegistry::new(),
+            log_path: None,
+            session_id: String::new(),
+            fork_manager: None,
         }
     }
 }

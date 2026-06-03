@@ -15,8 +15,8 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  RUSTFLAGS: "-C target-feature=-crt-static"
-  # All targets share the same profile (LTO + strip + panic=abort from Cargo.toml)
+  # No RUSTFLAGS needed — musl targets default to +crt-static.
+  # Profile settings (LTO + strip + panic=abort) come from Cargo.toml.
 
 jobs:
   x86_64-musl:

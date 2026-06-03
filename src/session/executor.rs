@@ -1,6 +1,9 @@
 use crate::adapters::ModelAdapter;
 use crate::session::conversation::ConversationLog;
+use crate::session::event_bus::{BusEvent, EventBus};
 use crate::session::prompt::PromptBuilder;
+use crate::session::verifier::CorrectionResult;
+use crate::session::verifier::{CorrectionLoop, VerifierHandler, VerifierSlots};
 use crate::shared::{
     Config, Message, Role, StreamEvent, ToolDef, ToolInvocation, ToolOutcome,
 };
@@ -25,6 +28,8 @@ pub struct Executor {
     deny_list: DenyList,
     path_guard: PathGuard,
     read_gate: ReadGate,
+    event_bus: EventBus,
+    correction_loop: Option<CorrectionLoop>,
 }
 
 impl Executor {
@@ -48,6 +53,21 @@ impl Executor {
     ) -> Self {
         let model_name = adapter.model_info().name.clone();
         let (deny_list, path_guard, read_gate) = access_from_config(&config);
+
+        // Initialize event bus with default verifiers
+        let event_bus = EventBus::new();
+        let verifier_slots = Arc::new(std::sync::RwLock::new(VerifierSlots::new()));
+        let verifier_handler = Arc::new(VerifierHandler::new(verifier_slots.clone()));
+        let correction_loop = Some(CorrectionLoop::new(verifier_handler.clone()));
+
+        // Register verifier handler on the event bus
+        // We don't block on this — it's best-effort initialization
+        let bus = event_bus.clone();
+        let handler = verifier_handler.clone();
+        tokio::spawn(async move {
+            let _ = bus.register(handler).await;
+        });
+
         Self {
             adapter,
             conversation,
@@ -59,7 +79,73 @@ impl Executor {
             deny_list,
             path_guard,
             read_gate,
+            event_bus,
+            correction_loop,
         }
+    }
+
+    /// Initialize default verifiers (security, lint, git).
+    /// Returns the number of registered verifiers.
+    pub fn init_default_verifiers(&mut self) -> usize {
+        use crate::session::verifier::{Verdict, Verifier};
+
+        let slots = Arc::new(std::sync::RwLock::new(VerifierSlots::new()));
+        let mut count = 0;
+
+        // Security verifier (priority 1 — runs first)
+        struct SecV;
+        #[async_trait::async_trait]
+        impl Verifier for SecV {
+            fn name(&self) -> &str { "security" }
+            fn priority(&self) -> u8 { 1 }
+            async fn verify(&self, event: &BusEvent) -> Verdict {
+                crate::session::verifier::security::verify_security(event).await
+            }
+        }
+        {
+            let mut s = slots.write().unwrap();
+            if s.register(Arc::new(SecV)).is_ok() { count += 1; }
+        }
+
+        // Lint verifier (priority 2)
+        struct LintV;
+        #[async_trait::async_trait]
+        impl Verifier for LintV {
+            fn name(&self) -> &str { "lint" }
+            fn priority(&self) -> u8 { 2 }
+            async fn verify(&self, event: &BusEvent) -> Verdict {
+                crate::session::verifier::lint::verify_lint(event).await
+            }
+        }
+        {
+            let mut s = slots.write().unwrap();
+            if s.register(Arc::new(LintV)).is_ok() { count += 1; }
+        }
+
+        // Git verifier (priority 3)
+        struct GitV;
+        #[async_trait::async_trait]
+        impl Verifier for GitV {
+            fn name(&self) -> &str { "git" }
+            fn priority(&self) -> u8 { 3 }
+            async fn verify(&self, event: &BusEvent) -> Verdict {
+                crate::session::verifier::git::verify_git(event).await
+            }
+        }
+        {
+            let mut s = slots.write().unwrap();
+            if s.register(Arc::new(GitV)).is_ok() { count += 1; }
+        }
+
+        let handler = Arc::new(VerifierHandler::new(slots));
+        let bus = self.event_bus.clone();
+        let h = handler.clone();
+        tokio::spawn(async move {
+            let _ = bus.register(h).await;
+        });
+
+        self.correction_loop = Some(CorrectionLoop::new(handler));
+        count
     }
 
     /// Run the executor as a long-lived background task.
@@ -320,11 +406,17 @@ impl Executor {
                                             if let Some(obj) = updated_args.as_object_mut() {
                                                 obj.insert("path".into(), path_obj);
                                             }
+                                            let crs_args = updated_args.clone();
                                             let outcome = tool.run(updated_args).await;
                                             handle_tool_outcome(outcome, tc, &mut events, &mut self.conversation)?;
+                                            let crs = self.emit_tool_event_and_correct(tc, tool_name, &crs_args).await;
+                                            emit_correction_results(crs, tc, &mut events, &mut self.conversation)?;
                                         } else {
+                                            let args = tc.arguments.clone();
                                             let outcome = tool.run(tc.arguments.clone()).await;
                                             handle_tool_outcome(outcome, tc, &mut events, &mut self.conversation)?;
+                                            let crs = self.emit_tool_event_and_correct(tc, tool_name, &args).await;
+                                            emit_correction_results(crs, tc, &mut events, &mut self.conversation)?;
                                         }
                                         continue;
                                     }
@@ -349,6 +441,10 @@ impl Executor {
                             // Non-file tools: bash, grep, glob — execute directly
                             let outcome = tool.run(tc.arguments.clone()).await;
                             handle_tool_outcome(outcome, tc, &mut events, &mut self.conversation)?;
+
+                            // Emit event + run correction loop
+                            let crs = self.emit_tool_event_and_correct(tc, tool_name, &tc.arguments).await;
+                            emit_correction_results(crs, tc, &mut events, &mut self.conversation)?;
                         }
 
                         // If there were tool calls, continue the loop for another model turn
@@ -369,6 +465,71 @@ impl Executor {
         }
 
         Ok(events)
+    }
+
+    /// Emit a tool event on the event bus and run the correction loop.
+    ///
+    /// Constructs the appropriate BusEvent based on tool name and
+    /// arguments, dispatches it to registered verifiers, and collects
+    /// any correction results.
+    async fn emit_tool_event_and_correct(
+        &self,
+        _tc: &ToolInvocation,
+        tool_name: &str,
+        args: &serde_json::Value,
+    ) -> Vec<CorrectionResult> {
+        let bus_event = match tool_name {
+            "read_file" => {
+                let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                Some(BusEvent::FileRead(crate::session::event_bus::FileReadEvent {
+                    path: std::path::PathBuf::from(&path),
+                    size_bytes: 0,
+                    truncated: false,
+                }))
+            }
+            "write_file" => {
+                let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let content = args.get("content").and_then(|v| v.as_str()).unwrap_or("");
+                Some(BusEvent::FileWrite(crate::session::event_bus::FileWriteEvent {
+                    path: std::path::PathBuf::from(&path),
+                    content_length: content.len(),
+                }))
+            }
+            "edit_file" => {
+                let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let diff = args.get("old_string")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                Some(BusEvent::Edit(crate::session::event_bus::EditEvent {
+                    path: std::path::PathBuf::from(&path),
+                    diff,
+                }))
+            }
+            "bash" => {
+                let command = args.get("command").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                Some(BusEvent::BashExec(crate::session::event_bus::BashExecEvent {
+                    command,
+                    exit_code: 0,
+                    stdout_len: 0,
+                    stderr_len: 0,
+                }))
+            }
+            _ => None,
+        };
+
+        let Some(event) = bus_event else {
+            return vec![];
+        };
+
+        // Dispatch on event bus (fire-and-forget to registered handlers)
+        let _ = self.event_bus.dispatch(&event).await;
+
+        // Run correction loop
+        let Some(ref correction_loop) = self.correction_loop else {
+            return vec![];
+        };
+        correction_loop.run(&event).await
     }
 }
 
@@ -399,6 +560,10 @@ pub enum TurnEvent {
         output: String,
     },
     Error(String),
+    Verification {
+        message: String,
+        success: bool,
+    },
     CostStats {
         prompt_tokens: usize,
         completion_tokens: usize,
@@ -517,6 +682,29 @@ fn format_grep_output(path: &std::path::Path, matches: &[crate::shared::Match]) 
         out.push('\n');
     }
     out
+}
+
+/// Helper: emit correction results as TurnEvents and conversation entries.
+fn emit_correction_results(
+    results: Vec<CorrectionResult>,
+    tc: &ToolInvocation,
+    events: &mut Vec<TurnEvent>,
+    conversation: &mut ConversationLog,
+) -> anyhow::Result<()> {
+    for cr in &results {
+        events.push(TurnEvent::Verification {
+            message: cr.message.clone(),
+            success: cr.success,
+        });
+        conversation.append(Message {
+            role: Role::Tool,
+            content: cr.message.clone(),
+            tool_call_id: Some(tc.id.clone()),
+            tool_name: Some(format!("verifier:{}", cr.verifier)),
+            ..Default::default()
+        })?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

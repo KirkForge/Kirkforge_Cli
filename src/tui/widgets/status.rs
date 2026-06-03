@@ -37,8 +37,15 @@ pub fn render_status(f: &mut Frame, area: Rect, state: &AppState) {
     } else {
         String::new()
     };
+    let skill_count = state.skill_registry.len();
+    let skills_str = if skill_count > 0 {
+        format!(" {}sk", skill_count)
+    } else {
+        String::new()
+    };
     let right_info = format!(
-        " ↑{} ↓{} {} │ {} ",
+        "{} ↑{} ↓{} {} │ {} ",
+        if skills_str.is_empty() { String::new() } else { format!("{} ", skills_str) },
         format_token_count(state.tokens_sent),
         format_token_count(state.tokens_received),
         cost_str,

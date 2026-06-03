@@ -8,6 +8,7 @@ mod session;
 mod shared;
 mod tools;
 mod tui;
+mod workflow;
 
 use clap::Parser;
 use std::io::Write;

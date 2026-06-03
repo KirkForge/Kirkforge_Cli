@@ -1,4 +1,4 @@
-use crate::shared::{Message, Role, ToolInvocation};
+use crate::shared::Message;
 use std::path::PathBuf;
 
 /// Append-only conversation log.

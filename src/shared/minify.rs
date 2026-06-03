@@ -3,7 +3,6 @@
 /// Applied at prompt-build time only — files on disk are never modified.
 /// Strips comments, collapses whitespace, shortens local identifiers
 /// in languages where that's safe.
-use std::collections::HashSet;
 use std::path::Path;
 
 /// Minify source code for a given language.

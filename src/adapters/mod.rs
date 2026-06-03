@@ -3,7 +3,7 @@ pub mod deepseek;
 pub mod gemini;
 pub mod openai_compat;
 
-use crate::shared::{ModelInfo, StreamEvent, ToolCallStyle};
+use crate::shared::{ModelInfo, StreamEvent};
 
 /// Every model adapter implements this.
 /// `stream()` returns a channel receiver the session drains.

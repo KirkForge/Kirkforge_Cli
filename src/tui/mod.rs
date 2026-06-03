@@ -53,7 +53,7 @@ pub async fn run_tui(
     };
 
     // Channel for receiving approval requests from executor
-    let (mut approval_rx) = {
+    let mut approval_rx = {
         let (tx, rx) = mpsc::unbounded_channel::<ApprovalRequest>();
         // tx is given to the executor for sending approval requests
         // but currently approval flow is simplified — will wire up fully in next pass
@@ -126,7 +126,7 @@ async fn run_event_loop(
 
         // ── Check for approval requests ──
         if let Ok(req) = approval_rx.try_recv() {
-            let (tx, _rx) = tokio::sync::oneshot::channel::<()>();
+            let (tx, _rx) = tokio::sync::oneshot::channel::<ApprovalResponse>();
             state.pending_approval = Some(PendingApproval {
                 tool_name: req.tool_name.clone(),
                 args: req.args.clone(),
@@ -260,11 +260,11 @@ fn handle_approval_key(key: KeyEvent, state: &mut AppState) {
     };
 
     if let Some(resp) = response {
-        if let Some(tx) = approval.responder {
-            let _ = tx.send(resp);
-        }
         if matches!(resp, ApprovalResponse::AlwaysApprove) {
             // TODO: set auto_approve in config
+        }
+        if let Some(tx) = approval.responder {
+            let _ = tx.send(resp);
         }
     }
 }

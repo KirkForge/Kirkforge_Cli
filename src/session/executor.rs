@@ -57,7 +57,7 @@ impl Executor {
         &mut self,
         user_input: &str,
         approval_sender: mpsc::UnboundedSender<ApprovalRequest>,
-        mut approval_receiver: mpsc::UnboundedReceiver<ApprovalResponse>,
+        _approval_receiver: mpsc::UnboundedReceiver<ApprovalResponse>,
     ) -> anyhow::Result<Vec<TurnEvent>> {
         // Append user message
         self.conversation.append(Message {
@@ -117,9 +117,9 @@ impl Executor {
                     StreamEvent::Error(e) => {
                         events.push(TurnEvent::Error(e));
                     }
-                    StreamEvent::Done { finish_reason, usage } => {
+                    StreamEvent::Done { finish_reason: _, usage } => {
                         // Save the assistant message
-                        let mut msg = Message {
+                        let msg = Message {
                             role: Role::Assistant,
                             content: assistant_content.clone(),
                             thinking: if assistant_thinking.is_empty() {
@@ -130,7 +130,7 @@ impl Executor {
                             tool_calls: if pending_tool_calls.is_empty() {
                                 None
                             } else {
-                                Some(pending_tool_calls.clone())
+                                Some(std::mem::take(&mut pending_tool_calls))
                             },
                             tool_call_id: None,
                             tool_name: None,
@@ -163,7 +163,7 @@ impl Executor {
 
                             if needs_approval {
                                 // Request approval from the UI
-                                let (response_tx, mut response_rx) = tokio::sync::oneshot::channel();
+                                let (response_tx, response_rx) = tokio::sync::oneshot::channel::<ApprovalResponse>();
                                 approval_sender.send(ApprovalRequest {
                                     tool_name: tc.name.clone(),
                                     args: tc.arguments.clone(),

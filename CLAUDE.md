@@ -22,14 +22,14 @@ Native Ollama CLI coding agent in Rust. Static binary, TUI, potato hardware (8GB
 
 ## Project status
 
-16 milestones (15 active + 1 deleted). 40 source files, ~8,375 lines of Rust. 123 unit tests, 7 integration tests (require Ollama, marked `#[ignore]`).
+16 milestones (15 active + 1 deleted). 40 source files, ~9,878 lines of Rust. 122 unit tests, 7 integration tests (require Ollama, marked `#[ignore]`).
 
 ## Build
 
 - **0 errors, 0 warnings** (clippy `-D warnings`)
-- `cargo test` — 123 unit tests, all pass
+- `cargo test` — 122 unit tests, all pass
 - `cargo test --test integration_test -- --ignored` — 7 integration tests against live Ollama
-- Release: 4.7 MB, LTO + panic=abort + strip
+- Release: 4.9 MB, LTO + panic=abort + strip
 
 ## Milestones
 

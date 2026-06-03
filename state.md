@@ -27,9 +27,9 @@ Last updated: 2026-06-03
 
 - **Rust toolchain**: stable (2026-06-03)
 - **Build**: ✅ Clean — 0 errors, 0 warnings (clippy `-D warnings`)
-- **Tests**: 123 unit tests pass, 7 integration tests (require Ollama, marked `#[ignore]`)
-- **Release binary**: 4.7 MB stripped, ELF x86-64, LTO + panic=abort
-- **Source**: 40 files, ~8,375 lines of Rust
+- **Tests**: 122 unit tests pass, 7 integration tests (require Ollama, marked `#[ignore]`)
+- **Release binary**: 4.9 MB stripped, ELF x86-64, LTO + panic=abort
+- **Source**: 40 files, ~9,878 lines of Rust
 
 ## Changes This Session
 

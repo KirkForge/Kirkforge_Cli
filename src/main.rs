@@ -1,6 +1,8 @@
-// Many modules expose stubs and helper APIs not yet wired into the main
-// execution path — suppress dead-code warnings so we keep the public API
-// surface clean for future callers.
+// Dead-code warnings suppressed for:
+//   - Public API fields/variants defined for completeness (not all consumed yet)
+//   - Handler methods registered at runtime via trait objects
+//   - Test helpers behind #[cfg(test)]
+// The one truly dead subsystem (workflow engine, 889 lines) has been removed.
 #![allow(dead_code)]
 
 mod adapters;
@@ -8,7 +10,6 @@ mod session;
 mod shared;
 mod tools;
 mod tui;
-mod workflow;
 
 use clap::Parser;
 use std::io::Write;

@@ -64,7 +64,69 @@ impl ModelAdapter for OpenAiCompatAdapter {
         tokio::spawn(async move {
             let mut stream = response.bytes_stream();
             let mut buffer = String::new();
-            let mut pending_tool_calls: Vec<ToolInvocation> = Vec::new();
+            /// Accumulator for OpenAI SSE tool-call deltas.
+    ///
+    /// OpenAI streams tool calls incrementally across multiple SSE events.
+    /// The first delta has `id` and `name`, subsequent deltas only have
+    /// `arguments` fragments. Keyed by `index` (0-based within the array).
+    ///
+    /// Example delta sequence:
+    ///   {index: 0, id: "call_1", function: {name: "read_file", arguments: ""}}
+    ///   {index: 0, id: null,      function: {name: null,        arguments: "{\"path\":" }}
+    ///   {index: 0, id: null,      function: {name: null,        arguments: " \"/etc\"}" }}
+    struct ToolCallAccumulator {
+        /// Keyed by `index` field from the delta.
+        calls: std::collections::HashMap<usize, (String, String, String)>, // (id, name, args_json)
+    }
+
+    impl ToolCallAccumulator {
+        fn new() -> Self {
+            Self { calls: std::collections::HashMap::new() }
+        }
+
+        /// Accumulate one delta. Merges `arguments` by appending.
+        fn accumulate(&mut self, index: usize, id: &str, name: Option<&str>, args: Option<&str>) {
+            let entry = self.calls.entry(index).or_insert_with(|| {
+                (id.to_string(), String::new(), String::new())
+            });
+            // ID: only set on first delta — keep whatever we get
+            if !id.is_empty() {
+                entry.0 = id.to_string();
+            }
+            // Name: set when present (first delta, usually)
+            if let Some(n) = name {
+                entry.1 = n.to_string();
+            }
+            // Arguments: append incrementally across deltas
+            if let Some(a) = args {
+                entry.2.push_str(a);
+            }
+        }
+
+        /// Drain all accumulated calls as ToolInvocation values.
+        fn drain(&mut self) -> Vec<ToolInvocation> {
+            let mut out: Vec<_> = self.calls.drain().collect();
+            out.sort_by_key(|(idx, _)| *idx);
+            out.into_iter().map(|(_, (id, name, args_json))| {
+                // Try to parse the accumulated arguments as JSON
+                let arguments = match serde_json::from_str::<serde_json::Value>(&args_json) {
+                    Ok(v) => v,
+                    Err(_) => serde_json::Value::String(args_json),
+                };
+                ToolInvocation {
+                    id,
+                    name,
+                    arguments,
+                }
+            }).collect()
+        }
+
+        fn is_empty(&self) -> bool {
+            self.calls.is_empty()
+        }
+    }
+
+    let mut pending_tool_calls = ToolCallAccumulator::new();
 
             while let Some(chunk_result) = stream.next().await {
                 match chunk_result {
@@ -113,29 +175,31 @@ impl ModelAdapter for OpenAiCompatAdapter {
                                         }
                                     }
 
-                                    // Tool calls in delta
+                                    // Tool calls in delta — accumulate across chunks
                                     if let Some(tcs) = delta.and_then(|d| d.get("tool_calls")) {
                                         if let Some(calls) = tcs.as_array() {
                                             for tc in calls {
-                                                if let (Some(name), Some(args)) = (
-                                                    tc.get("function").and_then(|f| f.get("name")).and_then(|n| n.as_str()),
-                                                    tc.get("function").and_then(|f| f.get("arguments")),
-                                                ) {
-                                                    // OpenAI streams tool call arguments across multiple deltas.
-                                                    // For simplicity, collect the full call when name is present.
-                                                    pending_tool_calls.push(ToolInvocation {
-                                                        id: tc.get("id").and_then(|id| id.as_str()).unwrap_or("").to_string(),
-                                                        name: name.to_string(),
-                                                        arguments: args.clone(),
-                                                    });
-                                                }
+                                                let index = tc.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
+                                                let id = tc.get("id").and_then(|id| id.as_str()).unwrap_or("");
+                                                let name = tc.get("function")
+                                                    .and_then(|f| f.get("name"))
+                                                    .and_then(|n| n.as_str());
+                                                let args = tc.get("function")
+                                                    .and_then(|f| f.get("arguments"))
+                                                    .and_then(|a| a.as_str());
+                                                pending_tool_calls.accumulate(index, id, name, args);
                                             }
                                         }
                                     }
 
                                     // Finish reason signals end
                                     if let Some(reason) = finish.and_then(|r| r.as_str()) {
-                                        for tc in pending_tool_calls.drain(..) {
+                                        if reason == "tool_calls" && pending_tool_calls.is_empty() {
+                                            let _ = tx.send(StreamEvent::Error(
+                                                "Model emitted tool_calls finish_reason but no parseable tool calls".to_string()
+                                            )).await;
+                                        }
+                                        for tc in pending_tool_calls.drain() {
                                             let _ = tx.send(StreamEvent::ToolCall(tc)).await;
                                         }
 

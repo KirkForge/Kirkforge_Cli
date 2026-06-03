@@ -22,14 +22,14 @@ Native Ollama CLI coding agent in Rust. Static binary, TUI, potato hardware (8GB
 
 ## Project status
 
-All 10 milestones complete. 34 source files, ~6,500 lines of Rust. 146 unit tests, 7 integration tests (require Ollama, marked `#[ignore]`).
+16 milestones (15 active + 1 deleted). 40 source files, ~8,375 lines of Rust. 123 unit tests, 7 integration tests (require Ollama, marked `#[ignore]`).
 
 ## Build
 
 - **0 errors, 0 warnings** (clippy `-D warnings`)
-- `cargo test` — 69 unit tests, all pass
+- `cargo test` — 123 unit tests, all pass
 - `cargo test --test integration_test -- --ignored` — 7 integration tests against live Ollama
-- Release: 4.6 MB (gnu), 4.8 MB (musl static), LTO + panic=abort + strip
+- Release: 4.7 MB, LTO + panic=abort + strip
 
 ## Milestones
 
@@ -48,8 +48,8 @@ All 10 milestones complete. 34 source files, ~6,500 lines of Rust. 146 unit test
 | 11 | Config bootstrap | ✅ Layered resolution, env var overrides, partial merge |
 | 12 | Skills system | ✅ SKILL.md frontmatter parser, slash command registry |
 | 13 | Session forking + background bash | ✅ ForkManager, BashJobRegistry |
-| 14 | VFS minification | ✅ LazyLock cache, strip-test blocks, C++/Java/Ruby/Shell |
-| 15 | Workflow engine | ✅ DAG steps, conditions, loops, variable interpolation |
+| 14 | VFS minification | ✅ LazyLock cache, hand-rolled (not tree-sitter) char scanning, C++/Java/Ruby/Shell |
+| 15 | ~~Workflow engine~~ | ❌ Deleted (was 889 lines of dead code) |
 | 16 | Prompt cache stem | ✅ Cache-aware build_stem(), hit probability estimator |
 
 ## Relevant paths

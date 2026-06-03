@@ -117,7 +117,12 @@ pub fn truncate(text: &str, max_width: usize) -> String {
     if text.len() <= max_width {
         text.to_string()
     } else {
-        let mut t = text[..max_width.saturating_sub(3)].to_string();
+        let end = max_width.saturating_sub(3);
+        let mut boundary = end;
+        while !text.is_char_boundary(boundary) {
+            boundary -= 1;
+        }
+        let mut t = text[..boundary].to_string();
         t.push_str("...");
         t
     }

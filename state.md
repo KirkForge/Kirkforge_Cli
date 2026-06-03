@@ -19,17 +19,18 @@ Last updated: 2026-06-03
 | 11 | Config bootstrap | ✅ Done | Layered resolution, env var overrides, partial merge |
 | 12 | Skills system | ✅ Done | SKILL.md frontmatter parser, slash command registry, wired into TUI |
 | 13 | Session forking + background bash | ✅ Done | ForkManager, BashJobRegistry, wired into TUI |
-| 14 | VFS tree-sitter minification upgrade | ✅ Done | LazyLock cache, strip-test blocks, C++/Java/Ruby/Shell support |
+| 14 | VFS minification upgrade | ✅ Done | Hand-rolled char scanning (not tree-sitter), LazyLock cache, C++/Java/Ruby/Shell support |
 | 15 | Workflow engine | ~~✅ Done~~ ❌ Deleted | Was 889 lines of dead code (declared but never called). Removed 2026-06-03. |
 | 16 | Prompt cache stem | ✅ Done | Cache-aware build_stem(), hit probability estimator |
+| 17 | Session carryover | ✅ Done | ~200B profile, ~55 tokens injected as prompt suffix, top-5 tool pruning, 19 tests |
 
 ## Compilation Status
 
 - **Rust toolchain**: stable (2026-06-03)
 - **Build**: ✅ Clean — 0 errors, 0 warnings (clippy `-D warnings`)
-- **Tests**: 122 unit tests pass, 7 integration tests (require Ollama, marked `#[ignore]`)
-- **Release binary**: 4.9 MB stripped, ELF x86-64, LTO + panic=abort
-- **Source**: 40 files, ~9,878 lines of Rust
+- **Tests**: 141 unit tests pass, 7 integration tests (require Ollama, marked `#[ignore]`)
+- **Release binary**: 5.0 MB stripped, ELF x86-64, LTO + panic=abort
+- **Source**: 42 files, ~10,200 lines of Rust
 
 ## Changes This Session
 
@@ -95,6 +96,7 @@ src/
 │   ├── mod.rs                           — data dir, config loader, session IDs
 │   ├── access.rs                        — DenyList, PathGuard, ReadGate, 10-point write guard system
 │   ├── bash_jobs.rs                     — Background bash job registry (global singleton)
+│   ├── carryover.rs                     — Session-to-session profile (collect, save, load, render)
 │   ├── config.rs                        — TOML config read/write, layered resolution
 │   ├── conversation.rs                  — NDJSON append-only log
 │   ├── event_bus.rs                     — 9 event kinds, EventHandler trait, publish/subscribe
@@ -132,8 +134,6 @@ src/
 │       ├── chat.rs                      — Chat panel with timestamps + role colors
 │       ├── input.rs                     — Input bar with cursor + placeholder
 │       └── status.rs                    — Status bar (model, tokens, elapsed, cost)
-└── workflow/
-    └── mod.rs                           — DAG engine: steps, conditions, loops, variable interpolation
 ```
 
 ## Key Config Files

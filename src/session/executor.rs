@@ -591,6 +591,52 @@ impl Executor {
                                     })?;
                                     continue;
                                 }
+
+                                // Force approval for risky patterns even in auto_approve mode.
+                                // curl/wget/|sh/|bash are common for legitimate work (installing
+                                // deps, testing endpoints) but warrant a checkpoint.
+                                if self.config.auto_approve {
+                                    let force_approve = tc
+                                        .arguments
+                                        .get("command")
+                                        .and_then(|c| c.as_str())
+                                        .is_some_and(|cmd| {
+                                            FORCE_APPROVAL_PATTERNS.iter().any(|p| cmd.contains(p))
+                                        });
+                                    if force_approve {
+                                        let (resp_tx, resp_rx) =
+                                            tokio::sync::oneshot::channel::<ApprovalResponse>();
+                                        approval_sender.send(ApprovalRequest {
+                                            tool_name: tc.name.clone(),
+                                            args: tc.arguments.clone(),
+                                            response: resp_tx,
+                                        })?;
+                                        let approved = match resp_rx.await {
+                                            Ok(ApprovalResponse::Approved) => true,
+                                            Ok(ApprovalResponse::Denied) => false,
+                                            Ok(ApprovalResponse::AlwaysApprove) => {
+                                                // Don't propagate to auto_approve — this is
+                                                // pattern-specific, not blanket bash approval
+                                                true
+                                            }
+                                            Err(_) => false,
+                                        };
+                                        if !approved {
+                                            events.push(TurnEvent::ToolResult {
+                                                name: tc.name.clone(),
+                                                output: "❌ User denied this operation".into(),
+                                            });
+                                            self.conversation.append(Message {
+                                                role: Role::Tool,
+                                                content: "Operation denied by user.".into(),
+                                                tool_call_id: Some(tc.id.clone()),
+                                                tool_name: Some(tc.name.clone()),
+                                                ..Default::default()
+                                            })?;
+                                            continue;
+                                        }
+                                    }
+                                }
                             }
 
                             let outcome = tool.run(tc.arguments.clone()).await;
@@ -775,7 +821,8 @@ pub enum TurnEvent {
     },
 }
 
-/// Dangerous shell command patterns (mirrors the list in verifier/security.rs).
+/// Dangerous shell command patterns — always blocked.
+/// (A subset of disk-wrecking patterns is also checked in verifier/security.rs).
 const DANGEROUS_SHELL_COMMANDS: &[&str] = &[
     "rm -rf /",
     "rm -rf /*",
@@ -787,11 +834,12 @@ const DANGEROUS_SHELL_COMMANDS: &[&str] = &[
     "chmod 777 /",
     "dd if=/dev/random",
     "> /dev/null < /dev/sda",
-    "wget ",
-    "curl ",
-    "| sh",
-    "| bash",
 ];
+
+/// Patterns that force user approval even in auto_approve mode.
+/// These are common legitimate operations (installing deps, curl tests,
+/// fetching remote resources) but riskier than a typical bash command.
+const FORCE_APPROVAL_PATTERNS: &[&str] = &["curl ", "wget ", "| sh", "| bash"];
 
 /// Pre-execution bash command check — blocks dangerous patterns before they run.
 fn check_bash_command(args: &serde_json::Value) -> Option<String> {
@@ -843,9 +891,14 @@ fn truncate_tool_output(outcome: ToolOutcome, max_chars: usize) -> ToolOutcome {
     match outcome {
         ToolOutcome::Success { content } => {
             if content.len() > max_chars {
+                // Walk back to a UTF-8 char boundary to avoid a panic on multi-byte chars
+                let mut boundary = max_chars;
+                while !content.is_char_boundary(boundary) {
+                    boundary -= 1;
+                }
                 let truncated = format!(
                     "{}...\n[output truncated to {} chars]",
-                    &content[..max_chars],
+                    &content[..boundary],
                     max_chars
                 );
                 ToolOutcome::Success { content: truncated }

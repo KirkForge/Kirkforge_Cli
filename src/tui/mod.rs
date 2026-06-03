@@ -52,6 +52,23 @@ pub async fn run_tui(
         since: Instant::now(),
     };
 
+    // Initialize skill registry: scan for SKILL.md files
+    state.skill_registry.add_scan_path(std::path::PathBuf::from(".claude/skills"));
+    match state.skill_registry.scan_and_load() {
+        Ok(count) => {
+            if count > 0 {
+                tracing::info!("Loaded {} skills from .claude/skills", count);
+            }
+        }
+        Err(e) => {
+            tracing::warn!("Skill scan error: {}", e);
+        }
+    }
+    // Always register built-in skills
+    for skill in crate::session::skills::builtin_skills() {
+        state.skill_registry.register(skill);
+    }
+
     // ── Channels ──
     // User input: TUI → Executor
     let (input_tx, input_rx) = mpsc::unbounded_channel::<String>();
@@ -144,6 +161,14 @@ async fn run_event_loop(
                             timestamp: chrono::Local::now(),
                         });
                     }
+                }
+                executor::TurnEvent::Verification { message, success } => {
+                    let prefix = if success { "🔍" } else { "⚠️" };
+                    state.messages.push(ConversationEntry {
+                        role: "system".into(),
+                        content: format!("{} {}", prefix, message),
+                        timestamp: chrono::Local::now(),
+                    });
                 }
                 executor::TurnEvent::Error(e) => {
                     state.messages.push(ConversationEntry {
@@ -286,38 +311,63 @@ fn handle_input_key(
 
             if !input.is_empty() {
                 if input.starts_with('/') {
-                    // Command — handle locally
+                    // Command — dispatch via skill registry or built-in
                     let parts: Vec<&str> = input.splitn(2, ' ').collect();
-                    match parts[0] {
-                        "/help" | "/h" => {
-                            state.messages.push(ConversationEntry {
-                                role: "system".into(),
-                                content: "Commands: /help, /clear, /model, /exit".into(),
-                                timestamp: chrono::Local::now(),
-                            });
-                        }
+                    let cmd = parts[0];
+                    let args = parts.get(1).copied().unwrap_or("");
+
+                    // Built-in commands that don't go through skills
+                    match cmd {
                         "/clear" => {
                             state.messages.clear();
                             state.thinking_buffer.clear();
-                        }
-                        "/model" => {
-                            let info = state.model_info.as_ref().map(|m| m.name.as_str()).unwrap_or("unknown");
-                            state.messages.push(ConversationEntry {
-                                role: "system".into(),
-                                content: format!("Current model: {}", info),
-                                timestamp: chrono::Local::now(),
-                            });
+                            return Ok(());
                         }
                         "/exit" | "/quit" => {
                             std::process::exit(0);
                         }
-                        other => {
+                        "/help" | "/h" | "/?" => {
+                            let mut help_text =
+                                "Built-in commands:\n  /clear  Clear conversation\n  /exit   Quit\n".to_string();
+                            let skills = state.skill_registry.all();
+                            if !skills.is_empty() {
+                                help_text.push_str("\nSkills:\n");
+                                for skill in skills {
+                                    help_text.push_str(&format!(
+                                        "  {}  — {}{}\n",
+                                        skill.meta.trigger,
+                                        skill.meta.description,
+                                        skill.meta.model.as_ref()
+                                            .map(|m| format!(" [{}]", m))
+                                            .unwrap_or_default(),
+                                    ));
+                                }
+                            }
                             state.messages.push(ConversationEntry {
                                 role: "system".into(),
-                                content: format!("Unknown command: {}\nType /help for available commands.", other),
+                                content: help_text,
                                 timestamp: chrono::Local::now(),
                             });
+                            return Ok(());
                         }
+                        _ => {}
+                    }
+
+                    if let Some(skill) = state.skill_registry.get_by_trigger(cmd) {
+                        let rendered = skill.render_prompt(args);
+                        state.messages.push(ConversationEntry {
+                            role: "system".into(),
+                            content: format!("🔧 Running skill: {} — {}", skill.meta.name, skill.meta.description),
+                            timestamp: chrono::Local::now(),
+                        });
+                        // Send the skill prompt to the model via executor
+                        let _ = input_tx.send(rendered);
+                    } else {
+                        state.messages.push(ConversationEntry {
+                            role: "system".into(),
+                            content: format!("Unknown command: {}\nType /help for available commands.", cmd),
+                            timestamp: chrono::Local::now(),
+                        });
                     }
                 } else {
                     // Regular message — push to display and send to executor

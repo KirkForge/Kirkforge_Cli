@@ -1,4 +1,5 @@
 /// Main application state and event handling.
+use crate::session::skills::SkillRegistry;
 use crate::shared::{Config, ModelInfo};
 use std::time::Instant;
 
@@ -47,6 +48,9 @@ pub struct AppState {
 
     /// Config reference
     pub config: Config,
+
+    /// Skill registry for slash commands (loaded from SKILL.md files)
+    pub skill_registry: SkillRegistry,
 }
 
 impl AppState {
@@ -67,6 +71,7 @@ impl AppState {
             cumulative_cost: 0.0,
             session_started: Instant::now(),
             config,
+            skill_registry: SkillRegistry::new(),
         }
     }
 }

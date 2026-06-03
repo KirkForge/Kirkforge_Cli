@@ -1,7 +1,7 @@
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **CLI** (492 symbols, 866 relationships, 31 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **Kirkforge_Cli** (1370 symbols, 3006 relationships, 118 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 
@@ -24,10 +24,10 @@ This project is indexed by GitNexus as **CLI** (492 symbols, 866 relationships, 
 
 | Resource | Use for |
 |----------|---------|
-| `gitnexus://repo/CLI/context` | Codebase overview, check index freshness |
-| `gitnexus://repo/CLI/clusters` | All functional areas |
-| `gitnexus://repo/CLI/processes` | All execution flows |
-| `gitnexus://repo/CLI/process/{name}` | Step-by-step execution trace |
+| `gitnexus://repo/Kirkforge_Cli/context` | Codebase overview, check index freshness |
+| `gitnexus://repo/Kirkforge_Cli/clusters` | All functional areas |
+| `gitnexus://repo/Kirkforge_Cli/processes` | All execution flows |
+| `gitnexus://repo/Kirkforge_Cli/process/{name}` | Step-by-step execution trace |
 
 ## CLI
 

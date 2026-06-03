@@ -54,21 +54,10 @@ impl Executor {
         let model_name = adapter.model_info().name.clone();
         let (deny_list, path_guard, read_gate) = access_from_config(&config);
 
-        // Initialize event bus with default verifiers
+        // Event bus — verifiers are registered by init_default_verifiers() called below
         let event_bus = EventBus::new();
-        let verifier_slots = Arc::new(std::sync::RwLock::new(VerifierSlots::new()));
-        let verifier_handler = Arc::new(VerifierHandler::new(verifier_slots.clone()));
-        let correction_loop = Some(CorrectionLoop::new(verifier_handler.clone()));
 
-        // Register verifier handler on the event bus
-        // We don't block on this — it's best-effort initialization
-        let bus = event_bus.clone();
-        let handler = verifier_handler.clone();
-        tokio::spawn(async move {
-            let _ = bus.register(handler).await;
-        });
-
-        Self {
+        let mut this = Self {
             adapter,
             conversation,
             prompt_builder: PromptBuilder::new(),
@@ -80,8 +69,10 @@ impl Executor {
             path_guard,
             read_gate,
             event_bus,
-            correction_loop,
-        }
+            correction_loop: None,
+        };
+        this.init_default_verifiers();
+        this
     }
 
     /// Initialize default verifiers (security, lint, git).

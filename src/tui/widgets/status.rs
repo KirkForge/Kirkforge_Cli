@@ -3,9 +3,9 @@ use crate::tui::app::{AppState, ConnectionState};
 use crate::tui::rendering::{format_duration, format_token_count};
 use ratatui::{
     layout::Rect,
-    style::{Color, Modifier, Style, Stylize},
+    style::{Color, Style},
     text::{Line, Span},
-    widgets::{Block, Paragraph},
+    widgets::Paragraph,
     Frame,
 };
 
@@ -37,10 +37,7 @@ pub fn render_status(f: &mut Frame, area: Rect, state: &AppState) {
         elapsed,
     );
 
-    let left_len = match &left_info.content {
-        Some(ref c) => c.len(),
-        None => 0,
-    };
+    let left_len = left_info.content.len();
     let space = if area.width as usize > left_len + right_info.len() + 2 {
         area.width as usize - left_len - right_info.len()
     } else {

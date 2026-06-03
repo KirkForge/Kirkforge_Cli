@@ -36,9 +36,7 @@ pub fn highlight_code(code: &str, extension: &str) -> String {
 
     for line in LinesWithEndings::from(code) {
         if let Ok(ranges) = highlighter.highlight_line(line, ss) {
-            for (style, text) in syntect::util::as_24_bit_terminal_escaped(&ranges, false) {
-                out.push_str(&format!("\x1b[{}m{}\x1b[0m", style, text));
-            }
+            out.push_str(&syntect::util::as_24_bit_terminal_escaped(&ranges[..], false));
         } else {
             out.push_str(line);
         }

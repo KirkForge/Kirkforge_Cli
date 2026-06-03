@@ -62,7 +62,7 @@ async fn main() -> anyhow::Result<()> {
     if let Some(host) = &cli.host {
         config.ollama_host = host.clone();
     }
-    let model = cli.model.unwrap_or_else(|| config.default_model.clone());
+    let model = cli.model.clone().unwrap_or_else(|| config.default_model.clone());
     if cli.auto_approve {
         config.auto_approve = true;
     }
@@ -109,10 +109,10 @@ async fn main() -> anyhow::Result<()> {
 }
 
 async fn run_non_interactive(
-    config: crate::shared::Config,
+    _config: crate::shared::Config,
     adapter: Box<dyn adapters::ModelAdapter>,
     tools: Vec<Arc<dyn tools::Tool>>,
-    mut conversation: session::conversation::ConversationLog,
+    conversation: session::conversation::ConversationLog,
     cli: Cli,
 ) -> anyhow::Result<()> {
     // Read prompt from stdin
@@ -159,8 +159,6 @@ async fn run_non_interactive(
 
     // Stream the response
     let mut rx = adapter.stream(&messages, &tool_defs).await?;
-
-    use tokio_stream::StreamExt;
 
     while let Some(event) = rx.recv().await {
         match event {

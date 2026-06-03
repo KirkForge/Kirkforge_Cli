@@ -35,7 +35,7 @@ pub fn render_input(f: &mut Frame, area: Rect, state: &AppState) {
         spans.push(Span::raw(before.to_string()));
         // Always show a cursor, even if empty
         spans.push(Span::styled(
-            if after.is_empty() { " █" } else { format!("{}█", &after[0..1]) },
+            if after.is_empty() { " █".to_string() } else { format!("{}█", &after[0..1]) },
             Style::default(),
         ));
         if after.len() > 1 {

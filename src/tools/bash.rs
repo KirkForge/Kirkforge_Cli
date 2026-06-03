@@ -46,7 +46,7 @@ impl Tool for Bash {
         let workdir_path = PathBuf::from(shellexpand::tilde(workdir).as_ref());
 
         // Determine if this is likely read-only
-        let is_readonly = is_readonly_command(&cmd);
+        let _is_readonly = is_readonly_command(&cmd);
 
         // Run the command
         let result = tokio::time::timeout(

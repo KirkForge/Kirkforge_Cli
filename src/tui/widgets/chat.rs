@@ -1,13 +1,13 @@
 /// Chat panel — the main conversation view.
 use ratatui::{
-    layout::{Alignment, Rect},
-    style::{Color, Modifier, Style, Stylize},
+    layout::Rect,
+    style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, BorderType, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap},
+    widgets::{Block, BorderType, Borders, Paragraph, Wrap},
     Frame,
 };
 
-use crate::tui::app::{AppState, ConnectionState, ConversationEntry};
+use crate::tui::app::{AppState, ConnectionState};
 
 /// Render the main chat area showing the conversation history.
 pub fn render_chat(f: &mut Frame, area: Rect, state: &AppState) {
@@ -93,7 +93,7 @@ pub fn render_chat(f: &mut Frame, area: Rect, state: &AppState) {
     }
 
     // Scroll position indicator
-    let total_lines = lines.len();
+    let _total_lines = lines.len();
     if state.scroll_offset > 0 {
         lines.push(Line::from(vec![
             Span::styled(

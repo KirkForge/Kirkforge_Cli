@@ -1,6 +1,6 @@
 use crate::shared::{ToolDef, ToolOutcome};
 use crate::tools::Tool;
-use globset::{Glob, GlobSet, GlobSetBuilder};
+use globset::{Glob as GlobPattern, GlobSet, GlobSetBuilder};
 use std::path::PathBuf;
 
 pub struct Glob;
@@ -47,7 +47,7 @@ impl Tool for Glob {
 
         // Build glob set
         let mut builder = GlobSetBuilder::new();
-        match Glob::new(&pattern) {
+        match GlobPattern::new(&pattern) {
             Ok(g) => { builder.add(g); }
             Err(e) => return ToolOutcome::Error {
                 message: format!("Invalid glob pattern '{}': {}", pattern, e),

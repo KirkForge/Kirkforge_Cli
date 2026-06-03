@@ -65,7 +65,7 @@ impl Tool for ReadFile {
         let display = if offset == 0 && end >= total {
             content.clone()
         } else {
-            let header = format!("{}:{} (showing lines {}-{} of {})", path.display(), offset + 1, end, total);
+            let header = format!("{}:{} (showing lines {}-{} of {})", path.display(), offset + 1, offset + 1, end, total);
             format!("{header}\n{sep}\n{selected}", sep = "-".repeat(header.len()))
         };
 

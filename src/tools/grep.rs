@@ -113,7 +113,7 @@ impl Tool for Grep {
     }
 }
 
-fn find_matches(content: &str, pattern: &str, file_path: &PathBuf, context: usize) -> Vec<SearchMatch> {
+fn find_matches(content: &str, pattern: &str, _file_path: &std::path::Path, context: usize) -> Vec<SearchMatch> {
     let mut results = Vec::new();
     let lines: Vec<&str> = content.lines().collect();
 

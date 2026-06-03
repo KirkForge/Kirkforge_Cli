@@ -66,10 +66,7 @@ pub fn load_or_create_config() -> Config {
         }
         if let Ok(content) = toml::to_string_pretty(&cfg) {
             let _ = std::fs::write(&path, content);
-            tracing::info!(
-                "Created default config at {}",
-                path.display()
-            );
+            tracing::info!("Created default config at {}", path.display());
         }
         tracing::info!(
             "Config file created at {}. Edit it to customize model, host, etc.",
@@ -140,6 +137,13 @@ fn apply_env_overrides(cfg: &mut Config) {
     if let Ok(val) = std::env::var("KIRKFORGE_BLOCK_BINARY") {
         cfg.block_binary_reads = val.eq_ignore_ascii_case("true");
     }
+
+    // KIRKFORGE_CARRYOVER_ENABLED
+    if let Ok(val) = std::env::var("KIRKFORGE_CARRYOVER_ENABLED") {
+        cfg.carryover_enabled = val.eq_ignore_ascii_case("true")
+            || val.eq_ignore_ascii_case("1")
+            || val.eq_ignore_ascii_case("yes");
+    }
 }
 
 /// Merge a parsed TOML table into a Config, field by field.
@@ -173,19 +177,34 @@ fn merge_toml_into_config(cfg: &mut Config, table: toml::Table) {
     if let Some(Value::Boolean(v)) = table.get("block_binary_reads") {
         cfg.block_binary_reads = *v;
     }
+    if let Some(Value::Boolean(v)) = table.get("carryover_enabled") {
+        cfg.carryover_enabled = *v;
+    }
 
     // Arrays
     if let Some(Value::Array(v)) = table.get("deny_paths") {
-        cfg.deny_paths = v.iter().filter_map(|v| v.as_str().map(String::from)).collect();
+        cfg.deny_paths = v
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect();
     }
     if let Some(Value::Array(v)) = table.get("deny_urls") {
-        cfg.deny_urls = v.iter().filter_map(|v| v.as_str().map(String::from)).collect();
+        cfg.deny_urls = v
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect();
     }
     if let Some(Value::Array(v)) = table.get("deny_extensions") {
-        cfg.deny_extensions = v.iter().filter_map(|v| v.as_str().map(String::from)).collect();
+        cfg.deny_extensions = v
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect();
     }
     if let Some(Value::Array(v)) = table.get("allowed_write_dirs") {
-        cfg.allowed_write_dirs = v.iter().filter_map(|v| v.as_str().map(String::from)).collect();
+        cfg.allowed_write_dirs = v
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect();
     }
 }
 

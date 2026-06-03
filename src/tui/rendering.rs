@@ -1,11 +1,11 @@
 //! Rendering utilities — syntax highlighting, markdown rendering,
 //! and display helpers for the TUI.
 
+use std::sync::OnceLock;
+use syntect::easy::HighlightLines;
 use syntect::highlighting::ThemeSet;
 use syntect::parsing::SyntaxSet;
-use syntect::easy::HighlightLines;
 use syntect::util::LinesWithEndings;
-use std::sync::OnceLock;
 
 /// Global syntax set (loaded once).
 fn syntax_set() -> &'static SyntaxSet {
@@ -36,7 +36,10 @@ pub fn highlight_code(code: &str, extension: &str) -> String {
 
     for line in LinesWithEndings::from(code) {
         if let Ok(ranges) = highlighter.highlight_line(line, ss) {
-            out.push_str(&syntect::util::as_24_bit_terminal_escaped(&ranges[..], false));
+            out.push_str(&syntect::util::as_24_bit_terminal_escaped(
+                &ranges[..],
+                false,
+            ));
         } else {
             out.push_str(line);
         }
@@ -75,12 +78,12 @@ pub fn render_markdown(text: &str) -> String {
         let chars: Vec<char> = line.chars().collect();
         while i < chars.len() {
             if i + 1 < chars.len() {
-                if chars[i] == '*' && chars[i+1] == '*' {
+                if chars[i] == '*' && chars[i + 1] == '*' {
                     out.push_str("\x1b[1m"); // bold
                     i += 2;
                     continue;
                 }
-                if chars[i] == '*' && chars[i+1] != ' ' {
+                if chars[i] == '*' && chars[i + 1] != ' ' {
                     out.push_str("\x1b[3m"); // italic
                     i += 1;
                     continue;
@@ -95,7 +98,9 @@ pub fn render_markdown(text: &str) -> String {
                     i += 1;
                 }
                 out.push_str("\x1b[0m");
-                if i < chars.len() { i += 1; }
+                if i < chars.len() {
+                    i += 1;
+                }
                 continue;
             }
             out.push(chars[i]);

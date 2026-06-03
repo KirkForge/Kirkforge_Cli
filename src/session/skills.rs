@@ -184,7 +184,10 @@ impl SkillRegistry {
 /// ```
 pub fn load_skill_from_file(path: &Path) -> anyhow::Result<Skill> {
     let content = std::fs::read_to_string(path)?;
-    parse_skill(&content, path.parent().unwrap_or(Path::new(".")).to_path_buf())
+    parse_skill(
+        &content,
+        path.parent().unwrap_or(Path::new(".")).to_path_buf(),
+    )
 }
 
 /// Parse SKILL.md content from a string.
@@ -197,9 +200,9 @@ pub fn parse_skill(content: &str, source_dir: PathBuf) -> anyhow::Result<Skill> 
     }
 
     let after_first = content.strip_prefix("---").unwrap().trim();
-    let end_idx = after_first.find("\n---").ok_or_else(|| {
-        anyhow::anyhow!("SKILL.md missing closing '---' delimiter")
-    })?;
+    let end_idx = after_first
+        .find("\n---")
+        .ok_or_else(|| anyhow::anyhow!("SKILL.md missing closing '---' delimiter"))?;
 
     let frontmatter_str = &after_first[..end_idx];
     let body = after_first[end_idx + 5..].trim().to_string(); // skip "\n---\n"
@@ -261,7 +264,8 @@ pub fn builtin_skills() -> Vec<Skill> {
                 model: None,
             },
             prompt_body: "List all available skills and their descriptions. \
-                          Format as a bullet list with the trigger and description.".into(),
+                          Format as a bullet list with the trigger and description."
+                .into(),
             source_dir: PathBuf::from("."),
         },
         Skill {
@@ -272,7 +276,8 @@ pub fn builtin_skills() -> Vec<Skill> {
                 model: Some("fast".into()),
             },
             prompt_body: "Summarize the current git status, recent changes, \
-                          and any obvious issues in the project.".into(),
+                          and any obvious issues in the project."
+                .into(),
             source_dir: PathBuf::from("."),
         },
     ]

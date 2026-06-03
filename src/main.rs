@@ -74,7 +74,10 @@ async fn main() -> anyhow::Result<()> {
     if let Some(host) = &cli.host {
         config.ollama_host = host.clone();
     }
-    let model = cli.model.clone().unwrap_or_else(|| config.default_model.clone());
+    let model = cli
+        .model
+        .clone()
+        .unwrap_or_else(|| config.default_model.clone());
     if cli.auto_approve {
         config.auto_approve = true;
     }
@@ -149,7 +152,12 @@ async fn run_non_interactive(
     let mut messages = Vec::new();
 
     // System prompt
-    let system = prompt_builder.build(&model_info.name, model_info.supports_thinking, &tool_names);
+    let system = prompt_builder.build(
+        &model_info.name,
+        model_info.supports_thinking,
+        &tool_names,
+        None,
+    );
     messages.push(system);
 
     // Existing conversation
@@ -212,7 +220,9 @@ async fn run_non_interactive(
             }
             crate::shared::StreamEvent::ToolCall(tc) => {
                 let start = std::time::Instant::now();
-                let (output_content, success) = if let Some(tool) = tools.iter().find(|t| t.def().name == tc.name) {
+                let (output_content, success) = if let Some(tool) =
+                    tools.iter().find(|t| t.def().name == tc.name)
+                {
                     let result = tool.run(tc.arguments.clone()).await;
                     match &result {
                         crate::shared::ToolOutcome::Success { content }
@@ -223,9 +233,7 @@ async fn run_non_interactive(
                         crate::shared::ToolOutcome::GrepMatches { matches, .. } => {
                             (format!("{} matches", matches.len()), true)
                         }
-                        crate::shared::ToolOutcome::Error { message } => {
-                            (message.clone(), false)
-                        }
+                        crate::shared::ToolOutcome::Error { message } => (message.clone(), false),
                     }
                 } else {
                     (format!("Unknown tool: {}", tc.name), false)
@@ -243,7 +251,12 @@ async fn run_non_interactive(
                     });
                     println!("{}", serde_json::to_string(&line).unwrap());
                 } else {
-                    eprintln!("\n[tool: {}] {} ({})", tc.name, output_content.len(), if success { "ok" } else { "error" });
+                    eprintln!(
+                        "\n[tool: {}] {} ({})",
+                        tc.name,
+                        output_content.len(),
+                        if success { "ok" } else { "error" }
+                    );
                 }
 
                 recorded_tool_calls.push(crate::shared::ToolCallRecord {
@@ -263,7 +276,10 @@ async fn run_non_interactive(
                     println!("{}", serde_json::to_string(&line).unwrap());
                 }
             }
-            crate::shared::StreamEvent::Done { finish_reason: _, usage } => {
+            crate::shared::StreamEvent::Done {
+                finish_reason: _,
+                usage,
+            } => {
                 // Record assistant message
                 recorded_messages.push(crate::shared::Message {
                     role: crate::shared::Role::Assistant,

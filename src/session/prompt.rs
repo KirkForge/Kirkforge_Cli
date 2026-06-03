@@ -41,12 +41,21 @@ impl PromptBuilder {
     /// [CACHE STEM — invariant instructions]
     /// Available tools: [...]
     /// [model-specific extensions]
+    /// [Session Carryover — optional, appended at the end]
     /// ```
     ///
     /// The stem portion is identical for all calls to the same model
     /// (same model_name + same thinking flag). The suffix changes
-    /// per-turn based on available tools.
-    pub fn build(&mut self, model_name: &str, model_supports_thinking: bool, tool_names: &[&str]) -> Message {
+    /// per-turn based on available tools. An optional carryover block
+    /// is appended last — it provides cross-session context without
+    /// disturbing the instruction stem.
+    pub fn build(
+        &mut self,
+        model_name: &str,
+        model_supports_thinking: bool,
+        tool_names: &[&str],
+        carryover_block: Option<&str>,
+    ) -> Message {
         let reg = handlebars::Handlebars::new();
 
         let mut data = serde_json::json!({
@@ -58,12 +67,21 @@ impl PromptBuilder {
             data["thinking_available"] = serde_json::Value::Bool(true);
         }
 
-        let rendered = reg.render_template(&self.template, &data)
+        let mut content = reg
+            .render_template(&self.template, &data)
             .unwrap_or_else(|_| "You are a coding agent.".to_string());
+
+        // Append carryover block at the very end if provided
+        if let Some(block) = carryover_block {
+            if !block.is_empty() {
+                content.push_str("\n\n");
+                content.push_str(block);
+            }
+        }
 
         Message {
             role: Role::System,
-            content: rendered,
+            content,
             thinking: None,
             tool_calls: None,
             tool_call_id: None,
@@ -253,7 +271,7 @@ mod tests {
     #[test]
     fn test_build_includes_tools() {
         let mut builder = PromptBuilder::new();
-        let msg = builder.build("test-model", false, &["read_file", "bash"]);
+        let msg = builder.build("test-model", false, &["read_file", "bash"], None);
         assert_eq!(msg.role, Role::System);
         assert!(!msg.content.is_empty());
     }
@@ -261,7 +279,7 @@ mod tests {
     #[test]
     fn test_build_supports_thinking() {
         let mut builder = PromptBuilder::new();
-        let msg = builder.build("test-model", true, &[]);
+        let msg = builder.build("test-model", true, &[], None);
         assert!(!msg.content.is_empty());
     }
 
@@ -273,13 +291,11 @@ mod tests {
             content: "You are a coding agent.".into(),
             ..Default::default()
         };
-        let history = vec![
-            Message {
-                role: Role::User,
-                content: "Hello".into(),
-                ..Default::default()
-            },
-        ];
+        let history = vec![Message {
+            role: Role::User,
+            content: "Hello".into(),
+            ..Default::default()
+        }];
         let result = builder.build_messages(system.clone(), &history, 8192, &[]);
         assert_eq!(result.len(), 2);
         assert_eq!(result[0].content, system.content);

@@ -94,10 +94,10 @@ fn minify_content_by_ext(content: &str, ext: &str, preserve_tests: bool) -> Stri
         "md" => minify_markdown(content),
         "json" | "yaml" | "yml" | "toml" => content.to_string(),
         _ => content.to_string(),
-        }
     }
+}
 
-    /// Clear the VFS minification cache.
+/// Clear the VFS minification cache.
 pub fn clear_minify_cache() {
     let mut cache = VFS_CACHE.lock().unwrap();
     cache.clear();
@@ -260,7 +260,11 @@ fn strip_test_blocks(source: &str) -> String {
         let trimmed = line.trim();
 
         // Detect #[cfg(test)] or #[test] attributes — only enter once
-        if !in_test_block && (trimmed == "#[cfg(test)]" || trimmed == "#[test]" || trimmed.starts_with("#[cfg(test)]")) {
+        if !in_test_block
+            && (trimmed == "#[cfg(test)]"
+                || trimmed == "#[test]"
+                || trimmed.starts_with("#[cfg(test)]"))
+        {
             in_test_block = true;
             test_started = false;
             continue;
@@ -390,7 +394,11 @@ fn minify_rust_inner(source: &str, preserve_tests: bool) -> String {
     }
 
     // Apply test-block stripping as a second pass (unless preserving tests)
-    let s = if preserve_tests { out } else { strip_test_blocks(&out) };
+    let s = if preserve_tests {
+        out
+    } else {
+        strip_test_blocks(&out)
+    };
     collapse_blank_lines(&s)
 }
 
@@ -407,9 +415,7 @@ fn minify_python(source: &str) -> String {
         }
 
         // Triple-quoted string detection
-        if (ch == '"' || ch == '\'')
-            && chars.peek() == Some(&ch)
-        {
+        if (ch == '"' || ch == '\'') && chars.peek() == Some(&ch) {
             let next2 = chars.clone().nth(1);
             if next2 == Some(ch) {
                 chars.next();
@@ -554,7 +560,8 @@ fn minify_ruby(source: &str) -> String {
         // Skip comment lines and shebang
         if trimmed.starts_with('#') {
             // Check if it's a heredoc or string containing # — skip for now
-            if !trimmed.starts_with("# encoding") && !trimmed.starts_with("# frozen_string_literal") {
+            if !trimmed.starts_with("# encoding") && !trimmed.starts_with("# frozen_string_literal")
+            {
                 continue;
             }
         }

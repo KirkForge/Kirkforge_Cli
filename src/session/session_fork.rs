@@ -40,10 +40,7 @@ impl ForkManager {
     /// `session_id` — display name like "2026-06-03-session-01"
     /// `log_path` — path to the session's NDJSON log file
     pub fn new(session_id: &str, log_path: &Path) -> Self {
-        let forks_dir = log_path
-            .parent()
-            .unwrap_or(Path::new("."))
-            .join("forks");
+        let forks_dir = log_path.parent().unwrap_or(Path::new(".")).join("forks");
         Self {
             session_id: session_id.to_string(),
             base_path: forks_dir,

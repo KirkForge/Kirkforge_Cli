@@ -1,14 +1,13 @@
 use crate::adapters::ModelAdapter;
+use crate::session::access::{access_from_config, DenyList, GuardVerdict, PathGuard, ReadGate};
+use crate::session::carryover::CarryoverProfile;
 use crate::session::conversation::ConversationLog;
 use crate::session::event_bus::{BusEvent, EventBus};
 use crate::session::prompt::PromptBuilder;
 use crate::session::verifier::CorrectionResult;
 use crate::session::verifier::{CorrectionLoop, VerifierHandler, VerifierSlots};
-use crate::shared::{
-    Config, Message, Role, StreamEvent, ToolDef, ToolInvocation, ToolOutcome,
-};
+use crate::shared::{Config, Message, Role, StreamEvent, ToolDef, ToolInvocation, ToolOutcome};
 use crate::tools::Tool;
-use crate::session::access::{access_from_config, DenyList, GuardVerdict, PathGuard, ReadGate};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -30,19 +29,27 @@ pub struct Executor {
     read_gate: ReadGate,
     event_bus: EventBus,
     correction_loop: Option<CorrectionLoop>,
+
+    // ── Carryover (Phase 17) ──────────────────────────────────
+    /// The live carryover profile being accumulated this session.
+    carryover: CarryoverProfile,
+    /// Whether carryover is enabled (from config).
+    carryover_enabled: bool,
+    /// Shared target for saving after the executor exits.
+    /// The TUI holds the other clone and saves after awaiting the handle.
+    carryover_target: Option<std::sync::Arc<std::sync::Mutex<CarryoverProfile>>>,
 }
 
 impl Executor {
-    pub fn new(
-        adapter: Box<dyn ModelAdapter>,
-        tools: Vec<Arc<dyn Tool>>,
-        config: Config,
-    ) -> Self {
+    pub fn new(adapter: Box<dyn ModelAdapter>, tools: Vec<Arc<dyn Tool>>, config: Config) -> Self {
         // Create a default temp conversation log
         let temp_dir = std::env::temp_dir().join("kirkforge-session");
-        let log_path = temp_dir.join(format!("session-{}.ndjson", chrono::Local::now().format("%Y%m%d-%H%M%S")));
+        let log_path = temp_dir.join(format!(
+            "session-{}.ndjson",
+            chrono::Local::now().format("%Y%m%d-%H%M%S")
+        ));
         let conversation = ConversationLog::open(log_path).unwrap();
-        Self::with_log(adapter, tools, config, conversation)
+        Self::with_log(adapter, tools, config, conversation, None)
     }
 
     pub fn with_log(
@@ -50,12 +57,20 @@ impl Executor {
         tools: Vec<Arc<dyn Tool>>,
         config: Config,
         conversation: ConversationLog,
+        carryover_target: Option<std::sync::Arc<std::sync::Mutex<CarryoverProfile>>>,
     ) -> Self {
         let model_name = adapter.model_info().name.clone();
         let (deny_list, path_guard, read_gate) = access_from_config(&config);
 
         // Event bus — verifiers are registered by init_default_verifiers() called below
         let event_bus = EventBus::new();
+
+        let carryover_enabled = config.carryover_enabled;
+        let carryover = if carryover_enabled {
+            crate::session::carryover::load_carryover()
+        } else {
+            CarryoverProfile::default()
+        };
 
         let mut this = Self {
             adapter,
@@ -70,6 +85,9 @@ impl Executor {
             read_gate,
             event_bus,
             correction_loop: None,
+            carryover,
+            carryover_enabled,
+            carryover_target,
         };
         this.init_default_verifiers();
         this
@@ -87,45 +105,63 @@ impl Executor {
         struct SecV;
         #[async_trait::async_trait]
         impl Verifier for SecV {
-            fn name(&self) -> &str { "security" }
-            fn priority(&self) -> u8 { 1 }
+            fn name(&self) -> &str {
+                "security"
+            }
+            fn priority(&self) -> u8 {
+                1
+            }
             async fn verify(&self, event: &BusEvent) -> Verdict {
                 crate::session::verifier::security::verify_security(event).await
             }
         }
         {
             let mut s = slots.write().unwrap();
-            if s.register(Arc::new(SecV)).is_ok() { count += 1; }
+            if s.register(Arc::new(SecV)).is_ok() {
+                count += 1;
+            }
         }
 
         // Lint verifier (priority 2)
         struct LintV;
         #[async_trait::async_trait]
         impl Verifier for LintV {
-            fn name(&self) -> &str { "lint" }
-            fn priority(&self) -> u8 { 2 }
+            fn name(&self) -> &str {
+                "lint"
+            }
+            fn priority(&self) -> u8 {
+                2
+            }
             async fn verify(&self, event: &BusEvent) -> Verdict {
                 crate::session::verifier::lint::verify_lint(event).await
             }
         }
         {
             let mut s = slots.write().unwrap();
-            if s.register(Arc::new(LintV)).is_ok() { count += 1; }
+            if s.register(Arc::new(LintV)).is_ok() {
+                count += 1;
+            }
         }
 
         // Git verifier (priority 3)
         struct GitV;
         #[async_trait::async_trait]
         impl Verifier for GitV {
-            fn name(&self) -> &str { "git" }
-            fn priority(&self) -> u8 { 3 }
+            fn name(&self) -> &str {
+                "git"
+            }
+            fn priority(&self) -> u8 {
+                3
+            }
             async fn verify(&self, event: &BusEvent) -> Verdict {
                 crate::session::verifier::git::verify_git(event).await
             }
         }
         {
             let mut s = slots.write().unwrap();
-            if s.register(Arc::new(GitV)).is_ok() { count += 1; }
+            if s.register(Arc::new(GitV)).is_ok() {
+                count += 1;
+            }
         }
 
         let handler = Arc::new(VerifierHandler::new(slots));
@@ -155,11 +191,60 @@ impl Executor {
             for ev in events {
                 if event_tx.send(ev).is_err() {
                     // TUI closed — stop the executor
+                    self.flush_carryover();
                     return Ok(());
                 }
             }
         }
+        self.flush_carryover();
         Ok(())
+    }
+
+    /// Flush the carryover profile to the shared target at session end.
+    fn flush_carryover(&mut self) {
+        if self.carryover_enabled {
+            self.carryover.session_count += 1;
+            self.carryover.last_session_time =
+                chrono::Local::now().format("%Y-%m-%d %H:%M").to_string();
+            self.carryover.refresh_patterns();
+            if let Some(ref target) = self.carryover_target {
+                if let Ok(mut guard) = target.lock() {
+                    *guard = self.carryover.clone();
+                }
+            }
+        }
+    }
+
+    /// Collect carryover data from a completed tool call + its corrections.
+    fn collect_carryover(&mut self, tc: &ToolInvocation, crs: &[CorrectionResult]) {
+        if !self.carryover_enabled {
+            return;
+        }
+        self.carryover.record_tool_call(&tc.name);
+        // Extract path if present
+        if let Some(path) = tc.arguments.get("path").and_then(|v| v.as_str()) {
+            if !path.is_empty() {
+                self.carryover.record_path(path);
+            }
+        }
+        // Track test-after-change pattern from bash commands
+        if tc.name == "bash" {
+            if let Some(cmd) = tc.arguments.get("command").and_then(|v| v.as_str()) {
+                if cmd.contains("cargo test")
+                    || cmd.contains("cargo check")
+                    || cmd.contains("go test")
+                    || cmd.contains("npm test")
+                    || cmd.contains("pytest")
+                    || cmd.contains("make test")
+                {
+                    self.carryover.record_test_after_change();
+                }
+            }
+        }
+        // Track verifier warnings
+        for cr in crs {
+            self.carryover.record_verifier_warning(&cr.message);
+        }
     }
 
     /// Run a single turn: send the current conversation to the model,
@@ -180,6 +265,11 @@ impl Executor {
             token_count: None,
         })?;
 
+        // ── Carryover: capture last user message ──
+        if self.carryover_enabled {
+            self.carryover.last_user_message = user_input.to_string();
+        }
+
         let mut events = Vec::new();
         let model_info = self.adapter.model_info();
         let tool_defs: Vec<ToolDef> = self.tools.iter().map(|t| t.def()).collect();
@@ -188,10 +278,22 @@ impl Executor {
         // Main loop: model responds, may call tools, we feed results back
         let max_iterations = 10; // safety cap on tool call loops
         for iteration in 0..max_iterations {
+            let carryover_block = if self.carryover_enabled {
+                let block = self.carryover.to_prompt_block();
+                if block.is_empty() {
+                    None
+                } else {
+                    Some(block)
+                }
+            } else {
+                None
+            };
+
             let system = self.prompt_builder.build(
                 &model_info.name,
                 model_info.supports_thinking,
                 &tool_names,
+                carryover_block.as_deref(),
             );
 
             let history = self.conversation.all();
@@ -227,7 +329,10 @@ impl Executor {
                     StreamEvent::Error(e) => {
                         events.push(TurnEvent::Error(e));
                     }
-                    StreamEvent::Done { finish_reason: _, usage } => {
+                    StreamEvent::Done {
+                        finish_reason: _,
+                        usage,
+                    } => {
                         // Save the assistant message
                         let has_tool_calls = !pending_tool_calls.is_empty();
                         let msg = Message {
@@ -253,7 +358,8 @@ impl Executor {
                         if let Some(ref u) = usage {
                             let prompt = u.prompt_tokens.unwrap_or(0);
                             let completion = u.completion_tokens.unwrap_or(0);
-                            let cost = crate::shared::calculate_cost(&self.model_name, prompt, completion);
+                            let cost =
+                                crate::shared::calculate_cost(&self.model_name, prompt, completion);
                             self.cost_tracking.record_turn(prompt, completion, cost);
                             events.push(TurnEvent::CostStats {
                                 prompt_tokens: prompt,
@@ -285,12 +391,14 @@ impl Executor {
                             };
 
                             // Check if destructive and needs approval
-                            let is_destructive = matches!(tc.name.as_str(), "write_file" | "edit_file" | "bash");
+                            let is_destructive =
+                                matches!(tc.name.as_str(), "write_file" | "edit_file" | "bash");
                             let needs_approval = is_destructive && !self.config.auto_approve;
 
                             if needs_approval {
                                 // Request approval from the UI
-                                let (response_tx, response_rx) = tokio::sync::oneshot::channel::<ApprovalResponse>();
+                                let (response_tx, response_rx) =
+                                    tokio::sync::oneshot::channel::<ApprovalResponse>();
                                 approval_sender.send(ApprovalRequest {
                                     tool_name: tc.name.clone(),
                                     args: tc.arguments.clone(),
@@ -333,7 +441,9 @@ impl Executor {
                             // ── Access control checks ──────────────
                             // 1. Deny list check (all tools)
                             let tool_name = tc.name.as_str();
-                            if let Some(denied) = check_deny_list(&self.deny_list, tool_name, &tc.arguments) {
+                            if let Some(denied) =
+                                check_deny_list(&self.deny_list, tool_name, &tc.arguments)
+                            {
                                 events.push(TurnEvent::ToolResult {
                                     name: tc.name.clone(),
                                     output: denied.clone(),
@@ -350,7 +460,9 @@ impl Executor {
 
                             // 2. Path guard check for file tools
                             if matches!(tool_name, "read_file" | "write_file" | "edit_file") {
-                                let path_str = tc.arguments.get("path")
+                                let path_str = tc
+                                    .arguments
+                                    .get("path")
                                     .and_then(|v| v.as_str())
                                     .unwrap_or("");
                                 let path = std::path::Path::new(path_str);
@@ -391,7 +503,9 @@ impl Executor {
                                         }
 
                                         // Stash resolved path back for the tool
-                                        if let Ok(path_obj) = serde_json::to_value(resolved.to_string_lossy().as_ref()) {
+                                        if let Ok(path_obj) = serde_json::to_value(
+                                            resolved.to_string_lossy().as_ref(),
+                                        ) {
                                             // Use the resolved path
                                             let mut updated_args = tc.arguments.clone();
                                             if let Some(obj) = updated_args.as_object_mut() {
@@ -399,15 +513,47 @@ impl Executor {
                                             }
                                             let crs_args = updated_args.clone();
                                             let outcome = tool.run(updated_args).await;
-                                            handle_tool_outcome(outcome, tc, &mut events, &mut self.conversation)?;
-                                            let crs = self.emit_tool_event_and_correct(tc, tool_name, &crs_args, None, None, None).await;
-                                            emit_correction_results(crs, tc, &mut events, &mut self.conversation)?;
+                                            handle_tool_outcome(
+                                                outcome,
+                                                tc,
+                                                &mut events,
+                                                &mut self.conversation,
+                                            )?;
+                                            let crs = self
+                                                .emit_tool_event_and_correct(
+                                                    tc, tool_name, &crs_args, None, None, None,
+                                                )
+                                                .await;
+                                            // ── Carryover collection (before crs is consumed) ──
+                                            self.collect_carryover(tc, &crs);
+                                            emit_correction_results(
+                                                crs,
+                                                tc,
+                                                &mut events,
+                                                &mut self.conversation,
+                                            )?;
                                         } else {
                                             let args = tc.arguments.clone();
                                             let outcome = tool.run(tc.arguments.clone()).await;
-                                            handle_tool_outcome(outcome, tc, &mut events, &mut self.conversation)?;
-                                            let crs = self.emit_tool_event_and_correct(tc, tool_name, &args, None, None, None).await;
-                                            emit_correction_results(crs, tc, &mut events, &mut self.conversation)?;
+                                            handle_tool_outcome(
+                                                outcome,
+                                                tc,
+                                                &mut events,
+                                                &mut self.conversation,
+                                            )?;
+                                            let crs = self
+                                                .emit_tool_event_and_correct(
+                                                    tc, tool_name, &args, None, None, None,
+                                                )
+                                                .await;
+                                            // ── Carryover collection (before crs is consumed) ──
+                                            self.collect_carryover(tc, &crs);
+                                            emit_correction_results(
+                                                crs,
+                                                tc,
+                                                &mut events,
+                                                &mut self.conversation,
+                                            )?;
                                         }
                                         continue;
                                     }
@@ -449,11 +595,12 @@ impl Executor {
 
                             let outcome = tool.run(tc.arguments.clone()).await;
                             // Cap output for bash to avoid blowing context
-                            let (real_exit_code, real_stdout_len, real_stderr_len) = if tool_name == "bash" {
-                                extract_bash_metrics(&outcome)
-                            } else {
-                                (None, None, None)
-                            };
+                            let (real_exit_code, real_stdout_len, real_stderr_len) =
+                                if tool_name == "bash" {
+                                    extract_bash_metrics(&outcome)
+                                } else {
+                                    (None, None, None)
+                                };
                             let outcome = if tool_name == "bash" {
                                 truncate_tool_output(outcome, self.config.max_tool_result_chars)
                             } else {
@@ -462,7 +609,18 @@ impl Executor {
                             handle_tool_outcome(outcome, tc, &mut events, &mut self.conversation)?;
 
                             // Emit event + run correction loop with real outcome data
-                            let crs = self.emit_tool_event_and_correct(tc, tool_name, &tc.arguments, real_exit_code, real_stdout_len, real_stderr_len).await;
+                            let crs = self
+                                .emit_tool_event_and_correct(
+                                    tc,
+                                    tool_name,
+                                    &tc.arguments,
+                                    real_exit_code,
+                                    real_stdout_len,
+                                    real_stderr_len,
+                                )
+                                .await;
+                            // ── Carryover collection (before crs is consumed) ──
+                            self.collect_carryover(tc, &crs);
                             emit_correction_results(crs, tc, &mut events, &mut self.conversation)?;
                         }
 
@@ -502,24 +660,41 @@ impl Executor {
     ) -> Vec<CorrectionResult> {
         let bus_event = match tool_name {
             "read_file" => {
-                let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                Some(BusEvent::FileRead(crate::session::event_bus::FileReadEvent {
-                    path: std::path::PathBuf::from(&path),
-                    size_bytes: 0,
-                    truncated: false,
-                }))
+                let path = args
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                Some(BusEvent::FileRead(
+                    crate::session::event_bus::FileReadEvent {
+                        path: std::path::PathBuf::from(&path),
+                        size_bytes: 0,
+                        truncated: false,
+                    },
+                ))
             }
             "write_file" => {
-                let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let path = args
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
                 let content = args.get("content").and_then(|v| v.as_str()).unwrap_or("");
-                Some(BusEvent::FileWrite(crate::session::event_bus::FileWriteEvent {
-                    path: std::path::PathBuf::from(&path),
-                    content_length: content.len(),
-                }))
+                Some(BusEvent::FileWrite(
+                    crate::session::event_bus::FileWriteEvent {
+                        path: std::path::PathBuf::from(&path),
+                        content_length: content.len(),
+                    },
+                ))
             }
             "edit_file" => {
-                let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                let diff = args.get("old_string")
+                let path = args
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let diff = args
+                    .get("old_string")
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
@@ -529,13 +704,19 @@ impl Executor {
                 }))
             }
             "bash" => {
-                let command = args.get("command").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                Some(BusEvent::BashExec(crate::session::event_bus::BashExecEvent {
-                    command,
-                    exit_code: real_exit_code.unwrap_or(0),
-                    stdout_len: real_stdout_len.unwrap_or(0),
-                    stderr_len: real_stderr_len.unwrap_or(0),
-                }))
+                let command = args
+                    .get("command")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                Some(BusEvent::BashExec(
+                    crate::session::event_bus::BashExecEvent {
+                        command,
+                        exit_code: real_exit_code.unwrap_or(0),
+                        stdout_len: real_stdout_len.unwrap_or(0),
+                        stderr_len: real_stderr_len.unwrap_or(0),
+                    },
+                ))
             }
             _ => None,
         };
@@ -617,7 +798,10 @@ fn check_bash_command(args: &serde_json::Value) -> Option<String> {
     let cmd = args.get("command").and_then(|c| c.as_str())?;
 
     // 1. Metadata endpoint access (cloud provider metadata)
-    if cmd.contains("169.254.169.254") || cmd.contains("metadata.google") || cmd.contains("metadata.aws") {
+    if cmd.contains("169.254.169.254")
+        || cmd.contains("metadata.google")
+        || cmd.contains("metadata.aws")
+    {
         return Some("🔒 Command blocked: contains reference to metadata endpoints".into());
     }
 
@@ -625,16 +809,24 @@ fn check_bash_command(args: &serde_json::Value) -> Option<String> {
     for pattern in DANGEROUS_SHELL_COMMANDS {
         if cmd.contains(pattern) {
             return Some(format!(
-                "🔒 Command blocked: dangerous pattern '{}' detected", pattern
+                "🔒 Command blocked: dangerous pattern '{}' detected",
+                pattern
             ));
         }
     }
 
     // 3. Path deny-list (applied to paths appearing in the command)
-    for pat in ["/etc/shadow", "/etc/passwd", "/etc/sudoers", "~/.ssh", "/root/"] {
+    for pat in [
+        "/etc/shadow",
+        "/etc/passwd",
+        "/etc/sudoers",
+        "~/.ssh",
+        "/root/",
+    ] {
         if cmd.contains(pat) {
             return Some(format!(
-                "🔒 Command blocked: references denied path '{}'", pat
+                "🔒 Command blocked: references denied path '{}'",
+                pat
             ));
         }
     }
@@ -651,7 +843,11 @@ fn truncate_tool_output(outcome: ToolOutcome, max_chars: usize) -> ToolOutcome {
     match outcome {
         ToolOutcome::Success { content } => {
             if content.len() > max_chars {
-                let truncated = format!("{}...\n[output truncated to {} chars]", &content[..max_chars], max_chars);
+                let truncated = format!(
+                    "{}...\n[output truncated to {} chars]",
+                    &content[..max_chars],
+                    max_chars
+                );
                 ToolOutcome::Success { content: truncated }
             } else {
                 ToolOutcome::Success { content }
@@ -667,18 +863,19 @@ fn truncate_tool_output(outcome: ToolOutcome, max_chars: usize) -> ToolOutcome {
 /// For the verifier to see real data instead of hardcoded zeros.
 fn extract_bash_metrics(outcome: &ToolOutcome) -> (Option<i32>, Option<usize>, Option<usize>) {
     match outcome {
-        ToolOutcome::Success { content } => {
-            (Some(0), Some(content.len()), Some(0))
-        }
+        ToolOutcome::Success { content } => (Some(0), Some(content.len()), Some(0)),
         ToolOutcome::Error { message } => {
             let exit_code = if message.contains("exited with code") {
-                message.split("exited with code ")
-                    .nth(1).and_then(|s| s.split_whitespace().next())
+                message
+                    .split("exited with code ")
+                    .nth(1)
+                    .and_then(|s| s.split_whitespace().next())
                     .and_then(|s| s.parse::<i32>().ok())
             } else {
                 Some(1)
             };
-            let (stdout_len, stderr_len) = message.find("\nstderr:\n")
+            let (stdout_len, stderr_len) = message
+                .find("\nstderr:\n")
                 .map(|pos| (pos, message[pos + 9..].len()))
                 .unwrap_or((message.len(), 0));
             (exit_code, Some(stdout_len), Some(stderr_len))
@@ -689,16 +886,17 @@ fn extract_bash_metrics(outcome: &ToolOutcome) -> (Option<i32>, Option<usize>, O
 
 /// Helper: check deny list before running a tool.
 /// Returns Some(denial_message) if blocked, None if allowed.
-fn check_deny_list(deny_list: &DenyList, tool_name: &str, args: &serde_json::Value) -> Option<String> {
+fn check_deny_list(
+    deny_list: &DenyList,
+    tool_name: &str,
+    args: &serde_json::Value,
+) -> Option<String> {
     match tool_name {
         "read_file" | "write_file" | "edit_file" => {
             if let Some(path) = args.get("path").and_then(|v| v.as_str()) {
                 let p = std::path::Path::new(path);
                 if deny_list.is_path_denied(p) {
-                    return Some(format!(
-                        "🔒 Path denied by deny list: {}",
-                        path
-                    ));
+                    return Some(format!("🔒 Path denied by deny list: {}", path));
                 }
             }
         }
@@ -711,10 +909,7 @@ fn check_deny_list(deny_list: &DenyList, tool_name: &str, args: &serde_json::Val
             if let Some(path) = args.get("path").and_then(|v| v.as_str()) {
                 let p = std::path::Path::new(path);
                 if deny_list.is_path_denied(p) {
-                    return Some(format!(
-                        "🔒 Path denied by deny list: {}",
-                        path
-                    ));
+                    return Some(format!("🔒 Path denied by deny list: {}", path));
                 }
             }
         }
@@ -823,7 +1018,10 @@ fn emit_correction_results(
 mod tests {
     use super::*;
     use crate::adapters::ModelAdapter;
-    use crate::shared::{ModelInfo, ToolCallStyle, ToolDef, StreamEvent, ToolOutcome, Message, Role, TokenUsage, FinishReason, ToolInvocation};
+    use crate::shared::{
+        FinishReason, Message, ModelInfo, Role, StreamEvent, TokenUsage, ToolCallStyle, ToolDef,
+        ToolInvocation, ToolOutcome,
+    };
     use std::sync::{Arc, Mutex};
     use tokio::sync::mpsc;
 
@@ -931,15 +1129,20 @@ mod tests {
             max_file_read_size: 1024 * 1024,
             follow_symlinks: false,
             block_binary_reads: false,
+            carryover_enabled: false,
         }
     }
 
-    fn make_executor(adapter: Box<dyn ModelAdapter>, tools: Vec<Arc<dyn Tool>>, config: Config) -> Executor {
+    fn make_executor(
+        adapter: Box<dyn ModelAdapter>,
+        tools: Vec<Arc<dyn Tool>>,
+        config: Config,
+    ) -> Executor {
         let temp_dir = std::env::temp_dir();
         let log_path = temp_dir.join(format!("kirkforge-test-{}.ndjson", std::process::id()));
         let _ = std::fs::remove_file(&log_path);
         let conversation = ConversationLog::open(log_path).unwrap();
-        Executor::with_log(adapter, tools, config, conversation)
+        Executor::with_log(adapter, tools, config, conversation, None)
     }
 
     // ── Tests ─────────────────────────────────────────────────────
@@ -965,10 +1168,13 @@ mod tests {
         let mut exe = make_executor(Box::new(adapter), vec![], make_config(false));
         let events = exe.run_turn("hello", &approval_tx).await.unwrap();
 
-        let tokens: Vec<_> = events.iter().filter_map(|e| match e {
-            TurnEvent::Token(t) => Some(t.as_str()),
-            _ => None,
-        }).collect();
+        let tokens: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                TurnEvent::Token(t) => Some(t.as_str()),
+                _ => None,
+            })
+            .collect();
         assert_eq!(tokens, vec!["Hello ", "world!"]);
 
         // Verify conversation was appended
@@ -1018,7 +1224,9 @@ mod tests {
 
         // Should have token + tool_start + tool_result
         let has_token = events.iter().any(|e| matches!(e, TurnEvent::Token(_)));
-        let has_start = events.iter().any(|e| matches!(e, TurnEvent::ToolStart { name, .. } if name == "echo"));
+        let has_start = events
+            .iter()
+            .any(|e| matches!(e, TurnEvent::ToolStart { name, .. } if name == "echo"));
         let has_result = events.iter().any(|e| matches!(e, TurnEvent::ToolResult { name, output } if name == "echo" && output == "echoed!"));
 
         assert!(has_token, "Should stream text before tool call");
@@ -1136,7 +1344,10 @@ mod tests {
         approval_handle.await.unwrap();
 
         // Tool should NOT have been called (denied)
-        assert!(captured.lock().unwrap().is_none(), "Tool should not have been called when denied");
+        assert!(
+            captured.lock().unwrap().is_none(),
+            "Tool should not have been called when denied"
+        );
 
         // Should have a denied-message result
         let denied = events.iter().any(|e| matches!(e, TurnEvent::ToolResult { name, output } if name == "bash" && output.contains("denied")));
@@ -1157,7 +1368,9 @@ mod tests {
         let mut exe = make_executor(Box::new(adapter), vec![], make_config(false));
         let events = exe.run_turn("do it", &approval_tx).await.unwrap();
 
-        let has_error = events.iter().any(|e| matches!(e, TurnEvent::Error(msg) if msg == "connection lost"));
+        let has_error = events
+            .iter()
+            .any(|e| matches!(e, TurnEvent::Error(msg) if msg == "connection lost"));
         assert!(has_error, "Error events should be forwarded");
     }
 
@@ -1180,9 +1393,14 @@ mod tests {
 
         let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
         let mut exe = make_executor(Box::new(adapter), vec![], make_config(false));
-        let events = exe.run_turn("use unknown tool", &approval_tx).await.unwrap();
+        let events = exe
+            .run_turn("use unknown tool", &approval_tx)
+            .await
+            .unwrap();
 
-        let has_error = events.iter().any(|e| matches!(e, TurnEvent::Error(msg) if msg.contains("Unknown tool")));
+        let has_error = events
+            .iter()
+            .any(|e| matches!(e, TurnEvent::Error(msg) if msg.contains("Unknown tool")));
         assert!(has_error, "Unknown tools should produce error events");
     }
 
@@ -1226,15 +1444,19 @@ mod tests {
                 let count = *self.call_count.lock().unwrap();
                 *self.call_count.lock().unwrap() = count + 1;
                 tokio::spawn(async move {
-                    let _ = tx.send(StreamEvent::ToolCall(ToolInvocation {
-                        id: format!("call-{}", count),
-                        name: "looper".into(),
-                        arguments: serde_json::json!({"x": format!("round-{}", count)}),
-                    })).await;
-                    let _ = tx.send(StreamEvent::Done {
-                        finish_reason: FinishReason::ToolCalls,
-                        usage: None,
-                    }).await;
+                    let _ = tx
+                        .send(StreamEvent::ToolCall(ToolInvocation {
+                            id: format!("call-{}", count),
+                            name: "looper".into(),
+                            arguments: serde_json::json!({"x": format!("round-{}", count)}),
+                        }))
+                        .await;
+                    let _ = tx
+                        .send(StreamEvent::Done {
+                            finish_reason: FinishReason::ToolCalls,
+                            usage: None,
+                        })
+                        .await;
                 });
                 Ok(rx)
             }
@@ -1252,7 +1474,10 @@ mod tests {
 
         // Should NOT have hit the limit (max_iterations = 10, and we'd get error if we did)
         let tool_calls = *call_count.lock().unwrap();
-        assert!(tool_calls <= 10, "Should not exceed max_iterations (was {})", tool_calls);
+        assert!(
+            tool_calls <= 10,
+            "Should not exceed max_iterations (was {})",
+            tool_calls
+        );
     }
 }
-

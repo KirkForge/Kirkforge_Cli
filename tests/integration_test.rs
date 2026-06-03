@@ -39,9 +39,16 @@ async fn test_ollama_server_connectivity() {
     let models = body["models"].as_array().unwrap_or(&empty);
 
     let has_test_model = models.iter().any(|m| {
-        m["name"].as_str().map(|n| n.starts_with(TEST_MODEL)).unwrap_or(false)
+        m["name"]
+            .as_str()
+            .map(|n| n.starts_with(TEST_MODEL))
+            .unwrap_or(false)
     });
-    assert!(has_test_model, "Test model '{}' must be pulled (run: ollama pull {})", TEST_MODEL, TEST_MODEL);
+    assert!(
+        has_test_model,
+        "Test model '{}' must be pulled (run: ollama pull {})",
+        TEST_MODEL, TEST_MODEL
+    );
 }
 
 // ── Basic streaming via /api/chat ────────────────────────────────
@@ -126,9 +133,15 @@ async fn test_non_streaming_response() {
 
     let json: serde_json::Value = resp.json().await.unwrap();
 
-    assert!(json["done"].as_bool().unwrap_or(false), "Non-streaming should have done=true");
     assert!(
-        json["message"]["content"].as_str().map(|c| !c.is_empty()).unwrap_or(false),
+        json["done"].as_bool().unwrap_or(false),
+        "Non-streaming should have done=true"
+    );
+    assert!(
+        json["message"]["content"]
+            .as_str()
+            .map(|c| !c.is_empty())
+            .unwrap_or(false),
         "Should have content"
     );
     assert!(
@@ -176,7 +189,10 @@ async fn test_tool_calls_format() {
         .await
         .expect("POST /api/chat failed");
 
-    assert!(resp.status().is_success(), "Tool call request should succeed");
+    assert!(
+        resp.status().is_success(),
+        "Tool call request should succeed"
+    );
 
     let json: serde_json::Value = resp.json().await.unwrap();
 
@@ -184,7 +200,10 @@ async fn test_tool_calls_format() {
     // as long as the API accepts the tool-def field and returns valid JSON.
     // If it did call tools, verify the format matches what our adapters expect.
     if let Some(tool_calls) = json["message"]["tool_calls"].as_array() {
-        assert!(!tool_calls.is_empty(), "If tool_calls present, should have entries");
+        assert!(
+            !tool_calls.is_empty(),
+            "If tool_calls present, should have entries"
+        );
         for tc in tool_calls {
             // Must have function.name and function.arguments
             assert!(
@@ -222,7 +241,10 @@ async fn test_error_on_unknown_model() {
         // Some Ollama configs may stream an error field instead
         let body: serde_json::Value = resp.json().await.unwrap();
         if let Some(err) = body.get("error") {
-            assert!(!err.as_str().unwrap_or("").is_empty(), "Error field should have message");
+            assert!(
+                !err.as_str().unwrap_or("").is_empty(),
+                "Error field should have message"
+            );
         }
     } else {
         assert_eq!(status.as_u16(), 404, "Unknown model should 404");
@@ -287,9 +309,8 @@ async fn test_tool_fn_json_parse_in_chunks() {
                 continue;
             }
 
-            let json: serde_json::Value = serde_json::from_str(line).unwrap_or_else(|_| {
-                serde_json::json!({"__parse_error": line})
-            });
+            let json: serde_json::Value = serde_json::from_str(line)
+                .unwrap_or_else(|_| serde_json::json!({"__parse_error": line}));
 
             if json.get("__parse_error").is_some() {
                 continue; // partial chunk boundary
@@ -302,7 +323,8 @@ async fn test_tool_fn_json_parse_in_chunks() {
             }
 
             // Tool-only responses have empty content but valid tool_calls
-            if json["message"]["tool_calls"].as_array()
+            if json["message"]["tool_calls"]
+                .as_array()
                 .map(|tc| !tc.is_empty())
                 .unwrap_or(false)
             {
@@ -316,7 +338,10 @@ async fn test_tool_fn_json_parse_in_chunks() {
     }
 
     // Stream should have content text, tool_calls, or both — plus a done signal
-    assert!(has_content, "Stream should have produced some content or tool_calls");
+    assert!(
+        has_content,
+        "Stream should have produced some content or tool_calls"
+    );
     assert!(has_done, "Stream should have terminated with done=true");
 }
 
@@ -365,12 +390,18 @@ async fn test_openai_compat_endpoint() {
                 if let Some(content) = json["choices"][0]["delta"]["content"].as_str() {
                     full_text.push_str(content);
                 }
-                if json["choices"][0]["finish_reason"].as_str().is_some_and(|r| !r.is_empty()) {
+                if json["choices"][0]["finish_reason"]
+                    .as_str()
+                    .is_some_and(|r| !r.is_empty())
+                {
                     break;
                 }
             }
         }
     }
 
-    assert!(!full_text.is_empty(), "OpenAI-compat endpoint should return text content");
+    assert!(
+        !full_text.is_empty(),
+        "OpenAI-compat endpoint should return text content"
+    );
 }

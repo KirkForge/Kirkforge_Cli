@@ -1,3 +1,4 @@
+use crate::session::event_bus::{BashExecEvent, BusEvent, GitOperationEvent};
 /// Git verifier — validates git state after operations.
 ///
 /// Checks for:
@@ -6,16 +7,19 @@
 /// - Dirty worktree state
 /// - Branch status
 use crate::session::verifier::{Verdict, VerificationError};
-use crate::session::event_bus::{BusEvent, GitOperationEvent, BashExecEvent};
 use std::path::PathBuf;
 
 /// Run the git verifier against an event.
 pub async fn verify_git(event: &BusEvent) -> Verdict {
     match event {
-        BusEvent::GitOperation(GitOperationEvent { args, output, success }) => {
-            verify_git_operation(args, output, *success).await
-        }
-        BusEvent::BashExec(BashExecEvent { command, exit_code, .. }) => {
+        BusEvent::GitOperation(GitOperationEvent {
+            args,
+            output,
+            success,
+        }) => verify_git_operation(args, output, *success).await,
+        BusEvent::BashExec(BashExecEvent {
+            command, exit_code, ..
+        }) => {
             // Only react to bash commands that look like git commands
             if command.trim_start().starts_with("git ") {
                 verify_git_bash(command, *exit_code).await
@@ -39,20 +43,16 @@ async fn verify_git_operation(args: &[String], _output: &str, success: bool) -> 
             // Check for merge conflicts
             check_merge_conflicts().await
         }
-        "commit" => {
-            Verdict::Unfixable(VerificationError {
-                description: "git commit failed".into(),
-                file: None,
-                details: "The commit operation failed. Check git status and try again.".into(),
-            })
-        }
-        "push" => {
-            Verdict::Unfixable(VerificationError {
-                description: "git push failed".into(),
-                file: None,
-                details: "Push was rejected. You may need to pull first or check remote status.".into(),
-            })
-        }
+        "commit" => Verdict::Unfixable(VerificationError {
+            description: "git commit failed".into(),
+            file: None,
+            details: "The commit operation failed. Check git status and try again.".into(),
+        }),
+        "push" => Verdict::Unfixable(VerificationError {
+            description: "git push failed".into(),
+            file: None,
+            details: "Push was rejected. You may need to pull first or check remote status.".into(),
+        }),
         _ => Verdict::Clean,
     }
 }
@@ -125,7 +125,11 @@ async fn check_merge_conflicts() -> Verdict {
         file: Some(PathBuf::from(conflicted.first().unwrap_or(&""))),
         details: format!(
             "Files with conflicts:\n{}",
-            conflicted.iter().map(|f| format!("  - {f}")).collect::<Vec<_>>().join("\n")
+            conflicted
+                .iter()
+                .map(|f| format!("  - {f}"))
+                .collect::<Vec<_>>()
+                .join("\n")
         ),
     })
 }

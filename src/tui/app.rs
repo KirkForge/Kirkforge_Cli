@@ -61,6 +61,10 @@ pub struct AppState {
     pub session_id: String,
     /// Fork manager for creating and listing conversation forks.
     pub fork_manager: Option<ForkManager>,
+
+    // ── Session exit (Phase 17) ─────────────────────────────
+    /// Set to true to break the event loop and trigger carryover save.
+    pub should_exit: bool,
 }
 
 impl AppState {
@@ -85,6 +89,7 @@ impl AppState {
             log_path: None,
             session_id: String::new(),
             fork_manager: None,
+            should_exit: false,
         }
     }
 }

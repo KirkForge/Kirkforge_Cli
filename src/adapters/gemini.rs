@@ -9,7 +9,9 @@
 //! `/api/chat` endpoint which normalizes the format, but Gemini still has
 //! distinct behavior: no thinking field, different tool call batching.
 
-use crate::shared::{FinishReason, Message, ModelInfo, StreamEvent, ToolCallStyle, ToolInvocation, TokenUsage};
+use crate::shared::{
+    FinishReason, Message, ModelInfo, StreamEvent, TokenUsage, ToolCallStyle, ToolInvocation,
+};
 use tokio_stream::StreamExt;
 
 use super::ModelAdapter;
@@ -54,7 +56,9 @@ impl ModelAdapter for GeminiAdapter {
         let body = super::build_ollama_chat_body(&self.model, messages, tools, true);
         let url = format!("{}/api/chat", self.api_base);
 
-        let response = self.client.post(&url)
+        let response = self
+            .client
+            .post(&url)
             .json(&body)
             .timeout(std::time::Duration::from_secs(300))
             .send()
@@ -75,45 +79,61 @@ impl ModelAdapter for GeminiAdapter {
                         while let Some(newline_pos) = buffer.find('\n') {
                             let line: String = buffer.drain(..=newline_pos).collect();
                             let line = line.trim();
-                            if line.is_empty() { continue; }
+                            if line.is_empty() {
+                                continue;
+                            }
 
                             match serde_json::from_str::<serde_json::Value>(line) {
                                 Ok(json) => {
                                     if let Some(err) = json.get("error") {
-                                        let _ = tx.send(StreamEvent::Error(
-                                            err.as_str().unwrap_or("unknown error").to_string()
-                                        )).await;
+                                        let _ = tx
+                                            .send(StreamEvent::Error(
+                                                err.as_str().unwrap_or("unknown error").to_string(),
+                                            ))
+                                            .await;
                                         continue;
                                     }
 
                                     // Gemini has no thinking field, just content
-                                    if let Some(content) = json.get("message")
-                                        .and_then(|m| m.get("content"))
+                                    if let Some(content) =
+                                        json.get("message").and_then(|m| m.get("content"))
                                     {
                                         if let Some(c) = content.as_str() {
                                             if !c.is_empty() {
-                                                let _ = tx.send(StreamEvent::Text(c.to_string())).await;
+                                                let _ =
+                                                    tx.send(StreamEvent::Text(c.to_string())).await;
                                             }
                                         }
                                     }
 
                                     // Tool calls (OpenAI-compat style through Ollama)
-                                    if let Some(tcs) = json.get("message")
-                                        .and_then(|m| m.get("tool_calls"))
+                                    if let Some(tcs) =
+                                        json.get("message").and_then(|m| m.get("tool_calls"))
                                     {
                                         if let Some(calls) = tcs.as_array() {
                                             let mut parsed_any = false;
                                             for tc in calls {
                                                 if let (Some(name), Some(args)) = (
-                                                    tc.get("function").and_then(|f| f.get("name")).and_then(|n| n.as_str()),
-                                                    tc.get("function").and_then(|f| f.get("arguments")),
+                                                    tc.get("function")
+                                                        .and_then(|f| f.get("name"))
+                                                        .and_then(|n| n.as_str()),
+                                                    tc.get("function")
+                                                        .and_then(|f| f.get("arguments")),
                                                 ) {
                                                     parsed_any = true;
-                                                    let _ = tx.send(StreamEvent::ToolCall(ToolInvocation {
-                                                        id: tc.get("id").and_then(|id| id.as_str()).unwrap_or("").to_string(),
-                                                        name: name.to_string(),
-                                                        arguments: args.clone(),
-                                                    })).await;
+                                                    let _ = tx
+                                                        .send(StreamEvent::ToolCall(
+                                                            ToolInvocation {
+                                                                id: tc
+                                                                    .get("id")
+                                                                    .and_then(|id| id.as_str())
+                                                                    .unwrap_or("")
+                                                                    .to_string(),
+                                                                name: name.to_string(),
+                                                                arguments: args.clone(),
+                                                            },
+                                                        ))
+                                                        .await;
                                                 }
                                             }
                                             if !calls.is_empty() && !parsed_any {
@@ -125,14 +145,19 @@ impl ModelAdapter for GeminiAdapter {
                                     }
 
                                     if json.get("done").and_then(|d| d.as_bool()).unwrap_or(false) {
-                                        let usage = json.get("usage").map(|u| {
-                                            TokenUsage {
-                                                prompt_tokens: u.get("prompt_tokens").and_then(|v| v.as_u64()).map(|v| v as usize),
-                                                completion_tokens: u.get("completion_tokens").and_then(|v| v.as_u64()).map(|v| v as usize),
-                                            }
+                                        let usage = json.get("usage").map(|u| TokenUsage {
+                                            prompt_tokens: u
+                                                .get("prompt_tokens")
+                                                .and_then(|v| v.as_u64())
+                                                .map(|v| v as usize),
+                                            completion_tokens: u
+                                                .get("completion_tokens")
+                                                .and_then(|v| v.as_u64())
+                                                .map(|v| v as usize),
                                         });
 
-                                        let reason = json.get("done_reason")
+                                        let reason = json
+                                            .get("done_reason")
                                             .and_then(|r| r.as_str())
                                             .unwrap_or("stop");
 
@@ -143,11 +168,18 @@ impl ModelAdapter for GeminiAdapter {
                                             _ => FinishReason::Stop,
                                         };
 
-                                        let _ = tx.send(StreamEvent::Done { finish_reason, usage }).await;
+                                        let _ = tx
+                                            .send(StreamEvent::Done {
+                                                finish_reason,
+                                                usage,
+                                            })
+                                            .await;
                                     }
                                 }
                                 Err(e) => {
-                                    let _ = tx.send(StreamEvent::Error(format!("JSON parse: {}", e))).await;
+                                    let _ = tx
+                                        .send(StreamEvent::Error(format!("JSON parse: {}", e)))
+                                        .await;
                                 }
                             }
                         }

@@ -4,8 +4,8 @@
 /// Jobs run as tokio tasks and their output is captured asynchronously.
 /// The model or user can check job status, read output, or cancel jobs.
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::sync::OnceLock;
 use tokio::sync::Mutex;
 
@@ -13,8 +13,8 @@ use tokio::sync::Mutex;
 #[derive(Debug, Clone, PartialEq)]
 pub enum JobStatus {
     Running,
-    Completed(i32),   // exit code
-    Failed(String),   // error message
+    Completed(i32), // exit code
+    Failed(String), // error message
     Cancelled,
 }
 
@@ -49,9 +49,7 @@ static GLOBAL_REGISTRY: OnceLock<BashJobRegistry> = OnceLock::new();
 
 /// Get the global bash job registry, initializing on first access.
 pub fn global_registry() -> BashJobRegistry {
-    GLOBAL_REGISTRY
-        .get_or_init(BashJobRegistry::new)
-        .clone()
+    GLOBAL_REGISTRY.get_or_init(BashJobRegistry::new).clone()
 }
 
 /// Registry of background bash jobs.
@@ -71,7 +69,12 @@ impl BashJobRegistry {
 
     /// Spawn a bash command in the background and return a job ID.
     /// Optionally accepts a working directory and timeout (seconds, 0 = no timeout).
-    pub async fn spawn(&self, command: &str, workdir: Option<&str>, timeout_secs: Option<u64>) -> anyhow::Result<u64> {
+    pub async fn spawn(
+        &self,
+        command: &str,
+        workdir: Option<&str>,
+        timeout_secs: Option<u64>,
+    ) -> anyhow::Result<u64> {
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
 
         let job = BashJob::new(id, command.to_string());
@@ -93,21 +96,28 @@ impl BashJobRegistry {
                 tokio::time::timeout(
                     std::time::Duration::from_secs(timeout_secs.unwrap()),
                     proc.output(),
-                ).await.map(|r| r.unwrap_or_else(|e| std::process::Output {
-                    status: std::process::ExitStatus::default(),
-                    stdout: Vec::new(),
-                    stderr: format!("Command failed: {}", e).into_bytes(),
-                })).unwrap_or_else(|_| std::process::Output {
+                )
+                .await
+                .map(|r| {
+                    r.unwrap_or_else(|e| std::process::Output {
+                        status: std::process::ExitStatus::default(),
+                        stdout: Vec::new(),
+                        stderr: format!("Command failed: {}", e).into_bytes(),
+                    })
+                })
+                .unwrap_or_else(|_| std::process::Output {
                     status: std::process::ExitStatus::default(),
                     stdout: Vec::new(),
                     stderr: b"Command timed out".to_vec(),
                 })
             } else {
-                proc.output().await.unwrap_or_else(|e| std::process::Output {
-                    status: std::process::ExitStatus::default(),
-                    stdout: Vec::new(),
-                    stderr: format!("Command failed: {}", e).into_bytes(),
-                })
+                proc.output()
+                    .await
+                    .unwrap_or_else(|e| std::process::Output {
+                        status: std::process::ExitStatus::default(),
+                        stdout: Vec::new(),
+                        stderr: format!("Command failed: {}", e).into_bytes(),
+                    })
             };
 
             let exit_code = output.status.code().unwrap_or(-1);
@@ -166,7 +176,9 @@ impl BashJobRegistry {
     /// Count of running jobs.
     pub async fn running_count(&self) -> usize {
         let jobs = self.jobs.lock().await;
-        jobs.values().filter(|j| j.status == JobStatus::Running).count()
+        jobs.values()
+            .filter(|j| j.status == JobStatus::Running)
+            .count()
     }
 
     /// Clear all completed/failed/cancelled jobs.
@@ -200,7 +212,10 @@ mod tests {
     #[tokio::test]
     async fn test_spawn_and_check_running() {
         let reg = BashJobRegistry::new();
-        let id = reg.spawn("sleep 0.1 && echo done", None, None).await.unwrap();
+        let id = reg
+            .spawn("sleep 0.1 && echo done", None, None)
+            .await
+            .unwrap();
 
         // Immediately check — should be running
         let job = reg.get(id).await.unwrap();

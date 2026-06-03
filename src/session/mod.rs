@@ -4,6 +4,7 @@ pub mod conversation;
 pub mod event_bus;
 pub mod executor;
 pub mod prompt;
+pub mod skills;
 pub mod verifier;
 
 use crate::shared::{Config, SessionId};

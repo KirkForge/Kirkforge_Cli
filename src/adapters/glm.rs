@@ -8,7 +8,9 @@
 //! GLM also supports tool use via the standard Ollama tools field,
 //! but tool calls arrive as a complete block in the final chunk (`done: true`).
 
-use crate::shared::{FinishReason, Message, ModelInfo, StreamEvent, ToolCallStyle, ToolInvocation, TokenUsage};
+use crate::shared::{
+    FinishReason, Message, ModelInfo, StreamEvent, TokenUsage, ToolCallStyle, ToolInvocation,
+};
 use tokio_stream::StreamExt;
 
 use super::ModelAdapter;
@@ -57,7 +59,9 @@ impl ModelAdapter for GlmAdapter {
         let body = super::build_ollama_chat_body(&self.model, messages, tools, true);
         let url = format!("{}/api/chat", self.api_base);
 
-        let response = self.client.post(&url)
+        let response = self
+            .client
+            .post(&url)
             .json(&body)
             .timeout(std::time::Duration::from_secs(300))
             .send()
@@ -89,41 +93,59 @@ impl ModelAdapter for GlmAdapter {
                                 Ok(json) => {
                                     // Check for error
                                     if let Some(err) = json.get("error") {
-                                        let _ = tx.send(StreamEvent::Error(
-                                            err.as_str().unwrap_or("unknown error").to_string()
-                                        )).await;
+                                        let _ = tx
+                                            .send(StreamEvent::Error(
+                                                err.as_str().unwrap_or("unknown error").to_string(),
+                                            ))
+                                            .await;
                                         continue;
                                     }
 
                                     // Extract thinking field
-                                    if let Some(thinking) = json.get("message").and_then(|m| m.get("thinking")) {
+                                    if let Some(thinking) =
+                                        json.get("message").and_then(|m| m.get("thinking"))
+                                    {
                                         if let Some(t) = thinking.as_str() {
                                             if !t.is_empty() {
-                                                let _ = tx.send(StreamEvent::Thinking(t.to_string())).await;
+                                                let _ = tx
+                                                    .send(StreamEvent::Thinking(t.to_string()))
+                                                    .await;
                                             }
                                         }
                                     }
 
                                     // Extract content
-                                    if let Some(content) = json.get("message").and_then(|m| m.get("content")) {
+                                    if let Some(content) =
+                                        json.get("message").and_then(|m| m.get("content"))
+                                    {
                                         if let Some(c) = content.as_str() {
                                             if !c.is_empty() {
-                                                let _ = tx.send(StreamEvent::Text(c.to_string())).await;
+                                                let _ =
+                                                    tx.send(StreamEvent::Text(c.to_string())).await;
                                             }
                                         }
                                     }
 
                                     // Collect tool calls (GLM sends them in the final chunk with done=true)
-                                    if let Some(tcs) = json.get("message").and_then(|m| m.get("tool_calls")) {
+                                    if let Some(tcs) =
+                                        json.get("message").and_then(|m| m.get("tool_calls"))
+                                    {
                                         if let Some(calls) = tcs.as_array() {
                                             let before = tool_calls_buffer.len();
                                             for tc in calls {
                                                 if let (Some(name), Some(args)) = (
-                                                    tc.get("function").and_then(|f| f.get("name")).and_then(|n| n.as_str()),
-                                                    tc.get("function").and_then(|f| f.get("arguments")),
+                                                    tc.get("function")
+                                                        .and_then(|f| f.get("name"))
+                                                        .and_then(|n| n.as_str()),
+                                                    tc.get("function")
+                                                        .and_then(|f| f.get("arguments")),
                                                 ) {
                                                     tool_calls_buffer.push(ToolInvocation {
-                                                        id: tc.get("id").and_then(|id| id.as_str()).unwrap_or("").to_string(),
+                                                        id: tc
+                                                            .get("id")
+                                                            .and_then(|id| id.as_str())
+                                                            .unwrap_or("")
+                                                            .to_string(),
                                                         name: name.to_string(),
                                                         arguments: args.clone(),
                                                     });
@@ -145,14 +167,19 @@ impl ModelAdapter for GlmAdapter {
                                             let _ = tx.send(StreamEvent::ToolCall(tc)).await;
                                         }
 
-                                        let usage = json.get("usage").map(|u| {
-                                            TokenUsage {
-                                                prompt_tokens: u.get("prompt_tokens").and_then(|v| v.as_u64()).map(|v| v as usize),
-                                                completion_tokens: u.get("completion_tokens").and_then(|v| v.as_u64()).map(|v| v as usize),
-                                            }
+                                        let usage = json.get("usage").map(|u| TokenUsage {
+                                            prompt_tokens: u
+                                                .get("prompt_tokens")
+                                                .and_then(|v| v.as_u64())
+                                                .map(|v| v as usize),
+                                            completion_tokens: u
+                                                .get("completion_tokens")
+                                                .and_then(|v| v.as_u64())
+                                                .map(|v| v as usize),
                                         });
 
-                                        let reason = json.get("done_reason")
+                                        let reason = json
+                                            .get("done_reason")
                                             .and_then(|r| r.as_str())
                                             .unwrap_or("stop");
 
@@ -163,16 +190,18 @@ impl ModelAdapter for GlmAdapter {
                                             _ => FinishReason::Stop,
                                         };
 
-                                        let _ = tx.send(StreamEvent::Done {
-                                            finish_reason,
-                                            usage,
-                                        }).await;
+                                        let _ = tx
+                                            .send(StreamEvent::Done {
+                                                finish_reason,
+                                                usage,
+                                            })
+                                            .await;
                                     }
                                 }
                                 Err(e) => {
-                                    let _ = tx.send(StreamEvent::Error(
-                                        format!("JSON parse: {}", e)
-                                    )).await;
+                                    let _ = tx
+                                        .send(StreamEvent::Error(format!("JSON parse: {}", e)))
+                                        .await;
                                 }
                             }
                         }

@@ -41,7 +41,11 @@ impl Tool for ReadFile {
     async fn run(&self, args: serde_json::Value) -> ToolOutcome {
         let path = match args.get("path").and_then(|p| p.as_str()) {
             Some(p) => PathBuf::from(shellexpand::tilde(p).as_ref()),
-            None => return ToolOutcome::Error { message: "Missing 'path' argument".into() },
+            None => {
+                return ToolOutcome::Error {
+                    message: "Missing 'path' argument".into(),
+                }
+            }
         };
 
         let offset = args.get("offset").and_then(|o| o.as_u64()).unwrap_or(0) as usize;
@@ -49,13 +53,18 @@ impl Tool for ReadFile {
 
         let raw_content = match std::fs::read_to_string(&path) {
             Ok(c) => c,
-            Err(e) => return ToolOutcome::Error {
-                message: format!("Cannot read {}: {}", path.display(), e),
-            },
+            Err(e) => {
+                return ToolOutcome::Error {
+                    message: format!("Cannot read {}: {}", path.display(), e),
+                }
+            }
         };
 
         // Apply minification before slicing if requested
-        let minify = args.get("minify").and_then(|m| m.as_bool()).unwrap_or(false);
+        let minify = args
+            .get("minify")
+            .and_then(|m| m.as_bool())
+            .unwrap_or(false);
         let content = if minify {
             crate::shared::minify::minify_source(&path, &raw_content)
         } else {
@@ -74,7 +83,11 @@ impl Tool for ReadFile {
         // File is empty after minification (e.g., all comments) — return a note
         if total == 0 {
             let note = if minify {
-                format!("{} — file is empty after minification (was {} bytes of comments/whitespace)", path.display(), raw_content.len())
+                format!(
+                    "{} — file is empty after minification (was {} bytes of comments/whitespace)",
+                    path.display(),
+                    raw_content.len()
+                )
             } else {
                 format!("{} — empty file", path.display())
             };
@@ -98,8 +111,18 @@ impl Tool for ReadFile {
                 content
             }
         } else {
-            let header = format!("{}:{} (showing lines {}-{} of {})", path.display(), offset + 1, offset + 1, end, total);
-            format!("{header}\n{sep}\n{selected}", sep = "-".repeat(header.len()))
+            let header = format!(
+                "{}:{} (showing lines {}-{} of {})",
+                path.display(),
+                offset + 1,
+                offset + 1,
+                end,
+                total
+            );
+            format!(
+                "{header}\n{sep}\n{selected}",
+                sep = "-".repeat(header.len())
+            )
         };
 
         ToolOutcome::FileContent {

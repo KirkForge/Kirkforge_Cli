@@ -1,6 +1,6 @@
-pub mod glm;
 pub mod deepseek;
 pub mod gemini;
+pub mod glm;
 pub mod openai_compat;
 
 use crate::shared::{ModelInfo, StreamEvent};
@@ -30,7 +30,10 @@ pub fn adapter_for(
             "glm" => Box::new(glm::GlmAdapter::new(ollama_host, model_name)),
             "deepseek" => Box::new(deepseek::DeepSeekAdapter::new(ollama_host, model_name)),
             "gemini" => Box::new(gemini::GeminiAdapter::new(ollama_host, model_name)),
-            _ => Box::new(openai_compat::OpenAiCompatAdapter::new(ollama_host, model_name)),
+            _ => Box::new(openai_compat::OpenAiCompatAdapter::new(
+                ollama_host,
+                model_name,
+            )),
         };
     }
 
@@ -42,7 +45,10 @@ pub fn adapter_for(
     } else if lower.starts_with("gemini") {
         Box::new(gemini::GeminiAdapter::new(ollama_host, model_name))
     } else {
-        Box::new(openai_compat::OpenAiCompatAdapter::new(ollama_host, model_name))
+        Box::new(openai_compat::OpenAiCompatAdapter::new(
+            ollama_host,
+            model_name,
+        ))
     }
 }
 
@@ -53,21 +59,24 @@ fn build_ollama_chat_body(
     tools: &[crate::shared::ToolDef],
     stream: bool,
 ) -> serde_json::Value {
-    let ollama_messages: Vec<serde_json::Value> = messages.iter().map(|m| {
-        let mut obj = serde_json::json!({
-            "role": m.role,
-            "content": m.content,
-        });
-        // GLM puts thinking in its own field at the message level
-        if let Some(ref t) = m.thinking {
-            obj["thinking"] = serde_json::Value::String(t.clone());
-        }
-        // Tool results
-        if let Some(ref id) = m.tool_call_id {
-            obj["tool_call_id"] = serde_json::Value::String(id.clone());
-        }
-        obj
-    }).collect();
+    let ollama_messages: Vec<serde_json::Value> = messages
+        .iter()
+        .map(|m| {
+            let mut obj = serde_json::json!({
+                "role": m.role,
+                "content": m.content,
+            });
+            // GLM puts thinking in its own field at the message level
+            if let Some(ref t) = m.thinking {
+                obj["thinking"] = serde_json::Value::String(t.clone());
+            }
+            // Tool results
+            if let Some(ref id) = m.tool_call_id {
+                obj["tool_call_id"] = serde_json::Value::String(id.clone());
+            }
+            obj
+        })
+        .collect();
 
     let mut body = serde_json::json!({
         "model": model,
@@ -77,16 +86,19 @@ fn build_ollama_chat_body(
 
     // Expose tool definitions when they exist
     if !tools.is_empty() {
-        let tool_defs: Vec<serde_json::Value> = tools.iter().map(|t| {
-            serde_json::json!({
-                "type": "function",
-                "function": {
-                    "name": t.name,
-                    "description": t.description,
-                    "parameters": t.parameters,
-                }
+        let tool_defs: Vec<serde_json::Value> = tools
+            .iter()
+            .map(|t| {
+                serde_json::json!({
+                    "type": "function",
+                    "function": {
+                        "name": t.name,
+                        "description": t.description,
+                        "parameters": t.parameters,
+                    }
+                })
             })
-        }).collect();
+            .collect();
         body["tools"] = serde_json::Value::Array(tool_defs);
     }
 
@@ -99,8 +111,9 @@ fn build_openai_compat_body(
     messages: &[crate::shared::Message],
     tools: &[crate::shared::ToolDef],
 ) -> serde_json::Value {
-    let oai_messages: Vec<serde_json::Value> = messages.iter().map(|m| {
-        match m.role {
+    let oai_messages: Vec<serde_json::Value> = messages
+        .iter()
+        .map(|m| match m.role {
             crate::shared::Role::Tool => {
                 serde_json::json!({
                     "role": "tool",
@@ -109,16 +122,22 @@ fn build_openai_compat_body(
                 })
             }
             crate::shared::Role::Assistant if m.tool_calls.is_some() => {
-                let tcs: Vec<serde_json::Value> = m.tool_calls.as_ref().unwrap().iter().map(|tc| {
-                    serde_json::json!({
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {
-                            "name": tc.name,
-                            "arguments": tc.arguments.to_string(),
-                        }
+                let tcs: Vec<serde_json::Value> = m
+                    .tool_calls
+                    .as_ref()
+                    .unwrap()
+                    .iter()
+                    .map(|tc| {
+                        serde_json::json!({
+                            "id": tc.id,
+                            "type": "function",
+                            "function": {
+                                "name": tc.name,
+                                "arguments": tc.arguments.to_string(),
+                            }
+                        })
                     })
-                }).collect();
+                    .collect();
                 serde_json::json!({
                     "role": "assistant",
                     "content": m.content,
@@ -131,8 +150,8 @@ fn build_openai_compat_body(
                     "content": m.content,
                 })
             }
-        }
-    }).collect();
+        })
+        .collect();
 
     let mut body = serde_json::json!({
         "model": model,
@@ -141,16 +160,19 @@ fn build_openai_compat_body(
     });
 
     if !tools.is_empty() {
-        let tool_defs: Vec<serde_json::Value> = tools.iter().map(|t| {
-            serde_json::json!({
-                "type": "function",
-                "function": {
-                    "name": t.name,
-                    "description": t.description,
-                    "parameters": t.parameters,
-                }
+        let tool_defs: Vec<serde_json::Value> = tools
+            .iter()
+            .map(|t| {
+                serde_json::json!({
+                    "type": "function",
+                    "function": {
+                        "name": t.name,
+                        "description": t.description,
+                        "parameters": t.parameters,
+                    }
+                })
             })
-        }).collect();
+            .collect();
         body["tools"] = serde_json::Value::Array(tool_defs);
     }
 

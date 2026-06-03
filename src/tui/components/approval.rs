@@ -44,7 +44,9 @@ pub fn render_approval_dialog(f: &mut Frame, area: Rect, approval: &PendingAppro
     let name_text = Paragraph::new(vec![
         Line::from(Span::styled(
             format!(" Tool: {}", approval.tool_name),
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
     ]);
@@ -65,12 +67,10 @@ pub fn render_approval_dialog(f: &mut Frame, area: Rect, approval: &PendingAppro
     f.render_widget(args_text, chunks[1]);
 
     // Instructions
-    let instr_text = Paragraph::new(vec![
-        Line::from(Span::styled(
-            " [Y]es  [N]o  [A]lways approve for this session  [Esc] cancel",
-            Style::default().fg(Color::Green),
-        )),
-    ])
+    let instr_text = Paragraph::new(vec![Line::from(Span::styled(
+        " [Y]es  [N]o  [A]lways approve for this session  [Esc] cancel",
+        Style::default().fg(Color::Green),
+    ))])
     .alignment(Alignment::Center);
     f.render_widget(instr_text, chunks[2]);
 

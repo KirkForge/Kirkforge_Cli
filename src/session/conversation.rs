@@ -15,7 +15,8 @@ impl ConversationLog {
     pub fn open(path: PathBuf) -> anyhow::Result<Self> {
         let messages = if path.exists() {
             let content = std::fs::read_to_string(&path)?;
-            content.lines()
+            content
+                .lines()
                 .filter(|l| !l.trim().is_empty())
                 .filter_map(|l| serde_json::from_str::<Message>(l).ok())
                 .collect()

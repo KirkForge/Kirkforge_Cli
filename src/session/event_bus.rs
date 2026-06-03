@@ -347,7 +347,9 @@ impl EventBus {
     /// Check if an event has already been handled by a specific handler.
     pub async fn was_handled(&self, handler_id: &str, kind: EventKind, idem_key: u64) -> bool {
         let inner = self.inner.lock().await;
-        inner.idem_cache.contains(&(handler_id.to_string(), kind, idem_key))
+        inner
+            .idem_cache
+            .contains(&(handler_id.to_string(), kind, idem_key))
     }
 
     /// Dispatch an event to all matching handlers.
@@ -602,10 +604,7 @@ mod tests {
     #[tokio::test]
     async fn test_handler_not_called_for_unsubscribed_kind() {
         let bus = EventBus::new();
-        let handler = Arc::new(CountingHandler::new(
-            "counter",
-            vec![EventKind::FileRead],
-        ));
+        let handler = Arc::new(CountingHandler::new("counter", vec![EventKind::FileRead]));
         bus.register(handler.clone()).await.unwrap();
 
         let event = make_event(EventKind::BashExec);
@@ -617,10 +616,7 @@ mod tests {
     #[tokio::test]
     async fn test_idempotency_same_event_skipped() {
         let bus = EventBus::new();
-        let handler = Arc::new(CountingHandler::new(
-            "counter",
-            vec![EventKind::FileRead],
-        ));
+        let handler = Arc::new(CountingHandler::new("counter", vec![EventKind::FileRead]));
         bus.register(handler.clone()).await.unwrap();
 
         let event = make_event(EventKind::FileRead);
@@ -755,7 +751,10 @@ mod tests {
     #[tokio::test]
     async fn test_clear_idem_cache() {
         let bus = EventBus::new();
-        let handler = Arc::new(CountingHandler::new("clear-test", vec![EventKind::FileRead]));
+        let handler = Arc::new(CountingHandler::new(
+            "clear-test",
+            vec![EventKind::FileRead],
+        ));
         bus.register(handler.clone()).await.unwrap();
 
         let event = make_event(EventKind::FileRead);

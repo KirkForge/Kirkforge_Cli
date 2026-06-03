@@ -1,3 +1,4 @@
+pub mod git;
 /// Verifier slots — deterministic post-execution checks and correction loop.
 ///
 /// Verifiers sit on the event bus and react to tool execution events.
@@ -21,12 +22,8 @@
 /// and stops at the first definitive result.
 pub mod lint;
 pub mod security;
-pub mod git;
 
-use crate::session::event_bus::{
-    BusEvent, EventKind, EventHandler,
-    HandlerResult,
-};
+use crate::session::event_bus::{BusEvent, EventHandler, EventKind, HandlerResult};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -177,7 +174,10 @@ impl VerifierSlots {
 
     /// Get verifier names in priority order.
     pub fn names(&self) -> Vec<String> {
-        self.verifiers.iter().map(|v| v.name().to_string()).collect()
+        self.verifiers
+            .iter()
+            .map(|v| v.name().to_string())
+            .collect()
     }
 
     /// Clone all registered verifiers (for use across await boundaries).
@@ -275,7 +275,10 @@ impl EventHandler for VerifierHandler {
         };
         HandlerResult {
             handler_id: "verifier".into(),
-            success: matches!(verdict, Verdict::Clean | Verdict::Skipped(_) | Verdict::Fixable(_)),
+            success: matches!(
+                verdict,
+                Verdict::Clean | Verdict::Skipped(_) | Verdict::Fixable(_)
+            ),
             message: msg,
         }
     }
@@ -407,7 +410,9 @@ mod tests {
         fn name(&self) -> &str {
             &self.name
         }
-        fn priority(&self) -> u8 { self.prio }
+        fn priority(&self) -> u8 {
+            self.prio
+        }
         async fn verify(&self, _event: &BusEvent) -> Verdict {
             self.verdict.clone()
         }
@@ -430,26 +435,30 @@ mod tests {
     #[tokio::test]
     async fn test_fixable_verdict_stops_at_first() {
         let mut slots = VerifierSlots::new();
-        slots.register(Arc::new(MockVerifier {
-            name: "lint".into(),
-            prio: 1,
-            verdict: Verdict::Fixable(FixSuggestion {
-                description: "unused variable".into(),
-                file: PathBuf::from("test.rs"),
-                original: "let x = 1;".into(),
-                replacement: "let _x = 1;".into(),
-                severity: "warning".into(),
-            }),
-        })).unwrap();
-        slots.register(Arc::new(MockVerifier {
-            name: "security".into(),
-            prio: 2,
-            verdict: Verdict::Unfixable(VerificationError {
-                description: "dangerous".into(),
-                file: None,
-                details: "hardcoded password".into(),
-            }),
-        })).unwrap();
+        slots
+            .register(Arc::new(MockVerifier {
+                name: "lint".into(),
+                prio: 1,
+                verdict: Verdict::Fixable(FixSuggestion {
+                    description: "unused variable".into(),
+                    file: PathBuf::from("test.rs"),
+                    original: "let x = 1;".into(),
+                    replacement: "let _x = 1;".into(),
+                    severity: "warning".into(),
+                }),
+            }))
+            .unwrap();
+        slots
+            .register(Arc::new(MockVerifier {
+                name: "security".into(),
+                prio: 2,
+                verdict: Verdict::Unfixable(VerificationError {
+                    description: "dangerous".into(),
+                    file: None,
+                    details: "hardcoded password".into(),
+                }),
+            }))
+            .unwrap();
 
         let verdict = slots.verify(&make_edit_event()).await;
         // Should stop at lint (priority 1) even though security would also fire
@@ -459,20 +468,24 @@ mod tests {
     #[tokio::test]
     async fn test_unfixable_stops_chain() {
         let mut slots = VerifierSlots::new();
-        slots.register(Arc::new(MockVerifier {
-            name: "security".into(),
-            prio: 1,
-            verdict: Verdict::Unfixable(VerificationError {
-                description: "API key exposed".into(),
-                file: Some(PathBuf::from("config.rs")),
-                details: "found sk-... pattern".into(),
-            }),
-        })).unwrap();
-        slots.register(Arc::new(MockVerifier {
-            name: "lint".into(),
-            prio: 2,
-            verdict: Verdict::Clean,
-        })).unwrap();
+        slots
+            .register(Arc::new(MockVerifier {
+                name: "security".into(),
+                prio: 1,
+                verdict: Verdict::Unfixable(VerificationError {
+                    description: "API key exposed".into(),
+                    file: Some(PathBuf::from("config.rs")),
+                    details: "found sk-... pattern".into(),
+                }),
+            }))
+            .unwrap();
+        slots
+            .register(Arc::new(MockVerifier {
+                name: "lint".into(),
+                prio: 2,
+                verdict: Verdict::Clean,
+            }))
+            .unwrap();
 
         let verdict = slots.verify(&make_edit_event()).await;
         assert!(matches!(verdict, Verdict::Unfixable(_)));
@@ -481,16 +494,20 @@ mod tests {
     #[tokio::test]
     async fn test_skipped_verifiers_are_skipped() {
         let mut slots = VerifierSlots::new();
-        slots.register(Arc::new(MockVerifier {
-            name: "git".into(),
-            prio: 1,
-            verdict: Verdict::Skipped("no git repo".into()),
-        })).unwrap();
-        slots.register(Arc::new(MockVerifier {
-            name: "lint".into(),
-            prio: 2,
-            verdict: Verdict::Clean,
-        })).unwrap();
+        slots
+            .register(Arc::new(MockVerifier {
+                name: "git".into(),
+                prio: 1,
+                verdict: Verdict::Skipped("no git repo".into()),
+            }))
+            .unwrap();
+        slots
+            .register(Arc::new(MockVerifier {
+                name: "lint".into(),
+                prio: 2,
+                verdict: Verdict::Clean,
+            }))
+            .unwrap();
 
         let verdict = slots.verify(&make_edit_event()).await;
         assert!(matches!(verdict, Verdict::Clean));
@@ -499,11 +516,13 @@ mod tests {
     #[tokio::test]
     async fn test_register_overflow() {
         let mut slots = VerifierSlots::with_max_slots(1);
-        slots.register(Arc::new(MockVerifier {
-            name: "lint".into(),
-            prio: 1,
-            verdict: Verdict::Clean,
-        })).unwrap();
+        slots
+            .register(Arc::new(MockVerifier {
+                name: "lint".into(),
+                prio: 1,
+                verdict: Verdict::Clean,
+            }))
+            .unwrap();
         let err = slots.register(Arc::new(MockVerifier {
             name: "security".into(),
             prio: 2,
@@ -515,11 +534,13 @@ mod tests {
     #[tokio::test]
     async fn test_duplicate_registration_rejected() {
         let mut slots = VerifierSlots::new();
-        slots.register(Arc::new(MockVerifier {
-            name: "lint".into(),
-            prio: 1,
-            verdict: Verdict::Clean,
-        })).unwrap();
+        slots
+            .register(Arc::new(MockVerifier {
+                name: "lint".into(),
+                prio: 1,
+                verdict: Verdict::Clean,
+            }))
+            .unwrap();
         let err = slots.register(Arc::new(MockVerifier {
             name: "lint".into(),
             prio: 1,
@@ -537,11 +558,13 @@ mod tests {
     #[tokio::test]
     async fn test_unregister_by_name() {
         let mut slots = VerifierSlots::new();
-        slots.register(Arc::new(MockVerifier {
-            name: "lint".into(),
-            prio: 1,
-            verdict: Verdict::Clean,
-        })).unwrap();
+        slots
+            .register(Arc::new(MockVerifier {
+                name: "lint".into(),
+                prio: 1,
+                verdict: Verdict::Clean,
+            }))
+            .unwrap();
         assert_eq!(slots.len(), 1);
         assert!(slots.unregister("lint"));
         assert_eq!(slots.len(), 0);
@@ -614,7 +637,8 @@ mod tests {
                     replacement: "b".into(),
                     severity: "warning".into(),
                 }),
-            })).unwrap();
+            }))
+            .unwrap();
         }
 
         let event = make_edit_event();
@@ -650,7 +674,8 @@ mod tests {
                     replacement: "let _x = 1;".into(),
                     severity: "warning".into(),
                 }),
-            })).unwrap();
+            }))
+            .unwrap();
         }
 
         let loop_ = CorrectionLoop::new(handler);
@@ -689,7 +714,8 @@ mod tests {
                 name: "lint".into(),
                 prio: 1,
                 verdict: Verdict::Clean,
-            })).unwrap();
+            }))
+            .unwrap();
         }
 
         // Dispatch via bus
@@ -700,7 +726,10 @@ mod tests {
         let results = bus.dispatch(&event).await;
 
         // VerifierHandler should have been called
-        let verifier_results: Vec<_> = results.iter().filter(|r| r.handler_id == "verifier").collect();
+        let verifier_results: Vec<_> = results
+            .iter()
+            .filter(|r| r.handler_id == "verifier")
+            .collect();
         assert_eq!(verifier_results.len(), 1);
         assert_eq!(verifier_results[0].message, "All verifiers passed");
     }

@@ -3,28 +3,29 @@ pub mod components;
 pub mod rendering;
 pub mod widgets;
 
-use app::{AppState, ConnectionState, ConversationEntry, PendingApproval};
-use components::approval::render_approval_dialog;
-use crate::session::executor::{self, ApprovalRequest, ApprovalResponse};
+use crate::session::carryover::CarryoverProfile;
 use crate::session::conversation::ConversationLog;
+use crate::session::executor::{self, ApprovalRequest, ApprovalResponse};
 use crate::shared::Config;
 use crate::tools::Tool;
+use app::{AppState, ConnectionState, ConversationEntry, PendingApproval};
+use components::approval::render_approval_dialog;
 use widgets::chat::render_chat;
 use widgets::input::render_input;
 use widgets::status::render_status;
 
-use ratatui::{
-    backend::CrosstermBackend,
-    layout::{Constraint, Direction, Layout},
-    Terminal,
-};
 use crossterm::{
     event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use ratatui::{
+    backend::CrosstermBackend,
+    layout::{Constraint, Direction, Layout},
+    Terminal,
+};
 use std::io;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tokio::sync::mpsc;
 
@@ -57,10 +58,15 @@ pub async fn run_tui(
     let session_id = crate::session::new_session_id().to_string();
     state.log_path = Some(log_path.clone());
     state.session_id = session_id.clone();
-    state.fork_manager = Some(crate::session::session_fork::ForkManager::new(&session_id, &log_path));
+    state.fork_manager = Some(crate::session::session_fork::ForkManager::new(
+        &session_id,
+        &log_path,
+    ));
 
     // Initialize skill registry: scan for SKILL.md files
-    state.skill_registry.add_scan_path(std::path::PathBuf::from(".claude/skills"));
+    state
+        .skill_registry
+        .add_scan_path(std::path::PathBuf::from(".claude/skills"));
     match state.skill_registry.scan_and_load() {
         Ok(count) => {
             if count > 0 {
@@ -76,6 +82,14 @@ pub async fn run_tui(
         state.skill_registry.register(skill);
     }
 
+    // ── Carryover profile (shared between executor and save) ──
+    let carryover_target: Option<Arc<Mutex<CarryoverProfile>>> = if config.carryover_enabled {
+        Some(Arc::new(Mutex::new(CarryoverProfile::default())))
+    } else {
+        None
+    };
+    let saved_profile = carryover_target.clone();
+
     // ── Channels ──
     // User input: TUI → Executor
     let (input_tx, input_rx) = mpsc::unbounded_channel::<String>();
@@ -85,8 +99,9 @@ pub async fn run_tui(
     let (approval_tx, mut approval_rx) = mpsc::unbounded_channel::<ApprovalRequest>();
 
     // Spawn the executor on a background task
-    let mut exe = executor::Executor::with_log(adapter, tools, config, conversation_log);
-    tokio::spawn(async move {
+    let mut exe =
+        executor::Executor::with_log(adapter, tools, config, conversation_log, carryover_target);
+    let handle = tokio::spawn(async move {
         let _ = exe.run(input_rx, event_tx, approval_tx).await;
     });
 
@@ -97,7 +112,19 @@ pub async fn run_tui(
         &mut event_rx,
         &mut approval_rx,
         &input_tx,
-    ).await;
+    )
+    .await;
+
+    // Drop input sender to close the executor's recv loop, then wait for flush
+    drop(input_tx);
+    let _ = handle.await;
+
+    // Save carryover profile
+    if let Some(ref target) = saved_profile {
+        if let Ok(guard) = target.lock() {
+            crate::session::carryover::save_carryover(&guard);
+        }
+    }
 
     // Cleanup
     let _ = disable_raw_mode();
@@ -114,6 +141,11 @@ async fn run_event_loop(
     input_tx: &mpsc::UnboundedSender<String>,
 ) -> anyhow::Result<()> {
     loop {
+        // Check for exit signal
+        if state.should_exit {
+            break Ok(());
+        }
+
         // ── Drain pending stream events ──
         while let Ok(ev) = event_rx.try_recv() {
             match ev {
@@ -184,7 +216,12 @@ async fn run_event_loop(
                         timestamp: chrono::Local::now(),
                     });
                 }
-                executor::TurnEvent::CostStats { prompt_tokens, completion_tokens, turn_cost, cumulative_cost } => {
+                executor::TurnEvent::CostStats {
+                    prompt_tokens,
+                    completion_tokens,
+                    turn_cost,
+                    cumulative_cost,
+                } => {
                     state.tokens_sent = state.tokens_sent.wrapping_add(prompt_tokens);
                     state.tokens_received = state.tokens_received.wrapping_add(completion_tokens);
                     state.turn_cost = turn_cost;
@@ -334,7 +371,8 @@ async fn handle_input_key(
                             return Ok(());
                         }
                         "/exit" | "/quit" => {
-                            std::process::exit(0);
+                            state.should_exit = true;
+                            return Ok(());
                         }
                         "/help" | "/h" | "/?" => {
                             let mut help_text =
@@ -347,7 +385,10 @@ async fn handle_input_key(
                                         "  {}  — {}{}\n",
                                         skill.meta.trigger,
                                         skill.meta.description,
-                                        skill.meta.model.as_ref()
+                                        skill
+                                            .meta
+                                            .model
+                                            .as_ref()
                                             .map(|m| format!(" [{}]", m))
                                             .unwrap_or_default(),
                                     ));
@@ -385,7 +426,10 @@ async fn handle_input_key(
                         let rendered = skill.render_prompt(args);
                         state.messages.push(ConversationEntry {
                             role: "system".into(),
-                            content: format!("🔧 Running skill: {} — {}", skill.meta.name, skill.meta.description),
+                            content: format!(
+                                "🔧 Running skill: {} — {}",
+                                skill.meta.name, skill.meta.description
+                            ),
                             timestamp: chrono::Local::now(),
                         });
                         // Send the skill prompt to the model via executor
@@ -393,7 +437,10 @@ async fn handle_input_key(
                     } else {
                         state.messages.push(ConversationEntry {
                             role: "system".into(),
-                            content: format!("Unknown command: {}\nType /help for available commands.", cmd),
+                            content: format!(
+                                "Unknown command: {}\nType /help for available commands.",
+                                cmd
+                            ),
                             timestamp: chrono::Local::now(),
                         });
                     }
@@ -501,14 +548,15 @@ async fn handle_fork_command(args: &str, state: &mut AppState) -> String {
     match crate::session::conversation::ConversationLog::open(log_path) {
         Ok(conv_log) => {
             // Fork point: -1 (end) by default, or parse an optional count
-            let fork_point: i64 = parts.get(1)
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(-1);
+            let fork_point: i64 = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(-1);
 
             match fm.create_fork(label, &conv_log, fork_point) {
                 Ok(fork) => format!(
                     "✅ Created fork {} — \"{}\" at message #{} (path: {})",
-                    fork.id, fork.label, fork.fork_point, fork.path.display()
+                    fork.id,
+                    fork.label,
+                    fork.fork_point,
+                    fork.path.display()
                 ),
                 Err(e) => format!("Error creating fork: {}", e),
             }
@@ -528,8 +576,12 @@ async fn handle_jobs_command() -> String {
     for job in &jobs {
         let status = match &job.status {
             crate::session::bash_jobs::JobStatus::Running => format!("⏳ running (id={})", job.id),
-            crate::session::bash_jobs::JobStatus::Completed(code) => format!("✅ completed #{} (exit {})", job.id, code),
-            crate::session::bash_jobs::JobStatus::Failed(e) => format!("❌ failed #{}: {}", job.id, e),
+            crate::session::bash_jobs::JobStatus::Completed(code) => {
+                format!("✅ completed #{} (exit {})", job.id, code)
+            }
+            crate::session::bash_jobs::JobStatus::Failed(e) => {
+                format!("❌ failed #{}: {}", job.id, e)
+            }
             crate::session::bash_jobs::JobStatus::Cancelled => format!("🚫 cancelled #{}", job.id),
         };
         out.push_str(&format!("  {} — {}\n", status, job.command));
@@ -550,4 +602,3 @@ fn notify_completed_jobs(state: &mut AppState) {
     // to the /jobs command at any time through handle_jobs_command().
     let _ = state; // placeholder for future push-based notification
 }
-

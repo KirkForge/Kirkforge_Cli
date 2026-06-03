@@ -19,10 +19,7 @@ pub fn render_status(f: &mut Frame, area: Rect, state: &AppState) {
             Span::styled(" ⟳ Connecting... ", Style::default().fg(Color::Yellow))
         }
         ConnectionState::Connected { model, .. } => {
-            Span::styled(
-                format!(" ◆ {} ", model),
-                Style::default().fg(Color::Green),
-            )
+            Span::styled(format!(" ◆ {} ", model), Style::default().fg(Color::Green))
         }
         ConnectionState::Error(e) => {
             Span::styled(format!(" ✗ {} ", e), Style::default().fg(Color::Red))
@@ -45,7 +42,11 @@ pub fn render_status(f: &mut Frame, area: Rect, state: &AppState) {
     };
     let right_info = format!(
         "{} ↑{} ↓{} {} │ {} ",
-        if skills_str.is_empty() { String::new() } else { format!("{} ", skills_str) },
+        if skills_str.is_empty() {
+            String::new()
+        } else {
+            format!("{} ", skills_str)
+        },
         format_token_count(state.tokens_sent),
         format_token_count(state.tokens_received),
         cost_str,
@@ -67,7 +68,6 @@ pub fn render_status(f: &mut Frame, area: Rect, state: &AppState) {
         Span::styled(right_info, Style::default().fg(Color::DarkGray)),
     ]);
 
-    let paragraph = Paragraph::new(line)
-        .style(Style::default().bg(Color::Black).fg(Color::White));
+    let paragraph = Paragraph::new(line).style(Style::default().bg(Color::Black).fg(Color::White));
     f.render_widget(paragraph, area);
 }

@@ -1,7 +1,7 @@
 pub mod minify;
 
-use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 /// The core unit of conversation — one turn from any participant.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -126,6 +126,16 @@ pub struct Config {
     /// Whether to block reading of binary files.
     #[serde(default)]
     pub block_binary_reads: bool,
+
+    /// Enable session carryover profile for cross-session awareness.
+    /// When enabled, a tiny profile (~200 bytes) is accumulated during
+    /// the session and injected into the next session's system prompt.
+    #[serde(default = "default_carryover_enabled")]
+    pub carryover_enabled: bool,
+}
+
+fn default_carryover_enabled() -> bool {
+    true
 }
 
 fn default_max_file_read_size() -> usize {
@@ -149,6 +159,7 @@ impl Default for Config {
             max_file_read_size: 1024 * 1024,
             follow_symlinks: false,
             block_binary_reads: false,
+            carryover_enabled: true,
         }
     }
 }
@@ -179,11 +190,26 @@ pub struct ToolDef {
 /// Result types for tools.
 #[derive(Debug, Clone)]
 pub enum ToolOutcome {
-    Success { content: String },
-    Error { message: String },
-    FileContent { path: PathBuf, content: String, truncated: bool },
-    FileEdit { path: PathBuf, diff: String },
-    GrepMatches { path: PathBuf, matches: Vec<Match>, total: usize },
+    Success {
+        content: String,
+    },
+    Error {
+        message: String,
+    },
+    FileContent {
+        path: PathBuf,
+        content: String,
+        truncated: bool,
+    },
+    FileEdit {
+        path: PathBuf,
+        diff: String,
+    },
+    GrepMatches {
+        path: PathBuf,
+        matches: Vec<Match>,
+        total: usize,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -228,19 +254,56 @@ pub struct Pricing {
 /// within each provider group. The final catch-all entry has empty prefix (free).
 pub const PRICING_TABLE: &[Pricing] = &[
     // Anthropic (via proxy)
-    Pricing { model_prefix: "opus-4", input_per_mtok: 15.00, output_per_mtok: 75.00, cache_write_per_mtok: 18.75, cache_read_per_mtok: 1.50 },
-    Pricing { model_prefix: "sonnet-4", input_per_mtok: 3.00, output_per_mtok: 15.00, cache_write_per_mtok: 3.75, cache_read_per_mtok: 0.30 },
-    Pricing { model_prefix: "haiku-4", input_per_mtok: 0.25, output_per_mtok: 1.25, cache_write_per_mtok: 0.30, cache_read_per_mtok: 0.05 },
+    Pricing {
+        model_prefix: "opus-4",
+        input_per_mtok: 15.00,
+        output_per_mtok: 75.00,
+        cache_write_per_mtok: 18.75,
+        cache_read_per_mtok: 1.50,
+    },
+    Pricing {
+        model_prefix: "sonnet-4",
+        input_per_mtok: 3.00,
+        output_per_mtok: 15.00,
+        cache_write_per_mtok: 3.75,
+        cache_read_per_mtok: 0.30,
+    },
+    Pricing {
+        model_prefix: "haiku-4",
+        input_per_mtok: 0.25,
+        output_per_mtok: 1.25,
+        cache_write_per_mtok: 0.30,
+        cache_read_per_mtok: 0.05,
+    },
     // OpenAI (via proxy)
-    Pricing { model_prefix: "gpt-4", input_per_mtok: 10.00, output_per_mtok: 30.00, cache_write_per_mtok: 0.0, cache_read_per_mtok: 0.0 },
-    Pricing { model_prefix: "gpt-5", input_per_mtok: 15.00, output_per_mtok: 60.00, cache_write_per_mtok: 7.50, cache_read_per_mtok: 0.75 },
+    Pricing {
+        model_prefix: "gpt-4",
+        input_per_mtok: 10.00,
+        output_per_mtok: 30.00,
+        cache_write_per_mtok: 0.0,
+        cache_read_per_mtok: 0.0,
+    },
+    Pricing {
+        model_prefix: "gpt-5",
+        input_per_mtok: 15.00,
+        output_per_mtok: 60.00,
+        cache_write_per_mtok: 7.50,
+        cache_read_per_mtok: 0.75,
+    },
     // Free catch-all for local Ollama models
-    Pricing { model_prefix: "", input_per_mtok: 0.0, output_per_mtok: 0.0, cache_write_per_mtok: 0.0, cache_read_per_mtok: 0.0 },
+    Pricing {
+        model_prefix: "",
+        input_per_mtok: 0.0,
+        output_per_mtok: 0.0,
+        cache_write_per_mtok: 0.0,
+        cache_read_per_mtok: 0.0,
+    },
 ];
 
 /// Compute the cost of a single turn in USD.
 pub fn calculate_cost(model: &str, input_tokens: usize, output_tokens: usize) -> f64 {
-    let p = PRICING_TABLE.iter()
+    let p = PRICING_TABLE
+        .iter()
         .find(|p| !p.model_prefix.is_empty() && model.starts_with(p.model_prefix))
         .unwrap_or_else(|| PRICING_TABLE.last().unwrap());
     let input_cost = (input_tokens as f64 / 1_000_000.0) * p.input_per_mtok;

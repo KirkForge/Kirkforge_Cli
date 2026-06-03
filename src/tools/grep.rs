@@ -41,12 +41,22 @@ impl Tool for Grep {
     async fn run(&self, args: serde_json::Value) -> ToolOutcome {
         let pattern = match args.get("pattern").and_then(|p| p.as_str()) {
             Some(p) => p.to_string(),
-            None => return ToolOutcome::Error { message: "Missing 'pattern' argument".into() },
+            None => {
+                return ToolOutcome::Error {
+                    message: "Missing 'pattern' argument".into(),
+                }
+            }
         };
 
         let path = args.get("path").and_then(|p| p.as_str()).unwrap_or(".");
-        let context_lines = args.get("context_lines").and_then(|c| c.as_u64()).unwrap_or(2) as usize;
-        let max_matches = args.get("max_matches").and_then(|m| m.as_u64()).unwrap_or(50) as usize;
+        let context_lines = args
+            .get("context_lines")
+            .and_then(|c| c.as_u64())
+            .unwrap_or(2) as usize;
+        let max_matches = args
+            .get("max_matches")
+            .and_then(|m| m.as_u64())
+            .unwrap_or(50) as usize;
 
         let search_path = PathBuf::from(shellexpand::tilde(path).as_ref());
 
@@ -113,7 +123,12 @@ impl Tool for Grep {
     }
 }
 
-fn find_matches(content: &str, pattern: &str, _file_path: &std::path::Path, context: usize) -> Vec<SearchMatch> {
+fn find_matches(
+    content: &str,
+    pattern: &str,
+    _file_path: &std::path::Path,
+    context: usize,
+) -> Vec<SearchMatch> {
     let mut results = Vec::new();
     let lines: Vec<&str> = content.lines().collect();
 
@@ -147,13 +162,9 @@ fn find_matches(content: &str, pattern: &str, _file_path: &std::path::Path, cont
 
 fn is_binary(path: &std::path::Path) -> bool {
     let binary_extensions = [
-        "png", "jpg", "jpeg", "gif", "bmp", "ico", "webp",
-        "ttf", "otf", "woff", "woff2", "eot",
-        "mp3", "mp4", "avi", "mov", "mkv", "webm",
-        "zip", "tar", "gz", "bz2", "xz", "zst",
-        "pdf", "doc", "docx", "xls", "xlsx",
-        "wasm", "o", "so", "dylib", "exe", "dll",
-        "pyc", "class",
+        "png", "jpg", "jpeg", "gif", "bmp", "ico", "webp", "ttf", "otf", "woff", "woff2", "eot",
+        "mp3", "mp4", "avi", "mov", "mkv", "webm", "zip", "tar", "gz", "bz2", "xz", "zst", "pdf",
+        "doc", "docx", "xls", "xlsx", "wasm", "o", "so", "dylib", "exe", "dll", "pyc", "class",
     ];
 
     path.extension()

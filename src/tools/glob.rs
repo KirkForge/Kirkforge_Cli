@@ -32,7 +32,11 @@ impl Tool for Glob {
     async fn run(&self, args: serde_json::Value) -> ToolOutcome {
         let pattern = match args.get("pattern").and_then(|p| p.as_str()) {
             Some(p) => p.to_string(),
-            None => return ToolOutcome::Error { message: "Missing 'pattern' argument".into() },
+            None => {
+                return ToolOutcome::Error {
+                    message: "Missing 'pattern' argument".into(),
+                }
+            }
         };
 
         let base_dir = args.get("base_dir").and_then(|b| b.as_str()).unwrap_or(".");
@@ -48,10 +52,14 @@ impl Tool for Glob {
         // Build glob set
         let mut builder = GlobSetBuilder::new();
         match GlobPattern::new(&pattern) {
-            Ok(g) => { builder.add(g); }
-            Err(e) => return ToolOutcome::Error {
-                message: format!("Invalid glob pattern '{}': {}", pattern, e),
-            },
+            Ok(g) => {
+                builder.add(g);
+            }
+            Err(e) => {
+                return ToolOutcome::Error {
+                    message: format!("Invalid glob pattern '{}': {}", pattern, e),
+                }
+            }
         }
         let glob_set = builder.build().unwrap_or_else(|_| GlobSet::empty());
 
@@ -86,7 +94,12 @@ impl Tool for Glob {
 
         let output = matches.join("\n");
         ToolOutcome::Success {
-            content: format!("Found {} files matching '{}':\n{}", matches.len(), pattern, output),
+            content: format!(
+                "Found {} files matching '{}':\n{}",
+                matches.len(),
+                pattern,
+                output
+            ),
         }
     }
 }

@@ -1,3 +1,4 @@
+use crate::session::event_bus::{BusEvent, EditEvent, FileWriteEvent};
 /// Lint verifier — runs cargo clippy or rustfmt on edited files.
 ///
 /// This verifier subscribes to `Edit` and `FileWrite` events.
@@ -6,7 +7,6 @@
 ///
 /// The lint verifier is registered at priority 2 (after security).
 use crate::session::verifier::{FixSuggestion, Verdict, VerificationError};
-use crate::session::event_bus::{BusEvent, EditEvent, FileWriteEvent};
 use std::path::{Path, PathBuf};
 
 /// Lint targets supported by the verifier.
@@ -44,7 +44,10 @@ pub async fn verify_lint(event: &BusEvent) -> Verdict {
 
     // For now only Rust is fully supported
     if !matches!(target, LintTarget::Rust) {
-        return Verdict::Skipped(format!("lint verifier not yet implemented for {:?}", target));
+        return Verdict::Skipped(format!(
+            "lint verifier not yet implemented for {:?}",
+            target
+        ));
     }
 
     // Run clippy on the project
@@ -72,16 +75,18 @@ pub async fn verify_lint(event: &BusEvent) -> Verdict {
                 file: PathBuf::from(&fname),
                 original: String::new(), // We don't know the exact original text
                 replacement: String::new(),
-                severity: if msg.contains("error") { "error".into() } else { "warning".into() },
+                severity: if msg.contains("error") {
+                    "error".into()
+                } else {
+                    "warning".into()
+                },
             })
         }
-        None => {
-            Verdict::Unfixable(VerificationError {
-                description: "clippy check failed".into(),
-                file: Some(path),
-                details: stderr.lines().take(5).collect::<Vec<_>>().join("\n"),
-            })
-        }
+        None => Verdict::Unfixable(VerificationError {
+            description: "clippy check failed".into(),
+            file: Some(path),
+            details: stderr.lines().take(5).collect::<Vec<_>>().join("\n"),
+        }),
     }
 }
 

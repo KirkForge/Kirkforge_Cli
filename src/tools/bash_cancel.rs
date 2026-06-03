@@ -27,9 +27,11 @@ impl Tool for BashCancel {
     async fn run(&self, args: serde_json::Value) -> ToolOutcome {
         let job_id = match args.get("id").and_then(|v| v.as_u64()) {
             Some(id) => id,
-            None => return ToolOutcome::Error {
-                message: "Missing 'id' argument".into(),
-            },
+            None => {
+                return ToolOutcome::Error {
+                    message: "Missing 'id' argument".into(),
+                }
+            }
         };
 
         let registry = global_registry();

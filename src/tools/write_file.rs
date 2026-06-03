@@ -30,12 +30,20 @@ impl Tool for WriteFile {
     async fn run(&self, args: serde_json::Value) -> ToolOutcome {
         let path = match args.get("path").and_then(|p| p.as_str()) {
             Some(p) => PathBuf::from(shellexpand::tilde(p).as_ref()),
-            None => return ToolOutcome::Error { message: "Missing 'path' argument".into() },
+            None => {
+                return ToolOutcome::Error {
+                    message: "Missing 'path' argument".into(),
+                }
+            }
         };
 
         let content = match args.get("content").and_then(|c| c.as_str()) {
             Some(c) => c.to_string(),
-            None => return ToolOutcome::Error { message: "Missing 'content' argument".into() },
+            None => {
+                return ToolOutcome::Error {
+                    message: "Missing 'content' argument".into(),
+                }
+            }
         };
 
         // Create parent directories if needed

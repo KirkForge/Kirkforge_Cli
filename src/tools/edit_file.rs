@@ -35,33 +35,49 @@ impl Tool for EditFile {
     async fn run(&self, args: serde_json::Value) -> ToolOutcome {
         let path = match args.get("path").and_then(|p| p.as_str()) {
             Some(p) => PathBuf::from(shellexpand::tilde(p).as_ref()),
-            None => return ToolOutcome::Error { message: "Missing 'path' argument".into() },
+            None => {
+                return ToolOutcome::Error {
+                    message: "Missing 'path' argument".into(),
+                }
+            }
         };
 
         let old = match args.get("old_string").and_then(|o| o.as_str()) {
             Some(o) => o.to_string(),
-            None => return ToolOutcome::Error { message: "Missing 'old_string' argument".into() },
+            None => {
+                return ToolOutcome::Error {
+                    message: "Missing 'old_string' argument".into(),
+                }
+            }
         };
 
         let new = match args.get("new_string").and_then(|n| n.as_str()) {
             Some(n) => n.to_string(),
-            None => return ToolOutcome::Error { message: "Missing 'new_string' argument".into() },
+            None => {
+                return ToolOutcome::Error {
+                    message: "Missing 'new_string' argument".into(),
+                }
+            }
         };
 
         let content = match std::fs::read_to_string(&path) {
             Ok(c) => c,
-            Err(e) => return ToolOutcome::Error {
-                message: format!("Cannot read {}: {}", path.display(), e),
-            },
+            Err(e) => {
+                return ToolOutcome::Error {
+                    message: format!("Cannot read {}: {}", path.display(), e),
+                }
+            }
         };
 
         if !content.contains(&old) {
             // Try fuzzy match: strip trailing whitespace per line, re-check
-            let normalized: String = content.lines()
+            let normalized: String = content
+                .lines()
                 .map(|l| l.trim_end())
                 .collect::<Vec<_>>()
                 .join("\n");
-            let old_normalized: String = old.lines()
+            let old_normalized: String = old
+                .lines()
                 .map(|l| l.trim_end())
                 .collect::<Vec<_>>()
                 .join("\n");

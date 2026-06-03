@@ -1,8 +1,8 @@
 use crate::session::bash_jobs::global_registry;
 use crate::shared::{ToolDef, ToolOutcome};
 use crate::tools::Tool;
-use std::time::Duration;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 pub struct Bash;
 
@@ -43,11 +43,19 @@ impl Tool for Bash {
     async fn run(&self, args: serde_json::Value) -> ToolOutcome {
         let cmd = match args.get("command").and_then(|c| c.as_str()) {
             Some(c) => c.to_string(),
-            None => return ToolOutcome::Error { message: "Missing 'command' argument".into() },
+            None => {
+                return ToolOutcome::Error {
+                    message: "Missing 'command' argument".into(),
+                }
+            }
         };
 
         // Check for background mode
-        if args.get("background").and_then(|b| b.as_bool()).unwrap_or(false) {
+        if args
+            .get("background")
+            .and_then(|b| b.as_bool())
+            .unwrap_or(false)
+        {
             let registry = global_registry();
             let workdir = args.get("workdir").and_then(|w| w.as_str());
             let timeout = args.get("timeout").and_then(|t| t.as_u64());
@@ -69,12 +77,15 @@ impl Tool for Bash {
             let result = tokio::time::timeout(
                 Duration::from_secs(timeout_secs),
                 run_shell(&cmd, &workdir_path),
-            ).await;
+            )
+            .await;
 
             match result {
                 Ok(Ok(output)) => {
                     if output.status.success() {
-                        ToolOutcome::Success { content: output.stdout }
+                        ToolOutcome::Success {
+                            content: output.stdout,
+                        }
                     } else {
                         let stderr = if output.stderr.is_empty() {
                             String::new()
@@ -129,5 +140,7 @@ async fn run_shell(cmd: &str, workdir: &Path) -> std::io::Result<ShellOutput> {
             stdout,
             stderr,
         })
-    }).await.expect("spawn_blocking panicked")
+    })
+    .await
+    .expect("spawn_blocking panicked")
 }

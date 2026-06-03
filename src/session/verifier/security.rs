@@ -1,3 +1,4 @@
+use crate::session::event_bus::{BusEvent, FileWriteEvent};
 /// Security verifier — scans file writes for dangerous patterns.
 ///
 /// Checks written files for:
@@ -5,7 +6,6 @@
 /// - Dangerous shell commands in scripts
 /// - Path traversal vulnerabilities
 use crate::session::verifier::{Verdict, VerificationError};
-use crate::session::event_bus::{BusEvent, FileWriteEvent};
 
 /// Known secret patterns (substring-based).
 const SECRET_PATTERNS: &[(&str, &str)] = &[
@@ -35,7 +35,10 @@ const DANGEROUS_SHELL_PATTERNS: &[&str] = &[
 /// Run the security verifier against an event.
 pub async fn verify_security(event: &BusEvent) -> Verdict {
     let (path, content_length) = match event {
-        BusEvent::FileWrite(FileWriteEvent { path, content_length }) => (path.clone(), *content_length),
+        BusEvent::FileWrite(FileWriteEvent {
+            path,
+            content_length,
+        }) => (path.clone(), *content_length),
         _ => return Verdict::Skipped("not a file write event".into()),
     };
 
@@ -76,7 +79,8 @@ pub async fn verify_security(event: &BusEvent) -> Verdict {
                 return Verdict::Unfixable(VerificationError {
                     description: format!("Dangerous shell command: {}", pattern),
                     file: Some(path.clone()),
-                    details: "This command is blocked by security policy. Remove it to proceed.".into(),
+                    details: "This command is blocked by security policy. Remove it to proceed."
+                        .into(),
                 });
             }
         }
@@ -133,7 +137,11 @@ mod tests {
     async fn test_detects_private_key() {
         let dir = std::env::temp_dir();
         let path = dir.join("kirkforge_sec_private.pem");
-        std::fs::write(&path, "-----BEGIN PRIVATE KEY-----\nABC123\n-----END PRIVATE KEY-----").unwrap();
+        std::fs::write(
+            &path,
+            "-----BEGIN PRIVATE KEY-----\nABC123\n-----END PRIVATE KEY-----",
+        )
+        .unwrap();
 
         let event = BusEvent::FileWrite(FileWriteEvent {
             path: path.clone(),

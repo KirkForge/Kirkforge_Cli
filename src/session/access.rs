@@ -40,7 +40,9 @@ impl DenyList {
     /// Returns true if `path` matches any deny pattern.
     pub fn is_path_denied(&self, path: &Path) -> bool {
         let as_str = path.to_string_lossy();
-        self.path_matchers.iter().any(|m| m.is_match(as_str.as_ref()))
+        self.path_matchers
+            .iter()
+            .any(|m| m.is_match(as_str.as_ref()))
     }
 
     /// Returns true if `url` starts with any blocked prefix.
@@ -119,10 +121,7 @@ impl PathGuard {
     pub fn check_read(&self, path: &Path) -> GuardVerdict {
         // 1. Deny list
         if self.deny_list.is_path_denied(path) {
-            return GuardVerdict::Denied(format!(
-                "Path denied by deny list: {}",
-                path.display()
-            ));
+            return GuardVerdict::Denied(format!("Path denied by deny list: {}", path.display()));
         }
 
         // Resolve real path if it exists (for sandbox + symlink checks)
@@ -152,10 +151,7 @@ impl PathGuard {
                 }
             };
             if !canonical.starts_with(&sb) {
-                return GuardVerdict::Denied(format!(
-                    "Path outside sandbox: {}",
-                    path.display()
-                ));
+                return GuardVerdict::Denied(format!("Path outside sandbox: {}", path.display()));
             }
         }
 
@@ -171,10 +167,7 @@ impl PathGuard {
                 }
             };
             if metadata.file_type().is_symlink() {
-                return GuardVerdict::Denied(format!(
-                    "Symlinks not allowed: {}",
-                    path.display()
-                ));
+                return GuardVerdict::Denied(format!("Symlinks not allowed: {}", path.display()));
             }
         }
 
@@ -209,10 +202,7 @@ impl PathGuard {
     pub fn check_write(&self, path: &Path) -> GuardVerdict {
         // 1. Deny list
         if self.deny_list.is_path_denied(path) {
-            return GuardVerdict::Denied(format!(
-                "Path denied by deny list: {}",
-                path.display()
-            ));
+            return GuardVerdict::Denied(format!("Path denied by deny list: {}", path.display()));
         }
 
         // 2. Sandbox containment
@@ -236,10 +226,7 @@ impl PathGuard {
                     .unwrap_or_else(|_| path.to_path_buf())
             };
             if !check.starts_with(&sb) {
-                return GuardVerdict::Denied(format!(
-                    "Path outside sandbox: {}",
-                    path.display()
-                ));
+                return GuardVerdict::Denied(format!("Path outside sandbox: {}", path.display()));
             }
         }
 
@@ -317,7 +304,11 @@ impl PathGuard {
         if content.is_empty() {
             return false;
         }
-        let sample = if content.len() > 512 { &content[..512] } else { content };
+        let sample = if content.len() > 512 {
+            &content[..512]
+        } else {
+            content
+        };
         sample.contains(&0x00)
     }
 }
@@ -481,10 +472,7 @@ mod tests {
 
     #[test]
     fn test_deny_list_custom_patterns() {
-        let dl = DenyList::new(
-            vec!["**/secret/**".into()],
-            vec![],
-        );
+        let dl = DenyList::new(vec!["**/secret/**".into()], vec![]);
         assert!(dl.is_path_denied(Path::new("project/secret/config.json")));
         assert!(!dl.is_path_denied(Path::new("project/src/main.rs")));
     }

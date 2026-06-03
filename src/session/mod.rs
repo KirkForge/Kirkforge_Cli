@@ -1,9 +1,11 @@
 pub mod access;
+pub mod bash_jobs;
 pub mod config;
 pub mod conversation;
 pub mod event_bus;
 pub mod executor;
 pub mod prompt;
+pub mod session_fork;
 pub mod skills;
 pub mod verifier;
 

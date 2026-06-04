@@ -310,40 +310,48 @@ impl CorrectionLoop {
 
     /// Run the correction loop after a tool execution event.
     ///
+    /// Re-checks after each auto-fix to catch cascading issues.
     /// Returns a list of correction messages that should be appended to
     /// the conversation as tool results.
     pub async fn run(&self, event: &BusEvent) -> Vec<CorrectionResult> {
-        let verdict = self.verifier_handler.verify_event(event).await;
-        if matches!(verdict, Verdict::Clean | Verdict::Skipped(_)) {
-            return vec![];
-        }
-
         let mut results = Vec::new();
 
-        match verdict {
-            Verdict::Fixable(fix) => {
-                // Attempt auto-correction
-                let applied = apply_fix(&fix).await;
-                results.push(CorrectionResult {
-                    verifier: "auto-fix".into(),
-                    success: applied,
-                    message: if applied {
-                        format!("Auto-fixed: {} — {}", fix.severity, fix.description)
-                    } else {
-                        format!("Failed to auto-fix: {} — {}", fix.severity, fix.description)
-                    },
-                    fix: Some(fix),
-                });
+        for _iteration in 0..self.max_iterations {
+            let verdict = self.verifier_handler.verify_event(event).await;
+            match verdict {
+                Verdict::Clean | Verdict::Skipped(_) => break,
+                Verdict::Fixable(fix) => {
+                    let applied = apply_fix(&fix).await;
+                    results.push(CorrectionResult {
+                        verifier: "auto-fix".into(),
+                        success: applied,
+                        message: if applied {
+                            format!("Auto-fixed: {} — {}", fix.severity, fix.description)
+                        } else {
+                            format!(
+                                "Failed to auto-fix: {} — {}",
+                                fix.severity, fix.description
+                            )
+                        },
+                        fix: Some(fix),
+                    });
+                    if !applied {
+                        break; // can't fix → stop looping
+                    }
+                }
+                Verdict::Unfixable(err) => {
+                    results.push(CorrectionResult {
+                        verifier: "verifier".into(),
+                        success: false,
+                        message: format!(
+                            "Verification failed: {} — {}",
+                            err.description, err.details
+                        ),
+                        fix: None,
+                    });
+                    break; // unfixable → stop
+                }
             }
-            Verdict::Unfixable(err) => {
-                results.push(CorrectionResult {
-                    verifier: "verifier".into(),
-                    success: false,
-                    message: format!("Verification failed: {} — {}", err.description, err.details),
-                    fix: None,
-                });
-            }
-            Verdict::Clean | Verdict::Skipped(_) => {}
         }
 
         results
@@ -364,6 +372,7 @@ pub struct CorrectionResult {
 }
 
 /// Apply a fix suggestion to the filesystem.
+/// Replaces only the first occurrence of the original text.
 async fn apply_fix(fix: &FixSuggestion) -> bool {
     let path = &fix.file;
     if !path.exists() {
@@ -376,7 +385,7 @@ async fn apply_fix(fix: &FixSuggestion) -> bool {
     if !content.contains(&fix.original) {
         return false;
     }
-    let new_content = content.replace(&fix.original, &fix.replacement);
+    let new_content = content.replacen(&fix.original, &fix.replacement, 1);
     std::fs::write(path, new_content).is_ok()
 }
 
@@ -653,6 +662,40 @@ mod tests {
         assert!(empty.is_empty());
     }
 
+    /// A verifier that checks the actual file content and only returns Fixable
+    /// if the old_string still exists — simulates a real verifier that stops
+    /// flagging after the fix is applied.
+    struct OnceVerifier {
+        name: String,
+        file: PathBuf,
+        original: String,
+        replacement: String,
+    }
+
+    #[async_trait::async_trait]
+    impl Verifier for OnceVerifier {
+        fn name(&self) -> &str {
+            &self.name
+        }
+        fn priority(&self) -> u8 {
+            1
+        }
+        async fn verify(&self, _event: &BusEvent) -> Verdict {
+            if let Ok(content) = std::fs::read_to_string(&self.file) {
+                if content.contains(&self.original) {
+                    return Verdict::Fixable(FixSuggestion {
+                        description: "unused variable".into(),
+                        file: self.file.clone(),
+                        original: self.original.clone(),
+                        replacement: self.replacement.clone(),
+                        severity: "warning".into(),
+                    });
+                }
+            }
+            Verdict::Clean
+        }
+    }
+
     #[tokio::test]
     async fn test_correction_loop_applies_and_returns() {
         let slots = Arc::new(std::sync::RwLock::new(VerifierSlots::new()));
@@ -664,16 +707,11 @@ mod tests {
 
         {
             let mut s = slots.write().unwrap();
-            s.register(Arc::new(MockVerifier {
+            s.register(Arc::new(OnceVerifier {
                 name: "lint".into(),
-                prio: 1,
-                verdict: Verdict::Fixable(FixSuggestion {
-                    description: "unused variable".into(),
-                    file: path.clone(),
-                    original: "let x = 1;".into(),
-                    replacement: "let _x = 1;".into(),
-                    severity: "warning".into(),
-                }),
+                file: path.clone(),
+                original: "let x = 1;".into(),
+                replacement: "let _x = 1;".into(),
             }))
             .unwrap();
         }

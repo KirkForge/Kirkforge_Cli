@@ -1,6 +1,6 @@
 # Project State
 
-Last updated: 2026-06-03
+Last updated: 2026-06-03 23:20
 
 ## Milestone Progress
 
@@ -165,3 +165,22 @@ Requires `qwen2.5:0.5b` model on local Ollama (cloud gateway routes to DeepSeek/
 - **Graphify + GitNexus analysis**: Fresh graph built (1,071 nodes, 1,906 edges, 52 communities). GitNexus indexed 1,370 symbols, 118 execution flows. No dead code, no concurrency issues, no CRITICAL blast radius found.
 - **Bug fix — verifiers never fired in production**: `Executor::with_log()` pre-registered an empty `VerifierHandler` on the event bus, then `init_default_verifiers()` tried to register a second one with the same ID — bus rejected it. Security/lint/git verifiers were silently never called during a real session. Fixed: removed the empty pre-registration, `with_log()` now immediately calls `init_default_verifiers()` which is the sole registration point.
 - **Full audit**: 146/146 tests pass, clippy clean, build clean. Graph's "unwired minification" and "missing cost display" claims were false positives — both are correctly wired.
+
+### Session 2 (2026-06-03 22:00-23:20)
+
+| New | Milestone | Note |
+|-----|-----------|------|
+| ✅ | Milestone 17 — Session carryover | ~200B JSON profile, ~55 tokens injected as prompt suffix, top-5 tool pruning, 19 tests. PULSE/ORBIT-inspired cross-session awareness via `src/session/carryover.rs`. |
+| ✅ | CI fixed | Root cause was `cargo fmt` violations in adapter files. Formatted all 12 files, pushed to master. |
+| ✅ | 3 UTF-8 byte-slice panics fixed | `&string[..n]` in `truncate_tool_output()`, `truncate()`, and `truncate_arg_preview()` could panic on non-ASCII output. Fixed with `is_char_boundary()` walkback. |
+| ✅ | curl/wget/pipe to shell → forced-approval | Moved from `DANGEROUS_SHELL_COMMANDS` (hard deny) to `FORCE_APPROVAL_PATTERNS` — prompts even in auto_approve mode, but can be greenlit per-use. |
+| ✅ | Security verifier now scans Edit events | Previously only FileWrite was scanned — keys inserted via `edit_file` bypassed detection. Now re-reads file on Edit events. |
+| ✅ | state.md updated | tree-sitter ref removed, carryover milestone added, workflow dir removed from source tree, test count 143 |
+
+```
+9900102 Fix UTF-8 byte-slice panics + curl/wget forced-approval + edit verifier
+dddd2a1 Fix formatting across all files (cargo fmt)
+bb3b548 Docs: reconcile line/test count, binary size
+26a9692 Phase 1+2: Adapter fixes, bash security, dead code deletion
+da7271a Fix: verifiers now actually register in production
+```

@@ -2,6 +2,12 @@ use crate::shared::{Match as SearchMatch, ToolDef, ToolOutcome};
 use crate::tools::Tool;
 use std::path::PathBuf;
 
+/// Maximum file size in bytes we'll attempt to read for grep (10 MB).
+const MAX_GREP_FILE_SIZE: u64 = 10 * 1024 * 1024;
+
+/// Maximum bytes read from a file at once for the content-based binary check.
+const BINARY_SCAN_BYTES: usize = 8192;
+
 pub struct Grep;
 
 #[async_trait::async_trait]
@@ -15,7 +21,7 @@ impl Tool for Grep {
                 "properties": {
                     "pattern": {
                         "type": "string",
-                        "description": "Pattern to search for (literal string or regex)"
+                        "description": "Literal substring to search for (not a regex)"
                     },
                     "path": {
                         "type": "string",
@@ -70,7 +76,7 @@ impl Tool for Grep {
                 .git_exclude(true)
                 .build();
 
-            for entry in walker.flatten().take(max_matches * 5) {
+            for entry in walker.flatten() {
                 if results.len() >= max_matches {
                     break;
                 }
@@ -79,8 +85,21 @@ impl Tool for Grep {
                 }
 
                 let file_path = entry.path();
-                // Skip binary-looking files
-                if is_binary(file_path) {
+
+                // ── Extension-based binary pre-check (fast path) ──
+                if is_binary_by_ext(file_path) {
+                    continue;
+                }
+
+                // ── Size check (skip files that are too large) ──
+                if let Ok(meta) = std::fs::metadata(file_path) {
+                    if meta.len() > MAX_GREP_FILE_SIZE {
+                        continue;
+                    }
+                }
+
+                // ── Content-based binary detection (read first 8K) ──
+                if is_binary_content(file_path) {
                     continue;
                 }
 
@@ -94,6 +113,19 @@ impl Tool for Grep {
                 }
             }
         } else if search_path.is_file() {
+            // ── Size + binary checks for single-file search ──
+            if let Ok(meta) = std::fs::metadata(&search_path) {
+                if meta.len() > MAX_GREP_FILE_SIZE {
+                    return ToolOutcome::Error {
+                        message: format!("File too large to search ({} bytes): {}", meta.len(), search_path.display()),
+                    };
+                }
+            }
+            if is_binary_content(&search_path) {
+                return ToolOutcome::Error {
+                    message: format!("Cannot search binary file: {}", search_path.display()),
+                };
+            }
             if let Ok(content) = std::fs::read_to_string(&search_path) {
                 let matches = find_matches(&content, &pattern, &search_path, context_lines);
                 total = matches.len();
@@ -160,15 +192,32 @@ fn find_matches(
     results
 }
 
-fn is_binary(path: &std::path::Path) -> bool {
+/// Fast extension-based binary check.
+fn is_binary_by_ext(path: &std::path::Path) -> bool {
     let binary_extensions = [
-        "png", "jpg", "jpeg", "gif", "bmp", "ico", "webp", "ttf", "otf", "woff", "woff2", "eot",
-        "mp3", "mp4", "avi", "mov", "mkv", "webm", "zip", "tar", "gz", "bz2", "xz", "zst", "pdf",
-        "doc", "docx", "xls", "xlsx", "wasm", "o", "so", "dylib", "exe", "dll", "pyc", "class",
+        "png", "jpg", "jpeg", "gif", "bmp", "ico", "webp",
+        "ttf", "otf", "woff", "woff2", "eot",
+        "mp3", "mp4", "avi", "mov", "mkv", "webm",
+        "zip", "tar", "gz", "bz2", "xz", "zst",
+        "pdf", "doc", "docx", "xls", "xlsx",
+        "wasm", "o", "so", "dylib", "exe", "dll",
+        "pyc", "class",
     ];
 
     path.extension()
         .and_then(|e| e.to_str())
         .map(|e| binary_extensions.contains(&e))
         .unwrap_or(false)
+}
+
+/// Content-based binary detection — reads the first 8K and checks for null bytes.
+fn is_binary_content(path: &std::path::Path) -> bool {
+    use std::io::Read;
+    let mut file = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(_) => return false,
+    };
+    let mut buf = vec![0u8; BINARY_SCAN_BYTES];
+    let n = file.read(&mut buf).unwrap_or(0);
+    buf[..n].contains(&0x00)
 }

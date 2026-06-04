@@ -158,96 +158,6 @@ impl<'a> Iterator for CollapseBlankLines<'a> {
     }
 }
 
-fn strip_line_comments(source: &str, prefix: &str) -> String {
-    let mut out = String::with_capacity(source.len());
-    for line in source.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with(prefix) {
-            continue; // whole line is a comment
-        }
-        // Inline comment: find the first occurrence not inside a string
-        if let Some(pos) = find_comment_pos(line, prefix) {
-            // Check if the comment prefix is inside a string literal
-            if !is_inside_string(line, pos) {
-                out.push_str(line[..pos].trim_end());
-                out.push('\n');
-                continue;
-            }
-        }
-        out.push_str(line);
-        out.push('\n');
-    }
-    out
-}
-
-fn find_comment_pos(line: &str, prefix: &str) -> Option<usize> {
-    let bytes = line.as_bytes();
-    let prefix_bytes = prefix.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i..].starts_with(prefix_bytes) {
-            return Some(i);
-        }
-        i += 1;
-    }
-    None
-}
-
-fn is_inside_string(line: &str, pos: usize) -> bool {
-    let mut in_single = false;
-    let mut in_double = false;
-    let mut escaped = false;
-    for (i, ch) in line.chars().enumerate() {
-        if i >= pos {
-            break;
-        }
-        if escaped {
-            escaped = false;
-            continue;
-        }
-        match ch {
-            '\\' => escaped = true,
-            '"' if !in_single => in_double = !in_double,
-            '\'' if !in_double => in_single = !in_single,
-            _ => {}
-        }
-    }
-    in_single || in_double
-}
-
-/// Strip block comments using simple string matching.
-fn strip_block_comments(source: &str, start: &str, end: &str) -> String {
-    let mut out = String::with_capacity(source.len());
-    let mut remaining = source;
-    let mut in_comment = false;
-
-    while !remaining.is_empty() {
-        if in_comment {
-            match remaining.find(end) {
-                Some(pos) => {
-                    remaining = &remaining[pos + end.len()..];
-                    in_comment = false;
-                }
-                None => break,
-            }
-        } else {
-            match remaining.find(start) {
-                Some(pos) => {
-                    out.push_str(&remaining[..pos]);
-                    remaining = &remaining[pos + start.len()..];
-                    in_comment = true;
-                }
-                None => {
-                    out.push_str(remaining);
-                    break;
-                }
-            }
-        }
-    }
-
-    out
-}
-
 /// Strip test-only blocks (`#[cfg(test)]` or `#[test]` in Rust).
 fn strip_test_blocks(source: &str) -> String {
     let mut out = String::new();
@@ -531,24 +441,108 @@ fn minify_go(source: &str) -> String {
     minify_js_like(source)
 }
 
-// ── C/C++ ─────────────────────────────────────────────────────────
+// ── C/C++ / Java (string-aware comment stripper) ──────────────────
 
-fn minify_c_like(source: &str) -> String {
-    let s = strip_line_comments(source, "//");
-    let s = strip_block_comments(&s, "/*", "*/");
-    collapse_blank_lines(&s)
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CState {
+    Normal,
+    Str(char), // inside a "..." or '...' literal; payload = the delimiter
+    Line,      // inside a // ... line comment
+    Block,     // inside a /* ... */ block comment
 }
 
-// ── Java ──────────────────────────────────────────────────────────
+/// Strip `//` line comments and `/* ... */` block comments from C-family source
+/// without touching comment markers that appear inside string or char literals.
+///
+/// Newlines inside comments are preserved so that code on either side of a
+/// multi-line comment never gets merged onto one line; `collapse_blank_lines`
+/// (defined above) tidies the resulting gaps.
+fn strip_c_style_comments(source: &str) -> String {
+    let chars: Vec<char> = source.chars().collect();
+    let n = chars.len();
+    let mut out = String::with_capacity(source.len());
+    let mut state = CState::Normal;
+    let mut i = 0;
+
+    while i < n {
+        let c = chars[i];
+        let next = if i + 1 < n { chars[i + 1] } else { '\0' };
+
+        match state {
+            CState::Normal => {
+                if c == '/' && next == '/' {
+                    state = CState::Line;
+                    i += 2;
+                    continue;
+                }
+                if c == '/' && next == '*' {
+                    state = CState::Block;
+                    i += 2;
+                    continue;
+                }
+                if c == '"' || c == '\'' {
+                    state = CState::Str(c);
+                    out.push(c);
+                    i += 1;
+                    continue;
+                }
+                out.push(c);
+                i += 1;
+            }
+            CState::Str(delim) => {
+                if c == '\\' {
+                    // Escape: emit the backslash and whatever it escapes verbatim,
+                    // so an escaped quote can't prematurely close the literal.
+                    out.push(c);
+                    if i + 1 < n {
+                        out.push(chars[i + 1]);
+                    }
+                    i += 2;
+                    continue;
+                }
+                out.push(c);
+                if c == delim {
+                    state = CState::Normal;
+                }
+                i += 1;
+            }
+            CState::Line => {
+                if c == '\n' {
+                    out.push('\n');
+                    state = CState::Normal;
+                }
+                i += 1;
+            }
+            CState::Block => {
+                if c == '*' && next == '/' {
+                    state = CState::Normal;
+                    i += 2;
+                    continue;
+                }
+                if c == '\n' {
+                    out.push('\n');
+                }
+                i += 1;
+            }
+        }
+    }
+
+    // Match the original `trim_end()`-per-line behaviour (drops the whitespace
+    // left where an inline comment used to be).
+    out.lines()
+        .map(|l| l.trim_end())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn minify_c_like(source: &str) -> String {
+    collapse_blank_lines(&strip_c_style_comments(source))
+}
 
 fn minify_java(source: &str) -> String {
-    let s = strip_line_comments(source, "//");
-    let s = strip_block_comments(&s, "/*", "*/");
-
-    // Also strip Javadoc comments (/** ... */)
-    let s = strip_block_comments(&s, "/**", "*/");
-
-    collapse_blank_lines(&s)
+    // `/** ... */` Javadoc is handled by the block path (it starts with `/*`),
+    // so the old redundant second strip_block_comments pass is gone.
+    collapse_blank_lines(&strip_c_style_comments(source))
 }
 
 // ── Ruby ──────────────────────────────────────────────────────────
@@ -710,6 +704,49 @@ mod tests {
         let result = minify_source(&PathBuf::from("x.cpp"), src);
         assert!(!result.contains("block"));
         assert!(result.contains("int x"));
+    }
+
+    // ── C/C++ string-awareness regression tests ─────────────────────
+
+    #[test]
+    fn test_c_keeps_block_comment_marker_inside_string() {
+        let src = r#"char *s = "/* not a comment */"; int x = 5;"#;
+        let result = minify_source(&PathBuf::from("x.c"), src);
+        assert!(result.contains(r#""/* not a comment */""#),
+            "must not eat /* inside a string literal");
+    }
+
+    #[test]
+    fn test_c_keeps_double_slash_inside_string_url() {
+        let src = r#"char *u = "http://example.com"; // real comment"#;
+        let result = minify_source(&PathBuf::from("x.c"), src);
+        assert!(result.contains(r#""http://example.com""#),
+            "must keep URL with // inside string");
+        assert!(!result.contains("comment"),
+            "must still strip real line comment");
+    }
+
+    #[test]
+    fn test_c_keeps_char_literal_of_a_quote() {
+        let src = "char c = '\"'; // gone";
+        let result = minify_source(&PathBuf::from("x.c"), src);
+        assert!(result.contains("'\"'"),
+            "char literal containing a double-quote must survive");
+    }
+
+    #[test]
+    fn test_c_line_marker_inside_block_comment_is_inert() {
+        let src = "/* // not a line comment */ y();";
+        let result = minify_source(&PathBuf::from("x.c"), src);
+        assert!(result.contains("y();"));
+    }
+
+    #[test]
+    fn test_c_block_marker_inside_line_comment_is_inert() {
+        let src = "x(); // /* not a block start";
+        let result = minify_source(&PathBuf::from("x.c"), src);
+        assert!(result.contains("x();"));
+        assert!(!result.contains("not a block"));
     }
 
     // ── Java ────────────────────────────────────────────────────────

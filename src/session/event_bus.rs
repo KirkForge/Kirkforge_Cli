@@ -291,6 +291,9 @@ pub struct StoredEvent {
 #[derive(Clone)]
 pub struct EventBus {
     inner: Arc<Mutex<BusInner>>,
+    /// Guards against concurrent dispatch of the same (kind, idem_key)
+    /// to prevent TOCTOU duplicates when handlers are slow.
+    in_flight: Arc<Mutex<HashSet<(EventKind, u64)>>>,
 }
 
 impl EventBus {
@@ -303,6 +306,7 @@ impl EventBus {
                 history: Vec::new(),
                 max_history: 100,
             })),
+            in_flight: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
@@ -315,6 +319,7 @@ impl EventBus {
                 history: Vec::new(),
                 max_history,
             })),
+            in_flight: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
@@ -356,9 +361,39 @@ impl EventBus {
     ///
     /// Returns the list of handler results. Handlers that have already
     /// processed an idempotent-equivalent event are skipped.
+    /// Uses an in-flight guard to prevent TOCTOU duplicates from
+    /// concurrent dispatch calls.
     pub async fn dispatch(&self, event: &BusEvent) -> Vec<HandlerResult> {
         let kind = event.kind();
         let idem_key = event.idem_key();
+
+        // ── In-flight guard: prevent TOCTOU duplicates ──
+        {
+            let mut in_flight = self.in_flight.lock().await;
+            if !in_flight.insert((kind, idem_key)) {
+                // This event is already being dispatched by another task
+                return vec![];
+            }
+        }
+
+        let result = self.dispatch_inner(event, kind, idem_key).await;
+
+        // Release in-flight guard
+        {
+            let mut in_flight = self.in_flight.lock().await;
+            in_flight.remove(&(kind, idem_key));
+        }
+
+        result
+    }
+
+    /// Inner dispatch (holds in-flight guard already).
+    async fn dispatch_inner(
+        &self,
+        event: &BusEvent,
+        kind: EventKind,
+        idem_key: u64,
+    ) -> Vec<HandlerResult> {
         let inner = self.inner.lock().await;
 
         // Find matching handlers that haven't seen this event

@@ -74,14 +74,10 @@ impl Tool for Bash {
 
             let workdir_path = PathBuf::from(shellexpand::tilde(workdir).as_ref());
 
-            let result = tokio::time::timeout(
-                Duration::from_secs(timeout_secs),
-                run_shell(&cmd, &workdir_path),
-            )
-            .await;
+            let result = run_shell(&cmd, &workdir_path, timeout_secs).await;
 
             match result {
-                Ok(Ok(output)) => {
+                Ok(output) => {
                     if output.status.success() {
                         ToolOutcome::Success {
                             content: output.stdout,
@@ -102,11 +98,8 @@ impl Tool for Bash {
                         }
                     }
                 }
-                Ok(Err(e)) => ToolOutcome::Error {
+                Err(e) => ToolOutcome::Error {
                     message: format!("Failed to execute command: {}", e),
-                },
-                Err(_) => ToolOutcome::Error {
-                    message: format!("Command timed out after {} seconds", timeout_secs),
                 },
             }
         }
@@ -119,28 +112,28 @@ struct ShellOutput {
     stderr: String,
 }
 
-async fn run_shell(cmd: &str, workdir: &Path) -> std::io::Result<ShellOutput> {
-    let cmd = cmd.to_string();
-    let workdir = workdir.to_path_buf();
+/// Run a shell command in the foreground with kill_on_drop and timeout.
+/// Uses tokio::process::Command so the child is killed on timeout or drop.
+async fn run_shell(cmd: &str, workdir: &Path, timeout_secs: u64) -> Result<ShellOutput, String> {
+    let mut proc = tokio::process::Command::new("/bin/sh");
+    proc.arg("-c")
+        .arg(cmd)
+        .current_dir(workdir)
+        .kill_on_drop(true)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
 
-    tokio::task::spawn_blocking(move || {
-        let output = std::process::Command::new("/bin/sh")
-            .arg("-c")
-            .arg(&cmd)
-            .current_dir(&workdir)
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .output()?;
+    let output = tokio::time::timeout(Duration::from_secs(timeout_secs), proc.output())
+        .await
+        .map_err(|_| format!("Command timed out after {} seconds", timeout_secs))?
+        .map_err(|e| format!("Failed to execute command: {}", e))?;
 
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
-        Ok(ShellOutput {
-            status: output.status,
-            stdout,
-            stderr,
-        })
+    Ok(ShellOutput {
+        status: output.status,
+        stdout,
+        stderr,
     })
-    .await
-    .expect("spawn_blocking panicked")
 }

@@ -282,6 +282,9 @@ impl Executor {
 
         // Main loop: model responds, may call tools, we feed results back
         let max_iterations = 10; // safety cap on tool call loops
+        // Parse retry: only one retry per turn (not one per iteration).
+        // If the model fails a second time, we give up and return.
+        let mut already_retried_parse = false;
         for iteration in 0..max_iterations {
             let carryover_block = if self.carryover_enabled {
                 let block = self.carryover.to_prompt_block();
@@ -317,6 +320,10 @@ impl Executor {
             let mut assistant_thinking = String::new();
             let mut pending_tool_calls: Vec<ToolInvocation> = Vec::new();
 
+            // Parse-retry tracking: if the model sent malformed JSON in a
+            // tool call, we re-prompt once to let it fix just the JSON.
+            let mut had_parse_error = false;
+
             // Stream events from the adapter
             while let Some(event) = rx.recv().await {
                 match event {
@@ -332,6 +339,11 @@ impl Executor {
                         pending_tool_calls.push(tc);
                     }
                     StreamEvent::Error(e) => {
+                        // Detect parse-related errors from adapters
+                        // (JSON parse, SSE parse, no parseable entries)
+                        if e.contains("parse") || e.contains("parseable") {
+                            had_parse_error = true;
+                        }
                         events.push(TurnEvent::Error(e));
                     }
                     StreamEvent::Done {
@@ -597,18 +609,18 @@ impl Executor {
                                     continue;
                                 }
 
-                                // Force approval for risky patterns even in auto_approve mode.
-                                // curl/wget/|sh/|bash are common for legitimate work (installing
-                                // deps, testing endpoints) but warrant a checkpoint.
+                                // Under auto_approve, only read-only bash commands pass
+                                // through automatically. Everything else — curl, wget, writes,
+                                // builds, pipes to shell, file redirects — forces a prompt.
                                 if self.config.auto_approve {
-                                    let force_approve = tc
+                                    let is_ro = tc
                                         .arguments
                                         .get("command")
                                         .and_then(|c| c.as_str())
                                         .is_some_and(|cmd| {
-                                            matches_force_approval(cmd)
+                                            is_read_only_bash(cmd)
                                         });
-                                    if force_approve {
+                                    if !is_ro {
                                         let (resp_tx, resp_rx) =
                                             tokio::sync::oneshot::channel::<ApprovalResponse>();
                                         approval_sender.send(ApprovalRequest {
@@ -680,7 +692,32 @@ impl Executor {
                             break; // break the event loop, continue the outer turn loop
                         }
 
-                        // No tool calls — we're done
+                        // No tool calls — check for parse errors to retry
+                        if had_parse_error && !already_retried_parse {
+                            already_retried_parse = true;
+                            // Inject a fix-it message to nudge the model into
+                            // re-emitting just the tool call with valid JSON.
+                            // This is a single retry — if the model fails again
+                            // we fall through to return Ok(events).
+                            let retry_msg = "Your previous response contained a tool call with malformed JSON arguments. Re-emit ONLY the tool call with the corrected JSON — no additional text, no explanation.";
+                            self.conversation.append(Message {
+                                role: Role::User,
+                                content: retry_msg.into(),
+                                thinking: None,
+                                tool_calls: None,
+                                tool_call_id: None,
+                                tool_name: None,
+                                token_count: None,
+                            })?;
+                            events.push(TurnEvent::Token(
+                                "(JSON parse error, retrying…)\n".into(),
+                            ));
+                            // Break the inner event loop so the outer turn loop
+                            // re-streams from the model with the fix-it message
+                            break; // break the event loop, not the outer turn loop
+                        }
+
+                        // No tool calls and no retry — we're done
                         return Ok(events);
                     }
                 }
@@ -841,12 +878,76 @@ const DANGEROUS_SHELL_COMMANDS: &[&str] = &[
     "> /dev/null < /dev/sda",
 ];
 
-/// Patterns that force user approval even in auto_approve mode.
-/// These are common legitimate operations (installing deps, curl tests,
-/// fetching remote resources) but riskier than a typical bash command.
-/// Uses word-boundary matching via the helper regex to prevent trivial
-/// bypasses (tabs, double-spaces, etc.).
-const FORCE_APPROVAL_PATTERNS: &[&str] = &["curl", "wget", "|sh", "|bash"];
+/// Bash commands classified as read-only for auto-approve purposes.
+/// Only the first word is checked. Commands starting with one of these
+/// auto-approve UNLESS they chain into dangerous operations (redirects,
+/// pipe-to-shell, chaining, command substitution).
+const READ_ONLY_COMMANDS: &[&str] = &[
+    "ls", "cat", "head", "tail", "pwd", "echo", "printf",
+    "which", "type", "file", "stat", "du", "df", "env",
+    "printenv", "true", "false", "dirname", "basename",
+    "realpath", "readlink",
+    "grep", "rg", "find", "sort", "wc", "cut", "tr", "uniq",
+    "fold", "nl", "diff", "cmp", "comm", "jq",
+    "date", "cal", "whoami", "id", "uname", "hostname",
+    "uptime", "ps", "free", "lscpu", "lsblk", "lsof",
+    "dmesg", "nproc", "arch", "tty",
+    "jobs", "help",
+];
+
+/// Check whether a bash command is read-only (safe to auto-approve).
+/// A command is read-only if its first word is a known read-only command
+/// AND it doesn't chain into dangerous operations via:
+///   - File redirects (> or >>)
+///   - Pipe to shell (|sh or | bash or any segment starting with sh/bash)
+///   - Command chaining (;, &&, ||)
+///   - Command substitution ($(...) or backtick)
+fn is_read_only_bash(cmd: &str) -> bool {
+    let trimmed = cmd.trim();
+    if trimmed.is_empty() {
+        return true;
+    }
+    // Extract the first word
+    let trimmed_stripped = trimmed.trim_start();
+    let first = match trimmed_stripped.find(|c: char| c.is_whitespace()) {
+        Some(pos) => &trimmed_stripped[..pos],
+        None => trimmed_stripped,
+    };
+
+    if !READ_ONLY_COMMANDS.contains(&first) {
+        return false;
+    }
+
+    // Check the rest of the command for risky operators
+    let rest = &trimmed[first.len()..];
+
+    // File redirect (> or >>)
+    if rest.contains('>') {
+        return false;
+    }
+
+    // Pipe to shell: check if any pipe-separated segment starts with sh or bash
+    for segment in trimmed.split('|') {
+        let seg = segment.trim();
+        if let Some(word) = seg.split_whitespace().next() {
+            if word == "sh" || word == "bash" {
+                return false;
+            }
+        }
+    }
+
+    // Command chaining (;, &&, ||)
+    if rest.contains(';') || rest.contains("&&") || rest.contains("||") {
+        return false;
+    }
+
+    // Command substitution ($(...) or backtick)
+    if rest.contains("$(") || rest.contains('`') {
+        return false;
+    }
+
+    true
+}
 
 /// Check if a pattern appears as a whole word in a command string.
 /// A "word boundary" is whitespace, pipe, semicolon, parens, angle brackets,
@@ -865,17 +966,6 @@ fn word_boundary_match(cmd: &str, pattern: &str) -> bool {
             }
         }
         i += 1;
-    }
-    false
-}
-
-/// Check whether a bash command matches a FORCE_APPROVAL_PATTERN.
-/// Uses word-boundary matching to prevent trivial bypasses (tabs, double-spaces).
-fn matches_force_approval(cmd: &str) -> bool {
-    for pat in FORCE_APPROVAL_PATTERNS {
-        if word_boundary_match(cmd, pat) {
-            return true;
-        }
     }
     false
 }
@@ -1650,20 +1740,100 @@ mod tests {
     }
 
     #[test]
-    fn test_matches_force_approval_curl() {
-        assert!(matches_force_approval("curl https://example.com"));
+    fn test_is_read_only_bash_simple_ls() {
+        assert!(is_read_only_bash("ls -la"));
     }
 
     #[test]
-    fn test_matches_force_approval_no_false_positive() {
-        // "curl" should NOT match "scurling" or in the middle of a word
-        assert!(!matches_force_approval("echo scurling"));
-        assert!(!matches_force_approval("cat curltest"));
+    fn test_is_read_only_bash_pwd() {
+        assert!(is_read_only_bash("pwd"));
     }
 
     #[test]
-    fn test_matches_force_approval_pipe_bash() {
-        assert!(matches_force_approval("curl foo | bash"));
-        assert!(matches_force_approval("curl foo | sh"));
+    fn test_is_read_only_bash_cat() {
+        assert!(is_read_only_bash("cat src/main.rs"));
+    }
+
+    #[test]
+    fn test_is_read_only_bash_grep() {
+        assert!(is_read_only_bash("grep -r foo ."));
+    }
+
+    #[test]
+    fn test_is_read_only_bash_echo() {
+        assert!(is_read_only_bash("echo hello world"));
+    }
+
+    #[test]
+    fn test_is_read_only_bash_find() {
+        assert!(is_read_only_bash("find . -name '*.rs'"));
+    }
+
+    #[test]
+    fn test_is_read_only_bash_curl_is_not_read_only() {
+        assert!(!is_read_only_bash("curl https://example.com"));
+    }
+
+    #[test]
+    fn test_is_read_only_bash_wget_is_not_read_only() {
+        assert!(!is_read_only_bash("wget http://example.com"));
+    }
+
+    #[test]
+    fn test_is_read_only_bash_pipe_to_sh_blocked() {
+        // Both glued |sh and spaced | sh must be caught
+        assert!(!is_read_only_bash("cat script | sh"));
+        assert!(!is_read_only_bash("cat script | bash"));
+    }
+
+    #[test]
+    fn test_is_read_only_bash_redirect_blocked() {
+        assert!(!is_read_only_bash("ls > out.txt"));
+        assert!(!is_read_only_bash("grep foo file >> log.txt"));
+    }
+
+    #[test]
+    fn test_is_read_only_bash_chaining_blocked() {
+        assert!(!is_read_only_bash("ls && rm -rf /"));
+        assert!(!is_read_only_bash("cat file; rm file"));
+        assert!(!is_read_only_bash("ls || true"));
+    }
+
+    #[test]
+    fn test_is_read_only_bash_substitution_blocked() {
+        assert!(!is_read_only_bash("echo $(rm -rf /)"));
+        assert!(!is_read_only_bash("echo `ls`"));
+    }
+
+    #[test]
+    fn test_is_read_only_bash_unknown_command_not_readonly() {
+        assert!(!is_read_only_bash("rm -rf /home/user/temp"));
+        assert!(!is_read_only_bash("cargo build"));
+        assert!(!is_read_only_bash("python -c 'print(1)'"));
+        assert!(!is_read_only_bash("npm install"));
+    }
+
+    #[test]
+    fn test_is_read_only_bash_word_boundary_no_false_positive() {
+        // "scurling" contains "curl" but should NOT match READ_ONLY_COMMANDS
+        assert!(!is_read_only_bash("scurling is not curl"));
+        // "cat" is read-only but only if it's the first word
+        assert!(is_read_only_bash("cat /etc/hostname"));
+        // A path or variable containing "cat" as first word isn't a problem
+        // because the first word has to EXACTLY match
+        assert!(!is_read_only_bash("cattitude"));
+    }
+
+    #[test]
+    fn test_is_read_only_bash_empty_is_readonly() {
+        assert!(is_read_only_bash(""));
+        assert!(is_read_only_bash("   "));
+    }
+
+    #[test]
+    fn test_is_read_only_bash_ps_and_jobs() {
+        assert!(is_read_only_bash("ps aux"));
+        assert!(is_read_only_bash("jobs"));
+        assert!(is_read_only_bash("help"));
     }
 }

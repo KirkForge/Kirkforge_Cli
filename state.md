@@ -1,6 +1,6 @@
 # Project State
 
-Last updated: 2026-06-03 23:20
+Last updated: 2026-06-04 06:45
 
 ## Milestone Progress
 
@@ -26,11 +26,11 @@ Last updated: 2026-06-03 23:20
 
 ## Compilation Status
 
-- **Rust toolchain**: stable (2026-06-03)
+- **Rust toolchain**: stable (2026-06-04)
 - **Build**: ✅ Clean — 0 errors, 0 warnings (clippy `-D warnings`)
-- **Tests**: 141 unit tests pass, 7 integration tests (require Ollama, marked `#[ignore]`)
-- **Release binary**: 5.0 MB stripped, ELF x86-64, LTO + panic=abort
-- **Source**: 42 files, ~10,200 lines of Rust
+- **Tests**: 175 unit tests pass, 7 integration tests (require Ollama, marked `#[ignore]`)
+- **Release binary**: 4.9 MB stripped, ELF x86-64, LTO + panic=abort
+- **Source**: 40 files, ~10,100 lines of Rust
 
 ## Changes This Session
 
@@ -162,25 +162,25 @@ Requires `qwen2.5:0.5b` model on local Ollama (cloud gateway routes to DeepSeek/
 
 ## Done This Session
 
-- **Graphify + GitNexus analysis**: Fresh graph built (1,071 nodes, 1,906 edges, 52 communities). GitNexus indexed 1,370 symbols, 118 execution flows. No dead code, no concurrency issues, no CRITICAL blast radius found.
-- **Bug fix — verifiers never fired in production**: `Executor::with_log()` pre-registered an empty `VerifierHandler` on the event bus, then `init_default_verifiers()` tried to register a second one with the same ID — bus rejected it. Security/lint/git verifiers were silently never called during a real session. Fixed: removed the empty pre-registration, `with_log()` now immediately calls `init_default_verifiers()` which is the sole registration point.
-- **Full audit**: 146/146 tests pass, clippy clean, build clean. Graph's "unwired minification" and "missing cost display" claims were false positives — both are correctly wired.
+### Session 3 — Bughunt + bash classification + parse retry (2026-06-04 04:00-06:45)
 
-### Session 2 (2026-06-03 22:00-23:20)
+| Fix | Impact |
+|-----|--------|
+| **DANGEROUS_SHELL_COMMANDS word-boundary matching** | `rm -rf /` no longer false-positives on `rm -rf /home/user/temp`. Patterns ending in `/` or ` ` use word-boundary matching; others use `.contains()`. |
+| **edit_file fuzzy fallback preserves formatting** | Byte-level span replacement instead of writing the entire normalized file (was stripping trailing whitespace from every line). |
+| **ReadGate error message fixed** | No longer references non-existent `force_edit` argument. |
+| **Correction loop test fixed** | `OnceVerifier` reads real file state instead of static mock — catches regressions in correction logic. |
+| **Adapters audited** | GLM, DeepSeek, Gemini, OpenAI-compat — all clean. No bugs found. |
+| **`|sh` whitespace gap closed** | Pipe-split in `is_read_only_bash()` catches both `|sh` and `| sh` (and similarly for `|bash`/`| bash`). |
+| **Bash read-only classification** | Replaced blunt `FORCE_APPROVAL_PATTERNS` (curl/wget/|sh/|bash) with proper classification. Under `auto_approve`, only known read-only commands (`ls`, `cat`, `grep`, `find`, `head`, etc.) pass through — everything else forces a prompt. Read-only check also blocks chaining (`;`, `&&`, `||`), redirects (`>`), pipe-to-shell, and substitution (`$()`, backticks). |
+| **Parse retry (one-shot)** | When the model emits JSON parse errors on tool calls, injects a fix-it message ("re-emit only the tool call with corrected JSON") instead of ending the turn. One retry max per `run_turn()`. |
+| **Non-interactive mode wired through executor** | `run_non_interactive()` now creates an `Executor` and calls `run_turn()` — full safety pipeline (deny list, path guard, approval channel, verifier loop). |
 
-| New | Milestone | Note |
-|-----|-----------|------|
-| ✅ | Milestone 17 — Session carryover | ~200B JSON profile, ~55 tokens injected as prompt suffix, top-5 tool pruning, 19 tests. PULSE/ORBIT-inspired cross-session awareness via `src/session/carryover.rs`. |
-| ✅ | CI fixed | Root cause was `cargo fmt` violations in adapter files. Formatted all 12 files, pushed to master. |
-| ✅ | 3 UTF-8 byte-slice panics fixed | `&string[..n]` in `truncate_tool_output()`, `truncate()`, and `truncate_arg_preview()` could panic on non-ASCII output. Fixed with `is_char_boundary()` walkback. |
-| ✅ | curl/wget/pipe to shell → forced-approval | Moved from `DANGEROUS_SHELL_COMMANDS` (hard deny) to `FORCE_APPROVAL_PATTERNS` — prompts even in auto_approve mode, but can be greenlit per-use. |
-| ✅ | Security verifier now scans Edit events | Previously only FileWrite was scanned — keys inserted via `edit_file` bypassed detection. Now re-reads file on Edit events. |
-| ✅ | state.md updated | tree-sitter ref removed, carryover milestone added, workflow dir removed from source tree, test count 143 |
+**Stats**: 14 files changed, 863 insertions, 392 deletions. 175/175 tests (was 146), clippy clean.
 
+Commits this session:
 ```
-9900102 Fix UTF-8 byte-slice panics + curl/wget forced-approval + edit verifier
-dddd2a1 Fix formatting across all files (cargo fmt)
-bb3b548 Docs: reconcile line/test count, binary size
-26a9692 Phase 1+2: Adapter fixes, bash security, dead code deletion
-da7271a Fix: verifiers now actually register in production
+8a0b92d Bash read-only classification + parse retry
+fcc64fc Bughunt: word-boundary shell matching, edit_file span fix, executor refactor
+9900102 Fix UTF-8 byte-slice panics
 ```

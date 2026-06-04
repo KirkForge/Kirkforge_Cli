@@ -83,16 +83,48 @@ impl Tool for EditFile {
                 .join("\n");
 
             if normalized.contains(&old_normalized) {
-                // Found fuzzy match — use normalized content but warn
-                let new_content = normalized.replacen(&old_normalized, &new, 1);
-                let diff = render_diff(&content, &new_content);
+                // Found fuzzy match — find the span in the normalized content,
+                // then apply the replacement to the ORIGINAL content instead
+                // of writing the whole normalized file.
+                //
+                // Strategy: compute LCS-style bounds. Walk normalized to find
+                // the old_normalized span, map line ranges back to original.
+                let n_lines: Vec<&str> = normalized.lines().collect();
+                let o_lines: Vec<&str> = old_normalized.lines().collect();
 
-                return match std::fs::write(&path, &new_content) {
-                    Ok(_) => ToolOutcome::FileEdit { path, diff },
-                    Err(e) => ToolOutcome::Error {
-                        message: format!("Cannot write {}: {}", path.display(), e),
-                    },
-                };
+                // Find the first line index where normalized starts matching old_normalized
+                let n_start = n_lines
+                    .windows(o_lines.len())
+                    .position(|w| w == o_lines.as_slice());
+
+                if let Some(n_start) = n_start {
+                    // Compute byte offset in original content: sum line lengths + newlines
+                    // up to the span start
+                    let orig_lines: Vec<&str> = content.lines().collect();
+                    let byte_start: usize = orig_lines[..n_start]
+                        .iter()
+                        .map(|l| l.len() + 1) // +1 for the newline
+                        .sum();
+                    let span_orig_len: usize = orig_lines[n_start..n_start + o_lines.len()]
+                        .iter()
+                        .map(|l| l.len() + 1)
+                        .sum::<usize>()
+                        .saturating_sub(1); // last newline not part of span
+
+                    // Build the new content by replacing the span in original
+                    let mut new_content = String::with_capacity(content.len() + new.len());
+                    new_content.push_str(&content[..byte_start]);
+                    new_content.push_str(&new);
+                    new_content.push_str(&content[byte_start + span_orig_len..]);
+
+                    let diff = render_diff(&content, &new_content);
+                    return match std::fs::write(&path, &new_content) {
+                        Ok(_) => ToolOutcome::FileEdit { path, diff },
+                        Err(e) => ToolOutcome::Error {
+                            message: format!("Cannot write {}: {}", path.display(), e),
+                        },
+                    };
+                }
             }
 
             // Still not found — find nearby context to help the model
@@ -134,4 +166,38 @@ fn render_diff(old: &str, new: &str) -> String {
     }
 
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_fuzzy_fallback_preserves_original_formatting() {
+        // Content with trailing whitespace on some lines
+        let content = "fn main() {\n    let x = 1;    \n    println!(\"hello\");\n}\n";
+        let dir = std::env::temp_dir();
+        let path = dir.join("kirkforge_edit_fuzzy.txt");
+        std::fs::write(&path, content).unwrap();
+
+        let tool = EditFile;
+        let args = serde_json::json!({
+            "path": path.to_string_lossy(),
+            "old_string": "let x = 1;",
+            "new_string": "let y = 2;",
+        });
+
+        let result = tool.run(args).await;
+        match result {
+            ToolOutcome::FileEdit { path: _, diff: _ } => {
+                let result_content = std::fs::read_to_string(&path).unwrap();
+                // The trailing whitespace on line 2 should be preserved
+                assert!(result_content.contains("    let y = 2;    "),
+                    "Fuzzy fallback should preserve original trailing whitespace, got: {:?}", result_content);
+            }
+            other => panic!("Expected FileEdit, got {:?}", other),
+        }
+
+        let _ = std::fs::remove_file(&path);
+    }
 }

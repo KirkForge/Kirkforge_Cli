@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::sync::OnceLock;
+use tokio::process::Child;
 use tokio::sync::Mutex;
 
 /// Status of a background job.
@@ -52,10 +53,15 @@ pub fn global_registry() -> BashJobRegistry {
     GLOBAL_REGISTRY.get_or_init(BashJobRegistry::new).clone()
 }
 
+/// Maximum number of concurrent background jobs.
+const MAX_JOBS: usize = 64;
+
 /// Registry of background bash jobs.
 #[derive(Clone, Default)]
 pub struct BashJobRegistry {
     jobs: Arc<Mutex<HashMap<u64, BashJob>>>,
+    /// Child process handles stored separately (Child is not Clone).
+    children: Arc<Mutex<HashMap<u64, Child>>>,
     next_id: Arc<AtomicU64>,
 }
 
@@ -63,12 +69,17 @@ impl BashJobRegistry {
     pub fn new() -> Self {
         Self {
             jobs: Arc::new(Mutex::new(HashMap::new())),
+            children: Arc::new(Mutex::new(HashMap::new())),
             next_id: Arc::new(AtomicU64::new(1)),
         }
     }
 
     /// Spawn a bash command in the background and return a job ID.
     /// Optionally accepts a working directory and timeout (seconds, 0 = no timeout).
+    ///
+    /// The child process handle is stored so that cancel() can kill it.
+    /// Completed/failed jobs are evicted oldest-first when the registry
+    /// reaches MAX_JOBS (64).
     pub async fn spawn(
         &self,
         command: &str,
@@ -77,60 +88,116 @@ impl BashJobRegistry {
     ) -> anyhow::Result<u64> {
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
 
-        let job = BashJob::new(id, command.to_string());
-        let mut jobs = self.jobs.lock().await;
-        jobs.insert(id, job);
-        drop(jobs); // release lock before spawning the task
-
-        let registry = self.clone();
-        let cmd = command.to_string();
-        let workdir = workdir.map(|s| s.to_string());
-        tokio::spawn(async move {
-            let mut proc = tokio::process::Command::new("sh");
-            proc.args(["-c", &cmd]);
-            if let Some(ref wd) = workdir {
-                proc.current_dir(wd);
+        // ── Job cap: evict oldest completed jobs if at limit ──
+        {
+            let mut jobs = self.jobs.lock().await;
+            if jobs.len() >= MAX_JOBS {
+                let to_remove: Vec<u64> = jobs
+                    .iter()
+                    .filter(|(_, j)| j.status != JobStatus::Running)
+                    .map(|(&id, _)| id)
+                    .collect();
+                for rid in to_remove {
+                    jobs.remove(&rid);
+                }
             }
+        }
 
-            let output = if timeout_secs.is_some_and(|t| t > 0) {
-                tokio::time::timeout(
-                    std::time::Duration::from_secs(timeout_secs.unwrap()),
-                    proc.output(),
-                )
-                .await
-                .map(|r| {
-                    r.unwrap_or_else(|e| std::process::Output {
-                        status: std::process::ExitStatus::default(),
-                        stdout: Vec::new(),
-                        stderr: format!("Command failed: {}", e).into_bytes(),
-                    })
-                })
-                .unwrap_or_else(|_| std::process::Output {
-                    status: std::process::ExitStatus::default(),
-                    stdout: Vec::new(),
-                    stderr: b"Command timed out".to_vec(),
-                })
-            } else {
-                proc.output()
-                    .await
-                    .unwrap_or_else(|e| std::process::Output {
-                        status: std::process::ExitStatus::default(),
-                        stdout: Vec::new(),
-                        stderr: format!("Command failed: {}", e).into_bytes(),
-                    })
+        let job = BashJob::new(id, command.to_string());
+        {
+            let mut jobs = self.jobs.lock().await;
+            jobs.insert(id, job);
+        }
+
+        let mut proc = tokio::process::Command::new("sh");
+        proc.args(["-c", command])
+            .kill_on_drop(true)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        if let Some(ref wd) = workdir {
+            proc.current_dir(wd);
+        }
+
+        let child = proc.spawn()?;
+
+        // Store child handle for cancel()
+        {
+            let mut children = self.children.lock().await;
+            children.insert(id, child);
+        }
+
+        // Spawn watcher: wait for output, update job record, remove child handle
+        let registry_watcher = self.clone();
+        tokio::spawn(async move {
+            let child = {
+                let mut children = registry_watcher.children.lock().await;
+                children.remove(&id)
             };
 
-            let exit_code = output.status.code().unwrap_or(-1);
-            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-            let status = JobStatus::Completed(exit_code);
+            let Some(child) = child else {
+                // Child handle was taken by cancel() — update status
+                let mut jobs = registry_watcher.jobs.lock().await;
+                if let Some(job) = jobs.get_mut(&id) {
+                    if job.status == JobStatus::Running {
+                        job.status = JobStatus::Cancelled;
+                    }
+                    job.finished_at = Some(chrono::Local::now());
+                }
+                return;
+            };
 
-            let mut jobs = registry.jobs.lock().await;
-            if let Some(job) = jobs.get_mut(&id) {
-                job.status = status;
-                job.stdout = stdout;
-                job.stderr = stderr;
-                job.finished_at = Some(chrono::Local::now());
+            // Wait with optional timeout
+            let output = if timeout_secs.is_some_and(|t| t > 0) {
+                match tokio::time::timeout(
+                    std::time::Duration::from_secs(timeout_secs.unwrap()),
+                    child.wait_with_output(),
+                )
+                .await
+                {
+                    Ok(Ok(out)) => Some(out),
+                    Ok(Err(e)) => {
+                        let mut jobs = registry_watcher.jobs.lock().await;
+                        if let Some(job) = jobs.get_mut(&id) {
+                            job.status = JobStatus::Failed(e.to_string());
+                            job.finished_at = Some(chrono::Local::now());
+                        }
+                        return;
+                    }
+                    Err(_) => {
+                        let mut jobs = registry_watcher.jobs.lock().await;
+                        if let Some(job) = jobs.get_mut(&id) {
+                            job.status = JobStatus::Failed("Timed out".into());
+                            job.finished_at = Some(chrono::Local::now());
+                        }
+                        // kill_on_drop kills the child when child is dropped here
+                        return;
+                    }
+                }
+            } else {
+                match child.wait_with_output().await {
+                    Ok(out) => Some(out),
+                    Err(e) => {
+                        let mut jobs = registry_watcher.jobs.lock().await;
+                        if let Some(job) = jobs.get_mut(&id) {
+                            job.status = JobStatus::Failed(e.to_string());
+                            job.finished_at = Some(chrono::Local::now());
+                        }
+                        return;
+                    }
+                }
+            };
+
+            if let Some(output) = output {
+                let exit_code = output.status.code().unwrap_or(-1);
+                let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                let mut jobs = registry_watcher.jobs.lock().await;
+                if let Some(job) = jobs.get_mut(&id) {
+                    job.status = JobStatus::Completed(exit_code);
+                    job.stdout = stdout;
+                    job.stderr = stderr;
+                    job.finished_at = Some(chrono::Local::now());
+                }
             }
         });
 
@@ -153,22 +220,44 @@ impl BashJobRegistry {
 
     /// Cancel a running job.
     ///
-    /// Note: this sets the status to Cancelled, but the underlying
-    /// tokio task continues until completion. The output is discarded.
+    /// Kills the child process and sets status to Cancelled.
     pub async fn cancel(&self, id: u64) -> bool {
-        let mut jobs = self.jobs.lock().await;
-        if let Some(job) = jobs.get_mut(&id) {
-            if job.status == JobStatus::Running {
-                job.status = JobStatus::Cancelled;
-                job.finished_at = Some(chrono::Local::now());
-                return true;
+        // Take the child handle and kill it
+        {
+            let mut children = self.children.lock().await;
+            if let Some(mut child) = children.remove(&id) {
+                let _ = child.kill().await;
+                let _ = child.wait().await;
             }
         }
-        false
+
+        // Update job status
+        let mut found = false;
+        {
+            let mut jobs = self.jobs.lock().await;
+            if let Some(job) = jobs.get_mut(&id) {
+                if job.status == JobStatus::Running {
+                    job.status = JobStatus::Cancelled;
+                    job.finished_at = Some(chrono::Local::now());
+                    found = true;
+                }
+            }
+        }
+        found
     }
 
-    /// Remove a job from the registry.
+    /// Remove a job from the registry (also cleans up the child handle).
     pub async fn remove(&self, id: u64) -> bool {
+        // Kill child if still alive
+        {
+            let mut children = self.children.lock().await;
+            if let Some(mut child) = children.remove(&id) {
+                let _ = child.kill().await;
+                let _ = child.wait().await;
+            }
+        }
+
+        // Remove job record
         let mut jobs = self.jobs.lock().await;
         jobs.remove(&id).is_some()
     }
@@ -183,10 +272,36 @@ impl BashJobRegistry {
 
     /// Clear all completed/failed/cancelled jobs.
     pub async fn clean(&self) -> usize {
-        let mut jobs = self.jobs.lock().await;
-        let before = jobs.len();
-        jobs.retain(|_, j| j.status == JobStatus::Running);
-        before - jobs.len()
+        // Collect non-running job IDs
+        let job_ids: Vec<u64> = {
+            let jobs = self.jobs.lock().await;
+            jobs.iter()
+                .filter(|(_, j)| j.status != JobStatus::Running)
+                .map(|(&id, _)| id)
+                .collect()
+        };
+
+        // Clean up child handles for those IDs
+        {
+            let mut children = self.children.lock().await;
+            for id in &job_ids {
+                if let Some(mut child) = children.remove(id) {
+                    let _ = child.kill().await;
+                    let _ = child.wait().await;
+                }
+            }
+        }
+
+        // Remove job records
+        let count = job_ids.len();
+        {
+            let mut jobs = self.jobs.lock().await;
+            for id in &job_ids {
+                jobs.remove(id);
+            }
+        }
+
+        count
     }
 }
 

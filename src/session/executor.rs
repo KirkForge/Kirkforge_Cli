@@ -200,6 +200,11 @@ impl Executor {
         Ok(())
     }
 
+    /// Borrow the conversation log (for non-interactive JSON summaries).
+    pub fn conversation_log(&self) -> &ConversationLog {
+        &self.conversation
+    }
+
     /// Flush the carryover profile to the shared target at session end.
     fn flush_carryover(&mut self) {
         if self.carryover_enabled {
@@ -601,7 +606,7 @@ impl Executor {
                                         .get("command")
                                         .and_then(|c| c.as_str())
                                         .is_some_and(|cmd| {
-                                            FORCE_APPROVAL_PATTERNS.iter().any(|p| cmd.contains(p))
+                                            matches_force_approval(cmd)
                                         });
                                     if force_approve {
                                         let (resp_tx, resp_rx) =
@@ -839,7 +844,41 @@ const DANGEROUS_SHELL_COMMANDS: &[&str] = &[
 /// Patterns that force user approval even in auto_approve mode.
 /// These are common legitimate operations (installing deps, curl tests,
 /// fetching remote resources) but riskier than a typical bash command.
-const FORCE_APPROVAL_PATTERNS: &[&str] = &["curl ", "wget ", "| sh", "| bash"];
+/// Uses word-boundary matching via the helper regex to prevent trivial
+/// bypasses (tabs, double-spaces, etc.).
+const FORCE_APPROVAL_PATTERNS: &[&str] = &["curl", "wget", "|sh", "|bash"];
+
+/// Check if a pattern appears as a whole word in a command string.
+/// A "word boundary" is whitespace, pipe, semicolon, parens, angle brackets,
+/// or start/end of the string.
+fn word_boundary_match(cmd: &str, pattern: &str) -> bool {
+    let boundaries = [' ', '\t', '\n', '|', ';', '&', '(', ')', '<', '>', '\0'];
+    let p: Vec<char> = pattern.chars().collect();
+    let chars: Vec<char> = cmd.chars().collect();
+    let mut i = 0;
+    while i + p.len() <= chars.len() {
+        if chars[i..i + p.len()].iter().collect::<String>() == *pattern {
+            let start_ok = i == 0 || boundaries.contains(&chars[i - 1]);
+            let end_ok = i + p.len() >= chars.len() || boundaries.contains(&chars[i + p.len()]);
+            if start_ok && end_ok {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
+/// Check whether a bash command matches a FORCE_APPROVAL_PATTERN.
+/// Uses word-boundary matching to prevent trivial bypasses (tabs, double-spaces).
+fn matches_force_approval(cmd: &str) -> bool {
+    for pat in FORCE_APPROVAL_PATTERNS {
+        if word_boundary_match(cmd, pat) {
+            return true;
+        }
+    }
+    false
+}
 
 /// Pre-execution bash command check — blocks dangerous patterns before they run.
 fn check_bash_command(args: &serde_json::Value) -> Option<String> {
@@ -854,8 +893,19 @@ fn check_bash_command(args: &serde_json::Value) -> Option<String> {
     }
 
     // 2. Dangerous command patterns (the opposite of read-only)
+    //
+    // Patterns ending in `/` or ` ` ("rm -rf /", "chmod 777 /") would
+    // false-positive on legitimate paths ("rm -rf /home") with .contains(),
+    // so they use word-boundary matching. Everything else uses .contains().
     for pattern in DANGEROUS_SHELL_COMMANDS {
-        if cmd.contains(pattern) {
+        let needs_word_boundary =
+            pattern.ends_with('/') || pattern.ends_with(' ');
+        let matches = if needs_word_boundary {
+            word_boundary_match(cmd, pattern)
+        } else {
+            cmd.contains(pattern)
+        };
+        if matches {
             return Some(format!(
                 "🔒 Command blocked: dangerous pattern '{}' detected",
                 pattern
@@ -1532,5 +1582,88 @@ mod tests {
             "Should not exceed max_iterations (was {})",
             tool_calls
         );
+    }
+
+    // ── Word-boundary matching tests ─────────────────────────────
+
+    #[test]
+    fn test_word_boundary_match_exact() {
+        assert!(word_boundary_match("rm -rf /", "rm -rf /"));
+    }
+
+    #[test]
+    fn test_word_boundary_no_false_positive_trailing_slash() {
+        // "rm -rf /" should NOT match "rm -rf /home" (the / is not word-boundary-terminated)
+        assert!(!word_boundary_match("rm -rf /home/user", "rm -rf /"));
+    }
+
+    #[test]
+    fn test_word_boundary_match_with_pipe_prefix() {
+        assert!(word_boundary_match("echo foo | rm -rf /", "rm -rf /"));
+    }
+
+    #[test]
+    fn test_word_boundary_match_with_semicolon() {
+        assert!(word_boundary_match("cd /; rm -rf /", "rm -rf /"));
+    }
+
+    #[test]
+    fn test_word_boundary_no_match_in_substring() {
+        assert!(!word_boundary_match("rm -rf /home", "rm -rf /"));
+    }
+
+    #[test]
+    fn test_check_bash_command_blocks_dangerous_exact() {
+        let args = serde_json::json!({"command": "rm -rf /"});
+        let result = check_bash_command(&args);
+        assert!(result.is_some(), "rm -rf / should be blocked");
+    }
+
+    #[test]
+    fn test_check_bash_command_allows_safe_similar() {
+        // "rm -rf /" should NOT block "rm -rf /home/user/temp"
+        let args = serde_json::json!({"command": "rm -rf /home/user/temp"});
+        let result = check_bash_command(&args);
+        assert!(result.is_none(), "rm -rf /home/user/temp should be allowed, got: {:?}", result);
+    }
+
+    #[test]
+    fn test_check_bash_command_blocks_dd_by_substring() {
+        // "dd if=/dev/zero of=" uses .contains() — should still block regardless of boundaries
+        let args = serde_json::json!({"command": "dd if=/dev/zero of=/tmp/out bs=1M count=1"});
+        let result = check_bash_command(&args);
+        assert!(result.is_some(), "dd if=/dev/zero should be blocked");
+    }
+
+    #[test]
+    fn test_check_bash_command_blocks_fork_bomb() {
+        let args = serde_json::json!({"command": ":(){ :|:& };:"});
+        let result = check_bash_command(&args);
+        assert!(result.is_some(), "Fork bomb should be blocked");
+    }
+
+    #[test]
+    fn test_check_bash_command_allows_legitimate_curl() {
+        let args = serde_json::json!({"command": "curl -s https://api.example.com/data"});
+        let result = check_bash_command(&args);
+        assert!(result.is_none(), "curl should not be blocked by check_bash_command");
+    }
+
+    #[test]
+    fn test_matches_force_approval_curl() {
+        assert!(matches_force_approval("curl https://example.com"));
+    }
+
+    #[test]
+    fn test_matches_force_approval_no_false_positive() {
+        // "curl" should NOT match "scurling" or in the middle of a word
+        assert!(!matches_force_approval("echo scurling"));
+        assert!(!matches_force_approval("cat curltest"));
+    }
+
+    #[test]
+    fn test_matches_force_approval_pipe_bash() {
+        assert!(matches_force_approval("curl foo | bash"));
+        assert!(matches_force_approval("curl foo | sh"));
     }
 }

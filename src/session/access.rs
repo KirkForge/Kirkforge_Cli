@@ -192,6 +192,25 @@ impl PathGuard {
             }
         }
 
+        // 5. Binary file detection
+        if self.block_binary_reads {
+            let sample = match std::fs::read(&canonical) {
+                Ok(data) => data,
+                Err(e) => {
+                    return GuardVerdict::Denied(format!(
+                        "Cannot read '{}' for binary detection: {e}",
+                        canonical.display()
+                    ));
+                }
+            };
+            if Self::is_binary(&sample) {
+                return GuardVerdict::Denied(format!(
+                    "Binary file blocked: {}",
+                    canonical.display()
+                ));
+            }
+        }
+
         GuardVerdict::Allowed(canonical)
     }
 
@@ -378,8 +397,7 @@ impl ReadGate {
         } else {
             GuardVerdict::Denied(format!(
                 "Read-before-edit: '{}' has not been read this session. \
-                 Use read_file first, or explicitly confirm with the \
-                 force_edit argument.",
+                 Use read_file first.",
                 path.display()
             ))
         }
@@ -394,8 +412,15 @@ impl ReadGate {
 // ── Helper: Construct from Config ────────────────────────────────────
 
 /// Build a [`DenyList`] and [`PathGuard`] from the user's config.
+///
+/// Merges configured deny patterns with safe defaults so that .ssh, .git,
+/// and credential files are always blocked unless explicitly overridden.
 pub fn access_from_config(config: &crate::shared::Config) -> (DenyList, PathGuard, ReadGate) {
-    let deny_list = DenyList::new(config.deny_paths.clone(), config.deny_urls.clone());
+    // Start with safe defaults, then merge configured patterns on top
+    let mut base = DenyList::default();
+    base.path_patterns.extend(config.deny_paths.clone());
+    base.url_patterns.extend(config.deny_urls.clone());
+    let deny_list = DenyList::new(base.path_patterns, base.url_patterns);
 
     let sandbox_dir = config
         .sandbox_dir
@@ -410,9 +435,13 @@ pub fn access_from_config(config: &crate::shared::Config) -> (DenyList, PathGuar
         .map(PathBuf::from)
         .collect();
 
+    // Merge deny extensions with defaults
+    let mut deny_extensions: Vec<String> = PathGuard::default().deny_extensions;
+    deny_extensions.extend(config.deny_extensions.clone());
+
     let path_guard = PathGuard {
         sandbox_dir,
-        deny_extensions: config.deny_extensions.clone(),
+        deny_extensions,
         block_dotfiles: config.block_dotfiles,
         max_read_size: config.max_file_read_size,
         deny_list: deny_list.clone(),

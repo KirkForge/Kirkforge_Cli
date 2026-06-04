@@ -8,6 +8,7 @@ use crate::session::verifier::CorrectionResult;
 use crate::session::verifier::{CorrectionLoop, VerifierHandler, VerifierSlots};
 use crate::shared::{Config, Message, Role, StreamEvent, ToolDef, ToolInvocation, ToolOutcome};
 use crate::tools::Tool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -180,20 +181,54 @@ impl Executor {
     /// Listens for user input on `input_rx`, runs the full turn loop
     /// (stream → tool calls → approval → execute), and forwards all
     /// renderable events to the TUI via `event_tx`.
+    ///
+    /// When `()` arrives on `cancel_rx`, the current `run_turn()` is
+    /// interrupted at the next yield point and subsequent turns are skipped
+    /// until a new input arrives (which resets the flag).
+    ///
+    /// When a `ConversationLog` arrives on `resume_rx`, the executor's
+    /// conversation is replaced in-place (fork resumption).
     pub async fn run(
         &mut self,
         mut input_rx: mpsc::UnboundedReceiver<String>,
         event_tx: mpsc::UnboundedSender<TurnEvent>,
         approval_tx: mpsc::UnboundedSender<ApprovalRequest>,
+        mut cancel_rx: mpsc::UnboundedReceiver<()>,
+        mut resume_rx: mpsc::UnboundedReceiver<ConversationLog>,
     ) -> anyhow::Result<()> {
-        while let Some(input) = input_rx.recv().await {
-            let events = self.run_turn(&input, &approval_tx).await?;
-            for ev in events {
-                if event_tx.send(ev).is_err() {
-                    // TUI closed — stop the executor
-                    self.flush_carryover();
-                    return Ok(());
+        let cancelled = Arc::new(AtomicBool::new(false));
+
+        loop {
+            tokio::select! {
+                biased; // check cancel first, then input
+
+                Some(()) = cancel_rx.recv() => {
+                    cancelled.store(true, Ordering::SeqCst);
+                    let _ = event_tx.send(TurnEvent::Token("\n⚠️ Generation cancelled\n".into()));
                 }
+                Some(new_log) = resume_rx.recv() => {
+                    // Resume from a fork — swap the conversation log
+                    self.replace_conversation(new_log);
+                    let _ = event_tx.send(TurnEvent::Token("✅ Resumed from fork\n".into()));
+                }
+                Some(input) = input_rx.recv() => {
+                    cancelled.store(false, Ordering::SeqCst);
+                    let events = self.run_turn(&input, &approval_tx, &cancelled).await;
+                    match events {
+                        Ok(evs) => {
+                            for ev in evs {
+                                if event_tx.send(ev).is_err() {
+                                    self.flush_carryover();
+                                    return Ok(());
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            let _ = event_tx.send(TurnEvent::Error(format!("Turn failed: {}", e)));
+                        }
+                    }
+                }
+                else => break,
             }
         }
         self.flush_carryover();
@@ -203,6 +238,11 @@ impl Executor {
     /// Borrow the conversation log (for non-interactive JSON summaries).
     pub fn conversation_log(&self) -> &ConversationLog {
         &self.conversation
+    }
+
+    /// Replace the conversation log in-place (used by /resume fork).
+    pub fn replace_conversation(&mut self, new_log: ConversationLog) {
+        self.conversation = new_log;
     }
 
     /// Flush the carryover profile to the shared target at session end.
@@ -254,10 +294,14 @@ impl Executor {
 
     /// Run a single turn: send the current conversation to the model,
     /// handle tool calls, return the assistant's response.
+    ///
+    /// If `cancelled` is provided, it is checked at each streaming
+    /// yield point and the turn stops early with a cancellation notice.
     pub async fn run_turn(
         &mut self,
         user_input: &str,
         approval_sender: &mpsc::UnboundedSender<ApprovalRequest>,
+        cancelled: &AtomicBool,
     ) -> anyhow::Result<Vec<TurnEvent>> {
         // Append user message
         self.conversation.append(Message {
@@ -326,6 +370,23 @@ impl Executor {
 
             // Stream events from the adapter
             while let Some(event) = rx.recv().await {
+                // Check cancellation between every event
+                if cancelled.load(Ordering::SeqCst) {
+                    events.push(TurnEvent::Token("\n⚠️ Cancelled\n".into()));
+                    // We still need to record what we have so far
+                    if !assistant_content.is_empty() || !pending_tool_calls.is_empty() {
+                        let msg = Message {
+                            role: Role::Assistant,
+                            content: assistant_content.clone(),
+                            thinking: if assistant_thinking.is_empty() { None } else { Some(assistant_thinking.clone()) },
+                            tool_calls: if pending_tool_calls.is_empty() { None } else { Some(pending_tool_calls.clone()) },
+                            ..Default::default()
+                        };
+                        self.conversation.append(msg)?;
+                    }
+                    return Ok(events);
+                }
+
                 match event {
                     StreamEvent::Text(t) => {
                         assistant_content.push_str(&t);
@@ -1215,8 +1276,17 @@ mod tests {
         FinishReason, Message, ModelInfo, Role, StreamEvent, TokenUsage, ToolCallStyle, ToolDef,
         ToolInvocation, ToolOutcome,
     };
+    use std::sync::atomic::AtomicBool;
     use std::sync::{Arc, Mutex};
     use tokio::sync::mpsc;
+
+    /// Convenience: an `AtomicBool` that is always false — used by tests
+    /// that don't need cancellation.
+    fn never_cancelled() -> &'static AtomicBool {
+        static NC: std::sync::LazyLock<AtomicBool> =
+            std::sync::LazyLock::new(|| AtomicBool::new(false));
+        &NC
+    }
 
     // ── Mocks ──────────────────────────────────────────────────────
 
@@ -1359,7 +1429,7 @@ mod tests {
 
         let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
         let mut exe = make_executor(Box::new(adapter), vec![], make_config(false));
-        let events = exe.run_turn("hello", &approval_tx).await.unwrap();
+        let events = exe.run_turn("hello", &approval_tx, never_cancelled()).await.unwrap();
 
         let tokens: Vec<_> = events
             .iter()
@@ -1413,7 +1483,7 @@ mod tests {
 
         let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
         let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(true));
-        let events = exe.run_turn("use echo", &approval_tx).await.unwrap();
+        let events = exe.run_turn("use echo", &approval_tx, never_cancelled()).await.unwrap();
 
         // Should have token + tool_start + tool_result
         let has_token = events.iter().any(|e| matches!(e, TurnEvent::Token(_)));
@@ -1482,7 +1552,7 @@ mod tests {
         });
 
         let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(false));
-        let events = exe.run_turn("run command", &approval_tx).await.unwrap();
+        let events = exe.run_turn("run command", &approval_tx, never_cancelled()).await.unwrap();
 
         approval_handle.await.unwrap();
 
@@ -1532,7 +1602,7 @@ mod tests {
         });
 
         let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(false));
-        let events = exe.run_turn("run command", &approval_tx).await.unwrap();
+        let events = exe.run_turn("run command", &approval_tx, never_cancelled()).await.unwrap();
 
         approval_handle.await.unwrap();
 
@@ -1559,7 +1629,7 @@ mod tests {
 
         let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
         let mut exe = make_executor(Box::new(adapter), vec![], make_config(false));
-        let events = exe.run_turn("do it", &approval_tx).await.unwrap();
+        let events = exe.run_turn("do it", &approval_tx, never_cancelled()).await.unwrap();
 
         let has_error = events
             .iter()
@@ -1587,7 +1657,7 @@ mod tests {
         let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
         let mut exe = make_executor(Box::new(adapter), vec![], make_config(false));
         let events = exe
-            .run_turn("use unknown tool", &approval_tx)
+            .run_turn("use unknown tool", &approval_tx, never_cancelled())
             .await
             .unwrap();
 
@@ -1663,7 +1733,7 @@ mod tests {
 
         let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
         let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(true));
-        let _events = exe.run_turn("loop", &approval_tx).await.unwrap();
+        let _events = exe.run_turn("loop", &approval_tx, never_cancelled()).await.unwrap();
 
         // Should NOT have hit the limit (max_iterations = 10, and we'd get error if we did)
         let tool_calls = *call_count.lock().unwrap();

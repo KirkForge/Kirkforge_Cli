@@ -111,12 +111,28 @@ pub async fn run_tui(
     let (event_tx, mut event_rx) = mpsc::unbounded_channel::<executor::TurnEvent>();
     // Approval requests: Executor → TUI
     let (approval_tx, mut approval_rx) = mpsc::unbounded_channel::<ApprovalRequest>();
+    // Cancellation: TUI → Executor (sends () to cancel current turn)
+    let (cancel_tx, cancel_rx) = mpsc::unbounded_channel::<()>();
+    // Resume: TUI → Executor (sends a ConversationLog to swap in for fork resumption)
+    let (resume_tx, resume_rx) = mpsc::unbounded_channel::<ConversationLog>();
+    // Keyboard events: background reader thread → TUI event loop
+    let (kb_tx, mut kb_rx) = mpsc::unbounded_channel::<Event>();
+
+    // Spawn a dedicated thread to read crossterm events without blocking
+    // the async event loop. This eliminates the 50ms poll latency floor.
+    std::thread::spawn(move || {
+        while let Ok(ev) = event::read() {
+            if kb_tx.send(ev).is_err() {
+                break; // receiver dropped (TUI exited)
+            }
+        }
+    });
 
     // Spawn the executor on a background task
     let mut exe =
         executor::Executor::with_log(adapter, tools, config, conversation_log, carryover_target);
     let handle = tokio::spawn(async move {
-        let _ = exe.run(input_rx, event_tx, approval_tx).await;
+        let _ = exe.run(input_rx, event_tx, approval_tx, cancel_rx, resume_rx).await;
     });
 
     // Event loop
@@ -125,7 +141,10 @@ pub async fn run_tui(
         &mut state,
         &mut event_rx,
         &mut approval_rx,
+        &mut kb_rx,
         &input_tx,
+        &cancel_tx,
+        &resume_tx,
     )
     .await;
 
@@ -147,12 +166,16 @@ pub async fn run_tui(
     res
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_event_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     state: &mut AppState,
     event_rx: &mut mpsc::UnboundedReceiver<executor::TurnEvent>,
     approval_rx: &mut mpsc::UnboundedReceiver<ApprovalRequest>,
+    kb_rx: &mut mpsc::UnboundedReceiver<Event>,
     input_tx: &mpsc::UnboundedSender<String>,
+    cancel_tx: &mpsc::UnboundedSender<()>,
+    resume_tx: &mpsc::UnboundedSender<ConversationLog>,
 ) -> anyhow::Result<()> {
     loop {
         // Check for exit signal
@@ -164,6 +187,7 @@ async fn run_event_loop(
         while let Ok(ev) = event_rx.try_recv() {
             match ev {
                 executor::TurnEvent::Token(t) => {
+                    state.is_generating = true; // got first token — turn off spinner
                     // Accumulate into the last assistant entry, or create one
                     let role_str = "assistant".to_string();
                     if let Some(last) = state.messages.last_mut() {
@@ -188,6 +212,7 @@ async fn run_event_loop(
                     state.thinking_buffer.push(t);
                 }
                 executor::TurnEvent::ToolStart { name, args: _ } => {
+                    state.is_generating = false; // turn ended (tool call)
                     state.messages.push(ConversationEntry {
                         role: "tool".into(),
                         content: format!("🔧 {} ...", name),
@@ -224,6 +249,7 @@ async fn run_event_loop(
                     });
                 }
                 executor::TurnEvent::Error(e) => {
+                    state.is_generating = false;
                     state.messages.push(ConversationEntry {
                         role: "system".into(),
                         content: format!("Error: {}", e),
@@ -236,6 +262,7 @@ async fn run_event_loop(
                     turn_cost,
                     cumulative_cost,
                 } => {
+                    state.is_generating = false;
                     state.tokens_sent = state.tokens_sent.wrapping_add(prompt_tokens);
                     state.tokens_received = state.tokens_received.wrapping_add(completion_tokens);
                     state.turn_cost = turn_cost;
@@ -245,10 +272,19 @@ async fn run_event_loop(
         }
 
         // ── Check for completed background jobs ──
-        notify_completed_jobs(state);
+        notify_completed_jobs(state).await;
 
         // ── Drain pending approval requests ──
+        // If a new approval arrives while one is pending, deny the old one
+        // before replacing it — otherwise the old oneshot sender is dropped
+        // without sending, causing the executor to hang forever.
         while let Ok(req) = approval_rx.try_recv() {
+            // Deny any existing pending approval first
+            if let Some(old) = state.pending_approval.take() {
+                if let Some(tx) = old.responder {
+                    let _ = tx.send(ApprovalResponse::Denied);
+                }
+            }
             state.pending_approval = Some(PendingApproval {
                 tool_name: req.tool_name.clone(),
                 args: req.args.clone(),
@@ -257,6 +293,8 @@ async fn run_event_loop(
         }
 
         // ── Render ──
+        // Tick spinner for loading animation
+        state.spinner_tick = state.spinner_tick.wrapping_add(1);
         terminal.draw(|f| {
             let size = f.area();
             let chunks = Layout::default()
@@ -278,14 +316,14 @@ async fn run_event_loop(
             }
         })?;
 
-        // ── Handle events ──
-        if event::poll(std::time::Duration::from_millis(50))? {
-            match event::read()? {
+        // ── Handle keyboard events (non-blocking, from background thread) ──
+        while let Ok(ev) = kb_rx.try_recv() {
+            match ev {
                 Event::Key(key) => {
                     if state.pending_approval.is_some() {
                         handle_approval_key(key, state);
                     } else {
-                        handle_input_key(key, state, input_tx).await?;
+                        handle_input_key(key, state, input_tx, cancel_tx, resume_tx).await?;
                     }
                 }
                 Event::Resize(_w, _h) => {}
@@ -299,26 +337,37 @@ async fn handle_input_key(
     key: KeyEvent,
     state: &mut AppState,
     input_tx: &mpsc::UnboundedSender<String>,
+    cancel_tx: &mpsc::UnboundedSender<()>,
+    resume_tx: &mpsc::UnboundedSender<ConversationLog>,
 ) -> anyhow::Result<()> {
     match key.code {
         KeyCode::Char(c) => {
             if key.modifiers.contains(KeyModifiers::CONTROL) {
                 match c {
                     'c' => {
-                        // Ctrl+C: send empty string to cancel
+                        // Ctrl+C: cancel in-flight generation (if any),
+                        // then clear the input buffer.
+                        if state.is_generating {
+                            let _ = cancel_tx.send(());
+                            state.is_generating = false;
+                        }
                         state.input.clear();
                         state.cursor_position = 0;
                     }
                     'w' => {
-                        // Ctrl+W: delete word backward
-                        let before = &state.input[..state.cursor_position];
+                        // Ctrl+W: delete word backward using char-index cursor
+                        let cur_byte = state.cursor_byte();
+                        let before = &state.input[..cur_byte];
                         if let Some(pos) = before.rfind(|c: char| c.is_whitespace()) {
+                            // pos is a byte offset — count chars before it to get new cursor position
                             let trimmed = before[..pos].trim_end_matches(' ');
-                            let new_pos = trimmed.len();
-                            state.input.drain(new_pos..state.cursor_position);
-                            state.cursor_position = new_pos;
+                            let new_byte = trimmed.len();
+                            let new_cursor = trimmed.chars().count();
+                            state.input.drain(new_byte..cur_byte);
+                            state.cursor_position = new_cursor;
                         } else {
-                            state.input.drain(..state.cursor_position);
+                            // Delete from start
+                            state.input.drain(..cur_byte);
                             state.cursor_position = 0;
                         }
                     }
@@ -333,20 +382,25 @@ async fn handle_input_key(
                     _ => {}
                 }
             } else {
-                state.input.insert(state.cursor_position, c);
+                let byte_pos = state.cursor_byte();
+                state.input.insert(byte_pos, c);
                 state.cursor_position += 1;
             }
         }
         KeyCode::Backspace => {
             if state.cursor_position > 0 {
-                let pos = state.cursor_position - 1;
-                state.input.remove(pos);
-                state.cursor_position = pos;
+                // Move back one char in char-index terms, then find the byte
+                // offset of the char we want to remove.
+                state.cursor_position -= 1;
+                let remove_byte = state.cursor_byte();
+                state.input.remove(remove_byte);
             }
         }
         KeyCode::Delete => {
-            if state.cursor_position < state.input.len() {
-                state.input.remove(state.cursor_position);
+            let char_count = state.input.chars().count();
+            if state.cursor_position < char_count {
+                let byte_pos = state.cursor_byte();
+                state.input.remove(byte_pos);
             }
         }
         KeyCode::Left => {
@@ -355,7 +409,8 @@ async fn handle_input_key(
             }
         }
         KeyCode::Right => {
-            if state.cursor_position < state.input.len() {
+            let char_count = state.input.chars().count();
+            if state.cursor_position < char_count {
                 state.cursor_position += 1;
             }
         }
@@ -363,7 +418,7 @@ async fn handle_input_key(
             state.cursor_position = 0;
         }
         KeyCode::End => {
-            state.cursor_position = state.input.len();
+            state.cursor_position = state.input.chars().count();
         }
         KeyCode::Enter => {
             let input = state.input.clone();
@@ -390,7 +445,7 @@ async fn handle_input_key(
                         }
                         "/help" | "/h" | "/?" => {
                             let mut help_text =
-                                "Built-in commands:\n  /clear  Clear conversation\n  /exit   Quit\n  /fork   Fork session: /fork list | <label> [count]\n  /jobs   List background bash jobs\n".to_string();
+                                "Built-in commands:\n  /clear   Clear conversation\n  /exit    Quit\n  /fork    Fork session: /fork list | <label> [count]\n  /resume  Resume a fork: /resume <fork-id>\n  /jobs    List background bash jobs\n".to_string();
                             let skills = state.skill_registry.all();
                             if !skills.is_empty() {
                                 help_text.push_str("\nSkills:\n");
@@ -424,6 +479,15 @@ async fn handle_input_key(
                             });
                             return Ok(());
                         }
+                        "/resume" => {
+                            let msg = handle_resume_command(args, state, resume_tx).await;
+                            state.messages.push(ConversationEntry {
+                                role: "system".into(),
+                                content: msg,
+                                timestamp: chrono::Local::now(),
+                            });
+                            return Ok(());
+                        }
                         "/jobs" => {
                             let msg = handle_jobs_command().await;
                             state.messages.push(ConversationEntry {
@@ -447,6 +511,7 @@ async fn handle_input_key(
                             timestamp: chrono::Local::now(),
                         });
                         // Send the skill prompt to the model via executor
+                        state.is_generating = true;
                         let _ = input_tx.send(rendered);
                     } else {
                         state.messages.push(ConversationEntry {
@@ -465,6 +530,7 @@ async fn handle_input_key(
                         content: input.clone(),
                         timestamp: chrono::Local::now(),
                     });
+                    state.is_generating = true;
                     let _ = input_tx.send(input);
                 }
             }
@@ -474,17 +540,20 @@ async fn handle_input_key(
             state.thinking_panel_visible = !state.thinking_panel_visible;
         }
         KeyCode::Up => {
-            // Scroll up
-            state.scroll_offset = state.scroll_offset.saturating_add(1);
-        }
-        KeyCode::Down => {
+            // Scroll up (see older content)
+            state.auto_scroll = false;
             state.scroll_offset = state.scroll_offset.saturating_sub(1);
         }
+        KeyCode::Down => {
+            // Scroll down (see newer content)
+            state.scroll_offset = state.scroll_offset.saturating_add(1);
+        }
         KeyCode::PageUp => {
-            state.scroll_offset = state.scroll_offset.saturating_add(10);
+            state.auto_scroll = false;
+            state.scroll_offset = state.scroll_offset.saturating_sub(10);
         }
         KeyCode::PageDown => {
-            state.scroll_offset = state.scroll_offset.saturating_sub(10);
+            state.scroll_offset = state.scroll_offset.saturating_add(10);
         }
         _ => {}
     }
@@ -579,6 +648,64 @@ async fn handle_fork_command(args: &str, state: &mut AppState) -> String {
     }
 }
 
+/// Handle /resume command: switch the active session to a fork.
+///
+/// Usage: /resume <fork-id>
+async fn handle_resume_command(
+    args: &str,
+    state: &mut AppState,
+    resume_tx: &mpsc::UnboundedSender<ConversationLog>,
+) -> String {
+    let fork_id = args.trim();
+    if fork_id.is_empty() {
+        return "Usage: /resume <fork-id>\nUse `/fork list` to see available forks.".into();
+    }
+
+    let fm = match state.fork_manager.as_mut() {
+        Some(fm) => fm,
+        None => return "No fork manager available.".into(),
+    };
+
+    // Verify the fork exists
+    let fork = match fm.get(fork_id) {
+        Some(f) => f.clone(),
+        None => {
+            let available: Vec<&str> = fm.list().iter().map(|f| f.id.as_str()).collect();
+            return format!(
+                "Fork '{}' not found. Available forks: [{}]",
+                fork_id,
+                available.join(", ")
+            );
+        }
+    };
+
+    // Open the fork's conversation log
+    match ConversationLog::open(fork.path.clone()) {
+        Ok(fork_log) => {
+            // Send the fork log to the executor (swaps in-place)
+            if resume_tx.send(fork_log).is_err() {
+                return "Error: executor is not running.".into();
+            }
+
+            // Reload TUI state from the fork's conversation
+            state.messages.clear();
+            state.thinking_buffer.clear();
+
+            // Update session identity
+            state.session_id = format!("{} (fork: {})", state.session_id, fork.id);
+            state.log_path = Some(fork.path);
+
+            format!(
+                "✅ Resumed fork '{}' — \"{}\" ({} messages). Type a message to continue.",
+                fork.id,
+                fork.label,
+                fork.fork_point,
+            )
+        }
+        Err(e) => format!("Error opening fork log: {}", e),
+    }
+}
+
 /// Handle /jobs command: list background bash jobs.
 async fn handle_jobs_command() -> String {
     let registry = crate::session::bash_jobs::global_registry();
@@ -605,14 +732,35 @@ async fn handle_jobs_command() -> String {
 }
 
 /// Check for recently-completed background jobs and push a notification.
-fn notify_completed_jobs(state: &mut AppState) {
-    // This runs synchronously in the event loop. We check via try_ methods
-    // but the BashJobRegistry requires async access. For the synchronous
-    // rendering path we rely on /jobs for status queries. Background job
-    // completion is handled by the executor/tool layer emitting events
-    // when jobs are polled.
-    //
-    // NOTE: The global registry is thread-safe; completed jobs are visible
-    // to the /jobs command at any time through handle_jobs_command().
-    let _ = state; // placeholder for future push-based notification
+async fn notify_completed_jobs(state: &mut AppState) {
+    let registry = crate::session::bash_jobs::global_registry();
+    let jobs = registry.list().await;
+    for job in &jobs {
+        let finished = match job.status {
+            crate::session::bash_jobs::JobStatus::Completed(_)
+            | crate::session::bash_jobs::JobStatus::Failed(_)
+            | crate::session::bash_jobs::JobStatus::Cancelled => true,
+            crate::session::bash_jobs::JobStatus::Running => false,
+        };
+        if finished && state.notified_jobs.insert(job.id) {
+            // First time seeing this job as finished — push a notification
+            let status_icon = match &job.status {
+                crate::session::bash_jobs::JobStatus::Completed(code) => {
+                    format!("✅ Job #{} completed (exit {})", job.id, code)
+                }
+                crate::session::bash_jobs::JobStatus::Failed(e) => {
+                    format!("❌ Job #{} failed: {}", job.id, e)
+                }
+                crate::session::bash_jobs::JobStatus::Cancelled => {
+                    format!("🚫 Job #{} cancelled", job.id)
+                }
+                _ => continue,
+            };
+            state.messages.push(ConversationEntry {
+                role: "system".into(),
+                content: format!("{} — `{}`", status_icon, job.command),
+                timestamp: chrono::Local::now(),
+            });
+        }
+    }
 }

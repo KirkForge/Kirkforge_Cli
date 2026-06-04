@@ -10,7 +10,10 @@ use ratatui::{
 use crate::tui::app::{AppState, ConnectionState};
 
 /// Render the main chat area showing the conversation history.
-pub fn render_chat(f: &mut Frame, area: Rect, state: &AppState) {
+///
+/// Takes `&mut AppState` so we can clamp `scroll_offset` and update
+/// `auto_scroll` based on the actual rendered line count.
+pub fn render_chat(f: &mut Frame, area: Rect, state: &mut AppState) {
     let mut lines: Vec<Line> = Vec::new();
 
     // Connection banner at top
@@ -61,6 +64,17 @@ pub fn render_chat(f: &mut Frame, area: Rect, state: &AppState) {
     // Empty line after banner
     lines.push(Line::from(""));
 
+    // Loading indicator: show a dim spinner when waiting for first token
+    if state.is_generating && state.messages.last().map(|m| m.role.as_str()) != Some("assistant") {
+        lines.push(Line::from(vec![Span::styled(
+            format!(" ⏳ {} ", state.spinner_char()),
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::DIM),
+        )]));
+        lines.push(Line::from(""));
+    }
+
     // Conversation messages
     for entry in &state.messages {
         let role_style = match entry.role.as_str() {
@@ -90,13 +104,31 @@ pub fn render_chat(f: &mut Frame, area: Rect, state: &AppState) {
 
         // Wrap content to available width
         let content_width = (area.width as usize).saturating_sub(4);
-        let wrapped = textwrap::fill(&entry.content, content_width);
 
-        for content_line in wrapped.lines() {
-            lines.push(Line::from(Span::styled(
-                format!(" {}", content_line),
-                Style::default(),
-            )));
+        // Assistant messages get markdown rendering; everything else is plain text
+        if entry.role == "assistant" {
+            // Render markdown into ratatui styled Lines (bold, code, code blocks)
+            let md_lines = crate::tui::rendering::render_markdown_lines(&entry.content);
+            for md_line in md_lines {
+                if md_line.spans.is_empty()
+                    || (md_line.spans.len() == 1 && md_line.spans[0].content.is_empty())
+                {
+                    continue;
+                }
+                // Prepend a space for padding
+                let mut padded = vec![Span::raw(" ")];
+                padded.extend(md_line.spans);
+                lines.push(Line::from(padded));
+            }
+        } else {
+            // Plain text wrapping for user/tool/system messages
+            let wrapped = textwrap::fill(&entry.content, content_width);
+            for content_line in wrapped.lines() {
+                lines.push(Line::from(Span::styled(
+                    format!(" {}", content_line),
+                    Style::default(),
+                )));
+            }
         }
         lines.push(Line::from(""));
     }
@@ -123,11 +155,33 @@ pub fn render_chat(f: &mut Frame, area: Rect, state: &AppState) {
         lines.push(Line::from(""));
     }
 
-    // Scroll position indicator
-    let _total_lines = lines.len();
-    if state.scroll_offset > 0 {
+    // ── Compute scroll geometry ─────────────────────────────
+    let visible_height = (area.height as usize).saturating_sub(3);
+    let total_lines = lines.len();
+    let max_scroll = total_lines.saturating_sub(visible_height);
+
+    // Auto-scroll: if enabled, pin to the bottom (latest messages).
+    if state.auto_scroll {
+        state.scroll_offset = max_scroll;
+    } else if state.scroll_offset >= max_scroll {
+        // User scrolled all the way back to the bottom — re-enable auto-scroll
+        state.auto_scroll = true;
+        state.scroll_offset = max_scroll;
+    }
+
+    // Clamp: if content shrunk (e.g. cleared), snap back
+    if state.scroll_offset > max_scroll {
+        state.scroll_offset = max_scroll;
+    }
+
+    // Only show scroll indicator when content is hidden below the viewport
+    let lines_remaining = max_scroll.saturating_sub(state.scroll_offset);
+    if lines_remaining > 0 {
         lines.push(Line::from(vec![Span::styled(
-            format!(" ↑ {} more lines above ", state.scroll_offset),
+            format!(
+                " ↓ {} more lines below (↓/PgDn to scroll, ↑/PgUp for history) ",
+                lines_remaining
+            ),
             Style::default().fg(Color::DarkGray),
         )]));
     }

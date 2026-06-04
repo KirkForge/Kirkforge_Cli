@@ -23,6 +23,7 @@ pub struct Message {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "lowercase")]
 pub enum Role {
     #[default]
     User,
@@ -145,7 +146,7 @@ fn default_max_file_read_size() -> usize {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            default_model: "glm-5.1:cloud".into(),
+            default_model: "deepseek-v4-flash:cloud".into(),
             ollama_host: "http://localhost:11434".into(),
             auto_approve: false,
             truncation_strategy: TruncationStrategy::KeepToolOnly,

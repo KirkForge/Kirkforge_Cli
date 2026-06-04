@@ -180,7 +180,8 @@ async fn run_non_interactive(
     }
 
     // Run through the executor's full safety pipeline (run_turn)
-    let events = executor.run_turn(&input, &approval_tx).await?;
+    let cancelled = std::sync::atomic::AtomicBool::new(false);
+    let events = executor.run_turn(&input, &approval_tx, &cancelled).await?;
 
     // Process events for output
     let mut total_prompt_tokens: usize = 0;

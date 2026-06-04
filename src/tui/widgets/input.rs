@@ -28,9 +28,12 @@ pub fn render_input(f: &mut Frame, area: Rect, state: &AppState) {
         let mut spans = Vec::new();
         let input = &state.input;
 
-        // Split at cursor position
-        let before = &input[..state.cursor_position];
-        let after = &input[state.cursor_position..];
+        // Convert char-index cursor to byte offset for safe slicing
+        let byte_pos = state.cursor_byte();
+
+        // Split at cursor position using byte offset
+        let before = &input[..byte_pos];
+        let after = &input[byte_pos..];
 
         spans.push(Span::raw(before.to_string()));
         // Always show a cursor, even if empty
@@ -38,12 +41,17 @@ pub fn render_input(f: &mut Frame, area: Rect, state: &AppState) {
             if after.is_empty() {
                 " █".to_string()
             } else {
-                format!("{}█", &after[0..1])
+                // Get the first char (safe — byte_pos is on a char boundary since
+                // cursor_byte() walks char_indices)
+                let first_char = after.chars().next().unwrap_or(' ');
+                format!("{}█", first_char)
             },
             Style::default(),
         ));
-        if after.len() > 1 {
-            spans.push(Span::raw(after[1..].to_string()));
+        if !after.is_empty() {
+            // Skip the first multi-byte-safe char
+            let char_len = after.chars().next().map(|c| c.len_utf8()).unwrap_or(0);
+            spans.push(Span::raw(after[char_len..].to_string()));
         }
 
         vec![Line::from(spans)]

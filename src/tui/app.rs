@@ -21,14 +21,25 @@ pub struct AppState {
 
     /// Current user input buffer
     pub input: String,
+    /// Cursor position as a Unicode **char index** (not byte offset).
+    /// This is safe across UTF-8 multi-byte characters. Convert to byte
+    /// offset via [`cursor_byte()`] before any string slicing.
     pub cursor_position: usize,
 
     /// Connection
     pub connection: ConnectionState,
     pub model_info: Option<ModelInfo>,
 
-    /// Scroll position for the chat view
+    /// Scroll position for the chat view.
+    /// 0 = top of content. Max = bottom (latest messages).
+    /// When auto_scroll is true, scroll_offset is reset to max
+    /// each render cycle so the user always sees the latest messages.
     pub scroll_offset: usize,
+
+    /// If true, the view automatically follows new content to the bottom.
+    /// Set false when the user scrolls up; re-enabled when they scroll
+    /// back to the bottom.
+    pub auto_scroll: bool,
 
     /// Thinking panel (collapsible)
     pub thinking_panel_visible: bool,
@@ -65,6 +76,18 @@ pub struct AppState {
     // ── Session exit (Phase 17) ─────────────────────────────
     /// Set to true to break the event loop and trigger carryover save.
     pub should_exit: bool,
+
+    // ── Generation state ────────────────────────────────────
+    /// True while the model is generating a response (between Enter and Done).
+    pub is_generating: bool,
+
+    /// Spinner frame counter — cycles through a spinner animation
+    /// to show the model is thinking before the first token arrives.
+    pub spinner_tick: u64,
+
+    /// Set of background job IDs that have already been notified as completed.
+    /// Used to avoid repeated notifications for the same job.
+    pub notified_jobs: std::collections::HashSet<u64>,
 }
 
 impl AppState {
@@ -76,6 +99,7 @@ impl AppState {
             connection: ConnectionState::Disconnected,
             model_info: None,
             scroll_offset: 0,
+            auto_scroll: true,
             thinking_panel_visible: false,
             thinking_buffer: Vec::new(),
             pending_approval: None,
@@ -90,7 +114,27 @@ impl AppState {
             session_id: String::new(),
             fork_manager: None,
             should_exit: false,
+            is_generating: false,
+            spinner_tick: 0,
+            notified_jobs: std::collections::HashSet::new(),
         }
+    }
+
+    /// Return a spinner character based on the frame tick.
+    pub fn spinner_char(&self) -> &'static str {
+        const SPINNERS: &[&str] = &["▁", "▃", "▄", "▅", "▆", "▇", "█", "▇", "▆", "▅", "▄", "▃"];
+        SPINNERS[(self.spinner_tick as usize) % SPINNERS.len()]
+    }
+
+    /// Convert the char-index cursor to a byte offset for string slicing.
+    /// Returns `input.len()` if cursor is past the last character.
+    #[inline]
+    pub fn cursor_byte(&self) -> usize {
+        self.input
+            .char_indices()
+            .nth(self.cursor_position)
+            .map(|(b, _)| b)
+            .unwrap_or(self.input.len())
     }
 }
 

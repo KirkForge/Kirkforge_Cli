@@ -6,11 +6,38 @@ use crate::session::event_bus::{BusEvent, EventBus};
 use crate::session::prompt::PromptBuilder;
 use crate::session::verifier::CorrectionResult;
 use crate::session::verifier::{CorrectionLoop, VerifierHandler, VerifierSlots};
+use crate::shared::permission::{evaluate, PermissionAction};
 use crate::shared::{Config, Message, Role, StreamEvent, ToolDef, ToolInvocation, ToolOutcome};
 use crate::tools::Tool;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
+
+/// Push a permission rule into a `Vec<PermissionRule>`, deduplicating
+/// against an existing identical rule. Two rules are considered
+/// identical if they have the same `(tool, key, pattern)` triple
+/// regardless of `action` — pushing `Allow bash:command=ls` twice
+/// only stores one. The `action` of the EXISTING rule is preserved
+/// (so a user-written `Deny` for `rm` won't be silently overwritten
+/// by an `Allow` from `[A]lways`).
+///
+/// **Why dedup at the call site instead of the TUI side:** both
+/// `approval_keys.rs` (TUI) and `executor.rs` (engine) push rules
+/// into their own `permission_rules` clones. Without dedup, hitting
+/// `[A]lways` once would land the rule in both — but hitting it
+/// twice on the same call (e.g. user mashes the key) would land
+/// duplicates in whichever side is racing. This helper is the
+/// single point of dedup, called from both sites.
+fn push_rule_unique(rules: &mut Vec<crate::shared::permission::PermissionRule>, new_rule: crate::shared::permission::PermissionRule) {
+    let duplicate = rules.iter().any(|r| {
+        r.tool == new_rule.tool
+            && r.key == new_rule.key
+            && r.pattern == new_rule.pattern
+    });
+    if !duplicate {
+        rules.push(new_rule);
+    }
+}
 
 /// The session executor runs the conversation loop:
 ///   1. Build the prompt → send to model → collect stream events
@@ -188,6 +215,14 @@ impl Executor {
     ///
     /// When a `ConversationLog` arrives on `resume_rx`, the executor's
     /// conversation is replaced in-place (fork resumption).
+    ///
+    /// When `()` arrives on `compact_rx`, the executor runs a
+    /// `/compact`-style compaction: `PromptBuilder::compact` reduces
+    /// the conversation, `ConversationLog::replace_all` atomically
+    /// rewrites the NDJSON file, and a `TurnEvent::CompactionReport`
+    /// is sent back via `event_tx` carrying the new message list
+    /// (so the TUI can rebuild its display from the same source of
+    /// truth).
     pub async fn run(
         &mut self,
         mut input_rx: mpsc::UnboundedReceiver<String>,
@@ -195,6 +230,7 @@ impl Executor {
         approval_tx: mpsc::UnboundedSender<ApprovalRequest>,
         mut cancel_rx: mpsc::UnboundedReceiver<()>,
         mut resume_rx: mpsc::UnboundedReceiver<ConversationLog>,
+        mut compact_rx: mpsc::UnboundedReceiver<()>,
     ) -> anyhow::Result<()> {
         let cancelled = Arc::new(AtomicBool::new(false));
 
@@ -210,6 +246,27 @@ impl Executor {
                     // Resume from a fork — swap the conversation log
                     self.replace_conversation(new_log);
                     let _ = event_tx.send(TurnEvent::Token("✅ Resumed from fork\n".into()));
+                }
+                Some(()) = compact_rx.recv() => {
+                    // /compact: walk the current history, condense
+                    // middle turns, drop middle tool results, rewrite
+                    // the NDJSON file atomically, and emit a report
+                    // so the TUI can rebuild its display.
+                    let history = self.conversation.all();
+                    let result = crate::session::prompt::PromptBuilder::compact(history);
+                    if let Err(e) = self.conversation.replace_all(result.new_messages.clone()) {
+                        let _ = event_tx.send(TurnEvent::Error(format!(
+                            "Compaction failed: {}", e
+                        )));
+                    } else {
+                        let _ = event_tx.send(TurnEvent::CompactionReport {
+                            new_messages: result.new_messages.clone(),
+                            dropped_tool_results: result.dropped_tool_results,
+                            condensed_assistant_turns: result.condensed_assistant_turns,
+                            original_count: result.original_count,
+                            compacted_count: result.compacted_count,
+                        });
+                    }
                 }
                 Some(input) = input_rx.recv() => {
                     cancelled.store(false, Ordering::SeqCst);
@@ -468,10 +525,62 @@ impl Executor {
                                 }
                             };
 
-                            // Check if destructive and needs approval
+                            // Check if destructive and needs approval.
+                            //
+                            // **v1.2-p12 — permission rules.** The binary
+                            // `auto_approve` flag still sets the default
+                            // action (true → Allow, false → Ask), but
+                            // `permission_rules` can override on a per-call
+                            // basis. First matching rule wins; a `Deny`
+                            // rule aborts the call without any prompt; an
+                            // `Allow` rule skips the prompt; an `Ask`
+                            // rule (or no match) falls through to the
+                            // normal approval flow.
                             let is_destructive =
                                 matches!(tc.name.as_str(), "write_file" | "edit_file" | "bash");
-                            let needs_approval = is_destructive && !self.config.auto_approve;
+                            let default_action = if self.config.auto_approve {
+                                PermissionAction::Allow
+                            } else {
+                                PermissionAction::Ask
+                            };
+                            let action = evaluate(
+                                &self.config.permission_rules,
+                                &tc.name,
+                                &tc.arguments,
+                                default_action,
+                            );
+                            let needs_approval =
+                                is_destructive && matches!(action, PermissionAction::Ask);
+
+                            if matches!(action, PermissionAction::Deny) && is_destructive {
+                                // Rule denied this specific call — no
+                                // prompt, just refuse and tell the model.
+                                let reason = format!(
+                                    "❌ Permission rule denied {}:{}={}",
+                                    tc.name,
+                                    tc.arguments
+                                        .as_object()
+                                        .and_then(|o| o.keys().next().map(|s| s.as_str()))
+                                        .unwrap_or(""),
+                                    tc.arguments
+                                        .as_object()
+                                        .and_then(|o| o.values().next())
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or(""),
+                                );
+                                events.push(TurnEvent::ToolResult {
+                                    name: tc.name.clone(),
+                                    output: reason.clone(),
+                                });
+                                self.conversation.append(Message {
+                                    role: Role::Tool,
+                                    content: reason,
+                                    tool_call_id: Some(tc.id.clone()),
+                                    tool_name: Some(tc.name.clone()),
+                                    ..Default::default()
+                                })?;
+                                continue;
+                            }
 
                             if needs_approval {
                                 // Request approval from the UI
@@ -488,7 +597,28 @@ impl Executor {
                                     Ok(ApprovalResponse::Approved) => true,
                                     Ok(ApprovalResponse::Denied) => false,
                                     Ok(ApprovalResponse::AlwaysApprove) => {
-                                        self.config.auto_approve = true;
+                                        // **v1.2-p13 — permission rule persistence.**
+                                        // Build a rule matching THIS specific call (tool
+                                        // name + the key argument — e.g. `command` for
+                                        // bash, `path` for edit_file) and push it into
+                                        // the session's `permission_rules`. Future calls
+                                        // matching this rule will skip the approval
+                                        // dialog entirely. The TUI side ALSO persists
+                                        // (so the rule survives across sessions via
+                                        // `save_config`); this in-memory push keeps
+                                        // the rest of THIS turn consistent.
+                                        //
+                                        // **Deliberately does NOT flip `auto_approve`.**
+                                        // The user asked for "always this specific
+                                        // command" — not "always everything". The old
+                                        // `auto_approve = true` was a blanket bypass
+                                        // that the new per-call rules replace.
+                                        let rule =
+                                            crate::shared::permission::suggest_rule(
+                                                &tc.name,
+                                                &tc.arguments,
+                                            );
+                                        push_rule_unique(&mut self.config.permission_rules, rule);
                                         true
                                     }
                                     Err(_) => false,
@@ -693,8 +823,27 @@ impl Executor {
                                             Ok(ApprovalResponse::Approved) => true,
                                             Ok(ApprovalResponse::Denied) => false,
                                             Ok(ApprovalResponse::AlwaysApprove) => {
-                                                // Don't propagate to auto_approve — this is
-                                                // pattern-specific, not blanket bash approval
+                                                // **v1.2-p13 — also persist here.** The
+                                                // read-only-bash approval flow runs under
+                                                // `auto_approve: true` (because the command
+                                                // was classified as read-only), so the user
+                                                // sees the dialog and can hit `[A]lways` to
+                                                // "make this the rule". Same persistence as
+                                                // the main site — push the matching rule into
+                                                // `permission_rules` for future sessions.
+                                                //
+                                                // We deliberately do NOT touch
+                                                // `auto_approve` (it's already true, but the
+                                                // rule is the more-specific record of the
+                                                // user's intent).
+                                                let rule = crate::shared::permission::suggest_rule(
+                                                    &tc.name,
+                                                    &tc.arguments,
+                                                );
+                                                push_rule_unique(
+                                                    &mut self.config.permission_rules,
+                                                    rule,
+                                                );
                                                 true
                                             }
                                             Err(_) => false,
@@ -892,6 +1041,7 @@ pub struct ApprovalRequest {
     pub response: tokio::sync::oneshot::Sender<ApprovalResponse>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
 pub enum ApprovalResponse {
     Approved,
     Denied,
@@ -921,6 +1071,18 @@ pub enum TurnEvent {
         completion_tokens: usize,
         turn_cost: f64,
         cumulative_cost: f64,
+    },
+    /// Emitted when a `/compact` request has finished processing.
+    /// `new_messages` is the compacted history that the TUI should
+    /// use to rebuild its display. The executor's own
+    /// `self.conversation` is already pointing at this new list
+    /// (and the on-disk log has been atomically rewritten).
+    CompactionReport {
+        new_messages: Vec<crate::shared::Message>,
+        dropped_tool_results: usize,
+        condensed_assistant_turns: usize,
+        original_count: usize,
+        compacted_count: usize,
     },
 }
 
@@ -1393,6 +1555,7 @@ mod tests {
             follow_symlinks: false,
             block_binary_reads: false,
             carryover_enabled: false,
+            permission_rules: vec![],
         }
     }
 
@@ -1615,6 +1778,223 @@ mod tests {
         // Should have a denied-message result
         let denied = events.iter().any(|e| matches!(e, TurnEvent::ToolResult { name, output } if name == "bash" && output.contains("denied")));
         assert!(denied, "Should report that operation was denied");
+    }
+
+    /// **v1.2-p13 — `[A]lways` should push a permission rule, NOT
+    /// flip `auto_approve`.** The old code did `self.config.auto_approve
+    /// = true;` which was a blanket bypass for the rest of the session.
+    /// The new code builds a rule matching THIS specific call and
+    /// pushes it into `permission_rules`, so future matching calls
+    /// skip the dialog but unrelated destructive calls still ask.
+    #[tokio::test]
+    async fn test_always_approve_pushes_permission_rule_not_auto_approve() {
+        let captured = Arc::new(Mutex::new(None));
+        let tool = MockTool {
+            def: ToolDef {
+                name: "bash".into(),
+                description: "run a command".into(),
+                parameters: serde_json::json!({"type": "object", "properties": {"command": {"type": "string"}}}),
+            },
+            captured_args: captured.clone(),
+            outcome: ToolOutcome::Success { content: "ran!".into() },
+        };
+
+        let adapter = MockAdapter::new(
+            vec![
+                StreamEvent::ToolCall(ToolInvocation {
+                    id: "call-1".into(),
+                    name: "bash".into(),
+                    arguments: serde_json::json!({"command": "cargo test --release"}),
+                }),
+                StreamEvent::Done {
+                    finish_reason: FinishReason::ToolCalls,
+                    usage: None,
+                },
+            ],
+            make_info(),
+        );
+
+        let (approval_tx, mut approval_rx) = mpsc::unbounded_channel();
+        let approval_handle = tokio::spawn(async move {
+            let req: ApprovalRequest = approval_rx.recv().await.unwrap();
+            // User hit `[A]lways`.
+            let _ = req.response.send(ApprovalResponse::AlwaysApprove);
+        });
+
+        // Start with auto_approve = false and an empty permission_rules
+        // list — the realistic starting state.
+        let config = make_config(false);
+        assert!(config.permission_rules.is_empty());
+        assert!(!config.auto_approve);
+
+        let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], config);
+        let _events = exe.run_turn("run tests", &approval_tx, never_cancelled()).await.unwrap();
+        approval_handle.await.unwrap();
+
+        // **The new rule must be in permission_rules.**
+        assert_eq!(
+            exe.config.permission_rules.len(),
+            1,
+            "AlwaysApprove should have appended exactly one rule, got {:?}",
+            exe.config.permission_rules
+        );
+        let r = &exe.config.permission_rules[0];
+        assert_eq!(r.tool, "bash");
+        assert_eq!(r.key, "command");
+        assert_eq!(r.pattern, "cargo test --release");
+        assert_eq!(r.action, PermissionAction::Allow);
+
+        // **auto_approve must NOT have been flipped.** This is the
+        // regression guard for the old buggy behaviour.
+        assert!(
+            !exe.config.auto_approve,
+            "AlwaysApprove should NOT flip auto_approve — the new rule is the user's intent"
+        );
+    }
+
+    /// Hitting `[A]lways` twice on the same call should NOT add a
+    /// duplicate rule. This is the in-memory counterpart to the TUI
+    /// `push_rule_unique` test — both sites use the same dedup
+    /// strategy, and both should be regression-tested.
+    #[tokio::test]
+    async fn test_always_approve_dedups_repeated_calls() {
+        let captured = Arc::new(Mutex::new(None));
+        let tool = MockTool {
+            def: ToolDef {
+                name: "bash".into(),
+                description: "run a command".into(),
+                parameters: serde_json::json!({"type": "object", "properties": {"command": {"type": "string"}}}),
+            },
+            captured_args: captured.clone(),
+            outcome: ToolOutcome::Success { content: "ran!".into() },
+        };
+
+        let adapter = MockAdapter::new(
+            vec![
+                StreamEvent::ToolCall(ToolInvocation {
+                    id: "call-1".into(),
+                    name: "bash".into(),
+                    arguments: serde_json::json!({"command": "ls"}),
+                }),
+                StreamEvent::Done {
+                    finish_reason: FinishReason::ToolCalls,
+                    usage: None,
+                },
+            ],
+            make_info(),
+        );
+
+        let (approval_tx, mut approval_rx) = mpsc::unbounded_channel::<ApprovalRequest>();
+        // `drop(approval_tx)` at the end of this test closes the
+        // channel, which makes the spawned `approval_rx.recv()`
+        // return `None` and complete. In THIS test the pre-populated
+        // `Allow` rule on `bash:command=ls` short-circuits the
+        // approval flow (action = Allow, needs_approval = false),
+        // so the spawned task never receives an `ApprovalRequest` —
+        // we rely on the channel-close to unblock it.
+        let approval_handle = tokio::spawn(async move {
+            while let Some(req) = approval_rx.recv().await {
+                // Rule short-circuited — no approval will ever be
+                // sent. We still handle it defensively in case the
+                // test author changes the rule setup.
+                let _ = req.response.send(ApprovalResponse::AlwaysApprove);
+            }
+        });
+
+        let config = make_config(false);
+        // Pre-populate with the EXACT rule that suggest_rule would
+        // build for `bash:command=ls`. The dedup should leave it
+        // untouched (and not add a duplicate).
+        let mut config = config;
+        config.permission_rules.push(crate::shared::permission::PermissionRule {
+            tool: "bash".into(),
+            key: "command".into(),
+            pattern: "ls".into(),
+            action: PermissionAction::Allow,
+        });
+        assert_eq!(config.permission_rules.len(), 1);
+
+        let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], config);
+        let _events = exe.run_turn("list", &approval_tx, never_cancelled()).await.unwrap();
+        drop(approval_tx);
+        approval_handle.await.unwrap();
+
+        // Still exactly one rule — no duplicate added.
+        assert_eq!(
+            exe.config.permission_rules.len(),
+            1,
+            "AlwaysApprove should dedup against an existing identical rule"
+        );
+    }
+
+    /// User-written `Deny` rule should NOT be overwritten by an
+    /// `Allow` from `[A]lways` on the same pattern. The dedup logic
+    /// preserves the EXISTING rule's action. This catches a "user
+    /// denies `rm -rf` then accidentally allows it by hitting
+    /// `[A]lways`" footgun.
+    #[tokio::test]
+    async fn test_always_approve_does_not_overwrite_existing_deny() {
+        let captured = Arc::new(Mutex::new(None));
+        let tool = MockTool {
+            def: ToolDef {
+                name: "bash".into(),
+                description: "run a command".into(),
+                parameters: serde_json::json!({"type": "object", "properties": {"command": {"type": "string"}}}),
+            },
+            captured_args: captured.clone(),
+            outcome: ToolOutcome::Success { content: "ran!".into() },
+        };
+
+        let adapter = MockAdapter::new(
+            vec![
+                StreamEvent::ToolCall(ToolInvocation {
+                    id: "call-1".into(),
+                    name: "bash".into(),
+                    arguments: serde_json::json!({"command": "rm -rf build"}),
+                }),
+                StreamEvent::Done {
+                    finish_reason: FinishReason::ToolCalls,
+                    usage: None,
+                },
+            ],
+            make_info(),
+        );
+
+        let (approval_tx, mut approval_rx) = mpsc::unbounded_channel::<ApprovalRequest>();
+        // Same pattern as the dedup test above: the pre-populated
+        // `Deny` rule on `rm -rf build` short-circuits the approval
+        // flow (action = Deny → refuses without prompting), so the
+        // spawned task never receives an `ApprovalRequest`. We make
+        // the receiver robust to channel close + drop the sender
+        // after the turn to unblock `recv()`.
+        let approval_handle = tokio::spawn(async move {
+            while let Some(req) = approval_rx.recv().await {
+                let _ = req.response.send(ApprovalResponse::AlwaysApprove);
+            }
+        });
+
+        let mut config = make_config(false);
+        // User previously DENIED this exact command (a sensible config).
+        config.permission_rules.push(crate::shared::permission::PermissionRule {
+            tool: "bash".into(),
+            key: "command".into(),
+            pattern: "rm -rf build".into(),
+            action: PermissionAction::Deny,
+        });
+
+        let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], config);
+        let _events = exe.run_turn("clean", &approval_tx, never_cancelled()).await.unwrap();
+        drop(approval_tx);
+        approval_handle.await.unwrap();
+
+        // Still exactly one rule, and it's still Deny — the user's
+        // explicit Deny was preserved over the AlwaysApprove's Allow.
+        assert_eq!(exe.config.permission_rules.len(), 1);
+        assert_eq!(
+            exe.config.permission_rules[0].action,
+            PermissionAction::Deny,
+            "Existing Deny should not be overwritten by a new Allow on the same pattern"
+        );
     }
 
     #[tokio::test]

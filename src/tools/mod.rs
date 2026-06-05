@@ -1,5 +1,6 @@
 pub mod bash;
 pub mod bash_cancel;
+pub mod bash_minify;
 pub mod bash_status;
 pub mod edit_file;
 pub mod glob;

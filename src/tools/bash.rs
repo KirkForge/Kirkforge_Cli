@@ -1,5 +1,6 @@
 use crate::session::bash_jobs::global_registry;
 use crate::shared::{ToolDef, ToolOutcome};
+use crate::tools::bash_minify;
 use crate::tools::Tool;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -79,10 +80,41 @@ impl Tool for Bash {
             match result {
                 Ok(output) => {
                     if output.status.success() {
-                        ToolOutcome::Success {
-                            content: output.stdout,
-                        }
+                        // v1.2 phase 21: if the command was a file-dump
+                        // (cat, head, tail, etc.) into a known source file,
+                        // route the captured stdout through the same
+                        // minifier read_file uses. The cache is keyed on
+                        // (path, mtime) so this is essentially free when
+                        // the model has already called read_file on the
+                        // same path earlier in the session.
+                        let content = bash_minify::try_minify_bash_output(&cmd, &output.stdout)
+                            .unwrap_or(output.stdout);
+                        // v1.2 phase 22: if the command was a build
+                        // (cargo build/test/check/clippy, rustc) and
+                        // produced the canonical cargo progress + warning
+                        // output, collapse the noise (compilation
+                        // progress lines, repeated warning suggestion
+                        // blocks) while keeping all errors and their
+                        // context intact. A 400-line `cargo build` log
+                        // can typically be reduced to ~50 lines.
+                        let content = bash_minify::try_minify_build_log(&cmd, &content)
+                            .unwrap_or(content);
+                        ToolOutcome::Success { content }
                     } else {
+                        // Error path: stdout is often the *real* signal on a
+                        // failing build (rustc prints diagnostics to stdout
+                        // with `--message-format=human`, which is the default).
+                        // Route it through the same minifiers the success path
+                        // uses — they have the same 20%-savings guard, so a
+                        // short error message passes through unchanged. Stderr
+                        // stays verbatim: it usually contains raw error text
+                        // (`error: command not found`, segfault traces) that's
+                        // already small and where minification heuristics are
+                        // more likely to drop the wrong line.
+                        let minified_stdout = bash_minify::try_minify_bash_output(&cmd, &output.stdout)
+                            .unwrap_or_else(|| output.stdout.clone());
+                        let minified_stdout = bash_minify::try_minify_build_log(&cmd, &minified_stdout)
+                            .unwrap_or(minified_stdout);
                         let stderr = if output.stderr.is_empty() {
                             String::new()
                         } else {
@@ -93,7 +125,7 @@ impl Tool for Bash {
                                 "Command exited with code {}{}\nstdout:\n{}",
                                 output.status.code().unwrap_or(-1),
                                 stderr,
-                                output.stdout
+                                minified_stdout
                             ),
                         }
                     }

@@ -76,7 +76,7 @@ pub fn render_chat(f: &mut Frame, area: Rect, state: &mut AppState) {
     }
 
     // Conversation messages
-    for entry in &state.messages {
+    for (idx, entry) in state.messages.iter().enumerate() {
         let role_style = match entry.role.as_str() {
             "user" => Style::default()
                 .fg(Color::Cyan)
@@ -85,7 +85,9 @@ pub fn render_chat(f: &mut Frame, area: Rect, state: &mut AppState) {
                 .fg(Color::Green)
                 .add_modifier(Modifier::BOLD),
             "system" => Style::default().fg(Color::DarkGray),
-            "tool" => Style::default().fg(Color::Yellow),
+            "tool" => Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::DIM),
             "thinking" => Style::default()
                 .fg(Color::Magenta)
                 .add_modifier(Modifier::DIM),
@@ -93,6 +95,93 @@ pub fn render_chat(f: &mut Frame, area: Rect, state: &mut AppState) {
         };
 
         let time_str = entry.timestamp.format("%H:%M:%S").to_string();
+        let content_width = (area.width as usize).saturating_sub(4);
+
+        // ── Tool entries: collapse vs expand ─────────────────
+        // When collapsed (default), show only the summary line in a
+        // dim yellow box. When expanded, show the full stored output.
+        if entry.role == "tool" {
+            if state.tool_should_collapse(idx) {
+                // Collapsed: one-line summary in a subtle box
+                let expanded_marker = if state.tool_collapsed {
+                    ""
+                } else {
+                    " (showing all)"
+                };
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        format!(" {} ", time_str),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                    Span::styled(
+                        "tool",
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::DIM),
+                    ),
+                ]));
+                lines.push(Line::from(vec![Span::styled(
+                    format!("  ┌─ {}{} ", entry.content, expanded_marker),
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::DIM),
+                )]));
+                lines.push(Line::from(vec![Span::styled(
+                    "  └─ [Enter or Tab to expand, Ctrl+T to toggle all]",
+                    Style::default()
+                        .fg(Color::DarkGray)
+                        .add_modifier(Modifier::DIM),
+                )]));
+                lines.push(Line::from(""));
+                continue;
+            }
+            // Expanded: render the full tool output (from sidecar if present)
+            let full = entry
+                .tool_output
+                .as_deref()
+                .unwrap_or(entry.content.as_str());
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!(" {} ", time_str),
+                    Style::default().fg(Color::DarkGray),
+                ),
+                Span::styled(
+                    "tool",
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    " (expanded — Enter or Tab to collapse)",
+                    Style::default()
+                        .fg(Color::DarkGray)
+                        .add_modifier(Modifier::DIM),
+                ),
+            ]));
+            // Open box
+            lines.push(Line::from(vec![Span::styled(
+                "  ┌─",
+                Style::default().fg(Color::Yellow),
+            )]));
+            for content_line in full.lines() {
+                let wrapped = textwrap::fill(content_line, content_width.saturating_sub(4));
+                for wline in wrapped.lines() {
+                    lines.push(Line::from(vec![Span::styled(
+                        format!("  │ {}", wline),
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::DIM),
+                    )]));
+                }
+            }
+            // Close box
+            lines.push(Line::from(vec![Span::styled(
+                "  └─",
+                Style::default().fg(Color::Yellow),
+            )]));
+            lines.push(Line::from(""));
+            continue;
+        }
 
         lines.push(Line::from(vec![
             Span::styled(
@@ -101,9 +190,6 @@ pub fn render_chat(f: &mut Frame, area: Rect, state: &mut AppState) {
             ),
             Span::styled(entry.role.to_string(), role_style),
         ]));
-
-        // Wrap content to available width
-        let content_width = (area.width as usize).saturating_sub(4);
 
         // Assistant messages get markdown rendering; everything else is plain text
         if entry.role == "assistant" {
@@ -121,7 +207,7 @@ pub fn render_chat(f: &mut Frame, area: Rect, state: &mut AppState) {
                 lines.push(Line::from(padded));
             }
         } else {
-            // Plain text wrapping for user/tool/system messages
+            // Plain text wrapping for user/system/thinking messages
             let wrapped = textwrap::fill(&entry.content, content_width);
             for content_line in wrapped.lines() {
                 lines.push(Line::from(Span::styled(
@@ -159,6 +245,10 @@ pub fn render_chat(f: &mut Frame, area: Rect, state: &mut AppState) {
     let visible_height = (area.height as usize).saturating_sub(3);
     let total_lines = lines.len();
     let max_scroll = total_lines.saturating_sub(visible_height);
+
+    // Publish max_scroll to AppState so key handlers (PgUp/PgDn) can
+    // clamp immediately without waiting for the next render.
+    state.max_scroll = max_scroll;
 
     // Auto-scroll: if enabled, pin to the bottom (latest messages).
     if state.auto_scroll {

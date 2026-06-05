@@ -1,6 +1,6 @@
 /// Status bar — model info, token counts, connection state.
 use crate::tui::app::{AppState, ConnectionState};
-use crate::tui::rendering::{format_duration, format_token_count};
+use crate::tui::rendering::{format_budget_indicator, format_duration, format_token_count};
 use ratatui::{
     layout::Rect,
     style::{Color, Style},
@@ -40,22 +40,59 @@ pub fn render_status(f: &mut Frame, area: Rect, state: &AppState) {
     } else {
         String::new()
     };
-    let right_info = format!(
-        "{} ↑{} ↓{} {} │ {} ",
-        if skills_str.is_empty() {
-            String::new()
-        } else {
-            format!("{} ", skills_str)
-        },
-        format_token_count(state.tokens_sent),
-        format_token_count(state.tokens_received),
-        cost_str,
-        elapsed,
-    );
 
-    let left_len = left_info.content.len();
-    let space = if area.width as usize > left_len + right_info.len() + 2 {
-        area.width as usize - left_len - right_info.len()
+    // ── Budget indicator (v1.2-p6) ─────────────────────────────────
+    // If we have both a connected model and a non-zero per-turn
+    // prompt size, show "↑12.4K/128K (10%)" with a color that tells
+    // the user when /compact is a good idea. Otherwise fall back to
+    // the plain "↑12.4K" cumulative display (pre-first-turn, or no
+    // model connected, or no max_context_tokens configured).
+    let max_ctx = state
+        .model_info
+        .as_ref()
+        .map(|m| m.max_context_tokens)
+        .unwrap_or(0);
+    let sent_span: Span = if state.last_turn_prompt_tokens > 0 && max_ctx > 0 {
+        let (text, color) = format_budget_indicator(state.last_turn_prompt_tokens, max_ctx);
+        Span::styled(format!("↑{} ", text), Style::default().fg(color))
+    } else {
+        Span::styled(
+            format!("↑{} ", format_token_count(state.tokens_sent)),
+            Style::default().fg(Color::DarkGray),
+        )
+    };
+    let received_span = Span::styled(
+        format!("↓{} ", format_token_count(state.tokens_received)),
+        Style::default().fg(Color::DarkGray),
+    );
+    let cost_span = Span::styled(cost_str.clone(), Style::default().fg(Color::DarkGray));
+    let elapsed_span = Span::styled(elapsed.clone(), Style::default().fg(Color::DarkGray));
+    let skills_span: Span = if skills_str.is_empty() {
+        Span::raw(String::new())
+    } else {
+        Span::styled(
+            format!("{} ", skills_str),
+            Style::default().fg(Color::DarkGray),
+        )
+    };
+
+    // Compute the spacer width from the actual rendered span widths.
+    // `Span::content` is the unstyled text length; we use that for
+    // layout math and rebuild with the styled spans for display.
+    let right_visible_len: usize = [
+        skills_span.content.chars().count(),
+        sent_span.content.chars().count(),
+        received_span.content.chars().count(),
+        cost_span.content.chars().count(),
+        elapsed_span.content.chars().count(),
+        // " │ " separator between cost/elapsed
+        3,
+    ]
+    .iter()
+    .sum();
+    let left_len = left_info.content.chars().count();
+    let space = if area.width as usize > left_len + right_visible_len + 2 {
+        area.width as usize - left_len - right_visible_len
     } else {
         1
     };
@@ -64,8 +101,25 @@ pub fn render_status(f: &mut Frame, area: Rect, state: &AppState) {
 
     let line = Line::from(vec![
         left_info,
+        Span::styled(
+            " [Ctrl+T: tool collapse ".to_string()
+                + if state.tool_collapsed { "ON" } else { "OFF" }
+                + "] ",
+            Style::default()
+                .fg(if state.tool_collapsed {
+                    Color::Green
+                } else {
+                    Color::DarkGray
+                })
+                .bg(Color::Black),
+        ),
         Span::styled(spacing, Style::default()),
-        Span::styled(right_info, Style::default().fg(Color::DarkGray)),
+        skills_span,
+        sent_span,
+        received_span,
+        cost_span,
+        Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
+        elapsed_span,
     ]);
 
     let paragraph = Paragraph::new(line).style(Style::default().bg(Color::Black).fg(Color::White));

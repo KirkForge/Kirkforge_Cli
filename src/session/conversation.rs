@@ -43,6 +43,41 @@ impl ConversationLog {
         Ok(())
     }
 
+    /// Replace the in-memory message list and rewrite the log file
+    /// atomically. Used by `/compact` to persist the compacted history
+    /// so a future `conversation_log().all()` sees the new messages.
+    ///
+    /// Atomicity: we write to `<path>.tmp` first, then rename. A crash
+    /// mid-rewrite either leaves the old log intact (if the rename
+    /// hasn't happened) or the new log fully written — never a
+    /// half-truncated file.
+    ///
+    /// The original full conversation is lost from the log (it lives
+    /// on in the TUI's `ConversationEntry::tool_output` sidecars for
+    /// tool results, and in `Role::Assistant` condensed messages as
+    /// first-500-chars previews). This is by design — `/compact` is a
+    /// destructive user action that explicitly opts in to losing
+    /// context.
+    pub fn replace_all(&mut self, messages: Vec<Message>) -> anyhow::Result<()> {
+        use std::io::Write;
+        let tmp_path = self.path.with_extension("ndjson.tmp");
+        {
+            let mut file = std::fs::OpenOptions::new()
+                .create(true)
+                .truncate(true)
+                .write(true)
+                .open(&tmp_path)?;
+            for msg in &messages {
+                let line = serde_json::to_string(msg)?;
+                writeln!(file, "{}", line)?;
+            }
+            file.sync_all()?;
+        }
+        std::fs::rename(&tmp_path, &self.path)?;
+        self.messages = messages;
+        Ok(())
+    }
+
     /// All messages in the conversation.
     pub fn all(&self) -> &[Message] {
         &self.messages

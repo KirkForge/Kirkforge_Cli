@@ -1,10 +1,11 @@
 pub mod minify;
+pub mod permission;
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 /// The core unit of conversation — one turn from any participant.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct Message {
     #[serde(default)]
     pub role: Role,
@@ -33,7 +34,7 @@ pub enum Role {
 }
 
 /// A tool call emitted by the model.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ToolInvocation {
     pub id: String,
     pub name: String,
@@ -100,6 +101,23 @@ pub struct Config {
     pub default_model: String,
     pub ollama_host: String,
     pub auto_approve: bool,
+    /// Per-tool permission rules — v1.2-p12. When non-empty, these
+    /// are evaluated (first match wins) **before** the binary
+    /// `auto_approve` default is applied. With empty rules, behaviour
+    /// is identical to the pre-p12 flow (`auto_approve: true` → Allow,
+    /// `auto_approve: false` → Ask).
+    ///
+    /// Wire shape: `[[permission_rules]]` in TOML, e.g.
+    ///
+    /// ```toml
+    /// [[permission_rules]]
+    /// tool = "bash"
+    /// key = "command"
+    /// pattern = "cargo test*"
+    /// action = "allow"
+    /// ```
+    #[serde(default)]
+    pub permission_rules: Vec<crate::shared::permission::PermissionRule>,
     pub truncation_strategy: TruncationStrategy,
     pub max_tool_result_chars: usize,
 
@@ -149,6 +167,7 @@ impl Default for Config {
             default_model: "deepseek-v4-flash:cloud".into(),
             ollama_host: "http://localhost:11434".into(),
             auto_approve: false,
+            permission_rules: vec![],
             truncation_strategy: TruncationStrategy::KeepToolOnly,
             max_tool_result_chars: 4000,
             deny_paths: vec![],

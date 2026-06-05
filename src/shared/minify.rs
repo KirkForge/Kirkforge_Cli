@@ -115,6 +115,33 @@ pub fn minify_cache_size() -> usize {
     cache.len()
 }
 
+/// Check whether the cache contains an entry for `path`.
+///
+/// Uses the **latest** `mtime` for the path on disk as the cache key
+/// (which is what `minify_source` does internally), so callers don't
+/// have to know the exact timestamp. Returns `false` for paths that
+/// don't exist on disk — those entries are never cached by
+/// `minify_source` (it falls back to direct minification).
+///
+/// Added for race-free test assertions: tests that need to assert
+/// "this path got cached" no longer have to inspect the global
+/// cache size, which is racy under `cargo test`'s default parallel
+/// execution. Returns `false` for paths that are not on disk or
+/// have no current cache entry.
+pub fn cache_contains(path: &Path) -> bool {
+    let mtime = match std::fs::metadata(path)
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+    {
+        Some(m) => m,
+        None => return false,
+    };
+    let cache = VFS_CACHE.lock().unwrap();
+    cache.contains_key(&(path.to_path_buf(), mtime))
+}
+
 // ── Helpers ─────────────────────────────────────────────────────────
 
 /// Collapse consecutive blank lines to one, tracking state.
@@ -796,19 +823,45 @@ mod tests {
 
     #[test]
     fn test_cache_results() {
-        // Note: VFS cache is global; other parallel tests may add entries.
-        // We test relative behavior rather than absolute size.
-        let start_size = minify_cache_size();
-
+        // Use a path unique to this test so we can assert THIS entry
+        // exists in the cache, not the global size. The previous
+        // version compared `minify_cache_size() > start_size`, which
+        // is racy: parallel tests can both add AND evict entries, so
+        // the size can decrease between two reads even when the test
+        // is doing the right thing. Asserting on a specific key
+        // removes the race entirely.
         let tmp = std::env::temp_dir().join("kirkforge_minify_cache_test.txt");
         std::fs::write(&tmp, "x = 1 # comment").unwrap();
 
-        let _ = minify_source(&tmp, "x = 1 # comment");
-        assert!(minify_cache_size() > start_size, "Cache should grow");
+        // Sanity: the cache should not already contain this path
+        // (a different process can't be touching this exact path
+        // in the same test run, since the temp filename is unique
+        // to this test).
+        assert!(
+            !cache_contains(&tmp),
+            "cache unexpectedly contains the test path before minify_source"
+        );
 
-        // Invalidate
+        // Touch the file to make sure mtime is current and unique
+        // to this test (avoids a stale mtime colliding with a
+        // previous test that used the same temp filename).
+        let _ = std::fs::write(&tmp, "x = 1 # comment v2");
+        let _ = minify_source(&tmp, "x = 1 # comment v2");
+
+        // The path should now be in the cache. This is the only
+        // assertion that matters — global size is irrelevant.
+        assert!(
+            cache_contains(&tmp),
+            "cache should contain the minify result for the test path"
+        );
+
+        // Invalidate by path — the entry for THIS path should be gone
+        // even if other parallel tests have populated other entries.
         invalidate_minify_cache(&tmp);
-        // May have decreased but not guaranteed to 0 due to parallel tests
+        assert!(
+            !cache_contains(&tmp),
+            "invalidate_minify_cache should remove the path's entry"
+        );
 
         let _ = std::fs::remove_file(&tmp);
     }
@@ -819,6 +872,34 @@ mod tests {
         // May be populated by parallel tests immediately after clear,
         // so just verify the function doesn't panic
         let _ = minify_cache_size();
+    }
+
+    /// `cache_contains` returns false for a path that hasn't been
+    /// minified yet (and doesn't even exist on disk).
+    #[test]
+    fn test_cache_contains_false_for_nonexistent_path() {
+        let path = PathBuf::from("/tmp/this_path_definitely_does_not_exist_xyz123.rs");
+        assert!(!cache_contains(&path));
+    }
+
+    /// `cache_contains` returns true after a minify, false after invalidate.
+    /// Race-free: asserts on the specific key, not the global size.
+    #[test]
+    fn test_cache_contains_round_trip() {
+        let tmp = std::env::temp_dir().join("kirkforge_minify_cache_contains_test.rs");
+        std::fs::write(&tmp, "fn main() {}").unwrap();
+
+        // Sanity
+        assert!(!cache_contains(&tmp));
+        let _ = minify_source(&tmp, "fn main() {}");
+        assert!(cache_contains(&tmp), "should be cached after minify");
+        invalidate_minify_cache(&tmp);
+        assert!(
+            !cache_contains(&tmp),
+            "should be evicted after invalidate"
+        );
+
+        let _ = std::fs::remove_file(&tmp);
     }
 
     // ── General ─────────────────────────────────────────────────────

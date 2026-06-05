@@ -226,7 +226,7 @@ mod tests {
     #[test]
     fn test_env_overrides_model() {
         let mut cfg = Config::default();
-        assert_eq!(cfg.default_model, "glm-5.1:cloud");
+        assert_eq!(cfg.default_model, "deepseek-v4-flash:cloud");
 
         set_env("KIRKFORGE_MODEL", Some("deepseek-v4:cloud"));
         apply_env_overrides(&mut cfg);

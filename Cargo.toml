@@ -59,6 +59,10 @@ chrono = "0.4"
 # Text wrapping for chat display
 textwrap = "0.16"
 
+[dev-dependencies]
+# Test-only: create real temporary files for @-mention expansion tests
+tempfile = "3"
+
 [profile.release]
 opt-level = "z"
 lto = true

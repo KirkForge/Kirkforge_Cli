@@ -266,6 +266,36 @@ async fn run_non_interactive(
                     println!("{}", serde_json::to_string(&line).unwrap());
                 }
             }
+            session::executor::TurnEvent::CompactionReport {
+                dropped_tool_results,
+                condensed_assistant_turns,
+                original_count,
+                compacted_count,
+                ..
+            } => {
+                // Headless mode: the executor has already atomically
+                // rewritten the NDJSON log and updated its in-memory
+                // conversation. We just need to surface the outcome
+                // to the user / machine consumer.
+                if output == crate::shared::OutputFormat::Text {
+                    eprintln!(
+                        "\n[compaction] {} → {} messages, dropped {} tool result(s), condensed {} assistant turn(s).",
+                        original_count,
+                        compacted_count,
+                        dropped_tool_results,
+                        condensed_assistant_turns,
+                    );
+                } else if output == crate::shared::OutputFormat::StreamJson {
+                    let line = serde_json::json!({
+                        "type": "compaction",
+                        "original_count": original_count,
+                        "compacted_count": compacted_count,
+                        "dropped_tool_results": dropped_tool_results,
+                        "condensed_assistant_turns": condensed_assistant_turns,
+                    });
+                    println!("{}", serde_json::to_string(&line).unwrap());
+                }
+            }
         }
     }
 

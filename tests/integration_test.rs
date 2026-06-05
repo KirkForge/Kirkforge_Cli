@@ -86,7 +86,7 @@ async fn test_basic_streaming_response() {
                 continue;
             }
 
-            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&line) {
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
                 if let Some(content) = json["message"]["content"].as_str() {
                     full_text.push_str(content);
                 }

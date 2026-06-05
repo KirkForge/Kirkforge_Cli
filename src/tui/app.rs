@@ -41,6 +41,11 @@ pub struct AppState {
     /// back to the bottom.
     pub auto_scroll: bool,
 
+    /// Maximum valid scroll offset, set each render in widgets/chat.rs.
+    /// Used by key handlers (PgUp/PgDn/Up/Down) to clamp scroll_offset
+    /// *before* the next render so off-by-N flashes are avoided.
+    pub max_scroll: usize,
+
     /// Thinking panel (collapsible)
     pub thinking_panel_visible: bool,
     pub thinking_buffer: Vec<String>,
@@ -88,6 +93,51 @@ pub struct AppState {
     /// Set of background job IDs that have already been notified as completed.
     /// Used to avoid repeated notifications for the same job.
     pub notified_jobs: std::collections::HashSet<u64>,
+
+    // ── Tool output collapse (v1.1) ───────────────────────────────
+    /// When true, long tool entries are collapsed to a one-line summary.
+    /// Toggled with Ctrl+T. Default true so the chat view is never flooded
+    /// by default — users opt in to the full flood.
+    pub tool_collapsed: bool,
+
+    /// Per-index expansion override: even when `tool_collapsed` is true,
+    /// an entry whose index is in this set renders in full. Allows users
+    /// to expand specific tool results they want to inspect.
+    pub expanded_tools: std::collections::HashSet<usize>,
+
+    // ── Approval dialog scroll (v1.2-p11) ──────────────────────────────
+    /// Vertical scroll offset into the args preview, in lines.
+    /// 0 = top of args. Set by the approval-mode key handler
+    /// (PageUp/PageDown/Up/Down/Home/End). Reset to 0 in
+    /// `drain_approval_requests` whenever a new approval arrives.
+    /// Lives on AppState (not PendingApproval) so a deny-then-replace
+    /// cycle naturally re-zeroes it via the existing take/replace path.
+    pub approval_scroll: usize,
+
+    /// Max valid scroll offset for the current approval's args preview.
+    /// Set each render in `render_approval_dialog` from the actual
+    /// wrapped-line count minus the visible window. Used by the
+    /// key handler to clamp scroll BEFORE the next render (same
+    /// off-by-N pattern as `max_scroll` for the chat view).
+    pub approval_max_scroll: usize,
+
+    // ── Budget indicator (v1.2-p6) ─────────────────────────────────
+    /// The prompt token count of the most recent turn.
+    ///
+    /// This is the **per-turn** value (NOT a running sum) — the API
+    /// reports `prompt_tokens` per response, and the TUI mirrors the
+    /// last reported value into this field. The status bar uses it
+    /// to compute the budget-pressure percentage:
+    ///   `last_turn_prompt_tokens / model_info.max_context_tokens`.
+    ///
+    /// Why per-turn, not cumulative: the model sees the *whole
+    /// conversation* on every turn, so the per-turn prompt size is
+    /// the right "current context pressure" metric. A cumulative sum
+    /// of all per-turn prompts would be N times too large.
+    ///
+    /// Initialised to 0 (pre-first-turn). The status bar treats 0 as
+    /// "no signal yet" and falls back to the plain `↑N` display.
+    pub last_turn_prompt_tokens: usize,
 }
 
 impl AppState {
@@ -100,6 +150,7 @@ impl AppState {
             model_info: None,
             scroll_offset: 0,
             auto_scroll: true,
+            max_scroll: 0,
             thinking_panel_visible: false,
             thinking_buffer: Vec::new(),
             pending_approval: None,
@@ -117,7 +168,34 @@ impl AppState {
             is_generating: false,
             spinner_tick: 0,
             notified_jobs: std::collections::HashSet::new(),
+            tool_collapsed: true,
+            expanded_tools: std::collections::HashSet::new(),
+            approval_scroll: 0,
+            approval_max_scroll: 0,
+            last_turn_prompt_tokens: 0,
         }
+    }
+
+    /// Should the tool entry at `idx` be collapsed to its summary line?
+    /// True when collapse mode is on AND the user hasn't explicitly expanded it.
+    #[inline]
+    pub fn tool_should_collapse(&self, idx: usize) -> bool {
+        self.tool_collapsed && !self.expanded_tools.contains(&idx)
+    }
+
+    /// Compute (line_count, byte_count) for a tool output string,
+    /// using the same line-wrapping width the chat renderer uses so the
+    /// summary matches the visual height the user would see if expanded.
+    pub fn tool_output_metrics(s: &str, wrap_width: usize) -> (usize, usize) {
+        let width = wrap_width.max(1);
+        let mut lines = 0usize;
+        for segment in s.split('\n') {
+            let len = segment.chars().count();
+            // textwrap::fill would produce ceil(len/width) wrapped lines,
+            // and an empty segment still occupies one line.
+            lines += if len == 0 { 1 } else { len.div_ceil(width) };
+        }
+        (lines.max(1), s.len())
     }
 
     /// Return a spinner character based on the frame tick.
@@ -144,6 +222,35 @@ pub struct ConversationEntry {
     pub role: String,
     pub content: String,
     pub timestamp: chrono::DateTime<chrono::Local>,
+    /// Optional full tool output, stored only for `role == "tool"` entries.
+    /// When `None`, the `content` field IS the full output (legacy/forward-compat).
+    /// When `Some`, the UI may render `content` as a summary and expand
+    /// via the stored `tool_output` on user request.
+    pub tool_output: Option<String>,
+}
+
+impl ConversationEntry {
+    /// Construct a plain (non-tool) conversation entry.
+    pub fn new(role: impl Into<String>, content: impl Into<String>) -> Self {
+        Self {
+            role: role.into(),
+            content: content.into(),
+            timestamp: chrono::Local::now(),
+            tool_output: None,
+        }
+    }
+
+    /// Construct a tool entry with full output stored separately.
+    /// `summary` is what the chat shows when collapsed; `full` is shown
+    /// when the user explicitly expands this entry.
+    pub fn tool(summary: impl Into<String>, full: impl Into<String>) -> Self {
+        Self {
+            role: "tool".into(),
+            content: summary.into(),
+            timestamp: chrono::Local::now(),
+            tool_output: Some(full.into()),
+        }
+    }
 }
 
 /// State held while waiting for approval of a destructive tool call.

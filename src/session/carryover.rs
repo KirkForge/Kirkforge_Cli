@@ -261,9 +261,11 @@ mod tests {
 
     #[test]
     fn test_basic_profile_rendered() {
-        let mut p = CarryoverProfile::default();
-        p.session_count = 3;
-        p.last_user_message = "fix the auth bug".to_string();
+        let mut p = CarryoverProfile {
+            session_count: 3,
+            last_user_message: "fix the auth bug".to_string(),
+            ..Default::default()
+        };
         p.last_session_time = "2026-06-03 14:22".to_string();
         p.recent_paths.push("src/auth/mod.rs".to_string());
 

@@ -480,7 +480,12 @@ mod tests {
         let rules = vec![rule("bash", "command", "rm *", PermissionAction::Deny)];
         // `command` is a number, not a string — can't match a glob, skip.
         assert_eq!(
-            evaluate(&rules, "bash", &json!({"command": 42}), PermissionAction::Ask),
+            evaluate(
+                &rules,
+                "bash",
+                &json!({"command": 42}),
+                PermissionAction::Ask
+            ),
             PermissionAction::Ask
         );
     }
@@ -489,7 +494,12 @@ mod tests {
     fn test_evaluate_tool_mismatch_skips_rule() {
         let rules = vec![rule("edit_file", "path", "src/*", PermissionAction::Allow)];
         assert_eq!(
-            evaluate(&rules, "bash", &json!({"command": "ls"}), PermissionAction::Ask),
+            evaluate(
+                &rules,
+                "bash",
+                &json!({"command": "ls"}),
+                PermissionAction::Ask
+            ),
             PermissionAction::Ask
         );
     }
@@ -507,7 +517,10 @@ mod tests {
 
     #[test]
     fn test_suggest_rule_edit_file_uses_path_key() {
-        let r = suggest_rule("edit_file", &json!({"path": "src/main.rs", "old_string": "a", "new_string": "b"}));
+        let r = suggest_rule(
+            "edit_file",
+            &json!({"path": "src/main.rs", "old_string": "a", "new_string": "b"}),
+        );
         assert_eq!(r.tool, "edit_file");
         assert_eq!(r.key, "path");
         assert_eq!(r.pattern, "src/main.rs");
@@ -566,8 +579,16 @@ mod tests {
         let desc = describe_rule(&r);
         // "allow bash:command=xxx…xxx" — pattern part is 60 chars max
         // (57 + "…"), so total fits in well under 100.
-        assert!(desc.contains("…"), "long pattern should be truncated: {}", desc);
-        assert!(desc.len() < 90, "description should be truncated: got {} chars", desc.len());
+        assert!(
+            desc.contains("…"),
+            "long pattern should be truncated: {}",
+            desc
+        );
+        assert!(
+            desc.len() < 90,
+            "description should be truncated: got {} chars",
+            desc.len()
+        );
     }
 
     // ── config round-trip ─────────────────────────────────────────

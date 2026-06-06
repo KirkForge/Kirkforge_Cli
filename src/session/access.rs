@@ -115,6 +115,14 @@ pub struct PathGuard {
 }
 
 impl PathGuard {
+    /// Returns true if this guard has either a `sandbox_dir` or a non-empty
+    /// `allowed_write_dirs`. The operator-facing `warn_if_unsandboxed`
+    /// function (and the TUI startup banner) use this to decide whether
+    /// to surface a config warning.
+    pub fn is_sandboxed(&self) -> bool {
+        self.sandbox_dir.is_some() || !self.allowed_write_dirs.is_empty()
+    }
+
     /// Check whether `path` may be read.
     ///
     /// On success returns the resolved path (canonicalized if it exists).
@@ -411,6 +419,28 @@ impl ReadGate {
 
 // ── Helper: Construct from Config ────────────────────────────────────
 
+/// Emit a startup warning when the path guard is unsandboxed.
+///
+/// If neither `sandbox_dir` nor `allowed_write_dirs` is configured, every
+/// write falls through to `GuardVerdict::Allowed`. This is a fail-open
+/// design choice that the operator should be aware of — model-driven
+/// writes can then touch anything the user can touch (subject to the
+/// deny list and the deny-extension list).
+///
+/// Emits a single `tracing::warn!` with the remediation. Safe to call
+/// repeatedly in tests; the warning is gated so it only fires when the
+/// guard is actually unsandboxed.
+pub fn warn_if_unsandboxed(path_guard: &PathGuard) {
+    if !path_guard.is_sandboxed() {
+        tracing::warn!(
+            "PathGuard is unsandboxed: no `sandbox_dir` and no `allowed_write_dirs` configured. \
+             Model-driven writes are not restricted to any directory tree (only the deny list and \
+             deny extensions apply). Set `sandbox_dir` in config.toml or via KIRKFORGE_SANDBOX_DIR, \
+             or list `allowed_write_dirs` to scope writes."
+        );
+    }
+}
+
 /// Build a [`DenyList`] and [`PathGuard`] from the user's config.
 ///
 /// Merges configured deny patterns with safe defaults so that .ssh, .git,
@@ -613,5 +643,125 @@ mod tests {
         gate.mark_read(p);
         gate.clear();
         assert!(matches!(gate.check_edit(p), GuardVerdict::Denied(_)));
+    }
+
+    // ── warn_if_unsandboxed ─────────────────────────────────────────
+
+    #[test]
+    fn test_warn_if_unsandboxed_default_guard_is_quiet_in_test() {
+        // We can't easily assert a tracing::warn! was emitted without
+        // installing a custom subscriber, but we can at least verify
+        // the function is callable on the default guard (no panic,
+        // no side effect beyond logging).
+        let guard = PathGuard::default();
+        warn_if_unsandboxed(&guard);
+    }
+
+    #[test]
+    fn test_warn_if_unsandboxed_with_sandbox_is_quiet() {
+        // A guard with only sandbox_dir set: should not warn.
+        let guard = PathGuard {
+            sandbox_dir: Some(PathBuf::from("/tmp")),
+            ..Default::default()
+        };
+        warn_if_unsandboxed(&guard);
+    }
+
+    #[test]
+    fn test_warn_if_unsandboxed_with_allowlist_is_quiet() {
+        // A guard with only allowed_write_dirs set: should not warn.
+        let guard = PathGuard {
+            allowed_write_dirs: vec![PathBuf::from("/tmp")],
+            ..Default::default()
+        };
+        warn_if_unsandboxed(&guard);
+    }
+
+    // ── Default contract (pinned by tests; changing these is a breaking change)
+
+    /// **Contract:** `PathGuard::default()` is **fail-open** — it does NOT
+    /// restrict writes. This is a deliberate operator choice: the deny list
+    /// and deny extensions still block the obviously-dangerous paths, but
+    /// without a sandbox or an `allowed_write_dirs` list, model-driven
+    /// writes fall through to `GuardVerdict::Allowed`. Operators who want
+    /// strict containment must call `access_from_config` (which honours
+    /// the config file) or set `sandbox_dir` / `allowed_write_dirs` on the
+    /// guard explicitly. The startup `warn_if_unsandboxed` banner is the
+    /// the operator's signal that they're running unsandboxed.
+    ///
+    /// **Do not change `Default` to fail-closed** without coordinating with
+    /// the existing call sites — see `test_path_guard_default_is_fail_open`
+    /// below for the cases that depend on this.
+    #[test]
+    fn test_path_guard_default_is_fail_open() {
+        let guard = PathGuard::default();
+        assert!(
+            !guard.is_sandboxed(),
+            "default PathGuard is unsandboxed by design"
+        );
+        // Writes to /tmp are allowed (no sandbox, no allowlist blocking it).
+        let tmp = std::env::temp_dir().join("kirkforge_default_failopen.txt");
+        let _ = std::fs::remove_file(&tmp);
+        let result = guard.check_write(&tmp);
+        let _ = std::fs::remove_file(&tmp);
+        assert!(
+            matches!(result, GuardVerdict::Allowed(_)),
+            "default PathGuard allows writes to /tmp; if this changes, the \
+             test name `is_fail_open` no longer matches reality and several \
+             call sites in tests/ will need to be updated"
+        );
+        // But the deny list and deny extensions still apply — even
+        // unsandboxed, .ssh and .pem are blocked.
+        let ssh_like = std::env::temp_dir().join("kirkforge.pem");
+        let result = guard.check_write(&ssh_like);
+        assert!(
+            matches!(result, GuardVerdict::Denied(_)),
+            "default PathGuard still applies the deny-extension list: .pem must be blocked"
+        );
+    }
+
+    /// **Contract:** `is_sandboxed()` is true iff `sandbox_dir` is `Some`
+    /// OR `allowed_write_dirs` is non-empty. Both count; either alone is
+    /// sufficient.
+    #[test]
+    fn test_path_guard_is_sandboxed_predicate() {
+        let bare = PathGuard::default();
+        assert!(!bare.is_sandboxed());
+
+        let with_sandbox = PathGuard {
+            sandbox_dir: Some(PathBuf::from("/tmp")),
+            ..Default::default()
+        };
+        assert!(with_sandbox.is_sandboxed());
+
+        let with_allowlist = PathGuard {
+            allowed_write_dirs: vec![PathBuf::from("/tmp")],
+            ..Default::default()
+        };
+        assert!(with_allowlist.is_sandboxed());
+
+        // An empty allowed_write_dirs does NOT count as sandboxed.
+        let empty_allowlist = PathGuard {
+            allowed_write_dirs: vec![],
+            ..Default::default()
+        };
+        assert!(!empty_allowlist.is_sandboxed());
+    }
+
+    /// **Contract:** `access_from_config` produces a guard whose
+    /// sandboxedness matches the config. With no `sandbox_dir` and no
+    /// `allowed_write_dirs` in the config, the resulting guard is
+    /// unsandboxed (and `warn_if_unsandboxed` would fire on it).
+    #[test]
+    fn test_access_from_config_propagates_sandboxedness() {
+        // A bare `Config::default()` has no sandbox_dir and no
+        // allowed_write_dirs. The resulting guard should be unsandboxed.
+        let config = crate::shared::Config::default();
+        let (_deny, guard, _gate) = access_from_config(&config);
+        assert!(
+            !guard.is_sandboxed(),
+            "Config::default() has no sandbox_dir or allowed_write_dirs, so \
+             access_from_config must produce an unsandboxed guard"
+        );
     }
 }

@@ -34,9 +34,7 @@ pub fn handle_approval_key(key: KeyEvent, state: &mut AppState) {
         // (Approval-mode keys never reach the chat-view scroll handler.)
         KeyCode::PageUp => {
             state.pending_approval = Some(approval);
-            state.approval_scroll = state
-                .approval_scroll
-                .saturating_sub(APPROVAL_PAGE_SIZE);
+            state.approval_scroll = state.approval_scroll.saturating_sub(APPROVAL_PAGE_SIZE);
             return;
         }
         KeyCode::PageDown => {
@@ -96,10 +94,7 @@ pub fn handle_approval_key(key: KeyEvent, state: &mut AppState) {
             //
             // `push_rule_unique` dedups so mashing `[A]lways` twice
             // doesn't create duplicate rules.
-            let rule = crate::shared::permission::suggest_rule(
-                &approval.tool_name,
-                &approval.args,
-            );
+            let rule = crate::shared::permission::suggest_rule(&approval.tool_name, &approval.args);
             push_rule_unique(&mut state.config.permission_rules, rule);
             let _ = crate::session::config::save_config(&state.config);
         }
@@ -108,7 +103,20 @@ pub fn handle_approval_key(key: KeyEvent, state: &mut AppState) {
         state.approval_scroll = 0;
         state.approval_max_scroll = 0;
         if let Some(tx) = approval.responder {
-            let _ = tx.send(resp);
+            // If the executor's receiver is gone (cancelled / shut
+            // down / replaced by a newer approval), the send fails.
+            // Log it; the old `let _ =` hid this from the user and
+            // from CI logs. `?e` (Debug) rather than `%e` (Display)
+            // because `oneshot::error::SendError<T>` only impls
+            // `Debug`; using `%e` would force `T: Display` and
+            // `ApprovalResponse` doesn't impl Display.
+            if let Err(e) = tx.send(resp) {
+                tracing::warn!(
+                    tool = %approval.tool_name,
+                    error = ?e,
+                    "approval responder dropped before user-decision send"
+                );
+            }
         }
     }
 }
@@ -121,11 +129,9 @@ fn push_rule_unique(
     rules: &mut Vec<crate::shared::permission::PermissionRule>,
     new_rule: crate::shared::permission::PermissionRule,
 ) {
-    let duplicate = rules.iter().any(|r| {
-        r.tool == new_rule.tool
-            && r.key == new_rule.key
-            && r.pattern == new_rule.pattern
-    });
+    let duplicate = rules
+        .iter()
+        .any(|r| r.tool == new_rule.tool && r.key == new_rule.key && r.pattern == new_rule.pattern);
     if !duplicate {
         rules.push(new_rule);
     }
@@ -266,10 +272,7 @@ mod tests {
         assert_eq!(r.tool, "bash");
         assert_eq!(r.key, "command");
         assert_eq!(r.pattern, "cargo test --release");
-        assert_eq!(
-            r.action,
-            crate::shared::permission::PermissionAction::Allow
-        );
+        assert_eq!(r.action, crate::shared::permission::PermissionAction::Allow);
 
         // **auto_approve must NOT have been flipped.** The user
         // asked for "always this specific command", not "always
@@ -351,12 +354,14 @@ mod tests {
     fn test_always_approves_does_not_overwrite_existing_deny() {
         let mut s = make_state_with_approval(json!({"command": "rm -rf build"}));
         s.config.permission_rules.clear();
-        s.config.permission_rules.push(crate::shared::permission::PermissionRule {
-            tool: "bash".into(),
-            key: "command".into(),
-            pattern: "rm -rf build".into(),
-            action: crate::shared::permission::PermissionAction::Deny,
-        });
+        s.config
+            .permission_rules
+            .push(crate::shared::permission::PermissionRule {
+                tool: "bash".into(),
+                key: "command".into(),
+                pattern: "rm -rf build".into(),
+                action: crate::shared::permission::PermissionAction::Deny,
+            });
 
         handle_approval_key(key(KeyCode::Char('a')), &mut s);
 

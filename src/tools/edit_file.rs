@@ -192,8 +192,11 @@ mod tests {
             ToolOutcome::FileEdit { path: _, diff: _ } => {
                 let result_content = std::fs::read_to_string(&path).unwrap();
                 // The trailing whitespace on line 2 should be preserved
-                assert!(result_content.contains("    let y = 2;    "),
-                    "Fuzzy fallback should preserve original trailing whitespace, got: {:?}", result_content);
+                assert!(
+                    result_content.contains("    let y = 2;    "),
+                    "Fuzzy fallback should preserve original trailing whitespace, got: {:?}",
+                    result_content
+                );
             }
             other => panic!("Expected FileEdit, got {:?}", other),
         }

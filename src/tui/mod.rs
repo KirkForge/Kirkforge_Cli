@@ -37,15 +37,12 @@ use crate::tools::Tool;
 use app::{AppState, ConnectionState};
 use commands::notify_completed_jobs;
 use components::approval::render_approval_dialog;
-use events::{drain_approval_requests, drain_turn_events};
-use widgets::chat::render_chat;
-use widgets::input::render_input;
-use widgets::status::render_status;
 use crossterm::{
     event::{self, Event},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use events::{drain_approval_requests, drain_turn_events};
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},
@@ -55,6 +52,9 @@ use std::io;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tokio::sync::mpsc;
+use widgets::chat::render_chat;
+use widgets::input::render_input;
+use widgets::status::render_status;
 
 /// Panic-safe guard that restores terminal state on drop.
 struct TerminalGuard;
@@ -137,7 +137,16 @@ pub async fn run_tui(
     let mut exe =
         executor::Executor::with_log(adapter, tools, config, conversation_log, carryover_target);
     let handle = tokio::spawn(async move {
-        let _ = exe.run(input_rx, event_tx, approval_tx, cancel_rx, resume_rx, compact_rx).await;
+        let _ = exe
+            .run(
+                input_rx,
+                event_tx,
+                approval_tx,
+                cancel_rx,
+                resume_rx,
+                compact_rx,
+            )
+            .await;
     });
 
     // Event loop
@@ -258,7 +267,10 @@ async fn run_event_loop(
                     if state.pending_approval.is_some() {
                         approval_keys::handle_approval_key(key, state);
                     } else {
-                        keys::handle_input_key(key, state, input_tx, cancel_tx, resume_tx, compact_tx).await?;
+                        keys::handle_input_key(
+                            key, state, input_tx, cancel_tx, resume_tx, compact_tx,
+                        )
+                        .await?;
                     }
                 }
                 Event::Resize(_w, _h) => {}

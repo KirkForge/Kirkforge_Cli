@@ -157,13 +157,18 @@ impl ModelAdapter for OpenAiCompatAdapter {
                             buffer.drain(..=start + 6 + end);
 
                             if line.is_empty() || line == "[DONE]" {
-                                if line == "[DONE]" {
-                                    let _ = tx
-                                        .send(StreamEvent::Done {
+                                if line == "[DONE]"
+                                    && !super::ollama_ndjson::send_or_bail(
+                                        &tx,
+                                        StreamEvent::Done {
                                             finish_reason: FinishReason::Stop,
                                             usage: None,
-                                        })
-                                        .await;
+                                        },
+                                        "SSE [DONE] sentinel",
+                                    )
+                                    .await
+                                {
+                                    return;
                                 }
                                 continue;
                             }
@@ -171,14 +176,20 @@ impl ModelAdapter for OpenAiCompatAdapter {
                             match serde_json::from_str::<serde_json::Value>(&line) {
                                 Ok(json) => {
                                     if let Some(err) = json.get("error") {
-                                        let _ = tx
-                                            .send(StreamEvent::Error(
+                                        if !super::ollama_ndjson::send_or_bail(
+                                            &tx,
+                                            StreamEvent::Error(
                                                 err.get("message")
                                                     .and_then(|m| m.as_str())
                                                     .unwrap_or("API error")
                                                     .to_string(),
-                                            ))
-                                            .await;
+                                            ),
+                                            "OpenAI-compat API error",
+                                        )
+                                        .await
+                                        {
+                                            return;
+                                        }
                                         continue;
                                     }
 
@@ -229,13 +240,28 @@ impl ModelAdapter for OpenAiCompatAdapter {
 
                                     // Finish reason signals end
                                     if let Some(reason) = finish.and_then(|r| r.as_str()) {
-                                        if reason == "tool_calls" && pending_tool_calls.is_empty() {
-                                            let _ = tx.send(StreamEvent::Error(
-                                                "Model emitted tool_calls finish_reason but no parseable tool calls".to_string()
-                                            )).await;
-                                        }
+                                        if reason == "tool_calls" && pending_tool_calls.is_empty()
+                                            && !super::ollama_ndjson::send_or_bail(
+                                                &tx,
+                                                StreamEvent::Error(
+                                                    "Model emitted tool_calls finish_reason but no parseable tool calls".to_string()
+                                                ),
+                                                "OpenAI-compat tool-call finish with no parseable calls",
+                                            )
+                                            .await
+                                            {
+                                                return;
+                                            }
                                         for tc in pending_tool_calls.drain() {
-                                            let _ = tx.send(StreamEvent::ToolCall(tc)).await;
+                                            if !super::ollama_ndjson::send_or_bail(
+                                                &tx,
+                                                StreamEvent::ToolCall(tc),
+                                                "OpenAI-compat accumulated tool call",
+                                            )
+                                            .await
+                                            {
+                                                return;
+                                            }
                                         }
 
                                         let finish_reason = match reason {
@@ -256,24 +282,47 @@ impl ModelAdapter for OpenAiCompatAdapter {
                                                 .map(|v| v as usize),
                                         });
 
-                                        let _ = tx
-                                            .send(StreamEvent::Done {
+                                        if !super::ollama_ndjson::send_or_bail(
+                                            &tx,
+                                            StreamEvent::Done {
                                                 finish_reason,
                                                 usage,
-                                            })
-                                            .await;
+                                            },
+                                            "OpenAI-compat done",
+                                        )
+                                        .await
+                                        {
+                                            return;
+                                        }
                                     }
                                 }
                                 Err(e) => {
-                                    let _ = tx
-                                        .send(StreamEvent::Error(format!("SSE parse: {}", e)))
-                                        .await;
+                                    if !super::ollama_ndjson::send_or_bail(
+                                        &tx,
+                                        StreamEvent::Error(format!("SSE parse: {}", e)),
+                                        "OpenAI-compat SSE parse error",
+                                    )
+                                    .await
+                                    {
+                                        return;
+                                    }
                                 }
                             }
                         }
                     }
                     Err(e) => {
-                        let _ = tx.send(StreamEvent::Error(e.to_string())).await;
+                        // Same shape as the Ollama adapter's
+                        // transport-error branch: log if the
+                        // consumer is also gone, then break.
+                        if !super::ollama_ndjson::send_or_bail(
+                            &tx,
+                            StreamEvent::Error(e.to_string()),
+                            "OpenAI-compat transport error",
+                        )
+                        .await
+                        {
+                            return;
+                        }
                         break;
                     }
                 }

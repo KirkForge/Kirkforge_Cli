@@ -328,10 +328,7 @@ impl CorrectionLoop {
                         message: if applied {
                             format!("Auto-fixed: {} — {}", fix.severity, fix.description)
                         } else {
-                            format!(
-                                "Failed to auto-fix: {} — {}",
-                                fix.severity, fix.description
-                            )
+                            format!("Failed to auto-fix: {} — {}", fix.severity, fix.description)
                         },
                         fix: Some(fix),
                     });

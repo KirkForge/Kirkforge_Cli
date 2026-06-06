@@ -1,5 +1,7 @@
 use crate::adapters::ModelAdapter;
-use crate::session::access::{access_from_config, DenyList, GuardVerdict, PathGuard, ReadGate};
+use crate::session::access::{
+    access_from_config, warn_if_unsandboxed, DenyList, GuardVerdict, PathGuard, ReadGate,
+};
 use crate::session::carryover::CarryoverProfile;
 use crate::session::conversation::ConversationLog;
 use crate::session::event_bus::{BusEvent, EventBus};
@@ -28,15 +30,49 @@ use tokio::sync::mpsc;
 /// twice on the same call (e.g. user mashes the key) would land
 /// duplicates in whichever side is racing. This helper is the
 /// single point of dedup, called from both sites.
-fn push_rule_unique(rules: &mut Vec<crate::shared::permission::PermissionRule>, new_rule: crate::shared::permission::PermissionRule) {
-    let duplicate = rules.iter().any(|r| {
-        r.tool == new_rule.tool
-            && r.key == new_rule.key
-            && r.pattern == new_rule.pattern
-    });
+fn push_rule_unique(
+    rules: &mut Vec<crate::shared::permission::PermissionRule>,
+    new_rule: crate::shared::permission::PermissionRule,
+) {
+    let duplicate = rules
+        .iter()
+        .any(|r| r.tool == new_rule.tool && r.key == new_rule.key && r.pattern == new_rule.pattern);
     if !duplicate {
         rules.push(new_rule);
     }
+}
+
+/// What a single stream iteration produced. The orchestrator
+/// (`run_turn`) drives this state machine.
+///
+/// **Why a private enum instead of nested Result types:** the
+/// caller needs to distinguish three orthogonal outcomes
+/// (continue, finish, retry) without an `Option<Option<…>>` pyramid.
+/// The variants are exhaustive and small.
+enum IterationOutcome {
+    /// Model emitted tool calls; the orchestrator should dispatch
+    /// each one and then loop for the model's next response.
+    ToolCalls(Vec<ToolInvocation>),
+    /// Model produced a final text response (or cancelled); the
+    /// turn is over.
+    Finished,
+    /// Adapter reported a JSON-parse error. The orchestrator will
+    /// inject a one-shot retry message and re-stream.
+    ParseError,
+}
+
+/// Outcome of asking the user (or permission rules) whether a
+/// destructive call may proceed. Returned by `run_approval_flow`.
+///
+/// `AlwaysApproved` is distinct from `Approved` so callers that
+/// care about persistence (e.g. a future audit log) can
+/// differentiate "this time" from "and also for future similar
+/// calls". The current `dispatch_tool_call` ignores the
+/// distinction; that's fine — the enum is the durable seam.
+enum ApprovalDecision {
+    Approved,
+    Denied,
+    AlwaysApproved,
 }
 
 /// The session executor runs the conversation loop:
@@ -89,6 +125,7 @@ impl Executor {
     ) -> Self {
         let model_name = adapter.model_info().name.clone();
         let (deny_list, path_guard, read_gate) = access_from_config(&config);
+        warn_if_unsandboxed(&path_guard);
 
         // Event bus — verifiers are registered by init_default_verifiers() called below
         let event_bus = EventBus::new();
@@ -240,12 +277,26 @@ impl Executor {
 
                 Some(()) = cancel_rx.recv() => {
                     cancelled.store(true, Ordering::SeqCst);
-                    let _ = event_tx.send(TurnEvent::Token("\n⚠️ Generation cancelled\n".into()));
+                    if event_tx.send(TurnEvent::Token("\n⚠️ Generation cancelled\n".into())).is_err() {
+                        // TUI receiver gone — the user closed the window,
+                        // hit Ctrl+C at the wrong layer, or the renderer
+                        // task panicked. No point keeping the executor
+                        // alive when nobody's listening. Flush
+                        // carryover and bail (same idiom as the Ok
+                        // path below when a per-event send fails).
+                        tracing::warn!("TUI event receiver dropped; executor driver exiting");
+                        self.flush_carryover();
+                        return Ok(());
+                    }
                 }
                 Some(new_log) = resume_rx.recv() => {
                     // Resume from a fork — swap the conversation log
                     self.replace_conversation(new_log);
-                    let _ = event_tx.send(TurnEvent::Token("✅ Resumed from fork\n".into()));
+                    if event_tx.send(TurnEvent::Token("✅ Resumed from fork\n".into())).is_err() {
+                        tracing::warn!("TUI event receiver dropped during /resume; exiting");
+                        self.flush_carryover();
+                        return Ok(());
+                    }
                 }
                 Some(()) = compact_rx.recv() => {
                     // /compact: walk the current history, condense
@@ -254,18 +305,21 @@ impl Executor {
                     // so the TUI can rebuild its display.
                     let history = self.conversation.all();
                     let result = crate::session::prompt::PromptBuilder::compact(history);
-                    if let Err(e) = self.conversation.replace_all(result.new_messages.clone()) {
-                        let _ = event_tx.send(TurnEvent::Error(format!(
-                            "Compaction failed: {}", e
-                        )));
+                    let report = if let Err(e) = self.conversation.replace_all(result.new_messages.clone()) {
+                        TurnEvent::Error(format!("Compaction failed: {}", e))
                     } else {
-                        let _ = event_tx.send(TurnEvent::CompactionReport {
+                        TurnEvent::CompactionReport {
                             new_messages: result.new_messages.clone(),
                             dropped_tool_results: result.dropped_tool_results,
                             condensed_assistant_turns: result.condensed_assistant_turns,
                             original_count: result.original_count,
                             compacted_count: result.compacted_count,
-                        });
+                        }
+                    };
+                    if event_tx.send(report).is_err() {
+                        tracing::warn!("TUI event receiver dropped during /compact; exiting");
+                        self.flush_carryover();
+                        return Ok(());
                     }
                 }
                 Some(input) = input_rx.recv() => {
@@ -275,13 +329,30 @@ impl Executor {
                         Ok(evs) => {
                             for ev in evs {
                                 if event_tx.send(ev).is_err() {
+                                    // Same idiom as the other branches
+                                    // above: TUI gone, no audience, no
+                                    // point continuing. Bail cleanly so
+                                    // the tokio task doesn't keep
+                                    // running model requests that
+                                    // nobody will see.
+                                    tracing::warn!("TUI event receiver dropped mid-turn; executor driver exiting");
                                     self.flush_carryover();
                                     return Ok(());
                                 }
                             }
                         }
                         Err(e) => {
-                            let _ = event_tx.send(TurnEvent::Error(format!("Turn failed: {}", e)));
+                            // One last attempt to surface the error to
+                            // the TUI; if the receiver is gone, the
+                            // session is over anyway. Don't swallow.
+                            if event_tx.send(TurnEvent::Error(format!("Turn failed: {}", e))).is_err() {
+                                tracing::warn!(
+                                    error = %e,
+                                    "TUI event receiver dropped while reporting turn-failure event"
+                                );
+                                self.flush_carryover();
+                                return Ok(());
+                            }
                         }
                     }
                 }
@@ -352,6 +423,10 @@ impl Executor {
     /// Run a single turn: send the current conversation to the model,
     /// handle tool calls, return the assistant's response.
     ///
+    /// This is now a thin orchestrator over [`stream_iteration`] and
+    /// [`dispatch_tool_call`]. It owns the iteration loop, the
+    /// tool-call limit, and the one-shot parse-error retry.
+    ///
     /// If `cancelled` is provided, it is checked at each streaming
     /// yield point and the turn stops early with a cancellation notice.
     pub async fn run_turn(
@@ -377,569 +452,568 @@ impl Executor {
         }
 
         let mut events = Vec::new();
-        let model_info = self.adapter.model_info();
-        let tool_defs: Vec<ToolDef> = self.tools.iter().map(|t| t.def()).collect();
-        let tool_names: Vec<&str> = tool_defs.iter().map(|t| t.name).collect();
-
-        // Main loop: model responds, may call tools, we feed results back
-        let max_iterations = 10; // safety cap on tool call loops
-        // Parse retry: only one retry per turn (not one per iteration).
-        // If the model fails a second time, we give up and return.
+        let mut tool_calls: Vec<ToolInvocation> = Vec::new();
         let mut already_retried_parse = false;
-        for iteration in 0..max_iterations {
-            let carryover_block = if self.carryover_enabled {
-                let block = self.carryover.to_prompt_block();
-                if block.is_empty() {
-                    None
-                } else {
-                    Some(block)
+
+        // Safety cap on tool-call loops. The model is supposed to
+        // reach a `FinishReason::Stop` before this, but a misbehaving
+        // adapter could loop forever.
+        const MAX_ITERATIONS: usize = 10;
+
+        for iteration in 0..MAX_ITERATIONS {
+            if cancelled.load(Ordering::SeqCst) {
+                events.push(TurnEvent::Token("\n⚠️ Cancelled\n".into()));
+                return Ok(events);
+            }
+
+            let outcome = self
+                .stream_iteration(approval_sender, cancelled, &mut events, &mut tool_calls)
+                .await?;
+
+            match outcome {
+                IterationOutcome::Finished => return Ok(events),
+                IterationOutcome::ToolCalls(tcs) => {
+                    for tc in &tcs {
+                        self.dispatch_tool_call(tc, approval_sender, &mut events)
+                            .await?;
+                    }
+                    // Loop again so the model can react to the tool results.
                 }
-            } else {
-                None
-            };
-
-            let system = self.prompt_builder.build(
-                &model_info.name,
-                model_info.supports_thinking,
-                &tool_names,
-                carryover_block.as_deref(),
-            );
-
-            let history = self.conversation.all();
-            let tool_results: Vec<Message> = Vec::new(); // sent as part of history
-
-            let messages = self.prompt_builder.build_messages(
-                system,
-                history,
-                model_info.max_context_tokens,
-                &tool_results,
-            );
-
-            let mut rx = self.adapter.stream(&messages, &tool_defs).await?;
-
-            let mut assistant_content = String::new();
-            let mut assistant_thinking = String::new();
-            let mut pending_tool_calls: Vec<ToolInvocation> = Vec::new();
-
-            // Parse-retry tracking: if the model sent malformed JSON in a
-            // tool call, we re-prompt once to let it fix just the JSON.
-            let mut had_parse_error = false;
-
-            // Stream events from the adapter
-            while let Some(event) = rx.recv().await {
-                // Check cancellation between every event
-                if cancelled.load(Ordering::SeqCst) {
-                    events.push(TurnEvent::Token("\n⚠️ Cancelled\n".into()));
-                    // We still need to record what we have so far
-                    if !assistant_content.is_empty() || !pending_tool_calls.is_empty() {
-                        let msg = Message {
-                            role: Role::Assistant,
-                            content: assistant_content.clone(),
-                            thinking: if assistant_thinking.is_empty() { None } else { Some(assistant_thinking.clone()) },
-                            tool_calls: if pending_tool_calls.is_empty() { None } else { Some(pending_tool_calls.clone()) },
-                            ..Default::default()
-                        };
-                        self.conversation.append(msg)?;
-                    }
-                    return Ok(events);
-                }
-
-                match event {
-                    StreamEvent::Text(t) => {
-                        assistant_content.push_str(&t);
-                        events.push(TurnEvent::Token(t));
-                    }
-                    StreamEvent::Thinking(t) => {
-                        assistant_thinking.push_str(&t);
-                        events.push(TurnEvent::Thinking(t));
-                    }
-                    StreamEvent::ToolCall(tc) => {
-                        pending_tool_calls.push(tc);
-                    }
-                    StreamEvent::Error(e) => {
-                        // Detect parse-related errors from adapters
-                        // (JSON parse, SSE parse, no parseable entries)
-                        if e.contains("parse") || e.contains("parseable") {
-                            had_parse_error = true;
-                        }
-                        events.push(TurnEvent::Error(e));
-                    }
-                    StreamEvent::Done {
-                        finish_reason: _,
-                        usage,
-                    } => {
-                        // Save the assistant message
-                        let has_tool_calls = !pending_tool_calls.is_empty();
-                        let msg = Message {
-                            role: Role::Assistant,
-                            content: assistant_content.clone(),
-                            thinking: if assistant_thinking.is_empty() {
-                                None
-                            } else {
-                                Some(assistant_thinking.clone())
-                            },
-                            tool_calls: if has_tool_calls {
-                                Some(pending_tool_calls.clone())
-                            } else {
-                                None
-                            },
+                IterationOutcome::ParseError => {
+                    if !already_retried_parse {
+                        already_retried_parse = true;
+                        // One-shot nudge: ask the model to re-emit
+                        // just the tool call with valid JSON. We
+                        // deliberately don't speculate about what
+                        // was wrong — the model saw its own bad
+                        // output in the conversation log.
+                        let retry_msg = "Your previous response contained a tool call with malformed JSON arguments. Re-emit ONLY the tool call with the corrected JSON — no additional text, no explanation.";
+                        self.conversation.append(Message {
+                            role: Role::User,
+                            content: retry_msg.into(),
+                            thinking: None,
+                            tool_calls: None,
                             tool_call_id: None,
                             tool_name: None,
-                            token_count: usage.as_ref().and_then(|u| u.completion_tokens),
-                        };
-                        self.conversation.append(msg)?;
-
-                        // Record cost
-                        if let Some(ref u) = usage {
-                            let prompt = u.prompt_tokens.unwrap_or(0);
-                            let completion = u.completion_tokens.unwrap_or(0);
-                            let cost =
-                                crate::shared::calculate_cost(&self.model_name, prompt, completion);
-                            self.cost_tracking.record_turn(prompt, completion, cost);
-                            events.push(TurnEvent::CostStats {
-                                prompt_tokens: prompt,
-                                completion_tokens: completion,
-                                turn_cost: cost,
-                                cumulative_cost: self.cost_tracking.cumulative_cost,
-                            });
-                        }
-
-                        // Process tool calls (clone because pending_tool_calls is
-                        // reused in the outer loop if we continue for another turn)
-                        let tool_calls = std::mem::take(&mut pending_tool_calls);
-                        for tc in &tool_calls {
-                            // Find the tool
-                            let tool = match self.tools.iter().find(|t| t.def().name == tc.name) {
-                                Some(t) => t.clone(),
-                                None => {
-                                    let err = format!("Unknown tool: {}", tc.name);
-                                    events.push(TurnEvent::Error(err.clone()));
-                                    self.conversation.append(Message {
-                                        role: Role::Tool,
-                                        content: err,
-                                        tool_call_id: Some(tc.id.clone()),
-                                        tool_name: Some(tc.name.clone()),
-                                        ..Default::default()
-                                    })?;
-                                    continue;
-                                }
-                            };
-
-                            // Check if destructive and needs approval.
-                            //
-                            // **v1.2-p12 — permission rules.** The binary
-                            // `auto_approve` flag still sets the default
-                            // action (true → Allow, false → Ask), but
-                            // `permission_rules` can override on a per-call
-                            // basis. First matching rule wins; a `Deny`
-                            // rule aborts the call without any prompt; an
-                            // `Allow` rule skips the prompt; an `Ask`
-                            // rule (or no match) falls through to the
-                            // normal approval flow.
-                            let is_destructive =
-                                matches!(tc.name.as_str(), "write_file" | "edit_file" | "bash");
-                            let default_action = if self.config.auto_approve {
-                                PermissionAction::Allow
-                            } else {
-                                PermissionAction::Ask
-                            };
-                            let action = evaluate(
-                                &self.config.permission_rules,
-                                &tc.name,
-                                &tc.arguments,
-                                default_action,
-                            );
-                            let needs_approval =
-                                is_destructive && matches!(action, PermissionAction::Ask);
-
-                            if matches!(action, PermissionAction::Deny) && is_destructive {
-                                // Rule denied this specific call — no
-                                // prompt, just refuse and tell the model.
-                                let reason = format!(
-                                    "❌ Permission rule denied {}:{}={}",
-                                    tc.name,
-                                    tc.arguments
-                                        .as_object()
-                                        .and_then(|o| o.keys().next().map(|s| s.as_str()))
-                                        .unwrap_or(""),
-                                    tc.arguments
-                                        .as_object()
-                                        .and_then(|o| o.values().next())
-                                        .and_then(|v| v.as_str())
-                                        .unwrap_or(""),
-                                );
-                                events.push(TurnEvent::ToolResult {
-                                    name: tc.name.clone(),
-                                    output: reason.clone(),
-                                });
-                                self.conversation.append(Message {
-                                    role: Role::Tool,
-                                    content: reason,
-                                    tool_call_id: Some(tc.id.clone()),
-                                    tool_name: Some(tc.name.clone()),
-                                    ..Default::default()
-                                })?;
-                                continue;
-                            }
-
-                            if needs_approval {
-                                // Request approval from the UI
-                                let (response_tx, response_rx) =
-                                    tokio::sync::oneshot::channel::<ApprovalResponse>();
-                                approval_sender.send(ApprovalRequest {
-                                    tool_name: tc.name.clone(),
-                                    args: tc.arguments.clone(),
-                                    response: response_tx,
-                                })?;
-
-                                // Wait for user decision
-                                let approved = match response_rx.await {
-                                    Ok(ApprovalResponse::Approved) => true,
-                                    Ok(ApprovalResponse::Denied) => false,
-                                    Ok(ApprovalResponse::AlwaysApprove) => {
-                                        // **v1.2-p13 — permission rule persistence.**
-                                        // Build a rule matching THIS specific call (tool
-                                        // name + the key argument — e.g. `command` for
-                                        // bash, `path` for edit_file) and push it into
-                                        // the session's `permission_rules`. Future calls
-                                        // matching this rule will skip the approval
-                                        // dialog entirely. The TUI side ALSO persists
-                                        // (so the rule survives across sessions via
-                                        // `save_config`); this in-memory push keeps
-                                        // the rest of THIS turn consistent.
-                                        //
-                                        // **Deliberately does NOT flip `auto_approve`.**
-                                        // The user asked for "always this specific
-                                        // command" — not "always everything". The old
-                                        // `auto_approve = true` was a blanket bypass
-                                        // that the new per-call rules replace.
-                                        let rule =
-                                            crate::shared::permission::suggest_rule(
-                                                &tc.name,
-                                                &tc.arguments,
-                                            );
-                                        push_rule_unique(&mut self.config.permission_rules, rule);
-                                        true
-                                    }
-                                    Err(_) => false,
-                                };
-
-                                if !approved {
-                                    events.push(TurnEvent::ToolResult {
-                                        name: tc.name.clone(),
-                                        output: "❌ User denied this operation".into(),
-                                    });
-                                    self.conversation.append(Message {
-                                        role: Role::Tool,
-                                        content: "Operation denied by user.".into(),
-                                        tool_call_id: Some(tc.id.clone()),
-                                        tool_name: Some(tc.name.clone()),
-                                        ..Default::default()
-                                    })?;
-                                    continue;
-                                }
-                            }
-
-                            // Execute the tool
-                            events.push(TurnEvent::ToolStart {
-                                name: tc.name.clone(),
-                                args: tc.arguments.clone(),
-                            });
-
-                            // ── Access control checks ──────────────
-                            // 1. Deny list check (all tools)
-                            let tool_name = tc.name.as_str();
-                            if let Some(denied) =
-                                check_deny_list(&self.deny_list, tool_name, &tc.arguments)
-                            {
-                                events.push(TurnEvent::ToolResult {
-                                    name: tc.name.clone(),
-                                    output: denied.clone(),
-                                });
-                                self.conversation.append(Message {
-                                    role: Role::Tool,
-                                    content: denied,
-                                    tool_call_id: Some(tc.id.clone()),
-                                    tool_name: Some(tc.name.clone()),
-                                    ..Default::default()
-                                })?;
-                                continue;
-                            }
-
-                            // 2. Path guard check for file tools
-                            if matches!(tool_name, "read_file" | "write_file" | "edit_file") {
-                                let path_str = tc
-                                    .arguments
-                                    .get("path")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("");
-                                let path = std::path::Path::new(path_str);
-
-                                let verdict = match tool_name {
-                                    "read_file" => self.path_guard.check_read(path),
-                                    "write_file" | "edit_file" => self.path_guard.check_write(path),
-                                    _ => unreachable!(),
-                                };
-
-                                match verdict {
-                                    GuardVerdict::Allowed(resolved) => {
-                                        // 3. Read-before-edit gate
-                                        if tool_name == "edit_file" {
-                                            match self.read_gate.check_edit(path) {
-                                                GuardVerdict::Allowed(_) => {}
-                                                GuardVerdict::Denied(msg) => {
-                                                    let denied = format!("🔒 Access denied: {msg}");
-                                                    events.push(TurnEvent::ToolResult {
-                                                        name: tc.name.clone(),
-                                                        output: denied.clone(),
-                                                    });
-                                                    self.conversation.append(Message {
-                                                        role: Role::Tool,
-                                                        content: denied,
-                                                        tool_call_id: Some(tc.id.clone()),
-                                                        tool_name: Some(tc.name.clone()),
-                                                        ..Default::default()
-                                                    })?;
-                                                    continue;
-                                                }
-                                            }
-                                        }
-
-                                        // 4. Mark as read if read_file
-                                        if tool_name == "read_file" {
-                                            self.read_gate.mark_read(&resolved);
-                                        }
-
-                                        // Stash resolved path back for the tool
-                                        if let Ok(path_obj) = serde_json::to_value(
-                                            resolved.to_string_lossy().as_ref(),
-                                        ) {
-                                            // Use the resolved path
-                                            let mut updated_args = tc.arguments.clone();
-                                            if let Some(obj) = updated_args.as_object_mut() {
-                                                obj.insert("path".into(), path_obj);
-                                            }
-                                            let crs_args = updated_args.clone();
-                                            let outcome = tool.run(updated_args).await;
-                                            handle_tool_outcome(
-                                                outcome,
-                                                tc,
-                                                &mut events,
-                                                &mut self.conversation,
-                                            )?;
-                                            let crs = self
-                                                .emit_tool_event_and_correct(
-                                                    tc, tool_name, &crs_args, None, None, None,
-                                                )
-                                                .await;
-                                            // ── Carryover collection (before crs is consumed) ──
-                                            self.collect_carryover(tc, &crs);
-                                            emit_correction_results(
-                                                crs,
-                                                tc,
-                                                &mut events,
-                                                &mut self.conversation,
-                                            )?;
-                                        } else {
-                                            let args = tc.arguments.clone();
-                                            let outcome = tool.run(tc.arguments.clone()).await;
-                                            handle_tool_outcome(
-                                                outcome,
-                                                tc,
-                                                &mut events,
-                                                &mut self.conversation,
-                                            )?;
-                                            let crs = self
-                                                .emit_tool_event_and_correct(
-                                                    tc, tool_name, &args, None, None, None,
-                                                )
-                                                .await;
-                                            // ── Carryover collection (before crs is consumed) ──
-                                            self.collect_carryover(tc, &crs);
-                                            emit_correction_results(
-                                                crs,
-                                                tc,
-                                                &mut events,
-                                                &mut self.conversation,
-                                            )?;
-                                        }
-                                        continue;
-                                    }
-                                    GuardVerdict::Denied(msg) => {
-                                        let denied = format!("🔒 Access denied: {msg}");
-                                        events.push(TurnEvent::ToolResult {
-                                            name: tc.name.clone(),
-                                            output: denied.clone(),
-                                        });
-                                        self.conversation.append(Message {
-                                            role: Role::Tool,
-                                            content: denied,
-                                            tool_call_id: Some(tc.id.clone()),
-                                            tool_name: Some(tc.name.clone()),
-                                            ..Default::default()
-                                        })?;
-                                        continue;
-                                    }
-                                }
-                            }
-
-                            // Non-file tools: bash, grep, glob — execute directly
-                            if tool_name == "bash" {
-                                if let Some(denied) = check_bash_command(&tc.arguments) {
-                                    events.push(TurnEvent::ToolResult {
-                                        name: tc.name.clone(),
-                                        output: denied.clone(),
-                                    });
-                                    self.conversation.append(Message {
-                                        role: Role::Tool,
-                                        content: denied,
-                                        tool_call_id: Some(tc.id.clone()),
-                                        tool_name: Some(tc.name.clone()),
-                                        ..Default::default()
-                                    })?;
-                                    continue;
-                                }
-
-                                // Under auto_approve, only read-only bash commands pass
-                                // through automatically. Everything else — curl, wget, writes,
-                                // builds, pipes to shell, file redirects — forces a prompt.
-                                if self.config.auto_approve {
-                                    let is_ro = tc
-                                        .arguments
-                                        .get("command")
-                                        .and_then(|c| c.as_str())
-                                        .is_some_and(|cmd| {
-                                            is_read_only_bash(cmd)
-                                        });
-                                    if !is_ro {
-                                        let (resp_tx, resp_rx) =
-                                            tokio::sync::oneshot::channel::<ApprovalResponse>();
-                                        approval_sender.send(ApprovalRequest {
-                                            tool_name: tc.name.clone(),
-                                            args: tc.arguments.clone(),
-                                            response: resp_tx,
-                                        })?;
-                                        let approved = match resp_rx.await {
-                                            Ok(ApprovalResponse::Approved) => true,
-                                            Ok(ApprovalResponse::Denied) => false,
-                                            Ok(ApprovalResponse::AlwaysApprove) => {
-                                                // **v1.2-p13 — also persist here.** The
-                                                // read-only-bash approval flow runs under
-                                                // `auto_approve: true` (because the command
-                                                // was classified as read-only), so the user
-                                                // sees the dialog and can hit `[A]lways` to
-                                                // "make this the rule". Same persistence as
-                                                // the main site — push the matching rule into
-                                                // `permission_rules` for future sessions.
-                                                //
-                                                // We deliberately do NOT touch
-                                                // `auto_approve` (it's already true, but the
-                                                // rule is the more-specific record of the
-                                                // user's intent).
-                                                let rule = crate::shared::permission::suggest_rule(
-                                                    &tc.name,
-                                                    &tc.arguments,
-                                                );
-                                                push_rule_unique(
-                                                    &mut self.config.permission_rules,
-                                                    rule,
-                                                );
-                                                true
-                                            }
-                                            Err(_) => false,
-                                        };
-                                        if !approved {
-                                            events.push(TurnEvent::ToolResult {
-                                                name: tc.name.clone(),
-                                                output: "❌ User denied this operation".into(),
-                                            });
-                                            self.conversation.append(Message {
-                                                role: Role::Tool,
-                                                content: "Operation denied by user.".into(),
-                                                tool_call_id: Some(tc.id.clone()),
-                                                tool_name: Some(tc.name.clone()),
-                                                ..Default::default()
-                                            })?;
-                                            continue;
-                                        }
-                                    }
-                                }
-                            }
-
-                            let outcome = tool.run(tc.arguments.clone()).await;
-                            // Cap output for bash to avoid blowing context
-                            let (real_exit_code, real_stdout_len, real_stderr_len) =
-                                if tool_name == "bash" {
-                                    extract_bash_metrics(&outcome)
-                                } else {
-                                    (None, None, None)
-                                };
-                            let outcome = if tool_name == "bash" {
-                                truncate_tool_output(outcome, self.config.max_tool_result_chars)
-                            } else {
-                                outcome
-                            };
-                            handle_tool_outcome(outcome, tc, &mut events, &mut self.conversation)?;
-
-                            // Emit event + run correction loop with real outcome data
-                            let crs = self
-                                .emit_tool_event_and_correct(
-                                    tc,
-                                    tool_name,
-                                    &tc.arguments,
-                                    real_exit_code,
-                                    real_stdout_len,
-                                    real_stderr_len,
-                                )
-                                .await;
-                            // ── Carryover collection (before crs is consumed) ──
-                            self.collect_carryover(tc, &crs);
-                            emit_correction_results(crs, tc, &mut events, &mut self.conversation)?;
-                        }
-
-                        // If there were tool calls, continue the loop for another model turn
-                        if !tool_calls.is_empty() {
-                            break; // break the event loop, continue the outer turn loop
-                        }
-
-                        // No tool calls — check for parse errors to retry
-                        if had_parse_error && !already_retried_parse {
-                            already_retried_parse = true;
-                            // Inject a fix-it message to nudge the model into
-                            // re-emitting just the tool call with valid JSON.
-                            // This is a single retry — if the model fails again
-                            // we fall through to return Ok(events).
-                            let retry_msg = "Your previous response contained a tool call with malformed JSON arguments. Re-emit ONLY the tool call with the corrected JSON — no additional text, no explanation.";
-                            self.conversation.append(Message {
-                                role: Role::User,
-                                content: retry_msg.into(),
-                                thinking: None,
-                                tool_calls: None,
-                                tool_call_id: None,
-                                tool_name: None,
-                                token_count: None,
-                            })?;
-                            events.push(TurnEvent::Token(
-                                "(JSON parse error, retrying…)\n".into(),
-                            ));
-                            // Break the inner event loop so the outer turn loop
-                            // re-streams from the model with the fix-it message
-                            break; // break the event loop, not the outer turn loop
-                        }
-
-                        // No tool calls and no retry — we're done
+                            token_count: None,
+                        })?;
+                        events.push(TurnEvent::Token("(JSON parse error, retrying…)\n".into()));
+                    } else {
+                        // Model failed twice. Give up and let the
+                        // user see the events we've collected.
                         return Ok(events);
                     }
                 }
             }
 
-            // If we processed tool calls, continue to let the model respond
-            if iteration + 1 >= max_iterations {
+            if iteration + 1 >= MAX_ITERATIONS {
                 events.push(TurnEvent::Error("Tool call loop limit reached".into()));
+                return Ok(events);
             }
         }
 
         Ok(events)
+    }
+
+    /// Run one pass of: build prompt → stream → drain events →
+    /// append assistant message → record cost.
+    ///
+    /// On `StreamEvent::Done`, decides between three outcomes:
+    /// - `ToolCalls` — pending tool calls were collected; return
+    ///   them to the orchestrator for dispatch + next iteration.
+    /// - `Finished` — no tool calls, no parse error; turn is over.
+    /// - `ParseError` — adapter reported a JSON parse error;
+    ///   orchestrator may retry.
+    ///
+    /// `tool_calls_out` is borrowed from the orchestrator so
+    /// completed tool calls land in the same buffer the caller
+    /// iterates over after we return. Avoids a second `Vec` clone
+    /// for the (common) "all calls completed, loop again" path.
+    ///
+    /// `approval_sender` is currently unused at this layer (the
+    /// stream itself never needs to prompt), but we keep it in
+    /// the signature so the orchestrator has one consistent
+    /// place to pass the channel to both helpers.
+    #[allow(unused_variables)]
+    async fn stream_iteration(
+        &mut self,
+        approval_sender: &mpsc::UnboundedSender<ApprovalRequest>,
+        cancelled: &AtomicBool,
+        events: &mut Vec<TurnEvent>,
+        tool_calls_out: &mut Vec<ToolInvocation>,
+    ) -> anyhow::Result<IterationOutcome> {
+        let model_info = self.adapter.model_info();
+        let tool_defs: Vec<ToolDef> = self.tools.iter().map(|t| t.def()).collect();
+        let tool_names: Vec<&str> = tool_defs.iter().map(|t| t.name).collect();
+
+        let carryover_block = if self.carryover_enabled {
+            let block = self.carryover.to_prompt_block();
+            if block.is_empty() {
+                None
+            } else {
+                Some(block)
+            }
+        } else {
+            None
+        };
+
+        let system = self.prompt_builder.build(
+            &model_info.name,
+            model_info.supports_thinking,
+            &tool_names,
+            carryover_block.as_deref(),
+        );
+
+        let history = self.conversation.all();
+        let tool_results: Vec<Message> = Vec::new(); // sent as part of history
+
+        let messages = self.prompt_builder.build_messages(
+            system,
+            history,
+            model_info.max_context_tokens,
+            &tool_results,
+        );
+
+        let mut rx = self.adapter.stream(&messages, &tool_defs).await?;
+
+        let mut assistant_content = String::new();
+        let mut assistant_thinking = String::new();
+        tool_calls_out.clear();
+
+        // Adapter-reported parse errors (JSON parse, no parseable
+        // entries). We only return `ParseError` once per turn (the
+        // orchestrator enforces the one-shot retry), but we still
+        // need to track it here so we don't suppress errors that
+        // arrive alongside a `Done` with tool calls.
+        let mut had_parse_error = false;
+
+        while let Some(event) = rx.recv().await {
+            if cancelled.load(Ordering::SeqCst) {
+                events.push(TurnEvent::Token("\n⚠️ Cancelled\n".into()));
+                // Record what we have so far before exiting.
+                if !assistant_content.is_empty()
+                    || !tool_calls_out.is_empty()
+                    || !assistant_thinking.is_empty()
+                {
+                    let msg = Message {
+                        role: Role::Assistant,
+                        content: assistant_content.clone(),
+                        thinking: if assistant_thinking.is_empty() {
+                            None
+                        } else {
+                            Some(assistant_thinking.clone())
+                        },
+                        tool_calls: if tool_calls_out.is_empty() {
+                            None
+                        } else {
+                            Some(tool_calls_out.clone())
+                        },
+                        ..Default::default()
+                    };
+                    self.conversation.append(msg)?;
+                }
+                return Ok(IterationOutcome::Finished);
+            }
+
+            match event {
+                StreamEvent::Text(t) => {
+                    assistant_content.push_str(&t);
+                    events.push(TurnEvent::Token(t));
+                }
+                StreamEvent::Thinking(t) => {
+                    assistant_thinking.push_str(&t);
+                    events.push(TurnEvent::Thinking(t));
+                }
+                StreamEvent::ToolCall(tc) => {
+                    tool_calls_out.push(tc);
+                }
+                StreamEvent::Error(e) => {
+                    // Surface parse-related errors from adapters so
+                    // the orchestrator can decide whether to retry.
+                    if e.contains("parse") || e.contains("parseable") {
+                        had_parse_error = true;
+                    }
+                    events.push(TurnEvent::Error(e));
+                }
+                StreamEvent::Done {
+                    finish_reason: _,
+                    usage,
+                } => {
+                    // Persist the assistant message (the body of
+                    // text/thinking/tool-calls we just streamed).
+                    let msg = Message {
+                        role: Role::Assistant,
+                        content: assistant_content.clone(),
+                        thinking: if assistant_thinking.is_empty() {
+                            None
+                        } else {
+                            Some(assistant_thinking.clone())
+                        },
+                        tool_calls: if tool_calls_out.is_empty() {
+                            None
+                        } else {
+                            Some(tool_calls_out.clone())
+                        },
+                        tool_call_id: None,
+                        tool_name: None,
+                        token_count: usage.as_ref().and_then(|u| u.completion_tokens),
+                    };
+                    self.conversation.append(msg)?;
+
+                    // Record cost
+                    if let Some(ref u) = usage {
+                        let prompt = u.prompt_tokens.unwrap_or(0);
+                        let completion = u.completion_tokens.unwrap_or(0);
+                        let cost =
+                            crate::shared::calculate_cost(&self.model_name, prompt, completion);
+                        self.cost_tracking.record_turn(prompt, completion, cost);
+                        events.push(TurnEvent::CostStats {
+                            prompt_tokens: prompt,
+                            completion_tokens: completion,
+                            turn_cost: cost,
+                            cumulative_cost: self.cost_tracking.cumulative_cost,
+                        });
+                    }
+
+                    if !tool_calls_out.is_empty() {
+                        // Caller will dispatch them and loop again.
+                        return Ok(IterationOutcome::ToolCalls(tool_calls_out.clone()));
+                    }
+
+                    // No tool calls. If the model reported a parse
+                    // error, the orchestrator decides whether to
+                    // retry. Otherwise the turn is done.
+                    return Ok(if had_parse_error {
+                        IterationOutcome::ParseError
+                    } else {
+                        IterationOutcome::Finished
+                    });
+                }
+            }
+        }
+
+        // Stream ended without an explicit Done — treat as
+        // finished. We may have missed parse errors in the
+        // tail; surface them so the orchestrator can decide.
+        if had_parse_error {
+            Ok(IterationOutcome::ParseError)
+        } else {
+            Ok(IterationOutcome::Finished)
+        }
+    }
+
+    /// Dispatch a single tool call through the full pipeline:
+    /// tool lookup → permission rules → approval → deny list →
+    /// path guard → read gate → bash minify → execute → event
+    /// emit → correction loop → carryover.
+    ///
+    /// **Why this is one function and not a chain of small
+    /// helpers:** the steps share state (e.g. the resolved path
+    /// from the path guard feeds the read gate, the corrected
+    /// path is the one the tool actually runs against). Splitting
+    /// them forces the caller to thread that state through
+    /// signatures; keeping them inlined here means the dataflow
+    /// is visible in one place. The "if it's not destructive,
+    /// skip approval" early return keeps the common case
+    /// (read_file, grep, glob) fast.
+    async fn dispatch_tool_call(
+        &mut self,
+        tc: &ToolInvocation,
+        approval_sender: &mpsc::UnboundedSender<ApprovalRequest>,
+        events: &mut Vec<TurnEvent>,
+    ) -> anyhow::Result<()> {
+        // 1. Tool lookup
+        let tool = match self.tools.iter().find(|t| t.def().name == tc.name) {
+            Some(t) => t.clone(),
+            None => {
+                let err = format!("Unknown tool: {}", tc.name);
+                events.push(TurnEvent::Error(err.clone()));
+                self.conversation.append(Message {
+                    role: Role::Tool,
+                    content: err,
+                    tool_call_id: Some(tc.id.clone()),
+                    tool_name: Some(tc.name.clone()),
+                    ..Default::default()
+                })?;
+                return Ok(());
+            }
+        };
+
+        // 2. Permission rule evaluation.
+        //    The `auto_approve` flag sets the default action
+        //    (true → Allow, false → Ask); `permission_rules`
+        //    can override per-call. First matching rule wins.
+        let is_destructive = matches!(tc.name.as_str(), "write_file" | "edit_file" | "bash");
+        let default_action = if self.config.auto_approve {
+            PermissionAction::Allow
+        } else {
+            PermissionAction::Ask
+        };
+        let action = evaluate(
+            &self.config.permission_rules,
+            &tc.name,
+            &tc.arguments,
+            default_action,
+        );
+        let needs_approval = is_destructive && matches!(action, PermissionAction::Ask);
+
+        // 3. Deny-list rule: refuse without prompting.
+        if matches!(action, PermissionAction::Deny) && is_destructive {
+            let reason = format!(
+                "❌ Permission rule denied {}:{}={}",
+                tc.name,
+                tc.arguments
+                    .as_object()
+                    .and_then(|o| o.keys().next().map(|s| s.as_str()))
+                    .unwrap_or(""),
+                tc.arguments
+                    .as_object()
+                    .and_then(|o| o.values().next())
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(""),
+            );
+            events.push(TurnEvent::ToolResult {
+                name: tc.name.clone(),
+                output: reason.clone(),
+            });
+            self.conversation.append(Message {
+                role: Role::Tool,
+                content: reason,
+                tool_call_id: Some(tc.id.clone()),
+                tool_name: Some(tc.name.clone()),
+                ..Default::default()
+            })?;
+            return Ok(());
+        }
+
+        // 4. Approval gate (file tools under !auto_approve, or
+        //    non-read-only bash under auto_approve).
+        if needs_approval {
+            match self.run_approval_flow(tc, approval_sender).await? {
+                ApprovalDecision::Approved | ApprovalDecision::AlwaysApproved => {
+                    // Proceed to access checks below.
+                }
+                ApprovalDecision::Denied => {
+                    events.push(TurnEvent::ToolResult {
+                        name: tc.name.clone(),
+                        output: "❌ User denied this operation".into(),
+                    });
+                    self.conversation.append(Message {
+                        role: Role::Tool,
+                        content: "Operation denied by user.".into(),
+                        tool_call_id: Some(tc.id.clone()),
+                        tool_name: Some(tc.name.clone()),
+                        ..Default::default()
+                    })?;
+                    return Ok(());
+                }
+            }
+        }
+
+        // 5. Access control: deny list (all tools)
+        if let Some(denied) = check_deny_list(&self.deny_list, &tc.name, &tc.arguments) {
+            events.push(TurnEvent::ToolResult {
+                name: tc.name.clone(),
+                output: denied.clone(),
+            });
+            self.conversation.append(Message {
+                role: Role::Tool,
+                content: denied,
+                tool_call_id: Some(tc.id.clone()),
+                tool_name: Some(tc.name.clone()),
+                ..Default::default()
+            })?;
+            return Ok(());
+        }
+
+        // 6. File tools: path guard + read-before-edit gate
+        if matches!(tc.name.as_str(), "read_file" | "write_file" | "edit_file") {
+            let path_str = tc
+                .arguments
+                .get("path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let path = std::path::Path::new(path_str);
+
+            let verdict = match tc.name.as_str() {
+                "read_file" => self.path_guard.check_read(path),
+                "write_file" | "edit_file" => self.path_guard.check_write(path),
+                _ => unreachable!(),
+            };
+
+            match verdict {
+                GuardVerdict::Allowed(resolved) => {
+                    if tc.name == "edit_file" {
+                        if let GuardVerdict::Denied(msg) = self.read_gate.check_edit(path) {
+                            let denied = format!("🔒 Access denied: {msg}");
+                            events.push(TurnEvent::ToolResult {
+                                name: tc.name.clone(),
+                                output: denied.clone(),
+                            });
+                            self.conversation.append(Message {
+                                role: Role::Tool,
+                                content: denied,
+                                tool_call_id: Some(tc.id.clone()),
+                                tool_name: Some(tc.name.clone()),
+                                ..Default::default()
+                            })?;
+                            return Ok(());
+                        }
+                    }
+
+                    if tc.name == "read_file" {
+                        self.read_gate.mark_read(&resolved);
+                    }
+
+                    // Stash resolved path back for the tool.
+                    let mut run_args = tc.arguments.clone();
+                    if let Ok(path_obj) = serde_json::to_value(resolved.to_string_lossy().as_ref())
+                    {
+                        if let Some(obj) = run_args.as_object_mut() {
+                            obj.insert("path".into(), path_obj);
+                        }
+                    }
+
+                    events.push(TurnEvent::ToolStart {
+                        name: tc.name.clone(),
+                        args: run_args.clone(),
+                    });
+                    let outcome = tool.run(run_args.clone()).await;
+                    handle_tool_outcome(outcome, tc, events, &mut self.conversation)?;
+                    let crs = self
+                        .emit_tool_event_and_correct(tc, &tc.name, &run_args, None, None, None)
+                        .await;
+                    self.collect_carryover(tc, &crs);
+                    emit_correction_results(crs, tc, events, &mut self.conversation)?;
+                    return Ok(());
+                }
+                GuardVerdict::Denied(msg) => {
+                    let denied = format!("🔒 Access denied: {msg}");
+                    events.push(TurnEvent::ToolResult {
+                        name: tc.name.clone(),
+                        output: denied.clone(),
+                    });
+                    self.conversation.append(Message {
+                        role: Role::Tool,
+                        content: denied,
+                        tool_call_id: Some(tc.id.clone()),
+                        tool_name: Some(tc.name.clone()),
+                        ..Default::default()
+                    })?;
+                    return Ok(());
+                }
+            }
+        }
+
+        // 7. Bash: deny-list + read-only classification for auto-approve
+        if tc.name == "bash" {
+            if let Some(denied) = check_bash_command(&tc.arguments) {
+                events.push(TurnEvent::ToolResult {
+                    name: tc.name.clone(),
+                    output: denied.clone(),
+                });
+                self.conversation.append(Message {
+                    role: Role::Tool,
+                    content: denied,
+                    tool_call_id: Some(tc.id.clone()),
+                    tool_name: Some(tc.name.clone()),
+                    ..Default::default()
+                })?;
+                return Ok(());
+            }
+        }
+
+        // 8. Execute
+        events.push(TurnEvent::ToolStart {
+            name: tc.name.clone(),
+            args: tc.arguments.clone(),
+        });
+        let outcome = tool.run(tc.arguments.clone()).await;
+
+        // 9. Cap output for bash to avoid blowing context
+        let (real_exit_code, real_stdout_len, real_stderr_len) = if tc.name == "bash" {
+            extract_bash_metrics(&outcome)
+        } else {
+            (None, None, None)
+        };
+        let outcome = if tc.name == "bash" {
+            truncate_tool_output(outcome, self.config.max_tool_result_chars)
+        } else {
+            outcome
+        };
+        handle_tool_outcome(outcome, tc, events, &mut self.conversation)?;
+
+        // 10. Bus event + correction loop + carryover
+        let crs = self
+            .emit_tool_event_and_correct(
+                tc,
+                &tc.name,
+                &tc.arguments,
+                real_exit_code,
+                real_stdout_len,
+                real_stderr_len,
+            )
+            .await;
+        self.collect_carryover(tc, &crs);
+        emit_correction_results(crs, tc, events, &mut self.conversation)?;
+        Ok(())
+    }
+
+    /// Run the "ask the user / wait for response" approval flow.
+    ///
+    /// Sends an [`ApprovalRequest`] over `approval_sender`, awaits
+    /// the user's decision, and (on `AlwaysApprove`) pushes a
+    /// matching `permission_rules` entry so future similar calls
+    /// skip the prompt entirely. This is the single home for the
+    /// duplicated approval logic that previously lived inline at
+    /// two call sites in `run_turn` (file tools under
+    /// `!auto_approve` and non-read-only bash under
+    /// `auto_approve`).
+    async fn run_approval_flow(
+        &mut self,
+        tc: &ToolInvocation,
+        approval_sender: &mpsc::UnboundedSender<ApprovalRequest>,
+    ) -> anyhow::Result<ApprovalDecision> {
+        let (response_tx, response_rx) = tokio::sync::oneshot::channel::<ApprovalResponse>();
+        approval_sender
+            .send(ApprovalRequest {
+                tool_name: tc.name.clone(),
+                args: tc.arguments.clone(),
+                response: response_tx,
+            })
+            .map_err(|_| anyhow::anyhow!("approval channel closed"))?;
+
+        match response_rx.await {
+            Ok(ApprovalResponse::Approved) => Ok(ApprovalDecision::Approved),
+            Ok(ApprovalResponse::Denied) => Ok(ApprovalDecision::Denied),
+            Ok(ApprovalResponse::AlwaysApprove) => {
+                // **v1.2-p13 — permission rule persistence.**
+                // Build a rule matching THIS specific call (tool
+                // name + the key argument — `command` for bash,
+                // `path` for edit_file) and push it into the
+                // session's `permission_rules`. Future calls
+                // matching this rule will skip the approval
+                // dialog. The TUI side ALSO persists so the
+                // rule survives across sessions via
+                // `save_config`; this in-memory push keeps the
+                // rest of THIS turn consistent.
+                //
+                // Deliberately does NOT flip `auto_approve`:
+                // the user asked for "always this specific
+                // command" — not "always everything". The old
+                // `auto_approve = true` was a blanket bypass
+                // that the new per-call rules replace.
+                let rule = crate::shared::permission::suggest_rule(&tc.name, &tc.arguments);
+                push_rule_unique(&mut self.config.permission_rules, rule);
+                Ok(ApprovalDecision::AlwaysApproved)
+            }
+            Err(_) => {
+                // Sender was dropped (UI exited). Conservatively
+                // deny — better to refuse than to silently
+                // execute.
+                Ok(ApprovalDecision::Denied)
+            }
+        }
     }
 
     /// Emit a tool event on the event bus and run the correction loop.
@@ -1106,16 +1180,11 @@ const DANGEROUS_SHELL_COMMANDS: &[&str] = &[
 /// auto-approve UNLESS they chain into dangerous operations (redirects,
 /// pipe-to-shell, chaining, command substitution).
 const READ_ONLY_COMMANDS: &[&str] = &[
-    "ls", "cat", "head", "tail", "pwd", "echo", "printf",
-    "which", "type", "file", "stat", "du", "df", "env",
-    "printenv", "true", "false", "dirname", "basename",
-    "realpath", "readlink",
-    "grep", "rg", "find", "sort", "wc", "cut", "tr", "uniq",
-    "fold", "nl", "diff", "cmp", "comm", "jq",
-    "date", "cal", "whoami", "id", "uname", "hostname",
-    "uptime", "ps", "free", "lscpu", "lsblk", "lsof",
-    "dmesg", "nproc", "arch", "tty",
-    "jobs", "help",
+    "ls", "cat", "head", "tail", "pwd", "echo", "printf", "which", "type", "file", "stat", "du",
+    "df", "env", "printenv", "true", "false", "dirname", "basename", "realpath", "readlink",
+    "grep", "rg", "find", "sort", "wc", "cut", "tr", "uniq", "fold", "nl", "diff", "cmp", "comm",
+    "jq", "date", "cal", "whoami", "id", "uname", "hostname", "uptime", "ps", "free", "lscpu",
+    "lsblk", "lsof", "dmesg", "nproc", "arch", "tty", "jobs", "help",
 ];
 
 /// Check whether a bash command is read-only (safe to auto-approve).
@@ -1211,8 +1280,7 @@ fn check_bash_command(args: &serde_json::Value) -> Option<String> {
     // false-positive on legitimate paths ("rm -rf /home") with .contains(),
     // so they use word-boundary matching. Everything else uses .contains().
     for pattern in DANGEROUS_SHELL_COMMANDS {
-        let needs_word_boundary =
-            pattern.ends_with('/') || pattern.ends_with(' ');
+        let needs_word_boundary = pattern.ends_with('/') || pattern.ends_with(' ');
         let matches = if needs_word_boundary {
             word_boundary_match(cmd, pattern)
         } else {
@@ -1592,7 +1660,10 @@ mod tests {
 
         let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
         let mut exe = make_executor(Box::new(adapter), vec![], make_config(false));
-        let events = exe.run_turn("hello", &approval_tx, never_cancelled()).await.unwrap();
+        let events = exe
+            .run_turn("hello", &approval_tx, never_cancelled())
+            .await
+            .unwrap();
 
         let tokens: Vec<_> = events
             .iter()
@@ -1646,7 +1717,10 @@ mod tests {
 
         let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
         let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(true));
-        let events = exe.run_turn("use echo", &approval_tx, never_cancelled()).await.unwrap();
+        let events = exe
+            .run_turn("use echo", &approval_tx, never_cancelled())
+            .await
+            .unwrap();
 
         // Should have token + tool_start + tool_result
         let has_token = events.iter().any(|e| matches!(e, TurnEvent::Token(_)));
@@ -1715,7 +1789,10 @@ mod tests {
         });
 
         let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(false));
-        let events = exe.run_turn("run command", &approval_tx, never_cancelled()).await.unwrap();
+        let events = exe
+            .run_turn("run command", &approval_tx, never_cancelled())
+            .await
+            .unwrap();
 
         approval_handle.await.unwrap();
 
@@ -1765,7 +1842,10 @@ mod tests {
         });
 
         let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(false));
-        let events = exe.run_turn("run command", &approval_tx, never_cancelled()).await.unwrap();
+        let events = exe
+            .run_turn("run command", &approval_tx, never_cancelled())
+            .await
+            .unwrap();
 
         approval_handle.await.unwrap();
 
@@ -1796,7 +1876,9 @@ mod tests {
                 parameters: serde_json::json!({"type": "object", "properties": {"command": {"type": "string"}}}),
             },
             captured_args: captured.clone(),
-            outcome: ToolOutcome::Success { content: "ran!".into() },
+            outcome: ToolOutcome::Success {
+                content: "ran!".into(),
+            },
         };
 
         let adapter = MockAdapter::new(
@@ -1828,7 +1910,10 @@ mod tests {
         assert!(!config.auto_approve);
 
         let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], config);
-        let _events = exe.run_turn("run tests", &approval_tx, never_cancelled()).await.unwrap();
+        let _events = exe
+            .run_turn("run tests", &approval_tx, never_cancelled())
+            .await
+            .unwrap();
         approval_handle.await.unwrap();
 
         // **The new rule must be in permission_rules.**
@@ -1866,7 +1951,9 @@ mod tests {
                 parameters: serde_json::json!({"type": "object", "properties": {"command": {"type": "string"}}}),
             },
             captured_args: captured.clone(),
-            outcome: ToolOutcome::Success { content: "ran!".into() },
+            outcome: ToolOutcome::Success {
+                content: "ran!".into(),
+            },
         };
 
         let adapter = MockAdapter::new(
@@ -1906,16 +1993,21 @@ mod tests {
         // build for `bash:command=ls`. The dedup should leave it
         // untouched (and not add a duplicate).
         let mut config = config;
-        config.permission_rules.push(crate::shared::permission::PermissionRule {
-            tool: "bash".into(),
-            key: "command".into(),
-            pattern: "ls".into(),
-            action: PermissionAction::Allow,
-        });
+        config
+            .permission_rules
+            .push(crate::shared::permission::PermissionRule {
+                tool: "bash".into(),
+                key: "command".into(),
+                pattern: "ls".into(),
+                action: PermissionAction::Allow,
+            });
         assert_eq!(config.permission_rules.len(), 1);
 
         let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], config);
-        let _events = exe.run_turn("list", &approval_tx, never_cancelled()).await.unwrap();
+        let _events = exe
+            .run_turn("list", &approval_tx, never_cancelled())
+            .await
+            .unwrap();
         drop(approval_tx);
         approval_handle.await.unwrap();
 
@@ -1942,7 +2034,9 @@ mod tests {
                 parameters: serde_json::json!({"type": "object", "properties": {"command": {"type": "string"}}}),
             },
             captured_args: captured.clone(),
-            outcome: ToolOutcome::Success { content: "ran!".into() },
+            outcome: ToolOutcome::Success {
+                content: "ran!".into(),
+            },
         };
 
         let adapter = MockAdapter::new(
@@ -1975,15 +2069,20 @@ mod tests {
 
         let mut config = make_config(false);
         // User previously DENIED this exact command (a sensible config).
-        config.permission_rules.push(crate::shared::permission::PermissionRule {
-            tool: "bash".into(),
-            key: "command".into(),
-            pattern: "rm -rf build".into(),
-            action: PermissionAction::Deny,
-        });
+        config
+            .permission_rules
+            .push(crate::shared::permission::PermissionRule {
+                tool: "bash".into(),
+                key: "command".into(),
+                pattern: "rm -rf build".into(),
+                action: PermissionAction::Deny,
+            });
 
         let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], config);
-        let _events = exe.run_turn("clean", &approval_tx, never_cancelled()).await.unwrap();
+        let _events = exe
+            .run_turn("clean", &approval_tx, never_cancelled())
+            .await
+            .unwrap();
         drop(approval_tx);
         approval_handle.await.unwrap();
 
@@ -2009,7 +2108,10 @@ mod tests {
 
         let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
         let mut exe = make_executor(Box::new(adapter), vec![], make_config(false));
-        let events = exe.run_turn("do it", &approval_tx, never_cancelled()).await.unwrap();
+        let events = exe
+            .run_turn("do it", &approval_tx, never_cancelled())
+            .await
+            .unwrap();
 
         let has_error = events
             .iter()
@@ -2113,7 +2215,10 @@ mod tests {
 
         let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
         let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(true));
-        let _events = exe.run_turn("loop", &approval_tx, never_cancelled()).await.unwrap();
+        let _events = exe
+            .run_turn("loop", &approval_tx, never_cancelled())
+            .await
+            .unwrap();
 
         // Should NOT have hit the limit (max_iterations = 10, and we'd get error if we did)
         let tool_calls = *call_count.lock().unwrap();
@@ -2164,7 +2269,11 @@ mod tests {
         // "rm -rf /" should NOT block "rm -rf /home/user/temp"
         let args = serde_json::json!({"command": "rm -rf /home/user/temp"});
         let result = check_bash_command(&args);
-        assert!(result.is_none(), "rm -rf /home/user/temp should be allowed, got: {:?}", result);
+        assert!(
+            result.is_none(),
+            "rm -rf /home/user/temp should be allowed, got: {:?}",
+            result
+        );
     }
 
     #[test]
@@ -2186,7 +2295,10 @@ mod tests {
     fn test_check_bash_command_allows_legitimate_curl() {
         let args = serde_json::json!({"command": "curl -s https://api.example.com/data"});
         let result = check_bash_command(&args);
-        assert!(result.is_none(), "curl should not be blocked by check_bash_command");
+        assert!(
+            result.is_none(),
+            "curl should not be blocked by check_bash_command"
+        );
     }
 
     #[test]

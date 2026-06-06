@@ -22,7 +22,7 @@ jobs:
   x86_64-musl:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-unknown-linux-musl
@@ -36,7 +36,7 @@ jobs:
           ldd target/x86_64-unknown-linux-musl/release/kirkforge 2>&1 \
             && echo "NOT STATIC" || echo "STATIC — no dynamic deps"
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: kirkforge-x86_64-musl
           path: target/x86_64-unknown-linux-musl/release/kirkforge
@@ -45,7 +45,7 @@ jobs:
   aarch64-musl:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-unknown-linux-musl
@@ -54,7 +54,7 @@ jobs:
       - name: Build (release, static)
         run: cross build --target aarch64-unknown-linux-musl --release
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: kirkforge-aarch64-musl
           path: target/aarch64-unknown-linux-musl/release/kirkforge
@@ -63,7 +63,7 @@ jobs:
   armv7-musl:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: armv7-unknown-linux-musleabihf
@@ -72,7 +72,7 @@ jobs:
       - name: Build (release, static)
         run: cross build --target armv7-unknown-linux-musleabihf --release
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: kirkforge-armv7-musl
           path: target/armv7-unknown-linux-musleabihf/release/kirkforge
@@ -86,15 +86,15 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: kirkforge-x86_64-musl
           path: release-artifacts/x86_64
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: kirkforge-aarch64-musl
           path: release-artifacts/aarch64
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: kirkforge-armv7-musl
           path: release-artifacts/armv7
@@ -105,6 +105,6 @@ jobs:
           cp release-artifacts/aarch64/kirkforge release-bundle/kirkforge-aarch64-musl
           cp release-artifacts/armv7/kirkforge release-bundle/kirkforge-armv7-musl
       - name: Upload to release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: release-bundle/*

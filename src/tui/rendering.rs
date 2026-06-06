@@ -134,7 +134,11 @@ pub fn render_markdown_lines(text: &str) -> Vec<Line<'static>> {
             } else {
                 // Start code block — extract language hint
                 in_code_block = true;
-                code_block_lang = raw_line.trim_start().trim_start_matches("```").trim().to_string();
+                code_block_lang = raw_line
+                    .trim_start()
+                    .trim_start_matches("```")
+                    .trim()
+                    .to_string();
             }
             continue;
         }
@@ -417,10 +421,25 @@ mod tests {
     #[test]
     fn test_budget_indicator_comfortable_is_green() {
         let (text, color) = format_budget_indicator(42_000, 128_000);
-        assert!(text.contains("42.0K"), "should show used in K, got '{}'", text);
-        assert!(text.contains("128.0K"), "should show max in K, got '{}'", text);
-        assert!(text.contains("(32%)"), "should show 32% (42k/128k), got '{}'", text);
-        assert!(matches!(color, Color::Green), "comfortable use should be green");
+        assert!(
+            text.contains("42.0K"),
+            "should show used in K, got '{}'",
+            text
+        );
+        assert!(
+            text.contains("128.0K"),
+            "should show max in K, got '{}'",
+            text
+        );
+        assert!(
+            text.contains("(32%)"),
+            "should show 32% (42k/128k), got '{}'",
+            text
+        );
+        assert!(
+            matches!(color, Color::Green),
+            "comfortable use should be green"
+        );
     }
 
     /// At 60% (mid-range) the indicator should be yellow.

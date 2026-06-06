@@ -1,6 +1,7 @@
 pub mod deepseek;
 pub mod gemini;
 pub mod glm;
+pub mod ollama_ndjson;
 pub mod openai_compat;
 
 use crate::shared::{ModelInfo, StreamEvent};

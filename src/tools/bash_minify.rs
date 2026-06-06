@@ -162,8 +162,8 @@ fn filter_build_log(lines: &[&str]) -> Vec<String> {
         .collect();
 
     let keep_head_w = BUILD_LOG_KEEP_HEAD_WARNINGS.min(warning_indices.len());
-    let keep_tail_w = BUILD_LOG_KEEP_TAIL_WARNINGS
-        .min(warning_indices.len().saturating_sub(keep_head_w));
+    let keep_tail_w =
+        BUILD_LOG_KEEP_TAIL_WARNINGS.min(warning_indices.len().saturating_sub(keep_head_w));
     let drop_w_start = keep_head_w;
     let drop_w_end = warning_indices.len().saturating_sub(keep_tail_w);
     let dropped_warnings = drop_w_end.saturating_sub(drop_w_start);
@@ -172,7 +172,10 @@ fn filter_build_log(lines: &[&str]) -> Vec<String> {
     // suggestion block under a dropped warning (the lines between
     // the warning title and the next blank/Compiling/warning).
     let dropped_warning_starts: std::collections::HashSet<usize> = if dropped_warnings > 0 {
-        warning_indices[drop_w_start..drop_w_end].iter().copied().collect()
+        warning_indices[drop_w_start..drop_w_end]
+            .iter()
+            .copied()
+            .collect()
     } else {
         std::collections::HashSet::new()
     };
@@ -185,14 +188,17 @@ fn filter_build_log(lines: &[&str]) -> Vec<String> {
         .collect();
 
     let keep_head_c = BUILD_LOG_KEEP_HEAD_COMPILING.min(compiling_indices.len());
-    let keep_tail_c = BUILD_LOG_KEEP_TAIL_COMPILING
-        .min(compiling_indices.len().saturating_sub(keep_head_c));
+    let keep_tail_c =
+        BUILD_LOG_KEEP_TAIL_COMPILING.min(compiling_indices.len().saturating_sub(keep_head_c));
     let drop_c_start = keep_head_c;
     let drop_c_end = compiling_indices.len().saturating_sub(keep_tail_c);
     let dropped_compiling = drop_c_end.saturating_sub(drop_c_start);
 
     let dropped_compiling_set: std::collections::HashSet<usize> = if dropped_compiling > 0 {
-        compiling_indices[drop_c_start..drop_c_end].iter().copied().collect()
+        compiling_indices[drop_c_start..drop_c_end]
+            .iter()
+            .copied()
+            .collect()
     } else {
         std::collections::HashSet::new()
     };
@@ -207,7 +213,9 @@ fn filter_build_log(lines: &[&str]) -> Vec<String> {
         if k == LineKind::WarningTitle {
             if dropped_warning_starts.contains(&i) {
                 // Mark this whole warning as collapsed.
-                if dropped_warnings > 0 && out.last().map(|s| s.as_str()) != Some(WARNINGS_OMITTED_MARKER) {
+                if dropped_warnings > 0
+                    && out.last().map(|s| s.as_str()) != Some(WARNINGS_OMITTED_MARKER)
+                {
                     out.push(WARNINGS_OMITTED_MARKER.to_string());
                 }
                 skipping_warning = true;
@@ -224,7 +232,13 @@ fn filter_build_log(lines: &[&str]) -> Vec<String> {
             // the block runs from the warning title to the next
             // blank line, Compiling line, or another warning/error.
             // Stop skipping at those boundaries.
-            if matches!(k, LineKind::Blank | LineKind::Compiling | LineKind::WarningTitle | LineKind::ErrorTitle) {
+            if matches!(
+                k,
+                LineKind::Blank
+                    | LineKind::Compiling
+                    | LineKind::WarningTitle
+                    | LineKind::ErrorTitle
+            ) {
                 skipping_warning = false;
                 // Fall through to emit this boundary line.
             } else {
@@ -234,7 +248,9 @@ fn filter_build_log(lines: &[&str]) -> Vec<String> {
 
         if k == LineKind::Compiling {
             if dropped_compiling_set.contains(&i) {
-                if dropped_compiling > 0 && out.last().map(|s| s.as_str()) != Some(CRATES_OMITTED_MARKER) {
+                if dropped_compiling > 0
+                    && out.last().map(|s| s.as_str()) != Some(CRATES_OMITTED_MARKER)
+                {
                     out.push(CRATES_OMITTED_MARKER.to_string());
                 }
                 continue;
@@ -254,16 +270,20 @@ fn filter_build_log(lines: &[&str]) -> Vec<String> {
     if dropped_warnings > 0 {
         for s in out.iter_mut() {
             if s == WARNINGS_OMITTED_MARKER {
-                *s = format!("[…{} warnings omitted (kept first {} and last {})…]",
-                             dropped_warnings, keep_head_w, keep_tail_w);
+                *s = format!(
+                    "[…{} warnings omitted (kept first {} and last {})…]",
+                    dropped_warnings, keep_head_w, keep_tail_w
+                );
             }
         }
     }
     if dropped_compiling > 0 {
         for s in out.iter_mut() {
             if s == CRATES_OMITTED_MARKER {
-                *s = format!("[…{} crate compilations omitted (kept first {} and last {})…]",
-                             dropped_compiling, keep_head_c, keep_tail_c);
+                *s = format!(
+                    "[…{} crate compilations omitted (kept first {} and last {})…]",
+                    dropped_compiling, keep_head_c, keep_tail_c
+                );
             }
         }
     }
@@ -438,7 +458,7 @@ fn is_dump_command(name: &str) -> bool {
             | "more"
             | "nl"      // number lines — still just file contents
             | "tac"     // reverse cat — same content
-            | "fold"    // wrap long lines — same content
+            | "fold" // wrap long lines — same content
     )
 }
 
@@ -568,7 +588,10 @@ mod tests {
         let result = try_minify_bash_output(&format!("cat {}", tmp.display()), original);
         assert!(result.is_some(), "minification should fire on a real file");
         let minified = result.unwrap();
-        assert!(minified.len() < original.len(), "minified form must be shorter");
+        assert!(
+            minified.len() < original.len(),
+            "minified form must be shorter"
+        );
         assert!(!minified.contains("comment"), "comments must be stripped");
 
         let _ = std::fs::remove_file(&tmp);
@@ -585,7 +608,10 @@ mod tests {
         let result = try_minify_bash_output(&format!("cat {}", tmp.display()), original);
         // The minifier is a near no-op on this — savings < 20% — so we
         // should refuse the swap and return None.
-        assert!(result.is_none(), "should refuse swap when savings are below threshold");
+        assert!(
+            result.is_none(),
+            "should refuse swap when savings are below threshold"
+        );
 
         let _ = std::fs::remove_file(&tmp);
     }
@@ -594,7 +620,8 @@ mod tests {
     fn try_minify_passthrough_for_unknown_extension() {
         // .txt is not in the minify allowlist — we should never modify it.
         let tmp = std::env::temp_dir().join("kirkforge_bash_minify_txt.txt");
-        let original = "this is some text content\nwith multiple lines\nthat should pass through unchanged\n";
+        let original =
+            "this is some text content\nwith multiple lines\nthat should pass through unchanged\n";
         std::fs::write(&tmp, original).unwrap();
 
         let result = try_minify_bash_output(&format!("cat {}", tmp.display()), original);
@@ -618,12 +645,17 @@ mod tests {
         }
         for i in 0..n_warnings {
             s.push_str(&format!("warning: unused variable `x{i}`\n"));
-            s.push_str(&format!("  --> src/very/long/path/to/module{i}/file{i}.rs:{}:5\n", 100 + i));
+            s.push_str(&format!(
+                "  --> src/very/long/path/to/module{i}/file{i}.rs:{}:5\n",
+                100 + i
+            ));
             s.push_str("   |\n");
             s.push_str(&format!("{} |     let x{i} = 5;\n", 100 + i));
             s.push_str(&format!("   |         ^ help: if this is intentional, prefix it with an underscore: `_x{i}`\n"));
             s.push_str("   |\n");
-            s.push_str(&format!("   = note: `#[warn(unused_variables)]` on by default\n"));
+            s.push_str(&format!(
+                "   = note: `#[warn(unused_variables)]` on by default\n"
+            ));
             s.push_str("\n");
         }
         s.push_str("    Finished `dev` profile [unoptimized + debuginfo] target(s) in 12.3s\n");
@@ -637,7 +669,10 @@ mod tests {
         // code excerpt, suggestion, blank, blank, `note:` line).
         let original = synthetic_cargo_output(50, 12);
         let result = try_minify_build_log("cargo build", &original);
-        assert!(result.is_some(), "should fire on a realistic cargo build log");
+        assert!(
+            result.is_some(),
+            "should fire on a realistic cargo build log"
+        );
         let minified = result.unwrap();
         assert!(
             minified.len() * 2 < original.len(),
@@ -660,9 +695,18 @@ mod tests {
 
         let result = try_minify_build_log("cargo build", &original).unwrap();
         assert!(result.contains("error[E0425]"), "error title must survive");
-        assert!(result.contains("cannot find value `foo`"), "error body must survive");
-        assert!(result.contains("--> src/main.rs:3:9"), "error location must survive");
-        assert!(result.contains("|     ^^^ not found in this scope"), "error context must survive");
+        assert!(
+            result.contains("cannot find value `foo`"),
+            "error body must survive"
+        );
+        assert!(
+            result.contains("--> src/main.rs:3:9"),
+            "error location must survive"
+        );
+        assert!(
+            result.contains("|     ^^^ not found in this scope"),
+            "error context must survive"
+        );
     }
 
     #[test]
@@ -672,10 +716,19 @@ mod tests {
         // LAST warning's variable name both survive.
         let original = synthetic_cargo_output(50, 12);
         let result = try_minify_build_log("cargo build", &original).unwrap();
-        assert!(result.contains("unused variable `x0`"), "first warning must survive");
-        assert!(result.contains("unused variable `x11`"), "last warning must survive");
+        assert!(
+            result.contains("unused variable `x0`"),
+            "first warning must survive"
+        );
+        assert!(
+            result.contains("unused variable `x11`"),
+            "last warning must survive"
+        );
         // And the middle ones should be collapsed.
-        assert!(result.contains("warnings omitted"), "middle warnings must be collapsed");
+        assert!(
+            result.contains("warnings omitted"),
+            "middle warnings must be collapsed"
+        );
     }
 
     #[test]
@@ -683,7 +736,10 @@ mod tests {
         // Without strong output signal, ls / cat / grep are not
         // build commands — even if the output is long, we mustn't
         // touch it.
-        let original = (0..50).map(|i| format!("file{i}.txt")).collect::<Vec<_>>().join("\n");
+        let original = (0..50)
+            .map(|i| format!("file{i}.txt"))
+            .collect::<Vec<_>>()
+            .join("\n");
         assert!(try_minify_build_log("ls", &original).is_none());
         assert!(try_minify_build_log("cat foo.txt", &original).is_none());
     }
@@ -702,7 +758,10 @@ mod tests {
         // looks exactly like cargo. Strong output signal = gate passes.
         let original = synthetic_cargo_output(50, 12);
         let result = try_minify_build_log("make build", &original);
-        assert!(result.is_some(), "output-format signal should fire on `make build`");
+        assert!(
+            result.is_some(),
+            "output-format signal should fire on `make build`"
+        );
     }
 
     #[test]
@@ -722,7 +781,9 @@ mod tests {
             original.push_str(&format!("  --> src/lib{i}.rs:{}:5\n", 10 + i));
             original.push_str(&format!("{} |     let x{i} = 5;\n", 10 + i));
             original.push_str(&format!("   |         ^ help: if this is intentional, prefix it with an underscore: `_x{i}`\n"));
-            original.push_str(&format!("   = note: `#[warn(unused_variables)]` on by default\n"));
+            original.push_str(&format!(
+                "   = note: `#[warn(unused_variables)]` on by default\n"
+            ));
             original.push_str("\n");
         }
         let result = try_minify_build_log("rustc --edition 2021 main.rs", &original);
@@ -758,22 +819,33 @@ mod tests {
             original.push_str(&format!("{} |     let x{i} = 5;\n", 100 + i));
             original.push_str(&format!("   |         ^ help: if this is intentional, prefix it with an underscore: `_x{i}`\n"));
             original.push_str("   |\n");
-            original.push_str(&format!("   = note: `#[warn(unused_variables)]` on by default\n"));
+            original.push_str(&format!(
+                "   = note: `#[warn(unused_variables)]` on by default\n"
+            ));
             original.push_str("\n");
         }
 
         // The error path runs the same two-step chain.
-        let step1 = try_minify_bash_output("cargo build", &original)
-            .unwrap_or_else(|| original.clone());
+        let step1 =
+            try_minify_bash_output("cargo build", &original).unwrap_or_else(|| original.clone());
         // `cargo build` is not in the file-dump allowlist, so step1 is
         // a no-op pass-through. Step2 is the build-log filter.
         let final_out = try_minify_build_log("cargo build", &step1)
             .expect("build-log filter must fire on failing cargo output");
 
         // The actual error must survive (model needs to act on it).
-        assert!(final_out.contains("error[E0425]"), "error title must survive");
-        assert!(final_out.contains("cannot find value `foo`"), "error body must survive");
-        assert!(final_out.contains("--> src/main.rs:3:9"), "error location must survive");
+        assert!(
+            final_out.contains("error[E0425]"),
+            "error title must survive"
+        );
+        assert!(
+            final_out.contains("cannot find value `foo`"),
+            "error body must survive"
+        );
+        assert!(
+            final_out.contains("--> src/main.rs:3:9"),
+            "error location must survive"
+        );
 
         // The collapsed output should be substantially smaller.
         assert!(
@@ -792,8 +864,7 @@ mod tests {
         let stdout = "";
         let step1 = try_minify_bash_output("cat /nonexistent", stdout)
             .unwrap_or_else(|| stdout.to_string());
-        let step2 = try_minify_build_log("cat /nonexistent", &step1)
-            .unwrap_or(step1);
+        let step2 = try_minify_build_log("cat /nonexistent", &step1).unwrap_or(step1);
         assert_eq!(step2, stdout, "empty stdout must pass through unchanged");
     }
 

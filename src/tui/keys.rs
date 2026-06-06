@@ -67,7 +67,20 @@ pub async fn handle_input_key(
                         // Ctrl+C: cancel in-flight generation (if any),
                         // then clear the input buffer.
                         if state.is_generating {
-                            let _ = cancel_tx.send(());
+                            if cancel_tx.send(()).is_err() {
+                                // The executor driver is gone — the
+                                // session is ending or the TUI is
+                                // shutting down. No need to keep
+                                // pretending a cancel is in flight.
+                                // Don't warn-and-continue; the user
+                                // pressing Ctrl+C is itself the
+                                // shutdown signal, so just suppress
+                                // state mutation.
+                                tracing::debug!(
+                                    "cancel_tx receiver dropped on Ctrl+C; executor already gone"
+                                );
+                                return Ok(());
+                            }
                             state.is_generating = false;
                         }
                         state.input.clear();
@@ -258,7 +271,9 @@ pub async fn handle_input_key(
                                     ));
                                 }
                             }
-                            state.messages.push(ConversationEntry::new("system", help_text));
+                            state
+                                .messages
+                                .push(ConversationEntry::new("system", help_text));
                             return Ok(());
                         }
                         "/fork" => {
@@ -267,10 +282,9 @@ pub async fn handle_input_key(
                             return Ok(());
                         }
                         "/resume" => {
-                            let msg = crate::tui::commands::handle_resume_command(
-                                args, state, resume_tx,
-                            )
-                            .await;
+                            let msg =
+                                crate::tui::commands::handle_resume_command(args, state, resume_tx)
+                                    .await;
                             state.messages.push(ConversationEntry::new("system", msg));
                             return Ok(());
                         }
@@ -280,15 +294,15 @@ pub async fn handle_input_key(
                             return Ok(());
                         }
                         "/status" => {
-                            let msg = crate::tui::commands::handle_status_command(args, state).await;
+                            let msg =
+                                crate::tui::commands::handle_status_command(args, state).await;
                             state.messages.push(ConversationEntry::new("system", msg));
                             return Ok(());
                         }
                         "/compact" => {
-                            let msg = crate::tui::commands::handle_compact_command(
-                                args, compact_tx,
-                            )
-                            .await;
+                            let msg =
+                                crate::tui::commands::handle_compact_command(args, compact_tx)
+                                    .await;
                             state.messages.push(ConversationEntry::new("system", msg));
                             return Ok(());
                         }
@@ -306,7 +320,15 @@ pub async fn handle_input_key(
                         ));
                         // Send the skill prompt to the model via executor
                         state.is_generating = true;
-                        let _ = input_tx.send(rendered);
+                        if input_tx.send(rendered).is_err() {
+                            // Executor driver gone — same situation
+                            // as the Ctrl+C branch above. Don't
+                            // leave the UI claiming it's
+                            // "generating" when no one is listening.
+                            tracing::warn!(skill = %skill.meta.name, "input_tx receiver dropped while dispatching skill prompt");
+                            state.is_generating = false;
+                            return Ok(());
+                        }
                     } else {
                         state.messages.push(ConversationEntry::new(
                             "system",
@@ -327,10 +349,8 @@ pub async fn handle_input_key(
                     } else {
                         crate::tui::commands::strip_mentions(&input, &mentions)
                     };
-                    let rendered_block =
-                        crate::tui::commands::render_mentions_block(&expansions);
-                    let status_msg =
-                        crate::tui::commands::format_mention_status(&expansions);
+                    let rendered_block = crate::tui::commands::render_mentions_block(&expansions);
+                    let status_msg = crate::tui::commands::format_mention_status(&expansions);
 
                     state
                         .messages
@@ -346,7 +366,18 @@ pub async fn handle_input_key(
                     } else {
                         format!("{}{}", cleaned, rendered_block)
                     };
-                    let _ = input_tx.send(prompt);
+                    if input_tx.send(prompt).is_err() {
+                        // Same pattern as the skill branch — the
+                        // executor is gone, so the spinner we'd
+                        // otherwise be stuck on would never get
+                        // cleared. Bail to the main loop and let it
+                        // see the empty TUI/executor state.
+                        tracing::warn!(
+                            "input_tx receiver dropped while dispatching slash-command prompt"
+                        );
+                        state.is_generating = false;
+                        return Ok(());
+                    }
                 }
             }
         }

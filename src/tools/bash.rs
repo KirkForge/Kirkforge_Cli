@@ -97,8 +97,8 @@ impl Tool for Bash {
                         // blocks) while keeping all errors and their
                         // context intact. A 400-line `cargo build` log
                         // can typically be reduced to ~50 lines.
-                        let content = bash_minify::try_minify_build_log(&cmd, &content)
-                            .unwrap_or(content);
+                        let content =
+                            bash_minify::try_minify_build_log(&cmd, &content).unwrap_or(content);
                         ToolOutcome::Success { content }
                     } else {
                         // Error path: stdout is often the *real* signal on a
@@ -111,10 +111,12 @@ impl Tool for Bash {
                         // (`error: command not found`, segfault traces) that's
                         // already small and where minification heuristics are
                         // more likely to drop the wrong line.
-                        let minified_stdout = bash_minify::try_minify_bash_output(&cmd, &output.stdout)
-                            .unwrap_or_else(|| output.stdout.clone());
-                        let minified_stdout = bash_minify::try_minify_build_log(&cmd, &minified_stdout)
-                            .unwrap_or(minified_stdout);
+                        let minified_stdout =
+                            bash_minify::try_minify_bash_output(&cmd, &output.stdout)
+                                .unwrap_or_else(|| output.stdout.clone());
+                        let minified_stdout =
+                            bash_minify::try_minify_build_log(&cmd, &minified_stdout)
+                                .unwrap_or(minified_stdout);
                         let stderr = if output.stderr.is_empty() {
                             String::new()
                         } else {

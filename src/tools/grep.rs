@@ -117,7 +117,11 @@ impl Tool for Grep {
             if let Ok(meta) = std::fs::metadata(&search_path) {
                 if meta.len() > MAX_GREP_FILE_SIZE {
                     return ToolOutcome::Error {
-                        message: format!("File too large to search ({} bytes): {}", meta.len(), search_path.display()),
+                        message: format!(
+                            "File too large to search ({} bytes): {}",
+                            meta.len(),
+                            search_path.display()
+                        ),
                     };
                 }
             }
@@ -195,13 +199,9 @@ fn find_matches(
 /// Fast extension-based binary check.
 fn is_binary_by_ext(path: &std::path::Path) -> bool {
     let binary_extensions = [
-        "png", "jpg", "jpeg", "gif", "bmp", "ico", "webp",
-        "ttf", "otf", "woff", "woff2", "eot",
-        "mp3", "mp4", "avi", "mov", "mkv", "webm",
-        "zip", "tar", "gz", "bz2", "xz", "zst",
-        "pdf", "doc", "docx", "xls", "xlsx",
-        "wasm", "o", "so", "dylib", "exe", "dll",
-        "pyc", "class",
+        "png", "jpg", "jpeg", "gif", "bmp", "ico", "webp", "ttf", "otf", "woff", "woff2", "eot",
+        "mp3", "mp4", "avi", "mov", "mkv", "webm", "zip", "tar", "gz", "bz2", "xz", "zst", "pdf",
+        "doc", "docx", "xls", "xlsx", "wasm", "o", "so", "dylib", "exe", "dll", "pyc", "class",
     ];
 
     path.extension()

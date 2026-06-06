@@ -739,26 +739,34 @@ mod tests {
     fn test_c_keeps_block_comment_marker_inside_string() {
         let src = r#"char *s = "/* not a comment */"; int x = 5;"#;
         let result = minify_source(&PathBuf::from("x.c"), src);
-        assert!(result.contains(r#""/* not a comment */""#),
-            "must not eat /* inside a string literal");
+        assert!(
+            result.contains(r#""/* not a comment */""#),
+            "must not eat /* inside a string literal"
+        );
     }
 
     #[test]
     fn test_c_keeps_double_slash_inside_string_url() {
         let src = r#"char *u = "http://example.com"; // real comment"#;
         let result = minify_source(&PathBuf::from("x.c"), src);
-        assert!(result.contains(r#""http://example.com""#),
-            "must keep URL with // inside string");
-        assert!(!result.contains("comment"),
-            "must still strip real line comment");
+        assert!(
+            result.contains(r#""http://example.com""#),
+            "must keep URL with // inside string"
+        );
+        assert!(
+            !result.contains("comment"),
+            "must still strip real line comment"
+        );
     }
 
     #[test]
     fn test_c_keeps_char_literal_of_a_quote() {
         let src = "char c = '\"'; // gone";
         let result = minify_source(&PathBuf::from("x.c"), src);
-        assert!(result.contains("'\"'"),
-            "char literal containing a double-quote must survive");
+        assert!(
+            result.contains("'\"'"),
+            "char literal containing a double-quote must survive"
+        );
     }
 
     #[test]
@@ -894,10 +902,7 @@ mod tests {
         let _ = minify_source(&tmp, "fn main() {}");
         assert!(cache_contains(&tmp), "should be cached after minify");
         invalidate_minify_cache(&tmp);
-        assert!(
-            !cache_contains(&tmp),
-            "should be evicted after invalidate"
-        );
+        assert!(!cache_contains(&tmp), "should be evicted after invalidate");
 
         let _ = std::fs::remove_file(&tmp);
     }

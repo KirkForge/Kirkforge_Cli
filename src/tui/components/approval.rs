@@ -311,7 +311,12 @@ mod tests {
         assert!(lines.len() > 1, "long command should wrap");
         // No wrapped line should exceed 40 chars
         for line in &lines {
-            assert!(line.chars().count() <= 40, "wrapped line exceeds width: {:?} (chars={})", line, line.chars().count());
+            assert!(
+                line.chars().count() <= 40,
+                "wrapped line exceeds width: {:?} (chars={})",
+                line,
+                line.chars().count()
+            );
         }
     }
 
@@ -340,7 +345,11 @@ mod tests {
         //   [4] = "lo\");\n}\","        (wrapped part 2)
         //   [5] = "  \"path\": \"src/main.rs\""
         //   [6] = "}"
-        assert!(lines.len() >= 5, "expected at least 5 visual lines, got {}", lines.len());
+        assert!(
+            lines.len() >= 5,
+            "expected at least 5 visual lines, got {}",
+            lines.len()
+        );
         // `lines[0]` is the opening brace; `lines[last-1]` is the closing brace.
         assert!(lines[0] == "{", "lines[0] was {:?}", lines[0]);
         // The path line — find it by content rather than relying on
@@ -357,10 +366,7 @@ mod tests {
     /// Regression guard for the byte-slice panic class.
     #[test]
     fn test_format_args_preview_utf8_safe() {
-        let a = make_approval(
-            "write_file",
-            json!({"content": "🦀".repeat(100)}),
-        );
+        let a = make_approval("write_file", json!({"content": "🦀".repeat(100)}));
         let lines = format_args_preview(&a, 30);
         // Should not panic. Should produce at least 2 wrapped lines.
         assert!(lines.len() >= 1);
@@ -411,7 +417,10 @@ mod tests {
     /// Risk hint for `edit_file` is the standard modify message.
     #[test]
     fn test_risk_hint_edit_file() {
-        let a = make_approval("edit_file", json!({"path": "x", "old_string": "a", "new_string": "b"}));
+        let a = make_approval(
+            "edit_file",
+            json!({"path": "x", "old_string": "a", "new_string": "b"}),
+        );
         assert_eq!(risk_hint(&a), "modifies a file on disk");
     }
 

@@ -50,7 +50,7 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
     match ev {
         TurnEvent::Token(t) => {
             state.is_generating = true; // got first token — turn off spinner
-            // Accumulate into the last assistant entry, or create one
+                                        // Accumulate into the last assistant entry, or create one
             let role_str = "assistant".to_string();
             if let Some(last) = state.messages.last_mut() {
                 if last.role == role_str {
@@ -67,10 +67,9 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
         }
         TurnEvent::ToolStart { name, args: _ } => {
             state.is_generating = false; // turn ended (tool call)
-            state.messages.push(ConversationEntry::new(
-                "tool",
-                format!("🔧 {} ...", name),
-            ));
+            state
+                .messages
+                .push(ConversationEntry::new("tool", format!("🔧 {} ...", name)));
         }
         TurnEvent::ToolResult { name, output } => {
             // Tool outputs are stored FULL in a sidecar and shown
@@ -81,13 +80,16 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
                 "🔧 {} (done) — {} lines, {} bytes [Enter or Tab to expand]",
                 name, lines, bytes
             );
-            state.messages.push(ConversationEntry::tool(summary, output));
+            state
+                .messages
+                .push(ConversationEntry::tool(summary, output));
         }
         TurnEvent::Verification { message, success } => {
             let prefix = if success { "🔍" } else { "⚠️" };
-            state
-                .messages
-                .push(ConversationEntry::new("system", format!("{} {}", prefix, message)));
+            state.messages.push(ConversationEntry::new(
+                "system",
+                format!("{} {}", prefix, message),
+            ));
         }
         TurnEvent::Error(e) => {
             state.is_generating = false;
@@ -143,8 +145,7 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
             // message list has been re-indexed), so we clear
             // the set. The user can re-expand any entry they
             // care about with Enter / Tab.
-            let mut rebuilt: Vec<ConversationEntry> =
-                Vec::with_capacity(new_messages.len() + 1);
+            let mut rebuilt: Vec<ConversationEntry> = Vec::with_capacity(new_messages.len() + 1);
             for msg in &new_messages {
                 let role_str = match msg.role {
                     Role::User => "user",
@@ -240,10 +241,7 @@ fn estimate_messages_tokens(messages: &[crate::shared::Message]) -> usize {
 ///
 /// The TUI calls this once per render frame so the chat panel
 /// stays in sync with whatever the model is producing.
-pub fn drain_turn_events(
-    state: &mut AppState,
-    event_rx: &mut mpsc::UnboundedReceiver<TurnEvent>,
-) {
+pub fn drain_turn_events(state: &mut AppState, event_rx: &mut mpsc::UnboundedReceiver<TurnEvent>) {
     while let Ok(ev) = event_rx.try_recv() {
         dispatch_turn_event(state, ev);
     }
@@ -261,7 +259,17 @@ pub fn drain_approval_requests(
         // Deny any existing pending approval first
         if let Some(old) = state.pending_approval.take() {
             if let Some(tx) = old.responder {
-                let _ = tx.send(ApprovalResponse::Denied);
+                // The old approval is being superseded by a new one.
+                // If the executor's receiver is gone (cancelled /
+                // panicked), the send fails — log it so the regression
+                // is visible in the log.
+                if let Err(e) = tx.send(ApprovalResponse::Denied) {
+                    tracing::warn!(
+                        tool = "superseded approval",
+                        error = ?e,
+                        "approval responder dropped before superseded-send"
+                    );
+                }
             }
         }
         state.pending_approval = Some(PendingApproval {
@@ -476,10 +484,7 @@ mod tests {
         s.scroll_offset = 42;
         s.auto_scroll = false;
 
-        let new_messages = vec![
-            msg(Role::User, "hi"),
-            msg(Role::Assistant, "hello"),
-        ];
+        let new_messages = vec![msg(Role::User, "hi"), msg(Role::Assistant, "hello")];
         dispatch_turn_event(
             &mut s,
             TurnEvent::CompactionReport {
@@ -521,10 +526,7 @@ mod tests {
         // /compact exists to relieve).
         s.last_turn_prompt_tokens = 30_000;
         // Post-compact: just two short messages, ~5 tokens total.
-        let new_messages = vec![
-            msg(Role::User, "hi"),
-            msg(Role::Assistant, "hello"),
-        ];
+        let new_messages = vec![msg(Role::User, "hi"), msg(Role::Assistant, "hello")];
         dispatch_turn_event(
             &mut s,
             TurnEvent::CompactionReport {

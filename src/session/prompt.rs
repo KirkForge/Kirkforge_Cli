@@ -1,5 +1,4 @@
 use crate::shared::{Message, Role};
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -22,8 +21,7 @@ pub const COMPACTED_TOOL_MARKER: &str =
 /// that have been condensed by compaction. The first 500 characters of
 /// the original are preserved (so the model can still see the
 /// conclusion of that turn), then a marker.
-pub const COMPACTED_ASSISTANT_MARKER: &str =
-    "[…previous assistant response compacted…]";
+pub const COMPACTED_ASSISTANT_MARKER: &str = "[…previous assistant response compacted…]";
 
 /// Result of compacting a conversation. Returned by
 /// [`PromptBuilder::compact`] so callers (TUI, executor) can report
@@ -187,85 +185,121 @@ impl PromptBuilder {
         model_max_tokens: usize,
         tool_results: &[Message],
     ) -> Vec<Message> {
-        let mut messages = vec![system];
+        // 1. Initial assembly: system + history + pending tool results.
+        //    System prompt is index 0 and is preserved by every later
+        //    phase (it's the cache stem — must stay byte-identical for
+        //    the model to benefit from prompt caching).
+        let mut messages = Self::assemble_messages(system, history, tool_results);
 
-        // Add history messages, newest last
+        // 2. Per-tool head/tail truncation. Tools like `bash` can
+        //    return MBs of output; `read_file` is bounded but can still
+        //    be 100k+ chars. Per-tool caps let bash keep more of its
+        //    tail (where errors live) and keep grep tight, so one
+        //    tool's runaway output doesn't starve the others. The
+        //    content is *sliced* — the TUI keeps the full output in
+        //    `ConversationEntry::tool_output` for human recall.
+        Self::truncate_tool_results(&mut messages);
+
+        // 3. Adjacent-identical dedup. A model that retries a failed
+        //    command ends up with two `Role::Tool` messages that carry
+        //    byte-identical content; the second is pure noise to the
+        //    model. We replace it with a one-line marker. Non-adjacent
+        //    duplicates are left alone — intervening turns may have
+        //    changed the context that makes the later result
+        //    meaningful.
+        Self::dedup_adjacent_tool_results(&mut messages);
+
+        // 4. Over-budget recovery. Each phase is a fall-through: try
+        //    the cheapest fix first, return as soon as we're under
+        //    budget, otherwise escalate to the next phase. The order
+        //    is minify → stub tool results → drop-from-middle because
+        //    the model loses the least context that way (minified
+        //    content is still readable; stubbed tool results are
+        //    replaceable from the TUI sidecar; dropped messages are
+        //    gone from the model's view entirely).
+        let budget = model_max_tokens.saturating_sub(model_max_tokens / 10);
+        if Self::estimated_tokens(&messages) <= budget {
+            return messages;
+        }
+
+        // 4a. Minify older non-tool messages.
+        let mut adjusted = messages.clone();
+        if Self::minify_old_messages(&messages, &mut adjusted)
+            && Self::estimated_tokens(&adjusted) <= budget
+        {
+            return adjusted;
+        }
+
+        // 4b. Stub old tool results (keep the most recent tail).
+        if Self::stub_old_tool_results(&mut adjusted) && Self::estimated_tokens(&adjusted) <= budget
+        {
+            return adjusted;
+        }
+
+        // 4c. Drop from middle (keep the most recent tail). This is
+        //     the lossy phase — old messages are gone from the
+        //     model's view. The TUI still has the full conversation
+        //     in `ConversationEntry::tool_output` sidecars.
+        Self::truncate_to_budget(&adjusted, budget)
+    }
+
+    /// Phase 1: assemble the message list from system prompt +
+    /// history + pending tool results. The system message goes at
+    /// index 0; everything else is in call-order. Pure function —
+    /// no mutation of inputs.
+    fn assemble_messages(
+        system: Message,
+        history: &[Message],
+        tool_results: &[Message],
+    ) -> Vec<Message> {
+        let mut messages = Vec::with_capacity(1 + history.len() + tool_results.len());
+        messages.push(system);
         for msg in history {
             messages.push(msg.clone());
         }
-
-        // Add pending tool results
         for msg in tool_results {
             messages.push(msg.clone());
         }
+        messages
+    }
 
-        // Simple token budget: rough estimate (4 chars ≈ 1 token for code-heavy content)
-        let safety_margin = model_max_tokens / 10; // reserve 10% for the response
-        let budget = model_max_tokens.saturating_sub(safety_margin);
-
-        let estimate_tokens = |m: &Message| -> usize {
-            let content_tokens = m.content.len() / 4;
-            let thinking_tokens = m
-                .thinking
-                .as_ref()
-                .map(|t| t.len() / 4)
-                .unwrap_or(0);
-            // tool_calls JSON is part of the prompt too — every
-            // assistant turn that emits a tool call sends the full
-            // `{"id": "...", "name": "...", "arguments": {...}}` block
-            // to the model. Undercounting it means we report "comfortable"
-            // when we're actually over budget. An `edit_file` with a 5k
-            // `old_string` is 5k chars of JSON we currently pretend doesn't
-            // exist. Serialise once and use the byte length of the actual
-            // JSON the wire sees. For `None` and empty `Vec`, serialise
-            // to a 2-byte string ("[]") which divides cleanly. The
-            // `.unwrap_or(2)` guards against serialisation errors (we'd
-            // rather undercount by 0.5 tokens than panic the budget pass).
-            let tool_call_tokens = m
-                .tool_calls
-                .as_ref()
-                .map(|calls| {
-                    serde_json::to_string(calls)
-                        .map(|s| s.len() / 4)
-                        .unwrap_or(0)
-                })
-                .unwrap_or(0);
-            content_tokens + thinking_tokens + tool_call_tokens
-        };
-
-        // Aggressively cap large tool results before they enter the budget.
-        // Tools (bash, grep, read_file) can return MBs of output; a per-tool
-        // budget lets each tool keep the context it actually needs without
-        // one tool's runaway output starving the others.
-        //
-        // Why per-tool: bash `cargo build 2>&1` legitimately produces 100k+ char
-        // output. `grep -n` results are typically < 5k chars. Forcing them to
-        // share a single 30k cap means bash steals from grep, or vice versa.
-        // Per-tool caps let bash keep more of its tail (where errors live) and
-        // keep grep tight.
-        //
-        // Lookup is by `msg.tool_name` (already populated by the executor for
-        // every `Role::Tool` message). A tool name not in the map falls back
-        // to `TOOL_RESULT_DEFAULT_CAP` — the same 30k that the old flat cap
-        // used, so behavior is unchanged for tools without an explicit entry.
+    /// Phase 2: per-tool head/tail truncation of `Role::Tool` messages.
+    ///
+    /// Why per-tool: bash `cargo build 2>&1` legitimately produces
+    /// 100k+ char output. `grep -n` results are typically < 5k chars.
+    /// Forcing them to share a single 30k cap means bash steals from
+    /// grep, or vice versa. Per-tool caps let bash keep more of its
+    /// tail (where errors live) and keep grep tight.
+    ///
+    /// Lookup is by `msg.tool_name` (already populated by the executor
+    /// for every `Role::Tool` message). A tool name not in the map
+    /// falls back to the global default — the same 30k that the old
+    /// flat cap used, so behavior is unchanged for tools without an
+    /// explicit entry.
+    fn truncate_tool_results(messages: &mut [Message]) {
         const TOOL_RESULT_DEFAULT_CAP: usize = 30_000; // chars (~7.5k tokens)
         const TOOL_RESULT_DEFAULT_HEAD: usize = 20_000;
         const TOOL_RESULT_DEFAULT_TAIL: usize = 8_000;
 
-        // Per-tool caps. Tune these as the model proves what it actually needs.
-        // The keys are tool names; the values are (head, tail) in chars.
-        // Head + tail is the kept portion; the middle is replaced with a marker.
+        // Per-tool caps. Tune these as the model proves what it
+        // actually needs. The keys are tool names; the values are
+        // (head, tail) in chars. Head + tail is the kept portion; the
+        // middle is replaced with a marker.
         //
-        //   bash     50k head + 10k tail = 60k chars (compiles produce long tails
-        //            of errors; head shows the command's stdout preamble)
-        //   grep     10k head + 5k tail  = 15k chars (rg results are usually tight;
-        //            lots of small matches means a small cap is fine)
-        //   read_file 20k head + 5k tail = 25k chars (file reads can be legitimately
-        //            large for reference material; head keeps the top, tail keeps
-        //            the bottom for "what's at the end of this file?")
+        //   bash     50k head + 10k tail = 60k chars (compiles
+        //            produce long tails of errors; head shows the
+        //            command's stdout preamble)
+        //   grep     10k head + 5k tail  = 15k chars (rg results
+        //            are usually tight; lots of small matches means
+        //            a small cap is fine)
+        //   read_file 20k head + 5k tail = 25k chars (file reads
+        //            can be legitimately large for reference
+        //            material; head keeps the top, tail keeps the
+        //            bottom for "what's at the end of this file?")
         //   glob     5k head + 2k tail  = 7k chars  (filenames only)
-        //   edit_file/write_file 5k+2k = 7k chars (file diffs are bounded)
-        //   fallback TOOL_RESULT_DEFAULT_HEAD + TAIL = 30k chars
+        //   edit_file/write_file 5k+2k = 7k chars (file diffs are
+        //            bounded)
+        //   fallback DEFAULT_HEAD + TAIL = 30k chars
         let per_tool_caps: HashMap<&str, (usize, usize)> = {
             let mut m = HashMap::new();
             m.insert("bash", (50_000, 10_000));
@@ -281,8 +315,9 @@ impl PromptBuilder {
             if !matches!(msg.role, Role::Tool) {
                 continue;
             }
-            // Resolve (head, tail) for this tool, defaulting to the global
-            // constants if the tool name is missing or not in the map.
+            // Resolve (head, tail) for this tool, defaulting to the
+            // global constants if the tool name is missing or not in
+            // the map.
             let (head_keep, tail_keep) = match msg.tool_name.as_deref() {
                 Some(name) => per_tool_caps
                     .get(name)
@@ -292,8 +327,9 @@ impl PromptBuilder {
             };
             let hard_cap = head_keep + tail_keep;
             if msg.content.chars().count() > hard_cap {
-                // Slice on char boundaries — naive byte indexing would panic
-                // on multi-byte UTF-8 in tool output (file contents, grep hits).
+                // Slice on char boundaries — naive byte indexing
+                // would panic on multi-byte UTF-8 in tool output
+                // (file contents, grep hits).
                 let head: String = msg.content.chars().take(head_keep).collect();
                 let tail: String = msg
                     .content
@@ -311,26 +347,24 @@ impl PromptBuilder {
                 );
             }
         }
+    }
 
-        // Dedup adjacent identical tool results before they enter the budget.
-        //
-        // Why: a model that retries a failed command — or a model that runs
-        // `ls -la` twice with the same output — ends up with two `Role::Tool`
-        // messages that carry byte-identical content. The second one is pure
-        // noise to the model (the answer is already in the prior turn) but
-        // costs full tokens. We replace duplicates with a one-line marker.
-        // The TUI keeps the original in `ConversationEntry::tool_output`
-        // sidecar for human recall, so nothing is *lost* — just demoted out
-        // of the model's context window.
-        //
-        // Identity key: `content` only. `tool_call_id` is intentionally NOT
-        // part of the key — the model knows it issued the call (it appears
-        // in the prior assistant turn), and the redundant *output* is what
-        // costs tokens. Two distinct calls with identical results should
-        // dedup just like two calls with the same call id.
-        //
-        // Non-adjacent duplicates are left alone — intervening turns may
-        // have changed the context that makes the later result meaningful.
+    /// Phase 3: replace adjacent identical `Role::Tool` content with a
+    /// one-line marker. The original is NOT lost — the TUI keeps it in
+    /// `ConversationEntry::tool_output` sidecar for human recall; it
+    /// just doesn't double-bill the model's context window.
+    ///
+    /// Identity key: `content` only. `tool_call_id` is intentionally
+    /// NOT part of the key — the model knows it issued the call (it
+    /// appears in the prior assistant turn), and the redundant
+    /// *output* is what costs tokens. Two distinct calls with
+    /// identical results should dedup just like two calls with the
+    /// same call id.
+    ///
+    /// Non-adjacent duplicates are left alone — intervening turns
+    /// may have changed the context that makes the later result
+    /// meaningful.
+    fn dedup_adjacent_tool_results(messages: &mut [Message]) {
         const TOOL_RESULT_DEDUP_MARKER: &str =
             "[duplicate tool result omitted — see previous identical result]";
         let mut prev_tool_content: Option<String> = None;
@@ -341,28 +375,66 @@ impl PromptBuilder {
             }
             if let Some(prev) = &prev_tool_content {
                 if prev == &msg.content {
-                    // Adjacent duplicate — replace with marker. Keep
-                    // prev_tool_content set so a 3rd identical result also dedups.
+                    // Adjacent duplicate — replace with marker.
+                    // Keep prev_tool_content set so a 3rd identical
+                    // result also dedups.
                     msg.content = TOOL_RESULT_DEDUP_MARKER.to_string();
                     continue;
                 }
             }
             prev_tool_content = Some(msg.content.clone());
         }
+    }
 
-        let total_est: usize = messages.iter().map(estimate_tokens).sum();
+    /// Estimate the total token cost of a message list. Roughly 4 chars
+    /// per token for code-heavy content (the executor's prompt builder
+    /// doesn't have access to a real tokenizer; this is the
+    /// "good-enough" heuristic used everywhere the budget pass needs
+    /// to make a decision).
+    ///
+    /// `tool_calls` JSON is part of the prompt too — every assistant
+    /// turn that emits a tool call sends the full
+    /// `{"id": "...", "name": "...", "arguments": {...}}` block to
+    /// the model. Undercounting it means we report "comfortable" when
+    /// we're actually over budget. An `edit_file` with a 5k
+    /// `old_string` is 5k chars of JSON we currently pretend doesn't
+    /// exist. Serialise once and use the byte length of the actual
+    /// JSON the wire sees. For `None` and empty `Vec`, serialise to a
+    /// 2-byte string ("[]") which divides cleanly. The `.unwrap_or(2)`
+    /// guards against serialisation errors (we'd rather undercount by
+    /// 0.5 tokens than panic the budget pass).
+    fn estimated_tokens(messages: &[Message]) -> usize {
+        messages.iter().map(Self::estimate_message_tokens).sum()
+    }
 
-        if total_est <= budget {
-            return messages;
-        }
+    /// Token estimate for a single message. Same heuristic as
+    /// `estimated_tokens` but exposed per-message so phase 4a can
+    /// decide whether a message is "worth minifying" (skip tiny
+    /// messages).
+    fn estimate_message_tokens(m: &Message) -> usize {
+        let content_tokens = m.content.len() / 4;
+        let thinking_tokens = m.thinking.as_ref().map(|t| t.len() / 4).unwrap_or(0);
+        let tool_call_tokens = m
+            .tool_calls
+            .as_ref()
+            .map(|calls| {
+                serde_json::to_string(calls)
+                    .map(|s| s.len() / 4)
+                    .unwrap_or(0)
+            })
+            .unwrap_or(0);
+        content_tokens + thinking_tokens + tool_call_tokens
+    }
 
-        // Over budget. Strategy: try minifying older non-system messages first.
-        let minified_content = RefCell::new(HashMap::<usize, String>::new());
-
-        // First pass: try minifying user/assistant pairs from the oldest end
-        let mut adjusted = messages.clone();
+    /// Phase 4a: minify older non-tool messages, leaving index 0
+    /// (system) and tool messages untouched. Returns `true` if any
+    /// message was actually minified.
+    ///
+    /// The safe variant (`minify_source_safe`) preserves test blocks
+    /// the model has already seen — we don't want to break a working
+    /// memory of "the tests look like X" by collapsing them.
+    fn minify_old_messages(messages: &[Message], adjusted: &mut [Message]) -> bool {
         let mut minified_any = false;
-
         for (i, msg) in messages.iter().enumerate() {
             if i == 0 {
                 continue; // keep system prompt as-is
@@ -371,88 +443,89 @@ impl PromptBuilder {
                 continue; // keep tool results as-is
             }
 
-            let est = estimate_tokens(msg);
+            let est = Self::estimate_message_tokens(msg);
             if est < 10 {
                 continue; // too short to bother
             }
 
-            // Minify the content (safe variant — preserves test blocks the model has seen)
+            // Minify the content (safe variant — preserves test
+            // blocks the model has seen).
             let path = PathBuf::from(format!("message-{}.txt", i));
             let minified = crate::shared::minify::minify_source_safe(&path, &msg.content);
             if minified.len() < msg.content.len() {
                 let savings = msg.content.len() - minified.len();
                 if savings > 20 {
-                    adjusted[i].content = minified.clone();
-                    minified_content.borrow_mut().insert(i, minified);
+                    adjusted[i].content = minified;
                     minified_any = true;
                 }
             }
         }
+        minified_any
+    }
 
-        if minified_any {
-            let new_est: usize = adjusted.iter().map(estimate_tokens).sum();
-            if new_est <= budget {
-                return adjusted;
-            }
-        }
-
-        // Still over budget — stub out old tool results.
-        //
-        // Why: tool results are the biggest budget eaters by count. A 20-turn
-        // session that used bash+read_file+grep can have 30+ tool messages
-        // totalling hundreds of KB. The model has already acted on the older
-        // ones — they're historical context, not working memory. We keep the
-        // last `TOOL_RESULT_KEEP_TAIL` tool results intact (the model is
-        // currently acting on them) and replace the rest with a one-line
-        // stub. The TUI keeps the full output in `ConversationEntry::tool_output`
-        // sidecar for human recall, so nothing is *lost* — just demoted out
-        // of the model's context window.
+    /// Phase 4b: stub out old tool results. Keeps the most recent
+    /// `TOOL_RESULT_KEEP_TAIL` tool results intact (the model is
+    /// currently acting on them) and replaces the rest with a
+    /// one-line stub. Returns `true` if any message was actually
+    /// stubbed.
+    ///
+    /// Why: tool results are the biggest budget eaters by count. A
+    /// 20-turn session that used bash+read_file+grep can have 30+
+    /// tool messages totalling hundreds of KB. The model has already
+    /// acted on the older ones — they're historical context, not
+    /// working memory. The TUI keeps the full output in
+    /// `ConversationEntry::tool_output` sidecar for human recall, so
+    /// nothing is *lost* — just demoted out of the model's context
+    /// window.
+    fn stub_old_tool_results(messages: &mut [Message]) -> bool {
         const TOOL_RESULT_KEEP_TAIL: usize = 2;
         const TOOL_RESULT_STUB: &str =
             "[previous tool result omitted to save budget — see TUI history]";
 
-        // Find the indices of all tool messages, mark the last K for preservation.
-        let tool_indices: Vec<usize> = adjusted
+        // Find the indices of all tool messages, mark the last K for
+        // preservation.
+        let tool_indices: Vec<usize> = messages
             .iter()
             .enumerate()
             .filter(|(_, m)| matches!(m.role, Role::Tool))
             .map(|(i, _)| i)
             .collect();
-        let preserve_from = tool_indices
-            .len()
-            .saturating_sub(TOOL_RESULT_KEEP_TAIL);
+        let preserve_from = tool_indices.len().saturating_sub(TOOL_RESULT_KEEP_TAIL);
 
         let mut stubbed_any = false;
         for &i in tool_indices.iter().take(preserve_from) {
-            if adjusted[i].content != TOOL_RESULT_STUB {
-                adjusted[i].content = TOOL_RESULT_STUB.to_string();
+            if messages[i].content != TOOL_RESULT_STUB {
+                messages[i].content = TOOL_RESULT_STUB.to_string();
                 stubbed_any = true;
             }
         }
+        stubbed_any
+    }
 
-        if stubbed_any {
-            let new_est: usize = adjusted.iter().map(estimate_tokens).sum();
-            if new_est <= budget {
-                return adjusted;
-            }
-        }
-
-        // Still over budget — drop from middle (keep the most recent tail)
+    /// Phase 4c: drop from the middle, keep the most recent tail.
+    /// The system message (index 0) is always preserved — it's the
+    /// cache stem and must stay byte-identical for the model to
+    /// benefit from prompt caching.
+    ///
+    /// This is the lossy phase. The TUI still has the full
+    /// conversation in `ConversationEntry::tool_output` sidecars, but
+    /// the model loses access to old turns entirely.
+    fn truncate_to_budget(messages: &[Message], budget: usize) -> Vec<Message> {
         let keep_count = (budget * 4) / 20;
-        let history_to_keep = std::cmp::min(keep_count, adjusted.len() - 1);
+        let history_to_keep = std::cmp::min(keep_count, messages.len() - 1);
 
-        let mut truncated = vec![adjusted[0].clone()]; // keep system (cache stem)
+        let mut truncated = vec![messages[0].clone()]; // keep system (cache stem)
 
         // Keep the most recent tail
-        let start = adjusted.len().saturating_sub(history_to_keep);
-        for msg in &adjusted[start..] {
+        let start = messages.len().saturating_sub(history_to_keep);
+        for msg in &messages[start..] {
             truncated.push(msg.clone());
         }
 
         if truncated.len() < 2 {
-            truncated = adjusted; // keep everything if we'd empty the conversation
+            // keep everything if we'd empty the conversation
+            return messages.to_vec();
         }
-
         truncated
     }
 
@@ -561,13 +634,9 @@ impl PromptBuilder {
                 }
                 Role::Assistant => {
                     // Condense: keep first 500 chars + marker.
-                    let truncated_content: String =
-                        msg.content.chars().take(500).collect();
+                    let truncated_content: String = msg.content.chars().take(500).collect();
                     let new_content = if msg.content.chars().count() > 500 {
-                        format!(
-                            "{}\n\n{}",
-                            truncated_content, COMPACTED_ASSISTANT_MARKER
-                        )
+                        format!("{}\n\n{}", truncated_content, COMPACTED_ASSISTANT_MARKER)
                     } else {
                         msg.content.clone()
                     };
@@ -719,9 +788,19 @@ mod tests {
             ..Default::default()
         }];
         let result = builder.build_messages(system, &[], 100_000, &tool_results);
-        let capped = result.iter().find(|m| matches!(m.role, Role::Tool)).unwrap();
-        assert!(capped.content.len() < 32_000, "tool output should be capped below 32k chars, got {}", capped.content.len());
-        assert!(capped.content.contains("truncated"), "should contain a truncation marker");
+        let capped = result
+            .iter()
+            .find(|m| matches!(m.role, Role::Tool))
+            .unwrap();
+        assert!(
+            capped.content.len() < 32_000,
+            "tool output should be capped below 32k chars, got {}",
+            capped.content.len()
+        );
+        assert!(
+            capped.content.contains("truncated"),
+            "should contain a truncation marker"
+        );
         assert!(capped.content.starts_with('x'), "head should be preserved");
         assert!(capped.content.ends_with('x'), "tail should be preserved");
     }
@@ -743,7 +822,10 @@ mod tests {
             ..Default::default()
         }];
         let result = builder.build_messages(system, &[], 100_000, &tool_results);
-        let kept = result.iter().find(|m| matches!(m.role, Role::Tool)).unwrap();
+        let kept = result
+            .iter()
+            .find(|m| matches!(m.role, Role::Tool))
+            .unwrap();
         assert_eq!(kept.content, small_output);
     }
 
@@ -765,7 +847,10 @@ mod tests {
             ..Default::default()
         }];
         let result = builder.build_messages(system, &[], 100_000, &tool_results);
-        let capped = result.iter().find(|m| matches!(m.role, Role::Tool)).unwrap();
+        let capped = result
+            .iter()
+            .find(|m| matches!(m.role, Role::Tool))
+            .unwrap();
         assert!(capped.content.chars().count() < 32_000);
         assert!(capped.content.contains("🦀"));
     }
@@ -819,8 +904,17 @@ mod tests {
             .iter()
             .filter(|m| m.content.contains("PADDING"))
             .count();
-        assert!(stubbed > 0, "expected older tool results to be stubbed, got {} stubbed / {} kept", stubbed, tool_msgs.len());
-        assert!(kept <= 2, "at most the last 2 tool results should be kept intact, got {} kept", kept);
+        assert!(
+            stubbed > 0,
+            "expected older tool results to be stubbed, got {} stubbed / {} kept",
+            stubbed,
+            tool_msgs.len()
+        );
+        assert!(
+            kept <= 2,
+            "at most the last 2 tool results should be kept intact, got {} kept",
+            kept
+        );
         assert!(
             stubbed + kept == tool_msgs.len(),
             "every tool message is either stubbed or kept"
@@ -853,7 +947,10 @@ mod tests {
             .iter()
             .filter(|m| matches!(m.role, Role::Tool) && m.content.contains("omitted"))
             .count();
-        assert_eq!(stubbed, 0, "no tool results should be stubbed when under budget");
+        assert_eq!(
+            stubbed, 0,
+            "no tool results should be stubbed when under budget"
+        );
     }
 
     /// Adjacent identical tool results should be replaced with a dedup marker.
@@ -890,7 +987,10 @@ mod tests {
             .collect();
         assert_eq!(tool_msgs.len(), 2);
         // First result is preserved verbatim.
-        assert_eq!(tool_msgs[0].content, "Cargo.lock already exists at /tmp/foo.lock");
+        assert_eq!(
+            tool_msgs[0].content,
+            "Cargo.lock already exists at /tmp/foo.lock"
+        );
         // Second result is replaced with the dedup marker.
         assert!(tool_msgs[1].content.contains("duplicate tool result"));
         assert!(!tool_msgs[1].content.contains("Cargo.lock"));
@@ -1047,7 +1147,10 @@ mod tests {
         assert_eq!(tool_msgs.len(), 4);
         assert_eq!(tool_msgs[0].content, "same");
         for m in &tool_msgs[1..] {
-            assert!(m.content.contains("duplicate"), "entries 2..4 should be deduped");
+            assert!(
+                m.content.contains("duplicate"),
+                "entries 2..4 should be deduped"
+            );
         }
     }
 
@@ -1077,7 +1180,10 @@ mod tests {
             ..Default::default()
         }];
         let result = builder.build_messages(system, &[], 100_000, &tool_results);
-        let capped = result.iter().find(|m| matches!(m.role, Role::Tool)).unwrap();
+        let capped = result
+            .iter()
+            .find(|m| matches!(m.role, Role::Tool))
+            .unwrap();
         // bash cap is 50_000 + 10_000 = 60_000. Plus a ~80-char marker
         // overhead, so the final content is < 61_000 chars.
         assert!(
@@ -1085,7 +1191,10 @@ mod tests {
             "bash tool output should be capped below 61k chars (50k+10k cap + marker), got {}",
             capped.content.chars().count()
         );
-        assert!(capped.content.contains("truncated"), "should contain a truncation marker");
+        assert!(
+            capped.content.contains("truncated"),
+            "should contain a truncation marker"
+        );
         assert!(capped.content.starts_with('B'), "head should be preserved");
         assert!(capped.content.ends_with('B'), "tail should be preserved");
     }
@@ -1109,7 +1218,10 @@ mod tests {
             ..Default::default()
         }];
         let result = builder.build_messages(system, &[], 100_000, &tool_results);
-        let capped = result.iter().find(|m| matches!(m.role, Role::Tool)).unwrap();
+        let capped = result
+            .iter()
+            .find(|m| matches!(m.role, Role::Tool))
+            .unwrap();
         // grep cap is 10_000 + 5_000 = 15_000. Plus a ~80-char marker
         // overhead, so the final content is < 16_000 chars.
         assert!(
@@ -1117,7 +1229,10 @@ mod tests {
             "grep tool output should be capped below 16k chars (10k+5k cap + marker), got {}",
             capped.content.chars().count()
         );
-        assert!(capped.content.contains("truncated"), "should contain a truncation marker");
+        assert!(
+            capped.content.contains("truncated"),
+            "should contain a truncation marker"
+        );
     }
 
     /// A `Role::Tool` message with no `tool_name` falls back to the default
@@ -1141,7 +1256,10 @@ mod tests {
             ..Default::default()
         }];
         let result = builder.build_messages(system, &[], 100_000, &tool_results);
-        let capped = result.iter().find(|m| matches!(m.role, Role::Tool)).unwrap();
+        let capped = result
+            .iter()
+            .find(|m| matches!(m.role, Role::Tool))
+            .unwrap();
         // Default cap is 20_000 + 8_000 = 28_000. Plus marker overhead.
         assert!(
             capped.content.chars().count() < 29_000,
@@ -1171,7 +1289,10 @@ mod tests {
             ..Default::default()
         }];
         let result = builder.build_messages(system, &[], 100_000, &tool_results);
-        let capped = result.iter().find(|m| matches!(m.role, Role::Tool)).unwrap();
+        let capped = result
+            .iter()
+            .find(|m| matches!(m.role, Role::Tool))
+            .unwrap();
         // Default 28k cap kicks in.
         assert!(
             capped.content.chars().count() < 29_000,
@@ -1584,8 +1705,7 @@ mod tests {
         assert_eq!(result.dropped_tool_results, 0);
         assert_eq!(result.condensed_assistant_turns, 0);
         // Order and content preserved
-        let original_contents: Vec<&str> =
-            history.iter().map(|m| m.content.as_str()).collect();
+        let original_contents: Vec<&str> = history.iter().map(|m| m.content.as_str()).collect();
         let compacted_contents: Vec<&str> = result
             .new_messages
             .iter()

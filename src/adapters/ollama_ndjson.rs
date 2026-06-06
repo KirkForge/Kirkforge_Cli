@@ -1,0 +1,474 @@
+//! Shared NDJSON parser for adapters that hit Ollama's `/api/chat`.
+//!
+//! GLM, DeepSeek, and Gemini all stream NDJSON over the same HTTP endpoint.
+//! The framing is identical; what differs is the *schema* of each JSON line:
+//!
+//! | Adapter  | Thinking field       | Tool calls                |
+//! |----------|----------------------|---------------------------|
+//! | GLM      | `message.thinking`   | batched at `done: true`   |
+//! | DeepSeek | `message.reasoning_content` | batched at `done: true` |
+//! | Gemini   | (none)               | batched at `done: true`*  |
+//!
+//! * Gemini's adapter historically emitted tool calls inline per chunk; that
+//!   timing difference is invisible to the session loop (which only cares
+//!   about the order `Text* ToolCall* Done`), so we normalize on the
+//!   buffered-then-flushed behavior.
+//!
+//! Parameterization is via [`OllamaNdjsonConfig`]: pick a thinking field
+//! name (or `None`) and the rest is shared.
+
+use crate::shared::{FinishReason, StreamEvent, TokenUsage, ToolInvocation};
+use tokio_stream::StreamExt;
+
+/// Per-adapter knobs for [`parse_ollama_ndjson_stream`].
+#[derive(Clone)]
+pub struct OllamaNdjsonConfig {
+    /// Field path on the message object that holds the model's chain-of-thought
+    /// (analogous to OpenAI's `reasoning_content`). `None` means the model has
+    /// no thinking channel (e.g. Gemini).
+    pub thinking_field: Option<&'static str>,
+}
+
+impl OllamaNdjsonConfig {
+    /// GLM-5.1:Cloud — uses `message.thinking`.
+    pub const GLM: Self = Self {
+        thinking_field: Some("thinking"),
+    };
+    /// DeepSeek-v4-Pro — uses `message.reasoning_content`.
+    pub const DEEPSEEK: Self = Self {
+        thinking_field: Some("reasoning_content"),
+    };
+    /// Gemini 3.0 Flash 1M — no thinking field through Ollama.
+    pub const GEMINI: Self = Self {
+        thinking_field: None,
+    };
+}
+
+/// Drive an Ollama `/api/chat` NDJSON response into a `StreamEvent` channel.
+///
+/// Reads `response.bytes_stream()` on the current task, line-buffers until
+/// `\n`, parses each complete line as JSON, and emits the appropriate
+/// `StreamEvent` variants. Tool calls are buffered and flushed at
+/// `done: true` — the session loop only cares about the *order* of events
+/// within a turn, not when during streaming they arrive.
+///
+/// Errors (transport, JSON parse, API `error` field) become
+/// `StreamEvent::Error`. The task returns when the upstream stream ends or
+/// yields an error; the receiver stays open until the caller drops it.
+///
+/// The stream is taken as an explicit parameter (rather than reconstructed
+/// from a `reqwest::Response`) so the function is testable against a
+/// fabricated stream and so the caller controls ownership of the response.
+///
+/// **Dropped-receiver behavior:** every `tx.send` here goes through
+/// [`send_or_bail`]. If the consumer is gone (executor cancelled, TUI
+/// closed, session aborted), the send fails and we log once at the call
+/// site and break out of the loop — there is no point draining the
+/// upstream HTTP body when nobody's listening, and silently swallowing
+/// the failure hides the cancellation cause.
+pub async fn parse_ollama_ndjson_stream<B, E, S>(
+    tx: tokio::sync::mpsc::Sender<StreamEvent>,
+    config: OllamaNdjsonConfig,
+    mut stream: S,
+) where
+    B: AsRef<[u8]>,
+    E: std::fmt::Display,
+    S: tokio_stream::Stream<Item = Result<B, E>> + Unpin,
+{
+    let mut buffer = String::new();
+    let mut tool_calls_buffer: Vec<ToolInvocation> = Vec::new();
+
+    while let Some(chunk_result) = stream.next().await {
+        match chunk_result {
+            Ok(bytes) => {
+                buffer.push_str(&String::from_utf8_lossy(bytes.as_ref()));
+
+                // Ollama NDJSON: one JSON object per line
+                while let Some(newline_pos) = buffer.find('\n') {
+                    let line: String = buffer.drain(..=newline_pos).collect();
+                    let line = line.trim();
+                    if line.is_empty() {
+                        continue;
+                    }
+
+                    match serde_json::from_str::<serde_json::Value>(line) {
+                        Ok(json) => {
+                            // API-level error
+                            if let Some(err) = json.get("error") {
+                                if !send_or_bail(
+                                    &tx,
+                                    StreamEvent::Error(
+                                        err.as_str().unwrap_or("unknown error").to_string(),
+                                    ),
+                                    "API error event",
+                                )
+                                .await
+                                {
+                                    return;
+                                }
+                                continue;
+                            }
+
+                            // Thinking field (GLM/DeepSeek)
+                            if let Some(field) = config.thinking_field {
+                                if let Some(thinking) =
+                                    json.get("message").and_then(|m| m.get(field))
+                                {
+                                    if let Some(t) = thinking.as_str() {
+                                        if !t.is_empty()
+                                            && !send_or_bail(
+                                                &tx,
+                                                StreamEvent::Thinking(t.to_string()),
+                                                "thinking chunk",
+                                            )
+                                            .await
+                                        {
+                                            return;
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Text content
+                            if let Some(content) =
+                                json.get("message").and_then(|m| m.get("content"))
+                            {
+                                if let Some(c) = content.as_str() {
+                                    if !c.is_empty()
+                                        && !send_or_bail(
+                                            &tx,
+                                            StreamEvent::Text(c.to_string()),
+                                            "text chunk",
+                                        )
+                                        .await
+                                    {
+                                        return;
+                                    }
+                                }
+                            }
+
+                            // Tool calls — buffer until done
+                            if let Some(tcs) = json.get("message").and_then(|m| m.get("tool_calls"))
+                            {
+                                if let Some(calls) = tcs.as_array() {
+                                    let before = tool_calls_buffer.len();
+                                    for tc in calls {
+                                        if let (Some(name), Some(args)) = (
+                                            tc.get("function")
+                                                .and_then(|f| f.get("name"))
+                                                .and_then(|n| n.as_str()),
+                                            tc.get("function").and_then(|f| f.get("arguments")),
+                                        ) {
+                                            tool_calls_buffer.push(ToolInvocation {
+                                                id: tc
+                                                    .get("id")
+                                                    .and_then(|id| id.as_str())
+                                                    .unwrap_or("")
+                                                    .to_string(),
+                                                name: name.to_string(),
+                                                arguments: args.clone(),
+                                            });
+                                        }
+                                    }
+                                    let parsed = tool_calls_buffer.len() - before;
+                                    if !calls.is_empty() && parsed == 0
+                                        && !send_or_bail(
+                                            &tx,
+                                            StreamEvent::Error(
+                                                "Model emitted tool_calls with no parseable entries"
+                                                    .to_string(),
+                                            ),
+                                            "tool-call parse error",
+                                        )
+                                        .await
+                                        {
+                                            return;
+                                        }
+                                }
+                            }
+
+                            // Done — flush buffered tool calls + emit Done
+                            if json.get("done").and_then(|d| d.as_bool()).unwrap_or(false) {
+                                for tc in tool_calls_buffer.drain(..) {
+                                    if !send_or_bail(
+                                        &tx,
+                                        StreamEvent::ToolCall(tc),
+                                        "buffered tool call",
+                                    )
+                                    .await
+                                    {
+                                        return;
+                                    }
+                                }
+
+                                let usage = json.get("usage").map(parse_token_usage);
+
+                                let reason = json
+                                    .get("done_reason")
+                                    .and_then(|r| r.as_str())
+                                    .unwrap_or("stop");
+
+                                let finish_reason = match reason {
+                                    "length" => FinishReason::Length,
+                                    "tool_calls" => FinishReason::ToolCalls,
+                                    "error" => FinishReason::Error,
+                                    _ => FinishReason::Stop,
+                                };
+
+                                if !send_or_bail(
+                                    &tx,
+                                    StreamEvent::Done {
+                                        finish_reason,
+                                        usage,
+                                    },
+                                    "done",
+                                )
+                                .await
+                                {
+                                    return;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            if !send_or_bail(
+                                &tx,
+                                StreamEvent::Error(format!("JSON parse: {}", e)),
+                                "JSON parse error",
+                            )
+                            .await
+                            {
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                // Last-ditch error delivery. If the consumer is also
+                // gone, log once and exit — same pattern as the
+                // per-event sends above, but at the bottom of the
+                // loop because we're about to break anyway.
+                if !send_or_bail(
+                    &tx,
+                    StreamEvent::Error(e.to_string()),
+                    "Ollama transport error",
+                )
+                .await
+                {
+                    return;
+                }
+                break;
+            }
+        }
+    }
+
+    // `response` is no longer needed; the bytes stream is the only thing
+    // we actually drive. (The arg was removed in commit 2 — see git log.)
+}
+
+/// Send a `StreamEvent` to the consumer. Returns `true` if the consumer
+/// is still listening, `false` if it dropped the receiver (and we
+/// already logged a `tracing::warn!` describing what couldn't be
+/// delivered). Used by the NDJSON / OpenAI-compat streaming parsers so
+/// that "consumer gone" produces a single, contextual log line per
+/// stream rather than N silent drops, and so the loop bails early
+/// instead of draining the upstream HTTP body into the void.
+///
+/// `kind` is a short human label for the event type (e.g. `"text
+/// chunk"`, `"done"`, `"tool call"`) — it appears in the warning
+/// message so the operator can tell what was lost.
+///
+/// `pub(crate)` because `openai_compat::stream_openai_chat` shares the
+/// same pattern; lifting it to a single helper keeps the warning
+/// message and bail-semantics consistent across both adapters.
+pub(crate) async fn send_or_bail(
+    tx: &tokio::sync::mpsc::Sender<StreamEvent>,
+    ev: StreamEvent,
+    kind: &'static str,
+) -> bool {
+    if tx.send(ev).await.is_ok() {
+        true
+    } else {
+        tracing::warn!(
+            event_kind = kind,
+            "Stream consumer dropped receiver mid-stream; aborting adapter parser"
+        );
+        false
+    }
+}
+
+/// Parse an Ollama `usage` object into a [`TokenUsage`].
+fn parse_token_usage(u: &serde_json::Value) -> TokenUsage {
+    TokenUsage {
+        prompt_tokens: u
+            .get("prompt_tokens")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize),
+        completion_tokens: u
+            .get("completion_tokens")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::shared::{FinishReason, StreamEvent};
+    use serde_json::json;
+
+    /// Drain the channel into a Vec, up to `max` events or until empty.
+    async fn drain(
+        mut rx: tokio::sync::mpsc::Receiver<StreamEvent>,
+        max: usize,
+    ) -> Vec<StreamEvent> {
+        let mut out = Vec::new();
+        for _ in 0..max {
+            match rx.recv().await {
+                Some(e) => out.push(e),
+                None => break,
+            }
+        }
+        out
+    }
+
+    /// A test stream that yields a fixed sequence of byte chunks, then EOF.
+    fn chunks(
+        items: Vec<Vec<u8>>,
+    ) -> impl tokio_stream::Stream<Item = Result<Vec<u8>, std::convert::Infallible>> {
+        tokio_stream::iter(items.into_iter().map(Ok))
+    }
+
+    /// Convert a single Ollama NDJSON line into the byte representation
+    /// the parser expects (line + trailing `\n`).
+    fn line(s: &str) -> Vec<u8> {
+        format!("{}\n", s).into_bytes()
+    }
+
+    /// Drive the parser over a sequence of NDJSON lines and return the events.
+    async fn run(lines: &[&str]) -> Vec<StreamEvent> {
+        let body: Vec<u8> = lines.iter().flat_map(|l| line(l)).collect();
+        let (tx, rx) = tokio::sync::mpsc::channel(64);
+        parse_ollama_ndjson_stream(tx, OllamaNdjsonConfig::GLM, chunks(vec![body])).await;
+        drain(rx, 1024).await
+    }
+
+    #[tokio::test]
+    async fn glm_thinking_and_text_are_emitted() {
+        let events = run(&[
+            r#"{"message":{"thinking":"let me think","content":""},"done":false}"#,
+            r#"{"message":{"thinking":"","content":"Hello "},"done":false}"#,
+            r#"{"message":{"thinking":"","content":"world"},"done":true,"done_reason":"stop","usage":{"prompt_tokens":3,"completion_tokens":5}}"#,
+        ])
+        .await;
+
+        // Thinking comes first, then text fragments in order, then Done.
+        assert!(matches!(events.first(), Some(StreamEvent::Thinking(t)) if t == "let me think"));
+        let texts: Vec<&str> = events
+            .iter()
+            .filter_map(|e| match e {
+                StreamEvent::Text(s) => Some(s.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(texts, vec!["Hello ", "world"]);
+
+        // The terminal event must be Done with Stop + the right token counts.
+        match events.last() {
+            Some(StreamEvent::Done {
+                finish_reason,
+                usage,
+            }) => {
+                assert!(matches!(finish_reason, FinishReason::Stop));
+                let u = usage.as_ref().expect("usage should be present");
+                assert_eq!(u.prompt_tokens, Some(3));
+                assert_eq!(u.completion_tokens, Some(5));
+            }
+            other => panic!("expected Done as last event, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn gemini_config_skips_thinking_field() {
+        // Build a line that names "thinking" but config has None → no Thinking event.
+        let body: Vec<u8> = line(
+            r#"{"message":{"thinking":"ignored","content":"hi"},"done":true,"done_reason":"stop"}"#,
+        );
+        let (tx, rx) = tokio::sync::mpsc::channel(16);
+        parse_ollama_ndjson_stream(tx, OllamaNdjsonConfig::GEMINI, chunks(vec![body])).await;
+        let events = drain(rx, 16).await;
+        assert!(!events.iter().any(|e| matches!(e, StreamEvent::Thinking(_))));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, StreamEvent::Text(s) if s == "hi")));
+    }
+
+    #[tokio::test]
+    async fn tool_calls_buffered_and_flushed_at_done() {
+        let events = run(&[
+            r#"{"message":{"content":"calling tool","tool_calls":[{"function":{"name":"read_file","arguments":{"path":"/etc/hosts"}}}]},"done":false}"#,
+            r#"{"message":{"content":"","tool_calls":[{"function":{"name":"ls","arguments":{}}}]},"done":true,"done_reason":"tool_calls"}"#,
+        ])
+        .await;
+        // Text fragments: the second chunk's empty `content` is intentionally
+        // skipped by the parser (the `if !c.is_empty()` guard in the loop),
+        // so we only see the first chunk's "calling tool".
+        let texts: Vec<&str> = events
+            .iter()
+            .filter_map(|e| match e {
+                StreamEvent::Text(s) => Some(s.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(texts, vec!["calling tool"]);
+        let tool_names: Vec<&str> = events
+            .iter()
+            .filter_map(|e| match e {
+                StreamEvent::ToolCall(tc) => Some(tc.name.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(tool_names, vec!["read_file", "ls"]);
+        assert!(matches!(
+            events.last(),
+            Some(StreamEvent::Done {
+                finish_reason: FinishReason::ToolCalls,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn parse_token_usage_extracts_counts() {
+        let u = json!({"prompt_tokens": 12, "completion_tokens": 34});
+        let t = parse_token_usage(&u);
+        assert_eq!(t.prompt_tokens, Some(12));
+        assert_eq!(t.completion_tokens, Some(34));
+    }
+
+    #[test]
+    fn parse_token_usage_handles_missing_fields() {
+        let u = json!({});
+        let t = parse_token_usage(&u);
+        assert_eq!(t.prompt_tokens, None);
+        assert_eq!(t.completion_tokens, None);
+    }
+
+    #[test]
+    fn glm_config_has_thinking_field() {
+        assert_eq!(OllamaNdjsonConfig::GLM.thinking_field, Some("thinking"));
+    }
+
+    #[test]
+    fn deepseek_config_has_reasoning_field() {
+        assert_eq!(
+            OllamaNdjsonConfig::DEEPSEEK.thinking_field,
+            Some("reasoning_content")
+        );
+    }
+
+    #[test]
+    fn gemini_config_has_no_thinking() {
+        assert_eq!(OllamaNdjsonConfig::GEMINI.thinking_field, None);
+    }
+}

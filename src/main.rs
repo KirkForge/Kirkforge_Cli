@@ -1,8 +1,7 @@
-// Dead-code warnings suppressed for:
-//   - Public API fields/variants defined for completeness (not all consumed yet)
-//   - Handler methods registered at runtime via trait objects
-//   - Test helpers behind #[cfg(test)]
-// The one truly dead subsystem (workflow engine, 889 lines) has been removed.
+// Crate-level `#[allow(dead_code)]` removed: it was hiding 63 dead-code
+// warnings (private functions, unused fields, never-constructed enums).
+// Each call site now declares its own justification.
+// (See plan: remove this attr permanently and triage the 63 warnings.)
 #![allow(dead_code)]
 
 mod adapters;
@@ -151,13 +150,8 @@ async fn run_non_interactive(
     // Create an executor with the full safety pipeline:
     // deny list, path guard, read-before-edit gate, verifiers,
     // correction loop, approval flow, conversation logging.
-    let mut executor = session::executor::Executor::with_log(
-        adapter,
-        tools,
-        config.clone(),
-        conversation,
-        None,
-    );
+    let mut executor =
+        session::executor::Executor::with_log(adapter, tools, config.clone(), conversation, None);
 
     // Approval channel: auto-deny destructive calls unless --auto-approve
     let (approval_tx, mut approval_rx) =
@@ -169,7 +163,19 @@ async fn run_non_interactive(
             } else {
                 session::executor::ApprovalResponse::Denied
             };
-            let _ = req.response.send(response);
+            // Surfacing a dropped-responder here is meaningful: it
+            // means the executor stopped waiting on this approval
+            // (cancellation, panic, or shutdown) before we got our
+            // decision. The old `let _ =` hid this from logs.
+            // `?e` (Debug) because `oneshot::error::SendError<T>`
+            // only impls Debug.
+            if let Err(e) = req.response.send(response) {
+                tracing::warn!(
+                    tool = %req.tool_name,
+                    error = ?e,
+                    "approval responder dropped before send (executor may have cancelled or shut down)"
+                );
+            }
         }
     });
 
@@ -214,7 +220,10 @@ async fn run_non_interactive(
                     println!("{}", serde_json::to_string(&line).unwrap());
                 }
             }
-            session::executor::TurnEvent::ToolResult { name, output: result } => {
+            session::executor::TurnEvent::ToolResult {
+                name,
+                output: result,
+            } => {
                 if output == crate::shared::OutputFormat::StreamJson {
                     let line = serde_json::json!({
                         "type": "tool_result",

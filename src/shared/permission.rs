@@ -21,9 +21,18 @@
 //! [[permission_rules]]
 //! tool = "bash"
 //! key = "command"
-//! pattern = "rm -rf *"
+//! pattern = "rm -rf **"
 //! action = "deny"
 //! ```
+//!
+//! **Note on `*` vs `**`:** the matcher treats `*` as "zero-or-more
+//! chars in the current path segment" — it does **not** cross `/`.
+//! For shell-command patterns, that means `rm -rf *` only matches
+//! arguments without a slash (e.g. `rm -rf foo`, not `rm -rf
+//! /home/x`). The `bash` `command` patterns are usually full shell
+//! strings, so prefer `**` (crosses slashes) for the headline deny
+//! rules you actually want to block. `**` also matches the
+//! slash-free case, so it's the safe default for `command` rules.
 //!
 //! Rules are evaluated in declaration order — first match wins. The
 //! **default action** is `Ask` (forces approval prompt) unless the
@@ -62,9 +71,13 @@ pub enum PermissionAction {
 /// - `key` — which argument of the tool to match against. `"command"`
 ///   for `bash`, `"path"` for `edit_file` / `write_file` / `read_file`,
 ///   or `"*"` to match without inspecting args.
-/// - `pattern` — glob pattern. `*` matches zero-or-more chars (slashes
-///   included), `?` matches exactly one char. Plain strings match
-///   exactly. Empty pattern matches only an empty value.
+/// - `pattern` — glob pattern. `**` matches zero-or-more chars
+///   including `/` and is the safe default for `command` patterns
+///   (which are full shell strings). `*` matches zero-or-more chars
+///   in a single path segment and does **not** cross `/` — useful for
+///   path patterns where you want `src/*.rs` to mean "one segment".
+///   `?` matches exactly one char. Plain strings match exactly.
+///   Empty pattern matches only an empty value.
 /// - `action` — what to do on match.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PermissionRule {
@@ -157,6 +170,14 @@ fn glob_match_recurse(pat: &[char], pi: usize, val: &[char], vi: usize) -> bool 
 /// **First match wins.** The order rules appear in the config file is
 /// the order they're checked. This is deliberate — users can write
 /// more-specific rules first to override the broad default behaviour.
+///
+/// **Fail-closed for `Deny` rules on non-string args:** if a `Deny`
+/// rule's key exists in `args` but isn't a string (e.g. the model
+/// emitted `{"command": 42}` for a `bash` call), the rule is treated
+/// as a match. The user wrote an explicit deny; if we can't read the
+/// value we can't prove the pattern doesn't match, so we honour the
+/// user's intent. For `Allow`/`Ask` rules the value still has to be a
+/// string — there's no benefit to speculatively matching.
 pub fn evaluate(
     rules: &[PermissionRule],
     tool: &str,
@@ -170,15 +191,24 @@ pub fn evaluate(
         if rule.key == "*" {
             return rule.action;
         }
-        let value = match args.get(&rule.key) {
+        match args.get(&rule.key) {
             Some(v) => match v.as_str() {
-                Some(s) => s,
-                None => continue, // key exists but isn't a string — skip
+                Some(s) => {
+                    if glob_match(&rule.pattern, s) {
+                        return rule.action;
+                    }
+                    // Pattern didn't match — keep scanning.
+                }
+                None => {
+                    // Key is present but isn't a string. For `Deny`,
+                    // honour the user's intent and refuse. For
+                    // `Allow`/`Ask`, the rule simply doesn't apply.
+                    if matches!(rule.action, PermissionAction::Deny) {
+                        return PermissionAction::Deny;
+                    }
+                }
             },
-            None => continue, // key not in args — skip
-        };
-        if glob_match(&rule.pattern, value) {
-            return rule.action;
+            None => continue, // key not in args — rule doesn't apply
         }
     }
     default
@@ -225,26 +255,6 @@ pub fn suggest_rule(tool: &str, args: &Value) -> PermissionRule {
         key,
         pattern,
         action: PermissionAction::Allow,
-    }
-}
-
-/// Human-readable summary of a rule, for the `[A]lways saved …` message
-/// in the TUI. Truncated to keep the dialog clean.
-pub fn describe_rule(rule: &PermissionRule) -> String {
-    let action = match rule.action {
-        PermissionAction::Allow => "allow",
-        PermissionAction::Ask => "ask",
-        PermissionAction::Deny => "deny",
-    };
-    let pattern = if rule.pattern.len() > 60 {
-        format!("{}…", &rule.pattern[..57])
-    } else {
-        rule.pattern.clone()
-    };
-    if rule.key == "*" {
-        format!("{} {}", action, rule.tool)
-    } else {
-        format!("{} {}:{}={}", action, rule.tool, rule.key, pattern)
     }
 }
 
@@ -476,9 +486,28 @@ mod tests {
     }
 
     #[test]
-    fn test_evaluate_non_string_key_skips_rule() {
+    fn test_evaluate_non_string_key_fails_closed_for_deny() {
+        // A `Deny` rule on a non-string arg fails CLOSED: the user
+        // asked to deny this pattern; if we can't read the value we
+        // can't prove the pattern doesn't match, so we honour the
+        // user's intent and refuse.
         let rules = vec![rule("bash", "command", "rm *", PermissionAction::Deny)];
-        // `command` is a number, not a string — can't match a glob, skip.
+        assert_eq!(
+            evaluate(
+                &rules,
+                "bash",
+                &json!({"command": 42}),
+                PermissionAction::Ask
+            ),
+            PermissionAction::Deny
+        );
+    }
+
+    #[test]
+    fn test_evaluate_non_string_key_skips_for_allow() {
+        // For `Allow`/`Ask` the rule still has nothing to match
+        // against — it falls through to the next rule / default.
+        let rules = vec![rule("bash", "command", "rm *", PermissionAction::Allow)];
         assert_eq!(
             evaluate(
                 &rules,
@@ -550,45 +579,6 @@ mod tests {
         let r = suggest_rule("bash", &json!({}));
         assert_eq!(r.key, "command");
         assert_eq!(r.pattern, "");
-    }
-
-    // ── describe_rule ─────────────────────────────────────────────
-
-    #[test]
-    fn test_describe_rule_wildcard_key() {
-        let r = rule("bash", "*", "", PermissionAction::Allow);
-        assert_eq!(describe_rule(&r), "allow bash");
-    }
-
-    #[test]
-    fn test_describe_rule_with_pattern() {
-        let r = rule("bash", "command", "cargo test*", PermissionAction::Allow);
-        assert_eq!(describe_rule(&r), "allow bash:command=cargo test*");
-    }
-
-    #[test]
-    fn test_describe_rule_deny() {
-        let r = rule("bash", "command", "rm -rf *", PermissionAction::Deny);
-        assert_eq!(describe_rule(&r), "deny bash:command=rm -rf *");
-    }
-
-    #[test]
-    fn test_describe_rule_truncates_long_pattern() {
-        let long = "x".repeat(100);
-        let r = rule("bash", "command", &long, PermissionAction::Allow);
-        let desc = describe_rule(&r);
-        // "allow bash:command=xxx…xxx" — pattern part is 60 chars max
-        // (57 + "…"), so total fits in well under 100.
-        assert!(
-            desc.contains("…"),
-            "long pattern should be truncated: {}",
-            desc
-        );
-        assert!(
-            desc.len() < 90,
-            "description should be truncated: got {} chars",
-            desc.len()
-        );
     }
 
     // ── config round-trip ─────────────────────────────────────────

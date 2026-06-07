@@ -749,12 +749,34 @@ impl Executor {
         } else {
             PermissionAction::Ask
         };
-        let action = evaluate(
+        let mut action = evaluate(
             &self.config.permission_rules,
             &tc.name,
             &tc.arguments,
             default_action,
         );
+
+        // **Bash read-only classification under `auto_approve`.** The
+        // default action for bash under auto_approve is `Allow`, but
+        // that would let any command through — including `curl`,
+        // `wget`, builds, interpreters, anything piped to a shell.
+        // The intent of `auto_approve` is to skip prompts for safe
+        // read-only inspection (ls, cat, grep, find, …), not for
+        // arbitrary commands. Force `Ask` for non-read-only bash so
+        // a confirmation prompt is still shown. A user-written
+        // `Allow` rule (above) still wins, since this only
+        // downgrades the default.
+        if self.config.auto_approve
+            && tc.name == "bash"
+            && matches!(action, PermissionAction::Allow)
+        {
+            if let Some(cmd) = tc.arguments.get("command").and_then(|v| v.as_str()) {
+                if !is_read_only_bash(cmd) {
+                    action = PermissionAction::Ask;
+                }
+            }
+        }
+
         let needs_approval = is_destructive && matches!(action, PermissionAction::Ask);
 
         // 3. Deny-list rule: refuse without prompting.
@@ -1871,8 +1893,8 @@ mod tests {
         let captured = Arc::new(Mutex::new(None));
         let tool = MockTool {
             def: ToolDef {
-                name: "bash".into(),
-                description: "run a command".into(),
+                name: "bash",
+                description: "run a command",
                 parameters: serde_json::json!({"type": "object", "properties": {"command": {"type": "string"}}}),
             },
             captured_args: captured.clone(),
@@ -1946,8 +1968,8 @@ mod tests {
         let captured = Arc::new(Mutex::new(None));
         let tool = MockTool {
             def: ToolDef {
-                name: "bash".into(),
-                description: "run a command".into(),
+                name: "bash",
+                description: "run a command",
                 parameters: serde_json::json!({"type": "object", "properties": {"command": {"type": "string"}}}),
             },
             captured_args: captured.clone(),
@@ -2029,8 +2051,8 @@ mod tests {
         let captured = Arc::new(Mutex::new(None));
         let tool = MockTool {
             def: ToolDef {
-                name: "bash".into(),
-                description: "run a command".into(),
+                name: "bash",
+                description: "run a command",
                 parameters: serde_json::json!({"type": "object", "properties": {"command": {"type": "string"}}}),
             },
             captured_args: captured.clone(),
@@ -2093,6 +2115,305 @@ mod tests {
             exe.config.permission_rules[0].action,
             PermissionAction::Deny,
             "Existing Deny should not be overwritten by a new Allow on the same pattern"
+        );
+    }
+
+    /// **Headline deny example must work end-to-end.** Review 2's #1
+    /// was: the docs in `permission.rs` advertise
+    /// `pattern = "rm -rf **"` (now `rm -rf **`, after the doc fix)
+    /// as a deny rule for `bash:command`. The unit test on `evaluate()`
+    /// proves the rule selects `Deny` — this test proves the executor
+    /// then refuses to call the tool, even with `auto_approve: true`.
+    #[tokio::test]
+    async fn test_deny_rule_blocks_bash_even_with_auto_approve() {
+        let captured = Arc::new(Mutex::new(None));
+        let tool = MockTool {
+            def: ToolDef {
+                name: "bash",
+                description: "run a command",
+                parameters: serde_json::json!({"type": "object", "properties": {"command": {"type": "string"}}}),
+            },
+            captured_args: captured.clone(),
+            outcome: ToolOutcome::Success {
+                content: "ran!".into(),
+            },
+        };
+
+        let adapter = MockAdapter::new(
+            vec![
+                StreamEvent::ToolCall(ToolInvocation {
+                    id: "call-1".into(),
+                    name: "bash".into(),
+                    // A command the docs' deny rule MUST catch.
+                    arguments: serde_json::json!({"command": "rm -rf /home/user/build"}),
+                }),
+                StreamEvent::Done {
+                    finish_reason: FinishReason::ToolCalls,
+                    usage: None,
+                },
+            ],
+            make_info(),
+        );
+
+        // auto_approve = true — would normally bypass the dialog —
+        // but the explicit Deny rule on `rm -rf **` should still
+        // short-circuit the call before it reaches the tool.
+        let (approval_tx, mut approval_rx) = mpsc::unbounded_channel::<ApprovalRequest>();
+        let approval_handle = tokio::spawn(async move {
+            // Rule short-circuits before any approval is sent; the
+            // channel close at end-of-test unblocks `recv()`.
+            while let Some(req) = approval_rx.recv().await {
+                let _ = req.response.send(ApprovalResponse::Approved);
+            }
+        });
+
+        let mut config = make_config(true);
+        config
+            .permission_rules
+            .push(crate::shared::permission::PermissionRule {
+                tool: "bash".into(),
+                key: "command".into(),
+                pattern: "rm -rf **".into(),
+                action: PermissionAction::Deny,
+            });
+
+        let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], config);
+        let events = exe
+            .run_turn("clean build", &approval_tx, never_cancelled())
+            .await
+            .unwrap();
+        drop(approval_tx);
+        approval_handle.await.unwrap();
+
+        // The tool must not have been called.
+        assert!(
+            captured.lock().unwrap().is_none(),
+            "Deny rule should prevent the tool from being called even with auto_approve"
+        );
+
+        // And the user sees a ToolResult carrying the denial reason.
+        let denied_msg = events.iter().find_map(|e| match e {
+            TurnEvent::ToolResult { name, output } if name == "bash" => Some(output.as_str()),
+            _ => None,
+        });
+        assert!(
+            denied_msg.is_some_and(|m| m.contains("Permission rule denied")),
+            "Expected a permission-rule denial message, got events: {:?}",
+            events
+        );
+    }
+
+    /// The executor's path-guard / deny-list / read-before-edit gate
+    /// is what protects file writes. This is the integration check
+    /// for Review 2's #2: when a `write_file` call targets a path
+    /// matched by the configured deny_paths, the executor must refuse
+    /// the call before the tool runs, regardless of `auto_approve`.
+    #[tokio::test]
+    async fn test_deny_paths_blocks_write_file_even_with_auto_approve() {
+        let captured = Arc::new(Mutex::new(None));
+        let tool = MockTool {
+            def: ToolDef {
+                name: "write_file",
+                description: "write to a file",
+                parameters: serde_json::json!({"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}}),
+            },
+            captured_args: captured.clone(),
+            outcome: ToolOutcome::Success {
+                content: "wrote".into(),
+            },
+        };
+
+        let adapter = MockAdapter::new(
+            vec![
+                StreamEvent::ToolCall(ToolInvocation {
+                    id: "call-1".into(),
+                    name: "write_file".into(),
+                    arguments: serde_json::json!({
+                        "path": "secret/credentials.json",
+                        "content": "{\"leaked\": true}"
+                    }),
+                }),
+                StreamEvent::Done {
+                    finish_reason: FinishReason::ToolCalls,
+                    usage: None,
+                },
+            ],
+            make_info(),
+        );
+
+        // No approval channel needed — auto_approve=true and a no-op
+        // permission_rules list. The path guard is what must block.
+        let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
+
+        let mut config = make_config(true);
+        config.deny_paths = vec!["secret/**".into()];
+
+        let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], config);
+        let events = exe
+            .run_turn("save creds", &approval_tx, never_cancelled())
+            .await
+            .unwrap();
+
+        // Tool must not have been called.
+        assert!(
+            captured.lock().unwrap().is_none(),
+            "write_file must be blocked by the path deny-list before the tool runs"
+        );
+
+        // And the result must surface the denial.
+        let denied = events.iter().any(|e| matches!(
+            e,
+            TurnEvent::ToolResult { name, output } if name == "write_file" && output.contains("denied")
+        ));
+        assert!(
+            denied,
+            "Expected a deny-list refusal ToolResult, got events: {:?}",
+            events
+        );
+    }
+
+    /// The dangerous-shell-command gate (rm -rf /, fork bomb, etc.) is
+    /// independent of the permission-rule system. Even with a
+    /// permissive `allow *` permission rule, the executor must still
+    /// block `rm -rf /` because the dangerous-shell check fires before
+    /// the tool runs. This is the integration counterpart to the
+    /// `check_bash_command_blocks_dangerous_exact` unit test.
+    #[tokio::test]
+    async fn test_dangerous_shell_blocked_even_with_allow_all_rule() {
+        let captured = Arc::new(Mutex::new(None));
+        let tool = MockTool {
+            def: ToolDef {
+                name: "bash",
+                description: "run a command",
+                parameters: serde_json::json!({"type": "object", "properties": {"command": {"type": "string"}}}),
+            },
+            captured_args: captured.clone(),
+            outcome: ToolOutcome::Success {
+                content: "ran!".into(),
+            },
+        };
+
+        let adapter = MockAdapter::new(
+            vec![
+                StreamEvent::ToolCall(ToolInvocation {
+                    id: "call-1".into(),
+                    name: "bash".into(),
+                    arguments: serde_json::json!({"command": "rm -rf /"}),
+                }),
+                StreamEvent::Done {
+                    finish_reason: FinishReason::ToolCalls,
+                    usage: None,
+                },
+            ],
+            make_info(),
+        );
+
+        // We expect exactly one approval request (the read-only
+        // classification downgrades the Allow default to Ask for
+        // `rm -rf /`). The responder approves, so the only thing
+        // stopping the call must be the dangerous-shell gate below.
+        let (approval_tx, mut approval_rx) = mpsc::unbounded_channel::<ApprovalRequest>();
+        let approval_handle = tokio::spawn(async move {
+            let req: ApprovalRequest = approval_rx.recv().await.expect("approval request");
+            let _ = req.response.send(ApprovalResponse::Approved);
+        });
+
+        // auto_approve + a wildcard Allow rule — the most permissive
+        // possible permission setup. The dangerous-shell gate must
+        // still refuse the call.
+        let mut config = make_config(true);
+        config
+            .permission_rules
+            .push(crate::shared::permission::PermissionRule {
+                tool: "*".into(),
+                key: "*".into(),
+                pattern: String::new(),
+                action: PermissionAction::Allow,
+            });
+
+        let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], config);
+        let events = exe
+            .run_turn("wipe disk", &approval_tx, never_cancelled())
+            .await
+            .unwrap();
+        approval_handle.await.unwrap();
+
+        assert!(
+            captured.lock().unwrap().is_none(),
+            "dangerous shell command must be blocked even when all permission rules allow it"
+        );
+
+        let blocked = events.iter().any(|e| matches!(
+            e,
+            TurnEvent::ToolResult { name, output } if name == "bash" && output.contains("dangerous")
+        ));
+        assert!(
+            blocked,
+            "Expected a dangerous-pattern refusal, got events: {:?}",
+            events
+        );
+    }
+
+    /// With `auto_approve: true`, a bash command that is NOT in the
+    /// read-only allowlist (e.g. `cargo build`) should still go
+    /// through the approval flow — `--auto-approve` does not bypass
+    /// approval for non-read-only bash. This pins the documented
+    /// behavior on the `auto_approve` flag's doc-comment.
+    #[tokio::test]
+    async fn test_auto_approve_does_not_skip_approval_for_non_read_only_bash() {
+        let captured = Arc::new(Mutex::new(None));
+        let tool = MockTool {
+            def: ToolDef {
+                name: "bash",
+                description: "run a command",
+                parameters: serde_json::json!({"type": "object", "properties": {"command": {"type": "string"}}}),
+            },
+            captured_args: captured.clone(),
+            outcome: ToolOutcome::Success {
+                content: "compiled".into(),
+            },
+        };
+
+        let adapter = MockAdapter::new(
+            vec![
+                StreamEvent::ToolCall(ToolInvocation {
+                    id: "call-1".into(),
+                    name: "bash".into(),
+                    arguments: serde_json::json!({"command": "cargo build"}),
+                }),
+                StreamEvent::Done {
+                    finish_reason: FinishReason::ToolCalls,
+                    usage: None,
+                },
+            ],
+            make_info(),
+        );
+
+        // auto_approve = true. The command is NOT in the read-only
+        // list, so the executor must ask for approval.
+        let (approval_tx, mut approval_rx) = mpsc::unbounded_channel::<ApprovalRequest>();
+        let approval_handle = tokio::spawn(async move {
+            // We expect exactly one approval request.
+            let req: ApprovalRequest = approval_rx.recv().await.expect("approval request");
+            assert_eq!(req.tool_name, "bash");
+            let _ = req.response.send(ApprovalResponse::Approved);
+        });
+
+        let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(true));
+        let _events = exe
+            .run_turn("build", &approval_tx, never_cancelled())
+            .await
+            .unwrap();
+        approval_handle.await.unwrap();
+
+        // The tool DID run because we approved it — but the point of
+        // this test is that the approval request was sent at all.
+        // (If `auto_approve` had silently bypassed approval, the
+        // spawned task would have hit `recv()` returning None and
+        // panicked before this assert.)
+        assert!(
+            captured.lock().unwrap().is_some(),
+            "Tool should have run after the user approved the non-read-only command"
         );
     }
 

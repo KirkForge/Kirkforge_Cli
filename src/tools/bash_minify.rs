@@ -653,10 +653,8 @@ mod tests {
             s.push_str(&format!("{} |     let x{i} = 5;\n", 100 + i));
             s.push_str(&format!("   |         ^ help: if this is intentional, prefix it with an underscore: `_x{i}`\n"));
             s.push_str("   |\n");
-            s.push_str(&format!(
-                "   = note: `#[warn(unused_variables)]` on by default\n"
-            ));
-            s.push_str("\n");
+            s.push_str("   = note: `#[warn(unused_variables)]` on by default\n");
+            s.push('\n');
         }
         s.push_str("    Finished `dev` profile [unoptimized + debuginfo] target(s) in 12.3s\n");
         s
@@ -781,10 +779,8 @@ mod tests {
             original.push_str(&format!("  --> src/lib{i}.rs:{}:5\n", 10 + i));
             original.push_str(&format!("{} |     let x{i} = 5;\n", 10 + i));
             original.push_str(&format!("   |         ^ help: if this is intentional, prefix it with an underscore: `_x{i}`\n"));
-            original.push_str(&format!(
-                "   = note: `#[warn(unused_variables)]` on by default\n"
-            ));
-            original.push_str("\n");
+            original.push_str("   = note: `#[warn(unused_variables)]` on by default\n");
+            original.push('\n');
         }
         let result = try_minify_build_log("rustc --edition 2021 main.rs", &original);
         assert!(result.is_some(), "rustc warnings output should fire");
@@ -819,10 +815,8 @@ mod tests {
             original.push_str(&format!("{} |     let x{i} = 5;\n", 100 + i));
             original.push_str(&format!("   |         ^ help: if this is intentional, prefix it with an underscore: `_x{i}`\n"));
             original.push_str("   |\n");
-            original.push_str(&format!(
-                "   = note: `#[warn(unused_variables)]` on by default\n"
-            ));
-            original.push_str("\n");
+            original.push_str("   = note: `#[warn(unused_variables)]` on by default\n");
+            original.push('\n');
         }
 
         // The error path runs the same two-step chain.

@@ -247,8 +247,10 @@ mod tests {
 
     #[test]
     fn test_env_auto_approve_false() {
-        let mut cfg = Config::default();
-        cfg.auto_approve = true;
+        let mut cfg = Config {
+            auto_approve: true,
+            ..Default::default()
+        };
 
         set_env("KIRKFORGE_AUTO_APPROVE", Some("false"));
         apply_env_overrides(&mut cfg);

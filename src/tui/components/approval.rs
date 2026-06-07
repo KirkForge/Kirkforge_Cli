@@ -369,7 +369,7 @@ mod tests {
         let a = make_approval("write_file", json!({"content": "🦀".repeat(100)}));
         let lines = format_args_preview(&a, 30);
         // Should not panic. Should produce at least 2 wrapped lines.
-        assert!(lines.len() >= 1);
+        assert!(!lines.is_empty());
         for line in &lines {
             // No line should be invalid UTF-8 (the type system enforces this,
             // but explicitly check no truncation marker is mid-char)

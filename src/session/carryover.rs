@@ -277,11 +277,13 @@ mod tests {
 
     #[test]
     fn test_serde_roundtrip() {
-        let mut p = CarryoverProfile::default();
-        p.session_count = 7;
-        p.last_user_message = "hello".to_string();
-        p.tool_usage.insert("read_file".into(), 10);
-        p.work_patterns.insert("test-after-change".into(), 0.8);
+        let p = CarryoverProfile {
+            session_count: 7,
+            last_user_message: "hello".to_string(),
+            tool_usage: HashMap::from([("read_file".into(), 10)]),
+            work_patterns: HashMap::from([("test-after-change".into(), 0.8)]),
+            ..Default::default()
+        };
 
         let json = serde_json::to_string(&p).unwrap();
         let recovered: CarryoverProfile = serde_json::from_str(&json).unwrap();
@@ -300,9 +302,11 @@ mod tests {
         let backup_path = PathBuf::from(".");
 
         // Manually test save/load logic by writing to temp path
-        let mut p = CarryoverProfile::default();
-        p.session_count = 2;
-        p.last_user_message = "test save".to_string();
+        let p = CarryoverProfile {
+            session_count: 2,
+            last_user_message: "test save".to_string(),
+            ..Default::default()
+        };
 
         // Write
         let json = serde_json::to_string(&p).unwrap();
@@ -438,7 +442,7 @@ mod tests {
         // But save writes to the file path. Let's just test the prune logic directly.
         let mut pruned = p.clone();
         let mut tools: Vec<(String, u64)> = pruned.tool_usage.drain().collect();
-        tools.sort_by(|a, b| b.1.cmp(&a.1));
+        tools.sort_by_key(|t| std::cmp::Reverse(t.1));
         tools.truncate(5);
 
         assert_eq!(tools.len(), 5);
@@ -465,9 +469,11 @@ mod tests {
 
     #[test]
     fn test_estimated_tokens_non_zero() {
-        let mut p = CarryoverProfile::default();
-        p.session_count = 1;
-        p.last_user_message = "hello world".to_string();
+        let p = CarryoverProfile {
+            session_count: 1,
+            last_user_message: "hello world".to_string(),
+            ..Default::default()
+        };
         assert!(p.estimated_tokens() > 0);
     }
 

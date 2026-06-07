@@ -44,19 +44,6 @@ pub const MENTION_MAX_BYTES: usize = 50_000;
 const MENTION_HEAD_BYTES: usize = 30_000;
 const MENTION_TAIL_BYTES: usize = 15_000;
 
-/// A parsed `@<path>[:<range>][:raw]` token, with byte offsets in the
-/// original input string so the stripper can excise it without
-/// re-scanning.
-#[derive(Debug, Clone, PartialEq)]
-pub struct MentionParse {
-    pub spec: MentionSpec,
-    /// Inclusive byte offset of the leading `@`.
-    pub start: usize,
-    /// Exclusive byte offset one past the last byte of the token
-    /// (i.e. the slice `&input[start..end]` is the raw token).
-    pub end: usize,
-}
-
 /// What the user actually asked for. The path may be relative
 /// (resolved against the project root at expand time) or absolute.
 /// `raw` suppresses the default minification.
@@ -90,21 +77,6 @@ pub enum MentionStatus {
     Denied(String),
     IoError(String),
     InvalidRange(String),
-}
-
-impl MentionExpansion {
-    /// True if the resolved content is suitable to be inlined into
-    /// the prompt (i.e. we have actual file content to show the model).
-    pub fn is_ok(&self) -> bool {
-        matches!(self.status, MentionStatus::Ok { .. })
-    }
-
-    /// Display label for the path — always shows the path the user
-    /// typed, never the resolved/canonical form (the user typed what
-    /// they typed).
-    pub fn display_path(&self) -> &str {
-        &self.spec.path
-    }
 }
 
 /// Scan `input` for `@<path>[:<range>][:raw]` tokens.

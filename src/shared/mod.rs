@@ -191,14 +191,6 @@ pub enum TruncationStrategy {
     SummarizeMiddle,
 }
 
-/// User approval decision for a destructive tool call.
-#[derive(Debug, Clone, PartialEq)]
-pub enum Approval {
-    Approved,
-    Denied,
-    AlwaysApprove,
-}
-
 /// A tool definition as exposed to the model.
 #[derive(Debug, Clone)]
 pub struct ToolDef {

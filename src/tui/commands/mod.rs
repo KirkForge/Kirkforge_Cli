@@ -1128,7 +1128,7 @@ mod tests {
         let guard = crate::session::access::PathGuard::default();
         let expansions = expand_mentions(&[token], &guard);
         assert_eq!(expansions.len(), 1);
-        assert!(expansions[0].is_ok());
+        assert!(matches!(expansions[0].status, MentionStatus::Ok { .. }));
         assert_eq!(expansions[0].content, "hello world");
     }
 

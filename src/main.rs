@@ -1,7 +1,37 @@
-// Crate-level `#[allow(dead_code)]` removed: it was hiding 63 dead-code
-// warnings (private functions, unused fields, never-constructed enums).
-// Each call site now declares its own justification.
-// (See plan: remove this attr permanently and triage the 63 warnings.)
+// Crate-level `#[allow(dead_code)]` is in place while a per-module
+// triage is in progress. Triage status (Phase 36+):
+//
+//   - **Removed in this branch (was queued for v1.3):**
+//     - `shared::permission::describe_rule` (no caller — the TUI
+//       builds its own description string from rule fields directly)
+//     - `shared::Approval` enum (unrelated to `executor::ApprovalDecision`
+//       and `executor::ApprovalResponse`; leftover from an earlier API)
+//     - `tui::commands::mentions::MentionParse` and its `is_ok` /
+//       `display_path` methods (no caller in the new TUI dispatch path)
+//
+//   - **Likely unused, kept pending verification of the v1.3 work list:**
+//     - `session::access::DenyList::is_url_denied` — only its own
+//       test exercises it; there's no URL fetch tool yet, so this is
+//       speculative API surface
+//     - `tui::rendering::{syntax_set, theme_set, highlight_code,
+//       render_markdown, truncate, format_size}` — not called from
+//       the current TUI code; looks like an earlier "phase 8" plan
+//       that never landed
+//
+//   - **Match-arm variants that look unused but aren't:**
+//     - `tui::app::ConnectionState::{Connecting, Connected, Error}` —
+//       exhaustive-match sites in `tui/widgets/{chat,status}.rs` cover
+//       all four variants even though only `Disconnected` is set in
+//       `AppState::new()`. Keep until the TUI actually drives a real
+//       connection state machine.
+//
+//   - **The remaining ~50 warnings are field/event variants that are
+//     intentionally public for the event bus / verifier / truncation
+//     inter-module contract:** `BusEvent` payload fields, `CorrectionResult`
+//     fields, `TruncationStrategy` variants, `ToolInvocation`/`Message`
+//     fields populated by the parser. These are pub(crate) API even
+//     when the consuming side isn't built yet. Triage is item-by-item;
+//     the work list lives in the v1.3 milestone notes.
 #![allow(dead_code)]
 
 mod adapters;
@@ -27,14 +57,45 @@ struct Cli {
     model: Option<String>,
 
     /// Ollama host (default: http://localhost:11434)
-    #[arg(short, long)]
+    #[arg(long)]
     host: Option<String>,
 
     /// Model type override (glm, deepseek, gemini, openai)
     #[arg(long)]
     model_type: Option<String>,
 
-    /// Auto-approve destructive tool calls (bash, write, edit)
+    /// Auto-approve destructive tool calls (bash, write, edit).
+    ///
+    /// **What `--auto-approve` does:** sets the *default* permission
+    /// action to `Allow` instead of `Ask`. The first time the model
+    /// wants to run `bash`, `write_file`, or `edit_file`, the call
+    /// runs without a confirmation prompt.
+    ///
+    /// **What `--auto-approve` does NOT do:**
+    /// - It does NOT skip user-written `deny` rules — a rule like
+    ///   `[[permission_rules]] tool = "bash" key = "command"
+    ///   pattern = "rm -rf **" action = "deny"` still refuses, no
+    ///   matter what `--auto-approve` is.
+    /// - It does NOT bypass the built-in danger list
+    ///   (`rm -rf /`, fork bombs, `dd if=/dev/zero of=...`,
+    ///   metadata-endpoint references, etc.) — those are blocked
+    ///   unconditionally.
+    /// - It does NOT skip the path deny-list, denied extensions, or
+    ///   the path guard (sandbox / `allowed_write_dirs` / dotfile /
+    ///   symlink rules) for file tools.
+    /// - It does NOT relax the read-only classification for bash:
+    ///   `auto_approve` still requires the command to be in the
+    ///   read-only allowlist AND to have no dangerous chains
+    ///   (redirects, pipe-to-shell, `;`, `&&`, `||`, `$(...)`).
+    ///   Non-read-only bash (e.g. `cargo build`, `npm install`,
+    ///   `python script.py`) still goes through the approval flow
+    ///   even with `--auto-approve`.
+    ///
+    /// **Bottom line:** `--auto-approve` removes the interactive
+    /// `Ask` prompt for destructive calls whose command/path
+    /// matches no `deny` rule, is not on the built-in danger list,
+    /// and (for bash) is read-only. It is a usability shortcut for
+    /// scripted / non-interactive use, not a sandbox bypass.
     #[arg(long)]
     auto_approve: bool,
 

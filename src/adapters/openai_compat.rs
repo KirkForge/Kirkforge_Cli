@@ -322,13 +322,31 @@ impl ModelAdapter for OpenAiCompatAdapter {
                                         };
 
                                         let usage = json.get("usage").map(|u| TokenUsage {
+                                            // Try OpenAI-style fields first, then
+                                            // Ollama-native names. Some
+                                            // OpenAI-compat proxies through
+                                            // Ollama emit the native names
+                                            // (prompt_eval_count / eval_count)
+                                            // even though the rest of the
+                                            // framing is OpenAI-compat. See
+                                            // `parse_token_usage` in
+                                            // ollama_ndjson.rs for the
+                                            // corresponding fix there.
                                             prompt_tokens: u
                                                 .get("prompt_tokens")
                                                 .and_then(|v| v.as_u64())
+                                                .or_else(|| {
+                                                    u.get("prompt_eval_count")
+                                                        .and_then(|v| v.as_u64())
+                                                })
                                                 .map(|v| v as usize),
                                             completion_tokens: u
                                                 .get("completion_tokens")
                                                 .and_then(|v| v.as_u64())
+                                                .or_else(|| {
+                                                    u.get("eval_count")
+                                                        .and_then(|v| v.as_u64())
+                                                })
                                                 .map(|v| v as usize),
                                         });
 

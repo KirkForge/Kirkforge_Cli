@@ -271,12 +271,28 @@ async fn run_non_interactive(
     }
 
     let cancelled = std::sync::atomic::AtomicBool::new(false);
+
+    // Wall-clock for the truthful `duration_ms` in the JSON summary
+    // (was hardcoded `0` in the previous implementation — see GPT 5.5
+    // review finding #13).
+    let turn_started_at = std::time::Instant::now();
     let events = executor.run_turn(&input, &approval_tx, &cancelled).await?;
+    let turn_duration_ms = turn_started_at.elapsed().as_millis() as u64;
 
     let mut total_prompt_tokens: usize = 0;
     let mut total_completion_tokens: usize = 0;
     let mut cumulative_cost: f64 = 0.0;
     let mut final_error: Option<String> = None;
+
+    // Per-tool timing + structured records for the JSON summary.
+    // `ToolStart` arms the timer; the matching `ToolResult` reads it
+    // and pushes a `ToolCallRecord` into `tool_records`. Tools are
+    // dispatched sequentially by the executor, so a single `Option`
+    // for the in-flight call is sufficient — we don't need to key by
+    // id. The previous implementation emitted `tool_calls: vec![]`
+    // regardless of reality (GPT 5.5 #13); this fixes it.
+    let mut in_flight: Option<(String, serde_json::Value, std::time::Instant)> = None;
+    let mut tool_records: Vec<crate::shared::ToolCallRecord> = Vec::new();
 
     for event in events {
         match event {
@@ -297,15 +313,23 @@ async fn run_non_interactive(
                     println!("{}", serde_json::to_string(&line).unwrap());
                 }
             }
-            session::executor::TurnEvent::ToolStart { name, args: _ } => {
+            session::executor::TurnEvent::ToolStart { name, args } => {
                 if output == crate::shared::OutputFormat::StreamJson {
                     let line = serde_json::json!({"type": "tool_start", "name": name});
                     println!("{}", serde_json::to_string(&line).unwrap());
                 }
+                // Arm the in-flight timer for the matching ToolResult.
+                // If we somehow see a second ToolStart without an
+                // intervening ToolResult (shouldn't happen given the
+                // executor's dispatch order, but defensive), the older
+                // record is dropped — better than accumulating stale
+                // timers.
+                in_flight = Some((name, args, std::time::Instant::now()));
             }
             session::executor::TurnEvent::ToolResult {
                 name,
                 output: result,
+                success,
             } => {
                 if output == crate::shared::OutputFormat::StreamJson {
                     let line = serde_json::json!({
@@ -316,6 +340,25 @@ async fn run_non_interactive(
                     println!("{}", serde_json::to_string(&line).unwrap());
                 } else if output == crate::shared::OutputFormat::Text {
                     eprintln!("\n[tool: {}] {} chars", name, result.len());
+                }
+                // If we have a matching in-flight record, fold it
+                // into a ToolCallRecord and push. Name mismatch
+                // (shouldn't happen but be defensive) falls back to
+                // empty args + zero duration.
+                if let Some((start_name, start_args, start_time)) = in_flight.take() {
+                    let duration_ms = start_time.elapsed().as_millis() as u64;
+                    let record = crate::shared::ToolCallRecord {
+                        name: start_name,
+                        arguments: start_args,
+                        result: result.clone(),
+                        success,
+                        duration_ms,
+                    };
+                    tool_records.push(record);
+                    // If the name in the result doesn't match the
+                    // start (paranoia), prefer the start name. We
+                    // already used `start_name`; nothing to do.
+                    let _ = name;
                 }
             }
             session::executor::TurnEvent::Verification { message, success } => {
@@ -399,11 +442,11 @@ async fn run_non_interactive(
             session: crate::shared::SessionInfo {
                 id: "non-interactive".into(),
                 model: model_name,
-                duration_ms: 0,
+                duration_ms: turn_duration_ms,
                 started_at: chrono::Local::now().to_rfc3339(),
             },
             messages: recorded_messages,
-            tool_calls: vec![],
+            tool_calls: tool_records,
             usage: crate::shared::UsageSummary {
                 prompt_tokens: total_prompt_tokens,
                 completion_tokens: total_completion_tokens,

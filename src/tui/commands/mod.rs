@@ -10,6 +10,7 @@ pub mod memory;
 pub mod mentions;
 pub mod plan;
 pub mod status;
+pub mod undo;
 
 pub use bang::*;
 pub use compact::*;
@@ -21,6 +22,7 @@ pub use memory::*;
 pub use mentions::*;
 pub use plan::*;
 pub use status::*;
+pub use undo::*;
 
 #[allow(unused_imports)]
 pub use crate::tui::commands::messages_to_entries_stub as messages_to_entries;

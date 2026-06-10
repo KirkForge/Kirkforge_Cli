@@ -174,10 +174,28 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
 
     let adapter = adapters::adapter_for(&model, ollama_host, model_type.as_deref());
 
-    let mut tools: Vec<Arc<dyn tools::Tool>> = tools::all_tools()
-        .into_iter()
-        .map(|t| t as Arc<dyn tools::Tool>)
-        .collect();
+    // ── Undo stack (review.md gap #7) ──
+    // Per-session edit undo. Constructed here so the EditFile and
+    // WriteFile tools can capture pre-edit bytes for `/undo`.
+    // Wrapped in `Arc<Mutex<_>>` because the executor and the TUI's
+    // `/undo` handler both touch it. The critical sections are tiny
+    // (push a snapshot, pop a file) so contention is not a concern.
+    //
+    // We log a warning and proceed without undo if the data dir
+    // can't be resolved — better than refusing the edit.
+    let undo_stack = match session::undo::UndoStack::for_session(&session_id.to_string()) {
+        Ok(s) => Some(std::sync::Arc::new(std::sync::Mutex::new(s))),
+        Err(e) => {
+            tracing::warn!(
+                session_id = %session_id,
+                error = ?e,
+                "could not open undo stack — edits will not be undoable this session"
+            );
+            None
+        }
+    };
+
+    let mut tools: Vec<Arc<dyn tools::Tool>> = tools::all_tools(undo_stack.clone());
 
     // --- MCP tools ---
     if !config.mcp_servers.is_empty() {

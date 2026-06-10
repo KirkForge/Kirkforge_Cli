@@ -1258,9 +1258,12 @@ const DANGEROUS_SHELL_COMMANDS: &[&str] = &[
 const READ_ONLY_COMMANDS: &[&str] = &[
     "ls", "cat", "head", "tail", "pwd", "echo", "printf", "which", "type", "file", "stat", "du",
     "df", "env", "printenv", "true", "false", "dirname", "basename", "realpath", "readlink",
-    "grep", "rg", "find", "sort", "wc", "cut", "tr", "uniq", "fold", "nl", "diff", "cmp", "comm",
+    "grep", "rg", "sort", "wc", "cut", "tr", "uniq", "fold", "nl", "diff", "cmp", "comm",
     "jq", "date", "cal", "whoami", "id", "uname", "hostname", "uptime", "ps", "free", "lscpu",
     "lsblk", "lsof", "dmesg", "nproc", "arch", "tty", "jobs", "help",
+    // `find` used to be in this list, but `find -delete` (and `-exec rm`,
+    // `-fprint`, etc.) is destructive. Removing it forces find through
+    // the approval gate — deepseek-v4 review finding #3.
 ];
 
 fn is_read_only_bash(cmd: &str) -> bool {
@@ -2732,7 +2735,23 @@ mod tests {
 
     #[test]
     fn test_is_read_only_bash_find() {
-        assert!(is_read_only_bash("find . -name '*.rs'"));
+        // `find` used to be in READ_ONLY_COMMANDS but was removed
+        // (deepseek-v4 review finding). All find invocations now go
+        // through the approval gate.
+        assert!(!is_read_only_bash("find . -name '*.rs'"));
+        assert!(!is_read_only_bash("find . -type f"));
+        assert!(!is_read_only_bash("find ."));
+    }
+
+    #[test]
+    fn test_is_read_only_bash_find_delete_specifically_blocked() {
+        // The `find . -delete` case was the specific bypass that
+        // motivated removing find from the read-only list. The test
+        // stays explicit so a future change that adds find back with
+        // a flag check can update this test accordingly.
+        assert!(!is_read_only_bash("find . -delete"));
+        assert!(!is_read_only_bash("find . -type f -delete"));
+        assert!(!is_read_only_bash("find . -exec rm {} \\;"));
     }
 
     #[test]

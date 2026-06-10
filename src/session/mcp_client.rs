@@ -221,9 +221,7 @@ impl McpClient {
                 "arguments": args,
             }
         });
-        let Some(resp) = self.send_request(&req).await else {
-            return None;
-        };
+        let resp = self.send_request(&req).await?;
         // Extract the content from the result
         let result = resp.get("result")?;
         // MCP spec: result.content is an array of content blocks

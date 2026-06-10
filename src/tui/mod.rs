@@ -73,6 +73,7 @@ pub async fn run_tui(
     adapter: Box<dyn crate::adapters::ModelAdapter>,
     tools: Vec<std::sync::Arc<dyn Tool>>,
     conversation_log: ConversationLog,
+    system: Option<String>,
 ) -> anyhow::Result<()> {
     // ── Terminal setup ──
     enable_raw_mode()?;
@@ -136,6 +137,10 @@ pub async fn run_tui(
     // Spawn the executor on a background task
     let mut exe =
         executor::Executor::with_log(adapter, tools, config, conversation_log, carryover_target);
+    // Apply --system override before the executor starts processing
+    // input. Without this, --system is silently dropped (was GPT 5.5
+    // review finding #2).
+    exe.set_system_override(system);
     let handle = tokio::spawn(async move {
         let _ = exe
             .run(

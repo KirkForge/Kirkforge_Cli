@@ -67,7 +67,7 @@ impl MemoryStore {
         if let Ok(entries) = std::fs::read_dir(&self.root) {
             for entry in entries.flatten() {
                 let path = entry.path();
-                if path.extension().map_or(true, |e| e != "md") {
+                if path.extension().is_none_or(|e| e != "md") {
                     continue;
                 }
                 if let Some(fact) = self.read_one(&path) {

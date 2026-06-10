@@ -1,5 +1,18 @@
-
-
+// Dead-code warnings.
+//
+// Review.md arch concern #2 called out the blanket `#![allow(dead_code)]`
+// at the crate root: it suppresses warnings across the entire crate, so
+// genuinely-unused code never surfaces. The principled fix is to scope
+// the allow to each file that has a public surface not yet wired into
+// the in-crate call graph — that is, library-style modules whose `pub`
+// items are meant for external consumers but Rust's lint can't see them.
+//
+// 22 files currently produce dead-code warnings. Scoping the allow
+// across all of them is a separate, multi-hour cleanup that doesn't
+// ship in M1 alongside the bang/scheduler work. The pragmatic
+// compromise: keep the root-level allow for now, but record the
+// deferred scoping as a tracked follow-up. The list of offenders
+// is captured in `state.md` for the next cleanup pass.
 #![allow(dead_code)]
 
 mod adapters;
@@ -133,6 +146,15 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     }
 
     let _ = session::config::save_config(&config);
+
+    // Resolve the launch-time cwd exactly once, then freeze it on the
+    // Config. Review.md arch concern #3: previously, `Config::default()`
+    // did this resolution, which (a) ran before any validation, and
+    // (b) allowed a deletion-after-launch race to silently widen the
+    // sandbox to `None`. `freeze_launch_sandbox` is the new single
+    // resolution site: resolves `current_dir()` once, captures the
+    // value, and honors the operator's explicit-escape-hatch policy.
+    let _frozen_cwd = session::config::freeze_launch_sandbox(&mut config);
 
     let ollama_host = &config.ollama_host;
 

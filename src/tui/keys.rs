@@ -188,14 +188,29 @@ pub async fn handle_input_key(
         KeyCode::Enter => {
             // v1.2-p14 — `!` bash passthrough. A line beginning with `!`
             // (and at least one non-`!` char after it) runs directly via
-            // /bin/sh with no model round trip and no approval gate. The
-            // returned string is rendered as a tool entry so the existing
-            // collapse/expand UX in `chat.rs` applies — a 500-line `!find`
-            // doesn't flood the chat.
+            // /bin/sh with no model round trip and (when
+            // `bang_requires_approval` is set in config) through the
+            // approval gate. The returned string is rendered as a tool
+            // entry so the existing collapse/expand UX in `chat.rs`
+            // applies — a 500-line `!find` doesn't flood the chat.
+            //
+            // Review.md arch concern #1: the `bang_requires_approval`
+            // config flag was previously defined but not wired into this
+            // branch — a security hole. We now route through the gate
+            // when the flag is on, and only run directly when it's off.
             if let Some(rest) = state.input.strip_prefix('!') {
                 let rest = rest.to_string();
                 state.input.clear();
                 state.cursor_position = 0;
+                if state.config.bang_requires_approval {
+                    // Park the command on AppState and let the next
+                    // event-loop iteration render the approval dialog.
+                    // The user hits Y to run, N/Esc to discard. We
+                    // intentionally do NOT run the command here — that
+                    // would defeat the gate.
+                    state.pending_bang = Some(crate::tui::app::PendingBangCommand { cmd: rest });
+                    return Ok(());
+                }
                 let out = crate::tui::commands::handle_bang_command(&rest).await;
                 // Split into summary (first line) and full output so the
                 // collapse UX has something to show by default. The

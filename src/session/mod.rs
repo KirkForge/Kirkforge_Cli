@@ -19,6 +19,7 @@ pub mod scheduler;
 pub mod session_fork;
 pub mod skills;
 pub mod tick;
+pub mod undo;
 pub mod verifier;
 
 use crate::shared::{Config, SessionId};

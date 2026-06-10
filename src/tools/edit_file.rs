@@ -1,9 +1,28 @@
+use crate::session::undo::UndoKind;
 use crate::shared::{ToolDef, ToolOutcome};
-use crate::tools::Tool;
+use crate::tools::{Tool, UndoStackRef};
 use similar::{ChangeTag, TextDiff};
 use std::path::PathBuf;
 
-pub struct EditFile;
+/// Edit file by exact-string match with fuzzy fallback.
+///
+/// Holds an `Option<UndoStackRef>` for the session's undo stack.
+/// When set, the tool snapshots the pre-edit bytes before writing
+/// the new content, so the user can `/undo` to revert.
+///
+/// Review.md gap #7: the undo stack is the safety net that makes
+/// users trust an AI agent with their code. Without it, the only
+/// recourse on a bad edit is `git checkout` — fine for git repos,
+/// useless for untracked files.
+pub struct EditFile {
+    undo: Option<UndoStackRef>,
+}
+
+impl EditFile {
+    pub fn new(undo: Option<UndoStackRef>) -> Self {
+        Self { undo }
+    }
+}
 
 #[async_trait::async_trait]
 impl Tool for EditFile {
@@ -60,12 +79,24 @@ impl Tool for EditFile {
             }
         };
 
-        let content = match std::fs::read_to_string(&path) {
+        // Snapshot pre-edit bytes BEFORE the destructive write, so
+        // the user can `/undo` even if the write succeeds. We
+        // capture the file as it exists *now* (which is the
+        // pre-edit state) — including the trailing-newline,
+        // CRLF/LF, encoding. Same byte-for-byte restoration on
+        // `/undo`.
+        let prev_bytes = std::fs::read(&path).unwrap_or_default();
+        let prev_existed = std::fs::metadata(&path).is_ok();
+
+        let content = match String::from_utf8(prev_bytes.clone()) {
             Ok(c) => c,
-            Err(e) => {
+            Err(_) => {
                 return ToolOutcome::Error {
-                    message: format!("Cannot read {}: {}", path.display(), e),
-                }
+                    message: format!(
+                        "{} is not valid UTF-8; cannot edit_file (use bash for binary content)",
+                        path.display()
+                    ),
+                };
             }
         };
 
@@ -144,7 +175,10 @@ impl Tool for EditFile {
 
                     let diff = render_diff(&content, &new_content);
                     return match std::fs::write(&path, &new_content) {
-                        Ok(_) => ToolOutcome::FileEdit { path, diff },
+                        Ok(_) => {
+                            snapshot_for_undo(&self.undo, UndoKind::Edit, &path, prev_existed, &prev_bytes);
+                            ToolOutcome::FileEdit { path, diff }
+                        }
                         Err(e) => ToolOutcome::Error {
                             message: format!("Cannot write {}: {}", path.display(), e),
                         },
@@ -169,10 +203,44 @@ impl Tool for EditFile {
         let diff = render_diff(&content, &new_content);
 
         match std::fs::write(&path, &new_content) {
-            Ok(_) => ToolOutcome::FileEdit { path, diff },
+            Ok(_) => {
+                snapshot_for_undo(&self.undo, UndoKind::Edit, &path, prev_existed, &prev_bytes);
+                ToolOutcome::FileEdit { path, diff }
+            }
             Err(e) => ToolOutcome::Error {
                 message: format!("Cannot write {}: {}", path.display(), e),
             },
+        }
+    }
+}
+
+/// Push a snapshot onto the undo stack, if one was supplied. On
+/// failure (disk full, permission denied), log a warning and
+/// continue — the edit still succeeded; it just won't be undoable.
+fn snapshot_for_undo(
+    undo: &Option<UndoStackRef>,
+    kind: UndoKind,
+    path: &std::path::Path,
+    prev_existed: bool,
+    prev_bytes: &[u8],
+) {
+    if let Some(stack) = undo {
+        match stack.lock() {
+            Ok(mut s) => {
+                if let Err(e) = s.push(kind, path, prev_existed, prev_bytes) {
+                    tracing::warn!(
+                        path = %path.display(),
+                        error = ?e,
+                        "edit succeeded but undo snapshot failed — edit will not be undoable"
+                    );
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = ?e,
+                    "undo stack mutex poisoned; edit will not be undoable"
+                );
+            }
         }
     }
 }
@@ -205,7 +273,7 @@ mod tests {
         let path = dir.join("kirkforge_edit_fuzzy.txt");
         std::fs::write(&path, content).unwrap();
 
-        let tool = EditFile;
+        let tool = EditFile::new(None);
         let args = serde_json::json!({
             "path": path.to_string_lossy(),
             "old_string": "let x = 1;",
@@ -242,7 +310,7 @@ mod tests {
         let path = dir.join("kirkforge_edit_fuzzy_crlf.txt");
         std::fs::write(&path, content).unwrap();
 
-        let tool = EditFile;
+        let tool = EditFile::new(None);
         let args = serde_json::json!({
             "path": path.to_string_lossy(),
             "old_string": "let x = 1;",
@@ -276,5 +344,50 @@ mod tests {
         }
 
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// When the tool is constructed with an `UndoStackRef`, every
+    /// successful edit must snapshot the pre-edit bytes so `/undo`
+    /// can revert.
+    #[tokio::test]
+    async fn test_edit_file_snapshots_for_undo() {
+        use crate::session::undo::{UndoKind, UndoStack};
+
+        let dir = std::env::temp_dir();
+        let path = dir.join("kirkforge_edit_undo.txt");
+        std::fs::write(&path, b"original content").unwrap();
+
+        // Fresh stack with a unique session id.
+        let id = format!(
+            "test-edit-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let stack = std::sync::Arc::new(std::sync::Mutex::new(
+            UndoStack::for_session(&id).unwrap(),
+        ));
+
+        let tool = EditFile::new(Some(stack.clone()));
+        let args = serde_json::json!({
+            "path": path.to_string_lossy(),
+            "old_string": "original",
+            "new_string": "modified",
+        });
+        let result = tool.run(args).await;
+        assert!(matches!(result, ToolOutcome::FileEdit { .. }));
+
+        // Stack should have one Edit entry, and pop should restore
+        // "original content".
+        let list = stack.lock().unwrap().list();
+        assert_eq!(list.len(), 1, "expected one undo entry, got {}", list.len());
+        assert_eq!(list[0].kind, UndoKind::Edit);
+        assert_eq!(list[0].path, path);
+
+        let restored = stack.lock().unwrap().pop().unwrap().unwrap();
+        assert_eq!(restored.path, path);
+        assert!(restored.prev_existed);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "original content");
     }
 }

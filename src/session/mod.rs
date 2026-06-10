@@ -17,6 +17,7 @@ pub mod prompt;
 pub mod router;
 pub mod scheduler;
 pub mod session_fork;
+pub mod session_index;
 pub mod skills;
 pub mod tick;
 pub mod undo;

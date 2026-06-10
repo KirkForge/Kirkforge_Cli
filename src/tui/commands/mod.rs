@@ -9,6 +9,7 @@ pub mod jobs;
 pub mod memory;
 pub mod mentions;
 pub mod plan;
+pub mod sessions;
 pub mod status;
 pub mod undo;
 
@@ -21,6 +22,7 @@ pub use jobs::*;
 pub use memory::*;
 pub use mentions::*;
 pub use plan::*;
+pub use sessions::*;
 pub use status::*;
 pub use undo::*;
 

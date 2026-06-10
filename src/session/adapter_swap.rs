@@ -78,6 +78,32 @@ impl AdapterSwap {
         Some(suggested)
     }
 
+    /// Install a specific model adapter, bypassing routing. Used by
+    /// the `/model <name>` slash command when the user wants to pin a
+    /// particular model for the remainder of the session (or until
+    /// they `/model` again).
+    ///
+    /// Mirrors the body of `maybe_swap` but skips `classify_local` and
+    /// the per-tier `routing_model_map` lookup — the user's explicit
+    /// choice wins. Returns the name of the newly-installed adapter
+    /// (which is the same as the input, after re-routing through
+    /// `adapters::adapter_for` for any model-type inference).
+    pub fn force_swap(
+        &mut self,
+        model_name: &str,
+        adapter: &mut Box<dyn ModelAdapter>,
+    ) -> String {
+        let new_adapter = adapters::adapter_for(
+            model_name,
+            &self.ollama_host,
+            self.model_type_override.as_deref(),
+        );
+        let _old = std::mem::replace(adapter, new_adapter);
+        // _old is dropped here, releasing any in-flight connections
+        self.current_model_name = model_name.to_string();
+        model_name.to_string()
+    }
+
     /// Resolve the final model name: consult the user's configured
     /// per-tier mapping first, then fall back to the router's built-in
     /// suggestion.
@@ -214,6 +240,38 @@ mod tests {
             swap.resolve_model(&config, "deepseek-v4-pro:cloud"),
             "my-custom-model:latest"
         );
+    }
+
+    /// `force_swap` installs the named adapter regardless of the
+    /// current state. Returns the new name and updates
+    /// `current_model_name`. Does not consult the routing model map
+    /// — the user's choice is authoritative.
+    #[test]
+    fn test_force_swap_replaces_current_model() {
+        let mut swap = AdapterSwap::new(
+            "deepseek-v4-pro:cloud".into(),
+            "http://localhost:11434".into(),
+            None,
+        );
+        let new = swap.force_swap("qwen2.5:3b", &mut make_dummy_adapter());
+        assert_eq!(new, "qwen2.5:3b");
+        assert_eq!(swap.current_model_name, "qwen2.5:3b");
+    }
+
+    /// `force_swap` with the same name is a no-op (it still returns
+    /// the name and updates the field, but the visible effect is
+    /// null). The executor treats this as a benign "user re-confirmed
+    /// the same model" gesture.
+    #[test]
+    fn test_force_swap_same_model_is_noop_in_effect() {
+        let mut swap = AdapterSwap::new(
+            "qwen2.5:3b".into(),
+            "http://localhost:11434".into(),
+            None,
+        );
+        let new = swap.force_swap("qwen2.5:3b", &mut make_dummy_adapter());
+        assert_eq!(new, "qwen2.5:3b");
+        assert_eq!(swap.current_model_name, "qwen2.5:3b");
     }
 
     // --- helpers ---

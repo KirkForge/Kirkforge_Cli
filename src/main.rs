@@ -61,6 +61,22 @@ enum Command {
 
         #[arg(long, default_value = "text")]
         output: crate::shared::OutputFormat,
+
+        /// Cap on the number of turns in non-interactive mode. Each
+        /// non-empty line on stdin is one turn. 0 = unlimited (run
+        /// until EOF or a blank line). Defaults to 0. Review.md
+        /// gap #2: the previous one-shot read-and-exit made it
+        /// impossible to script multi-turn sessions.
+        #[arg(long, default_value_t = 0)]
+        max_turns: usize,
+
+        /// Resume a prior session by id prefix (or full path). When
+        /// set, the existing `*.conv.ndjson` is reopened and the new
+        /// turns are appended to it. Path is preferred if the value
+        /// contains a `/`; otherwise it's treated as a session-id
+        /// prefix and resolved via `session::session_index`.
+        #[arg(long)]
+        continue_session: Option<String>,
     },
 
     Schedule {
@@ -95,6 +111,8 @@ async fn main() -> anyhow::Result<()> {
             resume,
             non_interactive,
             output,
+            max_turns,
+            continue_session,
         } => {
             run_session(RunArgs {
                 model,
@@ -105,6 +123,8 @@ async fn main() -> anyhow::Result<()> {
                 resume,
                 non_interactive,
                 output,
+                max_turns,
+                continue_session,
             })
             .await
         }
@@ -121,6 +141,8 @@ struct RunArgs {
     resume: Option<String>,
     non_interactive: bool,
     output: crate::shared::OutputFormat,
+    max_turns: usize,
+    continue_session: Option<String>,
 }
 
 async fn run_session(args: RunArgs) -> anyhow::Result<()> {
@@ -133,6 +155,8 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
         resume,
         non_interactive,
         output,
+        max_turns,
+        continue_session,
     } = args;
 
     let mut config = session::config::load_or_create_config();
@@ -162,7 +186,19 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     std::fs::create_dir_all(&data_dir)?;
 
     let session_id = session::new_session_id();
-    let log_path = if let Some(resume) = &resume {
+    // Resolve the log path. Three inputs can determine it, in
+    // priority order:
+    //   1. `--continue-session <value>` — id prefix OR full path
+    //   2. `--resume <path>`            — legacy path-only flag
+    //   3. brand-new session id
+    //
+    // `--continue-session` accepts a session-id prefix when the
+    // value does not contain a path separator; if it does, it's
+    // treated as a full path. The legacy `--resume` flag is kept
+    // for back-compat and behaves exactly as it did before M4.
+    let log_path = if let Some(cont) = &continue_session {
+        resolve_continue_path(cont)?
+    } else if let Some(resume) = &resume {
         std::path::PathBuf::from(resume)
     } else {
         let sessions_dir = data_dir.join("sessions");
@@ -217,7 +253,16 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     }
 
     if non_interactive {
-        run_non_interactive(config, adapter, tools, conversation, system, output).await
+        run_non_interactive(
+            config,
+            adapter,
+            tools,
+            conversation,
+            system,
+            output,
+            max_turns,
+        )
+        .await
     } else {
         tui::run_tui(config, adapter, tools, conversation, system).await
     }
@@ -266,17 +311,8 @@ async fn run_non_interactive(
     conversation: session::conversation::ConversationLog,
     system: Option<String>,
     output: crate::shared::OutputFormat,
+    max_turns: usize,
 ) -> anyhow::Result<()> {
-
-    let mut input = String::new();
-    use std::io::Read;
-    std::io::stdin().read_to_string(&mut input)?;
-    let input = input.trim().to_string();
-
-    if input.is_empty() && system.is_none() {
-        eprintln!("No input provided. Pipe a prompt or use --system.");
-        return Ok(());
-    }
 
     let model_name = adapter.model_info().name.clone();
 
@@ -312,34 +348,132 @@ async fn run_non_interactive(
 
     let cancelled = std::sync::atomic::AtomicBool::new(false);
 
-    // Wall-clock for the truthful `duration_ms` in the JSON summary
-    // (was hardcoded `0` in the previous implementation — see GPT 5.5
-    // review finding #13).
-    let turn_started_at = std::time::Instant::now();
-    let events = executor.run_turn(&input, &approval_tx, &cancelled).await?;
-    let turn_duration_ms = turn_started_at.elapsed().as_millis() as u64;
-
+    // Read prompts from stdin line-by-line. Review.md gap #2: the
+    // previous `read_to_string` + one-shot `run_turn` made scripting
+    // multi-turn sessions impossible. Newline-delimited input is
+    // pipe- and heredoc-friendly:
+    //
+    //   $ printf 'turn 1\nturn 2\nturn 3\n' | kirkforge run --non-interactive --max-turns 3
+    //
+    // Blank line ends input. `--max-turns 0` (the default) means
+    // "unlimited until EOF or a blank line."
+    let stdin = std::io::stdin();
+    let mut reader = stdin.lock();
+    let mut line_buf = String::new();
+    let mut turn_no: usize = 0;
     let mut total_prompt_tokens: usize = 0;
     let mut total_completion_tokens: usize = 0;
     let mut cumulative_cost: f64 = 0.0;
+    let mut all_tool_records: Vec<crate::shared::ToolCallRecord> = Vec::new();
     let mut final_error: Option<String> = None;
+    let overall_started = std::time::Instant::now();
 
+    while let Some(input) = next_prompt(&mut reader, &mut line_buf)? {
+        turn_no += 1;
+        if max_turns > 0 && turn_no > max_turns {
+            tracing::info!(
+                turn_no,
+                max_turns,
+                "reached --max-turns cap; stopping stdin read"
+            );
+            break;
+        }
+
+        let turn_started_at = std::time::Instant::now();
+        let events = executor.run_turn(&input, &approval_tx, &cancelled).await?;
+        // Per-turn wall-clock is recorded for tracing but not surfaced
+        // in the JSON summary — the summary's `duration_ms` is the
+        // overall wall-clock across all turns (set at end-of-loop).
+        let _turn_duration_ms = turn_started_at.elapsed().as_millis() as u64;
+        let turn_outcome = emit_turn_events(
+            &events,
+            output,
+            &mut total_prompt_tokens,
+            &mut total_completion_tokens,
+            &mut cumulative_cost,
+            &mut all_tool_records,
+            &mut final_error,
+        );
+        // If a turn errored fatally (e.g. JSON parse error after
+        // retry), the executor's event stream is the only signal —
+        // we keep going for subsequent turns unless the user
+        // passes `--max-turns 1`.
+        let _ = turn_outcome;
+    }
+
+    // Post-loop: if we never ran a turn and no `--system` was
+    // supplied, mirror the pre-M4 "No input provided" error. The
+    // pre-M4 check lived inside the single read; here we check
+    // after the loop because `next_prompt` filters blank lines
+    // into `None` and EOF is also `None` — both cases end up
+    // with `turn_no == 0`.
+    if turn_no == 0 && system.is_none() {
+        eprintln!("No input provided. Pipe a prompt or use --system.");
+        return Ok(());
+    }
+
+    if output == crate::shared::OutputFormat::Text {
+        println!();
+    }
+
+    if output == crate::shared::OutputFormat::Json {
+        let total_duration_ms = overall_started.elapsed().as_millis() as u64;
+        let recorded_messages: Vec<_> = executor.conversation_log().all().to_vec();
+        let summary = crate::shared::SessionSummary {
+            version: "1.0".into(),
+            session: crate::shared::SessionInfo {
+                id: "non-interactive".into(),
+                model: model_name,
+                duration_ms: total_duration_ms,
+                started_at: chrono::Local::now().to_rfc3339(),
+            },
+            messages: recorded_messages,
+            tool_calls: all_tool_records,
+            usage: crate::shared::UsageSummary {
+                prompt_tokens: total_prompt_tokens,
+                completion_tokens: total_completion_tokens,
+                total_tokens: total_prompt_tokens + total_completion_tokens,
+                cost_usd: cumulative_cost,
+            },
+            error: final_error,
+        };
+        println!("{}", serde_json::to_string_pretty(&summary).unwrap());
+    }
+
+    Ok(())
+}
+
+/// Per-turn event emission, extracted from the pre-M4 single-turn
+/// loop so the multi-turn driver can call it once per turn without
+/// duplicating the 165-line match. Mutates the running totals in
+/// place; returns the `final_error` (if any) so the caller can
+/// keep a "most recent error" pointer for the JSON summary.
+#[allow(clippy::too_many_arguments)]
+fn emit_turn_events(
+    events: &[session::executor::TurnEvent],
+    output: crate::shared::OutputFormat,
+    total_prompt_tokens: &mut usize,
+    total_completion_tokens: &mut usize,
+    cumulative_cost: &mut f64,
+    tool_records: &mut Vec<crate::shared::ToolCallRecord>,
+    final_error: &mut Option<String>,
+) -> Option<String> {
     // Per-tool timing + structured records for the JSON summary.
-    // `ToolStart` arms the timer; the matching `ToolResult` reads it
-    // and pushes a `ToolCallRecord` into `tool_records`. Tools are
-    // dispatched sequentially by the executor, so a single `Option`
-    // for the in-flight call is sufficient — we don't need to key by
-    // id. The previous implementation emitted `tool_calls: vec![]`
-    // regardless of reality (GPT 5.5 #13); this fixes it.
+    // `ToolStart` arms the timer; the matching `ToolResult` reads
+    // it and pushes a `ToolCallRecord` into `tool_records`. Tools
+    // are dispatched sequentially by the executor, so a single
+    // `Option` for the in-flight call is sufficient — we don't
+    // need to key by id. The previous implementation emitted
+    // `tool_calls: vec![]` regardless of reality (GPT 5.5 #13);
+    // this fixes it.
     let mut in_flight: Option<(String, serde_json::Value, std::time::Instant)> = None;
-    let mut tool_records: Vec<crate::shared::ToolCallRecord> = Vec::new();
 
     for event in events {
         match event {
             session::executor::TurnEvent::Token(t) => {
                 if output == crate::shared::OutputFormat::Text {
                     print!("{}", t);
-                    std::io::stdout().flush()?;
+                    let _ = std::io::stdout().flush();
                 } else if output == crate::shared::OutputFormat::StreamJson {
                     let line = serde_json::json!({"type": "token", "content": t});
                     println!("{}", serde_json::to_string(&line).unwrap());
@@ -364,7 +498,7 @@ async fn run_non_interactive(
                 // executor's dispatch order, but defensive), the older
                 // record is dropped — better than accumulating stale
                 // timers.
-                in_flight = Some((name, args, std::time::Instant::now()));
+                in_flight = Some((name.clone(), args.clone(), std::time::Instant::now()));
             }
             session::executor::TurnEvent::ToolResult {
                 name,
@@ -391,7 +525,7 @@ async fn run_non_interactive(
                         name: start_name,
                         arguments: start_args,
                         result: result.clone(),
-                        success,
+                        success: *success,
                         duration_ms,
                     };
                     tool_records.push(record);
@@ -412,7 +546,7 @@ async fn run_non_interactive(
                 }
             }
             session::executor::TurnEvent::Error(e) => {
-                final_error = Some(e.clone());
+                *final_error = Some(e.clone());
                 if output == crate::shared::OutputFormat::Text {
                     eprintln!("\n[error] {}", e);
                 } else if output == crate::shared::OutputFormat::StreamJson {
@@ -426,9 +560,9 @@ async fn run_non_interactive(
                 turn_cost,
                 cumulative_cost: cum_cost,
             } => {
-                total_prompt_tokens += prompt_tokens;
-                total_completion_tokens += completion_tokens;
-                cumulative_cost = cum_cost;
+                *total_prompt_tokens += prompt_tokens;
+                *total_completion_tokens += completion_tokens;
+                *cumulative_cost = *cum_cost;
 
                 if output == crate::shared::OutputFormat::StreamJson {
                     let line = serde_json::json!({
@@ -436,7 +570,7 @@ async fn run_non_interactive(
                         "prompt_tokens": prompt_tokens,
                         "completion_tokens": completion_tokens,
                         "turn_cost": turn_cost,
-                        "cumulative_cost": cumulative_cost,
+                        "cumulative_cost": *cum_cost,
                     });
                     println!("{}", serde_json::to_string(&line).unwrap());
                 }
@@ -448,7 +582,6 @@ async fn run_non_interactive(
                 compacted_count,
                 ..
             } => {
-
                 if output == crate::shared::OutputFormat::Text {
                     eprintln!(
                         "\n[compaction] {} → {} messages, dropped {} tool result(s), condensed {} assistant turn(s).",
@@ -471,32 +604,168 @@ async fn run_non_interactive(
         }
     }
 
-    if output == crate::shared::OutputFormat::Text {
-        println!();
+    final_error.clone()
+}
+
+/// Resolve a `--continue-session` value to a log path.
+///
+/// Pure: takes the raw CLI string and returns either a `PathBuf`
+/// (for path-style values) or an error. For id-prefix values, the
+/// call to `session_index::resolve_session_id` is what actually
+/// hits the filesystem — that side effect is documented at the
+/// call site (`run_session`) so callers know what they're invoking.
+fn resolve_continue_path(value: &str) -> anyhow::Result<std::path::PathBuf> {
+    if value.contains('/') || value.ends_with(".conv.ndjson") {
+        return Ok(std::path::PathBuf::from(value));
+    }
+    match session::session_index::resolve_session_id(value) {
+        Ok(Some(p)) => Ok(p),
+        Ok(None) => Err(anyhow::anyhow!(
+            "No saved session found matching '{}'. Run `kirkforge run --non-interactive` once to create one, or use `/sessions` in the TUI to list.",
+            value
+        )),
+        Err(e) => Err(anyhow::anyhow!(
+            "Error resolving session id '{}': {}",
+            value,
+            e
+        )),
+    }
+}
+
+/// Parse the next prompt from a `BufRead` source, applying the
+/// multi-turn rules:
+///
+/// - EOF (0 bytes)              → `None` (loop exits)
+/// - Blank/whitespace-only line → `None` (heredoc terminator)
+/// - Non-blank line             → `Some(trimmed)`
+///
+/// Review.md gap #2: this replaces the pre-M4 `read_to_string` +
+/// one-shot `run_turn` flow. The function is pure (it takes a
+/// `&mut String` buffer for reuse, but otherwise has no side
+/// effects) and is the unit-testable seam for the loop driver.
+fn next_prompt<R: std::io::BufRead>(reader: &mut R, buf: &mut String) -> std::io::Result<Option<String>> {
+    buf.clear();
+    let n = reader.read_line(buf)?;
+    if n == 0 {
+        return Ok(None);
+    }
+    let trimmed = buf.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(trimmed.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    /// Path-style values (containing a `/`) are returned as-is,
+    /// without touching the session index. This is the "I have a
+    /// specific log file path" case.
+    #[test]
+    fn resolve_continue_path_passthrough_for_path_style() {
+        let p = resolve_continue_path("/home/kirk/sessions/foo.conv.ndjson").unwrap();
+        assert_eq!(p, std::path::PathBuf::from("/home/kirk/sessions/foo.conv.ndjson"));
     }
 
-    if output == crate::shared::OutputFormat::Json {
-        let recorded_messages: Vec<_> = executor.conversation_log().all().to_vec();
-        let summary = crate::shared::SessionSummary {
-            version: "1.0".into(),
-            session: crate::shared::SessionInfo {
-                id: "non-interactive".into(),
-                model: model_name,
-                duration_ms: turn_duration_ms,
-                started_at: chrono::Local::now().to_rfc3339(),
-            },
-            messages: recorded_messages,
-            tool_calls: tool_records,
-            usage: crate::shared::UsageSummary {
-                prompt_tokens: total_prompt_tokens,
-                completion_tokens: total_completion_tokens,
-                total_tokens: total_prompt_tokens + total_completion_tokens,
-                cost_usd: cumulative_cost,
-            },
-            error: final_error,
-        };
-        println!("{}", serde_json::to_string_pretty(&summary).unwrap());
+    /// `.conv.ndjson` suffix is enough to be treated as a path,
+    /// even without a separator. Belt-and-suspenders for users
+    /// who pass a bare filename.
+    #[test]
+    fn resolve_continue_path_passthrough_for_conv_ndjson_suffix() {
+        let p = resolve_continue_path("foo.conv.ndjson").unwrap();
+        assert_eq!(p, std::path::PathBuf::from("foo.conv.ndjson"));
     }
 
-    Ok(())
+    /// Empty input: contains neither a slash nor the suffix, so
+    /// it would be treated as a session id prefix. An empty prefix
+    /// is unlikely to resolve to anything; we just check the call
+    /// goes through the id-resolution path (and errors out at the
+    /// session-index layer for this test env, which is fine).
+    #[test]
+    fn resolve_continue_path_id_prefix_goes_to_index() {
+        // We can't assert the exact error text (depends on the
+        // real session directory) but we can assert it's an error
+        // and that it doesn't fall through as a path.
+        let r = resolve_continue_path("definitely-not-a-real-session-xyzzy");
+        assert!(r.is_err(), "expected an error, got: {:?}", r);
+        let err = r.unwrap_err().to_string();
+        // Either "No saved session found" (empty sessions dir) or
+        // a session-index error. Both indicate the id-resolution
+        // path was taken, which is what we want to verify.
+        assert!(
+            err.contains("No saved session")
+                || err.contains("Error resolving session id"),
+            "unexpected error: {}",
+            err
+        );
+    }
+
+    /// `next_prompt` returns `None` at EOF.
+    #[test]
+    fn next_prompt_returns_none_on_eof() {
+        let input = "";
+        let mut reader = Cursor::new(input);
+        let mut buf = String::new();
+        let r = next_prompt(&mut reader, &mut buf).unwrap();
+        assert!(r.is_none());
+    }
+
+    /// `next_prompt` returns `None` for a blank/whitespace-only
+    /// line. This is the heredoc terminator behaviour.
+    #[test]
+    fn next_prompt_returns_none_for_blank_line() {
+        let input = "   \t  \n";
+        let mut reader = Cursor::new(input);
+        let mut buf = String::new();
+        let r = next_prompt(&mut reader, &mut buf).unwrap();
+        assert!(r.is_none());
+    }
+
+    /// `next_prompt` returns the trimmed line for non-blank input.
+    #[test]
+    fn next_prompt_returns_trimmed_line() {
+        let input = "  hello world  \n";
+        let mut reader = Cursor::new(input);
+        let mut buf = String::new();
+        let r = next_prompt(&mut reader, &mut buf).unwrap();
+        assert_eq!(r.as_deref(), Some("hello world"));
+    }
+
+    /// `next_prompt` over a 3-line stream: first two are prompts,
+    /// the third is blank → the function returns the first prompt
+    /// and the second call sees the blank and returns None. The
+    /// loop driver would then exit.
+    #[test]
+    fn next_prompt_sequence_three_lines() {
+        let input = "turn 1\nturn 2\n\n";
+        let mut reader = Cursor::new(input);
+        let mut buf = String::new();
+        assert_eq!(
+            next_prompt(&mut reader, &mut buf).unwrap().as_deref(),
+            Some("turn 1")
+        );
+        assert_eq!(
+            next_prompt(&mut reader, &mut buf).unwrap().as_deref(),
+            Some("turn 2")
+        );
+        // Third call: blank line → None (loop exits).
+        assert!(next_prompt(&mut reader, &mut buf).unwrap().is_none());
+    }
+
+    /// `next_prompt` with no trailing newline on the last prompt
+    /// still works (the `read_line` call returns the bytes; `trim`
+    /// handles the missing newline).
+    #[test]
+    fn next_prompt_handles_missing_trailing_newline() {
+        let input = "no newline here";
+        let mut reader = Cursor::new(input);
+        let mut buf = String::new();
+        let r = next_prompt(&mut reader, &mut buf).unwrap();
+        assert_eq!(r.as_deref(), Some("no newline here"));
+        // Subsequent call sees EOF.
+        assert!(next_prompt(&mut reader, &mut buf).unwrap().is_none());
+    }
 }

@@ -298,16 +298,32 @@ pub(crate) async fn send_or_bail(
 }
 
 /// Parse an Ollama `usage` object into a [`TokenUsage`].
+///
+/// Ollama's native `/api/chat` response uses `prompt_eval_count` and
+/// `eval_count` for the token counts. Some adapters (notably
+/// OpenAI-compat mode through Ollama, or the GLM/DeepSeek cloud
+/// proxies) emit the OpenAI-style `prompt_tokens` / `completion_tokens`
+/// instead. We try both shapes and prefer whichever is populated, so
+/// usage is reported correctly across native and compat adapters.
+///
+/// This was the bug behind GPT 5.5 review finding #7: the parser
+/// previously only looked at the OpenAI-style fields, so a stock
+/// `ollama run deepseek-v4` invocation never surfaced token usage even
+/// though the `done: true` line always includes the counts.
 fn parse_token_usage(u: &serde_json::Value) -> TokenUsage {
+    let prompt_tokens = u
+        .get("prompt_tokens")
+        .and_then(|v| v.as_u64())
+        .or_else(|| u.get("prompt_eval_count").and_then(|v| v.as_u64()))
+        .map(|v| v as usize);
+    let completion_tokens = u
+        .get("completion_tokens")
+        .and_then(|v| v.as_u64())
+        .or_else(|| u.get("eval_count").and_then(|v| v.as_u64()))
+        .map(|v| v as usize);
     TokenUsage {
-        prompt_tokens: u
-            .get("prompt_tokens")
-            .and_then(|v| v.as_u64())
-            .map(|v| v as usize),
-        completion_tokens: u
-            .get("completion_tokens")
-            .and_then(|v| v.as_u64())
-            .map(|v| v as usize),
+        prompt_tokens,
+        completion_tokens,
     }
 }
 
@@ -444,6 +460,31 @@ mod tests {
         let t = parse_token_usage(&u);
         assert_eq!(t.prompt_tokens, Some(12));
         assert_eq!(t.completion_tokens, Some(34));
+    }
+
+    /// Ollama's native `/api/chat` `usage` object uses the
+    /// `prompt_eval_count` / `eval_count` names, not the OpenAI-style
+    /// fields. Previously the parser only looked at the OpenAI names
+    /// and silently reported `None` for both counts, so the CostStats
+    /// event never fired for native-Ollama models. This is the
+    /// regression test for GPT 5.5 review finding #7.
+    #[test]
+    fn parse_token_usage_falls_back_to_ollama_native_fields() {
+        let u = json!({"prompt_eval_count": 7, "eval_count": 11});
+        let t = parse_token_usage(&u);
+        assert_eq!(t.prompt_tokens, Some(7));
+        assert_eq!(t.completion_tokens, Some(11));
+    }
+
+    /// Mixed shapes: some proxies emit one set of names, some the
+    /// other. We should accept either; the test confirms we don't
+    /// accidentally require *both* to be in the same shape.
+    #[test]
+    fn parse_token_usage_mixed_shapes() {
+        let u = json!({"prompt_tokens": 5, "eval_count": 9});
+        let t = parse_token_usage(&u);
+        assert_eq!(t.prompt_tokens, Some(5));
+        assert_eq!(t.completion_tokens, Some(9));
     }
 
     #[test]

@@ -813,6 +813,7 @@ impl Executor {
             events.push(TurnEvent::ToolResult {
                 name: tc.name.clone(),
                 output: reason.clone(),
+                success: false,
             });
             self.conversation.append(Message {
                 role: Role::Tool,
@@ -833,6 +834,7 @@ impl Executor {
                     events.push(TurnEvent::ToolResult {
                         name: tc.name.clone(),
                         output: "❌ User denied this operation".into(),
+                        success: false,
                     });
                     self.conversation.append(Message {
                         role: Role::Tool,
@@ -850,6 +852,7 @@ impl Executor {
             events.push(TurnEvent::ToolResult {
                 name: tc.name.clone(),
                 output: denied.clone(),
+                success: false,
             });
             self.conversation.append(Message {
                 role: Role::Tool,
@@ -883,6 +886,7 @@ impl Executor {
                             events.push(TurnEvent::ToolResult {
                                 name: tc.name.clone(),
                                 output: denied.clone(),
+                                success: false,
                             });
                             self.conversation.append(Message {
                                 role: Role::Tool,
@@ -922,7 +926,12 @@ impl Executor {
                     );
 
                     let outcome = tool.run(run_args.clone()).await;
-                    handle_tool_outcome(outcome, tc, events, &mut self.conversation)?;
+                    let edit_diff = handle_tool_outcome(
+                        outcome,
+                        tc,
+                        events,
+                        &mut self.conversation,
+                    )?;
 
                     // Post-tool hook
                     self.run_hook(
@@ -932,7 +941,15 @@ impl Executor {
                     );
 
                     let crs = self
-                        .emit_tool_event_and_correct(tc, &tc.name, &run_args, None, None, None)
+                        .emit_tool_event_and_correct(
+                            tc,
+                            &tc.name,
+                            &run_args,
+                            None,
+                            None,
+                            None,
+                            edit_diff,
+                        )
                         .await;
                     self.collect_carryover(tc, &crs);
                     emit_correction_results(crs, tc, events, &mut self.conversation)?;
@@ -943,6 +960,7 @@ impl Executor {
                     events.push(TurnEvent::ToolResult {
                         name: tc.name.clone(),
                         output: denied.clone(),
+                        success: false,
                     });
                     self.conversation.append(Message {
                         role: Role::Tool,
@@ -991,6 +1009,7 @@ impl Executor {
                 events.push(TurnEvent::ToolResult {
                     name: tc.name.clone(),
                     output: denied.clone(),
+                    success: false,
                 });
                 self.conversation.append(Message {
                     role: Role::Tool,
@@ -1020,6 +1039,7 @@ impl Executor {
                 events.push(TurnEvent::ToolResult {
                     name: tc.name.clone(),
                     output: denied.clone(),
+                    success: false,
                 });
                 self.conversation.append(Message {
                     role: Role::Tool,
@@ -1057,7 +1077,7 @@ impl Executor {
         } else {
             outcome
         };
-        handle_tool_outcome(outcome, tc, events, &mut self.conversation)?;
+        let edit_diff = handle_tool_outcome(outcome, tc, events, &mut self.conversation)?;
 
         // Post-tool hook
         self.run_hook(
@@ -1074,6 +1094,7 @@ impl Executor {
                 real_exit_code,
                 real_stdout_len,
                 real_stderr_len,
+                edit_diff,
             )
             .await;
         self.collect_carryover(tc, &crs);
@@ -1111,6 +1132,13 @@ impl Executor {
         }
     }
 
+    // The seven-arg clippy limit was already at the boundary for
+    // bash metrics (real_exit_code / real_stdout_len / real_stderr_len);
+    // the GPT 5.5 #9 fix added the `edit_diff` parameter, pushing us
+    // to 8. Suppress locally rather than refactor — the per-tool
+    // metrics are only meaningful for `bash` and would be empty
+    // Option fields for every other call site.
+    #[allow(clippy::too_many_arguments)]
     async fn emit_tool_event_and_correct(
         &self,
         _tc: &ToolInvocation,
@@ -1119,6 +1147,15 @@ impl Executor {
         real_exit_code: Option<i32>,
         real_stdout_len: Option<usize>,
         real_stderr_len: Option<usize>,
+        // The rendered diff from the edit_file tool, when the call
+        // succeeded. Used as the `EditEvent.diff` payload so downstream
+        // consumers (event-bus handlers, correction loop) see the
+        // real unified diff rather than the user's `old_string`
+        // (which was what the old code passed — see GPT 5.5
+        // review finding #9). `None` for any other tool or for a
+        // failed edit; the `args.old_string` fallback inside the
+        // match keeps the event populated for the failure case.
+        edit_diff: Option<String>,
     ) -> Vec<CorrectionResult> {
         let bus_event = match tool_name {
             "read_file" => {
@@ -1155,11 +1192,16 @@ impl Executor {
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
-                let diff = args
-                    .get("old_string")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
+                // Prefer the rendered diff returned by the tool (the
+                // "happy path"); fall back to the user's old_string
+                // when the edit failed (no real diff exists) so the
+                // event still carries something useful for debugging.
+                let diff = edit_diff.unwrap_or_else(|| {
+                    args.get("old_string")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string()
+                });
                 Some(BusEvent::Edit(crate::session::event_bus::EditEvent {
                     path: std::path::PathBuf::from(&path),
                     diff,
@@ -1220,6 +1262,14 @@ pub enum TurnEvent {
     ToolResult {
         name: String,
         output: String,
+        /// Whether the tool call actually succeeded. `false` covers all
+        /// denial paths (path guard, deny list, read-before-edit gate,
+        /// approval-deny, dangerous-command block) as well as the tool
+        /// itself returning a `ToolOutcome::Error`. The non-interactive
+        /// JSON summary uses this to populate the `success` field on
+        /// `ToolCallRecord` truthfully (was hardcoded `vec![]` in the
+        /// previous implementation — see GPT 5.5 review finding #13).
+        success: bool,
     },
     Error(String),
     Verification {
@@ -1574,19 +1624,27 @@ fn check_deny_list(
     None
 }
 
+/// Process a tool outcome: append the conversation log entry, push a
+/// `TurnEvent::ToolResult` for downstream consumers, and (on error) try
+/// to surface a recovery hint.
+///
+/// Returns the rendered diff string when the outcome was a `FileEdit`.
+/// This is propagated up to `emit_tool_event_and_correct` so the
+/// `BusEvent::Edit` carries the *real* diff, not the user's `old_string`
+/// (which is what the previous implementation used — see GPT 5.5
+/// review finding #9).
 fn handle_tool_outcome(
     outcome: ToolOutcome,
     tc: &ToolInvocation,
     events: &mut Vec<TurnEvent>,
     conversation: &mut ConversationLog,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Option<String>> {
     match outcome {
-        ToolOutcome::Success { content }
-        | ToolOutcome::FileContent { content, .. }
-        | ToolOutcome::FileEdit { diff: content, .. } => {
+        ToolOutcome::Success { content } => {
             events.push(TurnEvent::ToolResult {
                 name: tc.name.clone(),
                 output: content.clone(),
+                success: true,
             });
             conversation.append(Message {
                 role: Role::Tool,
@@ -1595,6 +1653,38 @@ fn handle_tool_outcome(
                 tool_name: Some(tc.name.clone()),
                 ..Default::default()
             })?;
+        }
+        ToolOutcome::FileContent { content, .. } => {
+            events.push(TurnEvent::ToolResult {
+                name: tc.name.clone(),
+                output: content.clone(),
+                success: true,
+            });
+            conversation.append(Message {
+                role: Role::Tool,
+                content,
+                tool_call_id: Some(tc.id.clone()),
+                tool_name: Some(tc.name.clone()),
+                ..Default::default()
+            })?;
+        }
+        ToolOutcome::FileEdit { diff, .. } => {
+            // Hand the rendered diff to the caller so the
+            // BusEvent::Edit event downstream carries the real
+            // diff text — see the docstring on this fn.
+            events.push(TurnEvent::ToolResult {
+                name: tc.name.clone(),
+                output: diff.clone(),
+                success: true,
+            });
+            conversation.append(Message {
+                role: Role::Tool,
+                content: diff.clone(),
+                tool_call_id: Some(tc.id.clone()),
+                tool_name: Some(tc.name.clone()),
+                ..Default::default()
+            })?;
+            return Ok(Some(diff));
         }
         ToolOutcome::GrepMatches {
             path,
@@ -1605,6 +1695,7 @@ fn handle_tool_outcome(
             events.push(TurnEvent::ToolResult {
                 name: tc.name.clone(),
                 output: output.clone(),
+                success: true,
             });
             conversation.append(Message {
                 role: Role::Tool,
@@ -1618,6 +1709,7 @@ fn handle_tool_outcome(
             events.push(TurnEvent::ToolResult {
                 name: tc.name.clone(),
                 output: format!("Error: {}", message),
+                success: false,
             });
             conversation.append(Message {
                 role: Role::Tool,
@@ -1639,7 +1731,7 @@ fn handle_tool_outcome(
             }
         }
     }
-    Ok(())
+    Ok(None)
 }
 
 fn format_grep_output(path: &std::path::Path, matches: &[crate::shared::Match]) -> String {
@@ -1908,7 +2000,7 @@ mod tests {
         let has_start = events
             .iter()
             .any(|e| matches!(e, TurnEvent::ToolStart { name, .. } if name == "echo"));
-        let has_result = events.iter().any(|e| matches!(e, TurnEvent::ToolResult { name, output } if name == "echo" && output == "echoed!"));
+        let has_result = events.iter().any(|e| matches!(e, TurnEvent::ToolResult { name, output, .. } if name == "echo" && output == "echoed!"));
 
         assert!(has_token, "Should stream text before tool call");
         assert!(has_start, "Should emit ToolStart");
@@ -1974,7 +2066,7 @@ mod tests {
         approval_handle.await.unwrap();
 
         let result = events.iter().find_map(|e| match e {
-            TurnEvent::ToolResult { name, output } => Some((name.as_str(), output.as_str())),
+            TurnEvent::ToolResult { name, output, .. } => Some((name.as_str(), output.as_str())),
             _ => None,
         });
         assert_eq!(result, Some(("bash", "ran!")));
@@ -2030,7 +2122,7 @@ mod tests {
             "Tool should not have been called when denied"
         );
 
-        let denied = events.iter().any(|e| matches!(e, TurnEvent::ToolResult { name, output } if name == "bash" && output.contains("denied")));
+        let denied = events.iter().any(|e| matches!(e, TurnEvent::ToolResult { name, output, .. } if name == "bash" && output.contains("denied")));
         assert!(denied, "Should report that operation was denied");
     }
 
@@ -2295,7 +2387,7 @@ mod tests {
         );
 
         let denied_msg = events.iter().find_map(|e| match e {
-            TurnEvent::ToolResult { name, output } if name == "bash" => Some(output.as_str()),
+            TurnEvent::ToolResult { name, output, .. } if name == "bash" => Some(output.as_str()),
             _ => None,
         });
         assert!(
@@ -2356,7 +2448,7 @@ mod tests {
 
         let denied = events.iter().any(|e| matches!(
             e,
-            TurnEvent::ToolResult { name, output } if name == "write_file" && output.contains("denied")
+            TurnEvent::ToolResult { name, output, .. } if name == "write_file" && output.contains("denied")
         ));
         assert!(
             denied,
@@ -2425,7 +2517,7 @@ mod tests {
 
         let blocked = events.iter().any(|e| matches!(
             e,
-            TurnEvent::ToolResult { name, output } if name == "bash" && output.contains("dangerous")
+            TurnEvent::ToolResult { name, output, .. } if name == "bash" && output.contains("dangerous")
         ));
         assert!(
             blocked,
@@ -2819,5 +2911,112 @@ mod tests {
         assert!(is_read_only_bash("ps aux"));
         assert!(is_read_only_bash("jobs"));
         assert!(is_read_only_bash("help"));
+    }
+
+    /// Regression test for GPT 5.5 review finding #9: the
+    /// `BusEvent::Edit` used to carry the user's `old_string` as the
+    /// `diff` field, which made the event useless to downstream
+    /// consumers (verifiers, correction loop, log replay). After the
+    /// fix, it should carry the rendered diff that the tool returned
+    /// in `ToolOutcome::FileEdit { diff, .. }`. This test wires up a
+    /// real `edit_file` tool call, returns a `FileEdit` outcome with a
+    /// distinctive diff string, and asserts the dispatched event
+    /// matches.
+    #[tokio::test]
+    async fn test_edit_event_diff_carries_real_diff_not_old_string() {
+        use crate::session::event_bus::{EditEvent, EventHandler, EventKind, HandlerResult};
+
+        struct Capture {
+            last: Mutex<Option<String>>,
+        }
+        #[async_trait::async_trait]
+        impl EventHandler for Capture {
+            fn id(&self) -> &str {
+                "capture"
+            }
+            fn subscribed_kinds(&self) -> Vec<EventKind> {
+                vec![EventKind::Edit]
+            }
+            async fn handle(&self, event: &BusEvent) -> HandlerResult {
+                if let BusEvent::Edit(EditEvent { diff, .. }) = event {
+                    *self.last.lock().unwrap() = Some(diff.clone());
+                }
+                HandlerResult {
+                    handler_id: "capture".into(),
+                    success: true,
+                    message: String::new(),
+                }
+            }
+        }
+
+        let captured: Arc<Capture> = Arc::new(Capture {
+            last: Mutex::new(None),
+        });
+
+        let tool = MockTool {
+            def: ToolDef {
+                name: "edit_file",
+                description: "fake edit",
+                parameters: serde_json::json!({"type": "object"}),
+            },
+            captured_args: Arc::new(Mutex::new(None)),
+            outcome: ToolOutcome::FileEdit {
+                path: std::path::PathBuf::from("/tmp/edit_event_diff_test.txt"),
+                diff: "--- a\n+++ b\n-old line\n+new line".to_string(),
+            },
+        };
+
+        let adapter = MockAdapter::new(
+            vec![
+                StreamEvent::ToolCall(ToolInvocation {
+                    id: "call-edit".into(),
+                    name: "edit_file".into(),
+                    arguments: serde_json::json!({
+                        "path": "/tmp/edit_event_diff_test.txt",
+                        "old_string": "old line",
+                        "new_string": "new line",
+                    }),
+                }),
+                StreamEvent::Done {
+                    finish_reason: FinishReason::ToolCalls,
+                    usage: None,
+                },
+            ],
+            make_info(),
+        );
+
+        let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
+        let mut exe = make_executor(
+            Box::new(adapter),
+            vec![Arc::new(tool)],
+            make_config(true),
+        );
+        exe.event_bus
+            .register(captured.clone() as Arc<dyn EventHandler>)
+            .await
+            .unwrap();
+        // The read-before-edit gate would otherwise deny the edit
+        // before the tool runs (and before the EditEvent is emitted).
+        // Mark the path as already read so we exercise the diff path.
+        exe.read_gate
+            .mark_read(&std::path::PathBuf::from("/tmp/edit_event_diff_test.txt"));
+
+        let _events = exe
+            .run_turn("edit it", &approval_tx, never_cancelled())
+            .await
+            .unwrap();
+
+        let last = captured.last.lock().unwrap().clone();
+        let got = last.expect("EditEvent should have been dispatched");
+        assert!(
+            got.contains("--- a") && got.contains("+++ b") && got.contains("-old line") && got.contains("+new line"),
+            "EditEvent.diff should be the rendered diff, got: {:?}",
+            got
+        );
+        assert!(
+            got.starts_with("---") || got.contains("\n---"),
+            "diff should start with --- header, got: {:?}",
+            got
+        );
     }
 }

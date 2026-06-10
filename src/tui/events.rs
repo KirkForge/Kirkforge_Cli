@@ -71,7 +71,7 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
                 .messages
                 .push(ConversationEntry::new("tool", format!("🔧 {} ...", name)));
         }
-        TurnEvent::ToolResult { name, output } => {
+        TurnEvent::ToolResult { name, output, .. } => {
             // Tool outputs are stored FULL in a sidecar and shown
             // as a one-line summary by default. Ctrl+T toggles
             // collapse; per-index expansion is in state.expanded_tools.
@@ -378,6 +378,7 @@ mod tests {
             TurnEvent::ToolResult {
                 name: "bash".into(),
                 output: full.clone(),
+                success: true,
             },
         );
         assert_eq!(s.messages.len(), 1);

@@ -1,4 +1,6 @@
 use crate::adapters::ModelAdapter;
+use crate::session::adapter_swap::AdapterSwap;
+use crate::session::hooks::HookRunner;
 use crate::session::access::{
     access_from_config, warn_if_unsandboxed, DenyList, GuardVerdict, PathGuard, ReadGate,
 };
@@ -15,21 +17,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
-/// Push a permission rule into a `Vec<PermissionRule>`, deduplicating
-/// against an existing identical rule. Two rules are considered
-/// identical if they have the same `(tool, key, pattern)` triple
-/// regardless of `action` — pushing `Allow bash:command=ls` twice
-/// only stores one. The `action` of the EXISTING rule is preserved
-/// (so a user-written `Deny` for `rm` won't be silently overwritten
-/// by an `Allow` from `[A]lways`).
-///
-/// **Why dedup at the call site instead of the TUI side:** both
-/// `approval_keys.rs` (TUI) and `executor.rs` (engine) push rules
-/// into their own `permission_rules` clones. Without dedup, hitting
-/// `[A]lways` once would land the rule in both — but hitting it
-/// twice on the same call (e.g. user mashes the key) would land
-/// duplicates in whichever side is racing. This helper is the
-/// single point of dedup, called from both sites.
 fn push_rule_unique(
     rules: &mut Vec<crate::shared::permission::PermissionRule>,
     new_rule: crate::shared::permission::PermissionRule,
@@ -42,46 +29,25 @@ fn push_rule_unique(
     }
 }
 
-/// What a single stream iteration produced. The orchestrator
-/// (`run_turn`) drives this state machine.
-///
-/// **Why a private enum instead of nested Result types:** the
-/// caller needs to distinguish three orthogonal outcomes
-/// (continue, finish, retry) without an `Option<Option<…>>` pyramid.
-/// The variants are exhaustive and small.
 enum IterationOutcome {
-    /// Model emitted tool calls; the orchestrator should dispatch
-    /// each one and then loop for the model's next response.
+
     ToolCalls(Vec<ToolInvocation>),
-    /// Model produced a final text response (or cancelled); the
-    /// turn is over.
+
     Finished,
-    /// Adapter reported a JSON-parse error. The orchestrator will
-    /// inject a one-shot retry message and re-stream.
+
     ParseError,
 }
 
-/// Outcome of asking the user (or permission rules) whether a
-/// destructive call may proceed. Returned by `run_approval_flow`.
-///
-/// `AlwaysApproved` is distinct from `Approved` so callers that
-/// care about persistence (e.g. a future audit log) can
-/// differentiate "this time" from "and also for future similar
-/// calls". The current `dispatch_tool_call` ignores the
-/// distinction; that's fine — the enum is the durable seam.
 enum ApprovalDecision {
     Approved,
     Denied,
     AlwaysApproved,
 }
 
-/// The session executor runs the conversation loop:
-///   1. Build the prompt → send to model → collect stream events
-///   2. Emit text tokens to the UI
-///   3. When tool calls arrive: validate → approve → execute → feed result back
-///   4. Repeat until done
 pub struct Executor {
     adapter: Box<dyn ModelAdapter>,
+    adapter_swap: AdapterSwap,
+    hook_runner: HookRunner,
     conversation: ConversationLog,
     prompt_builder: PromptBuilder,
     tools: Vec<Arc<dyn Tool>>,
@@ -94,19 +60,16 @@ pub struct Executor {
     event_bus: EventBus,
     correction_loop: Option<CorrectionLoop>,
 
-    // ── Carryover (Phase 17) ──────────────────────────────────
-    /// The live carryover profile being accumulated this session.
     carryover: CarryoverProfile,
-    /// Whether carryover is enabled (from config).
+
     carryover_enabled: bool,
-    /// Shared target for saving after the executor exits.
-    /// The TUI holds the other clone and saves after awaiting the handle.
+
     carryover_target: Option<std::sync::Arc<std::sync::Mutex<CarryoverProfile>>>,
 }
 
 impl Executor {
     pub fn new(adapter: Box<dyn ModelAdapter>, tools: Vec<Arc<dyn Tool>>, config: Config) -> Self {
-        // Create a default temp conversation log
+
         let temp_dir = std::env::temp_dir().join("kirkforge-session");
         let log_path = temp_dir.join(format!(
             "session-{}.ndjson",
@@ -127,7 +90,14 @@ impl Executor {
         let (deny_list, path_guard, read_gate) = access_from_config(&config);
         warn_if_unsandboxed(&path_guard);
 
-        // Event bus — verifiers are registered by init_default_verifiers() called below
+        let adapter_swap = AdapterSwap::new(
+            model_name.clone(),
+            config.ollama_host.clone(),
+            None, // model_type_override not available here; set via CLI
+        );
+
+        let hook_runner = HookRunner::default();
+
         let event_bus = EventBus::new();
 
         let carryover_enabled = config.carryover_enabled;
@@ -139,6 +109,8 @@ impl Executor {
 
         let mut this = Self {
             adapter,
+            adapter_swap,
+            hook_runner,
             conversation,
             prompt_builder: PromptBuilder::new(),
             tools,
@@ -158,15 +130,12 @@ impl Executor {
         this
     }
 
-    /// Initialize default verifiers (security, lint, git).
-    /// Returns the number of registered verifiers.
     pub fn init_default_verifiers(&mut self) -> usize {
         use crate::session::verifier::{Verdict, Verifier};
 
         let slots = Arc::new(std::sync::RwLock::new(VerifierSlots::new()));
         let mut count = 0;
 
-        // Security verifier (priority 1 — runs first)
         struct SecV;
         #[async_trait::async_trait]
         impl Verifier for SecV {
@@ -187,7 +156,6 @@ impl Executor {
             }
         }
 
-        // Lint verifier (priority 2)
         struct LintV;
         #[async_trait::async_trait]
         impl Verifier for LintV {
@@ -208,7 +176,6 @@ impl Executor {
             }
         }
 
-        // Git verifier (priority 3)
         struct GitV;
         #[async_trait::async_trait]
         impl Verifier for GitV {
@@ -240,26 +207,6 @@ impl Executor {
         count
     }
 
-    /// Run the executor as a long-lived background task.
-    ///
-    /// Listens for user input on `input_rx`, runs the full turn loop
-    /// (stream → tool calls → approval → execute), and forwards all
-    /// renderable events to the TUI via `event_tx`.
-    ///
-    /// When `()` arrives on `cancel_rx`, the current `run_turn()` is
-    /// interrupted at the next yield point and subsequent turns are skipped
-    /// until a new input arrives (which resets the flag).
-    ///
-    /// When a `ConversationLog` arrives on `resume_rx`, the executor's
-    /// conversation is replaced in-place (fork resumption).
-    ///
-    /// When `()` arrives on `compact_rx`, the executor runs a
-    /// `/compact`-style compaction: `PromptBuilder::compact` reduces
-    /// the conversation, `ConversationLog::replace_all` atomically
-    /// rewrites the NDJSON file, and a `TurnEvent::CompactionReport`
-    /// is sent back via `event_tx` carrying the new message list
-    /// (so the TUI can rebuild its display from the same source of
-    /// truth).
     pub async fn run(
         &mut self,
         mut input_rx: mpsc::UnboundedReceiver<String>,
@@ -271,6 +218,9 @@ impl Executor {
     ) -> anyhow::Result<()> {
         let cancelled = Arc::new(AtomicBool::new(false));
 
+        // Fire session-start hook (fire-and-forget, best-effort)
+        self.run_hook("session-start", None, None);
+
         loop {
             tokio::select! {
                 biased; // check cancel first, then input
@@ -278,19 +228,14 @@ impl Executor {
                 Some(()) = cancel_rx.recv() => {
                     cancelled.store(true, Ordering::SeqCst);
                     if event_tx.send(TurnEvent::Token("\n⚠️ Generation cancelled\n".into())).is_err() {
-                        // TUI receiver gone — the user closed the window,
-                        // hit Ctrl+C at the wrong layer, or the renderer
-                        // task panicked. No point keeping the executor
-                        // alive when nobody's listening. Flush
-                        // carryover and bail (same idiom as the Ok
-                        // path below when a per-event send fails).
+
                         tracing::warn!("TUI event receiver dropped; executor driver exiting");
                         self.flush_carryover();
                         return Ok(());
                     }
                 }
                 Some(new_log) = resume_rx.recv() => {
-                    // Resume from a fork — swap the conversation log
+
                     self.replace_conversation(new_log);
                     if event_tx.send(TurnEvent::Token("✅ Resumed from fork\n".into())).is_err() {
                         tracing::warn!("TUI event receiver dropped during /resume; exiting");
@@ -299,27 +244,120 @@ impl Executor {
                     }
                 }
                 Some(()) = compact_rx.recv() => {
-                    // /compact: walk the current history, condense
-                    // middle turns, drop middle tool results, rewrite
-                    // the NDJSON file atomically, and emit a report
-                    // so the TUI can rebuild its display.
-                    let history = self.conversation.all();
-                    let result = crate::session::prompt::PromptBuilder::compact(history);
-                    let report = if let Err(e) = self.conversation.replace_all(result.new_messages.clone()) {
-                        TurnEvent::Error(format!("Compaction failed: {}", e))
-                    } else {
-                        TurnEvent::CompactionReport {
-                            new_messages: result.new_messages.clone(),
-                            dropped_tool_results: result.dropped_tool_results,
-                            condensed_assistant_turns: result.condensed_assistant_turns,
-                            original_count: result.original_count,
-                            compacted_count: result.compacted_count,
+                    let history = self.conversation.all().to_vec();
+                    let mut did_summarize = false;
+
+                    // Try LLM-based summarization if enabled
+                    if self.config.summarize_enabled && history.len() > 2 {
+                        // Preserve the system anchor and last 4 turns
+                        let working_set_size = 8; // 4 user↔assistant pairs ≈ 8 messages
+                        let anchor = if !history.is_empty()
+                            && matches!(history[0].role, Role::System)
+                        {
+                            1
+                        } else {
+                            0
+                        };
+
+                        let summarize_from = anchor;
+                        let summarize_to = history.len().saturating_sub(working_set_size);
+                        if summarize_to > summarize_from + 6
+                        {
+                            let to_summarize: Vec<Message> = history[summarize_from..summarize_to]
+                                .to_vec();
+                            if !to_summarize.is_empty() {
+                                let summarizer_config = crate::session::prompt::summarizer::SummarizerConfig {
+                                    model: self.config.summarize_model.clone(),
+                                    max_summary_tokens: 500,
+                                    min_turns_for_summary: 4,
+                                    min_compression_ratio: 0.4,
+                                };
+
+                                let result = crate::session::prompt::summarizer::summarize_conversation(
+                                    &summarizer_config,
+                                    &to_summarize,
+                                    &self.config.ollama_host,
+                                )
+                                .await;
+
+                                if let Some(ref summary) = result.summary {
+                                    let mut new_msgs = Vec::new();
+                                    // Keep the anchor
+                                    if anchor > 0 {
+                                        new_msgs.push(history[0].clone());
+                                    }
+                                    // Insert summary as system message
+                                    new_msgs.push(Message {
+                                        role: Role::System,
+                                        content: format!(
+                                            "[Context summary — {} messages compressed]\n{}",
+                                            result.summarised_messages, summary
+                                        ),
+                                        ..Default::default()
+                                    });
+                                    // Append working set
+                                    for msg in &history[summarize_to..] {
+                                        new_msgs.push(msg.clone());
+                                    }
+
+                                    if let Err(e) = self.conversation.replace_all(new_msgs.clone())
+                                    {
+                                        if event_tx
+                                            .send(TurnEvent::Error(format!(
+                                                "Summarization failed: {}",
+                                                e
+                                            )))
+                                            .is_err()
+                                        {
+                                            self.flush_carryover();
+                                            return Ok(());
+                                        }
+                                    } else {
+                                        did_summarize = true;
+                                        let report = TurnEvent::Token(format!(
+                                            "🧠 Summarised {}→{} messages ({}→{} tokens, {:.0}% compression)\n",
+                                            result.summarised_messages,
+                                            if anchor > 0 { 1 + history.len() - summarize_to } else { history.len() - summarize_to },
+                                            result.tokens_before,
+                                            result.tokens_after,
+                                            (1.0 - result.tokens_after as f64 / result.tokens_before.max(1) as f64) * 100.0,
+                                        ));
+                                        if event_tx.send(report).is_err() {
+                                            self.flush_carryover();
+                                            return Ok(());
+                                        }
+                                    }
+                                } else if let Some(ref err) = result.error {
+                                    // Summarization failed — log and fall through to truncation
+                                    tracing::info!(
+                                        "Summarization skipped: {} — falling back to truncation",
+                                        err
+                                    );
+                                }
+                            }
                         }
-                    };
-                    if event_tx.send(report).is_err() {
-                        tracing::warn!("TUI event receiver dropped during /compact; exiting");
-                        self.flush_carryover();
-                        return Ok(());
+                    }
+
+                    // Fall back to naive truncation if summarization didn't run or failed
+                    if !did_summarize {
+                        let history = self.conversation.all();
+                        let result = crate::session::prompt::compact(history);
+                        let report = if let Err(e) = self.conversation.replace_all(result.new_messages.clone()) {
+                            TurnEvent::Error(format!("Compaction failed: {}", e))
+                        } else {
+                            TurnEvent::CompactionReport {
+                                new_messages: result.new_messages.clone(),
+                                dropped_tool_results: result.dropped_tool_results,
+                                condensed_assistant_turns: result.condensed_assistant_turns,
+                                original_count: result.original_count,
+                                compacted_count: result.compacted_count,
+                            }
+                        };
+                        if event_tx.send(report).is_err() {
+                            tracing::warn!("TUI event receiver dropped during /compact; exiting");
+                            self.flush_carryover();
+                            return Ok(());
+                        }
                     }
                 }
                 Some(input) = input_rx.recv() => {
@@ -329,12 +367,7 @@ impl Executor {
                         Ok(evs) => {
                             for ev in evs {
                                 if event_tx.send(ev).is_err() {
-                                    // Same idiom as the other branches
-                                    // above: TUI gone, no audience, no
-                                    // point continuing. Bail cleanly so
-                                    // the tokio task doesn't keep
-                                    // running model requests that
-                                    // nobody will see.
+
                                     tracing::warn!("TUI event receiver dropped mid-turn; executor driver exiting");
                                     self.flush_carryover();
                                     return Ok(());
@@ -342,9 +375,7 @@ impl Executor {
                             }
                         }
                         Err(e) => {
-                            // One last attempt to surface the error to
-                            // the TUI; if the receiver is gone, the
-                            // session is over anyway. Don't swallow.
+
                             if event_tx.send(TurnEvent::Error(format!("Turn failed: {}", e))).is_err() {
                                 tracing::warn!(
                                     error = %e,
@@ -363,17 +394,27 @@ impl Executor {
         Ok(())
     }
 
-    /// Borrow the conversation log (for non-interactive JSON summaries).
     pub fn conversation_log(&self) -> &ConversationLog {
         &self.conversation
     }
 
-    /// Replace the conversation log in-place (used by /resume fork).
     pub fn replace_conversation(&mut self, new_log: ConversationLog) {
         self.conversation = new_log;
     }
 
-    /// Flush the carryover profile to the shared target at session end.
+    /// Run a lifecycle hook (fire-and-forget). Wraps HookRunner::run with
+    /// common env vars derived from current session state.
+    fn run_hook(&self, event: &str, tool_name: Option<&str>, args_json: Option<&str>) {
+        let mut env_vars: Vec<(&str, &str)> = Vec::new();
+        if let Some(name) = tool_name {
+            env_vars.push(("KF_TOOL_NAME", name));
+        }
+        if let Some(json) = args_json {
+            env_vars.push(("KF_TOOL_ARGS_JSON", json));
+        }
+        self.hook_runner.run(event, &env_vars);
+    }
+
     fn flush_carryover(&mut self) {
         if self.carryover_enabled {
             self.carryover.session_count += 1;
@@ -388,19 +429,18 @@ impl Executor {
         }
     }
 
-    /// Collect carryover data from a completed tool call + its corrections.
     fn collect_carryover(&mut self, tc: &ToolInvocation, crs: &[CorrectionResult]) {
         if !self.carryover_enabled {
             return;
         }
         self.carryover.record_tool_call(&tc.name);
-        // Extract path if present
+
         if let Some(path) = tc.arguments.get("path").and_then(|v| v.as_str()) {
             if !path.is_empty() {
                 self.carryover.record_path(path);
             }
         }
-        // Track test-after-change pattern from bash commands
+
         if tc.name == "bash" {
             if let Some(cmd) = tc.arguments.get("command").and_then(|v| v.as_str()) {
                 if cmd.contains("cargo test")
@@ -414,28 +454,34 @@ impl Executor {
                 }
             }
         }
-        // Track verifier warnings
+
         for cr in crs {
             self.carryover.record_verifier_warning(&cr.message);
         }
     }
 
-    /// Run a single turn: send the current conversation to the model,
-    /// handle tool calls, return the assistant's response.
-    ///
-    /// This is now a thin orchestrator over [`stream_iteration`] and
-    /// [`dispatch_tool_call`]. It owns the iteration loop, the
-    /// tool-call limit, and the one-shot parse-error retry.
-    ///
-    /// If `cancelled` is provided, it is checked at each streaming
-    /// yield point and the turn stops early with a cancellation notice.
     pub async fn run_turn(
         &mut self,
         user_input: &str,
         approval_sender: &mpsc::UnboundedSender<ApprovalRequest>,
         cancelled: &AtomicBool,
     ) -> anyhow::Result<Vec<TurnEvent>> {
-        // Append user message
+        let mut events = Vec::new();
+
+        // --- adapter hot-swap via smart routing ---
+        if self.config.routing_enabled {
+            let swapped = self
+                .adapter_swap
+                .maybe_swap(&self.config, &mut self.adapter, user_input);
+            if let Some(new_model) = swapped {
+                self.model_name = new_model.clone();
+                events.push(TurnEvent::Token(format!(
+                    "🔀 Switched to {}\n",
+                    new_model
+                )));
+            }
+        }
+
         self.conversation.append(Message {
             role: Role::User,
             content: user_input.to_string(),
@@ -446,18 +492,13 @@ impl Executor {
             token_count: None,
         })?;
 
-        // ── Carryover: capture last user message ──
         if self.carryover_enabled {
             self.carryover.last_user_message = user_input.to_string();
         }
 
-        let mut events = Vec::new();
         let mut tool_calls: Vec<ToolInvocation> = Vec::new();
         let mut already_retried_parse = false;
 
-        // Safety cap on tool-call loops. The model is supposed to
-        // reach a `FinishReason::Stop` before this, but a misbehaving
-        // adapter could loop forever.
         const MAX_ITERATIONS: usize = 10;
 
         for iteration in 0..MAX_ITERATIONS {
@@ -477,16 +518,12 @@ impl Executor {
                         self.dispatch_tool_call(tc, approval_sender, &mut events)
                             .await?;
                     }
-                    // Loop again so the model can react to the tool results.
+
                 }
                 IterationOutcome::ParseError => {
                     if !already_retried_parse {
                         already_retried_parse = true;
-                        // One-shot nudge: ask the model to re-emit
-                        // just the tool call with valid JSON. We
-                        // deliberately don't speculate about what
-                        // was wrong — the model saw its own bad
-                        // output in the conversation log.
+
                         let retry_msg = "Your previous response contained a tool call with malformed JSON arguments. Re-emit ONLY the tool call with the corrected JSON — no additional text, no explanation.";
                         self.conversation.append(Message {
                             role: Role::User,
@@ -499,8 +536,7 @@ impl Executor {
                         })?;
                         events.push(TurnEvent::Token("(JSON parse error, retrying…)\n".into()));
                     } else {
-                        // Model failed twice. Give up and let the
-                        // user see the events we've collected.
+
                         return Ok(events);
                     }
                 }
@@ -512,28 +548,12 @@ impl Executor {
             }
         }
 
+        // Post-turn hook (fire-and-forget)
+        self.run_hook("post-turn", None, None);
+
         Ok(events)
     }
 
-    /// Run one pass of: build prompt → stream → drain events →
-    /// append assistant message → record cost.
-    ///
-    /// On `StreamEvent::Done`, decides between three outcomes:
-    /// - `ToolCalls` — pending tool calls were collected; return
-    ///   them to the orchestrator for dispatch + next iteration.
-    /// - `Finished` — no tool calls, no parse error; turn is over.
-    /// - `ParseError` — adapter reported a JSON parse error;
-    ///   orchestrator may retry.
-    ///
-    /// `tool_calls_out` is borrowed from the orchestrator so
-    /// completed tool calls land in the same buffer the caller
-    /// iterates over after we return. Avoids a second `Vec` clone
-    /// for the (common) "all calls completed, loop again" path.
-    ///
-    /// `approval_sender` is currently unused at this layer (the
-    /// stream itself never needs to prompt), but we keep it in
-    /// the signature so the orchestrator has one consistent
-    /// place to pass the channel to both helpers.
     #[allow(unused_variables)]
     async fn stream_iteration(
         &mut self,
@@ -580,17 +600,12 @@ impl Executor {
         let mut assistant_thinking = String::new();
         tool_calls_out.clear();
 
-        // Adapter-reported parse errors (JSON parse, no parseable
-        // entries). We only return `ParseError` once per turn (the
-        // orchestrator enforces the one-shot retry), but we still
-        // need to track it here so we don't suppress errors that
-        // arrive alongside a `Done` with tool calls.
         let mut had_parse_error = false;
 
         while let Some(event) = rx.recv().await {
             if cancelled.load(Ordering::SeqCst) {
                 events.push(TurnEvent::Token("\n⚠️ Cancelled\n".into()));
-                // Record what we have so far before exiting.
+
                 if !assistant_content.is_empty()
                     || !tool_calls_out.is_empty()
                     || !assistant_thinking.is_empty()
@@ -628,8 +643,7 @@ impl Executor {
                     tool_calls_out.push(tc);
                 }
                 StreamEvent::Error(e) => {
-                    // Surface parse-related errors from adapters so
-                    // the orchestrator can decide whether to retry.
+
                     if e.contains("parse") || e.contains("parseable") {
                         had_parse_error = true;
                     }
@@ -639,8 +653,7 @@ impl Executor {
                     finish_reason: _,
                     usage,
                 } => {
-                    // Persist the assistant message (the body of
-                    // text/thinking/tool-calls we just streamed).
+
                     let msg = Message {
                         role: Role::Assistant,
                         content: assistant_content.clone(),
@@ -660,7 +673,6 @@ impl Executor {
                     };
                     self.conversation.append(msg)?;
 
-                    // Record cost
                     if let Some(ref u) = usage {
                         let prompt = u.prompt_tokens.unwrap_or(0);
                         let completion = u.completion_tokens.unwrap_or(0);
@@ -676,13 +688,10 @@ impl Executor {
                     }
 
                     if !tool_calls_out.is_empty() {
-                        // Caller will dispatch them and loop again.
+
                         return Ok(IterationOutcome::ToolCalls(tool_calls_out.clone()));
                     }
 
-                    // No tool calls. If the model reported a parse
-                    // error, the orchestrator decides whether to
-                    // retry. Otherwise the turn is done.
                     return Ok(if had_parse_error {
                         IterationOutcome::ParseError
                     } else {
@@ -692,9 +701,6 @@ impl Executor {
             }
         }
 
-        // Stream ended without an explicit Done — treat as
-        // finished. We may have missed parse errors in the
-        // tail; surface them so the orchestrator can decide.
         if had_parse_error {
             Ok(IterationOutcome::ParseError)
         } else {
@@ -702,27 +708,13 @@ impl Executor {
         }
     }
 
-    /// Dispatch a single tool call through the full pipeline:
-    /// tool lookup → permission rules → approval → deny list →
-    /// path guard → read gate → bash minify → execute → event
-    /// emit → correction loop → carryover.
-    ///
-    /// **Why this is one function and not a chain of small
-    /// helpers:** the steps share state (e.g. the resolved path
-    /// from the path guard feeds the read gate, the corrected
-    /// path is the one the tool actually runs against). Splitting
-    /// them forces the caller to thread that state through
-    /// signatures; keeping them inlined here means the dataflow
-    /// is visible in one place. The "if it's not destructive,
-    /// skip approval" early return keeps the common case
-    /// (read_file, grep, glob) fast.
     async fn dispatch_tool_call(
         &mut self,
         tc: &ToolInvocation,
         approval_sender: &mpsc::UnboundedSender<ApprovalRequest>,
         events: &mut Vec<TurnEvent>,
     ) -> anyhow::Result<()> {
-        // 1. Tool lookup
+
         let tool = match self.tools.iter().find(|t| t.def().name == tc.name) {
             Some(t) => t.clone(),
             None => {
@@ -739,10 +731,6 @@ impl Executor {
             }
         };
 
-        // 2. Permission rule evaluation.
-        //    The `auto_approve` flag sets the default action
-        //    (true → Allow, false → Ask); `permission_rules`
-        //    can override per-call. First matching rule wins.
         let is_destructive = matches!(tc.name.as_str(), "write_file" | "edit_file" | "bash");
         let default_action = if self.config.auto_approve {
             PermissionAction::Allow
@@ -756,16 +744,6 @@ impl Executor {
             default_action,
         );
 
-        // **Bash read-only classification under `auto_approve`.** The
-        // default action for bash under auto_approve is `Allow`, but
-        // that would let any command through — including `curl`,
-        // `wget`, builds, interpreters, anything piped to a shell.
-        // The intent of `auto_approve` is to skip prompts for safe
-        // read-only inspection (ls, cat, grep, find, …), not for
-        // arbitrary commands. Force `Ask` for non-read-only bash so
-        // a confirmation prompt is still shown. A user-written
-        // `Allow` rule (above) still wins, since this only
-        // downgrades the default.
         if self.config.auto_approve
             && tc.name == "bash"
             && matches!(action, PermissionAction::Allow)
@@ -779,7 +757,6 @@ impl Executor {
 
         let needs_approval = is_destructive && matches!(action, PermissionAction::Ask);
 
-        // 3. Deny-list rule: refuse without prompting.
         if matches!(action, PermissionAction::Deny) && is_destructive {
             let reason = format!(
                 "❌ Permission rule denied {}:{}={}",
@@ -808,12 +785,10 @@ impl Executor {
             return Ok(());
         }
 
-        // 4. Approval gate (file tools under !auto_approve, or
-        //    non-read-only bash under auto_approve).
         if needs_approval {
             match self.run_approval_flow(tc, approval_sender).await? {
                 ApprovalDecision::Approved | ApprovalDecision::AlwaysApproved => {
-                    // Proceed to access checks below.
+
                 }
                 ApprovalDecision::Denied => {
                     events.push(TurnEvent::ToolResult {
@@ -832,7 +807,6 @@ impl Executor {
             }
         }
 
-        // 5. Access control: deny list (all tools)
         if let Some(denied) = check_deny_list(&self.deny_list, &tc.name, &tc.arguments) {
             events.push(TurnEvent::ToolResult {
                 name: tc.name.clone(),
@@ -848,7 +822,6 @@ impl Executor {
             return Ok(());
         }
 
-        // 6. File tools: path guard + read-before-edit gate
         if matches!(tc.name.as_str(), "read_file" | "write_file" | "edit_file") {
             let path_str = tc
                 .arguments
@@ -887,7 +860,6 @@ impl Executor {
                         self.read_gate.mark_read(&resolved);
                     }
 
-                    // Stash resolved path back for the tool.
                     let mut run_args = tc.arguments.clone();
                     if let Ok(path_obj) = serde_json::to_value(resolved.to_string_lossy().as_ref())
                     {
@@ -900,8 +872,26 @@ impl Executor {
                         name: tc.name.clone(),
                         args: run_args.clone(),
                     });
+
+                    // Pre-tool hook
+                    let args_json =
+                        serde_json::to_string(&run_args).unwrap_or_default();
+                    self.run_hook(
+                        &format!("pre-tool-{}", tc.name),
+                        Some(&tc.name),
+                        Some(&args_json),
+                    );
+
                     let outcome = tool.run(run_args.clone()).await;
                     handle_tool_outcome(outcome, tc, events, &mut self.conversation)?;
+
+                    // Post-tool hook
+                    self.run_hook(
+                        &format!("post-tool-{}", tc.name),
+                        Some(&tc.name),
+                        Some(&args_json),
+                    );
+
                     let crs = self
                         .emit_tool_event_and_correct(tc, &tc.name, &run_args, None, None, None)
                         .await;
@@ -927,7 +917,6 @@ impl Executor {
             }
         }
 
-        // 7. Bash: deny-list + read-only classification for auto-approve
         if tc.name == "bash" {
             if let Some(denied) = check_bash_command(&tc.arguments) {
                 events.push(TurnEvent::ToolResult {
@@ -945,14 +934,21 @@ impl Executor {
             }
         }
 
-        // 8. Execute
         events.push(TurnEvent::ToolStart {
             name: tc.name.clone(),
             args: tc.arguments.clone(),
         });
+
+        // Pre-tool hook
+        let args_json = serde_json::to_string(&tc.arguments).unwrap_or_default();
+        self.run_hook(
+            &format!("pre-tool-{}", tc.name),
+            Some(&tc.name),
+            Some(&args_json),
+        );
+
         let outcome = tool.run(tc.arguments.clone()).await;
 
-        // 9. Cap output for bash to avoid blowing context
         let (real_exit_code, real_stdout_len, real_stderr_len) = if tc.name == "bash" {
             extract_bash_metrics(&outcome)
         } else {
@@ -965,7 +961,13 @@ impl Executor {
         };
         handle_tool_outcome(outcome, tc, events, &mut self.conversation)?;
 
-        // 10. Bus event + correction loop + carryover
+        // Post-tool hook
+        self.run_hook(
+            &format!("post-tool-{}", tc.name),
+            Some(&tc.name),
+            Some(&args_json),
+        );
+
         let crs = self
             .emit_tool_event_and_correct(
                 tc,
@@ -981,16 +983,6 @@ impl Executor {
         Ok(())
     }
 
-    /// Run the "ask the user / wait for response" approval flow.
-    ///
-    /// Sends an [`ApprovalRequest`] over `approval_sender`, awaits
-    /// the user's decision, and (on `AlwaysApprove`) pushes a
-    /// matching `permission_rules` entry so future similar calls
-    /// skip the prompt entirely. This is the single home for the
-    /// duplicated approval logic that previously lived inline at
-    /// two call sites in `run_turn` (file tools under
-    /// `!auto_approve` and non-read-only bash under
-    /// `auto_approve`).
     async fn run_approval_flow(
         &mut self,
         tc: &ToolInvocation,
@@ -1009,40 +1001,18 @@ impl Executor {
             Ok(ApprovalResponse::Approved) => Ok(ApprovalDecision::Approved),
             Ok(ApprovalResponse::Denied) => Ok(ApprovalDecision::Denied),
             Ok(ApprovalResponse::AlwaysApprove) => {
-                // **v1.2-p13 — permission rule persistence.**
-                // Build a rule matching THIS specific call (tool
-                // name + the key argument — `command` for bash,
-                // `path` for edit_file) and push it into the
-                // session's `permission_rules`. Future calls
-                // matching this rule will skip the approval
-                // dialog. The TUI side ALSO persists so the
-                // rule survives across sessions via
-                // `save_config`; this in-memory push keeps the
-                // rest of THIS turn consistent.
-                //
-                // Deliberately does NOT flip `auto_approve`:
-                // the user asked for "always this specific
-                // command" — not "always everything". The old
-                // `auto_approve = true` was a blanket bypass
-                // that the new per-call rules replace.
+
                 let rule = crate::shared::permission::suggest_rule(&tc.name, &tc.arguments);
                 push_rule_unique(&mut self.config.permission_rules, rule);
                 Ok(ApprovalDecision::AlwaysApproved)
             }
             Err(_) => {
-                // Sender was dropped (UI exited). Conservatively
-                // deny — better to refuse than to silently
-                // execute.
+
                 Ok(ApprovalDecision::Denied)
             }
         }
     }
 
-    /// Emit a tool event on the event bus and run the correction loop.
-    ///
-    /// Constructs the appropriate BusEvent based on tool name and
-    /// arguments, dispatches it to registered verifiers, and collects
-    /// any correction results.
     async fn emit_tool_event_and_correct(
         &self,
         _tc: &ToolInvocation,
@@ -1119,10 +1089,8 @@ impl Executor {
             return vec![];
         };
 
-        // Dispatch on event bus (fire-and-forget to registered handlers)
         let _ = self.event_bus.dispatch(&event).await;
 
-        // Run correction loop
         let Some(ref correction_loop) = self.correction_loop else {
             return vec![];
         };
@@ -1130,7 +1098,6 @@ impl Executor {
     }
 }
 
-/// Request from executor to the UI for user approval.
 pub struct ApprovalRequest {
     pub tool_name: String,
     pub args: serde_json::Value,
@@ -1144,7 +1111,6 @@ pub enum ApprovalResponse {
     AlwaysApprove,
 }
 
-/// An event emitted during a turn, for the UI to render.
 #[derive(Debug, Clone)]
 pub enum TurnEvent {
     Token(String),
@@ -1168,11 +1134,7 @@ pub enum TurnEvent {
         turn_cost: f64,
         cumulative_cost: f64,
     },
-    /// Emitted when a `/compact` request has finished processing.
-    /// `new_messages` is the compacted history that the TUI should
-    /// use to rebuild its display. The executor's own
-    /// `self.conversation` is already pointing at this new list
-    /// (and the on-disk log has been atomically rewritten).
+
     CompactionReport {
         new_messages: Vec<crate::shared::Message>,
         dropped_tool_results: usize,
@@ -1182,8 +1144,6 @@ pub enum TurnEvent {
     },
 }
 
-/// Dangerous shell command patterns — always blocked.
-/// (A subset of disk-wrecking patterns is also checked in verifier/security.rs).
 const DANGEROUS_SHELL_COMMANDS: &[&str] = &[
     "rm -rf /",
     "rm -rf /*",
@@ -1197,10 +1157,6 @@ const DANGEROUS_SHELL_COMMANDS: &[&str] = &[
     "> /dev/null < /dev/sda",
 ];
 
-/// Bash commands classified as read-only for auto-approve purposes.
-/// Only the first word is checked. Commands starting with one of these
-/// auto-approve UNLESS they chain into dangerous operations (redirects,
-/// pipe-to-shell, chaining, command substitution).
 const READ_ONLY_COMMANDS: &[&str] = &[
     "ls", "cat", "head", "tail", "pwd", "echo", "printf", "which", "type", "file", "stat", "du",
     "df", "env", "printenv", "true", "false", "dirname", "basename", "realpath", "readlink",
@@ -1209,19 +1165,12 @@ const READ_ONLY_COMMANDS: &[&str] = &[
     "lsblk", "lsof", "dmesg", "nproc", "arch", "tty", "jobs", "help",
 ];
 
-/// Check whether a bash command is read-only (safe to auto-approve).
-/// A command is read-only if its first word is a known read-only command
-/// AND it doesn't chain into dangerous operations via:
-///   - File redirects (> or >>)
-///   - Pipe to shell (|sh or | bash or any segment starting with sh/bash)
-///   - Command chaining (;, &&, ||)
-///   - Command substitution ($(...) or backtick)
 fn is_read_only_bash(cmd: &str) -> bool {
     let trimmed = cmd.trim();
     if trimmed.is_empty() {
         return true;
     }
-    // Extract the first word
+
     let trimmed_stripped = trimmed.trim_start();
     let first = match trimmed_stripped.find(|c: char| c.is_whitespace()) {
         Some(pos) => &trimmed_stripped[..pos],
@@ -1232,15 +1181,12 @@ fn is_read_only_bash(cmd: &str) -> bool {
         return false;
     }
 
-    // Check the rest of the command for risky operators
     let rest = &trimmed[first.len()..];
 
-    // File redirect (> or >>)
     if rest.contains('>') {
         return false;
     }
 
-    // Pipe to shell: check if any pipe-separated segment starts with sh or bash
     for segment in trimmed.split('|') {
         let seg = segment.trim();
         if let Some(word) = seg.split_whitespace().next() {
@@ -1250,12 +1196,10 @@ fn is_read_only_bash(cmd: &str) -> bool {
         }
     }
 
-    // Command chaining (;, &&, ||)
     if rest.contains(';') || rest.contains("&&") || rest.contains("||") {
         return false;
     }
 
-    // Command substitution ($(...) or backtick)
     if rest.contains("$(") || rest.contains('`') {
         return false;
     }
@@ -1263,9 +1207,6 @@ fn is_read_only_bash(cmd: &str) -> bool {
     true
 }
 
-/// Check if a pattern appears as a whole word in a command string.
-/// A "word boundary" is whitespace, pipe, semicolon, parens, angle brackets,
-/// or start/end of the string.
 fn word_boundary_match(cmd: &str, pattern: &str) -> bool {
     let boundaries = [' ', '\t', '\n', '|', ';', '&', '(', ')', '<', '>', '\0'];
     let p: Vec<char> = pattern.chars().collect();
@@ -1284,11 +1225,9 @@ fn word_boundary_match(cmd: &str, pattern: &str) -> bool {
     false
 }
 
-/// Pre-execution bash command check — blocks dangerous patterns before they run.
 fn check_bash_command(args: &serde_json::Value) -> Option<String> {
     let cmd = args.get("command").and_then(|c| c.as_str())?;
 
-    // 1. Metadata endpoint access (cloud provider metadata)
     if cmd.contains("169.254.169.254")
         || cmd.contains("metadata.google")
         || cmd.contains("metadata.aws")
@@ -1296,11 +1235,6 @@ fn check_bash_command(args: &serde_json::Value) -> Option<String> {
         return Some("🔒 Command blocked: contains reference to metadata endpoints".into());
     }
 
-    // 2. Dangerous command patterns (the opposite of read-only)
-    //
-    // Patterns ending in `/` or ` ` ("rm -rf /", "chmod 777 /") would
-    // false-positive on legitimate paths ("rm -rf /home") with .contains(),
-    // so they use word-boundary matching. Everything else uses .contains().
     for pattern in DANGEROUS_SHELL_COMMANDS {
         let needs_word_boundary = pattern.ends_with('/') || pattern.ends_with(' ');
         let matches = if needs_word_boundary {
@@ -1316,7 +1250,6 @@ fn check_bash_command(args: &serde_json::Value) -> Option<String> {
         }
     }
 
-    // 3. Path deny-list (applied to paths appearing in the command)
     for pat in [
         "/etc/shadow",
         "/etc/passwd",
@@ -1335,8 +1268,6 @@ fn check_bash_command(args: &serde_json::Value) -> Option<String> {
     None
 }
 
-/// Truncate tool output to a maximum number of characters.
-/// Applied to bash output to prevent context-window overflow.
 fn truncate_tool_output(outcome: ToolOutcome, max_chars: usize) -> ToolOutcome {
     if max_chars == 0 {
         return outcome;
@@ -1344,7 +1275,7 @@ fn truncate_tool_output(outcome: ToolOutcome, max_chars: usize) -> ToolOutcome {
     match outcome {
         ToolOutcome::Success { content } => {
             if content.len() > max_chars {
-                // Walk back to a UTF-8 char boundary to avoid a panic on multi-byte chars
+
                 let mut boundary = max_chars;
                 while !content.is_char_boundary(boundary) {
                     boundary -= 1;
@@ -1364,9 +1295,6 @@ fn truncate_tool_output(outcome: ToolOutcome, max_chars: usize) -> ToolOutcome {
     }
 }
 
-/// Extract bash execution metrics from a ToolOutcome.
-/// Returns (outcome, exit_code, stdout_len, stderr_len).
-/// For the verifier to see real data instead of hardcoded zeros.
 fn extract_bash_metrics(outcome: &ToolOutcome) -> (Option<i32>, Option<usize>, Option<usize>) {
     match outcome {
         ToolOutcome::Success { content } => (Some(0), Some(content.len()), Some(0)),
@@ -1390,8 +1318,6 @@ fn extract_bash_metrics(outcome: &ToolOutcome) -> (Option<i32>, Option<usize>, O
     }
 }
 
-/// Helper: check deny list before running a tool.
-/// Returns Some(denial_message) if blocked, None if allowed.
 fn check_deny_list(
     deny_list: &DenyList,
     tool_name: &str,
@@ -1407,9 +1333,7 @@ fn check_deny_list(
             }
         }
         "bash" => {
-            // Note: pre-execution dangerous-command check is in check_bash_command()
-            // which runs right before tool execution. This function only handles
-            // the generic deny-list (path patterns, URLs) for consistency.
+
         }
         "grep" | "glob" => {
             if let Some(path) = args.get("path").and_then(|v| v.as_str()) {
@@ -1424,7 +1348,6 @@ fn check_deny_list(
     None
 }
 
-/// Helper: process a tool outcome and push events/conversation entries.
 fn handle_tool_outcome(
     outcome: ToolOutcome,
     tc: &ToolInvocation,
@@ -1477,6 +1400,17 @@ fn handle_tool_outcome(
                 tool_name: Some(tc.name.clone()),
                 ..Default::default()
             })?;
+
+            // Attempt error recovery — analyze the error and inject a hint
+            if let Some(hint) = crate::session::error_recovery::analyze_error(
+                &tc.name,
+                &message,
+                &tc.arguments,
+            ) {
+                let recovery_msg =
+                    crate::session::error_recovery::build_recovery_message(&hint);
+                conversation.append(recovery_msg)?;
+            }
         }
     }
     Ok(())
@@ -1497,7 +1431,6 @@ fn format_grep_output(path: &std::path::Path, matches: &[crate::shared::Match]) 
     out
 }
 
-/// Helper: emit correction results as TurnEvents and conversation entries.
 fn emit_correction_results(
     results: Vec<CorrectionResult>,
     tc: &ToolInvocation,
@@ -1532,20 +1465,16 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use tokio::sync::mpsc;
 
-    /// Convenience: an `AtomicBool` that is always false — used by tests
-    /// that don't need cancellation.
     fn never_cancelled() -> &'static AtomicBool {
         static NC: std::sync::LazyLock<AtomicBool> =
             std::sync::LazyLock::new(|| AtomicBool::new(false));
         &NC
     }
 
-    // ── Mocks ──────────────────────────────────────────────────────
-
     struct MockAdapter {
-        /// Events to emit on the first stream() call.
+
         first_events: Vec<StreamEvent>,
-        /// Events to emit on subsequent stream() calls (e.g. empty to break tool-call loops).
+
         followup_events: Vec<StreamEvent>,
         info: ModelInfo,
         call_count: Arc<Mutex<usize>>,
@@ -1646,6 +1575,12 @@ mod tests {
             block_binary_reads: false,
             carryover_enabled: false,
             permission_rules: vec![],
+            summarize_model: String::new(),
+            summarize_enabled: false,
+            routing_enabled: false,
+            router_model: String::new(),
+            routing_model_map: std::collections::HashMap::new(),
+            mcp_servers: vec![],
         }
     }
 
@@ -1660,8 +1595,6 @@ mod tests {
         let conversation = ConversationLog::open(log_path).unwrap();
         Executor::with_log(adapter, tools, config, conversation, None)
     }
-
-    // ── Tests ─────────────────────────────────────────────────────
 
     #[tokio::test]
     async fn test_basic_text_response() {
@@ -1696,7 +1629,6 @@ mod tests {
             .collect();
         assert_eq!(tokens, vec!["Hello ", "world!"]);
 
-        // Verify conversation was appended
         let msgs = exe.conversation.all();
         assert_eq!(msgs.len(), 2); // user + assistant
         assert_eq!(msgs[0].role, Role::User);
@@ -1744,7 +1676,6 @@ mod tests {
             .await
             .unwrap();
 
-        // Should have token + tool_start + tool_result
         let has_token = events.iter().any(|e| matches!(e, TurnEvent::Token(_)));
         let has_start = events
             .iter()
@@ -1755,7 +1686,6 @@ mod tests {
         assert!(has_start, "Should emit ToolStart");
         assert!(has_result, "Should emit ToolResult");
 
-        // Verify tool was actually called with correct args
         let called_with = captured.lock().unwrap().take();
         assert!(called_with.is_some(), "Tool should have been called");
         assert_eq!(
@@ -1763,7 +1693,6 @@ mod tests {
             Some("test")
         );
 
-        // Tool result should be in conversation
         let msgs = exe.conversation.all();
         let tool_msgs: Vec<_> = msgs.iter().filter(|m| m.role == Role::Tool).collect();
         assert_eq!(tool_msgs.len(), 1);
@@ -1800,10 +1729,8 @@ mod tests {
             make_info(),
         );
 
-        // auto_approve = false — should require approval
         let (approval_tx, mut approval_rx) = mpsc::unbounded_channel();
 
-        // Spawn a task to respond to the approval request
         let approval_handle = tokio::spawn(async move {
             let req: ApprovalRequest = approval_rx.recv().await.unwrap();
             assert_eq!(req.tool_name, "bash");
@@ -1818,7 +1745,6 @@ mod tests {
 
         approval_handle.await.unwrap();
 
-        // Should have ToolResult since we approved
         let result = events.iter().find_map(|e| match e {
             TurnEvent::ToolResult { name, output } => Some((name.as_str(), output.as_str())),
             _ => None,
@@ -1871,23 +1797,15 @@ mod tests {
 
         approval_handle.await.unwrap();
 
-        // Tool should NOT have been called (denied)
         assert!(
             captured.lock().unwrap().is_none(),
             "Tool should not have been called when denied"
         );
 
-        // Should have a denied-message result
         let denied = events.iter().any(|e| matches!(e, TurnEvent::ToolResult { name, output } if name == "bash" && output.contains("denied")));
         assert!(denied, "Should report that operation was denied");
     }
 
-    /// **v1.2-p13 — `[A]lways` should push a permission rule, NOT
-    /// flip `auto_approve`.** The old code did `self.config.auto_approve
-    /// = true;` which was a blanket bypass for the rest of the session.
-    /// The new code builds a rule matching THIS specific call and
-    /// pushes it into `permission_rules`, so future matching calls
-    /// skip the dialog but unrelated destructive calls still ask.
     #[tokio::test]
     async fn test_always_approve_pushes_permission_rule_not_auto_approve() {
         let captured = Arc::new(Mutex::new(None));
@@ -1921,12 +1839,10 @@ mod tests {
         let (approval_tx, mut approval_rx) = mpsc::unbounded_channel();
         let approval_handle = tokio::spawn(async move {
             let req: ApprovalRequest = approval_rx.recv().await.unwrap();
-            // User hit `[A]lways`.
+
             let _ = req.response.send(ApprovalResponse::AlwaysApprove);
         });
 
-        // Start with auto_approve = false and an empty permission_rules
-        // list — the realistic starting state.
         let config = make_config(false);
         assert!(config.permission_rules.is_empty());
         assert!(!config.auto_approve);
@@ -1938,7 +1854,6 @@ mod tests {
             .unwrap();
         approval_handle.await.unwrap();
 
-        // **The new rule must be in permission_rules.**
         assert_eq!(
             exe.config.permission_rules.len(),
             1,
@@ -1951,18 +1866,12 @@ mod tests {
         assert_eq!(r.pattern, "cargo test --release");
         assert_eq!(r.action, PermissionAction::Allow);
 
-        // **auto_approve must NOT have been flipped.** This is the
-        // regression guard for the old buggy behaviour.
         assert!(
             !exe.config.auto_approve,
             "AlwaysApprove should NOT flip auto_approve — the new rule is the user's intent"
         );
     }
 
-    /// Hitting `[A]lways` twice on the same call should NOT add a
-    /// duplicate rule. This is the in-memory counterpart to the TUI
-    /// `push_rule_unique` test — both sites use the same dedup
-    /// strategy, and both should be regression-tested.
     #[tokio::test]
     async fn test_always_approve_dedups_repeated_calls() {
         let captured = Arc::new(Mutex::new(None));
@@ -1994,26 +1903,16 @@ mod tests {
         );
 
         let (approval_tx, mut approval_rx) = mpsc::unbounded_channel::<ApprovalRequest>();
-        // `drop(approval_tx)` at the end of this test closes the
-        // channel, which makes the spawned `approval_rx.recv()`
-        // return `None` and complete. In THIS test the pre-populated
-        // `Allow` rule on `bash:command=ls` short-circuits the
-        // approval flow (action = Allow, needs_approval = false),
-        // so the spawned task never receives an `ApprovalRequest` —
-        // we rely on the channel-close to unblock it.
+
         let approval_handle = tokio::spawn(async move {
             while let Some(req) = approval_rx.recv().await {
-                // Rule short-circuited — no approval will ever be
-                // sent. We still handle it defensively in case the
-                // test author changes the rule setup.
+
                 let _ = req.response.send(ApprovalResponse::AlwaysApprove);
             }
         });
 
         let config = make_config(false);
-        // Pre-populate with the EXACT rule that suggest_rule would
-        // build for `bash:command=ls`. The dedup should leave it
-        // untouched (and not add a duplicate).
+
         let mut config = config;
         config
             .permission_rules
@@ -2033,7 +1932,6 @@ mod tests {
         drop(approval_tx);
         approval_handle.await.unwrap();
 
-        // Still exactly one rule — no duplicate added.
         assert_eq!(
             exe.config.permission_rules.len(),
             1,
@@ -2041,11 +1939,6 @@ mod tests {
         );
     }
 
-    /// User-written `Deny` rule should NOT be overwritten by an
-    /// `Allow` from `[A]lways` on the same pattern. The dedup logic
-    /// preserves the EXISTING rule's action. This catches a "user
-    /// denies `rm -rf` then accidentally allows it by hitting
-    /// `[A]lways`" footgun.
     #[tokio::test]
     async fn test_always_approve_does_not_overwrite_existing_deny() {
         let captured = Arc::new(Mutex::new(None));
@@ -2077,12 +1970,7 @@ mod tests {
         );
 
         let (approval_tx, mut approval_rx) = mpsc::unbounded_channel::<ApprovalRequest>();
-        // Same pattern as the dedup test above: the pre-populated
-        // `Deny` rule on `rm -rf build` short-circuits the approval
-        // flow (action = Deny → refuses without prompting), so the
-        // spawned task never receives an `ApprovalRequest`. We make
-        // the receiver robust to channel close + drop the sender
-        // after the turn to unblock `recv()`.
+
         let approval_handle = tokio::spawn(async move {
             while let Some(req) = approval_rx.recv().await {
                 let _ = req.response.send(ApprovalResponse::AlwaysApprove);
@@ -2090,7 +1978,7 @@ mod tests {
         });
 
         let mut config = make_config(false);
-        // User previously DENIED this exact command (a sensible config).
+
         config
             .permission_rules
             .push(crate::shared::permission::PermissionRule {
@@ -2108,8 +1996,6 @@ mod tests {
         drop(approval_tx);
         approval_handle.await.unwrap();
 
-        // Still exactly one rule, and it's still Deny — the user's
-        // explicit Deny was preserved over the AlwaysApprove's Allow.
         assert_eq!(exe.config.permission_rules.len(), 1);
         assert_eq!(
             exe.config.permission_rules[0].action,
@@ -2118,12 +2004,6 @@ mod tests {
         );
     }
 
-    /// **Headline deny example must work end-to-end.** Review 2's #1
-    /// was: the docs in `permission.rs` advertise
-    /// `pattern = "rm -rf **"` (now `rm -rf **`, after the doc fix)
-    /// as a deny rule for `bash:command`. The unit test on `evaluate()`
-    /// proves the rule selects `Deny` — this test proves the executor
-    /// then refuses to call the tool, even with `auto_approve: true`.
     #[tokio::test]
     async fn test_deny_rule_blocks_bash_even_with_auto_approve() {
         let captured = Arc::new(Mutex::new(None));
@@ -2144,7 +2024,7 @@ mod tests {
                 StreamEvent::ToolCall(ToolInvocation {
                     id: "call-1".into(),
                     name: "bash".into(),
-                    // A command the docs' deny rule MUST catch.
+
                     arguments: serde_json::json!({"command": "rm -rf /home/user/build"}),
                 }),
                 StreamEvent::Done {
@@ -2155,13 +2035,9 @@ mod tests {
             make_info(),
         );
 
-        // auto_approve = true — would normally bypass the dialog —
-        // but the explicit Deny rule on `rm -rf **` should still
-        // short-circuit the call before it reaches the tool.
         let (approval_tx, mut approval_rx) = mpsc::unbounded_channel::<ApprovalRequest>();
         let approval_handle = tokio::spawn(async move {
-            // Rule short-circuits before any approval is sent; the
-            // channel close at end-of-test unblocks `recv()`.
+
             while let Some(req) = approval_rx.recv().await {
                 let _ = req.response.send(ApprovalResponse::Approved);
             }
@@ -2185,13 +2061,11 @@ mod tests {
         drop(approval_tx);
         approval_handle.await.unwrap();
 
-        // The tool must not have been called.
         assert!(
             captured.lock().unwrap().is_none(),
             "Deny rule should prevent the tool from being called even with auto_approve"
         );
 
-        // And the user sees a ToolResult carrying the denial reason.
         let denied_msg = events.iter().find_map(|e| match e {
             TurnEvent::ToolResult { name, output } if name == "bash" => Some(output.as_str()),
             _ => None,
@@ -2203,11 +2077,6 @@ mod tests {
         );
     }
 
-    /// The executor's path-guard / deny-list / read-before-edit gate
-    /// is what protects file writes. This is the integration check
-    /// for Review 2's #2: when a `write_file` call targets a path
-    /// matched by the configured deny_paths, the executor must refuse
-    /// the call before the tool runs, regardless of `auto_approve`.
     #[tokio::test]
     async fn test_deny_paths_blocks_write_file_even_with_auto_approve() {
         let captured = Arc::new(Mutex::new(None));
@@ -2241,8 +2110,6 @@ mod tests {
             make_info(),
         );
 
-        // No approval channel needed — auto_approve=true and a no-op
-        // permission_rules list. The path guard is what must block.
         let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
 
         let mut config = make_config(true);
@@ -2254,13 +2121,11 @@ mod tests {
             .await
             .unwrap();
 
-        // Tool must not have been called.
         assert!(
             captured.lock().unwrap().is_none(),
             "write_file must be blocked by the path deny-list before the tool runs"
         );
 
-        // And the result must surface the denial.
         let denied = events.iter().any(|e| matches!(
             e,
             TurnEvent::ToolResult { name, output } if name == "write_file" && output.contains("denied")
@@ -2272,12 +2137,6 @@ mod tests {
         );
     }
 
-    /// The dangerous-shell-command gate (rm -rf /, fork bomb, etc.) is
-    /// independent of the permission-rule system. Even with a
-    /// permissive `allow *` permission rule, the executor must still
-    /// block `rm -rf /` because the dangerous-shell check fires before
-    /// the tool runs. This is the integration counterpart to the
-    /// `check_bash_command_blocks_dangerous_exact` unit test.
     #[tokio::test]
     async fn test_dangerous_shell_blocked_even_with_allow_all_rule() {
         let captured = Arc::new(Mutex::new(None));
@@ -2308,19 +2167,12 @@ mod tests {
             make_info(),
         );
 
-        // We expect exactly one approval request (the read-only
-        // classification downgrades the Allow default to Ask for
-        // `rm -rf /`). The responder approves, so the only thing
-        // stopping the call must be the dangerous-shell gate below.
         let (approval_tx, mut approval_rx) = mpsc::unbounded_channel::<ApprovalRequest>();
         let approval_handle = tokio::spawn(async move {
             let req: ApprovalRequest = approval_rx.recv().await.expect("approval request");
             let _ = req.response.send(ApprovalResponse::Approved);
         });
 
-        // auto_approve + a wildcard Allow rule — the most permissive
-        // possible permission setup. The dangerous-shell gate must
-        // still refuse the call.
         let mut config = make_config(true);
         config
             .permission_rules
@@ -2354,11 +2206,6 @@ mod tests {
         );
     }
 
-    /// With `auto_approve: true`, a bash command that is NOT in the
-    /// read-only allowlist (e.g. `cargo build`) should still go
-    /// through the approval flow — `--auto-approve` does not bypass
-    /// approval for non-read-only bash. This pins the documented
-    /// behavior on the `auto_approve` flag's doc-comment.
     #[tokio::test]
     async fn test_auto_approve_does_not_skip_approval_for_non_read_only_bash() {
         let captured = Arc::new(Mutex::new(None));
@@ -2389,11 +2236,9 @@ mod tests {
             make_info(),
         );
 
-        // auto_approve = true. The command is NOT in the read-only
-        // list, so the executor must ask for approval.
         let (approval_tx, mut approval_rx) = mpsc::unbounded_channel::<ApprovalRequest>();
         let approval_handle = tokio::spawn(async move {
-            // We expect exactly one approval request.
+
             let req: ApprovalRequest = approval_rx.recv().await.expect("approval request");
             assert_eq!(req.tool_name, "bash");
             let _ = req.response.send(ApprovalResponse::Approved);
@@ -2406,11 +2251,6 @@ mod tests {
             .unwrap();
         approval_handle.await.unwrap();
 
-        // The tool DID run because we approved it — but the point of
-        // this test is that the approval request was sent at all.
-        // (If `auto_approve` had silently bypassed approval, the
-        // spawned task would have hit `recv()` returning None and
-        // panicked before this assert.)
         assert!(
             captured.lock().unwrap().is_some(),
             "Tool should have run after the user approved the non-read-only command"
@@ -2472,7 +2312,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tool_call_loop_capped() {
-        // A tool that returns success but causes the model to keep calling it
+
         let captured = Arc::new(Mutex::new(None));
         let tool = MockTool {
             def: ToolDef {
@@ -2486,10 +2326,6 @@ mod tests {
             },
         };
 
-        // Every turn, the model calls the tool again (emulate via MockAdapter returning
-        // the same ToolCall pattern each iteration)
-        // We need a more sophisticated mock for this. Let's use a custom adapter
-        // that returns a fresh tool-call stream every invocation.
         struct LoopAdapter {
             info: ModelInfo,
             call_count: Arc<Mutex<usize>>,
@@ -2541,7 +2377,6 @@ mod tests {
             .await
             .unwrap();
 
-        // Should NOT have hit the limit (max_iterations = 10, and we'd get error if we did)
         let tool_calls = *call_count.lock().unwrap();
         assert!(
             tool_calls <= 10,
@@ -2550,8 +2385,6 @@ mod tests {
         );
     }
 
-    // ── Word-boundary matching tests ─────────────────────────────
-
     #[test]
     fn test_word_boundary_match_exact() {
         assert!(word_boundary_match("rm -rf /", "rm -rf /"));
@@ -2559,7 +2392,7 @@ mod tests {
 
     #[test]
     fn test_word_boundary_no_false_positive_trailing_slash() {
-        // "rm -rf /" should NOT match "rm -rf /home" (the / is not word-boundary-terminated)
+
         assert!(!word_boundary_match("rm -rf /home/user", "rm -rf /"));
     }
 
@@ -2587,7 +2420,7 @@ mod tests {
 
     #[test]
     fn test_check_bash_command_allows_safe_similar() {
-        // "rm -rf /" should NOT block "rm -rf /home/user/temp"
+
         let args = serde_json::json!({"command": "rm -rf /home/user/temp"});
         let result = check_bash_command(&args);
         assert!(
@@ -2599,7 +2432,7 @@ mod tests {
 
     #[test]
     fn test_check_bash_command_blocks_dd_by_substring() {
-        // "dd if=/dev/zero of=" uses .contains() — should still block regardless of boundaries
+
         let args = serde_json::json!({"command": "dd if=/dev/zero of=/tmp/out bs=1M count=1"});
         let result = check_bash_command(&args);
         assert!(result.is_some(), "dd if=/dev/zero should be blocked");
@@ -2664,7 +2497,7 @@ mod tests {
 
     #[test]
     fn test_is_read_only_bash_pipe_to_sh_blocked() {
-        // Both glued |sh and spaced | sh must be caught
+
         assert!(!is_read_only_bash("cat script | sh"));
         assert!(!is_read_only_bash("cat script | bash"));
     }
@@ -2698,12 +2531,11 @@ mod tests {
 
     #[test]
     fn test_is_read_only_bash_word_boundary_no_false_positive() {
-        // "scurling" contains "curl" but should NOT match READ_ONLY_COMMANDS
+
         assert!(!is_read_only_bash("scurling is not curl"));
-        // "cat" is read-only but only if it's the first word
+
         assert!(is_read_only_bash("cat /etc/hostname"));
-        // A path or variable containing "cat" as first word isn't a problem
-        // because the first word has to EXACTLY match
+
         assert!(!is_read_only_bash("cattitude"));
     }
 

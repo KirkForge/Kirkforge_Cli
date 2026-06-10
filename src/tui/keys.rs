@@ -306,6 +306,40 @@ pub async fn handle_input_key(
                             state.messages.push(ConversationEntry::new("system", msg));
                             return Ok(());
                         }
+                        "/memory" => {
+                            let msg = crate::tui::commands::handle_memory_command(args);
+                            state.messages.push(ConversationEntry::new("system", msg));
+                            return Ok(());
+                        }
+                        "/plan" => {
+                            let (display, plan_prompt) =
+                                crate::tui::commands::handle_plan_command(args);
+                            state
+                                .messages
+                                .push(ConversationEntry::new("system", display));
+                            if !plan_prompt.is_empty() {
+                                state.is_generating = true;
+                                if input_tx.send(plan_prompt).is_err() {
+                                    tracing::warn!(
+                                        "input_tx receiver dropped while dispatching plan prompt"
+                                    );
+                                    state.is_generating = false;
+                                    return Ok(());
+                                }
+                            }
+                            return Ok(());
+                        }
+                        "/gh" => {
+                            let msg = crate::tui::commands::handle_gh_command(args);
+                            state.messages.push(ConversationEntry::new("system", msg));
+                            return Ok(());
+                        }
+                        "/init" => {
+                            let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+                            let msg = crate::tui::commands::handle_init_command(args, &cwd);
+                            state.messages.push(ConversationEntry::new("system", msg));
+                            return Ok(());
+                        }
                         _ => {}
                     }
 

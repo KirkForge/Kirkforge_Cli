@@ -207,6 +207,7 @@ impl Executor {
         count
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn run(
         &mut self,
         mut input_rx: mpsc::UnboundedReceiver<String>,
@@ -215,6 +216,7 @@ impl Executor {
         mut cancel_rx: mpsc::UnboundedReceiver<()>,
         mut resume_rx: mpsc::UnboundedReceiver<ConversationLog>,
         mut compact_rx: mpsc::UnboundedReceiver<()>,
+        mut model_rx: mpsc::UnboundedReceiver<String>,
     ) -> anyhow::Result<()> {
         let cancelled = Arc::new(AtomicBool::new(false));
 
@@ -230,6 +232,31 @@ impl Executor {
                     if event_tx.send(TurnEvent::Token("\n⚠️ Generation cancelled\n".into())).is_err() {
 
                         tracing::warn!("TUI event receiver dropped; executor driver exiting");
+                        self.flush_carryover();
+                        return Ok(());
+                    }
+                }
+                // Review.md gap #5 — mid-session model swap. The TUI
+                // forwards `/model <name>` here; we install the named
+                // adapter via `AdapterSwap::force_swap` (which
+                // bypasses the smart-router) and emit a confirmation
+                // token so the user sees the swap land. The next turn
+                // will use the new adapter.
+                Some(model_name) = model_rx.recv() => {
+                    let new_name = self
+                        .adapter_swap
+                        .force_swap(&model_name, &mut self.adapter);
+                    self.model_name = new_name.clone();
+                    if event_tx
+                        .send(TurnEvent::Token(format!(
+                            "🔀 Switched to {}\n",
+                            new_name
+                        )))
+                        .is_err()
+                    {
+                        tracing::warn!(
+                            "TUI event receiver dropped while reporting model swap; exiting"
+                        );
                         self.flush_carryover();
                         return Ok(());
                     }

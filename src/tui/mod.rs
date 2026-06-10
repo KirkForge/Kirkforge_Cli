@@ -122,6 +122,12 @@ pub async fn run_tui(
     let (resume_tx, resume_rx) = mpsc::unbounded_channel::<ConversationLog>();
     // Compact: TUI → Executor (sends () to trigger a /compact pass)
     let (compact_tx, compact_rx) = mpsc::unbounded_channel::<()>();
+    // Model swap: TUI → Executor (sends a model name to install mid-session)
+    // Review.md gap #5. Mirror of the other control channels. The
+    // TUI owns the sender (passed into `keys::handle_input_key`); the
+    // executor's `run` loop receives the name and calls
+    // `AdapterSwap::force_swap`.
+    let (model_tx, model_rx) = mpsc::unbounded_channel::<String>();
     // Keyboard events: background reader thread → TUI event loop
     let (kb_tx, mut kb_rx) = mpsc::unbounded_channel::<Event>();
 
@@ -134,6 +140,49 @@ pub async fn run_tui(
             }
         }
     });
+
+    // SIGHUP config hot-reload (review.md gap #5, second half).
+    // On Unix, the conventional "reload config" signal is SIGHUP.
+    // When we receive one, re-read `config.toml` and emit a token
+    // through `event_tx` so the user sees the reload happen. The
+    // reloaded config is *display-only* — the executor captured its
+    // Config by value at construction and is not externally
+    // mutable, so the executor keeps using the launch-time config
+    // for routing, auto-approve, etc. What the user does see is the
+    // new config in `/status` (after the next render) and in any
+    // dialog that re-queries Config (e.g. approval text). Full
+    // hot-reload of the executor's behavior would require
+    // Arc<RwLock<Config>> plumbing; deferred to a follow-up.
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        match signal(SignalKind::hangup()) {
+            Ok(mut hup) => {
+                let reload_event_tx = event_tx.clone();
+                let mut last_known = state.config.clone();
+                tokio::spawn(async move {
+                    while hup.recv().await.is_some() {
+                        let fresh = crate::session::config::load_config();
+                        let diff_summary = config_diff_summary(&last_known, &fresh);
+                        last_known = fresh;
+                        let msg = if diff_summary.is_empty() {
+                            "🔄 Reloaded config (no changes)\n".to_string()
+                        } else {
+                            format!("🔄 Reloaded config: {}\n", diff_summary)
+                        };
+                        // Best-effort: the TUI's event drain renders
+                        // tokens as system lines. If the receiver is
+                        // gone (TUI exited) we just drop the message.
+                        let _ = reload_event_tx
+                            .send(executor::TurnEvent::Token(msg));
+                    }
+                });
+            }
+            Err(e) => {
+                tracing::warn!("Could not install SIGHUP handler: {}", e);
+            }
+        }
+    }
 
     // Spawn the executor on a background task
     let mut exe =
@@ -151,6 +200,7 @@ pub async fn run_tui(
                 cancel_rx,
                 resume_rx,
                 compact_rx,
+                model_rx,
             )
             .await;
     });
@@ -166,6 +216,7 @@ pub async fn run_tui(
         &cancel_tx,
         &resume_tx,
         &compact_tx,
+        &model_tx,
     )
     .await;
 
@@ -198,6 +249,7 @@ async fn run_event_loop(
     cancel_tx: &mpsc::UnboundedSender<()>,
     resume_tx: &mpsc::UnboundedSender<ConversationLog>,
     compact_tx: &mpsc::UnboundedSender<()>,
+    model_tx: &mpsc::UnboundedSender<String>,
 ) -> anyhow::Result<()> {
     loop {
         // Check for exit signal
@@ -295,7 +347,7 @@ async fn run_event_loop(
                         approval_keys::handle_approval_key(key, state);
                     } else {
                         keys::handle_input_key(
-                            key, state, input_tx, cancel_tx, resume_tx, compact_tx,
+                            key, state, input_tx, cancel_tx, resume_tx, compact_tx, model_tx,
                         )
                         .await?;
                     }
@@ -304,5 +356,120 @@ async fn run_event_loop(
                 _ => {}
             }
         }
+    }
+}
+
+/// Pure helper: produce a one-line summary of the differences between
+/// two `Config` values, used by the SIGHUP reload path to tell the
+/// user what changed (or that nothing did).
+///
+/// We deliberately compare a small, *user-facing* subset of fields
+/// — not the full struct equality. Showing changes to internal
+/// knobs (truncation_strategy, deny_paths, etc.) would be noisy and
+/// could leak security-sensitive details in a chat pane. The
+/// high-impact fields the operator usually tweaks are: model,
+/// host, auto_approve, bang_requires_approval, sandbox_dir.
+///
+/// Returns an empty string when the two configs are equal on this
+/// subset, so the caller can show "no changes" instead of a
+/// confusing "0 changes" line.
+fn config_diff_summary(before: &crate::shared::Config, after: &crate::shared::Config) -> String {
+    let mut diffs: Vec<String> = Vec::new();
+    if before.default_model != after.default_model {
+        diffs.push(format!(
+            "default_model: {} → {}",
+            before.default_model, after.default_model
+        ));
+    }
+    if before.ollama_host != after.ollama_host {
+        diffs.push(format!(
+            "ollama_host: {} → {}",
+            before.ollama_host, after.ollama_host
+        ));
+    }
+    if before.auto_approve != after.auto_approve {
+        diffs.push(format!(
+            "auto_approve: {} → {}",
+            before.auto_approve, after.auto_approve
+        ));
+    }
+    if before.bang_requires_approval != after.bang_requires_approval {
+        diffs.push(format!(
+            "bang_requires_approval: {} → {}",
+            before.bang_requires_approval, after.bang_requires_approval
+        ));
+    }
+    if before.sandbox_dir != after.sandbox_dir {
+        diffs.push(format!(
+            "sandbox_dir: {:?} → {:?}",
+            before.sandbox_dir, after.sandbox_dir
+        ));
+    }
+    if before.routing_enabled != after.routing_enabled {
+        diffs.push(format!(
+            "routing_enabled: {} → {}",
+            before.routing_enabled, after.routing_enabled
+        ));
+    }
+    if before.summarize_enabled != after.summarize_enabled {
+        diffs.push(format!(
+            "summarize_enabled: {} → {}",
+            before.summarize_enabled, after.summarize_enabled
+        ));
+    }
+    diffs.join(", ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::shared::Config;
+
+    #[test]
+    fn test_config_diff_summary_empty_for_equal() {
+        let a = Config::default();
+        let b = Config::default();
+        assert!(config_diff_summary(&a, &b).is_empty());
+    }
+
+    #[test]
+    fn test_config_diff_summary_model_change() {
+        let a = Config::default();
+        let mut b = Config::default();
+        b.default_model = "qwen2.5:3b".into();
+        let s = config_diff_summary(&a, &b);
+        assert!(s.contains("default_model"), "got: {}", s);
+        assert!(s.contains("→ qwen2.5:3b"), "got: {}", s);
+    }
+
+    #[test]
+    fn test_config_diff_summary_multiple_fields() {
+        let a = Config::default();
+        let mut b = Config::default();
+        b.default_model = "qwen2.5:3b".into();
+        b.auto_approve = true;
+        b.ollama_host = "http://example.com:11434".into();
+        let s = config_diff_summary(&a, &b);
+        // All three should appear; order is the field order above.
+        assert!(s.contains("default_model"), "got: {}", s);
+        assert!(s.contains("auto_approve"), "got: {}", s);
+        assert!(s.contains("ollama_host"), "got: {}", s);
+    }
+
+    #[test]
+    fn test_config_diff_summary_ignores_internal_fields() {
+        // deny_paths and friends should NOT show up in the diff
+        // even if they differ — those are internal/security knobs.
+        let a = Config::default();
+        let mut b = Config::default();
+        b.deny_paths = vec!["/secret".into()];
+        b.allowed_write_dirs = vec!["/tmp".into()];
+        let s = config_diff_summary(&a, &b);
+        assert!(
+            !s.contains("deny_paths") && !s.contains("allowed_write_dirs"),
+            "internal fields leaked: {}",
+            s
+        );
+        assert!(s.is_empty());
     }
 }

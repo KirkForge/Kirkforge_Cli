@@ -146,6 +146,25 @@ pub struct AppState {
     /// `pending_approval` in shape but doesn't go through the executor's
     /// oneshot channel — bang is a pure local feature.
     pub pending_bang: Option<PendingBangCommand>,
+
+    // ── Conversation search (review.md gap #4) ─────────────
+    /// When `true`, the input box is being used as a search bar.
+    /// Ctrl+F enters search mode; typing filters the chat
+    /// conversation; Enter commits and leaves the matches
+    /// highlighted; Esc cancels and clears the matches.
+    pub search_mode: bool,
+    /// The current search query (built up while in search mode).
+    /// Empty when not searching.
+    pub search_query: String,
+    /// All match positions in the conversation, in document order.
+    /// Each entry is `(message_index, byte_offset)` for the start
+    /// of the match in `messages[message_index].content`. Filled in
+    /// when search is committed; cleared on cancel or `/clear`.
+    pub search_matches: Vec<(usize, usize)>,
+    /// Index into `search_matches` of the currently-highlighted
+    /// match. `n` cycles forward, `N` (Shift+N) cycles backward.
+    /// When `search_matches.is_empty()`, this is meaningless.
+    pub search_match_idx: usize,
 }
 
 impl AppState {
@@ -182,6 +201,10 @@ impl AppState {
             approval_max_scroll: 0,
             last_turn_prompt_tokens: 0,
             pending_bang: None,
+            search_mode: false,
+            search_query: String::new(),
+            search_matches: Vec::new(),
+            search_match_idx: 0,
         }
     }
 

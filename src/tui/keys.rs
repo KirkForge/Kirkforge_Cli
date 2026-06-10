@@ -59,9 +59,95 @@ pub async fn handle_input_key(
     resume_tx: &mpsc::UnboundedSender<ConversationLog>,
     compact_tx: &mpsc::UnboundedSender<()>,
 ) -> anyhow::Result<()> {
+    // ── Search mode interceptor ─────────────────────────────
+    // When search_mode is on, the input box is acting as a search
+    // bar. We intercept Enter, Esc, Backspace, and any printable
+    // char here so the regular input handling doesn't fire. `n`
+    // / `N` (navigate next/prev match) are handled below the
+    // search-mode branch — they're only meaningful AFTER a search
+    // has been committed, not while typing a new query.
+    if state.search_mode {
+        match key.code {
+            KeyCode::Esc => {
+                state.search_mode = false;
+                state.search_query.clear();
+                state.search_matches.clear();
+                state.search_match_idx = 0;
+                return Ok(());
+            }
+            KeyCode::Enter => {
+                // Commit the search. The matches are computed
+                // from the current query; the renderer can now
+                // highlight them. Search mode is left ON so the
+                // user can `n` / `N` to navigate; pressing Esc
+                // again exits it.
+                let matches =
+                    crate::tui::search::compute_matches(&state.messages, &state.search_query);
+                state.search_matches = matches;
+                state.search_match_idx = 0;
+                return Ok(());
+            }
+            KeyCode::Backspace => {
+                state.search_query.pop();
+                return Ok(());
+            }
+            KeyCode::Char(c) => {
+                if !key.modifiers.contains(KeyModifiers::CONTROL) {
+                    state.search_query.push(c);
+                    return Ok(());
+                }
+                // Ctrl+C in search mode = cancel and exit.
+                if c == 'c' {
+                    state.search_mode = false;
+                    state.search_query.clear();
+                    state.search_matches.clear();
+                    state.search_match_idx = 0;
+                    state.input.clear();
+                    state.cursor_position = 0;
+                    return Ok(());
+                }
+            }
+            _ => {}
+        }
+    }
+    // ── Post-search navigation (n / Shift+N) ─────────────
+    // Only active when a search is committed (matches is
+    // non-empty). Falls through to regular handling otherwise.
+    if !state.search_matches.is_empty()
+        && !state.search_mode
+        && key.modifiers.contains(KeyModifiers::NONE)
+    {
+        match key.code {
+            KeyCode::Char('n') => {
+                state.search_match_idx = crate::tui::search::navigate_next(
+                    state.search_match_idx,
+                    state.search_matches.len(),
+                );
+                return Ok(());
+            }
+            KeyCode::Char('N') => {
+                state.search_match_idx = crate::tui::search::navigate_prev(
+                    state.search_match_idx,
+                    state.search_matches.len(),
+                );
+                return Ok(());
+            }
+            _ => {}
+        }
+    }
     match key.code {
         KeyCode::Char(c) => {
             if key.modifiers.contains(KeyModifiers::CONTROL) {
+                // Ctrl+F is a no-op while in search mode (the
+                // input box is the search box; we don't want to
+                // toggle out of it).
+                if c == 'f' && !state.search_mode {
+                    state.search_mode = true;
+                    state.search_query.clear();
+                    state.search_matches.clear();
+                    state.search_match_idx = 0;
+                    return Ok(());
+                }
                 match c {
                     'c' => {
                         // Ctrl+C: cancel in-flight generation (if any),
@@ -260,6 +346,14 @@ pub async fn handle_input_key(
                         "/clear" => {
                             state.messages.clear();
                             state.thinking_buffer.clear();
+                            // A cleared conversation invalidates any
+                            // outstanding search matches — leave
+                            // search_mode and search_query alone
+                            // (so the user can re-type the same
+                            // query against fresh content) but
+                            // drop the cached positions.
+                            state.search_matches.clear();
+                            state.search_match_idx = 0;
                             return Ok(());
                         }
                         "/exit" | "/quit" => {
@@ -269,7 +363,8 @@ pub async fn handle_input_key(
                         "/help" | "/h" | "/?" => {
                             let mut help_text =
                                 "Built-in commands:\n  /clear    Clear conversation\n  /exit     Quit\n  /fork     Fork session: /fork list | <label> [count]\n  /resume   Resume a fork: /resume <fork-id>\n  /jobs     Background bash jobs: /jobs | <id> | clean\n  /status   Show model, cost, tokens, and context pressure (one-shot)\n  /compact  Compact conversation history: drop old tool results, condense old assistant turns. Destructive — see TUI for stats.
-  /undo     Undo the most recent edit_file or write_file. Restores the file from a pre-edit snapshot.\n\nBash passthrough:\n  !<command>  Run a shell command directly — no model round trip, no approval. Output is shown as a collapsible tool entry. 30-second timeout; for long jobs use `!<cmd> &` and check /jobs.\n\n@-mentions (inline file context):\n  @<path>          Inline the file's contents into the prompt (minified by default). The TUI shows a status row per mention.\n  @<path>:raw      Inline the file verbatim, no minification.\n  @<path>:A-B      Inline lines A–B (1-indexed, inclusive on both ends).\n  @<path>:A-B:raw  Range + verbatim, combined.\n  @~/...           Tilde expansion supported (e.g. @~/notes.md).\n  Multiple @<path> tokens in one input are all expanded. Each mention is capped at 50 KB (head + tail + marker) and respects the same path-safety rules as the model's read_file tool. Failures (missing, denied, I/O) are shown in the TUI as ✗ rows and as quoted placeholders in the prompt, so the model can react.\n\nKeybindings:\n  Ctrl+T   Toggle tool output collapse (default ON)\n  Enter    Expand/collapse the most recent tool output (when input is empty)\n  Tab      Same as Enter (alternative expand gesture)\n  Ctrl+C   Cancel generation + clear input\n  Ctrl+W   Delete word backward\n  Ctrl+U   Clear input line\n  Esc      Toggle thinking panel\n\nStatus bar:\n  The bottom bar shows session model, time, cumulative cost, and a colour-coded budget indicator. Green (< 50%) = comfortable, yellow (50–80%) = consider /compact, red (> 80%) = compact now. The same data is available on demand via /status.\n".to_string();
+  /undo     Undo the most recent edit_file or write_file. Restores the file from a pre-edit snapshot.
+  /sessions List saved sessions, prune old ones, or delete one by id.\n\nBash passthrough:\n  !<command>  Run a shell command directly — no model round trip, no approval. Output is shown as a collapsible tool entry. 30-second timeout; for long jobs use `!<cmd> &` and check /jobs.\n\n@-mentions (inline file context):\n  @<path>          Inline the file's contents into the prompt (minified by default). The TUI shows a status row per mention.\n  @<path>:raw      Inline the file verbatim, no minification.\n  @<path>:A-B      Inline lines A–B (1-indexed, inclusive on both ends).\n  @<path>:A-B:raw  Range + verbatim, combined.\n  @~/...           Tilde expansion supported (e.g. @~/notes.md).\n  Multiple @<path> tokens in one input are all expanded. Each mention is capped at 50 KB (head + tail + marker) and respects the same path-safety rules as the model's read_file tool. Failures (missing, denied, I/O) are shown in the TUI as ✗ rows and as quoted placeholders in the prompt, so the model can react.\n\nKeybindings:\n  Ctrl+T   Toggle tool output collapse (default ON)\n  Ctrl+F   Search the conversation (Enter to commit, n / Shift+N to cycle, Esc to cancel)\n  Enter    Expand/collapse the most recent tool output (when input is empty)\n  Tab      Same as Enter (alternative expand gesture)\n  Ctrl+C   Cancel generation + clear input\n  Ctrl+W   Delete word backward\n  Ctrl+U   Clear input line\n  Esc      Toggle thinking panel (or cancel search if Ctrl+F is active)\n\nStatus bar:\n  The bottom bar shows session model, time, cumulative cost, and a colour-coded budget indicator. Green (< 50%) = comfortable, yellow (50–80%) = consider /compact, red (> 80%) = compact now. The same data is available on demand via /status.\n".to_string();
                             let skills = state.skill_registry.all();
                             if !skills.is_empty() {
                                 help_text.push_str("\nSkills:\n");
@@ -369,6 +464,11 @@ pub async fn handle_input_key(
                         "/init" => {
                             let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
                             let msg = crate::tui::commands::handle_init_command(args, &cwd);
+                            state.messages.push(ConversationEntry::new("system", msg));
+                            return Ok(());
+                        }
+                        "/sessions" => {
+                            let msg = crate::tui::commands::handle_sessions_command(args, state);
                             state.messages.push(ConversationEntry::new("system", msg));
                             return Ok(());
                         }

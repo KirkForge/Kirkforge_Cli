@@ -1,7 +1,7 @@
 /// Input bar — user command input at the bottom of the screen.
 use ratatui::{
     layout::Rect,
-    style::{Color, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Paragraph},
     Frame,
@@ -11,8 +11,22 @@ use crate::tui::app::AppState;
 
 /// Render the input bar showing the current user input and cursor.
 pub fn render_input(f: &mut Frame, area: Rect, state: &AppState) {
+    // Search mode overrides the normal input — the input box
+    // becomes a search bar with a different border color and a
+    // live match counter.
+    if state.search_mode {
+        render_search_bar(f, area, state);
+        return;
+    }
+
     let block = Block::default()
-        .title(" Input ")
+        .title(if !state.search_matches.is_empty() {
+            let total = state.search_matches.len();
+            let cur = state.search_match_idx + 1;
+            format!(" Input  ({} / {} matches) ", cur, total)
+        } else {
+            " Input ".to_string()
+        })
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(Color::Green));
@@ -58,5 +72,59 @@ pub fn render_input(f: &mut Frame, area: Rect, state: &AppState) {
     };
 
     let paragraph = Paragraph::new(display_text).block(block);
+    f.render_widget(paragraph, area);
+}
+
+/// Render the input bar in search mode.
+///
+/// Yellow border, "Search:" prompt, the live query string, and a
+/// match counter. A trailing hint reminds the user how to commit /
+/// cancel.
+fn render_search_bar(f: &mut Frame, area: Rect, state: &AppState) {
+    let block = Block::default()
+        .title(" Search (Ctrl+F) ")
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        );
+
+    // Match counter is shown in the corner: " 3 / 12 " or " 0 / 0 ".
+    let (cur, total) = if state.search_matches.is_empty() {
+        (0, 0)
+    } else {
+        (state.search_match_idx + 1, state.search_matches.len())
+    };
+    let counter = format!(" {} / {} ", cur, total);
+
+    let mut spans = vec![
+        Span::styled(
+            " 🔍 ",
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            state.search_query.clone(),
+            Style::default().fg(Color::White),
+        ),
+        Span::styled(
+            "█",
+            Style::default().fg(Color::Yellow),
+        ),
+        Span::styled(
+            format!("  {}", counter),
+            Style::default().fg(Color::DarkGray),
+        ),
+    ];
+    // Hint at the trailing edge.
+    spans.push(Span::styled(
+        "  Enter=navigate  Esc=cancel ",
+        Style::default()
+            .fg(Color::DarkGray)
+            .add_modifier(Modifier::DIM),
+    ));
+
+    let paragraph = Paragraph::new(Line::from(spans)).block(block);
     f.render_widget(paragraph, area);
 }

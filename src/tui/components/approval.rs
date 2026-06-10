@@ -54,19 +54,70 @@ pub fn render_approval_dialog(
     //   [3] instructions                       (1 line)
     let args_window_height = inner.height.saturating_sub(4) as usize;
 
-    // Pure helper: build the full flat line list of the args preview.
-    let all_lines = format_args_preview(approval, dialog_width as usize);
+    // Build the full flat line list of the preview. For
+    // `edit_file` / `write_file` approvals we append a unified
+    // diff after the JSON args — see Review.md gap #8. The diff is
+    // color-coded per line (green for `+`, red for `-`); the args
+    // lines are plain white. We pack both into a single
+    // `Vec<Line>` so the existing scroll/clamp code works
+    // unchanged.
+    let args_lines = format_args_preview(approval, dialog_width as usize);
+    let mut visible_lines: Vec<Line> = args_lines
+        .iter()
+        .map(|s| Line::from(Span::styled(s.as_str(), Style::default().fg(Color::White))))
+        .collect();
+
+    // Try to add a diff section. The reader callback resolves the
+    // file path to its current bytes; we only attach a diff if the
+    // tool is `edit_file` / `write_file` (other tools return
+    // `Vec::new()` from the formatter).
+    let reader = |p: &str| std::fs::read_to_string(p).ok();
+    let diff_lines =
+        crate::tui::components::diff_preview::format_edit_diff_preview(
+            approval,
+            dialog_width as usize,
+            &reader,
+        );
+    if !diff_lines.is_empty() {
+        // Separator between args and diff.
+        visible_lines.push(Line::from(Span::styled(
+            " ── Diff preview ──",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )));
+        for dl in &diff_lines {
+            let color = if dl.starts_with("+ ") && !dl.starts_with("+++") {
+                Color::Green
+            } else if dl.starts_with("- ") && !dl.starts_with("---") {
+                Color::Red
+            } else if dl.starts_with("+++") {
+                Color::Green
+            } else if dl.starts_with("---") {
+                Color::Red
+            } else {
+                Color::White
+            };
+            visible_lines.push(Line::from(Span::styled(dl.as_str(), Style::default().fg(color))));
+        }
+    }
+    let all_lines: Vec<String> = visible_lines.iter().map(|l| {
+        // Flatten back to a string for the max_scroll / overflow
+        // computation. The visible rendering happens below using
+        // the styled `Line`s directly.
+        l.spans.iter().map(|s| s.content.as_ref()).collect()
+    }).collect();
 
     // Clamp scroll and compute visible window + overflow indicator.
     let max_scroll = all_lines.len().saturating_sub(args_window_height.max(1));
     state.approval_max_scroll = max_scroll;
     let scroll = state.approval_scroll.min(max_scroll);
 
-    let visible: Vec<Line> = all_lines
+    let visible: Vec<Line> = visible_lines
         .iter()
         .skip(scroll)
         .take(args_window_height.max(1))
-        .map(|s| Line::from(Span::styled(s.as_str(), Style::default().fg(Color::White))))
+        .cloned()
         .collect();
 
     // Show a small "N more above / N more below" indicator only when

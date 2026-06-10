@@ -27,6 +27,7 @@ pub mod components;
 pub mod events;
 pub mod keys;
 pub mod rendering;
+pub mod search;
 pub mod widgets;
 
 use crate::session::carryover::CarryoverProfile;

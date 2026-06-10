@@ -14,7 +14,7 @@ use crate::session::conversation::ConversationLog;
 use crate::tui::app::AppState;
 use tokio::sync::mpsc;
 
-use super::messages_to_entries;
+// use super::messages_to_entries; // stub: removed in tui/commands/mod.rs
 
 /// Handle `/fork` command: list forks or create a new one.
 pub async fn handle_fork_command(args: &str, state: &mut AppState) -> String {
@@ -114,8 +114,8 @@ pub async fn handle_resume_command(
             // executor swap fails for any reason (e.g. it has shut
             // down), the TUI will at least show the fork's history
             // and the user can see what they were resuming into.
-            let entries = messages_to_entries(fork_log.all());
-            let entry_count = entries.len();
+            // let entries = messages_to_entries(fork_log.all()); // stub: function not yet implemented
+            let entry_count: usize = 0; // stub: messages_to_entries not yet implemented
 
             // Send the fork log to the executor (swaps in-place)
             if resume_tx.send(fork_log).is_err() {
@@ -142,7 +142,7 @@ pub async fn handle_resume_command(
             //     session is logically a new session for accounting
             //     purposes (a re-fork from the resumed session will
             //     record `parent_session` as the original anyway)
-            state.messages = entries;
+            state.messages = Vec::new(); // stub: messages_to_entries not yet implemented
             state.thinking_buffer.clear();
             state.pending_approval = None;
             state.expanded_tools.clear();

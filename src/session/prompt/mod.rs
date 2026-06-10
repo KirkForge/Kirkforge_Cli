@@ -12,6 +12,15 @@ use std::path::PathBuf;
 pub struct PromptBuilder {
     template: String,
     cache: HashMap<String, String>, // keyed by model name
+    /// When `Some`, replaces the base template entirely. Set from the
+    /// `--system` CLI flag (or future config knob). `None` means "use
+    /// `prompts/system.hbs`" — the historical behavior.
+    ///
+    /// This was the source of GPT 5.5's review finding #2 ("--system is
+    /// accepted but ignored"). The flag used to be parsed, logged, and
+    /// dropped on the floor; this field is where the value actually
+    /// lives now.
+    system_override: Option<String>,
 }
 
 impl PromptBuilder {
@@ -20,7 +29,22 @@ impl PromptBuilder {
         Self {
             template: template.to_string(),
             cache: HashMap::new(),
+            system_override: None,
         }
+    }
+
+    /// Install a full system-prompt override. The next `build()` call
+    /// will return a single system message with this content instead
+    /// of rendering the base template. Pass `None` (or call
+    /// `clear_system_override`) to revert to the template.
+    ///
+    /// This is a **full** override, not an append: if the operator
+    /// wants the base safety scaffolding, they need to embed it in
+    /// their override. The trade-off is predictability — the operator
+    /// sees exactly the prompt they're running with, no hidden
+    /// behavior.
+    pub fn set_system_override(&mut self, override_prompt: Option<String>) {
+        self.system_override = override_prompt;
     }
 
     pub fn build(
@@ -30,20 +54,30 @@ impl PromptBuilder {
         tool_names: &[&str],
         carryover_block: Option<&str>,
     ) -> Message {
-        let reg = handlebars::Handlebars::new();
+        // Full override: the operator passed --system "..." or set
+        // `system_override` directly. We still append the carryover
+        // block and the memory block so context the operator didn't
+        // know about isn't silently dropped — but the base template
+        // (which carries the safety scaffolding) is replaced. Operators
+        // who want the base template need to embed it in their
+        // override.
+        let mut content = if let Some(ref ovr) = self.system_override {
+            ovr.clone()
+        } else {
+            let reg = handlebars::Handlebars::new();
 
-        let mut data = serde_json::json!({
-            "model_name": model_name,
-            "tools": tool_names.iter().map(|n| serde_json::json!({"name": n})).collect::<Vec<_>>(),
-        });
+            let mut data = serde_json::json!({
+                "model_name": model_name,
+                "tools": tool_names.iter().map(|n| serde_json::json!({"name": n})).collect::<Vec<_>>(),
+            });
 
-        if model_supports_thinking {
-            data["thinking_available"] = serde_json::Value::Bool(true);
-        }
+            if model_supports_thinking {
+                data["thinking_available"] = serde_json::Value::Bool(true);
+            }
 
-        let mut content = reg
-            .render_template(&self.template, &data)
-            .unwrap_or_else(|_| "You are a coding agent.".to_string());
+            reg.render_template(&self.template, &data)
+                .unwrap_or_else(|_| "You are a coding agent.".to_string())
+        };
 
         if let Some(block) = carryover_block {
             if !block.is_empty() {

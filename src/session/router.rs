@@ -43,21 +43,12 @@ impl std::fmt::Display for ComplexityTier {
 }
 
 /// Configuration for the task router.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RouterConfig {
     /// Whether model routing is enabled.
     pub enabled: bool,
     /// Model for LLM-based routing (fast/cheap). Empty = use local heuristics.
     pub router_model: String,
-}
-
-impl Default for RouterConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            router_model: String::new(),
-        }
-    }
 }
 
 /// The result of classifying a user message.

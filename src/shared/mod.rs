@@ -126,6 +126,16 @@ pub struct Config {
     #[serde(default)]
     pub block_binary_reads: bool,
 
+    /// When `true` (the default), the bash tool runs with its working
+    /// directory forced inside `sandbox_dir`. An explicit `workdir` arg
+    /// that points outside the sandbox is rejected; a missing workdir
+    /// defaults to the sandbox. Set to `false` to allow the bash
+    /// subprocess to run anywhere on the filesystem (the old
+    /// behavior). This is the bash-policy half of GPT 5.5's review
+    /// finding #4.
+    #[serde(default = "default_bash_sandbox_workdir")]
+    pub bash_sandbox_workdir: bool,
+
     #[serde(default = "default_carryover_enabled")]
     pub carryover_enabled: bool,
 
@@ -164,6 +174,19 @@ pub struct Config {
     /// available alongside built-in tools (prefixed with `mcp/<server>/`).
     #[serde(default)]
     pub mcp_servers: Vec<McpServerConfig>,
+
+    /// When `true`, the `!` bash passthrough routes through the same
+    /// approval gate that the bash tool uses. The escape-hatch UX is
+    /// preserved (still no model round trip), but the user must
+    /// confirm the command. Default `false` — the passthrough is
+    /// deliberately friction-free for fast feedback loops. Set to
+    /// `true` for high-stakes environments where you want explicit
+    /// confirmation even for user-typed commands.
+    ///
+    /// This is the "configurable `!` passthrough" half of GPT 5.5's
+    /// review finding #4.
+    #[serde(default)]
+    pub bang_requires_approval: bool,
 }
 
 /// Configuration for a single MCP server connection.
@@ -189,12 +212,29 @@ fn default_carryover_enabled() -> bool {
     true
 }
 
+fn default_bash_sandbox_workdir() -> bool {
+    true
+}
+
 fn default_max_file_read_size() -> usize {
     1024 * 1024
 }
 
 impl Default for Config {
     fn default() -> Self {
+        // SAFETY: PathGuard defaults to the current working directory so that
+        // model-driven writes are contained by default. Operators who want
+        // unrestricted access must explicitly opt out by setting
+        // `sandbox_dir = ""` in the config file, or by exporting
+        // `KIRKFORGE_SANDBOX_DIR=""` (both are checked in
+        // `access_from_config` and resolve to `sandbox_dir = None`).
+        // A bare `std::env::current_dir()` failure (e.g. cwd deleted) falls
+        // through to `None` and surfaces the existing `warn_if_unsandboxed`
+        // banner, which is a louder signal than silent fail-open.
+        let sandbox_dir = std::env::current_dir()
+            .ok()
+            .map(|p| p.to_string_lossy().to_string());
+
         Self {
             default_model: "deepseek-v4-flash:cloud".into(),
             ollama_host: "http://localhost:11434".into(),
@@ -206,11 +246,12 @@ impl Default for Config {
             deny_urls: vec![],
             deny_extensions: vec![],
             allowed_write_dirs: vec![],
-            sandbox_dir: None,
+            sandbox_dir,
             block_dotfiles: false,
             max_file_read_size: 1024 * 1024,
             follow_symlinks: false,
             block_binary_reads: false,
+            bash_sandbox_workdir: true,
             carryover_enabled: true,
             summarize_model: "qwen2.5:3b".into(),
             summarize_enabled: false,
@@ -218,6 +259,7 @@ impl Default for Config {
             router_model: String::new(),
             routing_model_map: HashMap::new(),
             mcp_servers: vec![],
+            bang_requires_approval: false,
         }
     }
 }

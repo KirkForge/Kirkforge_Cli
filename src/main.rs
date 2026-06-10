@@ -170,14 +170,16 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     }
 
     if let Some(sys) = &system {
-
+        // Wired into the executor's PromptBuilder before the first turn
+        // (see tui::run_tui and run_non_interactive). Kept as an info
+        // log so operators can confirm the override took effect.
         tracing::info!("System prompt set from CLI: {}", sys);
     }
 
     if non_interactive {
         run_non_interactive(config, adapter, tools, conversation, system, output).await
     } else {
-        tui::run_tui(config, adapter, tools, conversation).await
+        tui::run_tui(config, adapter, tools, conversation, system).await
     }
 }
 
@@ -240,6 +242,9 @@ async fn run_non_interactive(
 
     let mut executor =
         session::executor::Executor::with_log(adapter, tools, config.clone(), conversation, None);
+    // Apply --system override before run_turn. Without this the
+    // override is silently dropped (was GPT 5.5 review finding #2).
+    executor.set_system_override(system.clone());
 
     let (approval_tx, mut approval_rx) =
         mpsc::unbounded_channel::<session::executor::ApprovalRequest>();
@@ -262,8 +267,7 @@ async fn run_non_interactive(
     });
 
     if let Some(sys) = &system {
-
-        let _ = sys;
+        tracing::info!("System prompt set from CLI: {}", sys);
     }
 
     let cancelled = std::sync::atomic::AtomicBool::new(false);

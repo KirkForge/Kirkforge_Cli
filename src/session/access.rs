@@ -748,20 +748,46 @@ mod tests {
         assert!(!empty_allowlist.is_sandboxed());
     }
 
-    /// **Contract:** `access_from_config` produces a guard whose
-    /// sandboxedness matches the config. With no `sandbox_dir` and no
-    /// `allowed_write_dirs` in the config, the resulting guard is
-    /// unsandboxed (and `warn_if_unsandboxed` would fire on it).
+    /// **Contract:** `Config::default()` now sandboxes to the current
+    /// working directory. Operators who want unsandboxed operation must
+    /// explicitly opt out via `sandbox_dir = ""` in the config file (or
+    /// `KIRKFORGE_SANDBOX_DIR=""` env var); `access_from_config` treats
+    /// the empty string as `None`. This replaces the prior fail-open
+    /// default, which was the source of GPT 5.5's review finding #5
+    /// ("Default mode is fail-open for writes").
     #[test]
     fn test_access_from_config_propagates_sandboxedness() {
-        // A bare `Config::default()` has no sandbox_dir and no
-        // allowed_write_dirs. The resulting guard should be unsandboxed.
+        // Default: sandboxed to cwd.
         let config = crate::shared::Config::default();
         let (_deny, guard, _gate) = access_from_config(&config);
         assert!(
-            !guard.is_sandboxed(),
-            "Config::default() has no sandbox_dir or allowed_write_dirs, so \
-             access_from_config must produce an unsandboxed guard"
+            guard.is_sandboxed(),
+            "Config::default() must sandbox to cwd; an unsandboxed default \
+             was the source of the v1.2 fail-open writing bug"
+        );
+
+        // Explicit escape hatch: empty string in config = unsandboxed.
+        let config_unsandboxed = crate::shared::Config {
+            sandbox_dir: Some(String::new()),
+            ..config.clone()
+        };
+        let (_deny, guard_unsandboxed, _gate) = access_from_config(&config_unsandboxed);
+        assert!(
+            !guard_unsandboxed.is_sandboxed(),
+            "Setting sandbox_dir = Some(\"\") in config is the explicit \
+             escape hatch; access_from_config must treat it as no-sandbox"
+        );
+
+        // `None` (e.g. resolved from `KIRKFORGE_SANDBOX_DIR=""`) is also
+        // the escape hatch — same path, different spelling.
+        let config_none = crate::shared::Config {
+            sandbox_dir: None,
+            ..config
+        };
+        let (_deny, guard_none, _gate) = access_from_config(&config_none);
+        assert!(
+            !guard_none.is_sandboxed(),
+            "sandbox_dir = None must also produce an unsandboxed guard"
         );
     }
 }

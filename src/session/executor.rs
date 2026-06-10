@@ -402,6 +402,14 @@ impl Executor {
         self.conversation = new_log;
     }
 
+    /// Install a full system-prompt override (e.g. from `--system`).
+    /// Pass `None` to revert to the base template. See
+    /// `PromptBuilder::set_system_override` for the trade-off (full
+    /// override, not append).
+    pub fn set_system_override(&mut self, override_prompt: Option<String>) {
+        self.prompt_builder.set_system_override(override_prompt);
+    }
+
     /// Run a lifecycle hook (fire-and-forget). Wraps HookRunner::run with
     /// common env vars derived from current session state.
     fn run_hook(&self, event: &str, tool_name: Option<&str>, args_json: Option<&str>) {
@@ -466,6 +474,36 @@ impl Executor {
         approval_sender: &mpsc::UnboundedSender<ApprovalRequest>,
         cancelled: &AtomicBool,
     ) -> anyhow::Result<Vec<TurnEvent>> {
+        // Post-turn hook contract: fires exactly once on every exit
+        // path (success, error, cancel, max-iterations, parse-error
+        // second retry). Implemented by splitting the body into a
+        // private `run_turn_inner` and firing the hook here in the
+        // outer wrapper, after the inner returns. A drop-guard
+        // approach would have to hold `&Executor` for the lifetime of
+        // the inner, which conflicts with the `&mut self` borrows
+        // inside the inner body. The inner/outer split avoids the
+        // borrow conflict while still hitting every exit path: any
+        // `?` or `return` inside `run_turn_inner` produces a value
+        // that's returned to us here, and we fire the hook before
+        // propagating.
+        //
+        // This is the fix for GPT 5.5 review finding #6 ("post-turn
+        // hook likely never runs"): the previous code put the hook at
+        // the bottom of `run_turn`, but `IterationOutcome::Finished
+        // => return Ok(events)` returns before reaching that line.
+        let result = self
+            .run_turn_inner(user_input, approval_sender, cancelled)
+            .await;
+        self.run_hook("post-turn", None, None);
+        result
+    }
+
+    async fn run_turn_inner(
+        &mut self,
+        user_input: &str,
+        approval_sender: &mpsc::UnboundedSender<ApprovalRequest>,
+        cancelled: &AtomicBool,
+    ) -> anyhow::Result<Vec<TurnEvent>> {
         let mut events = Vec::new();
 
         // --- adapter hot-swap via smart routing ---
@@ -513,8 +551,8 @@ impl Executor {
 
             match outcome {
                 IterationOutcome::Finished => return Ok(events),
-                IterationOutcome::ToolCalls(tcs) => {
-                    for tc in &tcs {
+                IterationOutcome::ToolCalls(mut tcs) => {
+                    for tc in &mut tcs {
                         self.dispatch_tool_call(tc, approval_sender, &mut events)
                             .await?;
                     }
@@ -548,9 +586,10 @@ impl Executor {
             }
         }
 
-        // Post-turn hook (fire-and-forget)
-        self.run_hook("post-turn", None, None);
-
+        // Post-turn hook fires from the public `run_turn` wrapper
+        // after this inner function returns. Do NOT add an explicit
+        // `self.run_hook("post-turn", ...)` here — that double-fires
+        // the hook on the natural completion path.
         Ok(events)
     }
 
@@ -710,7 +749,7 @@ impl Executor {
 
     async fn dispatch_tool_call(
         &mut self,
-        tc: &ToolInvocation,
+        tc: &mut ToolInvocation,
         approval_sender: &mpsc::UnboundedSender<ApprovalRequest>,
         events: &mut Vec<TurnEvent>,
     ) -> anyhow::Result<()> {
@@ -918,7 +957,66 @@ impl Executor {
         }
 
         if tc.name == "bash" {
-            if let Some(denied) = check_bash_command(&tc.arguments) {
+            // Pre-process: if `bash_sandbox_workdir` is enabled, force
+            // the workdir to the sandbox when the model didn't pass one.
+            // We mutate `tc.arguments` in place so the actual `tool.run`
+            // call (and the pre/post tool hooks) see the override. The
+            // check function below rejects an explicit workdir that
+            // points outside the sandbox.
+            if self.config.bash_sandbox_workdir
+                && self.path_guard.sandbox_dir.is_some()
+                && tc
+                    .arguments
+                    .get("workdir")
+                    .and_then(|w| w.as_str())
+                    .map(|s| s.is_empty())
+                    .unwrap_or(true)
+            {
+                if let Some(obj) = tc.arguments.as_object_mut() {
+                    if let Some(ref sandbox) = self.path_guard.sandbox_dir {
+                        obj.insert(
+                            "workdir".into(),
+                            serde_json::Value::String(sandbox.to_string_lossy().to_string()),
+                        );
+                    }
+                }
+            }
+
+            if let Some(denied) = check_bash_command(
+                &tc.arguments,
+                &self.deny_list,
+                &self.path_guard,
+                self.config.bash_sandbox_workdir,
+            ) {
+                events.push(TurnEvent::ToolResult {
+                    name: tc.name.clone(),
+                    output: denied.clone(),
+                });
+                self.conversation.append(Message {
+                    role: Role::Tool,
+                    content: denied,
+                    tool_call_id: Some(tc.id.clone()),
+                    tool_name: Some(tc.name.clone()),
+                    ..Default::default()
+                })?;
+                return Ok(());
+            }
+        }
+
+        // grep/glob: apply the same PathGuard containment that
+        // read_file/write_file/edit_file get. Without this, the model
+        // could enumerate or search outside the sandbox via grep/glob
+        // even when file reads/writes are guarded. See `check_search_path`
+        // for why we use a separate check rather than `check_read`.
+        if matches!(tc.name.as_str(), "grep" | "glob") {
+            let path_str = tc
+                .arguments
+                .get("path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let path = std::path::Path::new(path_str);
+            if let GuardVerdict::Denied(msg) = check_search_path(&self.path_guard, path) {
+                let denied = format!("🔒 Access denied: {msg}");
                 events.push(TurnEvent::ToolResult {
                     name: tc.name.clone(),
                     output: denied.clone(),
@@ -1225,9 +1323,44 @@ fn word_boundary_match(cmd: &str, pattern: &str) -> bool {
     false
 }
 
-fn check_bash_command(args: &serde_json::Value) -> Option<String> {
+fn check_bash_command(
+    args: &serde_json::Value,
+    deny_list: &DenyList,
+    path_guard: &PathGuard,
+    bash_sandbox_workdir: bool,
+) -> Option<String> {
     let cmd = args.get("command").and_then(|c| c.as_str())?;
 
+    // 1. Sandboxed workdir policy. If enabled, the bash subprocess is
+    //    confined to the sandbox — either by overriding the workdir
+    //    arg (when missing) or by rejecting an explicit workdir that
+    //    points outside the sandbox. This is the bash-policy half of
+    //    GPT 5.5's review finding #4 ("bash can run in arbitrary
+    //    workdir").
+    if bash_sandbox_workdir {
+        if let Some(workdir) = args.get("workdir").and_then(|w| w.as_str()) {
+            if !workdir.is_empty() {
+                let workdir_path = std::path::Path::new(workdir);
+                let resolved = workdir_path
+                    .canonicalize()
+                    .unwrap_or_else(|_| workdir_path.to_path_buf());
+                if let Some(ref sandbox) = path_guard.sandbox_dir {
+                    let sb = sandbox.canonicalize().unwrap_or_else(|_| sandbox.clone());
+                    if !resolved.starts_with(&sb) {
+                        return Some(format!(
+                            "🔒 Bash workdir outside sandbox: {} (sandbox: {})",
+                            workdir,
+                            sandbox.display()
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. Hard-coded metadata endpoint blocks. These are the well-known
+    //    cloud metadata IPs/hostnames that the model must never reach
+    //    regardless of user config.
     if cmd.contains("169.254.169.254")
         || cmd.contains("metadata.google")
         || cmd.contains("metadata.aws")
@@ -1235,6 +1368,22 @@ fn check_bash_command(args: &serde_json::Value) -> Option<String> {
         return Some("🔒 Command blocked: contains reference to metadata endpoints".into());
     }
 
+    // 3. User-configured URL deny list. Scans the command string for
+    //    any of the blocked URL prefixes. Naive substring match is
+    //    fine for prefixes (`http://169.254.169.254`,
+    //    `http://metadata.google.internal`) because they're meant to
+    //    be hard prefixes.
+    for url_prefix in &deny_list.url_patterns {
+        if !url_prefix.is_empty() && cmd.contains(url_prefix) {
+            return Some(format!(
+                "🔒 Command blocked: references denied URL '{}'",
+                url_prefix
+            ));
+        }
+    }
+
+    // 4. Built-in dangerous shell patterns (rm -rf /, etc.) and
+    //    hard-coded system path deny list.
     for pattern in DANGEROUS_SHELL_COMMANDS {
         let needs_word_boundary = pattern.ends_with('/') || pattern.ends_with(' ');
         let matches = if needs_word_boundary {
@@ -1261,6 +1410,20 @@ fn check_bash_command(args: &serde_json::Value) -> Option<String> {
             return Some(format!(
                 "🔒 Command blocked: references denied path '{}'",
                 pat
+            ));
+        }
+    }
+
+    // 5. User-configured path deny list. Scans the command string for
+    //    any of the blocked glob patterns. Glob matchers from
+    //    `DenyList::is_path_denied` work on `Path` arguments, so we
+    //    tokenize the command into whitespace-separated tokens and
+    //    check each one as a path. This catches `rm **/.ssh/**` etc.
+    for token in cmd.split_whitespace() {
+        if deny_list.is_path_denied(std::path::Path::new(token)) {
+            return Some(format!(
+                "🔒 Command blocked: references denied path '{}'",
+                token
             ));
         }
     }
@@ -1316,6 +1479,66 @@ fn extract_bash_metrics(outcome: &ToolOutcome) -> (Option<i32>, Option<usize>, O
         }
         _ => (None, None, None),
     }
+}
+
+/// PathGuard-style check for grep/glob search paths.
+///
+/// `PathGuard::check_read` requires the path to exist, but grep/glob
+/// arguments are often glob patterns (`src/**/*.rs`) or directories
+/// that may not exist yet. This helper does the deny-list and sandbox
+/// containment checks without requiring existence, falling back to
+/// the longest existing ancestor for containment.
+///
+/// This was the source of GPT 5.5's review finding #3 ("PathGuard
+/// applied to grep/glob") — without this, a model could enumerate
+/// files outside the sandbox via grep/glob even though
+/// read/write/edit were guarded.
+fn check_search_path(path_guard: &PathGuard, path: &std::path::Path) -> GuardVerdict {
+    // 1. Deny list — same as check_read.
+    if path_guard.deny_list.is_path_denied(path) {
+        return GuardVerdict::Denied(format!(
+            "Path denied by deny list: {}",
+            path.display()
+        ));
+    }
+
+    // 2. Resolve to the longest existing ancestor so glob patterns
+    //    still get a containment check. If nothing in the path exists
+    //    (e.g. the model is searching a freshly-deleted directory),
+    //    fall back to the literal path; the sandbox check below will
+    //    deny it because we can't prove containment.
+    let check = if path.exists() {
+        path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+    } else {
+        let mut cur = path.to_path_buf();
+        while !cur.exists() {
+            if !cur.pop() {
+                break;
+            }
+        }
+        cur.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+    };
+
+    // 3. Sandbox containment on the resolved ancestor.
+    if let Some(ref sandbox) = path_guard.sandbox_dir {
+        let sb = match sandbox.canonicalize() {
+            Ok(s) => s,
+            Err(e) => {
+                return GuardVerdict::Denied(format!(
+                    "Cannot resolve sandbox dir '{}': {e}",
+                    sandbox.display()
+                ));
+            }
+        };
+        if !check.starts_with(&sb) {
+            return GuardVerdict::Denied(format!(
+                "Search path outside sandbox: {}",
+                path.display()
+            ));
+        }
+    }
+
+    GuardVerdict::Allowed(path.to_path_buf())
 }
 
 fn check_deny_list(
@@ -1573,6 +1796,7 @@ mod tests {
             max_file_read_size: 1024 * 1024,
             follow_symlinks: false,
             block_binary_reads: false,
+            bash_sandbox_workdir: false,
             carryover_enabled: false,
             permission_rules: vec![],
             summarize_model: String::new(),
@@ -1581,6 +1805,7 @@ mod tests {
             router_model: String::new(),
             routing_model_map: std::collections::HashMap::new(),
             mcp_servers: vec![],
+            bang_requires_approval: false,
         }
     }
 
@@ -2414,7 +2639,12 @@ mod tests {
     #[test]
     fn test_check_bash_command_blocks_dangerous_exact() {
         let args = serde_json::json!({"command": "rm -rf /"});
-        let result = check_bash_command(&args);
+        let result = check_bash_command(
+            &args,
+            &DenyList::default(),
+            &PathGuard::default(),
+            false,
+        );
         assert!(result.is_some(), "rm -rf / should be blocked");
     }
 
@@ -2422,7 +2652,12 @@ mod tests {
     fn test_check_bash_command_allows_safe_similar() {
 
         let args = serde_json::json!({"command": "rm -rf /home/user/temp"});
-        let result = check_bash_command(&args);
+        let result = check_bash_command(
+            &args,
+            &DenyList::default(),
+            &PathGuard::default(),
+            false,
+        );
         assert!(
             result.is_none(),
             "rm -rf /home/user/temp should be allowed, got: {:?}",
@@ -2434,21 +2669,36 @@ mod tests {
     fn test_check_bash_command_blocks_dd_by_substring() {
 
         let args = serde_json::json!({"command": "dd if=/dev/zero of=/tmp/out bs=1M count=1"});
-        let result = check_bash_command(&args);
+        let result = check_bash_command(
+            &args,
+            &DenyList::default(),
+            &PathGuard::default(),
+            false,
+        );
         assert!(result.is_some(), "dd if=/dev/zero should be blocked");
     }
 
     #[test]
     fn test_check_bash_command_blocks_fork_bomb() {
         let args = serde_json::json!({"command": ":(){ :|:& };:"});
-        let result = check_bash_command(&args);
+        let result = check_bash_command(
+            &args,
+            &DenyList::default(),
+            &PathGuard::default(),
+            false,
+        );
         assert!(result.is_some(), "Fork bomb should be blocked");
     }
 
     #[test]
     fn test_check_bash_command_allows_legitimate_curl() {
         let args = serde_json::json!({"command": "curl -s https://api.example.com/data"});
-        let result = check_bash_command(&args);
+        let result = check_bash_command(
+            &args,
+            &DenyList::default(),
+            &PathGuard::default(),
+            false,
+        );
         assert!(
             result.is_none(),
             "curl should not be blocked by check_bash_command"

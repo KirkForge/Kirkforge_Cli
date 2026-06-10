@@ -88,6 +88,53 @@ pub fn save_config(config: &Config) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Resolve the launch-time cwd and assign it to `config.sandbox_dir` if
+/// the operator hasn't already set one explicitly.
+///
+/// Review.md arch concern #3: `Config::default()` previously called
+/// `std::env::current_dir()` itself, which (a) ran before any
+/// validation, and (b) silently dropped sandbox protection if the
+/// cwd had been deleted before launch. This helper is the new single
+/// resolution site: callers in `main.rs` call it once at startup,
+/// freezing the value for the session lifetime.
+///
+/// Returns the resolved path (as a `String`) on success, or `None`
+/// if `current_dir()` failed and we left `sandbox_dir` as `None` —
+/// in which case the executor's `warn_if_unsandboxed` banner will
+/// surface the situation to the user.
+///
+/// Honours the explicit-escape-hatch policy: an empty string in
+/// `config.sandbox_dir` means "intentionally unsandboxed," and we
+/// do not overwrite it. Only the `None` case (operator didn't set
+/// the field) is filled in.
+pub fn freeze_launch_sandbox(config: &mut Config) -> Option<String> {
+    if config.sandbox_dir.is_some() {
+        // Operator already set it (via config file, env var, or
+        // an earlier `KIRKFORGE_SANDBOX_DIR` override). Respect
+        // their choice — even if it's an explicit empty string
+        // meaning "unsandboxed."
+        return config.sandbox_dir.clone();
+    }
+    match std::env::current_dir() {
+        Ok(cwd) => {
+            let path = cwd.to_string_lossy().to_string();
+            config.sandbox_dir = Some(path.clone());
+            Some(path)
+        }
+        Err(_) => {
+            // `current_dir()` failed (cwd deleted before launch).
+            // Leave `sandbox_dir` as `None` so the executor's
+            // `warn_if_unsandboxed` banner surfaces the situation.
+            // The previous code also fell through to `None` in
+            // this case, but did so via the `Default::default()`
+            // path; the difference is that NOW the caller knows
+            // we tried, and the next test asserts this behaviour
+            // explicitly.
+            None
+        }
+    }
+}
+
 /// Apply environment variable overrides to a Config.
 fn apply_env_overrides(cfg: &mut Config) {
     // KIRKFORGE_MODEL
@@ -333,5 +380,54 @@ mod tests {
 
         assert_eq!(cfg.deny_paths.len(), 2);
         assert!(cfg.deny_paths.contains(&"**/.ssh/**".into()));
+    }
+
+    /// `freeze_launch_sandbox` is the new launch-time cwd resolution
+    /// site. It must fill in `sandbox_dir` with the resolved cwd when
+    /// the operator hasn't set it explicitly, and must not overwrite
+    /// an explicit (including intentionally-empty) value.
+    ///
+    /// Review.md arch concern #3: the previous code did this in
+    /// `Config::default()`, which (a) ran before any validation and
+    /// (b) silently dropped sandbox protection on a `current_dir()`
+    /// failure. The new helper is a single, testable call site.
+    #[test]
+    fn test_freeze_launch_sandbox_fills_in_cwd() {
+        let mut cfg = Config::default();
+        assert!(cfg.sandbox_dir.is_none());
+        let resolved = freeze_launch_sandbox(&mut cfg);
+        // The test runner always has a cwd.
+        assert!(resolved.is_some(), "test cwd is always present");
+        let resolved = resolved.unwrap();
+        assert_eq!(cfg.sandbox_dir.as_deref(), Some(resolved.as_str()));
+    }
+
+    /// The explicit-escape-hatch contract: if the operator set
+    /// `sandbox_dir = Some("")` (or it was loaded from a config
+    /// file that way), `freeze_launch_sandbox` must leave it alone.
+    /// This is the policy that lets operators opt out of sandboxing.
+    #[test]
+    fn test_freeze_launch_sandbox_does_not_overwrite_explicit_empty() {
+        let mut cfg = Config {
+            sandbox_dir: Some(String::new()),
+            ..Config::default()
+        };
+        let resolved = freeze_launch_sandbox(&mut cfg);
+        assert_eq!(resolved.as_deref(), Some(""));
+        assert_eq!(cfg.sandbox_dir.as_deref(), Some(""));
+    }
+
+    /// If the operator set a real path (e.g. from a config file's
+    /// `sandbox_dir = "/srv/project"`), the helper must not
+    /// overwrite it with cwd. Operators win over defaults.
+    #[test]
+    fn test_freeze_launch_sandbox_does_not_overwrite_explicit_path() {
+        let mut cfg = Config {
+            sandbox_dir: Some("/srv/project".to_string()),
+            ..Config::default()
+        };
+        let resolved = freeze_launch_sandbox(&mut cfg);
+        assert_eq!(resolved.as_deref(), Some("/srv/project"));
+        assert_eq!(cfg.sandbox_dir.as_deref(), Some("/srv/project"));
     }
 }

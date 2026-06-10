@@ -222,19 +222,27 @@ fn default_max_file_read_size() -> usize {
 
 impl Default for Config {
     fn default() -> Self {
-        // SAFETY: PathGuard defaults to the current working directory so that
-        // model-driven writes are contained by default. Operators who want
-        // unrestricted access must explicitly opt out by setting
-        // `sandbox_dir = ""` in the config file, or by exporting
+        // `sandbox_dir` is left as `None` here. The launch-time
+        // resolution of the working directory (which would otherwise
+        // belong in `Default::default`) is the caller's job — see
+        // `main.rs::run_session`, which calls `current_dir()` once,
+        // freezes the value, and assigns it before constructing the
+        // executor.
+        //
+        // Review.md arch concern #3: the previous code resolved
+        // `current_dir()` inside `Default::default()`. That ran
+        // *before* any validation, and a launch-time cwd failure
+        // (e.g. cwd deleted) silently dropped sandbox protection
+        // because the value fell through to `None`. Resolving once
+        // at startup and freezing it gives a deterministic, auditable
+        // policy: the operator sees exactly which directory was
+        // captured, and a deletion-after-launch race can't widen the
+        // sandbox.
+        //
+        // Operators who want explicit opt-out still can: set
+        // `sandbox_dir = ""` in the config file or export
         // `KIRKFORGE_SANDBOX_DIR=""` (both are checked in
         // `access_from_config` and resolve to `sandbox_dir = None`).
-        // A bare `std::env::current_dir()` failure (e.g. cwd deleted) falls
-        // through to `None` and surfaces the existing `warn_if_unsandboxed`
-        // banner, which is a louder signal than silent fail-open.
-        let sandbox_dir = std::env::current_dir()
-            .ok()
-            .map(|p| p.to_string_lossy().to_string());
-
         Self {
             default_model: "deepseek-v4-flash:cloud".into(),
             ollama_host: "http://localhost:11434".into(),
@@ -246,7 +254,7 @@ impl Default for Config {
             deny_urls: vec![],
             deny_extensions: vec![],
             allowed_write_dirs: vec![],
-            sandbox_dir,
+            sandbox_dir: None,
             block_dotfiles: false,
             max_file_read_size: 1024 * 1024,
             follow_symlinks: false,

@@ -138,6 +138,14 @@ pub struct AppState {
     /// Initialised to 0 (pre-first-turn). The status bar treats 0 as
     /// "no signal yet" and falls back to the plain `↑N` display.
     pub last_turn_prompt_tokens: usize,
+
+    // ── Bang approval gate (review.md arch concern #1) ─────────────
+    /// When `Some`, the user has typed `!` with `bang_requires_approval`
+    /// enabled, and is being shown the approval dialog for the local
+    /// (no-model) bash run. `None` in the common case. Mirrors
+    /// `pending_approval` in shape but doesn't go through the executor's
+    /// oneshot channel — bang is a pure local feature.
+    pub pending_bang: Option<PendingBangCommand>,
 }
 
 impl AppState {
@@ -173,6 +181,7 @@ impl AppState {
             approval_scroll: 0,
             approval_max_scroll: 0,
             last_turn_prompt_tokens: 0,
+            pending_bang: None,
         }
     }
 
@@ -258,4 +267,18 @@ pub struct PendingApproval {
     pub tool_name: String,
     pub args: serde_json::Value,
     pub responder: Option<tokio::sync::oneshot::Sender<crate::session::executor::ApprovalResponse>>,
+}
+
+/// State held while waiting for approval of a `!` bang command.
+///
+/// The model-bash approval flow uses `PendingApproval` + a oneshot back to
+/// the executor. The bang flow is local — no executor round trip — so it
+/// gets its own field. The dialog renderer checks both; the key handler
+/// branches on which is set.
+///
+/// Review.md (arch concern #1) flagged that the previous `!` handler
+/// silently bypassed the approval flow even when `bang_requires_approval`
+/// was on. This struct is the gate.
+pub struct PendingBangCommand {
+    pub cmd: String,
 }

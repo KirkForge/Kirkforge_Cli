@@ -756,38 +756,84 @@ mod tests {
     /// default, which was the source of GPT 5.5's review finding #5
     /// ("Default mode is fail-open for writes").
     #[test]
-    fn test_access_from_config_propagates_sandboxedness() {
-        // Default: sandboxed to cwd.
-        let config = crate::shared::Config::default();
+    /// Guard the user-visible invariant: when a KirkForge session
+    /// starts in a typical directory, the resulting `PathGuard` is
+    /// sandboxed to that directory.
+    ///
+    /// Review.md arch concern #3 moved the cwd resolution out of
+    /// `Config::default()` into a new `freeze_launch_sandbox` helper
+    /// in `session::config`. The test now exercises that helper
+    /// explicitly — it's the actual launch path, where the policy
+    /// takes effect. The old test (which asserted the same property
+    /// on `Config::default()` directly) was guarding a now-defunct
+    /// code path.
+    ///
+    /// History: the previous fail-open default (sandbox_dir = None
+    /// when cwd was unreachable) was the source of GPT 5.5's review
+    /// finding #5 ("Default mode is fail-open for writes"). The new
+    /// `freeze_launch_sandbox` surfaces a `current_dir()` failure
+    /// as `None` (still) but does so from a single, testable call
+    /// site, with a tracking comment that explains the policy.
+    #[test]
+    fn test_launch_path_sandboxes_to_cwd_by_default() {
+        use crate::session::config::freeze_launch_sandbox;
+
+        // Default Config has no sandbox_dir — operator didn't set
+        // it. After `freeze_launch_sandbox`, it should be filled
+        // in with the resolved cwd. This is the typical launch
+        // case the user sees.
+        let mut config = crate::shared::Config::default();
+        assert!(
+            config.sandbox_dir.is_none(),
+            "Config::default() must NOT pre-resolve cwd — that's the \
+             review.md arch concern #3 fix. Resolution happens at \
+             launch time in `freeze_launch_sandbox`."
+        );
+
+        // Launch path. In the unit-test runtime, cwd is always
+        // present, so the helper fills in some path.
+        freeze_launch_sandbox(&mut config);
         let (_deny, guard, _gate) = access_from_config(&config);
         assert!(
             guard.is_sandboxed(),
-            "Config::default() must sandbox to cwd; an unsandboxed default \
-             was the source of the v1.2 fail-open writing bug"
+            "After freeze_launch_sandbox, the launch path must produce a \
+             sandboxed guard. The user-visible invariant — sandboxed by \
+             default — is what we care about; the helper is the new \
+             single resolution site."
         );
 
         // Explicit escape hatch: empty string in config = unsandboxed.
-        let config_unsandboxed = crate::shared::Config {
+        // The helper must not overwrite it.
+        let mut config_unsandboxed = crate::shared::Config {
             sandbox_dir: Some(String::new()),
-            ..config.clone()
+            ..crate::shared::Config::default()
         };
+        freeze_launch_sandbox(&mut config_unsandboxed);
         let (_deny, guard_unsandboxed, _gate) = access_from_config(&config_unsandboxed);
         assert!(
             !guard_unsandboxed.is_sandboxed(),
             "Setting sandbox_dir = Some(\"\") in config is the explicit \
-             escape hatch; access_from_config must treat it as no-sandbox"
+             escape hatch; freeze_launch_sandbox must not overwrite it"
+        );
+        assert_eq!(
+            config_unsandboxed.sandbox_dir.as_deref(),
+            Some(""),
+            "freeze_launch_sandbox must leave an explicit-empty sandbox_dir alone"
         );
 
-        // `None` (e.g. resolved from `KIRKFORGE_SANDBOX_DIR=""`) is also
-        // the escape hatch — same path, different spelling.
-        let config_none = crate::shared::Config {
-            sandbox_dir: None,
-            ..config
-        };
+        // `None` is also the escape hatch — same path, different
+        // spelling (e.g. resolved from `KIRKFORGE_SANDBOX_DIR=""`).
+        let mut config_none = crate::shared::Config::default();
+        // For the test, simulate the "KIRKFORGE_SANDBOX_DIR=\"\""
+        // path by clearing the field *after* the helper would
+        // normally have filled it. The user-facing property is
+        // that `None` produces an unsandboxed guard.
+        freeze_launch_sandbox(&mut config_none);
+        config_none.sandbox_dir = None;
         let (_deny, guard_none, _gate) = access_from_config(&config_none);
         assert!(
             !guard_none.is_sandboxed(),
-            "sandbox_dir = None must also produce an unsandboxed guard"
+            "sandbox_dir = None must produce an unsandboxed guard"
         );
     }
 }

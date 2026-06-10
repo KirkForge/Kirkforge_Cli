@@ -258,9 +258,25 @@ async fn run_event_loop(
             //   3. The dialog is the only consumer of `pending_approval`,
             //      and we're already inside the render path so no other
             //      code can observe the temporary `None`.
+            //
+            // The bang-approval gate (review.md arch concern #1) uses
+            // the same dialog shape via `pending_bang`. We render it
+            // identically — only the key handler knows the difference
+            // (see `approval_keys::handle_bang_approval_key`).
             let pending_taken = state.pending_approval.take();
             if let Some(ref approval) = pending_taken {
                 render_approval_dialog(f, size, approval, state);
+            } else if let Some(ref bang) = state.pending_bang {
+                // Synthesize a transient `PendingApproval` view of the
+                // bang command so the dialog renders the same way. The
+                // `responder` is `None` because bang is a local flow
+                // (no executor oneshot).
+                let synthetic = crate::tui::app::PendingApproval {
+                    tool_name: "!bash".into(),
+                    args: serde_json::json!({ "command": bang.cmd }),
+                    responder: None,
+                };
+                render_approval_dialog(f, size, &synthetic, state);
             }
             state.pending_approval = pending_taken;
         })?;
@@ -269,7 +285,12 @@ async fn run_event_loop(
         while let Ok(ev) = kb_rx.try_recv() {
             match ev {
                 Event::Key(key) => {
-                    if state.pending_approval.is_some() {
+                    // Order matters: the bang-approval gate (review.md
+                    // arch concern #1) takes priority over the model
+                    // approval because its response is purely local.
+                    if state.pending_bang.is_some() {
+                        approval_keys::handle_bang_approval_key(key, state);
+                    } else if state.pending_approval.is_some() {
                         approval_keys::handle_approval_key(key, state);
                     } else {
                         keys::handle_input_key(

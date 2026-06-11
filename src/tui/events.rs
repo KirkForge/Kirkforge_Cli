@@ -242,8 +242,19 @@ fn estimate_messages_tokens(messages: &[crate::shared::Message]) -> usize {
 /// The TUI calls this once per render frame so the chat panel
 /// stays in sync with whatever the model is producing.
 pub fn drain_turn_events(state: &mut AppState, event_rx: &mut mpsc::UnboundedReceiver<TurnEvent>) {
+    let mut any = false;
     while let Ok(ev) = event_rx.try_recv() {
         dispatch_turn_event(state, ev);
+        any = true;
+    }
+    if any {
+        // Frame-pacing v2: tell the event loop that a redraw is
+        // now required. We only call this when at least one event
+        // was actually applied — an empty channel should not
+        // mark dirty (the event loop is the one that polls the
+        // channel and would otherwise needlessly keep state dirty
+        // when nothing is happening).
+        state.mark_dirty();
     }
 }
 
@@ -255,6 +266,7 @@ pub fn drain_approval_requests(
     state: &mut AppState,
     approval_rx: &mut mpsc::UnboundedReceiver<ApprovalRequest>,
 ) {
+    let mut any = false;
     while let Ok(req) = approval_rx.try_recv() {
         // Deny any existing pending approval first
         if let Some(old) = state.pending_approval.take() {
@@ -281,6 +293,13 @@ pub fn drain_approval_requests(
         // starts at the top, regardless of where the previous one was.
         state.approval_scroll = 0;
         state.approval_max_scroll = 0;
+        any = true;
+    }
+    if any {
+        // A new approval (or a new approval replacing an old one)
+        // appeared. The dialog overlay must be drawn on the next
+        // frame, so mark the state dirty.
+        state.mark_dirty();
     }
 }
 

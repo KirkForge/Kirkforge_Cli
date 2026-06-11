@@ -259,11 +259,20 @@ pub async fn run_tui(
 
     // Event loop
     // Slow-tick: drives time-based UI elements (spinner, the
-    // 4Hz refresh of the status bar's elapsed-time display).
-    // 250ms = 4Hz, which is smooth enough for the spinner
-    // (12-frame animation, full cycle every 3s) and slow enough
-    // that the slow-tick never dominates idle CPU.
-    let mut slow_tick = tokio::time::interval(std::time::Duration::from_millis(250));
+    // 8Hz refresh of the status bar's elapsed-time display).
+    // 125ms = 8Hz, which keeps the 12-frame spinner animation
+    // visually smooth (full cycle every 1.5s) at a cost of
+    // ~8 redraws/sec when idle. This replaces the earlier
+    // 4Hz / 250ms tick (5b9909a) — the 4Hz version was
+    // visibly less smooth and users noticed.
+    //
+    // For a quiet session this is 8 redraws/sec of the same
+    // frame; ratatui's diffing + the terminal's lack of
+    // damage tracking means most of these redraws are cheap
+    // (the cost is dominated by the layout split + the chat
+    // line build, both O(n_lines) in the visible message
+    // count, which doesn't grow on idle).
+    let mut slow_tick = tokio::time::interval(std::time::Duration::from_millis(125));
     slow_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     let res = run_event_loop(

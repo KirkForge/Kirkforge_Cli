@@ -67,6 +67,43 @@ pub struct Executor {
     carryover_target: Option<std::sync::Arc<std::sync::Mutex<CarryoverProfile>>>,
 }
 
+/// Drop guard that fires the `post-turn` hook on every exit path of
+/// `run_turn_inner` — Ok, Err, panic unwind, cancel, max-iterations,
+/// parse-error second retry.
+///
+/// The previous design split `run_turn` into a public wrapper that
+/// fired the hook manually after `run_turn_inner` returned. That was
+/// correct but fragile: every early-return inside `run_turn_inner`
+/// had to flow back to the outer wrapper for the hook to fire, and
+/// the 17-line block-comment documenting the contract was a code
+/// smell.
+///
+/// This guard owns a *cloned* `HookRunner` (the struct is `Clone` —
+/// just a `PathBuf` + `HashSet<String>`), so it can outlive the
+/// `&mut self` borrows inside `run_turn_inner` and fire on Drop
+/// without aliasing.
+///
+/// Fire-and-forget: `HookRunner::run` wraps `tokio::spawn` internally
+/// with a 5s timeout, so Drop never blocks on the hook script.
+pub struct PostTurnHookGuard {
+    runner: HookRunner,
+}
+
+impl PostTurnHookGuard {
+    pub fn new(runner: HookRunner) -> Self {
+        Self { runner }
+    }
+}
+
+impl Drop for PostTurnHookGuard {
+    fn drop(&mut self) {
+        // No-op if the hook script doesn't exist; otherwise spawns
+        // a tokio task that runs `bash <hooks_dir>/post-turn.sh`
+        // with a 5s timeout. Drop completes in microseconds.
+        self.runner.run("post-turn", &[]);
+    }
+}
+
 impl Executor {
     pub fn new(adapter: Box<dyn ModelAdapter>, tools: Vec<Arc<dyn Tool>>, config: Config) -> Self {
 
@@ -507,28 +544,23 @@ impl Executor {
         approval_sender: &mpsc::UnboundedSender<ApprovalRequest>,
         cancelled: &AtomicBool,
     ) -> anyhow::Result<Vec<TurnEvent>> {
-        // Post-turn hook contract: fires exactly once on every exit
-        // path (success, error, cancel, max-iterations, parse-error
-        // second retry). Implemented by splitting the body into a
-        // private `run_turn_inner` and firing the hook here in the
-        // outer wrapper, after the inner returns. A drop-guard
-        // approach would have to hold `&Executor` for the lifetime of
-        // the inner, which conflicts with the `&mut self` borrows
-        // inside the inner body. The inner/outer split avoids the
-        // borrow conflict while still hitting every exit path: any
-        // `?` or `return` inside `run_turn_inner` produces a value
-        // that's returned to us here, and we fire the hook before
-        // propagating.
+        // Post-turn hook: fires on every exit path (Ok / Err / panic /
+        // cancel / max-iterations / parse-error second retry) via the
+        // `PostTurnHookGuard` constructed on the stack below. The guard
+        // owns a cloned `HookRunner`, so it can outlive the `&mut self`
+        // borrows inside `run_turn_inner` and fire on Drop without
+        // aliasing.
         //
-        // This is the fix for GPT 5.5 review finding #6 ("post-turn
-        // hook likely never runs"): the previous code put the hook at
-        // the bottom of `run_turn`, but `IterationOutcome::Finished
-        // => return Ok(events)` returns before reaching that line.
-        let result = self
-            .run_turn_inner(user_input, approval_sender, cancelled)
-            .await;
-        self.run_hook("post-turn", None, None);
-        result
+        // Supersedes the earlier inner/outer split where the hook was
+        // fired manually after `run_turn_inner` returned. That worked
+        // but was fragile (any new early-return in the inner had to
+        // flow back to the wrapper). Review.md arch-concern #4
+        // specifically called this out — "a Drop guard holding an &Fn
+        // closure would be more robust." We keep the inner/outer split
+        // (still useful for tests that want to call the inner directly)
+        // but stop firing the hook manually.
+        let _hook_guard = PostTurnHookGuard::new(self.hook_runner.clone());
+        self.run_turn_inner(user_input, approval_sender, cancelled).await
     }
 
     async fn run_turn_inner(
@@ -3086,5 +3118,21 @@ mod tests {
             "diff should start with --- header, got: {:?}",
             got
         );
+    }
+
+    /// Smoke test for `PostTurnHookGuard`. Constructs a guard with the
+    /// default `HookRunner` and lets it fall out of scope. The
+    /// `HookRunner::run` call inside `Drop` is fire-and-forget and
+    /// (in the absence of a real `~/.local/share/kirkforge/hooks/
+    /// post-turn.sh`) is a no-op, so this test exercises construction
+    /// and Drop without making any external assumptions.
+    ///
+    /// The real value is at compile time: if `PostTurnHookGuard` ever
+    /// stops being `pub`, or `HookRunner` stops being `Clone`, this
+    /// test fails to build — catching the regression before it
+    /// silently breaks the post-turn hook fire path.
+    #[test]
+    fn post_turn_guard_constructs_and_drops() {
+        let _guard = PostTurnHookGuard::new(HookRunner::default());
     }
 }

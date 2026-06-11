@@ -166,11 +166,27 @@ pub fn render_chat(f: &mut Frame, area: Rect, state: &mut AppState) {
             for content_line in full.lines() {
                 let wrapped = textwrap::fill(content_line, content_width.saturating_sub(4));
                 for wline in wrapped.lines() {
+                    // No `Modifier::DIM` here. The original styling
+                    // applied dim to expanded tool content, which
+                    // (a) makes the output hard to read on terminals
+                    // that don't differentiate dim from regular
+                    // weight, and (b) on terminals that map `DIM` to
+                    // strikethrough (KDE Konsole with custom
+                    // themes, some xterm configs), makes the
+                    // expanded tool content look crossed-out.
+                    //
+                    // 2026-06-11 incident: the user reported the
+                    // entire tool output as "text all over the
+                    // screen and unreadable" — DIM was the proximate
+                    // cause for the strikethrough appearance.
+                    //
+                    // The collapsed summary path above (line ~104)
+                    // still uses DIM, but that's intentional —
+                    // collapsed tool entries are supposed to be
+                    // visually subordinate to assistant text.
                     lines.push(Line::from(vec![Span::styled(
                         format!("  │ {}", wline),
-                        Style::default()
-                            .fg(Color::Yellow)
-                            .add_modifier(Modifier::DIM),
+                        Style::default().fg(Color::Yellow),
                     )]));
                 }
             }

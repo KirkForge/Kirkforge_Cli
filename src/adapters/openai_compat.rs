@@ -186,7 +186,18 @@ impl ModelAdapter for OpenAiCompatAdapter {
             .await?
             .error_for_status()?;
 
-        let (tx, rx) = tokio::sync::mpsc::channel::<StreamEvent>(128);
+        // Channel size: 4096 events. The previous value of 128 was
+        // the proximate cause of the "stream consumer dropped
+        // receiver mid-stream; aborting adapter parser" warnings
+        // seen on every turn in the 2026-06-11 incident: when the
+        // channel fills, `tx.send().await` blocks the parser; the
+        // executor meanwhile sees a `Done` or `ToolCall` event and
+        // returns from its iteration loop, dropping `rx`; the
+        // parser's next `tx.send` returns `Err`, `send_or_bail`
+        // logs the warning, the parser bails, the assistant
+        // message is never persisted, and the cost is never
+        // recorded. 4096 gives ~20x headroom.
+        let (tx, rx) = tokio::sync::mpsc::channel::<StreamEvent>(4096);
 
         tokio::spawn(async move {
             let mut stream = response.bytes_stream();

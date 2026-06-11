@@ -79,7 +79,9 @@ impl ModelAdapter for GlmAdapter {
             .await?
             .error_for_status()?;
 
-        let (tx, rx) = tokio::sync::mpsc::channel::<StreamEvent>(128);
+        // Channel size: 4096 events. See deepseek.rs for the
+        // rationale (2026-06-11 incident).
+        let (tx, rx) = tokio::sync::mpsc::channel::<StreamEvent>(4096);
 
         tokio::spawn(async move {
             let stream = response.bytes_stream();

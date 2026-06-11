@@ -75,7 +75,11 @@ impl ModelAdapter for GeminiAdapter {
             .await?
             .error_for_status()?;
 
-        let (tx, rx) = tokio::sync::mpsc::channel::<StreamEvent>(128);
+        // Channel size: 4096 events. See deepseek.rs for the
+        // rationale (2026-06-11 incident — 128 was too small for
+        // thinking-model streaming responses, caused "stream
+        // consumer dropped receiver mid-stream" warnings).
+        let (tx, rx) = tokio::sync::mpsc::channel::<StreamEvent>(4096);
 
         tokio::spawn(async move {
             let stream = response.bytes_stream();

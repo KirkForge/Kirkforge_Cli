@@ -165,6 +165,19 @@ pub struct AppState {
     /// match. `n` cycles forward, `N` (Shift+N) cycles backward.
     /// When `search_matches.is_empty()`, this is meaningless.
     pub search_match_idx: usize,
+
+    // ── /test command (review.md gap #9) ─────────────────────
+    /// The shared `Bash` tool. Constructed once at startup; the `/test`
+    /// slash command invokes it directly so the same approval gate,
+    /// sandbox, and deny_paths the model's bash calls go through apply.
+    /// Cloning is cheap (`Bash` is a unit struct), so `Arc::new` is
+    /// essentially a one-time allocation.
+    pub bash_tool: std::sync::Arc<crate::tools::bash::Bash>,
+
+    /// True while a `/test` command is running. Used to (1) gate the
+    /// input box against stacking tests, (2) drive the spinner in
+    /// place of the model-generation spinner.
+    pub test_in_progress: bool,
 }
 
 impl AppState {
@@ -205,6 +218,8 @@ impl AppState {
             search_query: String::new(),
             search_matches: Vec::new(),
             search_match_idx: 0,
+            bash_tool: std::sync::Arc::new(crate::tools::bash::Bash),
+            test_in_progress: false,
         }
     }
 

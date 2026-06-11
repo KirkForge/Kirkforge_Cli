@@ -12,6 +12,8 @@ pub mod model;
 pub mod plan;
 pub mod sessions;
 pub mod status;
+pub mod test;
+pub mod test_parse;
 pub mod undo;
 
 pub use bang::*;
@@ -26,6 +28,7 @@ pub use model::*;
 pub use plan::*;
 pub use sessions::*;
 pub use status::*;
+pub use test::*;
 pub use undo::*;
 
 #[allow(unused_imports)]

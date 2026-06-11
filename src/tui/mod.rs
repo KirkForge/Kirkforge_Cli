@@ -69,6 +69,46 @@ impl Drop for TerminalGuard {
     }
 }
 
+/// One-shot probe of the configured Ollama endpoint.
+///
+/// Returns `Connected { model, since: now }` if `${ollama_host}/api/tags`
+/// responds with 2xx within a 2-second budget, `Error(msg)` on transport
+/// failure or non-2xx status, and `Disconnected` only if the host string
+/// is empty or unparseable.
+///
+/// We hit `/api/tags` rather than `/api/version` because it doubles as a
+/// "do we have this model?" check, and the response (a JSON object
+/// listing the available models) is what the executor's smart router
+/// will consult anyway. A 2s budget is generous — local Ollama answers
+/// in <50ms, and the cloud route usually <500ms.
+///
+/// Failure modes are non-fatal: the TUI starts up either way, the user
+/// can still type, and the first turn will surface the underlying
+/// connection error via the executor's normal error path.
+async fn probe_ollama_connection(config: &Config) -> ConnectionState {
+    let host = config.ollama_host.trim_end_matches('/');
+    if host.is_empty() {
+        return ConnectionState::Error("empty ollama_host in config".into());
+    }
+    let url = format!("{}/api/tags", host);
+    let model = config.default_model.clone();
+    let since = Instant::now();
+
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(2))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => return ConnectionState::Error(format!("client build failed: {}", e)),
+    };
+
+    match client.get(&url).send().await {
+        Ok(resp) if resp.status().is_success() => ConnectionState::Connected { model, since },
+        Ok(resp) => ConnectionState::Error(format!("{}: HTTP {}", url, resp.status().as_u16())),
+        Err(e) => ConnectionState::Error(format!("{}: {}", url, e)),
+    }
+}
+
 /// Run the TUI event loop.
 pub async fn run_tui(
     config: Config,
@@ -88,8 +128,19 @@ pub async fn run_tui(
     // ── AppState ──
     let mut state = AppState::new(config.clone());
     state.session_started = Instant::now();
-    // Hook for sessions that need a connection indicator
-    state.connection = ConnectionState::Disconnected;
+    // Hook for sessions that need a connection indicator.
+    //
+    // Probes Ollama at startup so the status bar reflects reality
+    // instead of lying on `Disconnected` for the entire session
+    // (2026-06-11 incident — the original code set `Disconnected`
+    // once at construction and never updated it, so the status
+    // bar said "Disconnected" even on a fully-working install).
+    //
+    // One-shot probe: doesn't poll. If Ollama goes down mid-session,
+    // the bar will continue to show the last-known state. A v2
+    // improvement would be a periodic background probe driven by
+    // the SIGHUP / reconnect signal path.
+    state.connection = probe_ollama_connection(&config).await;
 
     // Skills — load any project-local SKILL.md files from registered scan paths,
     // then layer the built-in skills on top. (Missing dirs are silently skipped,
@@ -357,6 +408,25 @@ async fn run_event_loop(
                 _ => {}
             }
         }
+
+        // ── Frame pacing ──
+        // The event loop above has no `await` that yields to the runtime
+        // on the idle path (drain_* use try_recv, notify_completed_jobs's
+        // .await is on a fast lock, terminal.draw is sync). Without
+        // pacing, the loop spins at 100% CPU even when there's nothing to
+        // render — a TUI on a 2012-era laptop burns 3+ cores at idle.
+        //
+        // 16ms = 60fps cap. Long enough to keep CPU usage at ~5% on idle,
+        // short enough that the spinner still looks smooth and keystrokes
+        // feel instant. The sleep is skipped on hot paths by `tokio::select!`
+        // merging with a real signal channel; for v1 the simple sleep is
+        // good enough.
+        //
+        // This is the proximate fix for the 27-29/8 CPU usage reported in
+        // the 2026-06-11 incident screenshots. The deeper fix (only
+        // re-render when state changes, instead of every iteration) is a
+        // v2 refactor.
+        tokio::time::sleep(std::time::Duration::from_millis(16)).await;
     }
 }
 

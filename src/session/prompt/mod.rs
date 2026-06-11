@@ -98,6 +98,7 @@ impl PromptBuilder {
         Message {
             role: Role::System,
             content,
+            content_parts: None,
             thinking: None,
             tool_calls: None,
             tool_call_id: None,
@@ -148,6 +149,12 @@ impl PromptBuilder {
 
         let mut messages = Self::assemble_messages(system, history, tool_results);
 
+        // Image attach — when the most-recent user turn follows a
+        // `read_image` tool result, splice the image content part
+        // onto the user message so the model actually sees the
+        // attachment inline (OpenAI vision / Ollama `images`).
+        Self::attach_pending_image(&mut messages);
+
         Self::truncate_tool_results(&mut messages);
 
         Self::dedup_adjacent_tool_results(&mut messages);
@@ -170,6 +177,78 @@ impl PromptBuilder {
         }
 
         Self::truncate_to_budget(&adjusted, budget)
+    }
+
+    /// Splice the image from a just-preceding `read_image` tool
+    /// result onto the next user message, so the model sees the
+    /// attachment in the right slot.
+    ///
+    /// Pattern: the conversation has
+    /// `[…, Role::Tool{tool_name=read_image, content_parts=[Image{…}]}, Role::User{…}]`
+    /// and we want to mutate the `User` message in place so its
+    /// `content_parts` includes the image (prepended before any
+    /// existing text parts). This is the "user attached a screenshot
+    /// and is now asking about it" UX.
+    ///
+    /// Rules:
+    /// 1. The most-recent user message must have empty or no
+    ///    `content_parts` (don't overwrite an already-attached image).
+    /// 2. The tool message immediately preceding it must be from
+    ///    `read_image` with a non-empty `content_parts` list.
+    /// 3. The splice is in-place on the `messages` slice; no new
+    ///    messages are inserted. The conversation log itself is
+    ///    *not* mutated — the image is attached on the way out to
+    ///    the model, not persisted in the on-disk log. (Replaying
+    ///    the log through `assemble_messages` again would re-run
+    ///    the splice, so the persistence story is fine.)
+    fn attach_pending_image(messages: &mut [Message]) {
+        if messages.len() < 2 {
+            return;
+        }
+        // Find the most-recent user message and the message before it.
+        let last_idx = messages.len() - 1;
+        if messages[last_idx].role != Role::User {
+            return; // no user turn at the tail — nothing to attach to
+        }
+        let tool_idx = last_idx - 1;
+        let tool_msg = &messages[tool_idx];
+        if tool_msg.role != Role::Tool {
+            return;
+        }
+        if tool_msg.tool_name.as_deref() != Some("read_image") {
+            return;
+        }
+        let image_part = match tool_msg
+            .content_parts
+            .as_ref()
+            .and_then(|parts| parts.first())
+        {
+            Some(crate::shared::ContentPart::Image { .. }) => {
+                tool_msg.content_parts.as_ref().unwrap()[0].clone()
+            }
+            _ => return, // read_image emitted no image — bail
+        };
+
+        // Splice the image onto the user message. Prepend (so it
+        // visually leads the message), or replace the existing
+        // content_parts if the model already sent some.
+        let user_msg = &mut messages[last_idx];
+        let mut new_parts: Vec<crate::shared::ContentPart> = Vec::with_capacity(2);
+        new_parts.push(image_part);
+        match user_msg.content_parts.take() {
+            Some(existing) => new_parts.extend(existing),
+            None => {
+                // No parts — synthesise a Text part from the
+                // existing `content` so the user message text is
+                // still in the parts list, alongside the image.
+                if !user_msg.content.is_empty() {
+                    new_parts.push(crate::shared::ContentPart::Text {
+                        text: user_msg.content.clone(),
+                    });
+                }
+            }
+        }
+        user_msg.content_parts = Some(new_parts);
     }
 
     fn assemble_messages(

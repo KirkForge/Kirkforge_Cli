@@ -6,6 +6,7 @@ pub mod edit_file;
 pub mod glob;
 pub mod grep;
 pub mod read_file;
+pub mod read_image;
 pub mod write_file;
 
 use crate::shared::{ToolDef, ToolOutcome};
@@ -35,8 +36,14 @@ pub type UndoStackRef = Arc<Mutex<crate::session::undo::UndoStack>>;
 /// (`edit_file`, `write_file`). Read-only tools don't need it.
 /// Pass `None` to disable undo — the tools still work, they just
 /// don't snapshot.
-pub fn all_tools(undo_stack: Option<UndoStackRef>) -> Vec<Arc<dyn Tool>> {
-    vec![
+///
+/// `supports_images` gates the `read_image` tool: a non-vision model
+/// never sees the tool in its available-tool list, and any
+/// hand-crafted `<tool_call>` invocation in the prompt is the user's
+/// problem rather than a server-side 400. The default is `false`
+/// (conservative — most Ollama-local models aren't vision-capable).
+pub fn all_tools(undo_stack: Option<UndoStackRef>, supports_images: bool) -> Vec<Arc<dyn Tool>> {
+    let mut tools: Vec<Arc<dyn Tool>> = vec![
         Arc::new(read_file::ReadFile),
         Arc::new(write_file::WriteFile::new(undo_stack.clone())),
         Arc::new(edit_file::EditFile::new(undo_stack)),
@@ -45,5 +52,9 @@ pub fn all_tools(undo_stack: Option<UndoStackRef>) -> Vec<Arc<dyn Tool>> {
         Arc::new(bash_cancel::BashCancel),
         Arc::new(grep::Grep),
         Arc::new(glob::Glob),
-    ]
+    ];
+    if supports_images {
+        tools.push(Arc::new(read_image::ReadImage));
+    }
+    tools
 }

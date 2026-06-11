@@ -137,6 +137,7 @@ pub fn build_recovery_message(hint: &RecoveryHint) -> Message {
              Do NOT repeat the same failing command — use the suggestions above.",
             hint.error_summary, hint.suggestion
         ),
+        content_parts: None,
         thinking: None,
         tool_calls: None,
         tool_call_id: None,

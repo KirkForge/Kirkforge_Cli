@@ -231,7 +231,8 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
         }
     };
 
-    let mut tools: Vec<Arc<dyn tools::Tool>> = tools::all_tools(undo_stack.clone());
+    let mut tools: Vec<Arc<dyn tools::Tool>> =
+        tools::all_tools(undo_stack.clone(), adapter.model_info().supports_images);
 
     // --- MCP tools ---
     if !config.mcp_servers.is_empty() {

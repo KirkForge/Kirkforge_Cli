@@ -17,6 +17,10 @@ pub struct GlmAdapter {
     model: String,
     api_base: String,
     client: reqwest::Client,
+    /// JSON-mode flag, set by the executor at construction time from
+    /// `Config::json_mode`. Default `false`. The body builder reads it
+    /// to add `"format": "json"` at the top level of the request.
+    json_mode: bool,
 }
 
 impl GlmAdapter {
@@ -28,6 +32,7 @@ impl GlmAdapter {
                 .tcp_nodelay(true)
                 .build()
                 .expect("reqwest client build failed"),
+            json_mode: false,
         }
     }
 }
@@ -41,7 +46,13 @@ impl ModelAdapter for GlmAdapter {
             tool_call_format: ToolCallStyle::Native,
             max_context_tokens: 128_000,
             recommended_temperature: 0.7,
+            supports_images: false, // GLM 5.1 cloud has no vision variant
+            supports_cache: false,  // Ollama's /api/chat has no cache_control
         }
+    }
+
+    fn set_json_mode(&mut self, json_mode: bool) {
+        self.json_mode = json_mode;
     }
 
     async fn stream(
@@ -49,7 +60,14 @@ impl ModelAdapter for GlmAdapter {
         messages: &[Message],
         tools: &[crate::shared::ToolDef],
     ) -> anyhow::Result<tokio::sync::mpsc::Receiver<StreamEvent>> {
-        let body = super::build_ollama_chat_body(&self.model, messages, tools, true);
+        let body = super::build_ollama_chat_body(
+            &self.model,
+            &self.model_info(),
+            messages,
+            tools,
+            true,
+            self.json_mode,
+        );
         let url = format!("{}/api/chat", self.api_base);
 
         let response = self

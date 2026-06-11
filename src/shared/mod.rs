@@ -11,6 +11,17 @@ pub struct Message {
     pub role: Role,
     #[serde(default)]
     pub content: String,
+    /// Multimodal content parts. When set, the adapter emits `content` as a
+    /// structured array (OpenAI vision format for `OpenAiCompatAdapter`,
+    /// Ollama's `images` field for the GLM/DeepSeek/Gemini/Native path).
+    /// When `None`, the adapter falls through to the legacy `content: String`
+    /// path — zero behaviour change for old log files.
+    ///
+    /// `skip_serializing_if = "Option::is_none"` keeps the on-disk NDJSON
+    /// log compact: text-only messages stay `{role, content}` as before.
+    /// `Default` on `Message` produces `None` here.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub content_parts: Option<Vec<ContentPart>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -21,6 +32,25 @@ pub struct Message {
     pub tool_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token_count: Option<usize>,
+}
+
+/// A single part of a multimodal message.
+///
+/// Tag-serialised as `{"type": "text", "text": "…"}` or
+/// `{"type": "image", "data_base64": "…", "mime": "image/png"}` —
+/// compact, human-readable, forward-compatible (new variants can be
+/// added without breaking old logs because the `type` tag discriminates).
+///
+/// `data_base64` is the standard content transport for OpenAI vision and
+/// Ollama's native `images: [string]` field. Adapters do the per-protocol
+/// translation (e.g. OpenAI wraps it as
+/// `{"type":"image_url","image_url":{"url":"data:<mime>;base64,<data>"}}`,
+/// Ollama just emits the base64 string).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ContentPart {
+    Text { text: String },
+    Image { data_base64: String, mime: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -73,6 +103,13 @@ pub enum FinishReason {
 pub struct TokenUsage {
     pub prompt_tokens: Option<usize>,
     pub completion_tokens: Option<usize>,
+    /// Tokens served from the provider's prompt cache (e.g. Anthropic's
+    /// `cache_read_input_tokens` or OpenAI's
+    /// `prompt_tokens_details.cached_tokens`). The cost-tracker applies the
+    /// discounted read-rate to this portion. Absent = unknown / not
+    /// reported by the server.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub cached_tokens: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -82,6 +119,22 @@ pub struct ModelInfo {
     pub tool_call_format: ToolCallStyle,
     pub max_context_tokens: usize,
     pub recommended_temperature: f64,
+    /// Whether the model accepts image inputs (OpenAI vision, Anthropic
+    /// `claude-3-*`, etc.). Drives the runtime registration of the
+    /// `read_image` tool: a non-vision model never sees that tool in its
+    /// available-tool list, and a tool-call attempt is a clear
+    /// "model not supported" error rather than a silent failure at the
+    /// adapter. Default `false`; the `OpenAiCompatAdapter` factory
+    /// sets it to `true` only for known vision model names.
+    pub supports_images: bool,
+    /// Whether the model / server supports prompt caching breakpoints
+    /// (Anthropic's `cache_control: {type: "ephemeral"}` or the OpenAI
+    /// equivalent). When `true`, the OpenAI-compat body builder marks
+    /// the last 2 messages of the prefix with `cache_control` so the
+    /// server can reuse its prompt KV-cache. Ollama-native and the
+    /// GLM/DeepSeek/Gemini adapters ignore this flag — they have no
+    /// equivalent field.
+    pub supports_cache: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -187,6 +240,19 @@ pub struct Config {
     /// review finding #4.
     #[serde(default)]
     pub bang_requires_approval: bool,
+
+    /// When `true`, the active adapter is asked to constrain its
+    /// output to well-formed JSON. Concretely: the OpenAI-compat body
+    /// builder adds `response_format: {type: "json_object"}` (and
+    /// `tool_choice: "auto"` when tools are present); the Ollama body
+    /// builder adds `format: "json"`. The regex-based tool-call
+    /// fallback is left in place regardless — `response_format` only
+    /// constrains the *content*, not the in-band `<tool_call>` block
+    /// emission, and some models honour the format hint while still
+    /// emitting tool calls inline. Default `false` — opt-in only
+    /// because forcing JSON breaks chat-style models.
+    #[serde(default)]
+    pub json_mode: bool,
 }
 
 /// Configuration for a single MCP server connection.
@@ -268,6 +334,7 @@ impl Default for Config {
             routing_model_map: HashMap::new(),
             mcp_servers: vec![],
             bang_requires_approval: false,
+            json_mode: false,
         }
     }
 }
@@ -307,6 +374,16 @@ pub enum ToolOutcome {
         path: PathBuf,
         matches: Vec<Match>,
         total: usize,
+    },
+    /// Multimodal result from the `read_image` tool. Carries the raw
+    /// base64 bytes + mime type. `handle_tool_outcome` translates this
+    /// into a `Message { Role::Tool, content_parts: [Image{…}] }` so the
+    /// next user turn can splice the image onto the user message and the
+    /// model sees it as part of the user's question.
+    Image {
+        path: PathBuf,
+        mime: String,
+        data_base64: String,
     },
 }
 
@@ -392,14 +469,30 @@ pub const PRICING_TABLE: &[Pricing] = &[
     },
 ];
 
-pub fn calculate_cost(model: &str, input_tokens: usize, output_tokens: usize) -> f64 {
+pub fn calculate_cost(model: &str, usage: &TokenUsage) -> f64 {
+    let prompt = usage.prompt_tokens.unwrap_or(0);
+    let completion = usage.completion_tokens.unwrap_or(0);
+    let cached = usage
+        .cached_tokens
+        .unwrap_or(0)
+        .min(prompt); // never let cached exceed the prompt itself
+
     let p = PRICING_TABLE
         .iter()
         .find(|p| !p.model_prefix.is_empty() && model.starts_with(p.model_prefix))
         .unwrap_or_else(|| PRICING_TABLE.last().unwrap());
-    let input_cost = (input_tokens as f64 / 1_000_000.0) * p.input_per_mtok;
-    let output_cost = (output_tokens as f64 / 1_000_000.0) * p.output_per_mtok;
-    input_cost + output_cost
+
+    // Cached tokens are billed at the discounted read rate; the rest of
+    // the prompt at the regular input rate. Servers that don't
+    // distinguish (most OpenAI-compat) return `cached_tokens = None`,
+    // and the discount path is a no-op. `cache_read_per_mtok` is
+    // `0.0` for non-cached pricing rows (e.g. `gpt-4` in the table),
+    // so a stale or wrong `cached_tokens` value still produces a
+    // reasonable upper-bound cost.
+    let cached_cost = (cached as f64 / 1_000_000.0) * p.cache_read_per_mtok;
+    let fresh_input_cost = ((prompt - cached) as f64 / 1_000_000.0) * p.input_per_mtok;
+    let output_cost = (completion as f64 / 1_000_000.0) * p.output_per_mtok;
+    cached_cost + fresh_input_cost + output_cost
 }
 
 #[derive(Debug, Clone, Default)]

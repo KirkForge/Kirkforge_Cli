@@ -65,6 +65,7 @@ mod tests {
         Message {
             role: Role::User,
             content: content.to_string(),
+            content_parts: None,
             thinking: None,
             tool_calls: None,
             tool_call_id: None,
@@ -77,6 +78,7 @@ mod tests {
         Message {
             role: Role::Assistant,
             content: content.to_string(),
+            content_parts: None,
             thinking: None,
             tool_calls: None,
             tool_call_id: None,
@@ -89,6 +91,7 @@ mod tests {
         Message {
             role: Role::Tool,
             content: content.to_string(),
+            content_parts: None,
             thinking: None,
             tool_calls: None,
             tool_call_id: Some("call_1".into()),

@@ -16,6 +16,7 @@ pub struct GeminiAdapter {
     model: String,
     api_base: String,
     client: reqwest::Client,
+    json_mode: bool,
 }
 
 impl GeminiAdapter {
@@ -27,6 +28,7 @@ impl GeminiAdapter {
                 .tcp_nodelay(true)
                 .build()
                 .expect("reqwest client build failed"),
+            json_mode: false,
         }
     }
 }
@@ -40,7 +42,13 @@ impl ModelAdapter for GeminiAdapter {
             tool_call_format: ToolCallStyle::OpenAiCompat,
             max_context_tokens: 1_000_000,
             recommended_temperature: 0.8,
+            supports_images: true, // Gemini Flash 1M accepts image parts natively
+            supports_cache: false, // routed through Ollama; no cache_control
         }
+    }
+
+    fn set_json_mode(&mut self, json_mode: bool) {
+        self.json_mode = json_mode;
     }
 
     async fn stream(
@@ -48,7 +56,14 @@ impl ModelAdapter for GeminiAdapter {
         messages: &[Message],
         tools: &[crate::shared::ToolDef],
     ) -> anyhow::Result<tokio::sync::mpsc::Receiver<StreamEvent>> {
-        let body = super::build_ollama_chat_body(&self.model, messages, tools, true);
+        let body = super::build_ollama_chat_body(
+            &self.model,
+            &self.model_info(),
+            messages,
+            tools,
+            true,
+            self.json_mode,
+        );
         let url = format!("{}/api/chat", self.api_base);
 
         let response = self

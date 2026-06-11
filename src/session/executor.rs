@@ -80,7 +80,7 @@ impl Executor {
     }
 
     pub fn with_log(
-        adapter: Box<dyn ModelAdapter>,
+        mut adapter: Box<dyn ModelAdapter>,
         tools: Vec<Arc<dyn Tool>>,
         config: Config,
         conversation: ConversationLog,
@@ -89,6 +89,12 @@ impl Executor {
         let model_name = adapter.model_info().name.clone();
         let (deny_list, path_guard, read_gate) = access_from_config(&config);
         warn_if_unsandboxed(&path_guard);
+
+        // Push the session-level JSON-mode flag down to the active
+        // adapter. The trait method has a default no-op for adapters
+        // that don't support it, so unknown models (and the test
+        // mocks) silently ignore the flag.
+        adapter.set_json_mode(config.json_mode);
 
         let adapter_swap = AdapterSwap::new(
             model_name.clone(),
@@ -550,6 +556,7 @@ impl Executor {
         self.conversation.append(Message {
             role: Role::User,
             content: user_input.to_string(),
+            content_parts: None,
             thinking: None,
             tool_calls: None,
             tool_call_id: None,
@@ -593,6 +600,7 @@ impl Executor {
                         self.conversation.append(Message {
                             role: Role::User,
                             content: retry_msg.into(),
+                            content_parts: None,
                             thinking: None,
                             tool_calls: None,
                             tool_call_id: None,
@@ -723,6 +731,7 @@ impl Executor {
                     let msg = Message {
                         role: Role::Assistant,
                         content: assistant_content.clone(),
+                        content_parts: None,
                         thinking: if assistant_thinking.is_empty() {
                             None
                         } else {
@@ -742,8 +751,7 @@ impl Executor {
                     if let Some(ref u) = usage {
                         let prompt = u.prompt_tokens.unwrap_or(0);
                         let completion = u.completion_tokens.unwrap_or(0);
-                        let cost =
-                            crate::shared::calculate_cost(&self.model_name, prompt, completion);
+                        let cost = crate::shared::calculate_cost(&self.model_name, u);
                         self.cost_tracking.record_turn(prompt, completion, cost);
                         events.push(TurnEvent::CostStats {
                             prompt_tokens: prompt,
@@ -1757,6 +1765,35 @@ fn handle_tool_outcome(
                 conversation.append(recovery_msg)?;
             }
         }
+        // `read_image` returns an Image outcome. We materialise it as
+        // a `Role::Tool` message with `content_parts: [Image{…}]` set
+        // and a short `content` projection that keeps the conversation
+        // log human-readable. The PromptBuilder's image-attach step
+        // (see `src/session/prompt/mod.rs`) splices the image onto the
+        // next user turn so the model actually sees it inline.
+        ToolOutcome::Image {
+            path,
+            mime,
+            data_base64,
+        } => {
+            let projection = format!("[image: {} ({}, {} bytes)]", path.display(), mime, data_base64.len());
+            events.push(TurnEvent::ToolResult {
+                name: tc.name.clone(),
+                output: projection.clone(),
+                success: true,
+            });
+            conversation.append(Message {
+                role: Role::Tool,
+                content: projection,
+                content_parts: Some(vec![crate::shared::ContentPart::Image {
+                    data_base64,
+                    mime,
+                }]),
+                tool_call_id: Some(tc.id.clone()),
+                tool_name: Some(tc.name.clone()),
+                ..Default::default()
+            })?;
+        }
     }
     Ok(None)
 }
@@ -1899,6 +1936,8 @@ mod tests {
             tool_call_format: ToolCallStyle::Native,
             max_context_tokens: 8192,
             recommended_temperature: 0.7,
+            supports_images: false,
+            supports_cache: false,
         }
     }
 
@@ -1928,6 +1967,7 @@ mod tests {
             routing_model_map: std::collections::HashMap::new(),
             mcp_servers: vec![],
             bang_requires_approval: false,
+            json_mode: false,
         }
     }
 
@@ -1954,6 +1994,7 @@ mod tests {
                     usage: Some(TokenUsage {
                         prompt_tokens: Some(10),
                         completion_tokens: Some(5),
+                        cached_tokens: None,
                     }),
                 },
             ],

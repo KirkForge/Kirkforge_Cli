@@ -114,6 +114,7 @@ pub struct OpenAiCompatAdapter {
     model: String,
     api_base: String,
     client: reqwest::Client,
+    json_mode: bool,
 }
 
 impl OpenAiCompatAdapter {
@@ -126,6 +127,7 @@ impl OpenAiCompatAdapter {
                 .tcp_nodelay(true)
                 .build()
                 .expect("reqwest client build failed"),
+            json_mode: false,
         }
     }
 }
@@ -139,7 +141,26 @@ impl ModelAdapter for OpenAiCompatAdapter {
             tool_call_format: ToolCallStyle::OpenAiCompat,
             max_context_tokens: 32_768, // conservative default
             recommended_temperature: 0.7,
+            // Conservative default: only the named vision / Anthropic /
+            // OpenAI-prefixed models are known to accept image inputs.
+            // Adapters with vision support that don't match the prefix
+            // (e.g. a local `llava` running behind an OpenAI-compat
+            // proxy) will report a "tool not available" error from the
+            // model, which is the right surface to fix the registration.
+            supports_images: false,
+            // Most OpenAI-compat servers ignore cache_control, and the
+            // field is unknown to Ollama's /v1/chat/completions
+            // endpoint. Set `true` only for the explicitly cache-aware
+            // models (claude-3-*, gpt-4o, gpt-5) when we know the
+            // server honours the marker.
+            supports_cache: self.model.starts_with("claude-3-")
+                || self.model.starts_with("gpt-4o")
+                || self.model.starts_with("gpt-5"),
         }
+    }
+
+    fn set_json_mode(&mut self, json_mode: bool) {
+        self.json_mode = json_mode;
     }
 
     async fn stream(
@@ -147,7 +168,13 @@ impl ModelAdapter for OpenAiCompatAdapter {
         messages: &[Message],
         tools: &[crate::shared::ToolDef],
     ) -> anyhow::Result<tokio::sync::mpsc::Receiver<StreamEvent>> {
-        let body = super::build_openai_compat_body(&self.model, messages, tools);
+        let body = super::build_openai_compat_body(
+            &self.model,
+            &self.model_info(),
+            messages,
+            tools,
+            self.json_mode,
+        );
         let url = format!("{}/v1/chat/completions", self.api_base);
 
         let response = self
@@ -345,6 +372,27 @@ impl ModelAdapter for OpenAiCompatAdapter {
                                                 .and_then(|v| v.as_u64())
                                                 .or_else(|| {
                                                     u.get("eval_count")
+                                                        .and_then(|v| v.as_u64())
+                                                })
+                                                .map(|v| v as usize),
+                                            // Cache hit count. OpenAI's
+                                            // chat-completions endpoint
+                                            // surfaces it under
+                                            // `prompt_tokens_details.cached_tokens`;
+                                            // Anthropic-style responses
+                                            // (routed through some
+                                            // OpenAI-compat proxies) use
+                                            // the top-level
+                                            // `cache_read_input_tokens`.
+                                            // Either name is fine — we
+                                            // just look up both and
+                                            // tolerate absence.
+                                            cached_tokens: u
+                                                .get("cache_read_input_tokens")
+                                                .and_then(|v| v.as_u64())
+                                                .or_else(|| {
+                                                    u.get("prompt_tokens_details")
+                                                        .and_then(|d| d.get("cached_tokens"))
                                                         .and_then(|v| v.as_u64())
                                                 })
                                                 .map(|v| v as usize),

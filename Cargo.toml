@@ -59,6 +59,9 @@ chrono = { version = "0.4", features = ["serde"] }
 # Text wrapping for chat display
 textwrap = "0.16"
 
+# Base64 for image-attach (read_image tool / multimodal messages)
+base64 = "0.22"
+
 [dev-dependencies]
 # Test-only: create real temporary files for @-mention expansion tests
 tempfile = "3"

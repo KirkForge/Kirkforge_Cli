@@ -321,9 +321,20 @@ fn parse_token_usage(u: &serde_json::Value) -> TokenUsage {
         .and_then(|v| v.as_u64())
         .or_else(|| u.get("eval_count").and_then(|v| v.as_u64()))
         .map(|v| v as usize);
+    // Ollama's native /api/chat added cached-prompt reporting in 0.5.x
+    // (`prompt_eval_count` is the fresh-eval count; the rest of the
+    // prompt is served from KV-cache). Tolerate absence — older
+    // Ollama versions simply don't surface the count.
+    let cached_tokens = u
+        .get("cached_count")
+        .or_else(|| u.get("cached_tokens"))
+        .or_else(|| u.get("prompt_tokens_details").and_then(|p| p.get("cached_tokens")))
+        .and_then(|v| v.as_u64())
+        .map(|v| v as usize);
     TokenUsage {
         prompt_tokens,
         completion_tokens,
+        cached_tokens,
     }
 }
 

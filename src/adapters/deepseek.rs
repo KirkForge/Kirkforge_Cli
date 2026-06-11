@@ -19,6 +19,7 @@ pub struct DeepSeekAdapter {
     model: String,
     api_base: String,
     client: reqwest::Client,
+    json_mode: bool,
 }
 
 impl DeepSeekAdapter {
@@ -30,6 +31,7 @@ impl DeepSeekAdapter {
                 .tcp_nodelay(true)
                 .build()
                 .expect("reqwest client build failed"),
+            json_mode: false,
         }
     }
 }
@@ -43,7 +45,13 @@ impl ModelAdapter for DeepSeekAdapter {
             tool_call_format: ToolCallStyle::Native,
             max_context_tokens: 64_000,
             recommended_temperature: 0.6,
+            supports_images: false, // DeepSeek-V4 cloud has no vision variant
+            supports_cache: false,  // Ollama's /api/chat has no cache_control
         }
+    }
+
+    fn set_json_mode(&mut self, json_mode: bool) {
+        self.json_mode = json_mode;
     }
 
     async fn stream(
@@ -51,7 +59,14 @@ impl ModelAdapter for DeepSeekAdapter {
         messages: &[Message],
         tools: &[crate::shared::ToolDef],
     ) -> anyhow::Result<tokio::sync::mpsc::Receiver<StreamEvent>> {
-        let body = super::build_ollama_chat_body(&self.model, messages, tools, true);
+        let body = super::build_ollama_chat_body(
+            &self.model,
+            &self.model_info(),
+            messages,
+            tools,
+            true,
+            self.json_mode,
+        );
         let url = format!("{}/api/chat", self.api_base);
 
         let response = self

@@ -178,6 +178,28 @@ pub struct AppState {
     /// input box against stacking tests, (2) drive the spinner in
     /// place of the model-generation spinner.
     pub test_in_progress: bool,
+
+    // ── Frame-pacing v2: render-on-state-change ───────────────────
+    /// Set to `true` whenever `state` mutates in a way that should
+    /// produce a redraw. The event loop checks this flag at the top
+    /// of each iteration and skips `terminal.draw` when it's still
+    /// `false` (i.e. the previous frame is up-to-date and there's
+    /// been no new input).
+    ///
+    /// The flag is reset to `false` immediately after a successful
+    /// render. Every site that mutates `state` in a way visible to
+    /// the renderer — stream events, approvals, key handling, the
+    /// 4Hz slow-tick that drives the spinner — must call
+    /// `mark_dirty()` to schedule the next frame.
+    ///
+    /// This replaces the earlier "render every iteration, sleep
+    /// 16ms" pattern (the 2026-06-11 fix at `tui/mod.rs:412-429`).
+    /// The 16ms cap was good enough to bring CPU from 100% to ~5%
+    /// per session, but it burned cycles re-rendering identical
+    /// frames. Render-on-state-change is a tighter bound: zero
+    /// frames when nothing's happening, plus a 4Hz slow-tick when
+    /// the spinner is animating.
+    pub dirty: bool,
 }
 
 impl AppState {
@@ -220,6 +242,10 @@ impl AppState {
             search_match_idx: 0,
             bash_tool: std::sync::Arc::new(crate::tools::bash::Bash),
             test_in_progress: false,
+            // Start dirty so the first frame draws immediately (the
+            // connection banner / status bar are non-empty even with
+            // zero state mutations).
+            dirty: true,
         }
     }
 
@@ -228,6 +254,15 @@ impl AppState {
     #[inline]
     pub fn tool_should_collapse(&self, idx: usize) -> bool {
         self.tool_collapsed && !self.expanded_tools.contains(&idx)
+    }
+
+    /// Mark the state as needing a redraw. Cheap (single bool write);
+    /// safe to call from any code path that mutates a field the
+    /// renderer reads. The event loop clears the flag at the end of
+    /// each render.
+    #[inline]
+    pub fn mark_dirty(&mut self) {
+        self.dirty = true;
     }
 
     /// Compute (line_count, byte_count) for a tool output string,
@@ -319,4 +354,38 @@ pub struct PendingApproval {
 /// was on. This struct is the gate.
 pub struct PendingBangCommand {
     pub cmd: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A freshly-constructed `AppState` must start with `dirty = true`
+    /// so the first frame draws the connection banner / status bar
+    /// even if no state mutation has happened yet. The render-on-
+    /// state-change refactor (tui/mod.rs) relies on this initial
+    /// dirty value; if it ever flips to `false`, the very first
+    /// iteration of the event loop would skip `terminal.draw` and
+    /// the user would see a blank screen until the slow-tick fired.
+    #[test]
+    fn new_state_starts_dirty() {
+        let s = AppState::new(Config::default());
+        assert!(s.dirty, "freshly-constructed state should be dirty for the first frame");
+    }
+
+    /// `mark_dirty` is a no-op when the state is already dirty, and
+    /// idempotent across repeated calls. The cheap bool write is
+    /// safe to call from any mutation site.
+    #[test]
+    fn mark_dirty_is_idempotent() {
+        let mut s = AppState::new(Config::default());
+        s.dirty = false;
+        s.mark_dirty();
+        assert!(s.dirty);
+        s.mark_dirty();
+        assert!(s.dirty);
+        // And reset path is just a bool write.
+        s.dirty = false;
+        assert!(!s.dirty);
+    }
 }

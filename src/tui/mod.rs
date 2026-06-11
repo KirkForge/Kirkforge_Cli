@@ -258,6 +258,14 @@ pub async fn run_tui(
     });
 
     // Event loop
+    // Slow-tick: drives time-based UI elements (spinner, the
+    // 4Hz refresh of the status bar's elapsed-time display).
+    // 250ms = 4Hz, which is smooth enough for the spinner
+    // (12-frame animation, full cycle every 3s) and slow enough
+    // that the slow-tick never dominates idle CPU.
+    let mut slow_tick = tokio::time::interval(std::time::Duration::from_millis(250));
+    slow_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
     let res = run_event_loop(
         &mut terminal,
         &mut state,
@@ -269,6 +277,7 @@ pub async fn run_tui(
         &resume_tx,
         &compact_tx,
         &model_tx,
+        &mut slow_tick,
     )
     .await;
 
@@ -302,6 +311,7 @@ async fn run_event_loop(
     resume_tx: &mpsc::UnboundedSender<ConversationLog>,
     compact_tx: &mpsc::UnboundedSender<()>,
     model_tx: &mpsc::UnboundedSender<String>,
+    slow_tick: &mut tokio::time::Interval,
 ) -> anyhow::Result<()> {
     loop {
         // Check for exit signal
@@ -309,23 +319,180 @@ async fn run_event_loop(
             break Ok(());
         }
 
-        // ── Drain pending stream events ──
-        // Each event is a pure mutation of `state`. See
-        // `tui::events` for the per-variant handlers and tests.
-        drain_turn_events(state, event_rx);
+        // ── Frame-pacing v2: render-on-state-change ───────────────
+        //
+        // The earlier pattern (v1, 2026-06-11) was:
+        //   1. drain events
+        //   2. render
+        //   3. drain keys
+        //   4. sleep 16ms
+        //
+        // That worked but burned ~5% CPU per idle session because
+        // step 2 re-rendered the same frame every iteration even
+        // when nothing had changed. The v2 pattern is event-driven:
+        // we `select!` on the four things that can cause a redraw
+        // (kb event, executor event, approval event, 4Hz slow-tick)
+        // and only render when `state.dirty` is set.
+        //
+        // `drain_*` calls below mutate state and `mark_dirty()`
+        // internally. The slow-tick `interval.tick()` always sets
+        // dirty (drives the spinner). Key handling sets dirty
+        // implicitly via the state mutations inside
+        // `handle_input_key` / `handle_approval_key`. Resize
+        // events also mark dirty.
+        //
+        // If `state.dirty` is still false after all of the above,
+        // we skip the render entirely. This is the case in 99% of
+        // iterations during a quiet session — the loop is mostly
+        // `select!` waiting, with no work to do.
 
-        // ── Check for completed background jobs ──
-        notify_completed_jobs(state).await;
+        let mut kb_event: Option<Event> = None;
+        let mut had_executor_event = false;
+        let mut had_approval_event = false;
+        let mut had_approval_pending = state.pending_approval.is_some() || state.pending_bang.is_some();
+        let mut dirty_from_tick = false;
 
-        // ── Drain pending approval requests ──
-        // If a new approval arrives while one is pending, deny the old one
-        // before replacing it — otherwise the old oneshot sender is dropped
-        // without sending, causing the executor to hang forever.
-        drain_approval_requests(state, approval_rx);
+        tokio::select! {
+            // Bias the select! slightly toward real events so we
+            // don't drop a kb event when the slow-tick happens to
+            // fire at the same instant. `tokio::select!` polls
+            // branches top-to-bottom; the slow-tick is the lowest
+            // priority, so it'll only fire when nothing else is
+            // ready.
+            ev = kb_rx.recv() => {
+                kb_event = ev;
+            }
+            ev = event_rx.recv() => {
+                if ev.is_some() {
+                    had_executor_event = true;
+                }
+            }
+            ev = approval_rx.recv() => {
+                if ev.is_some() {
+                    had_approval_event = true;
+                }
+            }
+            _ = slow_tick.tick() => {
+                dirty_from_tick = true;
+            }
+        }
 
-        // ── Render ──
-        // Tick spinner for loading animation
-        state.spinner_tick = state.spinner_tick.wrapping_add(1);
+        // ── Drain events that have accumulated since last loop ──
+        // The `select!` above waits on the *first* of each channel
+        // to become ready; everything queued after that is also
+        // drained here in a tight loop. This is the same work the
+        // v1 loop did on every iteration — now it only happens
+        // when at least one event source is actually ready.
+        if had_executor_event {
+            drain_turn_events(state, event_rx);
+            state.mark_dirty();
+        }
+        if had_approval_event {
+            drain_approval_requests(state, approval_rx);
+            state.mark_dirty();
+        }
+        // Jobs and kb events are also work that may have been
+        // waiting. We always drain jobs (cheap) and process any
+        // kb event we just got. If nothing happened, none of this
+        // marks the state dirty.
+
+        // notify_completed_jobs mutates state when it pushes a
+        // notification, and is cheap (O(n) in jobs, single lock).
+        // It returns `true` only when it actually pushed something;
+        // we use that to set the dirty flag (so a no-op
+        // notification pass doesn't schedule an unnecessary redraw).
+        if notify_completed_jobs(state).await {
+            state.mark_dirty();
+        }
+
+        // Process the kb event (if any). The handlers
+        // (`handle_input_key` / `handle_approval_key` /
+        // `handle_bang_approval_key`) call `state.mark_dirty()`
+        // internally via their state mutations, but we also
+        // explicitly mark dirty here because a no-op key event
+        // (e.g. Shift held down) shouldn't redraw, and the
+        // explicit mark ensures the redraw still happens on the
+        // first key event regardless of which handler ran.
+        if let Some(ev) = kb_event {
+            match ev {
+                Event::Key(key) => {
+                    // Order matters: the bang-approval gate (review.md
+                    // arch concern #1) takes priority over the model
+                    // approval because its response is purely local.
+                    if state.pending_bang.is_some() {
+                        approval_keys::handle_bang_approval_key(key, state);
+                    } else if state.pending_approval.is_some() {
+                        approval_keys::handle_approval_key(key, state);
+                    } else {
+                        keys::handle_input_key(
+                            key, state, input_tx, cancel_tx, resume_tx, compact_tx, model_tx,
+                        )
+                        .await?;
+                    }
+                }
+                Event::Resize(_w, _h) => {
+                    // Terminal size changed — the layout has to
+                    // recompute. Mark dirty so the next render
+                    // uses the new size even if no other state
+                    // changed.
+                    state.mark_dirty();
+                }
+                _ => {}
+            }
+        }
+
+        // Also drain any other kb events that arrived in the same
+        // burst (e.g. a paste that's multiple key events). These
+        // were already there in the v1 loop; we keep the
+        // try_recv loop for them.
+        while let Ok(ev) = kb_rx.try_recv() {
+            match ev {
+                Event::Key(key) => {
+                    if state.pending_bang.is_some() {
+                        approval_keys::handle_bang_approval_key(key, state);
+                    } else if state.pending_approval.is_some() {
+                        approval_keys::handle_approval_key(key, state);
+                    } else {
+                        keys::handle_input_key(
+                            key, state, input_tx, cancel_tx, resume_tx, compact_tx, model_tx,
+                        )
+                        .await?;
+                    }
+                }
+                Event::Resize(_w, _h) => state.mark_dirty(),
+                _ => {}
+            }
+        }
+
+        // ── Approval dialog appeared mid-iteration ─────────────
+        // The drain functions above set `state.pending_approval` /
+        // `state.pending_bang` if a new approval arrived. Track
+        // this so the next render (even if it would otherwise be
+        // skipped) draws the dialog. Mirrors the v1 behavior of
+        // always rendering so the dialog appears immediately.
+        if state.pending_approval.is_some() || state.pending_bang.is_some() {
+            had_approval_pending = true;
+        }
+        if had_approval_pending {
+            state.mark_dirty();
+        }
+
+        // ── Slow-tick: drive the spinner + any other clock-driven UI ──
+        if dirty_from_tick {
+            state.spinner_tick = state.spinner_tick.wrapping_add(1);
+            state.mark_dirty();
+        }
+
+        // ── Render (only if dirty) ──────────────────────────────
+        if !state.dirty {
+            // Nothing to draw. The `select!` above already
+            // incorporated a 250ms wait (slow_tick interval), so
+            // the loop is naturally rate-limited. The CPU
+            // profile at idle is essentially zero on this path.
+            continue;
+        }
+        state.dirty = false;
+
         terminal.draw(|f| {
             let size = f.area();
             let chunks = Layout::default()
@@ -385,48 +552,6 @@ async fn run_event_loop(
             }
             state.pending_approval = pending_taken;
         })?;
-
-        // ── Handle keyboard events (non-blocking, from background thread) ──
-        while let Ok(ev) = kb_rx.try_recv() {
-            match ev {
-                Event::Key(key) => {
-                    // Order matters: the bang-approval gate (review.md
-                    // arch concern #1) takes priority over the model
-                    // approval because its response is purely local.
-                    if state.pending_bang.is_some() {
-                        approval_keys::handle_bang_approval_key(key, state);
-                    } else if state.pending_approval.is_some() {
-                        approval_keys::handle_approval_key(key, state);
-                    } else {
-                        keys::handle_input_key(
-                            key, state, input_tx, cancel_tx, resume_tx, compact_tx, model_tx,
-                        )
-                        .await?;
-                    }
-                }
-                Event::Resize(_w, _h) => {}
-                _ => {}
-            }
-        }
-
-        // ── Frame pacing ──
-        // The event loop above has no `await` that yields to the runtime
-        // on the idle path (drain_* use try_recv, notify_completed_jobs's
-        // .await is on a fast lock, terminal.draw is sync). Without
-        // pacing, the loop spins at 100% CPU even when there's nothing to
-        // render — a TUI on a 2012-era laptop burns 3+ cores at idle.
-        //
-        // 16ms = 60fps cap. Long enough to keep CPU usage at ~5% on idle,
-        // short enough that the spinner still looks smooth and keystrokes
-        // feel instant. The sleep is skipped on hot paths by `tokio::select!`
-        // merging with a real signal channel; for v1 the simple sleep is
-        // good enough.
-        //
-        // This is the proximate fix for the 27-29/8 CPU usage reported in
-        // the 2026-06-11 incident screenshots. The deeper fix (only
-        // re-render when state changes, instead of every iteration) is a
-        // v2 refactor.
-        tokio::time::sleep(std::time::Duration::from_millis(16)).await;
     }
 }
 

@@ -244,7 +244,12 @@ pub async fn handle_jobs_command(args: &str) -> String {
 ///
 /// Called by the TUI event loop on every tick. Cheap O(n) in the
 /// number of jobs; not O(n) in the number of turns.
-pub async fn notify_completed_jobs(state: &mut AppState) {
+///
+/// Returns `true` if any job was newly notified (so `state` was
+/// mutated). Callers use this to set the frame-pacing dirty flag
+/// instead of re-checking the registry themselves.
+pub async fn notify_completed_jobs(state: &mut AppState) -> bool {
+    let mut any = false;
     let registry = crate::session::bash_jobs::global_registry();
     let jobs = registry.list().await;
     for job in &jobs {
@@ -272,6 +277,8 @@ pub async fn notify_completed_jobs(state: &mut AppState) {
                 "system",
                 format!("{} — `{}`", status_icon, job.command),
             ));
+            any = true;
         }
     }
+    any
 }

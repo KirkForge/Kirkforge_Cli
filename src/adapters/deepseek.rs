@@ -78,7 +78,15 @@ impl ModelAdapter for DeepSeekAdapter {
             .await?
             .error_for_status()?;
 
-        let (tx, rx) = tokio::sync::mpsc::channel::<StreamEvent>(128);
+        // Channel size: 4096 events. The previous value of 128 was
+        // too small for streaming responses from thinking models —
+        // a single response can produce 200+ text chunks before the
+        // executor drains the receiver, and a full channel blocks
+        // `tx.send` which in turn causes the parser to bail with
+        // "stream consumer dropped receiver mid-stream" warnings
+        // (2026-06-11 incident, see screenshot 1/2/3). 4096 gives
+        // ~20x headroom and is still small enough to bound memory.
+        let (tx, rx) = tokio::sync::mpsc::channel::<StreamEvent>(4096);
 
         tokio::spawn(async move {
             let stream = response.bytes_stream();

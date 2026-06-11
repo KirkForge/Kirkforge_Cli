@@ -8,7 +8,6 @@ pub mod cron;
 pub mod error_recovery;
 pub mod event_bus;
 pub mod executor;
-pub mod heartbeat;
 pub mod hooks;
 pub mod mcp_client;
 pub mod mcp_tools;
@@ -19,7 +18,6 @@ pub mod scheduler;
 pub mod session_fork;
 pub mod session_index;
 pub mod skills;
-pub mod tick;
 pub mod undo;
 pub mod verifier;
 

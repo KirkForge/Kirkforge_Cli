@@ -22,6 +22,7 @@
 
 pub mod app;
 pub mod approval_keys;
+pub mod clipboard;
 pub mod commands;
 pub mod components;
 pub mod events;

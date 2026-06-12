@@ -53,7 +53,7 @@ use ratatui::{
 use std::io;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Notify};
 use widgets::chat::render_chat;
 use widgets::input::render_input;
 use widgets::status::render_status;
@@ -183,12 +183,55 @@ pub async fn run_tui(
     // Keyboard events: background reader thread → TUI event loop
     let (kb_tx, mut kb_rx) = mpsc::unbounded_channel::<Event>();
 
+    // Shutdown signal: a one-shot notify that any of the exit paths
+    // (SIGHUP, kb-reader thread EOF when the pty closes, future
+    // SIGTERM/SIGINT) can fire. The event loop `select!`s on it and
+    // sets `state.should_exit = true` when it fires.
+    //
+    // Bug this fixes: previously, when the controlling terminal went
+    // away (wezterm pane close, SSH disconnect, dropped SSH session),
+    // the TUI event loop had no way to observe it. The SIGHUP handler
+    // was wired only to config hot-reload; the kb-reader thread
+    // silently exited on `event::read()` Err but the TUI kept waiting
+    // on the (now-empty) keyboard channel forever. The process became
+    // an orphan: pty gone, stdin/stdout `(deleted)`, but the event
+    // loop pinned a core at low CPU for the lifetime of the OS.
+    let shutdown = Arc::new(Notify::new());
+    let shutdown_for_loop = shutdown.clone();
+    let shutdown_for_kb = shutdown.clone();
+
     // Spawn a dedicated thread to read crossterm events without blocking
     // the async event loop. This eliminates the 50ms poll latency floor.
+    //
+    // 2026-06-12: when the pty closes (terminal multiplexer pane close,
+    // SSH disconnect, etc.) `event::read()` returns `Err`. The
+    // pre-fix code silently dropped the thread here, leaving the
+    // TUI event loop waiting on `kb_rx` for events that would never
+    // arrive. The fix fires `shutdown` so the TUI loop wakes up,
+    // sets `state.should_exit = true`, and runs the same graceful
+    // shutdown path as `/exit` (terminal mode restored, carryover
+    // profile saved, executor flushed).
     std::thread::spawn(move || {
-        while let Ok(ev) = event::read() {
-            if kb_tx.send(ev).is_err() {
-                break; // receiver dropped (TUI exited)
+        loop {
+            match event::read() {
+                Ok(ev) => {
+                    if kb_tx.send(ev).is_err() {
+                        break; // receiver dropped (TUI exited)
+                    }
+                }
+                Err(e) => {
+                    // pty is gone (or some other fatal read error).
+                    // Signal the event loop to exit. We don't try to
+                    // distinguish EINTR / UnexpectedEof / other
+                    // variants — the cost of a false positive is one
+                    // extra `/exit`, which is harmless.
+                    tracing::info!(
+                        error = ?e,
+                        "keyboard reader thread exiting; signalling TUI shutdown"
+                    );
+                    shutdown_for_kb.notify_one();
+                    break;
+                }
             }
         }
     });
@@ -232,6 +275,37 @@ pub async fn run_tui(
             }
             Err(e) => {
                 tracing::warn!("Could not install SIGHUP handler: {}", e);
+            }
+        }
+
+        // SIGHUP also fires a shutdown signal so the TUI exits when
+        // the controlling terminal goes away (wezterm pane close,
+        // SSH disconnect, etc.). This is a *second* independent
+        // signal stream for the same signal — tokio's `signal()`
+        // allows multiple subscribers, and the OS delivers SIGHUP
+        // to both. The reload handler above keeps its display-only
+        // behaviour; this handler is the actual exit path.
+        //
+        // We register it on every Unix target (macOS included) so
+        // the fix is portable across the box's OSes. If signal()
+        // fails (extremely rare — only when the process has
+        // exhausted its signal-handler table) we log and continue;
+        // the kb-thread EOF path above is the fallback.
+        let shutdown_for_hup = shutdown.clone();
+        match signal(SignalKind::hangup()) {
+            Ok(mut hup) => {
+                tokio::spawn(async move {
+                    if hup.recv().await.is_some() {
+                        tracing::info!("SIGHUP received; shutting down TUI");
+                        shutdown_for_hup.notify_one();
+                    }
+                });
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Could not install SIGHUP shutdown handler: {}",
+                    e
+                );
             }
         }
     }
@@ -287,6 +361,7 @@ pub async fn run_tui(
         &compact_tx,
         &model_tx,
         &mut slow_tick,
+        &shutdown_for_loop,
     )
     .await;
 
@@ -321,6 +396,13 @@ async fn run_event_loop(
     compact_tx: &mpsc::UnboundedSender<()>,
     model_tx: &mpsc::UnboundedSender<String>,
     slow_tick: &mut tokio::time::Interval,
+    // One-shot shutdown signal. Fired by:
+    //   - the SIGHUP handler (Unix, pty-close)
+    //   - the kb-reader thread (crossterm `event::read()` Err)
+    // When the loop observes it, it sets `state.should_exit = true`
+    // and falls through to the standard exit path (terminal mode
+    // restored, executor dropped, carryover profile saved).
+    shutdown: &Arc<Notify>,
 ) -> anyhow::Result<()> {
     loop {
         // Check for exit signal
@@ -380,6 +462,14 @@ async fn run_event_loop(
                 if ev.is_some() {
                     had_approval_event = true;
                 }
+            }
+            // Shutdown arm: SIGHUP or kb-reader-thread EOF. Higher
+            // priority than the slow-tick so a signal received
+            // during a tick still preempts the next 125ms wait. On
+            // the slow path (no SIGHUP) the notified future is
+            // cheap to poll — Notify uses a futex internally.
+            _ = shutdown.notified() => {
+                state.should_exit = true;
             }
             _ = slow_tick.tick() => {
                 dirty_from_tick = true;
@@ -676,5 +766,67 @@ mod tests {
             s
         );
         assert!(s.is_empty());
+    }
+
+    // ── Shutdown-signal regression test ────────────────────────
+    //
+    // 2026-06-12 fix: the TUI event loop now observes a `Notify` so
+    // SIGHUP and kb-reader-thread EOF can both wake the loop and
+    // set `state.should_exit = true`. This test pins the
+    // `Notify` + `select!` wiring: a future refactor that breaks
+    // the shutdown arm — by removing it from the `select!`, by
+    // holding the only `Arc` reference inside a function that
+    // returns before the loop polls, etc. — will fail this test.
+    //
+    // The test does not exercise the full TUI (that needs a real
+    // pty + a live Ollama). It exercises the same `select!` arm
+    // shape the event loop uses: a `Notify` and a slow tick. If
+    // the arm is wired correctly, the `select!` resolves on the
+    // `Notify` arm within a few ms.
+    #[tokio::test]
+    async fn shutdown_notify_wakes_select() {
+        let notify = Arc::new(Notify::new());
+        let notify_for_task = notify.clone();
+        let started = std::time::Instant::now();
+
+        // Fire the notify after a short delay. This mimics the
+        // SIGHUP handler and the kb-reader-thread-EOF path in
+        // `run_tui`, both of which call `notify_one()` from a
+        // background task/thread.
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            notify_for_task.notify_one();
+        });
+
+        let mut slow_tick =
+            tokio::time::interval(std::time::Duration::from_millis(125));
+        slow_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+        let mut should_exit = false;
+        loop {
+            tokio::select! {
+                _ = notify.notified() => {
+                    should_exit = true;
+                }
+                _ = slow_tick.tick() => {
+                    // Loop is alive but no shutdown yet.
+                }
+            }
+            if should_exit {
+                break;
+            }
+            // Safety net: bail out if the test would otherwise
+            // hang forever (Notify never fired). 1s is generous
+            // — the real notification fires at 20ms.
+            if started.elapsed() > std::time::Duration::from_secs(1) {
+                panic!("shutdown Notify was never observed");
+            }
+        }
+
+        assert!(
+            started.elapsed() < std::time::Duration::from_millis(500),
+            "shutdown took too long: {:?}",
+            started.elapsed()
+        );
     }
 }

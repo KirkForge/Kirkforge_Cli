@@ -21,6 +21,7 @@ Design notes borrowed from other CLI agent projects. Each file sketches one idea
 | Built-in subagent personas | [../adr/010-subagent-personas.md](../adr/010-subagent-personas.md) |
 | Compaction lifecycle hooks | [../adr/011-compaction-hooks.md](../adr/011-compaction-hooks.md) |
 | Safe git commit helper | [../adr/012-git-commit-sanitation.md](../adr/012-git-commit-sanitation.md) |
+| Rust-native plugin system | [../adr/013-rust-native-plugin-system.md](../adr/013-rust-native-plugin-system.md) |
 
 These are not roadmaps — just reference material.
 Some ideas above have been implemented; their ADRs document the current behavior.

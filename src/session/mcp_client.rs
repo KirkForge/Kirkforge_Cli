@@ -39,6 +39,7 @@
 //! - `Drop` kills the child and spawns a best-effort reap task; a
 //!   synchronous `Drop` cannot `.await`, so zombie reaping is best-effort.
 
+use crate::session::process_group::{kill_process_group, setup_process_group};
 use crate::shared::McpServerConfig;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -125,6 +126,7 @@ impl McpClient {
         cmd.stdin(std::process::Stdio::piped());
         cmd.stdout(std::process::Stdio::piped());
         cmd.stderr(std::process::Stdio::piped());
+        setup_process_group(&mut cmd);
 
         let mut child = match cmd.spawn() {
             Ok(c) => c,
@@ -281,17 +283,20 @@ impl McpClient {
                 return;
             }
         };
-        let mut stdin = self.stdin.lock().await;
-        if let Err(e) = stdin.write_all(line.as_bytes()).await {
-            tracing::warn!(error = %e, "failed to write MCP notification");
-            return;
-        }
-        if let Err(e) = stdin.write_all(b"\n").await {
-            tracing::warn!(error = %e, "failed to write MCP notification newline");
-            return;
-        }
-        if let Err(e) = stdin.flush().await {
-            tracing::warn!(error = %e, "failed to flush MCP notification");
+        let write_fut = async {
+            let mut stdin = self.stdin.lock().await;
+            stdin.write_all(line.as_bytes()).await?;
+            stdin.write_all(b"\n").await?;
+            stdin.flush().await
+        };
+        match tokio::time::timeout(REQUEST_TIMEOUT, write_fut).await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                tracing::warn!(error = %e, "failed to write MCP notification");
+            }
+            Err(_) => {
+                tracing::warn!("MCP notification write timed out");
+            }
         }
     }
 
@@ -488,7 +493,10 @@ impl Drop for McpClient {
         // the OS will reap it — rather than panicking.
         if let Ok(mut guard) = self.child.lock() {
             if let Some(mut child) = guard.take() {
-                let _ = child.start_kill();
+                // Kill the whole process group so MCP server descendants
+                // (e.g. a Node subprocess spawned by `npx`) are not left
+                // behind as orphans.
+                kill_process_group(&mut child);
                 if tokio::runtime::Handle::try_current().is_ok() {
                     std::mem::drop(spawn_child_reap(child));
                 }

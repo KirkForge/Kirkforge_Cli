@@ -1,5 +1,6 @@
 use crate::session::access::{DenyList, PathGuard};
 use crate::session::bash_jobs::global_registry;
+use crate::session::process_group::{kill_process_group, setup_process_group};
 use crate::shared::{ToolDef, ToolOutcome};
 use crate::tools::bash_minify;
 use crate::tools::Tool;
@@ -274,6 +275,8 @@ pub async fn run_shell(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
+    setup_process_group(&mut proc);
+
     let mut child = proc
         .spawn()
         .map_err(|e| format!("Failed to execute command: {}", e))?;
@@ -299,11 +302,10 @@ pub async fn run_shell(
             Ok(result)
         }
         _ = tokio::time::sleep_until(timeout_at) => {
-            // The child is still owned by the outer scope; we can
-            // explicitly kill it. The drain tasks continue draining
-            // the pipes (which close once the child dies) and we join
-            // them below to surface partial output.
-            let _ = child.start_kill();
+            // The child is still owned by the outer scope; kill the
+            // whole process group so grandchildren cannot outlive it
+            // and keep the pipes open.
+            kill_process_group(&mut child);
             Err(())
         }
     };
@@ -372,11 +374,32 @@ pub fn cap_to_string(raw: Vec<u8>, dropped: u64) -> String {
 /// `.code()`, and we want it to take the error branch and prepend the
 /// timeout marker.
 fn synth_status_killed() -> std::process::ExitStatus {
-    use std::os::unix::process::ExitStatusExt;
-    // On Unix, `ExitStatus::from_raw(N)` represents "killed by signal N"
-    // (the `wait()` convention stores the signal number directly in the
-    // low bits when WIFSIGNALED). SIGKILL = 9.
-    std::process::ExitStatus::from_raw(9)
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        // On Unix, `ExitStatus::from_raw(N)` represents "killed by signal N"
+        // (the `wait()` convention stores the signal number directly in the
+        // low bits when WIFSIGNALED). SIGKILL = 9.
+        std::process::ExitStatus::from_raw(9)
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::ExitStatusExt;
+        // On Windows, `from_raw` is the exit code. Returning 9 keeps
+        // `.success()` false and `.code()` returning `Some(9)`.
+        std::process::ExitStatus::from_raw(9)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        // Exotic target fallback: spawn a trivial command that exits 9.
+        // This path is only reached on timeout, so the overhead is
+        // acceptable and better than failing to compile.
+        std::process::Command::new("sh")
+            .arg("-c")
+            .arg("exit 9")
+            .status()
+            .expect("fallback status command")
+    }
 }
 
 /// Dangerous shell-command substrings. These are blocked regardless of
@@ -429,16 +452,32 @@ pub fn check_bash_command_str(
     bash_sandbox_workdir: bool,
 ) -> Option<String> {
     // 1. Sandboxed workdir policy. If enabled, reject an explicit workdir
-    //    that points outside the sandbox.
+    //    that points outside the sandbox. If we cannot canonicalize the path
+    //    we deny: a non-canonical path containing `..` could pass the
+    //    prefix check while resolving outside the sandbox.
     if bash_sandbox_workdir {
         if let Some(workdir) = workdir {
             if !workdir.is_empty() {
                 let workdir_path = Path::new(workdir);
-                let resolved = workdir_path
-                    .canonicalize()
-                    .unwrap_or_else(|_| workdir_path.to_path_buf());
+                let resolved = match workdir_path.canonicalize() {
+                    Ok(p) => p,
+                    Err(_) => {
+                        return Some(format!(
+                            "🔒 Bash workdir cannot be resolved: {} (sandbox enforcement active)",
+                            workdir
+                        ));
+                    }
+                };
                 if let Some(ref sandbox) = path_guard.sandbox_dir {
-                    let sb = sandbox.canonicalize().unwrap_or_else(|_| sandbox.clone());
+                    let sb = match sandbox.canonicalize() {
+                        Ok(p) => p,
+                        Err(_) => {
+                            return Some(format!(
+                                "🔒 Sandbox directory cannot be resolved: {}",
+                                sandbox.display()
+                            ));
+                        }
+                    };
                     if !resolved.starts_with(&sb) {
                         return Some(format!(
                             "🔒 Bash workdir outside sandbox: {} (sandbox: {})",
@@ -560,6 +599,40 @@ mod tests {
         assert_eq!(kept.len(), cap);
         assert_eq!(dropped as usize, payload.len() - cap);
         assert_eq!(&kept[..], &payload[..cap]);
+    }
+
+    /// A timed-out `run_shell` invocation must not leave descendants
+    /// behind. We nest a `sleep` inside a subshell so it is a
+    /// grandchild of the outer shell and verify the survivor never
+    /// touches a marker file.
+    #[tokio::test]
+    async fn run_shell_timeout_kills_descendants() {
+        let tmp = std::env::temp_dir();
+        let marker = tmp.join(format!(
+            "kirkforge_run_shell_orphan_test_{}",
+            std::process::id()
+        ));
+        let marker_str = marker.to_string_lossy().to_string();
+        let _ = std::fs::remove_file(&marker);
+
+        // Inner `sh` makes `sleep` a grandchild of the outer shell.
+        let cmd = format!("sh -c 'sleep 30; touch {}'", marker_str);
+        let out = run_shell(&cmd, &tmp, 1)
+            .await
+            .expect("run_shell should time out, not error");
+        assert!(
+            out.stdout.contains("timed out"),
+            "expected timeout marker, got: {:?}",
+            &out.stdout[..out.stdout.len().min(200)]
+        );
+
+        // Allow a generous window for a would-be orphan to touch the marker.
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        assert!(
+            !marker.exists(),
+            "descendant process survived timeout and touched marker"
+        );
+        let _ = std::fs::remove_file(&marker);
     }
 
     /// A `run_shell` invocation that exceeds the cap gets the marker in
@@ -710,6 +783,28 @@ mod tests {
                 .as_ref()
                 .is_some_and(|m| m.contains("outside sandbox")),
             "workdir outside sandbox should be rejected, got: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_check_bash_command_str_sandbox_rejects_unresolvable_workdir() {
+        let path_guard = crate::session::access::PathGuard {
+            sandbox_dir: Some(std::env::temp_dir()),
+            ..Default::default()
+        };
+        let result = check_bash_command_str(
+            "ls",
+            Some("/nonexistent/path/that/cannot/be/canonicalized"),
+            &DenyList::default(),
+            &path_guard,
+            true,
+        );
+        assert!(
+            result
+                .as_ref()
+                .is_some_and(|m| m.contains("cannot be resolved")),
+            "unresolvable workdir should be rejected, got: {:?}",
             result
         );
     }

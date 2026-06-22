@@ -14,6 +14,7 @@ pub mod hooks;
 pub mod mcp_client;
 pub mod mcp_tools;
 pub mod memory;
+pub mod process_group;
 pub mod prompt;
 pub mod router;
 pub mod session_fork;

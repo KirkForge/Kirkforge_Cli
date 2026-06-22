@@ -20,6 +20,7 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use crate::session::access::access_from_config;
+use crate::session::process_group::{kill_process_group, setup_process_group};
 use crate::shared::Config;
 use crate::tools::bash::{
     cap_to_string, check_bash_command_str, drain_capped, MAX_BASH_OUTPUT_BYTES,
@@ -184,6 +185,7 @@ async fn run_hook_script(
         .kill_on_drop(true)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    setup_process_group(&mut cmd);
     for (k, v) in env_vars {
         cmd.env(k, v);
     }
@@ -209,7 +211,10 @@ async fn run_hook_script(
         biased;
         result = child.wait() => Ok(result),
         _ = tokio::time::sleep_until(timeout_at) => {
-            let _ = child.start_kill();
+            // Kill the whole process group so a long-lived descendant
+            // (e.g. a hook that spawned `sleep`) cannot keep the pipes
+            // open and block the drain tasks.
+            kill_process_group(&mut child);
             Err(())
         }
     };
@@ -424,6 +429,27 @@ mod tests {
         runner.run("slow-hook", &[], &default_config());
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         // If we get here without the 30s sleep blocking, timeout works
+    }
+
+    #[tokio::test]
+    async fn test_run_hook_timeout_kills_descendants() {
+        let (_tmp, dir) = temp_hooks_dir();
+        let marker = dir.join("survivor-marker.txt");
+        let marker_str = marker.to_string_lossy().to_string();
+        write_hook(
+            &dir,
+            "slow-hook",
+            &format!("#!/bin/bash\nsh -c 'sleep 30; touch {}'", marker_str),
+        );
+        let runner = HookRunner::new(dir);
+
+        runner.run("slow-hook", &[], &default_config());
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+        assert!(
+            !marker.exists(),
+            "hook descendant survived timeout and touched marker"
+        );
     }
 
     #[tokio::test]

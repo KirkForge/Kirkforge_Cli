@@ -6,6 +6,7 @@
 /// Allows spawning bash commands that outlive a single tool call.
 /// Jobs run as tokio tasks and their output is captured asynchronously.
 /// The model or user can check job status, read output, or cancel jobs.
+use crate::session::process_group::{kill_process_group, setup_process_group};
 use crate::tools::bash::{cap_to_string, drain_capped, MAX_BASH_OUTPUT_BYTES};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -13,48 +14,6 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 use tokio::process::Child;
 use tokio::sync::Mutex;
-
-#[cfg(unix)]
-use std::os::unix::process::CommandExt;
-
-#[cfg(unix)]
-extern "C" {
-    fn setpgid(pid: i32, pgid: i32) -> i32;
-    fn killpg(pgrp: i32, sig: i32) -> i32;
-}
-
-const SIGKILL: i32 = 9;
-
-#[cfg(unix)]
-fn setup_process_group(cmd: &mut tokio::process::Command) {
-    // Place the shell into a new process group. When a timeout fires we can
-    // then signal the whole group, killing any grandchildren that inherited
-    // our stdout/stderr pipes and would otherwise keep the pipe open.
-    unsafe {
-        cmd.as_std_mut().pre_exec(|| {
-            let _ = setpgid(0, 0);
-            Ok(())
-        });
-    }
-}
-
-#[cfg(not(unix))]
-fn setup_process_group(_cmd: &mut tokio::process::Command) {}
-
-/// Kill a child and, on Unix, its entire process group. This prevents orphan
-/// descendants from holding our pipe ends open and blocking drain tasks.
-fn kill_process_group(child: &mut Child) {
-    #[cfg(unix)]
-    if let Some(pid) = child.id() {
-        unsafe {
-            let _ = killpg(pid as i32, SIGKILL);
-        }
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = child.start_kill();
-    }
-}
 
 /// Status of a background job.
 #[derive(Debug, Clone, PartialEq)]
@@ -364,7 +323,7 @@ impl BashJobRegistry {
             let mut children = self.children.lock().await;
             for id in &job_ids {
                 if let Some(mut child) = children.remove(id) {
-                    let _ = child.kill().await;
+                    kill_process_group(&mut child);
                     let _ = child.wait().await;
                 }
             }

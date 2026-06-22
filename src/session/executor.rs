@@ -48,6 +48,12 @@ enum ApprovalDecision {
     AlwaysApproved,
 }
 
+/// Marker emitted by the model at the end of a plan-mode turn. The
+/// executor detects this string in the assistant content and surfaces a
+/// `TurnEvent::PlanComplete` so the TUI can ask the user to approve
+/// exiting plan mode.
+const PLAN_COMPLETE_MARKER: &str = "## Plan Complete — ready to implement";
+
 pub struct Executor {
     adapter: Box<dyn ModelAdapter>,
     adapter_swap: AdapterSwap,
@@ -73,6 +79,13 @@ pub struct Executor {
     /// Optional per-session undo stack. Held here so `/undo` can pop
     /// via a control channel without touching the tools directly.
     undo_stack: Option<UndoStackRef>,
+
+    /// When true, the executor only permits read-only discovery tools
+    /// (read_file, read_image, grep, glob, and read-only bash). All
+    /// mutating tools are denied at the dispatch layer so the model
+    /// cannot implement while it is still "thinking". Entered via
+    /// `/plan` and exited via `/implement` or user approval.
+    plan_mode: bool,
 }
 
 /// Drop guard that fires the `post-turn` hook on every exit path of
@@ -188,6 +201,7 @@ impl Executor {
             carryover_enabled,
             carryover_target,
             undo_stack,
+            plan_mode: false,
         };
         this.init_default_verifiers();
         this
@@ -314,6 +328,7 @@ impl Executor {
         mut model_rx: mpsc::UnboundedReceiver<String>,
         mut undo_rx: mpsc::UnboundedReceiver<()>,
         mut config_rx: mpsc::UnboundedReceiver<Config>,
+        mut plan_rx: mpsc::UnboundedReceiver<bool>,
     ) -> anyhow::Result<()> {
         let cancelled = Arc::new(AtomicBool::new(false));
 
@@ -396,6 +411,25 @@ impl Executor {
                         tracing::warn!(
                             "TUI event receiver dropped while reporting model swap; exiting"
                         );
+                        self.flush_carryover();
+                        return Ok(());
+                    }
+                }
+                Some(enable) = plan_rx.recv() => {
+                    self.set_plan_mode(enable);
+                    let msg = if enable {
+                        "📐 Plan mode enabled — only read-only tools are permitted. Type /implement when ready.\n".to_string()
+                    } else {
+                        match self.exit_plan_mode() {
+                            Ok(m) => format!("✅ {}\n", m),
+                            Err(e) => {
+                                tracing::warn!("exit_plan_mode failed: {}", e);
+                                format!("⚠️ Could not exit plan mode: {}\n", e)
+                            }
+                        }
+                    };
+                    if event_tx.send(TurnEvent::Token(msg)).is_err() {
+                        tracing::warn!("TUI event receiver dropped during plan-mode toggle; exiting");
                         self.flush_carryover();
                         return Ok(());
                     }
@@ -602,6 +636,32 @@ impl Executor {
     /// override, not append).
     pub fn set_system_override(&mut self, override_prompt: Option<String>) {
         self.prompt_builder.set_system_override(override_prompt);
+    }
+
+    /// Enable or disable plan mode. When enabled, only read-only
+    /// discovery tools are allowed to execute; mutating tools are
+    /// denied at the dispatch layer.
+    pub fn set_plan_mode(&mut self, enabled: bool) {
+        self.plan_mode = enabled;
+    }
+
+    /// Exit plan mode and inject a system message telling the model it
+    /// may now implement the plan. Returns the message content so the
+    /// caller can echo it to the user if desired.
+    pub fn exit_plan_mode(&mut self) -> anyhow::Result<String> {
+        self.plan_mode = false;
+        let msg = "Plan mode exited — you may now implement the plan.".to_string();
+        self.conversation.append(Message {
+            role: Role::System,
+            content: msg.clone(),
+            content_parts: None,
+            thinking: None,
+            tool_calls: None,
+            tool_call_id: None,
+            tool_name: None,
+            token_count: None,
+        })?;
+        Ok(msg)
     }
 
     /// Run a lifecycle hook (fire-and-forget). Wraps HookRunner::run with
@@ -933,6 +993,13 @@ impl Executor {
                     };
                     self.conversation.append(msg)?;
 
+                    // If we're in plan mode and the assistant signalled
+                    // completion, surface a PlanComplete event so the TUI
+                    // can ask the user to approve implementation.
+                    if self.plan_mode && assistant_content.contains(PLAN_COMPLETE_MARKER) {
+                        events.push(TurnEvent::PlanComplete);
+                    }
+
                     if let Some(ref u) = usage {
                         let prompt = u.prompt_tokens.unwrap_or(0);
                         let completion = u.completion_tokens.unwrap_or(0);
@@ -987,6 +1054,41 @@ impl Executor {
                 return Ok(());
             }
         };
+
+        // Plan-mode enforcement: only read-only discovery tools may run.
+        // This is a hard guard independent of permission rules so the
+        // model cannot mutate code while it is still "thinking".
+        if self.plan_mode {
+            let allowed = match tc.name.as_str() {
+                "read_file" | "read_image" | "grep" | "glob" => true,
+                "bash" => tc
+                    .arguments
+                    .get("command")
+                    .and_then(|v| v.as_str())
+                    .map(is_read_only_bash)
+                    .unwrap_or(false),
+                _ => false,
+            };
+            if !allowed {
+                let reason = format!(
+                    "📐 Plan mode blocked {}: only read-only discovery tools are allowed until you type /implement.",
+                    tc.name
+                );
+                events.push(TurnEvent::ToolResult {
+                    name: tc.name.clone(),
+                    output: reason.clone(),
+                    success: false,
+                });
+                self.conversation.append(Message {
+                    role: Role::Tool,
+                    content: reason,
+                    tool_call_id: Some(tc.id.clone()),
+                    tool_name: Some(tc.name.clone()),
+                    ..Default::default()
+                })?;
+                return Ok(());
+            }
+        }
 
         // Snapshot the permission config so we don't hold the read
         // guard across the mutable self borrows below.
@@ -1529,6 +1631,11 @@ pub enum TurnEvent {
         original_count: usize,
         compacted_count: usize,
     },
+
+    /// Emitted when the assistant's response contains the plan-complete
+    /// marker while plan mode is active. The TUI should prompt the user
+    /// to approve exiting plan mode (e.g. via `/implement`).
+    PlanComplete,
 }
 
 const READ_ONLY_COMMANDS: &[&str] = &[
@@ -1909,6 +2016,16 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use tokio::sync::mpsc;
 
+    /// RAII guard that removes a temp file when dropped. Used by plan-mode
+    /// tests that need a real, readable file on disk.
+    struct CleanupFile(std::path::PathBuf);
+
+    impl Drop for CleanupFile {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
     fn never_cancelled() -> &'static AtomicBool {
         static NC: std::sync::LazyLock<AtomicBool> =
             std::sync::LazyLock::new(|| AtomicBool::new(false));
@@ -2043,8 +2160,14 @@ mod tests {
         tools: Vec<Arc<dyn Tool>>,
         config: Config,
     ) -> Executor {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
         let temp_dir = std::env::temp_dir();
-        let log_path = temp_dir.join(format!("kirkforge-test-{}.ndjson", std::process::id()));
+        let log_path = temp_dir.join(format!(
+            "kirkforge-test-{}-{}.ndjson",
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::SeqCst)
+        ));
         let _ = std::fs::remove_file(&log_path);
         let conversation = ConversationLog::open(log_path).unwrap();
         Executor::with_log(adapter, tools, config, conversation, None)
@@ -3103,5 +3226,284 @@ mod tests {
         assert_eq!(cfg.default_model, "qwen2.5:14b");
         assert!(cfg.json_mode);
         assert!(cfg.carryover_enabled);
+    }
+
+    #[tokio::test]
+    async fn test_plan_mode_blocks_write_file() {
+        let captured = Arc::new(Mutex::new(None));
+        let tool = MockTool {
+            def: ToolDef {
+                name: "write_file",
+                description: "write a file",
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"},
+                        "content": {"type": "string"}
+                    }
+                }),
+            },
+            captured_args: captured.clone(),
+            outcome: ToolOutcome::Success {
+                content: "wrote".into(),
+            },
+        };
+
+        let adapter = MockAdapter::new(
+            vec![
+                StreamEvent::ToolCall(ToolInvocation {
+                    id: "call-1".into(),
+                    name: "write_file".into(),
+                    arguments: serde_json::json!({
+                        "path": "/tmp/plan_mode_test.txt",
+                        "content": "hello"
+                    }),
+                }),
+                StreamEvent::Done {
+                    finish_reason: FinishReason::ToolCalls,
+                    usage: None,
+                },
+            ],
+            make_info(),
+        );
+
+        let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
+        let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(true));
+        exe.set_plan_mode(true);
+
+        let events = exe
+            .run_turn("write something", &approval_tx, never_cancelled())
+            .await
+            .unwrap();
+
+        assert!(
+            captured.lock().unwrap().is_none(),
+            "write_file must not run while plan mode is active"
+        );
+        let blocked = events.iter().any(|e| {
+            matches!(
+                e,
+                TurnEvent::ToolResult { name, output, .. }
+                    if name == "write_file" && output.contains("Plan mode blocked")
+            )
+        });
+        assert!(
+            blocked,
+            "Expected plan-mode denial, got events: {:?}",
+            events
+        );
+    }
+
+    #[tokio::test]
+    async fn test_plan_mode_blocks_non_read_only_bash() {
+        let captured = Arc::new(Mutex::new(None));
+        let tool = MockTool {
+            def: ToolDef {
+                name: "bash",
+                description: "run a command",
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {"command": {"type": "string"}}
+                }),
+            },
+            captured_args: captured.clone(),
+            outcome: ToolOutcome::Success {
+                content: "ran".into(),
+            },
+        };
+
+        let adapter = MockAdapter::new(
+            vec![
+                StreamEvent::ToolCall(ToolInvocation {
+                    id: "call-1".into(),
+                    name: "bash".into(),
+                    arguments: serde_json::json!({"command": "cargo build"}),
+                }),
+                StreamEvent::Done {
+                    finish_reason: FinishReason::ToolCalls,
+                    usage: None,
+                },
+            ],
+            make_info(),
+        );
+
+        let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
+        let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(true));
+        exe.set_plan_mode(true);
+
+        let events = exe
+            .run_turn("build", &approval_tx, never_cancelled())
+            .await
+            .unwrap();
+
+        assert!(
+            captured.lock().unwrap().is_none(),
+            "non-read-only bash must not run while plan mode is active"
+        );
+        let blocked = events.iter().any(|e| {
+            matches!(
+                e,
+                TurnEvent::ToolResult { name, output, .. }
+                    if name == "bash" && output.contains("Plan mode blocked")
+            )
+        });
+        assert!(
+            blocked,
+            "Expected plan-mode denial, got events: {:?}",
+            events
+        );
+    }
+
+    #[tokio::test]
+    async fn test_plan_mode_allows_read_file() {
+        let tmp = std::env::temp_dir().join(format!(
+            "kirkforge_plan_read_test_{}.txt",
+            std::process::id()
+        ));
+        std::fs::write(&tmp, "file contents").expect("write temp file");
+        let _cleanup = CleanupFile(tmp.clone());
+
+        let captured = Arc::new(Mutex::new(None));
+        let tool = MockTool {
+            def: ToolDef {
+                name: "read_file",
+                description: "read a file",
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {"path": {"type": "string"}}
+                }),
+            },
+            captured_args: captured.clone(),
+            outcome: ToolOutcome::Success {
+                content: "file contents".into(),
+            },
+        };
+
+        let adapter = MockAdapter::new(
+            vec![
+                StreamEvent::ToolCall(ToolInvocation {
+                    id: "call-1".into(),
+                    name: "read_file".into(),
+                    arguments: serde_json::json!({"path": tmp.to_string_lossy()}),
+                }),
+                StreamEvent::Done {
+                    finish_reason: FinishReason::ToolCalls,
+                    usage: None,
+                },
+            ],
+            make_info(),
+        );
+
+        let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
+        let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(true));
+        exe.set_plan_mode(true);
+
+        let events = exe
+            .run_turn("read something", &approval_tx, never_cancelled())
+            .await
+            .unwrap();
+
+        assert!(
+            captured.lock().unwrap().is_some(),
+            "read_file should run in plan mode"
+        );
+        let allowed = events.iter().any(|e| {
+            matches!(
+                e,
+                TurnEvent::ToolResult { name, output, .. }
+                    if name == "read_file" && output == "file contents"
+            )
+        });
+        assert!(
+            allowed,
+            "Expected read_file result, got events: {:?}",
+            events
+        );
+    }
+
+    #[tokio::test]
+    async fn test_plan_mode_allows_read_only_bash() {
+        let captured = Arc::new(Mutex::new(None));
+        let tool = MockTool {
+            def: ToolDef {
+                name: "bash",
+                description: "run a command",
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {"command": {"type": "string"}}
+                }),
+            },
+            captured_args: captured.clone(),
+            outcome: ToolOutcome::Success {
+                content: "listing".into(),
+            },
+        };
+
+        let adapter = MockAdapter::new(
+            vec![
+                StreamEvent::ToolCall(ToolInvocation {
+                    id: "call-1".into(),
+                    name: "bash".into(),
+                    arguments: serde_json::json!({"command": "ls -la"}),
+                }),
+                StreamEvent::Done {
+                    finish_reason: FinishReason::ToolCalls,
+                    usage: None,
+                },
+            ],
+            make_info(),
+        );
+
+        let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
+        let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(true));
+        exe.set_plan_mode(true);
+
+        let events = exe
+            .run_turn("list files", &approval_tx, never_cancelled())
+            .await
+            .unwrap();
+
+        assert!(
+            captured.lock().unwrap().is_some(),
+            "read-only bash should run in plan mode"
+        );
+        let allowed = events.iter().any(|e| {
+            matches!(
+                e,
+                TurnEvent::ToolResult { name, output, .. }
+                    if name == "bash" && output == "listing"
+            )
+        });
+        assert!(allowed, "Expected bash result, got events: {:?}", events);
+    }
+
+    #[tokio::test]
+    async fn test_plan_complete_marker_emits_event() {
+        let adapter = MockAdapter::new(
+            vec![
+                StreamEvent::Text("Here is the plan.".to_string()),
+                StreamEvent::Text(format!("\n{}\n", PLAN_COMPLETE_MARKER)),
+                StreamEvent::Done {
+                    finish_reason: FinishReason::Stop,
+                    usage: None,
+                },
+            ],
+            make_info(),
+        );
+
+        let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
+        let mut exe = make_executor(Box::new(adapter), vec![], make_config(false));
+        exe.set_plan_mode(true);
+
+        let events = exe
+            .run_turn("plan this", &approval_tx, never_cancelled())
+            .await
+            .unwrap();
+
+        assert!(
+            events.iter().any(|e| matches!(e, TurnEvent::PlanComplete)),
+            "Expected PlanComplete event, got events: {:?}",
+            events
+        );
     }
 }

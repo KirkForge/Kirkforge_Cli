@@ -235,6 +235,10 @@ pub async fn run_tui(
     // The TUI owns the sender (driven by SIGHUP or `/reload`); the
     // executor replaces its shared config and rebuilds access control.
     let (config_tx, config_rx) = mpsc::unbounded_channel::<Config>();
+    // Plan mode: TUI → Executor (sends bool to enter/exit plan mode).
+    // `/plan` sends true, `/implement` sends false. The executor
+    // enforces read-only tools while plan mode is active.
+    let (plan_tx, plan_rx) = mpsc::unbounded_channel::<bool>();
     // Keyboard events: background reader thread → TUI event loop
     let (kb_tx, mut kb_rx) = mpsc::unbounded_channel::<Event>();
 
@@ -376,6 +380,7 @@ pub async fn run_tui(
                 model_rx,
                 undo_rx,
                 config_rx,
+                plan_rx,
             )
             .await;
     });
@@ -411,6 +416,7 @@ pub async fn run_tui(
         &model_tx,
         &undo_tx,
         &config_tx,
+        &plan_tx,
         &mut slow_tick,
         &shutdown_for_loop,
     )
@@ -422,7 +428,7 @@ pub async fn run_tui(
     // only `input_tx` left the others alive and caused the TUI to hang
     // on `handle.await` after `run_event_loop` returned.
     drop((
-        input_tx, cancel_tx, resume_tx, compact_tx, model_tx, undo_tx,
+        input_tx, cancel_tx, resume_tx, compact_tx, model_tx, undo_tx, plan_tx,
     ));
     let _ = handle.await;
 
@@ -454,6 +460,7 @@ async fn run_event_loop(
     model_tx: &mpsc::UnboundedSender<String>,
     undo_tx: &mpsc::UnboundedSender<()>,
     config_tx: &mpsc::UnboundedSender<Config>,
+    plan_tx: &mpsc::UnboundedSender<bool>,
     slow_tick: &mut tokio::time::Interval,
     // One-shot shutdown signal. Fired by:
     //   - the SIGHUP handler (Unix, pty-close)
@@ -585,7 +592,7 @@ async fn run_event_loop(
                     } else {
                         keys::handle_input_key(
                             key, state, input_tx, cancel_tx, resume_tx, compact_tx, model_tx,
-                            undo_tx, config_tx,
+                            undo_tx, config_tx, plan_tx,
                         )
                         .await?;
                     }
@@ -615,7 +622,7 @@ async fn run_event_loop(
                     } else {
                         keys::handle_input_key(
                             key, state, input_tx, cancel_tx, resume_tx, compact_tx, model_tx,
-                            undo_tx, config_tx,
+                            undo_tx, config_tx, plan_tx,
                         )
                         .await?;
                     }

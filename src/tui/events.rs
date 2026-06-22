@@ -119,6 +119,13 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
             // "current context pressure" signal.
             state.last_turn_prompt_tokens = prompt_tokens;
         }
+        TurnEvent::PlanComplete => {
+            state.is_generating = false;
+            state.messages.push(ConversationEntry::new(
+                "system",
+                "📐 Plan complete. The model has finished exploring and designed an implementation plan. Type /implement to allow edits and continue.".to_string(),
+            ));
+        }
         TurnEvent::CompactionReport {
             new_messages,
             dropped_tool_results,

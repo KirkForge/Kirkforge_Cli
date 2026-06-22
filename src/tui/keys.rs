@@ -62,6 +62,7 @@ pub async fn handle_input_key(
     model_tx: &mpsc::UnboundedSender<String>,
     undo_tx: &mpsc::UnboundedSender<()>,
     config_tx: &mpsc::UnboundedSender<Config>,
+    plan_tx: &mpsc::UnboundedSender<bool>,
 ) -> anyhow::Result<()> {
     // ── Session picker interceptor ─────────────────────────
     // When the recent-session picker overlay is active, all keys route
@@ -442,6 +443,8 @@ pub async fn handle_input_key(
                         "/help" | "/h" | "/?" => {
                             let mut help_text =
                                 "Built-in commands:\n  /clear    Clear conversation\n  /exit     Quit\n  /fork     Fork session: /fork list | <label> [count]\n  /resume   Resume a fork: /resume <fork-id>\n  /jobs     Background bash jobs: /jobs | <id> | clean\n  /status   Show model, cost, tokens, and context pressure (one-shot)\n  /model    Hot-swap the active model: /model <name> (bypasses smart routing)\n  /compact  Compact conversation history: drop old tool results, condense old assistant turns. Destructive — see TUI for stats.
+  /plan     Enter plan mode: read-only tools only. The model explores and designs; type /implement to start coding.
+  /implement Exit plan mode and allow the model to implement the approved plan.
   /commit   Commit changes safely: /commit shows status + suggested message; /commit \"message\" stages all and commits after sanitation checks.
   /undo     Undo the most recent edit_file or write_file. /undo list shows the stack; /undo count prints the depth.
   /sessions List saved sessions, prune old ones, or delete one by id.
@@ -546,6 +549,9 @@ pub async fn handle_input_key(
                                 .messages
                                 .push(ConversationEntry::new("system", display));
                             if !plan_prompt.is_empty() {
+                                // Tell the executor to enforce read-only
+                                // tools for this turn sequence.
+                                let _ = plan_tx.send(true);
                                 state.is_generating = true;
                                 if input_tx.send(plan_prompt).is_err() {
                                     tracing::warn!(
@@ -555,6 +561,18 @@ pub async fn handle_input_key(
                                     return Ok(());
                                 }
                             }
+                            return Ok(());
+                        }
+                        "/implement" => {
+                            // Exit plan mode and let the model implement
+                            // the approved plan. The executor injects a
+                            // system message telling the model it may
+                            // proceed; we echo a local confirmation too.
+                            let _ = plan_tx.send(false);
+                            state.messages.push(ConversationEntry::new(
+                                "system",
+                                "✅ Plan mode disabled — implementation may begin.".to_string(),
+                            ));
                             return Ok(());
                         }
                         "/gh" => {

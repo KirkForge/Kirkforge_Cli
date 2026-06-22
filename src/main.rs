@@ -641,6 +641,10 @@ fn emit_turn_events(
                     print_json_line(&line);
                 }
             }
+            session::executor::TurnEvent::PlanComplete => {
+                // Non-interactive mode does not enter plan mode, so this
+                // event should not arrive. If it does, ignore it.
+            }
             session::executor::TurnEvent::CompactionReport {
                 dropped_tool_results,
                 condensed_assistant_turns,

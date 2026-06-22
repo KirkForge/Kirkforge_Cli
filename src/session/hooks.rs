@@ -2,13 +2,20 @@
 //!
 //! Hooks are shell scripts placed in `~/.local/share/kirkforge/hooks/`.
 //! Naming convention: `<event>.sh` — e.g., `pre-tool-bash.sh`,
-//! `post-tool-write_file.sh`, `post-turn.sh`, `session-start.sh`.
+//! `post-tool-write_file.sh`, `post-turn.sh`, `session-start.sh`,
+//! `pre-compact.sh`, `post-compact.sh`.
 //!
 //! Each hook receives event data as environment variables:
 //! - `KF_EVENT` — the event name (e.g., "post-turn")
 //! - `KF_TOOL_NAME` — the tool being called (tool events only)
 //! - `KF_TOOL_ARGS_JSON` — JSON-serialised tool arguments (tool events only)
 //! - `KF_SESSION_ID` — the session identifier
+//!
+//! Compaction hooks (`pre-compact` / `post-compact`) receive a JSON object
+//! in `KF_TOOL_ARGS_JSON` with fields such as `message_count`,
+//! `preserve_recent`, `original_count`, `result_count`,
+//! `dropped_tool_results`, `condensed_assistant_turns`,
+//! `summarised_messages`, and `strategy` (`"summarize"` or `"naive"`).
 //!
 //! Hooks run with a 5-second timeout, fire-and-forget (tokio::spawn).
 //! Failures are logged to tracing but never surfaced to the user.

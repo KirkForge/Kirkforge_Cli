@@ -54,6 +54,19 @@ enum ApprovalDecision {
 /// exiting plan mode.
 const PLAN_COMPLETE_MARKER: &str = "## Plan Complete — ready to implement";
 
+/// Statistics passed to compaction lifecycle hooks (`pre-compact` / `post-compact`).
+#[derive(Debug, Clone, Copy)]
+struct CompactHookStats {
+    message_count: usize,
+    preserve_recent: usize,
+    original_count: usize,
+    result_count: usize,
+    dropped_tool_results: usize,
+    condensed_assistant_turns: usize,
+    summarised_messages: usize,
+    strategy: &'static str,
+}
+
 pub struct Executor {
     adapter: Box<dyn ModelAdapter>,
     adapter_swap: AdapterSwap,
@@ -461,18 +474,36 @@ impl Executor {
                 }
                 Some(()) = compact_rx.recv() => {
                     let history = self.conversation.all().to_vec();
-                    let mut did_summarize = false;
 
                     // Snapshot the config fields we need; the guard must
                     // drop before we mutate `self.conversation` below.
-                    let (summarize_enabled, summarize_model, ollama_host) = {
+                    let (summarize_enabled, summarize_model, ollama_host, preserve_recent) = {
                         let cfg = read_shared_config(&self.config);
                         (
                             cfg.summarize_enabled,
                             cfg.summarize_model.clone(),
                             cfg.ollama_host.clone(),
+                            cfg.preserve_recent_messages,
                         )
                     };
+
+                    // Notify lifecycle hooks that compaction is starting.
+                    self.run_compact_hook(
+                        "pre-compact",
+                        CompactHookStats {
+                            message_count: history.len(),
+                            preserve_recent,
+                            original_count: history.len(),
+                            result_count: history.len(),
+                            dropped_tool_results: 0,
+                            condensed_assistant_turns: 0,
+                            summarised_messages: 0,
+                            strategy: "pending",
+                        },
+                    );
+
+                    let mut did_summarize = false;
+                    let mut compact_stats = None;
 
                     // Try LLM-based summarization if enabled
                     if summarize_enabled && history.len() > 2 {
@@ -541,6 +572,16 @@ impl Executor {
                                         }
                                     } else {
                                         did_summarize = true;
+                                        compact_stats = Some(CompactHookStats {
+                                            message_count: history.len(),
+                                            preserve_recent,
+                                            original_count: history.len(),
+                                            result_count: new_msgs.len(),
+                                            dropped_tool_results: 0,
+                                            condensed_assistant_turns: 0,
+                                            summarised_messages: result.summarised_messages,
+                                            strategy: "summarize",
+                                        });
                                         let report = TurnEvent::Token(format!(
                                             "🧠 Summarised {}→{} messages ({}→{} tokens, {:.0}% compression)\n",
                                             result.summarised_messages,
@@ -568,11 +609,17 @@ impl Executor {
                     // Fall back to naive truncation if summarization didn't run or failed
                     if !did_summarize {
                         let history = self.conversation.all();
-                        let preserve_recent = {
-                            let cfg = crate::shared::read_shared_config(&self.config);
-                            cfg.preserve_recent_messages
-                        };
                         let result = crate::session::prompt::compact(history, preserve_recent);
+                        compact_stats = Some(CompactHookStats {
+                            message_count: history.len(),
+                            preserve_recent,
+                            original_count: result.original_count,
+                            result_count: result.compacted_count,
+                            dropped_tool_results: result.dropped_tool_results,
+                            condensed_assistant_turns: result.condensed_assistant_turns,
+                            summarised_messages: 0,
+                            strategy: "naive",
+                        });
                         let report = if let Err(e) = self.conversation.replace_all(result.new_messages.clone()) {
                             TurnEvent::Error(format!("Compaction failed: {}", e))
                         } else {
@@ -589,6 +636,11 @@ impl Executor {
                             self.flush_carryover();
                             return Ok(());
                         }
+                    }
+
+                    // Notify lifecycle hooks that compaction finished.
+                    if let Some(stats) = compact_stats {
+                        self.run_compact_hook("post-compact", stats);
                     }
                 }
                 Some(input) = input_rx.recv() => {
@@ -671,6 +723,7 @@ impl Executor {
     /// common env vars derived from current session state.
     fn run_hook(&self, event: &str, tool_name: Option<&str>, args_json: Option<&str>) {
         let mut env_vars: Vec<(&str, &str)> = Vec::new();
+        env_vars.push(("KF_EVENT", event));
         if let Some(name) = tool_name {
             env_vars.push(("KF_TOOL_NAME", name));
         }
@@ -679,6 +732,32 @@ impl Executor {
         }
         let cfg = crate::shared::read_shared_config(&self.config);
         self.hook_runner.run(event, &env_vars, &cfg);
+    }
+
+    /// Run a compaction lifecycle hook (`pre-compact` / `post-compact`).
+    ///
+    /// Exposes compact metadata in `KF_TOOL_ARGS_JSON` as a JSON object:
+    /// - `message_count` — messages before compaction
+    /// - `preserve_recent` — configured tail size
+    /// - `original_count` — messages before compaction
+    /// - `result_count` — messages after compaction
+    /// - `dropped_tool_results` — number of tool results stubbed (naive path)
+    /// - `condensed_assistant_turns` — number of assistant turns condensed (naive path)
+    /// - `summarised_messages` — number of messages compressed into an LLM summary (summarize path)
+    /// - `strategy` — `"summarize"`, `"naive"`, or `"pending"`
+    fn run_compact_hook(&self, event: &str, stats: CompactHookStats) {
+        let args_json = serde_json::json!({
+            "message_count": stats.message_count,
+            "preserve_recent": stats.preserve_recent,
+            "original_count": stats.original_count,
+            "result_count": stats.result_count,
+            "dropped_tool_results": stats.dropped_tool_results,
+            "condensed_assistant_turns": stats.condensed_assistant_turns,
+            "summarised_messages": stats.summarised_messages,
+            "strategy": stats.strategy,
+        })
+        .to_string();
+        self.run_hook(event, None, Some(&args_json));
     }
 
     /// Run a pre-tool hook that is allowed to deny the tool call.
@@ -3703,5 +3782,102 @@ mod tests {
             captured.lock().unwrap().is_some(),
             "pre-tool hook timeout must be fail-open and allow the bash tool to run"
         );
+    }
+
+    #[tokio::test]
+    async fn test_compact_hooks_fire_pre_and_post() {
+        let (_tmp, hooks_dir) = temp_hooks_dir();
+        let pre_marker = hooks_dir.join("pre-compact-marker.txt");
+        let post_marker = hooks_dir.join("post-compact-marker.txt");
+
+        std::fs::write(
+            hooks_dir.join("pre-compact.sh"),
+            format!(
+                "#!/bin/bash\necho \"$KF_TOOL_ARGS_JSON\" > {}",
+                pre_marker.to_string_lossy()
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            hooks_dir.join("post-compact.sh"),
+            format!(
+                "#!/bin/bash\necho \"$KF_TOOL_ARGS_JSON\" > {}",
+                post_marker.to_string_lossy()
+            ),
+        )
+        .unwrap();
+
+        let mut config = make_config(false);
+        config.hooks_dir = Some(hooks_dir);
+        let exe = make_executor(
+            Box::new(MockAdapter::new(vec![], make_info())),
+            vec![],
+            config,
+        );
+
+        exe.run_compact_hook(
+            "pre-compact",
+            CompactHookStats {
+                message_count: 20,
+                preserve_recent: 2,
+                original_count: 20,
+                result_count: 20,
+                dropped_tool_results: 0,
+                condensed_assistant_turns: 0,
+                summarised_messages: 0,
+                strategy: "pending",
+            },
+        );
+        exe.run_compact_hook(
+            "post-compact",
+            CompactHookStats {
+                message_count: 20,
+                preserve_recent: 2,
+                original_count: 20,
+                result_count: 8,
+                dropped_tool_results: 5,
+                condensed_assistant_turns: 3,
+                summarised_messages: 0,
+                strategy: "naive",
+            },
+        );
+
+        let mut pre_content = String::new();
+        let mut post_content = String::new();
+        for _ in 0..40 {
+            if let Ok(c) = std::fs::read_to_string(&pre_marker) {
+                pre_content = c;
+            }
+            if let Ok(c) = std::fs::read_to_string(&post_marker) {
+                post_content = c;
+            }
+            if !pre_content.is_empty() && !post_content.is_empty() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+
+        assert!(
+            !pre_content.is_empty(),
+            "pre-compact hook should have written its marker"
+        );
+        assert!(
+            !post_content.is_empty(),
+            "post-compact hook should have written its marker"
+        );
+
+        let pre_json: serde_json::Value =
+            serde_json::from_str(&pre_content).expect("pre-compact hook wrote valid JSON");
+        let post_json: serde_json::Value =
+            serde_json::from_str(&post_content).expect("post-compact hook wrote valid JSON");
+
+        assert_eq!(pre_json["strategy"], "pending");
+        assert_eq!(pre_json["message_count"], 20);
+
+        assert_eq!(post_json["strategy"], "naive");
+        assert_eq!(post_json["original_count"], 20);
+        assert_eq!(post_json["result_count"], 8);
+        assert_eq!(post_json["dropped_tool_results"], 5);
+        assert_eq!(post_json["condensed_assistant_turns"], 3);
     }
 }

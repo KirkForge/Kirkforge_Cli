@@ -34,10 +34,10 @@ pub mod widgets;
 use crate::session::carryover::CarryoverProfile;
 use crate::session::conversation::ConversationLog;
 use crate::session::executor::{self, ApprovalRequest};
-use crate::shared::Config;
+use crate::shared::{Config, Message, Role};
 use crate::tools::Tool;
-use app::{AppState, ConnectionState};
-use commands::notify_completed_jobs;
+use app::{AppState, ConnectionState, ConversationEntry};
+use commands::{messages_to_entries, notify_completed_jobs, PersonaKind, PersonaResult};
 use components::approval::render_approval_dialog;
 use crossterm::{
     event::{self, Event},
@@ -236,9 +236,14 @@ pub async fn run_tui(
     // executor replaces its shared config and rebuilds access control.
     let (config_tx, config_rx) = mpsc::unbounded_channel::<Config>();
     // Plan mode: TUI → Executor (sends bool to enter/exit plan mode).
-    // `/plan` sends true, `/implement` sends false. The executor
-    // enforces read-only tools while plan mode is active.
+    // After the fork-isolated `/plan` persona merges its result, the
+    // main executor is placed in plan mode so `/implement` remains the
+    // approval gesture.
     let (plan_tx, plan_rx) = mpsc::unbounded_channel::<bool>();
+    // Persona completion: background task → TUI event loop.
+    // `/explore`, `/plan`, and `/coder` spawn fork-isolated subagents;
+    // the result is merged back into the parent conversation here.
+    let (persona_tx, mut persona_rx) = mpsc::unbounded_channel::<PersonaResult>();
     // Keyboard events: background reader thread → TUI event loop
     let (kb_tx, mut kb_rx) = mpsc::unbounded_channel::<Event>();
 
@@ -408,6 +413,7 @@ pub async fn run_tui(
         &mut state,
         &mut event_rx,
         &mut approval_rx,
+        &mut persona_rx,
         &mut kb_rx,
         &input_tx,
         &cancel_tx,
@@ -417,6 +423,7 @@ pub async fn run_tui(
         &undo_tx,
         &config_tx,
         &plan_tx,
+        &persona_tx,
         &mut slow_tick,
         &shutdown_for_loop,
     )
@@ -428,7 +435,7 @@ pub async fn run_tui(
     // only `input_tx` left the others alive and caused the TUI to hang
     // on `handle.await` after `run_event_loop` returned.
     drop((
-        input_tx, cancel_tx, resume_tx, compact_tx, model_tx, undo_tx, plan_tx,
+        input_tx, cancel_tx, resume_tx, compact_tx, model_tx, undo_tx, plan_tx, persona_tx,
     ));
     let _ = handle.await;
 
@@ -452,6 +459,7 @@ async fn run_event_loop(
     state: &mut AppState,
     event_rx: &mut mpsc::UnboundedReceiver<executor::TurnEvent>,
     approval_rx: &mut mpsc::UnboundedReceiver<ApprovalRequest>,
+    persona_rx: &mut mpsc::UnboundedReceiver<PersonaResult>,
     kb_rx: &mut mpsc::UnboundedReceiver<Event>,
     input_tx: &mpsc::UnboundedSender<String>,
     cancel_tx: &mpsc::UnboundedSender<()>,
@@ -461,6 +469,7 @@ async fn run_event_loop(
     undo_tx: &mpsc::UnboundedSender<()>,
     config_tx: &mpsc::UnboundedSender<Config>,
     plan_tx: &mpsc::UnboundedSender<bool>,
+    persona_tx: &mpsc::UnboundedSender<PersonaResult>,
     slow_tick: &mut tokio::time::Interval,
     // One-shot shutdown signal. Fired by:
     //   - the SIGHUP handler (Unix, pty-close)
@@ -506,6 +515,7 @@ async fn run_event_loop(
         let mut kb_event: Option<Event> = None;
         let mut had_executor_event = false;
         let mut had_approval_event = false;
+        let mut persona_result: Option<PersonaResult> = None;
         let mut had_approval_pending =
             state.pending_approval.is_some() || state.pending_bang.is_some();
         let mut dirty_from_tick = false;
@@ -528,6 +538,14 @@ async fn run_event_loop(
             ev = approval_rx.recv() => {
                 if ev.is_some() {
                     had_approval_event = true;
+                }
+            }
+            ev = persona_rx.recv() => {
+                if let Some(result) = ev {
+                    // Store the result in a temporary location so we can
+                    // process it after the select! without holding a
+                    // borrow across the await point.
+                    persona_result = Some(result);
                 }
             }
             // Shutdown arm: SIGHUP or kb-reader-thread EOF. Higher
@@ -555,6 +573,10 @@ async fn run_event_loop(
         }
         if had_approval_event {
             drain_approval_requests(state, approval_rx);
+            state.mark_dirty();
+        }
+        if let Some(result) = persona_result {
+            handle_persona_complete(result, state, resume_tx, plan_tx).await;
             state.mark_dirty();
         }
         // Jobs and kb events are also work that may have been
@@ -592,7 +614,7 @@ async fn run_event_loop(
                     } else {
                         keys::handle_input_key(
                             key, state, input_tx, cancel_tx, resume_tx, compact_tx, model_tx,
-                            undo_tx, config_tx, plan_tx,
+                            undo_tx, config_tx, plan_tx, persona_tx,
                         )
                         .await?;
                     }
@@ -622,7 +644,7 @@ async fn run_event_loop(
                     } else {
                         keys::handle_input_key(
                             key, state, input_tx, cancel_tx, resume_tx, compact_tx, model_tx,
-                            undo_tx, config_tx, plan_tx,
+                            undo_tx, config_tx, plan_tx, persona_tx,
                         )
                         .await?;
                     }
@@ -731,6 +753,94 @@ async fn run_event_loop(
             }
             state.pending_approval = pending_taken;
         })?;
+    }
+}
+
+/// Merge a completed persona result back into the parent session.
+///
+/// 1. Append the persona's final assistant summary as a system message
+///    to the parent conversation log.
+/// 2. Reload the TUI message list from the updated log.
+/// 3. Send the updated log to the main executor via `resume_tx` so the
+///    next turn sees the merged context.
+/// 4. For `/plan`, additionally enter plan mode in the main executor and
+///    prompt the user to type `/implement`.
+async fn handle_persona_complete(
+    result: PersonaResult,
+    state: &mut AppState,
+    resume_tx: &mpsc::UnboundedSender<ConversationLog>,
+    plan_tx: &mpsc::UnboundedSender<bool>,
+) {
+    state.is_generating = false;
+    state.persona_in_progress = None;
+    state.persona_cancel = None;
+
+    if !result.success {
+        state.messages.push(ConversationEntry::new(
+            "system",
+            format!(
+                "{} persona failed: {}",
+                result.kind,
+                result.error.unwrap_or_default()
+            ),
+        ));
+        return;
+    }
+
+    let parent_path = match state.log_path.clone() {
+        Some(p) => p,
+        None => {
+            state.messages.push(ConversationEntry::new(
+                "system",
+                "Cannot merge persona result: no session log path.".to_string(),
+            ));
+            return;
+        }
+    };
+
+    let mut parent_log = match ConversationLog::open(parent_path.clone()) {
+        Ok(l) => l,
+        Err(e) => {
+            state.messages.push(ConversationEntry::new(
+                "system",
+                format!("Cannot open session log: {}", e),
+            ));
+            return;
+        }
+    };
+
+    let marker = format!(
+        "🤖 {} persona result for: {}\n\n{}",
+        result.kind, result.task, result.summary
+    );
+    if let Err(e) = parent_log.append(Message {
+        role: Role::System,
+        content: marker,
+        ..Default::default()
+    }) {
+        state.messages.push(ConversationEntry::new(
+            "system",
+            format!("Failed to merge persona: {}", e),
+        ));
+        return;
+    }
+
+    state.messages = messages_to_entries(parent_log.all());
+
+    if resume_tx.send(parent_log).is_err() {
+        state.messages.push(ConversationEntry::new(
+            "system",
+            "Executor gone; persona result saved to log only.".to_string(),
+        ));
+        return;
+    }
+
+    if result.kind == PersonaKind::Plan {
+        let _ = plan_tx.send(true);
+        state.messages.push(ConversationEntry::new(
+            "system",
+            "📐 Plan complete. Type /implement to allow edits and continue.".to_string(),
+        ));
     }
 }
 

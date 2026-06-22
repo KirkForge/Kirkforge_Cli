@@ -2152,6 +2152,7 @@ mod tests {
             json_mode: false,
             preserve_recent_messages: 2,
             max_plugin_trust: kirkforge_plugin::TrustTier::Shell,
+            max_persona_turns: 10,
         }
     }
 

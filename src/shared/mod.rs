@@ -284,6 +284,14 @@ pub struct Config {
     /// more trust are rejected at load time.
     #[serde(default = "default_max_plugin_trust")]
     pub max_plugin_trust: TrustTier,
+
+    /// Maximum number of high-level turns a fork-isolated persona
+    /// (/explore, /plan, /coder) may consume before returning to the main
+    /// thread. Each persona currently runs one self-contained `run_turn`
+    /// (which already caps its internal tool-call loop), so the field acts
+    /// as an on/off guard and a reservation for future multi-turn personas.
+    #[serde(default = "default_max_persona_turns")]
+    pub max_persona_turns: usize,
 }
 
 /// Configuration for a single MCP server connection.
@@ -323,6 +331,10 @@ fn default_preserve_recent_messages() -> usize {
 
 fn default_max_plugin_trust() -> TrustTier {
     TrustTier::Shell
+}
+
+fn default_max_persona_turns() -> usize {
+    10
 }
 
 impl Default for Config {
@@ -376,6 +388,7 @@ impl Default for Config {
             json_mode: false,
             preserve_recent_messages: default_preserve_recent_messages(),
             max_plugin_trust: default_max_plugin_trust(),
+            max_persona_turns: default_max_persona_turns(),
         }
     }
 }

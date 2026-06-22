@@ -3,10 +3,9 @@ use crate::session::session_fork::ForkManager;
 use crate::session::skills::SkillRegistry;
 use crate::shared::{ModelInfo, SharedConfig};
 use std::path::PathBuf;
-use std::time::Instant;
-
-#[cfg(test)]
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use std::time::Instant;
 
 #[cfg(test)]
 use crate::shared::Config;
@@ -96,6 +95,11 @@ pub struct AppState {
     // ── Generation state ────────────────────────────────────
     /// True while the model is generating a response (between Enter and Done).
     pub is_generating: bool,
+
+    /// Fork-isolated subagent currently running in the background.
+    pub persona_in_progress: Option<crate::tui::commands::PersonaHandle>,
+    /// Cancel flag for the running persona, checked between internal turns.
+    pub persona_cancel: Option<Arc<AtomicBool>>,
 
     /// Spinner frame counter — cycles through a spinner animation
     /// to show the model is thinking before the first token arrives.
@@ -248,6 +252,8 @@ impl AppState {
             fork_manager: None,
             should_exit: false,
             is_generating: false,
+            persona_in_progress: None,
+            persona_cancel: None,
             spinner_tick: 0,
             notified_jobs: std::collections::HashSet::new(),
             tool_collapsed: true,

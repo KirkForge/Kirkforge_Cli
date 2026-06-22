@@ -4,6 +4,14 @@ version = "0.1.0"
 edition = "2021"
 description = "Native Ollama CLI coding agent — static binary, TUI, potato hardware"
 
+[workspace]
+members = ["crates/*"]
+resolver = "2"
+
+[workspace.dependencies]
+kirkforge-plugin = { path = "crates/kirkforge-plugin" }
+kirkforge-plugin-host = { path = "crates/kirkforge-plugin-host" }
+
 [dependencies]
 # TUI
 ratatui = { version = "0.29", features = ["unstable"] }
@@ -62,9 +70,9 @@ base64 = "0.22"
 # Clipboard for Ctrl+Shift+C copy
 arboard = "3"
 
-# Rust-native plugin SDK (sibling repo)
-kirkforge-plugin = { path = "../KirkForge-Plugin/crates/kirkforge-plugin" }
-kirkforge-plugin-host = { path = "../KirkForge-Plugin/crates/kirkforge-plugin-host" }
+# Rust-native plugin SDK (vendored workspace members)
+kirkforge-plugin = { workspace = true }
+kirkforge-plugin-host = { workspace = true }
 
 [dev-dependencies]
 # Test-only: create real temporary files for @-mention expansion tests

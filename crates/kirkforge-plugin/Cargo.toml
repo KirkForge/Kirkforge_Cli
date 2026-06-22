@@ -1,0 +1,16 @@
+[package]
+name = "kirkforge-plugin"
+version = "0.1.0"
+edition = "2021"
+description = "SDK for authoring KirkForge plugins — manifest, trust tiers, and capabilities."
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+tracing = "0.1"
+toml = "0.8"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }
+tempfile = "3"

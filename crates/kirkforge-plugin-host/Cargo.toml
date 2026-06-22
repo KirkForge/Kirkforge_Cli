@@ -1,0 +1,15 @@
+[package]
+name = "kirkforge-plugin-host"
+version = "0.1.0"
+edition = "2021"
+description = "Runtime host for KirkForge plugins — registry, trust policy, and dispatch."
+
+[dependencies]
+kirkforge-plugin = { path = "../kirkforge-plugin" }
+serde_json = "1"
+anyhow = "1"
+tracing = "0.1"
+thiserror = "1"
+
+[dev-dependencies]
+tempfile = "3"

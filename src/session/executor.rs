@@ -531,7 +531,11 @@ impl Executor {
                     // Fall back to naive truncation if summarization didn't run or failed
                     if !did_summarize {
                         let history = self.conversation.all();
-                        let result = crate::session::prompt::compact(history);
+                        let preserve_recent = {
+                            let cfg = crate::shared::read_shared_config(&self.config);
+                            cfg.preserve_recent_messages
+                        };
+                        let result = crate::session::prompt::compact(history, preserve_recent);
                         let report = if let Err(e) = self.conversation.replace_all(result.new_messages.clone()) {
                             TurnEvent::Error(format!("Compaction failed: {}", e))
                         } else {
@@ -612,6 +616,31 @@ impl Executor {
         }
         let cfg = crate::shared::read_shared_config(&self.config);
         self.hook_runner.run(event, &env_vars, &cfg);
+    }
+
+    /// Run a pre-tool hook that is allowed to deny the tool call.
+    /// Returns `Some(reason)` if the hook exits with code 2 and denies
+    /// the call; returns `None` otherwise (missing hook, success, or any
+    /// failure — hooks are fail-open so a broken hook cannot block the
+    /// user).
+    async fn run_pre_tool_hook(
+        &self,
+        event: &str,
+        tool_name: Option<&str>,
+        args_json: Option<&str>,
+    ) -> Option<String> {
+        let mut env_vars: Vec<(&str, &str)> = Vec::new();
+        if let Some(name) = tool_name {
+            env_vars.push(("KF_TOOL_NAME", name));
+        }
+        if let Some(json) = args_json {
+            env_vars.push(("KF_TOOL_ARGS_JSON", json));
+        }
+        let cfg = crate::shared::read_shared_config(&self.config).clone();
+        match self.hook_runner.run_decision(event, &env_vars, &cfg).await {
+            crate::session::hooks::HookDecision::Allow => None,
+            crate::session::hooks::HookDecision::Deny(reason) => Some(reason),
+        }
     }
 
     fn flush_carryover(&mut self) {
@@ -1119,13 +1148,31 @@ impl Executor {
                         args: run_args.clone(),
                     });
 
-                    // Pre-tool hook
+                    // Pre-tool hook (may deny the operation).
                     let args_json = serde_json::to_string(&run_args).unwrap_or_default();
-                    self.run_hook(
-                        &format!("pre-tool-{}", tc.name),
-                        Some(&tc.name),
-                        Some(&args_json),
-                    );
+                    if let Some(reason) = self
+                        .run_pre_tool_hook(
+                            &format!("pre-tool-{}", tc.name),
+                            Some(&tc.name),
+                            Some(&args_json),
+                        )
+                        .await
+                    {
+                        let denied = format!("❌ Hook denied {}: {}", tc.name, reason);
+                        events.push(TurnEvent::ToolResult {
+                            name: tc.name.clone(),
+                            output: denied.clone(),
+                            success: false,
+                        });
+                        self.conversation.append(Message {
+                            role: Role::Tool,
+                            content: denied,
+                            tool_call_id: Some(tc.id.clone()),
+                            tool_name: Some(tc.name.clone()),
+                            ..Default::default()
+                        })?;
+                        return Ok(());
+                    }
 
                     let outcome = tool.run(run_args.clone()).await;
                     let edit_diff =
@@ -1986,6 +2033,7 @@ mod tests {
             mcp_servers: vec![],
             bang_requires_approval: false,
             json_mode: false,
+            preserve_recent_messages: 2,
         }
     }
 

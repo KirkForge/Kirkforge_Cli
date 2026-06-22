@@ -64,6 +64,10 @@ impl HookRunner {
     /// safety gate as the model's `bash` tool (metadata blocks,
     /// dangerous patterns, path/url deny lists). Stdout and stderr are
     /// capped so a runaway hook can't OOM the process.
+    ///
+    /// For hooks that may deny an operation (i.e. `pre-tool-*`), use
+    /// [`Self::run_decision`] instead. This method always treats the
+    /// hook as observational.
     pub fn run(&self, event_name: &str, env_vars: &[(&str, &str)], config: &Config) {
         if !self.has(event_name) {
             return;
@@ -81,7 +85,16 @@ impl HookRunner {
         let handle = match tokio::runtime::Handle::try_current() {
             Ok(rt) => rt.spawn(async move {
                 match run_hook_script(&script_path_owned, &owned_vars, &config).await {
-                    Ok(()) => {}
+                    Ok(HookDecision::Allow) => {}
+                    Ok(HookDecision::Deny(reason)) => {
+                        // Fire-and-forget path: a deny here is too late to
+                        // block, so we log it as a warning.
+                        tracing::warn!(
+                            event = %event,
+                            reason = %reason,
+                            "Observational hook reported deny after the fact"
+                        );
+                    }
                     Err(e) => {
                         tracing::warn!(event = %event, error = %e, "Hook run failed");
                     }
@@ -94,6 +107,38 @@ impl HookRunner {
         };
         // Detach the task; hooks are best-effort and must not block.
         std::mem::drop(handle);
+    }
+
+    /// Run a hook that is allowed to deny an operation and await its
+    /// decision.
+    ///
+    /// Returns [`HookDecision::Allow`] if the hook is missing, succeeds,
+    /// exits with any non-zero code other than `2`, times out, or fails
+    /// to execute. Returns [`HookDecision::Deny`] only when the hook
+    /// exits with code `2`.
+    pub async fn run_decision(
+        &self,
+        event_name: &str,
+        env_vars: &[(&str, &str)],
+        config: &Config,
+    ) -> HookDecision {
+        if !self.has(event_name) {
+            return HookDecision::Allow;
+        }
+
+        let script_path = self.hooks_dir.join(format!("{}.sh", event_name));
+        let owned_vars: Vec<(String, String)> = env_vars
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+
+        match run_hook_script(&script_path, &owned_vars, config).await {
+            Ok(decision) => decision,
+            Err(e) => {
+                tracing::warn!(event = %event_name, error = %e, "Decision hook failed (fail-open)");
+                HookDecision::Allow
+            }
+        }
     }
 }
 
@@ -136,17 +181,32 @@ fn default_hooks_dir() -> anyhow::Result<PathBuf> {
     Ok(base.join("hooks"))
 }
 
+/// Decision returned by a hook that is allowed to block execution.
+#[derive(Debug, Clone, PartialEq)]
+pub enum HookDecision {
+    /// Hook permits the operation to proceed.
+    Allow,
+    /// Hook denies the operation with a human-readable reason.
+    Deny(String),
+}
+
 /// Spawn a hook script with env vars, timeout, and capped output.
 ///
 /// The script content is checked against the shared bash safety gate
 /// before execution. Output is capped per-stream at
 /// [`MAX_BASH_OUTPUT_BYTES`]; anything past the cap is discarded and
 /// counted so the log can mention it.
+///
+/// Exit-code semantics for hooks that gate operations (`pre-tool-*`):
+/// - `0` → [`HookDecision::Allow`]
+/// - `2` → [`HookDecision::Deny`]
+/// - any other non-zero, timeout, or crash → allow but log a warning
+///   (fail-open, so a broken hook cannot silently block the user)
 async fn run_hook_script(
     script: &Path,
     env_vars: &[(String, String)],
     config: &Config,
-) -> Result<(), String> {
+) -> Result<HookDecision, String> {
     let (deny_list, path_guard, _) = access_from_config(config);
 
     if deny_list.is_path_denied(script) {
@@ -223,13 +283,30 @@ async fn run_hook_script(
         Ok(Ok(status)) => {
             let (_raw_stdout, stdout_dropped) = join_hook_drain(drain_stdout, "stdout").await?;
             let (raw_stderr, stderr_dropped) = join_hook_drain(drain_stderr, "stderr").await?;
+
+            let stderr_text = cap_to_string(raw_stderr, stderr_dropped);
+
+            // Exit code 2 is the explicit "deny" signal for gating hooks.
+            if status.code() == Some(2) {
+                let reason = if stderr_text.is_empty() {
+                    format!("hook {} denied execution", script.display())
+                } else {
+                    format!(
+                        "hook {} denied execution: {}",
+                        script.display(),
+                        stderr_text.trim()
+                    )
+                };
+                return Ok(HookDecision::Deny(reason));
+            }
+
             if !status.success() {
                 tracing::warn!(
                     script = %script.display(),
                     code = status.code(),
                     stdout_dropped,
                     stderr_dropped,
-                    "Hook exited with non-zero status"
+                    "Hook exited with non-zero status (fail-open: allowing)"
                 );
             } else if stdout_dropped > 0 || stderr_dropped > 0 {
                 tracing::debug!(
@@ -239,7 +316,6 @@ async fn run_hook_script(
                     "Hook output was capped"
                 );
             }
-            let stderr_text = cap_to_string(raw_stderr, stderr_dropped);
             if !stderr_text.is_empty() {
                 tracing::debug!(
                     script = %script.display(),
@@ -247,13 +323,18 @@ async fn run_hook_script(
                     "Hook stderr"
                 );
             }
-            Ok(())
+            Ok(HookDecision::Allow)
         }
-        Ok(Err(e)) => Err(format!(
-            "failed to wait for hook {}: {}",
-            script.display(),
-            e
-        )),
+        Ok(Err(e)) => {
+            // Fail-open: a hook that we cannot reap must not block the
+            // user. Log and allow.
+            tracing::warn!(
+                script = %script.display(),
+                error = %e,
+                "Failed to wait for hook (fail-open: allowing)"
+            );
+            Ok(HookDecision::Allow)
+        }
         Err(()) => {
             let _ = tokio::time::timeout(Duration::from_secs(2), child.wait()).await;
             let (_raw_stdout, _stdout_dropped) = join_hook_drain(drain_stdout, "stdout").await?;
@@ -266,10 +347,13 @@ async fn run_hook_script(
                     "Hook stderr on timeout"
                 );
             }
-            Err(format!(
-                "hook {} timed out after 5 seconds",
-                script.display()
-            ))
+            // Timeouts are fail-open: a stuck hook must not wedge the
+            // agent. We log loudly and allow the operation.
+            tracing::warn!(
+                script = %script.display(),
+                "Hook timed out after 5 seconds (fail-open: allowing)"
+            );
+            Ok(HookDecision::Allow)
         }
     }
 }
@@ -463,5 +547,70 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         // The only observable behaviour is "did not panic"; tracing covers
         // the block reason.
+    }
+
+    #[tokio::test]
+    async fn test_run_decision_allows_exit_zero() {
+        let (_tmp, dir) = temp_hooks_dir();
+        write_hook(&dir, "pre-tool-bash", "#!/bin/bash\necho ok");
+        let runner = HookRunner::new(dir);
+
+        let decision = runner
+            .run_decision(
+                "pre-tool-bash",
+                &[("KF_TOOL_NAME", "bash")],
+                &default_config(),
+            )
+            .await;
+        assert_eq!(decision, HookDecision::Allow);
+    }
+
+    #[tokio::test]
+    async fn test_run_decision_denies_exit_two() {
+        let (_tmp, dir) = temp_hooks_dir();
+        write_hook(
+            &dir,
+            "pre-tool-bash",
+            "#!/bin/bash\necho 'blocked' >&2; exit 2",
+        );
+        let runner = HookRunner::new(dir);
+
+        let decision = runner
+            .run_decision(
+                "pre-tool-bash",
+                &[("KF_TOOL_NAME", "bash")],
+                &default_config(),
+            )
+            .await;
+        assert!(
+            matches!(decision, HookDecision::Deny(ref r) if r.contains("blocked")),
+            "expected Deny with stderr reason, got {:?}",
+            decision
+        );
+    }
+
+    #[tokio::test]
+    async fn test_run_decision_fail_open_on_non_two_exit() {
+        let (_tmp, dir) = temp_hooks_dir();
+        write_hook(&dir, "pre-tool-bash", "#!/bin/bash\nexit 1");
+        let runner = HookRunner::new(dir);
+
+        let decision = runner
+            .run_decision(
+                "pre-tool-bash",
+                &[("KF_TOOL_NAME", "bash")],
+                &default_config(),
+            )
+            .await;
+        assert_eq!(decision, HookDecision::Allow, "exit 1 should be fail-open");
+    }
+
+    #[tokio::test]
+    async fn test_run_decision_missing_hook_is_allow() {
+        let (_tmp, dir) = temp_hooks_dir();
+        let runner = HookRunner::new(dir);
+
+        let decision = runner.run_decision("missing", &[], &default_config()).await;
+        assert_eq!(decision, HookDecision::Allow);
     }
 }

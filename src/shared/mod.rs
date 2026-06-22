@@ -270,6 +270,14 @@ pub struct Config {
     /// because forcing JSON breaks chat-style models.
     #[serde(default)]
     pub json_mode: bool,
+
+    /// Number of recent messages to keep verbatim during naive context
+    /// compaction. Kimi-style "tail preservation": the last N messages
+    /// (default 2, i.e. one user + one assistant turn) stay untouched so
+    /// the model retains the immediate thread. Older messages are
+    /// stubbed/condensed. Must be at least 1.
+    #[serde(default = "default_preserve_recent_messages")]
+    pub preserve_recent_messages: usize,
 }
 
 /// Configuration for a single MCP server connection.
@@ -301,6 +309,10 @@ fn default_bash_sandbox_workdir() -> bool {
 
 fn default_max_file_read_size() -> usize {
     1024 * 1024
+}
+
+fn default_preserve_recent_messages() -> usize {
+    2
 }
 
 impl Default for Config {
@@ -352,6 +364,7 @@ impl Default for Config {
             mcp_servers: vec![],
             bang_requires_approval: false,
             json_mode: false,
+            preserve_recent_messages: default_preserve_recent_messages(),
         }
     }
 }

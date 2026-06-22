@@ -27,12 +27,12 @@
 //!
 //! **Note on `*` vs `**`:** the matcher treats `*` as "zero-or-more
 //! chars in the current path segment" — it does **not** cross `/`.
-//! For shell-command patterns, that means `rm -rf *` only matches
-//! arguments without a slash (e.g. `rm -rf foo`, not `rm -rf
-//! /home/x`). The `bash` `command` patterns are usually full shell
-//! strings, so prefer `**` (crosses slashes) for the headline deny
-//! rules you actually want to block. `**` also matches the
-//! slash-free case, so it's the safe default for `command` rules.
+//! For `bash` `command` rules the matcher automatically promotes lone
+//! `*` to `**`, so `rm -rf *` blocks absolute paths too. For `path`
+//! rules (e.g. `edit_file` with `key = "path"`) `*` keeps its
+//! one-segment meaning, so `src/*.rs` matches `src/main.rs` but not
+//! `src/lib/utils.rs`. Prefer explicit `**` when writing cross-slash
+//! path rules.
 //!
 //! Rules are evaluated in declaration order — first match wins. The
 //! **default action** is `Ask` (forces approval prompt) unless the
@@ -72,12 +72,13 @@ pub enum PermissionAction {
 ///   for `bash`, `"path"` for `edit_file` / `write_file` / `read_file`,
 ///   or `"*"` to match without inspecting args.
 /// - `pattern` — glob pattern. `**` matches zero-or-more chars
-///   including `/` and is the safe default for `command` patterns
-///   (which are full shell strings). `*` matches zero-or-more chars
-///   in a single path segment and does **not** cross `/` — useful for
-///   path patterns where you want `src/*.rs` to mean "one segment".
-///   `?` matches exactly one char. Plain strings match exactly.
-///   Empty pattern matches only an empty value.
+///   including `/`. `*` matches zero-or-more chars in a single path
+///   segment and does **not** cross `/` — useful for path patterns
+///   where you want `src/*.rs` to mean "one segment". For `bash`
+///   `command` rules, lone `*` is automatically promoted to `**` so
+///   shell-command patterns block paths across `/`. `?` matches
+///   exactly one char. Plain strings match exactly. Empty pattern
+///   matches only an empty value.
 /// - `action` — what to do on match.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PermissionRule {
@@ -194,7 +195,14 @@ pub fn evaluate(
         match args.get(&rule.key) {
             Some(v) => match v.as_str() {
                 Some(s) => {
-                    if glob_match(&rule.pattern, s) {
+                    let normalized;
+                    let pattern: &str = if rule.tool == "bash" && rule.key == "command" {
+                        normalized = normalize_command_pattern(&rule.pattern);
+                        &normalized
+                    } else {
+                        &rule.pattern
+                    };
+                    if glob_match(pattern, s) {
                         return rule.action;
                     }
                     // Pattern didn't match — keep scanning.
@@ -217,6 +225,37 @@ pub fn evaluate(
 /// Tool-name matching: exact, or `"*"` wildcard.
 fn tool_matches(pattern: &str, tool: &str) -> bool {
     pattern == "*" || pattern == tool
+}
+
+/// Normalize a bare `*` to `**` for bash `command` patterns.
+///
+/// The matcher treats `*` as "zero-or-more chars in the current path
+/// segment" (it does not cross `/`). That is correct for `path` rules
+/// like `src/*.rs`, but it is dangerous for shell-command rules where
+/// the user expects `rm -rf *` to block absolute paths. For `bash` with
+/// `key = "command"`, promote every lone `*` to `**` so the rule crosses
+/// slashes. Existing `**` patterns are unchanged.
+fn normalize_command_pattern(pattern: &str) -> String {
+    let mut out = String::with_capacity(pattern.len());
+    let mut chars = pattern.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '*' {
+            if chars.peek() == Some(&'*') {
+                // Already a `**` (or longer run) — consume the next star
+                // and emit a double-star.
+                let _ = chars.next();
+                out.push('*');
+                out.push('*');
+            } else {
+                // Lone `*` — promote to `**`.
+                out.push('*');
+                out.push('*');
+            }
+        } else {
+            out.push(ch);
+        }
+    }
+    out
 }
 
 /// Build a sensible `Allow` rule from the current `PendingApproval`'s
@@ -527,6 +566,65 @@ mod tests {
                 &rules,
                 "bash",
                 &json!({"command": "ls"}),
+                PermissionAction::Ask
+            ),
+            PermissionAction::Ask
+        );
+    }
+
+    /// `bash` `command` rules auto-promote lone `*` to `**` so that a
+    /// deny rule like `rm -rf *` blocks absolute paths too. Without the
+    /// normalization, `*` would not cross `/` and the dangerous command
+    /// would slip through.
+    #[test]
+    fn test_evaluate_command_star_normalizes_to_double_star() {
+        let rules = vec![rule("bash", "command", "rm -rf *", PermissionAction::Deny)];
+        assert_eq!(
+            evaluate(
+                &rules,
+                "bash",
+                &json!({"command": "rm -rf /home/x"}),
+                PermissionAction::Ask
+            ),
+            PermissionAction::Deny,
+            "single * in command rule should match across /"
+        );
+        assert_eq!(
+            evaluate(
+                &rules,
+                "bash",
+                &json!({"command": "rm -rf foo"}),
+                PermissionAction::Ask
+            ),
+            PermissionAction::Deny,
+            "single * in command rule should still match slash-free args"
+        );
+    }
+
+    /// `path` rules keep the documented one-segment semantics: `src/*.rs`
+    /// matches `src/main.rs` but not `src/lib/utils.rs`.
+    #[test]
+    fn test_evaluate_path_star_keeps_segment_semantics() {
+        let rules = vec![rule(
+            "edit_file",
+            "path",
+            "src/*.rs",
+            PermissionAction::Allow,
+        )];
+        assert_eq!(
+            evaluate(
+                &rules,
+                "edit_file",
+                &json!({"path": "src/main.rs"}),
+                PermissionAction::Ask
+            ),
+            PermissionAction::Allow
+        );
+        assert_eq!(
+            evaluate(
+                &rules,
+                "edit_file",
+                &json!({"path": "src/lib/utils.rs"}),
                 PermissionAction::Ask
             ),
             PermissionAction::Ask

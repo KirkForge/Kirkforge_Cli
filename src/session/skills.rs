@@ -1,3 +1,6 @@
+// Public/future surface in a binary crate: suppress dead-code warnings for pub items.
+#![allow(dead_code)]
+
 /// Skills system — slash-command skill registry and loader.
 ///
 /// Skills are reusable capabilities defined in SKILL.md files with
@@ -97,20 +100,35 @@ impl SkillRegistry {
             return Ok(0);
         }
         let mut count = 0;
-        for entry in ignore::WalkBuilder::new(dir)
+        let mut walker = ignore::WalkBuilder::new(dir)
             .max_depth(Some(3))
             .standard_filters(false) // don't ignore hidden dirs like .claude
-            .build()
-            .filter_map(|e| e.ok())
-            .filter(|e| e.file_name() == "SKILL.md")
-        {
-            let path = entry.path().to_path_buf();
-            if let Ok(skill) = load_skill_from_file(&path) {
-                let name = skill.meta.name.clone();
-                let trigger = skill.meta.trigger.clone();
-                self.skills.insert(name.clone(), skill);
-                self.triggers.insert(trigger, name);
-                count += 1;
+            .build();
+        let mut entries = Vec::new();
+        for result in walker.by_ref() {
+            match result {
+                Ok(entry) => {
+                    if entry.file_name() == "SKILL.md" {
+                        entries.push(entry.path().to_path_buf());
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "failed to walk skill directory");
+                }
+            }
+        }
+        for path in entries {
+            match load_skill_from_file(&path) {
+                Ok(skill) => {
+                    let name = skill.meta.name.clone();
+                    let trigger = skill.meta.trigger.clone();
+                    self.skills.insert(name.clone(), skill);
+                    self.triggers.insert(trigger, name);
+                    count += 1;
+                }
+                Err(e) => {
+                    tracing::warn!(path = %path.display(), error = %e, "failed to load SKILL.md");
+                }
             }
         }
         Ok(count)
@@ -199,7 +217,8 @@ pub fn parse_skill(content: &str, source_dir: PathBuf) -> anyhow::Result<Skill> 
         anyhow::bail!("SKILL.md must start with '---' frontmatter delimiter");
     }
 
-    let after_first = content.strip_prefix("---").unwrap().trim();
+    // `starts_with` was just verified, so slicing past the prefix is safe.
+    let after_first = content["---".len()..].trim();
     let end_idx = after_first
         .find("\n---")
         .ok_or_else(|| anyhow::anyhow!("SKILL.md missing closing '---' delimiter"))?;

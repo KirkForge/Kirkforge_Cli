@@ -63,6 +63,7 @@ pub fn handle_plan_command(args: &str) -> (String, String) {
 }
 
 /// Check whether a user message is a plan-mode prompt.
+#[allow(dead_code)]
 pub fn is_plan_prompt(message: &str) -> bool {
     message.starts_with("PLAN MODE")
 }

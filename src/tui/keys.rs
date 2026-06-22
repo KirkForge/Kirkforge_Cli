@@ -8,6 +8,7 @@
 //! The orchestrator calls us only when `state.pending_approval.is_none()`.
 
 use crate::session::conversation::ConversationLog;
+use crate::shared::Config;
 use crate::tui::app::{AppState, ConversationEntry};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use tokio::sync::mpsc;
@@ -59,7 +60,49 @@ pub async fn handle_input_key(
     resume_tx: &mpsc::UnboundedSender<ConversationLog>,
     compact_tx: &mpsc::UnboundedSender<()>,
     model_tx: &mpsc::UnboundedSender<String>,
+    undo_tx: &mpsc::UnboundedSender<()>,
+    config_tx: &mpsc::UnboundedSender<Config>,
 ) -> anyhow::Result<()> {
+    // ── Session picker interceptor ─────────────────────────
+    // When the recent-session picker overlay is active, all keys route
+    // to it. Enter confirms the selection and resumes the session;
+    // Esc/q cancels. The overlay is cleared once a choice is made.
+    //
+    // We `take()` the picker out of AppState while handling it so the
+    // mutable borrow of `state.session_picker` does not conflict with
+    // the mutable borrow of `state` passed to `resume_conversation_log`.
+    if let Some(mut picker) = state.session_picker.take() {
+        let consumed = picker.handle_key(key);
+        if consumed && picker.is_confirmed() {
+            if let Some(path) = picker.selected_path() {
+                match crate::session::conversation::ConversationLog::open(path) {
+                    Ok(log) => {
+                        let msg =
+                            crate::tui::commands::resume_conversation_log(log, state, resume_tx)
+                                .await;
+                        state.messages.push(ConversationEntry::new("system", msg));
+                    }
+                    Err(e) => {
+                        state.messages.push(ConversationEntry::new(
+                            "system",
+                            format!("Error resuming session: {}", e),
+                        ));
+                    }
+                }
+            }
+            // Picker is consumed: don't restore it.
+            return Ok(());
+        }
+        if consumed && picker.is_cancelled() {
+            // Picker is consumed: don't restore it.
+            return Ok(());
+        }
+        // Key did not finalize the picker (e.g. arrow navigation):
+        // put it back so the next key event continues the interaction.
+        state.session_picker = Some(picker);
+        return Ok(());
+    }
+
     // ── Search mode interceptor ─────────────────────────────
     // When search_mode is on, the input box is acting as a search
     // bar. We intercept Enter, Esc, Backspace, and any printable
@@ -120,17 +163,21 @@ pub async fn handle_input_key(
     {
         match key.code {
             KeyCode::Char('n') => {
-                state.search_match_idx = crate::tui::search::navigate_next(
+                if let Some(idx) = crate::tui::search::navigate_next(
                     state.search_match_idx,
                     state.search_matches.len(),
-                );
+                ) {
+                    state.search_match_idx = idx;
+                }
                 return Ok(());
             }
             KeyCode::Char('N') => {
-                state.search_match_idx = crate::tui::search::navigate_prev(
+                if let Some(idx) = crate::tui::search::navigate_prev(
                     state.search_match_idx,
                     state.search_matches.len(),
-                );
+                ) {
+                    state.search_match_idx = idx;
+                }
                 return Ok(());
             }
             _ => {}
@@ -143,7 +190,9 @@ pub async fn handle_input_key(
             // has to come BEFORE the plain Ctrl-only check below —
             // otherwise the SHIFT bit is ignored and we fall into
             // the cancel-current-generation path.
-            if key.modifiers.contains(KeyModifiers::CONTROL | KeyModifiers::SHIFT)
+            if key
+                .modifiers
+                .contains(KeyModifiers::CONTROL | KeyModifiers::SHIFT)
                 && (c == 'c' || c == 'C')
             {
                 let last = state
@@ -155,18 +204,13 @@ pub async fn handle_input_key(
                 let line = match last {
                     Some(text) if !text.is_empty() => {
                         match crate::tui::clipboard::copy_to_clipboard(&text) {
-                            Ok(n) => format!(
-                                "📋 Copied {} chars to clipboard",
-                                n
-                            ),
+                            Ok(n) => format!("📋 Copied {} chars to clipboard", n),
                             Err(e) => {
                                 format!("📋 Clipboard error: {}", e)
                             }
                         }
                     }
-                    Some(_) | None => {
-                        "📋 No assistant message to copy".to_string()
-                    }
+                    Some(_) | None => "📋 No assistant message to copy".to_string(),
                 };
                 state.messages.push(ConversationEntry::new("system", line));
                 return Ok(());
@@ -322,7 +366,7 @@ pub async fn handle_input_key(
                 let rest = rest.to_string();
                 state.input.clear();
                 state.cursor_position = 0;
-                if state.config.bang_requires_approval {
+                if crate::shared::read_shared_config(&state.config).bang_requires_approval {
                     // Park the command on AppState and let the next
                     // event-loop iteration render the approval dialog.
                     // The user hits Y to run, N/Esc to discard. We
@@ -397,7 +441,7 @@ pub async fn handle_input_key(
                         "/help" | "/h" | "/?" => {
                             let mut help_text =
                                 "Built-in commands:\n  /clear    Clear conversation\n  /exit     Quit\n  /fork     Fork session: /fork list | <label> [count]\n  /resume   Resume a fork: /resume <fork-id>\n  /jobs     Background bash jobs: /jobs | <id> | clean\n  /status   Show model, cost, tokens, and context pressure (one-shot)\n  /model    Hot-swap the active model: /model <name> (bypasses smart routing)\n  /compact  Compact conversation history: drop old tool results, condense old assistant turns. Destructive — see TUI for stats.
-  /undo     Undo the most recent edit_file or write_file. Restores the file from a pre-edit snapshot.
+  /undo     Undo the most recent edit_file or write_file. /undo list shows the stack; /undo count prints the depth.
   /sessions List saved sessions, prune old ones, or delete one by id.
   /test     Run cargo test --no-fail-fast; surface a parsed pass/fail summary with file:line locations. Optional: /test <timeout-secs>.\n\nBash passthrough:\n  !<command>  Run a shell command directly — no model round trip, no approval. Output is shown as a collapsible tool entry. 30-second timeout; for long jobs use `!<cmd> &` and check /jobs.\n\n@-mentions (inline file context):\n  @<path>          Inline the file's contents into the prompt (minified by default). The TUI shows a status row per mention.\n  @<path>:raw      Inline the file verbatim, no minification.\n  @<path>:A-B      Inline lines A–B (1-indexed, inclusive on both ends).\n  @<path>:A-B:raw  Range + verbatim, combined.\n  @~/...           Tilde expansion supported (e.g. @~/notes.md).\n  Multiple @<path> tokens in one input are all expanded. Each mention is capped at 50 KB (head + tail + marker) and respects the same path-safety rules as the model's read_file tool. Failures (missing, denied, I/O) are shown in the TUI as ✗ rows and as quoted placeholders in the prompt, so the model can react.\n\nKeybindings:\n  Ctrl+T   Toggle tool output collapse (default ON)\n  Ctrl+F   Search the conversation (Enter to commit, n / Shift+N to cycle, Esc to cancel)\n  Enter    Expand/collapse the most recent tool output (when input is empty)\n  Tab      Same as Enter (alternative expand gesture)\n  Ctrl+C   Cancel generation + clear input
   Ctrl+Shift+C  Copy last assistant message to clipboard\n  Ctrl+W   Delete word backward\n  Ctrl+U   Clear input line\n  Esc      Toggle thinking panel (or cancel search if Ctrl+F is active)\n\nStatus bar:\n  The bottom bar shows session model, time, cumulative cost, and a colour-coded budget indicator. Green (< 50%) = comfortable, yellow (50–80%) = consider /compact, red (> 80%) = compact now. The same data is available on demand via /status.\n".to_string();
@@ -446,6 +490,12 @@ pub async fn handle_input_key(
                             state.messages.push(ConversationEntry::new("system", msg));
                             return Ok(());
                         }
+                        "/reload" => {
+                            let msg =
+                                crate::tui::commands::handle_reload_command(config_tx, state).await;
+                            state.messages.push(ConversationEntry::new("system", msg));
+                            return Ok(());
+                        }
                         "/model" => {
                             // Review.md gap #5 — hot-swap the active
                             // model. The handler sends the name to
@@ -455,9 +505,9 @@ pub async fn handle_input_key(
                             // return is just a "request accepted"
                             // confirmation so the user gets instant
                             // feedback.
-                            let msg = crate::tui::commands::handle_model_command(
-                                args, model_tx, state,
-                            );
+                            let msg =
+                                crate::tui::commands::handle_model_command(args, model_tx, state)
+                                    .await;
                             state.messages.push(ConversationEntry::new("system", msg));
                             return Ok(());
                         }
@@ -478,14 +528,12 @@ pub async fn handle_input_key(
                             // for file edits. The undo stack is
                             // held by the executor (constructed at
                             // session start) and populated by the
-                            // edit_file / write_file tools. The
-                            // TUI command here is the user-facing
-                            // entry point; for v1 it returns a
-                            // clear message that the TUI plumbing
-                            // is still in progress. The data layer
-                            // (snapshots on disk) is fully wired
-                            // and unit-tested.
-                            let msg = crate::tui::commands::handle_undo_command(args, state);
+                            // edit_file / write_file tools. We send
+                            // a signal over `undo_tx`; the executor
+                            // pops the stack and emits the result
+                            // as a system token.
+                            let msg =
+                                crate::tui::commands::handle_undo_command(args, undo_tx, state);
                             state.messages.push(ConversationEntry::new("system", msg));
                             return Ok(());
                         }
@@ -513,7 +561,8 @@ pub async fn handle_input_key(
                             return Ok(());
                         }
                         "/init" => {
-                            let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+                            let cwd = std::env::current_dir()
+                                .unwrap_or_else(|_| std::path::PathBuf::from("."));
                             let msg = crate::tui::commands::handle_init_command(args, &cwd);
                             state.messages.push(ConversationEntry::new("system", msg));
                             return Ok(());

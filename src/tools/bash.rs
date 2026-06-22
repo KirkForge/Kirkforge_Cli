@@ -26,7 +26,8 @@ const MAX_BASH_OUTPUT_BYTES: usize = 1024 * 1024;
 /// Marker appended to a stream that hit the cap. Includes the count of
 /// dropped bytes so the model can decide whether to re-run with a narrower
 /// filter (e.g. `head -n 1000`).
-const TRUNCATED_MARKER_FMT: &str = "\n[...truncated: {} bytes omitted, output exceeded 1 MiB cap...]\n";
+const TRUNCATED_MARKER_FMT: &str =
+    "\n[...truncated: {} bytes omitted, output exceeded 1 MiB cap...]\n";
 
 /// Reader that stops accepting bytes once `cap` is reached but keeps
 /// draining the underlying pipe so the child process doesn't block on a
@@ -323,14 +324,14 @@ async fn run_shell(cmd: &str, workdir: &Path, timeout_secs: u64) -> Result<Shell
             // close. Join them and report whatever they captured.
             let (raw_stdout, stdout_dropped) = join_drain(drain_stdout, "stdout").await?;
             let (raw_stderr, stderr_dropped) = join_drain(drain_stderr, "stderr").await?;
+            // Best-effort reap: the drain tasks have closed the pipes,
+            // so the child should exit quickly. A short timeout prevents
+            // a stuck child from wedging us.
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(2), child.wait()).await;
             let prefix = format!("[timed out after {} seconds]\n", timeout_secs);
             Ok(ShellOutput {
                 status: synth_status_killed(),
-                stdout: format!(
-                    "{}{}",
-                    prefix,
-                    cap_to_string(raw_stdout, stdout_dropped)
-                ),
+                stdout: format!("{}{}", prefix, cap_to_string(raw_stdout, stdout_dropped)),
                 stderr: cap_to_string(raw_stderr, stderr_dropped),
             })
         }

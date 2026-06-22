@@ -4,8 +4,9 @@
 //!   1. Ollama server running on http://localhost:11434
 //!   2. The `qwen2.5:0.5b` model pulled (`ollama pull qwen2.5:0.5b`)
 //!
-//! Run with: `cargo test --test integration_test -- --ignored --nocapture`
-//! Or selectively: `cargo test --test integration_test <name> -- --ignored --nocapture`
+//! Run with: `cargo test --test integration_test -- --include-ignored --nocapture`
+//! Or selectively: `cargo test --test integration_test <name> -- --include-ignored --nocapture`
+//! Or use the helper script: `./scripts/run-integration-tests.sh`
 
 use std::time::Duration;
 

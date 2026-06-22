@@ -59,7 +59,7 @@ pub fn format_edit_diff_preview(
 ) -> Vec<String> {
     match approval.tool_name.as_str() {
         "edit_file" => format_edit_file_diff(approval, wrap_width, reader),
-        "write_file" => format_write_file_diff(approval, wrap_width),
+        "write_file" => format_write_file_diff(approval, wrap_width, reader),
         _ => Vec::new(),
     }
 }
@@ -87,10 +87,16 @@ fn format_edit_file_diff(
     out
 }
 
-/// Diff for `write_file`: the entire new file as additions, with a
-/// `+++ <filename> (new)` header. We don't read the existing file —
-/// the model's intent is to overwrite.
-fn format_write_file_diff(approval: &PendingApproval, wrap_width: usize) -> Vec<String> {
+/// Diff for `write_file`: if the file already exists, compute a
+/// real unified diff between the current content and the proposed
+/// new content so the user sees both deletions and additions. If the
+/// file is missing or empty, fall back to the "new file" view (all
+/// additions).
+fn format_write_file_diff(
+    approval: &PendingApproval,
+    wrap_width: usize,
+    reader: FileReader<'_>,
+) -> Vec<String> {
     let args = &approval.args;
     let path = args
         .get("path")
@@ -101,19 +107,26 @@ fn format_write_file_diff(approval: &PendingApproval, wrap_width: usize) -> Vec<
         None => return Vec::new(),
     };
 
-    let mut out = Vec::new();
-    // "new file" header — no `---` line since there's no current
-    // file to compare against.
-    let header = format!("+++ {} (new file)", path);
-    out.push(header);
-    out.push(String::new());
-    // All lines are additions. Push with `+ ` prefix and wrap.
-    let width = wrap_width.max(8).saturating_sub(2);
-    for line in content.lines() {
-        for wrapped in wrap_diff_line(line, width) {
-            out.push(format!("+ {}", wrapped));
+    let current = reader(path).unwrap_or_default();
+    if current.is_empty() {
+        // New file path: show everything as additions.
+        let mut out = Vec::new();
+        let header = format!("+++ {} (new file)", path);
+        out.push(header);
+        out.push(String::new());
+        let width = wrap_width.max(8).saturating_sub(2);
+        for line in content.lines() {
+            for wrapped in wrap_diff_line(line, width) {
+                out.push(format!("+ {}", wrapped));
+            }
         }
+        return out;
     }
+
+    // Overwrite of an existing file: show the real diff.
+    let mut out = Vec::new();
+    push_header(&mut out, path, false);
+    push_unified_diff(&mut out, &current, content, wrap_width);
     out
 }
 
@@ -276,6 +289,35 @@ mod tests {
         assert!(lines.iter().any(|l| l.contains("new file")));
         // The new content appears as additions.
         assert!(lines.iter().any(|l| l.contains("+ fn created()")));
+    }
+
+    /// `write_file` against an existing file shows a real diff with
+    /// both deletions and additions, not just the new content.
+    #[test]
+    fn test_write_file_overwrite_shows_deletions() {
+        let a = approval(
+            "write_file",
+            json!({
+                "path": "src/existing.rs",
+                "content": "fn new() {}\n"
+            }),
+        );
+        let reader = |p: &str| {
+            if p == "src/existing.rs" {
+                Some("fn old() {}\n".to_string())
+            } else {
+                None
+            }
+        };
+        let lines = format_edit_diff_preview(&a, 80, &reader);
+        // Real diff: both --- and +++ headers.
+        assert!(lines.iter().any(|l| l.starts_with("--- src/existing.rs")));
+        assert!(lines.iter().any(|l| l.starts_with("+++ src/existing.rs")));
+        // Deleted old content and added new content.
+        assert!(lines.iter().any(|l| l.contains("- fn old()")));
+        assert!(lines.iter().any(|l| l.contains("+ fn new()")));
+        // Should NOT say "new file" because it's an overwrite.
+        assert!(!lines.iter().any(|l| l.contains("new file")));
     }
 
     /// Wrapping: a long added line gets split across multiple

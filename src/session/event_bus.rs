@@ -1,3 +1,6 @@
+// Public/future surface in a binary crate: suppress dead-code warnings for pub items.
+#![allow(dead_code)]
+
 /// Event bus — pub/sub dispatcher for tool execution events.
 ///
 /// The event bus sits between tool execution and downstream consumers

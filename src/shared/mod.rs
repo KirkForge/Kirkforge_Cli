@@ -1,9 +1,26 @@
+// Public/future surface in a binary crate: suppress dead-code warnings for pub items.
+#![allow(dead_code)]
+
 pub mod minify;
 pub mod permission;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::{Arc, RwLock};
+
+/// Thread-safe shared configuration. Used by both the TUI and the executor
+/// so that config hot-reload affects live behavior without restarting.
+pub type SharedConfig = Arc<RwLock<Config>>;
+
+/// Read a shared config, recovering from lock poisoning if necessary.
+///
+/// `unwrap_or_else` here is deliberate: if a writer panicked and poisoned
+/// the lock, we still return the inner guard so the TUI/executor can keep
+/// running with the last-known config rather than crashing.
+pub fn read_shared_config(cfg: &SharedConfig) -> std::sync::RwLockReadGuard<'_, Config> {
+    cfg.read().unwrap_or_else(|e| e.into_inner())
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct Message {
@@ -409,7 +426,6 @@ impl std::fmt::Display for SessionId {
 
 #[derive(Debug, Clone)]
 pub struct Pricing {
-
     pub model_prefix: &'static str,
 
     pub input_per_mtok: f64,
@@ -422,7 +438,6 @@ pub struct Pricing {
 }
 
 pub const PRICING_TABLE: &[Pricing] = &[
-
     Pricing {
         model_prefix: "opus-4",
         input_per_mtok: 15.00,
@@ -444,7 +459,6 @@ pub const PRICING_TABLE: &[Pricing] = &[
         cache_write_per_mtok: 0.30,
         cache_read_per_mtok: 0.05,
     },
-
     Pricing {
         model_prefix: "gpt-4",
         input_per_mtok: 10.00,
@@ -459,7 +473,6 @@ pub const PRICING_TABLE: &[Pricing] = &[
         cache_write_per_mtok: 7.50,
         cache_read_per_mtok: 0.75,
     },
-
     Pricing {
         model_prefix: "",
         input_per_mtok: 0.0,
@@ -472,15 +485,16 @@ pub const PRICING_TABLE: &[Pricing] = &[
 pub fn calculate_cost(model: &str, usage: &TokenUsage) -> f64 {
     let prompt = usage.prompt_tokens.unwrap_or(0);
     let completion = usage.completion_tokens.unwrap_or(0);
-    let cached = usage
-        .cached_tokens
-        .unwrap_or(0)
-        .min(prompt); // never let cached exceed the prompt itself
+    let cached = usage.cached_tokens.unwrap_or(0).min(prompt); // never let cached exceed the prompt itself
 
     let p = PRICING_TABLE
         .iter()
         .find(|p| !p.model_prefix.is_empty() && model.starts_with(p.model_prefix))
-        .unwrap_or_else(|| PRICING_TABLE.last().unwrap());
+        .unwrap_or_else(|| {
+            PRICING_TABLE
+                .last()
+                .expect("PRICING_TABLE has fallback entry")
+        });
 
     // Cached tokens are billed at the discounted read rate; the rest of
     // the prompt at the regular input rate. Servers that don't
@@ -512,7 +526,6 @@ impl CostTracking {
 
 #[derive(Debug, Clone, Copy, PartialEq, clap::ValueEnum)]
 pub enum OutputFormat {
-
     Text,
 
     Json,

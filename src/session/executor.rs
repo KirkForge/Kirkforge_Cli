@@ -1,18 +1,22 @@
 use crate::adapters::ModelAdapter;
-use crate::session::adapter_swap::AdapterSwap;
-use crate::session::hooks::HookRunner;
 use crate::session::access::{
     access_from_config, warn_if_unsandboxed, DenyList, GuardVerdict, PathGuard, ReadGate,
 };
+use crate::session::adapter_swap::AdapterSwap;
 use crate::session::carryover::CarryoverProfile;
+use crate::session::config::config_diff_summary;
 use crate::session::conversation::ConversationLog;
 use crate::session::event_bus::{BusEvent, EventBus};
+use crate::session::hooks::HookRunner;
 use crate::session::prompt::PromptBuilder;
 use crate::session::verifier::CorrectionResult;
 use crate::session::verifier::{CorrectionLoop, VerifierHandler, VerifierSlots};
 use crate::shared::permission::{evaluate, PermissionAction};
-use crate::shared::{Config, Message, Role, StreamEvent, ToolDef, ToolInvocation, ToolOutcome};
-use crate::tools::Tool;
+use crate::shared::{
+    read_shared_config, Config, Message, Role, SharedConfig, StreamEvent, ToolDef, ToolInvocation,
+    ToolOutcome,
+};
+use crate::tools::{Tool, UndoStackRef};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -30,7 +34,6 @@ fn push_rule_unique(
 }
 
 enum IterationOutcome {
-
     ToolCalls(Vec<ToolInvocation>),
 
     Finished,
@@ -51,7 +54,7 @@ pub struct Executor {
     conversation: ConversationLog,
     prompt_builder: PromptBuilder,
     tools: Vec<Arc<dyn Tool>>,
-    config: Config,
+    config: SharedConfig,
     cost_tracking: crate::shared::CostTracking,
     model_name: String,
     deny_list: DenyList,
@@ -65,6 +68,10 @@ pub struct Executor {
     carryover_enabled: bool,
 
     carryover_target: Option<std::sync::Arc<std::sync::Mutex<CarryoverProfile>>>,
+
+    /// Optional per-session undo stack. Held here so `/undo` can pop
+    /// via a control channel without touching the tools directly.
+    undo_stack: Option<UndoStackRef>,
 }
 
 /// Drop guard that fires the `post-turn` hook on every exit path of
@@ -105,37 +112,47 @@ impl Drop for PostTurnHookGuard {
 }
 
 impl Executor {
-    pub fn new(adapter: Box<dyn ModelAdapter>, tools: Vec<Arc<dyn Tool>>, config: Config) -> Self {
-
-        let temp_dir = std::env::temp_dir().join("kirkforge-session");
-        let log_path = temp_dir.join(format!(
-            "session-{}.ndjson",
-            chrono::Local::now().format("%Y%m%d-%H%M%S")
-        ));
-        let conversation = ConversationLog::open(log_path).unwrap();
-        Self::with_log(adapter, tools, config, conversation, None)
-    }
-
     pub fn with_log(
-        mut adapter: Box<dyn ModelAdapter>,
+        adapter: Box<dyn ModelAdapter>,
         tools: Vec<Arc<dyn Tool>>,
         config: Config,
         conversation: ConversationLog,
         carryover_target: Option<std::sync::Arc<std::sync::Mutex<CarryoverProfile>>>,
     ) -> Self {
+        Self::with_log_and_undo(
+            adapter,
+            tools,
+            Arc::new(std::sync::RwLock::new(config)),
+            conversation,
+            carryover_target,
+            None,
+        )
+    }
+
+    /// Constructor that also accepts a shared undo stack and a shared config.
+    pub fn with_log_and_undo(
+        mut adapter: Box<dyn ModelAdapter>,
+        tools: Vec<Arc<dyn Tool>>,
+        config: SharedConfig,
+        conversation: ConversationLog,
+        carryover_target: Option<std::sync::Arc<std::sync::Mutex<CarryoverProfile>>>,
+        undo_stack: Option<UndoStackRef>,
+    ) -> Self {
         let model_name = adapter.model_info().name.clone();
-        let (deny_list, path_guard, read_gate) = access_from_config(&config);
+        let config_for_startup = config.clone();
+        let cfg = read_shared_config(&config_for_startup);
+        let (deny_list, path_guard, read_gate) = access_from_config(&cfg);
         warn_if_unsandboxed(&path_guard);
 
         // Push the session-level JSON-mode flag down to the active
         // adapter. The trait method has a default no-op for adapters
         // that don't support it, so unknown models (and the test
         // mocks) silently ignore the flag.
-        adapter.set_json_mode(config.json_mode);
+        adapter.set_json_mode(cfg.json_mode);
 
         let adapter_swap = AdapterSwap::new(
             model_name.clone(),
-            config.ollama_host.clone(),
+            cfg.ollama_host.clone(),
             None, // model_type_override not available here; set via CLI
         );
 
@@ -143,7 +160,7 @@ impl Executor {
 
         let event_bus = EventBus::new();
 
-        let carryover_enabled = config.carryover_enabled;
+        let carryover_enabled = cfg.carryover_enabled;
         let carryover = if carryover_enabled {
             crate::session::carryover::load_carryover()
         } else {
@@ -168,9 +185,32 @@ impl Executor {
             carryover,
             carryover_enabled,
             carryover_target,
+            undo_stack,
         };
         this.init_default_verifiers();
         this
+    }
+
+    /// Replace the shared config with `new` and rebuild access-control
+    /// structures from it. Returns a human-readable diff summary.
+    fn reload_config(&mut self, new: Config) -> String {
+        let old = read_shared_config(&self.config).clone();
+        // Update the shared lock. If it is poisoned we still apply the
+        // new config locally so this executor keeps running with the
+        // fresh rules.
+        let fresh = if let Ok(mut cfg) = self.config.write() {
+            *cfg = new.clone();
+            new
+        } else {
+            new
+        };
+        let (deny_list, path_guard, read_gate) = access_from_config(&fresh);
+        self.deny_list = deny_list;
+        self.path_guard = path_guard;
+        self.read_gate = read_gate;
+        // JSON-mode changes are applied to the running adapter too.
+        self.adapter.set_json_mode(fresh.json_mode);
+        config_diff_summary(&old, &fresh)
     }
 
     pub fn init_default_verifiers(&mut self) -> usize {
@@ -193,7 +233,7 @@ impl Executor {
             }
         }
         {
-            let mut s = slots.write().unwrap();
+            let mut s = slots.write().unwrap_or_else(|e| e.into_inner());
             if s.register(Arc::new(SecV)).is_ok() {
                 count += 1;
             }
@@ -213,7 +253,7 @@ impl Executor {
             }
         }
         {
-            let mut s = slots.write().unwrap();
+            let mut s = slots.write().unwrap_or_else(|e| e.into_inner());
             if s.register(Arc::new(LintV)).is_ok() {
                 count += 1;
             }
@@ -233,7 +273,7 @@ impl Executor {
             }
         }
         {
-            let mut s = slots.write().unwrap();
+            let mut s = slots.write().unwrap_or_else(|e| e.into_inner());
             if s.register(Arc::new(GitV)).is_ok() {
                 count += 1;
             }
@@ -242,12 +282,22 @@ impl Executor {
         let handler = Arc::new(VerifierHandler::new(slots));
         let bus = self.event_bus.clone();
         let h = handler.clone();
-        tokio::spawn(async move {
-            let _ = bus.register(h).await;
-        });
-
-        self.correction_loop = Some(CorrectionLoop::new(handler));
-        count
+        match tokio::runtime::Handle::try_current() {
+            Ok(rt) => {
+                rt.spawn(async move {
+                    let _ = bus.register(h).await;
+                });
+                self.correction_loop = Some(CorrectionLoop::new(handler));
+                count
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "no Tokio runtime available; default verifiers will not run"
+                );
+                0
+            }
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -260,21 +310,65 @@ impl Executor {
         mut resume_rx: mpsc::UnboundedReceiver<ConversationLog>,
         mut compact_rx: mpsc::UnboundedReceiver<()>,
         mut model_rx: mpsc::UnboundedReceiver<String>,
+        mut undo_rx: mpsc::UnboundedReceiver<()>,
+        mut config_rx: mpsc::UnboundedReceiver<Config>,
     ) -> anyhow::Result<()> {
         let cancelled = Arc::new(AtomicBool::new(false));
+
+        // Cancel watcher: drains the cancel channel and sets the
+        // shared flag so that an in-flight turn can observe
+        // cancellation without waiting for the outer `select!` to
+        // poll `cancel_rx`. Previously `run_turn(...).await` was
+        // awaited directly in the `input_rx` arm, so `cancel_rx` was
+        // not polled while a turn streamed.
+        let cancel_event_tx = event_tx.clone();
+        let cancel_watcher_cancelled = cancelled.clone();
+        tokio::spawn(async move {
+            while cancel_rx.recv().await.is_some() {
+                cancel_watcher_cancelled.store(true, Ordering::SeqCst);
+                if cancel_event_tx
+                    .send(TurnEvent::Token("\n⚠️ Generation cancelled\n".into()))
+                    .is_err()
+                {
+                    tracing::warn!("TUI event receiver dropped; cancel watcher exiting");
+                    break;
+                }
+            }
+        });
 
         // Fire session-start hook (fire-and-forget, best-effort)
         self.run_hook("session-start", None, None);
 
         loop {
             tokio::select! {
-                biased; // check cancel first, then input
+                biased; // check control channels first, then input
 
-                Some(()) = cancel_rx.recv() => {
-                    cancelled.store(true, Ordering::SeqCst);
-                    if event_tx.send(TurnEvent::Token("\n⚠️ Generation cancelled\n".into())).is_err() {
-
-                        tracing::warn!("TUI event receiver dropped; executor driver exiting");
+                // Review.md gap #7 — in-app undo. The TUI sends a
+                // signal over `undo_rx`; we pop the executor's undo
+                // stack and emit the result as a system token.
+                Some(()) = undo_rx.recv() => {
+                    let msg = if let Some(ref stack) = self.undo_stack {
+                        match stack.lock() {
+                            Ok(mut s) => match s.pop() {
+                                Ok(Some(r)) => format!(
+                                    "↶ Undo: {} ({})",
+                                    if r.prev_existed {
+                                        format!("restored {}", r.path.display())
+                                    } else {
+                                        format!("removed newly-created {}", r.path.display())
+                                    },
+                                    r.kind.as_str()
+                                ),
+                                Ok(None) => "Nothing to undo.".to_string(),
+                                Err(e) => format!("Undo failed: {}", e),
+                            },
+                            Err(e) => format!("Undo stack mutex poisoned: {}", e),
+                        }
+                    } else {
+                        "Undo unavailable: no undo stack for this session.".to_string()
+                    };
+                    if event_tx.send(TurnEvent::Token(msg)).is_err() {
+                        tracing::warn!("TUI event receiver dropped during /undo; exiting");
                         self.flush_carryover();
                         return Ok(());
                     }
@@ -304,6 +398,19 @@ impl Executor {
                         return Ok(());
                     }
                 }
+                Some(new_config) = config_rx.recv() => {
+                    let diff_summary = self.reload_config(new_config);
+                    let msg = if diff_summary.is_empty() {
+                        "🔄 Reloaded config (no changes)\n".to_string()
+                    } else {
+                        format!("🔄 Reloaded config: {}\n", diff_summary)
+                    };
+                    if event_tx.send(TurnEvent::Token(msg)).is_err() {
+                        tracing::warn!("TUI event receiver dropped during config reload; exiting");
+                        self.flush_carryover();
+                        return Ok(());
+                    }
+                }
                 Some(new_log) = resume_rx.recv() => {
 
                     self.replace_conversation(new_log);
@@ -317,8 +424,19 @@ impl Executor {
                     let history = self.conversation.all().to_vec();
                     let mut did_summarize = false;
 
+                    // Snapshot the config fields we need; the guard must
+                    // drop before we mutate `self.conversation` below.
+                    let (summarize_enabled, summarize_model, ollama_host) = {
+                        let cfg = read_shared_config(&self.config);
+                        (
+                            cfg.summarize_enabled,
+                            cfg.summarize_model.clone(),
+                            cfg.ollama_host.clone(),
+                        )
+                    };
+
                     // Try LLM-based summarization if enabled
-                    if self.config.summarize_enabled && history.len() > 2 {
+                    if summarize_enabled && history.len() > 2 {
                         // Preserve the system anchor and last 4 turns
                         let working_set_size = 8; // 4 user↔assistant pairs ≈ 8 messages
                         let anchor = if !history.is_empty()
@@ -337,7 +455,7 @@ impl Executor {
                                 .to_vec();
                             if !to_summarize.is_empty() {
                                 let summarizer_config = crate::session::prompt::summarizer::SummarizerConfig {
-                                    model: self.config.summarize_model.clone(),
+                                    model: summarize_model.clone(),
                                     max_summary_tokens: 500,
                                     min_turns_for_summary: 4,
                                     min_compression_ratio: 0.4,
@@ -346,7 +464,7 @@ impl Executor {
                                 let result = crate::session::prompt::summarizer::summarize_conversation(
                                     &summarizer_config,
                                     &to_summarize,
-                                    &self.config.ollama_host,
+                                    &ollama_host,
                                 )
                                 .await;
 
@@ -560,7 +678,8 @@ impl Executor {
         // (still useful for tests that want to call the inner directly)
         // but stop firing the hook manually.
         let _hook_guard = PostTurnHookGuard::new(self.hook_runner.clone());
-        self.run_turn_inner(user_input, approval_sender, cancelled).await
+        self.run_turn_inner(user_input, approval_sender, cancelled)
+            .await
     }
 
     async fn run_turn_inner(
@@ -572,16 +691,17 @@ impl Executor {
         let mut events = Vec::new();
 
         // --- adapter hot-swap via smart routing ---
-        if self.config.routing_enabled {
-            let swapped = self
-                .adapter_swap
-                .maybe_swap(&self.config, &mut self.adapter, user_input);
+        let routing_enabled = read_shared_config(&self.config).routing_enabled;
+        if routing_enabled {
+            // Clone the config for the swap check so we don't hold the
+            // read guard across the mutable adapter borrow.
+            let cfg_snapshot = read_shared_config(&self.config).clone();
+            let swapped =
+                self.adapter_swap
+                    .maybe_swap(&cfg_snapshot, &mut self.adapter, user_input);
             if let Some(new_model) = swapped {
                 self.model_name = new_model.clone();
-                events.push(TurnEvent::Token(format!(
-                    "🔀 Switched to {}\n",
-                    new_model
-                )));
+                events.push(TurnEvent::Token(format!("🔀 Switched to {}\n", new_model)));
             }
         }
 
@@ -607,7 +727,8 @@ impl Executor {
 
         for iteration in 0..MAX_ITERATIONS {
             if cancelled.load(Ordering::SeqCst) {
-                events.push(TurnEvent::Token("\n⚠️ Cancelled\n".into()));
+                // The cancel watcher already emitted "Generation
+                // cancelled"; just return the events collected so far.
                 return Ok(events);
             }
 
@@ -622,7 +743,6 @@ impl Executor {
                         self.dispatch_tool_call(tc, approval_sender, &mut events)
                             .await?;
                     }
-
                 }
                 IterationOutcome::ParseError => {
                     if !already_retried_parse {
@@ -641,7 +761,6 @@ impl Executor {
                         })?;
                         events.push(TurnEvent::Token("(JSON parse error, retrying…)\n".into()));
                     } else {
-
                         return Ok(events);
                     }
                 }
@@ -710,8 +829,9 @@ impl Executor {
 
         while let Some(event) = rx.recv().await {
             if cancelled.load(Ordering::SeqCst) {
-                events.push(TurnEvent::Token("\n⚠️ Cancelled\n".into()));
-
+                // The cancel watcher already emitted "Generation
+                // cancelled"; flush any partial assistant message
+                // and finish the turn.
                 if !assistant_content.is_empty()
                     || !tool_calls_out.is_empty()
                     || !assistant_thinking.is_empty()
@@ -749,7 +869,6 @@ impl Executor {
                     tool_calls_out.push(tc);
                 }
                 StreamEvent::Error(e) => {
-
                     if e.contains("parse") || e.contains("parseable") {
                         had_parse_error = true;
                     }
@@ -759,7 +878,6 @@ impl Executor {
                     finish_reason: _,
                     usage,
                 } => {
-
                     let msg = Message {
                         role: Role::Assistant,
                         content: assistant_content.clone(),
@@ -794,7 +912,6 @@ impl Executor {
                     }
 
                     if !tool_calls_out.is_empty() {
-
                         return Ok(IterationOutcome::ToolCalls(tool_calls_out.clone()));
                     }
 
@@ -820,7 +937,6 @@ impl Executor {
         approval_sender: &mpsc::UnboundedSender<ApprovalRequest>,
         events: &mut Vec<TurnEvent>,
     ) -> anyhow::Result<()> {
-
         let tool = match self.tools.iter().find(|t| t.def().name == tc.name) {
             Some(t) => t.clone(),
             None => {
@@ -837,23 +953,21 @@ impl Executor {
             }
         };
 
+        // Snapshot the permission config so we don't hold the read
+        // guard across the mutable self borrows below.
+        let (auto_approve, permission_rules) = {
+            let cfg = read_shared_config(&self.config);
+            (cfg.auto_approve, cfg.permission_rules.clone())
+        };
         let is_destructive = matches!(tc.name.as_str(), "write_file" | "edit_file" | "bash");
-        let default_action = if self.config.auto_approve {
+        let default_action = if auto_approve {
             PermissionAction::Allow
         } else {
             PermissionAction::Ask
         };
-        let mut action = evaluate(
-            &self.config.permission_rules,
-            &tc.name,
-            &tc.arguments,
-            default_action,
-        );
+        let mut action = evaluate(&permission_rules, &tc.name, &tc.arguments, default_action);
 
-        if self.config.auto_approve
-            && tc.name == "bash"
-            && matches!(action, PermissionAction::Allow)
-        {
+        if auto_approve && tc.name == "bash" && matches!(action, PermissionAction::Allow) {
             if let Some(cmd) = tc.arguments.get("command").and_then(|v| v.as_str()) {
                 if !is_read_only_bash(cmd) {
                     action = PermissionAction::Ask;
@@ -894,9 +1008,7 @@ impl Executor {
 
         if needs_approval {
             match self.run_approval_flow(tc, approval_sender).await? {
-                ApprovalDecision::Approved | ApprovalDecision::AlwaysApproved => {
-
-                }
+                ApprovalDecision::Approved | ApprovalDecision::AlwaysApproved => {}
                 ApprovalDecision::Denied => {
                     events.push(TurnEvent::ToolResult {
                         name: tc.name.clone(),
@@ -984,8 +1096,7 @@ impl Executor {
                     });
 
                     // Pre-tool hook
-                    let args_json =
-                        serde_json::to_string(&run_args).unwrap_or_default();
+                    let args_json = serde_json::to_string(&run_args).unwrap_or_default();
                     self.run_hook(
                         &format!("pre-tool-{}", tc.name),
                         Some(&tc.name),
@@ -993,12 +1104,8 @@ impl Executor {
                     );
 
                     let outcome = tool.run(run_args.clone()).await;
-                    let edit_diff = handle_tool_outcome(
-                        outcome,
-                        tc,
-                        events,
-                        &mut self.conversation,
-                    )?;
+                    let edit_diff =
+                        handle_tool_outcome(outcome, tc, events, &mut self.conversation)?;
 
                     // Post-tool hook
                     self.run_hook(
@@ -1009,13 +1116,7 @@ impl Executor {
 
                     let crs = self
                         .emit_tool_event_and_correct(
-                            tc,
-                            &tc.name,
-                            &run_args,
-                            None,
-                            None,
-                            None,
-                            edit_diff,
+                            tc, &tc.name, &run_args, None, None, None, edit_diff,
                         )
                         .await;
                     self.collect_carryover(tc, &crs);
@@ -1048,7 +1149,8 @@ impl Executor {
             // call (and the pre/post tool hooks) see the override. The
             // check function below rejects an explicit workdir that
             // points outside the sandbox.
-            if self.config.bash_sandbox_workdir
+            let bash_sandbox_workdir = read_shared_config(&self.config).bash_sandbox_workdir;
+            if bash_sandbox_workdir
                 && self.path_guard.sandbox_dir.is_some()
                 && tc
                     .arguments
@@ -1071,7 +1173,7 @@ impl Executor {
                 &tc.arguments,
                 &self.deny_list,
                 &self.path_guard,
-                self.config.bash_sandbox_workdir,
+                bash_sandbox_workdir,
             ) {
                 events.push(TurnEvent::ToolResult {
                     name: tc.name.clone(),
@@ -1139,8 +1241,9 @@ impl Executor {
         } else {
             (None, None, None)
         };
+        let max_tool_result_chars = read_shared_config(&self.config).max_tool_result_chars;
         let outcome = if tc.name == "bash" {
-            truncate_tool_output(outcome, self.config.max_tool_result_chars)
+            truncate_tool_output(outcome, max_tool_result_chars)
         } else {
             outcome
         };
@@ -1187,15 +1290,13 @@ impl Executor {
             Ok(ApprovalResponse::Approved) => Ok(ApprovalDecision::Approved),
             Ok(ApprovalResponse::Denied) => Ok(ApprovalDecision::Denied),
             Ok(ApprovalResponse::AlwaysApprove) => {
-
                 let rule = crate::shared::permission::suggest_rule(&tc.name, &tc.arguments);
-                push_rule_unique(&mut self.config.permission_rules, rule);
+                if let Ok(mut cfg) = self.config.write() {
+                    push_rule_unique(&mut cfg.permission_rules, rule);
+                }
                 Ok(ApprovalDecision::AlwaysApproved)
             }
-            Err(_) => {
-
-                Ok(ApprovalDecision::Denied)
-            }
+            Err(_) => Ok(ApprovalDecision::Denied),
         }
     }
 
@@ -1375,9 +1476,10 @@ const DANGEROUS_SHELL_COMMANDS: &[&str] = &[
 const READ_ONLY_COMMANDS: &[&str] = &[
     "ls", "cat", "head", "tail", "pwd", "echo", "printf", "which", "type", "file", "stat", "du",
     "df", "env", "printenv", "true", "false", "dirname", "basename", "realpath", "readlink",
-    "grep", "rg", "sort", "wc", "cut", "tr", "uniq", "fold", "nl", "diff", "cmp", "comm",
-    "jq", "date", "cal", "whoami", "id", "uname", "hostname", "uptime", "ps", "free", "lscpu",
-    "lsblk", "lsof", "dmesg", "nproc", "arch", "tty", "jobs", "help",
+    "grep", "rg", "sort", "wc", "cut", "tr", "uniq", "fold", "nl", "diff", "cmp", "comm", "jq",
+    "date", "cal", "whoami", "id", "uname", "hostname", "uptime", "ps", "free", "lscpu", "lsblk",
+    "lsof", "dmesg", "nproc", "arch", "tty", "jobs",
+    "help",
     // `find` used to be in this list, but `find -delete` (and `-exec rm`,
     // `-fprint`, etc.) is destructive. Removing it forces find through
     // the approval gate — deepseek-v4 review finding #3.
@@ -1558,7 +1660,6 @@ fn truncate_tool_output(outcome: ToolOutcome, max_chars: usize) -> ToolOutcome {
     match outcome {
         ToolOutcome::Success { content } => {
             if content.len() > max_chars {
-
                 let mut boundary = max_chars;
                 while !content.is_char_boundary(boundary) {
                     boundary -= 1;
@@ -1616,10 +1717,7 @@ fn extract_bash_metrics(outcome: &ToolOutcome) -> (Option<i32>, Option<usize>, O
 fn check_search_path(path_guard: &PathGuard, path: &std::path::Path) -> GuardVerdict {
     // 1. Deny list — same as check_read.
     if path_guard.deny_list.is_path_denied(path) {
-        return GuardVerdict::Denied(format!(
-            "Path denied by deny list: {}",
-            path.display()
-        ));
+        return GuardVerdict::Denied(format!("Path denied by deny list: {}", path.display()));
     }
 
     // 2. Resolve to the longest existing ancestor so glob patterns
@@ -1675,9 +1773,7 @@ fn check_deny_list(
                 }
             }
         }
-        "bash" => {
-
-        }
+        "bash" => {}
         "grep" | "glob" => {
             if let Some(path) = args.get("path").and_then(|v| v.as_str()) {
                 let p = std::path::Path::new(path);
@@ -1787,13 +1883,10 @@ fn handle_tool_outcome(
             })?;
 
             // Attempt error recovery — analyze the error and inject a hint
-            if let Some(hint) = crate::session::error_recovery::analyze_error(
-                &tc.name,
-                &message,
-                &tc.arguments,
-            ) {
-                let recovery_msg =
-                    crate::session::error_recovery::build_recovery_message(&hint);
+            if let Some(hint) =
+                crate::session::error_recovery::analyze_error(&tc.name, &message, &tc.arguments)
+            {
+                let recovery_msg = crate::session::error_recovery::build_recovery_message(&hint);
                 conversation.append(recovery_msg)?;
             }
         }
@@ -1808,7 +1901,12 @@ fn handle_tool_outcome(
             mime,
             data_base64,
         } => {
-            let projection = format!("[image: {} ({}, {} bytes)]", path.display(), mime, data_base64.len());
+            let projection = format!(
+                "[image: {} ({}, {} bytes)]",
+                path.display(),
+                mime,
+                data_base64.len()
+            );
             events.push(TurnEvent::ToolResult {
                 name: tc.name.clone(),
                 output: projection.clone(),
@@ -1885,8 +1983,11 @@ mod tests {
         &NC
     }
 
-    struct MockAdapter {
+    fn cfg(exe: &Executor) -> std::sync::RwLockReadGuard<'_, Config> {
+        crate::shared::read_shared_config(&exe.config)
+    }
 
+    struct MockAdapter {
         first_events: Vec<StreamEvent>,
 
         followup_events: Vec<StreamEvent>,
@@ -2274,20 +2375,23 @@ mod tests {
             .unwrap();
         approval_handle.await.unwrap();
 
-        assert_eq!(
-            exe.config.permission_rules.len(),
-            1,
-            "AlwaysApprove should have appended exactly one rule, got {:?}",
-            exe.config.permission_rules
-        );
-        let r = &exe.config.permission_rules[0];
-        assert_eq!(r.tool, "bash");
-        assert_eq!(r.key, "command");
-        assert_eq!(r.pattern, "cargo test --release");
-        assert_eq!(r.action, PermissionAction::Allow);
+        {
+            let cfg = cfg(&exe);
+            assert_eq!(
+                cfg.permission_rules.len(),
+                1,
+                "AlwaysApprove should have appended exactly one rule, got {:?}",
+                cfg.permission_rules
+            );
+            let r = &cfg.permission_rules[0];
+            assert_eq!(r.tool, "bash");
+            assert_eq!(r.key, "command");
+            assert_eq!(r.pattern, "cargo test --release");
+            assert_eq!(r.action, PermissionAction::Allow);
+        }
 
         assert!(
-            !exe.config.auto_approve,
+            !cfg(&exe).auto_approve,
             "AlwaysApprove should NOT flip auto_approve — the new rule is the user's intent"
         );
     }
@@ -2326,7 +2430,6 @@ mod tests {
 
         let approval_handle = tokio::spawn(async move {
             while let Some(req) = approval_rx.recv().await {
-
                 let _ = req.response.send(ApprovalResponse::AlwaysApprove);
             }
         });
@@ -2353,7 +2456,7 @@ mod tests {
         approval_handle.await.unwrap();
 
         assert_eq!(
-            exe.config.permission_rules.len(),
+            cfg(&exe).permission_rules.len(),
             1,
             "AlwaysApprove should dedup against an existing identical rule"
         );
@@ -2416,12 +2519,15 @@ mod tests {
         drop(approval_tx);
         approval_handle.await.unwrap();
 
-        assert_eq!(exe.config.permission_rules.len(), 1);
-        assert_eq!(
-            exe.config.permission_rules[0].action,
-            PermissionAction::Deny,
-            "Existing Deny should not be overwritten by a new Allow on the same pattern"
-        );
+        {
+            let cfg = cfg(&exe);
+            assert_eq!(cfg.permission_rules.len(), 1);
+            assert_eq!(
+                cfg.permission_rules[0].action,
+                PermissionAction::Deny,
+                "Existing Deny should not be overwritten by a new Allow on the same pattern"
+            );
+        }
     }
 
     #[tokio::test]
@@ -2457,7 +2563,6 @@ mod tests {
 
         let (approval_tx, mut approval_rx) = mpsc::unbounded_channel::<ApprovalRequest>();
         let approval_handle = tokio::spawn(async move {
-
             while let Some(req) = approval_rx.recv().await {
                 let _ = req.response.send(ApprovalResponse::Approved);
             }
@@ -2658,7 +2763,6 @@ mod tests {
 
         let (approval_tx, mut approval_rx) = mpsc::unbounded_channel::<ApprovalRequest>();
         let approval_handle = tokio::spawn(async move {
-
             let req: ApprovalRequest = approval_rx.recv().await.expect("approval request");
             assert_eq!(req.tool_name, "bash");
             let _ = req.response.send(ApprovalResponse::Approved);
@@ -2732,7 +2836,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_tool_call_loop_capped() {
-
         let captured = Arc::new(Mutex::new(None));
         let tool = MockTool {
             def: ToolDef {
@@ -2812,7 +2915,6 @@ mod tests {
 
     #[test]
     fn test_word_boundary_no_false_positive_trailing_slash() {
-
         assert!(!word_boundary_match("rm -rf /home/user", "rm -rf /"));
     }
 
@@ -2834,25 +2936,14 @@ mod tests {
     #[test]
     fn test_check_bash_command_blocks_dangerous_exact() {
         let args = serde_json::json!({"command": "rm -rf /"});
-        let result = check_bash_command(
-            &args,
-            &DenyList::default(),
-            &PathGuard::default(),
-            false,
-        );
+        let result = check_bash_command(&args, &DenyList::default(), &PathGuard::default(), false);
         assert!(result.is_some(), "rm -rf / should be blocked");
     }
 
     #[test]
     fn test_check_bash_command_allows_safe_similar() {
-
         let args = serde_json::json!({"command": "rm -rf /home/user/temp"});
-        let result = check_bash_command(
-            &args,
-            &DenyList::default(),
-            &PathGuard::default(),
-            false,
-        );
+        let result = check_bash_command(&args, &DenyList::default(), &PathGuard::default(), false);
         assert!(
             result.is_none(),
             "rm -rf /home/user/temp should be allowed, got: {:?}",
@@ -2862,38 +2953,22 @@ mod tests {
 
     #[test]
     fn test_check_bash_command_blocks_dd_by_substring() {
-
         let args = serde_json::json!({"command": "dd if=/dev/zero of=/tmp/out bs=1M count=1"});
-        let result = check_bash_command(
-            &args,
-            &DenyList::default(),
-            &PathGuard::default(),
-            false,
-        );
+        let result = check_bash_command(&args, &DenyList::default(), &PathGuard::default(), false);
         assert!(result.is_some(), "dd if=/dev/zero should be blocked");
     }
 
     #[test]
     fn test_check_bash_command_blocks_fork_bomb() {
         let args = serde_json::json!({"command": ":(){ :|:& };:"});
-        let result = check_bash_command(
-            &args,
-            &DenyList::default(),
-            &PathGuard::default(),
-            false,
-        );
+        let result = check_bash_command(&args, &DenyList::default(), &PathGuard::default(), false);
         assert!(result.is_some(), "Fork bomb should be blocked");
     }
 
     #[test]
     fn test_check_bash_command_allows_legitimate_curl() {
         let args = serde_json::json!({"command": "curl -s https://api.example.com/data"});
-        let result = check_bash_command(
-            &args,
-            &DenyList::default(),
-            &PathGuard::default(),
-            false,
-        );
+        let result = check_bash_command(&args, &DenyList::default(), &PathGuard::default(), false);
         assert!(
             result.is_none(),
             "curl should not be blocked by check_bash_command"
@@ -2958,7 +3033,6 @@ mod tests {
 
     #[test]
     fn test_is_read_only_bash_pipe_to_sh_blocked() {
-
         assert!(!is_read_only_bash("cat script | sh"));
         assert!(!is_read_only_bash("cat script | bash"));
     }
@@ -2992,7 +3066,6 @@ mod tests {
 
     #[test]
     fn test_is_read_only_bash_word_boundary_no_false_positive() {
-
         assert!(!is_read_only_bash("scurling is not curl"));
 
         assert!(is_read_only_bash("cat /etc/hostname"));
@@ -3086,11 +3159,7 @@ mod tests {
         );
 
         let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
-        let mut exe = make_executor(
-            Box::new(adapter),
-            vec![Arc::new(tool)],
-            make_config(true),
-        );
+        let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(true));
         exe.event_bus
             .register(captured.clone() as Arc<dyn EventHandler>)
             .await
@@ -3109,7 +3178,10 @@ mod tests {
         let last = captured.last.lock().unwrap().clone();
         let got = last.expect("EditEvent should have been dispatched");
         assert!(
-            got.contains("--- a") && got.contains("+++ b") && got.contains("-old line") && got.contains("+new line"),
+            got.contains("--- a")
+                && got.contains("+++ b")
+                && got.contains("-old line")
+                && got.contains("+new line"),
             "EditEvent.diff should be the rendered diff, got: {:?}",
             got
         );
@@ -3134,5 +3206,35 @@ mod tests {
     #[test]
     fn post_turn_guard_constructs_and_drops() {
         let _guard = PostTurnHookGuard::new(HookRunner::default());
+    }
+
+    /// `reload_config` rebuilds access control from a new config and
+    /// reports the changed fields. This exercises the hot-reload path
+    /// without needing a live TUI or SIGHUP signal.
+    #[test]
+    fn reload_config_rebuilds_and_reports_changes() {
+        let adapter = MockAdapter::new(vec![], make_info());
+        let mut exe = make_executor(Box::new(adapter), vec![], make_config(false));
+
+        let mut new_config = make_config(false);
+        new_config.default_model = "qwen2.5:14b".into();
+        new_config.json_mode = true;
+        new_config.carryover_enabled = true;
+
+        let summary = exe.reload_config(new_config.clone());
+
+        assert!(
+            summary.contains("default_model")
+                || summary.contains("json_mode")
+                || summary.contains("carryover_enabled"),
+            "reload_config should report changed high-impact fields, got: {}",
+            summary
+        );
+
+        // The shared lock should hold the new values.
+        let cfg = cfg(&exe);
+        assert_eq!(cfg.default_model, "qwen2.5:14b");
+        assert!(cfg.json_mode);
+        assert!(cfg.carryover_enabled);
     }
 }

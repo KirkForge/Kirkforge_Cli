@@ -6,10 +6,10 @@
 //! is covered by `attach_pending_image_splices_image_onto_user_message`
 //! at the bottom of this file — that's the only test that touches
 //! the prompt builder.
+#![cfg(test)]
+
 use crate::adapters::{build_ollama_chat_body, build_openai_compat_body};
-use crate::shared::{
-    ContentPart, Message, ModelInfo, Role, ToolCallStyle, ToolDef, TokenUsage,
-};
+use crate::shared::{ContentPart, Message, ModelInfo, Role, TokenUsage, ToolCallStyle, ToolDef};
 use serde_json::json;
 
 fn dummy_model_info() -> ModelInfo {
@@ -134,7 +134,11 @@ fn openai_multimodal_message_uses_vision_array() {
     ]);
     let body = oai_body(&[m], false);
     let content = &body["messages"][0]["content"];
-    assert!(content.is_array(), "expected vision array, got: {}", content);
+    assert!(
+        content.is_array(),
+        "expected vision array, got: {}",
+        content
+    );
     let arr = content.as_array().unwrap();
     assert_eq!(arr.len(), 2);
     assert_eq!(arr[0], json!({"type": "text", "text": "what is this?"}));
@@ -196,15 +200,9 @@ fn openai_cache_mode_marks_last_two_prefix_messages() {
     assert!(oai_msgs[0].get("cache_control").is_none());
     // First assistant (idx 1): MARKER (last 2 of the prefix, with
     // prefix = [0, 1, 2])
-    assert_eq!(
-        oai_msgs[1]["cache_control"],
-        json!({"type": "ephemeral"})
-    );
+    assert_eq!(oai_msgs[1]["cache_control"], json!({"type": "ephemeral"}));
     // Second assistant (idx 2): MARKER (last 2 of the prefix)
-    assert_eq!(
-        oai_msgs[2]["cache_control"],
-        json!({"type": "ephemeral"})
-    );
+    assert_eq!(oai_msgs[2]["cache_control"], json!({"type": "ephemeral"}));
     // Trailing user (idx 3): no marker — it's the live turn
     assert!(oai_msgs[3].get("cache_control").is_none());
 }
@@ -214,11 +212,7 @@ fn openai_cache_mode_off_omits_cache_control() {
     let mut mi = dummy_model_info();
     mi.supports_cache = false;
     let tools: Vec<ToolDef> = vec![];
-    let msgs = vec![
-        user_text("a"),
-        user_text("b"),
-        user_text("c"),
-    ];
+    let msgs = vec![user_text("a"), user_text("b"), user_text("c")];
     let body = build_openai_compat_body("m", &mi, &msgs, &tools, false);
     for m in body["messages"].as_array().unwrap() {
         assert!(m.get("cache_control").is_none());
@@ -350,8 +344,7 @@ fn attach_pending_image_splices_image_onto_user_message() {
         user_text("What does the error say?"),
     ];
     let mut pb = PromptBuilder::new();
-    let messages =
-        pb.build_messages(system, &history, 32_000, &[]);
+    let messages = pb.build_messages(system, &history, 32_000, &[]);
 
     // The user message should now have a `content_parts` field
     // with the image prepended + a text part containing the original
@@ -386,10 +379,7 @@ fn attach_pending_image_does_nothing_when_no_read_image_in_history() {
     let mut pb = PromptBuilder::new();
     let messages = pb.build_messages(system, &history, 32_000, &[]);
     let last = messages.last().unwrap();
-    assert!(
-        last.content_parts.is_none(),
-        "no read_image → no splice"
-    );
+    assert!(last.content_parts.is_none(), "no read_image → no splice");
 }
 
 #[test]

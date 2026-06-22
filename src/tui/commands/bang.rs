@@ -10,10 +10,10 @@
 //! Design choices:
 //! - **No model round trip.** The whole point is "don't wait for
 //!   inference." The command runs in `~ms`, not seconds.
-//! - **No approval gate.** The user *typed* the command. Approval
-//!   would defeat the purpose of the escape hatch. (Future: a config
-//!   flag `bang_requires_approval` could opt in to the approval flow
-//!   for high-stakes environments.)
+//! - **No approval gate by default.** The user *typed* the command.
+//!   When the config flag `bang_requires_approval` is set to `true`,
+//!   the TUI pauses and asks for Y/N confirmation before executing
+//!   the command (handled in `src/tui/approval_keys.rs`).
 //! - **30-second timeout** (matches the bash tool's default).
 //! - **Output goes through the existing chat widget** so the
 //!   collapse/expand UX applies automatically. A `!find .` that

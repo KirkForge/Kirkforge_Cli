@@ -49,7 +49,8 @@ pub const TOOL_RESULT_STUB: &str =
 /// Marker prefix for condensed assistant turns. The trailing `(N chars)` is
 /// the original message's character count, which is useful debugging info
 /// (and makes the marker grep-able in the on-disk NDJSON log).
-const ASSISTANT_CONDENSED_PREFIX: &str = "[previous assistant turn condensed for context budget — original was ";
+const ASSISTANT_CONDENSED_PREFIX: &str =
+    "[previous assistant turn condensed for context budget — original was ";
 
 const ASSISTANT_CONDENSED_SUFFIX: &str = " chars]";
 
@@ -260,7 +261,7 @@ mod tests {
         msgs.push(tool_result("huge output", "c1", "bash")); // 2 — stub
         msgs.push(assistant("old answer with prose")); // 3 — condense
         msgs.push(tool_result("more output", "c2", "read_file")); // 4 — stub
-        // Working set (8 messages):
+                                                                  // Working set (8 messages):
         msgs.push(user("recent q1"));
         msgs.push(assistant("recent a1"));
         msgs.push(tool_result("r1", "c3", "bash"));
@@ -284,7 +285,9 @@ mod tests {
         assert_eq!(middle[0].content, "old question"); // user verbatim
         assert_eq!(middle[1].content, TOOL_RESULT_STUB); // tool stub
         assert!(middle[2].content.starts_with(ASSISTANT_CONDENSED_PREFIX)); // assistant condense
-        assert!(middle[2].content.contains("old answer with prose".len().to_string().as_str()));
+        assert!(middle[2]
+            .content
+            .contains("old answer with prose".len().to_string().as_str()));
         assert_eq!(middle[3].content, TOOL_RESULT_STUB); // tool stub
 
         // Working set: last 8 messages, verbatim.
@@ -334,8 +337,7 @@ mod tests {
             .new_messages
             .iter()
             .find(|m| {
-                m.role == Role::Assistant
-                    && m.content.starts_with(ASSISTANT_CONDENSED_PREFIX)
+                m.role == Role::Assistant && m.content.starts_with(ASSISTANT_CONDENSED_PREFIX)
             })
             .expect("a condensed assistant should be present");
         assert!(condensed.tool_calls.is_some());
@@ -363,11 +365,7 @@ mod tests {
         let empty_prose = r
             .new_messages
             .iter()
-            .find(|m| {
-                m.role == Role::Assistant
-                    && m.content.is_empty()
-                    && m.tool_calls.is_some()
-            })
+            .find(|m| m.role == Role::Assistant && m.content.is_empty() && m.tool_calls.is_some())
             .expect("the empty-prose assistant should be present verbatim");
         assert_eq!(empty_prose.tool_calls.as_ref().unwrap()[0].id, "abc");
 

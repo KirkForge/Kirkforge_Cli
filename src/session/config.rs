@@ -255,6 +255,56 @@ fn merge_toml_into_config(cfg: &mut Config, table: toml::Table) {
     }
 }
 
+/// Human-readable summary of config changes. Security/internal knobs
+/// (deny lists, allowed dirs, etc.) are intentionally omitted so the
+/// summary is suitable for display in the TUI.
+pub fn config_diff_summary(before: &Config, after: &Config) -> String {
+    let mut diffs: Vec<String> = Vec::new();
+    if before.default_model != after.default_model {
+        diffs.push(format!(
+            "default_model: {} → {}",
+            before.default_model, after.default_model
+        ));
+    }
+    if before.ollama_host != after.ollama_host {
+        diffs.push(format!(
+            "ollama_host: {} → {}",
+            before.ollama_host, after.ollama_host
+        ));
+    }
+    if before.auto_approve != after.auto_approve {
+        diffs.push(format!(
+            "auto_approve: {} → {}",
+            before.auto_approve, after.auto_approve
+        ));
+    }
+    if before.bang_requires_approval != after.bang_requires_approval {
+        diffs.push(format!(
+            "bang_requires_approval: {} → {}",
+            before.bang_requires_approval, after.bang_requires_approval
+        ));
+    }
+    if before.sandbox_dir != after.sandbox_dir {
+        diffs.push(format!(
+            "sandbox_dir: {:?} → {:?}",
+            before.sandbox_dir, after.sandbox_dir
+        ));
+    }
+    if before.routing_enabled != after.routing_enabled {
+        diffs.push(format!(
+            "routing_enabled: {} → {}",
+            before.routing_enabled, after.routing_enabled
+        ));
+    }
+    if before.summarize_enabled != after.summarize_enabled {
+        diffs.push(format!(
+            "summarize_enabled: {} → {}",
+            before.summarize_enabled, after.summarize_enabled
+        ));
+    }
+    diffs.join(", ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -429,5 +479,56 @@ mod tests {
         let resolved = freeze_launch_sandbox(&mut cfg);
         assert_eq!(resolved.as_deref(), Some("/srv/project"));
         assert_eq!(cfg.sandbox_dir.as_deref(), Some("/srv/project"));
+    }
+
+    #[test]
+    fn test_config_diff_summary_empty_for_equal() {
+        let a = Config::default();
+        let b = Config::default();
+        assert!(config_diff_summary(&a, &b).is_empty());
+    }
+
+    #[test]
+    fn test_config_diff_summary_model_change() {
+        let a = Config::default();
+        let b = Config {
+            default_model: "qwen2.5:3b".into(),
+            ..Config::default()
+        };
+        let s = config_diff_summary(&a, &b);
+        assert!(s.contains("default_model"), "got: {}", s);
+        assert!(s.contains("→ qwen2.5:3b"), "got: {}", s);
+    }
+
+    #[test]
+    fn test_config_diff_summary_multiple_fields() {
+        let a = Config::default();
+        let b = Config {
+            default_model: "qwen2.5:3b".into(),
+            auto_approve: true,
+            ollama_host: "http://example.com:11434".into(),
+            ..Config::default()
+        };
+        let s = config_diff_summary(&a, &b);
+        assert!(s.contains("default_model"), "got: {}", s);
+        assert!(s.contains("auto_approve"), "got: {}", s);
+        assert!(s.contains("ollama_host"), "got: {}", s);
+    }
+
+    #[test]
+    fn test_config_diff_summary_ignores_internal_fields() {
+        let a = Config::default();
+        let b = Config {
+            deny_paths: vec!["/secret".into()],
+            allowed_write_dirs: vec!["/tmp".into()],
+            ..Config::default()
+        };
+        let s = config_diff_summary(&a, &b);
+        assert!(
+            !s.contains("deny_paths") && !s.contains("allowed_write_dirs"),
+            "internal fields leaked: {}",
+            s
+        );
+        assert!(s.is_empty());
     }
 }

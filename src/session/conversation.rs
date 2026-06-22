@@ -1,3 +1,6 @@
+// Public/future surface in a binary crate: suppress dead-code warnings for pub items.
+#![allow(dead_code)]
+
 use crate::shared::Message;
 use std::path::PathBuf;
 
@@ -18,7 +21,13 @@ impl ConversationLog {
             content
                 .lines()
                 .filter(|l| !l.trim().is_empty())
-                .filter_map(|l| serde_json::from_str::<Message>(l).ok())
+                .filter_map(|l| match serde_json::from_str::<Message>(l) {
+                    Ok(m) => Some(m),
+                    Err(e) => {
+                        tracing::warn!(error = %e, line = %l, "skipping corrupt conversation log line");
+                        None
+                    }
+                })
                 .collect()
         } else {
             if let Some(parent) = path.parent() {
@@ -96,5 +105,31 @@ impl ConversationLog {
     /// Path to the log file.
     pub fn path(&self) -> &PathBuf {
         &self.path
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::shared::Message;
+
+    #[test]
+    fn test_open_skips_corrupt_lines_and_keeps_valid_ones() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("test.ndjson");
+        let lines = [
+            r#"{"role":"user","content":"hello"}"#,
+            "this is not json",
+            r#"{"role":"assistant","content":"hi"}"#,
+        ];
+        std::fs::write(&path, lines.join("\n")).unwrap();
+
+        let log = ConversationLog::open(path).unwrap();
+        let messages: Vec<&Message> = log.all().iter().collect();
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].role, crate::shared::Role::User);
+        assert_eq!(messages[0].content, "hello");
+        assert_eq!(messages[1].role, crate::shared::Role::Assistant);
+        assert_eq!(messages[1].content, "hi");
     }
 }

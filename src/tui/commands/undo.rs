@@ -11,7 +11,8 @@
 //! The TUI's `/undo` handler needs to reach it, so this command
 //! takes an `UndoStackRef` and dispatches via that.
 
-use crate::tui::app::{AppState, ConversationEntry};
+use crate::tui::app::AppState;
+use tokio::sync::mpsc;
 
 /// Handle `/undo` and `/undo list`.
 ///
@@ -23,26 +24,47 @@ use crate::tui::app::{AppState, ConversationEntry};
 /// `/undo count` is a small convenience: prints the current depth
 /// of the stack. Useful for scripts that want to check before
 /// running a destructive operation.
-pub fn handle_undo_command(args: &str, _state: &mut AppState) -> String {
-    // The undo stack is held by the executor, not by AppState.
-    // The TUI dispatches slash commands that touch executor state
-    // via a side channel; for the v1 implementation of `/undo`,
-    // we surface the limitation in the help text and accept the
-    // /undo invocation as a no-op with a system message.
-    //
-    // Wiring this fully requires plumbing the UndoStackRef from
-    // the executor through to the keys handler. The M2 commit
-    // lays the data and tool plumbing; the TUI-side command is
-    // here as a placeholder so the dispatch is wired and
-    // discoverable via /help. The actual TUI command is part of
-    // a follow-up that also adds /sessions (M3).
-    //
-    // For now, return a clear message so users aren't confused.
-    let _ = args;
-    "⚠ /undo is registered, but the TUI command is not yet wired to the executor's undo stack. \
-     Use the underlying EditFile/WriteFile tool plumbing (which IS wired) and the snapshot files \
-     under `~/.local/share/kirkforge/undo/<session-id>/` for manual recovery. \
-     The full TUI command ships in M3 alongside /sessions.".to_string()
+pub fn handle_undo_command(
+    args: &str,
+    undo_tx: &mpsc::UnboundedSender<()>,
+    state: &mut AppState,
+) -> String {
+    let args = args.trim();
+    match args {
+        "" => {
+            // Pop is performed by the executor so the file I/O happens on
+            // the executor task, not the TUI task. The result comes back as
+            // a TurnEvent::Token in the chat.
+            match undo_tx.send(()) {
+                Ok(()) => "Undoing most recent edit…".to_string(),
+                Err(_) => "Executor is not running; cannot undo.".to_string(),
+            }
+        }
+        "list" => {
+            let Some(ref stack) = state.undo_stack else {
+                return "Undo unavailable: no undo stack for this session.".to_string();
+            };
+            let entries = match stack.lock() {
+                Ok(s) => s.list(),
+                Err(e) => return format!("Undo stack mutex poisoned: {}", e),
+            };
+            format_undo_list(&entries)
+        }
+        "count" => {
+            let Some(ref stack) = state.undo_stack else {
+                return "Undo unavailable: no undo stack for this session.".to_string();
+            };
+            let count = match stack.lock() {
+                Ok(s) => s.len(),
+                Err(e) => return format!("Undo stack mutex poisoned: {}", e),
+            };
+            format!("Undo stack contains {} entr{}", count, if count == 1 { "y" } else { "ies" })
+        }
+        _ => format!(
+            "Usage: /undo [list|count]\n\nUnknown argument '{}'. /undo pops the most recent edit; /undo list shows the stack; /undo count prints the depth.",
+            args
+        ),
+    }
 }
 
 /// Format a stack of undo entries as a multi-line display string.
@@ -67,6 +89,9 @@ pub fn format_undo_list(entries: &[crate::session::undo::UndoSummary]) -> String
 }
 
 /// Format the result of an `UndoStack::pop` as a user-facing string.
+/// Currently only exercised by unit tests; kept around so the
+/// executor's inline formatting and the TUI command stay in sync.
+#[cfg(test)]
 pub fn format_undo_popped(restored: &crate::session::undo::RestoredOp) -> String {
     let action = if restored.prev_existed {
         format!("restored {}", restored.path.display())
@@ -75,13 +100,6 @@ pub fn format_undo_popped(restored: &crate::session::undo::RestoredOp) -> String
     };
     format!("↶ Undo: {} ({})", action, restored.kind.as_str())
 }
-
-// We need a stub for `ConversationEntry::new` usage in case future
-// versions push system messages from here. The current
-// implementation returns a string and lets `keys.rs` push it; that
-// keeps the command side effect-free and testable.
-#[allow(dead_code)]
-fn _entry_anchor(_e: ConversationEntry) {}
 
 #[cfg(test)]
 mod tests {
@@ -152,5 +170,100 @@ mod tests {
         let s = format_undo_popped(&r);
         assert!(s.contains("removed"));
         assert!(s.contains("newly-created"));
+    }
+
+    /// Helper: fresh AppState with an empty UndoStack in a temp dir.
+    fn state_with_stack() -> (AppState, crate::tools::UndoStackRef, std::path::PathBuf) {
+        let id = format!(
+            "cmd-test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let stack = crate::session::undo::UndoStack::for_session(&id).expect("for_session");
+        let target = std::env::temp_dir().join(format!("kf_undo_cmd_target_{}.txt", id));
+        let state = AppState::new(std::sync::Arc::new(std::sync::RwLock::new(
+            crate::shared::Config::default(),
+        )));
+        let stack_ref = std::sync::Arc::new(std::sync::Mutex::new(stack));
+        (state, stack_ref, target)
+    }
+
+    /// `/undo count` on an empty stack reports zero with singular wording.
+    #[test]
+    fn test_undo_count_empty() {
+        let (mut state, stack_ref, _) = state_with_stack();
+        state.undo_stack = Some(stack_ref);
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let out = handle_undo_command("count", &tx, &mut state);
+        assert!(out.contains("0 entries"), "got: {}", out);
+    }
+
+    /// `/undo list` on an empty stack reports the empty message.
+    #[test]
+    fn test_undo_list_empty() {
+        let (mut state, stack_ref, _) = state_with_stack();
+        state.undo_stack = Some(stack_ref);
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let out = handle_undo_command("list", &tx, &mut state);
+        assert!(out.contains("empty"), "got: {}", out);
+    }
+
+    /// `/undo count` reflects pushed entries.
+    #[test]
+    fn test_undo_count_reflects_stack() {
+        let (mut state, stack_ref, target) = state_with_stack();
+        std::fs::write(&target, b"v1").unwrap();
+        {
+            let mut s = stack_ref.lock().unwrap();
+            let prev = std::fs::read(&target).unwrap();
+            s.push(crate::session::undo::UndoKind::Edit, &target, true, &prev)
+                .unwrap();
+            std::fs::write(&target, b"v2").unwrap();
+        }
+        state.undo_stack = Some(stack_ref);
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let out = handle_undo_command("count", &tx, &mut state);
+        assert!(out.contains("1 entry"), "got: {}", out);
+    }
+
+    /// `/undo list` reflects pushed entries with paths and kinds.
+    #[test]
+    fn test_undo_list_reflects_stack() {
+        let (mut state, stack_ref, target) = state_with_stack();
+        std::fs::write(&target, b"v1").unwrap();
+        {
+            let mut s = stack_ref.lock().unwrap();
+            let prev = std::fs::read(&target).unwrap();
+            s.push(crate::session::undo::UndoKind::Edit, &target, true, &prev)
+                .unwrap();
+            std::fs::write(&target, b"v2").unwrap();
+        }
+        state.undo_stack = Some(stack_ref);
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let out = handle_undo_command("list", &tx, &mut state);
+        assert!(out.contains("1 entries"), "got: {}", out);
+        assert!(out.contains("edit"), "got: {}", out);
+        assert!(
+            out.contains(target.file_name().unwrap().to_str().unwrap()),
+            "got: {}",
+            out
+        );
+    }
+
+    /// Unknown `/undo` argument returns usage and does not pop.
+    #[test]
+    fn test_undo_unknown_argument_returns_usage() {
+        let (mut state, stack_ref, _) = state_with_stack();
+        state.undo_stack = Some(stack_ref);
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let out = handle_undo_command("foo", &tx, &mut state);
+        assert!(out.contains("Usage"), "got: {}", out);
+        assert!(out.contains("foo"), "got: {}", out);
+        assert!(
+            rx.try_recv().is_err(),
+            "pop signal should not have been sent"
+        );
     }
 }

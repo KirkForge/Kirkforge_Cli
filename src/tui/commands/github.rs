@@ -35,11 +35,7 @@ pub fn handle_gh_command(args: &str) -> String {
         "search" => handle_search(sub_args),
         "run" => handle_run(sub_args),
         "file" => handle_file(sub_args),
-        _ => format!(
-            "Unknown subcommand: /gh {}\n\n{}",
-            subcommand,
-            usage()
-        ),
+        _ => format!("Unknown subcommand: /gh {}\n\n{}", subcommand, usage()),
     }
 }
 
@@ -80,16 +76,27 @@ fn handle_issue(args: &str) -> String {
     } else if args == "view" {
         "/gh issue view <number> — e.g. /gh issue view 42".into()
     } else if args == "create" {
-        "Creating issues requires an interactive editor. Run `gh issue create` in a terminal.".into()
+        "Creating issues requires an interactive editor. Run `gh issue create` in a terminal."
+            .into()
     } else {
-        format!("Unknown /gh issue subcommand: {}.\nUse: list | view <number>", args)
+        format!(
+            "Unknown /gh issue subcommand: {}.\nUse: list | view <number>",
+            args
+        )
     }
 }
 
 fn run_gh_issue_list(args: &str) -> Result<String, String> {
     let label = extract_label_flag(args);
     let mut cmd = Command::new("gh");
-    cmd.args(["issue", "list", "--json", "number,title,state,labels", "--limit", "20"]);
+    cmd.args([
+        "issue",
+        "list",
+        "--json",
+        "number,title,state,labels",
+        "--limit",
+        "20",
+    ]);
     if let Some(l) = &label {
         cmd.args(["--label", l]);
     }
@@ -133,13 +140,23 @@ fn handle_pr(args: &str) -> String {
     } else if args == "view" || args == "diff" {
         format!("/gh pr {} <number> — e.g. /gh pr {} 42", args, args)
     } else {
-        format!("Unknown /gh pr subcommand: {}.\nUse: list | view <number> | diff <number>", args)
+        format!(
+            "Unknown /gh pr subcommand: {}.\nUse: list | view <number> | diff <number>",
+            args
+        )
     }
 }
 
 fn run_gh_pr_list() -> Result<String, String> {
     let mut cmd = Command::new("gh");
-    cmd.args(["pr", "list", "--json", "number,title,state,author,headRefName,baseRefName", "--limit", "10"]);
+    cmd.args([
+        "pr",
+        "list",
+        "--json",
+        "number,title,state,author,headRefName,baseRefName",
+        "--limit",
+        "10",
+    ]);
     exec_gh(cmd, "gh pr list")
 }
 
@@ -200,7 +217,10 @@ fn handle_run(args: &str) -> String {
             Err(e) => e,
         }
     } else {
-        format!("Unknown /gh run subcommand: {}.\nUse: list | view <id>", args)
+        format!(
+            "Unknown /gh run subcommand: {}.\nUse: list | view <id>",
+            args
+        )
     }
 }
 
@@ -225,7 +245,8 @@ fn handle_file(args: &str) -> String {
     let parts: Vec<&str> = args.split_whitespace().collect();
     if parts.is_empty() {
         return "/gh file <path> [ref] — view file content from the default branch.\n\
-                Example: /gh file src/main.rs main".into();
+                Example: /gh file src/main.rs main"
+            .into();
     }
     let path = parts[0];
     let ref_name = parts.get(1).copied().unwrap_or("HEAD");
@@ -393,10 +414,7 @@ mod tests {
 
     #[test]
     fn test_extract_label_flag_present() {
-        assert_eq!(
-            extract_label_flag("--label bug"),
-            Some("bug".to_string())
-        );
+        assert_eq!(extract_label_flag("--label bug"), Some("bug".to_string()));
     }
 
     #[test]

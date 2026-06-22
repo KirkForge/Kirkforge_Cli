@@ -1,16 +1,26 @@
 /// Main application state and event handling.
 use crate::session::session_fork::ForkManager;
 use crate::session::skills::SkillRegistry;
-use crate::shared::{Config, ModelInfo};
+use crate::shared::{ModelInfo, SharedConfig};
 use std::path::PathBuf;
 use std::time::Instant;
+
+#[cfg(test)]
+use std::sync::Arc;
+
+#[cfg(test)]
+use crate::shared::Config;
 
 /// Represents the connection state for the status bar.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ConnectionState {
     Disconnected,
+    #[allow(dead_code)]
     Connecting,
-    Connected { model: String, since: Instant },
+    Connected {
+        model: String,
+        since: Instant,
+    },
     Error(String),
 }
 
@@ -64,8 +74,9 @@ pub struct AppState {
     /// Session start time
     pub session_started: Instant,
 
-    /// Config reference
-    pub config: Config,
+    /// Shared config reference. Kept behind an `Arc<RwLock>` so that
+    /// SIGHUP/`/reload` can update live behavior without restarting.
+    pub config: SharedConfig,
 
     /// Skill registry for slash commands (loaded from SKILL.md files)
     pub skill_registry: SkillRegistry,
@@ -157,10 +168,12 @@ pub struct AppState {
     /// Empty when not searching.
     pub search_query: String,
     /// All match positions in the conversation, in document order.
-    /// Each entry is `(message_index, byte_offset)` for the start
-    /// of the match in `messages[message_index].content`. Filled in
-    /// when search is committed; cleared on cancel or `/clear`.
-    pub search_matches: Vec<(usize, usize)>,
+    /// Each entry is `(message_index, byte_offset, source)` for the
+    /// start of the match in `messages[message_index].content` or
+    /// `messages[message_index].tool_output` (see
+    /// `crate::tui::search::SearchSource`). Filled in when search is
+    /// committed; cleared on cancel or `/clear`.
+    pub search_matches: Vec<crate::tui::search::MatchPos>,
     /// Index into `search_matches` of the currently-highlighted
     /// match. `n` cycles forward, `N` (Shift+N) cycles backward.
     /// When `search_matches.is_empty()`, this is meaningless.
@@ -178,6 +191,20 @@ pub struct AppState {
     /// input box against stacking tests, (2) drive the spinner in
     /// place of the model-generation spinner.
     pub test_in_progress: bool,
+
+    // ── Recent-session picker (daemon follow-up) ────────────
+    /// When set, the TUI is showing the recent-session picker overlay
+    /// instead of the normal input box. Triggered at startup (if the
+    /// daemon has recent sessions and no explicit resume flag was given)
+    /// or by `/resume` with no arguments inside a running session.
+    pub session_picker: Option<crate::tui::components::session_picker::SessionPicker>,
+
+    // ── /undo stack (review.md gap #7) ───────────────────────
+    /// Shared undo stack. The executor owns the write side (push via
+    /// `edit_file` / `write_file`); the TUI uses it read-only for
+    /// `/undo list` and `/undo count`. `None` when the stack could
+    /// not be created at session start.
+    pub undo_stack: Option<crate::tools::UndoStackRef>,
 
     // ── Frame-pacing v2: render-on-state-change ───────────────────
     /// Set to `true` whenever `state` mutates in a way that should
@@ -203,7 +230,7 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new(config: Config) -> Self {
+    pub fn new(config: SharedConfig) -> Self {
         Self {
             messages: Vec::new(),
             input: String::new(),
@@ -242,6 +269,8 @@ impl AppState {
             search_match_idx: 0,
             bash_tool: std::sync::Arc::new(crate::tools::bash::Bash),
             test_in_progress: false,
+            undo_stack: None,
+            session_picker: None,
             // Start dirty so the first frame draws immediately (the
             // connection banner / status bar are non-empty even with
             // zero state mutations).
@@ -369,8 +398,11 @@ mod tests {
     /// the user would see a blank screen until the slow-tick fired.
     #[test]
     fn new_state_starts_dirty() {
-        let s = AppState::new(Config::default());
-        assert!(s.dirty, "freshly-constructed state should be dirty for the first frame");
+        let s = AppState::new(Arc::new(std::sync::RwLock::new(Config::default())));
+        assert!(
+            s.dirty,
+            "freshly-constructed state should be dirty for the first frame"
+        );
     }
 
     /// `mark_dirty` is a no-op when the state is already dirty, and
@@ -378,7 +410,7 @@ mod tests {
     /// safe to call from any mutation site.
     #[test]
     fn mark_dirty_is_idempotent() {
-        let mut s = AppState::new(Config::default());
+        let mut s = AppState::new(Arc::new(std::sync::RwLock::new(Config::default())));
         s.dirty = false;
         s.mark_dirty();
         assert!(s.dirty);

@@ -29,8 +29,6 @@
 use crate::shared::ToolOutcome;
 use crate::tools::Tool;
 use crate::tui::app::AppState;
-use std::path::Path;
-
 /// Default timeout in seconds when the user types `/test` with
 /// no argument. 5 minutes covers most real-world `cargo test`
 /// runs (the project's own suite finishes in ~12s; a fresh
@@ -66,7 +64,8 @@ pub async fn handle_test_command(args: &str, state: &mut AppState) -> String {
 
     // v1: cargo only. detect_test_command returns the full cargo
     // invocation; later versions branch on cwd contents.
-    let cmd = match detect_test_command() {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let cmd = match detect_test_command(&cwd) {
         Some(c) => c,
         None => return "/test: not a Cargo project (no Cargo.toml in current directory). pytest/npm/go support is a v2 follow-up.".into(),
     };
@@ -101,8 +100,8 @@ pub async fn handle_test_command(args: &str, state: &mut AppState) -> String {
 /// Returns `None` when no `Cargo.toml` is present. Future
 /// versions will fall through to `pytest` / `npm test` / `go test`
 /// in a single match arm.
-fn detect_test_command() -> Option<&'static str> {
-    if Path::new("Cargo.toml").exists() {
+fn detect_test_command(dir: &std::path::Path) -> Option<&'static str> {
+    if dir.join("Cargo.toml").exists() {
         Some("cargo test --no-fail-fast")
     } else {
         None
@@ -243,22 +242,13 @@ mod tests {
 
     #[test]
     fn test_detect_test_command_present() {
-        // Use a tempdir so this test is independent of the
-        // process cwd. (Other tests in the suite — notably
-        // `src/session/undo.rs` — change cwd for their own
-        // setup, and a test that asserts on cwd-relative
-        // paths becomes flaky when run in parallel.)
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::write(dir.path().join("Cargo.toml"), "[package]\nname=\"x\"\n").expect("write");
-        let prev = std::env::current_dir().ok();
-        std::env::set_current_dir(dir.path()).expect("set cwd");
-        let cmd = detect_test_command();
-        // Restore the previous cwd so the rest of the suite
-        // isn't disturbed.
-        if let Some(p) = prev {
-            let _ = std::env::set_current_dir(&p);
-        }
-        assert!(cmd.is_some(), "expected cargo test command in cwd");
+        let cmd = detect_test_command(dir.path());
+        assert!(
+            cmd.is_some(),
+            "expected cargo test command in dir with Cargo.toml"
+        );
         assert!(cmd.unwrap().contains("cargo test"));
     }
 
@@ -266,12 +256,7 @@ mod tests {
     fn test_detect_test_command_absent() {
         // Empty tempdir → no Cargo.toml → expect None.
         let dir = tempfile::tempdir().expect("tempdir");
-        let prev = std::env::current_dir().ok();
-        std::env::set_current_dir(dir.path()).expect("set cwd");
-        let cmd = detect_test_command();
-        if let Some(p) = prev {
-            let _ = std::env::set_current_dir(&p);
-        }
+        let cmd = detect_test_command(dir.path());
         assert!(cmd.is_none(), "expected None in non-cargo dir");
     }
 }

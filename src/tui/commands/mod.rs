@@ -1,5 +1,3 @@
-
-
 pub mod bang;
 pub mod compact;
 pub mod fork;
@@ -10,6 +8,7 @@ pub mod memory;
 pub mod mentions;
 pub mod model;
 pub mod plan;
+pub mod reload;
 pub mod sessions;
 pub mod status;
 pub mod test;
@@ -26,12 +25,12 @@ pub use memory::*;
 pub use mentions::*;
 pub use model::*;
 pub use plan::*;
+pub use reload::*;
 pub use sessions::*;
 pub use status::*;
 pub use test::*;
 pub use undo::*;
 
-#[allow(unused_imports)]
 pub use crate::tui::commands::messages_to_entries_stub as messages_to_entries;
 
 /// Stub: deepseek's in-flight work referenced `messages_to_entries` from
@@ -41,7 +40,9 @@ pub use crate::tui::commands::messages_to_entries_stub as messages_to_entries;
 /// TUI's `Vec<ConversationEntry>`. Tests in this module call it directly;
 /// the production fallback in `fork.rs` and `resume.rs` short-circuits
 /// the result.
-pub fn messages_to_entries_stub(msgs: &[crate::shared::Message]) -> Vec<crate::tui::app::ConversationEntry> {
+pub fn messages_to_entries_stub(
+    msgs: &[crate::shared::Message],
+) -> Vec<crate::tui::app::ConversationEntry> {
     msgs.iter()
         .map(|m| crate::tui::app::ConversationEntry {
             role: match m.role {
@@ -761,7 +762,6 @@ mod tests {
 
     #[test]
     fn expand_mentions_tilde_expansion() {
-
         let spec = MentionSpec {
             path: "~/nonexistent_xyzzy_kf_test.rs".into(),
             range: None,
@@ -780,5 +780,4 @@ mod tests {
             MentionStatus::NotFound | MentionStatus::IoError(_)
         ));
     }
-
 }

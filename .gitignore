@@ -1,11 +1,20 @@
-state.md
-review.md
+# Build artifacts
 target/
+
+# Editor / OS cruft
 *.swp
 *.swo
 *~
 .DS_Store
+
+# LLM/agent session state and per-machine instructions
+# These are internal to the operator/session and should never be tracked.
+state.md
+review.md
 .claude/
-graphify-out/
 AGENTS.md
 CLAUDE.md
+
+# Knowledge-graph outputs (graphify + gitnexus indexes)
+graphify-out/
+.gitnexus/

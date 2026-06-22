@@ -88,11 +88,7 @@ impl AdapterSwap {
     /// choice wins. Returns the name of the newly-installed adapter
     /// (which is the same as the input, after re-routing through
     /// `adapters::adapter_for` for any model-type inference).
-    pub fn force_swap(
-        &mut self,
-        model_name: &str,
-        adapter: &mut Box<dyn ModelAdapter>,
-    ) -> String {
+    pub fn force_swap(&mut self, model_name: &str, adapter: &mut Box<dyn ModelAdapter>) -> String {
         let new_adapter = adapters::adapter_for(
             model_name,
             &self.ollama_host,
@@ -149,7 +145,11 @@ mod tests {
 
         // Without a real adapter we can't call adapter_for() with a mock,
         // but we can test the early-return guard.
-        let result = swap.maybe_swap(&config, &mut make_dummy_adapter(), "refactor the auth system");
+        let result = swap.maybe_swap(
+            &config,
+            &mut make_dummy_adapter(),
+            "refactor the auth system",
+        );
         assert!(result.is_none());
     }
 
@@ -230,10 +230,9 @@ mod tests {
             None,
         );
         let mut config = Config::default();
-        config.routing_model_map.insert(
-            "complex".into(),
-            "my-custom-model:latest".into(),
-        );
+        config
+            .routing_model_map
+            .insert("complex".into(), "my-custom-model:latest".into());
         // The default is "deepseek-v4-pro:cloud" which matches the "complex"
         // tier heuristic (contains "pro")
         assert_eq!(
@@ -264,11 +263,7 @@ mod tests {
     /// the same model" gesture.
     #[test]
     fn test_force_swap_same_model_is_noop_in_effect() {
-        let mut swap = AdapterSwap::new(
-            "qwen2.5:3b".into(),
-            "http://localhost:11434".into(),
-            None,
-        );
+        let mut swap = AdapterSwap::new("qwen2.5:3b".into(), "http://localhost:11434".into(), None);
         let new = swap.force_swap("qwen2.5:3b", &mut make_dummy_adapter());
         assert_eq!(new, "qwen2.5:3b");
         assert_eq!(swap.current_model_name, "qwen2.5:3b");

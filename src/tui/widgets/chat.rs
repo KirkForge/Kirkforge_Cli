@@ -9,6 +9,51 @@ use ratatui::{
 
 use crate::tui::app::{AppState, ConnectionState};
 
+/// Highlight every occurrence of `query` inside `line` with a
+/// high-visibility background. Non-matching parts keep `base_style`.
+///
+/// This is a line-level highlight used for plain-text and tool-output
+/// rendering. It is case-insensitive and finds the same occurrences the
+/// search module reports, so the rendered chat reflects the active
+/// search. Assistant markdown is harder to highlight because the
+/// markdown renderer already splits text into styled spans; we leave
+/// that for a future v2.
+fn highlight_line_spans(line: &str, query: &str, base_style: Style) -> Vec<Span<'static>> {
+    if query.is_empty() {
+        return vec![Span::styled(line.to_string(), base_style)];
+    }
+    let query_lower = query.to_lowercase();
+    let line_lower = line.to_lowercase();
+    let mut spans = Vec::new();
+    let mut start = 0;
+    while let Some(rel) = line_lower[start..].find(&query_lower) {
+        let match_start = start + rel;
+        let match_end = match_start + query.len();
+
+        if match_start > start {
+            spans.push(Span::styled(
+                line[start..match_start].to_string(),
+                base_style,
+            ));
+        }
+        spans.push(Span::styled(
+            line[match_start..match_end].to_string(),
+            base_style
+                .fg(Color::Black)
+                .bg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ));
+        start = match_end;
+        if start >= line.len() {
+            break;
+        }
+    }
+    if start < line.len() {
+        spans.push(Span::styled(line[start..].to_string(), base_style));
+    }
+    spans
+}
+
 /// Render the main chat area showing the conversation history.
 ///
 /// Takes `&mut AppState` so we can clamp `scroll_offset` and update
@@ -166,28 +211,13 @@ pub fn render_chat(f: &mut Frame, area: Rect, state: &mut AppState) {
             for content_line in full.lines() {
                 let wrapped = textwrap::fill(content_line, content_width.saturating_sub(4));
                 for wline in wrapped.lines() {
-                    // No `Modifier::DIM` here. The original styling
-                    // applied dim to expanded tool content, which
-                    // (a) makes the output hard to read on terminals
-                    // that don't differentiate dim from regular
-                    // weight, and (b) on terminals that map `DIM` to
-                    // strikethrough (KDE Konsole with custom
-                    // themes, some xterm configs), makes the
-                    // expanded tool content look crossed-out.
-                    //
-                    // 2026-06-11 incident: the user reported the
-                    // entire tool output as "text all over the
-                    // screen and unreadable" — DIM was the proximate
-                    // cause for the strikethrough appearance.
-                    //
-                    // The collapsed summary path above (line ~104)
-                    // still uses DIM, but that's intentional —
-                    // collapsed tool entries are supposed to be
-                    // visually subordinate to assistant text.
-                    lines.push(Line::from(vec![Span::styled(
-                        format!("  │ {}", wline),
+                    let mut spans = vec![Span::styled("  │ ", Style::default().fg(Color::Yellow))];
+                    spans.extend(highlight_line_spans(
+                        wline,
+                        &state.search_query,
                         Style::default().fg(Color::Yellow),
-                    )]));
+                    ));
+                    lines.push(Line::from(spans));
                 }
             }
             // Close box
@@ -226,10 +256,13 @@ pub fn render_chat(f: &mut Frame, area: Rect, state: &mut AppState) {
             // Plain text wrapping for user/system/thinking messages
             let wrapped = textwrap::fill(&entry.content, content_width);
             for content_line in wrapped.lines() {
-                lines.push(Line::from(Span::styled(
-                    format!(" {}", content_line),
+                let mut spans = vec![Span::raw(" ")];
+                spans.extend(highlight_line_spans(
+                    content_line,
+                    &state.search_query,
                     Style::default(),
-                )));
+                ));
+                lines.push(Line::from(spans));
             }
         }
         lines.push(Line::from(""));

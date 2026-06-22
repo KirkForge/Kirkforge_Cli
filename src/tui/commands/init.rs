@@ -107,22 +107,19 @@ pub fn handle_init_command(args: &str, cwd: &Path) -> String {
     let config_content = generate_config(&project);
 
     if let Err(e) = std::fs::create_dir_all(&config_dir) {
-        output.push_str(&format!("❌ Failed to create .kirkforge/ directory: {}\n", e));
+        output.push_str(&format!(
+            "❌ Failed to create .kirkforge/ directory: {}\n",
+            e
+        ));
         return output;
     }
 
     match std::fs::write(&config_path, &config_content) {
         Ok(_) => {
-            output.push_str(&format!(
-                "✅ Created {}\n",
-                config_path.display()
-            ));
+            output.push_str(&format!("✅ Created {}\n", config_path.display()));
         }
         Err(e) => {
-            output.push_str(&format!(
-                "❌ Failed to write config: {}\n",
-                e
-            ));
+            output.push_str(&format!("❌ Failed to write config: {}\n", e));
             return output;
         }
     }
@@ -177,48 +174,38 @@ fn generate_config(project: &ProjectType) -> String {
 /// Generate a CLAUDE.md instructions skeleton.
 fn generate_instructions(project: &ProjectType) -> String {
     match project {
-        ProjectType::Rust => {
-            "# Rust Project\n\n\
+        ProjectType::Rust => "# Rust Project\n\n\
              - Build: `cargo build`\n\
              - Test: `cargo test`\n\
              - Check: `cargo check`\n\
              - Format: `cargo fmt`\n\
              - Lint: `cargo clippy`\n\n\
              Edit this file to add project-specific instructions for the AI.\n"
-                .to_string()
-        }
-        ProjectType::Node => {
-            "# Node.js Project\n\n\
+            .to_string(),
+        ProjectType::Node => "# Node.js Project\n\n\
              - Install: `npm install`\n\
              - Test: `npm test`\n\
              - Build: `npm run build`\n\
              - Lint: `npm run lint`\n\n\
              Edit this file to add project-specific instructions for the AI.\n"
-                .to_string()
-        }
-        ProjectType::Python => {
-            "# Python Project\n\n\
+            .to_string(),
+        ProjectType::Python => "# Python Project\n\n\
              - Test: `pytest` or `python -m pytest`\n\
              - Lint: `ruff check .`\n\
              - Format: `ruff format .`\n\
              - Type check: `mypy .`\n\n\
              Edit this file to add project-specific instructions for the AI.\n"
-                .to_string()
-        }
-        ProjectType::Go => {
-            "# Go Project\n\n\
+            .to_string(),
+        ProjectType::Go => "# Go Project\n\n\
              - Build: `go build ./...`\n\
              - Test: `go test ./...`\n\
              - Format: `go fmt ./...`\n\
              - Lint: `golangci-lint run`\n\n\
              Edit this file to add project-specific instructions for the AI.\n"
-                .to_string()
-        }
-        _ => {
-            "# Project Instructions\n\n\
+            .to_string(),
+        _ => "# Project Instructions\n\n\
              Edit this file to add project-specific instructions for the AI.\n"
-                .to_string()
-        }
+            .to_string(),
     }
 }
 
@@ -253,7 +240,11 @@ mod tests {
     #[test]
     fn test_detect_python_setup_py() {
         let tmp = tempfile::tempdir().unwrap();
-        std::fs::write(tmp.path().join("setup.py"), "from setuptools import setup\n").unwrap();
+        std::fs::write(
+            tmp.path().join("setup.py"),
+            "from setuptools import setup\n",
+        )
+        .unwrap();
         let pt = detect_project(tmp.path());
         assert_eq!(pt, ProjectType::Python);
     }
@@ -354,6 +345,10 @@ mod tests {
         let out = handle_init_command("--force", tmp.path());
         assert!(out.contains("Created"), "got: {}", out);
         let new_content = std::fs::read_to_string(config_dir.join("config.toml")).unwrap();
-        assert!(!new_content.contains("old"), "should have been overwritten, got: {}", new_content);
+        assert!(
+            !new_content.contains("old"),
+            "should have been overwritten, got: {}",
+            new_content
+        );
     }
 }

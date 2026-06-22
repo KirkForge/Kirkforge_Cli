@@ -30,7 +30,11 @@ const APPROVAL_PAGE_SIZE: usize = 10;
 /// PageDown/Up/Down/Home/End) bubble through to the dialog's
 /// args-preview scroll state (shared with the regular approval flow
 /// — same dialog, same renderer).
-pub fn handle_bang_approval_key(key: KeyEvent, state: &mut AppState) {
+///
+/// This is async so that approving a bang command yields the TUI
+/// event loop while the shell command runs, instead of freezing the
+/// UI with `block_in_place`/`block_on`.
+pub async fn handle_bang_approval_key(key: KeyEvent, state: &mut AppState) {
     match key.code {
         KeyCode::PageUp => {
             state.approval_scroll = state.approval_scroll.saturating_sub(APPROVAL_PAGE_SIZE);
@@ -83,21 +87,13 @@ pub fn handle_bang_approval_key(key: KeyEvent, state: &mut AppState) {
     state.approval_max_scroll = 0;
 
     if approved {
-        // The `!` runner is async; the key handler is sync. Use
-        // `block_in_place` + a `Handle::block_on` to run it on the
-        // current thread. This is safe with the multi-thread tokio
-        // runtime we ship with `tokio = "full"`. The handler is
-        // short (one process spawn + read); we never hold the
-        // runtime block.
-        //
-        // Alternative would be a separate `tokio::spawn` that races
-        // the user's next keypress; sync is simpler and the cost is
-        // bounded by the 30s bang timeout.
+        // The `!` runner is async; await it here so the TUI event
+        // loop keeps draining executor events, spinner ticks, and
+        // shutdown signals while the shell command runs. The prior
+        // `block_in_place` + `Handle::block_on` froze the UI for the
+        // duration of the command (up to the 30s bang timeout).
         let cmd = bang.cmd;
-        let result = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current()
-                .block_on(crate::tui::commands::handle_bang_command(&cmd))
-        });
+        let result = crate::tui::commands::handle_bang_command(&cmd).await;
         // Split into summary / full for the collapse UX. Mirrors
         // the split rule in `keys.rs::split_bang_summary` — first
         // two lines are the summary, the whole thing is the full
@@ -108,7 +104,9 @@ pub fn handle_bang_approval_key(key: KeyEvent, state: &mut AppState) {
         let second = lines.next().unwrap_or("").to_string();
         let _rest = lines.next();
         let summary = format!("{}\n{}", first, second);
-        state.messages.push(ConversationEntry::tool(summary, result));
+        state
+            .messages
+            .push(ConversationEntry::tool(summary, result));
     } else {
         state.messages.push(ConversationEntry::new(
             "system",
@@ -193,8 +191,11 @@ pub fn handle_approval_key(key: KeyEvent, state: &mut AppState) {
             // `push_rule_unique` dedups so mashing `[A]lways` twice
             // doesn't create duplicate rules.
             let rule = crate::shared::permission::suggest_rule(&approval.tool_name, &approval.args);
-            push_rule_unique(&mut state.config.permission_rules, rule);
-            let _ = crate::session::config::save_config(&state.config);
+            if let Ok(mut cfg) = state.config.write() {
+                push_rule_unique(&mut cfg.permission_rules, rule);
+            }
+            let cfg = crate::shared::read_shared_config(&state.config);
+            let _ = crate::session::config::save_config(&cfg);
         }
         // The user just decided — clear the scroll state so the next
         // approval (if any) starts fresh at the top.
@@ -244,7 +245,9 @@ mod tests {
     use serde_json::json;
 
     fn make_state_with_approval(args: serde_json::Value) -> AppState {
-        let mut s = AppState::new(Config::default());
+        let mut s = AppState::new(std::sync::Arc::new(std::sync::RwLock::new(
+            Config::default(),
+        )));
         s.pending_approval = Some(PendingApproval {
             tool_name: "bash".into(),
             args,
@@ -255,6 +258,10 @@ mod tests {
 
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    fn cfg_mut(s: &mut AppState) -> std::sync::RwLockWriteGuard<'_, Config> {
+        s.config.write().unwrap_or_else(|e| e.into_inner())
     }
 
     /// PageDown moves scroll forward, clamped to max_scroll.
@@ -349,34 +356,37 @@ mod tests {
     fn test_always_approves_saves_permission_rule() {
         let mut s = make_state_with_approval(json!({"command": "cargo test --release"}));
         // Start with auto_approve = false and no rules — realistic state.
-        s.config.auto_approve = false;
-        s.config.permission_rules.clear();
-        assert!(!s.config.auto_approve);
-        assert!(s.config.permission_rules.is_empty());
+        cfg_mut(&mut s).auto_approve = false;
+        cfg_mut(&mut s).permission_rules.clear();
+        assert!(!cfg_mut(&mut s).auto_approve);
+        assert!(cfg_mut(&mut s).permission_rules.is_empty());
 
-        // Capture state.config before [A]lways, because save_config
-        // would write to the real config path; the test only checks
-        // the in-memory state (the path-writing is exercised in
-        // integration tests, not unit tests).
+        // Capture config before [A]lways, because save_config would
+        // write to the real config path; the test only checks the
+        // in-memory state (the path-writing is exercised in integration
+        // tests, not unit tests).
         handle_approval_key(key(KeyCode::Char('a')), &mut s);
 
         // **The new rule should be in permission_rules.**
         assert_eq!(
-            s.config.permission_rules.len(),
+            cfg_mut(&mut s).permission_rules.len(),
             1,
             "[A]lways should have appended exactly one rule"
         );
-        let r = &s.config.permission_rules[0];
-        assert_eq!(r.tool, "bash");
-        assert_eq!(r.key, "command");
-        assert_eq!(r.pattern, "cargo test --release");
-        assert_eq!(r.action, crate::shared::permission::PermissionAction::Allow);
+        {
+            let cfg = cfg_mut(&mut s);
+            let r = &cfg.permission_rules[0];
+            assert_eq!(r.tool, "bash");
+            assert_eq!(r.key, "command");
+            assert_eq!(r.pattern, "cargo test --release");
+            assert_eq!(r.action, crate::shared::permission::PermissionAction::Allow);
+        }
 
         // **auto_approve must NOT have been flipped.** The user
         // asked for "always this specific command", not "always
         // everything". The new rule is the user's intent.
         assert!(
-            !s.config.auto_approve,
+            !cfg_mut(&mut s).auto_approve,
             "[A]lways should NOT flip auto_approve — the new rule is the user's intent"
         );
 
@@ -393,7 +403,9 @@ mod tests {
         // Build a state with a real edit_file approval (not via the
         // bash-only helper), so suggest_rule's tool-driven key
         // selection gets exercised end-to-end.
-        let mut s = AppState::new(Config::default());
+        let mut s = AppState::new(std::sync::Arc::new(std::sync::RwLock::new(
+            Config::default(),
+        )));
         s.pending_approval = Some(PendingApproval {
             tool_name: "edit_file".into(),
             args: json!({
@@ -403,18 +415,21 @@ mod tests {
             }),
             responder: None,
         });
-        s.config.permission_rules.clear();
+        cfg_mut(&mut s).permission_rules.clear();
 
         handle_approval_key(key(KeyCode::Char('A')), &mut s);
 
-        assert_eq!(s.config.permission_rules.len(), 1);
-        let r = &s.config.permission_rules[0];
-        assert_eq!(r.tool, "edit_file");
-        assert_eq!(
-            r.key, "path",
-            "edit_file approvals should build a rule keyed on `path`, not `command`"
-        );
-        assert_eq!(r.pattern, "src/main.rs");
+        assert_eq!(cfg_mut(&mut s).permission_rules.len(), 1);
+        {
+            let cfg = cfg_mut(&mut s);
+            let r = &cfg.permission_rules[0];
+            assert_eq!(r.tool, "edit_file");
+            assert_eq!(
+                r.key, "path",
+                "edit_file approvals should build a rule keyed on `path`, not `command`"
+            );
+            assert_eq!(r.pattern, "src/main.rs");
+        }
     }
 
     /// `[A]` twice on the same call should NOT add duplicate rules.
@@ -422,11 +437,11 @@ mod tests {
     #[test]
     fn test_always_approves_dedups_repeated_calls() {
         let mut s = make_state_with_approval(json!({"command": "ls"}));
-        s.config.permission_rules.clear();
+        cfg_mut(&mut s).permission_rules.clear();
 
         handle_approval_key(key(KeyCode::Char('a')), &mut s);
         // First push: one rule.
-        assert_eq!(s.config.permission_rules.len(), 1);
+        assert_eq!(cfg_mut(&mut s).permission_rules.len(), 1);
 
         // Synthesise a second approval with the same args (simulating
         // a second `[A]lways` in a later turn). The real flow would
@@ -439,7 +454,7 @@ mod tests {
         handle_approval_key(key(KeyCode::Char('a')), &mut s);
         // Still one rule — the dedup caught the second push.
         assert_eq!(
-            s.config.permission_rules.len(),
+            cfg_mut(&mut s).permission_rules.len(),
             1,
             "Second [A]lways on the same call should not duplicate the rule"
         );
@@ -451,25 +466,30 @@ mod tests {
     #[test]
     fn test_always_approves_does_not_overwrite_existing_deny() {
         let mut s = make_state_with_approval(json!({"command": "rm -rf build"}));
-        s.config.permission_rules.clear();
-        s.config
-            .permission_rules
-            .push(crate::shared::permission::PermissionRule {
-                tool: "bash".into(),
-                key: "command".into(),
-                pattern: "rm -rf build".into(),
-                action: crate::shared::permission::PermissionAction::Deny,
-            });
+        {
+            let mut cfg = cfg_mut(&mut s);
+            cfg.permission_rules.clear();
+            cfg.permission_rules
+                .push(crate::shared::permission::PermissionRule {
+                    tool: "bash".into(),
+                    key: "command".into(),
+                    pattern: "rm -rf build".into(),
+                    action: crate::shared::permission::PermissionAction::Deny,
+                });
+        }
 
         handle_approval_key(key(KeyCode::Char('a')), &mut s);
 
         // Still exactly one rule, and it's still Deny.
-        assert_eq!(s.config.permission_rules.len(), 1);
-        assert_eq!(
-            s.config.permission_rules[0].action,
-            crate::shared::permission::PermissionAction::Deny,
-            "Existing Deny should not be overwritten by [A]lways's Allow on the same pattern"
-        );
+        assert_eq!(cfg_mut(&mut s).permission_rules.len(), 1);
+        {
+            let cfg = cfg_mut(&mut s);
+            assert_eq!(
+                cfg.permission_rules[0].action,
+                crate::shared::permission::PermissionAction::Deny,
+                "Existing Deny should not be overwritten by [A]lways's Allow on the same pattern"
+            );
+        }
     }
 
     // ── Bang approval gate (review.md arch concern #1) ───────────
@@ -482,7 +502,9 @@ mod tests {
     // shows the same dialog until the user decides.
 
     fn make_state_with_bang(cmd: &str) -> AppState {
-        let mut s = AppState::new(Config::default());
+        let mut s = AppState::new(std::sync::Arc::new(std::sync::RwLock::new(
+            Config::default(),
+        )));
         s.pending_bang = Some(crate::tui::app::PendingBangCommand { cmd: cmd.into() });
         s
     }
@@ -493,16 +515,12 @@ mod tests {
     /// the explicit Y keystroke.
     ///
     /// We use `echo hi` so the test is fast and deterministic.
-    /// `handle_bang_approval_key` uses `block_in_place` to run the
-    /// async command, so this works in a non-async test context.
-    #[test]
-    fn test_bang_y_runs_command_and_pushes_tool_entry() {
-        // Tokio runtime required for `Handle::current()`.
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let _guard = rt.enter();
-
+    /// `handle_bang_approval_key` is async, so this test runs on the
+    /// Tokio runtime via `#[tokio::test]`.
+    #[tokio::test]
+    async fn test_bang_y_runs_command_and_pushes_tool_entry() {
         let mut s = make_state_with_bang("echo hi");
-        handle_bang_approval_key(key(KeyCode::Char('y')), &mut s);
+        handle_bang_approval_key(key(KeyCode::Char('y')), &mut s).await;
 
         // The gate is consumed.
         assert!(s.pending_bang.is_none());
@@ -519,15 +537,15 @@ mod tests {
 
     /// N on a bang approval clears the gate WITHOUT running the
     /// command. A system message records the cancellation.
-    #[test]
-    fn test_bang_n_clears_gate_without_running() {
+    #[tokio::test]
+    async fn test_bang_n_clears_gate_without_running() {
         let mut s = make_state_with_bang("touch /tmp/should-not-exist");
         // The path we're testing for is whether the command ran.
         // We can't easily prove a non-event in a unit test, so the
         // strongest assertion is: gate is cleared, system message
         // is pushed, and the run-method is never called (we'd see
         // a tool entry with a "touch" output, which we don't).
-        handle_bang_approval_key(key(KeyCode::Char('n')), &mut s);
+        handle_bang_approval_key(key(KeyCode::Char('n')), &mut s).await;
         assert!(s.pending_bang.is_none());
         assert_eq!(s.messages.len(), 1);
         assert_eq!(s.messages[0].role, "system");
@@ -535,10 +553,10 @@ mod tests {
     }
 
     /// Esc has the same effect as N — clears the gate, no run.
-    #[test]
-    fn test_bang_esc_clears_gate() {
+    #[tokio::test]
+    async fn test_bang_esc_clears_gate() {
         let mut s = make_state_with_bang("rm -rf /");
-        handle_bang_approval_key(key(KeyCode::Esc), &mut s);
+        handle_bang_approval_key(key(KeyCode::Esc), &mut s).await;
         assert!(s.pending_bang.is_none());
         assert_eq!(s.messages.len(), 1);
         assert!(s.messages[0].content.contains("Cancelled"));
@@ -547,10 +565,10 @@ mod tests {
     /// Unknown keys leave the gate intact so the user can still
     /// type a decision. (Mirrors the regular approval flow's
     /// "unknown key preserves state" test.)
-    #[test]
-    fn test_bang_unknown_key_preserves_gate() {
+    #[tokio::test]
+    async fn test_bang_unknown_key_preserves_gate() {
         let mut s = make_state_with_bang("echo hi");
-        handle_bang_approval_key(key(KeyCode::Char('z')), &mut s);
+        handle_bang_approval_key(key(KeyCode::Char('z')), &mut s).await;
         assert!(s.pending_bang.is_some());
         assert!(s.messages.is_empty());
     }
@@ -559,15 +577,15 @@ mod tests {
     /// dialog renders identically for bang and model-approval, so
     /// the scroll plumbing is shared — these are the regression
     /// guards for that sharing.
-    #[test]
-    fn test_bang_scroll_keys_share_state() {
+    #[tokio::test]
+    async fn test_bang_scroll_keys_share_state() {
         let mut s = make_state_with_bang("echo hi");
         s.approval_max_scroll = 50;
-        handle_bang_approval_key(key(KeyCode::PageDown), &mut s);
+        handle_bang_approval_key(key(KeyCode::PageDown), &mut s).await;
         assert_eq!(s.approval_scroll, 10);
-        handle_bang_approval_key(key(KeyCode::End), &mut s);
+        handle_bang_approval_key(key(KeyCode::End), &mut s).await;
         assert_eq!(s.approval_scroll, 50);
-        handle_bang_approval_key(key(KeyCode::Home), &mut s);
+        handle_bang_approval_key(key(KeyCode::Home), &mut s).await;
         assert_eq!(s.approval_scroll, 0);
     }
 }

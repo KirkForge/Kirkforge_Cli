@@ -28,8 +28,8 @@
 /// actual transfer is binary-agnostic — arboard writes the bytes
 /// verbatim.
 pub fn copy_to_clipboard(text: &str) -> anyhow::Result<usize> {
-    let mut cb = arboard::Clipboard::new()
-        .map_err(|e| anyhow::anyhow!("clipboard unavailable: {}", e))?;
+    let mut cb =
+        arboard::Clipboard::new().map_err(|e| anyhow::anyhow!("clipboard unavailable: {}", e))?;
     cb.set_text(text.to_string())
         .map_err(|e| anyhow::anyhow!("clipboard set failed: {}", e))?;
     Ok(text.len())

@@ -6,6 +6,39 @@ pub mod openai_compat;
 
 use crate::shared::{ModelInfo, StreamEvent};
 
+/// Classification of the runtime protocol a model speaks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AdapterKind {
+    /// Native Ollama `/api/chat` protocol (also covers GLM, DeepSeek,
+    /// and Gemini when routed through an Ollama host).
+    Ollama,
+    /// OpenAI-compatible `/v1/chat/completions` protocol.
+    OpenAiCompat,
+}
+
+/// Classify a model name (and optional type override) into an
+/// [`AdapterKind`]. This is the routing decision before we build the
+/// concrete adapter.
+pub fn adapter_kind_for(model_name: &str, model_type_override: Option<&str>) -> AdapterKind {
+    if let Some(override_type) = model_type_override {
+        return match override_type {
+            "glm" | "deepseek" | "gemini" => AdapterKind::Ollama,
+            _ => AdapterKind::OpenAiCompat,
+        };
+    }
+
+    let lower = model_name.to_lowercase();
+    if lower.starts_with("glm")
+        || lower.contains("chatglm")
+        || lower.starts_with("deepseek")
+        || lower.starts_with("gemini")
+    {
+        AdapterKind::Ollama
+    } else {
+        AdapterKind::OpenAiCompat
+    }
+}
+
 /// Every model adapter implements this.
 /// `stream()` returns a channel receiver the session drains.
 /// The session layer never sees raw JSON — only events.
@@ -39,30 +72,38 @@ pub fn adapter_for(
     ollama_host: &str,
     model_type_override: Option<&str>,
 ) -> Box<dyn ModelAdapter> {
-    if let Some(override_type) = model_type_override {
-        return match override_type {
-            "glm" => Box::new(glm::GlmAdapter::new(ollama_host, model_name)),
-            "deepseek" => Box::new(deepseek::DeepSeekAdapter::new(ollama_host, model_name)),
-            "gemini" => Box::new(gemini::GeminiAdapter::new(ollama_host, model_name)),
-            _ => Box::new(openai_compat::OpenAiCompatAdapter::new(
-                ollama_host,
-                model_name,
-            )),
-        };
-    }
-
-    let lower = model_name.to_lowercase();
-    if lower.starts_with("glm") || lower.contains("chatglm") {
-        Box::new(glm::GlmAdapter::new(ollama_host, model_name))
-    } else if lower.starts_with("deepseek") {
-        Box::new(deepseek::DeepSeekAdapter::new(ollama_host, model_name))
-    } else if lower.starts_with("gemini") {
-        Box::new(gemini::GeminiAdapter::new(ollama_host, model_name))
-    } else {
-        Box::new(openai_compat::OpenAiCompatAdapter::new(
+    let override_lower = model_type_override.map(|s| s.to_lowercase());
+    match adapter_kind_for(model_name, model_type_override) {
+        AdapterKind::Ollama => {
+            let lower = model_name.to_lowercase();
+            // Respect the model_type_override when selecting the concrete
+            // adapter, so a name like "my-glm" with override "glm" still
+            // routes to the GLM adapter rather than falling through to
+            // the OpenAI-compat fallback.
+            if override_lower.as_deref() == Some("glm")
+                || lower.starts_with("glm")
+                || lower.contains("chatglm")
+            {
+                Box::new(glm::GlmAdapter::new(ollama_host, model_name))
+            } else if override_lower.as_deref() == Some("deepseek") || lower.starts_with("deepseek")
+            {
+                Box::new(deepseek::DeepSeekAdapter::new(ollama_host, model_name))
+            } else if override_lower.as_deref() == Some("gemini") || lower.starts_with("gemini") {
+                Box::new(gemini::GeminiAdapter::new(ollama_host, model_name))
+            } else {
+                // With the current classification this branch is
+                // unreachable, but keep the previous permissive
+                // fallback so we never panic on unknown input.
+                Box::new(openai_compat::OpenAiCompatAdapter::new(
+                    ollama_host,
+                    model_name,
+                ))
+            }
+        }
+        AdapterKind::OpenAiCompat => Box::new(openai_compat::OpenAiCompatAdapter::new(
             ollama_host,
             model_name,
-        ))
+        )),
     }
 }
 
@@ -100,9 +141,7 @@ fn build_ollama_chat_body(
                                 text_projection.push_str(text);
                             }
                             crate::shared::ContentPart::Image { data_base64, .. } => {
-                                if !text_projection.is_empty()
-                                    && !text_projection.ends_with('\n')
-                                {
+                                if !text_projection.is_empty() && !text_projection.ends_with('\n') {
                                     text_projection.push('\n');
                                 }
                                 text_projection.push_str("[image]");
@@ -119,10 +158,7 @@ fn build_ollama_chat_body(
                         },
                     )
                 }
-                _ => (
-                    serde_json::Value::String(m.content.clone()),
-                    None,
-                ),
+                _ => (serde_json::Value::String(m.content.clone()), None),
             };
 
             let mut obj = serde_json::json!({
@@ -237,11 +273,8 @@ fn build_openai_compat_body(
                         "content": m.content,
                     })
                 }
-                crate::shared::Role::Assistant if m.tool_calls.is_some() => {
-                    let tcs: Vec<serde_json::Value> = m
-                        .tool_calls
-                        .as_ref()
-                        .unwrap()
+                crate::shared::Role::Assistant if let Some(tcs) = m.tool_calls.as_ref() => {
+                    let tcs: Vec<serde_json::Value> = tcs
                         .iter()
                         .map(|tc| {
                             serde_json::json!({

@@ -62,45 +62,53 @@ impl HookRunner {
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect();
 
-        tokio::spawn(async move {
-            let mut cmd = tokio::process::Command::new("bash");
-            cmd.arg(&script_path);
-            for (k, v) in &owned_vars {
-                cmd.env(k, v);
-            }
+        let handle = match tokio::runtime::Handle::try_current() {
+            Ok(rt) => rt.spawn(async move {
+                let mut cmd = tokio::process::Command::new("bash");
+                cmd.arg(&script_path);
+                for (k, v) in &owned_vars {
+                    cmd.env(k, v);
+                }
 
-            match tokio::time::timeout(std::time::Duration::from_secs(5), cmd.output()).await {
-                Ok(Ok(out)) => {
-                    if !out.status.success() {
+                match tokio::time::timeout(std::time::Duration::from_secs(5), cmd.output()).await {
+                    Ok(Ok(out)) => {
+                        if !out.status.success() {
+                            tracing::warn!(
+                                event = %event,
+                                code = out.status.code(),
+                                "Hook exited with non-zero status"
+                            );
+                        }
+                        if !out.stderr.is_empty() {
+                            tracing::debug!(
+                                event = %event,
+                                stderr = %String::from_utf8_lossy(&out.stderr),
+                                "Hook stderr"
+                            );
+                        }
+                    }
+                    Ok(Err(e)) => {
                         tracing::warn!(
                             event = %event,
-                            code = out.status.code(),
-                            "Hook exited with non-zero status"
+                            error = %e,
+                            "Failed to execute hook"
                         );
                     }
-                    if !out.stderr.is_empty() {
-                        tracing::debug!(
+                    Err(_elapsed) => {
+                        tracing::warn!(
                             event = %event,
-                            stderr = %String::from_utf8_lossy(&out.stderr),
-                            "Hook stderr"
+                            "Hook timed out after 5s"
                         );
                     }
                 }
-                Ok(Err(e)) => {
-                    tracing::warn!(
-                        event = %event,
-                        error = %e,
-                        "Failed to execute hook"
-                    );
-                }
-                Err(_elapsed) => {
-                    tracing::warn!(
-                        event = %event,
-                        "Hook timed out after 5s"
-                    );
-                }
+            }),
+            Err(e) => {
+                tracing::warn!(event = %event, error = %e, "no Tokio runtime available; hook skipped");
+                return;
             }
-        });
+        };
+        // Detach the task; hooks are best-effort and must not block.
+        std::mem::drop(handle);
     }
 }
 
@@ -234,8 +242,7 @@ mod tests {
         // Give the spawned task a moment to run
         tokio::time::sleep(std::time::Duration::from_millis(300)).await;
 
-        let content =
-            std::fs::read_to_string(&marker).unwrap_or_else(|_| String::from("not-run"));
+        let content = std::fs::read_to_string(&marker).unwrap_or_else(|_| String::from("not-run"));
         assert_eq!(content.trim(), "post-turn");
     }
 

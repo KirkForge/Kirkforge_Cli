@@ -1,3 +1,6 @@
+// Public/future surface in a binary crate: suppress dead-code warnings for pub items.
+#![allow(dead_code)]
+
 pub mod git;
 /// Verifier slots — deterministic post-execution checks and correction loop.
 ///
@@ -216,7 +219,7 @@ impl VerifierHandler {
     pub async fn verify_event(&self, event: &BusEvent) -> Verdict {
         // Extract verifiers from the lock to avoid holding it across .await
         let verifiers: Vec<Arc<dyn Verifier>> = {
-            let slots = self.slots.read().unwrap();
+            let slots = self.slots.read().unwrap_or_else(|e| e.into_inner());
             if slots.is_empty() {
                 return Verdict::Clean;
             }

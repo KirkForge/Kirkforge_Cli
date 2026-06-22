@@ -5,6 +5,7 @@
 /// - [`PathGuard`]: multi-layer safety checks for file read/write operations.
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use tracing;
 
 // ── Deny List ────────────────────────────────────────────────────────
 
@@ -23,13 +24,17 @@ pub struct DenyList {
 }
 
 impl DenyList {
-    /// Build from raw pattern strings; invalid globs are silently skipped.
+    /// Build from raw pattern strings; invalid globs are logged and skipped.
     pub fn new(path_patterns: Vec<String>, url_patterns: Vec<String>) -> Self {
-        let path_matchers = path_patterns
-            .iter()
-            .filter_map(|p| globset::Glob::new(p).ok())
-            .map(|g| g.compile_matcher())
-            .collect();
+        let mut path_matchers = Vec::new();
+        for p in &path_patterns {
+            match globset::Glob::new(p) {
+                Ok(g) => path_matchers.push(g.compile_matcher()),
+                Err(e) => {
+                    tracing::warn!(pattern = %p, error = %e, "invalid deny-list glob; skipping");
+                }
+            }
+        }
         Self {
             path_matchers,
             path_patterns,
@@ -498,6 +503,21 @@ mod tests {
         assert!(dl.is_path_denied(Path::new(".ssh/config")));
     }
 
+    /// Invalid glob patterns are logged and skipped; valid patterns still work.
+    #[test]
+    fn test_deny_list_skips_invalid_globs() {
+        let dl = DenyList::new(
+            vec!["**/.ssh/**".into(), "[invalid".into(), "*.key".into()],
+            vec![],
+        );
+        // Valid patterns should still match.
+        assert!(dl.is_path_denied(Path::new("/home/user/.ssh/id_rsa")));
+        assert!(dl.is_path_denied(Path::new("secret.key")));
+        // The invalid pattern does not cause a panic and matches nothing.
+        assert!(!dl.is_path_denied(Path::new("[invalid")));
+        assert!(!dl.is_path_denied(Path::new("some.file")));
+    }
+
     #[test]
     fn test_deny_list_default_blocks_git() {
         let dl = DenyList::default();
@@ -755,7 +775,6 @@ mod tests {
     /// the empty string as `None`. This replaces the prior fail-open
     /// default, which was the source of GPT 5.5's review finding #5
     /// ("Default mode is fail-open for writes").
-    #[test]
     /// Guard the user-visible invariant: when a KirkForge session
     /// starts in a typical directory, the resulting `PathGuard` is
     /// sandboxed to that directory.

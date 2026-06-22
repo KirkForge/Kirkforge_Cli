@@ -21,13 +21,11 @@
 //!
 //! # Mime detection
 //!
-//! We detect the mime type from the file extension rather than
-//! sniffing the bytes. The four supported formats cover >99% of
-//! screenshots in practice; the `error` arm returns a clear
-//! "unsupported format" message rather than silently sending the
-//! wrong mime to the model. (Sniffing the magic bytes would be
-//! more robust but adds a `mime_guess` dependency for marginal
-//! benefit; revisit if the use case broadens.)
+//! MIME type is detected from the file's magic bytes, not the
+//! extension. This handles mis-named files and lets the tool
+//! support common formats without guessing. The `error` arm returns
+//! a clear "unsupported format" message rather than silently
+//! sending the wrong MIME to the model.
 //!
 //! # Size cap
 //!
@@ -42,16 +40,47 @@ use std::path::PathBuf;
 
 pub struct ReadImage;
 
-fn mime_for(path: &std::path::Path) -> Option<&'static str> {
-    match path.extension().and_then(|s| s.to_str()) {
-        Some(ext) => match ext.to_ascii_lowercase().as_str() {
-            "png" => Some("image/png"),
-            "jpg" | "jpeg" => Some("image/jpeg"),
-            "gif" => Some("image/gif"),
-            "webp" => Some("image/webp"),
-            _ => None,
-        },
-        None => None,
+/// Detect an image MIME type from the leading magic bytes of `bytes`.
+///
+/// A leading UTF-8 BOM and ASCII whitespace are skipped before checking
+/// signatures, so pretty-printed XML and files with spurious leading
+/// bytes are handled consistently.
+///
+/// Supported signatures:
+///   PNG   — `89 50 4E 47 0D 0A 1A 0A`
+///   JPEG  — `FF D8 FF`
+///   GIF   — `47 49 46 38 37 61` or `47 49 46 38 39 61`
+///   WEBP  — `52 49 46 ?? ?? 57 45 42 50` (RIFF container with WEBP tag)
+///   BMP   — `42 4D`
+///   SVG   — `<?xml` or `<svg` after the optional BOM/whitespace skip
+fn mime_for_bytes(bytes: &[u8]) -> Option<&'static str> {
+    // Skip a leading UTF-8 BOM and any ASCII whitespace before checking
+    // signatures. This makes detection forgiving of BOM-prefixed or
+    // whitespace-prefixed files without weakening the magic-byte checks.
+    let mut i = 0;
+    let bom: [u8; 3] = [0xEF, 0xBB, 0xBF];
+    if bytes.starts_with(&bom) {
+        i += 3;
+    }
+    while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+        i += 1;
+    }
+    let rest = &bytes[i..];
+
+    if rest.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some("image/png")
+    } else if rest.len() >= 3 && rest[0] == 0xFF && rest[1] == 0xD8 && rest[2] == 0xFF {
+        Some("image/jpeg")
+    } else if rest.starts_with(b"GIF87a") || rest.starts_with(b"GIF89a") {
+        Some("image/gif")
+    } else if rest.len() >= 12 && rest.starts_with(b"RIFF") && &rest[8..12] == b"WEBP" {
+        Some("image/webp")
+    } else if rest.starts_with(b"BM") {
+        Some("image/bmp")
+    } else if rest.starts_with(b"<?xml") || rest.starts_with(b"<svg") {
+        Some("image/svg+xml")
+    } else {
+        None
     }
 }
 
@@ -60,7 +89,7 @@ impl Tool for ReadImage {
     fn def(&self) -> ToolDef {
         ToolDef {
             name: "read_image",
-            description: "Read an image file from disk and attach it to the conversation as a multimodal part. The model will see the image on the *next* user turn — call this tool first, then ask the model about the image. Supported formats: png, jpg, jpeg, gif, webp.",
+            description: "Read an image file from disk and attach it to the conversation as a multimodal part. The model will see the image on the *next* user turn — call this tool first, then ask the model about the image. Supported formats: png, jpg, jpeg, gif, webp, bmp, svg.",
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -84,23 +113,23 @@ impl Tool for ReadImage {
             }
         };
 
-        let mime = match mime_for(&path) {
-            Some(m) => m,
-            None => {
-                return ToolOutcome::Error {
-                    message: format!(
-                        "Unsupported image format ({}). Supported: png, jpg, jpeg, gif, webp.",
-                        path.display()
-                    ),
-                }
-            }
-        };
-
         let bytes = match std::fs::read(&path) {
             Ok(b) => b,
             Err(e) => {
                 return ToolOutcome::Error {
                     message: format!("Cannot read {}: {}", path.display(), e),
+                }
+            }
+        };
+
+        let mime = match mime_for_bytes(&bytes) {
+            Some(m) => m,
+            None => {
+                return ToolOutcome::Error {
+                    message: format!(
+                        "Unsupported image format ({}). Supported: png, jpg, jpeg, gif, webp, bmp, svg.",
+                        path.display()
+                    ),
                 }
             }
         };
@@ -134,7 +163,7 @@ mod tests {
     async fn read_image_png_returns_base64_with_correct_mime() {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("shot.png");
-        std::fs::write(&p, &PNG_MAGIC).unwrap();
+        std::fs::write(&p, PNG_MAGIC).unwrap();
 
         let out = ReadImage.run(make_args(&p.display().to_string())).await;
         match out {
@@ -157,7 +186,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("pic.jpg");
         // SOI marker for JPEG
-        std::fs::write(&p, &[0xFF, 0xD8, 0xFF]).unwrap();
+        std::fs::write(&p, [0xFF, 0xD8, 0xFF]).unwrap();
 
         let out = ReadImage.run(make_args(&p.display().to_string())).await;
         assert!(matches!(out, ToolOutcome::Image { ref mime, .. } if mime == "image/jpeg"));
@@ -171,6 +200,125 @@ mod tests {
 
         let out = ReadImage.run(make_args(&p.display().to_string())).await;
         assert!(matches!(out, ToolOutcome::Error { .. }));
+    }
+
+    #[tokio::test]
+    async fn read_image_misnamed_jpeg_is_detected_by_magic_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        // Wrong extension: .png, but the bytes are JPEG magic.
+        let p = dir.path().join("actually_jpeg.png");
+        std::fs::write(&p, [0xFF, 0xD8, 0xFF, 0xE0]).unwrap();
+
+        let out = ReadImage.run(make_args(&p.display().to_string())).await;
+        assert!(matches!(out, ToolOutcome::Image { ref mime, .. } if mime == "image/jpeg"));
+    }
+
+    #[tokio::test]
+    async fn read_image_gif_by_magic_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("anim.gif");
+        std::fs::write(&p, b"GIF89a\x01\x00").unwrap();
+
+        let out = ReadImage.run(make_args(&p.display().to_string())).await;
+        assert!(matches!(out, ToolOutcome::Image { ref mime, .. } if mime == "image/gif"));
+    }
+
+    #[tokio::test]
+    async fn read_image_webp_by_magic_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("pic.webp");
+        // Minimal RIFF/WEBP header: RIFF + 4-byte size + WEBP.
+        let bytes: Vec<u8> = b"RIFF"
+            .iter()
+            .copied()
+            .chain([0x00, 0x00, 0x00, 0x00].iter().copied())
+            .chain(b"WEBP".iter().copied())
+            .collect();
+        std::fs::write(&p, bytes).unwrap();
+
+        let out = ReadImage.run(make_args(&p.display().to_string())).await;
+        assert!(matches!(out, ToolOutcome::Image { ref mime, .. } if mime == "image/webp"));
+    }
+
+    #[tokio::test]
+    async fn read_image_bmp_by_magic_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("shot.bmp");
+        std::fs::write(&p, b"BM\x00\x00\x00\x00").unwrap();
+
+        let out = ReadImage.run(make_args(&p.display().to_string())).await;
+        assert!(matches!(out, ToolOutcome::Image { ref mime, .. } if mime == "image/bmp"));
+    }
+
+    #[tokio::test]
+    async fn read_image_svg_by_magic_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("icon.svg");
+        std::fs::write(&p, b"<?xml version=\"1.0\"?><svg></svg>").unwrap();
+
+        let out = ReadImage.run(make_args(&p.display().to_string())).await;
+        assert!(matches!(out, ToolOutcome::Image { ref mime, .. } if mime == "image/svg+xml"));
+    }
+
+    #[tokio::test]
+    async fn read_image_svg_with_bom_and_whitespace() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("bom.svg");
+        let bytes: Vec<u8> = [0xEF, 0xBB, 0xBF]
+            .iter()
+            .copied()
+            .chain(b"\n  \t<svg>".iter().copied())
+            .collect();
+        std::fs::write(&p, bytes).unwrap();
+
+        let out = ReadImage.run(make_args(&p.display().to_string())).await;
+        assert!(matches!(out, ToolOutcome::Image { ref mime, .. } if mime == "image/svg+xml"));
+    }
+
+    #[tokio::test]
+    async fn read_image_png_with_bom_is_detected() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("bom.png");
+        let bytes: Vec<u8> = [0xEF, 0xBB, 0xBF]
+            .iter()
+            .copied()
+            .chain(PNG_MAGIC.iter().copied())
+            .collect();
+        std::fs::write(&p, bytes).unwrap();
+
+        let out = ReadImage.run(make_args(&p.display().to_string())).await;
+        assert!(matches!(out, ToolOutcome::Image { ref mime, .. } if mime == "image/png"));
+    }
+
+    #[tokio::test]
+    async fn read_image_jpeg_with_whitespace_is_detected() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("space.jpg");
+        let bytes: Vec<u8> = b"\n  \t"
+            .iter()
+            .copied()
+            .chain([0xFF, 0xD8, 0xFF].iter().copied())
+            .collect();
+        std::fs::write(&p, bytes).unwrap();
+
+        let out = ReadImage.run(make_args(&p.display().to_string())).await;
+        assert!(matches!(out, ToolOutcome::Image { ref mime, .. } if mime == "image/jpeg"));
+    }
+
+    #[tokio::test]
+    async fn read_image_gif_with_bom_and_whitespace_is_detected() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("bom.gif");
+        let bytes: Vec<u8> = [0xEF, 0xBB, 0xBF]
+            .iter()
+            .copied()
+            .chain(b"\n".iter().copied())
+            .chain(b"GIF89a\x01\x00".iter().copied())
+            .collect();
+        std::fs::write(&p, bytes).unwrap();
+
+        let out = ReadImage.run(make_args(&p.display().to_string())).await;
+        assert!(matches!(out, ToolOutcome::Image { ref mime, .. } if mime == "image/gif"));
     }
 
     #[tokio::test]

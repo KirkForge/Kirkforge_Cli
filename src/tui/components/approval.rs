@@ -72,12 +72,11 @@ pub fn render_approval_dialog(
     // tool is `edit_file` / `write_file` (other tools return
     // `Vec::new()` from the formatter).
     let reader = |p: &str| std::fs::read_to_string(p).ok();
-    let diff_lines =
-        crate::tui::components::diff_preview::format_edit_diff_preview(
-            approval,
-            dialog_width as usize,
-            &reader,
-        );
+    let diff_lines = crate::tui::components::diff_preview::format_edit_diff_preview(
+        approval,
+        dialog_width as usize,
+        &reader,
+    );
     if !diff_lines.is_empty() {
         // Separator between args and diff.
         visible_lines.push(Line::from(Span::styled(
@@ -98,15 +97,21 @@ pub fn render_approval_dialog(
             } else {
                 Color::White
             };
-            visible_lines.push(Line::from(Span::styled(dl.as_str(), Style::default().fg(color))));
+            visible_lines.push(Line::from(Span::styled(
+                dl.as_str(),
+                Style::default().fg(color),
+            )));
         }
     }
-    let all_lines: Vec<String> = visible_lines.iter().map(|l| {
-        // Flatten back to a string for the max_scroll / overflow
-        // computation. The visible rendering happens below using
-        // the styled `Line`s directly.
-        l.spans.iter().map(|s| s.content.as_ref()).collect()
-    }).collect();
+    let all_lines: Vec<String> = visible_lines
+        .iter()
+        .map(|l| {
+            // Flatten back to a string for the max_scroll / overflow
+            // computation. The visible rendering happens below using
+            // the styled `Line`s directly.
+            l.spans.iter().map(|s| s.content.as_ref()).collect()
+        })
+        .collect();
 
     // Clamp scroll and compute visible window + overflow indicator.
     let max_scroll = all_lines.len().saturating_sub(args_window_height.max(1));

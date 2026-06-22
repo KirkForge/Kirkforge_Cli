@@ -1,4 +1,5 @@
-
+// Public/future surface in a binary crate: suppress dead-code warnings for pub items.
+#![allow(dead_code)]
 
 mod compaction;
 pub mod summarizer;
@@ -87,8 +88,13 @@ impl PromptBuilder {
         }
 
         // Inject persistent memory facts (if any)
-        let memory_store = crate::session::memory::MemoryStore::default_store();
-        let memory_block = memory_store.to_prompt_block();
+        let memory_block = match crate::session::memory::MemoryStore::default_store() {
+            Ok(store) => store.to_prompt_block(),
+            Err(e) => {
+                tracing::warn!(error = %e, "could not load memory store; skipping memory injection");
+                String::new()
+            }
+        };
         if !memory_block.is_empty() {
             content.push_str("\n\n<memory>\n");
             content.push_str(&memory_block);
@@ -134,7 +140,6 @@ impl PromptBuilder {
         if stem_tokens_est > 2048 {
             0.95
         } else {
-
             0.3 + (stem_tokens_est as f64 - 1024.0) / (2048.0 - 1024.0) * 0.65
         }
     }
@@ -146,7 +151,6 @@ impl PromptBuilder {
         model_max_tokens: usize,
         tool_results: &[Message],
     ) -> Vec<Message> {
-
         let mut messages = Self::assemble_messages(system, history, tool_results);
 
         // Image attach — when the most-recent user turn follows a
@@ -223,9 +227,7 @@ impl PromptBuilder {
             .as_ref()
             .and_then(|parts| parts.first())
         {
-            Some(crate::shared::ContentPart::Image { .. }) => {
-                tool_msg.content_parts.as_ref().unwrap()[0].clone()
-            }
+            Some(part @ crate::shared::ContentPart::Image { .. }) => part.clone(),
             _ => return, // read_image emitted no image — bail
         };
 
@@ -297,7 +299,6 @@ impl PromptBuilder {
             };
             let hard_cap = head_keep + tail_keep;
             if msg.content.chars().count() > hard_cap {
-
                 let head: String = msg.content.chars().take(head_keep).collect();
                 let tail: String = msg
                     .content
@@ -328,7 +329,6 @@ impl PromptBuilder {
             }
             if let Some(prev) = &prev_tool_content {
                 if prev == &msg.content {
-
                     msg.content = TOOL_RESULT_DEDUP_MARKER.to_string();
                     continue;
                 }
@@ -419,7 +419,6 @@ impl PromptBuilder {
         }
 
         if truncated.len() < 2 {
-
             return messages.to_vec();
         }
         truncated
@@ -451,7 +450,6 @@ mod tests {
         let stem2 = builder.build_stem("deepseek-v4", false);
         assert!(!stem1.is_empty());
         assert!(!stem2.is_empty());
-
     }
 
     #[test]

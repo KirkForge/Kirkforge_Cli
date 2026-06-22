@@ -1,3 +1,6 @@
+// Public/future surface in a binary crate: suppress dead-code warnings for pub items.
+#![allow(dead_code)]
+
 /// Session forking — conversation branching and checkpoint management.
 ///
 /// A fork is a copy of the conversation at a specific point in time,

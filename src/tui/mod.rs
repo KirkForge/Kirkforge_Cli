@@ -59,13 +59,53 @@ use widgets::input::render_input;
 use widgets::status::render_status;
 
 /// Panic-safe guard that restores terminal state on drop.
-struct TerminalGuard;
+pub(crate) struct TerminalGuard;
 
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
         let _ = disable_raw_mode();
         let mut stdout = io::stdout();
         let _ = execute!(stdout, LeaveAlternateScreen);
+    }
+}
+
+/// Show a standalone recent-session picker before the main TUI starts.
+///
+/// This is used by `main.rs` when the user runs `kirkforge run` without
+/// an explicit `--continue` / `--resume` / `--attach` / `--auto-resume`
+/// and the session daemon reports recent sessions. The picker runs in a
+/// temporary terminal session; when it returns, the alternate screen is
+/// cleared and terminal state is restored.
+pub async fn run_session_picker(
+    sessions: Vec<crate::session::session_index::SessionEntry>,
+) -> anyhow::Result<Option<std::path::PathBuf>> {
+    tokio::task::spawn_blocking(move || run_session_picker_sync(sessions)).await?
+}
+
+fn run_session_picker_sync(
+    sessions: Vec<crate::session::session_index::SessionEntry>,
+) -> anyhow::Result<Option<std::path::PathBuf>> {
+    use crate::tui::components::session_picker::SessionPicker;
+
+    enable_raw_mode()?;
+    let mut stdout = io::stdout();
+    execute!(stdout, EnterAlternateScreen)?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
+    let _guard = TerminalGuard;
+
+    let mut picker = SessionPicker::new(sessions);
+    loop {
+        terminal.draw(|f| picker.render(f, f.area()))?;
+        if let Event::Key(key) = event::read()? {
+            picker.handle_key(key);
+            if picker.is_confirmed() {
+                return Ok(picker.selected_path());
+            }
+            if picker.is_cancelled() {
+                return Ok(None);
+            }
+        }
     }
 }
 
@@ -111,11 +151,12 @@ async fn probe_ollama_connection(config: &Config) -> ConnectionState {
 
 /// Run the TUI event loop.
 pub async fn run_tui(
-    config: Config,
+    shared_config: crate::shared::SharedConfig,
     adapter: Box<dyn crate::adapters::ModelAdapter>,
     tools: Vec<std::sync::Arc<dyn Tool>>,
     conversation_log: ConversationLog,
     system: Option<String>,
+    undo_stack: Option<crate::tools::UndoStackRef>,
 ) -> anyhow::Result<()> {
     // ── Terminal setup ──
     enable_raw_mode()?;
@@ -125,8 +166,11 @@ pub async fn run_tui(
     let mut terminal = Terminal::new(backend)?;
     let _guard = TerminalGuard;
 
+    let cfg_for_startup = crate::shared::read_shared_config(&shared_config).clone();
+
     // ── AppState ──
-    let mut state = AppState::new(config.clone());
+    let mut state = AppState::new(shared_config.clone());
+    state.undo_stack = undo_stack.clone();
     state.session_started = Instant::now();
     // Hook for sessions that need a connection indicator.
     //
@@ -140,7 +184,7 @@ pub async fn run_tui(
     // the bar will continue to show the last-known state. A v2
     // improvement would be a periodic background probe driven by
     // the SIGHUP / reconnect signal path.
-    state.connection = probe_ollama_connection(&config).await;
+    state.connection = probe_ollama_connection(&cfg_for_startup).await;
 
     // Skills — load any project-local SKILL.md files from registered scan paths,
     // then layer the built-in skills on top. (Missing dirs are silently skipped,
@@ -154,11 +198,12 @@ pub async fn run_tui(
     }
 
     // ── Carryover profile (shared between executor and save) ──
-    let carryover_target: Option<Arc<Mutex<CarryoverProfile>>> = if config.carryover_enabled {
-        Some(Arc::new(Mutex::new(CarryoverProfile::default())))
-    } else {
-        None
-    };
+    let carryover_target: Option<Arc<Mutex<CarryoverProfile>>> =
+        if cfg_for_startup.carryover_enabled {
+            Some(Arc::new(Mutex::new(CarryoverProfile::default())))
+        } else {
+            None
+        };
     let saved_profile = carryover_target.clone();
 
     // ── Channels ──
@@ -180,6 +225,14 @@ pub async fn run_tui(
     // executor's `run` loop receives the name and calls
     // `AdapterSwap::force_swap`.
     let (model_tx, model_rx) = mpsc::unbounded_channel::<String>();
+    // Undo: TUI → Executor (signals a pop of the undo stack).
+    // Review.md gap #7. `()` payload because the only operation is
+    // "pop the most recent edit"; the result comes back as a token.
+    let (undo_tx, undo_rx) = mpsc::unbounded_channel::<()>();
+    // Config reload: TUI → Executor (sends a new Config snapshot).
+    // The TUI owns the sender (driven by SIGHUP or `/reload`); the
+    // executor replaces its shared config and rebuilds access control.
+    let (config_tx, config_rx) = mpsc::unbounded_channel::<Config>();
     // Keyboard events: background reader thread → TUI event loop
     let (kb_tx, mut kb_rx) = mpsc::unbounded_channel::<Event>();
 
@@ -236,40 +289,29 @@ pub async fn run_tui(
         }
     });
 
-    // SIGHUP config hot-reload (review.md gap #5, second half).
+    // SIGHUP config hot-reload (review.md gap #5).
     // On Unix, the conventional "reload config" signal is SIGHUP.
-    // When we receive one, re-read `config.toml` and emit a token
-    // through `event_tx` so the user sees the reload happen. The
-    // reloaded config is *display-only* — the executor captured its
-    // Config by value at construction and is not externally
-    // mutable, so the executor keeps using the launch-time config
-    // for routing, auto-approve, etc. What the user does see is the
-    // new config in `/status` (after the next render) and in any
-    // dialog that re-queries Config (e.g. approval text). Full
-    // hot-reload of the executor's behavior would require
-    // Arc<RwLock<Config>> plumbing; deferred to a follow-up.
+    // When we receive one, re-read `config.toml`, update the shared
+    // config in place, and forward a snapshot to the executor so it
+    // rebuilds deny lists, path guards, and approval state. The
+    // executor emits the user-visible confirmation token.
     #[cfg(unix)]
     {
         use tokio::signal::unix::{signal, SignalKind};
         match signal(SignalKind::hangup()) {
             Ok(mut hup) => {
-                let reload_event_tx = event_tx.clone();
-                let mut last_known = state.config.clone();
+                let reload_config_tx = config_tx.clone();
+                let reload_shared_config = shared_config.clone();
                 tokio::spawn(async move {
                     while hup.recv().await.is_some() {
                         let fresh = crate::session::config::load_config();
-                        let diff_summary = config_diff_summary(&last_known, &fresh);
-                        last_known = fresh;
-                        let msg = if diff_summary.is_empty() {
-                            "🔄 Reloaded config (no changes)\n".to_string()
-                        } else {
-                            format!("🔄 Reloaded config: {}\n", diff_summary)
-                        };
-                        // Best-effort: the TUI's event drain renders
-                        // tokens as system lines. If the receiver is
-                        // gone (TUI exited) we just drop the message.
-                        let _ = reload_event_tx
-                            .send(executor::TurnEvent::Token(msg));
+                        if let Ok(mut cfg) = reload_shared_config.write() {
+                            *cfg = fresh.clone();
+                        }
+                        // Forward the new snapshot to the executor,
+                        // which owns the access-control rebuild. If the
+                        // executor is gone (TUI exited) we drop it.
+                        let _ = reload_config_tx.send(fresh);
                     }
                 });
             }
@@ -302,17 +344,20 @@ pub async fn run_tui(
                 });
             }
             Err(e) => {
-                tracing::warn!(
-                    "Could not install SIGHUP shutdown handler: {}",
-                    e
-                );
+                tracing::warn!("Could not install SIGHUP shutdown handler: {}", e);
             }
         }
     }
 
     // Spawn the executor on a background task
-    let mut exe =
-        executor::Executor::with_log(adapter, tools, config, conversation_log, carryover_target);
+    let mut exe = executor::Executor::with_log_and_undo(
+        adapter,
+        tools,
+        shared_config.clone(),
+        conversation_log,
+        carryover_target,
+        undo_stack,
+    );
     // Apply --system override before the executor starts processing
     // input. Without this, --system is silently dropped (was GPT 5.5
     // review finding #2).
@@ -327,6 +372,8 @@ pub async fn run_tui(
                 resume_rx,
                 compact_rx,
                 model_rx,
+                undo_rx,
+                config_rx,
             )
             .await;
     });
@@ -360,13 +407,21 @@ pub async fn run_tui(
         &resume_tx,
         &compact_tx,
         &model_tx,
+        &undo_tx,
+        &config_tx,
         &mut slow_tick,
         &shutdown_for_loop,
     )
     .await;
 
-    // Drop input sender to close the executor's recv loop, then wait for flush
-    drop(input_tx);
+    // Drop all control senders so every receiver in the executor's
+    // `tokio::select!` closes. The executor only breaks on the
+    // `else => break` arm once *all* receivers are closed; dropping
+    // only `input_tx` left the others alive and caused the TUI to hang
+    // on `handle.await` after `run_event_loop` returned.
+    drop((
+        input_tx, cancel_tx, resume_tx, compact_tx, model_tx, undo_tx,
+    ));
     let _ = handle.await;
 
     // Save carryover profile
@@ -395,6 +450,8 @@ async fn run_event_loop(
     resume_tx: &mpsc::UnboundedSender<ConversationLog>,
     compact_tx: &mpsc::UnboundedSender<()>,
     model_tx: &mpsc::UnboundedSender<String>,
+    undo_tx: &mpsc::UnboundedSender<()>,
+    config_tx: &mpsc::UnboundedSender<Config>,
     slow_tick: &mut tokio::time::Interval,
     // One-shot shutdown signal. Fired by:
     //   - the SIGHUP handler (Unix, pty-close)
@@ -440,7 +497,8 @@ async fn run_event_loop(
         let mut kb_event: Option<Event> = None;
         let mut had_executor_event = false;
         let mut had_approval_event = false;
-        let mut had_approval_pending = state.pending_approval.is_some() || state.pending_bang.is_some();
+        let mut had_approval_pending =
+            state.pending_approval.is_some() || state.pending_bang.is_some();
         let mut dirty_from_tick = false;
 
         tokio::select! {
@@ -519,12 +577,13 @@ async fn run_event_loop(
                     // arch concern #1) takes priority over the model
                     // approval because its response is purely local.
                     if state.pending_bang.is_some() {
-                        approval_keys::handle_bang_approval_key(key, state);
+                        approval_keys::handle_bang_approval_key(key, state).await;
                     } else if state.pending_approval.is_some() {
                         approval_keys::handle_approval_key(key, state);
                     } else {
                         keys::handle_input_key(
                             key, state, input_tx, cancel_tx, resume_tx, compact_tx, model_tx,
+                            undo_tx, config_tx,
                         )
                         .await?;
                     }
@@ -548,12 +607,13 @@ async fn run_event_loop(
             match ev {
                 Event::Key(key) => {
                     if state.pending_bang.is_some() {
-                        approval_keys::handle_bang_approval_key(key, state);
+                        approval_keys::handle_bang_approval_key(key, state).await;
                     } else if state.pending_approval.is_some() {
                         approval_keys::handle_approval_key(key, state);
                     } else {
                         keys::handle_input_key(
                             key, state, input_tx, cancel_tx, resume_tx, compact_tx, model_tx,
+                            undo_tx, config_tx,
                         )
                         .await?;
                     }
@@ -606,6 +666,17 @@ async fn run_event_loop(
             render_chat(f, chunks[0], state);
             render_input(f, chunks[1], state);
             render_status(f, chunks[2], state);
+
+            // Session picker overlay (daemon follow-up). Shown when the
+            // user invokes `/resume` with no arguments, or at startup
+            // before the main event loop. The approval dialog takes
+            // precedence if both are somehow active — approvals are
+            // system-initiated and require immediate attention.
+            if state.pending_approval.is_none() && state.pending_bang.is_none() {
+                if let Some(ref picker) = state.session_picker {
+                    picker.render(f, size);
+                }
+            }
 
             // Approval dialog overlay.
             //
@@ -668,105 +739,9 @@ async fn run_event_loop(
 /// Returns an empty string when the two configs are equal on this
 /// subset, so the caller can show "no changes" instead of a
 /// confusing "0 changes" line.
-fn config_diff_summary(before: &crate::shared::Config, after: &crate::shared::Config) -> String {
-    let mut diffs: Vec<String> = Vec::new();
-    if before.default_model != after.default_model {
-        diffs.push(format!(
-            "default_model: {} → {}",
-            before.default_model, after.default_model
-        ));
-    }
-    if before.ollama_host != after.ollama_host {
-        diffs.push(format!(
-            "ollama_host: {} → {}",
-            before.ollama_host, after.ollama_host
-        ));
-    }
-    if before.auto_approve != after.auto_approve {
-        diffs.push(format!(
-            "auto_approve: {} → {}",
-            before.auto_approve, after.auto_approve
-        ));
-    }
-    if before.bang_requires_approval != after.bang_requires_approval {
-        diffs.push(format!(
-            "bang_requires_approval: {} → {}",
-            before.bang_requires_approval, after.bang_requires_approval
-        ));
-    }
-    if before.sandbox_dir != after.sandbox_dir {
-        diffs.push(format!(
-            "sandbox_dir: {:?} → {:?}",
-            before.sandbox_dir, after.sandbox_dir
-        ));
-    }
-    if before.routing_enabled != after.routing_enabled {
-        diffs.push(format!(
-            "routing_enabled: {} → {}",
-            before.routing_enabled, after.routing_enabled
-        ));
-    }
-    if before.summarize_enabled != after.summarize_enabled {
-        diffs.push(format!(
-            "summarize_enabled: {} → {}",
-            before.summarize_enabled, after.summarize_enabled
-        ));
-    }
-    diffs.join(", ")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shared::Config;
-
-    #[test]
-    fn test_config_diff_summary_empty_for_equal() {
-        let a = Config::default();
-        let b = Config::default();
-        assert!(config_diff_summary(&a, &b).is_empty());
-    }
-
-    #[test]
-    fn test_config_diff_summary_model_change() {
-        let a = Config::default();
-        let mut b = Config::default();
-        b.default_model = "qwen2.5:3b".into();
-        let s = config_diff_summary(&a, &b);
-        assert!(s.contains("default_model"), "got: {}", s);
-        assert!(s.contains("→ qwen2.5:3b"), "got: {}", s);
-    }
-
-    #[test]
-    fn test_config_diff_summary_multiple_fields() {
-        let a = Config::default();
-        let mut b = Config::default();
-        b.default_model = "qwen2.5:3b".into();
-        b.auto_approve = true;
-        b.ollama_host = "http://example.com:11434".into();
-        let s = config_diff_summary(&a, &b);
-        // All three should appear; order is the field order above.
-        assert!(s.contains("default_model"), "got: {}", s);
-        assert!(s.contains("auto_approve"), "got: {}", s);
-        assert!(s.contains("ollama_host"), "got: {}", s);
-    }
-
-    #[test]
-    fn test_config_diff_summary_ignores_internal_fields() {
-        // deny_paths and friends should NOT show up in the diff
-        // even if they differ — those are internal/security knobs.
-        let a = Config::default();
-        let mut b = Config::default();
-        b.deny_paths = vec!["/secret".into()];
-        b.allowed_write_dirs = vec!["/tmp".into()];
-        let s = config_diff_summary(&a, &b);
-        assert!(
-            !s.contains("deny_paths") && !s.contains("allowed_write_dirs"),
-            "internal fields leaked: {}",
-            s
-        );
-        assert!(s.is_empty());
-    }
 
     // ── Shutdown-signal regression test ────────────────────────
     //
@@ -798,8 +773,7 @@ mod tests {
             notify_for_task.notify_one();
         });
 
-        let mut slow_tick =
-            tokio::time::interval(std::time::Duration::from_millis(125));
+        let mut slow_tick = tokio::time::interval(std::time::Duration::from_millis(125));
         slow_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         let mut should_exit = false;

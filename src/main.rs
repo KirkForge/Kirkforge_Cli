@@ -1,21 +1,5 @@
-// Dead-code warnings.
-//
-// Review.md arch concern #2 called out the blanket `#![allow(dead_code)]`
-// at the crate root: it suppresses warnings across the entire crate, so
-// genuinely-unused code never surfaces. The principled fix is to scope
-// the allow to each file that has a public surface not yet wired into
-// the in-crate call graph — that is, library-style modules whose `pub`
-// items are meant for external consumers but Rust's lint can't see them.
-//
-// 22 files currently produce dead-code warnings. Scoping the allow
-// across all of them is a separate, multi-hour cleanup that doesn't
-// ship in M1 alongside the bang/scheduler work. The pragmatic
-// compromise: keep the root-level allow for now, but record the
-// deferred scoping as a tracked follow-up. The list of offenders
-// is captured in `state.md` for the next cleanup pass.
-#![allow(dead_code)]
-
 mod adapters;
+mod daemon;
 mod session;
 mod shared;
 mod tools;
@@ -35,9 +19,7 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Command {
-
     Run {
-
         #[arg(short, long)]
         model: Option<String>,
 
@@ -77,21 +59,35 @@ enum Command {
         /// prefix and resolved via `session::session_index`.
         #[arg(long)]
         continue_session: Option<String>,
+
+        /// Resume the most recent session via the session daemon.
+        /// If the daemon is not running, falls back to creating a new session.
+        #[arg(long, conflicts_with = "continue_session", conflicts_with = "resume")]
+        auto_resume: bool,
+
+        /// Resume a specific recent session by id or prefix via the daemon.
+        #[arg(
+            long,
+            conflicts_with = "continue_session",
+            conflicts_with = "resume",
+            conflicts_with = "auto_resume"
+        )]
+        attach: Option<String>,
     },
-
-    Schedule {
-
+    /// Run the background session daemon.
+    Daemon {
+        /// Stay in the foreground instead of detaching.
         #[arg(long)]
-        config: Option<std::path::PathBuf>,
+        foreground: bool,
 
-        #[arg(long)]
-        print_config: bool,
+        /// Stop a running daemon.
+        #[arg(long, conflicts_with = "foreground")]
+        stop: bool,
     },
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -113,6 +109,8 @@ async fn main() -> anyhow::Result<()> {
             output,
             max_turns,
             continue_session,
+            auto_resume,
+            attach,
         } => {
             run_session(RunArgs {
                 model,
@@ -125,10 +123,12 @@ async fn main() -> anyhow::Result<()> {
                 output,
                 max_turns,
                 continue_session,
+                auto_resume,
+                attach,
             })
             .await
         }
-        Command::Schedule { config, print_config } => run_scheduler(config, print_config).await,
+        Command::Daemon { foreground, stop } => daemon::server::run_daemon(foreground, stop).await,
     }
 }
 
@@ -143,6 +143,8 @@ struct RunArgs {
     output: crate::shared::OutputFormat,
     max_turns: usize,
     continue_session: Option<String>,
+    auto_resume: bool,
+    attach: Option<String>,
 }
 
 async fn run_session(args: RunArgs) -> anyhow::Result<()> {
@@ -157,6 +159,8 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
         output,
         max_turns,
         continue_session,
+        auto_resume,
+        attach,
     } = args;
 
     let mut config = session::config::load_or_create_config();
@@ -169,7 +173,9 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
         config.auto_approve = true;
     }
 
-    let _ = session::config::save_config(&config);
+    if let Err(e) = session::config::save_config(&config) {
+        tracing::warn!(error = %e, "failed to persist updated config");
+    }
 
     // Resolve the launch-time cwd exactly once, then freeze it on the
     // Config. Review.md arch concern #3: previously, `Config::default()`
@@ -186,25 +192,80 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     std::fs::create_dir_all(&data_dir)?;
 
     let session_id = session::new_session_id();
-    // Resolve the log path. Three inputs can determine it, in
-    // priority order:
+
+    // Resolve the log path. Priority order:
     //   1. `--continue-session <value>` — id prefix OR full path
     //   2. `--resume <path>`            — legacy path-only flag
-    //   3. brand-new session id
-    //
-    // `--continue-session` accepts a session-id prefix when the
-    // value does not contain a path separator; if it does, it's
-    // treated as a full path. The legacy `--resume` flag is kept
-    // for back-compat and behaves exactly as it did before M4.
+    //   3. `--attach <id-or-prefix>`    — via session daemon
+    //   4. `--auto-resume`              — most recent session via daemon
+    //   5. TUI startup picker (if daemon has recent sessions)
+    //   6. brand-new session id
     let log_path = if let Some(cont) = &continue_session {
         resolve_continue_path(cont)?
     } else if let Some(resume) = &resume {
         std::path::PathBuf::from(resume)
+    } else if let Some(id) = &attach {
+        match daemon::client::try_resolve_id(id).await? {
+            Some(path) => path,
+            None => {
+                anyhow::bail!(
+                    "daemon could not resolve session '{}'. Run `/sessions` to see available ids.",
+                    id
+                );
+            }
+        }
+    } else if auto_resume {
+        match daemon::client::try_resolve_recent().await? {
+            Some(path) => {
+                tracing::info!(path = %path.display(), "auto-resuming most recent session");
+                path
+            }
+            None => {
+                tracing::info!("no recent sessions found; starting a new session");
+                let sessions_dir = data_dir.join("sessions");
+                std::fs::create_dir_all(&sessions_dir)?;
+                sessions_dir.join(format!("{}.conv.ndjson", session_id))
+            }
+        }
     } else {
-        let sessions_dir = data_dir.join("sessions");
-        std::fs::create_dir_all(&sessions_dir)?;
-        sessions_dir.join(format!("{}.conv.ndjson", session_id))
+        // Try the daemon for a startup picker in TUI mode, or a hint in
+        // non-interactive mode.
+        match daemon::client::try_list_recent().await? {
+            Some(sessions) if !sessions.is_empty() && !non_interactive => {
+                match tui::run_session_picker(sessions).await? {
+                    Some(path) => {
+                        tracing::info!(path = %path.display(), "resuming selected session");
+                        path
+                    }
+                    None => {
+                        tracing::info!("user chose new session");
+                        let sessions_dir = data_dir.join("sessions");
+                        std::fs::create_dir_all(&sessions_dir)?;
+                        sessions_dir.join(format!("{}.conv.ndjson", session_id))
+                    }
+                }
+            }
+            Some(sessions) if !sessions.is_empty() => {
+                print_recent_sessions_hint(&sessions);
+                let sessions_dir = data_dir.join("sessions");
+                std::fs::create_dir_all(&sessions_dir)?;
+                sessions_dir.join(format!("{}.conv.ndjson", session_id))
+            }
+            _ => {
+                let sessions_dir = data_dir.join("sessions");
+                std::fs::create_dir_all(&sessions_dir)?;
+                sessions_dir.join(format!("{}.conv.ndjson", session_id))
+            }
+        }
     };
+
+    // Tell the daemon this session is now active.
+    let touch_id = log_path
+        .file_stem()
+        .and_then(|f| f.to_str())
+        .map(|s| s.trim_end_matches(".conv").to_string())
+        .unwrap_or_else(|| session_id.to_string());
+    daemon::client::try_touch(&touch_id, log_path.clone()).await;
 
     let conversation = session::conversation::ConversationLog::open(log_path)?;
 
@@ -234,9 +295,15 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     let mut tools: Vec<Arc<dyn tools::Tool>> =
         tools::all_tools(undo_stack.clone(), adapter.model_info().supports_images);
 
+    // ── Shared config (hot-reload foundation) ──
+    // Wrap the launch-time Config in an Arc<RwLock> so both TUI and
+    // executor can observe live updates from SIGHUP or `/reload`.
+    let shared_config = std::sync::Arc::new(std::sync::RwLock::new(config));
+
     // --- MCP tools ---
-    if !config.mcp_servers.is_empty() {
-        let mcp_mgr = session::mcp_client::McpClientManager::new(&config.mcp_servers).await;
+    let cfg_for_mcp = crate::shared::read_shared_config(&shared_config).clone();
+    if !cfg_for_mcp.mcp_servers.is_empty() {
+        let mcp_mgr = session::mcp_client::McpClientManager::new(&cfg_for_mcp.mcp_servers).await;
         let mcp_tool_count = mcp_mgr.tool_count();
         if mcp_tool_count > 0 {
             let mcp_mgr = std::sync::Arc::new(mcp_mgr);
@@ -255,7 +322,7 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
 
     if non_interactive {
         run_non_interactive(
-            config,
+            shared_config,
             adapter,
             tools,
             conversation,
@@ -265,48 +332,20 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
         )
         .await
     } else {
-        tui::run_tui(config, adapter, tools, conversation, system).await
+        tui::run_tui(
+            shared_config,
+            adapter,
+            tools,
+            conversation,
+            system,
+            undo_stack,
+        )
+        .await
     }
-}
-
-async fn run_scheduler(
-    config: Option<std::path::PathBuf>,
-    print_config: bool,
-) -> anyhow::Result<()> {
-    let path = config.unwrap_or_else(|| {
-        let mut p = session::data_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-        p.push("schedule.toml");
-        p
-    });
-
-    if print_config {
-        let cfg = session::scheduler::ScheduleConfig::load(&path)?;
-        println!("schedule.toml  : {}", path.display());
-        println!("cron           : {}", cfg.schedule.cron);
-        println!("work_budget_s  : {}", cfg.schedule.work_budget_secs);
-        println!("idle_timeout_s : {}", cfg.schedule.idle_timeout_secs);
-        println!("token_cap      : {}", cfg.schedule.token_cap);
-        println!("model          : {}", cfg.session.model);
-        println!("project_dir    : {}", cfg.resolved_project_dir().display());
-        println!("state_dir      : {}", cfg.resolved_state_dir().display());
-        match &cfg.session.prompt {
-            Some(p) => {
-                let preview: String = p.chars().take(80).collect();
-                println!("prompt         : {} ({} chars)", preview, p.len());
-            }
-            None => println!("prompt_file    : {:?}", cfg.session.prompt_file),
-        }
-        return Ok(());
-    }
-
-    let cfg = session::scheduler::ScheduleConfig::load(&path)?;
-    let sched = session::scheduler::Scheduler::new(cfg)?;
-    let shutdown = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    sched.run(shutdown).await
 }
 
 async fn run_non_interactive(
-    config: crate::shared::Config,
+    config: crate::shared::SharedConfig,
     adapter: Box<dyn adapters::ModelAdapter>,
     tools: Vec<Arc<dyn tools::Tool>>,
     conversation: session::conversation::ConversationLog,
@@ -314,11 +353,16 @@ async fn run_non_interactive(
     output: crate::shared::OutputFormat,
     max_turns: usize,
 ) -> anyhow::Result<()> {
-
     let model_name = adapter.model_info().name.clone();
 
-    let mut executor =
-        session::executor::Executor::with_log(adapter, tools, config.clone(), conversation, None);
+    let mut executor = session::executor::Executor::with_log_and_undo(
+        adapter,
+        tools,
+        config.clone(),
+        conversation,
+        None,
+        None,
+    );
     // Apply --system override before run_turn. Without this the
     // override is silently dropped (was GPT 5.5 review finding #2).
     executor.set_system_override(system.clone());
@@ -327,9 +371,18 @@ async fn run_non_interactive(
         mpsc::unbounded_channel::<session::executor::ApprovalRequest>();
     tokio::spawn(async move {
         while let Some(req) = approval_rx.recv().await {
-            let response = if config.auto_approve {
+            let response = if crate::shared::read_shared_config(&config).auto_approve {
                 session::executor::ApprovalResponse::Approved
             } else {
+                // Non-interactive mode has no human in the loop, so a
+                // tool that requires approval cannot be allowed. Log
+                // a warning that names the tool and tells the operator
+                // how to opt in to automatic approval.
+                tracing::warn!(
+                    tool = %req.tool_name,
+                    args = %req.args,
+                    "non-interactive run denied approval for tool; pass --auto-approve or set auto_approve=true to allow destructive tools without interaction"
+                );
                 session::executor::ApprovalResponse::Denied
             };
 
@@ -409,7 +462,7 @@ async fn run_non_interactive(
     // into `None` and EOF is also `None` — both cases end up
     // with `turn_no == 0`.
     if turn_no == 0 && system.is_none() {
-        eprintln!("No input provided. Pipe a prompt or use --system.");
+        tracing::warn!("No input provided. Pipe a prompt or use --system.");
         return Ok(());
     }
 
@@ -438,10 +491,22 @@ async fn run_non_interactive(
             },
             error: final_error,
         };
-        println!("{}", serde_json::to_string_pretty(&summary).unwrap());
+        println!("{}", serde_json::to_string_pretty(&summary)?);
     }
 
     Ok(())
+}
+
+/// Serialize a JSON value and emit it as one stream-json line.
+///
+/// `serde_json::to_string` can fail only for non-finite floats; if that
+/// somehow happens (e.g. a corrupted cost value), we log a warning and
+/// skip the line rather than panicking in the headless output path.
+fn print_json_line(value: &serde_json::Value) {
+    match serde_json::to_string(value) {
+        Ok(line) => println!("{}", line),
+        Err(e) => tracing::warn!("failed to serialize stream-json event: {}", e),
+    }
 }
 
 /// Per-turn event emission, extracted from the pre-M4 single-turn
@@ -477,7 +542,7 @@ fn emit_turn_events(
                     let _ = std::io::stdout().flush();
                 } else if output == crate::shared::OutputFormat::StreamJson {
                     let line = serde_json::json!({"type": "token", "content": t});
-                    println!("{}", serde_json::to_string(&line).unwrap());
+                    print_json_line(&line);
                 }
             }
             session::executor::TurnEvent::Thinking(t) => {
@@ -485,13 +550,13 @@ fn emit_turn_events(
                     eprintln!("\n[thinking] {}", t);
                 } else if output == crate::shared::OutputFormat::StreamJson {
                     let line = serde_json::json!({"type": "thinking", "content": t});
-                    println!("{}", serde_json::to_string(&line).unwrap());
+                    print_json_line(&line);
                 }
             }
             session::executor::TurnEvent::ToolStart { name, args } => {
                 if output == crate::shared::OutputFormat::StreamJson {
                     let line = serde_json::json!({"type": "tool_start", "name": name});
-                    println!("{}", serde_json::to_string(&line).unwrap());
+                    print_json_line(&line);
                 }
                 // Arm the in-flight timer for the matching ToolResult.
                 // If we somehow see a second ToolStart without an
@@ -512,7 +577,7 @@ fn emit_turn_events(
                         "name": name,
                         "content": result,
                     });
-                    println!("{}", serde_json::to_string(&line).unwrap());
+                    print_json_line(&line);
                 } else if output == crate::shared::OutputFormat::Text {
                     eprintln!("\n[tool: {}] {} chars", name, result.len());
                 }
@@ -543,7 +608,7 @@ fn emit_turn_events(
                         "message": message,
                         "success": success,
                     });
-                    println!("{}", serde_json::to_string(&line).unwrap());
+                    print_json_line(&line);
                 }
             }
             session::executor::TurnEvent::Error(e) => {
@@ -552,7 +617,7 @@ fn emit_turn_events(
                     eprintln!("\n[error] {}", e);
                 } else if output == crate::shared::OutputFormat::StreamJson {
                     let line = serde_json::json!({"type": "error", "content": e});
-                    println!("{}", serde_json::to_string(&line).unwrap());
+                    print_json_line(&line);
                 }
             }
             session::executor::TurnEvent::CostStats {
@@ -573,7 +638,7 @@ fn emit_turn_events(
                         "turn_cost": turn_cost,
                         "cumulative_cost": *cum_cost,
                     });
-                    println!("{}", serde_json::to_string(&line).unwrap());
+                    print_json_line(&line);
                 }
             }
             session::executor::TurnEvent::CompactionReport {
@@ -599,7 +664,7 @@ fn emit_turn_events(
                         "dropped_tool_results": dropped_tool_results,
                         "condensed_assistant_turns": condensed_assistant_turns,
                     });
-                    println!("{}", serde_json::to_string(&line).unwrap());
+                    print_json_line(&line);
                 }
             }
         }
@@ -644,7 +709,10 @@ fn resolve_continue_path(value: &str) -> anyhow::Result<std::path::PathBuf> {
 /// one-shot `run_turn` flow. The function is pure (it takes a
 /// `&mut String` buffer for reuse, but otherwise has no side
 /// effects) and is the unit-testable seam for the loop driver.
-fn next_prompt<R: std::io::BufRead>(reader: &mut R, buf: &mut String) -> std::io::Result<Option<String>> {
+fn next_prompt<R: std::io::BufRead>(
+    reader: &mut R,
+    buf: &mut String,
+) -> std::io::Result<Option<String>> {
     buf.clear();
     let n = reader.read_line(buf)?;
     if n == 0 {
@@ -655,6 +723,25 @@ fn next_prompt<R: std::io::BufRead>(reader: &mut R, buf: &mut String) -> std::io
         return Ok(None);
     }
     Ok(Some(trimmed.to_string()))
+}
+
+/// Print a hint listing recent sessions when running non-interactively
+/// without an explicit resume target.
+fn print_recent_sessions_hint(sessions: &[crate::session::session_index::SessionEntry]) {
+    eprintln!("Recent sessions (run with --auto-resume or --attach <id> to resume):");
+    for (i, e) in sessions
+        .iter()
+        .enumerate()
+        .take(crate::daemon::RECENT_SESSIONS_LIMIT)
+    {
+        eprintln!(
+            "  {}. {} — {} messages — {}",
+            i + 1,
+            e.id,
+            e.message_count,
+            e.started_at
+        );
+    }
 }
 
 #[cfg(test)]
@@ -668,7 +755,10 @@ mod tests {
     #[test]
     fn resolve_continue_path_passthrough_for_path_style() {
         let p = resolve_continue_path("/home/kirk/sessions/foo.conv.ndjson").unwrap();
-        assert_eq!(p, std::path::PathBuf::from("/home/kirk/sessions/foo.conv.ndjson"));
+        assert_eq!(
+            p,
+            std::path::PathBuf::from("/home/kirk/sessions/foo.conv.ndjson")
+        );
     }
 
     /// `.conv.ndjson` suffix is enough to be treated as a path,
@@ -697,8 +787,7 @@ mod tests {
         // a session-index error. Both indicate the id-resolution
         // path was taken, which is what we want to verify.
         assert!(
-            err.contains("No saved session")
-                || err.contains("Error resolving session id"),
+            err.contains("No saved session") || err.contains("Error resolving session id"),
             "unexpected error: {}",
             err
         );

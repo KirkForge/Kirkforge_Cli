@@ -17,5 +17,9 @@ Design notes borrowed from other CLI agent projects. Each file sketches one idea
 | Atomic writes and path guards | [path-safety.md](path-safety.md) |
 | Layered config resolution | [config-bootstrap.md](config-bootstrap.md) |
 | Session forking | [session-forking.md](session-forking.md) |
+| Enforced plan mode | [../adr/009-enforced-plan-mode.md](../adr/009-enforced-plan-mode.md) |
+| Built-in subagent personas | [../adr/010-subagent-personas.md](../adr/010-subagent-personas.md) |
 
 These are not roadmaps — just reference material.
+Some ideas above have been implemented; their ADRs document the current behavior.
+

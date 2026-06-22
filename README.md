@@ -32,6 +32,8 @@ cargo run -- daemon
 - **Permission rules** — Claude-Code-style allow/ask/deny rules per command/path; see the config example.
 - **Multimodal** — `read_image` for screenshots and images.
 - **MCP tools** — optional external tool servers via `[[mcp_servers]]` in config.
+- **Enforced plan mode** — `/plan` locks the executor to read-only tools until you type `/implement`.
+- **Subagent personas** — `/explore`, `/plan`, and `/coder` run isolated fork sessions with restricted toolsets and merge a summary back.
 
 ## Config
 

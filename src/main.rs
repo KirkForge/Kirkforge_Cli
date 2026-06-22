@@ -6,7 +6,10 @@ mod tools;
 mod tui;
 
 use clap::{Parser, Subcommand};
+use kirkforge_plugin::TrustTier;
+use kirkforge_plugin_host::TrustPolicy;
 use std::io::Write;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -311,6 +314,26 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
             tools.extend(mcp_tools);
             tracing::info!(count = mcp_tool_count, "MCP tools registered");
         }
+    }
+
+    // ── Plugin tools ──
+    let plugins_dir = session::data_dir()
+        .map(|d| d.join("plugins"))
+        .unwrap_or_else(|_| PathBuf::from(".local/share/kirkforge/plugins"));
+    let mut plugin_registry = kirkforge_plugin_host::PluginRegistry::new();
+    let plugin_warnings = plugin_registry
+        .load_from_dir(&plugins_dir, TrustPolicy::up_to(TrustTier::Shell))
+        .unwrap_or_default();
+    let plugin_tools = session::plugin_tools::all_plugin_tools(&plugin_registry);
+    if !plugin_tools.is_empty() {
+        tools.extend(plugin_tools);
+        tracing::info!(
+            count = plugin_registry.active_count(),
+            "plugin tools registered"
+        );
+    }
+    for w in plugin_warnings {
+        tracing::warn!(warning = %w, "plugin load warning");
     }
 
     if let Some(sys) = &system {

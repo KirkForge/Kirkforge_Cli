@@ -295,8 +295,16 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
         }
     };
 
-    let mut tools: Vec<Arc<dyn tools::Tool>> =
-        tools::all_tools(undo_stack.clone(), adapter.model_info().supports_images);
+    // ── Toolset assembly (Phase 2.2) ──
+    // Compose built-in, MCP, and plugin tools into a single source-aware
+    // collection. The executor receives the flattened vector, but order and
+    // duplicate-name resolution are controlled here: built-ins win over MCP,
+    // and MCP wins over plugins.
+    let mut toolset = session::toolset::CompositeToolset::empty();
+    toolset.add(Box::new(session::toolset::VecToolset::new(
+        "builtin",
+        tools::all_tools(undo_stack.clone(), adapter.model_info().supports_images),
+    )));
 
     // ── Shared config (hot-reload foundation) ──
     // Wrap the launch-time Config in an Arc<RwLock> so both TUI and
@@ -310,8 +318,10 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
         let mcp_tool_count = mcp_mgr.tool_count();
         if mcp_tool_count > 0 {
             let mcp_mgr = std::sync::Arc::new(mcp_mgr);
-            let mcp_tools = session::mcp_tools::all_mcp_tools(mcp_mgr);
-            tools.extend(mcp_tools);
+            toolset.add(Box::new(session::toolset::VecToolset::new(
+                "mcp",
+                session::mcp_tools::all_mcp_tools(mcp_mgr),
+            )));
             tracing::info!(count = mcp_tool_count, "MCP tools registered");
         }
     }
@@ -326,7 +336,10 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
         .unwrap_or_default();
     let plugin_tools = session::plugin_tools::all_plugin_tools(&plugin_registry);
     if !plugin_tools.is_empty() {
-        tools.extend(plugin_tools);
+        toolset.add(Box::new(session::toolset::VecToolset::new(
+            "plugin",
+            plugin_tools,
+        )));
         tracing::info!(
             count = plugin_registry.active_count(),
             "plugin tools registered"
@@ -335,6 +348,8 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     for w in plugin_warnings {
         tracing::warn!(warning = %w, "plugin load warning");
     }
+
+    let tools = toolset.into_tools();
 
     if let Some(sys) = &system {
         // Wired into the executor's PromptBuilder before the first turn

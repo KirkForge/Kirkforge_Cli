@@ -73,7 +73,7 @@ pub struct Executor {
     hook_runner: HookRunner,
     conversation: ConversationLog,
     prompt_builder: PromptBuilder,
-    tools: Vec<Arc<dyn Tool>>,
+    tools: Box<dyn crate::session::toolset::Toolset>,
     config: SharedConfig,
     cost_tracking: crate::shared::CostTracking,
     model_name: String,
@@ -204,7 +204,7 @@ impl Executor {
             hook_runner,
             conversation,
             prompt_builder: PromptBuilder::new(),
-            tools,
+            tools: Box::new(crate::session::toolset::VecToolset::new("legacy", tools)),
             config,
             cost_tracking: crate::shared::CostTracking::default(),
             model_name,
@@ -965,7 +965,7 @@ impl Executor {
         tool_calls_out: &mut Vec<ToolInvocation>,
     ) -> anyhow::Result<IterationOutcome> {
         let model_info = self.adapter.model_info();
-        let tool_defs: Vec<ToolDef> = self.tools.iter().map(|t| t.def()).collect();
+        let tool_defs: Vec<ToolDef> = self.tools.definitions();
         let tool_names: Vec<&str> = tool_defs.iter().map(|t| t.name).collect();
 
         let carryover_block = if self.carryover_enabled {
@@ -1121,8 +1121,8 @@ impl Executor {
         approval_sender: &mpsc::UnboundedSender<ApprovalRequest>,
         events: &mut Vec<TurnEvent>,
     ) -> anyhow::Result<()> {
-        let tool = match self.tools.iter().find(|t| t.def().name == tc.name) {
-            Some(t) => t.clone(),
+        let tool = match self.tools.resolve(&tc.name) {
+            Some(t) => t,
             None => {
                 let err = format!("Unknown tool: {}", tc.name);
                 events.push(TurnEvent::Error(err.clone()));

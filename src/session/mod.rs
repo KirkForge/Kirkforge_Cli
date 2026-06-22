@@ -22,6 +22,7 @@ pub mod router;
 pub mod session_fork;
 pub mod session_index;
 pub mod skills;
+pub mod toolset;
 pub mod undo;
 pub mod verifier;
 

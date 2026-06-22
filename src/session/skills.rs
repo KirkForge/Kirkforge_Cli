@@ -180,6 +180,58 @@ impl SkillRegistry {
             .collect()
     }
 
+    /// Human-readable summary of active plugin trust tiers for the TUI
+    /// status bar.
+    ///
+    /// Returns `None` if no plugins are active. Otherwise returns a compact
+    /// string like "🔒2 ⚡1 🌐0" with one glyph per tier. Rejected plugins
+    /// are reported as "☠️N blocked" so the user can see that a manifest
+    /// exceeded the configured `max_plugin_trust`.
+    pub fn plugin_status_summary(&self) -> Option<String> {
+        let active = self.plugin_registry.active_plugins();
+        if active.is_empty() && self.plugin_warnings.is_empty() {
+            return None;
+        }
+
+        let mut read_only = 0usize;
+        let mut shell = 0usize;
+        let mut network = 0usize;
+        let mut unsafe_ = 0usize;
+        for p in active {
+            match p.effective_trust {
+                TrustTier::ReadOnly => read_only += 1,
+                TrustTier::Shell => shell += 1,
+                TrustTier::Network => network += 1,
+                TrustTier::Unsafe => unsafe_ += 1,
+            }
+        }
+
+        let mut parts = Vec::new();
+        if read_only > 0 {
+            parts.push(format!("🔒{}", read_only));
+        }
+        if shell > 0 {
+            parts.push(format!("⚡{}", shell));
+        }
+        if network > 0 {
+            parts.push(format!("🌐{}", network));
+        }
+        if unsafe_ > 0 {
+            parts.push(format!("☠️{}", unsafe_));
+        }
+
+        let rejected = self.plugin_warnings.len();
+        if rejected > 0 {
+            parts.push(format!("☠️{} blocked", rejected));
+        }
+
+        if parts.is_empty() {
+            None
+        } else {
+            Some(parts.join(" "))
+        }
+    }
+
     /// Recursively scan a directory for SKILL.md files.
     fn load_from_dir(&mut self, dir: &Path) -> anyhow::Result<usize> {
         if !dir.is_dir() {

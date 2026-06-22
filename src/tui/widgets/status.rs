@@ -41,6 +41,9 @@ pub fn render_status(f: &mut Frame, area: Rect, state: &AppState) {
         String::new()
     };
 
+    // ── Plugin trust-tier indicator (Phase 2.3) ────────────────────
+    let plugin_str = state.plugin_status.as_deref().unwrap_or("");
+
     // ── Budget indicator (v1.2-p6) ─────────────────────────────────
     // If we have both a connected model and a non-zero per-turn
     // prompt size, show "↑12.4K/128K (10%)" with a color that tells
@@ -75,12 +78,21 @@ pub fn render_status(f: &mut Frame, area: Rect, state: &AppState) {
             Style::default().fg(Color::DarkGray),
         )
     };
+    let plugin_span: Span = if plugin_str.is_empty() {
+        Span::raw(String::new())
+    } else {
+        Span::styled(
+            format!("{} ", plugin_str),
+            Style::default().fg(Color::Yellow),
+        )
+    };
 
     // Compute the spacer width from the actual rendered span widths.
     // `Span::content` is the unstyled text length; we use that for
     // layout math and rebuild with the styled spans for display.
     let right_visible_len: usize = [
         skills_span.content.chars().count(),
+        plugin_span.content.chars().count(),
         sent_span.content.chars().count(),
         received_span.content.chars().count(),
         cost_span.content.chars().count(),
@@ -115,6 +127,7 @@ pub fn render_status(f: &mut Frame, area: Rect, state: &AppState) {
         ),
         Span::styled(spacing, Style::default()),
         skills_span,
+        plugin_span,
         sent_span,
         received_span,
         cost_span,

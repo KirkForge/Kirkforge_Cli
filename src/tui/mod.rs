@@ -198,6 +198,8 @@ pub async fn run_tui(
     for skill in crate::session::skills::builtin_skills() {
         state.skill_registry.register(skill);
     }
+    // Surface plugin trust tiers in the status bar (Phase 2.3).
+    state.plugin_status = state.skill_registry.plugin_status_summary();
 
     // ── Carryover profile (shared between executor and save) ──
     let carryover_target: Option<Arc<Mutex<CarryoverProfile>>> =

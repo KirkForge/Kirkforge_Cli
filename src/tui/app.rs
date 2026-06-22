@@ -203,6 +203,11 @@ pub struct AppState {
     /// not be created at session start.
     pub undo_stack: Option<crate::tools::UndoStackRef>,
 
+    // ── Plugin trust-tier status (Phase 2.3) ──────────────────────
+    /// Compact summary of loaded plugin trust tiers, displayed in the
+    /// status bar. Example: "🔒2 ⚡1". `None` when no plugins are loaded.
+    pub plugin_status: Option<String>,
+
     // ── Frame-pacing v2: render-on-state-change ───────────────────
     /// Set to `true` whenever `state` mutates in a way that should
     /// produce a redraw. The event loop checks this flag at the top
@@ -269,6 +274,7 @@ impl AppState {
             test_in_progress: false,
             undo_stack: None,
             session_picker: None,
+            plugin_status: None,
             // Start dirty so the first frame draws immediately (the
             // connection banner / status bar are non-empty even with
             // zero state mutations).

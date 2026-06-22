@@ -1,3 +1,6 @@
+// Public/future surface in a binary crate: suppress dead-code warnings for pub items.
+#![allow(dead_code)]
+
 //! Session index — list, prune, and delete prior sessions.
 //!
 //! Review.md gap #3: prior to this, the only way to find an old
@@ -25,13 +28,13 @@
 //! --continue <id>`.
 
 use crate::session::conversation::ConversationLog;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 /// One row in the sessions listing. Display-only — the `id` is the
 /// filename stem, `path` is the absolute path (for `--continue` or
 /// "open in editor"), and the other fields are summary metadata.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionEntry {
     pub id: String,
     pub path: PathBuf,
@@ -92,16 +95,25 @@ fn summarize_file(path: &std::path::Path) -> Option<SessionEntry> {
         .to_string_lossy()
         .trim_end_matches(".conv")
         .to_string();
-    let metadata = std::fs::metadata(path).ok()?;
+    let metadata = match std::fs::metadata(path) {
+        Ok(m) => m,
+        Err(e) => {
+            tracing::warn!(path = %path.display(), error = %e, "failed to stat session file");
+            return None;
+        }
+    };
     let size_bytes = metadata.len();
 
     // Count non-empty lines. Cheap, no JSON parse needed for the
     // count.
-    let content = std::fs::read_to_string(path).ok()?;
-    let message_count = content
-        .lines()
-        .filter(|l| !l.trim().is_empty())
-        .count();
+    let content = match std::fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(path = %path.display(), error = %e, "failed to read session file");
+            return None;
+        }
+    };
+    let message_count = content.lines().filter(|l| !l.trim().is_empty()).count();
 
     // started_at: file mtime in rfc3339 form. If the mtime is
     // unparseable (very rare — epoch on some FSes) we use the
@@ -129,7 +141,9 @@ fn summarize_file(path: &std::path::Path) -> Option<SessionEntry> {
 /// removed, `Ok(false)` if no matching file existed.
 pub fn delete_session(id: &str) -> anyhow::Result<bool> {
     let data_dir = crate::session::data_dir()?;
-    let path = data_dir.join("sessions").join(format!("{}.conv.ndjson", id));
+    let path = data_dir
+        .join("sessions")
+        .join(format!("{}.conv.ndjson", id));
     if !path.exists() {
         return Ok(false);
     }

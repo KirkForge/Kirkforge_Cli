@@ -1,4 +1,6 @@
+use crate::session::access::{DenyList, PathGuard};
 use crate::session::bash_jobs::global_registry;
+use crate::session::process_group::{kill_process_group, setup_process_group};
 use crate::shared::{ToolDef, ToolOutcome};
 use crate::tools::bash_minify;
 use crate::tools::Tool;
@@ -21,12 +23,13 @@ pub struct Bash;
 /// as a config knob; the original review (GPT 5.5 #10) flagged the
 /// unbounded buffer as a safety finding, and 1 MiB is the canonical
 /// "readable but bounded" choice.
-const MAX_BASH_OUTPUT_BYTES: usize = 1024 * 1024;
+pub const MAX_BASH_OUTPUT_BYTES: usize = 1024 * 1024;
 
 /// Marker appended to a stream that hit the cap. Includes the count of
 /// dropped bytes so the model can decide whether to re-run with a narrower
 /// filter (e.g. `head -n 1000`).
-const TRUNCATED_MARKER_FMT: &str = "\n[...truncated: {} bytes omitted, output exceeded 1 MiB cap...]\n";
+const TRUNCATED_MARKER_FMT: &str =
+    "\n[...truncated: {} bytes omitted, output exceeded 1 MiB cap...]\n";
 
 /// Reader that stops accepting bytes once `cap` is reached but keeps
 /// draining the underlying pipe so the child process doesn't block on a
@@ -92,7 +95,7 @@ impl CappedReader {
 /// number of bytes dropped past the cap. The `Send` bound is required so
 /// the function can run inside a `tokio::spawn` task (the actual readers
 /// we pass — `ChildStdout` / `ChildStderr` — are `Send`).
-async fn drain_capped<R>(r: R, cap: usize) -> std::io::Result<(Vec<u8>, u64)>
+pub async fn drain_capped<R>(r: R, cap: usize) -> std::io::Result<(Vec<u8>, u64)>
 where
     R: AsyncRead + Unpin + Send + 'static,
 {
@@ -240,10 +243,10 @@ impl Tool for Bash {
     }
 }
 
-struct ShellOutput {
-    status: std::process::ExitStatus,
-    stdout: String,
-    stderr: String,
+pub struct ShellOutput {
+    pub status: std::process::ExitStatus,
+    pub stdout: String,
+    pub stderr: String,
 }
 
 /// Run a shell command in the foreground with kill_on_drop and timeout.
@@ -259,7 +262,11 @@ struct ShellOutput {
 /// child never blocks on a full pipe buffer. If the child produces more
 /// than the cap before the timeout, the marker returned in the string
 /// tells the model how much was dropped.
-async fn run_shell(cmd: &str, workdir: &Path, timeout_secs: u64) -> Result<ShellOutput, String> {
+pub async fn run_shell(
+    cmd: &str,
+    workdir: &Path,
+    timeout_secs: u64,
+) -> Result<ShellOutput, String> {
     let mut proc = Command::new("/bin/sh");
     proc.arg("-c")
         .arg(cmd)
@@ -267,6 +274,8 @@ async fn run_shell(cmd: &str, workdir: &Path, timeout_secs: u64) -> Result<Shell
         .kill_on_drop(true)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+
+    setup_process_group(&mut proc);
 
     let mut child = proc
         .spawn()
@@ -293,11 +302,10 @@ async fn run_shell(cmd: &str, workdir: &Path, timeout_secs: u64) -> Result<Shell
             Ok(result)
         }
         _ = tokio::time::sleep_until(timeout_at) => {
-            // The child is still owned by the outer scope; we can
-            // explicitly kill it. The drain tasks continue draining
-            // the pipes (which close once the child dies) and we join
-            // them below to surface partial output.
-            let _ = child.start_kill();
+            // The child is still owned by the outer scope; kill the
+            // whole process group so grandchildren cannot outlive it
+            // and keep the pipes open.
+            kill_process_group(&mut child);
             Err(())
         }
     };
@@ -323,14 +331,14 @@ async fn run_shell(cmd: &str, workdir: &Path, timeout_secs: u64) -> Result<Shell
             // close. Join them and report whatever they captured.
             let (raw_stdout, stdout_dropped) = join_drain(drain_stdout, "stdout").await?;
             let (raw_stderr, stderr_dropped) = join_drain(drain_stderr, "stderr").await?;
+            // Best-effort reap: the drain tasks have closed the pipes,
+            // so the child should exit quickly. A short timeout prevents
+            // a stuck child from wedging us.
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(2), child.wait()).await;
             let prefix = format!("[timed out after {} seconds]\n", timeout_secs);
             Ok(ShellOutput {
                 status: synth_status_killed(),
-                stdout: format!(
-                    "{}{}",
-                    prefix,
-                    cap_to_string(raw_stdout, stdout_dropped)
-                ),
+                stdout: format!("{}{}", prefix, cap_to_string(raw_stdout, stdout_dropped)),
                 stderr: cap_to_string(raw_stderr, stderr_dropped),
             })
         }
@@ -352,7 +360,7 @@ async fn join_drain(
 
 /// Render a drained stream into a String, appending a truncation marker
 /// if the cap was hit.
-fn cap_to_string(raw: Vec<u8>, dropped: u64) -> String {
+pub fn cap_to_string(raw: Vec<u8>, dropped: u64) -> String {
     let mut s = String::from_utf8_lossy(&raw).to_string();
     if dropped > 0 {
         s.push_str(&TRUNCATED_MARKER_FMT.replace("{}", &dropped.to_string()));
@@ -366,11 +374,196 @@ fn cap_to_string(raw: Vec<u8>, dropped: u64) -> String {
 /// `.code()`, and we want it to take the error branch and prepend the
 /// timeout marker.
 fn synth_status_killed() -> std::process::ExitStatus {
-    use std::os::unix::process::ExitStatusExt;
-    // On Unix, `ExitStatus::from_raw(N)` represents "killed by signal N"
-    // (the `wait()` convention stores the signal number directly in the
-    // low bits when WIFSIGNALED). SIGKILL = 9.
-    std::process::ExitStatus::from_raw(9)
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        // On Unix, `ExitStatus::from_raw(N)` represents "killed by signal N"
+        // (the `wait()` convention stores the signal number directly in the
+        // low bits when WIFSIGNALED). SIGKILL = 9.
+        std::process::ExitStatus::from_raw(9)
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::ExitStatusExt;
+        // On Windows, `from_raw` is the exit code. Returning 9 keeps
+        // `.success()` false and `.code()` returning `Some(9)`.
+        std::process::ExitStatus::from_raw(9)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        // Exotic target fallback: spawn a trivial command that exits 9.
+        // This path is only reached on timeout, so the overhead is
+        // acceptable and better than failing to compile.
+        std::process::Command::new("sh")
+            .arg("-c")
+            .arg("exit 9")
+            .status()
+            .expect("fallback status command")
+    }
+}
+
+/// Dangerous shell-command substrings. These are blocked regardless of
+/// approval state because they can destroy data or compromise the host.
+const DANGEROUS_SHELL_COMMANDS: &[&str] = &[
+    "rm -rf /",
+    "rm -rf /*",
+    ":(){ :|:& };:",
+    "> /dev/sda",
+    "mkfs.",
+    "dd if=/dev/zero of=",
+    "chmod -R 777 /",
+    "chmod 777 /",
+    "dd if=/dev/random",
+    "> /dev/null < /dev/sda",
+];
+
+/// True if `pattern` appears in `cmd` at a word boundary (start/end of
+/// string, whitespace, or shell metacharacter). Used so `rm -rf /` blocks
+/// the exact dangerous command even when it appears inside a pipeline.
+fn word_boundary_match(cmd: &str, pattern: &str) -> bool {
+    let boundaries = [' ', '\t', '\n', '|', ';', '&', '(', ')', '<', '>', '\0'];
+    let p: Vec<char> = pattern.chars().collect();
+    let chars: Vec<char> = cmd.chars().collect();
+    let mut i = 0;
+    while i + p.len() <= chars.len() {
+        if chars[i..i + p.len()].iter().collect::<String>() == *pattern {
+            let start_ok = i == 0 || boundaries.contains(&chars[i - 1]);
+            let end_ok = i + p.len() >= chars.len() || boundaries.contains(&chars[i + p.len()]);
+            if start_ok && end_ok {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
+/// Safety check for a bash command. Returns `Some(reason)` if the command
+/// should be blocked, `None` if it may proceed.
+///
+/// This is shared between the model's `bash` tool, the `!` bang passthrough,
+/// the `/test` slash command, and lifecycle hooks so every shell execution
+/// goes through the same sandbox, deny-list, and dangerous-pattern gates.
+pub fn check_bash_command_str(
+    cmd: &str,
+    workdir: Option<&str>,
+    deny_list: &DenyList,
+    path_guard: &PathGuard,
+    bash_sandbox_workdir: bool,
+) -> Option<String> {
+    // 1. Sandboxed workdir policy. If enabled, reject an explicit workdir
+    //    that points outside the sandbox. If we cannot canonicalize the path
+    //    we deny: a non-canonical path containing `..` could pass the
+    //    prefix check while resolving outside the sandbox.
+    if bash_sandbox_workdir {
+        if let Some(workdir) = workdir {
+            if !workdir.is_empty() {
+                let workdir_path = Path::new(workdir);
+                let resolved = match workdir_path.canonicalize() {
+                    Ok(p) => p,
+                    Err(_) => {
+                        return Some(format!(
+                            "🔒 Bash workdir cannot be resolved: {} (sandbox enforcement active)",
+                            workdir
+                        ));
+                    }
+                };
+                if let Some(ref sandbox) = path_guard.sandbox_dir {
+                    let sb = match sandbox.canonicalize() {
+                        Ok(p) => p,
+                        Err(_) => {
+                            return Some(format!(
+                                "🔒 Sandbox directory cannot be resolved: {}",
+                                sandbox.display()
+                            ));
+                        }
+                    };
+                    if !resolved.starts_with(&sb) {
+                        return Some(format!(
+                            "🔒 Bash workdir outside sandbox: {} (sandbox: {})",
+                            workdir,
+                            sandbox.display()
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. Hard-coded metadata endpoint blocks.
+    if cmd.contains("169.254.169.254")
+        || cmd.contains("metadata.google")
+        || cmd.contains("metadata.aws")
+    {
+        return Some("🔒 Command blocked: contains reference to metadata endpoints".into());
+    }
+
+    // 3. User-configured URL deny list.
+    for url_prefix in &deny_list.url_patterns {
+        if !url_prefix.is_empty() && cmd.contains(url_prefix) {
+            return Some(format!(
+                "🔒 Command blocked: references denied URL '{}'",
+                url_prefix
+            ));
+        }
+    }
+
+    // 4. Built-in dangerous shell patterns and hard-coded system paths.
+    for pattern in DANGEROUS_SHELL_COMMANDS {
+        let needs_word_boundary = pattern.ends_with('/') || pattern.ends_with(' ');
+        let matches = if needs_word_boundary {
+            word_boundary_match(cmd, pattern)
+        } else {
+            cmd.contains(pattern)
+        };
+        if matches {
+            return Some(format!(
+                "🔒 Command blocked: dangerous pattern '{}' detected",
+                pattern
+            ));
+        }
+    }
+
+    for pat in [
+        "/etc/shadow",
+        "/etc/passwd",
+        "/etc/sudoers",
+        "~/.ssh",
+        "/root/",
+    ] {
+        if cmd.contains(pat) {
+            return Some(format!(
+                "🔒 Command blocked: references denied path '{}'",
+                pat
+            ));
+        }
+    }
+
+    // 5. User-configured path deny list. Tokenize the command and check
+    //    each token as a path.
+    for token in cmd.split_whitespace() {
+        if deny_list.is_path_denied(Path::new(token)) {
+            return Some(format!(
+                "🔒 Command blocked: references denied path '{}'",
+                token
+            ));
+        }
+    }
+
+    None
+}
+
+/// JSON-args wrapper around [`check_bash_command_str`] for the model's
+/// `bash` tool invocation path.
+pub fn check_bash_command(
+    args: &serde_json::Value,
+    deny_list: &DenyList,
+    path_guard: &PathGuard,
+    bash_sandbox_workdir: bool,
+) -> Option<String> {
+    let cmd = args.get("command").and_then(|c| c.as_str()).unwrap_or("");
+    let workdir = args.get("workdir").and_then(|w| w.as_str());
+    check_bash_command_str(cmd, workdir, deny_list, path_guard, bash_sandbox_workdir)
 }
 
 #[cfg(test)]
@@ -406,6 +599,40 @@ mod tests {
         assert_eq!(kept.len(), cap);
         assert_eq!(dropped as usize, payload.len() - cap);
         assert_eq!(&kept[..], &payload[..cap]);
+    }
+
+    /// A timed-out `run_shell` invocation must not leave descendants
+    /// behind. We nest a `sleep` inside a subshell so it is a
+    /// grandchild of the outer shell and verify the survivor never
+    /// touches a marker file.
+    #[tokio::test]
+    async fn run_shell_timeout_kills_descendants() {
+        let tmp = std::env::temp_dir();
+        let marker = tmp.join(format!(
+            "kirkforge_run_shell_orphan_test_{}",
+            std::process::id()
+        ));
+        let marker_str = marker.to_string_lossy().to_string();
+        let _ = std::fs::remove_file(&marker);
+
+        // Inner `sh` makes `sleep` a grandchild of the outer shell.
+        let cmd = format!("sh -c 'sleep 30; touch {}'", marker_str);
+        let out = run_shell(&cmd, &tmp, 1)
+            .await
+            .expect("run_shell should time out, not error");
+        assert!(
+            out.stdout.contains("timed out"),
+            "expected timeout marker, got: {:?}",
+            &out.stdout[..out.stdout.len().min(200)]
+        );
+
+        // Allow a generous window for a would-be orphan to touch the marker.
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        assert!(
+            !marker.exists(),
+            "descendant process survived timeout and touched marker"
+        );
+        let _ = std::fs::remove_file(&marker);
     }
 
     /// A `run_shell` invocation that exceeds the cap gets the marker in
@@ -458,6 +685,127 @@ mod tests {
             out.stdout.contains("[...truncated:"),
             "expected truncation marker, got: {:?}",
             &out.stdout[..out.stdout.len().min(200)]
+        );
+    }
+
+    #[test]
+    fn test_word_boundary_match_exact() {
+        assert!(word_boundary_match("rm -rf /", "rm -rf /"));
+    }
+
+    #[test]
+    fn test_word_boundary_no_false_positive_trailing_slash() {
+        assert!(!word_boundary_match("rm -rf /home/user", "rm -rf /"));
+    }
+
+    #[test]
+    fn test_word_boundary_match_with_pipe_prefix() {
+        assert!(word_boundary_match("echo foo | rm -rf /", "rm -rf /"));
+    }
+
+    #[test]
+    fn test_word_boundary_match_with_semicolon() {
+        assert!(word_boundary_match("cd /; rm -rf /", "rm -rf /"));
+    }
+
+    #[test]
+    fn test_word_boundary_no_match_in_substring() {
+        assert!(!word_boundary_match("rm -rf /home", "rm -rf /"));
+    }
+
+    #[test]
+    fn test_check_bash_command_blocks_dangerous_exact() {
+        let args = serde_json::json!({"command": "rm -rf /"});
+        let result = check_bash_command(&args, &DenyList::default(), &PathGuard::default(), false);
+        assert!(result.is_some(), "rm -rf / should be blocked");
+    }
+
+    #[test]
+    fn test_check_bash_command_allows_safe_similar() {
+        let args = serde_json::json!({"command": "rm -rf /home/user/temp"});
+        let result = check_bash_command(&args, &DenyList::default(), &PathGuard::default(), false);
+        assert!(
+            result.is_none(),
+            "rm -rf /home/user/temp should be allowed, got: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_check_bash_command_blocks_dd_by_substring() {
+        let args = serde_json::json!({"command": "dd if=/dev/zero of=/tmp/out bs=1M count=1"});
+        let result = check_bash_command(&args, &DenyList::default(), &PathGuard::default(), false);
+        assert!(result.is_some(), "dd if=/dev/zero should be blocked");
+    }
+
+    #[test]
+    fn test_check_bash_command_blocks_fork_bomb() {
+        let args = serde_json::json!({"command": ":(){ :|:& };:"});
+        let result = check_bash_command(&args, &DenyList::default(), &PathGuard::default(), false);
+        assert!(result.is_some(), "Fork bomb should be blocked");
+    }
+
+    #[test]
+    fn test_check_bash_command_allows_legitimate_curl() {
+        let args = serde_json::json!({"command": "curl -s https://api.example.com/data"});
+        let result = check_bash_command(&args, &DenyList::default(), &PathGuard::default(), false);
+        assert!(
+            result.is_none(),
+            "curl should not be blocked by check_bash_command"
+        );
+    }
+
+    #[test]
+    fn test_check_bash_command_str_blocks_metadata_endpoint() {
+        let result = check_bash_command_str(
+            "curl http://169.254.169.254/latest/meta-data/",
+            None,
+            &DenyList::default(),
+            &PathGuard::default(),
+            false,
+        );
+        assert!(
+            result.is_some_and(|m| m.contains("metadata")),
+            "metadata endpoint should be blocked"
+        );
+    }
+
+    #[test]
+    fn test_check_bash_command_str_sandbox_workdir_rejects_escape() {
+        let path_guard = crate::session::access::PathGuard {
+            sandbox_dir: Some(std::env::temp_dir()),
+            ..Default::default()
+        };
+        let result =
+            check_bash_command_str("ls", Some("/etc"), &DenyList::default(), &path_guard, true);
+        assert!(
+            result
+                .as_ref()
+                .is_some_and(|m| m.contains("outside sandbox")),
+            "workdir outside sandbox should be rejected, got: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_check_bash_command_str_sandbox_rejects_unresolvable_workdir() {
+        let path_guard = crate::session::access::PathGuard {
+            sandbox_dir: Some(std::env::temp_dir()),
+            ..Default::default()
+        };
+        let result = check_bash_command_str(
+            "ls",
+            Some("/nonexistent/path/that/cannot/be/canonicalized"),
+            &DenyList::default(),
+            &path_guard,
+            true,
+        );
+        assert!(
+            result
+                .as_ref()
+                .is_some_and(|m| m.contains("cannot be resolved")),
+            "unresolvable workdir should be rejected, got: {:?}",
+            result
         );
     }
 }

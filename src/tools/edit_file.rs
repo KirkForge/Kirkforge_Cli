@@ -85,8 +85,24 @@ impl Tool for EditFile {
         // pre-edit state) — including the trailing-newline,
         // CRLF/LF, encoding. Same byte-for-byte restoration on
         // `/undo`.
-        let prev_bytes = std::fs::read(&path).unwrap_or_default();
         let prev_existed = std::fs::metadata(&path).is_ok();
+        let prev_bytes = if prev_existed {
+            match std::fs::read(&path) {
+                Ok(b) => b,
+                Err(e) => {
+                    return ToolOutcome::Error {
+                        message: format!(
+                            "Cannot read existing file {} for undo snapshot: {}. \
+                             Refusing to edit without a snapshot.",
+                            path.display(),
+                            e
+                        ),
+                    };
+                }
+            }
+        } else {
+            Vec::new()
+        };
 
         let content = match String::from_utf8(prev_bytes.clone()) {
             Ok(c) => c,
@@ -137,10 +153,8 @@ impl Tool for EditFile {
                     // the replacement landed one byte early — corrupting
                     // the file. This was the source of deepseek-v4's review
                     // finding on edit_file's fuzzy fallback.
-                    let newline_positions: Vec<usize> = content
-                        .match_indices('\n')
-                        .map(|(i, _)| i)
-                        .collect();
+                    let newline_positions: Vec<usize> =
+                        content.match_indices('\n').map(|(i, _)| i).collect();
 
                     // byte offset of the start of `line_idx` in `content`
                     let line_byte_start = |line_idx: usize| -> usize {
@@ -176,7 +190,13 @@ impl Tool for EditFile {
                     let diff = render_diff(&content, &new_content);
                     return match std::fs::write(&path, &new_content) {
                         Ok(_) => {
-                            snapshot_for_undo(&self.undo, UndoKind::Edit, &path, prev_existed, &prev_bytes);
+                            snapshot_for_undo(
+                                &self.undo,
+                                UndoKind::Edit,
+                                &path,
+                                prev_existed,
+                                &prev_bytes,
+                            );
                             ToolOutcome::FileEdit { path, diff }
                         }
                         Err(e) => ToolOutcome::Error {
@@ -365,9 +385,8 @@ mod tests {
                 .unwrap()
                 .as_nanos()
         );
-        let stack = std::sync::Arc::new(std::sync::Mutex::new(
-            UndoStack::for_session(&id).unwrap(),
-        ));
+        let stack =
+            std::sync::Arc::new(std::sync::Mutex::new(UndoStack::for_session(&id).unwrap()));
 
         let tool = EditFile::new(Some(stack.clone()));
         let args = serde_json::json!({

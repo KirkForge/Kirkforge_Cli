@@ -77,23 +77,27 @@ impl ToolCallAccumulator {
     ///    compliant. Ollama's OpenAI-compat layer
     ///    rejects subsequent requests that reference
     ///    those duplicate ids. We de-duplicate by
-    ///    suffixing the original id with `__<index>`
+    ///    suffixing the duplicate id with `__<n>`
     ///    so every emitted call has a unique id.
+    ///    Spec-compliant servers that already emit unique
+    ///    ids pass through unchanged.
     fn drain(&mut self) -> Vec<ToolInvocation> {
         let mut out: Vec<_> = self.calls.drain().collect();
         out.sort_by_key(|(idx, _)| *idx);
+        let mut seen_ids: std::collections::HashSet<String> =
+            std::collections::HashSet::with_capacity(out.len());
         let mut next: usize = 0;
         out.into_iter()
             .flat_map(|(_, (id, name, args_json))| {
                 let args = split_concatenated_json(&args_json);
                 args.into_iter()
                     .map(|arg| {
-                        let unique_id = if next == 0 {
+                        let unique_id = if seen_ids.insert(id.clone()) {
                             id.clone()
                         } else {
+                            next += 1;
                             format!("{}__{}", id, next)
                         };
-                        next += 1;
                         ToolInvocation {
                             id: unique_id,
                             name: name.clone(),
@@ -107,6 +111,29 @@ impl ToolCallAccumulator {
 
     fn is_empty(&self) -> bool {
         self.calls.is_empty()
+    }
+}
+
+/// Send a `Done` event only if one has not already been emitted.
+///
+/// OpenAI-compat streams sometimes carry both a `[DONE]` sentinel and a
+/// later `finish_reason`. Sending two `Done` events can cause the
+/// executor to drop the receiver and produce a spurious warning on the
+/// second send. This helper suppresses duplicate `Done` events.
+async fn send_done_once(
+    tx: &tokio::sync::mpsc::Sender<StreamEvent>,
+    done_emitted: &mut bool,
+    ev: StreamEvent,
+    kind: &'static str,
+) -> bool {
+    if *done_emitted {
+        return true;
+    }
+    if super::ollama_ndjson::send_or_bail(tx, ev, kind).await {
+        *done_emitted = true;
+        true
+    } else {
+        false
     }
 }
 
@@ -126,7 +153,10 @@ impl OpenAiCompatAdapter {
             client: reqwest::Client::builder()
                 .tcp_nodelay(true)
                 .build()
-                .expect("reqwest client build failed"),
+                .unwrap_or_else(|e| {
+                    tracing::warn!(error = %e, "failed to build custom reqwest client; falling back to default");
+                    reqwest::Client::new()
+                }),
             json_mode: false,
         }
     }
@@ -135,27 +165,34 @@ impl OpenAiCompatAdapter {
 #[async_trait::async_trait]
 impl ModelAdapter for OpenAiCompatAdapter {
     fn model_info(&self) -> ModelInfo {
+        let lower = self.model.to_lowercase();
+        let is_claude3 = lower.starts_with("claude-3")
+            || lower.starts_with("claude-3.5")
+            || lower.starts_with("claude-3-5");
+        let is_gpt4o = lower.starts_with("gpt-4o");
+        let is_gpt5 = lower.starts_with("gpt-5");
+        let is_gemini = lower.starts_with("gemini");
+        let is_llava = lower.starts_with("llava");
+
         ModelInfo {
             name: self.model.clone(),
             supports_thinking: false,
             tool_call_format: ToolCallStyle::OpenAiCompat,
             max_context_tokens: 32_768, // conservative default
             recommended_temperature: 0.7,
-            // Conservative default: only the named vision / Anthropic /
-            // OpenAI-prefixed models are known to accept image inputs.
-            // Adapters with vision support that don't match the prefix
-            // (e.g. a local `llava` running behind an OpenAI-compat
-            // proxy) will report a "tool not available" error from the
-            // model, which is the right surface to fix the registration.
-            supports_images: false,
+            // Enable image support for the families we know accept
+            // vision inputs through an OpenAI-compatible endpoint.
+            // Models not on this list will still get a clean "tool not
+            // available" error from the server if they don't support
+            // images, but this stops us from refusing to send images
+            // to e.g. `gpt-4o` or `claude-3-5-sonnet` proxies.
+            supports_images: is_claude3 || is_gpt4o || is_gpt5 || is_gemini || is_llava,
             // Most OpenAI-compat servers ignore cache_control, and the
             // field is unknown to Ollama's /v1/chat/completions
             // endpoint. Set `true` only for the explicitly cache-aware
-            // models (claude-3-*, gpt-4o, gpt-5) when we know the
-            // server honours the marker.
-            supports_cache: self.model.starts_with("claude-3-")
-                || self.model.starts_with("gpt-4o")
-                || self.model.starts_with("gpt-5"),
+            // Anthropic/OpenAI families when we know the server honours
+            // the marker. Include claude-3.5 / claude-3-5 style names.
+            supports_cache: is_claude3 || is_gpt4o || is_gpt5,
         }
     }
 
@@ -203,6 +240,7 @@ impl ModelAdapter for OpenAiCompatAdapter {
             let mut stream = response.bytes_stream();
             let mut buffer = String::new();
             let mut pending_tool_calls = ToolCallAccumulator::new();
+            let mut done_emitted = false;
 
             while let Some(chunk_result) = stream.next().await {
                 match chunk_result {
@@ -245,8 +283,9 @@ impl ModelAdapter for OpenAiCompatAdapter {
                             if line.is_empty() || line == "[DONE]" {
                                 buffer.drain(..drain_to);
                                 if line == "[DONE]"
-                                    && !super::ollama_ndjson::send_or_bail(
+                                    && !send_done_once(
                                         &tx,
+                                        &mut done_emitted,
                                         StreamEvent::Done {
                                             finish_reason: FinishReason::Stop,
                                             usage: None,
@@ -382,8 +421,7 @@ impl ModelAdapter for OpenAiCompatAdapter {
                                                 .get("completion_tokens")
                                                 .and_then(|v| v.as_u64())
                                                 .or_else(|| {
-                                                    u.get("eval_count")
-                                                        .and_then(|v| v.as_u64())
+                                                    u.get("eval_count").and_then(|v| v.as_u64())
                                                 })
                                                 .map(|v| v as usize),
                                             // Cache hit count. OpenAI's
@@ -409,8 +447,9 @@ impl ModelAdapter for OpenAiCompatAdapter {
                                                 .map(|v| v as usize),
                                         });
 
-                                        if !super::ollama_ndjson::send_or_bail(
+                                        if !send_done_once(
                                             &tx,
+                                            &mut done_emitted,
                                             StreamEvent::Done {
                                                 finish_reason,
                                                 usage,
@@ -690,6 +729,20 @@ mod tests {
         assert_eq!(calls[0].arguments, json!({"path":"a.md"}));
     }
 
+    /// Regression: spec-compliant servers emit unique ids for each
+    /// tool call. The accumulator must not add id suffixes when there
+    /// are no duplicates.
+    #[test]
+    fn accumulator_unique_ids_passthrough() {
+        let mut a = ToolCallAccumulator::new();
+        a.accumulate(0, "call_a", Some("read_file"), Some(r#"{"path":"a.md"}"#));
+        a.accumulate(1, "call_b", Some("read_file"), Some(r#"{"path":"b.md"}"#));
+        let calls = a.drain();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].id, "call_a");
+        assert_eq!(calls[1].id, "call_b");
+    }
+
     /// Regression: SSE parser panicked on long streams because
     /// `buffer.drain(..=start + 6 + end)` was off-by-two — the
     /// inclusive upper bound hit `buffer.len()` exactly when the
@@ -727,5 +780,42 @@ mod tests {
         // Buffer is now empty — we correctly drained everything
         // we'd consumed, and the (absent) `\n\n` was NOT drained.
         assert!(buffer.is_empty(), "expected empty buffer, got {:?}", buffer);
+    }
+
+    /// Regression: `[DONE]` sentinel and a later `finish_reason` can
+    /// both try to emit `Done`. Only the first should be sent.
+    #[tokio::test]
+    async fn send_done_once_suppresses_duplicates() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+        let mut emitted = false;
+        assert!(
+            send_done_once(
+                &tx,
+                &mut emitted,
+                StreamEvent::Done {
+                    finish_reason: FinishReason::Stop,
+                    usage: None,
+                },
+                "test done",
+            )
+            .await
+        );
+        assert!(emitted);
+        assert!(
+            send_done_once(
+                &tx,
+                &mut emitted,
+                StreamEvent::Done {
+                    finish_reason: FinishReason::Stop,
+                    usage: None,
+                },
+                "test done duplicate",
+            )
+            .await
+        );
+        // Only one event should have been delivered.
+        let first = rx.recv().await;
+        assert!(matches!(first, Some(StreamEvent::Done { .. })));
+        assert!(rx.is_empty());
     }
 }

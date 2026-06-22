@@ -1,0 +1,148 @@
+# KirkForge example configuration
+#
+# Copy this file to ~/.local/share/kirkforge/config.toml and uncomment the
+# settings you want to change. Any field omitted from the real config file
+# keeps its built-in default, so a minimal config can be a single line.
+
+# ---------------------------------------------------------------------------
+# Model and endpoint
+# ---------------------------------------------------------------------------
+
+# Default model used when `kirkforge run` is invoked without `--model`.
+# Examples: "qwen2.5:3b", "llama3.2:latest", "deepseek-v4-flash:cloud",
+# or any model name your Ollama / OpenAI-compatible server knows.
+# default_model = "qwen2.5:3b"
+
+# URL of the Ollama server. For OpenAI-compatible endpoints the same host is
+# used; set model_type via `--model-type openai` or `model_type` once it is
+# exposed in config.
+# ollama_host = "http://localhost:11434"
+
+# ---------------------------------------------------------------------------
+# Safety / approval
+# ---------------------------------------------------------------------------
+
+# When true, all tool calls and `!` passthrough are approved automatically.
+# Useful for scripted non-interactive runs, dangerous for normal interactive
+# coding. Default: false.
+# auto_approve = false
+
+# When true, the `!command` passthrough routes through the same approval gate
+# as the bash tool. Default: false (passthrough is friction-free).
+# bang_requires_approval = false
+
+# ---------------------------------------------------------------------------
+# Sandbox and filesystem access
+# ---------------------------------------------------------------------------
+
+# Working directory the bash tool defaults to and is confined inside. Empty
+# string ("") resolves to the current working directory at launch time.
+# Setting an explicit path overrides cwd capture. Default: "".
+# sandbox_dir = ""
+
+# When true, the bash tool forces its subprocess cwd inside `sandbox_dir` and
+# rejects explicit `workdir` args that escape it. Default: true.
+# bash_sandbox_workdir = true
+
+# When true, write_file/edit_file reject paths that resolve inside dotfile
+# directories (e.g. ~/.ssh). Default: false.
+# block_dotfiles = false
+
+# When true, read_file rejects binary files instead of returning truncated
+# base64. Default: false.
+# block_binary_reads = false
+
+# Maximum bytes the read_file tool returns. Default: 1048576 (1 MiB).
+# max_file_read_size = 1048576
+
+# When true, read_file follows symlinks. Default: false.
+# follow_symlinks = false
+
+# ---------------------------------------------------------------------------
+# Deny / allow lists
+# ---------------------------------------------------------------------------
+
+# Glob patterns for paths the file tools are not allowed to touch.
+# deny_paths = ["**/.ssh/**", "**/secret/**"]
+
+# Glob patterns for URLs the bash tool is not allowed to curl/wget/etc.
+# deny_urls = ["https://example.com/internal/*"]
+
+# File extensions that file tools will refuse to write.
+# deny_extensions = [".key", "*.pem"]
+
+# If non-empty, write_file/edit_file outside these directories are rejected.
+# allowed_write_dirs = ["/home/me/projects"]
+
+# ---------------------------------------------------------------------------
+# Conversation context
+# ---------------------------------------------------------------------------
+
+# How the context window is shrunk when it grows too long.
+# Options: "KeepToolOnly" (default), "DropOldest", "SummarizeMiddle".
+# truncation_strategy = "KeepToolOnly"
+
+# When true, old turns are carried over into new sessions. Default: true.
+# carryover_enabled = true
+
+# Maximum characters of a single tool result that are kept in context.
+# Default: 4000.
+# max_tool_result_chars = 4000
+
+# ---------------------------------------------------------------------------
+# Summarization (optional LLM-based compaction)
+# ---------------------------------------------------------------------------
+
+# When true, `/compact` uses the model below to summarize old turns instead
+# of naive truncation. Falls back to truncation if summarization fails.
+# summarize_enabled = false
+
+# Fast/cheap model used for summarization.
+# summarize_model = "qwen2.5:3b"
+
+# ---------------------------------------------------------------------------
+# Smart routing (experimental)
+# ---------------------------------------------------------------------------
+
+# When true, the first user message each turn is classified by complexity and
+# the router may suggest a model tier. Advisory only today.
+# routing_enabled = false
+
+# Model used for complexity classification. Empty means keyword heuristics.
+# router_model = ""
+
+# Per-tier model overrides. Valid keys: "simple", "medium", "complex".
+# [routing_model_map]
+# simple = "qwen2.5:3b"
+# medium = "deepseek-v4-flash:cloud"
+# complex = "deepseek-v4-pro:cloud"
+
+# ---------------------------------------------------------------------------
+# MCP servers (optional external tools)
+# ---------------------------------------------------------------------------
+#
+# Each server is spawned as a subprocess. Its tools become available inside
+# KirkForge prefixed with `mcp/<name>/`.
+
+# [[mcp_servers]]
+# name = "fetch"
+# command = "npx"
+# args = ["-y", "@modelcontextprotocol/server-fetch"]
+# [mcp_servers.env_vars]
+# LOG_LEVEL = "warn"
+
+# ---------------------------------------------------------------------------
+# Output / model behavior
+# ---------------------------------------------------------------------------
+
+# When true, request JSON-formatted responses. Models vary in how well they
+# honor this; tool calls may still appear inline. Default: false.
+# json_mode = false
+
+# ---------------------------------------------------------------------------
+# Git commit helper
+# ---------------------------------------------------------------------------
+
+# Maximum file size (in bytes) allowed in a `/commit`. Files larger than this
+# are a hard blocker. Default: 5242880 (5 MiB).
+# commit_max_file_size = 5242880

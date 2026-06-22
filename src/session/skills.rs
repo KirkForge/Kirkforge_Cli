@@ -1,3 +1,6 @@
+// Public/future surface in a binary crate: suppress dead-code warnings for pub items.
+#![allow(dead_code)]
+
 /// Skills system — slash-command skill registry and loader.
 ///
 /// Skills are reusable capabilities defined in SKILL.md files with
@@ -20,6 +23,8 @@
 ///
 /// The body after the frontmatter is the system prompt that's injected
 /// when the skill is invoked.
+use kirkforge_plugin::{Capability, TrustTier};
+use kirkforge_plugin_host::{PluginRegistry, TrustPolicy};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -48,8 +53,12 @@ pub struct Skill {
 
 impl Skill {
     /// Render the full system prompt for this skill, appending user input.
+    ///
+    /// Plugin prompts may contain a `{{args}}` placeholder; it is replaced
+    /// with the user input before the standard suffix is appended.
     pub fn render_prompt(&self, user_input: &str) -> String {
-        format!("{}\n\nUser request: {}", self.prompt_body, user_input)
+        let body = self.prompt_body.replace("{{args}}", user_input);
+        format!("{}\n\nUser request: {}", body, user_input)
     }
 }
 
@@ -59,6 +68,9 @@ pub struct SkillRegistry {
     skills: HashMap<String, Skill>,
     triggers: HashMap<String, String>, // trigger → name
     scan_paths: Vec<PathBuf>,
+    plugin_registry: PluginRegistry,
+    plugin_warnings: Vec<String>,
+    max_plugin_trust: TrustTier,
 }
 
 impl SkillRegistry {
@@ -67,7 +79,15 @@ impl SkillRegistry {
             skills: HashMap::new(),
             triggers: HashMap::new(),
             scan_paths: vec![PathBuf::from(".claude/skills")],
+            plugin_registry: PluginRegistry::new(),
+            plugin_warnings: Vec::new(),
+            max_plugin_trust: TrustTier::Shell,
         }
+    }
+
+    /// Set the maximum trust tier for loaded plugins.
+    pub fn set_max_plugin_trust(&mut self, max: TrustTier) {
+        self.max_plugin_trust = max;
     }
 
     /// Add a directory to scan for SKILL.md files.
@@ -79,6 +99,9 @@ impl SkillRegistry {
     }
 
     /// Scan all registered paths and load any SKILL.md files found.
+    ///
+    /// Also loads plugin directories from `~/.local/share/kirkforge/plugins`
+    /// and registers any plugin skills whose trust tier is allowed.
     pub fn scan_and_load(&mut self) -> anyhow::Result<usize> {
         let mut count = 0;
         let paths = self.scan_paths.clone();
@@ -88,7 +111,125 @@ impl SkillRegistry {
             }
             count += self.load_from_dir(base)?;
         }
+        count += self.load_plugins()?;
         Ok(count)
+    }
+
+    /// Load plugins from the canonical data-directory plugins folder and
+    /// register their skills.
+    fn load_plugins(&mut self) -> anyhow::Result<usize> {
+        let plugins_dir = crate::session::data_dir()
+            .map(|d| d.join("plugins"))
+            .unwrap_or_else(|_| PathBuf::from(".local/share/kirkforge/plugins"));
+
+        self.plugin_registry = PluginRegistry::new();
+        let warnings = self
+            .plugin_registry
+            .load_from_dir(&plugins_dir, TrustPolicy::up_to(self.max_plugin_trust))
+            .unwrap_or_default();
+        self.plugin_warnings = warnings;
+
+        let mut count = 0;
+        for trigger in self.plugin_registry.skill_triggers() {
+            let Some((manifest, plugin)) = self.plugin_registry.skill_by_trigger(&trigger) else {
+                continue;
+            };
+            let prompt_template = plugin.skill_prompt(&trigger, "").unwrap_or_default();
+            let model_hint = manifest.capabilities.iter().find_map(|c| match c {
+                Capability::Skill {
+                    trigger: t,
+                    model_hint,
+                    ..
+                } if t == &trigger => model_hint.clone(),
+                _ => None,
+            });
+
+            let skill = Skill {
+                meta: SkillMeta {
+                    name: format!("{}-{}", manifest.name, trigger.trim_start_matches('/')),
+                    description: format!("{} [{} plugin]", manifest.description, manifest.trust),
+                    trigger: trigger.clone(),
+                    model: model_hint,
+                },
+                prompt_body: prompt_template,
+                source_dir: plugin
+                    .manifest()
+                    .metadata
+                    .get("source_dir")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| plugins_dir.clone()),
+            };
+            self.register(skill);
+            count += 1;
+        }
+        Ok(count)
+    }
+
+    /// Warnings emitted while loading plugins (trust rejections, parse
+    /// failures, etc.).
+    pub fn plugin_warnings(&self) -> &[String] {
+        &self.plugin_warnings
+    }
+
+    /// Active plugin manifests, useful for status/logging.
+    pub fn active_plugins(&self) -> Vec<&kirkforge_plugin::PluginManifest> {
+        self.plugin_registry
+            .active_plugins()
+            .iter()
+            .map(|p| &p.plugin.manifest)
+            .collect()
+    }
+
+    /// Human-readable summary of active plugin trust tiers for the TUI
+    /// status bar.
+    ///
+    /// Returns `None` if no plugins are active. Otherwise returns a compact
+    /// string like "🔒2 ⚡1 🌐0" with one glyph per tier. Rejected plugins
+    /// are reported as "☠️N blocked" so the user can see that a manifest
+    /// exceeded the configured `max_plugin_trust`.
+    pub fn plugin_status_summary(&self) -> Option<String> {
+        let active = self.plugin_registry.active_plugins();
+        if active.is_empty() && self.plugin_warnings.is_empty() {
+            return None;
+        }
+
+        let mut read_only = 0usize;
+        let mut shell = 0usize;
+        let mut network = 0usize;
+        let mut unsafe_ = 0usize;
+        for p in active {
+            match p.effective_trust {
+                TrustTier::ReadOnly => read_only += 1,
+                TrustTier::Shell => shell += 1,
+                TrustTier::Network => network += 1,
+                TrustTier::Unsafe => unsafe_ += 1,
+            }
+        }
+
+        let mut parts = Vec::new();
+        if read_only > 0 {
+            parts.push(format!("🔒{}", read_only));
+        }
+        if shell > 0 {
+            parts.push(format!("⚡{}", shell));
+        }
+        if network > 0 {
+            parts.push(format!("🌐{}", network));
+        }
+        if unsafe_ > 0 {
+            parts.push(format!("☠️{}", unsafe_));
+        }
+
+        let rejected = self.plugin_warnings.len();
+        if rejected > 0 {
+            parts.push(format!("☠️{} blocked", rejected));
+        }
+
+        if parts.is_empty() {
+            None
+        } else {
+            Some(parts.join(" "))
+        }
     }
 
     /// Recursively scan a directory for SKILL.md files.
@@ -97,20 +238,35 @@ impl SkillRegistry {
             return Ok(0);
         }
         let mut count = 0;
-        for entry in ignore::WalkBuilder::new(dir)
+        let mut walker = ignore::WalkBuilder::new(dir)
             .max_depth(Some(3))
             .standard_filters(false) // don't ignore hidden dirs like .claude
-            .build()
-            .filter_map(|e| e.ok())
-            .filter(|e| e.file_name() == "SKILL.md")
-        {
-            let path = entry.path().to_path_buf();
-            if let Ok(skill) = load_skill_from_file(&path) {
-                let name = skill.meta.name.clone();
-                let trigger = skill.meta.trigger.clone();
-                self.skills.insert(name.clone(), skill);
-                self.triggers.insert(trigger, name);
-                count += 1;
+            .build();
+        let mut entries = Vec::new();
+        for result in walker.by_ref() {
+            match result {
+                Ok(entry) => {
+                    if entry.file_name() == "SKILL.md" {
+                        entries.push(entry.path().to_path_buf());
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "failed to walk skill directory");
+                }
+            }
+        }
+        for path in entries {
+            match load_skill_from_file(&path) {
+                Ok(skill) => {
+                    let name = skill.meta.name.clone();
+                    let trigger = skill.meta.trigger.clone();
+                    self.skills.insert(name.clone(), skill);
+                    self.triggers.insert(trigger, name);
+                    count += 1;
+                }
+                Err(e) => {
+                    tracing::warn!(path = %path.display(), error = %e, "failed to load SKILL.md");
+                }
             }
         }
         Ok(count)
@@ -199,7 +355,8 @@ pub fn parse_skill(content: &str, source_dir: PathBuf) -> anyhow::Result<Skill> 
         anyhow::bail!("SKILL.md must start with '---' frontmatter delimiter");
     }
 
-    let after_first = content.strip_prefix("---").unwrap().trim();
+    // `starts_with` was just verified, so slicing past the prefix is safe.
+    let after_first = content["---".len()..].trim();
     let end_idx = after_first
         .find("\n---")
         .ok_or_else(|| anyhow::anyhow!("SKILL.md missing closing '---' delimiter"))?;

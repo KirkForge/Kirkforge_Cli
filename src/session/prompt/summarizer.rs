@@ -155,11 +155,7 @@ fn truncate_for_summary(text: &str, max_chars: usize) -> String {
 }
 
 /// Prepare the summarization request payload for Ollama's `/api/chat`.
-fn build_summarize_request(
-    model: &str,
-    prompt: &str,
-    max_tokens: usize,
-) -> serde_json::Value {
+fn build_summarize_request(model: &str, prompt: &str, max_tokens: usize) -> serde_json::Value {
     serde_json::json!({
         "model": model,
         "messages": [{
@@ -345,7 +341,11 @@ mod tests {
 
         let prompt = build_summary_prompt(&messages);
         // The prompt header is ~360 chars + ~310 chars of "User: " + truncated content
-        assert!(prompt.len() < 700, "Long content should be truncated, got {} chars", prompt.len());
+        assert!(
+            prompt.len() < 700,
+            "Long content should be truncated, got {} chars",
+            prompt.len()
+        );
         assert!(prompt.contains('…'), "Should show truncation ellipsis");
     }
 

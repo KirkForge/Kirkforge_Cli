@@ -328,7 +328,10 @@ fn parse_token_usage(u: &serde_json::Value) -> TokenUsage {
     let cached_tokens = u
         .get("cached_count")
         .or_else(|| u.get("cached_tokens"))
-        .or_else(|| u.get("prompt_tokens_details").and_then(|p| p.get("cached_tokens")))
+        .or_else(|| {
+            u.get("prompt_tokens_details")
+                .and_then(|p| p.get("cached_tokens"))
+        })
         .and_then(|v| v.as_u64())
         .map(|v| v as usize);
     TokenUsage {

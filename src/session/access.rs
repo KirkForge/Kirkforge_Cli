@@ -5,6 +5,7 @@
 /// - [`PathGuard`]: multi-layer safety checks for file read/write operations.
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use tracing;
 
 // ── Deny List ────────────────────────────────────────────────────────
 
@@ -23,13 +24,17 @@ pub struct DenyList {
 }
 
 impl DenyList {
-    /// Build from raw pattern strings; invalid globs are silently skipped.
+    /// Build from raw pattern strings; invalid globs are logged and skipped.
     pub fn new(path_patterns: Vec<String>, url_patterns: Vec<String>) -> Self {
-        let path_matchers = path_patterns
-            .iter()
-            .filter_map(|p| globset::Glob::new(p).ok())
-            .map(|g| g.compile_matcher())
-            .collect();
+        let mut path_matchers = Vec::new();
+        for p in &path_patterns {
+            match globset::Glob::new(p) {
+                Ok(g) => path_matchers.push(g.compile_matcher()),
+                Err(e) => {
+                    tracing::warn!(pattern = %p, error = %e, "invalid deny-list glob; skipping");
+                }
+            }
+        }
         Self {
             path_matchers,
             path_patterns,
@@ -243,14 +248,32 @@ impl PathGuard {
                     ));
                 }
             };
-            // For new files the path doesn't exist yet — check parent directory
+            // For new files the path doesn't exist yet — check parent directory.
+            // If we cannot resolve the path (or its parent), deny rather than
+            // falling back to the unresolved literal — a symlink/mount race
+            // could otherwise make `starts_with` pass on a path that escapes
+            // the sandbox.
             let check = if path.exists() {
-                path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+                match path.canonicalize() {
+                    Ok(c) => c,
+                    Err(e) => {
+                        return GuardVerdict::Denied(format!(
+                            "Cannot resolve path '{}': {e} (refusing write outside sandbox)",
+                            path.display()
+                        ));
+                    }
+                }
             } else {
-                path.parent()
-                    .unwrap_or(Path::new("."))
-                    .canonicalize()
-                    .unwrap_or_else(|_| path.to_path_buf())
+                let parent = path.parent().unwrap_or(Path::new("."));
+                match parent.canonicalize() {
+                    Ok(c) => c,
+                    Err(e) => {
+                        return GuardVerdict::Denied(format!(
+                            "Cannot resolve parent directory '{}': {e} (refusing write outside sandbox)",
+                            parent.display()
+                        ));
+                    }
+                }
             };
             if !check.starts_with(&sb) {
                 return GuardVerdict::Denied(format!("Path outside sandbox: {}", path.display()));
@@ -303,12 +326,26 @@ impl PathGuard {
         // 6. Allowed write directories
         if !self.allowed_write_dirs.is_empty() {
             let check = if path.exists() {
-                path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+                match path.canonicalize() {
+                    Ok(c) => c,
+                    Err(e) => {
+                        return GuardVerdict::Denied(format!(
+                            "Cannot resolve path '{}': {e} (refusing write outside allowed dirs)",
+                            path.display()
+                        ));
+                    }
+                }
             } else {
-                path.parent()
-                    .unwrap_or(Path::new("."))
-                    .canonicalize()
-                    .unwrap_or_else(|_| path.to_path_buf())
+                let parent = path.parent().unwrap_or(Path::new("."));
+                match parent.canonicalize() {
+                    Ok(c) => c,
+                    Err(e) => {
+                        return GuardVerdict::Denied(format!(
+                            "Cannot resolve parent directory '{}': {e} (refusing write outside allowed dirs)",
+                            parent.display()
+                        ));
+                    }
+                }
             };
             let ok = self.allowed_write_dirs.iter().any(|d| {
                 d.canonicalize()
@@ -496,6 +533,21 @@ mod tests {
         let dl = DenyList::default();
         assert!(dl.is_path_denied(Path::new("/home/user/.ssh/id_rsa")));
         assert!(dl.is_path_denied(Path::new(".ssh/config")));
+    }
+
+    /// Invalid glob patterns are logged and skipped; valid patterns still work.
+    #[test]
+    fn test_deny_list_skips_invalid_globs() {
+        let dl = DenyList::new(
+            vec!["**/.ssh/**".into(), "[invalid".into(), "*.key".into()],
+            vec![],
+        );
+        // Valid patterns should still match.
+        assert!(dl.is_path_denied(Path::new("/home/user/.ssh/id_rsa")));
+        assert!(dl.is_path_denied(Path::new("secret.key")));
+        // The invalid pattern does not cause a panic and matches nothing.
+        assert!(!dl.is_path_denied(Path::new("[invalid")));
+        assert!(!dl.is_path_denied(Path::new("some.file")));
     }
 
     #[test]
@@ -755,7 +807,6 @@ mod tests {
     /// the empty string as `None`. This replaces the prior fail-open
     /// default, which was the source of GPT 5.5's review finding #5
     /// ("Default mode is fail-open for writes").
-    #[test]
     /// Guard the user-visible invariant: when a KirkForge session
     /// starts in a typical directory, the resulting `PathGuard` is
     /// sandboxed to that directory.

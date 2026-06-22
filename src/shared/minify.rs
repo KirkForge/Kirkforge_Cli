@@ -1,3 +1,6 @@
+// Public/future surface in a binary crate: suppress dead-code warnings for pub items.
+#![allow(dead_code)]
+
 /// Language-aware source minification for prompt compression.
 ///
 /// Applied at prompt-build time only — files on disk are never modified.
@@ -54,7 +57,7 @@ fn minify_source_impl(path: &Path, content: &str, preserve_tests: bool) -> Strin
 
     // Check cache
     {
-        let cache = VFS_CACHE.lock().unwrap();
+        let cache = VFS_CACHE.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(cached) = cache.get(&(path.to_path_buf(), mtime)) {
             return cached.clone();
         }
@@ -66,7 +69,7 @@ fn minify_source_impl(path: &Path, content: &str, preserve_tests: bool) -> Strin
 
     // Store in cache (only for non-preserve mode — safe variants skip cache)
     if !preserve_tests {
-        let mut cache = VFS_CACHE.lock().unwrap();
+        let mut cache = VFS_CACHE.lock().unwrap_or_else(|e| e.into_inner());
         cache.insert((path.to_path_buf(), mtime), result.clone());
         if cache.len() > CACHE_CAPACITY {
             let target = CACHE_CAPACITY / 2;
@@ -99,19 +102,19 @@ fn minify_content_by_ext(content: &str, ext: &str, preserve_tests: bool) -> Stri
 
 /// Clear the VFS minification cache.
 pub fn clear_minify_cache() {
-    let mut cache = VFS_CACHE.lock().unwrap();
+    let mut cache = VFS_CACHE.lock().unwrap_or_else(|e| e.into_inner());
     cache.clear();
 }
 
 /// Remove cache entries for a specific file path.
 pub fn invalidate_minify_cache(path: &Path) {
-    let mut cache = VFS_CACHE.lock().unwrap();
+    let mut cache = VFS_CACHE.lock().unwrap_or_else(|e| e.into_inner());
     cache.retain(|(p, _), _| p != path);
 }
 
 /// Get current cache size.
 pub fn minify_cache_size() -> usize {
-    let cache = VFS_CACHE.lock().unwrap();
+    let cache = VFS_CACHE.lock().unwrap_or_else(|e| e.into_inner());
     cache.len()
 }
 
@@ -138,7 +141,7 @@ pub fn cache_contains(path: &Path) -> bool {
         Some(m) => m,
         None => return false,
     };
-    let cache = VFS_CACHE.lock().unwrap();
+    let cache = VFS_CACHE.lock().unwrap_or_else(|e| e.into_inner());
     cache.contains_key(&(path.to_path_buf(), mtime))
 }
 
@@ -838,7 +841,10 @@ mod tests {
         // the size can decrease between two reads even when the test
         // is doing the right thing. Asserting on a specific key
         // removes the race entirely.
-        let tmp = std::env::temp_dir().join("kirkforge_minify_cache_test.txt");
+        let tmp = std::env::temp_dir().join(format!(
+            "kirkforge_minify_cache_test_{}.txt",
+            std::process::id()
+        ));
         std::fs::write(&tmp, "x = 1 # comment").unwrap();
 
         // Sanity: the cache should not already contain this path
@@ -891,10 +897,16 @@ mod tests {
     }
 
     /// `cache_contains` returns true after a minify, false after invalidate.
-    /// Race-free: asserts on the specific key, not the global size.
+    ///
+    /// Clears the global cache first so parallel tests that have already
+    /// filled it cannot trigger an LRU-style eviction between the minify
+    /// and the contains check.
     #[test]
     fn test_cache_contains_round_trip() {
+        clear_minify_cache();
+
         let tmp = std::env::temp_dir().join("kirkforge_minify_cache_contains_test.rs");
+        let _ = std::fs::remove_file(&tmp);
         std::fs::write(&tmp, "fn main() {}").unwrap();
 
         // Sanity

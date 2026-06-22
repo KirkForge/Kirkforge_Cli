@@ -34,7 +34,12 @@ impl McpToolWrapper {
     /// Create a new wrapper for a single MCP tool.
     ///
     /// The caller should use `all_mcp_tools()` for creating these in batch.
-    pub fn new(full_name: String, description: String, parameters: serde_json::Value, manager: Arc<McpClientManager>) -> Self {
+    pub fn new(
+        full_name: String,
+        description: String,
+        parameters: serde_json::Value,
+        manager: Arc<McpClientManager>,
+    ) -> Self {
         // Leak the strings to make them 'static (safe: session-lifetime objects)
         let name: &'static str = Box::leak(full_name.clone().into_boxed_str());
         let desc: &'static str = Box::leak(description.into_boxed_str());
@@ -60,7 +65,10 @@ impl Tool for McpToolWrapper {
         match self.manager.call_tool(&self.full_name, args).await {
             Some(content) => ToolOutcome::Success { content },
             None => ToolOutcome::Error {
-                message: format!("MCP tool '{}' failed: no response from server", self.full_name),
+                message: format!(
+                    "MCP tool '{}' failed: no response from server",
+                    self.full_name
+                ),
             },
         }
     }
@@ -76,12 +84,7 @@ pub fn all_mcp_tools(manager: Arc<McpClientManager>) -> Vec<Arc<dyn Tool>> {
     let mut tools: Vec<Arc<dyn Tool>> = Vec::new();
 
     for (full_name, desc, params) in manager.tool_defs() {
-        let wrapper = McpToolWrapper::new(
-            full_name.clone(),
-            desc,
-            params,
-            manager.clone(),
-        );
+        let wrapper = McpToolWrapper::new(full_name.clone(), desc, params, manager.clone());
         tools.push(Arc::new(wrapper));
     }
 

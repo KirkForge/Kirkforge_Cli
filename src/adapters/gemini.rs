@@ -27,7 +27,10 @@ impl GeminiAdapter {
             client: reqwest::Client::builder()
                 .tcp_nodelay(true)
                 .build()
-                .expect("reqwest client build failed"),
+                .unwrap_or_else(|e| {
+                    tracing::warn!(error = %e, "failed to build custom reqwest client; falling back to default");
+                    reqwest::Client::new()
+                }),
             json_mode: false,
         }
     }

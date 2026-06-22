@@ -119,6 +119,13 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
             // "current context pressure" signal.
             state.last_turn_prompt_tokens = prompt_tokens;
         }
+        TurnEvent::PlanComplete => {
+            state.is_generating = false;
+            state.messages.push(ConversationEntry::new(
+                "system",
+                "📐 Plan complete. The model has finished exploring and designed an implementation plan. Type /implement to allow edits and continue.".to_string(),
+            ));
+        }
         TurnEvent::CompactionReport {
             new_messages,
             dropped_tool_results,
@@ -181,6 +188,11 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
             ));
             state.messages = rebuilt;
             state.expanded_tools.clear();
+            // Search match indices are also tied to the old message
+            // list; clear them so a committed search doesn't jump to
+            // a stale or non-existent index after compaction.
+            state.search_matches.clear();
+            state.search_match_idx = 0;
             // Scroll back to the bottom so the user sees the
             // status message and the last few kept turns.
             state.auto_scroll = true;
@@ -262,6 +274,10 @@ pub fn drain_turn_events(state: &mut AppState, event_rx: &mut mpsc::UnboundedRec
 /// arrives while one is pending, the **old** one is denied first —
 /// dropping the old oneshot sender without sending would hang the
 /// executor forever (it would block on `response_rx.await`).
+///
+/// Also clears any pending bang-approval gate, so a model approval
+/// and a bang approval cannot be open at the same time (the render
+/// path and the key handler otherwise disagree on which to show).
 pub fn drain_approval_requests(
     state: &mut AppState,
     approval_rx: &mut mpsc::UnboundedReceiver<ApprovalRequest>,
@@ -283,6 +299,13 @@ pub fn drain_approval_requests(
                     );
                 }
             }
+        }
+        // A model approval supersedes any pending bang gate. Without
+        // this, both dialogs could be `Some` simultaneously and the
+        // render path prefers one while the key handler prefers the
+        // other, leaving one orphaned.
+        if state.pending_bang.is_some() {
+            state.pending_bang = None;
         }
         state.pending_approval = Some(PendingApproval {
             tool_name: req.tool_name.clone(),
@@ -311,7 +334,9 @@ mod tests {
     use tokio::sync::mpsc;
 
     fn make_state() -> AppState {
-        AppState::new(Config::default())
+        AppState::new(std::sync::Arc::new(std::sync::RwLock::new(
+            Config::default(),
+        )))
     }
 
     /// Helper to build a minimal `Message` for the compaction test.

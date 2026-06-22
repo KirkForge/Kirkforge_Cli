@@ -55,10 +55,9 @@ impl MemoryStore {
     }
 
     /// Default store at `~/.local/share/kirkforge/memory/`.
-    pub fn default_store() -> Self {
-        let data_dir = crate::session::data_dir()
-            .unwrap_or_else(|_| PathBuf::from(".kirkforge"));
-        Self::open(data_dir.join("memory")).expect("memory store directory")
+    pub fn default_store() -> std::io::Result<Self> {
+        let data_dir = crate::session::data_dir().unwrap_or_else(|_| PathBuf::from(".kirkforge"));
+        Self::open(data_dir.join("memory"))
     }
 
     /// Read all facts from disk, sorted by name.
@@ -86,7 +85,13 @@ impl MemoryStore {
     }
 
     /// Add or update a fact. Returns the saved fact.
-    pub fn upsert(&self, name: &str, description: &str, body: &str, meta_type: &str) -> std::io::Result<MemoryFact> {
+    pub fn upsert(
+        &self,
+        name: &str,
+        description: &str,
+        body: &str,
+        meta_type: &str,
+    ) -> std::io::Result<MemoryFact> {
         let mut metadata = std::collections::HashMap::new();
         metadata.insert("type".into(), meta_type.to_string());
 
@@ -153,9 +158,7 @@ impl MemoryStore {
         }
 
         // Deduplicate by type category for compact injection
-        let mut block = String::from(
-            "<!-- MEMORY: persisted facts from past sessions -->\n",
-        );
+        let mut block = String::from("<!-- MEMORY: persisted facts from past sessions -->\n");
 
         let mut seen_types = std::collections::HashSet::new();
         for fact in &facts {
@@ -164,7 +167,10 @@ impl MemoryStore {
 
         for fact in &facts {
             let mtype = fact.metadata.get("type").cloned().unwrap_or_default();
-            block.push_str(&format!("- [{}] {}: {}\n", mtype, fact.name, fact.description));
+            block.push_str(&format!(
+                "- [{}] {}: {}\n",
+                mtype, fact.name, fact.description
+            ));
         }
 
         block
@@ -259,7 +265,9 @@ impl MemoryStore {
 /// Returns `(frontmatter_map, body_text)` or `None` if no valid frontmatter
 /// is found. Handles the subset of YAML used by memory files (simple
 /// key: value pairs and one level of nested `metadata:` block).
-pub fn parse_frontmatter(content: &str) -> Option<(std::collections::HashMap<String, String>, String)> {
+pub fn parse_frontmatter(
+    content: &str,
+) -> Option<(std::collections::HashMap<String, String>, String)> {
     let content = content.trim();
     if !content.starts_with("---") {
         return None;
@@ -283,9 +291,7 @@ pub fn parse_frontmatter(content: &str) -> Option<(std::collections::HashMap<Str
 
         // Handle metadata sub-keys: lines indented with 2 spaces or a tab
         if in_metadata {
-            if let Some(indented) = line.strip_prefix("  ")
-                .or_else(|| line.strip_prefix('\t'))
-            {
+            if let Some(indented) = line.strip_prefix("  ").or_else(|| line.strip_prefix('\t')) {
                 let trimmed = indented.trim();
                 if let Some((k, v)) = trimmed.split_once(':') {
                     metadata_lines.push(format!("{}: {}", k.trim(), v.trim()));
@@ -354,6 +360,16 @@ mod tests {
     }
 
     #[test]
+    fn test_open_fails_when_path_is_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file_path = tmp.path().join("not-a-dir");
+        std::fs::write(&file_path, "x").unwrap();
+        // Opening a store at a file path should fail because create_dir_all
+        // cannot turn a file into a directory.
+        assert!(MemoryStore::open(file_path).is_err());
+    }
+
+    #[test]
     fn test_crud_cycle() {
         let store = temp_store();
         store
@@ -376,12 +392,8 @@ mod tests {
     #[test]
     fn test_upsert_overwrites() {
         let store = temp_store();
-        store
-            .upsert("test-fact", "v1", "body v1", "user")
-            .unwrap();
-        store
-            .upsert("test-fact", "v2", "body v2", "user")
-            .unwrap();
+        store.upsert("test-fact", "v1", "body v1", "user").unwrap();
+        store.upsert("test-fact", "v2", "body v2", "user").unwrap();
 
         let facts = store.all();
         assert_eq!(facts.len(), 1);
@@ -434,9 +446,7 @@ mod tests {
     #[test]
     fn test_search_no_match_returns_empty() {
         let store = temp_store();
-        store
-            .upsert("fact1", "Something", "body", "user")
-            .unwrap();
+        store.upsert("fact1", "Something", "body", "user").unwrap();
         assert!(store.search("nonexistent").is_empty());
     }
 
@@ -480,7 +490,10 @@ mod tests {
     fn test_parse_frontmatter_with_nested_metadata() {
         let input = "---\nname: test\ndescription: desc\nmetadata:\n  type: user\n---\n\nbody";
         let result = parse_frontmatter(input);
-        assert!(result.is_some(), "parse_frontmatter returned None for valid input");
+        assert!(
+            result.is_some(),
+            "parse_frontmatter returned None for valid input"
+        );
         let (map, body) = result.unwrap();
         assert_eq!(map.get("name").unwrap(), "test");
         assert_eq!(map.get("description").unwrap(), "desc");

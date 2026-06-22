@@ -102,16 +102,15 @@ fn render_search_bar(f: &mut Frame, area: Rect, state: &AppState) {
     let mut spans = vec![
         Span::styled(
             " 🔍 ",
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
             state.search_query.clone(),
             Style::default().fg(Color::White),
         ),
-        Span::styled(
-            "█",
-            Style::default().fg(Color::Yellow),
-        ),
+        Span::styled("█", Style::default().fg(Color::Yellow)),
         Span::styled(
             format!("  {}", counter),
             Style::default().fg(Color::DarkGray),

@@ -26,11 +26,8 @@
 //! point for the test command; v2 will add `pytest` / `npm test`
 //! / `go test` arms there.
 
-use crate::shared::ToolOutcome;
-use crate::tools::Tool;
+use crate::tools::bash::run_shell;
 use crate::tui::app::AppState;
-use std::path::Path;
-
 /// Default timeout in seconds when the user types `/test` with
 /// no argument. 5 minutes covers most real-world `cargo test`
 /// runs (the project's own suite finishes in ~12s; a fresh
@@ -66,26 +63,48 @@ pub async fn handle_test_command(args: &str, state: &mut AppState) -> String {
 
     // v1: cargo only. detect_test_command returns the full cargo
     // invocation; later versions branch on cwd contents.
-    let cmd = match detect_test_command() {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let cmd = match detect_test_command(&cwd) {
         Some(c) => c,
         None => return "/test: not a Cargo project (no Cargo.toml in current directory). pytest/npm/go support is a v2 follow-up.".into(),
     };
 
+    // Build access control from the live config so /test is subject to
+    // the same metadata blocks, deny lists, sandbox containment, and
+    // dangerous-pattern checks as the model's `bash` tool. Going through
+    // `Bash::run` directly would skip the executor's safety gate.
+    let (deny_list, path_guard, _) = crate::session::access::access_from_config(
+        &crate::shared::read_shared_config(&state.config),
+    );
+
+    let current_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let workdir = if crate::shared::read_shared_config(&state.config).bash_sandbox_workdir {
+        path_guard
+            .sandbox_dir
+            .as_deref()
+            .unwrap_or(current_dir.as_path())
+    } else {
+        current_dir.as_path()
+    };
+    let workdir_str = workdir.to_string_lossy().to_string();
+
+    if let Some(reason) = crate::tools::bash::check_bash_command_str(
+        cmd,
+        Some(&workdir_str),
+        &deny_list,
+        &path_guard,
+        crate::shared::read_shared_config(&state.config).bash_sandbox_workdir,
+    ) {
+        return format!("🔒 /test blocked: {}", reason);
+    }
+
     state.test_in_progress = true;
-    let result = state
-        .bash_tool
-        .run(serde_json::json!({
-            "command": cmd,
-            "timeout": timeout_secs,
-            "workdir": ".",
-        }))
-        .await;
+    let result = run_shell(cmd, workdir, timeout_secs).await;
     state.test_in_progress = false;
 
     let (raw_stdout, raw_stderr, exit_code) = match result {
-        ToolOutcome::Success { content } => (content, String::new(), 0),
-        ToolOutcome::Error { message } => parse_bash_error(&message),
-        _ => return "/test: unexpected tool outcome from Bash.".into(),
+        Ok(out) => (out.stdout, out.stderr, out.status.code().unwrap_or(-1)),
+        Err(e) => return format!("❌ /test failed to run: {}", e),
     };
 
     let summary = super::test_parse::parse_cargo_test_output(&raw_stdout);
@@ -101,8 +120,8 @@ pub async fn handle_test_command(args: &str, state: &mut AppState) -> String {
 /// Returns `None` when no `Cargo.toml` is present. Future
 /// versions will fall through to `pytest` / `npm test` / `go test`
 /// in a single match arm.
-fn detect_test_command() -> Option<&'static str> {
-    if Path::new("Cargo.toml").exists() {
+fn detect_test_command(dir: &std::path::Path) -> Option<&'static str> {
+    if dir.join("Cargo.toml").exists() {
         Some("cargo test --no-fail-fast")
     } else {
         None
@@ -119,66 +138,6 @@ pub fn parse_timeout_arg(args: &str) -> u64 {
         .ok()
         .map(|n| n.clamp(TEST_MIN_TIMEOUT_SECS, TEST_MAX_TIMEOUT_SECS))
         .unwrap_or(TEST_DEFAULT_TIMEOUT_SECS)
-}
-
-/// Splits the bash tool's error-message format
-/// `"Command exited with code {N}{stderr_block_if_any}\nstdout:\n{stdout}"`
-/// into the `(stdout, stderr, exit_code)` triple the formatter
-/// needs. The format is produced by `src/tools/bash.rs:225-232`.
-///
-/// Stderr is in the message only when non-empty; when stderr is
-/// empty the message is `"Command exited with code {N}\nstdout:\n{stdout}"`.
-fn parse_bash_error(msg: &str) -> (String, String, i32) {
-    // Strip "Command exited with code " prefix.
-    let after_prefix = match msg.strip_prefix("Command exited with code ") {
-        Some(s) => s,
-        None => return (String::new(), String::new(), -1),
-    };
-
-    // The exit code is the first integer at the start of the
-    // remaining string. cargo test may have a 3-digit code, so
-    // parse greedily until a non-digit character.
-    let mut digits = String::new();
-    let mut after_code = after_prefix;
-    for c in after_code.chars() {
-        if c.is_ascii_digit() {
-            digits.push(c);
-        } else {
-            break;
-        }
-    }
-    after_code = &after_code[digits.len()..];
-    let exit_code: i32 = digits.parse().unwrap_or(-1);
-
-    // After the exit code, the format is either:
-    //   "\nstdout:\n<…>"           (no stderr)
-    //   "\nstderr:\n<…>\nstdout:\n<…>"   (with stderr)
-    let (stderr, stdout) = split_stderr_stdout(after_code);
-    (stdout, stderr, exit_code)
-}
-
-/// After the exit code, splits the rest of the bash error
-/// message into `(stderr, stdout)`. Defensive against the order
-/// being swapped (shouldn't happen, but the input is from a
-/// different module's string formatting).
-fn split_stderr_stdout(rest: &str) -> (String, String) {
-    if let Some(after_stderr) = rest.strip_prefix("\nstderr:\n") {
-        // Find the "stdout:" marker that follows.
-        if let Some(idx) = after_stderr.find("\nstdout:\n") {
-            let stderr = after_stderr[..idx].to_string();
-            let stdout = after_stderr[idx + "\nstdout:\n".len()..].to_string();
-            return (stderr, stdout);
-        }
-        // No stdout marker found — treat the whole tail as
-        // stderr (degenerate but doesn't lose data).
-        return (after_stderr.to_string(), String::new());
-    }
-    if let Some(after_stdout) = rest.strip_prefix("\nstdout:\n") {
-        return (String::new(), after_stdout.to_string());
-    }
-    // No recognizable marker — treat the whole rest as stdout
-    // (matches the no-stderr path of the bash tool).
-    (String::new(), rest.to_string())
 }
 
 #[cfg(test)]
@@ -220,45 +179,14 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_bash_error_with_stderr() {
-        // Mirrors the format produced by src/tools/bash.rs:225-232
-        // when both stdout and stderr are non-empty.
-        let msg = "Command exited with code 101\nstderr:\nwarning: unused variable\nstdout:\ntest result: FAILED. 1 passed; 1 failed";
-        let (stdout, stderr, code) = parse_bash_error(msg);
-        assert_eq!(code, 101);
-        assert_eq!(stdout, "test result: FAILED. 1 passed; 1 failed");
-        assert_eq!(stderr, "warning: unused variable");
-    }
-
-    #[test]
-    fn test_parse_bash_error_no_stderr() {
-        // Mirrors the format when stderr is empty (the bash tool
-        // omits the "\nstderr:\n…" block in that case).
-        let msg = "Command exited with code 0\nstdout:\ntest result: ok. 5 passed; 0 failed";
-        let (stdout, stderr, code) = parse_bash_error(msg);
-        assert_eq!(code, 0);
-        assert_eq!(stdout, "test result: ok. 5 passed; 0 failed");
-        assert_eq!(stderr, "");
-    }
-
-    #[test]
     fn test_detect_test_command_present() {
-        // Use a tempdir so this test is independent of the
-        // process cwd. (Other tests in the suite — notably
-        // `src/session/undo.rs` — change cwd for their own
-        // setup, and a test that asserts on cwd-relative
-        // paths becomes flaky when run in parallel.)
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::write(dir.path().join("Cargo.toml"), "[package]\nname=\"x\"\n").expect("write");
-        let prev = std::env::current_dir().ok();
-        std::env::set_current_dir(dir.path()).expect("set cwd");
-        let cmd = detect_test_command();
-        // Restore the previous cwd so the rest of the suite
-        // isn't disturbed.
-        if let Some(p) = prev {
-            let _ = std::env::set_current_dir(&p);
-        }
-        assert!(cmd.is_some(), "expected cargo test command in cwd");
+        let cmd = detect_test_command(dir.path());
+        assert!(
+            cmd.is_some(),
+            "expected cargo test command in dir with Cargo.toml"
+        );
         assert!(cmd.unwrap().contains("cargo test"));
     }
 
@@ -266,12 +194,7 @@ mod tests {
     fn test_detect_test_command_absent() {
         // Empty tempdir → no Cargo.toml → expect None.
         let dir = tempfile::tempdir().expect("tempdir");
-        let prev = std::env::current_dir().ok();
-        std::env::set_current_dir(dir.path()).expect("set cwd");
-        let cmd = detect_test_command();
-        if let Some(p) = prev {
-            let _ = std::env::set_current_dir(&p);
-        }
+        let cmd = detect_test_command(dir.path());
         assert!(cmd.is_none(), "expected None in non-cargo dir");
     }
 }

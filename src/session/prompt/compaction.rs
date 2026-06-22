@@ -7,12 +7,13 @@
 //!    preserved verbatim. It's the cache stem and dropping it would
 //!    invalidate the prompt cache on the next turn.
 //!
-//! 2. **Working set** — the last 8 messages (≈ 4 user↔assistant pairs).
-//!    Preserved verbatim. The model needs the most recent turns
-//!    intact to follow the live thread.
+//! 2. **Tail** — the last `preserve_recent` messages. Preserved
+//!    verbatim. Kimi-style "tail preservation" keeps the most recent
+//!    user↔assistant turns intact so the model follows the live thread.
+//!    Configurable via `Config::preserve_recent_messages` (default 2).
 //!
-//! 3. **Middle** — everything between the anchor and the working set.
-//!    The compaction work happens here:
+//! 3. **Middle** — everything between the anchor and the tail. The
+//!    compaction work happens here:
 //!    - Tool results → replaced with a stub marker
 //!      (`[previous tool result omitted to save budget …]`).
 //!    - Assistant turns → replaced with a short condense marker
@@ -49,27 +50,36 @@ pub const TOOL_RESULT_STUB: &str =
 /// Marker prefix for condensed assistant turns. The trailing `(N chars)` is
 /// the original message's character count, which is useful debugging info
 /// (and makes the marker grep-able in the on-disk NDJSON log).
-const ASSISTANT_CONDENSED_PREFIX: &str = "[previous assistant turn condensed for context budget — original was ";
+const ASSISTANT_CONDENSED_PREFIX: &str =
+    "[previous assistant turn condensed for context budget — original was ";
 
 const ASSISTANT_CONDENSED_SUFFIX: &str = " chars]";
 
-/// Number of trailing messages to keep verbatim. Matches the
-/// `working_set_size` constant in `executor.rs` so naive fallback and
-/// LLM-summarisation agree on the boundary.
-pub const WORKING_SET_SIZE: usize = 8;
+/// Default number of trailing messages to keep verbatim. Used as a
+/// fallback when the caller does not specify a `preserve_recent`
+/// value. Mirrors the historical `DEFAULT_PRESERVE_RECENT` of 8 for
+/// backwards compatibility in tests; production code should pass the
+/// configured value from `Config::preserve_recent_messages`.
+pub const DEFAULT_PRESERVE_RECENT: usize = 8;
 
 /// Naive compaction. Always succeeds; never panics.
 ///
+/// `preserve_recent` is the number of trailing messages to keep
+/// verbatim. The minimum effective value is 1 (always keep at least
+/// the final message so the live turn isn't lost). When `messages` is
+/// shorter than `preserve_recent + 1` the operation is a no-op.
+///
 /// Returns `original_count == compacted_count` only on the no-op
-/// case (history shorter than the working set, so there's nothing
-/// in the middle to compact). Every other invocation reduces
+/// case (history shorter than the tail, so there's nothing in the
+/// middle to compact). Every other invocation reduces
 /// `compacted_count` below `original_count` and bumps at least one
 /// of the work-counters.
-pub fn compact(messages: &[Message]) -> CompactionResult {
+pub fn compact(messages: &[Message], preserve_recent: usize) -> CompactionResult {
     let original_count = messages.len();
+    let preserve_recent = preserve_recent.max(1);
 
     // Empty / trivial input — nothing to do.
-    if messages.len() <= WORKING_SET_SIZE {
+    if messages.len() <= preserve_recent {
         return CompactionResult {
             new_messages: messages.to_vec(),
             dropped_tool_results: 0,
@@ -86,8 +96,8 @@ pub fn compact(messages: &[Message]) -> CompactionResult {
         0
     };
 
-    // Working set: the last WORKING_SET_SIZE messages, verbatim.
-    let working_set_start = messages.len() - WORKING_SET_SIZE;
+    // Tail: the last `preserve_recent` messages, verbatim.
+    let working_set_start = messages.len() - preserve_recent;
 
     // Middle: [anchor .. working_set_start). May be empty.
     let mut new_messages: Vec<Message> = Vec::with_capacity(messages.len());
@@ -209,7 +219,7 @@ mod tests {
 
     #[test]
     fn empty_input_is_no_op() {
-        let r = compact(&[]);
+        let r = compact(&[], DEFAULT_PRESERVE_RECENT);
         assert_eq!(r.original_count, 0);
         assert_eq!(r.compacted_count, 0);
         assert_eq!(r.dropped_tool_results, 0);
@@ -218,10 +228,10 @@ mod tests {
     }
 
     #[test]
-    fn short_input_below_working_set_is_no_op() {
-        // 6 messages < WORKING_SET_SIZE (8) — preserve verbatim.
+    fn short_input_below_tail_is_no_op() {
+        // 4 messages < DEFAULT_PRESERVE_RECENT (8) — preserve verbatim.
         let msgs = vec![user("a"), assistant("b"), user("c"), assistant("d")];
-        let r = compact(&msgs);
+        let r = compact(&msgs, DEFAULT_PRESERVE_RECENT);
         assert_eq!(r.original_count, 4);
         assert_eq!(r.compacted_count, 4);
         assert_eq!(r.dropped_tool_results, 0);
@@ -231,7 +241,7 @@ mod tests {
 
     #[test]
     fn preserves_system_anchor() {
-        // 9 messages: 1 system + 8 working. No middle. Should be a no-op
+        // 9 messages: 1 system + 8 tail. No middle. Should be a no-op
         // because the boundary check is on len, not on the anchor.
         let mut msgs = vec![system("you are an agent")];
         for i in 0..8 {
@@ -241,7 +251,7 @@ mod tests {
                 assistant(&format!("a{}", i))
             });
         }
-        let r = compact(&msgs);
+        let r = compact(&msgs, DEFAULT_PRESERVE_RECENT);
         assert_eq!(r.compacted_count, 9);
         assert_eq!(r.dropped_tool_results, 0);
         assert_eq!(r.condensed_assistant_turns, 0);
@@ -251,16 +261,16 @@ mod tests {
 
     #[test]
     fn stubs_middle_tool_results_and_condenses_assistants() {
-        // 1 system + 12 working = 13 total. Middle = [1..5) = 4 messages
+        // 1 system + 12 tail = 13 total. Middle = [1..5) = 4 messages
         //   - user(1), tool(1), assistant(1), tool(1)
-        // Working set: last 8 messages verbatim.
+        // Tail: last 8 messages verbatim.
         let mut msgs = vec![system("anchor")];
         // Middle (4 messages):
         msgs.push(user("old question")); // 1
         msgs.push(tool_result("huge output", "c1", "bash")); // 2 — stub
         msgs.push(assistant("old answer with prose")); // 3 — condense
         msgs.push(tool_result("more output", "c2", "read_file")); // 4 — stub
-        // Working set (8 messages):
+                                                                  // Tail (8 messages):
         msgs.push(user("recent q1"));
         msgs.push(assistant("recent a1"));
         msgs.push(tool_result("r1", "c3", "bash"));
@@ -270,7 +280,7 @@ mod tests {
         msgs.push(tool_result("r2", "c4", "bash"));
         msgs.push(assistant("recent a4"));
 
-        let r = compact(&msgs);
+        let r = compact(&msgs, DEFAULT_PRESERVE_RECENT);
         assert_eq!(r.original_count, 13);
         assert_eq!(r.compacted_count, 13); // no deletion, only replacement
         assert_eq!(r.dropped_tool_results, 2);
@@ -284,29 +294,31 @@ mod tests {
         assert_eq!(middle[0].content, "old question"); // user verbatim
         assert_eq!(middle[1].content, TOOL_RESULT_STUB); // tool stub
         assert!(middle[2].content.starts_with(ASSISTANT_CONDENSED_PREFIX)); // assistant condense
-        assert!(middle[2].content.contains("old answer with prose".len().to_string().as_str()));
+        assert!(middle[2]
+            .content
+            .contains("old answer with prose".len().to_string().as_str()));
         assert_eq!(middle[3].content, TOOL_RESULT_STUB); // tool stub
 
-        // Working set: last 8 messages, verbatim.
-        let working = &r.new_messages[5..];
-        assert_eq!(working[0].content, "recent q1");
-        assert_eq!(working[7].content, "recent a4");
+        // Tail: last 8 messages, verbatim.
+        let tail = &r.new_messages[5..];
+        assert_eq!(tail[0].content, "recent q1");
+        assert_eq!(tail[7].content, "recent a4");
     }
 
     #[test]
     fn stubbed_tool_keeps_tool_name_and_call_id() {
         let mut msgs = vec![system("a")];
-        for i in 0..WORKING_SET_SIZE {
+        for i in 0..DEFAULT_PRESERVE_RECENT {
             msgs.push(user(&format!("q{}", i)));
             msgs.push(assistant(&format!("a{}", i)));
         }
-        // 1 system + 16 working = 17. But we need a middle, so we
-        // need history.len() > WORKING_SET_SIZE. The above gives 17
-        // which is > 8 — middle is [1..9) = 8 messages.
+        // 1 system + 16 tail = 17. We need a middle, so history.len()
+        // must be > DEFAULT_PRESERVE_RECENT. The above gives 17 which is
+        // > 8 — middle is [1..9) = 8 messages.
         // Add 1 tool result in the middle:
         msgs.insert(2, tool_result("big output", "call_xyz", "read_file"));
 
-        let r = compact(&msgs);
+        let r = compact(&msgs, DEFAULT_PRESERVE_RECENT);
         let tool_msg = r
             .new_messages
             .iter()
@@ -322,20 +334,19 @@ mod tests {
         // survive even when the prose is condensed, otherwise the
         // model loses the structural history of "I called bash here".
         let mut msgs = vec![system("a")];
-        for i in 0..WORKING_SET_SIZE {
+        for i in 0..DEFAULT_PRESERVE_RECENT {
             msgs.push(user(&format!("q{}", i)));
             msgs.push(assistant(&format!("a{}", i)));
         }
         // Insert an assistant-with-tool-call into the middle.
         msgs.insert(2, assistant_with_tool_call("I'll run ls", "bash", "abc"));
 
-        let r = compact(&msgs);
+        let r = compact(&msgs, DEFAULT_PRESERVE_RECENT);
         let condensed = r
             .new_messages
             .iter()
             .find(|m| {
-                m.role == Role::Assistant
-                    && m.content.starts_with(ASSISTANT_CONDENSED_PREFIX)
+                m.role == Role::Assistant && m.content.starts_with(ASSISTANT_CONDENSED_PREFIX)
             })
             .expect("a condensed assistant should be present");
         assert!(condensed.tool_calls.is_some());
@@ -350,24 +361,20 @@ mod tests {
         // condense. (Other assistant turns in the middle that DO
         // have prose still get condensed normally.)
         let mut msgs = vec![system("a")];
-        for i in 0..WORKING_SET_SIZE {
+        for i in 0..DEFAULT_PRESERVE_RECENT {
             msgs.push(user(&format!("q{}", i)));
             msgs.push(assistant(&format!("a{}", i)));
         }
         // Insert a tool-call-only assistant turn (no prose) in the middle.
         msgs.insert(2, assistant_with_tool_call("", "bash", "abc"));
 
-        let r = compact(&msgs);
+        let r = compact(&msgs, DEFAULT_PRESERVE_RECENT);
         // Find the empty-prose assistant and confirm it survived verbatim
         // (not converted to a condense marker).
         let empty_prose = r
             .new_messages
             .iter()
-            .find(|m| {
-                m.role == Role::Assistant
-                    && m.content.is_empty()
-                    && m.tool_calls.is_some()
-            })
+            .find(|m| m.role == Role::Assistant && m.content.is_empty() && m.tool_calls.is_some())
             .expect("the empty-prose assistant should be present verbatim");
         assert_eq!(empty_prose.tool_calls.as_ref().unwrap()[0].id, "abc");
 
@@ -394,12 +401,50 @@ mod tests {
         for i in 0..8 {
             msgs.push(assistant(&format!("a{}", i)));
         }
-        let r = compact(&msgs);
+        let r = compact(&msgs, DEFAULT_PRESERVE_RECENT);
         // Empty middle, no work done.
         assert_eq!(r.dropped_tool_results, 0);
         assert_eq!(r.condensed_assistant_turns, 0);
         assert_eq!(r.compacted_count, 9);
         assert_eq!(r.new_messages[0].content, "first question");
+    }
+
+    #[test]
+    fn tail_preservation_keeps_last_n_verbatim() {
+        // Kimi-style tail preservation: keep only the last 2 messages
+        // verbatim and condense/stub everything else in the middle.
+        let mut msgs = vec![system("anchor")];
+        // Middle (5 messages): will be compacted.
+        msgs.push(user("old q1"));
+        msgs.push(assistant("old a1 with lots of prose"));
+        msgs.push(tool_result("big output", "c1", "bash"));
+        msgs.push(user("old q2"));
+        msgs.push(assistant("old a2 with lots of prose"));
+        // Tail (2 messages): preserved verbatim.
+        msgs.push(user("recent q"));
+        msgs.push(assistant("recent a"));
+
+        let r = compact(&msgs, 2);
+        assert_eq!(r.original_count, 8);
+        assert_eq!(r.compacted_count, 8);
+        assert_eq!(r.dropped_tool_results, 1);
+        assert_eq!(r.condensed_assistant_turns, 2);
+
+        // Anchor preserved.
+        assert_eq!(r.new_messages[0].content, "anchor");
+        // Tail preserved verbatim.
+        assert_eq!(r.new_messages[r.new_messages.len() - 2].content, "recent q");
+        assert_eq!(r.new_messages[r.new_messages.len() - 1].content, "recent a");
+    }
+
+    #[test]
+    fn preserve_recent_clamped_to_at_least_one() {
+        // A pathological preserve_recent of 0 must not drop the final
+        // message; the live turn would be lost.
+        let msgs = vec![user("q"), assistant("a")];
+        let r = compact(&msgs, 0);
+        assert_eq!(r.compacted_count, 2);
+        assert_eq!(r.new_messages[1].content, "a");
     }
 
     #[test]
@@ -416,7 +461,7 @@ mod tests {
             msgs.push(tool_result(&"y".repeat(5000), "c", "bash")); // 5k chars
         }
         let original_chars: usize = msgs.iter().map(|m| m.content.len()).sum();
-        let r = compact(&msgs);
+        let r = compact(&msgs, DEFAULT_PRESERVE_RECENT);
         let compacted_chars: usize = r.new_messages.iter().map(|m| m.content.len()).sum();
         assert!(
             compacted_chars < original_chars,

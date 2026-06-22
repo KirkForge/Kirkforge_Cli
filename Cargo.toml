@@ -33,9 +33,6 @@ async-trait = "0.1"
 toml = "0.8"
 directories = "6"
 
-# Syntax highlighting (lightweight — just regex-based for now, no tree-sitter)
-syntect = { version = "5", default-features = false, features = ["default-syntaxes", "default-themes", "regex-fancy"] }
-
 # System prompt templating
 handlebars = "6"
 
@@ -64,6 +61,10 @@ base64 = "0.22"
 
 # Clipboard for Ctrl+Shift+C copy
 arboard = "3"
+
+# Rust-native plugin SDK (sibling repo)
+kirkforge-plugin = { path = "../KirkForge-Plugin/crates/kirkforge-plugin" }
+kirkforge-plugin-host = { path = "../KirkForge-Plugin/crates/kirkforge-plugin-host" }
 
 [dev-dependencies]
 # Test-only: create real temporary files for @-mention expansion tests

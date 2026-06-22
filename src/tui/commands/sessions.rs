@@ -25,15 +25,9 @@ pub fn handle_sessions_command(args: &str, _state: &mut AppState) -> String {
         "list" | "" => list_sessions_text(),
         "prune" => {
             // /sessions prune [N] [keep K]
-            let n: usize = parts
-                .next()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(5);
+            let n: usize = parts.next().and_then(|s| s.parse().ok()).unwrap_or(5);
             let keep: usize = match parts.next() {
-                Some("keep") => parts
-                    .next()
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(10),
+                Some("keep") => parts.next().and_then(|s| s.parse().ok()).unwrap_or(10),
                 Some(k) => k.parse().unwrap_or(10),
                 None => 10,
             };
@@ -102,7 +96,9 @@ fn prune_sessions_text(delete_count: usize, keep: usize) -> String {
         Ok(deleted) if deleted.is_empty() => {
             format!(
                 "Nothing to prune. (Have ≤ {} + {} = {} sessions; would not remove anything.)",
-                keep, delete_count, keep + delete_count
+                keep,
+                delete_count,
+                keep + delete_count
             )
         }
         Ok(deleted) => {
@@ -204,7 +200,10 @@ mod tests {
     /// `truncate_id` shortens and adds an ellipsis.
     #[test]
     fn test_truncate_id() {
-        assert_eq!(truncate_id("2026-06-10-session-01", 30), "2026-06-10-session-01");
+        assert_eq!(
+            truncate_id("2026-06-10-session-01", 30),
+            "2026-06-10-session-01"
+        );
         assert!(truncate_id("a".repeat(40).as_str(), 10).ends_with('…'));
     }
 
@@ -214,7 +213,9 @@ mod tests {
         // We can't easily inject a non-empty sessions dir in unit
         // tests without polluting the real data dir, so just verify
         // the help/empty path returns a string (not a panic).
-        let mut state = AppState::new(crate::shared::Config::default());
+        let mut state = AppState::new(std::sync::Arc::new(std::sync::RwLock::new(
+            crate::shared::Config::default(),
+        )));
         let out = handle_sessions_command("", &mut state);
         // Either "No sessions found" or the table — both are fine.
         assert!(!out.is_empty());
@@ -223,7 +224,9 @@ mod tests {
     /// `/sessions help` returns the help text.
     #[test]
     fn test_handle_sessions_help() {
-        let mut state = AppState::new(crate::shared::Config::default());
+        let mut state = AppState::new(std::sync::Arc::new(std::sync::RwLock::new(
+            crate::shared::Config::default(),
+        )));
         let out = handle_sessions_command("help", &mut state);
         assert!(out.contains("/sessions"));
         assert!(out.contains("prune"));
@@ -233,7 +236,9 @@ mod tests {
     /// `/sessions delete` without an id → usage hint.
     #[test]
     fn test_handle_sessions_delete_requires_id() {
-        let mut state = AppState::new(crate::shared::Config::default());
+        let mut state = AppState::new(std::sync::Arc::new(std::sync::RwLock::new(
+            crate::shared::Config::default(),
+        )));
         let out = handle_sessions_command("delete", &mut state);
         assert!(out.contains("Usage"));
     }
@@ -242,7 +247,9 @@ mod tests {
     /// surfaces the help text.
     #[test]
     fn test_handle_sessions_unknown_subcommand() {
-        let mut state = AppState::new(crate::shared::Config::default());
+        let mut state = AppState::new(std::sync::Arc::new(std::sync::RwLock::new(
+            crate::shared::Config::default(),
+        )));
         let out = handle_sessions_command("foo", &mut state);
         assert!(out.contains("Unknown"));
         assert!(out.contains("/sessions"));

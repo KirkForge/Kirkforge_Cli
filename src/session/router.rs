@@ -1,3 +1,6 @@
+// Public/future surface in a binary crate: suppress dead-code warnings for pub items.
+#![allow(dead_code)]
+
 //! Smart model routing — task complexity classification.
 //!
 //! When enabled, the user's first message each turn is classified into a
@@ -17,6 +20,14 @@
 //! 2. **LLM-based classification** — when a router model is configured,
 //!    sends the user message to a small/fast model for classification.
 //!    Falls back to local on error or timeout.
+//!
+//! # Hard-coded fallback models
+//!
+//! The local heuristic and LLM-fallback paths return fixed model names
+//! (`qwen2.5:3b`, `deepseek-v4-flash:cloud`, `deepseek-v4-pro:cloud`).
+//! These are convenience defaults for the current release. A future
+//! iteration should make them config-driven so operators can route to
+//! models they actually have available.
 
 use serde::{Deserialize, Serialize};
 
@@ -85,9 +96,8 @@ pub fn classify_local(message: &str) -> RouteResult {
 
     // Simple indicators (reduce complexity score)
     for word in &[
-        "what is", "how do i", "explain", "simple", "quick", "just",
-        "one line", "trivial", "example", "show me", "list", "help",
-        "status", "check",
+        "what is", "how do i", "explain", "simple", "quick", "just", "one line", "trivial",
+        "example", "show me", "list", "help", "status", "check",
     ] {
         if lower.contains(word) {
             score -= 1;
@@ -96,8 +106,8 @@ pub fn classify_local(message: &str) -> RouteResult {
 
     // Medium indicators
     for word in &[
-        "add", "update", "change", "modify", "write", "create",
-        "delete", "remove", "rename", "extract", "split",
+        "add", "update", "change", "modify", "write", "create", "delete", "remove", "rename",
+        "extract", "split",
     ] {
         if lower.contains(word) {
             score += 1;
@@ -106,10 +116,26 @@ pub fn classify_local(message: &str) -> RouteResult {
 
     // Complex indicators
     for word in &[
-        "refactor", "redesign", "architecture", "rewrite", "migrate",
-        "debug", "fix bug", "investigate", "optimize", "performance",
-        "security", "audit", "implement", "design", "multi",
-        "complex", "all", "every", "across", "comprehensive",
+        "refactor",
+        "redesign",
+        "architecture",
+        "rewrite",
+        "migrate",
+        "debug",
+        "fix bug",
+        "investigate",
+        "optimize",
+        "performance",
+        "security",
+        "audit",
+        "implement",
+        "design",
+        "multi",
+        "complex",
+        "all",
+        "every",
+        "across",
+        "comprehensive",
     ] {
         if lower.contains(word) {
             score += 2;
@@ -176,8 +202,8 @@ pub async fn classify_with_llm(
         .send()
         .await
     {
-        Ok(resp) => {
-            if let Ok(json) = resp.json::<serde_json::Value>().await {
+        Ok(resp) => match resp.json::<serde_json::Value>().await {
+            Ok(json) => {
                 let answer = json
                     .get("message")
                     .and_then(|m| m.get("content"))
@@ -205,9 +231,12 @@ pub async fn classify_with_llm(
                     },
                 };
             }
-        }
-        Err(_) => {
-            // Fall through to local heuristics
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to parse LLM routing response; falling back to local heuristics");
+            }
+        },
+        Err(e) => {
+            tracing::warn!(error = %e, "LLM routing request failed; falling back to local heuristics");
         }
     }
 
@@ -218,11 +247,7 @@ pub async fn classify_with_llm(
 }
 
 /// Convenience: classify with LLM if router_model is set, otherwise local.
-pub async fn classify(
-    message: &str,
-    config: &RouterConfig,
-    ollama_host: &str,
-) -> RouteResult {
+pub async fn classify(message: &str, config: &RouterConfig, ollama_host: &str) -> RouteResult {
     if config.enabled && !config.router_model.is_empty() {
         classify_with_llm(message, &config.router_model, ollama_host).await
     } else {

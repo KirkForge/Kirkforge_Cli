@@ -82,8 +82,24 @@ impl Tool for WriteFile {
         // For a new file (`prev_existed = false`) the bytes are
         // empty but the op is still recorded so `/undo` knows to
         // remove the file.
-        let prev_bytes = std::fs::read(&path).unwrap_or_default();
         let prev_existed = std::fs::metadata(&path).is_ok();
+        let prev_bytes = if prev_existed {
+            match std::fs::read(&path) {
+                Ok(b) => b,
+                Err(e) => {
+                    return ToolOutcome::Error {
+                        message: format!(
+                            "Cannot read existing file {} for undo snapshot: {}. \
+                             Refusing to overwrite without a snapshot.",
+                            path.display(),
+                            e
+                        ),
+                    };
+                }
+            }
+        } else {
+            Vec::new()
+        };
 
         match std::fs::write(&path, &content) {
             Ok(_) => {

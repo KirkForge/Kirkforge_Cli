@@ -10,10 +10,17 @@
 //! Design choices:
 //! - **No model round trip.** The whole point is "don't wait for
 //!   inference." The command runs in `~ms`, not seconds.
-//! - **No approval gate.** The user *typed* the command. Approval
-//!   would defeat the purpose of the escape hatch. (Future: a config
-//!   flag `bang_requires_approval` could opt in to the approval flow
-//!   for high-stakes environments.)
+//! - **No approval gate by default.** The user *typed* the command.
+//!   When the config flag `bang_requires_approval` is set to `true`,
+//!   the TUI pauses and asks for Y/N confirmation before executing
+//!   the command (handled in `src/tui/approval_keys.rs`).
+//! - **Same safety gate as the model's `bash` tool.** Every command
+//!   passes through `tools::bash::check_bash_command_str`, including
+//!   metadata endpoint blocks, dangerous pattern blocks, URL/path
+//!   deny lists, and sandbox-workdir containment. Blocked commands
+//!   return a `🔒` reason instead of executing.
+//! - **Capped output** via `run_shell` so a runaway `!find /` can't
+//!   OOM the process.
 //! - **30-second timeout** (matches the bash tool's default).
 //! - **Output goes through the existing chat widget** so the
 //!   collapse/expand UX applies automatically. A `!find .` that
@@ -60,66 +67,73 @@ impl BangResult {
 /// Run a shell command directly without going through the model. The
 /// user typed `!` deliberately — no approval gate, no model round trip.
 ///
-/// This is a thin wrapper over `tokio::process::Command` with a timeout
-/// and `kill_on_drop`, matching the bash tool's foreground-execution
-/// shape (`src/tools/bash.rs::run_shell`). Working dir is the current
-/// process dir; we deliberately don't chdir to the project root here —
-/// `!` is a "I want to do this now in the shell I'm in" feature, not a
-/// re-skin of the bash tool.
+/// Unlike the original implementation, this now goes through the same
+/// safety gate as the model's `bash` tool (`check_bash_command_str`) and
+/// uses the same capped, kill-on-drop runner (`run_shell`). Working dir
+/// defaults to the current process dir; if `config.bash_sandbox_workdir`
+/// is enabled and a sandbox is configured, the command is confined to
+/// the sandbox.
 ///
 /// Returns a `BangResult` capturing stdout/stderr/exit_code/timed_out
 /// for the formatter to consume. Does not write to `state` — the
 /// caller (`keys.rs`) is responsible for pushing the formatted string
 /// into `state.messages` so the conversation log records what happened.
-pub async fn run_bang_command(cmd: &str) -> BangResult {
-    use std::process::Stdio;
-    use std::time::{Duration, Instant};
+pub async fn run_bang_command(cmd: &str, config: &crate::shared::Config) -> BangResult {
+    use std::time::Instant;
+
+    let (deny_list, path_guard, _) = crate::session::access::access_from_config(config);
+
+    // Determine the workdir. Bang defaults to the shell the user is in,
+    // but when sandboxing is enabled we force it inside the sandbox so
+    // the same containment check the bash tool uses applies here too.
+    let current_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let workdir = if config.bash_sandbox_workdir {
+        path_guard
+            .sandbox_dir
+            .as_deref()
+            .unwrap_or(current_dir.as_path())
+    } else {
+        current_dir.as_path()
+    };
+
+    let workdir_str = workdir.to_string_lossy().to_string();
+
+    if let Some(reason) = crate::tools::bash::check_bash_command_str(
+        cmd,
+        Some(&workdir_str),
+        &deny_list,
+        &path_guard,
+        config.bash_sandbox_workdir,
+    ) {
+        return BangResult {
+            cmd: cmd.to_string(),
+            exit_code: -1,
+            stdout: String::new(),
+            stderr: reason,
+            timed_out: false,
+            elapsed_ms: 0,
+        };
+    }
 
     let start = Instant::now();
-    let mut proc = tokio::process::Command::new("/bin/sh");
-    proc.arg("-c")
-        .arg(cmd)
-        .kill_on_drop(true)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-
-    let output = tokio::time::timeout(
-        Duration::from_secs(BANG_DEFAULT_TIMEOUT_SECS),
-        proc.output(),
-    )
-    .await;
-
+    let result = crate::tools::bash::run_shell(cmd, workdir, BANG_DEFAULT_TIMEOUT_SECS).await;
     let elapsed_ms = start.elapsed().as_millis() as u64;
 
-    match output {
-        Ok(Ok(out)) => BangResult {
+    match result {
+        Ok(out) => BangResult {
             cmd: cmd.to_string(),
             exit_code: out.status.code().unwrap_or(-1),
-            stdout: String::from_utf8_lossy(&out.stdout).to_string(),
-            stderr: String::from_utf8_lossy(&out.stderr).to_string(),
-            timed_out: false,
+            stdout: out.stdout,
+            stderr: out.stderr,
+            timed_out: out.status.code().is_none() && !out.status.success(),
             elapsed_ms,
         },
-        Ok(Err(e)) => BangResult {
-            cmd: cmd.to_string(),
-            // `-1` signals "could not even spawn", distinct from a process
-            // that ran and exited non-zero. The formatter surfaces this
-            // as a clear error to the user.
-            exit_code: -1,
-            stdout: String::new(),
-            stderr: format!("Failed to execute command: {}", e),
-            timed_out: false,
-            elapsed_ms,
-        },
-        Err(_) => BangResult {
+        Err(e) => BangResult {
             cmd: cmd.to_string(),
             exit_code: -1,
             stdout: String::new(),
-            stderr: format!(
-                "Command timed out after {} seconds",
-                BANG_DEFAULT_TIMEOUT_SECS
-            ),
-            timed_out: true,
+            stderr: e,
+            timed_out: false,
             elapsed_ms,
         },
     }
@@ -208,7 +222,7 @@ pub fn format_elapsed(ms: u64) -> String {
 /// it in `ConversationEntry::tool(summary, full)` for collapse support,
 /// but for the v1.2-p14 first cut we return the full string and let
 /// the caller decide how to display it.
-pub async fn handle_bang_command(cmd: &str) -> String {
+pub async fn handle_bang_command(cmd: &str, config: &crate::shared::Config) -> String {
     if cmd.trim().is_empty() {
         // Empty `!` is a no-op. We could also surface a hint about
         // "type `!help` for what this does" but the user already
@@ -216,6 +230,6 @@ pub async fn handle_bang_command(cmd: &str) -> String {
         return "Usage: !<command>  — runs <command> via /bin/sh with no model round trip."
             .to_string();
     }
-    let result = run_bang_command(cmd).await;
+    let result = run_bang_command(cmd, config).await;
     format_bang_output(&result)
 }

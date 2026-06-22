@@ -1,16 +1,25 @@
 /// Main application state and event handling.
 use crate::session::session_fork::ForkManager;
 use crate::session::skills::SkillRegistry;
-use crate::shared::{Config, ModelInfo};
+use crate::shared::{ModelInfo, SharedConfig};
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 use std::time::Instant;
+
+#[cfg(test)]
+use crate::shared::Config;
 
 /// Represents the connection state for the status bar.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ConnectionState {
     Disconnected,
+    #[allow(dead_code)]
     Connecting,
-    Connected { model: String, since: Instant },
+    Connected {
+        model: String,
+        since: Instant,
+    },
     Error(String),
 }
 
@@ -64,8 +73,9 @@ pub struct AppState {
     /// Session start time
     pub session_started: Instant,
 
-    /// Config reference
-    pub config: Config,
+    /// Shared config reference. Kept behind an `Arc<RwLock>` so that
+    /// SIGHUP/`/reload` can update live behavior without restarting.
+    pub config: SharedConfig,
 
     /// Skill registry for slash commands (loaded from SKILL.md files)
     pub skill_registry: SkillRegistry,
@@ -85,6 +95,11 @@ pub struct AppState {
     // ── Generation state ────────────────────────────────────
     /// True while the model is generating a response (between Enter and Done).
     pub is_generating: bool,
+
+    /// Fork-isolated subagent currently running in the background.
+    pub persona_in_progress: Option<crate::tui::commands::PersonaHandle>,
+    /// Cancel flag for the running persona, checked between internal turns.
+    pub persona_cancel: Option<Arc<AtomicBool>>,
 
     /// Spinner frame counter — cycles through a spinner animation
     /// to show the model is thinking before the first token arrives.
@@ -157,27 +172,41 @@ pub struct AppState {
     /// Empty when not searching.
     pub search_query: String,
     /// All match positions in the conversation, in document order.
-    /// Each entry is `(message_index, byte_offset)` for the start
-    /// of the match in `messages[message_index].content`. Filled in
-    /// when search is committed; cleared on cancel or `/clear`.
-    pub search_matches: Vec<(usize, usize)>,
+    /// Each entry is `(message_index, byte_offset, source)` for the
+    /// start of the match in `messages[message_index].content` or
+    /// `messages[message_index].tool_output` (see
+    /// `crate::tui::search::SearchSource`). Filled in when search is
+    /// committed; cleared on cancel or `/clear`.
+    pub search_matches: Vec<crate::tui::search::MatchPos>,
     /// Index into `search_matches` of the currently-highlighted
     /// match. `n` cycles forward, `N` (Shift+N) cycles backward.
     /// When `search_matches.is_empty()`, this is meaningless.
     pub search_match_idx: usize,
 
     // ── /test command (review.md gap #9) ─────────────────────
-    /// The shared `Bash` tool. Constructed once at startup; the `/test`
-    /// slash command invokes it directly so the same approval gate,
-    /// sandbox, and deny_paths the model's bash calls go through apply.
-    /// Cloning is cheap (`Bash` is a unit struct), so `Arc::new` is
-    /// essentially a one-time allocation.
-    pub bash_tool: std::sync::Arc<crate::tools::bash::Bash>,
-
     /// True while a `/test` command is running. Used to (1) gate the
     /// input box against stacking tests, (2) drive the spinner in
     /// place of the model-generation spinner.
     pub test_in_progress: bool,
+
+    // ── Recent-session picker (daemon follow-up) ────────────
+    /// When set, the TUI is showing the recent-session picker overlay
+    /// instead of the normal input box. Triggered at startup (if the
+    /// daemon has recent sessions and no explicit resume flag was given)
+    /// or by `/resume` with no arguments inside a running session.
+    pub session_picker: Option<crate::tui::components::session_picker::SessionPicker>,
+
+    // ── /undo stack (review.md gap #7) ───────────────────────
+    /// Shared undo stack. The executor owns the write side (push via
+    /// `edit_file` / `write_file`); the TUI uses it read-only for
+    /// `/undo list` and `/undo count`. `None` when the stack could
+    /// not be created at session start.
+    pub undo_stack: Option<crate::tools::UndoStackRef>,
+
+    // ── Plugin trust-tier status (Phase 2.3) ──────────────────────
+    /// Compact summary of loaded plugin trust tiers, displayed in the
+    /// status bar. Example: "🔒2 ⚡1". `None` when no plugins are loaded.
+    pub plugin_status: Option<String>,
 
     // ── Frame-pacing v2: render-on-state-change ───────────────────
     /// Set to `true` whenever `state` mutates in a way that should
@@ -203,7 +232,7 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new(config: Config) -> Self {
+    pub fn new(config: SharedConfig) -> Self {
         Self {
             messages: Vec::new(),
             input: String::new(),
@@ -228,6 +257,8 @@ impl AppState {
             fork_manager: None,
             should_exit: false,
             is_generating: false,
+            persona_in_progress: None,
+            persona_cancel: None,
             spinner_tick: 0,
             notified_jobs: std::collections::HashSet::new(),
             tool_collapsed: true,
@@ -240,8 +271,10 @@ impl AppState {
             search_query: String::new(),
             search_matches: Vec::new(),
             search_match_idx: 0,
-            bash_tool: std::sync::Arc::new(crate::tools::bash::Bash),
             test_in_progress: false,
+            undo_stack: None,
+            session_picker: None,
+            plugin_status: None,
             // Start dirty so the first frame draws immediately (the
             // connection banner / status bar are non-empty even with
             // zero state mutations).
@@ -369,8 +402,11 @@ mod tests {
     /// the user would see a blank screen until the slow-tick fired.
     #[test]
     fn new_state_starts_dirty() {
-        let s = AppState::new(Config::default());
-        assert!(s.dirty, "freshly-constructed state should be dirty for the first frame");
+        let s = AppState::new(Arc::new(std::sync::RwLock::new(Config::default())));
+        assert!(
+            s.dirty,
+            "freshly-constructed state should be dirty for the first frame"
+        );
     }
 
     /// `mark_dirty` is a no-op when the state is already dirty, and
@@ -378,7 +414,7 @@ mod tests {
     /// safe to call from any mutation site.
     #[test]
     fn mark_dirty_is_idempotent() {
-        let mut s = AppState::new(Config::default());
+        let mut s = AppState::new(Arc::new(std::sync::RwLock::new(Config::default())));
         s.dirty = false;
         s.mark_dirty();
         assert!(s.dirty);

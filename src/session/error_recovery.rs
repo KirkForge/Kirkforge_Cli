@@ -1,3 +1,6 @@
+// Public/future surface in a binary crate: suppress dead-code warnings for pub items.
+#![allow(dead_code)]
+
 //! Error recovery — smart retry hints after tool failures.
 //!
 //! When a tool call fails (file not found, build error, permission denied),
@@ -27,12 +30,18 @@ pub struct RecoveryHint {
 /// Analyze a tool error and produce a recovery hint.
 ///
 /// Returns `None` if the error is not something we can give a useful hint for.
-pub fn analyze_error(tool_name: &str, error_message: &str, args: &serde_json::Value) -> Option<RecoveryHint> {
+pub fn analyze_error(
+    tool_name: &str,
+    error_message: &str,
+    args: &serde_json::Value,
+) -> Option<RecoveryHint> {
     let err_lower = error_message.to_lowercase();
 
     // File not found patterns (after command-not-found check so "not found"
     // in tool output doesn't capture "command not found" errors)
-    if err_lower.contains("no such file") || (err_lower.contains("not found") && !err_lower.contains("command")) {
+    if err_lower.contains("no such file")
+        || (err_lower.contains("not found") && !err_lower.contains("command"))
+    {
         let path_hint = args
             .get("path")
             .and_then(|v| v.as_str())
@@ -73,7 +82,11 @@ pub fn analyze_error(tool_name: &str, error_message: &str, args: &serde_json::Va
     }
 
     // Build/compile errors
-    if tool_name == "bash" && (err_lower.contains("error:") || err_lower.contains("failed") || err_lower.contains("cannot find")) {
+    if tool_name == "bash"
+        && (err_lower.contains("error:")
+            || err_lower.contains("failed")
+            || err_lower.contains("cannot find"))
+    {
         if err_lower.contains("cargo") || err_lower.contains("rustc") {
             return Some(RecoveryHint {
                 error_summary: "Build/compile error".to_string(),
@@ -106,13 +119,16 @@ pub fn analyze_error(tool_name: &str, error_message: &str, args: &serde_json::Va
                      1. Is the tool installed? Try `which <command>`\n\
                      2. Do you need to install it first? Use the package manager\n\
                      3. Is there an alternative tool you can use?"
-                    .to_string(),
+                .to_string(),
             recoverable: true,
         });
     }
 
     // Connection/network errors
-    if err_lower.contains("connection") || err_lower.contains("timeout") || err_lower.contains("network") {
+    if err_lower.contains("connection")
+        || err_lower.contains("timeout")
+        || err_lower.contains("network")
+    {
         return Some(RecoveryHint {
             error_summary: "Network error".to_string(),
             suggestion: "A network operation failed. Retry may succeed — \
@@ -186,7 +202,8 @@ mod tests {
     #[test]
     fn test_analyze_file_not_found() {
         let args = serde_json::json!({"path": "src/lib.rs"});
-        let hint = analyze_error("read_file", "No such file or directory: src/lib.rs", &args).unwrap();
+        let hint =
+            analyze_error("read_file", "No such file or directory: src/lib.rs", &args).unwrap();
         assert!(hint.suggestion.contains("glob"));
         assert!(hint.recoverable);
     }
@@ -216,7 +233,8 @@ mod tests {
     #[test]
     fn test_analyze_command_not_found() {
         let args = serde_json::json!({"command": "nonexistent-tool"});
-        let hint = analyze_error("bash", "bash: nonexistent-tool: command not found", &args).unwrap();
+        let hint =
+            analyze_error("bash", "bash: nonexistent-tool: command not found", &args).unwrap();
         assert!(hint.suggestion.contains("installed"));
         assert!(hint.recoverable);
     }

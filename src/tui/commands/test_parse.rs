@@ -122,13 +122,15 @@ pub fn parse_cargo_test_output(stdout: &str) -> TestRunSummary {
                         // never appears (truncated output), the
                         // failure still shows up with just the
                         // name and no location.
-                        pending.entry(name.to_string()).or_insert_with(|| TestFailure {
-                            test_name: name.to_string(),
-                            file: None,
-                            line: None,
-                            col: None,
-                            message: String::new(),
-                        });
+                        pending
+                            .entry(name.to_string())
+                            .or_insert_with(|| TestFailure {
+                                test_name: name.to_string(),
+                                file: None,
+                                line: None,
+                                col: None,
+                                message: String::new(),
+                            });
                     }
                     "ok" | "ignored" => {
                         // Counts come from the summary line.
@@ -150,13 +152,15 @@ pub fn parse_cargo_test_output(stdout: &str) -> TestRunSummary {
                 // FAILED line (defensive — cargo's output is
                 // stable but a tool filtering the stream could
                 // break it).
-                pending.entry(name.to_string()).or_insert_with(|| TestFailure {
-                    test_name: name.to_string(),
-                    file: None,
-                    line: None,
-                    col: None,
-                    message: String::new(),
-                });
+                pending
+                    .entry(name.to_string())
+                    .or_insert_with(|| TestFailure {
+                        test_name: name.to_string(),
+                        file: None,
+                        line: None,
+                        col: None,
+                        message: String::new(),
+                    });
                 active_body = Some(name.to_string());
                 continue;
             }
@@ -377,12 +381,7 @@ fn parse_result_line_into(rest: &str, summary: &mut TestRunSummary) {
 /// Stderr is appended at the end (rare — usually empty for
 /// cargo test). Exit code is rendered as a `$? N` annotation
 /// when non-zero.
-pub fn format_test_summary(
-    s: &TestRunSummary,
-    cmd: &str,
-    exit_code: i32,
-    stderr: &str,
-) -> String {
+pub fn format_test_summary(s: &TestRunSummary, cmd: &str, exit_code: i32, stderr: &str) -> String {
     use std::fmt::Write;
     let mut out = String::new();
     let _ = writeln!(out, "$ {}", cmd);
@@ -625,11 +624,7 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; < 0.
         assert!(out.contains("test result: FAILED."), "got: {}", out);
         assert!(out.contains("FAIL tests::test_foo"), "got: {}", out);
         assert!(out.contains("src/foo.rs:42:5"), "got: {}", out);
-        assert!(
-            out.contains("assertion failed: x != y"),
-            "got: {}",
-            out
-        );
+        assert!(out.contains("assertion failed: x != y"), "got: {}", out);
         assert!(out.contains("FAIL tests::test_baz"), "got: {}", out);
         assert!(out.contains("src/bar.rs:88:13"), "got: {}", out);
         assert!(out.contains("index out of bounds"), "got: {}", out);
@@ -647,10 +642,6 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; < 0.
             failures: vec![],
         };
         let out = format_test_summary(&s, "cargo test", 0, "warning: something\n");
-        assert!(
-            out.contains("stderr:\nwarning: something"),
-            "got: {}",
-            out
-        );
+        assert!(out.contains("stderr:\nwarning: something"), "got: {}", out);
     }
 }

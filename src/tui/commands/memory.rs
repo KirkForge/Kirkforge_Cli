@@ -1,3 +1,6 @@
+// Public/future surface in a binary crate: suppress dead-code warnings for pub items.
+#![allow(dead_code)]
+
 //! `/memory` slash command — persistent semantic memory management.
 //!
 //! Subcommands:
@@ -50,7 +53,10 @@ fn detect_type(text: &str) -> &str {
 ///
 /// Dispatches to the appropriate subcommand and returns a display string.
 pub fn handle_memory_command(args: &str) -> String {
-    let store = MemoryStore::default_store();
+    let store = match MemoryStore::default_store() {
+        Ok(s) => s,
+        Err(e) => return format!("Memory store unavailable: {}", e),
+    };
     let trimmed = args.trim();
 
     if trimmed.is_empty() {
@@ -81,7 +87,10 @@ pub fn handle_memory_command(args: &str) -> String {
                     let _ = store.write_index();
                     format!(
                         "✅ Stored memory [{}] as `{}` (type: {})\n→ {}\n\n**Why:** {}",
-                        fact.name, fact.name, mtype, fact.description,
+                        fact.name,
+                        fact.name,
+                        mtype,
+                        fact.description,
                         if mtype == "feedback" {
                             "Feedback memories shape future responses."
                         } else if mtype == "user" {
@@ -109,7 +118,9 @@ pub fn handle_memory_command(args: &str) -> String {
                     mtype, fact.name, "", fact.description
                 ));
             }
-            out.push_str("\nUse `/memory search <query>` to filter, `/memory rm <name>` to delete.");
+            out.push_str(
+                "\nUse `/memory search <query>` to filter, `/memory rm <name>` to delete.",
+            );
             out
         }
         "search" | "find" => {
@@ -158,7 +169,10 @@ mod tests {
 
     #[test]
     fn test_detect_type_feedback() {
-        assert_eq!(detect_type("You should always run cargo check first"), "feedback");
+        assert_eq!(
+            detect_type("You should always run cargo check first"),
+            "feedback"
+        );
         assert_eq!(detect_type("Never use unwrap in this repo"), "feedback");
     }
 

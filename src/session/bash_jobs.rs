@@ -1,8 +1,13 @@
+// Public/future surface in a binary crate: suppress dead-code warnings for pub items.
+#![allow(dead_code)]
+
 /// Background bash jobs — long-running command registry.
 ///
 /// Allows spawning bash commands that outlive a single tool call.
 /// Jobs run as tokio tasks and their output is captured asynchronously.
 /// The model or user can check job status, read output, or cancel jobs.
+use crate::session::process_group::{kill_process_group, setup_process_group};
+use crate::tools::bash::{cap_to_string, drain_capped, MAX_BASH_OUTPUT_BYTES};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -114,6 +119,7 @@ impl BashJobRegistry {
             .kill_on_drop(true)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
+        setup_process_group(&mut proc);
         if let Some(ref wd) = workdir {
             proc.current_dir(wd);
         }
@@ -134,7 +140,7 @@ impl BashJobRegistry {
                 children.remove(&id)
             };
 
-            let Some(child) = child else {
+            let Some(mut child) = child else {
                 // Child handle was taken by cancel() — update status
                 let mut jobs = registry_watcher.jobs.lock().await;
                 if let Some(job) = jobs.get_mut(&id) {
@@ -146,58 +152,89 @@ impl BashJobRegistry {
                 return;
             };
 
+            // Take stdout/stderr before waiting so we can drain them
+            // concurrently. This also lets us reap the child explicitly
+            // without `wait_with_output` consuming ownership on timeout.
+            let stdout = child.stdout.take();
+            let stderr = child.stderr.take();
+
+            let drain_stdout = stdout.map(|r| {
+                tokio::spawn(async move {
+                    drain_capped(r, MAX_BASH_OUTPUT_BYTES)
+                        .await
+                        .unwrap_or_else(|_| (Vec::new(), 0))
+                })
+            });
+            let drain_stderr = stderr.map(|r| {
+                tokio::spawn(async move {
+                    drain_capped(r, MAX_BASH_OUTPUT_BYTES)
+                        .await
+                        .unwrap_or_else(|_| (Vec::new(), 0))
+                })
+            });
+
             // Wait with optional timeout
-            let output = if timeout_secs.is_some_and(|t| t > 0) {
-                match tokio::time::timeout(
-                    std::time::Duration::from_secs(timeout_secs.unwrap()),
-                    child.wait_with_output(),
-                )
-                .await
-                {
-                    Ok(Ok(out)) => Some(out),
-                    Ok(Err(e)) => {
-                        let mut jobs = registry_watcher.jobs.lock().await;
-                        if let Some(job) = jobs.get_mut(&id) {
-                            job.status = JobStatus::Failed(e.to_string());
-                            job.finished_at = Some(chrono::Local::now());
-                        }
-                        return;
-                    }
-                    Err(_) => {
-                        let mut jobs = registry_watcher.jobs.lock().await;
-                        if let Some(job) = jobs.get_mut(&id) {
-                            job.status = JobStatus::Failed("Timed out".into());
-                            job.finished_at = Some(chrono::Local::now());
-                        }
-                        // kill_on_drop kills the child when child is dropped here
-                        return;
-                    }
+            let status_result: Result<std::process::ExitStatus, String> = if let Some(t) =
+                timeout_secs.filter(|t| *t > 0)
+            {
+                match tokio::time::timeout(std::time::Duration::from_secs(t), child.wait()).await {
+                    Ok(Ok(status)) => Ok(status),
+                    Ok(Err(e)) => Err(e.to_string()),
+                    Err(_) => Err("Timed out".into()),
                 }
             } else {
-                match child.wait_with_output().await {
-                    Ok(out) => Some(out),
-                    Err(e) => {
-                        let mut jobs = registry_watcher.jobs.lock().await;
-                        if let Some(job) = jobs.get_mut(&id) {
-                            job.status = JobStatus::Failed(e.to_string());
-                            job.finished_at = Some(chrono::Local::now());
-                        }
-                        return;
+                child.wait().await.map_err(|e| e.to_string())
+            };
+
+            let (status, mut error_msg) = match status_result {
+                Ok(status) => (Some(status), None),
+                Err(e) => {
+                    if e == "Timed out" {
+                        kill_process_group(&mut child);
                     }
+                    (None, Some(e))
                 }
             };
 
-            if let Some(output) = output {
-                let exit_code = output.status.code().unwrap_or(-1);
-                let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-                let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-                let mut jobs = registry_watcher.jobs.lock().await;
-                if let Some(job) = jobs.get_mut(&id) {
-                    job.status = JobStatus::Completed(exit_code);
-                    job.stdout = stdout;
-                    job.stderr = stderr;
-                    job.finished_at = Some(chrono::Local::now());
+            // Reap the child with a short timeout so it does not become a
+            // zombie. The drain tasks continue reading until EOF (which
+            // arrives as the child closes its pipes), so partial output is
+            // preserved.
+            if status.is_none() {
+                let _ = tokio::time::timeout(std::time::Duration::from_secs(2), child.wait()).await;
+            }
+
+            // Join the drain tasks to capture output (or partial output on
+            // timeout). A short timeout prevents a stuck pipe from wedging
+            // cleanup.
+            let (stdout_buf, stdout_dropped) = match drain_stdout {
+                Some(h) => tokio::time::timeout(std::time::Duration::from_secs(2), h)
+                    .await
+                    .ok()
+                    .and_then(|r| r.ok())
+                    .unwrap_or_else(|| (Vec::new(), 0)),
+                None => (Vec::new(), 0),
+            };
+            let (stderr_buf, stderr_dropped) = match drain_stderr {
+                Some(h) => tokio::time::timeout(std::time::Duration::from_secs(2), h)
+                    .await
+                    .ok()
+                    .and_then(|r| r.ok())
+                    .unwrap_or_else(|| (Vec::new(), 0)),
+                None => (Vec::new(), 0),
+            };
+
+            let mut jobs = registry_watcher.jobs.lock().await;
+            if let Some(job) = jobs.get_mut(&id) {
+                if let Some(status) = status {
+                    job.status = JobStatus::Completed(status.code().unwrap_or(-1));
+                } else {
+                    job.status =
+                        JobStatus::Failed(error_msg.take().unwrap_or_else(|| "Failed".into()));
                 }
+                job.stdout = cap_to_string(stdout_buf, stdout_dropped);
+                job.stderr = cap_to_string(stderr_buf, stderr_dropped);
+                job.finished_at = Some(chrono::Local::now());
             }
         });
 
@@ -226,7 +263,7 @@ impl BashJobRegistry {
         {
             let mut children = self.children.lock().await;
             if let Some(mut child) = children.remove(&id) {
-                let _ = child.kill().await;
+                kill_process_group(&mut child);
                 let _ = child.wait().await;
             }
         }
@@ -252,7 +289,7 @@ impl BashJobRegistry {
         {
             let mut children = self.children.lock().await;
             if let Some(mut child) = children.remove(&id) {
-                let _ = child.kill().await;
+                kill_process_group(&mut child);
                 let _ = child.wait().await;
             }
         }
@@ -286,7 +323,7 @@ impl BashJobRegistry {
             let mut children = self.children.lock().await;
             for id in &job_ids {
                 if let Some(mut child) = children.remove(id) {
-                    let _ = child.kill().await;
+                    kill_process_group(&mut child);
                     let _ = child.wait().await;
                 }
             }
@@ -386,5 +423,30 @@ mod tests {
         let list = reg.list().await;
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].id, running_id);
+    }
+
+    /// A job that exceeds its timeout is killed, reaped, and still retains
+    /// the partial output it produced before the timeout.
+    #[tokio::test]
+    async fn test_timeout_reaps_child_and_preserves_partial_output() {
+        let reg = BashJobRegistry::new();
+        let id = reg
+            .spawn("echo partial; sleep 30", None, Some(1))
+            .await
+            .unwrap();
+
+        // Wait for the watcher to time out and reap the child. The watcher
+        // allows up to 1s for the timeout, 2s for child.wait() after the kill,
+        // and 2s for each drain task, so give it a comfortable margin.
+        tokio::time::sleep(std::time::Duration::from_secs(6)).await;
+
+        let job = reg.get(id).await.unwrap();
+        assert!(
+            matches!(job.status, JobStatus::Failed(ref msg) if msg.contains("Timed out")),
+            "expected timeout failure, got {:?}",
+            job.status
+        );
+        assert_eq!(job.stdout.trim(), "partial");
+        assert!(job.finished_at.is_some());
     }
 }

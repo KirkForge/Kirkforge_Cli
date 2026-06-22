@@ -1,9 +1,27 @@
+// Public/future surface in a binary crate: suppress dead-code warnings for pub items.
+#![allow(dead_code)]
+
 pub mod minify;
 pub mod permission;
 
+use kirkforge_plugin::TrustTier;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::{Arc, RwLock};
+
+/// Thread-safe shared configuration. Used by both the TUI and the executor
+/// so that config hot-reload affects live behavior without restarting.
+pub type SharedConfig = Arc<RwLock<Config>>;
+
+/// Read a shared config, recovering from lock poisoning if necessary.
+///
+/// `unwrap_or_else` here is deliberate: if a writer panicked and poisoned
+/// the lock, we still return the inner guard so the TUI/executor can keep
+/// running with the last-known config rather than crashing.
+pub fn read_shared_config(cfg: &SharedConfig) -> std::sync::RwLockReadGuard<'_, Config> {
+    cfg.read().unwrap_or_else(|e| e.into_inner())
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct Message {
@@ -222,6 +240,13 @@ pub struct Config {
     #[serde(default)]
     pub routing_model_map: HashMap<String, String>,
 
+    /// Maximum file size (in bytes) allowed in a commit produced by the
+    /// `/commit` command. Files larger than this are a hard blocker. The
+    /// default is 5 MiB — enough for small assets but small enough to catch
+    /// accidentally committed binaries and dumps.
+    #[serde(default = "default_commit_max_file_size")]
+    pub commit_max_file_size: u64,
+
     /// MCP (Model Context Protocol) servers to connect to at session start.
     /// Each server is spawned as a subprocess and its tools are made
     /// available alongside built-in tools (prefixed with `mcp/<server>/`).
@@ -253,6 +278,34 @@ pub struct Config {
     /// because forcing JSON breaks chat-style models.
     #[serde(default)]
     pub json_mode: bool,
+
+    /// Number of recent messages to keep verbatim during naive context
+    /// compaction. Kimi-style "tail preservation": the last N messages
+    /// (default 2, i.e. one user + one assistant turn) stay untouched so
+    /// the model retains the immediate thread. Older messages are
+    /// stubbed/condensed. Must be at least 1.
+    #[serde(default = "default_preserve_recent_messages")]
+    pub preserve_recent_messages: usize,
+
+    /// Maximum trust tier allowed for loaded plugins. Plugins that request
+    /// more trust are rejected at load time.
+    #[serde(default = "default_max_plugin_trust")]
+    pub max_plugin_trust: TrustTier,
+
+    /// Maximum number of high-level turns a fork-isolated persona
+    /// (/explore, /plan, /coder) may consume before returning to the main
+    /// thread. Each persona currently runs one self-contained `run_turn`
+    /// (which already caps its internal tool-call loop), so the field acts
+    /// as an on/off guard and a reservation for future multi-turn personas.
+    #[serde(default = "default_max_persona_turns")]
+    pub max_persona_turns: usize,
+
+    /// Optional directory containing lifecycle hook scripts (`<event>.sh`).
+    /// When `None`, the executor uses the default hooks directory
+    /// (`~/.local/share/kirkforge/hooks/`). Set this for tests or custom
+    /// deployments.
+    #[serde(default)]
+    pub hooks_dir: Option<PathBuf>,
 }
 
 /// Configuration for a single MCP server connection.
@@ -284,6 +337,22 @@ fn default_bash_sandbox_workdir() -> bool {
 
 fn default_max_file_read_size() -> usize {
     1024 * 1024
+}
+
+fn default_preserve_recent_messages() -> usize {
+    2
+}
+
+fn default_max_plugin_trust() -> TrustTier {
+    TrustTier::Shell
+}
+
+fn default_max_persona_turns() -> usize {
+    10
+}
+
+fn default_commit_max_file_size() -> u64 {
+    5 * 1024 * 1024
 }
 
 impl Default for Config {
@@ -335,6 +404,11 @@ impl Default for Config {
             mcp_servers: vec![],
             bang_requires_approval: false,
             json_mode: false,
+            preserve_recent_messages: default_preserve_recent_messages(),
+            max_plugin_trust: default_max_plugin_trust(),
+            max_persona_turns: default_max_persona_turns(),
+            hooks_dir: None,
+            commit_max_file_size: default_commit_max_file_size(),
         }
     }
 }
@@ -409,7 +483,6 @@ impl std::fmt::Display for SessionId {
 
 #[derive(Debug, Clone)]
 pub struct Pricing {
-
     pub model_prefix: &'static str,
 
     pub input_per_mtok: f64,
@@ -422,7 +495,6 @@ pub struct Pricing {
 }
 
 pub const PRICING_TABLE: &[Pricing] = &[
-
     Pricing {
         model_prefix: "opus-4",
         input_per_mtok: 15.00,
@@ -444,7 +516,6 @@ pub const PRICING_TABLE: &[Pricing] = &[
         cache_write_per_mtok: 0.30,
         cache_read_per_mtok: 0.05,
     },
-
     Pricing {
         model_prefix: "gpt-4",
         input_per_mtok: 10.00,
@@ -459,7 +530,6 @@ pub const PRICING_TABLE: &[Pricing] = &[
         cache_write_per_mtok: 7.50,
         cache_read_per_mtok: 0.75,
     },
-
     Pricing {
         model_prefix: "",
         input_per_mtok: 0.0,
@@ -472,15 +542,16 @@ pub const PRICING_TABLE: &[Pricing] = &[
 pub fn calculate_cost(model: &str, usage: &TokenUsage) -> f64 {
     let prompt = usage.prompt_tokens.unwrap_or(0);
     let completion = usage.completion_tokens.unwrap_or(0);
-    let cached = usage
-        .cached_tokens
-        .unwrap_or(0)
-        .min(prompt); // never let cached exceed the prompt itself
+    let cached = usage.cached_tokens.unwrap_or(0).min(prompt); // never let cached exceed the prompt itself
 
     let p = PRICING_TABLE
         .iter()
         .find(|p| !p.model_prefix.is_empty() && model.starts_with(p.model_prefix))
-        .unwrap_or_else(|| PRICING_TABLE.last().unwrap());
+        .unwrap_or_else(|| {
+            PRICING_TABLE
+                .last()
+                .expect("PRICING_TABLE has fallback entry")
+        });
 
     // Cached tokens are billed at the discounted read rate; the rest of
     // the prompt at the regular input rate. Servers that don't
@@ -512,7 +583,6 @@ impl CostTracking {
 
 #[derive(Debug, Clone, Copy, PartialEq, clap::ValueEnum)]
 pub enum OutputFormat {
-
     Text,
 
     Json,

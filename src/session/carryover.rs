@@ -1,3 +1,6 @@
+// Public/future surface in a binary crate: suppress dead-code warnings for pub items.
+#![allow(dead_code)]
+
 /// Session carryover profile — cross-session awareness with tiny footprint.
 ///
 /// Collects a minimal profile (~200 bytes JSON, ~55 tokens rendered) during
@@ -217,8 +220,17 @@ pub fn load_carryover() -> CarryoverProfile {
         return CarryoverProfile::default();
     }
     match std::fs::read_to_string(&path) {
-        Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
-        Err(_) => CarryoverProfile::default(),
+        Ok(content) => match serde_json::from_str(&content) {
+            Ok(profile) => profile,
+            Err(e) => {
+                tracing::warn!(error = %e, path = %path.display(), "failed to parse carryover profile; using default");
+                CarryoverProfile::default()
+            }
+        },
+        Err(e) => {
+            tracing::warn!(error = %e, path = %path.display(), "failed to read carryover profile; using default");
+            CarryoverProfile::default()
+        }
     }
 }
 
@@ -242,10 +254,20 @@ pub fn save_carryover(profile: &CarryoverProfile) {
 
     let path = carryover_path();
     if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            tracing::warn!(error = %e, path = %parent.display(), "failed to create carryover directory");
+            return;
+        }
     }
-    if let Ok(content) = serde_json::to_string(&pruned) {
-        let _ = std::fs::write(&path, content);
+    match serde_json::to_string(&pruned) {
+        Ok(content) => {
+            if let Err(e) = std::fs::write(&path, content) {
+                tracing::warn!(error = %e, path = %path.display(), "failed to write carryover profile");
+            }
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, path = %path.display(), "failed to serialize carryover profile");
+        }
     }
 }
 

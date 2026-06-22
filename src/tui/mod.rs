@@ -34,10 +34,10 @@ pub mod widgets;
 use crate::session::carryover::CarryoverProfile;
 use crate::session::conversation::ConversationLog;
 use crate::session::executor::{self, ApprovalRequest};
-use crate::shared::Config;
+use crate::shared::{Config, Message, Role};
 use crate::tools::Tool;
-use app::{AppState, ConnectionState};
-use commands::notify_completed_jobs;
+use app::{AppState, ConnectionState, ConversationEntry};
+use commands::{messages_to_entries, notify_completed_jobs, PersonaKind, PersonaResult};
 use components::approval::render_approval_dialog;
 use crossterm::{
     event::{self, Event},
@@ -59,13 +59,53 @@ use widgets::input::render_input;
 use widgets::status::render_status;
 
 /// Panic-safe guard that restores terminal state on drop.
-struct TerminalGuard;
+pub(crate) struct TerminalGuard;
 
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
         let _ = disable_raw_mode();
         let mut stdout = io::stdout();
         let _ = execute!(stdout, LeaveAlternateScreen);
+    }
+}
+
+/// Show a standalone recent-session picker before the main TUI starts.
+///
+/// This is used by `main.rs` when the user runs `kirkforge run` without
+/// an explicit `--continue` / `--resume` / `--attach` / `--auto-resume`
+/// and the session daemon reports recent sessions. The picker runs in a
+/// temporary terminal session; when it returns, the alternate screen is
+/// cleared and terminal state is restored.
+pub async fn run_session_picker(
+    sessions: Vec<crate::session::session_index::SessionEntry>,
+) -> anyhow::Result<Option<std::path::PathBuf>> {
+    tokio::task::spawn_blocking(move || run_session_picker_sync(sessions)).await?
+}
+
+fn run_session_picker_sync(
+    sessions: Vec<crate::session::session_index::SessionEntry>,
+) -> anyhow::Result<Option<std::path::PathBuf>> {
+    use crate::tui::components::session_picker::SessionPicker;
+
+    enable_raw_mode()?;
+    let mut stdout = io::stdout();
+    execute!(stdout, EnterAlternateScreen)?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
+    let _guard = TerminalGuard;
+
+    let mut picker = SessionPicker::new(sessions);
+    loop {
+        terminal.draw(|f| picker.render(f, f.area()))?;
+        if let Event::Key(key) = event::read()? {
+            picker.handle_key(key);
+            if picker.is_confirmed() {
+                return Ok(picker.selected_path());
+            }
+            if picker.is_cancelled() {
+                return Ok(None);
+            }
+        }
     }
 }
 
@@ -111,11 +151,13 @@ async fn probe_ollama_connection(config: &Config) -> ConnectionState {
 
 /// Run the TUI event loop.
 pub async fn run_tui(
-    config: Config,
+    shared_config: crate::shared::SharedConfig,
     adapter: Box<dyn crate::adapters::ModelAdapter>,
     tools: Vec<std::sync::Arc<dyn Tool>>,
     conversation_log: ConversationLog,
     system: Option<String>,
+    undo_stack: Option<crate::tools::UndoStackRef>,
+    plugin_registry: &kirkforge_plugin_host::PluginRegistry,
 ) -> anyhow::Result<()> {
     // ── Terminal setup ──
     enable_raw_mode()?;
@@ -125,8 +167,11 @@ pub async fn run_tui(
     let mut terminal = Terminal::new(backend)?;
     let _guard = TerminalGuard;
 
+    let cfg_for_startup = crate::shared::read_shared_config(&shared_config).clone();
+
     // ── AppState ──
-    let mut state = AppState::new(config.clone());
+    let mut state = AppState::new(shared_config.clone());
+    state.undo_stack = undo_stack.clone();
     state.session_started = Instant::now();
     // Hook for sessions that need a connection indicator.
     //
@@ -140,11 +185,13 @@ pub async fn run_tui(
     // the bar will continue to show the last-known state. A v2
     // improvement would be a periodic background probe driven by
     // the SIGHUP / reconnect signal path.
-    state.connection = probe_ollama_connection(&config).await;
+    state.connection = probe_ollama_connection(&cfg_for_startup).await;
 
-    // Skills — load any project-local SKILL.md files from registered scan paths,
+    // Skills — load project-local SKILL.md files and plugin directories,
     // then layer the built-in skills on top. (Missing dirs are silently skipped,
     // so an empty project is fine.)
+    let max_trust = cfg_for_startup.max_plugin_trust;
+    state.skill_registry.set_max_plugin_trust(max_trust);
     if let Err(e) = state.skill_registry.scan_and_load() {
         tracing::warn!("Skill scan error: {}", e);
     }
@@ -152,13 +199,16 @@ pub async fn run_tui(
     for skill in crate::session::skills::builtin_skills() {
         state.skill_registry.register(skill);
     }
+    // Surface plugin trust tiers in the status bar (Phase 2.3).
+    state.plugin_status = state.skill_registry.plugin_status_summary();
 
     // ── Carryover profile (shared between executor and save) ──
-    let carryover_target: Option<Arc<Mutex<CarryoverProfile>>> = if config.carryover_enabled {
-        Some(Arc::new(Mutex::new(CarryoverProfile::default())))
-    } else {
-        None
-    };
+    let carryover_target: Option<Arc<Mutex<CarryoverProfile>>> =
+        if cfg_for_startup.carryover_enabled {
+            Some(Arc::new(Mutex::new(CarryoverProfile::default())))
+        } else {
+            None
+        };
     let saved_profile = carryover_target.clone();
 
     // ── Channels ──
@@ -180,6 +230,23 @@ pub async fn run_tui(
     // executor's `run` loop receives the name and calls
     // `AdapterSwap::force_swap`.
     let (model_tx, model_rx) = mpsc::unbounded_channel::<String>();
+    // Undo: TUI → Executor (signals a pop of the undo stack).
+    // Review.md gap #7. `()` payload because the only operation is
+    // "pop the most recent edit"; the result comes back as a token.
+    let (undo_tx, undo_rx) = mpsc::unbounded_channel::<()>();
+    // Config reload: TUI → Executor (sends a new Config snapshot).
+    // The TUI owns the sender (driven by SIGHUP or `/reload`); the
+    // executor replaces its shared config and rebuilds access control.
+    let (config_tx, config_rx) = mpsc::unbounded_channel::<Config>();
+    // Plan mode: TUI → Executor (sends bool to enter/exit plan mode).
+    // After the fork-isolated `/plan` persona merges its result, the
+    // main executor is placed in plan mode so `/implement` remains the
+    // approval gesture.
+    let (plan_tx, plan_rx) = mpsc::unbounded_channel::<bool>();
+    // Persona completion: background task → TUI event loop.
+    // `/explore`, `/plan`, and `/coder` spawn fork-isolated subagents;
+    // the result is merged back into the parent conversation here.
+    let (persona_tx, mut persona_rx) = mpsc::unbounded_channel::<PersonaResult>();
     // Keyboard events: background reader thread → TUI event loop
     let (kb_tx, mut kb_rx) = mpsc::unbounded_channel::<Event>();
 
@@ -236,40 +303,29 @@ pub async fn run_tui(
         }
     });
 
-    // SIGHUP config hot-reload (review.md gap #5, second half).
+    // SIGHUP config hot-reload (review.md gap #5).
     // On Unix, the conventional "reload config" signal is SIGHUP.
-    // When we receive one, re-read `config.toml` and emit a token
-    // through `event_tx` so the user sees the reload happen. The
-    // reloaded config is *display-only* — the executor captured its
-    // Config by value at construction and is not externally
-    // mutable, so the executor keeps using the launch-time config
-    // for routing, auto-approve, etc. What the user does see is the
-    // new config in `/status` (after the next render) and in any
-    // dialog that re-queries Config (e.g. approval text). Full
-    // hot-reload of the executor's behavior would require
-    // Arc<RwLock<Config>> plumbing; deferred to a follow-up.
+    // When we receive one, re-read `config.toml`, update the shared
+    // config in place, and forward a snapshot to the executor so it
+    // rebuilds deny lists, path guards, and approval state. The
+    // executor emits the user-visible confirmation token.
     #[cfg(unix)]
     {
         use tokio::signal::unix::{signal, SignalKind};
         match signal(SignalKind::hangup()) {
             Ok(mut hup) => {
-                let reload_event_tx = event_tx.clone();
-                let mut last_known = state.config.clone();
+                let reload_config_tx = config_tx.clone();
+                let reload_shared_config = shared_config.clone();
                 tokio::spawn(async move {
                     while hup.recv().await.is_some() {
                         let fresh = crate::session::config::load_config();
-                        let diff_summary = config_diff_summary(&last_known, &fresh);
-                        last_known = fresh;
-                        let msg = if diff_summary.is_empty() {
-                            "🔄 Reloaded config (no changes)\n".to_string()
-                        } else {
-                            format!("🔄 Reloaded config: {}\n", diff_summary)
-                        };
-                        // Best-effort: the TUI's event drain renders
-                        // tokens as system lines. If the receiver is
-                        // gone (TUI exited) we just drop the message.
-                        let _ = reload_event_tx
-                            .send(executor::TurnEvent::Token(msg));
+                        if let Ok(mut cfg) = reload_shared_config.write() {
+                            *cfg = fresh.clone();
+                        }
+                        // Forward the new snapshot to the executor,
+                        // which owns the access-control rebuild. If the
+                        // executor is gone (TUI exited) we drop it.
+                        let _ = reload_config_tx.send(fresh);
                     }
                 });
             }
@@ -302,17 +358,21 @@ pub async fn run_tui(
                 });
             }
             Err(e) => {
-                tracing::warn!(
-                    "Could not install SIGHUP shutdown handler: {}",
-                    e
-                );
+                tracing::warn!("Could not install SIGHUP shutdown handler: {}", e);
             }
         }
     }
 
     // Spawn the executor on a background task
-    let mut exe =
-        executor::Executor::with_log(adapter, tools, config, conversation_log, carryover_target);
+    let mut exe = executor::Executor::with_log_and_undo_and_plugins(
+        adapter,
+        tools,
+        shared_config.clone(),
+        conversation_log,
+        carryover_target,
+        undo_stack,
+        Some(plugin_registry),
+    );
     // Apply --system override before the executor starts processing
     // input. Without this, --system is silently dropped (was GPT 5.5
     // review finding #2).
@@ -327,6 +387,9 @@ pub async fn run_tui(
                 resume_rx,
                 compact_rx,
                 model_rx,
+                undo_rx,
+                config_rx,
+                plan_rx,
             )
             .await;
     });
@@ -354,19 +417,30 @@ pub async fn run_tui(
         &mut state,
         &mut event_rx,
         &mut approval_rx,
+        &mut persona_rx,
         &mut kb_rx,
         &input_tx,
         &cancel_tx,
         &resume_tx,
         &compact_tx,
         &model_tx,
+        &undo_tx,
+        &config_tx,
+        &plan_tx,
+        &persona_tx,
         &mut slow_tick,
         &shutdown_for_loop,
     )
     .await;
 
-    // Drop input sender to close the executor's recv loop, then wait for flush
-    drop(input_tx);
+    // Drop all control senders so every receiver in the executor's
+    // `tokio::select!` closes. The executor only breaks on the
+    // `else => break` arm once *all* receivers are closed; dropping
+    // only `input_tx` left the others alive and caused the TUI to hang
+    // on `handle.await` after `run_event_loop` returned.
+    drop((
+        input_tx, cancel_tx, resume_tx, compact_tx, model_tx, undo_tx, plan_tx, persona_tx,
+    ));
     let _ = handle.await;
 
     // Save carryover profile
@@ -389,12 +463,17 @@ async fn run_event_loop(
     state: &mut AppState,
     event_rx: &mut mpsc::UnboundedReceiver<executor::TurnEvent>,
     approval_rx: &mut mpsc::UnboundedReceiver<ApprovalRequest>,
+    persona_rx: &mut mpsc::UnboundedReceiver<PersonaResult>,
     kb_rx: &mut mpsc::UnboundedReceiver<Event>,
     input_tx: &mpsc::UnboundedSender<String>,
     cancel_tx: &mpsc::UnboundedSender<()>,
     resume_tx: &mpsc::UnboundedSender<ConversationLog>,
     compact_tx: &mpsc::UnboundedSender<()>,
     model_tx: &mpsc::UnboundedSender<String>,
+    undo_tx: &mpsc::UnboundedSender<()>,
+    config_tx: &mpsc::UnboundedSender<Config>,
+    plan_tx: &mpsc::UnboundedSender<bool>,
+    persona_tx: &mpsc::UnboundedSender<PersonaResult>,
     slow_tick: &mut tokio::time::Interval,
     // One-shot shutdown signal. Fired by:
     //   - the SIGHUP handler (Unix, pty-close)
@@ -440,7 +519,9 @@ async fn run_event_loop(
         let mut kb_event: Option<Event> = None;
         let mut had_executor_event = false;
         let mut had_approval_event = false;
-        let mut had_approval_pending = state.pending_approval.is_some() || state.pending_bang.is_some();
+        let mut persona_result: Option<PersonaResult> = None;
+        let mut had_approval_pending =
+            state.pending_approval.is_some() || state.pending_bang.is_some();
         let mut dirty_from_tick = false;
 
         tokio::select! {
@@ -461,6 +542,14 @@ async fn run_event_loop(
             ev = approval_rx.recv() => {
                 if ev.is_some() {
                     had_approval_event = true;
+                }
+            }
+            ev = persona_rx.recv() => {
+                if let Some(result) = ev {
+                    // Store the result in a temporary location so we can
+                    // process it after the select! without holding a
+                    // borrow across the await point.
+                    persona_result = Some(result);
                 }
             }
             // Shutdown arm: SIGHUP or kb-reader-thread EOF. Higher
@@ -488,6 +577,10 @@ async fn run_event_loop(
         }
         if had_approval_event {
             drain_approval_requests(state, approval_rx);
+            state.mark_dirty();
+        }
+        if let Some(result) = persona_result {
+            handle_persona_complete(result, state, resume_tx, plan_tx).await;
             state.mark_dirty();
         }
         // Jobs and kb events are also work that may have been
@@ -519,12 +612,13 @@ async fn run_event_loop(
                     // arch concern #1) takes priority over the model
                     // approval because its response is purely local.
                     if state.pending_bang.is_some() {
-                        approval_keys::handle_bang_approval_key(key, state);
+                        approval_keys::handle_bang_approval_key(key, state).await;
                     } else if state.pending_approval.is_some() {
                         approval_keys::handle_approval_key(key, state);
                     } else {
                         keys::handle_input_key(
                             key, state, input_tx, cancel_tx, resume_tx, compact_tx, model_tx,
+                            undo_tx, config_tx, plan_tx, persona_tx,
                         )
                         .await?;
                     }
@@ -548,12 +642,13 @@ async fn run_event_loop(
             match ev {
                 Event::Key(key) => {
                     if state.pending_bang.is_some() {
-                        approval_keys::handle_bang_approval_key(key, state);
+                        approval_keys::handle_bang_approval_key(key, state).await;
                     } else if state.pending_approval.is_some() {
                         approval_keys::handle_approval_key(key, state);
                     } else {
                         keys::handle_input_key(
                             key, state, input_tx, cancel_tx, resume_tx, compact_tx, model_tx,
+                            undo_tx, config_tx, plan_tx, persona_tx,
                         )
                         .await?;
                     }
@@ -607,6 +702,17 @@ async fn run_event_loop(
             render_input(f, chunks[1], state);
             render_status(f, chunks[2], state);
 
+            // Session picker overlay (daemon follow-up). Shown when the
+            // user invokes `/resume` with no arguments, or at startup
+            // before the main event loop. The approval dialog takes
+            // precedence if both are somehow active — approvals are
+            // system-initiated and require immediate attention.
+            if state.pending_approval.is_none() && state.pending_bang.is_none() {
+                if let Some(ref picker) = state.session_picker {
+                    picker.render(f, size);
+                }
+            }
+
             // Approval dialog overlay.
             //
             // `render_approval_dialog` needs both a `&PendingApproval` (to
@@ -654,6 +760,94 @@ async fn run_event_loop(
     }
 }
 
+/// Merge a completed persona result back into the parent session.
+///
+/// 1. Append the persona's final assistant summary as a system message
+///    to the parent conversation log.
+/// 2. Reload the TUI message list from the updated log.
+/// 3. Send the updated log to the main executor via `resume_tx` so the
+///    next turn sees the merged context.
+/// 4. For `/plan`, additionally enter plan mode in the main executor and
+///    prompt the user to type `/implement`.
+async fn handle_persona_complete(
+    result: PersonaResult,
+    state: &mut AppState,
+    resume_tx: &mpsc::UnboundedSender<ConversationLog>,
+    plan_tx: &mpsc::UnboundedSender<bool>,
+) {
+    state.is_generating = false;
+    state.persona_in_progress = None;
+    state.persona_cancel = None;
+
+    if !result.success {
+        state.messages.push(ConversationEntry::new(
+            "system",
+            format!(
+                "{} persona failed: {}",
+                result.kind,
+                result.error.unwrap_or_default()
+            ),
+        ));
+        return;
+    }
+
+    let parent_path = match state.log_path.clone() {
+        Some(p) => p,
+        None => {
+            state.messages.push(ConversationEntry::new(
+                "system",
+                "Cannot merge persona result: no session log path.".to_string(),
+            ));
+            return;
+        }
+    };
+
+    let mut parent_log = match ConversationLog::open(parent_path.clone()) {
+        Ok(l) => l,
+        Err(e) => {
+            state.messages.push(ConversationEntry::new(
+                "system",
+                format!("Cannot open session log: {}", e),
+            ));
+            return;
+        }
+    };
+
+    let marker = format!(
+        "🤖 {} persona result for: {}\n\n{}",
+        result.kind, result.task, result.summary
+    );
+    if let Err(e) = parent_log.append(Message {
+        role: Role::System,
+        content: marker,
+        ..Default::default()
+    }) {
+        state.messages.push(ConversationEntry::new(
+            "system",
+            format!("Failed to merge persona: {}", e),
+        ));
+        return;
+    }
+
+    state.messages = messages_to_entries(parent_log.all());
+
+    if resume_tx.send(parent_log).is_err() {
+        state.messages.push(ConversationEntry::new(
+            "system",
+            "Executor gone; persona result saved to log only.".to_string(),
+        ));
+        return;
+    }
+
+    if result.kind == PersonaKind::Plan {
+        let _ = plan_tx.send(true);
+        state.messages.push(ConversationEntry::new(
+            "system",
+            "📐 Plan complete. Type /implement to allow edits and continue.".to_string(),
+        ));
+    }
+}
+
 /// Pure helper: produce a one-line summary of the differences between
 /// two `Config` values, used by the SIGHUP reload path to tell the
 /// user what changed (or that nothing did).
@@ -668,104 +862,16 @@ async fn run_event_loop(
 /// Returns an empty string when the two configs are equal on this
 /// subset, so the caller can show "no changes" instead of a
 /// confusing "0 changes" line.
-fn config_diff_summary(before: &crate::shared::Config, after: &crate::shared::Config) -> String {
-    let mut diffs: Vec<String> = Vec::new();
-    if before.default_model != after.default_model {
-        diffs.push(format!(
-            "default_model: {} → {}",
-            before.default_model, after.default_model
-        ));
-    }
-    if before.ollama_host != after.ollama_host {
-        diffs.push(format!(
-            "ollama_host: {} → {}",
-            before.ollama_host, after.ollama_host
-        ));
-    }
-    if before.auto_approve != after.auto_approve {
-        diffs.push(format!(
-            "auto_approve: {} → {}",
-            before.auto_approve, after.auto_approve
-        ));
-    }
-    if before.bang_requires_approval != after.bang_requires_approval {
-        diffs.push(format!(
-            "bang_requires_approval: {} → {}",
-            before.bang_requires_approval, after.bang_requires_approval
-        ));
-    }
-    if before.sandbox_dir != after.sandbox_dir {
-        diffs.push(format!(
-            "sandbox_dir: {:?} → {:?}",
-            before.sandbox_dir, after.sandbox_dir
-        ));
-    }
-    if before.routing_enabled != after.routing_enabled {
-        diffs.push(format!(
-            "routing_enabled: {} → {}",
-            before.routing_enabled, after.routing_enabled
-        ));
-    }
-    if before.summarize_enabled != after.summarize_enabled {
-        diffs.push(format!(
-            "summarize_enabled: {} → {}",
-            before.summarize_enabled, after.summarize_enabled
-        ));
-    }
-    diffs.join(", ")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::shared::Config;
+    use std::path::PathBuf;
 
-    #[test]
-    fn test_config_diff_summary_empty_for_equal() {
-        let a = Config::default();
-        let b = Config::default();
-        assert!(config_diff_summary(&a, &b).is_empty());
-    }
-
-    #[test]
-    fn test_config_diff_summary_model_change() {
-        let a = Config::default();
-        let mut b = Config::default();
-        b.default_model = "qwen2.5:3b".into();
-        let s = config_diff_summary(&a, &b);
-        assert!(s.contains("default_model"), "got: {}", s);
-        assert!(s.contains("→ qwen2.5:3b"), "got: {}", s);
-    }
-
-    #[test]
-    fn test_config_diff_summary_multiple_fields() {
-        let a = Config::default();
-        let mut b = Config::default();
-        b.default_model = "qwen2.5:3b".into();
-        b.auto_approve = true;
-        b.ollama_host = "http://example.com:11434".into();
-        let s = config_diff_summary(&a, &b);
-        // All three should appear; order is the field order above.
-        assert!(s.contains("default_model"), "got: {}", s);
-        assert!(s.contains("auto_approve"), "got: {}", s);
-        assert!(s.contains("ollama_host"), "got: {}", s);
-    }
-
-    #[test]
-    fn test_config_diff_summary_ignores_internal_fields() {
-        // deny_paths and friends should NOT show up in the diff
-        // even if they differ — those are internal/security knobs.
-        let a = Config::default();
-        let mut b = Config::default();
-        b.deny_paths = vec!["/secret".into()];
-        b.allowed_write_dirs = vec!["/tmp".into()];
-        let s = config_diff_summary(&a, &b);
-        assert!(
-            !s.contains("deny_paths") && !s.contains("allowed_write_dirs"),
-            "internal fields leaked: {}",
-            s
-        );
-        assert!(s.is_empty());
+    fn test_state_with_log(log_path: PathBuf) -> AppState {
+        let mut state = AppState::new(Arc::new(std::sync::RwLock::new(Config::default())));
+        state.log_path = Some(log_path);
+        state
     }
 
     // ── Shutdown-signal regression test ────────────────────────
@@ -798,8 +904,7 @@ mod tests {
             notify_for_task.notify_one();
         });
 
-        let mut slow_tick =
-            tokio::time::interval(std::time::Duration::from_millis(125));
+        let mut slow_tick = tokio::time::interval(std::time::Duration::from_millis(125));
         slow_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         let mut should_exit = false;
@@ -828,5 +933,137 @@ mod tests {
             "shutdown took too long: {:?}",
             started.elapsed()
         );
+    }
+
+    // ── Persona merge regression tests ─────────────────────────
+    //
+    // These pin the fork-isolation contract from ADR 010: only the
+    // final assistant summary is merged back into the parent log, and
+    // `/plan` additionally flips the parent executor into plan mode.
+
+    #[tokio::test]
+    async fn handle_persona_complete_merges_summary_and_resumes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let log_path = tmp.path().join("parent.ndjson");
+        let mut state = test_state_with_log(log_path.clone());
+
+        // Pre-seed the parent log so we can verify it is not replaced.
+        let mut parent = ConversationLog::open(log_path.clone()).unwrap();
+        parent
+            .append(Message {
+                role: Role::User,
+                content: "parent question".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        state.messages = messages_to_entries(parent.all());
+
+        let (resume_tx, mut resume_rx) = mpsc::unbounded_channel::<ConversationLog>();
+        let (plan_tx, _plan_rx) = mpsc::unbounded_channel::<bool>();
+
+        let result = PersonaResult {
+            kind: PersonaKind::Explore,
+            task: "find auth".into(),
+            fork_path: tmp.path().join("fork.ndjson"),
+            success: true,
+            summary: "auth is in src/auth.rs".into(),
+            error: None,
+        };
+
+        handle_persona_complete(result, &mut state, &resume_tx, &plan_tx).await;
+
+        // Parent log grew by one system message.
+        let reloaded = ConversationLog::open(log_path).unwrap();
+        assert_eq!(reloaded.all().len(), 2);
+        let merged = &reloaded.all()[1];
+        assert_eq!(merged.role, Role::System);
+        assert!(merged.content.contains("explore persona result"));
+        assert!(merged.content.contains("auth is in src/auth.rs"));
+
+        // TUI message list mirrors the persisted log.
+        assert_eq!(state.messages.len(), 2);
+        assert!(state.messages[1].content.contains("explore persona result"));
+
+        // Resume channel forwarded the updated log.
+        assert!(resume_rx.try_recv().is_ok());
+    }
+
+    #[tokio::test]
+    async fn handle_persona_complete_plan_enters_plan_mode() {
+        let tmp = tempfile::tempdir().unwrap();
+        let log_path = tmp.path().join("parent.ndjson");
+        let mut state = test_state_with_log(log_path.clone());
+
+        let (resume_tx, mut resume_rx) = mpsc::unbounded_channel::<ConversationLog>();
+        let (plan_tx, mut plan_rx) = mpsc::unbounded_channel::<bool>();
+
+        let result = PersonaResult {
+            kind: PersonaKind::Plan,
+            task: "add dark mode".into(),
+            fork_path: tmp.path().join("fork.ndjson"),
+            success: true,
+            summary: "Plan summary".into(),
+            error: None,
+        };
+
+        handle_persona_complete(result, &mut state, &resume_tx, &plan_tx).await;
+
+        // Plan persona flips plan mode on and prompts for /implement.
+        assert_eq!(plan_rx.try_recv(), Ok(true));
+        assert!(state
+            .messages
+            .iter()
+            .any(|m| m.content.contains("/implement")));
+
+        // Updated log was still sent to the executor.
+        assert!(resume_rx.try_recv().is_ok());
+    }
+
+    #[tokio::test]
+    async fn handle_persona_complete_failure_does_not_pollute_log() {
+        let tmp = tempfile::tempdir().unwrap();
+        let log_path = tmp.path().join("parent.ndjson");
+        let mut state = test_state_with_log(log_path.clone());
+
+        // Seed a single parent message.
+        let mut parent = ConversationLog::open(log_path.clone()).unwrap();
+        parent
+            .append(Message {
+                role: Role::User,
+                content: "parent question".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        state.messages = messages_to_entries(parent.all());
+
+        let (resume_tx, mut resume_rx) = mpsc::unbounded_channel::<ConversationLog>();
+        let (plan_tx, mut plan_rx) = mpsc::unbounded_channel::<bool>();
+
+        let result = PersonaResult {
+            kind: PersonaKind::Coder,
+            task: "refactor".into(),
+            fork_path: tmp.path().join("fork.ndjson"),
+            success: false,
+            summary: String::new(),
+            error: Some("fork log missing".into()),
+        };
+
+        handle_persona_complete(result, &mut state, &resume_tx, &plan_tx).await;
+
+        // Log on disk is untouched.
+        let reloaded = ConversationLog::open(log_path).unwrap();
+        assert_eq!(reloaded.all().len(), 1);
+
+        // UI shows the error, not a merged summary.
+        assert!(state
+            .messages
+            .last()
+            .unwrap()
+            .content
+            .contains("coder persona failed"));
+
+        // No resume or plan signals were sent.
+        assert!(resume_rx.try_recv().is_err());
+        assert!(plan_rx.try_recv().is_err());
     }
 }

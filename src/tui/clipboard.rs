@@ -45,6 +45,7 @@ mod tests {
     /// — it doesn't lie. The error is reported, not silently
     /// swallowed.
     #[test]
+    #[ignore = "requires a display server (skipped on headless CI)"]
     fn copy_to_clipboard_round_trips_short_ascii() {
         match copy_to_clipboard("hello clipboard") {
             Ok(n) => assert_eq!(n, "hello clipboard".len()),

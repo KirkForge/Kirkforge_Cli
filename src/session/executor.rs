@@ -171,7 +171,10 @@ impl Executor {
             None, // model_type_override not available here; set via CLI
         );
 
-        let hook_runner = HookRunner::default();
+        let hook_runner = match &cfg.hooks_dir {
+            Some(dir) => HookRunner::new(dir.clone()),
+            None => HookRunner::default(),
+        };
 
         let event_bus = EventBus::new();
 
@@ -1399,13 +1402,30 @@ impl Executor {
             args: tc.arguments.clone(),
         });
 
-        // Pre-tool hook
+        // Pre-tool hook: gating hooks may deny the call with exit code 2.
         let args_json = serde_json::to_string(&tc.arguments).unwrap_or_default();
-        self.run_hook(
-            &format!("pre-tool-{}", tc.name),
-            Some(&tc.name),
-            Some(&args_json),
-        );
+        if let Some(reason) = self
+            .run_pre_tool_hook(
+                &format!("pre-tool-{}", tc.name),
+                Some(&tc.name),
+                Some(&args_json),
+            )
+            .await
+        {
+            events.push(TurnEvent::ToolResult {
+                name: tc.name.clone(),
+                output: reason.clone(),
+                success: false,
+            });
+            self.conversation.append(Message {
+                role: Role::Tool,
+                content: reason,
+                tool_call_id: Some(tc.id.clone()),
+                tool_name: Some(tc.name.clone()),
+                ..Default::default()
+            })?;
+            return Ok(());
+        }
 
         let outcome = tool.run(tc.arguments.clone()).await;
 
@@ -2153,6 +2173,7 @@ mod tests {
             preserve_recent_messages: 2,
             max_plugin_trust: kirkforge_plugin::TrustTier::Shell,
             max_persona_turns: 10,
+            hooks_dir: None,
         }
     }
 
@@ -3505,6 +3526,182 @@ mod tests {
             events.iter().any(|e| matches!(e, TurnEvent::PlanComplete)),
             "Expected PlanComplete event, got events: {:?}",
             events
+        );
+    }
+
+    fn temp_hooks_dir() -> (tempfile::TempDir, std::path::PathBuf) {
+        let tmp = tempfile::tempdir().unwrap();
+        let hooks_dir = tmp.path().join("hooks");
+        std::fs::create_dir_all(&hooks_dir).unwrap();
+        (tmp, hooks_dir)
+    }
+
+    #[tokio::test]
+    async fn test_pre_tool_hook_exit_two_blocks_bash() {
+        let captured = Arc::new(Mutex::new(None));
+        let tool = MockTool {
+            def: ToolDef {
+                name: "bash",
+                description: "run a command",
+                parameters: serde_json::json!(
+                    {"type": "object", "properties": {"command": {"type": "string"}}}
+                ),
+            },
+            captured_args: captured.clone(),
+            outcome: ToolOutcome::Success {
+                content: "ran".into(),
+            },
+        };
+
+        let adapter = MockAdapter::new(
+            vec![
+                StreamEvent::ToolCall(ToolInvocation {
+                    id: "call-1".into(),
+                    name: "bash".into(),
+                    arguments: serde_json::json!({"command": "echo hi"}),
+                }),
+                StreamEvent::Done {
+                    finish_reason: FinishReason::ToolCalls,
+                    usage: None,
+                },
+            ],
+            make_info(),
+        );
+
+        let (_tmp, hooks_dir) = temp_hooks_dir();
+        std::fs::write(hooks_dir.join("pre-tool-bash.sh"), "#!/bin/bash\nexit 2").unwrap();
+
+        let mut config = make_config(true);
+        config.hooks_dir = Some(hooks_dir);
+        let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], config);
+
+        let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
+        let events = exe
+            .run_turn("run command", &approval_tx, never_cancelled())
+            .await
+            .unwrap();
+
+        assert!(
+            captured.lock().unwrap().is_none(),
+            "pre-tool hook exit 2 must prevent the bash tool from running"
+        );
+        let denied = events.iter().any(|e| {
+            matches!(
+                e,
+                TurnEvent::ToolResult { name, output, .. }
+                    if name == "bash" && output.contains("denied")
+            )
+        });
+        assert!(
+            denied,
+            "Expected a hook-denial ToolResult, got events: {:?}",
+            events
+        );
+    }
+
+    #[tokio::test]
+    async fn test_pre_tool_hook_exit_one_allows_and_warns() {
+        let captured = Arc::new(Mutex::new(None));
+        let tool = MockTool {
+            def: ToolDef {
+                name: "bash",
+                description: "run a command",
+                parameters: serde_json::json!(
+                    {"type": "object", "properties": {"command": {"type": "string"}}}
+                ),
+            },
+            captured_args: captured.clone(),
+            outcome: ToolOutcome::Success {
+                content: "ran".into(),
+            },
+        };
+
+        let adapter = MockAdapter::new(
+            vec![
+                StreamEvent::ToolCall(ToolInvocation {
+                    id: "call-1".into(),
+                    name: "bash".into(),
+                    arguments: serde_json::json!({"command": "echo hi"}),
+                }),
+                StreamEvent::Done {
+                    finish_reason: FinishReason::ToolCalls,
+                    usage: None,
+                },
+            ],
+            make_info(),
+        );
+
+        let (_tmp, hooks_dir) = temp_hooks_dir();
+        std::fs::write(
+            hooks_dir.join("pre-tool-bash.sh"),
+            "#!/bin/bash\necho warning >&2\nexit 1",
+        )
+        .unwrap();
+
+        let mut config = make_config(true);
+        config.hooks_dir = Some(hooks_dir);
+        let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], config);
+
+        let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
+        let _events = exe
+            .run_turn("run command", &approval_tx, never_cancelled())
+            .await
+            .unwrap();
+
+        assert!(
+            captured.lock().unwrap().is_some(),
+            "pre-tool hook exit 1 must be fail-open and allow the bash tool to run"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_pre_tool_hook_timeout_allows_and_warns() {
+        let captured = Arc::new(Mutex::new(None));
+        let tool = MockTool {
+            def: ToolDef {
+                name: "bash",
+                description: "run a command",
+                parameters: serde_json::json!(
+                    {"type": "object", "properties": {"command": {"type": "string"}}}
+                ),
+            },
+            captured_args: captured.clone(),
+            outcome: ToolOutcome::Success {
+                content: "ran".into(),
+            },
+        };
+
+        let adapter = MockAdapter::new(
+            vec![
+                StreamEvent::ToolCall(ToolInvocation {
+                    id: "call-1".into(),
+                    name: "bash".into(),
+                    arguments: serde_json::json!({"command": "echo hi"}),
+                }),
+                StreamEvent::Done {
+                    finish_reason: FinishReason::ToolCalls,
+                    usage: None,
+                },
+            ],
+            make_info(),
+        );
+
+        let (_tmp, hooks_dir) = temp_hooks_dir();
+        std::fs::write(hooks_dir.join("pre-tool-bash.sh"), "#!/bin/bash\nsleep 10").unwrap();
+
+        let mut config = make_config(true);
+        config.hooks_dir = Some(hooks_dir);
+        let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], config);
+
+        let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
+        let _events = exe
+            .run_turn("run command", &approval_tx, never_cancelled())
+            .await
+            .unwrap();
+
+        assert!(
+            captured.lock().unwrap().is_some(),
+            "pre-tool hook timeout must be fail-open and allow the bash tool to run"
         );
     }
 }

@@ -292,6 +292,13 @@ pub struct Config {
     /// as an on/off guard and a reservation for future multi-turn personas.
     #[serde(default = "default_max_persona_turns")]
     pub max_persona_turns: usize,
+
+    /// Optional directory containing lifecycle hook scripts (`<event>.sh`).
+    /// When `None`, the executor uses the default hooks directory
+    /// (`~/.local/share/kirkforge/hooks/`). Set this for tests or custom
+    /// deployments.
+    #[serde(default)]
+    pub hooks_dir: Option<PathBuf>,
 }
 
 /// Configuration for a single MCP server connection.
@@ -389,6 +396,7 @@ impl Default for Config {
             preserve_recent_messages: default_preserve_recent_messages(),
             max_plugin_trust: default_max_plugin_trust(),
             max_persona_turns: default_max_persona_turns(),
+            hooks_dir: None,
         }
     }
 }

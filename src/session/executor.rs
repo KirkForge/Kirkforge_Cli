@@ -1188,6 +1188,8 @@ impl Executor {
         if self.plan_mode {
             let allowed = match tc.name.as_str() {
                 "read_file" | "read_image" | "grep" | "glob" => true,
+                // Job-status queries are read-only and useful while planning.
+                "bash_status" | "bash_cancel" => true,
                 "bash" => tc
                     .arguments
                     .get("command")
@@ -3622,6 +3624,129 @@ mod tests {
             )
         });
         assert!(allowed, "Expected bash result, got events: {:?}", events);
+    }
+
+    #[tokio::test]
+    async fn test_plan_mode_allows_bash_status() {
+        let captured = Arc::new(Mutex::new(None));
+        let tool = MockTool {
+            def: ToolDef {
+                name: "bash_status",
+                description: "check job status",
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {"id": {"type": "string"}}
+                }),
+            },
+            captured_args: captured.clone(),
+            outcome: ToolOutcome::Success {
+                content: "running".into(),
+            },
+        };
+
+        let adapter = MockAdapter::new(
+            vec![
+                StreamEvent::ToolCall(ToolInvocation {
+                    id: "call-1".into(),
+                    name: "bash_status".into(),
+                    arguments: serde_json::json!({"id": "job-1"}),
+                }),
+                StreamEvent::Done {
+                    finish_reason: FinishReason::ToolCalls,
+                    usage: None,
+                },
+            ],
+            make_info(),
+        );
+
+        let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
+        let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(true));
+        exe.set_plan_mode(true);
+
+        let events = exe
+            .run_turn("check job", &approval_tx, never_cancelled())
+            .await
+            .unwrap();
+
+        assert!(
+            captured.lock().unwrap().is_some(),
+            "bash_status should run in plan mode"
+        );
+        let allowed = events.iter().any(|e| {
+            matches!(
+                e,
+                TurnEvent::ToolResult { name, output, .. }
+                    if name == "bash_status" && output == "running"
+            )
+        });
+        assert!(
+            allowed,
+            "Expected bash_status result, got events: {:?}",
+            events
+        );
+    }
+
+    #[tokio::test]
+    async fn test_plan_mode_allows_bash_cancel_for_read_only_query() {
+        // bash_cancel is a read-only status query in plan mode (it only
+        // asks to cancel a job; we treat it as allowed because it does not
+        // mutate the worktree or read new files).
+        let captured = Arc::new(Mutex::new(None));
+        let tool = MockTool {
+            def: ToolDef {
+                name: "bash_cancel",
+                description: "cancel a job",
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {"id": {"type": "string"}}
+                }),
+            },
+            captured_args: captured.clone(),
+            outcome: ToolOutcome::Success {
+                content: "cancelled".into(),
+            },
+        };
+
+        let adapter = MockAdapter::new(
+            vec![
+                StreamEvent::ToolCall(ToolInvocation {
+                    id: "call-1".into(),
+                    name: "bash_cancel".into(),
+                    arguments: serde_json::json!({"id": "job-1"}),
+                }),
+                StreamEvent::Done {
+                    finish_reason: FinishReason::ToolCalls,
+                    usage: None,
+                },
+            ],
+            make_info(),
+        );
+
+        let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
+        let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(true));
+        exe.set_plan_mode(true);
+
+        let events = exe
+            .run_turn("cancel job", &approval_tx, never_cancelled())
+            .await
+            .unwrap();
+
+        assert!(
+            captured.lock().unwrap().is_some(),
+            "bash_cancel should run in plan mode"
+        );
+        let allowed = events.iter().any(|e| {
+            matches!(
+                e,
+                TurnEvent::ToolResult { name, output, .. }
+                    if name == "bash_cancel" && output == "cancelled"
+            )
+        });
+        assert!(
+            allowed,
+            "Expected bash_cancel result, got events: {:?}",
+            events
+        );
     }
 
     #[tokio::test]

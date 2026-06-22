@@ -865,6 +865,14 @@ async fn handle_persona_complete(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shared::Config;
+    use std::path::PathBuf;
+
+    fn test_state_with_log(log_path: PathBuf) -> AppState {
+        let mut state = AppState::new(Arc::new(std::sync::RwLock::new(Config::default())));
+        state.log_path = Some(log_path);
+        state
+    }
 
     // ── Shutdown-signal regression test ────────────────────────
     //
@@ -925,5 +933,137 @@ mod tests {
             "shutdown took too long: {:?}",
             started.elapsed()
         );
+    }
+
+    // ── Persona merge regression tests ─────────────────────────
+    //
+    // These pin the fork-isolation contract from ADR 010: only the
+    // final assistant summary is merged back into the parent log, and
+    // `/plan` additionally flips the parent executor into plan mode.
+
+    #[tokio::test]
+    async fn handle_persona_complete_merges_summary_and_resumes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let log_path = tmp.path().join("parent.ndjson");
+        let mut state = test_state_with_log(log_path.clone());
+
+        // Pre-seed the parent log so we can verify it is not replaced.
+        let mut parent = ConversationLog::open(log_path.clone()).unwrap();
+        parent
+            .append(Message {
+                role: Role::User,
+                content: "parent question".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        state.messages = messages_to_entries(parent.all());
+
+        let (resume_tx, mut resume_rx) = mpsc::unbounded_channel::<ConversationLog>();
+        let (plan_tx, _plan_rx) = mpsc::unbounded_channel::<bool>();
+
+        let result = PersonaResult {
+            kind: PersonaKind::Explore,
+            task: "find auth".into(),
+            fork_path: tmp.path().join("fork.ndjson"),
+            success: true,
+            summary: "auth is in src/auth.rs".into(),
+            error: None,
+        };
+
+        handle_persona_complete(result, &mut state, &resume_tx, &plan_tx).await;
+
+        // Parent log grew by one system message.
+        let reloaded = ConversationLog::open(log_path).unwrap();
+        assert_eq!(reloaded.all().len(), 2);
+        let merged = &reloaded.all()[1];
+        assert_eq!(merged.role, Role::System);
+        assert!(merged.content.contains("explore persona result"));
+        assert!(merged.content.contains("auth is in src/auth.rs"));
+
+        // TUI message list mirrors the persisted log.
+        assert_eq!(state.messages.len(), 2);
+        assert!(state.messages[1].content.contains("explore persona result"));
+
+        // Resume channel forwarded the updated log.
+        assert!(resume_rx.try_recv().is_ok());
+    }
+
+    #[tokio::test]
+    async fn handle_persona_complete_plan_enters_plan_mode() {
+        let tmp = tempfile::tempdir().unwrap();
+        let log_path = tmp.path().join("parent.ndjson");
+        let mut state = test_state_with_log(log_path.clone());
+
+        let (resume_tx, mut resume_rx) = mpsc::unbounded_channel::<ConversationLog>();
+        let (plan_tx, mut plan_rx) = mpsc::unbounded_channel::<bool>();
+
+        let result = PersonaResult {
+            kind: PersonaKind::Plan,
+            task: "add dark mode".into(),
+            fork_path: tmp.path().join("fork.ndjson"),
+            success: true,
+            summary: "Plan summary".into(),
+            error: None,
+        };
+
+        handle_persona_complete(result, &mut state, &resume_tx, &plan_tx).await;
+
+        // Plan persona flips plan mode on and prompts for /implement.
+        assert_eq!(plan_rx.try_recv(), Ok(true));
+        assert!(state
+            .messages
+            .iter()
+            .any(|m| m.content.contains("/implement")));
+
+        // Updated log was still sent to the executor.
+        assert!(resume_rx.try_recv().is_ok());
+    }
+
+    #[tokio::test]
+    async fn handle_persona_complete_failure_does_not_pollute_log() {
+        let tmp = tempfile::tempdir().unwrap();
+        let log_path = tmp.path().join("parent.ndjson");
+        let mut state = test_state_with_log(log_path.clone());
+
+        // Seed a single parent message.
+        let mut parent = ConversationLog::open(log_path.clone()).unwrap();
+        parent
+            .append(Message {
+                role: Role::User,
+                content: "parent question".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        state.messages = messages_to_entries(parent.all());
+
+        let (resume_tx, mut resume_rx) = mpsc::unbounded_channel::<ConversationLog>();
+        let (plan_tx, mut plan_rx) = mpsc::unbounded_channel::<bool>();
+
+        let result = PersonaResult {
+            kind: PersonaKind::Coder,
+            task: "refactor".into(),
+            fork_path: tmp.path().join("fork.ndjson"),
+            success: false,
+            summary: String::new(),
+            error: Some("fork log missing".into()),
+        };
+
+        handle_persona_complete(result, &mut state, &resume_tx, &plan_tx).await;
+
+        // Log on disk is untouched.
+        let reloaded = ConversationLog::open(log_path).unwrap();
+        assert_eq!(reloaded.all().len(), 1);
+
+        // UI shows the error, not a merged summary.
+        assert!(state
+            .messages
+            .last()
+            .unwrap()
+            .content
+            .contains("coder persona failed"));
+
+        // No resume or plan signals were sent.
+        assert!(resume_rx.try_recv().is_err());
+        assert!(plan_rx.try_recv().is_err());
     }
 }

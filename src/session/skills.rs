@@ -23,6 +23,8 @@
 ///
 /// The body after the frontmatter is the system prompt that's injected
 /// when the skill is invoked.
+use kirkforge_plugin::{Capability, TrustTier};
+use kirkforge_plugin_host::{PluginRegistry, TrustPolicy};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -51,8 +53,12 @@ pub struct Skill {
 
 impl Skill {
     /// Render the full system prompt for this skill, appending user input.
+    ///
+    /// Plugin prompts may contain a `{{args}}` placeholder; it is replaced
+    /// with the user input before the standard suffix is appended.
     pub fn render_prompt(&self, user_input: &str) -> String {
-        format!("{}\n\nUser request: {}", self.prompt_body, user_input)
+        let body = self.prompt_body.replace("{{args}}", user_input);
+        format!("{}\n\nUser request: {}", body, user_input)
     }
 }
 
@@ -62,6 +68,9 @@ pub struct SkillRegistry {
     skills: HashMap<String, Skill>,
     triggers: HashMap<String, String>, // trigger → name
     scan_paths: Vec<PathBuf>,
+    plugin_registry: PluginRegistry,
+    plugin_warnings: Vec<String>,
+    max_plugin_trust: TrustTier,
 }
 
 impl SkillRegistry {
@@ -70,7 +79,15 @@ impl SkillRegistry {
             skills: HashMap::new(),
             triggers: HashMap::new(),
             scan_paths: vec![PathBuf::from(".claude/skills")],
+            plugin_registry: PluginRegistry::new(),
+            plugin_warnings: Vec::new(),
+            max_plugin_trust: TrustTier::Shell,
         }
+    }
+
+    /// Set the maximum trust tier for loaded plugins.
+    pub fn set_max_plugin_trust(&mut self, max: TrustTier) {
+        self.max_plugin_trust = max;
     }
 
     /// Add a directory to scan for SKILL.md files.
@@ -82,6 +99,9 @@ impl SkillRegistry {
     }
 
     /// Scan all registered paths and load any SKILL.md files found.
+    ///
+    /// Also loads plugin directories from `~/.local/share/kirkforge/plugins`
+    /// and registers any plugin skills whose trust tier is allowed.
     pub fn scan_and_load(&mut self) -> anyhow::Result<usize> {
         let mut count = 0;
         let paths = self.scan_paths.clone();
@@ -91,7 +111,73 @@ impl SkillRegistry {
             }
             count += self.load_from_dir(base)?;
         }
+        count += self.load_plugins()?;
         Ok(count)
+    }
+
+    /// Load plugins from the canonical data-directory plugins folder and
+    /// register their skills.
+    fn load_plugins(&mut self) -> anyhow::Result<usize> {
+        let plugins_dir = crate::session::data_dir()
+            .map(|d| d.join("plugins"))
+            .unwrap_or_else(|_| PathBuf::from(".local/share/kirkforge/plugins"));
+
+        self.plugin_registry = PluginRegistry::new();
+        let warnings = self
+            .plugin_registry
+            .load_from_dir(&plugins_dir, TrustPolicy::up_to(self.max_plugin_trust))
+            .unwrap_or_default();
+        self.plugin_warnings = warnings;
+
+        let mut count = 0;
+        for trigger in self.plugin_registry.skill_triggers() {
+            let Some((manifest, plugin)) = self.plugin_registry.skill_by_trigger(&trigger) else {
+                continue;
+            };
+            let prompt_template = plugin.skill_prompt(&trigger, "").unwrap_or_default();
+            let model_hint = manifest.capabilities.iter().find_map(|c| match c {
+                Capability::Skill {
+                    trigger: t,
+                    model_hint,
+                    ..
+                } if t == &trigger => model_hint.clone(),
+                _ => None,
+            });
+
+            let skill = Skill {
+                meta: SkillMeta {
+                    name: format!("{}-{}", manifest.name, trigger.trim_start_matches('/')),
+                    description: format!("{} [{} plugin]", manifest.description, manifest.trust),
+                    trigger: trigger.clone(),
+                    model: model_hint,
+                },
+                prompt_body: prompt_template,
+                source_dir: plugin
+                    .manifest()
+                    .metadata
+                    .get("source_dir")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| plugins_dir.clone()),
+            };
+            self.register(skill);
+            count += 1;
+        }
+        Ok(count)
+    }
+
+    /// Warnings emitted while loading plugins (trust rejections, parse
+    /// failures, etc.).
+    pub fn plugin_warnings(&self) -> &[String] {
+        &self.plugin_warnings
+    }
+
+    /// Active plugin manifests, useful for status/logging.
+    pub fn active_plugins(&self) -> Vec<&kirkforge_plugin::PluginManifest> {
+        self.plugin_registry
+            .active_plugins()
+            .iter()
+            .map(|p| &p.plugin.manifest)
+            .collect()
     }
 
     /// Recursively scan a directory for SKILL.md files.

@@ -186,9 +186,11 @@ pub async fn run_tui(
     // the SIGHUP / reconnect signal path.
     state.connection = probe_ollama_connection(&cfg_for_startup).await;
 
-    // Skills — load any project-local SKILL.md files from registered scan paths,
+    // Skills — load project-local SKILL.md files and plugin directories,
     // then layer the built-in skills on top. (Missing dirs are silently skipped,
     // so an empty project is fine.)
+    let max_trust = cfg_for_startup.max_plugin_trust;
+    state.skill_registry.set_max_plugin_trust(max_trust);
     if let Err(e) = state.skill_registry.scan_and_load() {
         tracing::warn!("Skill scan error: {}", e);
     }

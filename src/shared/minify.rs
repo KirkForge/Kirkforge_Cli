@@ -841,7 +841,10 @@ mod tests {
         // the size can decrease between two reads even when the test
         // is doing the right thing. Asserting on a specific key
         // removes the race entirely.
-        let tmp = std::env::temp_dir().join("kirkforge_minify_cache_test.txt");
+        let tmp = std::env::temp_dir().join(format!(
+            "kirkforge_minify_cache_test_{}.txt",
+            std::process::id()
+        ));
         std::fs::write(&tmp, "x = 1 # comment").unwrap();
 
         // Sanity: the cache should not already contain this path

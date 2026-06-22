@@ -4,6 +4,7 @@
 pub mod minify;
 pub mod permission;
 
+use kirkforge_plugin::TrustTier;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -278,6 +279,11 @@ pub struct Config {
     /// stubbed/condensed. Must be at least 1.
     #[serde(default = "default_preserve_recent_messages")]
     pub preserve_recent_messages: usize,
+
+    /// Maximum trust tier allowed for loaded plugins. Plugins that request
+    /// more trust are rejected at load time.
+    #[serde(default = "default_max_plugin_trust")]
+    pub max_plugin_trust: TrustTier,
 }
 
 /// Configuration for a single MCP server connection.
@@ -313,6 +319,10 @@ fn default_max_file_read_size() -> usize {
 
 fn default_preserve_recent_messages() -> usize {
     2
+}
+
+fn default_max_plugin_trust() -> TrustTier {
+    TrustTier::Shell
 }
 
 impl Default for Config {
@@ -365,6 +375,7 @@ impl Default for Config {
             bang_requires_approval: false,
             json_mode: false,
             preserve_recent_messages: default_preserve_recent_messages(),
+            max_plugin_trust: default_max_plugin_trust(),
         }
     }
 }

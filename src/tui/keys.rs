@@ -442,6 +442,7 @@ pub async fn handle_input_key(
                         "/help" | "/h" | "/?" => {
                             let mut help_text =
                                 "Built-in commands:\n  /clear    Clear conversation\n  /exit     Quit\n  /fork     Fork session: /fork list | <label> [count]\n  /resume   Resume a fork: /resume <fork-id>\n  /jobs     Background bash jobs: /jobs | <id> | clean\n  /status   Show model, cost, tokens, and context pressure (one-shot)\n  /model    Hot-swap the active model: /model <name> (bypasses smart routing)\n  /compact  Compact conversation history: drop old tool results, condense old assistant turns. Destructive — see TUI for stats.
+  /commit   Commit changes safely: /commit shows status + suggested message; /commit \"message\" stages all and commits after sanitation checks.
   /undo     Undo the most recent edit_file or write_file. /undo list shows the stack; /undo count prints the depth.
   /sessions List saved sessions, prune old ones, or delete one by id.
   /test     Run cargo test --no-fail-fast; surface a parsed pass/fail summary with file:line locations. Optional: /test <timeout-secs>.\n\nBash passthrough:\n  !<command>  Run a shell command directly — no model round trip, no approval. Output is shown as a collapsible tool entry. 30-second timeout; for long jobs use `!<cmd> &` and check /jobs.\n\n@-mentions (inline file context):\n  @<path>          Inline the file's contents into the prompt (minified by default). The TUI shows a status row per mention.\n  @<path>:raw      Inline the file verbatim, no minification.\n  @<path>:A-B      Inline lines A–B (1-indexed, inclusive on both ends).\n  @<path>:A-B:raw  Range + verbatim, combined.\n  @~/...           Tilde expansion supported (e.g. @~/notes.md).\n  Multiple @<path> tokens in one input are all expanded. Each mention is capped at 50 KB (head + tail + marker) and respects the same path-safety rules as the model's read_file tool. Failures (missing, denied, I/O) are shown in the TUI as ✗ rows and as quoted placeholders in the prompt, so the model can react.\n\nKeybindings:\n  Ctrl+T   Toggle tool output collapse (default ON)\n  Ctrl+F   Search the conversation (Enter to commit, n / Shift+N to cycle, Esc to cancel)\n  Enter    Expand/collapse the most recent tool output (when input is empty)\n  Tab      Same as Enter (alternative expand gesture)\n  Ctrl+C   Cancel generation + clear input
@@ -565,6 +566,13 @@ pub async fn handle_input_key(
                             let cwd = std::env::current_dir()
                                 .unwrap_or_else(|_| std::path::PathBuf::from("."));
                             let msg = crate::tui::commands::handle_init_command(args, &cwd);
+                            state.messages.push(ConversationEntry::new("system", msg));
+                            return Ok(());
+                        }
+                        "/commit" => {
+                            let cwd = std::env::current_dir()
+                                .unwrap_or_else(|_| std::path::PathBuf::from("."));
+                            let msg = crate::tui::commands::handle_commit_command(args, &cwd).await;
                             state.messages.push(ConversationEntry::new("system", msg));
                             return Ok(());
                         }

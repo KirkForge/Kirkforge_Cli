@@ -10,6 +10,7 @@ pub mod conversation;
 pub mod error_recovery;
 pub mod event_bus;
 pub mod executor;
+pub mod git_sanitation;
 pub mod hooks;
 pub mod mcp_client;
 pub mod mcp_tools;

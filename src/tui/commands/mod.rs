@@ -1,4 +1,5 @@
 pub mod bang;
+pub mod commit;
 pub mod compact;
 pub mod fork;
 pub mod github;
@@ -16,6 +17,7 @@ pub mod test_parse;
 pub mod undo;
 
 pub use bang::*;
+pub use commit::*;
 pub use compact::*;
 pub use fork::*;
 pub use github::*;

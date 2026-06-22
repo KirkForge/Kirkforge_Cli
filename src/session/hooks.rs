@@ -461,10 +461,18 @@ mod tests {
 
         runner.run("post-turn", &[("KF_EVENT", "post-turn")], &default_config());
 
-        // Give the spawned task a moment to run
-        tokio::time::sleep(std::time::Duration::from_millis(800)).await;
-
-        let content = std::fs::read_to_string(&marker).unwrap_or_else(|_| String::from("not-run"));
+        // Poll for the marker so the test stays stable under heavy
+        // parallel test loads. Give up after ~2 seconds.
+        let mut content = String::from("not-run");
+        for _ in 0..40 {
+            if let Ok(c) = std::fs::read_to_string(&marker) {
+                content = c;
+                if content.trim() == "post-turn" {
+                    break;
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
         assert_eq!(content.trim(), "post-turn");
     }
 
@@ -497,9 +505,16 @@ mod tests {
             &default_config(),
         );
 
-        tokio::time::sleep(std::time::Duration::from_millis(800)).await;
-
-        let content = std::fs::read_to_string(&marker).unwrap_or_default();
+        let mut content = String::new();
+        for _ in 0..40 {
+            if let Ok(c) = std::fs::read_to_string(&marker) {
+                content = c;
+                if content.trim() == "bash,pre-tool-bash" {
+                    break;
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
         assert_eq!(content.trim(), "bash,pre-tool-bash");
     }
 

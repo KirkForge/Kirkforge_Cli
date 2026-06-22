@@ -2253,6 +2253,7 @@ mod tests {
             max_plugin_trust: kirkforge_plugin::TrustTier::Shell,
             max_persona_turns: 10,
             hooks_dir: None,
+            commit_max_file_size: 5 * 1024 * 1024,
         }
     }
 

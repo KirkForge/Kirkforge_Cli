@@ -34,6 +34,7 @@ cargo run -- daemon
 - **MCP tools** — optional external tool servers via `[[mcp_servers]]` in config.
 - **Enforced plan mode** — `/plan` locks the executor to read-only tools until you type `/implement`.
 - **Subagent personas** — `/explore`, `/plan`, and `/coder` run isolated fork sessions with restricted toolsets and merge a summary back.
+- **Safe git commit helper** — `/commit` runs pre-commit sanitation (large files, secrets, conflict markers) and suggests a conventional-commit message; `/commit --push "message"` commits and pushes.
 
 ## Config
 

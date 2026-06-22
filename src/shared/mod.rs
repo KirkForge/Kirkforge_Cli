@@ -240,6 +240,13 @@ pub struct Config {
     #[serde(default)]
     pub routing_model_map: HashMap<String, String>,
 
+    /// Maximum file size (in bytes) allowed in a commit produced by the
+    /// `/commit` command. Files larger than this are a hard blocker. The
+    /// default is 5 MiB — enough for small assets but small enough to catch
+    /// accidentally committed binaries and dumps.
+    #[serde(default = "default_commit_max_file_size")]
+    pub commit_max_file_size: u64,
+
     /// MCP (Model Context Protocol) servers to connect to at session start.
     /// Each server is spawned as a subprocess and its tools are made
     /// available alongside built-in tools (prefixed with `mcp/<server>/`).
@@ -344,6 +351,10 @@ fn default_max_persona_turns() -> usize {
     10
 }
 
+fn default_commit_max_file_size() -> u64 {
+    5 * 1024 * 1024
+}
+
 impl Default for Config {
     fn default() -> Self {
         // `sandbox_dir` is left as `None` here. The launch-time
@@ -397,6 +408,7 @@ impl Default for Config {
             max_plugin_trust: default_max_plugin_trust(),
             max_persona_turns: default_max_persona_turns(),
             hooks_dir: None,
+            commit_max_file_size: default_commit_max_file_size(),
         }
     }
 }

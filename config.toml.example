@@ -138,3 +138,11 @@
 # When true, request JSON-formatted responses. Models vary in how well they
 # honor this; tool calls may still appear inline. Default: false.
 # json_mode = false
+
+# ---------------------------------------------------------------------------
+# Git commit helper
+# ---------------------------------------------------------------------------
+
+# Maximum file size (in bytes) allowed in a `/commit`. Files larger than this
+# are a hard blocker. Default: 5242880 (5 MiB).
+# commit_max_file_size = 5242880

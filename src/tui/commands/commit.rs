@@ -9,25 +9,63 @@
 //! - `/commit "message"` runs sanitation and, if no blockers are found,
 //!   stages all changes (`git add -A`) and commits with the supplied
 //!   message.
+//! - `/commit --push "message"` does the same and then pushes the current
+//!   branch to the configured upstream.
 //!
 //! Sanitation is fail-closed: blockers (large files, secret patterns, or
 //! merge-conflict markers) abort the commit and are shown to the user.
 //! Warnings (untracked/unstaged debris) are shown but do not block.
 
 use crate::session::git_sanitation::{check_worktree, suggest_message};
+use crate::shared::Config;
 use std::path::Path;
 use tokio::process::Command;
 
 /// Maximum bytes to capture from `git status --porcelain`.
 const MAX_STATUS_BYTES: usize = 256 * 1024;
 
-/// Handle `/commit [message]`.
+/// Parsed arguments for `/commit`.
+#[derive(Debug, Clone, Default)]
+struct CommitArgs {
+    /// `--push` flag was present.
+    push: bool,
+    /// The commit message, if any.
+    message: Option<String>,
+}
+
+/// Parse `/commit`, `/commit "message"`, or `/commit --push "message"`.
+fn parse_commit_args(input: &str) -> CommitArgs {
+    let mut rest = input.trim();
+    let mut push = false;
+
+    // Handle leading --push flag, with or without a message after it.
+    if let Some(after_flag) = rest.strip_prefix("--push") {
+        push = true;
+        rest = after_flag.trim_start();
+    }
+
+    let message = if rest.is_empty() {
+        None
+    } else {
+        // Strip surrounding quotes if present.
+        let m = rest
+            .strip_prefix('"')
+            .and_then(|s| s.strip_suffix('"'))
+            .unwrap_or(rest);
+        Some(m.to_string())
+    };
+
+    CommitArgs { push, message }
+}
+
+/// Handle `/commit [message]` or `/commit --push [message]`.
 ///
 /// If no message is supplied, returns a status report and a suggested
-/// message. If a message is supplied, runs sanitation and commits.
-pub async fn handle_commit_command(args: &str, cwd: &Path) -> String {
-    let args = args.trim();
-    let has_message = !args.is_empty();
+/// message. If a message is supplied, runs sanitation, commits, and
+/// optionally pushes.
+pub async fn handle_commit_command(args: &str, cwd: &Path, config: &Config) -> String {
+    let parsed = parse_commit_args(args);
+    let has_message = parsed.message.is_some();
 
     // 1. Gather git status.
     let status = match git_status_porcelain(cwd).await {
@@ -38,7 +76,7 @@ pub async fn handle_commit_command(args: &str, cwd: &Path) -> String {
     let status_lines: Vec<String> = status.lines().map(|l| l.to_string()).collect();
 
     // 2. Run sanitation.
-    let report = match check_worktree(cwd, &status, None) {
+    let report = match check_worktree(cwd, &status, Some(config.commit_max_file_size)) {
         Ok(r) => r,
         Err(e) => return format!("❌ Sanitation check failed: {e}"),
     };
@@ -53,10 +91,15 @@ pub async fn handle_commit_command(args: &str, cwd: &Path) -> String {
         } else {
             format!("Changed files:\n{}", status_lines.join("\n"))
         };
+        let push_hint = if parsed.push {
+            "\nFlag `--push` will be applied once a message is supplied."
+        } else {
+            ""
+        };
         return format!(
             "📝 Pre-commit review\n\n{status_preview}\n\n{report_text}\n\n\
              Suggested message: `{suggested}`\n\
-             Run `/commit \"{suggested}\"` to commit, or supply your own message."
+             Run `/commit \"{suggested}\"` to commit, or supply your own message.{push_hint}"
         );
     }
 
@@ -69,21 +112,34 @@ pub async fn handle_commit_command(args: &str, cwd: &Path) -> String {
     }
 
     // 5. Stage all and commit.
-    let message = args;
+    let message = parsed.message.unwrap_or_default();
     match stage_all(cwd).await {
         Ok(()) => {}
         Err(e) => return format!("❌ `git add -A` failed: {e}"),
     }
-    match git_commit(cwd, message).await {
-        Ok(output) => {
-            let output_trimmed = output.trim();
-            if output_trimmed.is_empty() {
-                format!("✅ Committed: {message}\n\n{report_text}")
-            } else {
-                format!("✅ Committed: {message}\n\n{output_trimmed}\n\n{report_text}")
+    let commit_output = match git_commit(cwd, &message).await {
+        Ok(output) => output,
+        Err(e) => return format!("❌ `git commit` failed: {e}"),
+    };
+
+    // 6. Optionally push.
+    let mut push_output = String::new();
+    if parsed.push {
+        match git_push(cwd).await {
+            Ok(out) => {
+                push_output = format!("\n\n📤 Pushed:\n{}", out.trim());
+            }
+            Err(e) => {
+                push_output = format!("\n\n⚠️ Push failed: {e}");
             }
         }
-        Err(e) => format!("❌ `git commit` failed: {e}"),
+    }
+
+    let output_trimmed = commit_output.trim();
+    if output_trimmed.is_empty() {
+        format!("✅ Committed: {message}\n\n{report_text}{push_output}")
+    } else {
+        format!("✅ Committed: {message}\n\n{output_trimmed}\n\n{report_text}{push_output}")
     }
 }
 
@@ -140,13 +196,35 @@ async fn git_commit(cwd: &Path, message: &str) -> Result<String, String> {
     Ok(stdout.to_string())
 }
 
+/// Push the current branch in `cwd`.
+async fn git_push(cwd: &Path) -> Result<String, String> {
+    let output = Command::new("git")
+        .arg("push")
+        .current_dir(cwd)
+        .output()
+        .await
+        .map_err(|e| format!("failed to spawn git push: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(stderr.trim().to_string());
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(stdout.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn default_config() -> Config {
+        Config::default()
+    }
+
     #[tokio::test]
     async fn empty_args_returns_report_and_suggestion() {
-        let out = handle_commit_command("", Path::new(".")).await;
+        let out = handle_commit_command("", Path::new("."), &default_config()).await;
         // Should mention pre-commit review in any git repo (or git status failure).
         assert!(
             out.contains("Pre-commit review") || out.contains("Cannot run git status"),
@@ -158,11 +236,39 @@ mod tests {
     #[tokio::test]
     async fn commit_without_git_repo_fails_cleanly() {
         let tmp = tempfile::tempdir().unwrap();
-        let out = handle_commit_command("test message", tmp.path()).await;
+        let out = handle_commit_command("test message", tmp.path(), &default_config()).await;
         assert!(
             out.contains("Cannot run git status") || out.contains("git status failed"),
             "got: {}",
             out
         );
+    }
+
+    #[test]
+    fn parse_commit_args_no_message_no_push() {
+        let p = parse_commit_args("");
+        assert!(!p.push);
+        assert!(p.message.is_none());
+    }
+
+    #[test]
+    fn parse_commit_args_message_no_push() {
+        let p = parse_commit_args("\"fix the thing\"");
+        assert!(!p.push);
+        assert_eq!(p.message.as_deref(), Some("fix the thing"));
+    }
+
+    #[test]
+    fn parse_commit_args_push_flag_with_message() {
+        let p = parse_commit_args("--push \"feat: add widget\"");
+        assert!(p.push);
+        assert_eq!(p.message.as_deref(), Some("feat: add widget"));
+    }
+
+    #[test]
+    fn parse_commit_args_push_flag_without_message() {
+        let p = parse_commit_args("--push");
+        assert!(p.push);
+        assert!(p.message.is_none());
     }
 }

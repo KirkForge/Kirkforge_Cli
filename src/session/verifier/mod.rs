@@ -432,7 +432,7 @@ pub fn verifier_event_kinds(verifier_name: &str) -> Vec<EventKind> {
         "lint" => vec![EventKind::Edit, EventKind::FileWrite],
         "type-check" => vec![EventKind::Edit, EventKind::FileWrite],
         "git" => vec![EventKind::GitOperation, EventKind::BashExec],
-        "security" => vec![EventKind::FileWrite, EventKind::BashExec],
+        "security" => vec![EventKind::FileWrite, EventKind::Edit, EventKind::BashExec],
         _ => vec![],
     }
 }

@@ -85,8 +85,24 @@ impl Tool for EditFile {
         // pre-edit state) — including the trailing-newline,
         // CRLF/LF, encoding. Same byte-for-byte restoration on
         // `/undo`.
-        let prev_bytes = std::fs::read(&path).unwrap_or_default();
         let prev_existed = std::fs::metadata(&path).is_ok();
+        let prev_bytes = if prev_existed {
+            match std::fs::read(&path) {
+                Ok(b) => b,
+                Err(e) => {
+                    return ToolOutcome::Error {
+                        message: format!(
+                            "Cannot read existing file {} for undo snapshot: {}. \
+                             Refusing to edit without a snapshot.",
+                            path.display(),
+                            e
+                        ),
+                    };
+                }
+            }
+        } else {
+            Vec::new()
+        };
 
         let content = match String::from_utf8(prev_bytes.clone()) {
             Ok(c) => c,

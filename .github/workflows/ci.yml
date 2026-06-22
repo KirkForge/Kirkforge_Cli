@@ -21,6 +21,9 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      - name: Check formatting
+        run: cargo fmt --check
+
       - name: Run unit tests
         run: cargo test --locked
 
@@ -29,3 +32,20 @@ jobs:
 
       - name: Build release binary
         run: cargo build --release --locked
+
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Audit dependencies
+        continue-on-error: true
+        run: cargo audit

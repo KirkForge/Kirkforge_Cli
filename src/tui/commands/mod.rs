@@ -476,9 +476,14 @@ mod tests {
         .is_success());
     }
 
+    fn default_config() -> crate::shared::Config {
+        crate::shared::Config::default()
+    }
+
     #[tokio::test]
     async fn handle_bang_command_echo_runs() {
-        let out = handle_bang_command("echo hi").await;
+        let cfg = default_config();
+        let out = handle_bang_command("echo hi", &cfg).await;
         assert!(out.contains("$ echo hi"), "got: {:?}", out);
         assert!(out.contains("✅ exit 0"), "got: {:?}", out);
         assert!(out.contains("hi"), "got: {:?}", out);
@@ -486,27 +491,42 @@ mod tests {
 
     #[tokio::test]
     async fn handle_bang_command_true_exits_zero_silently() {
-        let out = handle_bang_command("true").await;
+        let cfg = default_config();
+        let out = handle_bang_command("true", &cfg).await;
         assert!(out.contains("✅ exit 0"), "got: {:?}", out);
         assert!(!out.contains("⚠"), "got: {:?}", out);
     }
 
     #[tokio::test]
     async fn handle_bang_command_false_exits_nonzero() {
-        let out = handle_bang_command("false").await;
+        let cfg = default_config();
+        let out = handle_bang_command("false", &cfg).await;
         assert!(out.contains("❌ exit 1"), "got: {:?}", out);
     }
 
     #[tokio::test]
     async fn handle_bang_command_empty_returns_usage() {
-        let out = handle_bang_command("").await;
+        let cfg = default_config();
+        let out = handle_bang_command("", &cfg).await;
         assert!(out.contains("Usage"), "got: {:?}", out);
     }
 
     #[tokio::test]
     async fn handle_bang_command_whitespace_only_returns_usage() {
-        let out = handle_bang_command("   ").await;
+        let cfg = default_config();
+        let out = handle_bang_command("   ", &cfg).await;
         assert!(out.contains("Usage"), "got: {:?}", out);
+    }
+
+    #[tokio::test]
+    async fn handle_bang_command_blocks_dangerous_pattern() {
+        let cfg = default_config();
+        let out = handle_bang_command("rm -rf /", &cfg).await;
+        assert!(
+            out.contains("🔒") && out.contains("dangerous"),
+            "dangerous bang command should be blocked, got: {:?}",
+            out
+        );
     }
 
     #[test]

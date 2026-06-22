@@ -199,13 +199,19 @@ pub struct VerifierHandler {
     slots: Arc<std::sync::RwLock<VerifierSlots>>,
     /// Correction results that verifiers produced — consumed by correction loop.
     pending_corrections: Arc<tokio::sync::Mutex<Vec<FixSuggestion>>>,
+    /// Path guard used when applying auto-fixes.
+    path_guard: crate::session::access::PathGuard,
 }
 
 impl VerifierHandler {
-    pub fn new(slots: Arc<std::sync::RwLock<VerifierSlots>>) -> Self {
+    pub fn new(
+        slots: Arc<std::sync::RwLock<VerifierSlots>>,
+        path_guard: crate::session::access::PathGuard,
+    ) -> Self {
         Self {
             slots,
             pending_corrections: Arc::new(tokio::sync::Mutex::new(Vec::new())),
+            path_guard,
         }
     }
 
@@ -324,7 +330,7 @@ impl CorrectionLoop {
             match verdict {
                 Verdict::Clean | Verdict::Skipped(_) => break,
                 Verdict::Fixable(fix) => {
-                    let applied = apply_fix(&fix).await;
+                    let applied = apply_fix(&fix, &self.verifier_handler.path_guard).await;
                     results.push(CorrectionResult {
                         verifier: "auto-fix".into(),
                         success: applied,
@@ -373,8 +379,38 @@ pub struct CorrectionResult {
 
 /// Apply a fix suggestion to the filesystem.
 /// Replaces only the first occurrence of the original text.
-async fn apply_fix(fix: &FixSuggestion) -> bool {
+///
+/// The target path is checked against the session [`PathGuard`] before
+/// any read or write so auto-fixes cannot escape the sandbox. Empty
+/// original/replacement suggestions are refused because we cannot
+/// determine what to change safely.
+async fn apply_fix(fix: &FixSuggestion, path_guard: &crate::session::access::PathGuard) -> bool {
     let path = &fix.file;
+
+    // Refuse suggestions with no concrete replacement plan.
+    if fix.original.is_empty() || fix.replacement.is_empty() {
+        tracing::warn!(
+            description = %fix.description,
+            file = %path.display(),
+            "auto-fix refused: empty original or replacement"
+        );
+        return false;
+    }
+
+    // Sandbox / deny-list gate. Treat the fix like a write operation.
+    match path_guard.check_write(path) {
+        crate::session::access::GuardVerdict::Allowed(_) => {}
+        crate::session::access::GuardVerdict::Denied(msg) => {
+            tracing::warn!(
+                description = %fix.description,
+                file = %path.display(),
+                reason = %msg,
+                "auto-fix refused: path guard denied write"
+            );
+            return false;
+        }
+    }
+
     if !path.exists() {
         return false;
     }
@@ -594,7 +630,7 @@ mod tests {
             severity: "warning".into(),
         };
 
-        assert!(apply_fix(&fix).await);
+        assert!(apply_fix(&fix, &crate::session::access::PathGuard::default()).await);
         let content = std::fs::read_to_string(&path).unwrap();
         assert_eq!(content, "let _x = 1;");
         let _ = std::fs::remove_file(&path);
@@ -609,7 +645,7 @@ mod tests {
             replacement: "new".into(),
             severity: "warning".into(),
         };
-        assert!(!apply_fix(&fix).await);
+        assert!(!apply_fix(&fix, &crate::session::access::PathGuard::default()).await);
     }
 
     #[tokio::test]
@@ -625,14 +661,53 @@ mod tests {
             replacement: "replacement".into(),
             severity: "error".into(),
         };
-        assert!(!apply_fix(&fix).await);
+        assert!(!apply_fix(&fix, &crate::session::access::PathGuard::default()).await);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn test_apply_fix_empty_original_is_refused() {
+        let dir = std::env::temp_dir();
+        let path = dir.join("kirkforge_fix_empty.txt");
+        std::fs::write(&path, "hello world").unwrap();
+
+        let fix = FixSuggestion {
+            description: "fix".into(),
+            file: path.clone(),
+            original: "".into(),
+            replacement: "new".into(),
+            severity: "warning".into(),
+        };
+        assert!(!apply_fix(&fix, &crate::session::access::PathGuard::default()).await);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn test_apply_fix_denied_by_path_guard() {
+        let dir = std::env::temp_dir();
+        let path = dir.join("kirkforge_fix_denied.pem");
+        std::fs::write(&path, "secret").unwrap();
+
+        let guard = crate::session::access::PathGuard {
+            deny_extensions: vec![".pem".into()],
+            ..crate::session::access::PathGuard::default()
+        };
+        let fix = FixSuggestion {
+            description: "fix".into(),
+            file: path.clone(),
+            original: "secret".into(),
+            replacement: "public".into(),
+            severity: "warning".into(),
+        };
+        assert!(!apply_fix(&fix, &guard).await);
         let _ = std::fs::remove_file(&path);
     }
 
     #[tokio::test]
     async fn test_verifier_handler_drain_corrections() {
         let slots = Arc::new(std::sync::RwLock::new(VerifierSlots::new()));
-        let handler = VerifierHandler::new(slots.clone());
+        let handler =
+            VerifierHandler::new(slots.clone(), crate::session::access::PathGuard::default());
 
         {
             let mut s = slots.write().unwrap();
@@ -699,7 +774,10 @@ mod tests {
     #[tokio::test]
     async fn test_correction_loop_applies_and_returns() {
         let slots = Arc::new(std::sync::RwLock::new(VerifierSlots::new()));
-        let handler = Arc::new(VerifierHandler::new(slots.clone()));
+        let handler = Arc::new(VerifierHandler::new(
+            slots.clone(),
+            crate::session::access::PathGuard::default(),
+        ));
 
         let dir = std::env::temp_dir();
         let path = dir.join("kirkforge_correction_loop.txt");
@@ -740,7 +818,10 @@ mod tests {
 
         let bus = EventBus::new();
         let slots = Arc::new(std::sync::RwLock::new(VerifierSlots::new()));
-        let handler = Arc::new(VerifierHandler::new(slots.clone()));
+        let handler = Arc::new(VerifierHandler::new(
+            slots.clone(),
+            crate::session::access::PathGuard::default(),
+        ));
 
         // Register as event bus handler
         bus.register(handler.clone()).await.unwrap();

@@ -248,14 +248,32 @@ impl PathGuard {
                     ));
                 }
             };
-            // For new files the path doesn't exist yet — check parent directory
+            // For new files the path doesn't exist yet — check parent directory.
+            // If we cannot resolve the path (or its parent), deny rather than
+            // falling back to the unresolved literal — a symlink/mount race
+            // could otherwise make `starts_with` pass on a path that escapes
+            // the sandbox.
             let check = if path.exists() {
-                path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+                match path.canonicalize() {
+                    Ok(c) => c,
+                    Err(e) => {
+                        return GuardVerdict::Denied(format!(
+                            "Cannot resolve path '{}': {e} (refusing write outside sandbox)",
+                            path.display()
+                        ));
+                    }
+                }
             } else {
-                path.parent()
-                    .unwrap_or(Path::new("."))
-                    .canonicalize()
-                    .unwrap_or_else(|_| path.to_path_buf())
+                let parent = path.parent().unwrap_or(Path::new("."));
+                match parent.canonicalize() {
+                    Ok(c) => c,
+                    Err(e) => {
+                        return GuardVerdict::Denied(format!(
+                            "Cannot resolve parent directory '{}': {e} (refusing write outside sandbox)",
+                            parent.display()
+                        ));
+                    }
+                }
             };
             if !check.starts_with(&sb) {
                 return GuardVerdict::Denied(format!("Path outside sandbox: {}", path.display()));
@@ -308,12 +326,26 @@ impl PathGuard {
         // 6. Allowed write directories
         if !self.allowed_write_dirs.is_empty() {
             let check = if path.exists() {
-                path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+                match path.canonicalize() {
+                    Ok(c) => c,
+                    Err(e) => {
+                        return GuardVerdict::Denied(format!(
+                            "Cannot resolve path '{}': {e} (refusing write outside allowed dirs)",
+                            path.display()
+                        ));
+                    }
+                }
             } else {
-                path.parent()
-                    .unwrap_or(Path::new("."))
-                    .canonicalize()
-                    .unwrap_or_else(|_| path.to_path_buf())
+                let parent = path.parent().unwrap_or(Path::new("."));
+                match parent.canonicalize() {
+                    Ok(c) => c,
+                    Err(e) => {
+                        return GuardVerdict::Denied(format!(
+                            "Cannot resolve parent directory '{}': {e} (refusing write outside allowed dirs)",
+                            parent.display()
+                        ));
+                    }
+                }
             };
             let ok = self.allowed_write_dirs.iter().any(|d| {
                 d.canonicalize()

@@ -375,7 +375,8 @@ pub async fn handle_input_key(
                     state.pending_bang = Some(crate::tui::app::PendingBangCommand { cmd: rest });
                     return Ok(());
                 }
-                let out = crate::tui::commands::handle_bang_command(&rest).await;
+                let config = crate::shared::read_shared_config(&state.config).clone();
+                let out = crate::tui::commands::handle_bang_command(&rest, &config).await;
                 // Split into summary (first line) and full output so the
                 // collapse UX has something to show by default. The
                 // summary is "$ <cmd>\n<icon> exit <code>" — two lines.

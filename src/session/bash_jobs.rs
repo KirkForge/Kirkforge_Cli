@@ -6,12 +6,55 @@
 /// Allows spawning bash commands that outlive a single tool call.
 /// Jobs run as tokio tasks and their output is captured asynchronously.
 /// The model or user can check job status, read output, or cancel jobs.
+use crate::tools::bash::{cap_to_string, drain_capped, MAX_BASH_OUTPUT_BYTES};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::sync::OnceLock;
 use tokio::process::Child;
 use tokio::sync::Mutex;
+
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
+
+#[cfg(unix)]
+extern "C" {
+    fn setpgid(pid: i32, pgid: i32) -> i32;
+    fn killpg(pgrp: i32, sig: i32) -> i32;
+}
+
+const SIGKILL: i32 = 9;
+
+#[cfg(unix)]
+fn setup_process_group(cmd: &mut tokio::process::Command) {
+    // Place the shell into a new process group. When a timeout fires we can
+    // then signal the whole group, killing any grandchildren that inherited
+    // our stdout/stderr pipes and would otherwise keep the pipe open.
+    unsafe {
+        cmd.as_std_mut().pre_exec(|| {
+            let _ = setpgid(0, 0);
+            Ok(())
+        });
+    }
+}
+
+#[cfg(not(unix))]
+fn setup_process_group(_cmd: &mut tokio::process::Command) {}
+
+/// Kill a child and, on Unix, its entire process group. This prevents orphan
+/// descendants from holding our pipe ends open and blocking drain tasks.
+fn kill_process_group(child: &mut Child) {
+    #[cfg(unix)]
+    if let Some(pid) = child.id() {
+        unsafe {
+            let _ = killpg(pid as i32, SIGKILL);
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = child.start_kill();
+    }
+}
 
 /// Status of a background job.
 #[derive(Debug, Clone, PartialEq)]
@@ -117,6 +160,7 @@ impl BashJobRegistry {
             .kill_on_drop(true)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
+        setup_process_group(&mut proc);
         if let Some(ref wd) = workdir {
             proc.current_dir(wd);
         }
@@ -155,32 +199,18 @@ impl BashJobRegistry {
             let stdout = child.stdout.take();
             let stderr = child.stderr.take();
 
-            // Cancellation channel: if the child is killed (timeout), the pipe
-            // may be kept open by orphaned grandchildren. Signalling the drain
-            // tasks lets them return their partial buffers instead of waiting
-            // forever for EOF.
-            let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
-            let mut cancel_rx_stdout = cancel_rx.clone();
-            let mut cancel_rx_stderr = cancel_rx.clone();
-
-            let drain_stdout = stdout.map(|mut r| {
+            let drain_stdout = stdout.map(|r| {
                 tokio::spawn(async move {
-                    let mut buf = Vec::new();
-                    tokio::select! {
-                        _ = tokio::io::AsyncReadExt::read_to_end(&mut r, &mut buf) => {}
-                        _ = cancel_rx_stdout.changed() => {}
-                    }
-                    buf
+                    drain_capped(r, MAX_BASH_OUTPUT_BYTES)
+                        .await
+                        .unwrap_or_else(|_| (Vec::new(), 0))
                 })
             });
-            let drain_stderr = stderr.map(|mut r| {
+            let drain_stderr = stderr.map(|r| {
                 tokio::spawn(async move {
-                    let mut buf = Vec::new();
-                    tokio::select! {
-                        _ = tokio::io::AsyncReadExt::read_to_end(&mut r, &mut buf) => {}
-                        _ = cancel_rx_stderr.changed() => {}
-                    }
-                    buf
+                    drain_capped(r, MAX_BASH_OUTPUT_BYTES)
+                        .await
+                        .unwrap_or_else(|_| (Vec::new(), 0))
                 })
             });
 
@@ -201,38 +231,38 @@ impl BashJobRegistry {
                 Ok(status) => (Some(status), None),
                 Err(e) => {
                     if e == "Timed out" {
-                        let _ = child.start_kill();
+                        kill_process_group(&mut child);
                     }
                     (None, Some(e))
                 }
             };
 
             // Reap the child with a short timeout so it does not become a
-            // zombie, then tell the drain tasks to return whatever partial
-            // output they already have.
+            // zombie. The drain tasks continue reading until EOF (which
+            // arrives as the child closes its pipes), so partial output is
+            // preserved.
             if status.is_none() {
                 let _ = tokio::time::timeout(std::time::Duration::from_secs(2), child.wait()).await;
-                let _ = cancel_tx.send(true);
             }
 
             // Join the drain tasks to capture output (or partial output on
             // timeout). A short timeout prevents a stuck pipe from wedging
-            // cleanup even if cancellation didn't land.
-            let stdout_buf = match drain_stdout {
+            // cleanup.
+            let (stdout_buf, stdout_dropped) = match drain_stdout {
                 Some(h) => tokio::time::timeout(std::time::Duration::from_secs(2), h)
                     .await
                     .ok()
                     .and_then(|r| r.ok())
-                    .unwrap_or_default(),
-                None => Vec::new(),
+                    .unwrap_or_else(|| (Vec::new(), 0)),
+                None => (Vec::new(), 0),
             };
-            let stderr_buf = match drain_stderr {
+            let (stderr_buf, stderr_dropped) = match drain_stderr {
                 Some(h) => tokio::time::timeout(std::time::Duration::from_secs(2), h)
                     .await
                     .ok()
                     .and_then(|r| r.ok())
-                    .unwrap_or_default(),
-                None => Vec::new(),
+                    .unwrap_or_else(|| (Vec::new(), 0)),
+                None => (Vec::new(), 0),
             };
 
             let mut jobs = registry_watcher.jobs.lock().await;
@@ -243,8 +273,8 @@ impl BashJobRegistry {
                     job.status =
                         JobStatus::Failed(error_msg.take().unwrap_or_else(|| "Failed".into()));
                 }
-                job.stdout = String::from_utf8_lossy(&stdout_buf).to_string();
-                job.stderr = String::from_utf8_lossy(&stderr_buf).to_string();
+                job.stdout = cap_to_string(stdout_buf, stdout_dropped);
+                job.stderr = cap_to_string(stderr_buf, stderr_dropped);
                 job.finished_at = Some(chrono::Local::now());
             }
         });
@@ -274,7 +304,7 @@ impl BashJobRegistry {
         {
             let mut children = self.children.lock().await;
             if let Some(mut child) = children.remove(&id) {
-                let _ = child.kill().await;
+                kill_process_group(&mut child);
                 let _ = child.wait().await;
             }
         }
@@ -300,7 +330,7 @@ impl BashJobRegistry {
         {
             let mut children = self.children.lock().await;
             if let Some(mut child) = children.remove(&id) {
-                let _ = child.kill().await;
+                kill_process_group(&mut child);
                 let _ = child.wait().await;
             }
         }

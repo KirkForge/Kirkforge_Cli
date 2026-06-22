@@ -93,7 +93,8 @@ pub async fn handle_bang_approval_key(key: KeyEvent, state: &mut AppState) {
         // `block_in_place` + `Handle::block_on` froze the UI for the
         // duration of the command (up to the 30s bang timeout).
         let cmd = bang.cmd;
-        let result = crate::tui::commands::handle_bang_command(&cmd).await;
+        let config = crate::shared::read_shared_config(&state.config).clone();
+        let result = crate::tui::commands::handle_bang_command(&cmd, &config).await;
         // Split into summary / full for the collapse UX. Mirrors
         // the split rule in `keys.rs::split_bang_summary` — first
         // two lines are the summary, the whole thing is the full

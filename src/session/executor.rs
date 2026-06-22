@@ -16,6 +16,7 @@ use crate::shared::{
     read_shared_config, Config, Message, Role, SharedConfig, StreamEvent, ToolDef, ToolInvocation,
     ToolOutcome,
 };
+use crate::tools::bash::check_bash_command;
 use crate::tools::{Tool, UndoStackRef};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -86,19 +87,20 @@ pub struct Executor {
 /// smell.
 ///
 /// This guard owns a *cloned* `HookRunner` (the struct is `Clone` —
-/// just a `PathBuf` + `HashSet<String>`), so it can outlive the
-/// `&mut self` borrows inside `run_turn_inner` and fire on Drop
-/// without aliasing.
+/// just a `PathBuf` + `HashSet<String>` + `Config`) and a copy of the
+/// current config, so it can outlive the `&mut self` borrows inside
+/// `run_turn_inner` and fire on Drop without aliasing.
 ///
 /// Fire-and-forget: `HookRunner::run` wraps `tokio::spawn` internally
 /// with a 5s timeout, so Drop never blocks on the hook script.
 pub struct PostTurnHookGuard {
     runner: HookRunner,
+    config: Config,
 }
 
 impl PostTurnHookGuard {
-    pub fn new(runner: HookRunner) -> Self {
-        Self { runner }
+    pub fn new(runner: HookRunner, config: Config) -> Self {
+        Self { runner, config }
     }
 }
 
@@ -107,7 +109,7 @@ impl Drop for PostTurnHookGuard {
         // No-op if the hook script doesn't exist; otherwise spawns
         // a tokio task that runs `bash <hooks_dir>/post-turn.sh`
         // with a 5s timeout. Drop completes in microseconds.
-        self.runner.run("post-turn", &[]);
+        self.runner.run("post-turn", &[], &self.config);
     }
 }
 
@@ -279,7 +281,7 @@ impl Executor {
             }
         }
 
-        let handler = Arc::new(VerifierHandler::new(slots));
+        let handler = Arc::new(VerifierHandler::new(slots, self.path_guard.clone()));
         let bus = self.event_bus.clone();
         let h = handler.clone();
         match tokio::runtime::Handle::try_current() {
@@ -608,7 +610,8 @@ impl Executor {
         if let Some(json) = args_json {
             env_vars.push(("KF_TOOL_ARGS_JSON", json));
         }
-        self.hook_runner.run(event, &env_vars);
+        let cfg = crate::shared::read_shared_config(&self.config);
+        self.hook_runner.run(event, &env_vars, &cfg);
     }
 
     fn flush_carryover(&mut self) {
@@ -677,7 +680,10 @@ impl Executor {
         // closure would be more robust." We keep the inner/outer split
         // (still useful for tests that want to call the inner directly)
         // but stop firing the hook manually.
-        let _hook_guard = PostTurnHookGuard::new(self.hook_runner.clone());
+        let _hook_guard = PostTurnHookGuard::new(
+            self.hook_runner.clone(),
+            crate::shared::read_shared_config(&self.config).clone(),
+        );
         self.run_turn_inner(user_input, approval_sender, cancelled)
             .await
     }
@@ -1043,7 +1049,10 @@ impl Executor {
             return Ok(());
         }
 
-        if matches!(tc.name.as_str(), "read_file" | "write_file" | "edit_file") {
+        if matches!(
+            tc.name.as_str(),
+            "read_file" | "read_image" | "write_file" | "edit_file"
+        ) {
             let path_str = tc
                 .arguments
                 .get("path")
@@ -1052,9 +1061,24 @@ impl Executor {
             let path = std::path::Path::new(path_str);
 
             let verdict = match tc.name.as_str() {
-                "read_file" => self.path_guard.check_read(path),
+                "read_file" | "read_image" => self.path_guard.check_read(path),
                 "write_file" | "edit_file" => self.path_guard.check_write(path),
-                _ => unreachable!(),
+                _ => {
+                    let denied = format!("🔒 Access denied: unsupported file tool '{}'", tc.name);
+                    events.push(TurnEvent::ToolResult {
+                        name: tc.name.clone(),
+                        output: denied.clone(),
+                        success: false,
+                    });
+                    self.conversation.append(Message {
+                        role: Role::Tool,
+                        content: denied,
+                        tool_call_id: Some(tc.id.clone()),
+                        tool_name: Some(tc.name.clone()),
+                        ..Default::default()
+                    })?;
+                    return Ok(());
+                }
             };
 
             match verdict {
@@ -1078,7 +1102,7 @@ impl Executor {
                         }
                     }
 
-                    if tc.name == "read_file" {
+                    if matches!(tc.name.as_str(), "read_file" | "read_image") {
                         self.read_gate.mark_read(&resolved);
                     }
 
@@ -1460,19 +1484,6 @@ pub enum TurnEvent {
     },
 }
 
-const DANGEROUS_SHELL_COMMANDS: &[&str] = &[
-    "rm -rf /",
-    "rm -rf /*",
-    ":(){ :|:& };:",
-    "> /dev/sda",
-    "mkfs.",
-    "dd if=/dev/zero of=",
-    "chmod -R 777 /",
-    "chmod 777 /",
-    "dd if=/dev/random",
-    "> /dev/null < /dev/sda",
-];
-
 const READ_ONLY_COMMANDS: &[&str] = &[
     "ls", "cat", "head", "tail", "pwd", "echo", "printf", "which", "type", "file", "stat", "du",
     "df", "env", "printenv", "true", "false", "dirname", "basename", "realpath", "readlink",
@@ -1525,132 +1536,6 @@ fn is_read_only_bash(cmd: &str) -> bool {
     }
 
     true
-}
-
-fn word_boundary_match(cmd: &str, pattern: &str) -> bool {
-    let boundaries = [' ', '\t', '\n', '|', ';', '&', '(', ')', '<', '>', '\0'];
-    let p: Vec<char> = pattern.chars().collect();
-    let chars: Vec<char> = cmd.chars().collect();
-    let mut i = 0;
-    while i + p.len() <= chars.len() {
-        if chars[i..i + p.len()].iter().collect::<String>() == *pattern {
-            let start_ok = i == 0 || boundaries.contains(&chars[i - 1]);
-            let end_ok = i + p.len() >= chars.len() || boundaries.contains(&chars[i + p.len()]);
-            if start_ok && end_ok {
-                return true;
-            }
-        }
-        i += 1;
-    }
-    false
-}
-
-fn check_bash_command(
-    args: &serde_json::Value,
-    deny_list: &DenyList,
-    path_guard: &PathGuard,
-    bash_sandbox_workdir: bool,
-) -> Option<String> {
-    let cmd = args.get("command").and_then(|c| c.as_str())?;
-
-    // 1. Sandboxed workdir policy. If enabled, the bash subprocess is
-    //    confined to the sandbox — either by overriding the workdir
-    //    arg (when missing) or by rejecting an explicit workdir that
-    //    points outside the sandbox. This is the bash-policy half of
-    //    GPT 5.5's review finding #4 ("bash can run in arbitrary
-    //    workdir").
-    if bash_sandbox_workdir {
-        if let Some(workdir) = args.get("workdir").and_then(|w| w.as_str()) {
-            if !workdir.is_empty() {
-                let workdir_path = std::path::Path::new(workdir);
-                let resolved = workdir_path
-                    .canonicalize()
-                    .unwrap_or_else(|_| workdir_path.to_path_buf());
-                if let Some(ref sandbox) = path_guard.sandbox_dir {
-                    let sb = sandbox.canonicalize().unwrap_or_else(|_| sandbox.clone());
-                    if !resolved.starts_with(&sb) {
-                        return Some(format!(
-                            "🔒 Bash workdir outside sandbox: {} (sandbox: {})",
-                            workdir,
-                            sandbox.display()
-                        ));
-                    }
-                }
-            }
-        }
-    }
-
-    // 2. Hard-coded metadata endpoint blocks. These are the well-known
-    //    cloud metadata IPs/hostnames that the model must never reach
-    //    regardless of user config.
-    if cmd.contains("169.254.169.254")
-        || cmd.contains("metadata.google")
-        || cmd.contains("metadata.aws")
-    {
-        return Some("🔒 Command blocked: contains reference to metadata endpoints".into());
-    }
-
-    // 3. User-configured URL deny list. Scans the command string for
-    //    any of the blocked URL prefixes. Naive substring match is
-    //    fine for prefixes (`http://169.254.169.254`,
-    //    `http://metadata.google.internal`) because they're meant to
-    //    be hard prefixes.
-    for url_prefix in &deny_list.url_patterns {
-        if !url_prefix.is_empty() && cmd.contains(url_prefix) {
-            return Some(format!(
-                "🔒 Command blocked: references denied URL '{}'",
-                url_prefix
-            ));
-        }
-    }
-
-    // 4. Built-in dangerous shell patterns (rm -rf /, etc.) and
-    //    hard-coded system path deny list.
-    for pattern in DANGEROUS_SHELL_COMMANDS {
-        let needs_word_boundary = pattern.ends_with('/') || pattern.ends_with(' ');
-        let matches = if needs_word_boundary {
-            word_boundary_match(cmd, pattern)
-        } else {
-            cmd.contains(pattern)
-        };
-        if matches {
-            return Some(format!(
-                "🔒 Command blocked: dangerous pattern '{}' detected",
-                pattern
-            ));
-        }
-    }
-
-    for pat in [
-        "/etc/shadow",
-        "/etc/passwd",
-        "/etc/sudoers",
-        "~/.ssh",
-        "/root/",
-    ] {
-        if cmd.contains(pat) {
-            return Some(format!(
-                "🔒 Command blocked: references denied path '{}'",
-                pat
-            ));
-        }
-    }
-
-    // 5. User-configured path deny list. Scans the command string for
-    //    any of the blocked glob patterns. Glob matchers from
-    //    `DenyList::is_path_denied` work on `Path` arguments, so we
-    //    tokenize the command into whitespace-separated tokens and
-    //    check each one as a path. This catches `rm **/.ssh/**` etc.
-    for token in cmd.split_whitespace() {
-        if deny_list.is_path_denied(std::path::Path::new(token)) {
-            return Some(format!(
-                "🔒 Command blocked: references denied path '{}'",
-                token
-            ));
-        }
-    }
-
-    None
 }
 
 fn truncate_tool_output(outcome: ToolOutcome, max_chars: usize) -> ToolOutcome {
@@ -1765,7 +1650,7 @@ fn check_deny_list(
     args: &serde_json::Value,
 ) -> Option<String> {
     match tool_name {
-        "read_file" | "write_file" | "edit_file" => {
+        "read_file" | "read_image" | "write_file" | "edit_file" => {
             if let Some(path) = args.get("path").and_then(|v| v.as_str()) {
                 let p = std::path::Path::new(path);
                 if deny_list.is_path_denied(p) {
@@ -2909,73 +2794,6 @@ mod tests {
     }
 
     #[test]
-    fn test_word_boundary_match_exact() {
-        assert!(word_boundary_match("rm -rf /", "rm -rf /"));
-    }
-
-    #[test]
-    fn test_word_boundary_no_false_positive_trailing_slash() {
-        assert!(!word_boundary_match("rm -rf /home/user", "rm -rf /"));
-    }
-
-    #[test]
-    fn test_word_boundary_match_with_pipe_prefix() {
-        assert!(word_boundary_match("echo foo | rm -rf /", "rm -rf /"));
-    }
-
-    #[test]
-    fn test_word_boundary_match_with_semicolon() {
-        assert!(word_boundary_match("cd /; rm -rf /", "rm -rf /"));
-    }
-
-    #[test]
-    fn test_word_boundary_no_match_in_substring() {
-        assert!(!word_boundary_match("rm -rf /home", "rm -rf /"));
-    }
-
-    #[test]
-    fn test_check_bash_command_blocks_dangerous_exact() {
-        let args = serde_json::json!({"command": "rm -rf /"});
-        let result = check_bash_command(&args, &DenyList::default(), &PathGuard::default(), false);
-        assert!(result.is_some(), "rm -rf / should be blocked");
-    }
-
-    #[test]
-    fn test_check_bash_command_allows_safe_similar() {
-        let args = serde_json::json!({"command": "rm -rf /home/user/temp"});
-        let result = check_bash_command(&args, &DenyList::default(), &PathGuard::default(), false);
-        assert!(
-            result.is_none(),
-            "rm -rf /home/user/temp should be allowed, got: {:?}",
-            result
-        );
-    }
-
-    #[test]
-    fn test_check_bash_command_blocks_dd_by_substring() {
-        let args = serde_json::json!({"command": "dd if=/dev/zero of=/tmp/out bs=1M count=1"});
-        let result = check_bash_command(&args, &DenyList::default(), &PathGuard::default(), false);
-        assert!(result.is_some(), "dd if=/dev/zero should be blocked");
-    }
-
-    #[test]
-    fn test_check_bash_command_blocks_fork_bomb() {
-        let args = serde_json::json!({"command": ":(){ :|:& };:"});
-        let result = check_bash_command(&args, &DenyList::default(), &PathGuard::default(), false);
-        assert!(result.is_some(), "Fork bomb should be blocked");
-    }
-
-    #[test]
-    fn test_check_bash_command_allows_legitimate_curl() {
-        let args = serde_json::json!({"command": "curl -s https://api.example.com/data"});
-        let result = check_bash_command(&args, &DenyList::default(), &PathGuard::default(), false);
-        assert!(
-            result.is_none(),
-            "curl should not be blocked by check_bash_command"
-        );
-    }
-
-    #[test]
     fn test_is_read_only_bash_simple_ls() {
         assert!(is_read_only_bash("ls -la"));
     }
@@ -3205,7 +3023,7 @@ mod tests {
     /// silently breaks the post-turn hook fire path.
     #[test]
     fn post_turn_guard_constructs_and_drops() {
-        let _guard = PostTurnHookGuard::new(HookRunner::default());
+        let _guard = PostTurnHookGuard::new(HookRunner::default(), Config::default());
     }
 
     /// `reload_config` rebuilds access control from a new config and

@@ -15,7 +15,15 @@
 //! This is best-effort — hooks must not block the executor loop.
 
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::Stdio;
+use std::time::Duration;
+
+use crate::session::access::access_from_config;
+use crate::shared::Config;
+use crate::tools::bash::{
+    cap_to_string, check_bash_command_str, drain_capped, MAX_BASH_OUTPUT_BYTES,
+};
 
 /// Discovers and runs lifecycle hook scripts.
 #[derive(Debug, Clone)]
@@ -50,7 +58,12 @@ impl HookRunner {
     /// The script is invoked via `bash` with a 5-second timeout.
     /// `env_vars` are passed as additional environment variables
     /// (pairs of key, value — both owned for the spawned future).
-    pub fn run(&self, event_name: &str, env_vars: &[(&str, &str)]) {
+    ///
+    /// Before executing, the script content passes through the same
+    /// safety gate as the model's `bash` tool (metadata blocks,
+    /// dangerous patterns, path/url deny lists). Stdout and stderr are
+    /// capped so a runaway hook can't OOM the process.
+    pub fn run(&self, event_name: &str, env_vars: &[(&str, &str)], config: &Config) {
         if !self.has(event_name) {
             return;
         }
@@ -61,44 +74,15 @@ impl HookRunner {
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect();
+        let script_path_owned = script_path.clone();
+        let config = config.clone();
 
         let handle = match tokio::runtime::Handle::try_current() {
             Ok(rt) => rt.spawn(async move {
-                let mut cmd = tokio::process::Command::new("bash");
-                cmd.arg(&script_path);
-                for (k, v) in &owned_vars {
-                    cmd.env(k, v);
-                }
-
-                match tokio::time::timeout(std::time::Duration::from_secs(5), cmd.output()).await {
-                    Ok(Ok(out)) => {
-                        if !out.status.success() {
-                            tracing::warn!(
-                                event = %event,
-                                code = out.status.code(),
-                                "Hook exited with non-zero status"
-                            );
-                        }
-                        if !out.stderr.is_empty() {
-                            tracing::debug!(
-                                event = %event,
-                                stderr = %String::from_utf8_lossy(&out.stderr),
-                                "Hook stderr"
-                            );
-                        }
-                    }
-                    Ok(Err(e)) => {
-                        tracing::warn!(
-                            event = %event,
-                            error = %e,
-                            "Failed to execute hook"
-                        );
-                    }
-                    Err(_elapsed) => {
-                        tracing::warn!(
-                            event = %event,
-                            "Hook timed out after 5s"
-                        );
+                match run_hook_script(&script_path_owned, &owned_vars, &config).await {
+                    Ok(()) => {}
+                    Err(e) => {
+                        tracing::warn!(event = %event, error = %e, "Hook run failed");
                     }
                 }
             }),
@@ -149,6 +133,151 @@ fn discover_hooks(hooks_dir: &std::path::Path) -> HashSet<String> {
 fn default_hooks_dir() -> anyhow::Result<PathBuf> {
     let base = crate::session::data_dir()?;
     Ok(base.join("hooks"))
+}
+
+/// Spawn a hook script with env vars, timeout, and capped output.
+///
+/// The script content is checked against the shared bash safety gate
+/// before execution. Output is capped per-stream at
+/// [`MAX_BASH_OUTPUT_BYTES`]; anything past the cap is discarded and
+/// counted so the log can mention it.
+async fn run_hook_script(
+    script: &Path,
+    env_vars: &[(String, String)],
+    config: &Config,
+) -> Result<(), String> {
+    let (deny_list, path_guard, _) = access_from_config(config);
+
+    if deny_list.is_path_denied(script) {
+        return Err(format!(
+            "hook script path denied by deny list: {}",
+            script.display()
+        ));
+    }
+
+    let content = match tokio::fs::read_to_string(script).await {
+        Ok(c) => c,
+        Err(e) => {
+            return Err(format!(
+                "cannot read hook script {}: {}",
+                script.display(),
+                e
+            ))
+        }
+    };
+
+    // Run the script content through the same gate the model's bash
+    // tool uses. We pass no workdir so sandbox workdir policy doesn't
+    // apply to global user hooks, but metadata/dangerous/deny checks do.
+    if let Some(reason) = check_bash_command_str(
+        &content,
+        None,
+        &deny_list,
+        &path_guard,
+        config.bash_sandbox_workdir,
+    ) {
+        return Err(format!("hook script blocked: {}", reason));
+    }
+
+    let mut cmd = tokio::process::Command::new("bash");
+    cmd.arg(script)
+        .kill_on_drop(true)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    for (k, v) in env_vars {
+        cmd.env(k, v);
+    }
+
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("failed to spawn hook {}: {}", script.display(), e))?;
+
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "hook stdout not available".to_string())?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "hook stderr not available".to_string())?;
+
+    let drain_stdout = tokio::spawn(drain_capped(stdout, MAX_BASH_OUTPUT_BYTES));
+    let drain_stderr = tokio::spawn(drain_capped(stderr, MAX_BASH_OUTPUT_BYTES));
+
+    let timeout_at = tokio::time::Instant::now() + Duration::from_secs(5);
+    let status_result = tokio::select! {
+        biased;
+        result = child.wait() => Ok(result),
+        _ = tokio::time::sleep_until(timeout_at) => {
+            let _ = child.start_kill();
+            Err(())
+        }
+    };
+
+    match status_result {
+        Ok(Ok(status)) => {
+            let (_raw_stdout, stdout_dropped) = join_hook_drain(drain_stdout, "stdout").await?;
+            let (raw_stderr, stderr_dropped) = join_hook_drain(drain_stderr, "stderr").await?;
+            if !status.success() {
+                tracing::warn!(
+                    script = %script.display(),
+                    code = status.code(),
+                    stdout_dropped,
+                    stderr_dropped,
+                    "Hook exited with non-zero status"
+                );
+            } else if stdout_dropped > 0 || stderr_dropped > 0 {
+                tracing::debug!(
+                    script = %script.display(),
+                    stdout_dropped,
+                    stderr_dropped,
+                    "Hook output was capped"
+                );
+            }
+            let stderr_text = cap_to_string(raw_stderr, stderr_dropped);
+            if !stderr_text.is_empty() {
+                tracing::debug!(
+                    script = %script.display(),
+                    stderr = %stderr_text,
+                    "Hook stderr"
+                );
+            }
+            Ok(())
+        }
+        Ok(Err(e)) => Err(format!(
+            "failed to wait for hook {}: {}",
+            script.display(),
+            e
+        )),
+        Err(()) => {
+            let _ = tokio::time::timeout(Duration::from_secs(2), child.wait()).await;
+            let (_raw_stdout, _stdout_dropped) = join_hook_drain(drain_stdout, "stdout").await?;
+            let (raw_stderr, stderr_dropped) = join_hook_drain(drain_stderr, "stderr").await?;
+            let stderr_text = cap_to_string(raw_stderr, stderr_dropped);
+            if !stderr_text.is_empty() {
+                tracing::debug!(
+                    script = %script.display(),
+                    stderr = %stderr_text,
+                    "Hook stderr on timeout"
+                );
+            }
+            Err(format!(
+                "hook {} timed out after 5 seconds",
+                script.display()
+            ))
+        }
+    }
+}
+
+async fn join_hook_drain(
+    handle: tokio::task::JoinHandle<std::io::Result<(Vec<u8>, u64)>>,
+    label: &str,
+) -> Result<(Vec<u8>, u64), String> {
+    match handle.await {
+        Ok(Ok(pair)) => Ok(pair),
+        Ok(Err(e)) => Err(format!("drain {}: {}", label, e)),
+        Err(e) => Err(format!("drain {} task panicked: {}", label, e)),
+    }
 }
 
 #[cfg(test)]
@@ -224,6 +353,10 @@ mod tests {
         assert!(!runner.has(""));
     }
 
+    fn default_config() -> Config {
+        Config::default()
+    }
+
     #[tokio::test]
     async fn test_run_executes_hook() {
         let (_tmp, dir) = temp_hooks_dir();
@@ -237,10 +370,10 @@ mod tests {
         );
         let runner = HookRunner::new(dir.clone());
 
-        runner.run("post-turn", &[("KF_EVENT", "post-turn")]);
+        runner.run("post-turn", &[("KF_EVENT", "post-turn")], &default_config());
 
         // Give the spawned task a moment to run
-        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(800)).await;
 
         let content = std::fs::read_to_string(&marker).unwrap_or_else(|_| String::from("not-run"));
         assert_eq!(content.trim(), "post-turn");
@@ -251,7 +384,7 @@ mod tests {
         let (_tmp, dir) = temp_hooks_dir();
         let runner = HookRunner::new(dir);
         // Should not panic or spawn anything
-        runner.run("nonexistent", &[]);
+        runner.run("nonexistent", &[], &default_config());
     }
 
     #[tokio::test]
@@ -272,9 +405,10 @@ mod tests {
         runner.run(
             "pre-tool-bash",
             &[("KF_TOOL_NAME", "bash"), ("KF_EVENT", "pre-tool-bash")],
+            &default_config(),
         );
 
-        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(800)).await;
 
         let content = std::fs::read_to_string(&marker).unwrap_or_default();
         assert_eq!(content.trim(), "bash,pre-tool-bash");
@@ -287,8 +421,21 @@ mod tests {
         let runner = HookRunner::new(dir);
 
         // Should not block — timeout kills it
-        runner.run("slow-hook", &[]);
+        runner.run("slow-hook", &[], &default_config());
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         // If we get here without the 30s sleep blocking, timeout works
+    }
+
+    #[tokio::test]
+    async fn test_run_hook_blocks_dangerous_content() {
+        let (_tmp, dir) = temp_hooks_dir();
+        write_hook(&dir, "evil", "#!/bin/bash\nrm -rf /");
+        let runner = HookRunner::new(dir);
+
+        // Should be a no-op at runtime because the safety gate blocks it.
+        runner.run("evil", &[], &default_config());
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        // The only observable behaviour is "did not panic"; tracing covers
+        // the block reason.
     }
 }

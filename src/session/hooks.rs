@@ -32,6 +32,8 @@ use crate::shared::Config;
 use crate::tools::bash::{
     cap_to_string, check_bash_command_str, drain_capped, MAX_BASH_OUTPUT_BYTES,
 };
+use kirkforge_plugin::Plugin;
+use kirkforge_plugin_host::PluginRegistry;
 
 /// Discovers and runs lifecycle hook scripts.
 #[derive(Debug, Clone)]
@@ -40,6 +42,12 @@ pub struct HookRunner {
     hooks_dir: PathBuf,
     /// Set of available hook names (without `.sh` suffix).
     available: HashSet<String>,
+    /// Plugin-defined hooks loaded from `PluginRegistry`.
+    ///
+    /// Each entry is `(event_name, absolute_script_path)`. Plugin hooks run
+    /// through the same `run_hook_script` pipeline as built-in hooks, so they
+    /// get the same 5-second timeout, bash safety gate, and capped output.
+    plugin_hooks: Vec<(String, PathBuf)>,
 }
 
 impl HookRunner {
@@ -52,46 +60,66 @@ impl HookRunner {
         Self {
             hooks_dir,
             available,
+            plugin_hooks: Vec::new(),
         }
     }
 
-    /// Check whether a hook with the given event name exists.
+    /// Load plugin-defined hooks from a `PluginRegistry`.
+    ///
+    /// Plugin hooks are stored separately from built-in hooks so both can
+    /// coexist; a plugin may add hooks for events the user did not define
+    /// locally, or add additional checks for events that already have a
+    /// built-in hook.
+    pub fn load_plugin_hooks(&mut self, registry: &PluginRegistry) {
+        for hosted in registry.active_plugins() {
+            let plugin = &hosted.plugin;
+            let root = plugin.root();
+            for cap in plugin.hooks() {
+                if let kirkforge_plugin::Capability::Hook { event, command } = cap {
+                    let script_path = root.join(&command);
+                    self.plugin_hooks.push((event, script_path));
+                }
+            }
+        }
+    }
+
+    /// Check whether any hook (built-in or plugin) exists for `event_name`.
     pub fn has(&self, event_name: &str) -> bool {
         self.available.contains(event_name)
+            || self.plugin_hooks.iter().any(|(e, _)| e == event_name)
     }
 
-    /// Run a hook script asynchronously (fire-and-forget).
-    ///
-    /// If no script exists for `event_name`, this is a no-op.
-    /// The script is invoked via `bash` with a 5-second timeout.
-    /// `env_vars` are passed as additional environment variables
-    /// (pairs of key, value — both owned for the spawned future).
-    ///
-    /// Before executing, the script content passes through the same
-    /// safety gate as the model's `bash` tool (metadata blocks,
-    /// dangerous patterns, path/url deny lists). Stdout and stderr are
-    /// capped so a runaway hook can't OOM the process.
-    ///
-    /// For hooks that may deny an operation (i.e. `pre-tool-*`), use
-    /// [`Self::run_decision`] instead. This method always treats the
-    /// hook as observational.
-    pub fn run(&self, event_name: &str, env_vars: &[(&str, &str)], config: &Config) {
-        if !self.has(event_name) {
-            return;
-        }
+    /// Return the plugin hook script paths registered for `event_name`.
+    fn plugin_hooks_for(&self, event_name: &str) -> Vec<PathBuf> {
+        self.plugin_hooks
+            .iter()
+            .filter(|(e, _)| e == event_name)
+            .map(|(_, path)| path.clone())
+            .collect()
+    }
 
-        let script_path = self.hooks_dir.join(format!("{}.sh", event_name));
-        let event = event_name.to_string();
-        let owned_vars: Vec<(String, String)> = env_vars
+    /// Convert `&[(&str, &str)]` env vars into owned pairs for async tasks.
+    fn owned_env_vars(env_vars: &[(&str, &str)]) -> Vec<(String, String)> {
+        env_vars
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect();
-        let script_path_owned = script_path.clone();
-        let config = config.clone();
+            .collect()
+    }
 
+    /// Spawn a single hook script via `run_hook_script` and log the outcome.
+    ///
+    /// Used for both built-in and plugin hooks in the fire-and-forget path.
+    fn spawn_hook_script(
+        &self,
+        event_name: &str,
+        script_path: PathBuf,
+        env_vars: Vec<(String, String)>,
+        config: Config,
+    ) {
+        let event = event_name.to_string();
         let handle = match tokio::runtime::Handle::try_current() {
             Ok(rt) => rt.spawn(async move {
-                match run_hook_script(&script_path_owned, &owned_vars, &config).await {
+                match run_hook_script(&script_path, &env_vars, &config).await {
                     Ok(HookDecision::Allow) => {}
                     Ok(HookDecision::Deny(reason)) => {
                         // Fire-and-forget path: a deny here is too late to
@@ -108,7 +136,7 @@ impl HookRunner {
                 }
             }),
             Err(e) => {
-                tracing::warn!(event = %event, error = %e, "no Tokio runtime available; hook skipped");
+                tracing::warn!(event = %event_name, error = %e, "no Tokio runtime available; hook skipped");
                 return;
             }
         };
@@ -116,36 +144,77 @@ impl HookRunner {
         std::mem::drop(handle);
     }
 
-    /// Run a hook that is allowed to deny an operation and await its
-    /// decision.
+    /// Run all hook scripts for `event_name` asynchronously (fire-and-forget).
     ///
-    /// Returns [`HookDecision::Allow`] if the hook is missing, succeeds,
-    /// exits with any non-zero code other than `2`, times out, or fails
-    /// to execute. Returns [`HookDecision::Deny`] only when the hook
-    /// exits with code `2`.
+    /// Built-in hooks (if any) and plugin hooks (if any) all run. Each script
+    /// is invoked via `bash` with a 5-second timeout and passes through the
+    /// same safety gate as the model's `bash` tool.
+    ///
+    /// For hooks that may deny an operation (i.e. `pre-tool-*`), use
+    /// [`Self::run_decision`] instead. This method always treats hooks as
+    /// observational.
+    pub fn run(&self, event_name: &str, env_vars: &[(&str, &str)], config: &Config) {
+        let owned_vars = Self::owned_env_vars(env_vars);
+        let config = config.clone();
+
+        // Built-in hook.
+        if self.available.contains(event_name) {
+            let script_path = self.hooks_dir.join(format!("{}.sh", event_name));
+            self.spawn_hook_script(event_name, script_path, owned_vars.clone(), config.clone());
+        }
+
+        // Plugin hooks.
+        for script_path in self.plugin_hooks_for(event_name) {
+            self.spawn_hook_script(event_name, script_path, owned_vars.clone(), config.clone());
+        }
+    }
+
+    /// Run all hooks for `event_name` that are allowed to deny an operation.
+    ///
+    /// Returns [`HookDecision::Allow`] if no hook exists, if all hooks
+    /// succeed or fail open, or if any non-gating failure occurs. Returns
+    /// [`HookDecision::Deny`] if any hook exits with code `2`. Built-in and
+    /// plugin hooks are both evaluated.
     pub async fn run_decision(
         &self,
         event_name: &str,
         env_vars: &[(&str, &str)],
         config: &Config,
     ) -> HookDecision {
-        if !self.has(event_name) {
-            return HookDecision::Allow;
-        }
+        let owned_vars = Self::owned_env_vars(env_vars);
+        let mut decisions: Vec<HookDecision> = Vec::new();
 
-        let script_path = self.hooks_dir.join(format!("{}.sh", event_name));
-        let owned_vars: Vec<(String, String)> = env_vars
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect();
-
-        match run_hook_script(&script_path, &owned_vars, config).await {
-            Ok(decision) => decision,
-            Err(e) => {
-                tracing::warn!(event = %event_name, error = %e, "Decision hook failed (fail-open)");
-                HookDecision::Allow
+        // Built-in hook.
+        if self.available.contains(event_name) {
+            let script_path = self.hooks_dir.join(format!("{}.sh", event_name));
+            match run_hook_script(&script_path, &owned_vars, config).await {
+                Ok(decision) => decisions.push(decision),
+                Err(e) => {
+                    tracing::warn!(event = %event_name, error = %e, "Built-in decision hook failed (fail-open)");
+                }
             }
         }
+
+        // Plugin hooks.
+        for script_path in self.plugin_hooks_for(event_name) {
+            match run_hook_script(&script_path, &owned_vars, config).await {
+                Ok(decision) => decisions.push(decision),
+                Err(e) => {
+                    tracing::warn!(
+                        event = %event_name,
+                        path = %script_path.display(),
+                        error = %e,
+                        "Plugin decision hook failed (fail-open)"
+                    );
+                }
+            }
+        }
+
+        // Any explicit deny wins; otherwise allow.
+        decisions
+            .into_iter()
+            .find(|d| matches!(d, HookDecision::Deny(_)))
+            .unwrap_or(HookDecision::Allow)
     }
 }
 
@@ -379,6 +448,7 @@ async fn join_hook_drain(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kirkforge_plugin_host::TrustPolicy;
 
     fn temp_hooks_dir() -> (tempfile::TempDir, PathBuf) {
         let tmp = tempfile::tempdir().unwrap();
@@ -634,5 +704,43 @@ mod tests {
 
         let decision = runner.run_decision("missing", &[], &default_config()).await;
         assert_eq!(decision, HookDecision::Allow);
+    }
+
+    #[test]
+    fn test_load_plugin_hooks_from_registry() {
+        let tmp = tempfile::tempdir().unwrap();
+        let plugins_dir = tmp.path().join("plugins");
+        let plugin_dir = plugins_dir.join("demo");
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        std::fs::write(
+            plugin_dir.join("kirkforge.toml"),
+            r#"
+name = "demo-hooks"
+version = "0.1.0"
+description = "demo"
+trust = "shell"
+
+[[capabilities]]
+type = "hook"
+event = "post-turn"
+command = "hooks/post-turn.sh"
+"#,
+        )
+        .unwrap();
+
+        let mut registry = PluginRegistry::new();
+        let warnings = registry
+            .load_from_dir(
+                &plugins_dir,
+                TrustPolicy::up_to(kirkforge_plugin::TrustTier::Shell),
+            )
+            .unwrap();
+        assert!(warnings.is_empty(), "{:?}", warnings);
+
+        let (_tmp2, hooks_dir) = temp_hooks_dir();
+        let mut runner = HookRunner::new(hooks_dir);
+        assert!(!runner.has("post-turn"));
+        runner.load_plugin_hooks(&registry);
+        assert!(runner.has("post-turn"));
     }
 }

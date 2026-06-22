@@ -27,7 +27,7 @@ use tokio::sync::Mutex;
 // ── Event Kinds ─────────────────────────────────────────────────────────
 
 /// All event kinds the bus supports.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize)]
 pub enum EventKind {
     FileRead,
     FileWrite,
@@ -81,7 +81,8 @@ impl std::fmt::Display for EventKind {
 // ── Events ──────────────────────────────────────────────────────────────
 
 /// A concrete event on the bus.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(tag = "kind", content = "payload")]
 pub enum BusEvent {
     FileRead(FileReadEvent),
     FileWrite(FileWriteEvent),
@@ -156,26 +157,26 @@ impl BusEvent {
 
 // ── Event payloads ──────────────────────────────────────────────────────
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct FileReadEvent {
     pub path: PathBuf,
     pub size_bytes: u64,
     pub truncated: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct FileWriteEvent {
     pub path: PathBuf,
     pub content_length: usize,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct EditEvent {
     pub path: PathBuf,
     pub diff: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct BashExecEvent {
     pub command: String,
     pub exit_code: i32,
@@ -183,40 +184,40 @@ pub struct BashExecEvent {
     pub stderr_len: usize,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct GitOperationEvent {
     pub args: Vec<String>,
     pub output: String,
     pub success: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct LintRunEvent {
     pub tool: String,
     pub target: String,
     pub findings: Vec<LintFinding>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct TypeCheckEvent {
     pub target: String,
     pub errors: Vec<String>,
     pub success: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct SecurityScanEvent {
     pub target: String,
     pub issues: Vec<SecurityIssue>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct ToolErrorEvent {
     pub tool: String,
     pub error: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct LintFinding {
     pub severity: String, // "error" | "warning" | "info"
     pub message: String,
@@ -224,7 +225,7 @@ pub struct LintFinding {
     pub line: Option<usize>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct SecurityIssue {
     pub severity: String,
     pub kind: String,

@@ -24,6 +24,7 @@ pub mod git;
 /// result is authoritative. The system runs verifiers in priority order
 /// and stops at the first definitive result.
 pub mod lint;
+pub mod plugin;
 pub mod security;
 
 use crate::session::event_bus::{BusEvent, EventHandler, EventKind, HandlerResult};

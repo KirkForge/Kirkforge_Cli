@@ -367,6 +367,7 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
             system,
             output,
             max_turns,
+            &plugin_registry,
         )
         .await
     } else {
@@ -377,11 +378,13 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
             conversation,
             system,
             undo_stack,
+            &plugin_registry,
         )
         .await
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_non_interactive(
     config: crate::shared::SharedConfig,
     adapter: Box<dyn adapters::ModelAdapter>,
@@ -390,16 +393,18 @@ async fn run_non_interactive(
     system: Option<String>,
     output: crate::shared::OutputFormat,
     max_turns: usize,
+    plugin_registry: &kirkforge_plugin_host::PluginRegistry,
 ) -> anyhow::Result<()> {
     let model_name = adapter.model_info().name.clone();
 
-    let mut executor = session::executor::Executor::with_log_and_undo(
+    let mut executor = session::executor::Executor::with_log_and_undo_and_plugins(
         adapter,
         tools,
         config.clone(),
         conversation,
         None,
         None,
+        Some(plugin_registry),
     );
     // Apply --system override before run_turn. Without this the
     // override is silently dropped (was GPT 5.5 review finding #2).

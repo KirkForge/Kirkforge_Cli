@@ -157,6 +157,7 @@ pub async fn run_tui(
     conversation_log: ConversationLog,
     system: Option<String>,
     undo_stack: Option<crate::tools::UndoStackRef>,
+    plugin_registry: &kirkforge_plugin_host::PluginRegistry,
 ) -> anyhow::Result<()> {
     // ── Terminal setup ──
     enable_raw_mode()?;
@@ -363,13 +364,14 @@ pub async fn run_tui(
     }
 
     // Spawn the executor on a background task
-    let mut exe = executor::Executor::with_log_and_undo(
+    let mut exe = executor::Executor::with_log_and_undo_and_plugins(
         adapter,
         tools,
         shared_config.clone(),
         conversation_log,
         carryover_target,
         undo_stack,
+        Some(plugin_registry),
     );
     // Apply --system override before the executor starts processing
     // input. Without this, --system is silently dropped (was GPT 5.5

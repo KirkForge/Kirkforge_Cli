@@ -158,13 +158,38 @@ impl Executor {
     }
 
     /// Constructor that also accepts a shared undo stack and a shared config.
+    ///
+    /// Does not load plugin hooks or verifiers. Use
+    /// [`Self::with_log_and_undo_and_plugins`] to enable plugins.
     pub fn with_log_and_undo(
+        adapter: Box<dyn ModelAdapter>,
+        tools: Vec<Arc<dyn Tool>>,
+        config: SharedConfig,
+        conversation: ConversationLog,
+        carryover_target: Option<std::sync::Arc<std::sync::Mutex<CarryoverProfile>>>,
+        undo_stack: Option<UndoStackRef>,
+    ) -> Self {
+        Self::with_log_and_undo_and_plugins(
+            adapter,
+            tools,
+            config,
+            conversation,
+            carryover_target,
+            undo_stack,
+            None,
+        )
+    }
+
+    /// Constructor that optionally loads plugin hooks and verifiers from a
+    /// `PluginRegistry`.
+    pub fn with_log_and_undo_and_plugins(
         mut adapter: Box<dyn ModelAdapter>,
         tools: Vec<Arc<dyn Tool>>,
         config: SharedConfig,
         conversation: ConversationLog,
         carryover_target: Option<std::sync::Arc<std::sync::Mutex<CarryoverProfile>>>,
         undo_stack: Option<UndoStackRef>,
+        plugin_registry: Option<&kirkforge_plugin_host::PluginRegistry>,
     ) -> Self {
         let model_name = adapter.model_info().name.clone();
         let config_for_startup = config.clone();
@@ -184,10 +209,13 @@ impl Executor {
             None, // model_type_override not available here; set via CLI
         );
 
-        let hook_runner = match &cfg.hooks_dir {
+        let mut hook_runner = match &cfg.hooks_dir {
             Some(dir) => HookRunner::new(dir.clone()),
             None => HookRunner::default(),
         };
+        if let Some(registry) = plugin_registry {
+            hook_runner.load_plugin_hooks(registry);
+        }
 
         let event_bus = EventBus::new();
 
@@ -219,7 +247,7 @@ impl Executor {
             undo_stack,
             plan_mode: false,
         };
-        this.init_default_verifiers();
+        this.init_default_verifiers(plugin_registry);
         this
     }
 
@@ -245,7 +273,10 @@ impl Executor {
         config_diff_summary(&old, &fresh)
     }
 
-    pub fn init_default_verifiers(&mut self) -> usize {
+    pub fn init_default_verifiers(
+        &mut self,
+        plugin_registry: Option<&kirkforge_plugin_host::PluginRegistry>,
+    ) -> usize {
         use crate::session::verifier::{Verdict, Verifier};
 
         let slots = Arc::new(std::sync::RwLock::new(VerifierSlots::new()));
@@ -308,6 +339,20 @@ impl Executor {
             let mut s = slots.write().unwrap_or_else(|e| e.into_inner());
             if s.register(Arc::new(GitV)).is_ok() {
                 count += 1;
+            }
+        }
+
+        // Register plugin verifiers (Phase 2.4).
+        if let Some(registry) = plugin_registry {
+            let plugin_verifiers =
+                crate::session::verifier::plugin::verifiers_from_registry(registry);
+            {
+                let mut s = slots.write().unwrap_or_else(|e| e.into_inner());
+                for v in plugin_verifiers {
+                    if s.register(v).is_ok() {
+                        count += 1;
+                    }
+                }
             }
         }
 

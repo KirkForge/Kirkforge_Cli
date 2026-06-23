@@ -218,6 +218,32 @@ pub async fn handle_input_key(
                 state.messages.push(ConversationEntry::new("system", line));
                 return Ok(());
             }
+            // Ctrl+Shift+B: copy the most recent assistant code block to
+            // the system clipboard. Mirrors the "· copy" hint shown on
+            // code-block headers in the chat renderer.
+            if key
+                .modifiers
+                .contains(KeyModifiers::CONTROL | KeyModifiers::SHIFT)
+                && (c == 'b' || c == 'B')
+            {
+                let copied = state
+                    .messages
+                    .iter()
+                    .rev()
+                    .filter(|m| m.role == "assistant")
+                    .find_map(|m| crate::tui::rendering::last_code_block(&m.content));
+                let line = match copied {
+                    Some(text) if !text.is_empty() => {
+                        match crate::tui::clipboard::copy_to_clipboard(&text) {
+                            Ok(n) => format!("📋 Copied code block ({} chars) to clipboard", n),
+                            Err(e) => format!("📋 Clipboard error: {}", e),
+                        }
+                    }
+                    Some(_) | None => "📋 No code block to copy".to_string(),
+                };
+                state.messages.push(ConversationEntry::new("system", line));
+                return Ok(());
+            }
             if key.modifiers.contains(KeyModifiers::CONTROL) {
                 // Ctrl+F is a no-op while in search mode (the
                 // input box is the search box; we don't want to
@@ -312,10 +338,9 @@ pub async fn handle_input_key(
             }
         }
         KeyCode::Tab => {
-            // Tab on an empty input toggles expand on the most recent
-            // tool entry. Empty input means the user isn't typing
-            // anything — Tab is otherwise useless in a single-line input,
-            // so it's a free gesture.
+            // Tab on an empty input toggles expand/collapse on the most
+            // recent message. Tool entries use `expanded_tools`; all other
+            // messages use `collapsed_messages`.
             if state.input.is_empty() {
                 if let Some(last_idx) = state.messages.len().checked_sub(1) {
                     if state.messages[last_idx].role == "tool"
@@ -326,8 +351,14 @@ pub async fn handle_input_key(
                         } else {
                             state.expanded_tools.insert(last_idx);
                         }
-                        return Ok(());
+                    } else {
+                        if state.collapsed_messages.contains(&last_idx) {
+                            state.collapsed_messages.remove(&last_idx);
+                        } else {
+                            state.collapsed_messages.insert(last_idx);
+                        }
                     }
+                    return Ok(());
                 }
             }
         }
@@ -419,8 +450,14 @@ pub async fn handle_input_key(
                         } else {
                             state.expanded_tools.insert(last_idx);
                         }
-                        return Ok(());
+                    } else {
+                        if state.collapsed_messages.contains(&last_idx) {
+                            state.collapsed_messages.remove(&last_idx);
+                        } else {
+                            state.collapsed_messages.insert(last_idx);
+                        }
                     }
+                    return Ok(());
                 }
             }
 
@@ -457,6 +494,7 @@ pub async fn handle_input_key(
                         "/help" | "/h" | "/?" => {
                             let mut help_text =
                                 "Built-in commands:\n  /clear    Clear conversation\n  /exit     Quit\n  /fork     Fork session: /fork list | <label> [count]\n  /resume   Resume a fork: /resume <fork-id>\n  /jobs     Background bash jobs: /jobs | <id> | clean\n  /status   Show model, cost, tokens, and context pressure (one-shot)\n  /model    Hot-swap the active model: /model <name> (bypasses smart routing)\n  /compact  Compact conversation history: drop old tool results, condense old assistant turns. Destructive — see TUI for stats.
+  /save     Save conversation transcript to markdown: /save [path]. Default: next to session log.
   /explore  Fork-isolated research: read-only tools, returns a summary.
   /plan     Fork-isolated plan mode: no shell, returns a step-by-step plan; type /implement to start coding.
   /coder    Fork-isolated implementation: full toolset, returns a summary of changes.
@@ -464,8 +502,8 @@ pub async fn handle_input_key(
   /commit   Commit changes safely: /commit shows status + suggested message; /commit \"message\" stages all and commits after sanitation checks; /commit --push \"message\" also pushes.
   /undo     Undo the most recent edit_file or write_file. /undo list shows the stack; /undo count prints the depth.
   /sessions List saved sessions, prune old ones, or delete one by id.
-  /test     Run cargo test --no-fail-fast; surface a parsed pass/fail summary with file:line locations. Optional: /test <timeout-secs>.\n\nBash passthrough:\n  !<command>  Run a shell command directly — no model round trip, no approval. Output is shown as a collapsible tool entry. 30-second timeout; for long jobs use `!<cmd> &` and check /jobs.\n\n@-mentions (inline file context):\n  @<path>          Inline the file's contents into the prompt (minified by default). The TUI shows a status row per mention.\n  @<path>:raw      Inline the file verbatim, no minification.\n  @<path>:A-B      Inline lines A–B (1-indexed, inclusive on both ends).\n  @<path>:A-B:raw  Range + verbatim, combined.\n  @~/...           Tilde expansion supported (e.g. @~/notes.md).\n  Multiple @<path> tokens in one input are all expanded. Each mention is capped at 50 KB (head + tail + marker) and respects the same path-safety rules as the model's read_file tool. Failures (missing, denied, I/O) are shown in the TUI as ✗ rows and as quoted placeholders in the prompt, so the model can react.\n\nKeybindings:\n  Ctrl+T   Toggle tool output collapse (default ON)\n  Ctrl+F   Search the conversation (Enter to commit, n / Shift+N to cycle, Esc to cancel)\n  Enter    Expand/collapse the most recent tool output (when input is empty)\n  Tab      Same as Enter (alternative expand gesture)\n  Ctrl+C   Cancel generation + clear input
-  Ctrl+Shift+C  Copy last assistant message to clipboard\n  Ctrl+W   Delete word backward\n  Ctrl+U   Clear input line\n  Esc      Toggle thinking panel (or cancel search if Ctrl+F is active)\n\nStatus bar:\n  The bottom bar shows session model, time, cumulative cost, and a colour-coded budget indicator. Green (< 50%) = comfortable, yellow (50–80%) = consider /compact, red (> 80%) = compact now. The same data is available on demand via /status.\n".to_string();
+  /test     Run cargo test --no-fail-fast; surface a parsed pass/fail summary with file:line locations. Optional: /test <timeout-secs>.\n\nBash passthrough:\n  !<command>  Run a shell command directly — no model round trip, no approval. Output is shown as a collapsible tool entry. 30-second timeout; for long jobs use `!<cmd> &` and check /jobs.\n\n@-mentions (inline file context):\n  @<path>          Inline the file's contents into the prompt (minified by default). The TUI shows a status row per mention.\n  @<path>:raw      Inline the file verbatim, no minification.\n  @<path>:A-B      Inline lines A–B (1-indexed, inclusive on both ends).\n  @<path>:A-B:raw  Range + verbatim, combined.\n  @~/...           Tilde expansion supported (e.g. @~/notes.md).\n  Multiple @<path> tokens in one input are all expanded. Each mention is capped at 50 KB (head + tail + marker) and respects the same path-safety rules as the model's read_file tool. Failures (missing, denied, I/O) are shown in the TUI as ✗ rows and as quoted placeholders in the prompt, so the model can react.\n\nKeybindings:\n  Ctrl+T   Toggle tool output collapse (default ON)\n  Ctrl+F   Search the conversation (Enter to commit, n / Shift+N to cycle, Esc to cancel)\n  Enter    Expand/collapse the most recent message (when input is empty)\n  Tab      Same as Enter (alternative expand gesture)\n  Ctrl+C   Cancel generation + clear input
+  Ctrl+Shift+C  Copy last assistant message to clipboard\n  Ctrl+Shift+B  Copy most recent assistant code block to clipboard\n  Ctrl+W   Delete word backward\n  Ctrl+U   Clear input line\n  Esc      Toggle thinking panel (or cancel search if Ctrl+F is active)\n\nStatus bar:\n  The bottom bar shows session model, time, cumulative cost, and a colour-coded budget indicator. Green (< 50%) = comfortable, yellow (50–80%) = consider /compact, red (> 80%) = compact now. The same data is available on demand via /status.\n".to_string();
                             let skills = state.skill_registry.all();
                             if !skills.is_empty() {
                                 help_text.push_str("\nSkills:\n");
@@ -541,6 +579,11 @@ pub async fn handle_input_key(
                         }
                         "/memory" => {
                             let msg = crate::tui::commands::handle_memory_command(args);
+                            state.messages.push(ConversationEntry::new("system", msg));
+                            return Ok(());
+                        }
+                        "/save" => {
+                            let msg = crate::tui::commands::handle_save_command(args, state);
                             state.messages.push(ConversationEntry::new("system", msg));
                             return Ok(());
                         }

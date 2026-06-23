@@ -292,6 +292,13 @@ pub struct Config {
     #[serde(default = "default_max_plugin_trust")]
     pub max_plugin_trust: TrustTier,
 
+    /// Maximum number of model↔tool iterations within a single turn.
+    /// Each tool call response is fed back to the model, which may emit
+    /// another tool call. This cap prevents runaway loops during large
+    /// codebase analysis. Default 50.
+    #[serde(default = "default_max_tool_calls_per_turn")]
+    pub max_tool_calls_per_turn: usize,
+
     /// Maximum number of high-level turns a fork-isolated persona
     /// (/explore, /plan, /coder) may consume before returning to the main
     /// thread. Each persona currently runs one self-contained `run_turn`
@@ -345,6 +352,10 @@ fn default_preserve_recent_messages() -> usize {
 
 fn default_max_plugin_trust() -> TrustTier {
     TrustTier::Shell
+}
+
+fn default_max_tool_calls_per_turn() -> usize {
+    50
 }
 
 fn default_max_persona_turns() -> usize {
@@ -406,6 +417,7 @@ impl Default for Config {
             json_mode: false,
             preserve_recent_messages: default_preserve_recent_messages(),
             max_plugin_trust: default_max_plugin_trust(),
+            max_tool_calls_per_turn: default_max_tool_calls_per_turn(),
             max_persona_turns: default_max_persona_turns(),
             hooks_dir: None,
             commit_max_file_size: default_commit_max_file_size(),

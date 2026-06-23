@@ -945,9 +945,9 @@ impl Executor {
         let mut tool_calls: Vec<ToolInvocation> = Vec::new();
         let mut already_retried_parse = false;
 
-        const MAX_ITERATIONS: usize = 10;
+        let max_iterations = read_shared_config(&self.config).max_tool_calls_per_turn.max(1);
 
-        for iteration in 0..MAX_ITERATIONS {
+        for iteration in 0..max_iterations {
             if cancelled.load(Ordering::SeqCst) {
                 // The cancel watcher already emitted "Generation
                 // cancelled"; just return the events collected so far.
@@ -988,7 +988,7 @@ impl Executor {
                 }
             }
 
-            if iteration + 1 >= MAX_ITERATIONS {
+            if iteration + 1 >= max_iterations {
                 events.push(TurnEvent::Error("Tool call loop limit reached".into()));
                 return Ok(events);
             }
@@ -1233,9 +1233,18 @@ impl Executor {
         };
         let mut action = evaluate(&permission_rules, &tc.name, &tc.arguments, default_action);
 
-        if auto_approve && tc.name == "bash" && matches!(action, PermissionAction::Allow) {
+        if tc.name == "bash" {
             if let Some(cmd) = tc.arguments.get("command").and_then(|v| v.as_str()) {
-                if !is_read_only_bash(cmd) {
+                if is_read_only_bash(cmd) {
+                    // Read-only commands (ls, cat, grep, find without
+                    // destructive flags) never need approval — they're
+                    // discovery-only and asking for every `ls` would be
+                    // unusable. Destructive/non-read-only bash still asks
+                    // unless auto_approve is on.
+                    action = PermissionAction::Allow;
+                } else if auto_approve && matches!(action, PermissionAction::Allow) {
+                    // auto_approve=true is not a blank cheque: downgrade
+                    // non-read-only bash back to Ask.
                     action = PermissionAction::Ask;
                 }
             }
@@ -1499,11 +1508,18 @@ impl Executor {
         // even when file reads/writes are guarded. See `check_search_path`
         // for why we use a separate check rather than `check_read`.
         if matches!(tc.name.as_str(), "grep" | "glob") {
-            let path_str = tc
-                .arguments
-                .get("path")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let path_str = match tc.name.as_str() {
+                "glob" => tc
+                    .arguments
+                    .get("base_dir")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("."),
+                _ => tc
+                    .arguments
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("."),
+            };
             let path = std::path::Path::new(path_str);
             if let GuardVerdict::Denied(msg) = check_search_path(&self.path_guard, path) {
                 let denied = format!("🔒 Access denied: {msg}");
@@ -1790,10 +1806,7 @@ const READ_ONLY_COMMANDS: &[&str] = &[
     "grep", "rg", "sort", "wc", "cut", "tr", "uniq", "fold", "nl", "diff", "cmp", "comm", "jq",
     "date", "cal", "whoami", "id", "uname", "hostname", "uptime", "ps", "free", "lscpu", "lsblk",
     "lsof", "dmesg", "nproc", "arch", "tty", "jobs",
-    "help",
-    // `find` used to be in this list, but `find -delete` (and `-exec rm`,
-    // `-fprint`, etc.) is destructive. Removing it forces find through
-    // the approval gate — deepseek-v4 review finding #3.
+    "help", "find",
 ];
 
 fn is_read_only_bash(cmd: &str) -> bool {
@@ -1810,6 +1823,18 @@ fn is_read_only_bash(cmd: &str) -> bool {
 
     if !READ_ONLY_COMMANDS.contains(&first) {
         return false;
+    }
+
+    // `find` is read-only for discovery, but several flags mutate the
+    // filesystem. Require approval for any find command that looks
+    // destructive.
+    if first == "find" {
+        let lowered = trimmed.to_lowercase();
+        for flag in [" -delete", " -exec", " -ok", " -fprint", " -fls"] {
+            if lowered.contains(flag) {
+                return false;
+            }
+        }
     }
 
     let rest = &trimmed[first.len()..];
@@ -2205,6 +2230,11 @@ mod tests {
                 call_count: Arc::new(Mutex::new(0)),
             }
         }
+
+        fn with_followup_events(mut self, events: Vec<StreamEvent>) -> Self {
+            self.followup_events = events;
+            self
+        }
     }
 
     #[async_trait::async_trait]
@@ -2298,6 +2328,7 @@ mod tests {
             json_mode: false,
             preserve_recent_messages: 2,
             max_plugin_trust: kirkforge_plugin::TrustTier::Shell,
+            max_tool_calls_per_turn: 10,
             max_persona_turns: 10,
             hooks_dir: None,
             commit_max_file_size: 5 * 1024 * 1024,
@@ -2427,7 +2458,64 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_approval_required_for_destructive_tool() {
+    async fn test_approval_required_for_destructive_bash() {
+        // Non-read-only bash (a redirect here) requires approval even
+        // when auto_approve is false.
+        let captured = Arc::new(Mutex::new(None));
+        let tool = MockTool {
+            def: ToolDef {
+                name: "bash",
+                description: "run a command",
+                parameters: serde_json::json!({"type": "object", "properties": {"command": {"type": "string"}}}),
+            },
+            captured_args: captured.clone(),
+            outcome: ToolOutcome::Success {
+                content: "ran!".into(),
+            },
+        };
+
+        let adapter = MockAdapter::new(
+            vec![
+                StreamEvent::ToolCall(ToolInvocation {
+                    id: "call-1".into(),
+                    name: "bash".into(),
+                    arguments: serde_json::json!({"command": "echo x > file.txt"}),
+                }),
+                StreamEvent::Done {
+                    finish_reason: FinishReason::ToolCalls,
+                    usage: None,
+                },
+            ],
+            make_info(),
+        );
+
+        let (approval_tx, mut approval_rx) = mpsc::unbounded_channel();
+
+        let approval_handle = tokio::spawn(async move {
+            let req: ApprovalRequest = approval_rx.recv().await.unwrap();
+            assert_eq!(req.tool_name, "bash");
+            let _ = req.response.send(ApprovalResponse::Approved);
+        });
+
+        let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(false));
+        let events = exe
+            .run_turn("run command", &approval_tx, never_cancelled())
+            .await
+            .unwrap();
+
+        approval_handle.await.unwrap();
+
+        let result = events.iter().find_map(|e| match e {
+            TurnEvent::ToolResult { name, output, .. } => Some((name.as_str(), output.as_str())),
+            _ => None,
+        });
+        assert_eq!(result, Some(("bash", "ran!")));
+    }
+
+    #[tokio::test]
+    async fn test_read_only_bash_auto_approved() {
+        // Read-only bash commands like `ls -la` should run without
+        // requiring approval when auto_approve is false.
         let captured = Arc::new(Mutex::new(None));
         let tool = MockTool {
             def: ToolDef {
@@ -2458,10 +2546,10 @@ mod tests {
 
         let (approval_tx, mut approval_rx) = mpsc::unbounded_channel();
 
+        // No approval request should be sent, so the channel stays empty.
         let approval_handle = tokio::spawn(async move {
-            let req: ApprovalRequest = approval_rx.recv().await.unwrap();
-            assert_eq!(req.tool_name, "bash");
-            let _ = req.response.send(ApprovalResponse::Approved);
+            let res = tokio::time::timeout(std::time::Duration::from_millis(100), approval_rx.recv()).await;
+            assert!(res.is_err() || res.unwrap().is_none(), "read-only bash should not ask for approval");
         });
 
         let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(false));
@@ -3100,7 +3188,9 @@ mod tests {
         };
 
         let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
-        let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(true));
+        let mut config = make_config(true);
+        config.max_tool_calls_per_turn = 5;
+        let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], config);
         let _events = exe
             .run_turn("loop", &approval_tx, never_cancelled())
             .await
@@ -3108,8 +3198,8 @@ mod tests {
 
         let tool_calls = *call_count.lock().unwrap();
         assert!(
-            tool_calls <= 10,
-            "Should not exceed max_iterations (was {})",
+            tool_calls <= 5,
+            "Should not exceed configured max_tool_calls_per_turn (was {})",
             tool_calls
         );
     }
@@ -3141,23 +3231,22 @@ mod tests {
 
     #[test]
     fn test_is_read_only_bash_find() {
-        // `find` used to be in READ_ONLY_COMMANDS but was removed
-        // (deepseek-v4 review finding). All find invocations now go
-        // through the approval gate.
-        assert!(!is_read_only_bash("find . -name '*.rs'"));
-        assert!(!is_read_only_bash("find . -type f"));
-        assert!(!is_read_only_bash("find ."));
+        // Plain find invocations are read-only discovery.
+        assert!(is_read_only_bash("find . -name '*.rs'"));
+        assert!(is_read_only_bash("find . -type f"));
+        assert!(is_read_only_bash("find ."));
     }
 
     #[test]
-    fn test_is_read_only_bash_find_delete_specifically_blocked() {
-        // The `find . -delete` case was the specific bypass that
-        // motivated removing find from the read-only list. The test
-        // stays explicit so a future change that adds find back with
-        // a flag check can update this test accordingly.
+    fn test_is_read_only_bash_find_destructive_flags_blocked() {
+        // Destructive find flags must still require approval.
         assert!(!is_read_only_bash("find . -delete"));
         assert!(!is_read_only_bash("find . -type f -delete"));
         assert!(!is_read_only_bash("find . -exec rm {} \\;"));
+        assert!(!is_read_only_bash("find . -exec sh {} \\;"));
+        assert!(!is_read_only_bash("find . -ok rm {} \\;"));
+        assert!(!is_read_only_bash("find . -fprint out.txt"));
+        assert!(!is_read_only_bash("find . -fls out.txt"));
     }
 
     #[test]
@@ -4050,5 +4139,307 @@ mod tests {
         assert_eq!(post_json["result_count"], 8);
         assert_eq!(post_json["dropped_tool_results"], 5);
         assert_eq!(post_json["condensed_assistant_turns"], 3);
+    }
+
+    #[tokio::test]
+    async fn test_find_without_destructive_flags_auto_approved() {
+        let captured = Arc::new(Mutex::new(None));
+        let tool = MockTool {
+            def: ToolDef {
+                name: "bash",
+                description: "run a command",
+                parameters: serde_json::json!({"type": "object", "properties": {"command": {"type": "string"}}}),
+            },
+            captured_args: captured.clone(),
+            outcome: ToolOutcome::Success {
+                content: "found!".into(),
+            },
+        };
+
+        let adapter = MockAdapter::new(
+            vec![
+                StreamEvent::ToolCall(ToolInvocation {
+                    id: "call-1".into(),
+                    name: "bash".into(),
+                    arguments: serde_json::json!({"command": "find . -name '*.rs' -type f"}),
+                }),
+                StreamEvent::Done {
+                    finish_reason: FinishReason::ToolCalls,
+                    usage: None,
+                },
+            ],
+            make_info(),
+        );
+
+        let (approval_tx, mut approval_rx) = mpsc::unbounded_channel();
+        let approval_handle = tokio::spawn(async move {
+            let res = tokio::time::timeout(std::time::Duration::from_millis(100), approval_rx.recv()).await;
+            assert!(
+                res.is_err() || res.unwrap().is_none(),
+                "non-destructive find should not ask for approval"
+            );
+        });
+
+        let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(false));
+        let events = exe
+            .run_turn("search files", &approval_tx, never_cancelled())
+            .await
+            .unwrap();
+
+        approval_handle.await.unwrap();
+
+        let result = events.iter().find_map(|e| match e {
+            TurnEvent::ToolResult { name, output, .. } => Some((name.as_str(), output.as_str())),
+            _ => None,
+        });
+        assert_eq!(result, Some(("bash", "found!")));
+    }
+
+    #[tokio::test]
+    async fn test_find_delete_requires_approval() {
+        let captured = Arc::new(Mutex::new(None));
+        let tool = MockTool {
+            def: ToolDef {
+                name: "bash",
+                description: "run a command",
+                parameters: serde_json::json!({"type": "object", "properties": {"command": {"type": "string"}}}),
+            },
+            captured_args: captured.clone(),
+            outcome: ToolOutcome::Success {
+                content: "deleted!".into(),
+            },
+        };
+
+        let adapter = MockAdapter::new(
+            vec![
+                StreamEvent::ToolCall(ToolInvocation {
+                    id: "call-1".into(),
+                    name: "bash".into(),
+                    arguments: serde_json::json!({"command": "find . -name '*.tmp' -delete"}),
+                }),
+                StreamEvent::Done {
+                    finish_reason: FinishReason::ToolCalls,
+                    usage: None,
+                },
+            ],
+            make_info(),
+        );
+
+        let (approval_tx, mut approval_rx) = mpsc::unbounded_channel();
+        let approval_handle = tokio::spawn(async move {
+            let req: ApprovalRequest = approval_rx.recv().await.unwrap();
+            assert_eq!(req.tool_name, "bash");
+            let _ = req.response.send(ApprovalResponse::Approved);
+        });
+
+        let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(false));
+        let events = exe
+            .run_turn("delete temp files", &approval_tx, never_cancelled())
+            .await
+            .unwrap();
+
+        approval_handle.await.unwrap();
+
+        let result = events.iter().find_map(|e| match e {
+            TurnEvent::ToolResult { name, output, .. } => Some((name.as_str(), output.as_str())),
+            _ => None,
+        });
+        assert_eq!(result, Some(("bash", "deleted!")));
+    }
+
+    #[tokio::test]
+    async fn test_glob_base_dir_outside_sandbox_denied() {
+        let temp = std::env::temp_dir();
+        let sandbox = temp.join(format!("kf-sandbox-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&sandbox);
+        let outside = temp.join(format!("kf-outside-{}", std::process::id()));
+
+        let tool = MockTool {
+            def: ToolDef {
+                name: "glob",
+                description: "list files",
+                parameters: serde_json::json!({"type": "object", "properties": {"base_dir": {"type": "string"}, "pattern": {"type": "string"}}}),
+            },
+            captured_args: Arc::new(Mutex::new(None)),
+            outcome: ToolOutcome::Success {
+                content: "listed!".into(),
+            },
+        };
+
+        let adapter = MockAdapter::new(
+            vec![
+                StreamEvent::ToolCall(ToolInvocation {
+                    id: "call-1".into(),
+                    name: "glob".into(),
+                    arguments: serde_json::json!({"base_dir": outside.to_string_lossy(), "pattern": "*.rs"}),
+                }),
+                StreamEvent::Done {
+                    finish_reason: FinishReason::ToolCalls,
+                    usage: None,
+                },
+            ],
+            make_info(),
+        );
+
+        let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
+        let mut config = make_config(false);
+        config.sandbox_dir = Some(sandbox.to_string_lossy().to_string());
+        let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], config);
+        let events = exe
+            .run_turn("list outside sandbox", &approval_tx, never_cancelled())
+            .await
+            .unwrap();
+
+        let denied = events.iter().any(|e| matches!(e, TurnEvent::ToolResult { name, output, .. } if name == "glob" && output.contains("Access denied")));
+        assert!(denied, "glob outside sandbox should be denied");
+
+        let _ = std::fs::remove_dir_all(&sandbox);
+    }
+
+    #[tokio::test]
+    async fn test_max_tool_calls_per_turn_respected() {
+        let captured = Arc::new(Mutex::new(None));
+        let tool = MockTool {
+            def: ToolDef {
+                name: "echo",
+                description: "echo a value",
+                parameters: serde_json::json!({"type": "object", "properties": {"val": {"type": "string"}}}),
+            },
+            captured_args: captured.clone(),
+            outcome: ToolOutcome::Success {
+                content: "echoed!".into(),
+            },
+        };
+
+        // The adapter always returns the same tool call, so the executor
+        // will loop until it hits the configured cap.
+        let tool_call_events = vec![
+            StreamEvent::ToolCall(ToolInvocation {
+                id: "call-1".into(),
+                name: "echo".into(),
+                arguments: serde_json::json!({"val": "loop"}),
+            }),
+            StreamEvent::Done {
+                finish_reason: FinishReason::ToolCalls,
+                usage: None,
+            },
+        ];
+        let adapter =
+            MockAdapter::new(tool_call_events.clone(), make_info()).with_followup_events(tool_call_events);
+
+        let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
+        let mut config = make_config(true);
+        config.max_tool_calls_per_turn = 3;
+        let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], config);
+        let events = exe
+            .run_turn("loop", &approval_tx, never_cancelled())
+            .await
+            .unwrap();
+
+        let tool_results = events
+            .iter()
+            .filter(|e| matches!(e, TurnEvent::ToolResult { name, .. } if name == "echo"))
+            .count();
+        assert_eq!(tool_results, 3, "should stop at max_tool_calls_per_turn");
+
+        let hit_limit = events.iter().any(|e| matches!(e, TurnEvent::Error(e) if e.contains("Tool call loop limit reached")));
+        assert!(hit_limit, "should emit loop-limit error when cap is reached");
+    }
+
+    #[tokio::test]
+    async fn test_always_approve_rule_round_trips_to_next_turn() {
+        // A rule created by the TUI's `[A]lways` key in one turn should
+        // auto-approve the same command in a later turn without prompting.
+        let captured = Arc::new(Mutex::new(None));
+        let tool = MockTool {
+            def: ToolDef {
+                name: "bash",
+                description: "run a command",
+                parameters: serde_json::json!({"type": "object", "properties": {"command": {"type": "string"}}}),
+            },
+            captured_args: captured.clone(),
+            outcome: ToolOutcome::Success {
+                content: "ran!".into(),
+            },
+        };
+
+        let command = "cargo test --release";
+        let first_events = vec![
+            StreamEvent::ToolCall(ToolInvocation {
+                id: "call-1".into(),
+                name: "bash".into(),
+                arguments: serde_json::json!({"command": command}),
+            }),
+            StreamEvent::Done {
+                finish_reason: FinishReason::ToolCalls,
+                usage: None,
+            },
+        ];
+        let followup_events = vec![
+            StreamEvent::ToolCall(ToolInvocation {
+                id: "call-2".into(),
+                name: "bash".into(),
+                arguments: serde_json::json!({"command": command}),
+            }),
+            StreamEvent::Done {
+                finish_reason: FinishReason::ToolCalls,
+                usage: None,
+            },
+        ];
+        let adapter = MockAdapter::new(first_events, make_info()).with_followup_events(followup_events);
+
+        let (approval_tx, mut approval_rx) = mpsc::unbounded_channel();
+        let approval_handle = tokio::spawn(async move {
+            let req: ApprovalRequest = approval_rx.recv().await.unwrap();
+            assert_eq!(req.tool_name, "bash");
+            assert_eq!(
+                req.args.get("command").and_then(|v| v.as_str()),
+                Some(command)
+            );
+            let _ = req.response.send(ApprovalResponse::AlwaysApprove);
+        });
+
+        let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(false));
+        let _events = exe
+            .run_turn("run tests", &approval_tx, never_cancelled())
+            .await
+            .unwrap();
+        approval_handle.await.unwrap();
+
+        {
+            let cfg = cfg(&exe);
+            assert_eq!(cfg.permission_rules.len(), 1);
+            assert_eq!(cfg.permission_rules[0].action, PermissionAction::Allow);
+        }
+
+        // Second turn: same command should now match the rule and run
+        // without sending an approval request.
+        let (approval_tx2, mut approval_rx2) = mpsc::unbounded_channel();
+        let requested = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let requested_flag = requested.clone();
+        let no_approval_handle = tokio::spawn(async move {
+            if approval_rx2.recv().await.is_some() {
+                requested_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+        });
+
+        let second_events = tokio::time::timeout(
+            std::time::Duration::from_millis(300),
+            exe.run_turn("run tests again", &approval_tx2, never_cancelled()),
+        )
+        .await
+        .expect("second turn should complete without approval prompt");
+
+        no_approval_handle.abort();
+        assert!(
+            !requested.load(std::sync::atomic::Ordering::SeqCst),
+            "rule should prevent second approval request"
+        );
+
+        let second_events = second_events.unwrap();
+        let has_result = second_events
+            .iter()
+            .any(|e| matches!(e, TurnEvent::ToolResult { name, output, .. } if name == "bash" && output == "ran!"));
+        assert!(has_result, "second turn should execute the allowed command");
     }
 }

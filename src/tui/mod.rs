@@ -29,6 +29,8 @@ pub mod events;
 pub mod keys;
 pub mod rendering;
 pub mod search;
+pub mod syntax;
+pub mod transcript;
 pub mod widgets;
 
 use crate::session::carryover::CarryoverProfile;
@@ -173,6 +175,16 @@ pub async fn run_tui(
     let mut state = AppState::new(shared_config.clone());
     state.undo_stack = undo_stack.clone();
     state.session_started = Instant::now();
+    // Capture the session identity from the conversation log before it
+    // moves into the executor. This lets the TUI report the session id
+    // and write transcript files to a predictable path.
+    state.log_path = Some(conversation_log.path().clone());
+    state.session_id = conversation_log
+        .path()
+        .file_stem()
+        .and_then(|f| f.to_str())
+        .map(|s| s.trim_end_matches(".conv").to_string())
+        .unwrap_or_else(|| "unknown-session".to_string());
     // Hook for sessions that need a connection indicator.
     //
     // Probes Ollama at startup so the status bar reflects reality

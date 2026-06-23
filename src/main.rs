@@ -12,6 +12,52 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc;
+use tracing_subscriber::prelude::*;
+
+/// Initialize tracing so logs go to a file instead of corrupting the TUI.
+///
+/// In interactive (TUI) mode stdout is the alternate screen, so any
+/// tracing output written there would be drawn over the UI. We always
+/// write logs to `<data_dir>/kirkforge.log` and additionally mirror them
+/// to stderr when `KIRKFORGE_LOG_STDERR=1` is set (useful for daemon or
+/// non-interactive debugging).
+fn init_tracing() {
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn"));
+
+    let log_file = session::data_dir()
+        .map(|d| d.join("kirkforge.log"))
+        .unwrap_or_else(|_| PathBuf::from("kirkforge.log"));
+    let _ = std::fs::create_dir_all(
+        log_file.parent().unwrap_or_else(|| std::path::Path::new(".")),
+    );
+
+    let file_layer = tracing_subscriber::fmt::layer()
+        .with_ansi(false)
+        .with_writer(move || {
+            // Re-open on every write so rotation can be done by moving the
+            // file aside while the process is running. The `tracing-appender`
+            // crate would be cleaner, but we avoid the extra dependency.
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&log_file)
+                .unwrap_or_else(|e| {
+                    // Last-ditch fallback: write to stderr so logs aren't lost.
+                    eprintln!("failed to open log file {}: {}", log_file.display(), e);
+                    std::fs::File::create("/dev/null").expect("/dev/null open")
+                })
+        });
+
+    let registry = tracing_subscriber::registry().with(env_filter).with(file_layer);
+
+    if std::env::var("KIRKFORGE_LOG_STDERR").is_ok() {
+        let stderr_layer = tracing_subscriber::fmt::layer().with_writer(std::io::stderr);
+        registry.with(stderr_layer).init();
+    } else {
+        registry.init();
+    }
+}
 
 #[derive(Parser, Debug)]
 #[command(name = "kirkforge", version, about)]
@@ -91,12 +137,7 @@ enum Command {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
-        )
-        .init();
+    init_tracing();
 
     let cli = Cli::parse();
 

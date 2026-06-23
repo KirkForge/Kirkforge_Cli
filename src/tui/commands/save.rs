@@ -1,0 +1,116 @@
+//! `/save` slash-command handler.
+//!
+//! Writes the current TUI conversation as a GitHub-flavored Markdown
+//! transcript to a file. The user can then open or share the file like a
+//! Claude Code transcript.
+
+use crate::tui::app::AppState;
+use std::path::PathBuf;
+
+/// Handle `/save [path]` command.
+///
+/// - `args` is empty → write to a default path next to the session log
+///   (`~/.local/share/kirkforge/sessions/YYYY-MM-DD-session-NN.md`).
+/// - `args` is a path → write to that path.
+///
+/// Returns a user-visible status string.
+pub fn handle_save_command(args: &str, state: &AppState) -> String {
+    let path = resolve_save_path(args, state);
+
+    let transcript = crate::tui::transcript::format_transcript(
+        &state.session_id,
+        &state.messages,
+    );
+
+    if let Some(parent) = path.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            return format!(
+                "❌ Failed to create directory {}: {}",
+                parent.display(),
+                e
+            );
+        }
+    }
+
+    match std::fs::write(&path, &transcript) {
+        Ok(()) => format!(
+            "💾 Saved transcript to {} ({} bytes)",
+            path.display(),
+            transcript.len()
+        ),
+        Err(e) => format!("❌ Failed to save transcript to {}: {}", path.display(), e),
+    }
+}
+
+fn resolve_save_path(args: &str, state: &AppState) -> PathBuf {
+    let trimmed = args.trim();
+    if !trimmed.is_empty() {
+        return PathBuf::from(trimmed);
+    }
+
+    if let Some(log) = &state.log_path {
+        let stem = log
+            .file_stem()
+            .and_then(|f| f.to_str())
+            .map(|s| s.trim_end_matches(".conv"))
+            .unwrap_or("transcript");
+        log.with_file_name(format!("{}.md", stem))
+    } else {
+        let now = chrono::Local::now().format("%Y-%m-%d-%H%M%S").to_string();
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(format!("kirkforge-transcript-{}.md", now))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tui::app::AppState;
+    use crate::shared::Config;
+    use std::sync::Arc;
+
+    fn test_state_with_log(log_path: PathBuf) -> AppState {
+        let mut state = AppState::new(Arc::new(std::sync::RwLock::new(Config::default())));
+        state.log_path = Some(log_path);
+        state.session_id = "2026-06-22-session-01".to_string();
+        state
+    }
+
+    #[test]
+    fn save_writes_file_next_to_log() {
+        let tmp = tempfile::tempdir().unwrap();
+        let log = tmp.path().join("2026-06-22-session-01.conv.ndjson");
+        let state = test_state_with_log(log);
+        let msg = handle_save_command("", &state);
+        assert!(msg.starts_with("💾 Saved transcript"));
+        let expected = tmp.path().join("2026-06-22-session-01.md");
+        assert!(expected.exists(), "expected {} to exist", expected.display());
+        let content = std::fs::read_to_string(&expected).unwrap();
+        assert!(content.contains("# KirkForge transcript"));
+    }
+
+    #[test]
+    fn save_writes_file_to_explicit_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("my-chat.md");
+        let state = AppState::new(Arc::new(std::sync::RwLock::new(Config::default())));
+        let msg = handle_save_command(target.to_str().unwrap(), &state);
+        assert!(msg.starts_with("💾 Saved transcript"));
+        assert!(target.exists());
+    }
+
+    #[test]
+    fn save_includes_messages() {
+        let tmp = tempfile::tempdir().unwrap();
+        let log = tmp.path().join("s.conv.ndjson");
+        let mut state = test_state_with_log(log);
+        state.messages.push(crate::tui::app::ConversationEntry::new("user", "hi"));
+        state.messages.push(crate::tui::app::ConversationEntry::new("assistant", "hello"));
+        let _msg = handle_save_command("", &state);
+        let expected = tmp.path().join("s.md");
+        let content = std::fs::read_to_string(&expected).unwrap();
+        assert!(content.contains("hi"));
+        assert!(content.contains("hello"));
+    }
+}

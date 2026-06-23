@@ -2,6 +2,8 @@
 use crate::session::session_fork::ForkManager;
 use crate::session::skills::SkillRegistry;
 use crate::shared::{ModelInfo, SharedConfig};
+use ratatui::text::Line;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -21,6 +23,62 @@ pub enum ConnectionState {
         since: Instant,
     },
     Error(String),
+}
+
+/// Cached rendered lines for the chat panel.
+///
+/// `entries` stores one entry per message in `AppState::messages`. Each entry
+/// records the message content length at the time it was rendered and the
+/// resulting `Line`s (header + body, not the trailing blank separator). The
+/// cache is invalidated when rendering parameters change: terminal width,
+/// search query, or tool-collapse state.
+#[derive(Debug, Default)]
+pub struct ChatRenderCache {
+    pub content_width: usize,
+    pub search_query: String,
+    pub tool_collapsed: bool,
+    pub expanded_tools: HashSet<usize>,
+    pub collapsed_messages: HashSet<usize>,
+    pub entries: Vec<(usize, Vec<Line<'static>>)>,
+}
+
+impl ChatRenderCache {
+    /// Drop all cached entries but keep the parameter snapshot.
+    pub fn clear_entries(&mut self) {
+        self.entries.clear();
+    }
+
+    /// True if the cached parameter snapshot still matches the current state.
+    pub fn params_match(
+        &self,
+        content_width: usize,
+        search_query: &str,
+        tool_collapsed: bool,
+        expanded_tools: &HashSet<usize>,
+        collapsed_messages: &HashSet<usize>,
+    ) -> bool {
+        self.content_width == content_width
+            && self.search_query == search_query
+            && self.tool_collapsed == tool_collapsed
+            && self.expanded_tools == *expanded_tools
+            && self.collapsed_messages == *collapsed_messages
+    }
+
+    /// Store the current parameters as the new cache snapshot.
+    pub fn snapshot_params(
+        &mut self,
+        content_width: usize,
+        search_query: &str,
+        tool_collapsed: bool,
+        expanded_tools: &HashSet<usize>,
+        collapsed_messages: &HashSet<usize>,
+    ) {
+        self.content_width = content_width;
+        self.search_query = search_query.to_string();
+        self.tool_collapsed = tool_collapsed;
+        self.expanded_tools = expanded_tools.clone();
+        self.collapsed_messages = collapsed_messages.clone();
+    }
 }
 
 /// Application state — single source of truth for the TUI.
@@ -119,6 +177,17 @@ pub struct AppState {
     /// an entry whose index is in this set renders in full. Allows users
     /// to expand specific tool results they want to inspect.
     pub expanded_tools: std::collections::HashSet<usize>,
+
+    // ── Chat render geometry cache (Step 6 of TUI chat polish) ───────
+    /// Cached `Line`s per message so streaming only recomputes the last
+    /// assistant message instead of the whole conversation.
+    pub chat_render_cache: ChatRenderCache,
+
+    // ── Per-message collapse (TUI v2) ────────────────────────────────
+    /// Indices of conversation entries that the user has collapsed.
+    /// Collapsed messages show only the header + an expand hint. Default
+    /// is expanded for every message.
+    pub collapsed_messages: HashSet<usize>,
 
     // ── Approval dialog scroll (v1.2-p11) ──────────────────────────────
     /// Vertical scroll offset into the args preview, in lines.
@@ -263,6 +332,8 @@ impl AppState {
             notified_jobs: std::collections::HashSet::new(),
             tool_collapsed: true,
             expanded_tools: std::collections::HashSet::new(),
+            collapsed_messages: HashSet::new(),
+            chat_render_cache: ChatRenderCache::default(),
             approval_scroll: 0,
             approval_max_scroll: 0,
             last_turn_prompt_tokens: 0,
@@ -287,6 +358,13 @@ impl AppState {
     #[inline]
     pub fn tool_should_collapse(&self, idx: usize) -> bool {
         self.tool_collapsed && !self.expanded_tools.contains(&idx)
+    }
+
+    /// Has the user explicitly collapsed the message at `idx`?
+    /// Non-tool messages are expanded by default.
+    #[inline]
+    pub fn message_should_collapse(&self, idx: usize) -> bool {
+        self.collapsed_messages.contains(&idx)
     }
 
     /// Mark the state as needing a redraw. Cheap (single bool write);

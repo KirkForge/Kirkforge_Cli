@@ -259,9 +259,10 @@ impl SkillRegistry {
             match load_skill_from_file(&path) {
                 Ok(skill) => {
                     let name = skill.meta.name.clone();
-                    let trigger = skill.meta.trigger.clone();
-                    self.skills.insert(name.clone(), skill);
-                    self.triggers.insert(trigger, name);
+                    self.skills.insert(name.clone(), skill.clone());
+                    if !skill.meta.trigger.is_empty() {
+                        self.triggers.insert(skill.meta.trigger.clone(), name);
+                    }
                     count += 1;
                 }
                 Err(e) => {
@@ -275,9 +276,10 @@ impl SkillRegistry {
     /// Register a skill programmatically (without a SKILL.md file).
     pub fn register(&mut self, skill: Skill) {
         let name = skill.meta.name.clone();
-        let trigger = skill.meta.trigger.clone();
-        self.skills.insert(name.clone(), skill);
-        self.triggers.insert(trigger, name);
+        self.skills.insert(name.clone(), skill.clone());
+        if !skill.meta.trigger.is_empty() {
+            self.triggers.insert(skill.meta.trigger.clone(), name);
+        }
     }
 
     /// Look up a skill by slash trigger (e.g., "/lint").
@@ -403,9 +405,6 @@ fn parse_frontmatter(content: &str) -> anyhow::Result<SkillMeta> {
     if meta.name.is_empty() {
         anyhow::bail!("SKILL.md missing required 'name' field in frontmatter");
     }
-    if meta.trigger.is_empty() {
-        anyhow::bail!("SKILL.md missing required 'trigger' field in frontmatter");
-    }
 
     Ok(meta)
 }
@@ -491,16 +490,17 @@ Body."#;
     }
 
     #[test]
-    fn test_missing_trigger_fails() {
+    fn test_missing_trigger_is_optional() {
         let content = r#"---
 name: test
 description: No trigger
 ---
 Body."#;
 
-        let err = parse_skill(content, PathBuf::from("."));
-        assert!(err.is_err());
-        assert!(err.unwrap_err().to_string().contains("trigger"));
+        let skill = parse_skill(content, PathBuf::from(".")).unwrap();
+        assert_eq!(skill.meta.name, "test");
+        assert_eq!(skill.meta.trigger, "");
+        assert_eq!(skill.meta.description, "No trigger");
     }
 
     #[test]

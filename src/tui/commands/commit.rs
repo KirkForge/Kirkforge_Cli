@@ -16,6 +16,7 @@
 //! merge-conflict markers) abort the commit and are shown to the user.
 //! Warnings (untracked/unstaged debris) are shown but do not block.
 
+use super::memory::truncate_to_char_boundary;
 use crate::session::git_sanitation::{check_worktree, suggest_message};
 use crate::shared::Config;
 use std::path::Path;
@@ -159,7 +160,7 @@ async fn git_status_porcelain(cwd: &Path) -> Result<String, String> {
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    Ok(stdout.chars().take(MAX_STATUS_BYTES).collect())
+    Ok(truncate_to_char_boundary(&stdout, MAX_STATUS_BYTES).to_string())
 }
 
 /// Stage all changes in `cwd`.

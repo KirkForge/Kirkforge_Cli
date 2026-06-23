@@ -97,8 +97,9 @@ pub enum GuardVerdict {
 /// Multi-layer path safety guard.
 ///
 /// Checks are applied in a fixed order so the error message is
-/// deterministic: deny list → sandbox → extension → dotfile → symlink
-/// → size → allowed directories.
+/// deterministic: deny list → symlink → sandbox → size → binary
+/// (reads) / extension → dotfile → symlink → sandbox → allowed
+/// directories (writes).
 #[derive(Debug, Clone)]
 pub struct PathGuard {
     /// If set, all file ops are restricted to this directory tree.
@@ -137,38 +138,13 @@ impl PathGuard {
             return GuardVerdict::Denied(format!("Path denied by deny list: {}", path.display()));
         }
 
-        // Resolve real path if it exists (for sandbox + symlink checks)
-        let canonical = if path.exists() {
-            match path.canonicalize() {
-                Ok(c) => c,
-                Err(e) => {
-                    return GuardVerdict::Denied(format!(
-                        "Cannot resolve path '{}': {e}",
-                        path.display()
-                    ));
-                }
-            }
-        } else {
+        if !path.exists() {
             return GuardVerdict::Denied(format!("Path does not exist: {}", path.display()));
-        };
-
-        // 2. Sandbox containment
-        if let Some(ref sandbox) = self.sandbox_dir {
-            let sb = match sandbox.canonicalize() {
-                Ok(s) => s,
-                Err(e) => {
-                    return GuardVerdict::Denied(format!(
-                        "Cannot resolve sandbox dir '{}': {e}",
-                        sandbox.display()
-                    ));
-                }
-            };
-            if !canonical.starts_with(&sb) {
-                return GuardVerdict::Denied(format!("Path outside sandbox: {}", path.display()));
-            }
         }
 
-        // 3. Symlink guard
+        // 2. Symlink guard — check before resolving the target so a
+        // symlink outside the sandbox cannot influence the sandbox check
+        // and so the denial reason is accurate.
         if !self.follow_symlinks {
             let metadata = match std::fs::symlink_metadata(path) {
                 Ok(m) => m,
@@ -181,6 +157,31 @@ impl PathGuard {
             };
             if metadata.file_type().is_symlink() {
                 return GuardVerdict::Denied(format!("Symlinks not allowed: {}", path.display()));
+            }
+        }
+
+        // 3. Sandbox containment
+        let canonical = match path.canonicalize() {
+            Ok(c) => c,
+            Err(e) => {
+                return GuardVerdict::Denied(format!(
+                    "Cannot resolve path '{}': {e}",
+                    path.display()
+                ));
+            }
+        };
+        if let Some(ref sandbox) = self.sandbox_dir {
+            let sb = match sandbox.canonicalize() {
+                Ok(s) => s,
+                Err(e) => {
+                    return GuardVerdict::Denied(format!(
+                        "Cannot resolve sandbox dir '{}': {e}",
+                        sandbox.display()
+                    ));
+                }
+            };
+            if !canonical.starts_with(&sb) {
+                return GuardVerdict::Denied(format!("Path outside sandbox: {}", path.display()));
             }
         }
 

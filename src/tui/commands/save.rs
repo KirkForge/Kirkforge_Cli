@@ -22,14 +22,12 @@ pub fn handle_save_command(args: &str, state: &AppState) -> String {
         &state.messages,
     );
 
-    if let Some(parent) = path.parent() {
-        if let Err(e) = std::fs::create_dir_all(parent) {
-            return format!(
-                "❌ Failed to create directory {}: {}",
-                parent.display(),
-                e
-            );
-        }
+    if let Err(e) = ensure_parent_dir(&path) {
+        return format!(
+            "❌ Failed to create directory for {}: {}",
+            path.display(),
+            e
+        );
     }
 
     match std::fs::write(&path, &transcript) {
@@ -40,6 +38,17 @@ pub fn handle_save_command(args: &str, state: &AppState) -> String {
         ),
         Err(e) => format!("❌ Failed to save transcript to {}: {}", path.display(), e),
     }
+}
+
+/// Create the parent directory for `path` if it exists and is non-empty.
+/// Relative filenames like "chat.md" have a parent of "" and are skipped.
+fn ensure_parent_dir(path: &std::path::Path) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            return std::fs::create_dir_all(parent);
+        }
+    }
+    Ok(())
 }
 
 fn resolve_save_path(args: &str, state: &AppState) -> PathBuf {
@@ -112,5 +121,19 @@ mod tests {
         let content = std::fs::read_to_string(&expected).unwrap();
         assert!(content.contains("hi"));
         assert!(content.contains("hello"));
+    }
+
+    #[test]
+    fn ensure_parent_dir_creates_missing_parent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let nested = tmp.path().join("a").join("b").join("c.md");
+        assert!(ensure_parent_dir(&nested).is_ok());
+        assert!(nested.parent().unwrap().exists());
+    }
+
+    #[test]
+    fn ensure_parent_dir_skips_relative_file_without_parent() {
+        let path = PathBuf::from("chat.md");
+        assert!(ensure_parent_dir(&path).is_ok());
     }
 }

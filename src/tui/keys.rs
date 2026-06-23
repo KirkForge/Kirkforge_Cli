@@ -111,6 +111,29 @@ fn delete_word_backward(input: &str, cursor_byte: usize) -> (String, usize) {
     (new_input, new_cursor)
 }
 
+/// Direction for post-search match navigation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SearchDirection {
+    Next,
+    Prev,
+}
+
+/// Determine whether `key` is a search-navigation gesture.
+///
+/// Only plain `n` (next) and `Shift+N` (previous) count; combinations like
+/// `Ctrl+n` are left for regular key handling.
+fn search_nav_direction(key: &KeyEvent) -> Option<SearchDirection> {
+    match key.code {
+        KeyCode::Char('n') if key.modifiers == KeyModifiers::NONE => {
+            Some(SearchDirection::Next)
+        }
+        KeyCode::Char('N') if key.modifiers == KeyModifiers::SHIFT => {
+            Some(SearchDirection::Prev)
+        }
+        _ => None,
+    }
+}
+
 /// Handle a single key event in the regular input mode.
 ///
 /// Returns `Ok(())` after a single event. Only errors on I/O failure
@@ -225,12 +248,9 @@ pub async fn handle_input_key(
     // ── Post-search navigation (n / Shift+N) ─────────────
     // Only active when a search is committed (matches is
     // non-empty). Falls through to regular handling otherwise.
-    if !state.search_matches.is_empty()
-        && !state.search_mode
-        && key.modifiers.contains(KeyModifiers::NONE)
-    {
-        match key.code {
-            KeyCode::Char('n') => {
+    if !state.search_matches.is_empty() && !state.search_mode {
+        match search_nav_direction(&key) {
+            Some(SearchDirection::Next) => {
                 if let Some(idx) = crate::tui::search::navigate_next(
                     state.search_match_idx,
                     state.search_matches.len(),
@@ -239,7 +259,7 @@ pub async fn handle_input_key(
                 }
                 return Ok(());
             }
-            KeyCode::Char('N') => {
+            Some(SearchDirection::Prev) => {
                 if let Some(idx) = crate::tui::search::navigate_prev(
                     state.search_match_idx,
                     state.search_matches.len(),
@@ -248,7 +268,7 @@ pub async fn handle_input_key(
                 }
                 return Ok(());
             }
-            _ => {}
+            None => {}
         }
     }
     match key.code {
@@ -854,7 +874,7 @@ pub async fn handle_input_key(
 
 #[cfg(test)]
 mod tests {
-    use super::delete_word_backward;
+    use super::{delete_word_backward, search_nav_direction, SearchDirection};
 
     fn check(input: &str, cursor_byte: usize, expected_input: &str, expected_cursor: usize) {
         let (got_input, got_cursor) = delete_word_backward(input, cursor_byte);
@@ -909,5 +929,50 @@ mod tests {
         let input = "héllo world";
         let cursor_byte = input.len(); // 12 bytes
         check(input, cursor_byte, "héllo", 5);
+    }
+
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    fn key(c: char, mods: KeyModifiers) -> KeyEvent {
+        KeyEvent::new(KeyCode::Char(c), mods)
+    }
+
+    #[test]
+    fn search_nav_direction_plain_n_is_next() {
+        assert_eq!(
+            search_nav_direction(&key('n', KeyModifiers::NONE)
+            ),
+            Some(SearchDirection::Next)
+        );
+    }
+
+    #[test]
+    fn search_nav_direction_shift_n_is_prev() {
+        assert_eq!(
+            search_nav_direction(
+                &key('N', KeyModifiers::SHIFT)
+            ),
+            Some(SearchDirection::Prev)
+        );
+    }
+
+    #[test]
+    fn search_nav_direction_ignores_other_keys() {
+        assert_eq!(
+            search_nav_direction(&key('x', KeyModifiers::NONE)),
+            None
+        );
+    }
+
+    #[test]
+    fn search_nav_direction_ignores_modified_n() {
+        assert_eq!(
+            search_nav_direction(&key('n', KeyModifiers::CONTROL)),
+            None
+        );
+        assert_eq!(
+            search_nav_direction(&key('N', KeyModifiers::CONTROL | KeyModifiers::SHIFT)),
+            None
+        );
     }
 }

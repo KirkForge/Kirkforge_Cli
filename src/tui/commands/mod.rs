@@ -35,30 +35,37 @@ pub use status::*;
 pub use test::*;
 pub use undo::*;
 
-pub use crate::tui::commands::messages_to_entries_stub as messages_to_entries;
-
-/// Stub: deepseek's in-flight work referenced `messages_to_entries` from
-/// `session::conversation` (used by `/fork` and `/resume` to reload the
-/// TUI's display list) but the implementation wasn't in the saved work.
-/// The real function maps a `&[Message]` (User/Assistant/Tool) into the
-/// TUI's `Vec<ConversationEntry>`. Tests in this module call it directly;
-/// the production fallback in `fork.rs` and `resume.rs` short-circuits
-/// the result.
-pub fn messages_to_entries_stub(
+/// Map persisted [`Message`]s into TUI [`ConversationEntry`]s.
+///
+/// Used when reloading a conversation from disk (`/resume`, `/fork`,
+/// persona merge) so the chat panel mirrors the persisted history.
+/// Tool results are restored with the full output in the sidecar and a
+/// generated one-line summary, preserving the collapse/expand behavior
+/// from a live session.
+pub fn messages_to_entries(
     msgs: &[crate::shared::Message],
 ) -> Vec<crate::tui::app::ConversationEntry> {
     msgs.iter()
-        .map(|m| crate::tui::app::ConversationEntry {
-            role: match m.role {
-                crate::shared::Role::User => "user",
-                crate::shared::Role::Assistant => "assistant",
-                crate::shared::Role::System => "system",
-                crate::shared::Role::Tool => "tool",
+        .map(|m| {
+            if m.role == crate::shared::Role::Tool {
+                let name = m.tool_name.as_deref().unwrap_or("tool");
+                let full = m.content.clone();
+                let (lines, bytes) =
+                    crate::tui::app::AppState::tool_output_metrics(&full, 80);
+                let summary = format!(
+                    "🔧 {} (done) — {} lines, {} bytes [Enter or Tab to expand]",
+                    name, lines, bytes
+                );
+                crate::tui::app::ConversationEntry::tool(summary, full)
+            } else {
+                let role = match m.role {
+                    crate::shared::Role::User => "user",
+                    crate::shared::Role::Assistant => "assistant",
+                    crate::shared::Role::System => "system",
+                    crate::shared::Role::Tool => "tool",
+                };
+                crate::tui::app::ConversationEntry::new(role, m.content.clone())
             }
-            .to_string(),
-            content: m.content.clone(),
-            timestamp: chrono::Local::now(),
-            tool_output: None,
         })
         .collect()
 }
@@ -124,10 +131,25 @@ mod tests {
     }
 
     #[test]
-    fn messages_to_entries_reexport_tool_no_sidecar() {
+    fn messages_to_entries_reexport_tool_has_sidecar_and_summary() {
         let entries = messages_to_entries(&[tool_msg("output")]);
         assert_eq!(entries[0].role, "tool");
-        assert!(entries[0].tool_output.is_none());
+        assert_eq!(entries[0].tool_output.as_deref(), Some("output"));
+        assert!(entries[0].content.contains("bash"));
+        assert!(entries[0].content.contains("bytes"));
+    }
+
+    #[test]
+    fn messages_to_entries_tool_without_name_uses_default() {
+        let msg = Message {
+            role: Role::Tool,
+            content: "result".to_string(),
+            tool_name: None,
+            ..Default::default()
+        };
+        let entries = messages_to_entries(&[msg]);
+        assert!(entries[0].content.contains("🔧 tool"));
+        assert_eq!(entries[0].tool_output.as_deref(), Some("result"));
     }
 
     fn dummy_job(id: u64, status: JobStatus) -> BashJob {

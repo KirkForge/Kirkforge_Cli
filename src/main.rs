@@ -425,6 +425,39 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     }
 }
 
+/// Spawn the approval responder used by non-interactive runs.
+///
+/// Non-interactive mode has no human in the loop, so every request
+/// that reaches this channel is denied. The executor already auto-allows
+/// read-only discovery tools and benign bash; anything that still needs
+/// approval (non-read-only bash, explicit Deny rules, etc.) must be
+/// rejected rather than silently approved.
+fn spawn_non_interactive_approval_handler(
+    mut approval_rx: mpsc::UnboundedReceiver<session::executor::ApprovalRequest>,
+) {
+    tokio::spawn(async move {
+        while let Some(req) = approval_rx.recv().await {
+            tracing::warn!(
+                tool = %req.tool_name,
+                args = %req.args,
+                "non-interactive run denied approval for tool; use interactive mode or add a permission rule that explicitly allows this operation"
+            );
+            if let Err(e) = req
+                .response
+                .send(session::executor::ApprovalResponse::DeniedWithReason(
+                    "non-interactive mode cannot approve destructive tools; use interactive mode or add a permission rule".into(),
+                ))
+            {
+                tracing::warn!(
+                    tool = %req.tool_name,
+                    error = ?e,
+                    "approval responder dropped before send (executor may have cancelled or shut down)"
+                );
+            }
+        }
+    });
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run_non_interactive(
     config: crate::shared::SharedConfig,
@@ -451,34 +484,9 @@ async fn run_non_interactive(
     // override is silently dropped (was GPT 5.5 review finding #2).
     executor.set_system_override(system.clone());
 
-    let (approval_tx, mut approval_rx) =
+    let (approval_tx, approval_rx) =
         mpsc::unbounded_channel::<session::executor::ApprovalRequest>();
-    tokio::spawn(async move {
-        while let Some(req) = approval_rx.recv().await {
-            let response = if crate::shared::read_shared_config(&config).auto_approve {
-                session::executor::ApprovalResponse::Approved
-            } else {
-                // Non-interactive mode has no human in the loop, so a
-                // tool that requires approval cannot be allowed. Log
-                // a warning that names the tool and tells the operator
-                // how to opt in to automatic approval.
-                tracing::warn!(
-                    tool = %req.tool_name,
-                    args = %req.args,
-                    "non-interactive run denied approval for tool; pass --auto-approve or set auto_approve=true to allow destructive tools without interaction"
-                );
-                session::executor::ApprovalResponse::Denied
-            };
-
-            if let Err(e) = req.response.send(response) {
-                tracing::warn!(
-                    tool = %req.tool_name,
-                    error = ?e,
-                    "approval responder dropped before send (executor may have cancelled or shut down)"
-                );
-            }
-        }
-    });
+    spawn_non_interactive_approval_handler(approval_rx);
 
     if let Some(sys) = &system {
         tracing::info!("System prompt set from CLI: {}", sys);
@@ -577,6 +585,13 @@ async fn run_non_interactive(
         };
         println!("{}", serde_json::to_string_pretty(&summary)?);
     }
+
+    // Ensure every token/tool-result emitted above is delivered to the
+    // pipe/terminal before the process exits. stdout is line-buffered
+    // when connected to a TTY, but block-buffered when piped; without
+    // this explicit flush the final bytes of a long assistant message
+    // can be lost on exit.
+    std::io::stdout().flush()?;
 
     Ok(())
 }
@@ -945,5 +960,32 @@ mod tests {
         assert_eq!(r.as_deref(), Some("no newline here"));
         // Subsequent call sees EOF.
         assert!(next_prompt(&mut reader, &mut buf).unwrap().is_none());
+    }
+
+    /// The non-interactive approval handler must deny every request,
+    /// even when global auto_approve is true. Otherwise it would bypass
+    /// the executor's safety downgrade for non-read-only bash.
+    #[tokio::test]
+    async fn non_interactive_approval_handler_denies_all_requests() {
+        let (tx, rx) = mpsc::unbounded_channel();
+        spawn_non_interactive_approval_handler(rx);
+
+        let (oneshot_tx, oneshot_rx) = tokio::sync::oneshot::channel();
+        tx.send(session::executor::ApprovalRequest {
+            tool_name: "bash".into(),
+            args: serde_json::json!({"command": "rm -rf /"}),
+            response: oneshot_tx,
+        })
+        .unwrap();
+
+        let resp = oneshot_rx.await.expect("handler sent a response");
+        assert!(
+            matches!(
+                resp,
+                session::executor::ApprovalResponse::DeniedWithReason(_)
+            ),
+            "expected a reasoned denial, got {:?}",
+            resp
+        );
     }
 }

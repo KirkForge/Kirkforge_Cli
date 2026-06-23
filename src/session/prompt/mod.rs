@@ -468,6 +468,24 @@ mod tests {
     }
 
     #[test]
+    fn test_build_prompt_requires_validation_and_no_artifact_injection() {
+        let mut builder = PromptBuilder::new();
+        let msg = builder.build("test-model", false, &[], None);
+        assert!(
+            msg.content.contains("run the project's build/test command"),
+            "system prompt should instruct the agent to validate edits"
+        );
+        assert!(
+            msg.content.contains("graphify-out/"),
+            "system prompt should forbid graphify-out/ artifact injection"
+        );
+        assert!(
+            msg.content.contains(".gitignore"),
+            "system prompt should forbid .gitignore edits"
+        );
+    }
+
+    #[test]
     fn test_build_supports_thinking() {
         let mut builder = PromptBuilder::new();
         let msg = builder.build("test-model", true, &[], None);

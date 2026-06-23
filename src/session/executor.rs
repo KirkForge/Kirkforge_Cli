@@ -44,7 +44,7 @@ enum IterationOutcome {
 
 enum ApprovalDecision {
     Approved,
-    Denied,
+    Denied { reason: String },
     AlwaysApproved,
 }
 
@@ -1284,15 +1284,16 @@ impl Executor {
         if needs_approval {
             match self.run_approval_flow(tc, approval_sender).await? {
                 ApprovalDecision::Approved | ApprovalDecision::AlwaysApproved => {}
-                ApprovalDecision::Denied => {
+                ApprovalDecision::Denied { reason } => {
+                    let msg = format!("❌ Approval denied: {reason}");
                     events.push(TurnEvent::ToolResult {
                         name: tc.name.clone(),
-                        output: "❌ User denied this operation".into(),
+                        output: msg.clone(),
                         success: false,
                     });
                     self.conversation.append(Message {
                         role: Role::Tool,
-                        content: "Operation denied by user.".into(),
+                        content: msg,
                         tool_call_id: Some(tc.id.clone()),
                         tool_name: Some(tc.name.clone()),
                         ..Default::default()
@@ -1623,7 +1624,12 @@ impl Executor {
 
         match response_rx.await {
             Ok(ApprovalResponse::Approved) => Ok(ApprovalDecision::Approved),
-            Ok(ApprovalResponse::Denied) => Ok(ApprovalDecision::Denied),
+            Ok(ApprovalResponse::Denied) => Ok(ApprovalDecision::Denied {
+                reason: "User denied this operation".into(),
+            }),
+            Ok(ApprovalResponse::DeniedWithReason(reason)) => {
+                Ok(ApprovalDecision::Denied { reason })
+            }
             Ok(ApprovalResponse::AlwaysApprove) => {
                 let rule = crate::shared::permission::suggest_rule(&tc.name, &tc.arguments);
                 if let Ok(mut cfg) = self.config.write() {
@@ -1631,7 +1637,9 @@ impl Executor {
                 }
                 Ok(ApprovalDecision::AlwaysApproved)
             }
-            Err(_) => Ok(ApprovalDecision::Denied),
+            Err(_) => Ok(ApprovalDecision::Denied {
+                reason: "Approval channel closed".into(),
+            }),
         }
     }
 
@@ -1751,6 +1759,10 @@ pub struct ApprovalRequest {
 pub enum ApprovalResponse {
     Approved,
     Denied,
+    /// Denied with an explanatory message surfaced to the model as the
+    /// tool result. Used by non-interactive mode so the agent knows why
+    /// a destructive operation was rejected.
+    DeniedWithReason(String),
     AlwaysApprove,
 }
 

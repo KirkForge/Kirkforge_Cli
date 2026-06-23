@@ -3,6 +3,7 @@
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Tag, TagEnd};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
+use crate::tui::search::case_fold_with_mapping;
 use crate::tui::syntax::{highlighter_for, highlight_line};
 
 #[derive(Debug, Default)]
@@ -52,18 +53,21 @@ fn highlight_spans(spans: Vec<Span<'static>>, query: &str) -> Vec<Span<'static>>
     }
     let query_lower = query.to_lowercase();
     let full: String = spans.iter().map(|s| s.content.as_ref()).collect();
-    let full_lower = full.to_lowercase();
+    let (folded, mapping) = case_fold_with_mapping(&full);
     let mut result = Vec::new();
-    let mut last_end = 0;
+    let mut folded_pos = 0;
+    let mut orig_last_end = 0;
 
-    while let Some(rel) = full_lower[last_end..].find(&query_lower) {
-        let match_start = last_end + rel;
-        let match_end = match_start + query.len();
+    while let Some(rel) = folded[folded_pos..].find(&query_lower) {
+        let folded_start = folded_pos + rel;
+        let folded_end = folded_start + query_lower.len();
+        let orig_start = mapping[folded_start];
+        let orig_end = mapping.get(folded_end).copied().unwrap_or(full.len());
 
-        if match_start > last_end {
-            result.extend(slice_spans_by_range(&spans, last_end, match_start));
+        if orig_start > orig_last_end {
+            result.extend(slice_spans_by_range(&spans, orig_last_end, orig_start));
         }
-        let mut matched = slice_spans_by_range(&spans, match_start, match_end);
+        let mut matched = slice_spans_by_range(&spans, orig_start, orig_end);
         for s in &mut matched {
             s.style = s
                 .style
@@ -72,14 +76,15 @@ fn highlight_spans(spans: Vec<Span<'static>>, query: &str) -> Vec<Span<'static>>
                 .add_modifier(Modifier::BOLD);
         }
         result.extend(matched);
-        last_end = match_end;
-        if last_end >= full.len() {
+        orig_last_end = orig_end;
+        folded_pos = folded_end;
+        if folded_pos >= folded.len() {
             break;
         }
     }
 
-    if last_end < full.len() {
-        result.extend(slice_spans_by_range(&spans, last_end, full.len()));
+    if orig_last_end < full.len() {
+        result.extend(slice_spans_by_range(&spans, orig_last_end, full.len()));
     }
 
     result
@@ -125,33 +130,37 @@ pub(crate) fn highlight_line_spans(line: &str, query: &str, base_style: Style) -
         return vec![Span::styled(line.to_string(), base_style)];
     }
     let query_lower = query.to_lowercase();
-    let line_lower = line.to_lowercase();
+    let (folded, mapping) = case_fold_with_mapping(line);
     let mut spans = Vec::new();
-    let mut start = 0;
-    while let Some(rel) = line_lower[start..].find(&query_lower) {
-        let match_start = start + rel;
-        let match_end = match_start + query.len();
+    let mut folded_pos = 0;
+    let mut orig_last_end = 0;
+    while let Some(rel) = folded[folded_pos..].find(&query_lower) {
+        let folded_start = folded_pos + rel;
+        let folded_end = folded_start + query_lower.len();
+        let orig_start = mapping[folded_start];
+        let orig_end = mapping.get(folded_end).copied().unwrap_or(line.len());
 
-        if match_start > start {
+        if orig_start > orig_last_end {
             spans.push(Span::styled(
-                line[start..match_start].to_string(),
+                line[orig_last_end..orig_start].to_string(),
                 base_style,
             ));
         }
         spans.push(Span::styled(
-            line[match_start..match_end].to_string(),
+            line[orig_start..orig_end].to_string(),
             base_style
                 .fg(Color::Black)
                 .bg(Color::Yellow)
                 .add_modifier(Modifier::BOLD),
         ));
-        start = match_end;
-        if start >= line.len() {
+        orig_last_end = orig_end;
+        folded_pos = folded_end;
+        if folded_pos >= folded.len() {
             break;
         }
     }
-    if start < line.len() {
-        spans.push(Span::styled(line[start..].to_string(), base_style));
+    if orig_last_end < line.len() {
+        spans.push(Span::styled(line[orig_last_end..].to_string(), base_style));
     }
     spans
 }
@@ -875,6 +884,33 @@ mod tests {
             "code-block search match should be highlighted"
         );
         assert_eq!(body.spans[3].content, ")");
+    }
+
+    #[test]
+    fn test_markdown_search_highlight_unicode_case_folding() {
+        // `İ` lowercases to two bytes/characters (`i` + combining dot).
+        // A naive `to_lowercase()` search reports byte offsets into the
+        // folded string, which would slice the original mid-character and
+        // panic. The mapping-aware renderer must align to original byte
+        // boundaries.
+        let lines = render_markdown_lines_with_query("İstanbul", "stan");
+        assert_eq!(lines.len(), 1);
+        let spans: Vec<String> = lines[0].spans.iter().map(|s| s.content.to_string()).collect();
+        assert_eq!(spans, vec!["İ".to_string(), "stan".to_string(), "bul".to_string()]);
+    }
+
+    #[test]
+    fn test_code_block_search_highlight_unicode_case_folding() {
+        // Code-block highlighting uses `highlight_spans` on the already
+        // syntax-highlighted spans, so it must also translate folded offsets
+        // back to original byte boundaries.
+        let lines = render_markdown_lines_with_query("```\nİstanbul\n```", "stan");
+        assert!(lines.len() >= 2);
+        let body = &lines[1];
+        let spans: Vec<String> = body.spans.iter().map(|s| s.content.to_string()).collect();
+        assert!(spans.contains(&"İ".to_string()));
+        assert!(spans.contains(&"stan".to_string()));
+        assert!(spans.contains(&"bul".to_string()));
     }
 
     #[test]

@@ -87,7 +87,7 @@ fn find_matches(
 /// character or multi-byte lowercase expansions (e.g. `İ` → `i` +
 /// combining dot, 2 bytes) map every produced byte back to the same
 /// source byte.
-fn case_fold_with_mapping(s: &str) -> (String, Vec<usize>) {
+pub(crate) fn case_fold_with_mapping(s: &str) -> (String, Vec<usize>) {
     let mut folded = String::with_capacity(s.len());
     let mut mapping = Vec::with_capacity(s.len());
     for (byte_idx, c) in s.char_indices() {

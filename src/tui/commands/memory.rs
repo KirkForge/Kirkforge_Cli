@@ -18,7 +18,7 @@ use crate::session::memory::MemoryStore;
 /// Auto-detect the memory type from the fact text.
 /// Truncate `s` to at most `max_bytes` without splitting a multi-byte
 /// character. Returns an empty string if `max_bytes` is 0.
-fn truncate_to_char_boundary(s: &str, max_bytes: usize) -> &str {
+pub(super) fn truncate_to_char_boundary(s: &str, max_bytes: usize) -> &str {
     let mut end = 0;
     for (idx, ch) in s.char_indices() {
         if idx + ch.len_utf8() > max_bytes {

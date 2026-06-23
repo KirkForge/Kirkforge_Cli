@@ -33,6 +33,8 @@ use crate::session::access::PathGuard;
 use crate::shared::minify::minify_source;
 use std::path::Path;
 
+use super::memory::truncate_to_char_boundary;
+
 /// Per-mention byte cap. Matches the read_file budget so a single
 /// @-mention cannot blow the model's context window by itself.
 pub const MENTION_MAX_BYTES: usize = 50_000;
@@ -360,6 +362,17 @@ fn expand_one(m: &MentionToken, path_guard: &PathGuard) -> MentionExpansion {
     }
 }
 
+/// Return a suffix of `s` starting no earlier than `min_bytes`, aligned
+/// to the next UTF-8 character boundary. Avoids panicking when the
+/// desired byte offset lands in the middle of a multi-byte character.
+fn skip_to_char_boundary(s: &str, min_bytes: usize) -> &str {
+    let mut start = min_bytes.min(s.len());
+    while !s.is_char_boundary(start) && start < s.len() {
+        start += 1;
+    }
+    &s[start..]
+}
+
 fn truncate_to_cap(content: &str) -> (String, bool) {
     if content.len() <= MENTION_MAX_BYTES {
         return (content.to_string(), false);
@@ -368,8 +381,8 @@ fn truncate_to_cap(content: &str) -> (String, bool) {
     // not the middle. Take head from the start, tail from the end.
     let head_end = MENTION_HEAD_BYTES.min(content.len());
     let tail_start = content.len().saturating_sub(MENTION_TAIL_BYTES);
-    let head = &content[..head_end];
-    let tail = &content[tail_start..];
+    let head = truncate_to_char_boundary(content, head_end);
+    let tail = skip_to_char_boundary(content, tail_start);
     let marker = format!(
         "\n... [truncated, {} bytes total — showing first {} + last {}] ...\n",
         content.len(),
@@ -499,4 +512,46 @@ pub fn format_mention_status(expansions: &[MentionExpansion]) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn truncate_to_cap_passes_through_small_content() {
+        let content = "small mention content";
+        let (out, truncated) = truncate_to_cap(content);
+        assert_eq!(out, content);
+        assert!(!truncated);
+    }
+
+    #[test]
+    fn truncate_to_cap_keeps_head_and_tail_for_oversized_content() {
+        let content = "A".repeat(MENTION_MAX_BYTES + 1000);
+        let (out, truncated) = truncate_to_cap(&content);
+        assert!(truncated);
+        assert!(out.starts_with(&"A".repeat(MENTION_HEAD_BYTES)));
+        assert!(out.ends_with(&"A".repeat(MENTION_TAIL_BYTES)));
+        assert!(out.contains("[truncated"));
+    }
+
+    #[test]
+    fn truncate_to_cap_does_not_split_multibyte_chars() {
+        // Two-byte characters: choose a length so the tail offset lands
+        // in the middle of a character, exercising the boundary-adjustment
+        // logic. Previously this panicked because the byte slice was not
+        // aligned to a character boundary.
+        let content = "é".repeat(25_001);
+        assert!(content.len() > MENTION_MAX_BYTES);
+        let (out, truncated) = truncate_to_cap(&content);
+        assert!(truncated);
+        // Result is valid UTF-8 by construction (it is a String), and the
+        // head/tail slices must not exceed their byte budgets by more than
+        // one multi-byte character.
+        let head_len = out.find("\n... [truncated").unwrap();
+        assert!(head_len <= MENTION_HEAD_BYTES + 'é'.len_utf8());
+        let tail_len = out.rsplit_once("...\n").unwrap().1.len();
+        assert!(tail_len <= MENTION_TAIL_BYTES + 'é'.len_utf8());
+    }
 }

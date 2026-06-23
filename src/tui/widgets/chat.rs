@@ -8,6 +8,8 @@ use ratatui::{
 };
 
 use chrono::Timelike;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 
 use crate::tui::app::{AppState, ConnectionState, ConversationEntry};
 use crate::tui::rendering::{highlight_line_spans, render_markdown_lines_with_query};
@@ -309,7 +311,11 @@ pub fn render_chat(f: &mut Frame, area: Rect, state: &mut AppState) {
     let mut prev_entry: Option<&ConversationEntry> = None;
 
     for (idx, entry) in state.messages.iter().enumerate() {
-        let content_len = entry.content.len();
+        let content_hash = {
+            let mut hasher = DefaultHasher::new();
+            (&entry.content,&entry.tool_output).hash(&mut hasher);
+            hasher.finish()
+        };
         let is_streaming_last = idx == last_idx
             && state.is_generating
             && entry.role == "assistant";
@@ -330,7 +336,7 @@ pub fn render_chat(f: &mut Frame, area: Rect, state: &mut AppState) {
                 .chat_render_cache
                 .entries
                 .get(idx)
-                .filter(|(len, _)| *len == content_len)
+                .filter(|(len, _)| *len == content_hash)
                 .map(|(_, lines)| lines.clone())
         };
 
@@ -346,7 +352,7 @@ pub fn render_chat(f: &mut Frame, area: Rect, state: &mut AppState) {
                 collapsed,
             );
             if let Some(slot) = state.chat_render_cache.entries.get_mut(idx) {
-                *slot = (content_len, lines.clone());
+                *slot = (content_hash, lines.clone());
             }
             lines
         };

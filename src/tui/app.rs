@@ -28,10 +28,10 @@ pub enum ConnectionState {
 /// Cached rendered lines for the chat panel.
 ///
 /// `entries` stores one entry per message in `AppState::messages`. Each entry
-/// records the message content length at the time it was rendered and the
-/// resulting `Line`s (header + body, not the trailing blank separator). The
-/// cache is invalidated when rendering parameters change: terminal width,
-/// search query, or tool-collapse state.
+/// records a stable hash of the message content at the time it was rendered
+/// and the resulting `Line`s (header + body, not the trailing blank
+/// separator). The cache is invalidated when rendering parameters change:
+/// terminal width, search query, or tool-collapse state.
 #[derive(Debug, Default)]
 pub struct ChatRenderCache {
     pub content_width: usize,
@@ -39,7 +39,7 @@ pub struct ChatRenderCache {
     pub tool_collapsed: bool,
     pub expanded_tools: HashSet<usize>,
     pub collapsed_messages: HashSet<usize>,
-    pub entries: Vec<(usize, Vec<Line<'static>>)>,
+    pub entries: Vec<(u64, Vec<Line<'static>>)>,
 }
 
 impl ChatRenderCache {

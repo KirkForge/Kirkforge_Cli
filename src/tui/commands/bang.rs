@@ -150,31 +150,48 @@ pub async fn run_bang_command(cmd: &str, config: &crate::shared::Config) -> Bang
 /// <stdout>
 /// ```
 pub fn format_bang_output(result: &BangResult) -> String {
-    if result.timed_out {
-        return format!(
-            "$ {}\n⏰ timed out after {}s",
-            result.cmd, BANG_DEFAULT_TIMEOUT_SECS
-        );
-    }
-
     let elapsed = format_elapsed(result.elapsed_ms);
-    let icon = if result.is_success() { "✅" } else { "❌" };
+    let icon = if result.timed_out {
+        "⏰"
+    } else if result.is_success() {
+        "✅"
+    } else {
+        "❌"
+    };
 
-    let mut out = format!(
-        "$ {}\n{} exit {} in {}",
-        result.cmd, icon, result.exit_code, elapsed
-    );
+    let banner = if result.timed_out {
+        format!("{} timed out after {}s", icon, BANG_DEFAULT_TIMEOUT_SECS)
+    } else {
+        format!("{} exit {} in {}", icon, result.exit_code, elapsed)
+    };
 
-    if !result.stdout.is_empty() {
+    let mut out = format!("$ {}\n{}", result.cmd, banner);
+
+    // On timeout `run_shell` prefixes stdout with a plain-text marker
+    // to help the model/executor path. For the TUI we keep the emoji
+    // banner above and strip the duplicate prefix so the user isn't
+    // told twice that the command timed out.
+    let stdout = if result.timed_out {
+        let prefix = format!("[timed out after {} seconds]\n", BANG_DEFAULT_TIMEOUT_SECS);
+        result
+            .stdout
+            .strip_prefix(&prefix)
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| result.stdout.clone())
+    } else {
+        result.stdout.clone()
+    };
+
+    if !stdout.is_empty() {
         out.push('\n');
-        out.push_str(&result.stdout);
+        out.push_str(&stdout);
     }
 
     if !result.stderr.is_empty() {
         // Trim trailing whitespace from stdout before appending the
         // stderr marker so the layout is clean even when stdout didn't
         // end in a newline.
-        if !result.stdout.is_empty() && !out.ends_with('\n') {
+        if !stdout.is_empty() && !out.ends_with('\n') {
             out.push('\n');
         }
         out.push_str("⚠ stderr:\n");

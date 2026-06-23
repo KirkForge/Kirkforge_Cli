@@ -438,6 +438,45 @@ mod tests {
     }
 
     #[test]
+    fn format_bang_output_timed_out_includes_partial_output() {
+        let r = BangResult {
+            cmd: "slow".to_string(),
+            exit_code: -1,
+            stdout: "line1\nline2\n".to_string(),
+            stderr: "warn!\n".to_string(),
+            timed_out: true,
+            elapsed_ms: 30_000,
+        };
+        let out = format_bang_output(&r);
+        assert!(out.contains("⏰"), "got: {:?}", out);
+        assert!(out.contains("line1"), "got: {:?}", out);
+        assert!(out.contains("line2"), "got: {:?}", out);
+        assert!(out.contains("⚠ stderr:"), "got: {:?}", out);
+        assert!(out.contains("warn!"), "got: {:?}", out);
+    }
+
+    #[test]
+    fn format_bang_output_timed_out_strips_run_shell_prefix() {
+        let prefix = "[timed out after 30 seconds]\n";
+        let r = BangResult {
+            cmd: "slow".to_string(),
+            exit_code: -1,
+            stdout: format!("{}partial output", prefix),
+            stderr: String::new(),
+            timed_out: true,
+            elapsed_ms: 30_000,
+        };
+        let out = format_bang_output(&r);
+        assert!(out.contains("⏰"), "got: {:?}", out);
+        assert!(
+            !out.contains("[timed out after 30 seconds]"),
+            "duplicate prefix should be stripped: {:?}",
+            out
+        );
+        assert!(out.contains("partial output"), "got: {:?}", out);
+    }
+
+    #[test]
     fn format_bang_output_success_with_stderr_separates_them() {
         let r = BangResult {
             cmd: "cargo build 2>&1 >/dev/null".to_string(),

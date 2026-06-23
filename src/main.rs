@@ -290,7 +290,12 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
                 }
             }
             Some(sessions) if !sessions.is_empty() => {
-                print_recent_sessions_hint(&sessions);
+                // In machine-readable output modes the hint would pollute
+                // stderr that callers may capture; only show it in plain
+                // text mode where a human is reading the terminal.
+                if output == crate::shared::OutputFormat::Text {
+                    print_recent_sessions_hint(&sessions);
+                }
                 let sessions_dir = data_dir.join("sessions");
                 std::fs::create_dir_all(&sessions_dir)?;
                 sessions_dir.join(format!("{}.conv.ndjson", session_id))

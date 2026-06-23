@@ -257,14 +257,18 @@ fn handle_file(args: &str) -> String {
 }
 
 fn run_gh_file(path: &str, ref_name: &str) -> Result<String, String> {
-    // gh api returns base64-encoded content. Pipe through bash `base64 -d`
-    // to avoid pulling in a base64 crate dependency.
-    let cmd_str = format!(
-        "gh api 'repos/:owner/:repo/contents/{}?ref={}' --jq '.content' | base64 -d 2>/dev/null",
-        path, ref_name
-    );
-    let output = Command::new("bash")
-        .args(["-c", &cmd_str])
+    // Use gh's native API client with the raw-content media type so we
+    // get the file body directly, with no shell interpolation and no
+    // external base64 decoder.
+    let path = path.trim_start_matches('/');
+    let endpoint = format!("repos/:owner/:repo/contents/{}?ref={}", path, ref_name);
+    let output = Command::new("gh")
+        .args([
+            "api",
+            &endpoint,
+            "--header",
+            "Accept: application/vnd.github.raw+json",
+        ])
         .output()
         .map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
@@ -276,7 +280,11 @@ fn run_gh_file(path: &str, ref_name: &str) -> Result<String, String> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("gh file failed: {}", stderr.trim()));
+        let err_msg = stderr.trim().to_string();
+        if err_msg.contains("not authenticated") || err_msg.contains("auth") {
+            return Err("gh not authenticated. Run `gh auth login` in a terminal.".into());
+        }
+        return Err(format!("gh file failed: {}", err_msg));
     }
 
     Ok(String::from_utf8_lossy(&output.stdout).to_string())

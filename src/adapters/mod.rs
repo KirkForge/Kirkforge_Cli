@@ -3,6 +3,7 @@ pub mod gemini;
 pub mod glm;
 pub mod ollama_ndjson;
 pub mod openai_compat;
+pub mod tool_call_markup;
 
 use crate::shared::{ModelInfo, StreamEvent};
 

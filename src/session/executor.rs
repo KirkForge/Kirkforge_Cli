@@ -1,4 +1,4 @@
-use crate::adapters::ModelAdapter;
+use crate::adapters::{tool_call_markup::extract_dsml_tool_calls, ModelAdapter};
 use crate::session::access::{
     access_from_config, warn_if_unsandboxed, DenyList, GuardVerdict, PathGuard, ReadGate,
 };
@@ -1100,6 +1100,22 @@ impl Executor {
                     finish_reason: _,
                     usage,
                 } => {
+                    // Fallback: some models (notably DeepSeek cloud through
+                    // Ollama's /api/chat proxy) emit native DSML markup in
+                    // the content stream instead of a valid tool_calls JSON
+                    // array. If the adapter delivered no tool calls but the
+                    // assistant content contains DSML blocks, extract them,
+                    // strip the markup from the persisted message, and treat
+                    // the turn as a tool-call turn.
+                    if tool_calls_out.is_empty() {
+                        let (cleaned, dsml_calls) =
+                            extract_dsml_tool_calls(&assistant_content);
+                        if !dsml_calls.is_empty() {
+                            assistant_content = cleaned;
+                            tool_calls_out.extend(dsml_calls);
+                        }
+                    }
+
                     let msg = Message {
                         role: Role::Assistant,
                         content: assistant_content.clone(),

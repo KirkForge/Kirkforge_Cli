@@ -46,6 +46,71 @@ fn split_bang_summary(formatted: &str) -> (String, String) {
     (summary, formatted.to_string())
 }
 
+/// Delete the word (or whitespace run) immediately before `cursor_byte`.
+///
+/// Returns the updated input string and the new char-index cursor position.
+///
+/// Behaviour mirrors readline-style `backward-kill-word`:
+/// - If the cursor is preceded by whitespace, the whitespace run is deleted.
+/// - If the cursor is preceded by a word, the word is deleted, and any
+///   whitespace separating it from a previous word is deleted too.
+/// - Leading whitespace before the first word is preserved (so "   hello|"
+///   becomes "   |", not "|").
+fn delete_word_backward(input: &str, cursor_byte: usize) -> (String, usize) {
+    let cur = cursor_byte.min(input.len());
+    let before = &input[..cur];
+
+    if before.is_empty() {
+        return (input.to_string(), 0);
+    }
+
+    let ends_with_ws = before
+        .chars()
+        .last()
+        .is_some_and(|c| c.is_whitespace());
+
+    let new_byte = if ends_with_ws {
+        // Cursor is in a trailing whitespace run: kill back to the previous
+        // non-whitespace character (or the start of the line).
+        before
+            .rfind(|c: char| !c.is_whitespace())
+            .map(|pos| {
+                let ch = before[pos..].chars().next().unwrap();
+                pos + ch.len_utf8()
+            })
+            .unwrap_or(0)
+    } else {
+        // Cursor is at the end of a word. Find the word's start, then decide
+        // whether to also kill the preceding whitespace run.
+        match before.rfind(|c: char| c.is_whitespace()) {
+            Some(pos) => {
+                let ch = before[pos..].chars().next().unwrap();
+                let word_start = pos + ch.len_utf8();
+                let has_prev_word = before[..word_start]
+                    .chars()
+                    .any(|c| !c.is_whitespace());
+                if has_prev_word {
+                    before[..word_start]
+                        .rfind(|c: char| !c.is_whitespace())
+                        .map(|prev_pos| {
+                            let prev_ch = before[prev_pos..].chars().next().unwrap();
+                            prev_pos + prev_ch.len_utf8()
+                        })
+                        .unwrap_or(0)
+                } else {
+                    word_start
+                }
+            }
+            None => 0,
+        }
+    };
+
+    let mut new_input = input[..new_byte].to_string();
+    new_input.push_str(&input[cur..]);
+    let new_cursor = new_input[..new_byte].chars().count();
+    (new_input, new_cursor)
+}
+
 /// Handle a single key event in the regular input mode.
 ///
 /// Returns `Ok(())` after a single event. Only errors on I/O failure
@@ -293,20 +358,10 @@ pub async fn handle_input_key(
                     }
                     'w' => {
                         // Ctrl+W: delete word backward using char-index cursor
-                        let cur_byte = state.cursor_byte();
-                        let before = &state.input[..cur_byte];
-                        if let Some(pos) = before.rfind(|c: char| c.is_whitespace()) {
-                            // pos is a byte offset — count chars before it to get new cursor position
-                            let trimmed = before[..pos].trim_end_matches(' ');
-                            let new_byte = trimmed.len();
-                            let new_cursor = trimmed.chars().count();
-                            state.input.drain(new_byte..cur_byte);
-                            state.cursor_position = new_cursor;
-                        } else {
-                            // Delete from start
-                            state.input.drain(..cur_byte);
-                            state.cursor_position = 0;
-                        }
+                        let (new_input, new_cursor) =
+                            delete_word_backward(&state.input, state.cursor_byte());
+                        state.input = new_input;
+                        state.cursor_position = new_cursor;
                     }
                     'u' => {
                         // Ctrl+U: clear line
@@ -795,4 +850,64 @@ pub async fn handle_input_key(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::delete_word_backward;
+
+    fn check(input: &str, cursor_byte: usize, expected_input: &str, expected_cursor: usize) {
+        let (got_input, got_cursor) = delete_word_backward(input, cursor_byte);
+        assert_eq!(got_input, expected_input, "input mismatch for {:?}", input);
+        assert_eq!(got_cursor, expected_cursor, "cursor mismatch for {:?}", input);
+    }
+
+    #[test]
+    fn delete_word_backward_preserves_leading_whitespace() {
+        // "   hello|" should become "   |" — leading spaces stay.
+        check("   hello", 8, "   ", 3);
+    }
+
+    #[test]
+    fn delete_word_backward_removes_word_and_separating_spaces() {
+        // "one   two|" should become "one|".
+        check("one   two", 9, "one", 3);
+    }
+
+    #[test]
+    fn delete_word_backward_removes_trailing_whitespace_run() {
+        // "hello   |" should become "hello|".
+        check("hello   ", 8, "hello", 5);
+    }
+
+    #[test]
+    fn delete_word_backward_removes_single_word_from_start() {
+        // "hello|" should become "|".
+        check("hello", 5, "", 0);
+    }
+
+    #[test]
+    fn delete_word_backward_removes_leading_whitespace_when_no_word_before() {
+        // "   |" should become "|".
+        check("   ", 3, "", 0);
+    }
+
+    #[test]
+    fn delete_word_backward_removes_leading_whitespace_before_word_ahead() {
+        // "   |hello" should become "|hello".
+        check("   hello", 3, "hello", 0);
+    }
+
+    #[test]
+    fn delete_word_backward_cursor_at_start_is_noop() {
+        check("hello", 0, "hello", 0);
+    }
+
+    #[test]
+    fn delete_word_backward_handles_multibyte_characters() {
+        // "héllo world|" should become "héllo|" (cursor_byte is byte offset).
+        let input = "héllo world";
+        let cursor_byte = input.len(); // 12 bytes
+        check(input, cursor_byte, "héllo", 5);
+    }
 }

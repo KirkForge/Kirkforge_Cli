@@ -16,6 +16,19 @@
 use crate::session::memory::MemoryStore;
 
 /// Auto-detect the memory type from the fact text.
+/// Truncate `s` to at most `max_bytes` without splitting a multi-byte
+/// character. Returns an empty string if `max_bytes` is 0.
+fn truncate_to_char_boundary(s: &str, max_bytes: usize) -> &str {
+    let mut end = 0;
+    for (idx, ch) in s.char_indices() {
+        if idx + ch.len_utf8() > max_bytes {
+            break;
+        }
+        end = idx + ch.len_utf8();
+    }
+    &s[..end]
+}
+
 fn detect_type(text: &str) -> &str {
     let lower = text.to_lowercase();
     if lower.contains("feedback")
@@ -75,9 +88,13 @@ pub fn handle_memory_command(args: &str) -> String {
             }
             let mtype = detect_type(rest);
             let name = crate::session::memory::slugify_description(rest);
-            let name = if name.len() > 40 { &name[..40] } else { &name };
+            let name = if name.len() > 40 {
+                truncate_to_char_boundary(&name, 40)
+            } else {
+                &name
+            };
             let description = if rest.len() > 80 {
-                format!("{}…", &rest[..77])
+                format!("{}…", truncate_to_char_boundary(rest, 77))
             } else {
                 rest.to_string()
             };
@@ -228,5 +245,26 @@ mod tests {
     fn test_handle_memory_unknown_subcommand() {
         let out = handle_memory_command("foo");
         assert!(out.contains("Unknown"));
+    }
+
+    #[test]
+    fn truncate_to_char_boundary_keeps_ascii_within_limit() {
+        assert_eq!(truncate_to_char_boundary("hello", 3), "hel");
+        assert_eq!(truncate_to_char_boundary("hello", 10), "hello");
+    }
+
+    #[test]
+    fn truncate_to_char_boundary_does_not_split_multibyte() {
+        // "héllo" is 6 bytes; é is 2 bytes.
+        assert_eq!(truncate_to_char_boundary("héllo", 1), "h"); // stop before é
+        assert_eq!(truncate_to_char_boundary("héllo", 2), "h"); // é would exceed 2 bytes
+        assert_eq!(truncate_to_char_boundary("héllo", 3), "hé");
+        assert_eq!(truncate_to_char_boundary("héllo", 4), "hél");
+        assert_eq!(truncate_to_char_boundary("héllo", 6), "héllo");
+    }
+
+    #[test]
+    fn truncate_to_char_boundary_empty_for_zero_limit() {
+        assert_eq!(truncate_to_char_boundary("hello", 0), "");
     }
 }

@@ -69,12 +69,12 @@ Generated: 2026-06-23 22:50 UTC
 
 ### P3 — UI polish / docs
 
-13. **Tool-card search expansion not implemented.**
-    - Pressing `Enter` on a search match should expand the collapsed tool card and scroll to the match; currently search only highlights in already-rendered text.
+13. ~~**Tool-card search expansion not implemented.**~~
+    - `scroll_offset_for_search_match` expands a collapsed tool card when the current match is in `tool_output` and returns a scroll offset aligned to the rendered body.
+    - Search `Enter` now commits, exits search mode, and jumps to the first match; `n` / `Shift+N` also expand and scroll as the match index cycles.
 
-14. **No copy-to-clipboard keybinding for code blocks.**
-    - Users expect a key (e.g. `c` over a focused code block or `Ctrl+Shift+C` in code-block context) to copy a single code block.
-    - Note: `Ctrl+Shift+B` already copies the most recent assistant code block; per-block focus is not yet implemented.
+14. ~~**No copy-to-clipboard keybinding for code blocks.**~~
+    - `Ctrl+Shift+B` now cycles through all code blocks in the most recent assistant message and copies the selected block, showing "Copied code block N/L". Repeated presses cycle backward through blocks.
 
 15. ~~**Docs drift.**~~
     - `review.md` test count and capability list updated.
@@ -83,5 +83,4 @@ Generated: 2026-06-23 22:50 UTC
 
 ## Remaining recommended work
 
-1. P3 tool-card search expansion and code-block copy keybinding.
-2. Pick a live regression target outside this repo and track it in that repo’s own `state.md`.
+1. Pick a live regression target outside this repo and track it in that repo’s own `state.md`.

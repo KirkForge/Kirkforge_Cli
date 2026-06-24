@@ -224,6 +224,175 @@ fn render_entry_lines(
     lines
 }
 
+/// Build the full list of rendered chat lines and the line index where
+/// each conversation message begins. Used by `render_chat` indirectly
+/// and directly by search navigation to compute a scroll offset for the
+/// current match.
+///
+/// Unlike `render_chat`, this helper does not use the render cache and
+/// does not append the "more lines below" footer or compute scroll
+/// geometry. It returns the raw line list and a parallel `message_start`
+/// vector such that `message_start[i]` is the line index of the first
+/// rendered line belonging to `state.messages[i]`.
+fn build_chat_lines(state: &AppState, content_width: usize) -> (Vec<Line<'static>>, Vec<usize>) {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let mut message_start: Vec<usize> = Vec::with_capacity(state.messages.len());
+
+    // Sandbox posture banner (always visible if unsandboxed).
+    if state.unsandboxed {
+        lines.push(Line::from(vec![
+            Span::styled(
+                " ⚠️  Unsandboxed ",
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                "PathGuard: model writes are not restricted to any directory tree.",
+                Style::default().fg(Color::Yellow),
+            ),
+        ]));
+        lines.push(Line::from(""));
+    }
+
+    // Connection banner at top.
+    match &state.connection {
+        ConnectionState::Connected { .. } => {}
+        ConnectionState::Disconnected => {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    " ⚡ Disconnected ",
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    "Press Enter to start a session, or type /connect <model>",
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]));
+            lines.push(Line::from(""));
+        }
+        ConnectionState::Connecting => {
+            lines.push(Line::from(vec![Span::styled(
+                " ⟳ Connecting... ",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            )]));
+            lines.push(Line::from(""));
+        }
+        ConnectionState::Error(e) => {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    " ✗ Error: ",
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(e.clone(), Style::default().fg(Color::Red)),
+            ]));
+            lines.push(Line::from(""));
+        }
+    }
+
+    // Loading indicator.
+    if state.is_generating && state.messages.last().map(|m| m.role.as_str()) != Some("assistant") {
+        lines.push(Line::from(vec![Span::styled(
+            format!(" ⏳ {} ", state.spinner_char()),
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::DIM),
+        )]));
+        lines.push(Line::from(""));
+    }
+
+    // Conversation messages.
+    let last_idx = state.messages.len().saturating_sub(1);
+    let mut prev_entry: Option<&ConversationEntry> = None;
+    for (idx, entry) in state.messages.iter().enumerate() {
+        message_start.push(lines.len());
+        let is_streaming_last =
+            idx == last_idx && state.is_generating && entry.role == "assistant";
+        let collapsed = if is_streaming_last {
+            false
+        } else if entry.role == "tool" {
+            state.tool_should_collapse(idx)
+        } else {
+            state.message_should_collapse(idx)
+        };
+        let entry_lines = render_entry_lines(
+            entry,
+            prev_entry,
+            idx,
+            content_width,
+            &state.search_query,
+            collapsed,
+        );
+        lines.extend(entry_lines);
+        lines.push(Line::from(""));
+        prev_entry = Some(entry);
+    }
+
+    // Inline thinking block.
+    if state.thinking_panel_visible && !state.thinking_buffer.is_empty() {
+        let thinking_width = content_width.saturating_sub(4);
+        let border_style = Style::default().fg(Color::Magenta).add_modifier(Modifier::DIM);
+        let body_style = Style::default().fg(Color::Magenta).add_modifier(Modifier::DIM);
+        lines.push(Line::from(vec![
+            Span::styled("  ⸱ ", border_style),
+            Span::styled(
+                "THINKING",
+                Style::default()
+                    .fg(Color::Magenta)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("  · Esc to hide", border_style),
+        ]));
+        for t in &state.thinking_buffer {
+            for line in textwrap::fill(t, thinking_width).lines() {
+                lines.push(Line::from(vec![
+                    Span::styled("    │ ", border_style),
+                    Span::styled(line.to_string(), body_style),
+                ]));
+            }
+        }
+    }
+
+    (lines, message_start)
+}
+
+/// Compute a scroll offset that shows the current search match.
+///
+/// - If the current match is inside a collapsed tool entry's
+///   `tool_output`, the entry is expanded first.
+/// - Returns `Some(line_index)` to scroll to, or `None` if there are
+///   no committed matches or the match message no longer exists.
+///
+/// The returned offset is a raw line index into the chat content area,
+/// before the "more lines below" footer is added. The caller should
+/// clamp it against `max_scroll` before assigning to `scroll_offset`.
+pub fn scroll_offset_for_search_match(state: &mut AppState, content_width: usize) -> Option<usize> {
+    let (msg_idx, _byte_offset, source) = state.search_matches.get(state.search_match_idx)?;
+    let msg_idx = *msg_idx;
+    if msg_idx >= state.messages.len() {
+        return None;
+    }
+
+    // Expand the tool card when the match lives in the hidden body.
+    if *source == crate::tui::search::SearchSource::ToolOutput {
+        let entry = &state.messages[msg_idx];
+        if entry.role == "tool" && entry.tool_output.is_some() {
+            state.expanded_tools.insert(msg_idx);
+        }
+    }
+
+    let (_lines, message_start) = build_chat_lines(state, content_width);
+    let mut target = message_start.get(msg_idx).copied()?;
+
+    // For tool-output matches, skip the header line so the body
+    // (where the highlighted text is) is visible instead of just the
+    // collapsed summary.
+    if *source == crate::tui::search::SearchSource::ToolOutput {
+        target += 1;
+    }
+    Some(target)
+}
+
 /// Render the main chat area showing the conversation history.
 ///
 /// Takes `&mut AppState` so we can clamp `scroll_offset` and update
@@ -297,6 +466,7 @@ pub fn render_chat(f: &mut Frame, area: Rect, state: &mut AppState) {
 
     // Conversation messages
     let content_width = (area.width as usize).saturating_sub(4);
+    state.last_content_width = content_width;
     let last_idx = state.messages.len().saturating_sub(1);
 
     // Invalidate the render cache when any rendering parameter changed.
@@ -648,6 +818,66 @@ mod tests {
             s.content == "needle" && s.style.bg == Some(Color::Yellow)
         });
         assert!(found, "search hit 'needle' should keep yellow highlight background");
+    }
+
+    #[test]
+    fn search_match_in_tool_output_expands_and_scrolls() {
+        let mut state = make_state(ConnectionState::Connected {
+            model: "test".into(),
+            since: std::time::Instant::now(),
+        });
+        state.tool_collapsed = true;
+        state.last_content_width = 80;
+        state.messages.push(entry_at("assistant", "check the tool output", 9, 14));
+        state.messages.push(tool_entry("tool summary", "hidden needle value", 9, 14));
+        state.search_query = "needle".into();
+        state.search_matches = crate::tui::search::compute_matches(&state.messages, "needle");
+        state.search_match_idx = 0;
+
+        let offset = scroll_offset_for_search_match(&mut state, 80).expect("match exists");
+
+        assert!(
+            state.expanded_tools.contains(&1),
+            "tool card at message 1 should be expanded for a ToolOutput match"
+        );
+        // The assistant message contributes a header + wrapped body + blank,
+        // then the tool entry header is after that. The returned offset should
+        // point at the tool body, not the collapsed summary header.
+        assert!(offset > 0, "scroll offset should be past the assistant message");
+    }
+
+    #[test]
+    fn search_match_in_content_does_not_expand_tool() {
+        let mut state = make_state(ConnectionState::Connected {
+            model: "test".into(),
+            since: std::time::Instant::now(),
+        });
+        state.tool_collapsed = true;
+        state.last_content_width = 80;
+        state.messages.push(tool_entry("needle summary", "hidden body", 9, 14));
+        state.search_query = "needle".into();
+        state.search_matches = crate::tui::search::compute_matches(&state.messages, "needle");
+        state.search_match_idx = 0;
+
+        let offset = scroll_offset_for_search_match(&mut state, 80).expect("match exists");
+
+        assert!(
+            !state.expanded_tools.contains(&0),
+            "content match should not force tool expansion"
+        );
+        assert_eq!(offset, 0, "first message starts at line 0 without banners");
+    }
+
+    #[test]
+    fn scroll_offset_for_search_match_returns_none_when_empty() {
+        let mut state = make_state(ConnectionState::Connected {
+            model: "test".into(),
+            since: std::time::Instant::now(),
+        });
+        state.last_content_width = 80;
+        state.search_matches.clear();
+        state.search_match_idx = 0;
+        assert_eq!(scroll_offset_for_search_match(&mut state, 80), None);
     }
 
     #[test]

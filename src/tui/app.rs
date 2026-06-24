@@ -183,6 +183,12 @@ pub struct AppState {
     /// assistant message instead of the whole conversation.
     pub chat_render_cache: ChatRenderCache,
 
+    /// Last content width used by `render_chat`, in columns. Search
+    /// navigation needs the same wrap width the renderer used so it
+    /// can compute a matching scroll offset after expanding a tool
+    /// card or jumping to a match.
+    pub last_content_width: usize,
+
     // ── Per-message collapse (TUI v2) ────────────────────────────────
     /// Indices of conversation entries that the user has collapsed.
     /// Collapsed messages show only the header + an expand hint. Default
@@ -251,6 +257,13 @@ pub struct AppState {
     /// match. `n` cycles forward, `N` (Shift+N) cycles backward.
     /// When `search_matches.is_empty()`, this is meaningless.
     pub search_match_idx: usize,
+
+    // ── Code-block copy cycle (P3) ────────────────────────────────
+    /// `Ctrl+Shift+B` cycles through the code blocks of the most
+    /// recent assistant message. This counter tracks which block is
+    /// copied next; it wraps around when it reaches the number of
+    /// blocks in that message.
+    pub code_block_copy_index: usize,
 
     // ── /test command (review.md gap #9) ─────────────────────
     /// True while a `/test` command is running. Used to (1) gate the
@@ -340,6 +353,7 @@ impl AppState {
             expanded_tools: std::collections::HashSet::new(),
             collapsed_messages: HashSet::new(),
             chat_render_cache: ChatRenderCache::default(),
+            last_content_width: 0,
             approval_scroll: 0,
             approval_max_scroll: 0,
             last_turn_prompt_tokens: 0,
@@ -348,6 +362,7 @@ impl AppState {
             search_query: String::new(),
             search_matches: Vec::new(),
             search_match_idx: 0,
+            code_block_copy_index: 0,
             test_in_progress: false,
             undo_stack: None,
             session_picker: None,

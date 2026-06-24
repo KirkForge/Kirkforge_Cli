@@ -415,11 +415,56 @@ pub fn render_markdown_lines(text: &str) -> Vec<Line<'static>> {
     render_markdown_lines_with_query(text, "")
 }
 
+/// Extract the text of every code block in a markdown string, in order.
+///
+/// Returns a vector of block contents (without fence markers) for all
+/// fenced or indented code blocks. Used by the TUI's per-block copy
+/// keybinding so `Ctrl+Shift+B` can cycle through blocks instead of
+/// always copying only the last one.
+pub fn all_code_blocks(markdown: &str) -> Vec<String> {
+    let parser = pulldown_cmark::Parser::new(markdown);
+    let mut in_block = false;
+    let mut content = String::new();
+    let mut blocks = Vec::new();
+    for event in parser {
+        match event {
+            Event::Start(Tag::CodeBlock(_)) => {
+                in_block = true;
+                content.clear();
+            }
+            Event::End(TagEnd::CodeBlock) => {
+                in_block = false;
+                let trimmed = content.trim_end().to_string();
+                if !trimmed.is_empty() {
+                    blocks.push(trimmed);
+                }
+                content.clear();
+            }
+            Event::Text(t) if in_block => {
+                content.push_str(&t);
+            }
+            _ => {}
+        }
+    }
+    // Keep a trailing incomplete block too (malformed markdown).
+    if in_block {
+        let trimmed = content.trim_end().to_string();
+        if !trimmed.is_empty() {
+            blocks.push(trimmed);
+        }
+    }
+    blocks
+}
+
 /// Extract the text of the most recent code block in a markdown string.
 ///
 /// Walks the document and keeps the accumulated text of the last fenced
 /// or indented code block it sees. Returns `Some(content)` (without the
 /// fence markers) or `None` if there is no code block.
+///
+/// Kept for the existing test suite; new callers should prefer
+/// [`all_code_blocks`] which supports per-block copy cycling.
+#[allow(dead_code)]
 pub fn last_code_block(markdown: &str) -> Option<String> {
     let parser = pulldown_cmark::Parser::new(markdown);
     let mut in_block = false;
@@ -940,5 +985,25 @@ mod tests {
             Some("second".to_string()),
             "should prefer the last code block"
         );
+    }
+
+    #[test]
+    fn test_all_code_blocks_returns_multiple_blocks() {
+        let md = "```a\nfirst\n```\n\n```b\nsecond\n```";
+        assert_eq!(
+            all_code_blocks(md),
+            vec!["first".to_string(), "second".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_all_code_blocks_skips_empty_blocks() {
+        let md = "```\n```\n\n```\ncontent\n```";
+        assert_eq!(all_code_blocks(md), vec!["content".to_string()]);
+    }
+
+    #[test]
+    fn test_all_code_blocks_returns_none_for_plain_text() {
+        assert!(all_code_blocks("No code here.").is_empty());
     }
 }

@@ -472,7 +472,7 @@ impl ConversationEntry {
 pub struct PendingApproval {
     pub tool_name: String,
     pub args: serde_json::Value,
-    pub responder: Option<tokio::sync::oneshot::Sender<crate::session::executor::ApprovalResponse>>,
+    pub responder: Option<crate::session::executor::ApprovalResponder>,
 }
 
 /// State held while waiting for approval of a `!` bang command.

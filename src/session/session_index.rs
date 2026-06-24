@@ -159,17 +159,44 @@ pub fn delete_session(id: &str) -> anyhow::Result<bool> {
 /// confirmation message. If there are fewer than `keep + delete_count`
 /// sessions, nothing is removed.
 pub fn prune_oldest(keep: usize, delete_count: usize) -> anyhow::Result<Vec<String>> {
-    let entries = list_sessions()?;
-    // list_sessions() is sorted newest-first, so the oldest are at
-    // the tail. We keep the first `keep` and remove the next
-    // `delete_count`.
+    let sessions_dir = crate::session::data_dir()?.join("sessions");
+    prune_oldest_in_dir(&sessions_dir, keep, delete_count)
+}
+
+/// Internal variant that works on an explicit directory so tests can
+/// stay isolated from the user's real `~/.local/share/kirkforge`.
+fn prune_oldest_in_dir(
+    sessions_dir: &std::path::Path,
+    keep: usize,
+    delete_count: usize,
+) -> anyhow::Result<Vec<String>> {
+    let mut entries = Vec::new();
+    if sessions_dir.is_dir() {
+        for entry in std::fs::read_dir(sessions_dir)?.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let fname = path.file_name().and_then(|f| f.to_str()).unwrap_or("");
+            if !fname.ends_with(".conv.ndjson") {
+                continue;
+            }
+            if let Some(summary) = summarize_file(&path) {
+                entries.push(summary);
+            }
+        }
+    }
+
+    // Newest first, matching list_sessions().
+    entries.sort_by(|a, b| b.started_at.cmp(&a.started_at));
+
     if entries.len() <= keep + delete_count {
         return Ok(Vec::new());
     }
     let to_delete = &entries[keep..keep + delete_count];
     let mut deleted = Vec::with_capacity(to_delete.len());
     for e in to_delete {
-        if delete_session(&e.id)? {
+        if std::fs::remove_file(&e.path).is_ok() {
             deleted.push(e.id.clone());
         }
     }
@@ -259,12 +286,38 @@ mod tests {
         assert!(summarize_file(path).is_none());
     }
 
-    /// `prune_oldest` with delete count larger than the actual
+    /// `prune_oldest_in_dir` with delete count larger than the actual
     /// surplus is a no-op.
     #[test]
     fn test_prune_oldest_noop_when_few_sessions() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sessions_dir = dir.path().join("sessions");
+        std::fs::create_dir_all(&sessions_dir).unwrap();
         // 0 sessions on disk → nothing to delete.
-        let deleted = prune_oldest(10, 5).unwrap();
+        let deleted = prune_oldest_in_dir(&sessions_dir, 10, 5).unwrap();
         assert!(deleted.is_empty());
+    }
+
+    /// `prune_oldest_in_dir` deletes the oldest sessions beyond `keep`.
+    #[test]
+    fn test_prune_oldest_deletes_oldest() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sessions_dir = dir.path().join("sessions");
+        std::fs::create_dir_all(&sessions_dir).unwrap();
+
+        let ids = ["2026-06-01-session-01", "2026-06-02-session-02", "2026-06-03-session-03"];
+        for id in ids {
+            std::fs::write(
+                sessions_dir.join(format!("{}.conv.ndjson", id)),
+                b"",
+            )
+            .unwrap();
+        }
+
+        // Keep 1, delete 1 → the oldest of the two beyond keep is removed.
+        let deleted = prune_oldest_in_dir(&sessions_dir, 1, 1).unwrap();
+        assert_eq!(deleted, vec!["2026-06-02-session-02".to_string()]);
+        assert!(!sessions_dir.join("2026-06-02-session-02.conv.ndjson").exists());
+        assert!(sessions_dir.join("2026-06-03-session-03.conv.ndjson").exists());
     }
 }

@@ -201,10 +201,20 @@ pub async fn handle_input_key(
             // Picker is consumed: don't restore it.
             return Ok(());
         }
-        // Key did not finalize the picker (e.g. arrow navigation):
-        // put it back so the next key event continues the interaction.
-        state.session_picker = Some(picker);
-        return Ok(());
+        // Ctrl+C always exits, even from the picker.
+        if key.code == KeyCode::Char('c')
+            && key.modifiers.contains(KeyModifiers::CONTROL)
+        {
+            state.should_exit = true;
+            return Ok(());
+        }
+        // Key did not finalize the picker and was not a global shortcut:
+        // cancel the overlay and fall through so the key is handled as
+        // normal input. This lets slash commands such as `/exit` work even
+        // when the startup picker is showing — the first character dismisses
+        // the picker and is typed into the input box, and the rest of the
+        // command follows. Navigation keys (arrows, j/k, Enter, Esc, q) are
+        // consumed above.
     }
 
     // ── Search mode interceptor ─────────────────────────────
@@ -395,7 +405,9 @@ pub async fn handle_input_key(
                 match c {
                     'c' => {
                         // Ctrl+C: cancel a running persona first, then
-                        // cancel in-flight generation, then clear input.
+                        // cancel in-flight generation. If nothing is running,
+                        // treat it as a quit signal so the user can escape the
+                        // app the same way every other terminal app works.
                         if let Some(cancel) = state.persona_cancel.take() {
                             cancel.store(true, std::sync::atomic::Ordering::SeqCst);
                             state.persona_in_progress = None;
@@ -412,21 +424,22 @@ pub async fn handle_input_key(
                             if cancel_tx.send(()).is_err() {
                                 // The executor driver is gone — the
                                 // session is ending or the TUI is
-                                // shutting down. No need to keep
-                                // pretending a cancel is in flight.
-                                // Don't warn-and-continue; the user
-                                // pressing Ctrl+C is itself the
-                                // shutdown signal, so just suppress
-                                // state mutation.
+                                // shutting down. Treat the key as a
+                                // quit signal instead of leaving the
+                                // user stuck in a dead loop.
                                 tracing::debug!(
                                     "cancel_tx receiver dropped on Ctrl+C; executor already gone"
                                 );
+                                state.should_exit = true;
                                 return Ok(());
                             }
                             state.is_generating = false;
+                            state.input.clear();
+                            state.cursor_position = 0;
+                            return Ok(());
                         }
-                        state.input.clear();
-                        state.cursor_position = 0;
+                        state.should_exit = true;
+                        return Ok(());
                     }
                     'w' => {
                         // Ctrl+W: delete word backward using char-index cursor

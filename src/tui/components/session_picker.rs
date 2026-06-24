@@ -97,6 +97,24 @@ impl SessionPicker {
 
     /// Render the picker centered over the full terminal area.
     pub fn render(&self, f: &mut Frame, area: Rect) {
+        // Guard against degenerate terminals (e.g. pseudo-terms with zero
+        // height during automated tests, or during an initial resize that
+        // has not settled yet). If the terminal is unusably small, clear
+        // the screen and show a fallback message instead of panicking on
+        // layout constraints.
+        const MIN_WIDTH: u16 = 40;
+        const MIN_HEIGHT: u16 = 8;
+        if area.width < MIN_WIDTH || area.height < MIN_HEIGHT {
+            f.render_widget(Clear, area);
+            let msg = Paragraph::new(
+                "Terminal too small for session picker.\n\
+                 Please resize to at least 40×8 or press any key to start fresh.",
+            )
+            .alignment(Alignment::Center);
+            f.render_widget(msg, area);
+            return;
+        }
+
         f.render_widget(Clear, area);
 
         let dialog_width = area.width.clamp(40, 80);

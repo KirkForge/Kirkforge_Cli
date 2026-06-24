@@ -80,6 +80,13 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
                 "🔧 {} (done) — {} lines, {} bytes [Enter or Tab to expand]",
                 name, lines, bytes
             );
+            // Avoid two entries per tool call: if the most recent message
+            // is the matching "🔧 name ..." placeholder, replace it.
+            if let Some(last) = state.messages.last() {
+                if last.role == "tool" && last.content == format!("🔧 {} ...", name) {
+                    state.messages.pop();
+                }
+            }
             state
                 .messages
                 .push(ConversationEntry::tool(summary, output));
@@ -284,13 +291,12 @@ pub fn drain_approval_requests(
 ) {
     let mut any = false;
     while let Ok(req) = approval_rx.try_recv() {
-        // Deny any existing pending approval first
+        // Deny any existing pending approval first. With the
+        // `ApprovalResponder` drop-guard, simply dropping the old
+        // responder would also send `Denied`; we send explicitly here so
+        // the log records why.
         if let Some(old) = state.pending_approval.take() {
             if let Some(tx) = old.responder {
-                // The old approval is being superseded by a new one.
-                // If the executor's receiver is gone (cancelled /
-                // panicked), the send fails — log it so the regression
-                // is visible in the log.
                 if let Err(e) = tx.send(ApprovalResponse::Denied) {
                     tracing::warn!(
                         tool = "superseded approval",
@@ -329,6 +335,7 @@ pub fn drain_approval_requests(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::session::executor::ApprovalResponder;
     use crate::shared::{Config, Message, Role};
     use crate::tui::app::AppState;
     use tokio::sync::mpsc;
@@ -706,7 +713,7 @@ mod tests {
             .send(ApprovalRequest {
                 tool_name: "bash".into(),
                 args: serde_json::json!({"cmd": "rm -rf /"}),
-                response: old_tx,
+                response: ApprovalResponder::new(old_tx),
             })
             .unwrap();
 
@@ -716,7 +723,7 @@ mod tests {
             .send(ApprovalRequest {
                 tool_name: "edit_file".into(),
                 args: serde_json::json!({"path": "/etc/passwd"}),
-                response: new_tx,
+                response: ApprovalResponder::new(new_tx),
             })
             .unwrap();
 

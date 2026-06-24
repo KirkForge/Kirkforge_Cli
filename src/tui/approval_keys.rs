@@ -18,7 +18,7 @@
 
 use crate::session::executor::ApprovalResponse;
 use crate::tui::app::{AppState, ConversationEntry};
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 /// How many lines a PageUp / PageDown jumps. Mirrors the chat-view
 /// page size (10 lines) so the muscle memory carries over.
@@ -122,6 +122,15 @@ pub fn handle_approval_key(key: KeyEvent, state: &mut AppState) {
         None => return,
     };
 
+    // Ctrl+C while a model approval dialog is open: deny the pending
+    // operation and signal the app to exit. This mirrors the idle Ctrl+C
+    // behavior and prevents the executor from blocking on the oneshot
+    // response while the TUI is trying to shut down.
+    if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        deny_pending_approval_and_exit(approval, state);
+        return;
+    }
+
     let response = match key.code {
         KeyCode::Char('y') | KeyCode::Char('Y') => Some(ApprovalResponse::Approved),
         KeyCode::Char('n') | KeyCode::Char('N') => Some(ApprovalResponse::Denied),
@@ -203,13 +212,6 @@ pub fn handle_approval_key(key: KeyEvent, state: &mut AppState) {
         state.approval_scroll = 0;
         state.approval_max_scroll = 0;
         if let Some(tx) = approval.responder {
-            // If the executor's receiver is gone (cancelled / shut
-            // down / replaced by a newer approval), the send fails.
-            // Log it; the old `let _ =` hid this from the user and
-            // from CI logs. `?e` (Debug) rather than `%e` (Display)
-            // because `oneshot::error::SendError<T>` only impls
-            // `Debug`; using `%e` would force `T: Display` and
-            // `ApprovalResponse` doesn't impl Display.
             if let Err(e) = tx.send(resp) {
                 tracing::warn!(
                     tool = %approval.tool_name,
@@ -219,6 +221,29 @@ pub fn handle_approval_key(key: KeyEvent, state: &mut AppState) {
             }
         }
     }
+}
+
+/// Deny the pending approval and request a TUI shutdown.
+///
+/// Used when the user aborts the dialog with Ctrl+C or when the app is
+/// exiting with an unresolved approval in flight. Sends a reasoned denial
+/// so the model sees why the operation did not run, then sets the exit
+/// flag so the event loop terminates.
+fn deny_pending_approval_and_exit(approval: crate::tui::app::PendingApproval, state: &mut AppState) {
+    state.approval_scroll = 0;
+    state.approval_max_scroll = 0;
+    if let Some(tx) = approval.responder {
+        if let Err(e) = tx.send(ApprovalResponse::DeniedWithReason(
+            "User cancelled the approval dialog (Ctrl+C / exit)".into(),
+        )) {
+            tracing::warn!(
+                tool = %approval.tool_name,
+                error = ?e,
+                "approval responder dropped during exit-deny"
+            );
+        }
+    }
+    state.should_exit = true;
 }
 
 /// Push a permission rule into a `Vec<PermissionRule>`, deduplicating

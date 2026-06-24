@@ -1634,7 +1634,7 @@ impl Executor {
             .send(ApprovalRequest {
                 tool_name: tc.name.clone(),
                 args: tc.arguments.clone(),
-                response: response_tx,
+                response: ApprovalResponder::new(response_tx),
             })
             .map_err(|_| anyhow::anyhow!("approval channel closed"))?;
 
@@ -1768,7 +1768,57 @@ impl Executor {
 pub struct ApprovalRequest {
     pub tool_name: String,
     pub args: serde_json::Value,
-    pub response: tokio::sync::oneshot::Sender<ApprovalResponse>,
+    pub response: ApprovalResponder,
+}
+
+/// Wrapper around the executor's oneshot approval response sender.
+///
+/// The oneshot channel is the boundary between the executor (which waits on
+/// `response_rx.await`) and the TUI / line-mode handler (which waits for the
+/// user). If the handler drops the `Sender` without calling `send`, the
+/// executor sees `oneshot::error::RecvError` and surfaces the confusing
+/// "Approval channel closed" message. This wrapper guarantees that the
+/// sender is always consumed with a response: either the explicit one from
+/// the user, or `ApprovalResponse::Denied` if the pending approval is dropped
+/// (app shutdown, render error, superseded request, etc.).
+#[derive(Debug)]
+pub struct ApprovalResponder {
+    inner: Option<tokio::sync::oneshot::Sender<ApprovalResponse>>,
+}
+
+impl ApprovalResponder {
+    pub fn new(tx: tokio::sync::oneshot::Sender<ApprovalResponse>) -> Self {
+        Self { inner: Some(tx) }
+    }
+
+    /// Consume this responder and send `resp` back to the executor.
+    /// Returns `Ok(())` on success, or `Err` if the executor's receiver is
+    /// already gone (cancelled / shut down).
+    pub fn send(mut self, resp: ApprovalResponse) -> Result<(), ApprovalResponse> {
+        if let Some(tx) = self.inner.take() {
+            tx.send(resp)
+        } else {
+            // Already consumed or dropped once; shouldn't happen in normal
+            // use, but treat it as a closed channel by returning the value.
+            Err(resp)
+        }
+    }
+}
+
+impl Drop for ApprovalResponder {
+    fn drop(&mut self) {
+        if let Some(tx) = self.inner.take() {
+            // Always answer so the executor never blocks forever and never
+            // sees the generic "channel closed" error. Use a reasoned denial
+            // so the model (and user) can tell this was not an explicit
+            // user decision — it happened because the handler dropped the
+            // responder without sending a response (e.g. app shutdown, render
+            // panic, or a handler bug).
+            let _ = tx.send(ApprovalResponse::DeniedWithReason(
+                "approval responder dropped without a user decision".into(),
+            ));
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -8,7 +8,7 @@ mod tui;
 use clap::{Parser, Subcommand};
 use kirkforge_plugin::TrustTier;
 use kirkforge_plugin_host::TrustPolicy;
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -150,6 +150,12 @@ enum Command {
             conflicts_with = "auto_resume"
         )]
         attach: Option<String>,
+
+        /// Force line-mode (no TUI) even when stdout is a terminal.
+        /// Useful when the alternate screen is broken or you want plain
+        /// stdin/stdout interaction with explicit approval prompts.
+        #[arg(long)]
+        no_tui: bool,
     },
     /// Run the background session daemon.
     Daemon {
@@ -183,6 +189,7 @@ async fn main() -> anyhow::Result<()> {
             continue_session,
             auto_resume,
             attach,
+            no_tui,
         } => {
             run_session(RunArgs {
                 model,
@@ -197,6 +204,7 @@ async fn main() -> anyhow::Result<()> {
                 continue_session,
                 auto_resume,
                 attach,
+                no_tui,
             })
             .await
         }
@@ -217,6 +225,7 @@ struct RunArgs {
     continue_session: Option<String>,
     auto_resume: bool,
     attach: Option<String>,
+    no_tui: bool,
 }
 
 async fn run_session(args: RunArgs) -> anyhow::Result<()> {
@@ -233,6 +242,7 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
         continue_session,
         auto_resume,
         attach,
+        no_tui,
     } = args;
 
     let mut config = session::config::load_or_create_config();
@@ -301,9 +311,9 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
         }
     } else {
         // Try the daemon for a startup picker in TUI mode, or a hint in
-        // non-interactive mode.
+        // non-interactive / no-TUI mode.
         match daemon::client::try_list_recent().await? {
-            Some(sessions) if !sessions.is_empty() && !non_interactive => {
+            Some(sessions) if !sessions.is_empty() && !non_interactive && !no_tui => {
                 match tui::run_session_picker(sessions).await? {
                     Some(path) => {
                         tracing::info!(path = %path.display(), "resuming selected session");
@@ -448,19 +458,12 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
         tracing::info!("System prompt set from CLI: {}", sys);
     }
 
-    if non_interactive {
-        run_non_interactive(
-            shared_config,
-            adapter,
-            tools,
-            conversation,
-            system,
-            output,
-            max_turns,
-            &plugin_registry,
-        )
-        .await
-    } else {
+    // If stdout is not a real terminal (piped, redirected, detached pty),
+    // the TUI cannot render. Fall back to the same line-mode loop that
+    // --non-interactive uses, but read from stdin instead of a pre-baked
+    // prompt list so the user can still chat.
+    let use_tui = !no_tui && !non_interactive && std::io::stdout().is_terminal();
+    if use_tui {
         tui::run_tui(
             shared_config,
             adapter,
@@ -468,6 +471,19 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
             conversation,
             system,
             undo_stack,
+            &plugin_registry,
+        )
+        .await
+    } else {
+        run_line_mode(
+            shared_config,
+            adapter,
+            tools,
+            conversation,
+            system,
+            output,
+            max_turns,
+            non_interactive,
             &plugin_registry,
         )
         .await
@@ -491,24 +507,15 @@ fn spawn_non_interactive_approval_handler(
                 args = %req.args,
                 "non-interactive run denied approval for tool; use interactive mode or add a permission rule that explicitly allows this operation"
             );
-            if let Err(e) = req
-                .response
-                .send(session::executor::ApprovalResponse::DeniedWithReason(
-                    "non-interactive mode cannot approve destructive tools; use interactive mode or add a permission rule".into(),
-                ))
-            {
-                tracing::warn!(
-                    tool = %req.tool_name,
-                    error = ?e,
-                    "approval responder dropped before send (executor may have cancelled or shut down)"
-                );
-            }
+            let _ = req.response.send(session::executor::ApprovalResponse::DeniedWithReason(
+                "non-interactive mode cannot approve destructive tools; use interactive mode or add a permission rule".into(),
+            ));
         }
     });
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn run_non_interactive(
+async fn run_line_mode(
     config: crate::shared::SharedConfig,
     adapter: Box<dyn adapters::ModelAdapter>,
     tools: Vec<Arc<dyn tools::Tool>>,
@@ -516,8 +523,12 @@ async fn run_non_interactive(
     system: Option<String>,
     output: crate::shared::OutputFormat,
     max_turns: usize,
+    non_interactive: bool,
     plugin_registry: &kirkforge_plugin_host::PluginRegistry,
 ) -> anyhow::Result<()> {
+    // If running in non-interactive mode (scripted), deny all approvals.
+    // If running in line-mode interactive (no TUI), prompt on stderr and
+    // read from /dev/tty so the user can actually approve or deny.
     let model_name = adapter.model_info().name.clone();
 
     let mut executor = session::executor::Executor::with_log_and_undo_and_plugins(
@@ -529,13 +540,16 @@ async fn run_non_interactive(
         None,
         Some(plugin_registry),
     );
-    // Apply --system override before run_turn. Without this the
-    // override is silently dropped (was GPT 5.5 review finding #2).
     executor.set_system_override(system.clone());
 
     let (approval_tx, approval_rx) =
         mpsc::unbounded_channel::<session::executor::ApprovalRequest>();
-    spawn_non_interactive_approval_handler(approval_rx);
+
+    if non_interactive {
+        spawn_non_interactive_approval_handler(approval_rx);
+    } else {
+        spawn_line_mode_approval_handler(approval_rx);
+    }
 
     if let Some(sys) = &system {
         tracing::info!("System prompt set from CLI: {}", sys);
@@ -543,15 +557,6 @@ async fn run_non_interactive(
 
     let cancelled = std::sync::atomic::AtomicBool::new(false);
 
-    // Read prompts from stdin line-by-line. Review.md gap #2: the
-    // previous `read_to_string` + one-shot `run_turn` made scripting
-    // multi-turn sessions impossible. Newline-delimited input is
-    // pipe- and heredoc-friendly:
-    //
-    //   $ printf 'turn 1\nturn 2\nturn 3\n' | kirkforge run --non-interactive --max-turns 3
-    //
-    // Blank line ends input. `--max-turns 0` (the default) means
-    // "unlimited until EOF or a blank line."
     let stdin = std::io::stdin();
     let mut reader = stdin.lock();
     let mut line_buf = String::new();
@@ -574,11 +579,19 @@ async fn run_non_interactive(
             break;
         }
 
+        // Built-in slash commands in line mode (where there is no TUI
+        // key handler to intercept them). This makes `/exit` and
+        // `/quit` behave consistently with the TUI.
+        let trimmed = input.trim();
+        if trimmed == "/exit" || trimmed == "/quit" {
+            if output == crate::shared::OutputFormat::Text {
+                println!("Exiting.");
+            }
+            break;
+        }
+
         let turn_started_at = std::time::Instant::now();
         let events = executor.run_turn(&input, &approval_tx, &cancelled).await?;
-        // Per-turn wall-clock is recorded for tracing but not surfaced
-        // in the JSON summary — the summary's `duration_ms` is the
-        // overall wall-clock across all turns (set at end-of-loop).
         let _turn_duration_ms = turn_started_at.elapsed().as_millis() as u64;
         let turn_outcome = emit_turn_events(
             &events,
@@ -589,19 +602,9 @@ async fn run_non_interactive(
             &mut all_tool_records,
             &mut final_error,
         );
-        // If a turn errored fatally (e.g. JSON parse error after
-        // retry), the executor's event stream is the only signal —
-        // we keep going for subsequent turns unless the user
-        // passes `--max-turns 1`.
         let _ = turn_outcome;
     }
 
-    // Post-loop: if we never ran a turn and no `--system` was
-    // supplied, mirror the pre-M4 "No input provided" error. The
-    // pre-M4 check lived inside the single read; here we check
-    // after the loop because `next_prompt` filters blank lines
-    // into `None` and EOF is also `None` — both cases end up
-    // with `turn_no == 0`.
     if turn_no == 0 && system.is_none() {
         tracing::warn!("No input provided. Pipe a prompt or use --system.");
         return Ok(());
@@ -617,7 +620,7 @@ async fn run_non_interactive(
         let summary = crate::shared::SessionSummary {
             version: "1.0".into(),
             session: crate::shared::SessionInfo {
-                id: "non-interactive".into(),
+                id: if non_interactive { "non-interactive".into() } else { "line-mode".into() },
                 model: model_name,
                 duration_ms: total_duration_ms,
                 started_at: chrono::Local::now().to_rfc3339(),
@@ -635,14 +638,83 @@ async fn run_non_interactive(
         println!("{}", serde_json::to_string_pretty(&summary)?);
     }
 
-    // Ensure every token/tool-result emitted above is delivered to the
-    // pipe/terminal before the process exits. stdout is line-buffered
-    // when connected to a TTY, but block-buffered when piped; without
-    // this explicit flush the final bytes of a long assistant message
-    // can be lost on exit.
-    std::io::stdout().flush()?;
-
     Ok(())
+}
+
+/// Spawn an approval responder for interactive line mode.
+///
+/// When the TUI is disabled, destructive tool calls still need a human
+/// decision. This handler prints the request to stderr and reads a line
+/// from `/dev/tty` (the controlling terminal) so it does not compete
+/// with stdin prompt reading. `y`/`yes` approves; anything else denies.
+///
+/// The read is performed on a detached OS thread with a timeout so the
+/// process can still exit cleanly when stdin reaches EOF or the user
+/// types `/exit`/`Ctrl+D`: a tokio `spawn_blocking` thread would keep
+/// the runtime alive while it waits forever on a quiet terminal.
+fn spawn_line_mode_approval_handler(
+    mut approval_rx: mpsc::UnboundedReceiver<session::executor::ApprovalRequest>,
+) {
+    tokio::spawn(async move {
+        while let Some(req) = approval_rx.recv().await {
+            let args_preview = match serde_json::to_string_pretty(&req.args) {
+                Ok(s) => s,
+                Err(_) => req.args.to_string(),
+            };
+            eprintln!();
+            eprintln!("⚠️  Approval required: {}", req.tool_name);
+            eprintln!("{}", args_preview);
+            eprint!("Approve? [y/N]: ");
+            let _ = std::io::stderr().flush();
+
+            let tool_name = req.tool_name.clone();
+            let (answer_tx, answer_rx) = tokio::sync::oneshot::channel::<bool>();
+
+            // Detached thread: reads /dev/tty and sends the answer back.
+            std::thread::spawn(move || {
+                let mut answer = String::new();
+                let approved = match std::fs::OpenOptions::new().read(true).open("/dev/tty") {
+                    Ok(mut tty) => {
+                        use std::io::BufRead;
+                        let mut reader = std::io::BufReader::new(&mut tty);
+                        let _ = reader.read_line(&mut answer);
+                        let trimmed = answer.trim().to_ascii_lowercase();
+                        trimmed == "y" || trimmed == "yes"
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            tool = %tool_name,
+                            error = %e,
+                            "line-mode approval: no /dev/tty available; denying"
+                        );
+                        false
+                    }
+                };
+                // If the tokio side already timed out, this send is
+                // harmless; the leftover thread will exit once the user
+                // finally provides input or the process terminates.
+                let _ = answer_tx.send(approved);
+            });
+
+            let approved = tokio::time::timeout(
+                std::time::Duration::from_secs(120),
+                answer_rx,
+            )
+            .await
+            .map(|r| r.unwrap_or(false))
+            .unwrap_or_else(|_| {
+                eprintln!("\nApproval prompt timed out after 120 s; denying.");
+                false
+            });
+
+            let resp = if approved {
+                session::executor::ApprovalResponse::Approved
+            } else {
+                session::executor::ApprovalResponse::Denied
+            };
+            let _ = req.response.send(resp);
+        }
+    });
 }
 
 /// Serialize a JSON value and emit it as one stream-json line.
@@ -727,7 +799,14 @@ fn emit_turn_events(
                     });
                     print_json_line(&line);
                 } else if output == crate::shared::OutputFormat::Text {
-                    eprintln!("\n[tool: {}] {} chars", name, result.len());
+                    // Keep non-interactive output compact: one line per tool,
+                    // and only the body if it failed. Successful tool churn is
+                    // the main source of terminal spam.
+                    let status = if *success { "ok" } else { "FAIL" };
+                    eprintln!("[tool {} -> {}]", name, status);
+                    if !success {
+                        eprintln!("{}", result);
+                    }
                 }
                 // If we have a matching in-flight record, fold it
                 // into a ToolCallRecord and push. Name mismatch
@@ -1023,7 +1102,7 @@ mod tests {
         tx.send(session::executor::ApprovalRequest {
             tool_name: "bash".into(),
             args: serde_json::json!({"command": "rm -rf /"}),
-            response: oneshot_tx,
+            response: session::executor::ApprovalResponder::new(oneshot_tx),
         })
         .unwrap();
 

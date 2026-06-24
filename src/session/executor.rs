@@ -1370,7 +1370,7 @@ impl Executor {
             match verdict {
                 GuardVerdict::Allowed(resolved) => {
                     if tc.name == "edit_file" {
-                        if let GuardVerdict::Denied(msg) = self.read_gate.check_edit(path) {
+                        if let GuardVerdict::Denied(msg) = self.read_gate.check_edit(path, &resolved) {
                             let denied = format!("🔒 Access denied: {msg}");
                             events.push(TurnEvent::ToolResult {
                                 name: tc.name.clone(),
@@ -3688,6 +3688,75 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_read_image_honours_path_guard_size_limit() {
+        let tmp = std::env::temp_dir().join(format!(
+            "kirkforge_oversized_image_test_{}.png",
+            std::process::id()
+        ));
+        // Write one byte over the default 1 MiB max_file_read_size.
+        let oversized = vec![0xFF; 1024 * 1024 + 1];
+        std::fs::write(&tmp, oversized).expect("write oversized image");
+        let _cleanup = CleanupFile(tmp.clone());
+
+        let captured = Arc::new(Mutex::new(None));
+        let tool = MockTool {
+            def: ToolDef {
+                name: "read_image",
+                description: "read image",
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {"path": {"type": "string"}}
+                }),
+            },
+            captured_args: captured.clone(),
+            outcome: ToolOutcome::Image {
+                path: tmp.clone(),
+                mime: "image/png".into(),
+                data_base64: String::new(),
+            },
+        };
+
+        let adapter = MockAdapter::new(
+            vec![
+                StreamEvent::ToolCall(ToolInvocation {
+                    id: "call-1".into(),
+                    name: "read_image".into(),
+                    arguments: serde_json::json!({"path": tmp.to_string_lossy()}),
+                }),
+                StreamEvent::Done {
+                    finish_reason: FinishReason::ToolCalls,
+                    usage: None,
+                },
+            ],
+            make_info(),
+        );
+
+        let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
+        let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(true));
+        let events = exe
+            .run_turn("read image", &approval_tx, never_cancelled())
+            .await
+            .unwrap();
+
+        assert!(
+            captured.lock().unwrap().is_none(),
+            "oversized read_image must be blocked before reaching the tool"
+        );
+        let denied = events.iter().any(|e| {
+            matches!(
+                e,
+                TurnEvent::ToolResult { name, output, .. }
+                    if name == "read_image" && output.contains("too large")
+            )
+        });
+        assert!(
+            denied,
+            "Expected read_image size-denial, got events: {:?}",
+            events
+        );
+    }
+
+    #[tokio::test]
     async fn test_plan_mode_allows_read_only_bash() {
         let captured = Arc::new(Mutex::new(None));
         let tool = MockTool {
@@ -4451,8 +4520,13 @@ mod tests {
             }
         });
 
+        // Second turn: same command should now match the rule and run
+        // without sending an approval request. The timeout is generous
+        // because this test suite is heavily parallel and a 300 ms wall
+        // clock would flake under load; the goal is only to detect an
+        // infinite hang caused by a misplaced approval prompt.
         let second_events = tokio::time::timeout(
-            std::time::Duration::from_millis(300),
+            std::time::Duration::from_secs(5),
             exe.run_turn("run tests again", &approval_tx2, never_cancelled()),
         )
         .await

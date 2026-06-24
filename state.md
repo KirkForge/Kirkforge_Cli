@@ -4,7 +4,7 @@ Generated: 2026-06-23 22:50 UTC
 
 ## Quality gates (last run)
 
-- `cargo test` — 817 passed; 7 integration tests ignored (need Ollama).
+- `cargo test` — 819 passed; 7 integration tests ignored (need Ollama).
 - `cargo clippy --all-targets -- -D warnings` — clean.
 - `cargo build --release` — clean; binary at `target/release/kirkforge`.
 
@@ -25,6 +25,10 @@ Generated: 2026-06-23 22:50 UTC
 - [x] **Bash permission deny rules get prefix semantics.** A `Deny` rule like `rm -rf /` now blocks `rm -rf /home` and `rm -rf /; echo`. Allow/Ask rules stay anchored, and lone `*` is promoted to `**` only for `Deny` rules.
 - [x] **Tracing fallback no longer panics on missing `/dev/null`.** `init_tracing` uses a `LogWriter` that falls back to `std::io::sink()`.
 - [x] **`/save` slash command now checks `PathGuard::check_write`.** Writes outside the sandbox/deny-list are rejected.
+- [x] **Safe indexing in TUI `keys.rs` hot path.** Replaced `unwrap()` after `rfind` with `let-else` fallbacks in `delete_word_backward`.
+- [x] **ReadGate uses the resolved canonical path for edit checks.** `ReadGate::check_edit` now takes the resolved path from `PathGuard`, avoiding a second canonicalization round and fallback mismatch.
+- [x] **Flaky executor test timeout relaxed.** `test_always_approve_rule_round_trips_to_next_turn` now uses a 5-second timeout instead of 300 ms so it no longer flakes under parallel test load.
+- [x] **Docs and ADRs updated.** `review.md` and `README.md` refreshed with current capabilities and test count; added ADRs 014 (background bash jobs), 015 (undo stack), and 016 (`/save` transcript).
 
 ## Remaining gaps (prioritized for tomorrow)
 
@@ -39,55 +43,45 @@ Generated: 2026-06-23 22:50 UTC
 
 4. ~~**`edit_file` replaces only the first occurrence.**~~
 
-5. **`PathGuard` default is fail-open.**
-   - `PathGuard::default()` has `sandbox_dir: None` and `allowed_write_dirs: vec![]`, so writes are only restricted by deny-list and extensions.
-   - This is intentional but dangerous; `warn_if_unsandboxed` only logs a `tracing::warn!`, which the TUI user never sees.
-   - Fix: surface the unsandboxed warning in the TUI startup banner and add a one-time system message.
+5. ~~**`PathGuard` default is fail-open / unsandboxed warning missing.**~~
+   - `PathGuard::default()` remains fail-open by design, but the TUI now surfaces the unsandboxed posture via a startup banner, a system message, and a status-bar indicator.
 
-6. **`read_image` may not honor `max_read_size` / binary guard.**
-   - Need to verify `src/tools/read_image.rs` applies `PathGuard::check_read` before loading pixels.
+6. ~~**`read_image` may not honor `max_read_size` / binary guard.**~~
+   - Confirmed: `dispatch_tool_call` applies `PathGuard::check_read` before the tool runs; `read_image` executor test added as a regression guard.
 
 ### P2 — robustness / edge cases
 
-7. **Bash drain can wedge if `join_drain` stalls.**
-   - `run_shell` joins drain tasks with a fixed 10 s timeout only inside `join_drain`? Actually `join_drain` awaits directly; the timeout is only on the timeout path.
-   - On normal exit, a misbehaving child that does not close its stdout could block the join forever.
-   - Fix: always wrap drain joins with `tokio::time::timeout`.
+7. ~~**Bash drain can wedge if `join_drain` stalls.**~~
+   - `join_drain` now wraps its `handle.await` with `tokio::time::timeout(Duration::from_secs(5))`.
 
-8. **TUI `keys.rs` has unchecked `unwrap()` on `chars().next()`.**
-   - `src/tui/keys.rs:78`, `:87`, `:96` assume a character exists at the found position; positions come from `rfind`, so they should be valid, but the code should use safe indexing or explicit asserts.
-   - Risk is low but these are in the hot input path.
+8. ~~**TUI `keys.rs` has unchecked `unwrap()` on `chars().next()`.**~~
+   - Replaced with `let-else` fallbacks in `delete_word_backward`.
 
 9. ~~**Tracing file-layer fallback panics if `/dev/null` is unavailable.**~~
 
-10. **Read-before-edit canonicalization fallback is unsafe?**
-    - `ReadGate::mark_read` and `was_read` fall back to the unresolved literal path. A symlink outside the sandbox could be read, then the edit path canonicalized differently.
-    - Verify the gate only canonicalizes after the PathGuard check_read returns the canonical path, and that `mark_read` uses that canonical path.
+10. ~~**Read-before-edit canonicalization fallback is unsafe?**~~
+    - `ReadGate::check_edit` now takes the resolved canonical path from `PathGuard`, eliminating the second canonicalization and fallback mismatch.
 
 11. ~~**`/save` slash command writes outside PathGuard.**~~
 
+12. ~~**Flaky executor test under parallel load.**~~
+    - `test_always_approve_rule_round_trips_to_next_turn` timeout increased from 300 ms to 5 s; full suite now passes.
+
 ### P3 — UI polish / docs
 
-12. **Tool-card search expansion not implemented.**
+13. **Tool-card search expansion not implemented.**
     - Pressing `Enter` on a search match should expand the collapsed tool card and scroll to the match; currently search only highlights in already-rendered text.
 
-13. **No copy-to-clipboard keybinding for code blocks.**
+14. **No copy-to-clipboard keybinding for code blocks.**
     - Users expect a key (e.g. `c` over a focused code block or `Ctrl+Shift+C` in code-block context) to copy a single code block.
+    - Note: `Ctrl+Shift+B` already copies the most recent assistant code block; per-block focus is not yet implemented.
 
-14. **Streaming render still re-highlights on every token.**
-    - The chat render cache helps, but search-highlight invalidation during streaming could be cheaper. Verify we only recompute spans when the content actually changes.
+15. ~~**Docs drift.**~~
+    - `review.md` test count and capability list updated.
+    - `README.md` updated with `/save`, permission-rule semantics, and `/commit --push` details.
+    - ADRs 014, 015, 016 added for background bash jobs, undo stack, and `/save` transcript.
 
-15. **Docs drift.**
-    - `review.md` numbers are stale (unit test count, gap list).
-    - `README.md` mentions `/model`, `/compact`, but not `/save` or `/commit --push` details.
-    - No ADR for the subagent persona subsystem, background bash jobs, undo stack, or `/save` transcript feature.
+## Remaining recommended work
 
-## Tomorrow’s recommended order
-
-1. P1 `PathGuard` fail-open warning: surface unsandboxed mode in the TUI startup banner and a one-time system message.
-2. P1 verify `read_image` honors `max_read_size` / binary guard via `PathGuard::check_read`.
-3. P2 bash drain wedging: always wrap drain joins with `tokio::time::timeout`.
-4. P2 safe indexing in `src/tui/keys.rs` hot path (replace `unwrap()` with explicit asserts or safe indexing).
-5. P2 read-before-edit canonicalization audit: ensure `ReadGate` records the canonical path returned by `PathGuard::check_read`.
-6. Update `review.md`, `README.md`, and add/update ADRs for the recent changes.
-7. Pick a live regression target outside this repo and track it in that repo’s own `state.md`.
+1. P3 tool-card search expansion and code-block copy keybinding.
+2. Pick a live regression target outside this repo and track it in that repo’s own `state.md`.

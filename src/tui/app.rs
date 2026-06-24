@@ -277,6 +277,12 @@ pub struct AppState {
     /// status bar. Example: "🔒2 ⚡1". `None` when no plugins are loaded.
     pub plugin_status: Option<String>,
 
+    // ── PathGuard sandbox indicator (v1.2-p12 follow-up) ─────────────
+    /// If true, the session is intentionally unsandboxed. The TUI chat
+    /// banner and status bar surface this so the operator sees the
+    /// posture, not just a tracing log line.
+    pub unsandboxed: bool,
+
     // ── Frame-pacing v2: render-on-state-change ───────────────────
     /// Set to `true` whenever `state` mutates in a way that should
     /// produce a redraw. The event loop checks this flag at the top
@@ -346,6 +352,7 @@ impl AppState {
             undo_stack: None,
             session_picker: None,
             plugin_status: None,
+            unsandboxed: false,
             // Start dirty so the first frame draws immediately (the
             // connection banner / status bar are non-empty even with
             // zero state mutations).

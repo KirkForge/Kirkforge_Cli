@@ -199,6 +199,23 @@ pub async fn run_tui(
     // the SIGHUP / reconnect signal path.
     state.connection = probe_ollama_connection(&cfg_for_startup).await;
 
+    // Surface PathGuard sandbox posture in the TUI. `freeze_launch_sandbox`
+    // already set `sandbox_dir` to the cwd by default, so `unsandboxed`
+    // only becomes true if the operator explicitly cleared it or set an
+    // empty `allowed_write_dirs` with no sandbox.
+    {
+        let cfg_for_guard = crate::shared::read_shared_config(&shared_config);
+        let (_, path_guard, _) = crate::session::access::access_from_config(&cfg_for_guard);
+        state.unsandboxed = !path_guard.is_sandboxed();
+    }
+    if state.unsandboxed {
+        state.messages.push(crate::tui::app::ConversationEntry::new(
+            "system",
+            "⚠️  PathGuard is unsandboxed: no `sandbox_dir` or `allowed_write_dirs` configured. \
+             Model-driven writes are not restricted to a directory tree. Set `sandbox_dir` in config.toml or via KIRKFORGE_SANDBOX_DIR, or list `allowed_write_dirs`.",
+        ));
+    }
+
     // Skills — load project-local SKILL.md files and plugin directories,
     // then layer the built-in skills on top. (Missing dirs are silently skipped,
     // so an empty project is fine.)

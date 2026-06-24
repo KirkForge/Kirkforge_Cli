@@ -3,7 +3,7 @@ use crate::tui::app::{AppState, ConnectionState};
 use crate::tui::rendering::{format_budget_indicator, format_duration, format_token_count};
 use ratatui::{
     layout::Rect,
-    style::{Color, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
     Frame,
@@ -87,10 +87,22 @@ pub fn render_status(f: &mut Frame, area: Rect, state: &AppState) {
         )
     };
 
+    // ── Sandbox indicator (v1.2-p12 follow-up) ─────────────────────
+    // Shown in the status bar only when PathGuard is unsandboxed.
+    let sandbox_span: Span = if state.unsandboxed {
+        Span::styled(
+            "⚠️ UNSANDBOXED ".to_string(),
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        )
+    } else {
+        Span::raw(String::new())
+    };
+
     // Compute the spacer width from the actual rendered span widths.
     // `Span::content` is the unstyled text length; we use that for
     // layout math and rebuild with the styled spans for display.
     let right_visible_len: usize = [
+        sandbox_span.content.chars().count(),
         skills_span.content.chars().count(),
         plugin_span.content.chars().count(),
         sent_span.content.chars().count(),
@@ -126,6 +138,7 @@ pub fn render_status(f: &mut Frame, area: Rect, state: &AppState) {
                 .bg(Color::Black),
         ),
         Span::styled(spacing, Style::default()),
+        sandbox_span,
         skills_span,
         plugin_span,
         sent_span,

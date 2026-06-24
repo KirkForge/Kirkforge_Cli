@@ -29,11 +29,10 @@
 //!
 //! # Size cap
 //!
-//! No explicit cap; the adapter layer doesn't enforce one either.
-//! Practical limit is whatever the model server accepts (OpenAI
-//! vision caps at ~20 MB; Ollama native has no documented cap).
-//! `Config::max_file_read_size` applies to text files only, not
-//! binary — the tool reads the raw bytes regardless.
+//! The executor applies `PathGuard::check_read` before this tool runs,
+//! so `Config::max_file_read_size` and the binary-read guard are both
+//! enforced at the dispatch layer. The tool itself reads the raw bytes
+//! once the guard has approved the path and size.
 use crate::shared::{ToolDef, ToolOutcome};
 use crate::tools::Tool;
 use std::path::PathBuf;

@@ -26,15 +26,15 @@ cargo run -- daemon
 - **TUI chat** with conversation search, copy-to-clipboard, and model hot-swap (`/model`).
 - **File tools** (`read_file`, `write_file`, `edit_file`) with approval gates, diff previews, and `/undo`.
 - **Bash tool** and `!` passthrough, sandboxed to a configurable working directory.
-- **Session management** — `/fork`, `/resume`, `/sessions`, plus `--continue-session`, `--auto-resume`, and `--attach`.
+- **Session management** — `/fork`, `/resume`, `/sessions`, `/save`, plus `--continue-session`, `--auto-resume`, and `--attach`.
 - **Session daemon** — background process tracks the last 5 sessions; the TUI shows a startup picker unless you resume explicitly.
 - **Config hot-reload** — edit `config.toml` and type `/reload` (or send `SIGHUP`) to update access control live.
-- **Permission rules** — Claude-Code-style allow/ask/deny rules per command/path; see the config example.
+- **Permission rules** — Claude-Code-style allow/ask/deny rules per command/path; `Deny` rules use prefix matching while `Allow`/`Ask` rules stay anchored.
 - **Multimodal** — `read_image` for screenshots and images.
 - **MCP tools** — optional external tool servers via `[[mcp_servers]]` in config.
 - **Enforced plan mode** — `/plan` locks the executor to read-only tools until you type `/implement`.
 - **Subagent personas** — `/explore`, `/plan`, and `/coder` run isolated fork sessions with restricted toolsets and merge a summary back.
-- **Safe git commit helper** — `/commit` runs pre-commit sanitation (large files, secrets, conflict markers) and suggests a conventional-commit message; `/commit --push "message"` commits and pushes.
+- **Safe git commit helper** — `/commit` shows status, runs pre-commit sanitation (large files, secrets, conflict markers, unstaged debris) and suggests a conventional-commit message; `/commit "message"` stages all changes and commits after sanitation; `/commit --push "message"` also pushes.
 
 ## Config
 

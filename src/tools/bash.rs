@@ -369,16 +369,25 @@ pub async fn run_shell(
     }
 }
 
-/// Join a drain task, awaiting its result. The `label` is used purely
-/// for error messages so a stuck/panicked task is debuggable.
+/// Join a drain task, awaiting its result with a bounded timeout.
+///
+/// The `label` is used purely for error messages so a stuck/panicked
+/// task is debuggable. The timeout prevents a misbehaving child that
+/// never closes its stdout/stderr from wedging the whole turn.
+const DRAIN_JOIN_TIMEOUT: Duration = Duration::from_secs(5);
+
 async fn join_drain(
     handle: tokio::task::JoinHandle<std::io::Result<(Vec<u8>, u64)>>,
     label: &str,
 ) -> Result<(Vec<u8>, u64), String> {
-    match handle.await {
-        Ok(Ok(pair)) => Ok(pair),
-        Ok(Err(e)) => Err(format!("drain {}: {}", label, e)),
-        Err(e) => Err(format!("drain {} task panicked: {}", label, e)),
+    match tokio::time::timeout(DRAIN_JOIN_TIMEOUT, handle).await {
+        Ok(Ok(Ok(pair))) => Ok(pair),
+        Ok(Ok(Err(e))) => Err(format!("drain {}: {}", label, e)),
+        Ok(Err(e)) => Err(format!("drain {} task panicked: {}", label, e)),
+        Err(_) => Err(format!(
+            "drain {}: task did not finish within {:?}",
+            label, DRAIN_JOIN_TIMEOUT
+        )),
     }
 }
 

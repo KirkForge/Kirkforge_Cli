@@ -75,7 +75,12 @@ fn delete_word_backward(input: &str, cursor_byte: usize) -> (String, usize) {
         before
             .rfind(|c: char| !c.is_whitespace())
             .map(|pos| {
-                let ch = before[pos..].chars().next().unwrap();
+                // `rfind` returned a char boundary; the char must exist.
+                // We defensively fall back to `pos` rather than panic on
+                // an empty slice (which cannot happen for valid UTF-8).
+                let Some(ch) = before[pos..].chars().next() else {
+                    return pos;
+                };
                 pos + ch.len_utf8()
             })
             .unwrap_or(0)
@@ -84,7 +89,11 @@ fn delete_word_backward(input: &str, cursor_byte: usize) -> (String, usize) {
         // whether to also kill the preceding whitespace run.
         match before.rfind(|c: char| c.is_whitespace()) {
             Some(pos) => {
-                let ch = before[pos..].chars().next().unwrap();
+                // `rfind` returned a char boundary; fall back to `pos`
+                // if the slice is somehow empty.
+                let Some(ch) = before[pos..].chars().next() else {
+                    return (input[..pos].to_string(), input[..pos].chars().count());
+                };
                 let word_start = pos + ch.len_utf8();
                 let has_prev_word = before[..word_start]
                     .chars()
@@ -93,7 +102,11 @@ fn delete_word_backward(input: &str, cursor_byte: usize) -> (String, usize) {
                     before[..word_start]
                         .rfind(|c: char| !c.is_whitespace())
                         .map(|prev_pos| {
-                            let prev_ch = before[prev_pos..].chars().next().unwrap();
+                            // `rfind` returned a char boundary; fall back to
+                            // `prev_pos` if the slice is somehow empty.
+                            let Some(prev_ch) = before[prev_pos..].chars().next() else {
+                                return prev_pos;
+                            };
                             prev_pos + prev_ch.len_utf8()
                         })
                         .unwrap_or(0)

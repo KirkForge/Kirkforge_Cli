@@ -231,6 +231,21 @@ fn render_entry_lines(
 pub fn render_chat(f: &mut Frame, area: Rect, state: &mut AppState) {
     let mut lines: Vec<Line> = Vec::new();
 
+    // Sandbox posture banner (always visible if unsandboxed).
+    if state.unsandboxed {
+        lines.push(Line::from(vec![
+            Span::styled(
+                " ⚠️  Unsandboxed ",
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                "PathGuard: model writes are not restricted to any directory tree.",
+                Style::default().fg(Color::Yellow),
+            ),
+        ]));
+        lines.push(Line::from(""));
+    }
+
     // Connection banner at top (only when not connected, so the first
     // message starts at the top of the panel once we're online).
     match &state.connection {
@@ -458,6 +473,7 @@ mod tests {
         let config = Arc::new(std::sync::RwLock::new(crate::shared::Config::default()));
         let mut state = AppState::new(config);
         state.connection = connection;
+        state.unsandboxed = false;
         state
     }
 

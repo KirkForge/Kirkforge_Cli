@@ -440,6 +440,10 @@ impl ReadGate {
     }
 
     /// Record that `path` was read (after path-guard approval).
+    ///
+    /// Prefer passing the canonical path returned by [`PathGuard::check_read`]
+    /// so the gate stores the resolved real path rather than a user-supplied
+    /// literal that may contain relative components or symlinks.
     pub fn mark_read(&mut self, path: &Path) {
         // Canonicalize if possible for consistent matching
         let key = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
@@ -454,8 +458,14 @@ impl ReadGate {
 
     /// Check that `path` was read before edit. Returns a denial reason
     /// if not.
-    pub fn check_edit(&self, path: &Path) -> GuardVerdict {
-        if self.was_read(path) {
+    ///
+    /// `resolved` is the canonical path produced by the path guard (e.g. the
+    /// return value of [`PathGuard::check_read`] or [`PathGuard::check_write`]).
+    /// Using the resolved path avoids a second canonicalization round and
+    /// prevents a malicious/ambiguous literal path from bypassing the gate.
+    pub fn check_edit(&self, path: &Path, resolved: &Path) -> GuardVerdict {
+        let key = resolved.canonicalize().unwrap_or_else(|_| resolved.to_path_buf());
+        if self.read_files.contains(&key) {
             GuardVerdict::Allowed(path.to_path_buf())
         } else {
             GuardVerdict::Denied(format!(
@@ -700,10 +710,10 @@ mod tests {
         let mut gate = ReadGate::new();
         let p = Path::new("/tmp/kirkforge_read_gate_test.txt");
         // Not read yet
-        assert!(matches!(gate.check_edit(p), GuardVerdict::Denied(_)));
+        assert!(matches!(gate.check_edit(p, p), GuardVerdict::Denied(_)));
         // Mark as read
         gate.mark_read(p);
-        assert!(matches!(gate.check_edit(p), GuardVerdict::Allowed(_)));
+        assert!(matches!(gate.check_edit(p, p), GuardVerdict::Allowed(_)));
     }
 
     #[test]
@@ -712,7 +722,22 @@ mod tests {
         let p = Path::new("/tmp/kirkforge_clear_test.txt");
         gate.mark_read(p);
         gate.clear();
-        assert!(matches!(gate.check_edit(p), GuardVerdict::Denied(_)));
+        assert!(matches!(gate.check_edit(p, p), GuardVerdict::Denied(_)));
+    }
+
+    #[test]
+    fn test_read_gate_uses_resolved_path_for_lookup() {
+        // The gate should match the resolved canonical key even when the
+        // display path and the resolved path differ in form.
+        let mut gate = ReadGate::new();
+        let display = Path::new("/tmp/../tmp/kirkforge_resolved_test.txt");
+        let resolved = Path::new("/tmp/kirkforge_resolved_test.txt");
+        gate.mark_read(resolved);
+        assert!(matches!(gate.check_edit(display, resolved), GuardVerdict::Allowed(_)));
+
+        // A different resolved key that was never read should still be denied.
+        let other = Path::new("/tmp/kirkforge_other_test.txt");
+        assert!(matches!(gate.check_edit(display, other), GuardVerdict::Denied(_)));
     }
 
     // ── warn_if_unsandboxed ─────────────────────────────────────────

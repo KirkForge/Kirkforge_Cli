@@ -42,16 +42,26 @@ pub type UndoStackRef = Arc<Mutex<crate::session::undo::UndoStack>>;
 /// hand-crafted `<tool_call>` invocation in the prompt is the user's
 /// problem rather than a server-side 400. The default is `false`
 /// (conservative — most Ollama-local models aren't vision-capable).
-pub fn all_tools(undo_stack: Option<UndoStackRef>, supports_images: bool) -> Vec<Arc<dyn Tool>> {
+pub fn all_tools(
+    undo_stack: Option<UndoStackRef>,
+    supports_images: bool,
+    deny_list: crate::session::access::DenyList,
+    path_guard: crate::session::access::PathGuard,
+    bash_sandbox_workdir: bool,
+) -> Vec<Arc<dyn Tool>> {
     let mut tools: Vec<Arc<dyn Tool>> = vec![
         Arc::new(read_file::ReadFile),
         Arc::new(write_file::WriteFile::new(undo_stack.clone())),
         Arc::new(edit_file::EditFile::new(undo_stack)),
-        Arc::new(bash::Bash),
+        Arc::new(bash::Bash::new(
+            deny_list.clone(),
+            path_guard.clone(),
+            bash_sandbox_workdir,
+        )),
         Arc::new(bash_status::BashStatus),
         Arc::new(bash_cancel::BashCancel),
-        Arc::new(grep::Grep),
-        Arc::new(glob::Glob),
+        Arc::new(grep::Grep::new(path_guard.clone())),
+        Arc::new(glob::Glob::new(path_guard)),
     ];
     if supports_images {
         tools.push(Arc::new(read_image::ReadImage));

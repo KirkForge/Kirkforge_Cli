@@ -4,6 +4,7 @@
 //! transcript to a file. The user can then open or share the file like a
 //! Claude Code transcript.
 
+use crate::session::access::{access_from_config, GuardVerdict};
 use crate::tui::app::AppState;
 use std::path::PathBuf;
 
@@ -16,6 +17,15 @@ use std::path::PathBuf;
 /// Returns a user-visible status string.
 pub fn handle_save_command(args: &str, state: &AppState) -> String {
     let path = resolve_save_path(args, state);
+
+    // Apply the same PathGuard write check that write_file/edit_file go
+    // through. `/save` writes user data to disk, so it must respect the
+    // sandbox and deny list.
+    let cfg = crate::shared::read_shared_config(&state.config);
+    let (_deny_list, path_guard, _read_gate) = access_from_config(&cfg);
+    if let GuardVerdict::Denied(msg) = path_guard.check_write(&path) {
+        return format!("🔒 Access denied: {msg}");
+    }
 
     let transcript = crate::tui::transcript::format_transcript(
         &state.session_id,

@@ -27,11 +27,13 @@
 //!
 //! **Note on `*` vs `**`:** the matcher treats `*` as "zero-or-more
 //! chars in the current path segment" — it does **not** cross `/`.
-//! For `bash` `command` rules the matcher automatically promotes lone
-//! `*` to `**`, so `rm -rf *` blocks absolute paths too. For `path`
-//! rules (e.g. `edit_file` with `key = "path"`) `*` keeps its
-//! one-segment meaning, so `src/*.rs` matches `src/main.rs` but not
-//! `src/lib/utils.rs`. Prefer explicit `**` when writing cross-slash
+//! For `bash` `command` rules with `action = "deny"` the matcher
+//! automatically promotes lone `*` to `**`, so `rm -rf *` blocks
+//! absolute paths too. Allow/Ask rules do **not** get that promotion;
+//! write explicit `**` if you really intend a cross-slash match.
+//! For `path` rules (e.g. `edit_file` with `key = "path"`) `*` keeps
+//! its one-segment meaning, so `src/*.rs` matches `src/main.rs` but
+//! not `src/lib/utils.rs`. Prefer explicit `**` when writing cross-slash
 //! path rules.
 //!
 //! Rules are evaluated in declaration order — first match wins. The
@@ -75,8 +77,9 @@ pub enum PermissionAction {
 ///   including `/`. `*` matches zero-or-more chars in a single path
 ///   segment and does **not** cross `/` — useful for path patterns
 ///   where you want `src/*.rs` to mean "one segment". For `bash`
-///   `command` rules, lone `*` is automatically promoted to `**` so
-///   shell-command patterns block paths across `/`. `?` matches
+///   `command` rules with `action = "deny"`, lone `*` is automatically
+///   promoted to `**` so deny patterns block paths across `/`. Allow/Ask
+///   rules use the literal pattern (do not promote `*`). `?` matches
 ///   exactly one char. Plain strings match exactly. Empty pattern
 ///   matches only an empty value.
 /// - `action` — what to do on match.
@@ -195,14 +198,20 @@ pub fn evaluate(
         match args.get(&rule.key) {
             Some(v) => match v.as_str() {
                 Some(s) => {
-                    let normalized;
-                    let pattern: &str = if rule.tool == "bash" && rule.key == "command" {
-                        normalized = normalize_command_pattern(&rule.pattern);
-                        &normalized
+                    let matched = if rule.tool == "bash"
+                        && rule.key == "command"
+                        && matches!(rule.action, PermissionAction::Deny)
+                    {
+                        // Deny rules for bash commands get prefix semantics and
+                        // have lone `*` promoted to `**` so blocklists cover paths.
+                        deny_command_matches(&rule.pattern, s)
                     } else {
-                        &rule.pattern
+                        // Allow/Ask rules stay anchored and do NOT promote `*` to
+                        // `**`, so a permissive allow rule cannot silently authorize
+                        // chained commands across path separators.
+                        glob_match(&rule.pattern, s)
                     };
-                    if glob_match(pattern, s) {
+                    if matched {
                         return rule.action;
                     }
                     // Pattern didn't match — keep scanning.
@@ -225,6 +234,34 @@ pub fn evaluate(
 /// Tool-name matching: exact, or `"*"` wildcard.
 fn tool_matches(pattern: &str, tool: &str) -> bool {
     pattern == "*" || pattern == tool
+}
+
+/// Deny-rule matcher for bash `command` patterns.
+///
+/// First tries the regular anchored glob match (with lone `*` promoted
+/// to `**`). If that fails, treats patterns ending with a path separator
+/// `/` or whitespace as a prefix, so a deny rule like `rm -rf /` blocks
+/// `rm -rf /home` and `rm -rf /; echo`. This matches user intent: a deny
+/// without a wildcard is meant to refuse the command and anything under
+/// it, not only the exact literal string.
+///
+/// Allow/Ask rules keep the stricter anchored semantics so a rule like
+/// `git status` does not accidentally permit `git status; rm -rf /`.
+fn deny_command_matches(pattern: &str, command: &str) -> bool {
+    let normalized = normalize_command_pattern(pattern);
+    if glob_match(&normalized, command) {
+        return true;
+    }
+    // Prefix deny: a pattern ending with a path or word boundary denies
+    // any command that starts with it.
+    if (normalized.ends_with('/')
+        || normalized.ends_with(' ')
+        || normalized.ends_with('\t'))
+        && command.starts_with(&normalized)
+    {
+        return true;
+    }
+    false
 }
 
 /// Normalize a bare `*` to `**` for bash `command` patterns.
@@ -598,6 +635,80 @@ mod tests {
             ),
             PermissionAction::Deny,
             "single * in command rule should still match slash-free args"
+        );
+    }
+
+    /// A Deny bash rule without a wildcard but ending in `/` acts as a
+    /// prefix, blocking commands that would operate inside that path.
+    #[test]
+    fn test_evaluate_deny_command_prefix_blocks_subpaths() {
+        let rules = vec![rule("bash", "command", "rm -rf /", PermissionAction::Deny)];
+        assert_eq!(
+            evaluate(
+                &rules,
+                "bash",
+                &json!({"command": "rm -rf /home/user"}),
+                PermissionAction::Ask
+            ),
+            PermissionAction::Deny,
+            "rm -rf / should deny rm -rf /home/user"
+        );
+        assert_eq!(
+            evaluate(
+                &rules,
+                "bash",
+                &json!({"command": "rm -rf /; echo done"}),
+                PermissionAction::Ask
+            ),
+            PermissionAction::Deny,
+            "rm -rf / should deny chained rm -rf /; echo"
+        );
+        // Exact match still works.
+        assert_eq!(
+            evaluate(
+                &rules,
+                "bash",
+                &json!({"command": "rm -rf /"}),
+                PermissionAction::Ask
+            ),
+            PermissionAction::Deny
+        );
+        // Different command is not denied.
+        assert_eq!(
+            evaluate(
+                &rules,
+                "bash",
+                &json!({"command": "rm -rf /home"}),
+                PermissionAction::Ask
+            ),
+            PermissionAction::Deny,
+            "/home is also under /"
+        );
+    }
+
+    /// Allow/Ask bash rules stay anchored: a literal `git status` rule
+    /// does not permit a chained destructive command.
+    #[test]
+    fn test_evaluate_allow_command_stays_anchored() {
+        let rules = vec![rule("bash", "command", "git status", PermissionAction::Allow)];
+        assert_eq!(
+            evaluate(
+                &rules,
+                "bash",
+                &json!({"command": "git status"}),
+                PermissionAction::Ask
+            ),
+            PermissionAction::Allow
+        );
+        assert_eq!(
+            evaluate(
+                &rules,
+                "bash",
+                &json!({"command": "git status; rm -rf /"}),
+                PermissionAction::Ask
+            ),
+            PermissionAction::Ask,
+            "anchored allow rule must not match chained command"
         );
     }
 

@@ -1,3 +1,4 @@
+use crate::session::access::{GuardVerdict, PathGuard};
 use crate::shared::{Match as SearchMatch, ToolDef, ToolOutcome};
 use crate::tools::Tool;
 use std::path::PathBuf;
@@ -8,7 +9,15 @@ const MAX_GREP_FILE_SIZE: u64 = 10 * 1024 * 1024;
 /// Maximum bytes read from a file at once for the content-based binary check.
 const BINARY_SCAN_BYTES: usize = 8192;
 
-pub struct Grep;
+pub struct Grep {
+    path_guard: PathGuard,
+}
+
+impl Grep {
+    pub fn new(path_guard: PathGuard) -> Self {
+        Self { path_guard }
+    }
+}
 
 #[async_trait::async_trait]
 impl Tool for Grep {
@@ -103,6 +112,13 @@ impl Tool for Grep {
                     continue;
                 }
 
+                // ── PathGuard read check per file (catches symlinks and
+                //    paths outside the sandbox that the walker may have
+                //    followed from an in-sandbox starting point).
+                if let GuardVerdict::Denied(_) = self.path_guard.check_read(file_path) {
+                    continue;
+                }
+
                 if let Ok(content) = std::fs::read_to_string(file_path) {
                     let matches = find_matches(&content, &pattern, file_path, context_lines);
                     let count = matches.len();
@@ -128,6 +144,11 @@ impl Tool for Grep {
             if is_binary_content(&search_path) {
                 return ToolOutcome::Error {
                     message: format!("Cannot search binary file: {}", search_path.display()),
+                };
+            }
+            if let GuardVerdict::Denied(msg) = self.path_guard.check_read(&search_path) {
+                return ToolOutcome::Error {
+                    message: format!("🔒 Access denied: {msg}"),
                 };
             }
             if let Ok(content) = std::fs::read_to_string(&search_path) {

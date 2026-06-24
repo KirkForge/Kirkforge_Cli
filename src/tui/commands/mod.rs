@@ -251,7 +251,17 @@ mod tests {
         let _guard = test_registry_lock().lock().await;
         let registry = crate::session::bash_jobs::global_registry();
         let unique = format!("echo kf_test_list_{}", std::process::id());
-        let id = registry.spawn(&unique, None, None).await.unwrap();
+        let id = registry
+            .spawn(
+                &unique,
+                None,
+                None,
+                &crate::session::access::DenyList::default(),
+                &crate::session::access::PathGuard::default(),
+                false,
+            )
+            .await
+            .unwrap();
         for _ in 0..40 {
             let job = registry.get(id).await.unwrap();
             if !matches!(job.status, JobStatus::Running) {
@@ -271,7 +281,17 @@ mod tests {
         let _guard = test_registry_lock().lock().await;
         let registry = crate::session::bash_jobs::global_registry();
         let unique = format!("echo kf_test_detail_{}", std::process::id());
-        let id = registry.spawn(&unique, None, None).await.unwrap();
+        let id = registry
+            .spawn(
+                &unique,
+                None,
+                None,
+                &crate::session::access::DenyList::default(),
+                &crate::session::access::PathGuard::default(),
+                false,
+            )
+            .await
+            .unwrap();
         for _ in 0..40 {
             let job = registry.get(id).await.unwrap();
             if !matches!(job.status, JobStatus::Running) {
@@ -319,7 +339,17 @@ mod tests {
         let registry = crate::session::bash_jobs::global_registry();
 
         let unique = format!("sleep 5  # kf_test_cancel_{}", std::process::id());
-        let id = registry.spawn(&unique, None, None).await.unwrap();
+        let id = registry
+            .spawn(
+                &unique,
+                None,
+                None,
+                &crate::session::access::DenyList::default(),
+                &crate::session::access::PathGuard::default(),
+                false,
+            )
+            .await
+            .unwrap();
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
@@ -342,7 +372,17 @@ mod tests {
         let _guard = test_registry_lock().lock().await;
         let registry = crate::session::bash_jobs::global_registry();
         let unique = format!("echo kf_test_cancel_done_{}", std::process::id());
-        let id = registry.spawn(&unique, None, None).await.unwrap();
+        let id = registry
+            .spawn(
+                &unique,
+                None,
+                None,
+                &crate::session::access::DenyList::default(),
+                &crate::session::access::PathGuard::default(),
+                false,
+            )
+            .await
+            .unwrap();
 
         for _ in 0..40 {
             let job = registry.get(id).await.unwrap();

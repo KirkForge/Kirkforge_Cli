@@ -102,8 +102,16 @@ fn tools_for_persona(
     kind: PersonaKind,
     undo_stack: Option<UndoStackRef>,
     supports_images: bool,
+    config: &Config,
 ) -> Vec<Arc<dyn Tool>> {
-    let all = crate::tools::all_tools(undo_stack, supports_images);
+    let (deny_list, path_guard, _read_gate) = crate::session::access::access_from_config(config);
+    let all = crate::tools::all_tools(
+        undo_stack,
+        supports_images,
+        deny_list,
+        path_guard,
+        config.bash_sandbox_workdir,
+    );
     match kind {
         PersonaKind::Explore => all
             .into_iter()
@@ -148,7 +156,7 @@ async fn run_persona_task(
     cancelled: Arc<AtomicBool>,
 ) -> PersonaResult {
     let adapter = adapters::adapter_for(&model_name, &ollama_host, None);
-    let tools = tools_for_persona(kind, undo_stack.clone(), supports_images);
+    let tools = tools_for_persona(kind, undo_stack.clone(), supports_images, &config);
 
     let conversation = match ConversationLog::open(fork_path.clone()) {
         Ok(c) => c,
@@ -369,7 +377,8 @@ mod tests {
 
     #[test]
     fn test_tools_for_plan_excludes_bash() {
-        let tools = tools_for_persona(PersonaKind::Plan, None, false);
+        let config = Config::default();
+        let tools = tools_for_persona(PersonaKind::Plan, None, false, &config);
         let names: Vec<&str> = tools.iter().map(|t| t.def().name).collect();
         assert!(names.contains(&"read_file"));
         assert!(names.contains(&"grep"));
@@ -379,7 +388,8 @@ mod tests {
 
     #[test]
     fn test_tools_for_explore_includes_bash() {
-        let tools = tools_for_persona(PersonaKind::Explore, None, false);
+        let config = Config::default();
+        let tools = tools_for_persona(PersonaKind::Explore, None, false, &config);
         let names: Vec<&str> = tools.iter().map(|t| t.def().name).collect();
         assert!(names.contains(&"read_file"));
         assert!(names.contains(&"bash"));
@@ -389,7 +399,8 @@ mod tests {
 
     #[test]
     fn test_tools_for_coder_has_all() {
-        let tools = tools_for_persona(PersonaKind::Coder, None, false);
+        let config = Config::default();
+        let tools = tools_for_persona(PersonaKind::Coder, None, false, &config);
         let names: Vec<&str> = tools.iter().map(|t| t.def().name).collect();
         assert!(names.contains(&"read_file"));
         assert!(names.contains(&"bash"));

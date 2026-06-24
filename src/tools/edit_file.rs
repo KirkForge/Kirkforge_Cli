@@ -130,6 +130,20 @@ impl Tool for EditFile {
                 .join("\n");
 
             if normalized.contains(&old_normalized) {
+                // Ambiguous fuzzy match guard: if the normalized old_string
+                // appears more than once, we cannot safely choose one.
+                let fuzzy_occurrences = normalized.matches(&old_normalized).count();
+                if fuzzy_occurrences > 1 {
+                    return ToolOutcome::Error {
+                        message: format!(
+                            "old_string matches {} times in {} after whitespace normalization; \
+                             edit_file requires a unique match",
+                            fuzzy_occurrences,
+                            path.display()
+                        ),
+                    };
+                }
+
                 // Found fuzzy match — find the span in the normalized content,
                 // then apply the replacement to the ORIGINAL content instead
                 // of writing the whole normalized file.
@@ -215,6 +229,20 @@ impl Tool for EditFile {
                     path.display(),
                     context_lines.len(),
                     preview
+                ),
+            };
+        }
+
+        // Ambiguous exact match guard: if old_string appears more than
+        // once, replacing the first occurrence silently would be
+        // surprising. Force the model to include more context.
+        let occurrences = content.matches(&old).count();
+        if occurrences > 1 {
+            return ToolOutcome::Error {
+                message: format!(
+                    "old_string matches {} times in {}; edit_file requires a unique match",
+                    occurrences,
+                    path.display()
                 ),
             };
         }
@@ -408,5 +436,58 @@ mod tests {
         assert_eq!(restored.path, path);
         assert!(restored.prev_existed);
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "original content");
+    }
+
+    /// When old_string appears more than once, edit_file must refuse rather
+    /// than silently replace the first occurrence.
+    #[tokio::test]
+    async fn test_edit_file_rejects_ambiguous_exact_match() {
+        let dir = std::env::temp_dir();
+        let path = dir.join("kirkforge_edit_ambiguous.txt");
+        std::fs::write(&path,
+            "fn foo() {}\nfn bar() {}\nfn foo() {}\n",
+        )
+        .unwrap();
+
+        let tool = EditFile::new(None);
+        let args = serde_json::json!({
+            "path": path.to_string_lossy(),
+            "old_string": "fn foo() {}",
+            "new_string": "fn baz() {}",
+        });
+        let result = tool.run(args).await;
+        assert!(
+            matches!(result, ToolOutcome::Error { ref message } if message.contains("matches 2 times")),
+            "expected ambiguous-match error, got {:?}",
+            result
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// The fuzzy fallback must also reject ambiguous normalized matches.
+    #[tokio::test]
+    async fn test_edit_file_rejects_ambiguous_fuzzy_match() {
+        let dir = std::env::temp_dir();
+        let path = dir.join("kirkforge_edit_ambiguous_fuzzy.txt");
+        // Same line twice with differing trailing whitespace.
+        std::fs::write(
+            &path,
+            "let x = 1;    \nlet y = 2;\nlet x = 1;\n",
+        )
+        .unwrap();
+
+        let tool = EditFile::new(None);
+        let args = serde_json::json!({
+            "path": path.to_string_lossy(),
+            "old_string": "let x = 1;",
+            "new_string": "let z = 3;",
+        });
+        let result = tool.run(args).await;
+        assert!(
+            matches!(result, ToolOutcome::Error { ref message } if message.contains("matches 2 times")),
+            "expected ambiguous fuzzy-match error, got {:?}",
+            result
+        );
+        let _ = std::fs::remove_file(&path);
     }
 }

@@ -4,9 +4,9 @@ Generated: 2026-06-23 22:50 UTC
 
 ## Quality gates (last run)
 
-- `cargo test` — 812 passed; 7 integration tests ignored (need Ollama).
+- `cargo test` — 817 passed; 7 integration tests ignored (need Ollama).
 - `cargo clippy --all-targets -- -D warnings` — clean.
-- `cargo build --release` — clean; binary installed to `~/.cargo/bin/kirkforge`.
+- `cargo build --release` — clean; binary at `target/release/kirkforge`.
 
 ## Recently landed TUI/UI/Permissions fixes
 
@@ -17,29 +17,27 @@ Generated: 2026-06-23 22:50 UTC
 5. Git status in `/commit` is byte-capped safely using `truncate_to_char_boundary`.
 6. PathGuard `check_read` now rejects symlinks before canonicalization so symlinks outside the sandbox cannot influence the sandbox check.
 
+## Today’s fixes (P1/P2 safety + robustness)
+
+- [x] **Background bash jobs now go through the same safety gate.** `BashJobRegistry::spawn` calls `check_bash_command_str` and validates `workdir` with `PathGuard` before spawning.
+- [x] **Per-file `PathGuard` checks in `grep`/`glob`.** Both walkers now call `path_guard.check_read` / `check_traversal` on every result before returning it.
+- [x] **`edit_file` rejects ambiguous matches.** If `old_string` matches more than once (exact or normalized fuzzy), the tool returns an error instead of silently editing the first hit.
+- [x] **Bash permission deny rules get prefix semantics.** A `Deny` rule like `rm -rf /` now blocks `rm -rf /home` and `rm -rf /; echo`. Allow/Ask rules stay anchored, and lone `*` is promoted to `**` only for `Deny` rules.
+- [x] **Tracing fallback no longer panics on missing `/dev/null`.** `init_tracing` uses a `LogWriter` that falls back to `std::io::sink()`.
+- [x] **`/save` slash command now checks `PathGuard::check_write`.** Writes outside the sandbox/deny-list are rejected.
+
 ## Remaining gaps (prioritized for tomorrow)
 
 ### P1 — safety / permissions (must fix before production)
 
-1. **Background jobs bypass bash safety gates.**
-   - `BashJobRegistry::spawn` in `src/session/bash_jobs.rs` runs `sh -c <command>` directly without calling `check_bash_command_str` or applying the `DenyList`/`PathGuard`.
-   - Also no `workdir` sandbox containment or symlink guard for the job’s working directory.
-   - Fix: route `bash` with `background: true` through the same `check_bash_command` gate, then validate `workdir` with `PathGuard`, before spawning.
+1. ~~**Background jobs bypass bash safety gates.**~~
 
-2. **Permission rule matching is exact string only.**
-   - `src/shared/permission.rs` matches command strings literally; `rm -rf /home/foo` does not match a rule for `rm -rf /`.
-   - This makes allow/ask/deny rules brittle and easy to bypass with extra arguments or different quoting.
-   - Fix: add glob/prefix/word-boundary matching for command rules (start with prefix or word-boundary match).
+2. ~~**Permission rule matching is exact string only.**~~
+   - Deny rules now get prefix semantics and lone `*` promotion to `**`; Allow/Ask rules stay anchored to avoid authorizing chained commands across path separators. Word-boundary matching for Allow rules remains future work.
 
-3. **`grep`/`glob` lack per-file PathGuard checks.**
-   - `src/tools/grep.rs` and `src/tools/glob.rs` walk the filesystem but only check extension/size and gitignore; they do not invoke `PathGuard` per file.
-   - This lets a model discover paths inside `~/.ssh`, `/etc`, or outside the sandbox.
-   - Fix: call `path_guard.check_read` on every file before returning/reading it.
+3. ~~**`grep`/`glob` lack per-file PathGuard checks.**~~
 
-4. **`edit_file` replaces only the first occurrence.**
-   - `content.replacen(&old, &new, 1)` can apply to the wrong occurrence if the same substring appears earlier in the file.
-   - Models already include context; we should fail if the match is ambiguous rather than silently edit the first hit.
-   - Fix: if `old` occurs more than once, require unique match or use line-boundary disambiguation.
+4. ~~**`edit_file` replaces only the first occurrence.**~~
 
 5. **`PathGuard` default is fail-open.**
    - `PathGuard::default()` has `sandbox_dir: None` and `allowed_write_dirs: vec![]`, so writes are only restricted by deny-list and extensions.
@@ -60,17 +58,13 @@ Generated: 2026-06-23 22:50 UTC
    - `src/tui/keys.rs:78`, `:87`, `:96` assume a character exists at the found position; positions come from `rfind`, so they should be valid, but the code should use safe indexing or explicit asserts.
    - Risk is low but these are in the hot input path.
 
-9. **Tracing file-layer fallback panics if `/dev/null` is unavailable.**
-   - `src/main.rs:48` uses `.expect("/dev/null open")` on a fallback file open. On a sandboxed or Windows environment this can crash startup.
-   - Fix: use `std::io::sink()` instead of opening `/dev/null`, or wrap in a safe fallback chain.
+9. ~~**Tracing file-layer fallback panics if `/dev/null` is unavailable.**~~
 
 10. **Read-before-edit canonicalization fallback is unsafe?**
     - `ReadGate::mark_read` and `was_read` fall back to the unresolved literal path. A symlink outside the sandbox could be read, then the edit path canonicalized differently.
     - Verify the gate only canonicalizes after the PathGuard check_read returns the canonical path, and that `mark_read` uses that canonical path.
 
-11. **`/save` slash command writes outside PathGuard.**
-    - `src/tui/commands/save.rs` writes a transcript file without any sandbox or deny-list check. A typo or malicious argument could write anywhere the user can write.
-    - Fix: run the resolved path through `PathGuard::check_write` or at least require it to be under the project root / home directory.
+11. ~~**`/save` slash command writes outside PathGuard.**~~
 
 ### P3 — UI polish / docs
 
@@ -90,9 +84,10 @@ Generated: 2026-06-23 22:50 UTC
 
 ## Tomorrow’s recommended order
 
-1. Fix P1 background-job safety gate (touches `src/session/bash_jobs.rs` + `src/tools/bash.rs`).
-2. Fix P1 `grep`/`glob` PathGuard checks.
-3. Fix P1 permission rule prefix/word-boundary matching.
-4. Address P2 tracing fallback panic and `/save` sandboxing.
-5. Update `review.md`, `README.md`, and add/update ADRs.
-6. Pick a live regression target outside this repo and track it in that repo’s own `state.md`.
+1. P1 `PathGuard` fail-open warning: surface unsandboxed mode in the TUI startup banner and a one-time system message.
+2. P1 verify `read_image` honors `max_read_size` / binary guard via `PathGuard::check_read`.
+3. P2 bash drain wedging: always wrap drain joins with `tokio::time::timeout`.
+4. P2 safe indexing in `src/tui/keys.rs` hot path (replace `unwrap()` with explicit asserts or safe indexing).
+5. P2 read-before-edit canonicalization audit: ensure `ReadGate` records the canonical path returned by `PathGuard::check_read`.
+6. Update `review.md`, `README.md`, and add/update ADRs for the recent changes.
+7. Pick a live regression target outside this repo and track it in that repo’s own `state.md`.

@@ -10,7 +10,21 @@ use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, ReadBuf};
 use tokio::process::Command;
 
-pub struct Bash;
+pub struct Bash {
+    deny_list: DenyList,
+    path_guard: PathGuard,
+    bash_sandbox_workdir: bool,
+}
+
+impl Bash {
+    pub fn new(deny_list: DenyList, path_guard: PathGuard, bash_sandbox_workdir: bool) -> Self {
+        Self {
+            deny_list,
+            path_guard,
+            bash_sandbox_workdir,
+        }
+    }
+}
 
 /// Per-stream cap for captured stdout / stderr from a single bash invocation.
 ///
@@ -163,7 +177,17 @@ impl Tool for Bash {
             let registry = global_registry();
             let workdir = args.get("workdir").and_then(|w| w.as_str());
             let timeout = args.get("timeout").and_then(|t| t.as_u64());
-            match registry.spawn(&cmd, workdir, timeout).await {
+            match registry
+                .spawn(
+                    &cmd,
+                    workdir,
+                    timeout,
+                    &self.deny_list,
+                    &self.path_guard,
+                    self.bash_sandbox_workdir,
+                )
+                .await
+            {
                 Ok(id) => ToolOutcome::Success {
                     content: format!("Background job #{} started. Use bash_status(id={}) or bash_output(id={}) to check results.", id, id, id),
                 },

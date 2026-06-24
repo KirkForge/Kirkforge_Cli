@@ -129,10 +129,15 @@ impl PathGuard {
         self.sandbox_dir.is_some() || !self.allowed_write_dirs.is_empty()
     }
 
-    /// Check whether `path` may be read.
+    /// Check whether `path` may be traversed (listed or read).
     ///
-    /// On success returns the resolved path (canonicalized if it exists).
-    pub fn check_read(&self, path: &Path) -> GuardVerdict {
+    /// This is the lightweight subset of `check_read`: deny list, existence,
+    /// symlink guard, and sandbox containment. It does **not** enforce size
+    /// limits or binary detection, so it is suitable for directory-listing
+    /// tools (`glob`) that only need to know a path is visible.
+    ///
+    /// On success returns the canonicalized path.
+    pub fn check_traversal(&self, path: &Path) -> GuardVerdict {
         // 1. Deny list
         if self.deny_list.is_path_denied(path) {
             return GuardVerdict::Denied(format!("Path denied by deny list: {}", path.display()));
@@ -184,6 +189,18 @@ impl PathGuard {
                 return GuardVerdict::Denied(format!("Path outside sandbox: {}", path.display()));
             }
         }
+
+        GuardVerdict::Allowed(canonical)
+    }
+
+    /// Check whether `path` may be read.
+    ///
+    /// On success returns the resolved path (canonicalized if it exists).
+    pub fn check_read(&self, path: &Path) -> GuardVerdict {
+        let canonical = match self.check_traversal(path) {
+            GuardVerdict::Allowed(c) => c,
+            GuardVerdict::Denied(msg) => return GuardVerdict::Denied(msg),
+        };
 
         // 4. Size limit
         if self.max_read_size > 0 {

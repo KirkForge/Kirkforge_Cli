@@ -1,9 +1,18 @@
+use crate::session::access::{GuardVerdict, PathGuard};
 use crate::shared::{ToolDef, ToolOutcome};
 use crate::tools::Tool;
 use globset::{Glob as GlobPattern, GlobSet, GlobSetBuilder};
 use std::path::PathBuf;
 
-pub struct Glob;
+pub struct Glob {
+    path_guard: PathGuard,
+}
+
+impl Glob {
+    pub fn new(path_guard: PathGuard) -> Self {
+        Self { path_guard }
+    }
+}
 
 #[async_trait::async_trait]
 impl Tool for Glob {
@@ -74,6 +83,15 @@ impl Tool for Glob {
         for entry in walker.flatten() {
             let entry_path = entry.path();
             if entry_path.is_dir() {
+                continue;
+            }
+
+            // Per-file traversal guard: the walker may have followed a
+            // symlink from inside the base_dir to outside it, or the file
+            // may sit on a denied path. `check_traversal` is the lightweight
+            // deny-list + symlink + sandbox check (no size/binary gate,
+            // because we are only listing paths).
+            if let GuardVerdict::Denied(_) = self.path_guard.check_traversal(entry_path) {
                 continue;
             }
 

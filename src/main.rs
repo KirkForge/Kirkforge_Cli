@@ -22,6 +22,28 @@ use tracing_subscriber::prelude::*;
 /// to stderr when `KIRKFORGE_LOG_STDERR=1` is set (useful for daemon or
 /// non-interactive debugging).
 fn init_tracing() {
+    // Writer enum so that a failure to open the log file falls back to
+    // a null sink instead of panicking on `/dev/null`.
+    enum LogWriter {
+        File(std::fs::File),
+        Sink(std::io::Sink),
+    }
+
+    impl std::io::Write for LogWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            match self {
+                LogWriter::File(f) => f.write(buf),
+                LogWriter::Sink(s) => s.write(buf),
+            }
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            match self {
+                LogWriter::File(f) => f.flush(),
+                LogWriter::Sink(s) => s.flush(),
+            }
+        }
+    }
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn"));
 
@@ -38,15 +60,21 @@ fn init_tracing() {
             // Re-open on every write so rotation can be done by moving the
             // file aside while the process is running. The `tracing-appender`
             // crate would be cleaner, but we avoid the extra dependency.
-            std::fs::OpenOptions::new()
+            match std::fs::OpenOptions::new()
                 .create(true)
                 .append(true)
                 .open(&log_file)
-                .unwrap_or_else(|e| {
-                    // Last-ditch fallback: write to stderr so logs aren't lost.
+            {
+                Ok(file) => LogWriter::File(file),
+                Err(e) => {
+                    // Last-ditch fallback: write to stderr so logs aren't lost,
+                    // and route tracing into a null sink so the subscriber
+                    // still initializes even when `/dev/null` is unavailable
+                    // (e.g. in a sandboxed or Windows environment).
                     eprintln!("failed to open log file {}: {}", log_file.display(), e);
-                    std::fs::File::create("/dev/null").expect("/dev/null open")
-                })
+                    LogWriter::Sink(std::io::sink())
+                }
+            }
         });
 
     let registry = tracing_subscriber::registry().with(env_filter).with(file_layer);
@@ -341,6 +369,16 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
         }
     };
 
+    // ── Built-in tool access controls ──
+    // PathGuard / DenyList are required by the bash, grep, and glob tools so
+    // they can enforce sandbox containment and deny-list checks at the tool
+    // layer (e.g. background bash must re-check the command, grep/glob must
+    // re-check each discovered file). Build them once from the resolved
+    // launch-time config.
+    let (builtin_deny_list, builtin_path_guard, _builtin_read_gate) =
+        session::access::access_from_config(&config);
+    let bash_sandbox_workdir = config.bash_sandbox_workdir;
+
     // ── Toolset assembly (Phase 2.2) ──
     // Compose built-in, MCP, and plugin tools into a single source-aware
     // collection. The executor receives the flattened vector, but order and
@@ -349,7 +387,13 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     let mut toolset = session::toolset::CompositeToolset::empty();
     toolset.add(Box::new(session::toolset::VecToolset::new(
         "builtin",
-        tools::all_tools(undo_stack.clone(), adapter.model_info().supports_images),
+        tools::all_tools(
+            undo_stack.clone(),
+            adapter.model_info().supports_images,
+            builtin_deny_list,
+            builtin_path_guard,
+            bash_sandbox_workdir,
+        ),
     )));
 
     // ── Shared config (hot-reload foundation) ──

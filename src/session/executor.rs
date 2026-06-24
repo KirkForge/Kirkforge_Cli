@@ -1242,33 +1242,51 @@ impl Executor {
             (cfg.auto_approve, cfg.permission_rules.clone())
         };
         let is_destructive = matches!(tc.name.as_str(), "write_file" | "edit_file" | "bash");
-        let default_action = if auto_approve {
+
+        // Whether THIS specific bash call is read-only discovery
+        // (ls/cat/grep/…). Only meaningful for bash; false otherwise.
+        let is_read_only_bash_call = tc.name == "bash"
+            && tc
+                .arguments
+                .get("command")
+                .and_then(|v| v.as_str())
+                .map(is_read_only_bash)
+                .unwrap_or(false);
+
+        // The DEFAULT action — used ONLY when no permission rule matches.
+        // The read-only / auto_approve heuristics live HERE, on the
+        // default, so they can never override an explicit user rule.
+        let default_action = if !is_destructive || is_read_only_bash_call {
+            // Non-destructive tools (read_file/grep/glob/read_image) and
+            // read-only discovery bash are governed by the path guard and
+            // deny-list, not the approval dialog. They don't prompt by
+            // default. An explicit `deny`/`ask` rule (below) still applies.
             PermissionAction::Allow
+        } else if auto_approve {
+            // auto_approve clears writes/edits, but is NOT a blank cheque
+            // for non-read-only bash — that still asks by default.
+            if tc.name == "bash" {
+                PermissionAction::Ask
+            } else {
+                PermissionAction::Allow
+            }
         } else {
             PermissionAction::Ask
         };
-        let mut action = evaluate(&permission_rules, &tc.name, &tc.arguments, default_action);
 
-        if tc.name == "bash" {
-            if let Some(cmd) = tc.arguments.get("command").and_then(|v| v.as_str()) {
-                if is_read_only_bash(cmd) {
-                    // Read-only commands (ls, cat, grep, find without
-                    // destructive flags) never need approval — they're
-                    // discovery-only and asking for every `ls` would be
-                    // unusable. Destructive/non-read-only bash still asks
-                    // unless auto_approve is on.
-                    action = PermissionAction::Allow;
-                } else if auto_approve && matches!(action, PermissionAction::Allow) {
-                    // auto_approve=true is not a blank cheque: downgrade
-                    // non-read-only bash back to Ask.
-                    action = PermissionAction::Ask;
-                }
-            }
-        }
+        // First-match-wins rules override the default. An explicit `allow`
+        // (e.g. one written by the `[A]lways` key) is honored as-is — it is
+        // no longer silently downgraded back to Ask under auto_approve.
+        let action = evaluate(&permission_rules, &tc.name, &tc.arguments, default_action);
 
-        let needs_approval = is_destructive && matches!(action, PermissionAction::Ask);
+        // Enforce the decision uniformly for EVERY tool. Previously the
+        // checks below were gated on `is_destructive`, which meant `deny`
+        // rules on read_file/grep/etc. were silently ignored and `ask`
+        // rules never prompted. `default_action` already encodes the safe
+        // per-tool defaults, so gate purely on `action`.
+        let needs_approval = matches!(action, PermissionAction::Ask);
 
-        if matches!(action, PermissionAction::Deny) && is_destructive {
+        if matches!(action, PermissionAction::Deny) {
             let reason = format!(
                 "❌ Permission rule denied {}:{}={}",
                 tc.name,
@@ -3064,10 +3082,15 @@ mod tests {
             make_info(),
         );
 
+        // No approval request should be sent: the allow-all rule permits the
+        // call, but the dangerous-pattern guard blocks it before the tool runs.
         let (approval_tx, mut approval_rx) = mpsc::unbounded_channel::<ApprovalRequest>();
         let approval_handle = tokio::spawn(async move {
-            let req: ApprovalRequest = approval_rx.recv().await.expect("approval request");
-            let _ = req.response.send(ApprovalResponse::Approved);
+            let res = tokio::time::timeout(std::time::Duration::from_millis(100), approval_rx.recv()).await;
+            assert!(
+                res.is_err() || res.unwrap().is_none(),
+                "dangerous command should be blocked by the safety gate, not by an approval prompt"
+            );
         });
 
         let mut config = make_config(true);
@@ -3085,6 +3108,7 @@ mod tests {
             .run_turn("wipe disk", &approval_tx, never_cancelled())
             .await
             .unwrap();
+        drop(approval_tx);
         approval_handle.await.unwrap();
 
         assert!(
@@ -3280,6 +3304,133 @@ mod tests {
             "Should not exceed configured max_tool_calls_per_turn (was {})",
             tool_calls
         );
+    }
+
+    #[tokio::test]
+    async fn test_explicit_allow_rule_honored_under_auto_approve_bash() {
+        // Regression: with auto_approve=true, an explicit allow rule for a
+        // non-read-only bash command must be honored, not downgraded back to Ask.
+        let captured = Arc::new(Mutex::new(None));
+        let tool = MockTool {
+            def: ToolDef {
+                name: "bash",
+                description: "run a command",
+                parameters: serde_json::json!({"type": "object", "properties": {"command": {"type": "string"}}}),
+            },
+            captured_args: captured.clone(),
+            outcome: ToolOutcome::Success {
+                content: "built!".into(),
+            },
+        };
+
+        let adapter = MockAdapter::new(
+            vec![
+                StreamEvent::ToolCall(ToolInvocation {
+                    id: "call-1".into(),
+                    name: "bash".into(),
+                    arguments: serde_json::json!({"command": "cargo build"}),
+                }),
+                StreamEvent::Done {
+                    finish_reason: FinishReason::ToolCalls,
+                    usage: None,
+                },
+            ],
+            make_info(),
+        );
+
+        let (approval_tx, mut approval_rx) = mpsc::unbounded_channel::<ApprovalRequest>();
+        let approval_handle = tokio::spawn(async move {
+            let res = tokio::time::timeout(std::time::Duration::from_millis(100), approval_rx.recv()).await;
+            assert!(
+                res.is_err() || res.unwrap().is_none(),
+                "Explicit allow rule should be honored under auto_approve; no approval prompt expected"
+            );
+        });
+
+        let mut config = make_config(true);
+        config
+            .permission_rules
+            .push(crate::shared::permission::PermissionRule {
+                tool: "bash".into(),
+                key: "command".into(),
+                pattern: "cargo build".into(),
+                action: PermissionAction::Allow,
+            });
+
+        let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], config);
+        let events = exe
+            .run_turn("build", &approval_tx, never_cancelled())
+            .await
+            .unwrap();
+        drop(approval_tx);
+        approval_handle.await.unwrap();
+
+        let result = events.iter().find_map(|e| match e {
+            TurnEvent::ToolResult { name, output, .. } => Some((name.as_str(), output.as_str())),
+            _ => None,
+        });
+        assert_eq!(result, Some(("bash", "built!")));
+    }
+
+    #[tokio::test]
+    async fn test_deny_rule_blocks_read_file() {
+        // Regression: deny rules must fire for non-destructive tools too.
+        let captured = Arc::new(Mutex::new(None));
+        let tool = MockTool {
+            def: ToolDef {
+                name: "read_file",
+                description: "read a file",
+                parameters: serde_json::json!({"type": "object", "properties": {"path": {"type": "string"}}}),
+            },
+            captured_args: captured.clone(),
+            outcome: ToolOutcome::Success {
+                content: "secret".into(),
+            },
+        };
+
+        let adapter = MockAdapter::new(
+            vec![
+                StreamEvent::ToolCall(ToolInvocation {
+                    id: "call-1".into(),
+                    name: "read_file".into(),
+                    arguments: serde_json::json!({"path": "/etc/passwd"}),
+                }),
+                StreamEvent::Done {
+                    finish_reason: FinishReason::ToolCalls,
+                    usage: None,
+                },
+            ],
+            make_info(),
+        );
+
+        let (approval_tx, _approval_rx) = mpsc::unbounded_channel::<ApprovalRequest>();
+
+        let mut config = make_config(false);
+        config
+            .permission_rules
+            .push(crate::shared::permission::PermissionRule {
+                tool: "read_file".into(),
+                key: "path".into(),
+                pattern: "/etc/**".into(),
+                action: PermissionAction::Deny,
+            });
+
+        let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], config);
+        let events = exe
+            .run_turn("read secrets", &approval_tx, never_cancelled())
+            .await
+            .unwrap();
+
+        assert!(
+            captured.lock().unwrap().is_none(),
+            "Deny rule on read_file should prevent the tool from running"
+        );
+
+        let denied = events.iter().any(|e| matches!(
+            e,
+            TurnEvent::ToolResult { name, output, .. } if name == "read_file" && output.contains("Permission rule denied")
+        ));
+        assert!(denied, "Expected a permission-rule denial for read_file");
     }
 
     #[test]

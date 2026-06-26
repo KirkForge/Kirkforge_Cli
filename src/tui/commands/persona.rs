@@ -225,7 +225,7 @@ async fn run_persona_task(
     }
 
     let prompt = build_persona_prompt(kind, &task);
-    if let Err(e) = executor.run_turn(&prompt, &approval_tx, &cancelled).await {
+    if let Err(e) = executor.run_turn_collecting(&prompt, &approval_tx, &cancelled).await {
         return PersonaResult {
             kind,
             task,

@@ -591,7 +591,7 @@ async fn run_line_mode(
         }
 
         let turn_started_at = std::time::Instant::now();
-        let events = executor.run_turn(&input, &approval_tx, &cancelled).await?;
+        let events = executor.run_turn_collecting(&input, &approval_tx, &cancelled).await?;
         let _turn_duration_ms = turn_started_at.elapsed().as_millis() as u64;
         let turn_outcome = emit_turn_events(
             &events,

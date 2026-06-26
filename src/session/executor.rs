@@ -690,29 +690,20 @@ impl Executor {
                 }
                 Some(input) = input_rx.recv() => {
                     cancelled.store(false, Ordering::SeqCst);
-                    let events = self.run_turn(&input, &approval_tx, &cancelled).await;
-                    match events {
-                        Ok(evs) => {
-                            for ev in evs {
-                                if event_tx.send(ev).is_err() {
-
-                                    tracing::warn!("TUI event receiver dropped mid-turn; executor driver exiting");
-                                    self.flush_carryover();
-                                    return Ok(());
-                                }
-                            }
-                        }
-                        Err(e) => {
-
-                            if event_tx.send(TurnEvent::Error(format!("Turn failed: {}", e))).is_err() {
-                                tracing::warn!(
-                                    error = %e,
-                                    "TUI event receiver dropped while reporting turn-failure event"
-                                );
-                                self.flush_carryover();
-                                return Ok(());
-                            }
-                        }
+                    // Events stream live into `event_tx` during the turn;
+                    // no batch to forward afterwards. A send failure inside
+                    // the turn means the TUI dropped its receiver — flush
+                    // and exit (the run loop's `input_rx.recv()` arm would
+                    // otherwise spin on a closed channel anyway).
+                    let result = self.run_turn(&input, &approval_tx, &cancelled, &event_tx).await;
+                    if let Err(e) = result {
+                        let _ = event_tx.send(TurnEvent::Error(format!("Turn failed: {}", e)));
+                        tracing::warn!(
+                            error = %e,
+                            "TUI event receiver may be dropped while reporting turn-failure event"
+                        );
+                        self.flush_carryover();
+                        return Ok(());
                     }
                 }
                 else => break,
@@ -875,33 +866,53 @@ impl Executor {
         }
     }
 
+    /// Run one turn, streaming `TurnEvent`s live to `event_tx` as they are
+    /// produced (tokens, tool starts/results, errors) instead of batching
+    /// them. The TUI consumes them incrementally — see `drain_turn_events` —
+    /// so the chat updates during generation rather than freezing until the
+    /// turn ends.
+    ///
+    /// `run_turn_collecting` is the batched wrapper used by tests and the
+    /// non-interactive / persona paths that want a `Vec<TurnEvent>`.
     pub async fn run_turn(
         &mut self,
         user_input: &str,
         approval_sender: &mpsc::UnboundedSender<ApprovalRequest>,
         cancelled: &AtomicBool,
-    ) -> anyhow::Result<Vec<TurnEvent>> {
+        event_tx: &mpsc::UnboundedSender<TurnEvent>,
+    ) -> anyhow::Result<()> {
         // Post-turn hook: fires on every exit path (Ok / Err / panic /
         // cancel / max-iterations / parse-error second retry) via the
         // `PostTurnHookGuard` constructed on the stack below. The guard
         // owns a cloned `HookRunner`, so it can outlive the `&mut self`
         // borrows inside `run_turn_inner` and fire on Drop without
         // aliasing.
-        //
-        // Supersedes the earlier inner/outer split where the hook was
-        // fired manually after `run_turn_inner` returned. That worked
-        // but was fragile (any new early-return in the inner had to
-        // flow back to the wrapper). Review.md arch-concern #4
-        // specifically called this out — "a Drop guard holding an &Fn
-        // closure would be more robust." We keep the inner/outer split
-        // (still useful for tests that want to call the inner directly)
-        // but stop firing the hook manually.
         let _hook_guard = PostTurnHookGuard::new(
             self.hook_runner.clone(),
             crate::shared::read_shared_config(&self.config).clone(),
         );
-        self.run_turn_inner(user_input, approval_sender, cancelled)
+        self.run_turn_inner(user_input, approval_sender, cancelled, event_tx)
             .await
+    }
+
+    /// Batched wrapper: run a turn into a private channel and return every
+    /// event as a `Vec`. The channel is unbounded, so all events are
+    // buffered by the time the turn completes and `try_recv` drains them
+    // without blocking. Keeps the old `run_turn` return shape for callers
+    // that want a slice (tests, non-interactive line mode, persona runner).
+    pub async fn run_turn_collecting(
+        &mut self,
+        user_input: &str,
+        approval_sender: &mpsc::UnboundedSender<ApprovalRequest>,
+        cancelled: &AtomicBool,
+    ) -> anyhow::Result<Vec<TurnEvent>> {
+        let (tx, mut rx) = mpsc::unbounded_channel::<TurnEvent>();
+        self.run_turn(user_input, approval_sender, cancelled, &tx).await?;
+        let mut events = Vec::new();
+        while let Ok(ev) = rx.try_recv() {
+            events.push(ev);
+        }
+        Ok(events)
     }
 
     async fn run_turn_inner(
@@ -909,9 +920,8 @@ impl Executor {
         user_input: &str,
         approval_sender: &mpsc::UnboundedSender<ApprovalRequest>,
         cancelled: &AtomicBool,
-    ) -> anyhow::Result<Vec<TurnEvent>> {
-        let mut events = Vec::new();
-
+        event_tx: &mpsc::UnboundedSender<TurnEvent>,
+    ) -> anyhow::Result<()> {
         // --- adapter hot-swap via smart routing ---
         let routing_enabled = read_shared_config(&self.config).routing_enabled;
         if routing_enabled {
@@ -923,7 +933,7 @@ impl Executor {
                     .maybe_swap(&cfg_snapshot, &mut self.adapter, user_input);
             if let Some(new_model) = swapped {
                 self.model_name = new_model.clone();
-                events.push(TurnEvent::Token(format!("🔀 Switched to {}\n", new_model)));
+                let _ = event_tx.send(TurnEvent::Token(format!("🔀 Switched to {}\n", new_model)));
             }
         }
 
@@ -950,19 +960,19 @@ impl Executor {
         for iteration in 0..max_iterations {
             if cancelled.load(Ordering::SeqCst) {
                 // The cancel watcher already emitted "Generation
-                // cancelled"; just return the events collected so far.
-                return Ok(events);
+                // cancelled"; just return — events were already sent live.
+                return Ok(());
             }
 
             let outcome = self
-                .stream_iteration(approval_sender, cancelled, &mut events, &mut tool_calls)
+                .stream_iteration(approval_sender, cancelled, event_tx, &mut tool_calls)
                 .await?;
 
             match outcome {
-                IterationOutcome::Finished => return Ok(events),
+                IterationOutcome::Finished => return Ok(()),
                 IterationOutcome::ToolCalls(mut tcs) => {
                     for tc in &mut tcs {
-                        self.dispatch_tool_call(tc, approval_sender, &mut events)
+                        self.dispatch_tool_call(tc, approval_sender, event_tx)
                             .await?;
                     }
                 }
@@ -981,16 +991,16 @@ impl Executor {
                             tool_name: None,
                             token_count: None,
                         })?;
-                        events.push(TurnEvent::Token("(JSON parse error, retrying…)\n".into()));
+                        let _ = event_tx.send(TurnEvent::Token("(JSON parse error, retrying…)\n".into()));
                     } else {
-                        return Ok(events);
+                        return Ok(());
                     }
                 }
             }
 
             if iteration + 1 >= max_iterations {
-                events.push(TurnEvent::Error("Tool call loop limit reached".into()));
-                return Ok(events);
+                let _ = event_tx.send(TurnEvent::Error("Tool call loop limit reached".into()));
+                return Ok(());
             }
         }
 
@@ -998,7 +1008,7 @@ impl Executor {
         // after this inner function returns. Do NOT add an explicit
         // `self.run_hook("post-turn", ...)` here — that double-fires
         // the hook on the natural completion path.
-        Ok(events)
+        Ok(())
     }
 
     #[allow(unused_variables)]
@@ -1006,7 +1016,7 @@ impl Executor {
         &mut self,
         approval_sender: &mpsc::UnboundedSender<ApprovalRequest>,
         cancelled: &AtomicBool,
-        events: &mut Vec<TurnEvent>,
+        event_tx: &mpsc::UnboundedSender<TurnEvent>,
         tool_calls_out: &mut Vec<ToolInvocation>,
     ) -> anyhow::Result<IterationOutcome> {
         let model_info = self.adapter.model_info();
@@ -1081,11 +1091,11 @@ impl Executor {
             match event {
                 StreamEvent::Text(t) => {
                     assistant_content.push_str(&t);
-                    events.push(TurnEvent::Token(t));
+                    let _ = event_tx.send(TurnEvent::Token(t));
                 }
                 StreamEvent::Thinking(t) => {
                     assistant_thinking.push_str(&t);
-                    events.push(TurnEvent::Thinking(t));
+                    let _ = event_tx.send(TurnEvent::Thinking(t));
                 }
                 StreamEvent::ToolCall(tc) => {
                     tool_calls_out.push(tc);
@@ -1094,7 +1104,7 @@ impl Executor {
                     if e.contains("parse") || e.contains("parseable") {
                         had_parse_error = true;
                     }
-                    events.push(TurnEvent::Error(e));
+                    let _ = event_tx.send(TurnEvent::Error(e));
                 }
                 StreamEvent::Done {
                     finish_reason: _,
@@ -1140,7 +1150,7 @@ impl Executor {
                     // completion, surface a PlanComplete event so the TUI
                     // can ask the user to approve implementation.
                     if self.plan_mode && assistant_content.contains(PLAN_COMPLETE_MARKER) {
-                        events.push(TurnEvent::PlanComplete);
+                        let _ = event_tx.send(TurnEvent::PlanComplete);
                     }
 
                     if let Some(ref u) = usage {
@@ -1148,7 +1158,7 @@ impl Executor {
                         let completion = u.completion_tokens.unwrap_or(0);
                         let cost = crate::shared::calculate_cost(&self.model_name, u);
                         self.cost_tracking.record_turn(prompt, completion, cost);
-                        events.push(TurnEvent::CostStats {
+                        let _ = event_tx.send(TurnEvent::CostStats {
                             prompt_tokens: prompt,
                             completion_tokens: completion,
                             turn_cost: cost,
@@ -1180,13 +1190,13 @@ impl Executor {
         &mut self,
         tc: &mut ToolInvocation,
         approval_sender: &mpsc::UnboundedSender<ApprovalRequest>,
-        events: &mut Vec<TurnEvent>,
+        event_tx: &mpsc::UnboundedSender<TurnEvent>,
     ) -> anyhow::Result<()> {
         let tool = match self.tools.resolve(&tc.name) {
             Some(t) => t,
             None => {
                 let err = format!("Unknown tool: {}", tc.name);
-                events.push(TurnEvent::Error(err.clone()));
+                let _ = event_tx.send(TurnEvent::Error(err.clone()));
                 self.conversation.append(Message {
                     role: Role::Tool,
                     content: err,
@@ -1219,7 +1229,7 @@ impl Executor {
                     "📐 Plan mode blocked {}: only read-only discovery tools are allowed until you type /implement.",
                     tc.name
                 );
-                events.push(TurnEvent::ToolResult {
+                let _ = event_tx.send(TurnEvent::ToolResult {
                     name: tc.name.clone(),
                     output: reason.clone(),
                     success: false,
@@ -1300,7 +1310,7 @@ impl Executor {
                     .and_then(|v| v.as_str())
                     .unwrap_or(""),
             );
-            events.push(TurnEvent::ToolResult {
+            let _ = event_tx.send(TurnEvent::ToolResult {
                 name: tc.name.clone(),
                 output: reason.clone(),
                 success: false,
@@ -1320,7 +1330,7 @@ impl Executor {
                 ApprovalDecision::Approved | ApprovalDecision::AlwaysApproved => {}
                 ApprovalDecision::Denied { reason } => {
                     let msg = format!("❌ Approval denied: {reason}");
-                    events.push(TurnEvent::ToolResult {
+                    let _ = event_tx.send(TurnEvent::ToolResult {
                         name: tc.name.clone(),
                         output: msg.clone(),
                         success: false,
@@ -1338,7 +1348,7 @@ impl Executor {
         }
 
         if let Some(denied) = check_deny_list(&self.deny_list, &tc.name, &tc.arguments) {
-            events.push(TurnEvent::ToolResult {
+            let _ = event_tx.send(TurnEvent::ToolResult {
                 name: tc.name.clone(),
                 output: denied.clone(),
                 success: false,
@@ -1369,7 +1379,7 @@ impl Executor {
                 "write_file" | "edit_file" => self.path_guard.check_write(path),
                 _ => {
                     let denied = format!("🔒 Access denied: unsupported file tool '{}'", tc.name);
-                    events.push(TurnEvent::ToolResult {
+                    let _ = event_tx.send(TurnEvent::ToolResult {
                         name: tc.name.clone(),
                         output: denied.clone(),
                         success: false,
@@ -1390,7 +1400,7 @@ impl Executor {
                     if tc.name == "edit_file" {
                         if let GuardVerdict::Denied(msg) = self.read_gate.check_edit(path, &resolved) {
                             let denied = format!("🔒 Access denied: {msg}");
-                            events.push(TurnEvent::ToolResult {
+                            let _ = event_tx.send(TurnEvent::ToolResult {
                                 name: tc.name.clone(),
                                 output: denied.clone(),
                                 success: false,
@@ -1418,7 +1428,7 @@ impl Executor {
                         }
                     }
 
-                    events.push(TurnEvent::ToolStart {
+                    let _ = event_tx.send(TurnEvent::ToolStart {
                         name: tc.name.clone(),
                         args: run_args.clone(),
                     });
@@ -1434,7 +1444,7 @@ impl Executor {
                         .await
                     {
                         let denied = format!("❌ Hook denied {}: {}", tc.name, reason);
-                        events.push(TurnEvent::ToolResult {
+                        let _ = event_tx.send(TurnEvent::ToolResult {
                             name: tc.name.clone(),
                             output: denied.clone(),
                             success: false,
@@ -1451,7 +1461,7 @@ impl Executor {
 
                     let outcome = tool.run(run_args.clone()).await;
                     let edit_diff =
-                        handle_tool_outcome(outcome, tc, events, &mut self.conversation)?;
+                        handle_tool_outcome(outcome, tc, event_tx, &mut self.conversation)?;
 
                     // Post-tool hook
                     self.run_hook(
@@ -1466,12 +1476,12 @@ impl Executor {
                         )
                         .await;
                     self.collect_carryover(tc, &crs);
-                    emit_correction_results(crs, tc, events, &mut self.conversation)?;
+                    emit_correction_results(crs, tc, event_tx, &mut self.conversation)?;
                     return Ok(());
                 }
                 GuardVerdict::Denied(msg) => {
                     let denied = format!("🔒 Access denied: {msg}");
-                    events.push(TurnEvent::ToolResult {
+                    let _ = event_tx.send(TurnEvent::ToolResult {
                         name: tc.name.clone(),
                         output: denied.clone(),
                         success: false,
@@ -1521,7 +1531,7 @@ impl Executor {
                 &self.path_guard,
                 bash_sandbox_workdir,
             ) {
-                events.push(TurnEvent::ToolResult {
+                let _ = event_tx.send(TurnEvent::ToolResult {
                     name: tc.name.clone(),
                     output: denied.clone(),
                     success: false,
@@ -1558,7 +1568,7 @@ impl Executor {
             let path = std::path::Path::new(path_str);
             if let GuardVerdict::Denied(msg) = check_search_path(&self.path_guard, path) {
                 let denied = format!("🔒 Access denied: {msg}");
-                events.push(TurnEvent::ToolResult {
+                let _ = event_tx.send(TurnEvent::ToolResult {
                     name: tc.name.clone(),
                     output: denied.clone(),
                     success: false,
@@ -1574,7 +1584,7 @@ impl Executor {
             }
         }
 
-        events.push(TurnEvent::ToolStart {
+        let _ = event_tx.send(TurnEvent::ToolStart {
             name: tc.name.clone(),
             args: tc.arguments.clone(),
         });
@@ -1589,7 +1599,7 @@ impl Executor {
             )
             .await
         {
-            events.push(TurnEvent::ToolResult {
+            let _ = event_tx.send(TurnEvent::ToolResult {
                 name: tc.name.clone(),
                 output: reason.clone(),
                 success: false,
@@ -1617,7 +1627,7 @@ impl Executor {
         } else {
             outcome
         };
-        let edit_diff = handle_tool_outcome(outcome, tc, events, &mut self.conversation)?;
+        let edit_diff = handle_tool_outcome(outcome, tc, event_tx, &mut self.conversation)?;
 
         // Post-tool hook
         self.run_hook(
@@ -1638,7 +1648,7 @@ impl Executor {
             )
             .await;
         self.collect_carryover(tc, &crs);
-        emit_correction_results(crs, tc, events, &mut self.conversation)?;
+        emit_correction_results(crs, tc, event_tx, &mut self.conversation)?;
         Ok(())
     }
 
@@ -2105,12 +2115,12 @@ fn check_deny_list(
 fn handle_tool_outcome(
     outcome: ToolOutcome,
     tc: &ToolInvocation,
-    events: &mut Vec<TurnEvent>,
+    event_tx: &mpsc::UnboundedSender<TurnEvent>,
     conversation: &mut ConversationLog,
 ) -> anyhow::Result<Option<String>> {
     match outcome {
         ToolOutcome::Success { content } => {
-            events.push(TurnEvent::ToolResult {
+            let _ = event_tx.send(TurnEvent::ToolResult {
                 name: tc.name.clone(),
                 output: content.clone(),
                 success: true,
@@ -2124,7 +2134,7 @@ fn handle_tool_outcome(
             })?;
         }
         ToolOutcome::FileContent { content, .. } => {
-            events.push(TurnEvent::ToolResult {
+            let _ = event_tx.send(TurnEvent::ToolResult {
                 name: tc.name.clone(),
                 output: content.clone(),
                 success: true,
@@ -2141,7 +2151,7 @@ fn handle_tool_outcome(
             // Hand the rendered diff to the caller so the
             // BusEvent::Edit event downstream carries the real
             // diff text — see the docstring on this fn.
-            events.push(TurnEvent::ToolResult {
+            let _ = event_tx.send(TurnEvent::ToolResult {
                 name: tc.name.clone(),
                 output: diff.clone(),
                 success: true,
@@ -2161,7 +2171,7 @@ fn handle_tool_outcome(
             total: _,
         } => {
             let output = format_grep_output(&path, &matches);
-            events.push(TurnEvent::ToolResult {
+            let _ = event_tx.send(TurnEvent::ToolResult {
                 name: tc.name.clone(),
                 output: output.clone(),
                 success: true,
@@ -2175,7 +2185,7 @@ fn handle_tool_outcome(
             })?;
         }
         ToolOutcome::Error { message } => {
-            events.push(TurnEvent::ToolResult {
+            let _ = event_tx.send(TurnEvent::ToolResult {
                 name: tc.name.clone(),
                 output: format!("Error: {}", message),
                 success: false,
@@ -2213,7 +2223,7 @@ fn handle_tool_outcome(
                 mime,
                 data_base64.len()
             );
-            events.push(TurnEvent::ToolResult {
+            let _ = event_tx.send(TurnEvent::ToolResult {
                 name: tc.name.clone(),
                 output: projection.clone(),
                 success: true,
@@ -2252,11 +2262,11 @@ fn format_grep_output(path: &std::path::Path, matches: &[crate::shared::Match]) 
 fn emit_correction_results(
     results: Vec<CorrectionResult>,
     tc: &ToolInvocation,
-    events: &mut Vec<TurnEvent>,
+    event_tx: &mpsc::UnboundedSender<TurnEvent>,
     conversation: &mut ConversationLog,
 ) -> anyhow::Result<()> {
     for cr in &results {
-        events.push(TurnEvent::Verification {
+        let _ = event_tx.send(TurnEvent::Verification {
             message: cr.message.clone(),
             success: cr.success,
         });
@@ -2470,7 +2480,7 @@ mod tests {
         let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
         let mut exe = make_executor(Box::new(adapter), vec![], make_config(false));
         let events = exe
-            .run_turn("hello", &approval_tx, never_cancelled())
+            .run_turn_collecting("hello", &approval_tx, never_cancelled())
             .await
             .unwrap();
 
@@ -2526,7 +2536,7 @@ mod tests {
         let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
         let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(true));
         let events = exe
-            .run_turn("use echo", &approval_tx, never_cancelled())
+            .run_turn_collecting("use echo", &approval_tx, never_cancelled())
             .await
             .unwrap();
 
@@ -2595,7 +2605,7 @@ mod tests {
 
         let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(false));
         let events = exe
-            .run_turn("run command", &approval_tx, never_cancelled())
+            .run_turn_collecting("run command", &approval_tx, never_cancelled())
             .await
             .unwrap();
 
@@ -2650,7 +2660,7 @@ mod tests {
 
         let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(false));
         let events = exe
-            .run_turn("run command", &approval_tx, never_cancelled())
+            .run_turn_collecting("run command", &approval_tx, never_cancelled())
             .await
             .unwrap();
 
@@ -2702,7 +2712,7 @@ mod tests {
 
         let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(false));
         let events = exe
-            .run_turn("run command", &approval_tx, never_cancelled())
+            .run_turn_collecting("run command", &approval_tx, never_cancelled())
             .await
             .unwrap();
 
@@ -2760,7 +2770,7 @@ mod tests {
 
         let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], config);
         let _events = exe
-            .run_turn("run tests", &approval_tx, never_cancelled())
+            .run_turn_collecting("run tests", &approval_tx, never_cancelled())
             .await
             .unwrap();
         approval_handle.await.unwrap();
@@ -2839,7 +2849,7 @@ mod tests {
 
         let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], config);
         let _events = exe
-            .run_turn("list", &approval_tx, never_cancelled())
+            .run_turn_collecting("list", &approval_tx, never_cancelled())
             .await
             .unwrap();
         drop(approval_tx);
@@ -2903,7 +2913,7 @@ mod tests {
 
         let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], config);
         let _events = exe
-            .run_turn("clean", &approval_tx, never_cancelled())
+            .run_turn_collecting("clean", &approval_tx, never_cancelled())
             .await
             .unwrap();
         drop(approval_tx);
@@ -2970,7 +2980,7 @@ mod tests {
 
         let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], config);
         let events = exe
-            .run_turn("clean build", &approval_tx, never_cancelled())
+            .run_turn_collecting("clean build", &approval_tx, never_cancelled())
             .await
             .unwrap();
         drop(approval_tx);
@@ -3032,7 +3042,7 @@ mod tests {
 
         let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], config);
         let events = exe
-            .run_turn("save creds", &approval_tx, never_cancelled())
+            .run_turn_collecting("save creds", &approval_tx, never_cancelled())
             .await
             .unwrap();
 
@@ -3105,7 +3115,7 @@ mod tests {
 
         let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], config);
         let events = exe
-            .run_turn("wipe disk", &approval_tx, never_cancelled())
+            .run_turn_collecting("wipe disk", &approval_tx, never_cancelled())
             .await
             .unwrap();
         drop(approval_tx);
@@ -3166,7 +3176,7 @@ mod tests {
 
         let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(true));
         let _events = exe
-            .run_turn("build", &approval_tx, never_cancelled())
+            .run_turn_collecting("build", &approval_tx, never_cancelled())
             .await
             .unwrap();
         approval_handle.await.unwrap();
@@ -3190,7 +3200,7 @@ mod tests {
         let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
         let mut exe = make_executor(Box::new(adapter), vec![], make_config(false));
         let events = exe
-            .run_turn("do it", &approval_tx, never_cancelled())
+            .run_turn_collecting("do it", &approval_tx, never_cancelled())
             .await
             .unwrap();
 
@@ -3220,7 +3230,7 @@ mod tests {
         let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
         let mut exe = make_executor(Box::new(adapter), vec![], make_config(false));
         let events = exe
-            .run_turn("use unknown tool", &approval_tx, never_cancelled())
+            .run_turn_collecting("use unknown tool", &approval_tx, never_cancelled())
             .await
             .unwrap();
 
@@ -3294,7 +3304,7 @@ mod tests {
         config.max_tool_calls_per_turn = 5;
         let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], config);
         let _events = exe
-            .run_turn("loop", &approval_tx, never_cancelled())
+            .run_turn_collecting("loop", &approval_tx, never_cancelled())
             .await
             .unwrap();
 
@@ -3359,7 +3369,7 @@ mod tests {
 
         let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], config);
         let events = exe
-            .run_turn("build", &approval_tx, never_cancelled())
+            .run_turn_collecting("build", &approval_tx, never_cancelled())
             .await
             .unwrap();
         drop(approval_tx);
@@ -3417,7 +3427,7 @@ mod tests {
 
         let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], config);
         let events = exe
-            .run_turn("read secrets", &approval_tx, never_cancelled())
+            .run_turn_collecting("read secrets", &approval_tx, never_cancelled())
             .await
             .unwrap();
 
@@ -3628,7 +3638,7 @@ mod tests {
             .mark_read(&std::path::PathBuf::from("/tmp/edit_event_diff_test.txt"));
 
         let _events = exe
-            .run_turn("edit it", &approval_tx, never_cancelled())
+            .run_turn_collecting("edit it", &approval_tx, never_cancelled())
             .await
             .unwrap();
 
@@ -3739,7 +3749,7 @@ mod tests {
         exe.set_plan_mode(true);
 
         let events = exe
-            .run_turn("write something", &approval_tx, never_cancelled())
+            .run_turn_collecting("write something", &approval_tx, never_cancelled())
             .await
             .unwrap();
 
@@ -3799,7 +3809,7 @@ mod tests {
         exe.set_plan_mode(true);
 
         let events = exe
-            .run_turn("build", &approval_tx, never_cancelled())
+            .run_turn_collecting("build", &approval_tx, never_cancelled())
             .await
             .unwrap();
 
@@ -3866,7 +3876,7 @@ mod tests {
         exe.set_plan_mode(true);
 
         let events = exe
-            .run_turn("read something", &approval_tx, never_cancelled())
+            .run_turn_collecting("read something", &approval_tx, never_cancelled())
             .await
             .unwrap();
 
@@ -3935,7 +3945,7 @@ mod tests {
         let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
         let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(true));
         let events = exe
-            .run_turn("read image", &approval_tx, never_cancelled())
+            .run_turn_collecting("read image", &approval_tx, never_cancelled())
             .await
             .unwrap();
 
@@ -3995,7 +4005,7 @@ mod tests {
         exe.set_plan_mode(true);
 
         let events = exe
-            .run_turn("list files", &approval_tx, never_cancelled())
+            .run_turn_collecting("list files", &approval_tx, never_cancelled())
             .await
             .unwrap();
 
@@ -4051,7 +4061,7 @@ mod tests {
         exe.set_plan_mode(true);
 
         let events = exe
-            .run_turn("check job", &approval_tx, never_cancelled())
+            .run_turn_collecting("check job", &approval_tx, never_cancelled())
             .await
             .unwrap();
 
@@ -4114,7 +4124,7 @@ mod tests {
         exe.set_plan_mode(true);
 
         let events = exe
-            .run_turn("cancel job", &approval_tx, never_cancelled())
+            .run_turn_collecting("cancel job", &approval_tx, never_cancelled())
             .await
             .unwrap();
 
@@ -4155,7 +4165,7 @@ mod tests {
         exe.set_plan_mode(true);
 
         let events = exe
-            .run_turn("plan this", &approval_tx, never_cancelled())
+            .run_turn_collecting("plan this", &approval_tx, never_cancelled())
             .await
             .unwrap();
 
@@ -4214,7 +4224,7 @@ mod tests {
 
         let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
         let events = exe
-            .run_turn("run command", &approval_tx, never_cancelled())
+            .run_turn_collecting("run command", &approval_tx, never_cancelled())
             .await
             .unwrap();
 
@@ -4281,7 +4291,7 @@ mod tests {
 
         let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
         let _events = exe
-            .run_turn("run command", &approval_tx, never_cancelled())
+            .run_turn_collecting("run command", &approval_tx, never_cancelled())
             .await
             .unwrap();
 
@@ -4332,7 +4342,7 @@ mod tests {
 
         let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
         let _events = exe
-            .run_turn("run command", &approval_tx, never_cancelled())
+            .run_turn_collecting("run command", &approval_tx, never_cancelled())
             .await
             .unwrap();
 
@@ -4480,7 +4490,7 @@ mod tests {
 
         let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(false));
         let events = exe
-            .run_turn("search files", &approval_tx, never_cancelled())
+            .run_turn_collecting("search files", &approval_tx, never_cancelled())
             .await
             .unwrap();
 
@@ -4532,7 +4542,7 @@ mod tests {
 
         let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(false));
         let events = exe
-            .run_turn("delete temp files", &approval_tx, never_cancelled())
+            .run_turn_collecting("delete temp files", &approval_tx, never_cancelled())
             .await
             .unwrap();
 
@@ -4584,7 +4594,7 @@ mod tests {
         config.sandbox_dir = Some(sandbox.to_string_lossy().to_string());
         let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], config);
         let events = exe
-            .run_turn("list outside sandbox", &approval_tx, never_cancelled())
+            .run_turn_collecting("list outside sandbox", &approval_tx, never_cancelled())
             .await
             .unwrap();
 
@@ -4630,7 +4640,7 @@ mod tests {
         config.max_tool_calls_per_turn = 3;
         let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], config);
         let events = exe
-            .run_turn("loop", &approval_tx, never_cancelled())
+            .run_turn_collecting("loop", &approval_tx, never_cancelled())
             .await
             .unwrap();
 
@@ -4699,7 +4709,7 @@ mod tests {
 
         let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(false));
         let _events = exe
-            .run_turn("run tests", &approval_tx, never_cancelled())
+            .run_turn_collecting("run tests", &approval_tx, never_cancelled())
             .await
             .unwrap();
         approval_handle.await.unwrap();
@@ -4728,7 +4738,7 @@ mod tests {
         // infinite hang caused by a misplaced approval prompt.
         let second_events = tokio::time::timeout(
             std::time::Duration::from_secs(5),
-            exe.run_turn("run tests again", &approval_tx2, never_cancelled()),
+            exe.run_turn_collecting("run tests again", &approval_tx2, never_cancelled()),
         )
         .await
         .expect("second turn should complete without approval prompt");

@@ -24,9 +24,6 @@ pub fn render_approval_dialog(
     approval: &PendingApproval,
     state: &mut AppState,
 ) {
-    // Dimmed overlay
-    f.render_widget(Clear, area);
-
     // Dialog box — up to 60 cols wide, up to 75% of terminal height.
     // (A 12-line fixed dialog truncated the args preview to 4 lines,
     // which made it impossible to read a 200-char `edit_file` argument
@@ -37,6 +34,13 @@ pub fn render_approval_dialog(
     let y = (area.height.saturating_sub(dialog_height)) / 2;
 
     let dialog_area = Rect::new(x, y, dialog_width, dialog_height);
+
+    // Clear ONLY the dialog rect, not the whole screen. A full-area
+    // `Clear` wipes the chat behind the popup, leaving a small red box
+    // on a black field — which reads as "blank/broken" rather than an
+    // approval prompt. Clearing just the dialog keeps the conversation
+    // visible around it, so the prompt appears in context.
+    f.render_widget(Clear, dialog_area);
 
     let block = Block::default()
         .title(" ⚠️  Approval Required ")

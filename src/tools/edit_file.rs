@@ -176,6 +176,16 @@ impl Tool for EditFile {
                 .collect::<Vec<_>>()
                 .join("\n");
 
+            if old_normalized.is_empty() {
+                return ToolOutcome::Error {
+                    message: format!(
+                        "old_string is empty or whitespace-only in {}; \
+                         edit_file requires a non-empty old_string",
+                        path.display()
+                    ),
+                };
+            }
+
             if normalized.contains(&old_normalized) {
                 // Ambiguous fuzzy match guard: if the normalized old_string
                 // appears more than once, we cannot safely choose one.
@@ -530,6 +540,31 @@ mod tests {
             "expected ambiguous-match error, got {result:?}"
         );
         remove_test_file(&path);
+    }
+
+    /// Whitespace-only old_string must not reach `slice::windows(0)`.
+    #[tokio::test]
+    async fn test_edit_file_rejects_whitespace_only_old_string() {
+        let dir = std::env::temp_dir();
+        let path = dir.join("kirkforge_edit_whitespace_old.txt");
+        // A single non-whitespace line so normalization is unique, plus an
+        // empty line so the whitespace-only old_string can be found exactly
+        // once after normalization.
+        std::fs::write(&path, "fn main() {\n\n}\n").unwrap();
+
+        let tool = EditFile::new(None);
+        let args = serde_json::json!({
+            "path": path.to_string_lossy(),
+            "old_string": "   ",
+            "new_string": "hello",
+        });
+        let result = tool.run(args).await;
+        assert!(
+            matches!(result, ToolOutcome::Error { ref message } if message.contains("whitespace-only")),
+            "expected whitespace-only rejection, got {:?}",
+            result
+        );
+        let _ = std::fs::remove_file(&path);
     }
 
     /// The fuzzy fallback must also reject ambiguous normalized matches.

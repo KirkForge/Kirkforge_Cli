@@ -123,6 +123,11 @@ impl BashJobRegistry {
                 for rid in to_remove {
                     jobs.remove(&rid);
                 }
+                if jobs.len() >= MAX_JOBS {
+                    return Err(anyhow::anyhow!(
+                        "Background job limit ({MAX_JOBS}) reached; wait for jobs to finish or cancel them."
+                    ));
+                }
             }
         }
 
@@ -556,6 +561,41 @@ mod tests {
             err.contains("dangerous pattern"),
             "expected dangerous-pattern denial, got: {err}"
         );
+    }
+
+    /// Once MAX_JOBS slots are filled with still-running jobs, further spawns
+    /// must be rejected instead of growing the registry unboundedly.
+    #[tokio::test]
+    async fn test_job_cap_enforced_when_all_running() {
+        let reg = BashJobRegistry::new();
+        for i in 0..MAX_JOBS {
+            let id = reg
+                .spawn("sleep 30", None, None, &DenyList::default(), &PathGuard::default(), false)
+                .await
+                .unwrap();
+            assert_eq!(id as usize, i + 1);
+        }
+
+        let next = reg
+            .spawn("echo overflow", None, None, &DenyList::default(), &PathGuard::default(), false)
+            .await;
+        assert!(
+            next.is_err(),
+            "spawn should fail when all {} jobs are still running",
+            MAX_JOBS
+        );
+        let err = next.unwrap_err().to_string();
+        assert!(
+            err.contains("Background job limit"),
+            "expected cap error, got: {}",
+            err
+        );
+
+        // Clean up the 64 long-running jobs so the test doesn't linger.
+        let ids: Vec<u64> = reg.list().await.into_iter().map(|j| j.id).collect();
+        for id in ids {
+            let _ = reg.cancel(id).await;
+        }
     }
 
     /// A job that exceeds its timeout is killed, reaped, and still retains

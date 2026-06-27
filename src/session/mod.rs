@@ -65,7 +65,14 @@ pub fn load_or_create_config() -> Config {
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        let _ = std::fs::write(&path, toml::to_string_pretty(&cfg).unwrap_or_default());
+        let content = toml::to_string_pretty(&cfg).unwrap_or_default();
+        if std::fs::write(&path, &content).is_ok() {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+            }
+        }
         cfg
     }
 }

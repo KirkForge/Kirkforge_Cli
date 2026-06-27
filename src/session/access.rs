@@ -61,6 +61,8 @@ impl Default for DenyList {
         Self::new(
             vec![
                 "**/.ssh/**".into(),
+                "**/.gnupg/**".into(),
+                "**/.aws/**".into(),
                 "**/.git/**".into(),
                 "**/__pycache__/**".into(),
                 "**/.env*".into(),

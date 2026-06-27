@@ -214,14 +214,39 @@ impl ModelAdapter for OpenAiCompatAdapter {
         );
         let url = format!("{}/v1/chat/completions", self.api_base);
 
-        let response = self
-            .client
-            .post(&url)
-            .json(&body)
-            .timeout(std::time::Duration::from_secs(300))
-            .send()
-            .await?
-            .error_for_status()?;
+        let response = {
+            let mut attempt = 0u32;
+            loop {
+                attempt += 1;
+                match self
+                    .client
+                    .post(&url)
+                    .json(&body)
+                    .timeout(std::time::Duration::from_secs(300))
+                    .send()
+                    .await
+                {
+                    Err(e) if attempt < 3 && (e.is_connect() || e.is_timeout()) => {
+                        tracing::warn!(attempt, error = %e, "model request failed, retrying");
+                        tokio::time::sleep(std::time::Duration::from_secs(1u64 << (attempt - 1)))
+                            .await;
+                    }
+                    Err(e) => return Err(e.into()),
+                    Ok(r) => {
+                        let s = r.status().as_u16();
+                        if attempt < 3 && (s == 429 || s == 503) {
+                            tracing::warn!(attempt, status = s, "model returned transient error, retrying");
+                            tokio::time::sleep(
+                                std::time::Duration::from_secs(1u64 << (attempt - 1)),
+                            )
+                            .await;
+                        } else {
+                            break r.error_for_status()?;
+                        }
+                    }
+                }
+            }
+        };
 
         // Channel size: 4096 events. The previous value of 128 was
         // the proximate cause of the "stream consumer dropped

@@ -3,6 +3,10 @@ name = "kirkforge"
 version = "0.1.0"
 edition = "2021"
 description = "Native Ollama CLI coding agent — static binary, TUI, potato hardware"
+repository = "https://github.com/KirkForge/KirkForge-Cli"
+license = "MIT"
+keywords = ["ai", "cli", "coding-agent", "ollama", "tui"]
+categories = ["command-line-utilities", "development-tools"]
 
 [workspace]
 members = ["crates/*"]

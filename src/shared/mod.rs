@@ -390,7 +390,7 @@ impl Default for Config {
         // `KIRKFORGE_SANDBOX_DIR=""` (both are checked in
         // `access_from_config` and resolve to `sandbox_dir = None`).
         Self {
-            default_model: "deepseek-v4-flash:cloud".into(),
+            default_model: "qwen2.5:7b".into(),
             ollama_host: "http://localhost:11434".into(),
             auto_approve: false,
             permission_rules: vec![],

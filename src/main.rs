@@ -462,7 +462,9 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     // the TUI cannot render. Fall back to the same line-mode loop that
     // --non-interactive uses, but read from stdin instead of a pre-baked
     // prompt list so the user can still chat.
-    let use_tui = !no_tui && !non_interactive && std::io::stdout().is_terminal();
+    let no_color = std::env::var("NO_COLOR").is_ok()
+        || std::env::var("TERM").map_or(false, |t| t == "dumb");
+    let use_tui = !no_tui && !non_interactive && !no_color && std::io::stdout().is_terminal();
     if use_tui {
         tui::run_tui(
             shared_config,

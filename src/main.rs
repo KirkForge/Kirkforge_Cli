@@ -197,6 +197,21 @@ enum Command {
     Completions {
         shell: Shell,
     },
+    /// List and export past sessions.
+    /// Without arguments, lists recent sessions (newest first).
+    /// With --export, writes the session to stdout or a file.
+    Sessions {
+        /// Session id or id prefix to export. Omit to list all sessions.
+        id: Option<String>,
+
+        /// Export format: markdown, json, or ndjson.
+        #[arg(long, value_name = "FORMAT")]
+        export: Option<String>,
+
+        /// Write export to this file instead of stdout.
+        #[arg(long, short)]
+        output: Option<PathBuf>,
+    },
     /// Run the background session daemon.
     Daemon {
         /// Stay in the foreground instead of detaching.
@@ -251,6 +266,9 @@ async fn main() {
             clap_complete::generate(shell, &mut Cli::command(), "kirkforge", &mut std::io::stdout());
             Ok(())
         }
+        Command::Sessions { id, export, output } => {
+            handle_sessions_command(id, export, output)
+        }
         Command::Daemon { foreground, stop } => daemon::server::run_daemon(foreground, stop).await,
     };
 
@@ -258,6 +276,78 @@ async fn main() {
         eprintln!("kirkforge: {e:#}");
         std::process::exit(exit_code(&e));
     }
+}
+
+fn handle_sessions_command(
+    id: Option<String>,
+    export: Option<String>,
+    out_path: Option<PathBuf>,
+) -> anyhow::Result<()> {
+    use session::conversation::ConversationLog;
+    use session::session_index::{list_sessions, resolve_session_id};
+
+    // No id → list
+    if id.is_none() && export.is_none() {
+        let entries = list_sessions().unwrap_or_default();
+        if entries.is_empty() {
+            println!("No sessions found.");
+            return Ok(());
+        }
+        println!("{:<30} {:>6} {:>10}  {}", "ID", "msgs", "size", "started");
+        println!("{}", "-".repeat(60));
+        for e in &entries {
+            println!(
+                "{:<30} {:>6} {:>10}  {}",
+                e.id,
+                e.message_count,
+                format!("{:.1} KB", e.size_bytes as f64 / 1024.0),
+                e.started_at
+            );
+        }
+        return Ok(());
+    }
+
+    let id = id.ok_or_else(|| anyhow::anyhow!("--export requires a session id"))?;
+    let fmt = export.as_deref().unwrap_or("markdown");
+
+    let path = resolve_session_id(&id)?
+        .ok_or_else(|| anyhow::anyhow!("session '{}' not found", id))?;
+
+    let content = match fmt {
+        "ndjson" => std::fs::read_to_string(&path)?,
+        "json" => {
+            let log = ConversationLog::open(path)?;
+            serde_json::to_string_pretty(log.all())?
+        }
+        "markdown" | "md" => {
+            let log = ConversationLog::open(path)?;
+            // Build ConversationEntry list from Message list for transcript formatter
+            let entries: Vec<tui::app::ConversationEntry> = log
+                .all()
+                .iter()
+                .map(|m| {
+                    let role = match m.role {
+                        shared::Role::User => "user",
+                        shared::Role::Assistant => "assistant",
+                        shared::Role::Tool => "tool",
+                        shared::Role::System => "system",
+                    };
+                    tui::app::ConversationEntry::new(role, m.content.clone())
+                })
+                .collect();
+            tui::transcript::format_transcript(&id, &entries)
+        }
+        other => anyhow::bail!("unknown export format '{}'; use markdown, json, or ndjson", other),
+    };
+
+    if let Some(p) = out_path {
+        std::fs::write(&p, &content)?;
+        println!("Exported {} session to {}", fmt, p.display());
+    } else {
+        print!("{}", content);
+    }
+
+    Ok(())
 }
 
 struct RunArgs {

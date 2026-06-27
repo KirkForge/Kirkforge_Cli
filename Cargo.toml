@@ -36,7 +36,8 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 anyhow = "1"
 
 # CLI args
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
+clap_complete = "4"
 
 # Async trait support
 async-trait = "0.1"

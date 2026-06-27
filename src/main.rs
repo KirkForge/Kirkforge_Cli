@@ -5,7 +5,8 @@ mod shared;
 mod tools;
 mod tui;
 
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
+use clap_complete::Shell;
 use kirkforge_plugin::TrustTier;
 use kirkforge_plugin_host::TrustPolicy;
 use std::io::{IsTerminal, Write};
@@ -21,7 +22,7 @@ use tracing_subscriber::prelude::*;
 /// write logs to `<data_dir>/kirkforge.log` and additionally mirror them
 /// to stderr when `KIRKFORGE_LOG_STDERR=1` is set (useful for daemon or
 /// non-interactive debugging).
-fn init_tracing() {
+fn init_tracing(log_level: &str) {
     // Writer enum so that a failure to open the log file falls back to
     // a null sink instead of panicking on `/dev/null`.
     enum LogWriter {
@@ -45,7 +46,7 @@ fn init_tracing() {
         }
     }
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn"));
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(log_level));
 
     let log_file = session::data_dir()
         .map(|d| d.join("kirkforge.log"))
@@ -90,6 +91,10 @@ fn init_tracing() {
 #[derive(Parser, Debug)]
 #[command(name = "kirkforge", version, about)]
 struct Cli {
+    /// Log verbosity. Overridden by RUST_LOG if set.
+    #[arg(long, default_value = "warn", env = "KIRKFORGE_LOG_LEVEL", global = true)]
+    log_level: String,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -157,6 +162,11 @@ enum Command {
         #[arg(long)]
         no_tui: bool,
     },
+    /// Print shell completion script and exit.
+    /// Example: kirkforge completions bash >> ~/.bashrc
+    Completions {
+        shell: Shell,
+    },
     /// Run the background session daemon.
     Daemon {
         /// Stay in the foreground instead of detaching.
@@ -171,9 +181,8 @@ enum Command {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    init_tracing();
-
     let cli = Cli::parse();
+    init_tracing(&cli.log_level);
 
     match cli.command {
         Command::Run {
@@ -207,6 +216,10 @@ async fn main() -> anyhow::Result<()> {
                 no_tui,
             })
             .await
+        }
+        Command::Completions { shell } => {
+            clap_complete::generate(shell, &mut Cli::command(), "kirkforge", &mut std::io::stdout());
+            Ok(())
         }
         Command::Daemon { foreground, stop } => daemon::server::run_daemon(foreground, stop).await,
     }

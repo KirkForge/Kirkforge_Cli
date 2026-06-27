@@ -88,8 +88,38 @@ fn init_tracing(log_level: &str) {
     }
 }
 
+/// Map an anyhow error to a structured exit code.
+/// 0 = success, 1 = general, 2 = bad args (clap), 3 = model unreachable,
+/// 4 = permission/sandbox denied, 5 = config parse error.
+fn exit_code(e: &anyhow::Error) -> i32 {
+    let msg = format!("{e:#}").to_lowercase();
+    if msg.contains("connection refused")
+        || msg.contains("failed to connect")
+        || msg.contains("dns error")
+        || msg.contains("timed out")
+        || msg.contains("model not found")
+    {
+        3
+    } else if msg.contains("denied")
+        || msg.contains("permission")
+        || msg.contains("sandbox")
+        || msg.contains("blocked")
+    {
+        4
+    } else if msg.contains("config") && (msg.contains("parse") || msg.contains("invalid")) {
+        5
+    } else {
+        1
+    }
+}
+
 #[derive(Parser, Debug)]
-#[command(name = "kirkforge", version, about)]
+#[command(
+    name = "kirkforge",
+    version,
+    about,
+    after_help = "Exit codes:\n  0  success\n  1  general error\n  2  bad arguments\n  3  model unreachable\n  4  permission / sandbox denied\n  5  config parse error"
+)]
 struct Cli {
     /// Log verbosity. Overridden by RUST_LOG if set.
     #[arg(long, default_value = "warn", env = "KIRKFORGE_LOG_LEVEL", global = true)]
@@ -180,11 +210,11 @@ enum Command {
 }
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() {
     let cli = Cli::parse();
     init_tracing(&cli.log_level);
 
-    match cli.command {
+    let result = match cli.command {
         Command::Run {
             model,
             host,
@@ -222,6 +252,11 @@ async fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Daemon { foreground, stop } => daemon::server::run_daemon(foreground, stop).await,
+    };
+
+    if let Err(e) = result {
+        eprintln!("kirkforge: {e:#}");
+        std::process::exit(exit_code(&e));
     }
 }
 

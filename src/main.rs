@@ -587,7 +587,7 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
         tracing::warn!(warning = %w, "plugin load warning");
     }
 
-    let tools = toolset.into_tools();
+    let tools = toolset.into_tools()?;
 
     if let Some(sys) = &system {
         // Wired into the executor's PromptBuilder before the first turn

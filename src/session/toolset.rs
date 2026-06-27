@@ -113,19 +113,19 @@ impl CompositeToolset {
     /// executor constructor, which wraps the vector internally. The order
     /// matches the composition order, and duplicate names across inner sets
     /// are resolved in favor of the first set that contains the name.
-    pub fn into_tools(self) -> Vec<Arc<dyn Tool>> {
+    pub fn into_tools(self) -> anyhow::Result<Vec<Arc<dyn Tool>>> {
         // Use the already-deduplicated definitions list so the model never
         // sees two tools with the same name, then resolve each back to the
         // concrete tool implementation.
         let defs = self.definitions();
         let mut tools = Vec::new();
         for def in defs {
-            tools.push(
-                self.resolve(def.name)
-                    .unwrap_or_else(|| panic!("tool {} disappeared during flatten", def.name)),
-            );
+            let tool = self.resolve(def.name).ok_or_else(|| {
+                anyhow::anyhow!("tool '{}' disappeared during flatten — plugin may have loaded inconsistently", def.name)
+            })?;
+            tools.push(tool);
         }
-        tools
+        Ok(tools)
     }
 }
 
@@ -233,7 +233,7 @@ mod tests {
             vec![Arc::new(DummyTool { name: "y" })],
         )));
 
-        let tools = composite.into_tools();
+        let tools = composite.into_tools().unwrap();
         assert_eq!(tools.len(), 2);
         assert_eq!(tools[0].def().name, "x");
         assert_eq!(tools[1].def().name, "y");

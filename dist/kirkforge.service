@@ -1,0 +1,18 @@
+[Unit]
+Description=kirkforge session daemon
+Documentation=man:kirkforge(1)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/share/kirkforge/bin/kirkforge daemon --foreground
+Restart=on-failure
+RestartSec=5s
+# Keep session state in the user data dir
+Environment=HOME=%h
+# Prevent the daemon from reading world-readable files it shouldn't see
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target

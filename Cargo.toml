@@ -86,6 +86,11 @@ kirkforge-plugin-host = { workspace = true }
 # Test-only: create real temporary files for @-mention expansion tests
 tempfile = "3"
 
+[build-dependencies]
+clap_mangen = "0.2"
+clap = { version = "4", features = ["derive", "env"] }
+clap_complete = "4"
+
 [profile.release]
 opt-level = "z"
 lto = true

@@ -135,6 +135,7 @@ pub fn handle_approval_key(key: KeyEvent, state: &mut AppState) {
         KeyCode::Char('y') | KeyCode::Char('Y') => Some(ApprovalResponse::Approved),
         KeyCode::Char('n') | KeyCode::Char('N') => Some(ApprovalResponse::Denied),
         KeyCode::Char('a') | KeyCode::Char('A') => Some(ApprovalResponse::AlwaysApprove),
+        KeyCode::Char('q') | KeyCode::Char('Q') => Some(ApprovalResponse::Denied),
         KeyCode::Esc => Some(ApprovalResponse::Denied),
         // Scroll keys — operate on the args preview, NOT the chat.
         // (Approval-mode keys never reach the chat-view scroll handler.)

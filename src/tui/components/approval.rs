@@ -197,7 +197,7 @@ pub fn render_approval_dialog(
 
     // [last] Instructions
     let instr_text = Paragraph::new(vec![Line::from(Span::styled(
-        " [Y]es  [N]o  [A]lways  [Esc] cancel    ↑↓ PgUp/PgDn scroll",
+        " [Y]es  [N]o  [A]lways  [Esc/Q] cancel    ^C exit    ↑↓ PgUp/PgDn",
         Style::default().fg(Color::Green),
     ))])
     .alignment(Alignment::Center);

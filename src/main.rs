@@ -293,7 +293,7 @@ fn handle_sessions_command(
             println!("No sessions found.");
             return Ok(());
         }
-        println!("{:<30} {:>6} {:>10}  {}", "ID", "msgs", "size", "started");
+        println!("{:<30} {:>6} {:>10}  started", "ID", "msgs", "size");
         println!("{}", "-".repeat(60));
         for e in &entries {
             println!(
@@ -601,7 +601,7 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     // --non-interactive uses, but read from stdin instead of a pre-baked
     // prompt list so the user can still chat.
     let no_color = std::env::var("NO_COLOR").is_ok()
-        || std::env::var("TERM").map_or(false, |t| t == "dumb");
+        || std::env::var("TERM").is_ok_and(|t| t == "dumb");
     let use_tui = !no_tui && !non_interactive && !no_color && std::io::stdout().is_terminal();
     if use_tui {
         tui::run_tui(

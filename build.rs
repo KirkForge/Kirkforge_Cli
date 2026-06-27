@@ -42,6 +42,14 @@ enum Command {
     },
     /// Print shell completion script and exit.
     Completions { shell: Shell },
+    /// List and export past sessions.
+    Sessions {
+        id: Option<String>,
+        #[arg(long, value_name = "FORMAT")]
+        export: Option<String>,
+        #[arg(long, short)]
+        output: Option<std::path::PathBuf>,
+    },
     /// Run the background session daemon.
     Daemon {
         #[arg(long)]

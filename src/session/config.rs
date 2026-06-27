@@ -65,8 +65,17 @@ pub fn load_or_create_config() -> Config {
             let _ = std::fs::create_dir_all(parent);
         }
         if let Ok(content) = toml::to_string_pretty(&cfg) {
-            let _ = std::fs::write(&path, content);
-            tracing::info!("Created default config at {}", path.display());
+            if std::fs::write(&path, content).is_ok() {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let _ = std::fs::set_permissions(
+                        &path,
+                        std::fs::Permissions::from_mode(0o600),
+                    );
+                }
+                tracing::info!("Created default config at {}", path.display());
+            }
         }
         tracing::info!(
             "Config file created at {}. Edit it to customize model, host, etc.",
@@ -85,6 +94,11 @@ pub fn save_config(config: &Config) -> anyhow::Result<()> {
     }
     let content = toml::to_string_pretty(config)?;
     std::fs::write(&path, content)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+    }
     Ok(())
 }
 

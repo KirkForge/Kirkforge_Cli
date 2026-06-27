@@ -262,6 +262,12 @@ fn estimate_messages_tokens(messages: &[crate::shared::Message]) -> usize {
 ///
 /// The TUI calls this once per render frame so the chat panel
 /// stays in sync with whatever the model is producing.
+/// Hard cap on the TUI display list. Beyond this, the oldest entries are
+/// evicted to prevent render perf degradation in very long sessions.
+const MAX_DISPLAY_MESSAGES: usize = 2000;
+/// How many messages to retain after a prune (keeps the most recent ones).
+const KEEP_DISPLAY_MESSAGES: usize = 1500;
+
 pub fn drain_turn_events(state: &mut AppState, event_rx: &mut mpsc::UnboundedReceiver<TurnEvent>) {
     let mut any = false;
     while let Ok(ev) = event_rx.try_recv() {
@@ -269,6 +275,7 @@ pub fn drain_turn_events(state: &mut AppState, event_rx: &mut mpsc::UnboundedRec
         any = true;
     }
     if any {
+        prune_display_messages(state);
         // Frame-pacing v2: tell the event loop that a redraw is
         // now required. We only call this when at least one event
         // was actually applied — an empty channel should not
@@ -277,6 +284,35 @@ pub fn drain_turn_events(state: &mut AppState, event_rx: &mut mpsc::UnboundedRec
         // when nothing is happening).
         state.mark_dirty();
     }
+}
+
+/// Evict the oldest display messages when the list exceeds MAX_DISPLAY_MESSAGES.
+///
+/// Adjusts all index-based state (collapsed_messages, expanded_tools) so
+/// existing UI state stays consistent. Clears search results — they'll be
+/// recomputed on the next search keystroke.
+fn prune_display_messages(state: &mut AppState) {
+    if state.messages.len() <= MAX_DISPLAY_MESSAGES {
+        return;
+    }
+    let n_drop = state.messages.len() - KEEP_DISPLAY_MESSAGES;
+    state.messages.drain(0..n_drop);
+    // Insert a sentinel so the user knows old entries were trimmed.
+    state.messages.insert(
+        0,
+        ConversationEntry::new(
+            "system",
+            format!("[{} older messages pruned from display — use /save to preserve the full session]", n_drop),
+        ),
+    );
+    // The sentinel is now at [0]; kept messages shifted by (1 - n_drop).
+    // Re-map: old_idx → new_idx = old_idx - n_drop + 1  (only for old_idx >= n_drop)
+    let remap = |i: usize| -> Option<usize> { i.checked_sub(n_drop).map(|x| x + 1) };
+    state.collapsed_messages = state.collapsed_messages.iter().filter_map(|&i| remap(i)).collect();
+    state.expanded_tools = state.expanded_tools.iter().filter_map(|&i| remap(i)).collect();
+    // Search indices reference old message positions — clear and let next search recompute.
+    state.search_matches.clear();
+    state.search_match_idx = 0;
 }
 
 /// Drain every approval request currently queued. If a new request

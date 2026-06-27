@@ -280,5 +280,10 @@ pub async fn notify_completed_jobs(state: &mut AppState) -> bool {
             any = true;
         }
     }
+    // Prune notified_jobs to IDs still in the registry. Once the registry
+    // evicts a finished job its ID never reappears, so the HashSet would grow
+    // for the lifetime of the session without this.
+    let live_ids: std::collections::HashSet<u64> = jobs.iter().map(|j| j.id).collect();
+    state.notified_jobs.retain(|id| live_ids.contains(id));
     any
 }

@@ -75,7 +75,23 @@ pub fn render_approval_dialog(
     // file path to its current bytes; we only attach a diff if the
     // tool is `edit_file` / `write_file` (other tools return
     // `Vec::new()` from the formatter).
-    let reader = |p: &str| std::fs::read_to_string(p).ok();
+    // Only read files inside the working directory; a malicious model could
+    // submit edit_file("../../../../etc/passwd") expecting the diff preview to
+    // leak the file contents even if PathGuard blocks the write.
+    let cwd = std::env::current_dir().ok();
+    let reader = |p: &str| {
+        let permitted = cwd.as_ref().is_some_and(|base| {
+            std::path::Path::new(p)
+                .canonicalize()
+                .map(|canon| canon.starts_with(base))
+                .unwrap_or(false)
+        });
+        if permitted {
+            std::fs::read_to_string(p).ok()
+        } else {
+            None
+        }
+    };
     let diff_lines = crate::tui::components::diff_preview::format_edit_diff_preview(
         approval,
         dialog_width as usize,

@@ -462,6 +462,8 @@ pub async fn run_tui(
     )
     .await;
 
+    // Signal any in-flight model call to abort before dropping channels.
+    let _ = cancel_tx.send(());
     // Drop all control senders so every receiver in the executor's
     // `tokio::select!` closes. The executor only breaks on the
     // `else => break` arm once *all* receivers are closed; dropping
@@ -470,7 +472,8 @@ pub async fn run_tui(
     drop((
         input_tx, cancel_tx, resume_tx, compact_tx, model_tx, undo_tx, plan_tx, persona_tx,
     ));
-    let _ = handle.await;
+    // ponytail: 3s timeout so a hung Ollama HTTP call doesn't freeze the terminal
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(3), handle).await;
 
     // Save carryover profile
     if let Some(ref target) = saved_profile {

@@ -629,6 +629,7 @@ pub async fn handle_input_key(
                             return Ok(());
                         }
                         "/exit" | "/quit" => {
+                            let _ = cancel_tx.send(());
                             state.should_exit = true;
                             return Ok(());
                         }

@@ -215,6 +215,8 @@ pub fn highlight_line(
             } else {
                 buf.push_str(rest);
                 flush_buf(&mut buf, &mut spans, comment_style(base_style));
+                let matched = prefix_match_len(rest, closer);
+                highlighter.state = State::InBlockComment { closer, matched };
                 i = line.len();
                 continue;
             }
@@ -326,6 +328,20 @@ pub fn highlighter_for(lang: Option<&str>) -> Highlighter {
         language: lang.map(Language::from_str).unwrap_or(Language::Unknown),
         state: State::Normal,
     }
+}
+
+/// Length (in bytes) of the longest prefix of `prefix` that appears at
+/// the end of `s`. Used when a block-comment closer is split across a
+/// line boundary so the highlighter can resume searching for the rest.
+fn prefix_match_len(s: &str, prefix: &str) -> usize {
+    let mut last = 0;
+    for (idx, ch) in prefix.char_indices() {
+        let end = idx + ch.len_utf8();
+        if s.ends_with(&prefix[..end]) {
+            last = end;
+        }
+    }
+    last
 }
 
 fn flush_buf(buf: &mut String, spans: &mut Vec<Span<'static>>, style: Style) {
@@ -463,6 +479,26 @@ mod tests {
         let spans = highlight_line(&mut h, ">++++++++[<+++++++++>-]", code_block_style());
         assert_eq!(spans.len(), 1);
         assert_eq!(spans[0].content, ">++++++++[<+++++++++>-]");
+    }
+
+    #[test]
+    fn block_comment_closer_split_across_lines() {
+        let mut h = highlighter_for(Some("rust"));
+        let first = highlight_line(&mut h, "/* hello *", code_block_style());
+        let first_text: String = first.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(first_text, "/* hello *");
+        assert!(first.iter().any(|s| s.style.fg == Some(Color::DarkGray)));
+
+        // The closing `/` arrives on the next line. With the bug, the
+        // highlighter never noticed the partial `*` and stayed stuck in
+        // block-comment mode, so ` world` would still be dark gray.
+        let second = highlight_line(&mut h, "/ world", code_block_style());
+        let second_text: String = second.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(second_text, "/ world");
+        assert!(
+            second.iter().any(|s| s.content == " world" && s.style.fg != Some(Color::DarkGray)),
+            "text after a split closer should return to normal highlighting"
+        );
     }
 
     fn code_block_style() -> Style {

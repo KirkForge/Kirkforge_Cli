@@ -67,6 +67,7 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
         }
         TurnEvent::ToolStart { name, args: _ } => {
             state.is_generating = false; // turn ended (tool call)
+            state.turn_tool_calls += 1;
             state
                 .messages
                 .push(ConversationEntry::new("tool", format!("🔧 {} ...", name)));
@@ -111,6 +112,7 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
             cumulative_cost,
         } => {
             state.is_generating = false;
+            state.turn_tool_calls = 0; // reset for next turn
             state.tokens_sent = state.tokens_sent.wrapping_add(prompt_tokens);
             state.tokens_received = state.tokens_received.wrapping_add(completion_tokens);
             state.turn_cost = turn_cost;

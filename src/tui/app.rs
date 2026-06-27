@@ -153,6 +153,10 @@ pub struct AppState {
     // ── Generation state ────────────────────────────────────
     /// True while the model is generating a response (between Enter and Done).
     pub is_generating: bool,
+    /// Tool calls made so far in the current executor turn. Reset when a
+    /// turn completes (CostStats). Shown in the status bar so the user
+    /// can see progress even when is_generating is false between tool calls.
+    pub turn_tool_calls: usize,
 
     /// Fork-isolated subagent currently running in the background.
     pub persona_in_progress: Option<crate::tui::commands::PersonaHandle>,
@@ -345,6 +349,7 @@ impl AppState {
             fork_manager: None,
             should_exit: false,
             is_generating: false,
+            turn_tool_calls: 0,
             persona_in_progress: None,
             persona_cancel: None,
             spinner_tick: 0,

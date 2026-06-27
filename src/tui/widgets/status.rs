@@ -44,6 +44,16 @@ pub fn render_status(f: &mut Frame, area: Rect, state: &AppState) {
     // ── Plugin trust-tier indicator (Phase 2.3) ────────────────────
     let plugin_str = state.plugin_status.as_deref().unwrap_or("");
 
+    // ── Tool call counter (visible between tool calls when spinner is off) ──
+    let tool_calls_span: Span = if state.turn_tool_calls > 0 {
+        Span::styled(
+            format!("🔧×{} ", state.turn_tool_calls),
+            Style::default().fg(Color::Cyan),
+        )
+    } else {
+        Span::raw(String::new())
+    };
+
     // ── Budget indicator (v1.2-p6) ─────────────────────────────────
     // If we have both a connected model and a non-zero per-turn
     // prompt size, show "↑12.4K/128K (10%)" with a color that tells
@@ -103,6 +113,7 @@ pub fn render_status(f: &mut Frame, area: Rect, state: &AppState) {
     // layout math and rebuild with the styled spans for display.
     let right_visible_len: usize = [
         sandbox_span.content.chars().count(),
+        tool_calls_span.content.chars().count(),
         skills_span.content.chars().count(),
         plugin_span.content.chars().count(),
         sent_span.content.chars().count(),
@@ -139,6 +150,7 @@ pub fn render_status(f: &mut Frame, area: Rect, state: &AppState) {
         ),
         Span::styled(spacing, Style::default()),
         sandbox_span,
+        tool_calls_span,
         skills_span,
         plugin_span,
         sent_span,

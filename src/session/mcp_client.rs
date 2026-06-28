@@ -564,13 +564,18 @@ impl McpClientManager {
         let mut tools: HashMap<String, (usize, String)> = HashMap::new();
         let mut tool_defs_cache: HashMap<String, McpToolDef> = HashMap::new();
 
-        for (idx, config) in servers.iter().enumerate() {
+        for config in servers.iter() {
             if let Some(client) = McpClient::connect(config).await {
                 let client = Arc::new(client);
                 let server_tools = client.list_tools().await;
+                // Index by the slot this client will occupy in `clients`,
+                // NOT the config position — a server that fails to connect
+                // is never pushed, so config indices and `clients` indices
+                // diverge once any earlier server fails.
+                let client_idx = clients.len();
                 for t in &server_tools {
                     let full_name = format!("mcp/{}/{}", config.name, t.name);
-                    tools.insert(full_name.clone(), (idx, t.name.clone()));
+                    tools.insert(full_name.clone(), (client_idx, t.name.clone()));
                     tool_defs_cache.insert(
                         full_name.clone(),
                         McpToolDef {

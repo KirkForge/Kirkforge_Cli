@@ -1949,10 +1949,15 @@ fn is_read_only_bash(cmd: &str) -> bool {
         return false;
     }
 
+    // Every pipe segment must itself be a read-only command. The first
+    // segment's command is already validated above; this catches a
+    // read-only producer piped into a writing consumer — e.g.
+    // `cat list | xargs rm`, `… | tee /etc/file`, `… | sh`. Without this,
+    // such a pipeline would be auto-approved despite mutating state.
     for segment in trimmed.split('|') {
         let seg = segment.trim();
         if let Some(word) = seg.split_whitespace().next() {
-            if word == "sh" || word == "bash" {
+            if !READ_ONLY_COMMANDS.contains(&word) {
                 return false;
             }
         }
@@ -3502,6 +3507,23 @@ mod tests {
     fn test_is_read_only_bash_pipe_to_sh_blocked() {
         assert!(!is_read_only_bash("cat script | sh"));
         assert!(!is_read_only_bash("cat script | bash"));
+    }
+
+    #[test]
+    fn test_is_read_only_bash_pipe_to_writer_blocked() {
+        // A read-only producer piped into a writing consumer must NOT be
+        // auto-approved.
+        assert!(!is_read_only_bash("cat list.txt | xargs rm"));
+        assert!(!is_read_only_bash("cat data | tee /etc/important"));
+        assert!(!is_read_only_bash("cat in | dd of=/dev/sda"));
+        assert!(!is_read_only_bash("grep -rl foo . | xargs sed -i 's/a/b/'"));
+    }
+
+    #[test]
+    fn test_is_read_only_bash_read_only_pipe_allowed() {
+        // Pipelines where every stage is read-only stay auto-approved.
+        assert!(is_read_only_bash("cat x | grep foo | sort | uniq -c"));
+        assert!(is_read_only_bash("ps aux | grep ssh | wc -l"));
     }
 
     #[test]

@@ -334,7 +334,7 @@ impl EventBus {
         let mut inner = self.inner.lock().await;
         let id = handler.id().to_string();
         if inner.handlers.contains_key(&id) {
-            anyhow::bail!("Handler '{}' is already registered", id);
+            anyhow::bail!("Handler '{id}' is already registered");
         }
         inner.handlers.insert(id, handler);
         Ok(())

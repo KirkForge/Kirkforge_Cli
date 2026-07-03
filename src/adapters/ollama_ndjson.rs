@@ -232,7 +232,7 @@ pub async fn parse_ollama_ndjson_stream<B, E, S>(
                         Err(e) => {
                             if !send_or_bail(
                                 &tx,
-                                StreamEvent::Error(format!("JSON parse: {}", e)),
+                                StreamEvent::Error(format!("JSON parse: {e}")),
                                 "JSON parse error",
                             )
                             .await
@@ -372,7 +372,7 @@ mod tests {
     /// Convert a single Ollama NDJSON line into the byte representation
     /// the parser expects (line + trailing `\n`).
     fn line(s: &str) -> Vec<u8> {
-        format!("{}\n", s).into_bytes()
+        format!("{s}\n").into_bytes()
     }
 
     /// Drive the parser over a sequence of NDJSON lines and return the events.
@@ -414,7 +414,7 @@ mod tests {
                 assert_eq!(u.prompt_tokens, Some(3));
                 assert_eq!(u.completion_tokens, Some(5));
             }
-            other => panic!("expected Done as last event, got {:?}", other),
+            other => panic!("expected Done as last event, got {other:?}"),
         }
     }
 

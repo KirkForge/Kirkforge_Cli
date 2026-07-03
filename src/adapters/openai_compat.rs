@@ -96,7 +96,7 @@ impl ToolCallAccumulator {
                             id.clone()
                         } else {
                             next += 1;
-                            format!("{}__{}", id, next)
+                            format!("{id}__{next}")
                         };
                         ToolInvocation {
                             id: unique_id,
@@ -235,10 +235,14 @@ impl ModelAdapter for OpenAiCompatAdapter {
                     Ok(r) => {
                         let s = r.status().as_u16();
                         if attempt < 3 && (s == 429 || s == 503) {
-                            tracing::warn!(attempt, status = s, "model returned transient error, retrying");
-                            tokio::time::sleep(
-                                std::time::Duration::from_secs(1u64 << (attempt - 1)),
-                            )
+                            tracing::warn!(
+                                attempt,
+                                status = s,
+                                "model returned transient error, retrying"
+                            );
+                            tokio::time::sleep(std::time::Duration::from_secs(
+                                1u64 << (attempt - 1),
+                            ))
                             .await;
                         } else {
                             break r.error_for_status()?;
@@ -649,7 +653,7 @@ mod tests {
         // already stripped to the inner contents).
         let s = r#"{"path":"AGENTS.md"}{"path":"REPORULES.md"}{"path":"README.md"}{"path":"ARCHITECTURE.md"}"#;
         let out = split_concatenated_json(s);
-        assert_eq!(out.len(), 4, "expected 4 objects, got: {:?}", out);
+        assert_eq!(out.len(), 4, "expected 4 objects, got: {out:?}");
         assert_eq!(out[0], json!({"path":"AGENTS.md"}));
         assert_eq!(out[1], json!({"path":"REPORULES.md"}));
         assert_eq!(out[2], json!({"path":"README.md"}));
@@ -662,7 +666,7 @@ mod tests {
         // split at the inner braces.
         let s = r#"{"path":"weird{path}"}{"path":"ok"}"#;
         let out = split_concatenated_json(s);
-        assert_eq!(out.len(), 2, "expected 2 objects, got: {:?}", out);
+        assert_eq!(out.len(), 2, "expected 2 objects, got: {out:?}");
         assert_eq!(out[0], json!({"path":"weird{path}"}));
         assert_eq!(out[1], json!({"path":"ok"}));
     }
@@ -704,7 +708,7 @@ mod tests {
             Some(r#"{"path":"a.md"}{"path":"b.md"}{"path":"c.md"}"#),
         );
         let calls = a.drain();
-        assert_eq!(calls.len(), 3, "expected 3 calls, got: {:?}", calls);
+        assert_eq!(calls.len(), 3, "expected 3 calls, got: {calls:?}");
         assert_eq!(calls[0].arguments, json!({"path":"a.md"}));
         assert_eq!(calls[1].arguments, json!({"path":"b.md"}));
         assert_eq!(calls[2].arguments, json!({"path":"c.md"}));
@@ -793,18 +797,11 @@ mod tests {
         let start = buffer.find("data: ").unwrap();
         let after_data = &buffer[start + 6..];
         let end = after_data.find("\n\n").unwrap_or(after_data.len());
-        let drain_to = start
-            + 6
-            + end
-            + if after_data.find("\n\n").is_some() {
-                2
-            } else {
-                0
-            };
+        let drain_to = start + 6 + end + if after_data.contains("\n\n") { 2 } else { 0 };
         buffer.drain(..drain_to);
         // Buffer is now empty — we correctly drained everything
         // we'd consumed, and the (absent) `\n\n` was NOT drained.
-        assert!(buffer.is_empty(), "expected empty buffer, got {:?}", buffer);
+        assert!(buffer.is_empty(), "expected empty buffer, got {buffer:?}");
     }
 
     /// Regression: `[DONE]` sentinel and a later `finish_reason` can

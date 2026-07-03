@@ -168,7 +168,7 @@ impl Tool for Grep {
 
         if results.is_empty() {
             return ToolOutcome::Success {
-                content: format!("No matches found for pattern: {}", pattern),
+                content: format!("No matches found for pattern: {pattern}"),
             };
         }
 

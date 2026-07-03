@@ -1,10 +1,10 @@
 //! Rendering utilities and display helpers for the TUI.
 
+use crate::tui::search::case_fold_with_mapping;
+use crate::tui::syntax::{highlight_line, highlighter_for};
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Tag, TagEnd};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use crate::tui::search::case_fold_with_mapping;
-use crate::tui::syntax::{highlighter_for, highlight_line};
 
 #[derive(Debug, Default)]
 struct ListState {
@@ -13,7 +13,9 @@ struct ListState {
 }
 
 fn current_style(style_stack: &[Style]) -> Style {
-    style_stack.iter().fold(Style::default(), |acc, s| acc.patch(*s))
+    style_stack
+        .iter()
+        .fold(Style::default(), |acc, s| acc.patch(*s))
 }
 
 fn code_block_style() -> Style {
@@ -90,11 +92,7 @@ fn highlight_spans(spans: Vec<Span<'static>>, query: &str) -> Vec<Span<'static>>
     result
 }
 
-fn slice_spans_by_range(
-    spans: &[Span<'static>],
-    start: usize,
-    end: usize,
-) -> Vec<Span<'static>> {
+fn slice_spans_by_range(spans: &[Span<'static>], start: usize, end: usize) -> Vec<Span<'static>> {
     let mut out = Vec::new();
     let mut offset = 0;
     for span in spans {
@@ -125,7 +123,11 @@ fn slice_spans_by_range(
 /// assistant markdown rendering. It is case-insensitive and finds the
 /// same occurrences the search module reports, so the rendered chat
 /// reflects the active search.
-pub(crate) fn highlight_line_spans(line: &str, query: &str, base_style: Style) -> Vec<Span<'static>> {
+pub(crate) fn highlight_line_spans(
+    line: &str,
+    query: &str,
+    base_style: Style,
+) -> Vec<Span<'static>> {
     if query.is_empty() {
         return vec![Span::styled(line.to_string(), base_style)];
     }
@@ -247,9 +249,9 @@ pub fn render_markdown_lines_with_query(text: &str, query: &str) -> Vec<Line<'st
                         if state.ordered {
                             let n = state.number;
                             state.number += 1;
-                            format!("{}{}. ", indent, n)
+                            format!("{indent}{n}. ")
                         } else {
-                            format!("{}- ", indent)
+                            format!("{indent}- ")
                         }
                     } else {
                         "- ".to_string()
@@ -347,11 +349,7 @@ pub fn render_markdown_lines_with_query(text: &str, query: &str) -> Vec<Line<'st
                 }
             }
             Event::Code(c) => {
-                current_line.extend(highlight_line_spans(
-                    &c,
-                    query,
-                    inline_code_style(),
-                ));
+                current_line.extend(highlight_line_spans(&c, query, inline_code_style()));
             }
             Event::SoftBreak | Event::HardBreak => {
                 flush_current(&mut lines, &mut current_line);
@@ -381,10 +379,7 @@ pub fn render_markdown_lines_with_query(text: &str, query: &str) -> Vec<Line<'st
                 ));
             }
             Event::InlineMath(t) | Event::DisplayMath(t) => {
-                current_line.push(Span::styled(
-                    t.to_string(),
-                    current_style(&style_stack),
-                ));
+                current_line.push(Span::styled(t.to_string(), current_style(&style_stack)));
             }
             Event::InlineHtml(h) => {
                 current_line.push(Span::styled(
@@ -500,7 +495,7 @@ pub fn last_code_block(markdown: &str) -> Option<String> {
 /// Format a duration for display.
 pub fn format_duration(secs: f64) -> String {
     if secs < 60.0 {
-        format!("{:.1}s", secs)
+        format!("{secs:.1}s")
     } else if secs < 3600.0 {
         format!("{:.0}m {:.0}s", secs / 60.0, secs % 60.0)
     } else {
@@ -622,18 +617,15 @@ mod tests {
         let (text, color) = format_budget_indicator(42_000, 128_000);
         assert!(
             text.contains("42.0K"),
-            "should show used in K, got '{}'",
-            text
+            "should show used in K, got '{text}'"
         );
         assert!(
             text.contains("128.0K"),
-            "should show max in K, got '{}'",
-            text
+            "should show max in K, got '{text}'"
         );
         assert!(
             text.contains("(32%)"),
-            "should show 32% (42k/128k), got '{}'",
-            text
+            "should show 32% (42k/128k), got '{text}'"
         );
         assert!(
             matches!(color, Color::Green),
@@ -647,7 +639,7 @@ mod tests {
     fn test_budget_indicator_tight_is_yellow() {
         // 60_000 / 100_000 = exactly 60%
         let (text, color) = format_budget_indicator(60_000, 100_000);
-        assert!(text.contains("(60%)"), "should show 60%, got '{}'", text);
+        assert!(text.contains("(60%)"), "should show 60%, got '{text}'");
         assert!(matches!(color, Color::Yellow), "50-80% should be yellow");
     }
 
@@ -656,7 +648,7 @@ mod tests {
     fn test_budget_indicator_high_is_red() {
         // 85_000 / 100_000 = 85%
         let (text, color) = format_budget_indicator(85_000, 100_000);
-        assert!(text.contains("(85%)"), "should show 85%, got '{}'", text);
+        assert!(text.contains("(85%)"), "should show 85%, got '{text}'");
         assert!(matches!(color, Color::Red), "80-95% should be red");
     }
 
@@ -804,11 +796,20 @@ mod tests {
             ]
         );
         // Body is syntax highlighted: `fn` keyword plus the rest as plain code.
-        assert_eq!(lines[1].spans[0], Span::styled("▕ ", code_block_border_style()));
-        let body_text: String = lines[1].spans[1..].iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(
+            lines[1].spans[0],
+            Span::styled("▕ ", code_block_border_style())
+        );
+        let body_text: String = lines[1].spans[1..]
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect();
         assert_eq!(body_text, "fn main() {}");
         assert!(
-            lines[1].spans.iter().any(|s| s.content == "fn" && s.style.fg == Some(Color::Rgb(220, 120, 220))),
+            lines[1]
+                .spans
+                .iter()
+                .any(|s| s.content == "fn" && s.style.fg == Some(Color::Rgb(220, 120, 220))),
             "rust keyword should be highlighted"
         );
     }
@@ -916,8 +917,7 @@ mod tests {
 
     #[test]
     fn test_markdown_search_highlight_in_code_block() {
-        let lines =
-            render_markdown_lines_with_query("```python\nprint(needle)\n```", "needle");
+        let lines = render_markdown_lines_with_query("```python\nprint(needle)\n```", "needle");
         // Header + one body line.
         assert_eq!(lines.len(), 2);
         let body = &lines[1];
@@ -940,8 +940,15 @@ mod tests {
         // boundaries.
         let lines = render_markdown_lines_with_query("İstanbul", "stan");
         assert_eq!(lines.len(), 1);
-        let spans: Vec<String> = lines[0].spans.iter().map(|s| s.content.to_string()).collect();
-        assert_eq!(spans, vec!["İ".to_string(), "stan".to_string(), "bul".to_string()]);
+        let spans: Vec<String> = lines[0]
+            .spans
+            .iter()
+            .map(|s| s.content.to_string())
+            .collect();
+        assert_eq!(
+            spans,
+            vec!["İ".to_string(), "stan".to_string(), "bul".to_string()]
+        );
     }
 
     #[test]

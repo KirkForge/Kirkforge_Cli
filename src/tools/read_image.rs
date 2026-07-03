@@ -176,7 +176,7 @@ mod tests {
                 // base64 of the 8-byte PNG magic
                 assert_eq!(data_base64, "iVBORw0KGgo=");
             }
-            other => panic!("expected Image outcome, got: {:?}", other),
+            other => panic!("expected Image outcome, got: {other:?}"),
         }
     }
 

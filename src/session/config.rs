@@ -69,10 +69,7 @@ pub fn load_or_create_config() -> Config {
                 #[cfg(unix)]
                 {
                     use std::os::unix::fs::PermissionsExt;
-                    let _ = std::fs::set_permissions(
-                        &path,
-                        std::fs::Permissions::from_mode(0o600),
-                    );
+                    let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
                 }
                 tracing::info!("Created default config at {}", path.display());
             }
@@ -510,8 +507,8 @@ mod tests {
             ..Config::default()
         };
         let s = config_diff_summary(&a, &b);
-        assert!(s.contains("default_model"), "got: {}", s);
-        assert!(s.contains("→ qwen2.5:3b"), "got: {}", s);
+        assert!(s.contains("default_model"), "got: {s}");
+        assert!(s.contains("→ qwen2.5:3b"), "got: {s}");
     }
 
     #[test]
@@ -524,9 +521,9 @@ mod tests {
             ..Config::default()
         };
         let s = config_diff_summary(&a, &b);
-        assert!(s.contains("default_model"), "got: {}", s);
-        assert!(s.contains("auto_approve"), "got: {}", s);
-        assert!(s.contains("ollama_host"), "got: {}", s);
+        assert!(s.contains("default_model"), "got: {s}");
+        assert!(s.contains("auto_approve"), "got: {s}");
+        assert!(s.contains("ollama_host"), "got: {s}");
     }
 
     #[test]
@@ -540,8 +537,7 @@ mod tests {
         let s = config_diff_summary(&a, &b);
         assert!(
             !s.contains("deny_paths") && !s.contains("allowed_write_dirs"),
-            "internal fields leaked: {}",
-            s
+            "internal fields leaked: {s}"
         );
         assert!(s.is_empty());
     }

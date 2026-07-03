@@ -75,24 +75,21 @@ fn build_persona_prompt(kind: PersonaKind, task: &str) -> String {
              search the codebase, and gather context. Use read_file, read_image, \
              grep, glob, and read-only bash only. Do not edit files or run \
              destructive commands. Produce a concise summary of findings.\n\n\
-             Task: {}",
-            task
+             Task: {task}"
         ),
         PersonaKind::Plan => format!(
             "You are a software architect. Explore the codebase with read-only tools \
              (read_file, read_image, grep, glob). Do not run shell commands. Design \
              a step-by-step implementation plan with specific file paths, risks, \
              and architectural decisions. End with: \"## Plan Complete — ready to implement\".\n\n\
-             Task: {}",
-            task
+             Task: {task}"
         ),
         PersonaKind::Coder => format!(
             "You are a focused implementation assistant. You have the full toolset \
              including file edits and shell commands. Work efficiently in this \
              isolated context and produce a concise summary of what you changed \
              and why when done.\n\n\
-             Task: {}",
-            task
+             Task: {task}"
         ),
     }
 }
@@ -167,7 +164,7 @@ async fn run_persona_task(
                 fork_path,
                 success: false,
                 summary: String::new(),
-                error: Some(format!("failed to open fork log: {}", e)),
+                error: Some(format!("failed to open fork log: {e}")),
             }
         }
     };
@@ -225,14 +222,17 @@ async fn run_persona_task(
     }
 
     let prompt = build_persona_prompt(kind, &task);
-    if let Err(e) = executor.run_turn_collecting(&prompt, &approval_tx, &cancelled).await {
+    if let Err(e) = executor
+        .run_turn_collecting(&prompt, &approval_tx, &cancelled)
+        .await
+    {
         return PersonaResult {
             kind,
             task,
             fork_path,
             success: false,
             summary: String::new(),
-            error: Some(format!("turn failed: {}", e)),
+            error: Some(format!("turn failed: {e}")),
         };
     }
 
@@ -267,10 +267,7 @@ pub async fn start_persona(
 ) -> String {
     let task = args.trim();
     if task.is_empty() {
-        return format!(
-            "Usage: /{} <task description> — start a fork-isolated {} persona",
-            kind, kind
-        );
+        return format!("Usage: /{kind} <task description> — start a fork-isolated {kind} persona");
     }
 
     let fm = match state.fork_manager.as_mut() {
@@ -285,7 +282,7 @@ pub async fn start_persona(
 
     let parent_log = match ConversationLog::open(parent_log_path.clone()) {
         Ok(l) => l,
-        Err(e) => return format!("Cannot open session log: {}", e),
+        Err(e) => return format!("Cannot open session log: {e}"),
     };
 
     let fork_label = format!(
@@ -295,7 +292,7 @@ pub async fn start_persona(
     );
     let fork = match fm.create_fork(&fork_label, &parent_log, -1) {
         Ok(f) => f,
-        Err(e) => return format!("Failed to create fork: {}", e),
+        Err(e) => return format!("Failed to create fork: {e}"),
     };
 
     let fork_path = fork.path.clone();
@@ -346,7 +343,7 @@ pub async fn start_persona(
     });
     state.is_generating = true;
 
-    format!("🚀 Started {} persona for: {}", kind, task)
+    format!("🚀 Started {kind} persona for: {task}")
 }
 
 #[cfg(test)]

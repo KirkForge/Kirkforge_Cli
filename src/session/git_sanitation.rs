@@ -431,25 +431,21 @@ mod tests {
     fn suggest_message_single_file() {
         let lines = vec![" M src/main.rs".to_string()];
         let msg = suggest_message(&lines);
-        assert!(msg.starts_with("feat(rs): update main.rs"), "got: {}", msg);
+        assert!(msg.starts_with("feat(rs): update main.rs"), "got: {msg}");
     }
 
     #[test]
     fn suggest_message_multiple_files_defaults_to_feat_rs() {
         let lines = vec![" M src/a.rs".to_string(), " M src/b.rs".to_string()];
         let msg = suggest_message(&lines);
-        assert!(msg.starts_with("feat(rs): update 2 files"), "got: {}", msg);
+        assert!(msg.starts_with("feat(rs): update 2 files"), "got: {msg}");
     }
 
     #[test]
     fn suggest_message_docs_only() {
         let lines = vec![" M README.md".to_string()];
         let msg = suggest_message(&lines);
-        assert!(
-            msg.starts_with("docs(md): update README.md"),
-            "got: {}",
-            msg
-        );
+        assert!(msg.starts_with("docs(md): update README.md"), "got: {msg}");
     }
 
     #[test]

@@ -132,7 +132,7 @@ async fn probe_ollama_connection(config: &Config) -> ConnectionState {
     if host.is_empty() {
         return ConnectionState::Error("empty ollama_host in config".into());
     }
-    let url = format!("{}/api/tags", host);
+    let url = format!("{host}/api/tags");
     let model = config.default_model.clone();
     let since = Instant::now();
 
@@ -141,13 +141,13 @@ async fn probe_ollama_connection(config: &Config) -> ConnectionState {
         .build()
     {
         Ok(c) => c,
-        Err(e) => return ConnectionState::Error(format!("client build failed: {}", e)),
+        Err(e) => return ConnectionState::Error(format!("client build failed: {e}")),
     };
 
     match client.get(&url).send().await {
         Ok(resp) if resp.status().is_success() => ConnectionState::Connected { model, since },
         Ok(resp) => ConnectionState::Error(format!("{}: HTTP {}", url, resp.status().as_u16())),
-        Err(e) => ConnectionState::Error(format!("{}: {}", url, e)),
+        Err(e) => ConnectionState::Error(format!("{url}: {e}")),
     }
 }
 
@@ -839,7 +839,7 @@ async fn handle_persona_complete(
         Err(e) => {
             state.messages.push(ConversationEntry::new(
                 "system",
-                format!("Cannot open session log: {}", e),
+                format!("Cannot open session log: {e}"),
             ));
             return;
         }
@@ -856,7 +856,7 @@ async fn handle_persona_complete(
     }) {
         state.messages.push(ConversationEntry::new(
             "system",
-            format!("Failed to merge persona: {}", e),
+            format!("Failed to merge persona: {e}"),
         ));
         return;
     }

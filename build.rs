@@ -16,7 +16,12 @@ use std::path::PathBuf;
 )]
 struct Cli {
     /// Log verbosity. Overridden by RUST_LOG if set.
-    #[arg(long, default_value = "warn", env = "KIRKFORGE_LOG_LEVEL", global = true)]
+    #[arg(
+        long,
+        default_value = "warn",
+        env = "KIRKFORGE_LOG_LEVEL",
+        global = true
+    )]
     log_level: String,
 
     #[command(subcommand)]

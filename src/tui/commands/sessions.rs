@@ -38,10 +38,7 @@ pub fn handle_sessions_command(args: &str, _state: &mut AppState) -> String {
             None => "Usage: /sessions delete <id-or-prefix>".to_string(),
         },
         "help" | "--help" | "-h" => SESSIONS_HELP.to_string(),
-        other => format!(
-            "Unknown /sessions subcommand: {}\n\n{}",
-            other, SESSIONS_HELP
-        ),
+        other => format!("Unknown /sessions subcommand: {other}\n\n{SESSIONS_HELP}"),
     }
 }
 
@@ -87,7 +84,7 @@ fn list_sessions_text() -> String {
             out.push_str("\nUse /sessions delete <id> to remove one, /sessions prune to clean up.");
             out
         }
-        Err(e) => format!("Error listing sessions: {}", e),
+        Err(e) => format!("Error listing sessions: {e}"),
     }
 }
 
@@ -104,15 +101,14 @@ fn prune_sessions_text(delete_count: usize, keep: usize) -> String {
         Ok(deleted) => {
             let mut out = format!("Pruned {} session(s):\n", deleted.len());
             for id in &deleted {
-                out.push_str(&format!("  ✓ {}\n", id));
+                out.push_str(&format!("  ✓ {id}\n"));
             }
             out.push_str(&format!(
-                "Kept {} most recent. Run /sessions to verify.",
-                keep
+                "Kept {keep} most recent. Run /sessions to verify."
             ));
             out
         }
-        Err(e) => format!("Error pruning sessions: {}", e),
+        Err(e) => format!("Error pruning sessions: {e}"),
     }
 }
 
@@ -123,11 +119,10 @@ fn delete_session_text(id_or_prefix: &str) -> String {
         Ok(Some(p)) => p,
         Ok(None) => {
             return format!(
-                "No session found matching '{}'. Run /sessions to see available ids.",
-                id_or_prefix
+                "No session found matching '{id_or_prefix}'. Run /sessions to see available ids."
             );
         }
-        Err(e) => return format!("Error resolving session id: {}", e),
+        Err(e) => return format!("Error resolving session id: {e}"),
     };
     let id = resolved
         .file_stem()
@@ -137,16 +132,16 @@ fn delete_session_text(id_or_prefix: &str) -> String {
         .to_string();
 
     match session_index::delete_session(&id) {
-        Ok(true) => format!("✓ Deleted session: {}", id),
-        Ok(false) => format!("Session '{}' did not exist (race?).", id),
-        Err(e) => format!("Error deleting session: {}", e),
+        Ok(true) => format!("✓ Deleted session: {id}"),
+        Ok(false) => format!("Session '{id}' did not exist (race?)."),
+        Err(e) => format!("Error deleting session: {e}"),
     }
 }
 
 /// Human-readable byte size: "1.2 KB" / "3.4 MB" / "567 B".
 fn human_size(bytes: u64) -> String {
     if bytes < 1024 {
-        format!("{} B", bytes)
+        format!("{bytes} B")
     } else if bytes < 1024 * 1024 {
         format!("{:.1} KB", bytes as f64 / 1024.0)
     } else {

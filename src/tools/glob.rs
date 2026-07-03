@@ -66,7 +66,7 @@ impl Tool for Glob {
             }
             Err(e) => {
                 return ToolOutcome::Error {
-                    message: format!("Invalid glob pattern '{}': {}", pattern, e),
+                    message: format!("Invalid glob pattern '{pattern}': {e}"),
                 }
             }
         }

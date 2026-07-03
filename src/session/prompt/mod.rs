@@ -311,8 +311,7 @@ impl PromptBuilder {
                     .collect();
                 let removed_chars = msg.content.chars().count() - (head_keep + tail_keep);
                 msg.content = format!(
-                    "{}\n\n[…truncated {} chars of tool output…]\n\n{}",
-                    head, removed_chars, tail
+                    "{head}\n\n[…truncated {removed_chars} chars of tool output…]\n\n{tail}"
                 );
             }
         }
@@ -371,7 +370,7 @@ impl PromptBuilder {
                 continue; // too short to bother
             }
 
-            let path = PathBuf::from(format!("message-{}.txt", i));
+            let path = PathBuf::from(format!("message-{i}.txt"));
             let minified = crate::shared::minify::minify_source_safe(&path, &msg.content);
             if minified.len() < msg.content.len() {
                 let savings = msg.content.len() - minified.len();
@@ -523,7 +522,7 @@ mod tests {
         for i in 0..20 {
             history.push(Message {
                 role: Role::User,
-                content: format!("Message {}", i),
+                content: format!("Message {i}"),
                 ..Default::default()
             });
         }
@@ -632,12 +631,12 @@ mod tests {
         for i in 0..3 {
             history.push(Message {
                 role: Role::User,
-                content: format!("user message {}", i),
+                content: format!("user message {i}"),
                 ..Default::default()
             });
             history.push(Message {
                 role: Role::Assistant,
-                content: format!("assistant message {}", i),
+                content: format!("assistant message {i}"),
                 ..Default::default()
             });
         }
@@ -671,8 +670,7 @@ mod tests {
         );
         assert!(
             kept <= 2,
-            "at most the last 2 tool results should be kept intact, got {} kept",
-            kept
+            "at most the last 2 tool results should be kept intact, got {kept} kept"
         );
         assert!(
             stubbed + kept == tool_msgs.len(),
@@ -696,7 +694,7 @@ mod tests {
         let tool_results: Vec<Message> = (0..4)
             .map(|i| Message {
                 role: Role::Tool,
-                content: format!("small tool result {}", i),
+                content: format!("small tool result {i}"),
                 ..Default::default()
             })
             .collect();

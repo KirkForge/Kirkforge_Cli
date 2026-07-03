@@ -160,7 +160,7 @@ pub fn format_bang_output(result: &BangResult) -> String {
     };
 
     let banner = if result.timed_out {
-        format!("{} timed out after {}s", icon, BANG_DEFAULT_TIMEOUT_SECS)
+        format!("{icon} timed out after {BANG_DEFAULT_TIMEOUT_SECS}s")
     } else {
         format!("{} exit {} in {}", icon, result.exit_code, elapsed)
     };
@@ -172,7 +172,7 @@ pub fn format_bang_output(result: &BangResult) -> String {
     // banner above and strip the duplicate prefix so the user isn't
     // told twice that the command timed out.
     let stdout = if result.timed_out {
-        let prefix = format!("[timed out after {} seconds]\n", BANG_DEFAULT_TIMEOUT_SECS);
+        let prefix = format!("[timed out after {BANG_DEFAULT_TIMEOUT_SECS} seconds]\n");
         result
             .stdout
             .strip_prefix(&prefix)
@@ -215,7 +215,7 @@ pub fn format_bang_output(result: &BangResult) -> String {
 /// without going through `format_bang_output`.
 pub fn format_elapsed(ms: u64) -> String {
     if ms < 1000 {
-        format!("{}ms", ms)
+        format!("{ms}ms")
     } else if ms < 60_000 {
         // Two decimal places for sub-minute durations. e.g. 1.42s, 12.34s.
         format!("{:.2}s", ms as f64 / 1000.0)
@@ -223,7 +223,7 @@ pub fn format_elapsed(ms: u64) -> String {
         let secs = ms / 1000;
         let minutes = secs / 60;
         let rem = secs % 60;
-        format!("{}m{:02}s", minutes, rem)
+        format!("{minutes}m{rem:02}s")
     }
 }
 

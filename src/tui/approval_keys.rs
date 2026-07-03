@@ -104,7 +104,7 @@ pub async fn handle_bang_approval_key(key: KeyEvent, state: &mut AppState) {
         let first = lines.next().unwrap_or("").to_string();
         let second = lines.next().unwrap_or("").to_string();
         let _rest = lines.next();
-        let summary = format!("{}\n{}", first, second);
+        let summary = format!("{first}\n{second}");
         state
             .messages
             .push(ConversationEntry::tool(summary, result));
@@ -230,7 +230,10 @@ pub fn handle_approval_key(key: KeyEvent, state: &mut AppState) {
 /// exiting with an unresolved approval in flight. Sends a reasoned denial
 /// so the model sees why the operation did not run, then sets the exit
 /// flag so the event loop terminates.
-fn deny_pending_approval_and_exit(approval: crate::tui::app::PendingApproval, state: &mut AppState) {
+fn deny_pending_approval_and_exit(
+    approval: crate::tui::app::PendingApproval,
+    state: &mut AppState,
+) {
     state.approval_scroll = 0;
     state.approval_max_scroll = 0;
     if let Some(tx) = approval.responder {
@@ -559,7 +562,7 @@ mod tests {
         // is the first ~2 lines.
         assert!(entry.tool_output.is_some());
         let full = entry.tool_output.as_ref().unwrap();
-        assert!(full.contains("hi"), "echo output missing: {}", full);
+        assert!(full.contains("hi"), "echo output missing: {full}");
     }
 
     /// N on a bang approval clears the gate WITHOUT running the

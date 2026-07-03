@@ -271,8 +271,7 @@ fn filter_build_log(lines: &[&str]) -> Vec<String> {
         for s in out.iter_mut() {
             if s == WARNINGS_OMITTED_MARKER {
                 *s = format!(
-                    "[…{} warnings omitted (kept first {} and last {})…]",
-                    dropped_warnings, keep_head_w, keep_tail_w
+                    "[…{dropped_warnings} warnings omitted (kept first {keep_head_w} and last {keep_tail_w})…]"
                 );
             }
         }
@@ -281,8 +280,7 @@ fn filter_build_log(lines: &[&str]) -> Vec<String> {
         for s in out.iter_mut() {
             if s == CRATES_OMITTED_MARKER {
                 *s = format!(
-                    "[…{} crate compilations omitted (kept first {} and last {})…]",
-                    dropped_compiling, keep_head_c, keep_tail_c
+                    "[…{dropped_compiling} crate compilations omitted (kept first {keep_head_c} and last {keep_tail_c})…]"
                 );
             }
         }
@@ -434,7 +432,7 @@ fn extract_file_path(cmd: &str) -> Option<PathBuf> {
     // handle ourselves.
     let expanded = if let Some(stripped) = raw.strip_prefix("~/") {
         if let Ok(home) = std::env::var("HOME") {
-            format!("{}/{}", home, stripped)
+            format!("{home}/{stripped}")
         } else {
             return None;
         }

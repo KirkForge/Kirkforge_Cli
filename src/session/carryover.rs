@@ -448,10 +448,10 @@ mod tests {
     fn test_prune_to_top_five() {
         let mut p = CarryoverProfile::default();
         for i in 0..7 {
-            p.record_tool_call(&format!("tool_{}", i));
+            p.record_tool_call(&format!("tool_{i}"));
             // Make some more frequent than others
             for _ in 0..(7 - i) {
-                p.record_tool_call(&format!("tool_{}", i));
+                p.record_tool_call(&format!("tool_{i}"));
             }
         }
 

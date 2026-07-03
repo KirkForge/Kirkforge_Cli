@@ -58,7 +58,7 @@ impl Skill {
     /// with the user input before the standard suffix is appended.
     pub fn render_prompt(&self, user_input: &str) -> String {
         let body = self.prompt_body.replace("{{args}}", user_input);
-        format!("{}\n\nUser request: {}", body, user_input)
+        format!("{body}\n\nUser request: {user_input}")
     }
 }
 
@@ -208,21 +208,21 @@ impl SkillRegistry {
 
         let mut parts = Vec::new();
         if read_only > 0 {
-            parts.push(format!("🔒{}", read_only));
+            parts.push(format!("🔒{read_only}"));
         }
         if shell > 0 {
-            parts.push(format!("⚡{}", shell));
+            parts.push(format!("⚡{shell}"));
         }
         if network > 0 {
-            parts.push(format!("🌐{}", network));
+            parts.push(format!("🌐{network}"));
         }
         if unsafe_ > 0 {
-            parts.push(format!("☠️{}", unsafe_));
+            parts.push(format!("☠️{unsafe_}"));
         }
 
         let rejected = self.plugin_warnings.len();
         if rejected > 0 {
-            parts.push(format!("☠️{} blocked", rejected));
+            parts.push(format!("☠️{rejected} blocked"));
         }
 
         if parts.is_empty() {

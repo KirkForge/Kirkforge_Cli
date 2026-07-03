@@ -60,7 +60,7 @@ impl DaemonClient {
     pub async fn ping(&mut self) -> anyhow::Result<()> {
         match self.call(Request::Ping).await? {
             Response::Ok { .. } => Ok(()),
-            Response::Error { message } => anyhow::bail!("daemon ping failed: {}", message),
+            Response::Error { message } => anyhow::bail!("daemon ping failed: {message}"),
         }
     }
 
@@ -83,7 +83,7 @@ impl DaemonClient {
                 Ok(out)
             }
             Response::Ok { .. } => Ok(Vec::new()),
-            Response::Error { message } => anyhow::bail!("daemon list failed: {}", message),
+            Response::Error { message } => anyhow::bail!("daemon list failed: {message}"),
         }
     }
 
@@ -105,7 +105,7 @@ impl DaemonClient {
                 }
             }
             Response::Ok { .. } => Ok(None),
-            Response::Error { message } => anyhow::bail!("daemon resolve failed: {}", message),
+            Response::Error { message } => anyhow::bail!("daemon resolve failed: {message}"),
         }
     }
 
@@ -119,7 +119,7 @@ impl DaemonClient {
             .await?
         {
             Response::Ok { .. } => Ok(()),
-            Response::Error { message } => anyhow::bail!("daemon touch failed: {}", message),
+            Response::Error { message } => anyhow::bail!("daemon touch failed: {message}"),
         }
     }
 
@@ -127,7 +127,7 @@ impl DaemonClient {
     pub async fn shutdown(&mut self) -> anyhow::Result<()> {
         match self.call(Request::Shutdown).await? {
             Response::Ok { .. } => Ok(()),
-            Response::Error { message } => anyhow::bail!("daemon shutdown failed: {}", message),
+            Response::Error { message } => anyhow::bail!("daemon shutdown failed: {message}"),
         }
     }
 }
@@ -151,7 +151,7 @@ async fn wait_for_daemon(timeout: std::time::Duration) -> anyhow::Result<()> {
         }
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
-    anyhow::bail!("daemon did not become reachable within {:?}", timeout)
+    anyhow::bail!("daemon did not become reachable within {timeout:?}")
 }
 
 /// Ensure the daemon is running, starting it if necessary.

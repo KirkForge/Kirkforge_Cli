@@ -44,10 +44,7 @@ pub async fn verify_lint(event: &BusEvent) -> Verdict {
 
     // For now only Rust is fully supported
     if !matches!(target, LintTarget::Rust) {
-        return Verdict::Skipped(format!(
-            "lint verifier not yet implemented for {:?}",
-            target
-        ));
+        return Verdict::Skipped(format!("lint verifier not yet implemented for {target:?}"));
     }
 
     // Run clippy on the project

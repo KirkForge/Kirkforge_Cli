@@ -438,9 +438,9 @@ impl Executor {
                                     r.kind.as_str()
                                 ),
                                 Ok(None) => "Nothing to undo.".to_string(),
-                                Err(e) => format!("Undo failed: {}", e),
+                                Err(e) => format!("Undo failed: {e}"),
                             },
-                            Err(e) => format!("Undo stack mutex poisoned: {}", e),
+                            Err(e) => format!("Undo stack mutex poisoned: {e}"),
                         }
                     } else {
                         "Undo unavailable: no undo stack for this session.".to_string()
@@ -464,8 +464,7 @@ impl Executor {
                     self.model_name = new_name.clone();
                     if event_tx
                         .send(TurnEvent::Token(format!(
-                            "🔀 Switched to {}\n",
-                            new_name
+                            "🔀 Switched to {new_name}\n"
                         )))
                         .is_err()
                     {
@@ -482,10 +481,10 @@ impl Executor {
                         "📐 Plan mode enabled — only read-only tools are permitted. Type /implement when ready.\n".to_string()
                     } else {
                         match self.exit_plan_mode() {
-                            Ok(m) => format!("✅ {}\n", m),
+                            Ok(m) => format!("✅ {m}\n"),
                             Err(e) => {
                                 tracing::warn!("exit_plan_mode failed: {}", e);
-                                format!("⚠️ Could not exit plan mode: {}\n", e)
+                                format!("⚠️ Could not exit plan mode: {e}\n")
                             }
                         }
                     };
@@ -500,7 +499,7 @@ impl Executor {
                     let msg = if diff_summary.is_empty() {
                         "🔄 Reloaded config (no changes)\n".to_string()
                     } else {
-                        format!("🔄 Reloaded config: {}\n", diff_summary)
+                        format!("🔄 Reloaded config: {diff_summary}\n")
                     };
                     if event_tx.send(TurnEvent::Token(msg)).is_err() {
                         tracing::warn!("TUI event receiver dropped during config reload; exiting");
@@ -607,8 +606,7 @@ impl Executor {
                                     {
                                         if event_tx
                                             .send(TurnEvent::Error(format!(
-                                                "Summarization failed: {}",
-                                                e
+                                                "Summarization failed: {e}"
                                             )))
                                             .is_err()
                                         {
@@ -666,7 +664,7 @@ impl Executor {
                             strategy: "naive",
                         });
                         let report = if let Err(e) = self.conversation.replace_all(result.new_messages.clone()) {
-                            TurnEvent::Error(format!("Compaction failed: {}", e))
+                            TurnEvent::Error(format!("Compaction failed: {e}"))
                         } else {
                             TurnEvent::CompactionReport {
                                 new_messages: result.new_messages.clone(),
@@ -697,7 +695,7 @@ impl Executor {
                     // otherwise spin on a closed channel anyway).
                     let result = self.run_turn(&input, &approval_tx, &cancelled, &event_tx).await;
                     if let Err(e) = result {
-                        let _ = event_tx.send(TurnEvent::Error(format!("Turn failed: {}", e)));
+                        let _ = event_tx.send(TurnEvent::Error(format!("Turn failed: {e}")));
                         tracing::warn!(
                             error = %e,
                             "TUI event receiver may be dropped while reporting turn-failure event"
@@ -907,7 +905,8 @@ impl Executor {
         cancelled: &AtomicBool,
     ) -> anyhow::Result<Vec<TurnEvent>> {
         let (tx, mut rx) = mpsc::unbounded_channel::<TurnEvent>();
-        self.run_turn(user_input, approval_sender, cancelled, &tx).await?;
+        self.run_turn(user_input, approval_sender, cancelled, &tx)
+            .await?;
         let mut events = Vec::new();
         while let Ok(ev) = rx.try_recv() {
             events.push(ev);
@@ -933,7 +932,7 @@ impl Executor {
                     .maybe_swap(&cfg_snapshot, &mut self.adapter, user_input);
             if let Some(new_model) = swapped {
                 self.model_name = new_model.clone();
-                let _ = event_tx.send(TurnEvent::Token(format!("🔀 Switched to {}\n", new_model)));
+                let _ = event_tx.send(TurnEvent::Token(format!("🔀 Switched to {new_model}\n")));
             }
         }
 
@@ -955,7 +954,9 @@ impl Executor {
         let mut tool_calls: Vec<ToolInvocation> = Vec::new();
         let mut already_retried_parse = false;
 
-        let max_iterations = read_shared_config(&self.config).max_tool_calls_per_turn.max(1);
+        let max_iterations = read_shared_config(&self.config)
+            .max_tool_calls_per_turn
+            .max(1);
 
         for iteration in 0..max_iterations {
             if cancelled.load(Ordering::SeqCst) {
@@ -991,7 +992,8 @@ impl Executor {
                             tool_name: None,
                             token_count: None,
                         })?;
-                        let _ = event_tx.send(TurnEvent::Token("(JSON parse error, retrying…)\n".into()));
+                        let _ = event_tx
+                            .send(TurnEvent::Token("(JSON parse error, retrying…)\n".into()));
                     } else {
                         return Ok(());
                     }
@@ -1118,8 +1120,7 @@ impl Executor {
                     // strip the markup from the persisted message, and treat
                     // the turn as a tool-call turn.
                     if tool_calls_out.is_empty() {
-                        let (cleaned, dsml_calls) =
-                            extract_dsml_tool_calls(&assistant_content);
+                        let (cleaned, dsml_calls) = extract_dsml_tool_calls(&assistant_content);
                         if !dsml_calls.is_empty() {
                             assistant_content = cleaned;
                             tool_calls_out.extend(dsml_calls);
@@ -1398,7 +1399,9 @@ impl Executor {
             match verdict {
                 GuardVerdict::Allowed(resolved) => {
                     if tc.name == "edit_file" {
-                        if let GuardVerdict::Denied(msg) = self.read_gate.check_edit(path, &resolved) {
+                        if let GuardVerdict::Denied(msg) =
+                            self.read_gate.check_edit(path, &resolved)
+                        {
                             let denied = format!("🔒 Access denied: {msg}");
                             let _ = event_tx.send(TurnEvent::ToolResult {
                                 name: tc.name.clone(),
@@ -1911,8 +1914,7 @@ const READ_ONLY_COMMANDS: &[&str] = &[
     "df", "env", "printenv", "true", "false", "dirname", "basename", "realpath", "readlink",
     "grep", "rg", "sort", "wc", "cut", "tr", "uniq", "fold", "nl", "diff", "cmp", "comm", "jq",
     "date", "cal", "whoami", "id", "uname", "hostname", "uptime", "ps", "free", "lscpu", "lsblk",
-    "lsof", "dmesg", "nproc", "arch", "tty", "jobs",
-    "help", "find",
+    "lsof", "dmesg", "nproc", "arch", "tty", "jobs", "help", "find",
 ];
 
 fn is_read_only_bash(cmd: &str) -> bool {
@@ -2090,7 +2092,7 @@ fn check_deny_list(
             if let Some(path) = args.get("path").and_then(|v| v.as_str()) {
                 let p = std::path::Path::new(path);
                 if deny_list.is_path_denied(p) {
-                    return Some(format!("🔒 Path denied by deny list: {}", path));
+                    return Some(format!("🔒 Path denied by deny list: {path}"));
                 }
             }
         }
@@ -2099,7 +2101,7 @@ fn check_deny_list(
             if let Some(path) = args.get("path").and_then(|v| v.as_str()) {
                 let p = std::path::Path::new(path);
                 if deny_list.is_path_denied(p) {
-                    return Some(format!("🔒 Path denied by deny list: {}", path));
+                    return Some(format!("🔒 Path denied by deny list: {path}"));
                 }
             }
         }
@@ -2192,12 +2194,12 @@ fn handle_tool_outcome(
         ToolOutcome::Error { message } => {
             let _ = event_tx.send(TurnEvent::ToolResult {
                 name: tc.name.clone(),
-                output: format!("Error: {}", message),
+                output: format!("Error: {message}"),
                 success: false,
             });
             conversation.append(Message {
                 role: Role::Tool,
-                content: format!("Error: {}", message),
+                content: format!("Error: {message}"),
                 tool_call_id: Some(tc.id.clone()),
                 tool_name: Some(tc.name.clone()),
                 ..Default::default()
@@ -2253,11 +2255,11 @@ fn format_grep_output(path: &std::path::Path, matches: &[crate::shared::Match]) 
     let mut out = format!("Matches in {}:\n", path.display());
     for m in matches {
         for ctx in &m.context_before {
-            out.push_str(&format!("  {}\n", ctx));
+            out.push_str(&format!("  {ctx}\n"));
         }
         out.push_str(&format!(">{}: {}\n", m.line_number, m.line));
         for ctx in &m.context_after {
-            out.push_str(&format!("  {}\n", ctx));
+            out.push_str(&format!("  {ctx}\n"));
         }
         out.push('\n');
     }
@@ -2659,8 +2661,13 @@ mod tests {
 
         // No approval request should be sent, so the channel stays empty.
         let approval_handle = tokio::spawn(async move {
-            let res = tokio::time::timeout(std::time::Duration::from_millis(100), approval_rx.recv()).await;
-            assert!(res.is_err() || res.unwrap().is_none(), "read-only bash should not ask for approval");
+            let res =
+                tokio::time::timeout(std::time::Duration::from_millis(100), approval_rx.recv())
+                    .await;
+            assert!(
+                res.is_err() || res.unwrap().is_none(),
+                "read-only bash should not ask for approval"
+            );
         });
 
         let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(false));
@@ -3002,8 +3009,7 @@ mod tests {
         });
         assert!(
             denied_msg.is_some_and(|m| m.contains("Permission rule denied")),
-            "Expected a permission-rule denial message, got events: {:?}",
-            events
+            "Expected a permission-rule denial message, got events: {events:?}"
         );
     }
 
@@ -3062,8 +3068,7 @@ mod tests {
         ));
         assert!(
             denied,
-            "Expected a deny-list refusal ToolResult, got events: {:?}",
-            events
+            "Expected a deny-list refusal ToolResult, got events: {events:?}"
         );
     }
 
@@ -3101,7 +3106,9 @@ mod tests {
         // call, but the dangerous-pattern guard blocks it before the tool runs.
         let (approval_tx, mut approval_rx) = mpsc::unbounded_channel::<ApprovalRequest>();
         let approval_handle = tokio::spawn(async move {
-            let res = tokio::time::timeout(std::time::Duration::from_millis(100), approval_rx.recv()).await;
+            let res =
+                tokio::time::timeout(std::time::Duration::from_millis(100), approval_rx.recv())
+                    .await;
             assert!(
                 res.is_err() || res.unwrap().is_none(),
                 "dangerous command should be blocked by the safety gate, not by an approval prompt"
@@ -3137,8 +3144,7 @@ mod tests {
         ));
         assert!(
             blocked,
-            "Expected a dangerous-pattern refusal, got events: {:?}",
-            events
+            "Expected a dangerous-pattern refusal, got events: {events:?}"
         );
     }
 
@@ -3282,7 +3288,7 @@ mod tests {
                 tokio::spawn(async move {
                     let _ = tx
                         .send(StreamEvent::ToolCall(ToolInvocation {
-                            id: format!("call-{}", count),
+                            id: format!("call-{count}"),
                             name: "looper".into(),
                             arguments: serde_json::json!({"x": format!("round-{}", count)}),
                         }))
@@ -3316,8 +3322,7 @@ mod tests {
         let tool_calls = *call_count.lock().unwrap();
         assert!(
             tool_calls <= 5,
-            "Should not exceed configured max_tool_calls_per_turn (was {})",
-            tool_calls
+            "Should not exceed configured max_tool_calls_per_turn (was {tool_calls})"
         );
     }
 
@@ -3355,7 +3360,9 @@ mod tests {
 
         let (approval_tx, mut approval_rx) = mpsc::unbounded_channel::<ApprovalRequest>();
         let approval_handle = tokio::spawn(async move {
-            let res = tokio::time::timeout(std::time::Duration::from_millis(100), approval_rx.recv()).await;
+            let res =
+                tokio::time::timeout(std::time::Duration::from_millis(100), approval_rx.recv())
+                    .await;
             assert!(
                 res.is_err() || res.unwrap().is_none(),
                 "Explicit allow rule should be honored under auto_approve; no approval prompt expected"
@@ -3671,13 +3678,11 @@ mod tests {
                 && got.contains("+++ b")
                 && got.contains("-old line")
                 && got.contains("+new line"),
-            "EditEvent.diff should be the rendered diff, got: {:?}",
-            got
+            "EditEvent.diff should be the rendered diff, got: {got:?}"
         );
         assert!(
             got.starts_with("---") || got.contains("\n---"),
-            "diff should start with --- header, got: {:?}",
-            got
+            "diff should start with --- header, got: {got:?}"
         );
     }
 
@@ -3716,8 +3721,7 @@ mod tests {
             summary.contains("default_model")
                 || summary.contains("json_mode")
                 || summary.contains("carryover_enabled"),
-            "reload_config should report changed high-impact fields, got: {}",
-            summary
+            "reload_config should report changed high-impact fields, got: {summary}"
         );
 
         // The shared lock should hold the new values.
@@ -3786,11 +3790,7 @@ mod tests {
                     if name == "write_file" && output.contains("Plan mode blocked")
             )
         });
-        assert!(
-            blocked,
-            "Expected plan-mode denial, got events: {:?}",
-            events
-        );
+        assert!(blocked, "Expected plan-mode denial, got events: {events:?}");
     }
 
     #[tokio::test]
@@ -3846,11 +3846,7 @@ mod tests {
                     if name == "bash" && output.contains("Plan mode blocked")
             )
         });
-        assert!(
-            blocked,
-            "Expected plan-mode denial, got events: {:?}",
-            events
-        );
+        assert!(blocked, "Expected plan-mode denial, got events: {events:?}");
     }
 
     #[tokio::test]
@@ -3913,11 +3909,7 @@ mod tests {
                     if name == "read_file" && output == "file contents"
             )
         });
-        assert!(
-            allowed,
-            "Expected read_file result, got events: {:?}",
-            events
-        );
+        assert!(allowed, "Expected read_file result, got events: {events:?}");
     }
 
     #[tokio::test]
@@ -3984,8 +3976,7 @@ mod tests {
         });
         assert!(
             denied,
-            "Expected read_image size-denial, got events: {:?}",
-            events
+            "Expected read_image size-denial, got events: {events:?}"
         );
     }
 
@@ -4042,7 +4033,7 @@ mod tests {
                     if name == "bash" && output == "listing"
             )
         });
-        assert!(allowed, "Expected bash result, got events: {:?}", events);
+        assert!(allowed, "Expected bash result, got events: {events:?}");
     }
 
     #[tokio::test]
@@ -4100,8 +4091,7 @@ mod tests {
         });
         assert!(
             allowed,
-            "Expected bash_status result, got events: {:?}",
-            events
+            "Expected bash_status result, got events: {events:?}"
         );
     }
 
@@ -4163,8 +4153,7 @@ mod tests {
         });
         assert!(
             allowed,
-            "Expected bash_cancel result, got events: {:?}",
-            events
+            "Expected bash_cancel result, got events: {events:?}"
         );
     }
 
@@ -4173,7 +4162,7 @@ mod tests {
         let adapter = MockAdapter::new(
             vec![
                 StreamEvent::Text("Here is the plan.".to_string()),
-                StreamEvent::Text(format!("\n{}\n", PLAN_COMPLETE_MARKER)),
+                StreamEvent::Text(format!("\n{PLAN_COMPLETE_MARKER}\n")),
                 StreamEvent::Done {
                     finish_reason: FinishReason::Stop,
                     usage: None,
@@ -4193,8 +4182,7 @@ mod tests {
 
         assert!(
             events.iter().any(|e| matches!(e, TurnEvent::PlanComplete)),
-            "Expected PlanComplete event, got events: {:?}",
-            events
+            "Expected PlanComplete event, got events: {events:?}"
         );
     }
 
@@ -4263,8 +4251,7 @@ mod tests {
         });
         assert!(
             denied,
-            "Expected a hook-denial ToolResult, got events: {:?}",
-            events
+            "Expected a hook-denial ToolResult, got events: {events:?}"
         );
     }
 
@@ -4503,7 +4490,9 @@ mod tests {
 
         let (approval_tx, mut approval_rx) = mpsc::unbounded_channel();
         let approval_handle = tokio::spawn(async move {
-            let res = tokio::time::timeout(std::time::Duration::from_millis(100), approval_rx.recv()).await;
+            let res =
+                tokio::time::timeout(std::time::Duration::from_millis(100), approval_rx.recv())
+                    .await;
             assert!(
                 res.is_err() || res.unwrap().is_none(),
                 "non-destructive find should not ask for approval"
@@ -4654,8 +4643,8 @@ mod tests {
                 usage: None,
             },
         ];
-        let adapter =
-            MockAdapter::new(tool_call_events.clone(), make_info()).with_followup_events(tool_call_events);
+        let adapter = MockAdapter::new(tool_call_events.clone(), make_info())
+            .with_followup_events(tool_call_events);
 
         let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
         let mut config = make_config(true);
@@ -4672,8 +4661,13 @@ mod tests {
             .count();
         assert_eq!(tool_results, 3, "should stop at max_tool_calls_per_turn");
 
-        let hit_limit = events.iter().any(|e| matches!(e, TurnEvent::Error(e) if e.contains("Tool call loop limit reached")));
-        assert!(hit_limit, "should emit loop-limit error when cap is reached");
+        let hit_limit = events.iter().any(
+            |e| matches!(e, TurnEvent::Error(e) if e.contains("Tool call loop limit reached")),
+        );
+        assert!(
+            hit_limit,
+            "should emit loop-limit error when cap is reached"
+        );
     }
 
     #[tokio::test]
@@ -4716,7 +4710,8 @@ mod tests {
                 usage: None,
             },
         ];
-        let adapter = MockAdapter::new(first_events, make_info()).with_followup_events(followup_events);
+        let adapter =
+            MockAdapter::new(first_events, make_info()).with_followup_events(followup_events);
 
         let (approval_tx, mut approval_rx) = mpsc::unbounded_channel();
         let approval_handle = tokio::spawn(async move {

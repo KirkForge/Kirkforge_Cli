@@ -134,8 +134,7 @@ pub fn compact(messages: &[Message], preserve_recent: usize) -> CompactionResult
                 } else {
                     let mut condensed = msg.clone();
                     condensed.content = format!(
-                        "{}{}{}",
-                        ASSISTANT_CONDENSED_PREFIX, original_chars, ASSISTANT_CONDENSED_SUFFIX,
+                        "{ASSISTANT_CONDENSED_PREFIX}{original_chars}{ASSISTANT_CONDENSED_SUFFIX}",
                     );
                     new_messages.push(condensed);
                     condensed_assistant_turns += 1;
@@ -246,9 +245,9 @@ mod tests {
         let mut msgs = vec![system("you are an agent")];
         for i in 0..8 {
             msgs.push(if i % 2 == 0 {
-                user(&format!("q{}", i))
+                user(&format!("q{i}"))
             } else {
-                assistant(&format!("a{}", i))
+                assistant(&format!("a{i}"))
             });
         }
         let r = compact(&msgs, DEFAULT_PRESERVE_RECENT);
@@ -309,8 +308,8 @@ mod tests {
     fn stubbed_tool_keeps_tool_name_and_call_id() {
         let mut msgs = vec![system("a")];
         for i in 0..DEFAULT_PRESERVE_RECENT {
-            msgs.push(user(&format!("q{}", i)));
-            msgs.push(assistant(&format!("a{}", i)));
+            msgs.push(user(&format!("q{i}")));
+            msgs.push(assistant(&format!("a{i}")));
         }
         // 1 system + 16 tail = 17. We need a middle, so history.len()
         // must be > DEFAULT_PRESERVE_RECENT. The above gives 17 which is
@@ -335,8 +334,8 @@ mod tests {
         // model loses the structural history of "I called bash here".
         let mut msgs = vec![system("a")];
         for i in 0..DEFAULT_PRESERVE_RECENT {
-            msgs.push(user(&format!("q{}", i)));
-            msgs.push(assistant(&format!("a{}", i)));
+            msgs.push(user(&format!("q{i}")));
+            msgs.push(assistant(&format!("a{i}")));
         }
         // Insert an assistant-with-tool-call into the middle.
         msgs.insert(2, assistant_with_tool_call("I'll run ls", "bash", "abc"));
@@ -362,8 +361,8 @@ mod tests {
         // have prose still get condensed normally.)
         let mut msgs = vec![system("a")];
         for i in 0..DEFAULT_PRESERVE_RECENT {
-            msgs.push(user(&format!("q{}", i)));
-            msgs.push(assistant(&format!("a{}", i)));
+            msgs.push(user(&format!("q{i}")));
+            msgs.push(assistant(&format!("a{i}")));
         }
         // Insert a tool-call-only assistant turn (no prose) in the middle.
         msgs.insert(2, assistant_with_tool_call("", "bash", "abc"));
@@ -399,7 +398,7 @@ mod tests {
         // 1 user + 8 working = 9. > 8. Middle = [0..1) = empty.
         let mut msgs = vec![user("first question")];
         for i in 0..8 {
-            msgs.push(assistant(&format!("a{}", i)));
+            msgs.push(assistant(&format!("a{i}")));
         }
         let r = compact(&msgs, DEFAULT_PRESERVE_RECENT);
         // Empty middle, no work done.
@@ -456,7 +455,7 @@ mod tests {
         // + stub path is taking effect.
         let mut msgs = vec![system("anchor")];
         for i in 0..10 {
-            msgs.push(user(&format!("q{}", i)));
+            msgs.push(user(&format!("q{i}")));
             msgs.push(assistant(&format!("{} ", "x".repeat(2000)))); // 2k chars
             msgs.push(tool_result(&"y".repeat(5000), "c", "bash")); // 5k chars
         }
@@ -465,9 +464,7 @@ mod tests {
         let compacted_chars: usize = r.new_messages.iter().map(|m| m.content.len()).sum();
         assert!(
             compacted_chars < original_chars,
-            "compaction should reduce char count: {} -> {}",
-            original_chars,
-            compacted_chars
+            "compaction should reduce char count: {original_chars} -> {compacted_chars}"
         );
     }
 }

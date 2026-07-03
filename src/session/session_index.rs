@@ -141,9 +141,7 @@ fn summarize_file(path: &std::path::Path) -> Option<SessionEntry> {
 /// removed, `Ok(false)` if no matching file existed.
 pub fn delete_session(id: &str) -> anyhow::Result<bool> {
     let data_dir = crate::session::data_dir()?;
-    let path = data_dir
-        .join("sessions")
-        .join(format!("{}.conv.ndjson", id));
+    let path = data_dir.join("sessions").join(format!("{id}.conv.ndjson"));
     if !path.exists() {
         return Ok(false);
     }
@@ -305,19 +303,23 @@ mod tests {
         let sessions_dir = dir.path().join("sessions");
         std::fs::create_dir_all(&sessions_dir).unwrap();
 
-        let ids = ["2026-06-01-session-01", "2026-06-02-session-02", "2026-06-03-session-03"];
+        let ids = [
+            "2026-06-01-session-01",
+            "2026-06-02-session-02",
+            "2026-06-03-session-03",
+        ];
         for id in ids {
-            std::fs::write(
-                sessions_dir.join(format!("{}.conv.ndjson", id)),
-                b"",
-            )
-            .unwrap();
+            std::fs::write(sessions_dir.join(format!("{id}.conv.ndjson")), b"").unwrap();
         }
 
         // Keep 1, delete 1 → the oldest of the two beyond keep is removed.
         let deleted = prune_oldest_in_dir(&sessions_dir, 1, 1).unwrap();
         assert_eq!(deleted, vec!["2026-06-02-session-02".to_string()]);
-        assert!(!sessions_dir.join("2026-06-02-session-02.conv.ndjson").exists());
-        assert!(sessions_dir.join("2026-06-03-session-03.conv.ndjson").exists());
+        assert!(!sessions_dir
+            .join("2026-06-02-session-02.conv.ndjson")
+            .exists());
+        assert!(sessions_dir
+            .join("2026-06-03-session-03.conv.ndjson")
+            .exists());
     }
 }

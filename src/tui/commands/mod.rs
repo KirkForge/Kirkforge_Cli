@@ -50,11 +50,9 @@ pub fn messages_to_entries(
             if m.role == crate::shared::Role::Tool {
                 let name = m.tool_name.as_deref().unwrap_or("tool");
                 let full = m.content.clone();
-                let (lines, bytes) =
-                    crate::tui::app::AppState::tool_output_metrics(&full, 80);
+                let (lines, bytes) = crate::tui::app::AppState::tool_output_metrics(&full, 80);
                 let summary = format!(
-                    "🔧 {} (done) — {} lines, {} bytes [Enter or Tab to expand]",
-                    name, lines, bytes
+                    "🔧 {name} (done) — {lines} lines, {bytes} bytes [Enter or Tab to expand]"
                 );
                 crate::tui::app::ConversationEntry::tool(summary, full)
             } else {
@@ -168,9 +166,9 @@ mod tests {
     fn format_job_status_running_uses_hash_form() {
         let j = dummy_job(5, JobStatus::Running);
         let s = format_job_status(&j);
-        assert!(s.contains("#5"), "got: {}", s);
-        assert!(!s.contains("(id="), "old format leaked: {}", s);
-        assert!(s.contains("running"), "got: {}", s);
+        assert!(s.contains("#5"), "got: {s}");
+        assert!(!s.contains("(id="), "old format leaked: {s}");
+        assert!(s.contains("running"), "got: {s}");
     }
 
     #[test]
@@ -217,7 +215,7 @@ mod tests {
     #[test]
     fn tail_lines_long_input_keeps_tail_and_reports_elided() {
         let input = (1..=100)
-            .map(|i| format!("line{}", i))
+            .map(|i| format!("line{i}"))
             .collect::<Vec<_>>()
             .join("\n");
         let (out, elided) = tail_lines(&input, 5);
@@ -232,7 +230,7 @@ mod tests {
     #[test]
     fn tail_lines_exact_boundary_no_elision() {
         let input = (1..=5)
-            .map(|i| format!("L{}", i))
+            .map(|i| format!("L{i}"))
             .collect::<Vec<_>>()
             .join("\n");
         let (out, elided) = tail_lines(&input, 5);
@@ -271,9 +269,9 @@ mod tests {
         }
 
         let out = handle_jobs_command("").await;
-        assert!(out.starts_with("Background jobs:"), "got: {}", out);
-        assert!(out.contains(&unique), "unique cmd missing: {}", out);
-        assert!(out.contains(&format!("#{}", id)), "job id missing: {}", out);
+        assert!(out.starts_with("Background jobs:"), "got: {out}");
+        assert!(out.contains(&unique), "unique cmd missing: {out}");
+        assert!(out.contains(&format!("#{id}")), "job id missing: {out}");
     }
 
     #[tokio::test]
@@ -301,25 +299,25 @@ mod tests {
         }
 
         let out = handle_jobs_command(&id.to_string()).await;
-        assert!(out.contains(&format!("#{}", id)), "got: {}", out);
-        assert!(out.contains("Command:"), "got: {}", out);
-        assert!(out.contains("Started:"), "got: {}", out);
-        assert!(out.contains("Finished:"), "got: {}", out);
-        assert!(out.contains("stdout"), "got: {}", out);
-        assert!(out.contains(&unique), "stdout missing unique: {}", out);
+        assert!(out.contains(&format!("#{id}")), "got: {out}");
+        assert!(out.contains("Command:"), "got: {out}");
+        assert!(out.contains("Started:"), "got: {out}");
+        assert!(out.contains("Finished:"), "got: {out}");
+        assert!(out.contains("stdout"), "got: {out}");
+        assert!(out.contains(&unique), "stdout missing unique: {out}");
     }
 
     #[tokio::test]
     async fn handle_jobs_command_detail_unknown_id_says_not_found() {
         let out = handle_jobs_command("999999").await;
-        assert!(out.contains("not found"), "got: {}", out);
+        assert!(out.contains("not found"), "got: {out}");
     }
 
     #[tokio::test]
     async fn handle_jobs_command_unknown_subcommand_returns_usage() {
         let out = handle_jobs_command("foo").await;
-        assert!(out.contains("Usage"), "got: {}", out);
-        assert!(out.contains("/jobs foo"), "got: {}", out);
+        assert!(out.contains("Usage"), "got: {out}");
+        assert!(out.contains("/jobs foo"), "got: {out}");
     }
 
     #[tokio::test]
@@ -328,8 +326,7 @@ mod tests {
         let out = handle_jobs_command("clean").await;
         assert!(
             out.contains("Cleaned") || out.contains("No completed jobs"),
-            "got: {}",
-            out
+            "got: {out}"
         );
     }
 
@@ -353,9 +350,9 @@ mod tests {
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-        let out = handle_jobs_command(&format!("{} cancel", id)).await;
-        assert!(out.contains("Cancel"), "got: {}", out);
-        assert!(out.contains(&format!("#{}", id)), "got: {}", out);
+        let out = handle_jobs_command(&format!("{id} cancel")).await;
+        assert!(out.contains("Cancel"), "got: {out}");
+        assert!(out.contains(&format!("#{id}")), "got: {out}");
 
         let job = registry.get(id).await;
         if let Some(j) = job {
@@ -392,33 +389,33 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
 
-        let out = handle_jobs_command(&format!("{} cancel", id)).await;
-        assert!(out.contains("not running"), "got: {}", out);
+        let out = handle_jobs_command(&format!("{id} cancel")).await;
+        assert!(out.contains("not running"), "got: {out}");
     }
 
     #[tokio::test]
     async fn handle_jobs_command_cancel_unknown_id_returns_not_found() {
         let out = handle_jobs_command("999999 cancel").await;
-        assert!(out.contains("not found"), "got: {}", out);
+        assert!(out.contains("not found"), "got: {out}");
     }
 
     #[tokio::test]
     async fn handle_jobs_command_cancel_without_id_returns_usage() {
         let out = handle_jobs_command("cancel").await;
-        assert!(out.contains("Usage"), "got: {}", out);
+        assert!(out.contains("Usage"), "got: {out}");
     }
 
     #[tokio::test]
     async fn handle_jobs_command_cancel_unknown_subcommand_returns_usage() {
         let out = handle_jobs_command("5 foo").await;
-        assert!(out.contains("Usage"), "got: {}", out);
-        assert!(out.contains("foo"), "got: {}", out);
+        assert!(out.contains("Usage"), "got: {out}");
+        assert!(out.contains("foo"), "got: {out}");
     }
 
     #[tokio::test]
     async fn handle_jobs_command_cancel_extra_token_returns_usage() {
         let out = handle_jobs_command("5 cancel now").await;
-        assert!(out.contains("Usage"), "got: {}", out);
+        assert!(out.contains("Usage"), "got: {out}");
     }
 
     fn sample_success(cmd: &str, stdout: &str, ms: u64) -> BangResult {
@@ -436,11 +433,11 @@ mod tests {
     fn format_bang_output_success_includes_command_and_banner() {
         let r = sample_success("echo hi", "hi\n", 42);
         let out = format_bang_output(&r);
-        assert!(out.starts_with("$ echo hi"), "got: {:?}", out);
-        assert!(out.contains("✅ exit 0"), "got: {:?}", out);
-        assert!(out.contains("hi"), "got: {:?}", out);
+        assert!(out.starts_with("$ echo hi"), "got: {out:?}");
+        assert!(out.contains("✅ exit 0"), "got: {out:?}");
+        assert!(out.contains("hi"), "got: {out:?}");
 
-        assert!(out.contains("42ms"), "got: {:?}", out);
+        assert!(out.contains("42ms"), "got: {out:?}");
     }
 
     #[test]
@@ -454,10 +451,10 @@ mod tests {
             elapsed_ms: 12,
         };
         let out = format_bang_output(&r);
-        assert!(out.contains("$ ls /nonexistent"), "got: {:?}", out);
-        assert!(out.contains("❌ exit 2"), "got: {:?}", out);
-        assert!(out.contains("⚠ stderr:"), "got: {:?}", out);
-        assert!(out.contains("No such file or directory"), "got: {:?}", out);
+        assert!(out.contains("$ ls /nonexistent"), "got: {out:?}");
+        assert!(out.contains("❌ exit 2"), "got: {out:?}");
+        assert!(out.contains("⚠ stderr:"), "got: {out:?}");
+        assert!(out.contains("No such file or directory"), "got: {out:?}");
     }
 
     #[test]
@@ -471,10 +468,10 @@ mod tests {
             elapsed_ms: 30_000,
         };
         let out = format_bang_output(&r);
-        assert!(out.contains("⏰"), "got: {:?}", out);
-        assert!(out.contains("30s"), "got: {:?}", out);
-        assert!(!out.contains("✅"), "got: {:?}", out);
-        assert!(!out.contains("❌"), "got: {:?}", out);
+        assert!(out.contains("⏰"), "got: {out:?}");
+        assert!(out.contains("30s"), "got: {out:?}");
+        assert!(!out.contains("✅"), "got: {out:?}");
+        assert!(!out.contains("❌"), "got: {out:?}");
     }
 
     #[test]
@@ -488,11 +485,11 @@ mod tests {
             elapsed_ms: 30_000,
         };
         let out = format_bang_output(&r);
-        assert!(out.contains("⏰"), "got: {:?}", out);
-        assert!(out.contains("line1"), "got: {:?}", out);
-        assert!(out.contains("line2"), "got: {:?}", out);
-        assert!(out.contains("⚠ stderr:"), "got: {:?}", out);
-        assert!(out.contains("warn!"), "got: {:?}", out);
+        assert!(out.contains("⏰"), "got: {out:?}");
+        assert!(out.contains("line1"), "got: {out:?}");
+        assert!(out.contains("line2"), "got: {out:?}");
+        assert!(out.contains("⚠ stderr:"), "got: {out:?}");
+        assert!(out.contains("warn!"), "got: {out:?}");
     }
 
     #[test]
@@ -501,19 +498,18 @@ mod tests {
         let r = BangResult {
             cmd: "slow".to_string(),
             exit_code: -1,
-            stdout: format!("{}partial output", prefix),
+            stdout: format!("{prefix}partial output"),
             stderr: String::new(),
             timed_out: true,
             elapsed_ms: 30_000,
         };
         let out = format_bang_output(&r);
-        assert!(out.contains("⏰"), "got: {:?}", out);
+        assert!(out.contains("⏰"), "got: {out:?}");
         assert!(
             !out.contains("[timed out after 30 seconds]"),
-            "duplicate prefix should be stripped: {:?}",
-            out
+            "duplicate prefix should be stripped: {out:?}"
         );
-        assert!(out.contains("partial output"), "got: {:?}", out);
+        assert!(out.contains("partial output"), "got: {out:?}");
     }
 
     #[test]
@@ -527,19 +523,19 @@ mod tests {
             elapsed_ms: 1200,
         };
         let out = format_bang_output(&r);
-        assert!(out.contains("✅ exit 0"), "got: {:?}", out);
-        assert!(out.contains("⚠ stderr:"), "got: {:?}", out);
-        assert!(out.contains("Compiling foo"), "got: {:?}", out);
+        assert!(out.contains("✅ exit 0"), "got: {out:?}");
+        assert!(out.contains("⚠ stderr:"), "got: {out:?}");
+        assert!(out.contains("Compiling foo"), "got: {out:?}");
     }
 
     #[test]
     fn format_bang_output_empty_output_is_just_banner() {
         let r = sample_success("true", "", 5);
         let out = format_bang_output(&r);
-        assert!(out.contains("$ true"), "got: {:?}", out);
-        assert!(out.contains("✅ exit 0"), "got: {:?}", out);
+        assert!(out.contains("$ true"), "got: {out:?}");
+        assert!(out.contains("✅ exit 0"), "got: {out:?}");
 
-        assert!(!out.contains("⚠"), "got: {:?}", out);
+        assert!(!out.contains("⚠"), "got: {out:?}");
     }
 
     #[test]
@@ -589,38 +585,38 @@ mod tests {
     async fn handle_bang_command_echo_runs() {
         let cfg = default_config();
         let out = handle_bang_command("echo hi", &cfg).await;
-        assert!(out.contains("$ echo hi"), "got: {:?}", out);
-        assert!(out.contains("✅ exit 0"), "got: {:?}", out);
-        assert!(out.contains("hi"), "got: {:?}", out);
+        assert!(out.contains("$ echo hi"), "got: {out:?}");
+        assert!(out.contains("✅ exit 0"), "got: {out:?}");
+        assert!(out.contains("hi"), "got: {out:?}");
     }
 
     #[tokio::test]
     async fn handle_bang_command_true_exits_zero_silently() {
         let cfg = default_config();
         let out = handle_bang_command("true", &cfg).await;
-        assert!(out.contains("✅ exit 0"), "got: {:?}", out);
-        assert!(!out.contains("⚠"), "got: {:?}", out);
+        assert!(out.contains("✅ exit 0"), "got: {out:?}");
+        assert!(!out.contains("⚠"), "got: {out:?}");
     }
 
     #[tokio::test]
     async fn handle_bang_command_false_exits_nonzero() {
         let cfg = default_config();
         let out = handle_bang_command("false", &cfg).await;
-        assert!(out.contains("❌ exit 1"), "got: {:?}", out);
+        assert!(out.contains("❌ exit 1"), "got: {out:?}");
     }
 
     #[tokio::test]
     async fn handle_bang_command_empty_returns_usage() {
         let cfg = default_config();
         let out = handle_bang_command("", &cfg).await;
-        assert!(out.contains("Usage"), "got: {:?}", out);
+        assert!(out.contains("Usage"), "got: {out:?}");
     }
 
     #[tokio::test]
     async fn handle_bang_command_whitespace_only_returns_usage() {
         let cfg = default_config();
         let out = handle_bang_command("   ", &cfg).await;
-        assert!(out.contains("Usage"), "got: {:?}", out);
+        assert!(out.contains("Usage"), "got: {out:?}");
     }
 
     #[tokio::test]
@@ -629,8 +625,7 @@ mod tests {
         let out = handle_bang_command("rm -rf /", &cfg).await;
         assert!(
             out.contains("🔒") && out.contains("dangerous"),
-            "dangerous bang command should be blocked, got: {:?}",
-            out
+            "dangerous bang command should be blocked, got: {out:?}"
         );
     }
 
@@ -666,7 +661,7 @@ mod tests {
     #[test]
     fn parse_mentions_double_at_is_literal() {
         let m = parse_mentions("send email to @@user");
-        assert!(m.is_empty(), "got: {:?}", m);
+        assert!(m.is_empty(), "got: {m:?}");
     }
 
     #[test]
@@ -701,8 +696,7 @@ mod tests {
         let m = parse_mentions("see @foo.rs:10-5");
         assert!(
             m.is_empty(),
-            "inverted range should be rejected, got: {:?}",
-            m
+            "inverted range should be rejected, got: {m:?}"
         );
     }
 
@@ -717,7 +711,7 @@ mod tests {
         let input = "look at @a.rs and @b.py now";
         let mentions = parse_mentions(input);
         let cleaned = strip_mentions(input, &mentions);
-        assert_eq!(cleaned, "look at  and  now", "got: {:?}", cleaned);
+        assert_eq!(cleaned, "look at  and  now", "got: {cleaned:?}");
     }
 
     #[test]
@@ -844,7 +838,7 @@ mod tests {
             status: MentionStatus::NotFound,
         };
         let s = render_mentions_block(&[e]);
-        assert!(s.contains("not found"), "got: {:?}", s);
+        assert!(s.contains("not found"), "got: {s:?}");
     }
 
     #[test]

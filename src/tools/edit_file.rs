@@ -335,11 +335,10 @@ mod tests {
                 // The trailing whitespace on line 2 should be preserved
                 assert!(
                     result_content.contains("    let y = 2;    "),
-                    "Fuzzy fallback should preserve original trailing whitespace, got: {:?}",
-                    result_content
+                    "Fuzzy fallback should preserve original trailing whitespace, got: {result_content:?}"
                 );
             }
-            other => panic!("Expected FileEdit, got {:?}", other),
+            other => panic!("Expected FileEdit, got {other:?}"),
         }
 
         let _ = std::fs::remove_file(&path);
@@ -374,8 +373,7 @@ mod tests {
                 // boundary (not in the middle of a `\r\n`).
                 assert!(
                     result_content.contains("    let y = 2;\r\n"),
-                    "Replacement should land at a line boundary with CRLF preserved, got: {:?}",
-                    result_content
+                    "Replacement should land at a line boundary with CRLF preserved, got: {result_content:?}"
                 );
                 // The file should not have any orphaned `\r` characters
                 // or missing newlines. Count the CRLFs in the original
@@ -384,11 +382,10 @@ mod tests {
                 let result_crlf_count = result_content.matches("\r\n").count();
                 assert_eq!(
                     original_crlf_count, result_crlf_count,
-                    "Number of CRLF line endings should be preserved (orig={}, result={})",
-                    original_crlf_count, result_crlf_count
+                    "Number of CRLF line endings should be preserved (orig={original_crlf_count}, result={result_crlf_count})"
                 );
             }
-            other => panic!("Expected FileEdit, got {:?}", other),
+            other => panic!("Expected FileEdit, got {other:?}"),
         }
 
         let _ = std::fs::remove_file(&path);
@@ -444,10 +441,7 @@ mod tests {
     async fn test_edit_file_rejects_ambiguous_exact_match() {
         let dir = std::env::temp_dir();
         let path = dir.join("kirkforge_edit_ambiguous.txt");
-        std::fs::write(&path,
-            "fn foo() {}\nfn bar() {}\nfn foo() {}\n",
-        )
-        .unwrap();
+        std::fs::write(&path, "fn foo() {}\nfn bar() {}\nfn foo() {}\n").unwrap();
 
         let tool = EditFile::new(None);
         let args = serde_json::json!({
@@ -458,8 +452,7 @@ mod tests {
         let result = tool.run(args).await;
         assert!(
             matches!(result, ToolOutcome::Error { ref message } if message.contains("matches 2 times")),
-            "expected ambiguous-match error, got {:?}",
-            result
+            "expected ambiguous-match error, got {result:?}"
         );
         let _ = std::fs::remove_file(&path);
     }
@@ -470,11 +463,7 @@ mod tests {
         let dir = std::env::temp_dir();
         let path = dir.join("kirkforge_edit_ambiguous_fuzzy.txt");
         // Same line twice with differing trailing whitespace.
-        std::fs::write(
-            &path,
-            "let x = 1;    \nlet y = 2;\nlet x = 1;\n",
-        )
-        .unwrap();
+        std::fs::write(&path, "let x = 1;    \nlet y = 2;\nlet x = 1;\n").unwrap();
 
         let tool = EditFile::new(None);
         let args = serde_json::json!({
@@ -485,8 +474,7 @@ mod tests {
         let result = tool.run(args).await;
         assert!(
             matches!(result, ToolOutcome::Error { ref message } if message.contains("matches 2 times")),
-            "expected ambiguous fuzzy-match error, got {:?}",
-            result
+            "expected ambiguous fuzzy-match error, got {result:?}"
         );
         let _ = std::fs::remove_file(&path);
     }

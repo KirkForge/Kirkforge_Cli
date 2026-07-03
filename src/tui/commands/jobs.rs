@@ -84,7 +84,7 @@ pub async fn handle_jobs_command(args: &str) -> String {
         } else if cleaned == 1 {
             "🧹 Cleaned 1 finished job.".into()
         } else {
-            format!("🧹 Cleaned {} finished jobs.", cleaned)
+            format!("🧹 Cleaned {cleaned} finished jobs.")
         };
     }
 
@@ -111,26 +111,19 @@ pub async fn handle_jobs_command(args: &str) -> String {
         let id: u64 = match first.parse() {
             Ok(n) => n,
             Err(_) => {
-                return format!(
-                    "Usage: /jobs [clean | <id> | <id> cancel]\nGot: /jobs {}",
-                    first
-                );
+                return format!("Usage: /jobs [clean | <id> | <id> cancel]\nGot: /jobs {first}");
             }
         };
 
         // `/jobs <id> cancel` — cancel a running job
         if let Some(sub) = second {
             if !sub.eq_ignore_ascii_case("cancel") {
-                return format!(
-                    "Usage: /jobs [clean | <id> | <id> cancel]\nGot: /jobs {} {}",
-                    id, sub
-                );
+                return format!("Usage: /jobs [clean | <id> | <id> cancel]\nGot: /jobs {id} {sub}");
             }
             let registry = crate::session::bash_jobs::global_registry();
             return match registry.cancel(id).await {
                 true => format!(
-                    "🚫 Cancellation requested for job #{}. The completion notifier will post the final status.",
-                    id
+                    "🚫 Cancellation requested for job #{id}. The completion notifier will post the final status."
                 ),
                 false => match registry.get(id).await {
                     Some(job) => format!(
@@ -138,7 +131,7 @@ pub async fn handle_jobs_command(args: &str) -> String {
                         id,
                         format_job_status(&job)
                     ),
-                    None => format!("Job #{} not found. No jobs to cancel.", id),
+                    None => format!("Job #{id} not found. No jobs to cancel."),
                 },
             };
         }
@@ -167,12 +160,11 @@ pub async fn handle_jobs_command(args: &str) -> String {
                     ));
                     if elided > 0 {
                         out.push_str(&format!(
-                            "  [... {} lines elided, showing last {} ...]\n",
-                            elided, JOB_DETAIL_TAIL_LINES
+                            "  [... {elided} lines elided, showing last {JOB_DETAIL_TAIL_LINES} ...]\n"
                         ));
                     }
                     for line in tail.lines() {
-                        out.push_str(&format!("  {}\n", line));
+                        out.push_str(&format!("  {line}\n"));
                     }
                 } else {
                     out.push_str("\n  --- stdout (empty) ---\n");
@@ -187,12 +179,11 @@ pub async fn handle_jobs_command(args: &str) -> String {
                     ));
                     if elided > 0 {
                         out.push_str(&format!(
-                            "  [... {} lines elided, showing last {} ...]\n",
-                            elided, JOB_DETAIL_TAIL_LINES
+                            "  [... {elided} lines elided, showing last {JOB_DETAIL_TAIL_LINES} ...]\n"
                         ));
                     }
                     for line in tail.lines() {
-                        out.push_str(&format!("  {}\n", line));
+                        out.push_str(&format!("  {line}\n"));
                     }
                 } else {
                     out.push_str("\n  --- stderr (empty) ---\n");
@@ -211,7 +202,7 @@ pub async fn handle_jobs_command(args: &str) -> String {
                     .map(|j| j.id.to_string())
                     .collect();
                 if ids.is_empty() {
-                    return format!("Job #{} not found. No background jobs exist.", id);
+                    return format!("Job #{id} not found. No background jobs exist.");
                 }
                 format!(
                     "Job #{} not found. Available jobs: [{}]",

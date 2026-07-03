@@ -91,7 +91,7 @@ pub fn new_session_id() -> SessionId {
                     let fname = entry.file_name();
                     let fname = fname.to_string_lossy();
 
-                    if let Some(rest) = fname.strip_prefix(&format!("{}-session-", prefix)) {
+                    if let Some(rest) = fname.strip_prefix(&format!("{prefix}-session-")) {
                         if let Some(seq_str) = rest.split('.').next() {
                             if let Ok(seq) = seq_str.parse::<u32>() {
                                 if seq > max_seq {

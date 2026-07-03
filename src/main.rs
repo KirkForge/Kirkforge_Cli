@@ -52,7 +52,9 @@ fn init_tracing(log_level: &str) {
         .map(|d| d.join("kirkforge.log"))
         .unwrap_or_else(|_| PathBuf::from("kirkforge.log"));
     let _ = std::fs::create_dir_all(
-        log_file.parent().unwrap_or_else(|| std::path::Path::new(".")),
+        log_file
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new(".")),
     );
 
     let file_layer = tracing_subscriber::fmt::layer()
@@ -78,7 +80,9 @@ fn init_tracing(log_level: &str) {
             }
         });
 
-    let registry = tracing_subscriber::registry().with(env_filter).with(file_layer);
+    let registry = tracing_subscriber::registry()
+        .with(env_filter)
+        .with(file_layer);
 
     if std::env::var("KIRKFORGE_LOG_STDERR").is_ok() {
         let stderr_layer = tracing_subscriber::fmt::layer().with_writer(std::io::stderr);
@@ -122,7 +126,12 @@ fn exit_code(e: &anyhow::Error) -> i32 {
 )]
 struct Cli {
     /// Log verbosity. Overridden by RUST_LOG if set.
-    #[arg(long, default_value = "warn", env = "KIRKFORGE_LOG_LEVEL", global = true)]
+    #[arg(
+        long,
+        default_value = "warn",
+        env = "KIRKFORGE_LOG_LEVEL",
+        global = true
+    )]
     log_level: String,
 
     #[command(subcommand)]
@@ -194,9 +203,7 @@ enum Command {
     },
     /// Print shell completion script and exit.
     /// Example: kirkforge completions bash >> ~/.bashrc
-    Completions {
-        shell: Shell,
-    },
+    Completions { shell: Shell },
     /// List and export past sessions.
     /// Without arguments, lists recent sessions (newest first).
     /// With --export, writes the session to stdout or a file.
@@ -263,12 +270,15 @@ async fn main() {
             .await
         }
         Command::Completions { shell } => {
-            clap_complete::generate(shell, &mut Cli::command(), "kirkforge", &mut std::io::stdout());
+            clap_complete::generate(
+                shell,
+                &mut Cli::command(),
+                "kirkforge",
+                &mut std::io::stdout(),
+            );
             Ok(())
         }
-        Command::Sessions { id, export, output } => {
-            handle_sessions_command(id, export, output)
-        }
+        Command::Sessions { id, export, output } => handle_sessions_command(id, export, output),
         Command::Daemon { foreground, stop } => daemon::server::run_daemon(foreground, stop).await,
     };
 
@@ -310,8 +320,8 @@ fn handle_sessions_command(
     let id = id.ok_or_else(|| anyhow::anyhow!("--export requires a session id"))?;
     let fmt = export.as_deref().unwrap_or("markdown");
 
-    let path = resolve_session_id(&id)?
-        .ok_or_else(|| anyhow::anyhow!("session '{}' not found", id))?;
+    let path =
+        resolve_session_id(&id)?.ok_or_else(|| anyhow::anyhow!("session '{id}' not found"))?;
 
     let content = match fmt {
         "ndjson" => std::fs::read_to_string(&path)?,
@@ -337,14 +347,14 @@ fn handle_sessions_command(
                 .collect();
             tui::transcript::format_transcript(&id, &entries)
         }
-        other => anyhow::bail!("unknown export format '{}'; use markdown, json, or ndjson", other),
+        other => anyhow::bail!("unknown export format '{other}'; use markdown, json, or ndjson"),
     };
 
     if let Some(p) = out_path {
         std::fs::write(&p, &content)?;
         println!("Exported {} session to {}", fmt, p.display());
     } else {
-        print!("{}", content);
+        print!("{content}");
     }
 
     Ok(())
@@ -429,8 +439,7 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
             Some(path) => path,
             None => {
                 anyhow::bail!(
-                    "daemon could not resolve session '{}'. Run `/sessions` to see available ids.",
-                    id
+                    "daemon could not resolve session '{id}'. Run `/sessions` to see available ids."
                 );
             }
         }
@@ -444,7 +453,7 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
                 tracing::info!("no recent sessions found; starting a new session");
                 let sessions_dir = data_dir.join("sessions");
                 std::fs::create_dir_all(&sessions_dir)?;
-                sessions_dir.join(format!("{}.conv.ndjson", session_id))
+                sessions_dir.join(format!("{session_id}.conv.ndjson"))
             }
         }
     } else {
@@ -461,7 +470,7 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
                         tracing::info!("user chose new session");
                         let sessions_dir = data_dir.join("sessions");
                         std::fs::create_dir_all(&sessions_dir)?;
-                        sessions_dir.join(format!("{}.conv.ndjson", session_id))
+                        sessions_dir.join(format!("{session_id}.conv.ndjson"))
                     }
                 }
             }
@@ -474,12 +483,12 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
                 }
                 let sessions_dir = data_dir.join("sessions");
                 std::fs::create_dir_all(&sessions_dir)?;
-                sessions_dir.join(format!("{}.conv.ndjson", session_id))
+                sessions_dir.join(format!("{session_id}.conv.ndjson"))
             }
             _ => {
                 let sessions_dir = data_dir.join("sessions");
                 std::fs::create_dir_all(&sessions_dir)?;
-                sessions_dir.join(format!("{}.conv.ndjson", session_id))
+                sessions_dir.join(format!("{session_id}.conv.ndjson"))
             }
         }
     };
@@ -600,8 +609,8 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     // the TUI cannot render. Fall back to the same line-mode loop that
     // --non-interactive uses, but read from stdin instead of a pre-baked
     // prompt list so the user can still chat.
-    let no_color = std::env::var("NO_COLOR").is_ok()
-        || std::env::var("TERM").is_ok_and(|t| t == "dumb");
+    let no_color =
+        std::env::var("NO_COLOR").is_ok() || std::env::var("TERM").is_ok_and(|t| t == "dumb");
     let use_tui = !no_tui && !non_interactive && !no_color && std::io::stdout().is_terminal();
     if use_tui {
         tui::run_tui(
@@ -731,7 +740,9 @@ async fn run_line_mode(
         }
 
         let turn_started_at = std::time::Instant::now();
-        let events = executor.run_turn_collecting(&input, &approval_tx, &cancelled).await?;
+        let events = executor
+            .run_turn_collecting(&input, &approval_tx, &cancelled)
+            .await?;
         let _turn_duration_ms = turn_started_at.elapsed().as_millis() as u64;
         let turn_outcome = emit_turn_events(
             &events,
@@ -760,7 +771,11 @@ async fn run_line_mode(
         let summary = crate::shared::SessionSummary {
             version: "1.0".into(),
             session: crate::shared::SessionInfo {
-                id: if non_interactive { "non-interactive".into() } else { "line-mode".into() },
+                id: if non_interactive {
+                    "non-interactive".into()
+                } else {
+                    "line-mode".into()
+                },
                 model: model_name,
                 duration_ms: total_duration_ms,
                 started_at: chrono::Local::now().to_rfc3339(),
@@ -803,7 +818,7 @@ fn spawn_line_mode_approval_handler(
             };
             eprintln!();
             eprintln!("⚠️  Approval required: {}", req.tool_name);
-            eprintln!("{}", args_preview);
+            eprintln!("{args_preview}");
             eprint!("Approve? [y/N]: ");
             let _ = std::io::stderr().flush();
 
@@ -836,16 +851,13 @@ fn spawn_line_mode_approval_handler(
                 let _ = answer_tx.send(approved);
             });
 
-            let approved = tokio::time::timeout(
-                std::time::Duration::from_secs(120),
-                answer_rx,
-            )
-            .await
-            .map(|r| r.unwrap_or(false))
-            .unwrap_or_else(|_| {
-                eprintln!("\nApproval prompt timed out after 120 s; denying.");
-                false
-            });
+            let approved = tokio::time::timeout(std::time::Duration::from_secs(120), answer_rx)
+                .await
+                .map(|r| r.unwrap_or(false))
+                .unwrap_or_else(|_| {
+                    eprintln!("\nApproval prompt timed out after 120 s; denying.");
+                    false
+                });
 
             let resp = if approved {
                 session::executor::ApprovalResponse::Approved
@@ -864,7 +876,7 @@ fn spawn_line_mode_approval_handler(
 /// skip the line rather than panicking in the headless output path.
 fn print_json_line(value: &serde_json::Value) {
     match serde_json::to_string(value) {
-        Ok(line) => println!("{}", line),
+        Ok(line) => println!("{line}"),
         Err(e) => tracing::warn!("failed to serialize stream-json event: {}", e),
     }
 }
@@ -898,7 +910,7 @@ fn emit_turn_events(
         match event {
             session::executor::TurnEvent::Token(t) => {
                 if output == crate::shared::OutputFormat::Text {
-                    print!("{}", t);
+                    print!("{t}");
                     let _ = std::io::stdout().flush();
                 } else if output == crate::shared::OutputFormat::StreamJson {
                     let line = serde_json::json!({"type": "token", "content": t});
@@ -907,7 +919,7 @@ fn emit_turn_events(
             }
             session::executor::TurnEvent::Thinking(t) => {
                 if output == crate::shared::OutputFormat::Text {
-                    eprintln!("\n[thinking] {}", t);
+                    eprintln!("\n[thinking] {t}");
                 } else if output == crate::shared::OutputFormat::StreamJson {
                     let line = serde_json::json!({"type": "thinking", "content": t});
                     print_json_line(&line);
@@ -943,9 +955,9 @@ fn emit_turn_events(
                     // and only the body if it failed. Successful tool churn is
                     // the main source of terminal spam.
                     let status = if *success { "ok" } else { "FAIL" };
-                    eprintln!("[tool {} -> {}]", name, status);
+                    eprintln!("[tool {name} -> {status}]");
                     if !success {
-                        eprintln!("{}", result);
+                        eprintln!("{result}");
                     }
                 }
                 // If we have a matching in-flight record, fold it
@@ -981,7 +993,7 @@ fn emit_turn_events(
             session::executor::TurnEvent::Error(e) => {
                 *final_error = Some(e.clone());
                 if output == crate::shared::OutputFormat::Text {
-                    eprintln!("\n[error] {}", e);
+                    eprintln!("\n[error] {e}");
                 } else if output == crate::shared::OutputFormat::StreamJson {
                     let line = serde_json::json!({"type": "error", "content": e});
                     print_json_line(&line);
@@ -1021,11 +1033,7 @@ fn emit_turn_events(
             } => {
                 if output == crate::shared::OutputFormat::Text {
                     eprintln!(
-                        "\n[compaction] {} → {} messages, dropped {} tool result(s), condensed {} assistant turn(s).",
-                        original_count,
-                        compacted_count,
-                        dropped_tool_results,
-                        condensed_assistant_turns,
+                        "\n[compaction] {original_count} → {compacted_count} messages, dropped {dropped_tool_results} tool result(s), condensed {condensed_assistant_turns} assistant turn(s).",
                     );
                 } else if output == crate::shared::OutputFormat::StreamJson {
                     let line = serde_json::json!({
@@ -1058,13 +1066,10 @@ fn resolve_continue_path(value: &str) -> anyhow::Result<std::path::PathBuf> {
     match session::session_index::resolve_session_id(value) {
         Ok(Some(p)) => Ok(p),
         Ok(None) => Err(anyhow::anyhow!(
-            "No saved session found matching '{}'. Run `kirkforge run --non-interactive` once to create one, or use `/sessions` in the TUI to list.",
-            value
+            "No saved session found matching '{value}'. Run `kirkforge run --non-interactive` once to create one, or use `/sessions` in the TUI to list."
         )),
         Err(e) => Err(anyhow::anyhow!(
-            "Error resolving session id '{}': {}",
-            value,
-            e
+            "Error resolving session id '{value}': {e}"
         )),
     }
 }
@@ -1152,15 +1157,14 @@ mod tests {
         // real session directory) but we can assert it's an error
         // and that it doesn't fall through as a path.
         let r = resolve_continue_path("definitely-not-a-real-session-xyzzy");
-        assert!(r.is_err(), "expected an error, got: {:?}", r);
+        assert!(r.is_err(), "expected an error, got: {r:?}");
         let err = r.unwrap_err().to_string();
         // Either "No saved session found" (empty sessions dir) or
         // a session-index error. Both indicate the id-resolution
         // path was taken, which is what we want to verify.
         assert!(
             err.contains("No saved session") || err.contains("Error resolving session id"),
-            "unexpected error: {}",
-            err
+            "unexpected error: {err}"
         );
     }
 
@@ -1252,8 +1256,7 @@ mod tests {
                 resp,
                 session::executor::ApprovalResponse::DeniedWithReason(_)
             ),
-            "expected a reasoned denial, got {:?}",
-            resp
+            "expected a reasoned denial, got {resp:?}"
         );
     }
 }

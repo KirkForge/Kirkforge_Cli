@@ -121,7 +121,10 @@ impl CompositeToolset {
         let mut tools = Vec::new();
         for def in defs {
             let tool = self.resolve(def.name).ok_or_else(|| {
-                anyhow::anyhow!("tool '{}' disappeared during flatten — plugin may have loaded inconsistently", def.name)
+                anyhow::anyhow!(
+                    "tool '{}' disappeared during flatten — plugin may have loaded inconsistently",
+                    def.name
+                )
             })?;
             tools.push(tool);
         }

@@ -28,7 +28,7 @@ const TEST_MODEL: &str = "qwen2.5:0.5b";
 #[ignore = "requires Ollama server running"]
 async fn test_ollama_server_connectivity() {
     let resp = client()
-        .get(format!("{}/api/tags", OLLAMA_HOST))
+        .get(format!("{OLLAMA_HOST}/api/tags"))
         .send()
         .await
         .expect("Ollama /api/tags request failed");
@@ -47,8 +47,7 @@ async fn test_ollama_server_connectivity() {
     });
     assert!(
         has_test_model,
-        "Test model '{}' must be pulled (run: ollama pull {})",
-        TEST_MODEL, TEST_MODEL
+        "Test model '{TEST_MODEL}' must be pulled (run: ollama pull {TEST_MODEL})"
     );
 }
 
@@ -66,7 +65,7 @@ async fn test_basic_streaming_response() {
     });
 
     let mut response = client()
-        .post(format!("{}/api/chat", OLLAMA_HOST))
+        .post(format!("{OLLAMA_HOST}/api/chat"))
         .json(&body)
         .send()
         .await
@@ -105,8 +104,7 @@ async fn test_basic_streaming_response() {
     assert!(!full_text.is_empty(), "Should have received some text");
     assert!(
         full_text.contains("HELLO_WORLD"),
-        "Response should contain expected output. Got: {}",
-        full_text
+        "Response should contain expected output. Got: {full_text}"
     );
 }
 
@@ -124,7 +122,7 @@ async fn test_non_streaming_response() {
     });
 
     let resp = client()
-        .post(format!("{}/api/chat", OLLAMA_HOST))
+        .post(format!("{OLLAMA_HOST}/api/chat"))
         .json(&body)
         .send()
         .await
@@ -184,7 +182,7 @@ async fn test_tool_calls_format() {
     });
 
     let resp = client()
-        .post(format!("{}/api/chat", OLLAMA_HOST))
+        .post(format!("{OLLAMA_HOST}/api/chat"))
         .json(&body)
         .send()
         .await
@@ -230,7 +228,7 @@ async fn test_error_on_unknown_model() {
     });
 
     let resp = client()
-        .post(format!("{}/api/chat", OLLAMA_HOST))
+        .post(format!("{OLLAMA_HOST}/api/chat"))
         .json(&body)
         .send()
         .await
@@ -288,7 +286,7 @@ async fn test_tool_fn_json_parse_in_chunks() {
     });
 
     let mut response = client()
-        .post(format!("{}/api/chat", OLLAMA_HOST))
+        .post(format!("{OLLAMA_HOST}/api/chat"))
         .json(&body)
         .send()
         .await
@@ -360,7 +358,7 @@ async fn test_openai_compat_endpoint() {
     });
 
     let mut response = client()
-        .post(format!("{}/v1/chat/completions", OLLAMA_HOST))
+        .post(format!("{OLLAMA_HOST}/v1/chat/completions"))
         .json(&body)
         .send()
         .await

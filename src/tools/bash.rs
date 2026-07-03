@@ -189,10 +189,10 @@ impl Tool for Bash {
                 .await
             {
                 Ok(id) => ToolOutcome::Success {
-                    content: format!("Background job #{} started. Use bash_status(id={}) or bash_output(id={}) to check results.", id, id, id),
+                    content: format!("Background job #{id} started. Use bash_status(id={id}) or bash_output(id={id}) to check results."),
                 },
                 Err(e) => ToolOutcome::Error {
-                    message: format!("Failed to start background job: {}", e),
+                    message: format!("Failed to start background job: {e}"),
                 },
             }
         } else {
@@ -260,7 +260,7 @@ impl Tool for Bash {
                     }
                 }
                 Err(e) => ToolOutcome::Error {
-                    message: format!("Failed to execute command: {}", e),
+                    message: format!("Failed to execute command: {e}"),
                 },
             }
         }
@@ -303,7 +303,7 @@ pub async fn run_shell(
 
     let mut child = proc
         .spawn()
-        .map_err(|e| format!("Failed to execute command: {}", e))?;
+        .map_err(|e| format!("Failed to execute command: {e}"))?;
 
     let stdout = child.stdout.take().ok_or_else(|| "no stdout".to_string())?;
     let stderr = child.stderr.take().ok_or_else(|| "no stderr".to_string())?;
@@ -348,7 +348,7 @@ pub async fn run_shell(
                 stderr: cap_to_string(raw_stderr, stderr_dropped),
             })
         }
-        Ok(Err(e)) => Err(format!("Failed to wait for command: {}", e)),
+        Ok(Err(e)) => Err(format!("Failed to wait for command: {e}")),
         Err(()) => {
             // Timeout path. The child has been sent SIGKILL; the drain
             // tasks are still running and will see EOF as the pipes
@@ -359,7 +359,7 @@ pub async fn run_shell(
             // so the child should exit quickly. A short timeout prevents
             // a stuck child from wedging us.
             let _ = tokio::time::timeout(std::time::Duration::from_secs(2), child.wait()).await;
-            let prefix = format!("[timed out after {} seconds]\n", timeout_secs);
+            let prefix = format!("[timed out after {timeout_secs} seconds]\n");
             Ok(ShellOutput {
                 status: synth_status_killed(),
                 stdout: format!("{}{}", prefix, cap_to_string(raw_stdout, stdout_dropped)),
@@ -382,11 +382,10 @@ async fn join_drain(
 ) -> Result<(Vec<u8>, u64), String> {
     match tokio::time::timeout(DRAIN_JOIN_TIMEOUT, handle).await {
         Ok(Ok(Ok(pair))) => Ok(pair),
-        Ok(Ok(Err(e))) => Err(format!("drain {}: {}", label, e)),
-        Ok(Err(e)) => Err(format!("drain {} task panicked: {}", label, e)),
+        Ok(Ok(Err(e))) => Err(format!("drain {label}: {e}")),
+        Ok(Err(e)) => Err(format!("drain {label} task panicked: {e}")),
         Err(_) => Err(format!(
-            "drain {}: task did not finish within {:?}",
-            label, DRAIN_JOIN_TIMEOUT
+            "drain {label}: task did not finish within {DRAIN_JOIN_TIMEOUT:?}"
         )),
     }
 }
@@ -496,8 +495,7 @@ pub fn check_bash_command_str(
                     Ok(p) => p,
                     Err(_) => {
                         return Some(format!(
-                            "🔒 Bash workdir cannot be resolved: {} (sandbox enforcement active)",
-                            workdir
+                            "🔒 Bash workdir cannot be resolved: {workdir} (sandbox enforcement active)"
                         ));
                     }
                 };
@@ -535,8 +533,7 @@ pub fn check_bash_command_str(
     for url_prefix in &deny_list.url_patterns {
         if !url_prefix.is_empty() && cmd.contains(url_prefix) {
             return Some(format!(
-                "🔒 Command blocked: references denied URL '{}'",
-                url_prefix
+                "🔒 Command blocked: references denied URL '{url_prefix}'"
             ));
         }
     }
@@ -551,8 +548,7 @@ pub fn check_bash_command_str(
         };
         if matches {
             return Some(format!(
-                "🔒 Command blocked: dangerous pattern '{}' detected",
-                pattern
+                "🔒 Command blocked: dangerous pattern '{pattern}' detected"
             ));
         }
     }
@@ -566,8 +562,7 @@ pub fn check_bash_command_str(
     ] {
         if cmd.contains(pat) {
             return Some(format!(
-                "🔒 Command blocked: references denied path '{}'",
-                pat
+                "🔒 Command blocked: references denied path '{pat}'"
             ));
         }
     }
@@ -577,8 +572,7 @@ pub fn check_bash_command_str(
     for token in cmd.split_whitespace() {
         if deny_list.is_path_denied(Path::new(token)) {
             return Some(format!(
-                "🔒 Command blocked: references denied path '{}'",
-                token
+                "🔒 Command blocked: references denied path '{token}'"
             ));
         }
     }
@@ -649,7 +643,7 @@ mod tests {
         let _ = std::fs::remove_file(&marker);
 
         // Inner `sh` makes `sleep` a grandchild of the outer shell.
-        let cmd = format!("sh -c 'sleep 30; touch {}'", marker_str);
+        let cmd = format!("sh -c 'sleep 30; touch {marker_str}'");
         let out = run_shell(&cmd, &tmp, 1)
             .await
             .expect("run_shell should time out, not error");
@@ -702,7 +696,7 @@ mod tests {
         // of output without needing a timeout. `head` closes its stdin
         // early and `yes` gets SIGPIPE.
         let twice = MAX_BASH_OUTPUT_BYTES * 2;
-        let cmd = format!("yes | head -c {}", twice);
+        let cmd = format!("yes | head -c {twice}");
         let tmp = std::env::temp_dir();
         let workdir = tmp.as_path();
         let out = run_shell(&cmd, workdir, 30).await.expect("run_shell");
@@ -759,8 +753,7 @@ mod tests {
         let result = check_bash_command(&args, &DenyList::default(), &PathGuard::default(), false);
         assert!(
             result.is_none(),
-            "rm -rf /home/user/temp should be allowed, got: {:?}",
-            result
+            "rm -rf /home/user/temp should be allowed, got: {result:?}"
         );
     }
 
@@ -815,8 +808,7 @@ mod tests {
             result
                 .as_ref()
                 .is_some_and(|m| m.contains("outside sandbox")),
-            "workdir outside sandbox should be rejected, got: {:?}",
-            result
+            "workdir outside sandbox should be rejected, got: {result:?}"
         );
     }
 
@@ -837,8 +829,7 @@ mod tests {
             result
                 .as_ref()
                 .is_some_and(|m| m.contains("cannot be resolved")),
-            "unresolvable workdir should be rejected, got: {:?}",
-            result
+            "unresolvable workdir should be rejected, got: {result:?}"
         );
     }
 }

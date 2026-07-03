@@ -384,7 +384,7 @@ fn parse_result_line_into(rest: &str, summary: &mut TestRunSummary) {
 pub fn format_test_summary(s: &TestRunSummary, cmd: &str, exit_code: i32, stderr: &str) -> String {
     use std::fmt::Write;
     let mut out = String::new();
-    let _ = writeln!(out, "$ {}", cmd);
+    let _ = writeln!(out, "$ {cmd}");
 
     let status = if s.failed == 0 { "ok" } else { "FAILED" };
     let _ = writeln!(
@@ -394,7 +394,7 @@ pub fn format_test_summary(s: &TestRunSummary, cmd: &str, exit_code: i32, stderr
     );
 
     if exit_code != 0 {
-        let _ = writeln!(out, "(exit code {})", exit_code);
+        let _ = writeln!(out, "(exit code {exit_code})");
     }
 
     for f in &s.failures {
@@ -582,16 +582,15 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; < 0.
             failures: vec![],
         };
         let out = format_test_summary(&s, "cargo test --no-fail-fast", 0, "");
-        assert!(out.contains("cargo test --no-fail-fast"), "got: {}", out);
-        assert!(out.contains("test result: ok."), "got: {}", out);
-        assert!(out.contains("47 passed"), "got: {}", out);
-        assert!(out.contains("0 failed"), "got: {}", out);
-        assert!(out.contains("1 ignored"), "got: {}", out);
-        assert!(!out.contains("FAIL "), "should have no failures: {}", out);
+        assert!(out.contains("cargo test --no-fail-fast"), "got: {out}");
+        assert!(out.contains("test result: ok."), "got: {out}");
+        assert!(out.contains("47 passed"), "got: {out}");
+        assert!(out.contains("0 failed"), "got: {out}");
+        assert!(out.contains("1 ignored"), "got: {out}");
+        assert!(!out.contains("FAIL "), "should have no failures: {out}");
         assert!(
             !out.contains("exit code"),
-            "exit code 0 should not be shown: {}",
-            out
+            "exit code 0 should not be shown: {out}"
         );
     }
 
@@ -621,14 +620,14 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; < 0.
             ],
         };
         let out = format_test_summary(&s, "cargo test --no-fail-fast", 101, "");
-        assert!(out.contains("test result: FAILED."), "got: {}", out);
-        assert!(out.contains("FAIL tests::test_foo"), "got: {}", out);
-        assert!(out.contains("src/foo.rs:42:5"), "got: {}", out);
-        assert!(out.contains("assertion failed: x != y"), "got: {}", out);
-        assert!(out.contains("FAIL tests::test_baz"), "got: {}", out);
-        assert!(out.contains("src/bar.rs:88:13"), "got: {}", out);
-        assert!(out.contains("index out of bounds"), "got: {}", out);
-        assert!(out.contains("(exit code 101)"), "got: {}", out);
+        assert!(out.contains("test result: FAILED."), "got: {out}");
+        assert!(out.contains("FAIL tests::test_foo"), "got: {out}");
+        assert!(out.contains("src/foo.rs:42:5"), "got: {out}");
+        assert!(out.contains("assertion failed: x != y"), "got: {out}");
+        assert!(out.contains("FAIL tests::test_baz"), "got: {out}");
+        assert!(out.contains("src/bar.rs:88:13"), "got: {out}");
+        assert!(out.contains("index out of bounds"), "got: {out}");
+        assert!(out.contains("(exit code 101)"), "got: {out}");
     }
 
     #[test]
@@ -642,6 +641,6 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; < 0.
             failures: vec![],
         };
         let out = format_test_summary(&s, "cargo test", 0, "warning: something\n");
-        assert!(out.contains("stderr:\nwarning: something"), "got: {}", out);
+        assert!(out.contains("stderr:\nwarning: something"), "got: {out}");
     }
 }

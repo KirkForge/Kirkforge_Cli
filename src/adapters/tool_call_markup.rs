@@ -83,14 +83,13 @@ fn find_invoke_open(content: &str, from: usize) -> Option<InvokeTag> {
     for (offset, _ch) in content[from..].char_indices() {
         let i = from + offset;
         // Try ASCII pipes first, then fullwidth.
-        let (tag_start, delim) =
-            if content[i..].starts_with("<|DSML|invoke ") {
-                (i, "|DSML|")
-            } else if content[i..].starts_with("<｜DSML｜invoke ") {
-                (i, "｜DSML｜")
-            } else {
-                continue;
-            };
+        let (tag_start, delim) = if content[i..].starts_with("<|DSML|invoke ") {
+            (i, "|DSML|")
+        } else if content[i..].starts_with("<｜DSML｜invoke ") {
+            (i, "｜DSML｜")
+        } else {
+            continue;
+        };
 
         // The opening tag runs until the next '>'.
         let after_tag = tag_start + "<".len() + delim.len() + "invoke ".len();
@@ -250,7 +249,10 @@ mod tests {
         let (cleaned, calls) = extract_dsml_tool_calls(content);
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "bash");
-        assert_eq!(calls[0].arguments, json!({"command": "cd /petsense && git status"}));
+        assert_eq!(
+            calls[0].arguments,
+            json!({"command": "cd /petsense && git status"})
+        );
         assert!(!cleaned.contains("DSML"));
         assert!(cleaned.contains("Looking now."));
     }

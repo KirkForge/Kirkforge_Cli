@@ -70,21 +70,19 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
             state.turn_tool_calls += 1;
             state
                 .messages
-                .push(ConversationEntry::new("tool", format!("🔧 {} ...", name)));
+                .push(ConversationEntry::new("tool", format!("🔧 {name} ...")));
         }
         TurnEvent::ToolResult { name, output, .. } => {
             // Tool outputs are stored FULL in a sidecar and shown
             // as a one-line summary by default. Ctrl+T toggles
             // collapse; per-index expansion is in state.expanded_tools.
             let (lines, bytes) = AppState::tool_output_metrics(&output, 80);
-            let summary = format!(
-                "🔧 {} (done) — {} lines, {} bytes [Enter or Tab to expand]",
-                name, lines, bytes
-            );
+            let summary =
+                format!("🔧 {name} (done) — {lines} lines, {bytes} bytes [Enter or Tab to expand]");
             // Avoid two entries per tool call: if the most recent message
             // is the matching "🔧 name ..." placeholder, replace it.
             if let Some(last) = state.messages.last() {
-                if last.role == "tool" && last.content == format!("🔧 {} ...", name) {
+                if last.role == "tool" && last.content == format!("🔧 {name} ...") {
                     state.messages.pop();
                 }
             }
@@ -96,14 +94,14 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
             let prefix = if success { "🔍" } else { "⚠️" };
             state.messages.push(ConversationEntry::new(
                 "system",
-                format!("{} {}", prefix, message),
+                format!("{prefix} {message}"),
             ));
         }
         TurnEvent::Error(e) => {
             state.is_generating = false;
             state
                 .messages
-                .push(ConversationEntry::new("system", format!("Error: {}", e)));
+                .push(ConversationEntry::new("system", format!("Error: {e}")));
         }
         TurnEvent::CostStats {
             prompt_tokens,
@@ -188,11 +186,7 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
             rebuilt.push(ConversationEntry::new(
                 "system",
                 format!(
-                    "🧹 Compacted: {} → {} messages, dropped {} tool result(s), condensed {} assistant turn(s).",
-                    original_count,
-                    compacted_count,
-                    dropped_tool_results,
-                    condensed_assistant_turns
+                    "🧹 Compacted: {original_count} → {compacted_count} messages, dropped {dropped_tool_results} tool result(s), condensed {condensed_assistant_turns} assistant turn(s)."
                 ),
             ));
             state.messages = rebuilt;
@@ -302,14 +296,22 @@ fn prune_display_messages(state: &mut AppState) {
         0,
         ConversationEntry::new(
             "system",
-            format!("[{} older messages pruned from display — use /save to preserve the full session]", n_drop),
+            format!("[{n_drop} older messages pruned from display — use /save to preserve the full session]"),
         ),
     );
     // The sentinel is now at [0]; kept messages shifted by (1 - n_drop).
     // Re-map: old_idx → new_idx = old_idx - n_drop + 1  (only for old_idx >= n_drop)
     let remap = |i: usize| -> Option<usize> { i.checked_sub(n_drop).map(|x| x + 1) };
-    state.collapsed_messages = state.collapsed_messages.iter().filter_map(|&i| remap(i)).collect();
-    state.expanded_tools = state.expanded_tools.iter().filter_map(|&i| remap(i)).collect();
+    state.collapsed_messages = state
+        .collapsed_messages
+        .iter()
+        .filter_map(|&i| remap(i))
+        .collect();
+    state.expanded_tools = state
+        .expanded_tools
+        .iter()
+        .filter_map(|&i| remap(i))
+        .collect();
     // Search indices reference old message positions — clear and let next search recompute.
     state.search_matches.clear();
     state.search_match_idx = 0;

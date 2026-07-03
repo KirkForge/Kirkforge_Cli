@@ -135,7 +135,7 @@ impl VerifierSlots {
         }
         let name = verifier.name().to_string();
         if self.verifiers.iter().any(|v| v.name() == name) {
-            anyhow::bail!("Verifier '{}' is already registered", name);
+            anyhow::bail!("Verifier '{name}' is already registered");
         }
         self.verifiers.push(verifier);
         // Keep sorted by priority (stable sort preserves insertion order for equal priority)

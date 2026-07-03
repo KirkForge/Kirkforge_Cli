@@ -118,59 +118,226 @@ impl Language {
         match self {
             Language::Rust => &[
                 "as", "async", "await", "break", "const", "continue", "crate", "dyn", "else",
-                "enum", "extern", "false", "fn", "for", "if", "impl", "in", "let", "loop",
-                "match", "mod", "move", "mut", "pub", "ref", "return", "self", "Self",
-                "static", "struct", "super", "trait", "true", "type", "union", "unsafe",
-                "use", "where", "while",
+                "enum", "extern", "false", "fn", "for", "if", "impl", "in", "let", "loop", "match",
+                "mod", "move", "mut", "pub", "ref", "return", "self", "Self", "static", "struct",
+                "super", "trait", "true", "type", "union", "unsafe", "use", "where", "while",
             ],
             Language::Python => &[
-                "False", "None", "True", "and", "as", "assert", "async", "await", "break",
-                "class", "continue", "def", "del", "elif", "else", "except", "finally",
-                "for", "from", "global", "if", "import", "in", "is", "lambda", "nonlocal",
-                "not", "or", "pass", "raise", "return", "try", "while", "with", "yield",
+                "False", "None", "True", "and", "as", "assert", "async", "await", "break", "class",
+                "continue", "def", "del", "elif", "else", "except", "finally", "for", "from",
+                "global", "if", "import", "in", "is", "lambda", "nonlocal", "not", "or", "pass",
+                "raise", "return", "try", "while", "with", "yield",
             ],
             Language::JavaScript | Language::TypeScript => &[
-                "async", "await", "break", "case", "catch", "class", "const", "continue",
-                "debugger", "default", "delete", "do", "else", "enum", "export", "extends",
-                "false", "finally", "for", "function", "if", "import", "in", "instanceof",
-                "let", "new", "null", "of", "return", "static", "super", "switch", "this",
-                "throw", "true", "try", "typeof", "undefined", "var", "void", "while",
-                "with", "yield",
+                "async",
+                "await",
+                "break",
+                "case",
+                "catch",
+                "class",
+                "const",
+                "continue",
+                "debugger",
+                "default",
+                "delete",
+                "do",
+                "else",
+                "enum",
+                "export",
+                "extends",
+                "false",
+                "finally",
+                "for",
+                "function",
+                "if",
+                "import",
+                "in",
+                "instanceof",
+                "let",
+                "new",
+                "null",
+                "of",
+                "return",
+                "static",
+                "super",
+                "switch",
+                "this",
+                "throw",
+                "true",
+                "try",
+                "typeof",
+                "undefined",
+                "var",
+                "void",
+                "while",
+                "with",
+                "yield",
             ],
             Language::Go => &[
-                "break", "case", "chan", "const", "continue", "default", "defer", "else",
-                "fallthrough", "for", "func", "go", "goto", "if", "import", "interface",
-                "map", "package", "range", "return", "select", "struct", "switch", "true",
-                "false", "nil", "type", "var",
+                "break",
+                "case",
+                "chan",
+                "const",
+                "continue",
+                "default",
+                "defer",
+                "else",
+                "fallthrough",
+                "for",
+                "func",
+                "go",
+                "goto",
+                "if",
+                "import",
+                "interface",
+                "map",
+                "package",
+                "range",
+                "return",
+                "select",
+                "struct",
+                "switch",
+                "true",
+                "false",
+                "nil",
+                "type",
+                "var",
             ],
             Language::C | Language::Cpp => &[
-                "alignas", "alignof", "auto", "bool", "break", "case", "catch", "char",
-                "class", "const", "constexpr", "continue", "default", "delete", "do",
-                "double", "else", "enum", "explicit", "export", "extern", "false", "float",
-                "for", "friend", "goto", "if", "inline", "int", "long", "mutable",
-                "namespace", "new", "noexcept", "nullptr", "operator", "private",
-                "protected", "public", "register", "reinterpret_cast", "return", "short",
-                "signed", "sizeof", "static", "static_assert", "static_cast", "struct",
-                "switch", "template", "this", "thread_local", "throw", "true", "try",
-                "typedef", "typeid", "typename", "union", "unsigned", "using", "virtual",
-                "void", "volatile", "wchar_t", "while",
+                "alignas",
+                "alignof",
+                "auto",
+                "bool",
+                "break",
+                "case",
+                "catch",
+                "char",
+                "class",
+                "const",
+                "constexpr",
+                "continue",
+                "default",
+                "delete",
+                "do",
+                "double",
+                "else",
+                "enum",
+                "explicit",
+                "export",
+                "extern",
+                "false",
+                "float",
+                "for",
+                "friend",
+                "goto",
+                "if",
+                "inline",
+                "int",
+                "long",
+                "mutable",
+                "namespace",
+                "new",
+                "noexcept",
+                "nullptr",
+                "operator",
+                "private",
+                "protected",
+                "public",
+                "register",
+                "reinterpret_cast",
+                "return",
+                "short",
+                "signed",
+                "sizeof",
+                "static",
+                "static_assert",
+                "static_cast",
+                "struct",
+                "switch",
+                "template",
+                "this",
+                "thread_local",
+                "throw",
+                "true",
+                "try",
+                "typedef",
+                "typeid",
+                "typename",
+                "union",
+                "unsigned",
+                "using",
+                "virtual",
+                "void",
+                "volatile",
+                "wchar_t",
+                "while",
             ],
             Language::Java => &[
-                "abstract", "assert", "boolean", "break", "byte", "case", "catch", "char",
-                "class", "const", "continue", "default", "do", "double", "else", "enum",
-                "extends", "false", "final", "finally", "float", "for", "goto", "if",
-                "implements", "import", "instanceof", "int", "interface", "long", "native",
-                "new", "null", "package", "private", "protected", "public", "return",
-                "short", "static", "strictfp", "super", "switch", "synchronized", "this",
-                "throw", "throws", "transient", "true", "try", "void", "volatile", "while",
+                "abstract",
+                "assert",
+                "boolean",
+                "break",
+                "byte",
+                "case",
+                "catch",
+                "char",
+                "class",
+                "const",
+                "continue",
+                "default",
+                "do",
+                "double",
+                "else",
+                "enum",
+                "extends",
+                "false",
+                "final",
+                "finally",
+                "float",
+                "for",
+                "goto",
+                "if",
+                "implements",
+                "import",
+                "instanceof",
+                "int",
+                "interface",
+                "long",
+                "native",
+                "new",
+                "null",
+                "package",
+                "private",
+                "protected",
+                "public",
+                "return",
+                "short",
+                "static",
+                "strictfp",
+                "super",
+                "switch",
+                "synchronized",
+                "this",
+                "throw",
+                "throws",
+                "transient",
+                "true",
+                "try",
+                "void",
+                "volatile",
+                "while",
             ],
             Language::Shell => &[
-                "alias", "break", "case", "continue", "do", "done", "echo", "elif", "else",
-                "esac", "exit", "export", "false", "fi", "for", "function", "if", "in",
-                "local", "printf", "read", "readonly", "return", "select", "shift", "source",
-                "then", "true", "typeset", "unset", "until", "while",
+                "alias", "break", "case", "continue", "do", "done", "echo", "elif", "else", "esac",
+                "exit", "export", "false", "fi", "for", "function", "if", "in", "local", "printf",
+                "read", "readonly", "return", "select", "shift", "source", "then", "true",
+                "typeset", "unset", "until", "while",
             ],
-            Language::Json | Language::Yaml | Language::Toml | Language::Markdown | Language::Unknown => &[],
+            Language::Json
+            | Language::Yaml
+            | Language::Toml
+            | Language::Markdown
+            | Language::Unknown => &[],
         }
     }
 
@@ -248,7 +415,10 @@ pub fn highlight_line(
             highlighter.state = if found_end {
                 State::Normal
             } else {
-                State::InString { quote, escaped: esc }
+                State::InString {
+                    quote,
+                    escaped: esc,
+                }
             };
             continue;
         }
@@ -278,10 +448,7 @@ pub fn highlight_line(
         // then look for the closing quote in the remaining text.
         if let Some(&quote) = quotes.iter().find(|&&q| rest.starts_with(q)) {
             flush_buf(&mut buf, &mut spans, base_style);
-            spans.push(Span::styled(
-                quote.to_string(),
-                string_style(base_style),
-            ));
+            spans.push(Span::styled(quote.to_string(), string_style(base_style)));
             highlighter.state = State::InString {
                 quote,
                 escaped: false,
@@ -368,8 +535,7 @@ fn number_style(base: Style) -> Style {
 
 fn starts_number(s: &str) -> bool {
     let first = s.chars().next().unwrap_or('\0');
-    first.is_ascii_digit()
-        || (first == '.' && s.chars().nth(1).is_some_and(|c| c.is_ascii_digit()))
+    first.is_ascii_digit() || (first == '.' && s.chars().nth(1).is_some_and(|c| c.is_ascii_digit()))
 }
 
 fn number_end(s: &str) -> usize {
@@ -434,7 +600,9 @@ mod tests {
         let spans = highlight_line(&mut h, r#"let x = "hello";"#, code_block_style());
         let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
         assert_eq!(text, r#"let x = "hello";"#);
-        assert!(spans.iter().any(|s| s.content == "let" && s.style.fg == Some(Color::Rgb(220, 120, 220))));
+        assert!(spans
+            .iter()
+            .any(|s| s.content == "let" && s.style.fg == Some(Color::Rgb(220, 120, 220))));
         // String highlighting splits into opening quote, content, and closing quote spans.
         let string_text: String = spans
             .iter()
@@ -448,7 +616,10 @@ mod tests {
     fn line_comment_greys_out_rest() {
         let mut h = highlighter_for(Some("rust"));
         let spans = highlight_line(&mut h, "let x = 1; // comment", code_block_style());
-        let comment_span = spans.iter().find(|s| s.content.contains("// comment")).unwrap();
+        let comment_span = spans
+            .iter()
+            .find(|s| s.content.contains("// comment"))
+            .unwrap();
         assert_eq!(comment_span.style.fg, Some(Color::DarkGray));
     }
 
@@ -462,7 +633,9 @@ mod tests {
         let second = highlight_line(&mut h, "line two\"", code_block_style());
         let second_text: String = second.iter().map(|s| s.content.as_ref()).collect();
         assert_eq!(second_text, "line two\"");
-        assert!(second.iter().any(|s| s.style.fg == Some(Color::Rgb(130, 200, 130))));
+        assert!(second
+            .iter()
+            .any(|s| s.style.fg == Some(Color::Rgb(130, 200, 130))));
     }
 
     #[test]
@@ -496,7 +669,9 @@ mod tests {
         let second_text: String = second.iter().map(|s| s.content.as_ref()).collect();
         assert_eq!(second_text, "/ world");
         assert!(
-            second.iter().any(|s| s.content == " world" && s.style.fg != Some(Color::DarkGray)),
+            second
+                .iter()
+                .any(|s| s.content == " world" && s.style.fg != Some(Color::DarkGray)),
             "text after a split closer should return to normal highlighting"
         );
     }

@@ -5,7 +5,42 @@ pub mod ollama_ndjson;
 pub mod openai_compat;
 pub mod tool_call_markup;
 
-use crate::shared::{ModelInfo, StreamEvent};
+use crate::shared::{ContentPart, ModelInfo, Role, StreamEvent};
+
+/// Build a message object for OpenAI-compatible requests.
+/// When `content_parts` is present and non-empty, emits the vision
+/// array shape; otherwise emits a string `content` field.
+fn build_content_object(
+    role: &Role,
+    content: &str,
+    parts: Option<&[ContentPart]>,
+) -> serde_json::Value {
+    match parts {
+        Some(parts) if !parts.is_empty() => {
+            let mut oai_parts: Vec<serde_json::Value> = Vec::with_capacity(parts.len());
+            for part in parts {
+                match part {
+                    ContentPart::Text { text } => {
+                        oai_parts.push(serde_json::json!({
+                            "type": "text",
+                            "text": text,
+                        }));
+                    }
+                    ContentPart::Image { data_base64, mime } => {
+                        oai_parts.push(serde_json::json!({
+                            "type": "image_url",
+                            "image_url": {
+                                "url": format!("data:{mime};base64,{data_base64}"),
+                            }
+                        }));
+                    }
+                }
+            }
+            serde_json::json!({"role": role, "content": oai_parts})
+        }
+        _ => serde_json::json!({"role": role, "content": content}),
+    }
+}
 
 /// Classification of the runtime protocol a model speaks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -274,69 +309,30 @@ fn build_openai_compat_body(
                         "content": m.content,
                     })
                 }
-                crate::shared::Role::Assistant if let Some(tcs) = m.tool_calls.as_ref() => {
-                    let tcs: Vec<serde_json::Value> = tcs
-                        .iter()
-                        .map(|tc| {
-                            serde_json::json!({
-                                "id": tc.id,
-                                "type": "function",
-                                "function": {
-                                    "name": tc.name,
-                                    "arguments": tc.arguments.to_string(),
-                                }
-                            })
-                        })
-                        .collect();
-                    serde_json::json!({
-                        "role": "assistant",
-                        "content": m.content,
-                        "tool_calls": tcs,
-                    })
-                }
-                _ => {
-                    // Multimodal content projection. If the message has
-                    // structured parts, emit OpenAI's vision shape:
-                    //   content: [
-                    //     {type: "text", text: "..."},
-                    //     {type: "image_url", image_url: {url: "data:<mime>;base64,<data>"}}
-                    //   ]
-                    // Otherwise fall through to the legacy
-                    // `content: String` projection.
-                    match &m.content_parts {
-                        Some(parts) if !parts.is_empty() => {
-                            let mut oai_parts: Vec<serde_json::Value> = Vec::with_capacity(parts.len());
-                            for part in parts {
-                                match part {
-                                    crate::shared::ContentPart::Text { text } => {
-                                        oai_parts.push(serde_json::json!({
-                                            "type": "text",
-                                            "text": text,
-                                        }));
+                crate::shared::Role::Assistant => {
+                    if let Some(tcs) = m.tool_calls.as_ref() {
+                        let tcs: Vec<serde_json::Value> = tcs
+                            .iter()
+                            .map(|tc| {
+                                serde_json::json!({
+                                    "id": tc.id,
+                                    "type": "function",
+                                    "function": {
+                                        "name": tc.name,
+                                        "arguments": tc.arguments.to_string(),
                                     }
-                                    crate::shared::ContentPart::Image { data_base64, mime } => {
-                                        oai_parts.push(serde_json::json!({
-                                            "type": "image_url",
-                                            "image_url": {
-                                                "url": format!("data:{};base64,{}", mime, data_base64)
-                                            }
-                                        }));
-                                    }
-                                }
-                            }
-                            serde_json::json!({
-                                "role": m.role,
-                                "content": oai_parts,
+                                })
                             })
-                        }
-                        _ => {
-                            serde_json::json!({
-                                "role": m.role,
-                                "content": m.content,
-                            })
-                        }
+                            .collect();
+                        return serde_json::json!({
+                            "role": "assistant",
+                            "content": m.content,
+                            "tool_calls": tcs,
+                        });
                     }
+                    build_content_object(&m.role, &m.content, m.content_parts.as_deref())
                 }
+                _ => build_content_object(&m.role, &m.content, m.content_parts.as_deref()),
             };
 
             // Cache breakpoint — only when this index is in the marker

@@ -254,9 +254,7 @@ fn deny_command_matches(pattern: &str, command: &str) -> bool {
     }
     // Prefix deny: a pattern ending with a path or word boundary denies
     // any command that starts with it.
-    if (normalized.ends_with('/')
-        || normalized.ends_with(' ')
-        || normalized.ends_with('\t'))
+    if (normalized.ends_with('/') || normalized.ends_with(' ') || normalized.ends_with('\t'))
         && command.starts_with(&normalized)
     {
         return true;
@@ -690,7 +688,12 @@ mod tests {
     /// does not permit a chained destructive command.
     #[test]
     fn test_evaluate_allow_command_stays_anchored() {
-        let rules = vec![rule("bash", "command", "git status", PermissionAction::Allow)];
+        let rules = vec![rule(
+            "bash",
+            "command",
+            "git status",
+            PermissionAction::Allow,
+        )];
         assert_eq!(
             evaluate(
                 &rules,
@@ -811,7 +814,7 @@ mod tests {
             (PermissionAction::Deny, "\"deny\""),
         ] {
             let json_str = serde_json::to_string(&variant).unwrap();
-            assert_eq!(json_str, expected, "mismatch for {:?}", variant);
+            assert_eq!(json_str, expected, "mismatch for {variant:?}");
         }
     }
 }

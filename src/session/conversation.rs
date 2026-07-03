@@ -47,7 +47,7 @@ impl ConversationLog {
             .create(true)
             .append(true)
             .open(&self.path)?;
-        writeln!(file, "{}", line)?;
+        writeln!(file, "{line}")?;
         self.messages.push(msg);
         Ok(())
     }
@@ -78,7 +78,7 @@ impl ConversationLog {
                 .open(&tmp_path)?;
             for msg in &messages {
                 let line = serde_json::to_string(msg)?;
-                writeln!(file, "{}", line)?;
+                writeln!(file, "{line}")?;
             }
             file.sync_all()?;
         }

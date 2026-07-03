@@ -6,8 +6,6 @@
 //! is covered by `attach_pending_image_splices_image_onto_user_message`
 //! at the bottom of this file — that's the only test that touches
 //! the prompt builder.
-#![cfg(test)]
-
 use crate::adapters::{build_ollama_chat_body, build_openai_compat_body};
 use crate::shared::{ContentPart, Message, ModelInfo, Role, TokenUsage, ToolCallStyle, ToolDef};
 use serde_json::json;
@@ -117,7 +115,7 @@ fn oai_body(msgs: &[Message], json_mode: bool) -> serde_json::Value {
 fn openai_text_only_message_uses_string_content() {
     let body = oai_body(&[user_text("hi")], false);
     let msg = &body["messages"][0];
-    assert!(msg["content"].is_string(), "got: {}", msg);
+    assert!(msg["content"].is_string(), "got: {msg}");
     assert_eq!(msg["content"], "hi");
 }
 
@@ -134,11 +132,7 @@ fn openai_multimodal_message_uses_vision_array() {
     ]);
     let body = oai_body(&[m], false);
     let content = &body["messages"][0]["content"];
-    assert!(
-        content.is_array(),
-        "expected vision array, got: {}",
-        content
-    );
+    assert!(content.is_array(), "expected vision array, got: {content}");
     let arr = content.as_array().unwrap();
     assert_eq!(arr.len(), 2);
     assert_eq!(arr[0], json!({"type": "text", "text": "what is this?"}));
@@ -251,8 +245,7 @@ fn ollama_multimodal_message_emits_images_array() {
     assert_eq!(
         msg["images"],
         json!(["BASE64"]),
-        "expected images array of base64 string, got: {}",
-        msg
+        "expected images array of base64 string, got: {msg}"
     );
     // Text projection concatenates the text parts followed by a
     // [image] marker (the model that ignores the `images` field
@@ -286,7 +279,7 @@ fn calculate_cost_no_cache_matches_legacy_formula() {
     // First row in PRICING_TABLE is "opus-4" with input 15.00,
     // output 75.00. 1M tokens of each = 15.0 + 75.0 = 90.0.
     let cost = crate::shared::calculate_cost("opus-4-anything", &usage);
-    assert!((cost - 90.0).abs() < 0.001, "got: {}", cost);
+    assert!((cost - 90.0).abs() < 0.001, "got: {cost}");
 }
 
 #[test]
@@ -302,8 +295,7 @@ fn calculate_cost_cached_tokens_apply_discount() {
     let cost = crate::shared::calculate_cost("opus-4-anything", &usage);
     assert!(
         (cost - 76.50).abs() < 0.001,
-        "expected 76.50 (1.5 cache + 75 output), got: {}",
-        cost
+        "expected 76.50 (1.5 cache + 75 output), got: {cost}"
     );
 }
 
@@ -320,7 +312,7 @@ fn calculate_cost_capped_at_prompt() {
     let cost = crate::shared::calculate_cost("opus-4-x", &usage);
     // 100 cached @ 1.50/M + 0 fresh + 50 completion @ 75.00/M
     // = 0.00015 + 0 + 0.00375 = 0.00390
-    assert!((cost - 0.0039).abs() < 0.0001, "got: {}", cost);
+    assert!((cost - 0.0039).abs() < 0.0001, "got: {cost}");
 }
 
 // ── PromptBuilder::attach_pending_image ────────────────────────────

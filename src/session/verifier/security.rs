@@ -68,7 +68,7 @@ pub async fn verify_security(event: &BusEvent) -> Verdict {
     for (name, pattern) in SECRET_PATTERNS {
         if content.contains(pattern) {
             return Verdict::Unfixable(VerificationError {
-                description: format!("Potential secret detected: {}", name),
+                description: format!("Potential secret detected: {name}"),
                 file: Some(path.clone()),
                 details: format!(
                     "Pattern '{}' found in {}. This must be reviewed manually.",
@@ -88,7 +88,7 @@ pub async fn verify_security(event: &BusEvent) -> Verdict {
         for pattern in DANGEROUS_SHELL_PATTERNS {
             if content.contains(pattern) {
                 return Verdict::Unfixable(VerificationError {
-                    description: format!("Dangerous shell command: {}", pattern),
+                    description: format!("Dangerous shell command: {pattern}"),
                     file: Some(path.clone()),
                     details: "This command is blocked by security policy. Remove it to proceed."
                         .into(),

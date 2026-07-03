@@ -63,7 +63,7 @@ impl ForkManager {
         fork_point: i64,
     ) -> anyhow::Result<Fork> {
         let fork_num = self.forks.len() + 1;
-        let fork_id = format!("fork-{:02}", fork_num);
+        let fork_id = format!("fork-{fork_num:02}");
         let fork_dir = self.base_path.join(&fork_id);
         std::fs::create_dir_all(&fork_dir)?;
 
@@ -117,7 +117,7 @@ impl ForkManager {
             .forks
             .iter()
             .find(|f| f.id == id)
-            .ok_or_else(|| anyhow::anyhow!("Fork '{}' not found", id))?;
+            .ok_or_else(|| anyhow::anyhow!("Fork '{id}' not found"))?;
         ConversationLog::open(fork.path.clone())
     }
 
@@ -127,7 +127,7 @@ impl ForkManager {
             .forks
             .iter()
             .position(|f| f.id == id)
-            .ok_or_else(|| anyhow::anyhow!("Fork '{}' not found", id))?;
+            .ok_or_else(|| anyhow::anyhow!("Fork '{id}' not found"))?;
 
         let fork = self.forks.remove(idx);
         let fork_dir = fork.path.parent().unwrap_or(Path::new("."));

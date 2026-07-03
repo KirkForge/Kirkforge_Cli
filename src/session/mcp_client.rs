@@ -73,10 +73,10 @@ enum McpError {
 impl std::fmt::Display for McpError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            McpError::Io(e) => write!(f, "I/O error: {}", e),
+            McpError::Io(e) => write!(f, "I/O error: {e}"),
             McpError::Timeout => write!(f, "request timed out"),
             McpError::JsonRpc { code, message } => {
-                write!(f, "JSON-RPC error {}: {}", code, message)
+                write!(f, "JSON-RPC error {code}: {message}")
             }
             McpError::ChannelClosed => write!(f, "response channel closed"),
         }
@@ -741,9 +741,9 @@ mod tests {
             .await
             .expect("waiter should receive a result")
             .expect_err("should be an error");
-        let msg = format!("{}", err);
-        assert!(msg.contains("JSON-RPC error"), "got: {}", msg);
-        assert!(msg.contains("Method not found"), "got: {}", msg);
+        let msg = format!("{err}");
+        assert!(msg.contains("JSON-RPC error"), "got: {msg}");
+        assert!(msg.contains("Method not found"), "got: {msg}");
     }
 
     /// A successful JSON-RPC response is forwarded as `Ok(Value)` to
@@ -786,8 +786,8 @@ mod tests {
             code: -32601,
             message: "Method not found".to_string(),
         };
-        let s = format!("{}", e);
-        assert!(s.contains("-32601"), "got: {}", s);
-        assert!(s.contains("Method not found"), "got: {}", s);
+        let s = format!("{e}");
+        assert!(s.contains("-32601"), "got: {s}");
+        assert!(s.contains("Method not found"), "got: {s}");
     }
 }

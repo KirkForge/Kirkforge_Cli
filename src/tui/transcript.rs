@@ -20,7 +20,11 @@ pub fn format_transcript(session_id: &str, entries: &[ConversationEntry]) -> Str
     out.push_str(session_id);
     out.push('\n');
     out.push_str("\nGenerated: ");
-    out.push_str(&chrono::Local::now().format("%Y-%m-%d %H:%M:%S %:z").to_string());
+    out.push_str(
+        &chrono::Local::now()
+            .format("%Y-%m-%d %H:%M:%S %:z")
+            .to_string(),
+    );
     out.push('\n');
 
     if entries.is_empty() {

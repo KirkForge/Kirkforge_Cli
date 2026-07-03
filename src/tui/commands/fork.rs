@@ -72,10 +72,10 @@ pub async fn handle_fork_command(args: &str, state: &mut AppState) -> String {
                     fork.fork_point,
                     fork.path.display()
                 ),
-                Err(e) => format!("Error creating fork: {}", e),
+                Err(e) => format!("Error creating fork: {e}"),
             }
         }
-        Err(e) => format!("Error opening conversation log: {}", e),
+        Err(e) => format!("Error opening conversation log: {e}"),
     }
 }
 
@@ -103,7 +103,7 @@ pub async fn handle_resume_command(
                     Some(crate::tui::components::session_picker::SessionPicker::new(sessions));
                 "Select a recent session to resume (Enter to confirm, q/Esc to cancel).".into()
             }
-            Err(e) => format!("Could not load recent sessions: {}", e),
+            Err(e) => format!("Could not load recent sessions: {e}"),
         };
     }
 
@@ -129,7 +129,7 @@ pub async fn handle_resume_command(
     // Open the fork's conversation log and resume it.
     match ConversationLog::open(fork.path.clone()) {
         Ok(fork_log) => resume_conversation_log(fork_log, state, resume_tx).await,
-        Err(e) => format!("Error opening fork log: {}", e),
+        Err(e) => format!("Error opening fork log: {e}"),
     }
 }
 
@@ -189,15 +189,14 @@ pub async fn resume_conversation_log(
     // Update session identity to the new log path. We keep the original
     // session_id as a parent marker so forks created from this resumed
     // branch still record their provenance.
-    state.session_id = format!("{} (resumed)", new_id);
+    state.session_id = format!("{new_id} (resumed)");
     state.log_path = Some(new_log_path.clone());
 
     // Touch the daemon so this resumed session is now the most recent.
     let _ = crate::daemon::client::try_touch(&new_id, new_log_path.clone()).await;
 
     format!(
-        "✅ Resumed session '{}' — {} messages reloaded. Type a message to continue.",
-        new_id, entry_count,
+        "✅ Resumed session '{new_id}' — {entry_count} messages reloaded. Type a message to continue.",
     )
 }
 

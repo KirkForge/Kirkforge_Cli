@@ -49,13 +49,12 @@ pub fn analyze_error(
             .unwrap_or("the file");
 
         return Some(RecoveryHint {
-            error_summary: format!("File not found: {}", path_hint),
+            error_summary: format!("File not found: {path_hint}"),
             suggestion: format!(
-                "The file '{}' was not found. Try:\n\
+                "The file '{path_hint}' was not found. Try:\n\
                  1. Use `glob` to search for the correct file path\n\
                  2. Use `grep` to search for code that references this file\n\
-                 3. If this is a new file you're creating, use `write_file` instead",
-                path_hint
+                 3. If this is a new file you're creating, use `write_file` instead"
             ),
             recoverable: true,
         });
@@ -69,13 +68,12 @@ pub fn analyze_error(
             .unwrap_or("the target");
 
         return Some(RecoveryHint {
-            error_summary: format!("Permission denied: {}", path_hint),
+            error_summary: format!("Permission denied: {path_hint}"),
             suggestion: format!(
-                "Access was denied for '{}'. Try:\n\
+                "Access was denied for '{path_hint}'. Try:\n\
                  1. Check if you have write permissions in this directory\n\
                  2. Consider using a different output path (e.g., /tmp/)\n\
-                 3. If this is a system file, the change may need to be applied differently",
-                path_hint
+                 3. If this is a system file, the change may need to be applied differently"
             ),
             recoverable: true,
         });

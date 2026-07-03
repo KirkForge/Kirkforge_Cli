@@ -27,10 +27,7 @@ pub fn handle_save_command(args: &str, state: &AppState) -> String {
         return format!("🔒 Access denied: {msg}");
     }
 
-    let transcript = crate::tui::transcript::format_transcript(
-        &state.session_id,
-        &state.messages,
-    );
+    let transcript = crate::tui::transcript::format_transcript(&state.session_id, &state.messages);
 
     if let Err(e) = ensure_parent_dir(&path) {
         return format!(
@@ -73,20 +70,20 @@ fn resolve_save_path(args: &str, state: &AppState) -> PathBuf {
             .and_then(|f| f.to_str())
             .map(|s| s.trim_end_matches(".conv"))
             .unwrap_or("transcript");
-        log.with_file_name(format!("{}.md", stem))
+        log.with_file_name(format!("{stem}.md"))
     } else {
         let now = chrono::Local::now().format("%Y-%m-%d-%H%M%S").to_string();
         std::env::current_dir()
             .unwrap_or_else(|_| PathBuf::from("."))
-            .join(format!("kirkforge-transcript-{}.md", now))
+            .join(format!("kirkforge-transcript-{now}.md"))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tui::app::AppState;
     use crate::shared::Config;
+    use crate::tui::app::AppState;
     use std::sync::Arc;
 
     fn test_state_with_log(log_path: PathBuf) -> AppState {
@@ -104,7 +101,11 @@ mod tests {
         let msg = handle_save_command("", &state);
         assert!(msg.starts_with("💾 Saved transcript"));
         let expected = tmp.path().join("2026-06-22-session-01.md");
-        assert!(expected.exists(), "expected {} to exist", expected.display());
+        assert!(
+            expected.exists(),
+            "expected {} to exist",
+            expected.display()
+        );
         let content = std::fs::read_to_string(&expected).unwrap();
         assert!(content.contains("# KirkForge transcript"));
     }
@@ -124,8 +125,13 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let log = tmp.path().join("s.conv.ndjson");
         let mut state = test_state_with_log(log);
-        state.messages.push(crate::tui::app::ConversationEntry::new("user", "hi"));
-        state.messages.push(crate::tui::app::ConversationEntry::new("assistant", "hello"));
+        state
+            .messages
+            .push(crate::tui::app::ConversationEntry::new("user", "hi"));
+        state.messages.push(crate::tui::app::ConversationEntry::new(
+            "assistant",
+            "hello",
+        ));
         let _msg = handle_save_command("", &state);
         let expected = tmp.path().join("s.md");
         let content = std::fs::read_to_string(&expected).unwrap();

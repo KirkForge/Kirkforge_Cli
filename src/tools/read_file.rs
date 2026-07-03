@@ -76,7 +76,7 @@ impl Tool for ReadFile {
 
         if offset >= total && total > 0 {
             return ToolOutcome::Error {
-                message: format!("Offset {} is beyond file length {}", offset, total),
+                message: format!("Offset {offset} is beyond file length {total}"),
             };
         }
 

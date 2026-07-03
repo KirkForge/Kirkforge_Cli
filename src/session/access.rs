@@ -466,7 +466,9 @@ impl ReadGate {
     /// Using the resolved path avoids a second canonicalization round and
     /// prevents a malicious/ambiguous literal path from bypassing the gate.
     pub fn check_edit(&self, path: &Path, resolved: &Path) -> GuardVerdict {
-        let key = resolved.canonicalize().unwrap_or_else(|_| resolved.to_path_buf());
+        let key = resolved
+            .canonicalize()
+            .unwrap_or_else(|_| resolved.to_path_buf());
         if self.read_files.contains(&key) {
             GuardVerdict::Allowed(path.to_path_buf())
         } else {
@@ -735,11 +737,17 @@ mod tests {
         let display = Path::new("/tmp/../tmp/kirkforge_resolved_test.txt");
         let resolved = Path::new("/tmp/kirkforge_resolved_test.txt");
         gate.mark_read(resolved);
-        assert!(matches!(gate.check_edit(display, resolved), GuardVerdict::Allowed(_)));
+        assert!(matches!(
+            gate.check_edit(display, resolved),
+            GuardVerdict::Allowed(_)
+        ));
 
         // A different resolved key that was never read should still be denied.
         let other = Path::new("/tmp/kirkforge_other_test.txt");
-        assert!(matches!(gate.check_edit(display, other), GuardVerdict::Denied(_)));
+        assert!(matches!(
+            gate.check_edit(display, other),
+            GuardVerdict::Denied(_)
+        ));
     }
 
     // ── warn_if_unsandboxed ─────────────────────────────────────────

@@ -88,7 +88,7 @@ async fn check_dirty_worktree() -> Verdict {
 
     if dirty_count > 0 {
         Verdict::Unfixable(VerificationError {
-            description: format!("Dirty worktree: {} uncommitted changes", dirty_count),
+            description: format!("Dirty worktree: {dirty_count} uncommitted changes"),
             file: None,
             details: format!(
                 "There are {} uncommitted files. Consider committing or stashing before proceeding.\n{}",

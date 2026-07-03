@@ -78,7 +78,7 @@ pub async fn handle_model_command(
             // a local `/api/tags` check would be meaningless here.
             let _validation = ModelValidation::SkippedOpenAiCompat;
             match model_tx.send(name.to_string()) {
-                Ok(()) => format!("Switching to {}…", name),
+                Ok(()) => format!("Switching to {name}…"),
                 Err(_) => "Executor is not running; cannot switch model.".to_string(),
             }
         }
@@ -88,16 +88,15 @@ pub async fn handle_model_command(
             let validation = validate_ollama_model(&client, &ollama_host, name).await;
             match validation {
                 ModelValidation::Valid => match model_tx.send(name.to_string()) {
-                    Ok(()) => format!("Switching to {}…", name),
+                    Ok(()) => format!("Switching to {name}…"),
                     Err(_) => "Executor is not running; cannot switch model.".to_string(),
                 },
                 ModelValidation::NotFound { similar } => {
-                    let mut msg =
-                        format!("Model '{}' not found in Ollama's local model list.", name);
+                    let mut msg = format!("Model '{name}' not found in Ollama's local model list.");
                     if !similar.is_empty() {
                         msg.push_str("\nDid you mean:\n");
                         for s in similar {
-                            msg.push_str(&format!("  - {}\n", s));
+                            msg.push_str(&format!("  - {s}\n"));
                         }
                         msg.pop(); // remove trailing newline
                     }
@@ -106,19 +105,16 @@ pub async fn handle_model_command(
                 ModelValidation::SkippedOpenAiCompat => {
                     // Defensive: should not happen for an Ollama kind.
                     match model_tx.send(name.to_string()) {
-                        Ok(()) => format!("Switching to {}…", name),
+                        Ok(()) => format!("Switching to {name}…"),
                         Err(_) => "Executor is not running; cannot switch model.".to_string(),
                     }
                 }
                 ModelValidation::CheckFailed(err) => {
                     let base = match model_tx.send(name.to_string()) {
-                        Ok(()) => format!("Switching to {}…", name),
+                        Ok(()) => format!("Switching to {name}…"),
                         Err(_) => "Executor is not running; cannot switch model.".to_string(),
                     };
-                    format!(
-                        "{}\nWarning: could not validate model availability: {}",
-                        base, err
-                    )
+                    format!("{base}\nWarning: could not validate model availability: {err}")
                 }
             }
         }
@@ -273,8 +269,8 @@ mod tests {
         let (tx, mut rx) = mpsc::unbounded_channel::<String>();
         let state = dummy_state();
         let out = handle_model_command("", &tx, &state).await;
-        assert!(out.starts_with("Usage"), "got: {}", out);
-        assert!(out.contains("/model"), "got: {}", out);
+        assert!(out.starts_with("Usage"), "got: {out}");
+        assert!(out.contains("/model"), "got: {out}");
         // No message on the channel.
         assert!(rx.try_recv().is_err());
     }
@@ -285,7 +281,7 @@ mod tests {
         let (tx, mut rx) = mpsc::unbounded_channel::<String>();
         let state = dummy_state();
         let out = handle_model_command("   \t  ", &tx, &state).await;
-        assert!(out.starts_with("Usage"), "got: {}", out);
+        assert!(out.starts_with("Usage"), "got: {out}");
         assert!(rx.try_recv().is_err());
     }
 
@@ -309,7 +305,7 @@ mod tests {
         let (tx, mut rx) = mpsc::unbounded_channel::<String>();
         let state = dummy_state();
         let out = handle_model_command("GPT-OSS-120B", &tx, &state).await;
-        assert!(out.contains("GPT-OSS-120B"), "got: {}", out);
+        assert!(out.contains("GPT-OSS-120B"), "got: {out}");
         let received = rx.try_recv().expect("channel should have a value");
         assert_eq!(received, "GPT-OSS-120B");
     }
@@ -322,8 +318,8 @@ mod tests {
         drop(rx);
         let state = dummy_state();
         let out = handle_model_command("qwen2.5:3b", &tx, &state).await;
-        assert!(out.contains("Executor"), "got: {}", out);
-        assert!(out.contains("not running"), "got: {}", out);
+        assert!(out.contains("Executor"), "got: {out}");
+        assert!(out.contains("not running"), "got: {out}");
     }
 
     /// `parse_model_list` extracts `models[].name` from `/api/tags` JSON.
@@ -375,7 +371,7 @@ mod tests {
 
     #[test]
     fn test_similar_models_caps_at_five() {
-        let available: Vec<String> = (0..10).map(|i| format!("model-{}", i)).collect();
+        let available: Vec<String> = (0..10).map(|i| format!("model-{i}")).collect();
         assert_eq!(similar_models("model", &available).len(), 5);
     }
 

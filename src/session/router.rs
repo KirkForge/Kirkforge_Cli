@@ -182,8 +182,7 @@ pub async fn classify_with_llm(
     let prompt = format!(
         "Classify this developer task as simple, medium, or complex. \
          Reply with only one word (simple/medium/complex).\n\n\
-         Task: {}",
-        message
+         Task: {message}"
     );
 
     let body = serde_json::json!({

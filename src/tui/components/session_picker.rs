@@ -221,7 +221,7 @@ impl SessionPicker {
 /// Human-readable byte size, mirrored from `crate::tui::commands::sessions`.
 fn human_size(bytes: u64) -> String {
     if bytes < 1024 {
-        format!("{} B", bytes)
+        format!("{bytes} B")
     } else if bytes < 1024 * 1024 {
         format!("{:.1} KB", bytes as f64 / 1024.0)
     } else {
@@ -248,7 +248,7 @@ mod tests {
         (0..n)
             .map(|i| SessionEntry {
                 id: format!("2026-06-{:02}-session-{:02}", i + 1, i + 1),
-                path: std::path::PathBuf::from(format!("/tmp/{}.conv.ndjson", i)),
+                path: std::path::PathBuf::from(format!("/tmp/{i}.conv.ndjson")),
                 started_at: format!("2026-06-{:02}T10:{:02}:00-07:00", i + 1, i),
                 message_count: i * 5,
                 size_bytes: (i as u64) * 1024,

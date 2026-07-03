@@ -50,6 +50,6 @@ pub async fn handle_reload_command(
     if diff_summary.is_empty() {
         "🔄 Reloaded config (no changes)".into()
     } else {
-        format!("🔄 Reloaded config: {}", diff_summary)
+        format!("🔄 Reloaded config: {diff_summary}")
     }
 }

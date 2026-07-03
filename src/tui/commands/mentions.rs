@@ -432,26 +432,22 @@ pub fn render_mentions_block(expansions: &[MentionExpansion]) -> String {
             }
             MentionStatus::NotFound => {
                 out.push_str(&format!(
-                    "\n### `{}` — could not read: file not found\n",
-                    label
+                    "\n### `{label}` — could not read: file not found\n"
                 ));
             }
             MentionStatus::Denied(reason) => {
                 out.push_str(&format!(
-                    "\n### `{}` — could not read: denied ({})\n",
-                    label, reason
+                    "\n### `{label}` — could not read: denied ({reason})\n"
                 ));
             }
             MentionStatus::IoError(err) => {
                 out.push_str(&format!(
-                    "\n### `{}` — could not read: I/O error ({})\n",
-                    label, err
+                    "\n### `{label}` — could not read: I/O error ({err})\n"
                 ));
             }
             MentionStatus::InvalidRange(reason) => {
                 out.push_str(&format!(
-                    "\n### `{}` — could not read: invalid range ({})\n",
-                    label, reason
+                    "\n### `{label}` — could not read: invalid range ({reason})\n"
                 ));
             }
         }
@@ -464,7 +460,7 @@ pub fn render_mentions_block(expansions: &[MentionExpansion]) -> String {
 fn mention_label(e: &MentionExpansion) -> String {
     let mut s = e.spec.path.clone();
     if let Some((start, end)) = e.spec.range {
-        s.push_str(&format!(":{}-{}", start, end));
+        s.push_str(&format!(":{start}-{end}"));
     }
     if e.spec.raw {
         s.push_str(":raw");
@@ -488,26 +484,26 @@ pub fn format_mention_status(expansions: &[MentionExpansion]) -> String {
                 minified,
                 truncated,
             } => {
-                let mut note = format!("{} bytes", bytes);
+                let mut note = format!("{bytes} bytes");
                 if *minified {
                     note.push_str(", minified");
                 }
                 if *truncated {
                     note.push_str(", truncated to cap");
                 }
-                out.push_str(&format!("  ✓ `{}` — {}\n", label, note));
+                out.push_str(&format!("  ✓ `{label}` — {note}\n"));
             }
             MentionStatus::NotFound => {
-                out.push_str(&format!("  ✗ `{}` — not found\n", label));
+                out.push_str(&format!("  ✗ `{label}` — not found\n"));
             }
             MentionStatus::Denied(reason) => {
-                out.push_str(&format!("  ✗ `{}` — denied ({})\n", label, reason));
+                out.push_str(&format!("  ✗ `{label}` — denied ({reason})\n"));
             }
             MentionStatus::IoError(err) => {
-                out.push_str(&format!("  ✗ `{}` — I/O error: {}\n", label, err));
+                out.push_str(&format!("  ✗ `{label}` — I/O error: {err}\n"));
             }
             MentionStatus::InvalidRange(reason) => {
-                out.push_str(&format!("  ✗ `{}` — {}\n", label, reason));
+                out.push_str(&format!("  ✗ `{label}` — {reason}\n"));
             }
         }
     }

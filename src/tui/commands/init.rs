@@ -107,10 +107,7 @@ pub fn handle_init_command(args: &str, cwd: &Path) -> String {
     let config_content = generate_config(&project);
 
     if let Err(e) = std::fs::create_dir_all(&config_dir) {
-        output.push_str(&format!(
-            "❌ Failed to create .kirkforge/ directory: {}\n",
-            e
-        ));
+        output.push_str(&format!("❌ Failed to create .kirkforge/ directory: {e}\n"));
         return output;
     }
 
@@ -119,7 +116,7 @@ pub fn handle_init_command(args: &str, cwd: &Path) -> String {
             output.push_str(&format!("✅ Created {}\n", config_path.display()));
         }
         Err(e) => {
-            output.push_str(&format!("❌ Failed to write config: {}\n", e));
+            output.push_str(&format!("❌ Failed to write config: {e}\n"));
             return output;
         }
     }
@@ -153,7 +150,7 @@ fn generate_config(project: &ProjectType) -> String {
     if !write_dirs.is_empty() {
         c.push_str("allowed_write_dirs = [\n");
         for d in &write_dirs {
-            c.push_str(&format!("    \"{}\",\n", d));
+            c.push_str(&format!("    \"{d}\",\n"));
         }
         c.push_str("]\n\n");
     }
@@ -163,7 +160,7 @@ fn generate_config(project: &ProjectType) -> String {
     if !deny.is_empty() {
         c.push_str("deny_paths = [\n");
         for d in &deny {
-            c.push_str(&format!("    \"{}\",\n", d));
+            c.push_str(&format!("    \"{d}\",\n"));
         }
         c.push_str("]\n");
     }
@@ -318,8 +315,8 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("Cargo.toml"), "[package]\n").unwrap();
         let out = handle_init_command("", tmp.path());
-        assert!(out.contains("Rust"), "got: {}", out);
-        assert!(out.contains("Created"), "got: {}", out);
+        assert!(out.contains("Rust"), "got: {out}");
+        assert!(out.contains("Created"), "got: {out}");
         assert!(tmp.path().join(".kirkforge/config.toml").exists());
         assert!(tmp.path().join(".kirkforge/CLAUDE.md").exists());
     }
@@ -332,7 +329,7 @@ mod tests {
         std::fs::create_dir_all(&config_dir).unwrap();
         std::fs::write(config_dir.join("config.toml"), "# existing\n").unwrap();
         let out = handle_init_command("", tmp.path());
-        assert!(out.contains("already exists"), "got: {}", out);
+        assert!(out.contains("already exists"), "got: {out}");
     }
 
     #[test]
@@ -343,12 +340,11 @@ mod tests {
         std::fs::create_dir_all(&config_dir).unwrap();
         std::fs::write(config_dir.join("config.toml"), "# old\n").unwrap();
         let out = handle_init_command("--force", tmp.path());
-        assert!(out.contains("Created"), "got: {}", out);
+        assert!(out.contains("Created"), "got: {out}");
         let new_content = std::fs::read_to_string(config_dir.join("config.toml")).unwrap();
         assert!(
             !new_content.contains("old"),
-            "should have been overwritten, got: {}",
-            new_content
+            "should have been overwritten, got: {new_content}"
         );
     }
 }

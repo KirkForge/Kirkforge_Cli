@@ -62,7 +62,7 @@ impl Tool for BashStatus {
                 }
             }
             None => ToolOutcome::Error {
-                message: format!("Job #{} not found", job_id),
+                message: format!("Job #{job_id} not found"),
             },
         }
     }

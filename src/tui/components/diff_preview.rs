@@ -111,13 +111,13 @@ fn format_write_file_diff(
     if current.is_empty() {
         // New file path: show everything as additions.
         let mut out = Vec::new();
-        let header = format!("+++ {} (new file)", path);
+        let header = format!("+++ {path} (new file)");
         out.push(header);
         out.push(String::new());
         let width = wrap_width.max(8).saturating_sub(2);
         for line in content.lines() {
             for wrapped in wrap_diff_line(line, width) {
-                out.push(format!("+ {}", wrapped));
+                out.push(format!("+ {wrapped}"));
             }
         }
         return out;
@@ -135,9 +135,9 @@ fn format_write_file_diff(
 /// `git diff /dev/null`).
 fn push_header(out: &mut Vec<String>, path: &str, is_new: bool) {
     if !is_new {
-        out.push(format!("--- {}", path));
+        out.push(format!("--- {path}"));
     }
-    out.push(format!("+++ {}", path));
+    out.push(format!("+++ {path}"));
     out.push(String::new());
 }
 
@@ -153,7 +153,7 @@ fn push_unified_diff(out: &mut Vec<String>, old: &str, new: &str, wrap_width: us
         };
         let line = change.value().trim_end_matches('\n');
         for wrapped in wrap_diff_line(line, width) {
-            out.push(format!("{} {}", prefix, wrapped));
+            out.push(format!("{prefix} {wrapped}"));
         }
     }
 }
@@ -340,7 +340,7 @@ mod tests {
         assert!(!plus_lines.is_empty());
         // Sanity: no line exceeds the wrap width + 2 for the prefix.
         for l in &plus_lines {
-            assert!(l.chars().count() <= 32, "wrapped line too long: {:?}", l);
+            assert!(l.chars().count() <= 32, "wrapped line too long: {l:?}");
         }
     }
 }

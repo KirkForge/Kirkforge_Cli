@@ -46,7 +46,7 @@ pub fn handle_undo_command(
             };
             let entries = match stack.lock() {
                 Ok(s) => s.list(),
-                Err(e) => return format!("Undo stack mutex poisoned: {}", e),
+                Err(e) => return format!("Undo stack mutex poisoned: {e}"),
             };
             format_undo_list(&entries)
         }
@@ -56,13 +56,12 @@ pub fn handle_undo_command(
             };
             let count = match stack.lock() {
                 Ok(s) => s.len(),
-                Err(e) => return format!("Undo stack mutex poisoned: {}", e),
+                Err(e) => return format!("Undo stack mutex poisoned: {e}"),
             };
             format!("Undo stack contains {} entr{}", count, if count == 1 { "y" } else { "ies" })
         }
         _ => format!(
-            "Usage: /undo [list|count]\n\nUnknown argument '{}'. /undo pops the most recent edit; /undo list shows the stack; /undo count prints the depth.",
-            args
+            "Usage: /undo [list|count]\n\nUnknown argument '{args}'. /undo pops the most recent edit; /undo list shows the stack; /undo count prints the depth."
         ),
     }
 }
@@ -182,7 +181,7 @@ mod tests {
                 .as_nanos()
         );
         let stack = crate::session::undo::UndoStack::for_session(&id).expect("for_session");
-        let target = std::env::temp_dir().join(format!("kf_undo_cmd_target_{}.txt", id));
+        let target = std::env::temp_dir().join(format!("kf_undo_cmd_target_{id}.txt"));
         let state = AppState::new(std::sync::Arc::new(std::sync::RwLock::new(
             crate::shared::Config::default(),
         )));
@@ -197,7 +196,7 @@ mod tests {
         state.undo_stack = Some(stack_ref);
         let (tx, _rx) = mpsc::unbounded_channel();
         let out = handle_undo_command("count", &tx, &mut state);
-        assert!(out.contains("0 entries"), "got: {}", out);
+        assert!(out.contains("0 entries"), "got: {out}");
     }
 
     /// `/undo list` on an empty stack reports the empty message.
@@ -207,7 +206,7 @@ mod tests {
         state.undo_stack = Some(stack_ref);
         let (tx, _rx) = mpsc::unbounded_channel();
         let out = handle_undo_command("list", &tx, &mut state);
-        assert!(out.contains("empty"), "got: {}", out);
+        assert!(out.contains("empty"), "got: {out}");
     }
 
     /// `/undo count` reflects pushed entries.
@@ -225,7 +224,7 @@ mod tests {
         state.undo_stack = Some(stack_ref);
         let (tx, _rx) = mpsc::unbounded_channel();
         let out = handle_undo_command("count", &tx, &mut state);
-        assert!(out.contains("1 entry"), "got: {}", out);
+        assert!(out.contains("1 entry"), "got: {out}");
     }
 
     /// `/undo list` reflects pushed entries with paths and kinds.
@@ -243,12 +242,11 @@ mod tests {
         state.undo_stack = Some(stack_ref);
         let (tx, _rx) = mpsc::unbounded_channel();
         let out = handle_undo_command("list", &tx, &mut state);
-        assert!(out.contains("1 entries"), "got: {}", out);
-        assert!(out.contains("edit"), "got: {}", out);
+        assert!(out.contains("1 entries"), "got: {out}");
+        assert!(out.contains("edit"), "got: {out}");
         assert!(
             out.contains(target.file_name().unwrap().to_str().unwrap()),
-            "got: {}",
-            out
+            "got: {out}"
         );
     }
 
@@ -259,8 +257,8 @@ mod tests {
         state.undo_stack = Some(stack_ref);
         let (tx, mut rx) = mpsc::unbounded_channel();
         let out = handle_undo_command("foo", &tx, &mut state);
-        assert!(out.contains("Usage"), "got: {}", out);
-        assert!(out.contains("foo"), "got: {}", out);
+        assert!(out.contains("Usage"), "got: {out}");
+        assert!(out.contains("foo"), "got: {out}");
         assert!(
             rx.try_recv().is_err(),
             "pop signal should not have been sent"

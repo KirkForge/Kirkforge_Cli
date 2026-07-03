@@ -112,7 +112,7 @@ fn build_summary_prompt(messages: &[Message]) -> String {
                 } else {
                     truncate_for_summary(&msg.content, 200)
                 };
-                conversation_text.push_str(&format!("Assistant: {}\n", text));
+                conversation_text.push_str(&format!("Assistant: {text}\n"));
             }
             Role::Tool => {
                 let label = msg.tool_name.as_deref().unwrap_or("tool");
@@ -267,7 +267,7 @@ pub async fn summarize_conversation(
                 tokens_before,
                 tokens_after: tokens_before,
                 fell_back: true,
-                error: Some(format!("JSON parse error: {}", e)),
+                error: Some(format!("JSON parse error: {e}")),
             },
         },
         Err(e) => SummarizeResult {
@@ -276,7 +276,7 @@ pub async fn summarize_conversation(
             tokens_before,
             tokens_after: tokens_before,
             fell_back: true,
-            error: Some(format!("HTTP error: {}", e)),
+            error: Some(format!("HTTP error: {e}")),
         },
     }
 }

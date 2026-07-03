@@ -217,7 +217,7 @@ mod tests {
             Verdict::Unfixable(err) => {
                 assert!(err.description.contains("bad pattern"));
             }
-            other => panic!("expected Unfixable, got {:?}", other),
+            other => panic!("expected Unfixable, got {other:?}"),
         }
     }
 
@@ -251,7 +251,7 @@ command = "bin/check.sh"
                 TrustPolicy::up_to(kirkforge_plugin::TrustTier::Shell),
             )
             .unwrap();
-        assert!(warnings.is_empty(), "{:?}", warnings);
+        assert!(warnings.is_empty(), "{warnings:?}");
 
         let verifiers = verifiers_from_registry(&registry);
         assert_eq!(verifiers.len(), 1);

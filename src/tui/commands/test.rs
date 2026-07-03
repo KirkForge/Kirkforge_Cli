@@ -95,7 +95,7 @@ pub async fn handle_test_command(args: &str, state: &mut AppState) -> String {
         &path_guard,
         crate::shared::read_shared_config(&state.config).bash_sandbox_workdir,
     ) {
-        return format!("🔒 /test blocked: {}", reason);
+        return format!("🔒 /test blocked: {reason}");
     }
 
     state.test_in_progress = true;
@@ -104,7 +104,7 @@ pub async fn handle_test_command(args: &str, state: &mut AppState) -> String {
 
     let (raw_stdout, raw_stderr, exit_code) = match result {
         Ok(out) => (out.stdout, out.stderr, out.status.code().unwrap_or(-1)),
-        Err(e) => return format!("❌ /test failed to run: {}", e),
+        Err(e) => return format!("❌ /test failed to run: {e}"),
     };
 
     let summary = super::test_parse::parse_cargo_test_output(&raw_stdout);

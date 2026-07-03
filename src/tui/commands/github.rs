@@ -79,10 +79,7 @@ fn handle_issue(args: &str) -> String {
         "Creating issues requires an interactive editor. Run `gh issue create` in a terminal."
             .into()
     } else {
-        format!(
-            "Unknown /gh issue subcommand: {}.\nUse: list | view <number>",
-            args
-        )
+        format!("Unknown /gh issue subcommand: {args}.\nUse: list | view <number>")
     }
 }
 
@@ -138,12 +135,9 @@ fn handle_pr(args: &str) -> String {
             Err(e) => e,
         }
     } else if args == "view" || args == "diff" {
-        format!("/gh pr {} <number> — e.g. /gh pr {} 42", args, args)
+        format!("/gh pr {args} <number> — e.g. /gh pr {args} 42")
     } else {
-        format!(
-            "Unknown /gh pr subcommand: {}.\nUse: list | view <number> | diff <number>",
-            args
-        )
+        format!("Unknown /gh pr subcommand: {args}.\nUse: list | view <number> | diff <number>")
     }
 }
 
@@ -217,10 +211,7 @@ fn handle_run(args: &str) -> String {
             Err(e) => e,
         }
     } else {
-        format!(
-            "Unknown /gh run subcommand: {}.\nUse: list | view <id>",
-            args
-        )
+        format!("Unknown /gh run subcommand: {args}.\nUse: list | view <id>")
     }
 }
 
@@ -261,7 +252,7 @@ fn run_gh_file(path: &str, ref_name: &str) -> Result<String, String> {
     // get the file body directly, with no shell interpolation and no
     // external base64 decoder.
     let path = path.trim_start_matches('/');
-    let endpoint = format!("repos/:owner/:repo/contents/{}?ref={}", path, ref_name);
+    let endpoint = format!("repos/:owner/:repo/contents/{path}?ref={ref_name}");
     let output = Command::new("gh")
         .args([
             "api",
@@ -274,7 +265,7 @@ fn run_gh_file(path: &str, ref_name: &str) -> Result<String, String> {
             if e.kind() == std::io::ErrorKind::NotFound {
                 "gh CLI not found. Install it: https://cli.github.com/".into()
             } else {
-                format!("Failed to run gh file: {}", e)
+                format!("Failed to run gh file: {e}")
             }
         })?;
 
@@ -284,7 +275,7 @@ fn run_gh_file(path: &str, ref_name: &str) -> Result<String, String> {
         if err_msg.contains("not authenticated") || err_msg.contains("auth") {
             return Err("gh not authenticated. Run `gh auth login` in a terminal.".into());
         }
-        return Err(format!("gh file failed: {}", err_msg));
+        return Err(format!("gh file failed: {err_msg}"));
     }
 
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
@@ -298,7 +289,7 @@ fn exec_gh(mut cmd: Command, label: &str) -> Result<String, String> {
         if e.kind() == std::io::ErrorKind::NotFound {
             "gh CLI not found. Install it: https://cli.github.com/".into()
         } else {
-            format!("Failed to run {}: {}", label, e)
+            format!("Failed to run {label}: {e}")
         }
     })?;
 
@@ -312,7 +303,7 @@ fn exec_gh(mut cmd: Command, label: &str) -> Result<String, String> {
         if err_msg.contains("not authenticated") || err_msg.contains("auth") {
             return Err("gh not authenticated. Run `gh auth login` in a terminal.".into());
         }
-        return Err(format!("{} failed: {}", label, err_msg));
+        return Err(format!("{label} failed: {err_msg}"));
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -348,76 +339,76 @@ mod tests {
     #[test]
     fn test_handle_gh_empty_returns_usage() {
         let out = handle_gh_command("");
-        assert!(out.contains("GitHub commands"), "got: {}", out);
+        assert!(out.contains("GitHub commands"), "got: {out}");
     }
 
     #[test]
     fn test_handle_gh_unknown_subcommand() {
         let out = handle_gh_command("nope");
-        assert!(out.contains("Unknown"), "got: {}", out);
+        assert!(out.contains("Unknown"), "got: {out}");
     }
 
     #[test]
     fn test_issue_empty_returns_help() {
         let out = handle_issue("");
-        assert!(out.contains("list"), "got: {}", out);
-        assert!(out.contains("view"), "got: {}", out);
+        assert!(out.contains("list"), "got: {out}");
+        assert!(out.contains("view"), "got: {out}");
     }
 
     #[test]
     fn test_issue_view_no_number() {
         let out = handle_issue("view");
-        assert!(out.contains("42"), "got: {}", out);
+        assert!(out.contains("42"), "got: {out}");
     }
 
     #[test]
     fn test_issue_create_returns_instructions() {
         let out = handle_issue("create");
-        assert!(out.contains("interactive"), "got: {}", out);
+        assert!(out.contains("interactive"), "got: {out}");
     }
 
     #[test]
     fn test_pr_empty_returns_help() {
         let out = handle_pr("");
-        assert!(out.contains("list"), "got: {}", out);
-        assert!(out.contains("diff"), "got: {}", out);
+        assert!(out.contains("list"), "got: {out}");
+        assert!(out.contains("diff"), "got: {out}");
     }
 
     #[test]
     fn test_pr_view_empty_number() {
         let out = handle_pr("view");
-        assert!(out.contains("42"), "got: {}", out);
+        assert!(out.contains("42"), "got: {out}");
     }
 
     #[test]
     fn test_pr_diff_empty_number() {
         let out = handle_pr("diff");
-        assert!(out.contains("42"), "got: {}", out);
+        assert!(out.contains("42"), "got: {out}");
     }
 
     #[test]
     fn test_search_empty_returns_help() {
         let out = handle_search("");
-        assert!(out.contains("search GitHub"), "got: {}", out);
+        assert!(out.contains("search GitHub"), "got: {out}");
     }
 
     #[test]
     fn test_run_empty_returns_help() {
         let out = handle_run("");
-        assert!(out.contains("list"), "got: {}", out);
+        assert!(out.contains("list"), "got: {out}");
     }
 
     #[test]
     fn test_run_view_empty_id() {
         let out = handle_run("view");
         // Should get help since "view" alone isn't valid
-        assert!(out.contains("list"), "got: {}", out);
+        assert!(out.contains("list"), "got: {out}");
     }
 
     #[test]
     fn test_file_empty_returns_help() {
         let out = handle_file("");
-        assert!(out.contains("path"), "got: {}", out);
+        assert!(out.contains("path"), "got: {out}");
     }
 
     #[test]

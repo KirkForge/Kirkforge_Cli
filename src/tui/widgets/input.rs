@@ -23,7 +23,7 @@ pub fn render_input(f: &mut Frame, area: Rect, state: &AppState) {
         .title(if !state.search_matches.is_empty() {
             let total = state.search_matches.len();
             let cur = state.search_match_idx + 1;
-            format!(" Input  ({} / {} matches) ", cur, total)
+            format!(" Input  ({cur} / {total} matches) ")
         } else {
             " Input ".to_string()
         })
@@ -58,7 +58,7 @@ pub fn render_input(f: &mut Frame, area: Rect, state: &AppState) {
                 // Get the first char (safe — byte_pos is on a char boundary since
                 // cursor_byte() walks char_indices)
                 let first_char = after.chars().next().unwrap_or(' ');
-                format!("{}█", first_char)
+                format!("{first_char}█")
             },
             Style::default(),
         ));
@@ -97,7 +97,7 @@ fn render_search_bar(f: &mut Frame, area: Rect, state: &AppState) {
     } else {
         (state.search_match_idx + 1, state.search_matches.len())
     };
-    let counter = format!(" {} / {} ", cur, total);
+    let counter = format!(" {cur} / {total} ");
 
     let mut spans = vec![
         Span::styled(
@@ -111,10 +111,7 @@ fn render_search_bar(f: &mut Frame, area: Rect, state: &AppState) {
             Style::default().fg(Color::White),
         ),
         Span::styled("█", Style::default().fg(Color::Yellow)),
-        Span::styled(
-            format!("  {}", counter),
-            Style::default().fg(Color::DarkGray),
-        ),
+        Span::styled(format!("  {counter}"), Style::default().fg(Color::DarkGray)),
     ];
     // Hint at the trailing edge.
     spans.push(Span::styled(

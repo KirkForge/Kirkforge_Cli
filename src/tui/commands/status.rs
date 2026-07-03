@@ -21,7 +21,7 @@ pub async fn handle_status_command(_args: &str, state: &AppState) -> String {
         ConnectionState::Connected { model, .. } => model.clone(),
         ConnectionState::Disconnected => "(disconnected)".to_string(),
         ConnectionState::Connecting => "(connecting)".to_string(),
-        ConnectionState::Error(e) => format!("(error: {})", e),
+        ConnectionState::Error(e) => format!("(error: {e})"),
     };
 
     // Context pressure: only meaningful once we've done at least one
@@ -87,7 +87,7 @@ fn format_duration(secs: u64) -> String {
     } else if secs >= 60 {
         format!("{}m {:02}s", secs / 60, secs % 60)
     } else {
-        format!("{}s", secs)
+        format!("{secs}s")
     }
 }
 

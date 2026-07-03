@@ -29,9 +29,9 @@
 /// verbatim.
 pub fn copy_to_clipboard(text: &str) -> anyhow::Result<usize> {
     let mut cb =
-        arboard::Clipboard::new().map_err(|e| anyhow::anyhow!("clipboard unavailable: {}", e))?;
+        arboard::Clipboard::new().map_err(|e| anyhow::anyhow!("clipboard unavailable: {e}"))?;
     cb.set_text(text.to_string())
-        .map_err(|e| anyhow::anyhow!("clipboard set failed: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("clipboard set failed: {e}"))?;
     Ok(text.len())
 }
 
@@ -49,10 +49,9 @@ mod tests {
     fn copy_to_clipboard_round_trips_short_ascii() {
         match copy_to_clipboard("hello clipboard") {
             Ok(n) => assert_eq!(n, "hello clipboard".len()),
-            Err(e) => panic!(
-                "clipboard unavailable in this environment (test was run headless?): {}",
-                e
-            ),
+            Err(e) => {
+                panic!("clipboard unavailable in this environment (test was run headless?): {e}")
+            }
         }
     }
 }

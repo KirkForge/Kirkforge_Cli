@@ -37,7 +37,7 @@ impl Tool for BashCancel {
         let registry = global_registry();
         if registry.cancel(job_id).await {
             ToolOutcome::Success {
-                content: format!("Job #{} cancelled", job_id),
+                content: format!("Job #{job_id} cancelled"),
             }
         } else {
             match registry.get(job_id).await {
@@ -45,7 +45,7 @@ impl Tool for BashCancel {
                     message: format!("Job #{} is not running (status: {:?})", job_id, job.status),
                 },
                 None => ToolOutcome::Error {
-                    message: format!("Job #{} not found", job_id),
+                    message: format!("Job #{job_id} not found"),
                 },
             }
         }

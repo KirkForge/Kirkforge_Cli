@@ -197,7 +197,7 @@ pub fn render_approval_dialog(
         let mut spans = Vec::new();
         if show_top_indicator {
             spans.push(Span::styled(
-                format!("↑ {} more above ", scroll),
+                format!("↑ {scroll} more above "),
                 Style::default().fg(Color::DarkGray),
             ));
         }
@@ -434,7 +434,7 @@ mod tests {
         let path_line = lines
             .iter()
             .find(|l| l.contains("src/main.rs"))
-            .unwrap_or_else(|| panic!("no line contains the path; lines={:?}", lines));
+            .unwrap_or_else(|| panic!("no line contains the path; lines={lines:?}"));
         assert!(path_line.contains("path"));
     }
 
@@ -529,7 +529,7 @@ mod tests {
         for l in &lines {
             // The whole line is a sequence of whole 🦀s (each 2 cells wide)
             for ch in l.chars() {
-                assert!(ch == '🦀' || ch == ' ', "got unexpected char: {:?}", ch);
+                assert!(ch == '🦀' || ch == ' ', "got unexpected char: {ch:?}");
             }
         }
     }

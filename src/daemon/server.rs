@@ -44,7 +44,7 @@ pub async fn run_daemon_at(socket_path: PathBuf, pid_path: PathBuf) -> anyhow::R
 
     // Write PID file.
     let pid = std::process::id();
-    let _ = std::fs::write(&pid_path, format!("{}\n", pid));
+    let _ = std::fs::write(&pid_path, format!("{pid}\n"));
 
     let listener = UnixListener::bind(&socket_path)
         .with_context(|| format!("bind daemon socket at {}", socket_path.display()))?;
@@ -199,7 +199,7 @@ async fn handle_client(
         let req: Request = match serde_json::from_str(trimmed) {
             Ok(r) => r,
             Err(e) => {
-                let resp = Response::error(format!("invalid request: {}", e));
+                let resp = Response::error(format!("invalid request: {e}"));
                 if write_response(&mut stream, resp).await.is_err() {
                     break;
                 }
@@ -242,7 +242,7 @@ async fn handle_request(req: Request, state: Arc<Mutex<DaemonState>>) -> Respons
                     "id": entry.id,
                     "path": entry.path.to_string_lossy().to_string(),
                 })),
-                None => Response::error(format!("session '{}' not found", id)),
+                None => Response::error(format!("session '{id}' not found")),
             }
         }
 

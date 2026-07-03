@@ -68,7 +68,7 @@ fn detect_type(text: &str) -> &str {
 pub fn handle_memory_command(args: &str) -> String {
     let store = match MemoryStore::default_store() {
         Ok(s) => s,
-        Err(e) => return format!("Memory store unavailable: {}", e),
+        Err(e) => return format!("Memory store unavailable: {e}"),
     };
     let trimmed = args.trim();
 
@@ -119,7 +119,7 @@ pub fn handle_memory_command(args: &str) -> String {
                         }
                     )
                 }
-                Err(e) => format!("❌ Failed to store memory: {}", e),
+                Err(e) => format!("❌ Failed to store memory: {e}"),
             }
         }
         "list" => {
@@ -146,7 +146,7 @@ pub fn handle_memory_command(args: &str) -> String {
             }
             let results = store.search(rest);
             if results.is_empty() {
-                return format!("No memories matching \"{}\".", rest);
+                return format!("No memories matching \"{rest}\".");
             }
             let mut out = format!("Found {} memories matching \"{}\":\n", results.len(), rest);
             for fact in &results {
@@ -163,14 +163,13 @@ pub fn handle_memory_command(args: &str) -> String {
                 return "Usage: /memory rm <name>".into();
             }
             match store.delete(rest) {
-                Ok(true) => format!("🗑 Deleted memory `{}`.", rest),
-                Ok(false) => format!("❌ No memory named `{}`.", rest),
-                Err(e) => format!("❌ Failed to delete: {}", e),
+                Ok(true) => format!("🗑 Deleted memory `{rest}`."),
+                Ok(false) => format!("❌ No memory named `{rest}`."),
+                Err(e) => format!("❌ Failed to delete: {e}"),
             }
         }
         _ => format!(
-            "Unknown subcommand: {}\nUsage: /memory add <fact> | list | search <query> | rm <name>",
-            subcmd
+            "Unknown subcommand: {subcmd}\nUsage: /memory add <fact> | list | search <query> | rm <name>"
         ),
     }
 }

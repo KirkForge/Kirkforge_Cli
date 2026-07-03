@@ -8,7 +8,9 @@
 /// The model or user can check job status, read output, or cancel jobs.
 use crate::session::access::{DenyList, PathGuard};
 use crate::session::process_group::{kill_process_group, setup_process_group};
-use crate::tools::bash::{cap_to_string, check_bash_command_str, drain_capped, MAX_BASH_OUTPUT_BYTES};
+use crate::tools::bash::{
+    cap_to_string, check_bash_command_str, drain_capped, MAX_BASH_OUTPUT_BYTES,
+};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -99,9 +101,13 @@ impl BashJobRegistry {
         // deny-list, dangerous-pattern, and sandbox-workdir checks as
         // foreground bash. Without this, `bash(background: true)` is a
         // trivial bypass around `check_bash_command_str`.
-        if let Some(denied) =
-            check_bash_command_str(command, workdir, deny_list, path_guard, bash_sandbox_workdir)
-        {
+        if let Some(denied) = check_bash_command_str(
+            command,
+            workdir,
+            deny_list,
+            path_guard,
+            bash_sandbox_workdir,
+        ) {
             return Err(anyhow::anyhow!(denied));
         }
 
@@ -363,7 +369,17 @@ mod tests {
     #[tokio::test]
     async fn test_spawn_and_complete() {
         let reg = BashJobRegistry::new();
-        let id = reg.spawn("echo hello", None, None, &DenyList::default(), &PathGuard::default(), false).await.unwrap();
+        let id = reg
+            .spawn(
+                "echo hello",
+                None,
+                None,
+                &DenyList::default(),
+                &PathGuard::default(),
+                false,
+            )
+            .await
+            .unwrap();
         assert!(id > 0);
 
         // Wait for completion
@@ -379,7 +395,14 @@ mod tests {
     async fn test_spawn_and_check_running() {
         let reg = BashJobRegistry::new();
         let id = reg
-            .spawn("sleep 0.1 && echo done", None, None, &DenyList::default(), &PathGuard::default(), false)
+            .spawn(
+                "sleep 0.1 && echo done",
+                None,
+                None,
+                &DenyList::default(),
+                &PathGuard::default(),
+                false,
+            )
             .await
             .unwrap();
 
@@ -392,8 +415,28 @@ mod tests {
     #[tokio::test]
     async fn test_job_list_and_count() {
         let reg = BashJobRegistry::new();
-        let _ = reg.spawn("echo a", None, None, &DenyList::default(), &PathGuard::default(), false).await.unwrap();
-        let _ = reg.spawn("echo b", None, None, &DenyList::default(), &PathGuard::default(), false).await.unwrap();
+        let _ = reg
+            .spawn(
+                "echo a",
+                None,
+                None,
+                &DenyList::default(),
+                &PathGuard::default(),
+                false,
+            )
+            .await
+            .unwrap();
+        let _ = reg
+            .spawn(
+                "echo b",
+                None,
+                None,
+                &DenyList::default(),
+                &PathGuard::default(),
+                false,
+            )
+            .await
+            .unwrap();
 
         tokio::time::sleep(std::time::Duration::from_millis(300)).await;
 
@@ -405,7 +448,17 @@ mod tests {
     #[tokio::test]
     async fn test_cancel_running_job() {
         let reg = BashJobRegistry::new();
-        let id = reg.spawn("sleep 5", None, None, &DenyList::default(), &PathGuard::default(), false).await.unwrap();
+        let id = reg
+            .spawn(
+                "sleep 5",
+                None,
+                None,
+                &DenyList::default(),
+                &PathGuard::default(),
+                false,
+            )
+            .await
+            .unwrap();
 
         // Cancel while running
         assert!(reg.cancel(id).await);
@@ -417,7 +470,17 @@ mod tests {
     #[tokio::test]
     async fn test_remove_job() {
         let reg = BashJobRegistry::new();
-        let id = reg.spawn("echo test", None, None, &DenyList::default(), &PathGuard::default(), false).await.unwrap();
+        let id = reg
+            .spawn(
+                "echo test",
+                None,
+                None,
+                &DenyList::default(),
+                &PathGuard::default(),
+                false,
+            )
+            .await
+            .unwrap();
         assert!(reg.remove(id).await);
         assert!(reg.get(id).await.is_none());
     }
@@ -425,8 +488,28 @@ mod tests {
     #[tokio::test]
     async fn test_clean_completed_jobs() {
         let reg = BashJobRegistry::new();
-        let _ = reg.spawn("echo a", None, None, &DenyList::default(), &PathGuard::default(), false).await.unwrap();
-        let running_id = reg.spawn("sleep 5", None, None, &DenyList::default(), &PathGuard::default(), false).await.unwrap();
+        let _ = reg
+            .spawn(
+                "echo a",
+                None,
+                None,
+                &DenyList::default(),
+                &PathGuard::default(),
+                false,
+            )
+            .await
+            .unwrap();
+        let running_id = reg
+            .spawn(
+                "sleep 5",
+                None,
+                None,
+                &DenyList::default(),
+                &PathGuard::default(),
+                false,
+            )
+            .await
+            .unwrap();
 
         tokio::time::sleep(std::time::Duration::from_millis(300)).await;
 
@@ -445,18 +528,23 @@ mod tests {
     async fn test_spawn_blocks_dangerous_command() {
         let reg = BashJobRegistry::new();
         let result = reg
-            .spawn("rm -rf /", None, None, &DenyList::default(), &PathGuard::default(), false)
+            .spawn(
+                "rm -rf /",
+                None,
+                None,
+                &DenyList::default(),
+                &PathGuard::default(),
+                false,
+            )
             .await;
         assert!(
             result.is_err(),
-            "dangerous background command should be rejected, got {:?}",
-            result
+            "dangerous background command should be rejected, got {result:?}"
         );
         let err = result.unwrap_err().to_string();
         assert!(
             err.contains("dangerous pattern"),
-            "expected dangerous-pattern denial, got: {}",
-            err
+            "expected dangerous-pattern denial, got: {err}"
         );
     }
 
@@ -466,7 +554,14 @@ mod tests {
     async fn test_timeout_reaps_child_and_preserves_partial_output() {
         let reg = BashJobRegistry::new();
         let id = reg
-            .spawn("echo partial; sleep 30", None, Some(1), &DenyList::default(), &PathGuard::default(), false)
+            .spawn(
+                "echo partial; sleep 30",
+                None,
+                Some(1),
+                &DenyList::default(),
+                &PathGuard::default(),
+                false,
+            )
             .await
             .unwrap();
 

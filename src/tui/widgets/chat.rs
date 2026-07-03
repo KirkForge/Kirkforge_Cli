@@ -19,16 +19,22 @@ fn role_badge(role: &str) -> Span<'static> {
     match role {
         "user" => Span::styled(
             "USER",
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
         ),
         "assistant" => Span::styled(
             "ASSISTANT",
-            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
         ),
         "system" => Span::styled("SYSTEM", Style::default().fg(Color::DarkGray)),
         "tool" => Span::styled(
             "TOOL",
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::DIM),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::DIM),
         ),
         "thinking" => Span::styled(
             "THINKING",
@@ -51,10 +57,7 @@ fn same_minute(a: &ConversationEntry, b: &ConversationEntry) -> bool {
 ///
 /// The timestamp is omitted when this message falls in the same minute as the
 /// previous one, so dense back-and-forth chats don't repeat the clock every line.
-fn message_header(
-    entry: &ConversationEntry,
-    prev: Option<&ConversationEntry>,
-) -> Line<'static> {
+fn message_header(entry: &ConversationEntry, prev: Option<&ConversationEntry>) -> Line<'static> {
     let mut spans = Vec::new();
 
     if prev.map(|p| same_minute(entry, p)) != Some(true) {
@@ -243,7 +246,9 @@ fn build_chat_lines(state: &AppState, content_width: usize) -> (Vec<Line<'static
         lines.push(Line::from(vec![
             Span::styled(
                 " ⚠️  Unsandboxed ",
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
                 "PathGuard: model writes are not restricted to any directory tree.",
@@ -306,8 +311,7 @@ fn build_chat_lines(state: &AppState, content_width: usize) -> (Vec<Line<'static
     let mut prev_entry: Option<&ConversationEntry> = None;
     for (idx, entry) in state.messages.iter().enumerate() {
         message_start.push(lines.len());
-        let is_streaming_last =
-            idx == last_idx && state.is_generating && entry.role == "assistant";
+        let is_streaming_last = idx == last_idx && state.is_generating && entry.role == "assistant";
         let collapsed = if is_streaming_last {
             false
         } else if entry.role == "tool" {
@@ -331,8 +335,12 @@ fn build_chat_lines(state: &AppState, content_width: usize) -> (Vec<Line<'static
     // Inline thinking block.
     if state.thinking_panel_visible && !state.thinking_buffer.is_empty() {
         let thinking_width = content_width.saturating_sub(4);
-        let border_style = Style::default().fg(Color::Magenta).add_modifier(Modifier::DIM);
-        let body_style = Style::default().fg(Color::Magenta).add_modifier(Modifier::DIM);
+        let border_style = Style::default()
+            .fg(Color::Magenta)
+            .add_modifier(Modifier::DIM);
+        let body_style = Style::default()
+            .fg(Color::Magenta)
+            .add_modifier(Modifier::DIM);
         lines.push(Line::from(vec![
             Span::styled("  ⸱ ", border_style),
             Span::styled(
@@ -405,7 +413,9 @@ pub fn render_chat(f: &mut Frame, area: Rect, state: &mut AppState) {
         lines.push(Line::from(vec![
             Span::styled(
                 " ⚠️  Unsandboxed ",
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
                 "PathGuard: model writes are not restricted to any directory tree.",
@@ -498,12 +508,10 @@ pub fn render_chat(f: &mut Frame, area: Rect, state: &mut AppState) {
     for (idx, entry) in state.messages.iter().enumerate() {
         let content_hash = {
             let mut hasher = DefaultHasher::new();
-            (&entry.content,&entry.tool_output).hash(&mut hasher);
+            (&entry.content, &entry.tool_output).hash(&mut hasher);
             hasher.finish()
         };
-        let is_streaming_last = idx == last_idx
-            && state.is_generating
-            && entry.role == "assistant";
+        let is_streaming_last = idx == last_idx && state.is_generating && entry.role == "assistant";
         let collapsed = if is_streaming_last {
             // The message currently being streamed must stay expanded
             // so the user can watch it arrive.
@@ -609,8 +617,7 @@ pub fn render_chat(f: &mut Frame, area: Rect, state: &mut AppState) {
     if lines_remaining > 0 {
         lines.push(Line::from(vec![Span::styled(
             format!(
-                " ↓ {} more lines below (↓/PgDn to scroll, ↑/PgUp for history) ",
-                lines_remaining
+                " ↓ {lines_remaining} more lines below (↓/PgDn to scroll, ↑/PgUp for history) "
             ),
             Style::default().fg(Color::DarkGray),
         )]));
@@ -793,7 +800,13 @@ mod tests {
         assert!(header.starts_with("09:14 ▼ "));
         assert!(header.contains("git status"));
 
-        let footer: String = lines.last().unwrap().spans.iter().map(|s| s.content.as_ref()).collect();
+        let footer: String = lines
+            .last()
+            .unwrap()
+            .spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect();
         assert!(footer.contains("Enter or Tab to collapse"));
         assert!(footer.contains("Ctrl+T to toggle all"));
     }
@@ -814,10 +827,14 @@ mod tests {
         let lines = tool_card_lines(&e, None, false, "needle", 80);
         assert!(lines.len() >= 2);
         let body_line = &lines[1];
-        let found = body_line.spans.iter().any(|s| {
-            s.content == "needle" && s.style.bg == Some(Color::Yellow)
-        });
-        assert!(found, "search hit 'needle' should keep yellow highlight background");
+        let found = body_line
+            .spans
+            .iter()
+            .any(|s| s.content == "needle" && s.style.bg == Some(Color::Yellow));
+        assert!(
+            found,
+            "search hit 'needle' should keep yellow highlight background"
+        );
     }
 
     #[test]
@@ -828,8 +845,12 @@ mod tests {
         });
         state.tool_collapsed = true;
         state.last_content_width = 80;
-        state.messages.push(entry_at("assistant", "check the tool output", 9, 14));
-        state.messages.push(tool_entry("tool summary", "hidden needle value", 9, 14));
+        state
+            .messages
+            .push(entry_at("assistant", "check the tool output", 9, 14));
+        state
+            .messages
+            .push(tool_entry("tool summary", "hidden needle value", 9, 14));
         state.search_query = "needle".into();
         state.search_matches = crate::tui::search::compute_matches(&state.messages, "needle");
         state.search_match_idx = 0;
@@ -843,7 +864,10 @@ mod tests {
         // The assistant message contributes a header + wrapped body + blank,
         // then the tool entry header is after that. The returned offset should
         // point at the tool body, not the collapsed summary header.
-        assert!(offset > 0, "scroll offset should be past the assistant message");
+        assert!(
+            offset > 0,
+            "scroll offset should be past the assistant message"
+        );
     }
 
     #[test]
@@ -854,7 +878,9 @@ mod tests {
         });
         state.tool_collapsed = true;
         state.last_content_width = 80;
-        state.messages.push(tool_entry("needle summary", "hidden body", 9, 14));
+        state
+            .messages
+            .push(tool_entry("needle summary", "hidden body", 9, 14));
         state.search_query = "needle".into();
         state.search_matches = crate::tui::search::compute_matches(&state.messages, "needle");
         state.search_match_idx = 0;
@@ -892,13 +918,11 @@ mod tests {
         let content_row = buffer_cell_text(&buffer, 1);
         assert!(
             !content_row.contains("Connected"),
-            "connected state should not show a banner at the top, got: {:?}",
-            content_row
+            "connected state should not show a banner at the top, got: {content_row:?}"
         );
         assert!(
             content_row.contains("09:14"),
-            "first content row should be the message header with timestamp, got: {:?}",
-            content_row
+            "first content row should be the message header with timestamp, got: {content_row:?}"
         );
     }
 
@@ -911,8 +935,7 @@ mod tests {
         let content_row = buffer_cell_text(&buffer, 1);
         assert!(
             content_row.contains("Disconnected"),
-            "disconnected state should show the banner, got: {:?}",
-            content_row
+            "disconnected state should show the banner, got: {content_row:?}"
         );
     }
 
@@ -928,8 +951,7 @@ mod tests {
         let trimmed = content_row.trim();
         assert!(
             trimmed.is_empty() || !trimmed.contains("Connected"),
-            "empty connected panel should not contain a connected banner, got: {:?}",
-            trimmed
+            "empty connected panel should not contain a connected banner, got: {trimmed:?}"
         );
     }
 
@@ -952,7 +974,10 @@ mod tests {
         //   row 5: " he"
         let buffer_before = render_state(&mut state, 40, 10);
         let assistant_before = buffer_cell_text(&buffer_before, 5);
-        assert!(assistant_before.contains("he"), "initial assistant content missing: {:?}", assistant_before);
+        assert!(
+            assistant_before.contains("he"),
+            "initial assistant content missing: {assistant_before:?}"
+        );
 
         // Simulate a streaming token appended to the last assistant message.
         state.messages.last_mut().unwrap().content.push_str("llo");
@@ -961,8 +986,7 @@ mod tests {
         let assistant_after = buffer_cell_text(&buffer_after, 5);
         assert!(
             assistant_after.contains("hello"),
-            "streaming token should appear in the rendered assistant message, got: {:?}",
-            assistant_after
+            "streaming token should appear in the rendered assistant message, got: {assistant_after:?}"
         );
     }
 
@@ -972,31 +996,23 @@ mod tests {
             model: "test".into(),
             since: std::time::Instant::now(),
         });
-        state.messages.push(entry_at("user", "word ".repeat(20).trim(), 9, 14));
+        state
+            .messages
+            .push(entry_at("user", "word ".repeat(20).trim(), 9, 14));
         state.messages.push(entry_at("assistant", "ok", 9, 14));
 
         // Count rows between the user header and the assistant header
         // that contain the repeated "word" content.
         let buffer_narrow = render_state(&mut state, 20, 30);
-        let narrow_body_rows = count_rows_between_headers(&buffer_narrow,
-            "USER",
-            "ASSISTANT",
-            "word",
-        );
+        let narrow_body_rows =
+            count_rows_between_headers(&buffer_narrow, "USER", "ASSISTANT", "word");
 
         let buffer_wide = render_state(&mut state, 80, 30);
-        let wide_body_rows = count_rows_between_headers(
-            &buffer_wide,
-            "USER",
-            "ASSISTANT",
-            "word",
-        );
+        let wide_body_rows = count_rows_between_headers(&buffer_wide, "USER", "ASSISTANT", "word");
 
         assert!(
             narrow_body_rows > wide_body_rows,
-            "narrow width should produce more body rows: narrow={} wide={}",
-            narrow_body_rows,
-            wide_body_rows
+            "narrow width should produce more body rows: narrow={narrow_body_rows} wide={wide_body_rows}"
         );
     }
 
@@ -1033,7 +1049,9 @@ mod tests {
             model: "test".into(),
             since: std::time::Instant::now(),
         });
-        state.messages.push(entry_at("user", "needle in haystack", 9, 14));
+        state
+            .messages
+            .push(entry_at("user", "needle in haystack", 9, 14));
         state.messages.push(entry_at("assistant", "ok", 9, 14));
 
         // Render without query first.
@@ -1051,7 +1069,10 @@ mod tests {
                 found_highlight = true;
             }
         }
-        assert!(found_highlight, "search query should render the matching line");
+        assert!(
+            found_highlight,
+            "search query should render the matching line"
+        );
     }
 
     #[test]
@@ -1060,7 +1081,9 @@ mod tests {
             model: "test".into(),
             since: std::time::Instant::now(),
         });
-        state.messages.push(ConversationEntry::tool("git status", "line1\nline2"));
+        state
+            .messages
+            .push(ConversationEntry::tool("git status", "line1\nline2"));
 
         // Default: tool_collapsed is true, so the entry renders as one line.
         let buffer_collapsed = render_state(&mut state, 40, 10);
@@ -1071,7 +1094,10 @@ mod tests {
                 collapsed_rows += 1;
             }
         }
-        assert_eq!(collapsed_rows, 1, "collapsed tool card should occupy one content row");
+        assert_eq!(
+            collapsed_rows, 1,
+            "collapsed tool card should occupy one content row"
+        );
 
         // Expand it.
         state.expanded_tools.insert(0);
@@ -1104,21 +1130,18 @@ mod tests {
         let header = buffer_cell_text(&buffer, 1);
         assert!(
             header.contains("ASSISTANT"),
-            "collapsed assistant should still show header, got: {:?}",
-            header
+            "collapsed assistant should still show header, got: {header:?}"
         );
         assert!(
             header.contains("▶"),
-            "collapsed assistant header should show collapsed chevron, got: {:?}",
-            header
+            "collapsed assistant header should show collapsed chevron, got: {header:?}"
         );
 
         for row in 2..buffer.area.height - 1 {
             let text = buffer_cell_text(&buffer, row);
             assert!(
                 !text.contains("this is a long reply"),
-                "collapsed assistant should not render body, got: {:?}",
-                text
+                "collapsed assistant should not render body, got: {text:?}"
             );
         }
     }
@@ -1137,14 +1160,16 @@ mod tests {
         let buffer = render_state(&mut state, 40, 10);
         let header = buffer_cell_text(&buffer, 1);
         assert!(header.contains("USER"), "collapsed user should show header");
-        assert!(header.contains("▶"), "collapsed user header should show chevron");
+        assert!(
+            header.contains("▶"),
+            "collapsed user header should show chevron"
+        );
 
         for row in 2..buffer.area.height - 1 {
             let text = buffer_cell_text(&buffer, row);
             assert!(
                 !text.contains("a very long user question"),
-                "collapsed user should not render body, got: {:?}",
-                text
+                "collapsed user should not render body, got: {text:?}"
             );
         }
     }
@@ -1156,9 +1181,7 @@ mod tests {
             since: std::time::Instant::now(),
         });
         state.messages.push(entry_at("user", "hi", 9, 14));
-        state
-            .messages
-            .push(entry_at("assistant", "typing", 9, 14));
+        state.messages.push(entry_at("assistant", "typing", 9, 14));
         state.is_generating = true;
         // Even if the user collapsed the last assistant message while it
         // is streaming, it must stay expanded so tokens remain visible.
@@ -1193,8 +1216,7 @@ mod tests {
             let text = buffer_cell_text(&buffer, row);
             assert!(
                 !text.contains("THINKING") && !text.contains("step 1"),
-                "thinking block should be hidden when panel flag is false, got: {:?}",
-                text
+                "thinking block should be hidden when panel flag is false, got: {text:?}"
             );
         }
     }

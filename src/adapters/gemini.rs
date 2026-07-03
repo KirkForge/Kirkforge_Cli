@@ -90,10 +90,14 @@ impl ModelAdapter for GeminiAdapter {
                     Ok(r) => {
                         let s = r.status().as_u16();
                         if attempt < 3 && (s == 429 || s == 503) {
-                            tracing::warn!(attempt, status = s, "model returned transient error, retrying");
-                            tokio::time::sleep(
-                                std::time::Duration::from_secs(1u64 << (attempt - 1)),
-                            )
+                            tracing::warn!(
+                                attempt,
+                                status = s,
+                                "model returned transient error, retrying"
+                            );
+                            tokio::time::sleep(std::time::Duration::from_secs(
+                                1u64 << (attempt - 1),
+                            ))
                             .await;
                         } else {
                             break r.error_for_status()?;

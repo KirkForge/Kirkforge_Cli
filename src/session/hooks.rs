@@ -159,7 +159,7 @@ impl HookRunner {
 
         // Built-in hook.
         if self.available.contains(event_name) {
-            let script_path = self.hooks_dir.join(format!("{}.sh", event_name));
+            let script_path = self.hooks_dir.join(format!("{event_name}.sh"));
             self.spawn_hook_script(event_name, script_path, owned_vars.clone(), config.clone());
         }
 
@@ -186,7 +186,7 @@ impl HookRunner {
 
         // Built-in hook.
         if self.available.contains(event_name) {
-            let script_path = self.hooks_dir.join(format!("{}.sh", event_name));
+            let script_path = self.hooks_dir.join(format!("{event_name}.sh"));
             match run_hook_script(&script_path, &owned_vars, config).await {
                 Ok(decision) => decisions.push(decision),
                 Err(e) => {
@@ -313,7 +313,7 @@ async fn run_hook_script(
         &path_guard,
         config.bash_sandbox_workdir,
     ) {
-        return Err(format!("hook script blocked: {}", reason));
+        return Err(format!("hook script blocked: {reason}"));
     }
 
     let mut cmd = tokio::process::Command::new("bash");
@@ -440,8 +440,8 @@ async fn join_hook_drain(
 ) -> Result<(Vec<u8>, u64), String> {
     match handle.await {
         Ok(Ok(pair)) => Ok(pair),
-        Ok(Err(e)) => Err(format!("drain {}: {}", label, e)),
-        Err(e) => Err(format!("drain {} task panicked: {}", label, e)),
+        Ok(Err(e)) => Err(format!("drain {label}: {e}")),
+        Err(e) => Err(format!("drain {label} task panicked: {e}")),
     }
 }
 
@@ -458,7 +458,7 @@ mod tests {
     }
 
     fn write_hook(dir: &std::path::Path, name: &str, content: &str) {
-        std::fs::write(dir.join(format!("{}.sh", name)), content).unwrap();
+        std::fs::write(dir.join(format!("{name}.sh")), content).unwrap();
     }
 
     #[test]
@@ -532,7 +532,7 @@ mod tests {
         write_hook(
             &dir,
             "post-turn",
-            &format!("#!/bin/bash\necho \"$KF_EVENT\" > {}", marker_str),
+            &format!("#!/bin/bash\necho \"$KF_EVENT\" > {marker_str}"),
         );
         let runner = HookRunner::new(dir.clone());
 
@@ -569,10 +569,7 @@ mod tests {
         write_hook(
             &dir,
             "pre-tool-bash",
-            &format!(
-                "#!/bin/bash\necho \"$KF_TOOL_NAME,$KF_EVENT\" > {}",
-                marker_str
-            ),
+            &format!("#!/bin/bash\necho \"$KF_TOOL_NAME,$KF_EVENT\" > {marker_str}"),
         );
         let runner = HookRunner::new(dir.clone());
 
@@ -615,7 +612,7 @@ mod tests {
         write_hook(
             &dir,
             "slow-hook",
-            &format!("#!/bin/bash\nsh -c 'sleep 30; touch {}'", marker_str),
+            &format!("#!/bin/bash\nsh -c 'sleep 30; touch {marker_str}'"),
         );
         let runner = HookRunner::new(dir);
 
@@ -676,8 +673,7 @@ mod tests {
             .await;
         assert!(
             matches!(decision, HookDecision::Deny(ref r) if r.contains("blocked")),
-            "expected Deny with stderr reason, got {:?}",
-            decision
+            "expected Deny with stderr reason, got {decision:?}"
         );
     }
 
@@ -735,7 +731,7 @@ command = "hooks/post-turn.sh"
                 TrustPolicy::up_to(kirkforge_plugin::TrustTier::Shell),
             )
             .unwrap();
-        assert!(warnings.is_empty(), "{:?}", warnings);
+        assert!(warnings.is_empty(), "{warnings:?}");
 
         let (_tmp2, hooks_dir) = temp_hooks_dir();
         let mut runner = HookRunner::new(hooks_dir);

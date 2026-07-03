@@ -263,7 +263,7 @@ mod tests {
         let sessions_dir = dir.path().join("sessions");
         std::fs::create_dir_all(&sessions_dir).unwrap();
         for i in 0..10 {
-            let path = sessions_dir.join(format!("s{}.conv.ndjson", i));
+            let path = sessions_dir.join(format!("s{i}.conv.ndjson"));
             std::fs::write(&path, "").unwrap();
             // Stagger mtimes so the listing order is predictable.
             std::thread::sleep(Duration::from_millis(10));
@@ -271,8 +271,8 @@ mod tests {
 
         let mut state = DaemonState::new();
         for i in 0..10 {
-            let path = sessions_dir.join(format!("s{}.conv.ndjson", i));
-            state.touch(&format!("s{}", i), path);
+            let path = sessions_dir.join(format!("s{i}.conv.ndjson"));
+            state.touch(&format!("s{i}"), path);
         }
         assert_eq!(state.recent.len(), RECENT_SESSIONS_LIMIT);
         assert_eq!(state.recent[0].id, "s9");

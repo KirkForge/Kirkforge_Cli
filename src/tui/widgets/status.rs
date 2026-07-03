@@ -19,10 +19,10 @@ pub fn render_status(f: &mut Frame, area: Rect, state: &AppState) {
             Span::styled(" ⟳ Connecting... ", Style::default().fg(Color::Yellow))
         }
         ConnectionState::Connected { model, .. } => {
-            Span::styled(format!(" ◆ {} ", model), Style::default().fg(Color::Green))
+            Span::styled(format!(" ◆ {model} "), Style::default().fg(Color::Green))
         }
         ConnectionState::Error(e) => {
-            Span::styled(format!(" ✗ {} ", e), Style::default().fg(Color::Red))
+            Span::styled(format!(" ✗ {e} "), Style::default().fg(Color::Red))
         }
     };
 
@@ -36,7 +36,7 @@ pub fn render_status(f: &mut Frame, area: Rect, state: &AppState) {
     };
     let skill_count = state.skill_registry.len();
     let skills_str = if skill_count > 0 {
-        format!(" {}sk", skill_count)
+        format!(" {skill_count}sk")
     } else {
         String::new()
     };
@@ -67,7 +67,7 @@ pub fn render_status(f: &mut Frame, area: Rect, state: &AppState) {
         .unwrap_or(0);
     let sent_span: Span = if state.last_turn_prompt_tokens > 0 && max_ctx > 0 {
         let (text, color) = format_budget_indicator(state.last_turn_prompt_tokens, max_ctx);
-        Span::styled(format!("↑{} ", text), Style::default().fg(color))
+        Span::styled(format!("↑{text} "), Style::default().fg(color))
     } else {
         Span::styled(
             format!("↑{} ", format_token_count(state.tokens_sent)),
@@ -84,17 +84,14 @@ pub fn render_status(f: &mut Frame, area: Rect, state: &AppState) {
         Span::raw(String::new())
     } else {
         Span::styled(
-            format!("{} ", skills_str),
+            format!("{skills_str} "),
             Style::default().fg(Color::DarkGray),
         )
     };
     let plugin_span: Span = if plugin_str.is_empty() {
         Span::raw(String::new())
     } else {
-        Span::styled(
-            format!("{} ", plugin_str),
-            Style::default().fg(Color::Yellow),
-        )
+        Span::styled(format!("{plugin_str} "), Style::default().fg(Color::Yellow))
     };
 
     // ── Sandbox indicator (v1.2-p12 follow-up) ─────────────────────

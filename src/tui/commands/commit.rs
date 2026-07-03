@@ -229,8 +229,7 @@ mod tests {
         // Should mention pre-commit review in any git repo (or git status failure).
         assert!(
             out.contains("Pre-commit review") || out.contains("Cannot run git status"),
-            "got: {}",
-            out
+            "got: {out}"
         );
     }
 
@@ -240,8 +239,7 @@ mod tests {
         let out = handle_commit_command("test message", tmp.path(), &default_config()).await;
         assert!(
             out.contains("Cannot run git status") || out.contains("git status failed"),
-            "got: {}",
-            out
+            "got: {out}"
         );
     }
 

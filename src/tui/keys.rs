@@ -36,11 +36,11 @@ fn split_bang_summary(formatted: &str) -> (String, String) {
 
     let summary = if rest.is_empty() {
         // Two-line output (no stdout/stderr) — just show both lines.
-        format!("{}\n{}", first, second)
+        format!("{first}\n{second}")
     } else {
         // Multi-line output — summary is the first two lines, full
         // output is everything.
-        format!("{}\n{}", first, second)
+        format!("{first}\n{second}")
     };
 
     (summary, formatted.to_string())
@@ -64,10 +64,7 @@ fn delete_word_backward(input: &str, cursor_byte: usize) -> (String, usize) {
         return (input.to_string(), 0);
     }
 
-    let ends_with_ws = before
-        .chars()
-        .last()
-        .is_some_and(|c| c.is_whitespace());
+    let ends_with_ws = before.chars().last().is_some_and(|c| c.is_whitespace());
 
     let new_byte = if ends_with_ws {
         // Cursor is in a trailing whitespace run: kill back to the previous
@@ -95,9 +92,7 @@ fn delete_word_backward(input: &str, cursor_byte: usize) -> (String, usize) {
                     return (input[..pos].to_string(), input[..pos].chars().count());
                 };
                 let word_start = pos + ch.len_utf8();
-                let has_prev_word = before[..word_start]
-                    .chars()
-                    .any(|c| !c.is_whitespace());
+                let has_prev_word = before[..word_start].chars().any(|c| !c.is_whitespace());
                 if has_prev_word {
                     before[..word_start]
                         .rfind(|c: char| !c.is_whitespace())
@@ -137,12 +132,8 @@ enum SearchDirection {
 /// `Ctrl+n` are left for regular key handling.
 fn search_nav_direction(key: &KeyEvent) -> Option<SearchDirection> {
     match key.code {
-        KeyCode::Char('n') if key.modifiers == KeyModifiers::NONE => {
-            Some(SearchDirection::Next)
-        }
-        KeyCode::Char('N') if key.modifiers == KeyModifiers::SHIFT => {
-            Some(SearchDirection::Prev)
-        }
+        KeyCode::Char('n') if key.modifiers == KeyModifiers::NONE => Some(SearchDirection::Next),
+        KeyCode::Char('N') if key.modifiers == KeyModifiers::SHIFT => Some(SearchDirection::Prev),
         _ => None,
     }
 }
@@ -189,7 +180,7 @@ pub async fn handle_input_key(
                     Err(e) => {
                         state.messages.push(ConversationEntry::new(
                             "system",
-                            format!("Error resuming session: {}", e),
+                            format!("Error resuming session: {e}"),
                         ));
                     }
                 }
@@ -202,9 +193,7 @@ pub async fn handle_input_key(
             return Ok(());
         }
         // Ctrl+C always exits, even from the picker.
-        if key.code == KeyCode::Char('c')
-            && key.modifiers.contains(KeyModifiers::CONTROL)
-        {
+        if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
             state.should_exit = true;
             return Ok(());
         }
@@ -290,12 +279,10 @@ pub async fn handle_input_key(
                     state.search_matches.len(),
                 ) {
                     state.search_match_idx = idx;
-                    if let Some(offset) =
-                        crate::tui::widgets::chat::scroll_offset_for_search_match(
-                            state,
-                            state.last_content_width,
-                        )
-                    {
+                    if let Some(offset) = crate::tui::widgets::chat::scroll_offset_for_search_match(
+                        state,
+                        state.last_content_width,
+                    ) {
                         state.auto_scroll = false;
                         state.scroll_offset = offset;
                     }
@@ -308,12 +295,10 @@ pub async fn handle_input_key(
                     state.search_matches.len(),
                 ) {
                     state.search_match_idx = idx;
-                    if let Some(offset) =
-                        crate::tui::widgets::chat::scroll_offset_for_search_match(
-                            state,
-                            state.last_content_width,
-                        )
-                    {
+                    if let Some(offset) = crate::tui::widgets::chat::scroll_offset_for_search_match(
+                        state,
+                        state.last_content_width,
+                    ) {
                         state.auto_scroll = false;
                         state.scroll_offset = offset;
                     }
@@ -344,9 +329,9 @@ pub async fn handle_input_key(
                 let line = match last {
                     Some(text) if !text.is_empty() => {
                         match crate::tui::clipboard::copy_to_clipboard(&text) {
-                            Ok(n) => format!("📋 Copied {} chars to clipboard", n),
+                            Ok(n) => format!("📋 Copied {n} chars to clipboard"),
                             Err(e) => {
-                                format!("📋 Clipboard error: {}", e)
+                                format!("📋 Clipboard error: {e}")
                             }
                         }
                     }
@@ -385,7 +370,7 @@ pub async fn handle_input_key(
                             blocks.len(),
                             n
                         ),
-                        Err(e) => format!("📋 Clipboard error: {}", e),
+                        Err(e) => format!("📋 Clipboard error: {e}"),
                     }
                 };
                 state.messages.push(ConversationEntry::new("system", line));
@@ -491,12 +476,10 @@ pub async fn handle_input_key(
                         } else {
                             state.expanded_tools.insert(last_idx);
                         }
+                    } else if state.collapsed_messages.contains(&last_idx) {
+                        state.collapsed_messages.remove(&last_idx);
                     } else {
-                        if state.collapsed_messages.contains(&last_idx) {
-                            state.collapsed_messages.remove(&last_idx);
-                        } else {
-                            state.collapsed_messages.insert(last_idx);
-                        }
+                        state.collapsed_messages.insert(last_idx);
                     }
                     return Ok(());
                 }
@@ -590,12 +573,10 @@ pub async fn handle_input_key(
                         } else {
                             state.expanded_tools.insert(last_idx);
                         }
+                    } else if state.collapsed_messages.contains(&last_idx) {
+                        state.collapsed_messages.remove(&last_idx);
                     } else {
-                        if state.collapsed_messages.contains(&last_idx) {
-                            state.collapsed_messages.remove(&last_idx);
-                        } else {
-                            state.collapsed_messages.insert(last_idx);
-                        }
+                        state.collapsed_messages.insert(last_idx);
                     }
                     return Ok(());
                 }
@@ -658,7 +639,7 @@ pub async fn handle_input_key(
                                             .meta
                                             .model
                                             .as_ref()
-                                            .map(|m| format!(" [{}]", m))
+                                            .map(|m| format!(" [{m}]"))
                                             .unwrap_or_default(),
                                     ));
                                 }
@@ -862,10 +843,7 @@ pub async fn handle_input_key(
                     } else {
                         state.messages.push(ConversationEntry::new(
                             "system",
-                            format!(
-                                "Unknown command: {}\nType /help for available commands.",
-                                cmd
-                            ),
+                            format!("Unknown command: {cmd}\nType /help for available commands."),
                         ));
                     }
                 } else {
@@ -894,7 +872,7 @@ pub async fn handle_input_key(
                     let prompt = if rendered_block.is_empty() {
                         cleaned
                     } else {
-                        format!("{}{}", cleaned, rendered_block)
+                        format!("{cleaned}{rendered_block}")
                     };
                     if input_tx.send(prompt).is_err() {
                         // Same pattern as the skill branch — the
@@ -945,8 +923,8 @@ mod tests {
 
     fn check(input: &str, cursor_byte: usize, expected_input: &str, expected_cursor: usize) {
         let (got_input, got_cursor) = delete_word_backward(input, cursor_byte);
-        assert_eq!(got_input, expected_input, "input mismatch for {:?}", input);
-        assert_eq!(got_cursor, expected_cursor, "cursor mismatch for {:?}", input);
+        assert_eq!(got_input, expected_input, "input mismatch for {input:?}");
+        assert_eq!(got_cursor, expected_cursor, "cursor mismatch for {input:?}");
     }
 
     #[test]
@@ -1007,8 +985,7 @@ mod tests {
     #[test]
     fn search_nav_direction_plain_n_is_next() {
         assert_eq!(
-            search_nav_direction(&key('n', KeyModifiers::NONE)
-            ),
+            search_nav_direction(&key('n', KeyModifiers::NONE)),
             Some(SearchDirection::Next)
         );
     }
@@ -1016,27 +993,19 @@ mod tests {
     #[test]
     fn search_nav_direction_shift_n_is_prev() {
         assert_eq!(
-            search_nav_direction(
-                &key('N', KeyModifiers::SHIFT)
-            ),
+            search_nav_direction(&key('N', KeyModifiers::SHIFT)),
             Some(SearchDirection::Prev)
         );
     }
 
     #[test]
     fn search_nav_direction_ignores_other_keys() {
-        assert_eq!(
-            search_nav_direction(&key('x', KeyModifiers::NONE)),
-            None
-        );
+        assert_eq!(search_nav_direction(&key('x', KeyModifiers::NONE)), None);
     }
 
     #[test]
     fn search_nav_direction_ignores_modified_n() {
-        assert_eq!(
-            search_nav_direction(&key('n', KeyModifiers::CONTROL)),
-            None
-        );
+        assert_eq!(search_nav_direction(&key('n', KeyModifiers::CONTROL)), None);
         assert_eq!(
             search_nav_direction(&key('N', KeyModifiers::CONTROL | KeyModifiers::SHIFT)),
             None

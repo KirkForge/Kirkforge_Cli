@@ -243,7 +243,7 @@ impl MemoryStore {
             keys.sort();
             for k in keys {
                 if let Some(v) = fact.metadata.get(k) {
-                    metadata_block.push_str(&format!("  {}: {}\n", k, v));
+                    metadata_block.push_str(&format!("  {k}: {v}\n"));
                 }
             }
         }
@@ -473,8 +473,8 @@ mod tests {
         assert_eq!(facts[1].name, "user");
 
         let block = store.to_prompt_block();
-        assert!(block.contains("[project]"), "block: {}", block);
-        assert!(block.contains("user"), "block: {}", block);
+        assert!(block.contains("[project]"), "block: {block}");
+        assert!(block.contains("user"), "block: {block}");
     }
 
     #[test]
@@ -498,7 +498,7 @@ mod tests {
         assert_eq!(map.get("name").unwrap(), "test");
         assert_eq!(map.get("description").unwrap(), "desc");
         let meta_val = map.get("metadata").expect("metadata key should exist");
-        assert_eq!(meta_val, "type: user", "metadata value mismatch: {:?}", map);
+        assert_eq!(meta_val, "type: user", "metadata value mismatch: {map:?}");
         assert_eq!(body.trim(), "body");
     }
 

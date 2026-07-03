@@ -321,11 +321,11 @@ impl UndoStack {
     }
 
     fn snapshot_path(&self, seq: u64) -> PathBuf {
-        self.dir.join(format!("{:08}.snap", seq))
+        self.dir.join(format!("{seq:08}.snap"))
     }
 
     fn meta_path(&self, seq: u64) -> PathBuf {
-        self.dir.join(format!("{:08}.meta.json", seq))
+        self.dir.join(format!("{seq:08}.meta.json"))
     }
 }
 
@@ -452,7 +452,7 @@ mod tests {
         let mut stack = fresh_stack();
         let target = env::temp_dir().join("kirkforge_undo_trim.txt");
         for i in 0..(MAX_ENTRIES + 1) {
-            std::fs::write(&target, format!("v{}", i)).unwrap();
+            std::fs::write(&target, format!("v{i}")).unwrap();
             let prev = std::fs::read(&target).unwrap();
             stack
                 .push(UndoKind::Edit, &target, true, &prev)
@@ -467,7 +467,7 @@ mod tests {
         let mut stack = fresh_stack();
         let target = env::temp_dir().join("kirkforge_undo_list.txt");
         for i in 0..3 {
-            std::fs::write(&target, format!("v{}", i)).unwrap();
+            std::fs::write(&target, format!("v{i}")).unwrap();
             let prev = std::fs::read(&target).unwrap();
             stack.push(UndoKind::Edit, &target, true, &prev).unwrap();
         }

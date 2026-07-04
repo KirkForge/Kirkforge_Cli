@@ -444,6 +444,7 @@ pub fn verifier_event_kinds(verifier_name: &str) -> Vec<EventKind> {
 mod tests {
     use super::*;
     use crate::session::event_bus::EditEvent;
+    use crate::shared::test_util::remove_test_file;
 
     struct MockVerifier {
         name: String,
@@ -634,7 +635,7 @@ mod tests {
         assert!(apply_fix(&fix, &crate::session::access::PathGuard::default()).await);
         let content = std::fs::read_to_string(&path).unwrap();
         assert_eq!(content, "let _x = 1;");
-        let _ = std::fs::remove_file(&path);
+        remove_test_file(&path);
     }
 
     #[tokio::test]
@@ -663,7 +664,7 @@ mod tests {
             severity: "error".into(),
         };
         assert!(!apply_fix(&fix, &crate::session::access::PathGuard::default()).await);
-        let _ = std::fs::remove_file(&path);
+        remove_test_file(&path);
     }
 
     #[tokio::test]
@@ -680,7 +681,7 @@ mod tests {
             severity: "warning".into(),
         };
         assert!(!apply_fix(&fix, &crate::session::access::PathGuard::default()).await);
-        let _ = std::fs::remove_file(&path);
+        remove_test_file(&path);
     }
 
     #[tokio::test]
@@ -701,7 +702,7 @@ mod tests {
             severity: "warning".into(),
         };
         assert!(!apply_fix(&fix, &guard).await);
-        let _ = std::fs::remove_file(&path);
+        remove_test_file(&path);
     }
 
     #[tokio::test]
@@ -810,7 +811,7 @@ mod tests {
         let content = std::fs::read_to_string(&path).unwrap();
         assert_eq!(content, "let _x = 1;");
 
-        let _ = std::fs::remove_file(&path);
+        remove_test_file(&path);
     }
 
     #[tokio::test]

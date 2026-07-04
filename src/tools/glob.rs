@@ -42,9 +42,7 @@ impl Tool for Glob {
         let pattern = match args.get("pattern").and_then(|p| p.as_str()) {
             Some(p) => p.to_string(),
             None => {
-                return ToolOutcome::Failure(ToolError::invalid_args(
-                    "Missing 'pattern' argument",
-                ));
+                return ToolOutcome::Failure(ToolError::invalid_args("Missing 'pattern' argument"));
             }
         };
 

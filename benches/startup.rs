@@ -6,7 +6,12 @@ use std::time::Instant;
 #[derive(Parser)]
 #[command(name = "kirkforge")]
 struct Cli {
-    #[arg(long, default_value = "warn", env = "KIRKFORGE_LOG_LEVEL", global = true)]
+    #[arg(
+        long,
+        default_value = "warn",
+        env = "KIRKFORGE_LOG_LEVEL",
+        global = true
+    )]
     _log_level: String,
 
     #[command(subcommand)]

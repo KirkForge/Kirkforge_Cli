@@ -557,6 +557,7 @@ pub fn access_from_config(config: &crate::shared::Config) -> (DenyList, PathGuar
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shared::test_util::remove_test_file;
 
     // ── DenyList ────────────────────────────────────────────────────
 
@@ -666,9 +667,9 @@ mod tests {
         };
         // This writes to tmp so the path exists for the read check
         let tmp = std::env::temp_dir().join(".kirkforge_test_dotfile");
-        let _ = std::fs::write(&tmp, "test");
+        std::fs::write(&tmp, "test").unwrap();
         let result = guard.check_read(&tmp);
-        let _ = std::fs::remove_file(&tmp);
+        remove_test_file(&tmp);
         assert!(matches!(result, GuardVerdict::Allowed(_)));
     }
 
@@ -678,7 +679,7 @@ mod tests {
         let tmp = std::env::temp_dir().join("kirkforge_test_normal.txt");
         std::fs::write(&tmp, "hello").unwrap();
         let result = guard.check_read(&tmp);
-        let _ = std::fs::remove_file(&tmp);
+        remove_test_file(&tmp);
         assert!(matches!(result, GuardVerdict::Allowed(_)));
     }
 
@@ -687,12 +688,12 @@ mod tests {
         let guard = PathGuard::default();
         let tmp = std::env::temp_dir().join("kirkforge_new_file_test.txt");
         // Should not exist for this test
-        let _ = std::fs::remove_file(&tmp);
+        remove_test_file(&tmp);
         let result = guard.check_write(&tmp);
         // Allowed since it's in tmp (no sandbox, no allow list restrictions)
         assert!(matches!(result, GuardVerdict::Allowed(_)));
         // Cleanup
-        let _ = std::fs::remove_file(&tmp);
+        remove_test_file(&tmp);
     }
 
     #[test]
@@ -806,9 +807,9 @@ mod tests {
         );
         // Writes to /tmp are allowed (no sandbox, no allowlist blocking it).
         let tmp = std::env::temp_dir().join("kirkforge_default_failopen.txt");
-        let _ = std::fs::remove_file(&tmp);
+        remove_test_file(&tmp);
         let result = guard.check_write(&tmp);
-        let _ = std::fs::remove_file(&tmp);
+        remove_test_file(&tmp);
         assert!(
             matches!(result, GuardVerdict::Allowed(_)),
             "default PathGuard allows writes to /tmp; if this changes, the \

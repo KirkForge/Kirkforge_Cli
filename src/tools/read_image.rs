@@ -106,9 +106,7 @@ impl Tool for ReadImage {
         let path = match args.get("path").and_then(|p| p.as_str()) {
             Some(p) => PathBuf::from(shellexpand::tilde(p).as_ref()),
             None => {
-                return ToolOutcome::Failure(ToolError::invalid_args(
-                    "Missing 'path' argument",
-                ));
+                return ToolOutcome::Failure(ToolError::invalid_args("Missing 'path' argument"));
             }
         };
 
@@ -166,7 +164,9 @@ mod tests {
         let p = dir.path().join("shot.png");
         std::fs::write(&p, PNG_MAGIC).unwrap();
 
-        let out = ReadImage.run(&ctx(), make_args(&p.display().to_string())).await;
+        let out = ReadImage
+            .run(&ctx(), make_args(&p.display().to_string()))
+            .await;
         match out {
             ToolOutcome::Image {
                 path,
@@ -189,7 +189,9 @@ mod tests {
         // SOI marker for JPEG
         std::fs::write(&p, [0xFF, 0xD8, 0xFF]).unwrap();
 
-        let out = ReadImage.run(&ctx(), make_args(&p.display().to_string())).await;
+        let out = ReadImage
+            .run(&ctx(), make_args(&p.display().to_string()))
+            .await;
         assert!(matches!(out, ToolOutcome::Image { ref mime, .. } if mime == "image/jpeg"));
     }
 
@@ -199,8 +201,13 @@ mod tests {
         let p = dir.path().join("mystery.xyz");
         std::fs::write(&p, b"some bytes").unwrap();
 
-        let out = ReadImage.run(&ctx(), make_args(&p.display().to_string())).await;
-        assert!(matches!(out, ToolOutcome::Failure(ToolError::InvalidArgs { .. })));
+        let out = ReadImage
+            .run(&ctx(), make_args(&p.display().to_string()))
+            .await;
+        assert!(matches!(
+            out,
+            ToolOutcome::Failure(ToolError::InvalidArgs { .. })
+        ));
     }
 
     #[tokio::test]
@@ -210,7 +217,9 @@ mod tests {
         let p = dir.path().join("actually_jpeg.png");
         std::fs::write(&p, [0xFF, 0xD8, 0xFF, 0xE0]).unwrap();
 
-        let out = ReadImage.run(&ctx(), make_args(&p.display().to_string())).await;
+        let out = ReadImage
+            .run(&ctx(), make_args(&p.display().to_string()))
+            .await;
         assert!(matches!(out, ToolOutcome::Image { ref mime, .. } if mime == "image/jpeg"));
     }
 
@@ -220,7 +229,9 @@ mod tests {
         let p = dir.path().join("anim.gif");
         std::fs::write(&p, b"GIF89a\x01\x00").unwrap();
 
-        let out = ReadImage.run(&ctx(), make_args(&p.display().to_string())).await;
+        let out = ReadImage
+            .run(&ctx(), make_args(&p.display().to_string()))
+            .await;
         assert!(matches!(out, ToolOutcome::Image { ref mime, .. } if mime == "image/gif"));
     }
 
@@ -237,7 +248,9 @@ mod tests {
             .collect();
         std::fs::write(&p, bytes).unwrap();
 
-        let out = ReadImage.run(&ctx(), make_args(&p.display().to_string())).await;
+        let out = ReadImage
+            .run(&ctx(), make_args(&p.display().to_string()))
+            .await;
         assert!(matches!(out, ToolOutcome::Image { ref mime, .. } if mime == "image/webp"));
     }
 
@@ -247,7 +260,9 @@ mod tests {
         let p = dir.path().join("shot.bmp");
         std::fs::write(&p, b"BM\x00\x00\x00\x00").unwrap();
 
-        let out = ReadImage.run(&ctx(), make_args(&p.display().to_string())).await;
+        let out = ReadImage
+            .run(&ctx(), make_args(&p.display().to_string()))
+            .await;
         assert!(matches!(out, ToolOutcome::Image { ref mime, .. } if mime == "image/bmp"));
     }
 
@@ -257,7 +272,9 @@ mod tests {
         let p = dir.path().join("icon.svg");
         std::fs::write(&p, b"<?xml version=\"1.0\"?><svg></svg>").unwrap();
 
-        let out = ReadImage.run(&ctx(), make_args(&p.display().to_string())).await;
+        let out = ReadImage
+            .run(&ctx(), make_args(&p.display().to_string()))
+            .await;
         assert!(matches!(out, ToolOutcome::Image { ref mime, .. } if mime == "image/svg+xml"));
     }
 
@@ -272,7 +289,9 @@ mod tests {
             .collect();
         std::fs::write(&p, bytes).unwrap();
 
-        let out = ReadImage.run(&ctx(), make_args(&p.display().to_string())).await;
+        let out = ReadImage
+            .run(&ctx(), make_args(&p.display().to_string()))
+            .await;
         assert!(matches!(out, ToolOutcome::Image { ref mime, .. } if mime == "image/svg+xml"));
     }
 
@@ -287,7 +306,9 @@ mod tests {
             .collect();
         std::fs::write(&p, bytes).unwrap();
 
-        let out = ReadImage.run(&ctx(), make_args(&p.display().to_string())).await;
+        let out = ReadImage
+            .run(&ctx(), make_args(&p.display().to_string()))
+            .await;
         assert!(matches!(out, ToolOutcome::Image { ref mime, .. } if mime == "image/png"));
     }
 
@@ -302,7 +323,9 @@ mod tests {
             .collect();
         std::fs::write(&p, bytes).unwrap();
 
-        let out = ReadImage.run(&ctx(), make_args(&p.display().to_string())).await;
+        let out = ReadImage
+            .run(&ctx(), make_args(&p.display().to_string()))
+            .await;
         assert!(matches!(out, ToolOutcome::Image { ref mime, .. } if mime == "image/jpeg"));
     }
 
@@ -318,14 +341,19 @@ mod tests {
             .collect();
         std::fs::write(&p, bytes).unwrap();
 
-        let out = ReadImage.run(&ctx(), make_args(&p.display().to_string())).await;
+        let out = ReadImage
+            .run(&ctx(), make_args(&p.display().to_string()))
+            .await;
         assert!(matches!(out, ToolOutcome::Image { ref mime, .. } if mime == "image/gif"));
     }
 
     #[tokio::test]
     async fn read_image_missing_path_returns_error() {
         let out = ReadImage.run(&ctx(), serde_json::json!({})).await;
-        assert!(matches!(out, ToolOutcome::Failure(ToolError::InvalidArgs { .. })));
+        assert!(matches!(
+            out,
+            ToolOutcome::Failure(ToolError::InvalidArgs { .. })
+        ));
     }
 
     #[tokio::test]
@@ -333,6 +361,9 @@ mod tests {
         let out = ReadImage
             .run(&ctx(), make_args("/nonexistent/path/to/file.png"))
             .await;
-        assert!(matches!(out, ToolOutcome::Failure(ToolError::Internal { .. })));
+        assert!(matches!(
+            out,
+            ToolOutcome::Failure(ToolError::Internal { .. })
+        ));
     }
 }

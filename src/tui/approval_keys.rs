@@ -17,6 +17,7 @@
 //! the formatted result into the chat. No executor round trip.
 
 use crate::session::executor::ApprovalResponse;
+use crate::shared::permission::push_rule_unique;
 use crate::tui::app::{AppState, ConversationEntry};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -206,7 +207,9 @@ pub fn handle_approval_key(key: KeyEvent, state: &mut AppState) {
                 push_rule_unique(&mut cfg.permission_rules, rule);
             }
             let cfg = crate::shared::read_shared_config(&state.config);
-            let _ = crate::session::config::save_config(&cfg);
+            if let Err(e) = crate::session::config::save_config(&cfg) {
+                tracing::warn!(error = %e, "Failed to save auto-approve rule to config");
+            }
         }
         // The user just decided — clear the scroll state so the next
         // approval (if any) starts fresh at the top.
@@ -248,22 +251,6 @@ fn deny_pending_approval_and_exit(
         }
     }
     state.should_exit = true;
-}
-
-/// Push a permission rule into a `Vec<PermissionRule>`, deduplicating
-/// against an existing identical rule by `(tool, key, pattern)`. The
-/// action of the existing rule is preserved. Mirrors
-/// `executor::push_rule_unique` — keep them in sync.
-fn push_rule_unique(
-    rules: &mut Vec<crate::shared::permission::PermissionRule>,
-    new_rule: crate::shared::permission::PermissionRule,
-) {
-    let duplicate = rules
-        .iter()
-        .any(|r| r.tool == new_rule.tool && r.key == new_rule.key && r.pattern == new_rule.pattern);
-    if !duplicate {
-        rules.push(new_rule);
-    }
 }
 
 #[cfg(test)]

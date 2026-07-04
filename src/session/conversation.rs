@@ -129,7 +129,15 @@ impl ConversationLog {
             checkpoints.sort();
             while checkpoints.len() > MAX_CHECKPOINTS {
                 let oldest = checkpoints.remove(0);
-                let _ = std::fs::remove_file(&oldest);
+                if let Err(e) = std::fs::remove_file(&oldest) {
+                    if e.kind() != std::io::ErrorKind::NotFound {
+                        tracing::warn!(
+                            error = %e,
+                            path = %oldest.display(),
+                            "Failed to prune old conversation checkpoint"
+                        );
+                    }
+                }
             }
         }
 
@@ -384,7 +392,9 @@ mod tests {
             .filter(|p| {
                 p.file_name()
                     .and_then(|f| f.to_str())
-                    .map(|f| f.starts_with("session.conv.ndjson.checkpoint-") && f.ends_with(".ndjson"))
+                    .map(|f| {
+                        f.starts_with("session.conv.ndjson.checkpoint-") && f.ends_with(".ndjson")
+                    })
                     .unwrap_or(false)
             })
             .collect();

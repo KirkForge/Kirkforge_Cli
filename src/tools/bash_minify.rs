@@ -479,6 +479,7 @@ fn looks_like_number(tok: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shared::test_util::remove_test_file;
 
     // ── Command recognition ─────────────────────────────────────────
 
@@ -592,7 +593,7 @@ mod tests {
         );
         assert!(!minified.contains("comment"), "comments must be stripped");
 
-        let _ = std::fs::remove_file(&tmp);
+        remove_test_file(&tmp);
     }
 
     #[test]
@@ -611,7 +612,7 @@ mod tests {
             "should refuse swap when savings are below threshold"
         );
 
-        let _ = std::fs::remove_file(&tmp);
+        remove_test_file(&tmp);
     }
 
     #[test]
@@ -625,7 +626,7 @@ mod tests {
         let result = try_minify_bash_output(&format!("cat {}", tmp.display()), original);
         assert!(result.is_none(), "unknown extension must pass through");
 
-        let _ = std::fs::remove_file(&tmp);
+        remove_test_file(&tmp);
     }
 
     // ── Build-log minification ───────────────────────────────────

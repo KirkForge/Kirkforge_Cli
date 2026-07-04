@@ -156,10 +156,7 @@ pub async fn run_tui(
     shared_config: crate::shared::SharedConfig,
     adapter: Box<dyn crate::adapters::ModelAdapter>,
     tools: Vec<std::sync::Arc<dyn Tool>>,
-    conversation: (
-        ConversationLog,
-        crate::session::conversation::OpenOutcome,
-    ),
+    conversation: (ConversationLog, crate::session::conversation::OpenOutcome),
     system: Option<String>,
     undo_stack: Option<crate::tools::UndoStackRef>,
     plugin_registry: &kirkforge_plugin_host::PluginRegistry,

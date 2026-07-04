@@ -101,7 +101,9 @@ pub fn handle_memory_command(args: &str) -> String {
 
             match store.upsert(name, &description, rest, mtype) {
                 Ok(fact) => {
-                    let _ = store.write_index();
+                    if let Err(e) = store.write_index() {
+                        tracing::warn!(error = %e, fact = %fact.name, "Failed to write memory index");
+                    }
                     format!(
                         "✅ Stored memory [{}] as `{}` (type: {})\n→ {}\n\n**Why:** {}",
                         fact.name,

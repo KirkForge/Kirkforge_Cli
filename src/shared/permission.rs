@@ -332,6 +332,77 @@ pub fn suggest_rule(tool: &str, args: &Value) -> PermissionRule {
     }
 }
 
+/// Push a permission rule into a `Vec<PermissionRule>`, deduplicating
+/// against an existing identical rule by `(tool, key, pattern)`. The
+/// action of the existing rule is preserved.
+pub fn push_rule_unique(rules: &mut Vec<PermissionRule>, new_rule: PermissionRule) {
+    let duplicate = rules
+        .iter()
+        .any(|r| r.tool == new_rule.tool && r.key == new_rule.key && r.pattern == new_rule.pattern);
+    if !duplicate {
+        rules.push(new_rule);
+    }
+}
+
+#[cfg(test)]
+mod push_rule_unique_tests {
+    use super::*;
+
+    #[test]
+    fn push_new_rule_appends() {
+        let mut rules = vec![];
+        push_rule_unique(
+            &mut rules,
+            PermissionRule {
+                tool: "bash".into(),
+                key: "command".into(),
+                pattern: "cargo test*".into(),
+                action: PermissionAction::Allow,
+            },
+        );
+        assert_eq!(rules.len(), 1);
+    }
+
+    #[test]
+    fn push_duplicate_rule_is_ignored() {
+        let mut rules = vec![];
+        let rule = PermissionRule {
+            tool: "bash".into(),
+            key: "command".into(),
+            pattern: "cargo test*".into(),
+            action: PermissionAction::Allow,
+        };
+        push_rule_unique(&mut rules, rule.clone());
+        push_rule_unique(&mut rules, rule);
+        assert_eq!(rules.len(), 1);
+    }
+
+    #[test]
+    fn push_different_action_same_shape_still_deduped() {
+        let mut rules = vec![];
+        push_rule_unique(
+            &mut rules,
+            PermissionRule {
+                tool: "bash".into(),
+                key: "command".into(),
+                pattern: "cargo test*".into(),
+                action: PermissionAction::Allow,
+            },
+        );
+        push_rule_unique(
+            &mut rules,
+            PermissionRule {
+                tool: "bash".into(),
+                key: "command".into(),
+                pattern: "cargo test*".into(),
+                action: PermissionAction::Ask,
+            },
+        );
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].action, PermissionAction::Allow);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

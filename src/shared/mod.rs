@@ -4,6 +4,9 @@
 pub mod minify;
 pub mod permission;
 
+#[cfg(test)]
+pub mod test_util;
+
 use kirkforge_plugin::TrustTier;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -590,7 +593,10 @@ mod tool_error_tests {
     #[test]
     fn invalid_args_message() {
         let err = ToolError::invalid_args("missing 'path'");
-        assert_eq!(err.to_user_message(), "Invalid tool arguments: missing 'path'");
+        assert_eq!(
+            err.to_user_message(),
+            "Invalid tool arguments: missing 'path'"
+        );
     }
 
     #[test]
@@ -622,7 +628,10 @@ mod tool_error_tests {
 
     #[test]
     fn cancelled_message() {
-        assert_eq!(ToolError::Cancelled.to_user_message(), "Tool cancelled by user");
+        assert_eq!(
+            ToolError::Cancelled.to_user_message(),
+            "Tool cancelled by user"
+        );
     }
 }
 

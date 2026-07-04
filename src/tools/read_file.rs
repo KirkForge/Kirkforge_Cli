@@ -42,9 +42,7 @@ impl Tool for ReadFile {
         let path = match args.get("path").and_then(|p| p.as_str()) {
             Some(p) => PathBuf::from(shellexpand::tilde(p).as_ref()),
             None => {
-                return ToolOutcome::Failure(ToolError::invalid_args(
-                    "Missing 'path' argument",
-                ));
+                return ToolOutcome::Failure(ToolError::invalid_args("Missing 'path' argument"));
             }
         };
 

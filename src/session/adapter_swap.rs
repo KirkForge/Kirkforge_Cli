@@ -14,8 +14,8 @@
 //!   any in-flight connections from the previous adapter.
 //! - A swap event is emitted as a TurnEvent token so the user sees the switch.
 
-use crate::adapters::{self, caching::CachingAdapter, ModelAdapter};
 use crate::adapters::cache::ResponseCache;
+use crate::adapters::{self, caching::CachingAdapter, ModelAdapter};
 use crate::session::router;
 use crate::shared::Config;
 

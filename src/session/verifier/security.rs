@@ -103,6 +103,7 @@ pub async fn verify_security(event: &BusEvent) -> Verdict {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shared::test_util::remove_test_file;
 
     #[tokio::test]
     async fn test_skips_unrelated_events() {
@@ -130,7 +131,7 @@ mod tests {
         let v = verify_security(&event).await;
         // Clean file written and then edited should still pass
         assert!(matches!(v, Verdict::Clean));
-        let _ = std::fs::remove_file(&path);
+        remove_test_file(&path);
     }
 
     #[tokio::test]
@@ -146,7 +147,7 @@ mod tests {
         let v = verify_security(&event).await;
         // Even though it's an Edit event, the file content should be scanned
         assert!(matches!(v, Verdict::Unfixable(_)));
-        let _ = std::fs::remove_file(&path);
+        remove_test_file(&path);
     }
 
     #[tokio::test]
@@ -161,7 +162,7 @@ mod tests {
         });
         let v = verify_security(&event).await;
         assert!(matches!(v, Verdict::Clean));
-        let _ = std::fs::remove_file(&path);
+        remove_test_file(&path);
     }
 
     #[tokio::test]
@@ -176,7 +177,7 @@ mod tests {
         });
         let v = verify_security(&event).await;
         assert!(matches!(v, Verdict::Unfixable(_)));
-        let _ = std::fs::remove_file(&path);
+        remove_test_file(&path);
     }
 
     #[tokio::test]
@@ -195,7 +196,7 @@ mod tests {
         });
         let v = verify_security(&event).await;
         assert!(matches!(v, Verdict::Unfixable(_)));
-        let _ = std::fs::remove_file(&path);
+        remove_test_file(&path);
     }
 
     #[tokio::test]
@@ -210,7 +211,7 @@ mod tests {
         });
         let v = verify_security(&event).await;
         assert!(matches!(v, Verdict::Unfixable(_)));
-        let _ = std::fs::remove_file(&path);
+        remove_test_file(&path);
     }
 
     #[tokio::test]
@@ -227,6 +228,6 @@ mod tests {
         let v = verify_security(&event).await;
         // Must be Clean (no Fixable) — ../ is a normal code pattern, not a vulnerability here
         assert!(matches!(v, Verdict::Clean));
-        let _ = std::fs::remove_file(&path);
+        remove_test_file(&path);
     }
 }

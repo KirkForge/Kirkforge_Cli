@@ -40,11 +40,17 @@ pub async fn run_daemon_at(socket_path: PathBuf, pid_path: PathBuf) -> anyhow::R
     }
 
     // Remove stale socket from a previous crash.
-    let _ = std::fs::remove_file(&socket_path);
+    if let Err(e) = std::fs::remove_file(&socket_path) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            tracing::warn!(error = %e, path = %socket_path.display(), "Failed to remove stale daemon socket");
+        }
+    }
 
     // Write PID file.
     let pid = std::process::id();
-    let _ = std::fs::write(&pid_path, format!("{pid}\n"));
+    if let Err(e) = std::fs::write(&pid_path, format!("{pid}\n")) {
+        tracing::warn!(error = %e, path = %pid_path.display(), "Failed to write daemon PID file");
+    }
 
     let listener = UnixListener::bind(&socket_path)
         .with_context(|| format!("bind daemon socket at {}", socket_path.display()))?;
@@ -131,8 +137,24 @@ pub async fn run_daemon_at(socket_path: PathBuf, pid_path: PathBuf) -> anyhow::R
         }
     }
 
-    let _ = std::fs::remove_file(&socket_path);
-    let _ = std::fs::remove_file(&pid_path);
+    if let Err(e) = std::fs::remove_file(&socket_path) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            tracing::warn!(
+                error = %e,
+                path = %socket_path.display(),
+                "Failed to remove daemon socket at shutdown"
+            );
+        }
+    }
+    if let Err(e) = std::fs::remove_file(&pid_path) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            tracing::warn!(
+                error = %e,
+                path = %pid_path.display(),
+                "Failed to remove daemon PID file at shutdown"
+            );
+        }
+    }
     Ok(())
 }
 
@@ -146,10 +168,26 @@ async fn stop_daemon(socket_path: &PathBuf, pid_path: &PathBuf) -> anyhow::Resul
         }
         Err(e) => {
             tracing::warn!(error = %e, "no daemon reachable; cleaning up stale files");
-            let _ = std::fs::remove_file(socket_path);
+            if let Err(e) = std::fs::remove_file(socket_path) {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    tracing::warn!(
+                        error = %e,
+                        path = %socket_path.display(),
+                        "Failed to remove stale daemon socket"
+                    );
+                }
+            }
         }
     }
-    let _ = std::fs::remove_file(pid_path);
+    if let Err(e) = std::fs::remove_file(pid_path) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            tracing::warn!(
+                error = %e,
+                path = %pid_path.display(),
+                "Failed to remove daemon PID file"
+            );
+        }
+    }
     Ok(())
 }
 

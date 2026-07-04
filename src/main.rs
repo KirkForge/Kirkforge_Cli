@@ -1,3 +1,8 @@
+// Stabilization lint: holding a std::sync lock guard across an .await point
+// is a classic async Rust foot-gun that can deadlock the executor. The
+// codebase currently passes this check; deny it to keep it that way.
+#![deny(clippy::await_holding_lock)]
+
 mod adapters;
 mod daemon;
 mod session;
@@ -51,11 +56,16 @@ fn init_tracing(log_level: &str) {
     let log_file = session::data_dir()
         .map(|d| d.join("kirkforge.log"))
         .unwrap_or_else(|_| PathBuf::from("kirkforge.log"));
-    let _ = std::fs::create_dir_all(
-        log_file
-            .parent()
-            .unwrap_or_else(|| std::path::Path::new(".")),
-    );
+    let log_dir = log_file
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
+    if let Err(e) = std::fs::create_dir_all(log_dir) {
+        eprintln!(
+            "failed to create log directory {}: {}",
+            log_dir.display(),
+            e
+        );
+    }
 
     let file_layer = tracing_subscriber::fmt::layer()
         .with_ansi(false)

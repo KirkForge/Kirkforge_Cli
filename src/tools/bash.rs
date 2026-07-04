@@ -223,7 +223,8 @@ impl Tool for Bash {
 
             let workdir_path = PathBuf::from(shellexpand::tilde(workdir).as_ref());
 
-            let result = run_shell_with_token(&cmd, &workdir_path, timeout_secs, Some(&ctx.token)).await;
+            let result =
+                run_shell_with_token(&cmd, &workdir_path, timeout_secs, Some(&ctx.token)).await;
 
             match result {
                 Ok(output) => {
@@ -405,7 +406,9 @@ pub async fn run_shell_with_token(
                 stderr: cap_to_string(raw_stderr, stderr_dropped),
             })
         }
-        Ok(Err(e)) => Err(ShellError::Spawn(format!("Failed to wait for command: {e}"))),
+        Ok(Err(e)) => Err(ShellError::Spawn(format!(
+            "Failed to wait for command: {e}"
+        ))),
         Err(ShellErrorKind::Timeout) => {
             // Timeout path. The child has been sent SIGKILL; the drain
             // tasks are still running and will see EOF as the pipes
@@ -695,6 +698,7 @@ pub fn check_bash_command(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shared::test_util::remove_test_file;
 
     /// Small input passes through `cap_to_string` unchanged.
     #[test]
@@ -739,7 +743,7 @@ mod tests {
             std::process::id()
         ));
         let marker_str = marker.to_string_lossy().to_string();
-        let _ = std::fs::remove_file(&marker);
+        remove_test_file(&marker);
 
         // Inner `sh` makes `sleep` a grandchild of the outer shell.
         let cmd = format!("sh -c 'sleep 30; touch {marker_str}'");
@@ -758,7 +762,7 @@ mod tests {
             !marker.exists(),
             "descendant process survived timeout and touched marker"
         );
-        let _ = std::fs::remove_file(&marker);
+        remove_test_file(&marker);
     }
 
     /// A `run_shell` invocation that exceeds the cap gets the marker in
@@ -824,7 +828,7 @@ mod tests {
             std::process::id()
         ));
         let marker_str = marker.to_string_lossy().to_string();
-        let _ = std::fs::remove_file(&marker);
+        remove_test_file(&marker);
 
         let tool = Bash::new(DenyList::default(), PathGuard::default(), false);
         let ctx = crate::tools::ToolContext::new();
@@ -841,15 +845,11 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         token.cancel();
 
-        let outcome = handle
-            .await
-            .expect("tool task should not panic");
+        let outcome = handle.await.expect("tool task should not panic");
         assert!(
             matches!(
                 outcome,
-                crate::shared::ToolOutcome::Failure(
-                    crate::shared::ToolError::Cancelled
-                )
+                crate::shared::ToolOutcome::Failure(crate::shared::ToolError::Cancelled)
             ),
             "expected Cancelled error, got {outcome:?}"
         );
@@ -877,9 +877,9 @@ mod tests {
         assert!(
             matches!(
                 outcome,
-                crate::shared::ToolOutcome::Failure(
-                    crate::shared::ToolError::Timeout { after_secs: 1 }
-                )
+                crate::shared::ToolOutcome::Failure(crate::shared::ToolError::Timeout {
+                    after_secs: 1
+                })
             ),
             "expected Timeout error, got {outcome:?}"
         );
@@ -918,7 +918,10 @@ mod tests {
 
         let outcome = tool.run(&ctx, args).await;
         assert!(
-            matches!(outcome, crate::shared::ToolOutcome::Failure(crate::shared::ToolError::AccessDenied { .. })),
+            matches!(
+                outcome,
+                crate::shared::ToolOutcome::Failure(crate::shared::ToolError::AccessDenied { .. })
+            ),
             "expected dry-run access-denied error, got {outcome:?}"
         );
     }

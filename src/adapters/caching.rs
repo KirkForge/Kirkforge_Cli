@@ -9,17 +9,14 @@
 //! This is used by the executor when `Config::cache_enabled` is true.
 
 use crate::adapters::cache::ResponseCache;
-use crate::shared::{Config, Message, ModelInfo, StreamEvent, ToolDef};
 use crate::adapters::ModelAdapter;
+use crate::shared::{Config, Message, ModelInfo, StreamEvent, ToolDef};
 
 /// Conditionally wrap an adapter with the response cache.
 ///
 /// Returns the adapter unchanged when caching is disabled, so callers don't
 /// have to branch on `Config::cache_enabled`.
-pub fn maybe_wrap_cached(
-    adapter: Box<dyn ModelAdapter>,
-    config: &Config,
-) -> Box<dyn ModelAdapter> {
+pub fn maybe_wrap_cached(adapter: Box<dyn ModelAdapter>, config: &Config) -> Box<dyn ModelAdapter> {
     if config.cache_enabled {
         let cache = ResponseCache::new(true, config.cache_dir.clone());
         Box::new(CachingAdapter::new(adapter, cache, config.json_mode))
@@ -64,12 +61,10 @@ impl ModelAdapter for CachingAdapter {
     ) -> anyhow::Result<tokio::sync::mpsc::Receiver<StreamEvent>> {
         let model_info = self.inner.model_info();
 
-        if let Some(events) = self.cache.get(
-            &model_info.name,
-            messages,
-            tools,
-            self.json_mode,
-        ) {
+        if let Some(events) = self
+            .cache
+            .get(&model_info.name, messages, tools, self.json_mode)
+        {
             let (tx, rx) = tokio::sync::mpsc::channel::<StreamEvent>(events.len().max(1));
             tokio::spawn(async move {
                 for ev in events {
@@ -98,7 +93,13 @@ impl ModelAdapter for CachingAdapter {
                     break;
                 }
             }
-            cache.put(&model_name, &messages_owned, &tools_owned, json_mode, &events);
+            cache.put(
+                &model_name,
+                &messages_owned,
+                &tools_owned,
+                json_mode,
+                &events,
+            );
         });
 
         Ok(rx_out)
@@ -108,8 +109,8 @@ impl ModelAdapter for CachingAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shared::{FinishReason, ModelInfo, TokenUsage, ToolCallStyle};
     use crate::adapters::ModelAdapter;
+    use crate::shared::{FinishReason, ModelInfo, TokenUsage, ToolCallStyle};
 
     struct DummyAdapter {
         events: Vec<StreamEvent>,

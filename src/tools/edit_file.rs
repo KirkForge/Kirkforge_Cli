@@ -55,9 +55,7 @@ impl Tool for EditFile {
         let path = match args.get("path").and_then(|p| p.as_str()) {
             Some(p) => PathBuf::from(shellexpand::tilde(p).as_ref()),
             None => {
-                return ToolOutcome::Failure(ToolError::invalid_args(
-                    "Missing 'path' argument",
-                ));
+                return ToolOutcome::Failure(ToolError::invalid_args("Missing 'path' argument"));
             }
         };
 
@@ -138,11 +136,7 @@ impl Tool for EditFile {
             let new_content = content.replacen(&old, &new, 1);
             let diff = render_diff(&content, &new_content);
             return ToolOutcome::Success {
-                content: format!(
-                    "Dry run: would edit {}:\n{}",
-                    path.display(),
-                    diff
-                ),
+                content: format!("Dry run: would edit {}:\n{}", path.display(), diff),
             };
         }
 
@@ -373,6 +367,7 @@ fn render_diff(old: &str, new: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shared::test_util::remove_test_file;
     use crate::tools::ToolContext;
 
     #[tokio::test]
@@ -404,7 +399,7 @@ mod tests {
             other => panic!("Expected FileEdit, got {other:?}"),
         }
 
-        let _ = std::fs::remove_file(&path);
+        remove_test_file(&path);
     }
 
     #[tokio::test]
@@ -452,7 +447,7 @@ mod tests {
             other => panic!("Expected FileEdit, got {other:?}"),
         }
 
-        let _ = std::fs::remove_file(&path);
+        remove_test_file(&path);
     }
 
     /// When the tool is constructed with an `UndoStackRef`, every
@@ -520,7 +515,7 @@ mod tests {
             matches!(result, ToolOutcome::Failure(ToolError::Execution { ref message, .. }) if message.contains("matches 2 times")),
             "expected ambiguous-match error, got {result:?}"
         );
-        let _ = std::fs::remove_file(&path);
+        remove_test_file(&path);
     }
 
     /// The fuzzy fallback must also reject ambiguous normalized matches.
@@ -543,7 +538,7 @@ mod tests {
             matches!(result, ToolOutcome::Failure(ToolError::Execution { ref message, .. }) if message.contains("matches 2 times")),
             "expected ambiguous fuzzy-match error, got {result:?}"
         );
-        let _ = std::fs::remove_file(&path);
+        remove_test_file(&path);
     }
 
     #[tokio::test]

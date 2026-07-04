@@ -146,7 +146,10 @@ pub fn check_worktree(
         let path = cwd.join(&entry.path);
         let content = match read_limited(&path, SCAN_CAP_BYTES) {
             Some(c) => c,
-            None => continue,
+            None => {
+                tracing::debug!(path = %path.display(), "Skipped git-sanitation content scan (unreadable or non-UTF8 file)");
+                continue;
+            }
         };
         let lower = content.to_lowercase();
 

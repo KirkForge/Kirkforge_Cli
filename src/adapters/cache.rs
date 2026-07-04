@@ -97,10 +97,22 @@ impl ResponseCache {
 
         let path = self.path_for(&key);
         if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                tracing::warn!(
+                    error = %e,
+                    dir = %parent.display(),
+                    "Failed to create response cache directory"
+                );
+            }
         }
         if let Ok(bytes) = bincode::serialize(events) {
-            let _ = std::fs::write(path, bytes);
+            if let Err(e) = std::fs::write(&path, bytes) {
+                tracing::warn!(
+                    error = %e,
+                    path = %path.display(),
+                    "Failed to write response cache entry"
+                );
+            }
         }
     }
 

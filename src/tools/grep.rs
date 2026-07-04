@@ -57,9 +57,7 @@ impl Tool for Grep {
         let pattern = match args.get("pattern").and_then(|p| p.as_str()) {
             Some(p) => p.to_string(),
             None => {
-                return ToolOutcome::Failure(ToolError::invalid_args(
-                    "Missing 'pattern' argument",
-                ));
+                return ToolOutcome::Failure(ToolError::invalid_args("Missing 'pattern' argument"));
             }
         };
 
@@ -147,9 +145,7 @@ impl Tool for Grep {
                 });
             }
             if let GuardVerdict::Denied(msg) = self.path_guard.check_read(&search_path) {
-                return ToolOutcome::Failure(ToolError::AccessDenied {
-                    message: msg,
-                });
+                return ToolOutcome::Failure(ToolError::AccessDenied { message: msg });
             }
             if let Ok(content) = std::fs::read_to_string(&search_path) {
                 let matches = find_matches(&content, &pattern, &search_path, context_lines);

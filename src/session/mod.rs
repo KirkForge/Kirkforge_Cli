@@ -26,7 +26,7 @@ pub mod toolset;
 pub mod undo;
 pub mod verifier;
 
-use crate::shared::{Config, SessionId};
+use crate::shared::SessionId;
 use std::path::PathBuf;
 
 #[cfg(test)]
@@ -48,33 +48,15 @@ pub fn data_dir() -> anyhow::Result<PathBuf> {
 }
 
 pub fn config_path() -> PathBuf {
-    let mut path = data_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let mut path = data_dir().unwrap_or_else(|e| {
+        tracing::warn!(
+            error = %e,
+            "Cannot determine kirkforge data directory; falling back to current directory for config.toml"
+        );
+        PathBuf::from(".")
+    });
     path.push("config.toml");
     path
-}
-
-pub fn load_or_create_config() -> Config {
-    let path = config_path();
-    if let Ok(content) = std::fs::read_to_string(&path) {
-        toml::from_str(&content).unwrap_or_else(|e| {
-            tracing::warn!("Config parse error ({}), using defaults", e);
-            Config::default()
-        })
-    } else {
-        let cfg = Config::default();
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        let content = toml::to_string_pretty(&cfg).unwrap_or_default();
-        if std::fs::write(&path, &content).is_ok() {
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
-            }
-        }
-        cfg
-    }
 }
 
 pub fn new_session_id() -> SessionId {

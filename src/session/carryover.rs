@@ -274,6 +274,7 @@ pub fn save_carryover(profile: &CarryoverProfile) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shared::test_util::remove_test_file;
 
     #[test]
     fn test_empty_profile_renders_empty() {
@@ -341,7 +342,7 @@ mod tests {
         assert_eq!(recovered.session_count, 2);
         assert_eq!(recovered.last_user_message, "test save");
 
-        let _ = std::fs::remove_file(&temp);
+        remove_test_file(&temp);
         let _ = backup_path;
     }
 

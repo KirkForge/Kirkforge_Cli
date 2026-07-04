@@ -202,6 +202,30 @@ impl UndoStack {
         })
     }
 
+    /// Remove a snapshot and its metadata sidecar, ignoring NotFound.
+    /// Logs unexpected failures so disk-permission problems don't
+    /// silently leave orphaned undo files.
+    fn remove_snapshot(&self, seq: u64) {
+        if let Err(e) = std::fs::remove_file(self.snapshot_path(seq)) {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                tracing::warn!(
+                    error = %e,
+                    seq,
+                    "Failed to remove undo snapshot file"
+                );
+            }
+        }
+        if let Err(e) = std::fs::remove_file(self.meta_path(seq)) {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                tracing::warn!(
+                    error = %e,
+                    seq,
+                    "Failed to remove undo metadata file"
+                );
+            }
+        }
+    }
+
     /// Snapshot `prev_bytes` to disk for the edit at `path`. Returns
     /// the seq number assigned. If the stack is at capacity, the
     /// oldest entry is FIFO-trimmed first (its snapshot file is
@@ -220,8 +244,7 @@ impl UndoStack {
         // FIFO-trim the oldest entry if we're at the cap.
         while self.ops.len() >= MAX_ENTRIES {
             if let Some(oldest) = self.ops.pop_front() {
-                let _ = std::fs::remove_file(self.snapshot_path(oldest.seq));
-                let _ = std::fs::remove_file(self.meta_path(oldest.seq));
+                self.remove_snapshot(oldest.seq);
             }
         }
 
@@ -235,16 +258,10 @@ impl UndoStack {
         // file the loader might mistake for valid.
         let tmp_snap = snap_path.with_extension("snap.tmp");
         std::fs::write(&tmp_snap, prev_bytes).map_err(|e| {
-            anyhow::anyhow!(
-                "cannot write undo snapshot for {}: {e}",
-                path.display()
-            )
+            anyhow::anyhow!("cannot write undo snapshot for {}: {e}", path.display())
         })?;
         std::fs::rename(&tmp_snap, &snap_path).map_err(|e| {
-            anyhow::anyhow!(
-                "cannot finalize undo snapshot for {}: {e}",
-                path.display()
-            )
+            anyhow::anyhow!("cannot finalize undo snapshot for {}: {e}", path.display())
         })?;
 
         // Write the sidecar metadata.
@@ -279,7 +296,6 @@ impl UndoStack {
             return Ok(None);
         };
         let snap_path = self.snapshot_path(op.seq);
-        let meta_path = self.meta_path(op.seq);
 
         if op.prev_existed {
             // Atomic write: temp + rename. The user's old file is
@@ -304,8 +320,7 @@ impl UndoStack {
 
         // Clean up the snapshot + metadata. We've used them; the
         // user can re-edit if they want to redo.
-        let _ = std::fs::remove_file(&snap_path);
-        let _ = std::fs::remove_file(&meta_path);
+        self.remove_snapshot(op.seq);
 
         Ok(Some(RestoredOp {
             path: op.path.clone(),

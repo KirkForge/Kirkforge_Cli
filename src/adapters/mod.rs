@@ -65,9 +65,12 @@ where
             Ok(r) => {
                 let s = r.status().as_u16();
                 if attempt < MODEL_MAX_RETRIES && (s == 429 || s == 503) {
-                    tracing::warn!(attempt, status = s, "model returned transient error, retrying");
-                    tokio::time::sleep(std::time::Duration::from_secs(1u64 << (attempt - 1)))
-                        .await;
+                    tracing::warn!(
+                        attempt,
+                        status = s,
+                        "model returned transient error, retrying"
+                    );
+                    tokio::time::sleep(std::time::Duration::from_secs(1u64 << (attempt - 1))).await;
                 } else {
                     return Ok(r.error_for_status()?);
                 }

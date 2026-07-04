@@ -647,6 +647,7 @@ pub fn savings_estimate(original: &str, minified: &str) -> (usize, f64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shared::test_util::remove_test_file;
     use std::path::PathBuf;
 
     // ── Rust ────────────────────────────────────────────────────────
@@ -859,7 +860,7 @@ mod tests {
         // Touch the file to make sure mtime is current and unique
         // to this test (avoids a stale mtime colliding with a
         // previous test that used the same temp filename).
-        let _ = std::fs::write(&tmp, "x = 1 # comment v2");
+        std::fs::write(&tmp, "x = 1 # comment v2").unwrap();
         let _ = minify_source(&tmp, "x = 1 # comment v2");
 
         // The path should now be in the cache. This is the only
@@ -877,7 +878,7 @@ mod tests {
             "invalidate_minify_cache should remove the path's entry"
         );
 
-        let _ = std::fs::remove_file(&tmp);
+        remove_test_file(&tmp);
     }
 
     #[test]
@@ -906,7 +907,7 @@ mod tests {
         clear_minify_cache();
 
         let tmp = std::env::temp_dir().join("kirkforge_minify_cache_contains_test.rs");
-        let _ = std::fs::remove_file(&tmp);
+        remove_test_file(&tmp);
         std::fs::write(&tmp, "fn main() {}").unwrap();
 
         // Sanity
@@ -916,7 +917,7 @@ mod tests {
         invalidate_minify_cache(&tmp);
         assert!(!cache_contains(&tmp), "should be evicted after invalidate");
 
-        let _ = std::fs::remove_file(&tmp);
+        remove_test_file(&tmp);
     }
 
     // ── General ─────────────────────────────────────────────────────

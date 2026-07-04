@@ -52,18 +52,14 @@ impl Tool for WriteFile {
         let path = match args.get("path").and_then(|p| p.as_str()) {
             Some(p) => PathBuf::from(shellexpand::tilde(p).as_ref()),
             None => {
-                return ToolOutcome::Failure(ToolError::invalid_args(
-                    "Missing 'path' argument",
-                ));
+                return ToolOutcome::Failure(ToolError::invalid_args("Missing 'path' argument"));
             }
         };
 
         let content = match args.get("content").and_then(|c| c.as_str()) {
             Some(c) => c.to_string(),
             None => {
-                return ToolOutcome::Failure(ToolError::invalid_args(
-                    "Missing 'content' argument",
-                ));
+                return ToolOutcome::Failure(ToolError::invalid_args("Missing 'content' argument"));
             }
         };
 
@@ -82,11 +78,7 @@ impl Tool for WriteFile {
             if !parent.exists() {
                 if let Err(e) = std::fs::create_dir_all(parent) {
                     return ToolOutcome::Failure(ToolError::Internal {
-                        message: format!(
-                            "Cannot create directory {}: {}",
-                            parent.display(),
-                            e
-                        ),
+                        message: format!("Cannot create directory {}: {}", parent.display(), e),
                     });
                 }
             }
@@ -177,7 +169,9 @@ mod tests {
 
         let tool = WriteFile::new(None);
         let ctx = ToolContext::with_dry_run(true);
-        let out = tool.run(&ctx, args(&path.display().to_string(), "hello")).await;
+        let out = tool
+            .run(&ctx, args(&path.display().to_string(), "hello"))
+            .await;
 
         assert!(
             matches!(out, ToolOutcome::Success { ref content } if content.contains("Dry run") && content.contains("would write"))
@@ -193,7 +187,9 @@ mod tests {
 
         let tool = WriteFile::new(None);
         let ctx = ToolContext::with_dry_run(true);
-        let out = tool.run(&ctx, args(&path.display().to_string(), "new content")).await;
+        let out = tool
+            .run(&ctx, args(&path.display().to_string(), "new content"))
+            .await;
 
         assert!(
             matches!(out, ToolOutcome::Success { ref content } if content.contains("Dry run") && content.contains("would write"))

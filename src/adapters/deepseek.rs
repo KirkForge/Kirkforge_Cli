@@ -70,7 +70,9 @@ impl ModelAdapter for DeepSeekAdapter {
             self.client
                 .post(&url)
                 .json(&body)
-                .timeout(std::time::Duration::from_secs(super::MODEL_REQUEST_TIMEOUT_SECS))
+                .timeout(std::time::Duration::from_secs(
+                    super::MODEL_REQUEST_TIMEOUT_SECS,
+                ))
                 .send()
                 .await
         })

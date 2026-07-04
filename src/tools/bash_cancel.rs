@@ -28,9 +28,7 @@ impl Tool for BashCancel {
         let job_id = match args.get("id").and_then(|v| v.as_u64()) {
             Some(id) => id,
             None => {
-                return ToolOutcome::Failure(ToolError::invalid_args(
-                    "Missing 'id' argument",
-                ));
+                return ToolOutcome::Failure(ToolError::invalid_args("Missing 'id' argument"));
             }
         };
 

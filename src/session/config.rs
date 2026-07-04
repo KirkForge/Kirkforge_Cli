@@ -63,14 +63,28 @@ pub fn load_or_create_config() -> Config {
     if !exists {
         // Write the default config to disk
         if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                tracing::warn!(
+                    error = %e,
+                    dir = %parent.display(),
+                    "Failed to create config directory"
+                );
+            }
         }
         if let Ok(content) = toml::to_string_pretty(&cfg) {
             if std::fs::write(&path, content).is_ok() {
                 #[cfg(unix)]
                 {
                     use std::os::unix::fs::PermissionsExt;
-                    let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+                    if let Err(e) =
+                        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+                    {
+                        tracing::warn!(
+                            error = %e,
+                            path = %path.display(),
+                            "Failed to set restrictive config permissions"
+                        );
+                    }
                 }
                 tracing::info!("Created default config at {}", path.display());
             }
@@ -95,7 +109,13 @@ pub fn save_config(config: &Config) -> anyhow::Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+        if let Err(e) = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)) {
+            tracing::warn!(
+                error = %e,
+                path = %path.display(),
+                "Failed to set restrictive config permissions"
+            );
+        }
     }
     Ok(())
 }
@@ -319,10 +339,7 @@ pub fn config_diff_summary(before: &Config, after: &Config) -> String {
         ));
     }
     if before.dry_run != after.dry_run {
-        diffs.push(format!(
-            "dry_run: {} → {}",
-            before.dry_run, after.dry_run
-        ));
+        diffs.push(format!("dry_run: {} → {}", before.dry_run, after.dry_run));
     }
     if before.cache_enabled != after.cache_enabled {
         diffs.push(format!(

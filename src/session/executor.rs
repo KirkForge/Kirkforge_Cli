@@ -11,7 +11,7 @@ use crate::session::hooks::HookRunner;
 use crate::session::prompt::PromptBuilder;
 use crate::session::verifier::CorrectionResult;
 use crate::session::verifier::{CorrectionLoop, VerifierHandler, VerifierSlots};
-use crate::shared::permission::{evaluate, PermissionAction};
+use crate::shared::permission::{evaluate, push_rule_unique, PermissionAction};
 use crate::shared::{
     read_shared_config, Config, Message, Role, SharedConfig, StreamEvent, ToolDef, ToolInvocation,
     ToolOutcome,
@@ -21,18 +21,6 @@ use crate::tools::{Tool, ToolContext, UndoStackRef};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
-
-fn push_rule_unique(
-    rules: &mut Vec<crate::shared::permission::PermissionRule>,
-    new_rule: crate::shared::permission::PermissionRule,
-) {
-    let duplicate = rules
-        .iter()
-        .any(|r| r.tool == new_rule.tool && r.key == new_rule.key && r.pattern == new_rule.pattern);
-    if !duplicate {
-        rules.push(new_rule);
-    }
-}
 
 enum IterationOutcome {
     ToolCalls(Vec<ToolInvocation>),
@@ -281,10 +269,7 @@ impl Executor {
 
     /// Build a per-tool-call context linked to the turn's cancellation
     /// state and the session's dry-run flag.
-    fn tool_context_for_call(
-        &self,
-        cancelled: &std::sync::atomic::AtomicBool,
-    ) -> ToolContext {
+    fn tool_context_for_call(&self, cancelled: &std::sync::atomic::AtomicBool) -> ToolContext {
         let dry_run = read_shared_config(&self.config).dry_run;
         ToolContext {
             token: tool_cancel_token(cancelled),
@@ -937,9 +922,7 @@ impl Executor {
         if result.is_ok() {
             if let Err(e) = self.conversation.checkpoint() {
                 tracing::warn!(error = %e, "post-turn checkpoint failed");
-                let _ = event_tx.send(TurnEvent::Error(format!(
-                    "Checkpoint failed: {e}"
-                )));
+                let _ = event_tx.send(TurnEvent::Error(format!("Checkpoint failed: {e}")));
             }
         }
         result
@@ -1038,9 +1021,7 @@ impl Executor {
                     // before the next assistant response loses less work.
                     if let Err(e) = self.conversation.checkpoint() {
                         tracing::warn!(error = %e, "post-tool-batch checkpoint failed");
-                        let _ = event_tx.send(TurnEvent::Error(format!(
-                            "Checkpoint failed: {e}"
-                        )));
+                        let _ = event_tx.send(TurnEvent::Error(format!("Checkpoint failed: {e}")));
                     }
                 }
                 IterationOutcome::ParseError => {
@@ -2141,9 +2122,7 @@ fn extract_bash_metrics(outcome: &ToolOutcome) -> (Option<i32>, Option<usize>, O
             exit_code, stderr, ..
         }) => (*exit_code, Some(0), Some(stderr.len())),
         ToolOutcome::Failure(crate::shared::ToolError::Timeout { .. })
-        | ToolOutcome::Failure(crate::shared::ToolError::Cancelled) => {
-            (Some(1), Some(0), Some(0))
-        }
+        | ToolOutcome::Failure(crate::shared::ToolError::Cancelled) => (Some(1), Some(0), Some(0)),
         ToolOutcome::Failure(_) => (Some(1), Some(0), Some(0)),
         _ => (None, None, None),
     }
@@ -2438,6 +2417,7 @@ fn emit_correction_results(
 mod tests {
     use super::*;
     use crate::adapters::ModelAdapter;
+    use crate::shared::test_util::{remove_test_dir, remove_test_file};
     use crate::shared::{
         FinishReason, Message, ModelInfo, Role, StreamEvent, TokenUsage, ToolCallStyle, ToolDef,
         ToolInvocation, ToolOutcome,
@@ -2452,7 +2432,7 @@ mod tests {
 
     impl Drop for CleanupFile {
         fn drop(&mut self) {
-            let _ = std::fs::remove_file(&self.0);
+            remove_test_file(&self.0);
         }
     }
 
@@ -2611,7 +2591,7 @@ mod tests {
             std::process::id(),
             COUNTER.fetch_add(1, Ordering::SeqCst)
         ));
-        let _ = std::fs::remove_file(&log_path);
+        remove_test_file(&log_path);
         let (conversation, _outcome) = ConversationLog::open(log_path).unwrap();
         Executor::with_log(adapter, tools, config, conversation, None)
     }
@@ -4720,7 +4700,7 @@ mod tests {
     async fn test_glob_base_dir_outside_sandbox_denied() {
         let temp = std::env::temp_dir();
         let sandbox = temp.join(format!("kf-sandbox-{}", std::process::id()));
-        let _ = std::fs::create_dir_all(&sandbox);
+        std::fs::create_dir_all(&sandbox).unwrap();
         let outside = temp.join(format!("kf-outside-{}", std::process::id()));
 
         let tool = MockTool {
@@ -4762,7 +4742,7 @@ mod tests {
         let denied = events.iter().any(|e| matches!(e, TurnEvent::ToolResult { name, output, .. } if name == "glob" && output.contains("Access denied")));
         assert!(denied, "glob outside sandbox should be denied");
 
-        let _ = std::fs::remove_dir_all(&sandbox);
+        remove_test_dir(&sandbox);
     }
 
     #[tokio::test]

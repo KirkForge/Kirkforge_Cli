@@ -67,17 +67,16 @@ impl ModelAdapter for GlmAdapter {
         );
         let url = format!("{}/api/chat", self.api_base);
 
-        let response = super::send_with_retry(
-            &self.client,
-            || async {
-                self.client
-                    .post(&url)
-                    .json(&body)
-                    .timeout(std::time::Duration::from_secs(super::MODEL_REQUEST_TIMEOUT_SECS))
-                    .send()
-                    .await
-            },
-        )
+        let response = super::send_with_retry(&self.client, || async {
+            self.client
+                .post(&url)
+                .json(&body)
+                .timeout(std::time::Duration::from_secs(
+                    super::MODEL_REQUEST_TIMEOUT_SECS,
+                ))
+                .send()
+                .await
+        })
         .await?;
 
         // Channel size: 4096 events. See deepseek.rs for the

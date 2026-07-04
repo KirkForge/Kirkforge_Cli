@@ -103,7 +103,9 @@ fn progress_line(p: &crate::tui::app::PullProgress) -> Line<'static> {
     Line::from(vec![
         Span::styled(
             " ⬇ ".to_string(),
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
         ),
         Span::styled(p.status.clone(), Style::default().fg(Color::Cyan)),
         Span::styled(" ".to_string(), Style::default()),

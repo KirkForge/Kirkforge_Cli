@@ -92,11 +92,10 @@ impl ForkManager {
         };
 
         self.forks.push(fork.clone());
-        // Persist fork metadata
+        // Persist fork metadata so the fork survives restarts.
         let meta_path = fork_dir.join("fork.json");
-        if let Ok(json) = serde_json::to_string_pretty(&fork) {
-            let _ = std::fs::write(&meta_path, json);
-        }
+        let json = serde_json::to_string_pretty(&fork)?;
+        std::fs::write(&meta_path, json)?;
 
         Ok(fork)
     }
@@ -131,7 +130,7 @@ impl ForkManager {
 
         let fork = self.forks.remove(idx);
         let fork_dir = fork.path.parent().unwrap_or(Path::new("."));
-        let _ = std::fs::remove_dir_all(fork_dir);
+        std::fs::remove_dir_all(fork_dir)?;
         Ok(true)
     }
 
@@ -148,6 +147,7 @@ impl ForkManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shared::test_util::remove_test_dir;
 
     #[test]
     fn test_fork_manager_creation() {
@@ -159,7 +159,7 @@ mod tests {
     #[test]
     fn test_create_and_list_fork() {
         let dir = std::env::temp_dir().join("kirkforge_fork_test");
-        let _ = std::fs::remove_dir_all(&dir);
+        remove_test_dir(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
         let log_path = dir.join("session.conv.ndjson");
@@ -193,13 +193,13 @@ mod tests {
         assert_eq!(mgr.list().len(), 1);
 
         // Cleanup
-        let _ = std::fs::remove_dir_all(&dir);
+        remove_test_dir(&dir);
     }
 
     #[test]
     fn test_get_fork_by_id() {
         let dir = std::env::temp_dir().join("kirkforge_fork_get_test");
-        let _ = std::fs::remove_dir_all(&dir);
+        remove_test_dir(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
         let log_path = dir.join("session.conv.ndjson");
@@ -214,13 +214,13 @@ mod tests {
         let not_found = mgr.get("nonexistent");
         assert!(not_found.is_none());
 
-        let _ = std::fs::remove_dir_all(&dir);
+        remove_test_dir(&dir);
     }
 
     #[test]
     fn test_delete_fork() {
         let dir = std::env::temp_dir().join("kirkforge_fork_del_test");
-        let _ = std::fs::remove_dir_all(&dir);
+        remove_test_dir(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
         let log_path = dir.join("session.conv.ndjson");
@@ -232,6 +232,6 @@ mod tests {
         assert!(mgr.delete_fork(&fork.id).is_ok());
         assert_eq!(mgr.len(), 0);
 
-        let _ = std::fs::remove_dir_all(&dir);
+        remove_test_dir(&dir);
     }
 }

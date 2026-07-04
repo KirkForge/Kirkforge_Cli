@@ -129,6 +129,10 @@ impl PluginRegistry {
             }
             match LoadedPlugin::load(&path) {
                 Ok(plugin) => {
+                    if let Err(e) = plugin.manifest().validate_api_version() {
+                        warnings.push(format!("{}: {}", path.display(), e));
+                        continue;
+                    }
                     let hosted = apply_policy(plugin, policy);
                     if let Some(ref reason) = hosted.rejection {
                         warnings.push(format!("{}: {}", hosted.plugin.manifest.name, reason));
@@ -297,7 +301,7 @@ mod tests {
 name = "test-plugin"
 version = "0.1.0"
 description = "test"
-trust = "{}"
+trust = "{trust}"
 
 [[capabilities]]
 type = "skill"
@@ -309,7 +313,6 @@ type = "hook"
 event = "post-turn"
 command = "hooks/post-turn.sh"
 "#,
-                trust
             ),
         )
         .unwrap();
@@ -327,7 +330,7 @@ command = "hooks/post-turn.sh"
         let warnings = reg
             .load_from_dir(&plugins, TrustPolicy::up_to(TrustTier::Shell))
             .unwrap();
-        assert!(warnings.is_empty(), "{:?}", warnings);
+        assert!(warnings.is_empty(), "{warnings:?}");
         assert_eq!(reg.active_count(), 1);
         assert!(reg.skill_by_trigger("/hello").is_some());
         assert!(!reg.hooks_for_event("post-turn").is_empty());
@@ -344,7 +347,7 @@ command = "hooks/post-turn.sh"
         let warnings = reg
             .load_from_dir(&plugins, TrustPolicy::up_to(TrustTier::Shell))
             .unwrap();
-        assert!(warnings.is_empty(), "{:?}", warnings);
+        assert!(warnings.is_empty(), "{warnings:?}");
         assert_eq!(reg.active_count(), 1);
         // Skill is read-only, hook requires shell and is filtered away.
         assert!(reg.skill_by_trigger("/hello").is_some());

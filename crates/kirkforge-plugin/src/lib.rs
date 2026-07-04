@@ -15,6 +15,23 @@ use std::collections::HashMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
+/// Supported plugin API versions. v1 is the only stable contract today;
+/// future major changes will introduce new variants.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ApiVersion {
+    #[default]
+    V1,
+}
+
+impl std::fmt::Display for ApiVersion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ApiVersion::V1 => write!(f, "v1"),
+        }
+    }
+}
+
 /// Plugin manifest loaded from `kirkforge.toml`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "kebab-case")]
@@ -25,6 +42,10 @@ pub struct PluginManifest {
     pub version: String,
     /// Short description.
     pub description: String,
+    /// Plugin API version. Default: v1. The host rejects manifests that
+    /// declare a version it does not understand.
+    #[serde(default)]
+    pub api_version: ApiVersion,
     /// Maximum trust tier the plugin requests.
     #[serde(default)]
     pub trust: TrustTier,
@@ -51,6 +72,13 @@ impl PluginManifest {
         toml::from_str(content).map_err(ManifestError::Parse)
     }
 
+    /// Validate that the manifest uses a supported API version.
+    pub fn validate_api_version(&self) -> Result<(), ManifestError> {
+        match self.api_version {
+            ApiVersion::V1 => Ok(()),
+        }
+    }
+
     /// True if the plugin declares at least one capability of `kind`.
     pub fn has_capability(&self, kind: CapabilityKind) -> bool {
         self.capabilities.iter().any(|c| c.kind() == kind)
@@ -63,6 +91,7 @@ impl Default for PluginManifest {
             name: "unnamed".into(),
             version: "0.1.0".into(),
             description: String::new(),
+            api_version: ApiVersion::V1,
             trust: TrustTier::ReadOnly,
             capabilities: Vec::new(),
             metadata: HashMap::new(),
@@ -182,6 +211,8 @@ pub enum ManifestError {
     },
     #[error("failed to parse manifest: {0}")]
     Parse(#[from] toml::de::Error),
+    #[error("unsupported api_version '{version}': host only supports v1")]
+    UnsupportedApiVersion { version: String },
 }
 
 /// High-level plugin interface.

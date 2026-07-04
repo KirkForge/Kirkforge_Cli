@@ -12,6 +12,10 @@ categories = ["command-line-utilities", "development-tools"]
 members = ["crates/*"]
 resolver = "2"
 
+[[bench]]
+name = "startup"
+harness = false
+
 [workspace.dependencies]
 kirkforge-plugin = { path = "crates/kirkforge-plugin" }
 kirkforge-plugin-host = { path = "crates/kirkforge-plugin-host" }

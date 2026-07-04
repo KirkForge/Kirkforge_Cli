@@ -7,7 +7,7 @@
 //! This lets existing skill directories continue to work after the move to
 //! the plugin registry.
 
-use kirkforge_plugin::{Capability, LoadedPlugin, PluginManifest, TrustTier};
+use kirkforge_plugin::{ApiVersion, Capability, LoadedPlugin, PluginManifest, TrustTier};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -33,6 +33,7 @@ pub fn load_skill_dir(path: &Path) -> anyhow::Result<Option<LoadedPlugin>> {
         name: trigger.trim_start_matches('/').to_string(),
         version: "0.1.0".into(),
         description: format!("Legacy skill from {}", path.display()),
+        api_version: ApiVersion::V1,
         trust: TrustTier::ReadOnly,
         capabilities: vec![Capability::Skill {
             trigger: trigger.clone(),

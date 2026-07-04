@@ -1,0 +1,16 @@
+# Pre-commit hooks for KirkForge-Cli
+# Install with: pip install pre-commit && pre-commit install
+# Run manually with: pre-commit run --all-files
+
+minimum_pre_commit_version: "3.2.0"
+
+repos:
+  - repo: https://github.com/trufflesecurity/trufflehog
+    rev: v3.88.0
+    hooks:
+      - id: trufflehog
+        name: TruffleHog — scan for leaked secrets
+        entry: trufflehog git file://.
+        language: golang
+        pass_filenames: false
+        stages: [pre-commit, pre-push]

@@ -5,8 +5,8 @@
 //! `Tool` trait, similar to `McpToolWrapper`. Plugin tool scripts are invoked
 //! synchronously in a blocking task so the async executor stays responsive.
 
-use crate::shared::{ToolDef, ToolOutcome};
-use crate::tools::Tool;
+use crate::shared::{ToolDef, ToolError, ToolOutcome};
+use crate::tools::{Tool, ToolContext};
 use kirkforge_plugin::{Capability, Plugin};
 use kirkforge_plugin_host::PluginRegistry;
 use std::path::PathBuf;
@@ -49,7 +49,7 @@ impl Tool for PluginToolWrapper {
         self.def.clone()
     }
 
-    async fn run(&self, args: serde_json::Value) -> ToolOutcome {
+    async fn run(&self, _ctx: &ToolContext, args: serde_json::Value) -> ToolOutcome {
         let tool = kirkforge_plugin_host::PluginTool {
             name: self.def.name.to_string(),
             description: self.def.description.to_string(),
@@ -72,12 +72,14 @@ impl Tool for PluginToolWrapper {
 
         match result {
             Ok(Ok(content)) => ToolOutcome::Success { content },
-            Ok(Err(e)) => ToolOutcome::Error {
+            Ok(Err(e)) => ToolOutcome::Failure(ToolError::Execution {
                 message: format!("plugin tool failed: {e}"),
-            },
-            Err(e) => ToolOutcome::Error {
+                exit_code: None,
+                stderr: String::new(),
+            }),
+            Err(e) => ToolOutcome::Failure(ToolError::Internal {
                 message: format!("plugin tool panicked: {e}"),
-            },
+            }),
         }
     }
 }

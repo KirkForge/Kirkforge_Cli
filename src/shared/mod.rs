@@ -97,7 +97,7 @@ pub struct ToolResult {
     pub truncated: Option<bool>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum StreamEvent {
     Text(String),
     Thinking(String),
@@ -109,7 +109,7 @@ pub enum StreamEvent {
     },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum FinishReason {
     Stop,
     Length,
@@ -117,7 +117,7 @@ pub enum FinishReason {
     Error,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TokenUsage {
     pub prompt_tokens: Option<usize>,
     pub completion_tokens: Option<usize>,
@@ -307,12 +307,37 @@ pub struct Config {
     #[serde(default = "default_max_persona_turns")]
     pub max_persona_turns: usize,
 
+    /// Per-tool hard timeout in seconds. The executor wraps every tool
+    /// call with this deadline. Individual tools may apply shorter
+    /// internal timeouts. Default 30 s, clamped to [1, 3600].
+    #[serde(default = "default_tool_timeout_secs")]
+    pub tool_timeout_secs: Option<u64>,
+
+    /// When `true`, destructive tools (write_file, edit_file, bash)
+    /// report what they *would* do without actually doing it. Useful for
+    /// reviewing the model's intended edits before allowing them. Read-
+    /// only tools still run normally.
+    #[serde(default)]
+    pub dry_run: bool,
+
     /// Optional directory containing lifecycle hook scripts (`<event>.sh`).
     /// When `None`, the executor uses the default hooks directory
     /// (`~/.local/share/kirkforge/hooks/`). Set this for tests or custom
     /// deployments.
     #[serde(default)]
     pub hooks_dir: Option<PathBuf>,
+
+    /// When `true`, successful model streams are cached on disk and replayed
+    /// for identical subsequent requests. Keys are content-addressed by
+    /// `(model, system_prompt_hash, messages_hash, tools_hash, json_mode)`.
+    /// Default: false.
+    #[serde(default)]
+    pub cache_enabled: bool,
+
+    /// Directory where the model-response cache stores entries. When `None`,
+    /// the default `~/.local/share/kirkforge/cache/` is used.
+    #[serde(default)]
+    pub cache_dir: Option<PathBuf>,
 }
 
 /// Configuration for a single MCP server connection.
@@ -364,6 +389,10 @@ fn default_max_persona_turns() -> usize {
 
 fn default_commit_max_file_size() -> u64 {
     5 * 1024 * 1024
+}
+
+fn default_tool_timeout_secs() -> Option<u64> {
+    Some(30)
 }
 
 impl Default for Config {
@@ -421,6 +450,10 @@ impl Default for Config {
             max_persona_turns: default_max_persona_turns(),
             hooks_dir: None,
             commit_max_file_size: default_commit_max_file_size(),
+            tool_timeout_secs: default_tool_timeout_secs(),
+            dry_run: false,
+            cache_enabled: false,
+            cache_dir: None,
         }
     }
 }
@@ -447,6 +480,7 @@ pub enum ToolOutcome {
     Error {
         message: String,
     },
+    Failure(ToolError),
     FileContent {
         path: PathBuf,
         content: String,
@@ -471,6 +505,125 @@ pub enum ToolOutcome {
         mime: String,
         data_base64: String,
     },
+}
+
+impl ToolOutcome {
+    /// Convenience constructor for the legacy unstructured error path.
+    /// Prefer `ToolOutcome::Failure(ToolError::...)` when the error kind
+    /// is known.
+    pub fn error(message: impl Into<String>) -> Self {
+        Self::Error {
+            message: message.into(),
+        }
+    }
+}
+
+/// Structured tool failure. Carries enough detail for the executor/TUI
+/// to decide how to present the result and whether the failure is
+/// retryable.
+#[derive(Debug, Clone)]
+pub enum ToolError {
+    /// Tool arguments were missing or malformed.
+    InvalidArgs { message: String },
+    /// The operation was denied by the permission/path guard.
+    AccessDenied { message: String },
+    /// The tool ran but exited non-zero. Includes the exit code and any
+    /// captured stderr.
+    Execution {
+        message: String,
+        exit_code: Option<i32>,
+        stderr: String,
+    },
+    /// The tool did not complete before its deadline.
+    Timeout { after_secs: u64 },
+    /// The caller cancelled the tool mid-flight.
+    Cancelled,
+    /// Catch-all for unexpected tool-internal errors.
+    Internal { message: String },
+}
+
+impl ToolError {
+    /// Human-readable single-line summary. This is what the model sees in
+    /// the conversation log and what line-mode prints.
+    pub fn to_user_message(&self) -> String {
+        match self {
+            Self::InvalidArgs { message } => format!("Invalid tool arguments: {message}"),
+            Self::AccessDenied { message } => format!("Access denied: {message}"),
+            Self::Execution {
+                message,
+                exit_code,
+                stderr,
+            } => {
+                let code = exit_code
+                    .map(|c| format!("exit code {c}"))
+                    .unwrap_or_else(|| "no exit code".to_string());
+                if stderr.is_empty() {
+                    format!("{message} ({code})")
+                } else {
+                    format!("{message} ({code})\nstderr:\n{stderr}")
+                }
+            }
+            Self::Timeout { after_secs } => format!("Tool timed out after {after_secs}s"),
+            Self::Cancelled => "Tool cancelled by user".to_string(),
+            Self::Internal { message } => format!("Internal tool error: {message}"),
+        }
+    }
+
+    /// Convenience for the legacy `ToolOutcome::Error` constructor.
+    pub fn invalid_args(message: impl Into<String>) -> Self {
+        Self::InvalidArgs {
+            message: message.into(),
+        }
+    }
+
+    pub fn internal(message: impl Into<String>) -> Self {
+        Self::Internal {
+            message: message.into(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tool_error_tests {
+    use super::ToolError;
+
+    #[test]
+    fn invalid_args_message() {
+        let err = ToolError::invalid_args("missing 'path'");
+        assert_eq!(err.to_user_message(), "Invalid tool arguments: missing 'path'");
+    }
+
+    #[test]
+    fn execution_message_includes_exit_code_and_stderr() {
+        let err = ToolError::Execution {
+            message: "Command failed".into(),
+            exit_code: Some(42),
+            stderr: "oh no".into(),
+        };
+        assert!(err.to_user_message().contains("exit code 42"));
+        assert!(err.to_user_message().contains("oh no"));
+    }
+
+    #[test]
+    fn execution_message_without_stderr_omits_stderr_block() {
+        let err = ToolError::Execution {
+            message: "Command failed".into(),
+            exit_code: Some(1),
+            stderr: String::new(),
+        };
+        assert_eq!(err.to_user_message(), "Command failed (exit code 1)");
+    }
+
+    #[test]
+    fn timeout_message() {
+        let err = ToolError::Timeout { after_secs: 7 };
+        assert_eq!(err.to_user_message(), "Tool timed out after 7s");
+    }
+
+    #[test]
+    fn cancelled_message() {
+        assert_eq!(ToolError::Cancelled.to_user_message(), "Tool cancelled by user");
+    }
 }
 
 #[derive(Debug, Clone)]

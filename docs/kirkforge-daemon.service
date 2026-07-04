@@ -1,0 +1,16 @@
+[Unit]
+Description=KirkForge session daemon
+Documentation=https://github.com/KirkForge/Kirkforge_Cli
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/kirkforge daemon --foreground
+Restart=on-failure
+RestartSec=5
+
+# Keep daemon logs out of the user's main journal namespace if desired.
+# StandardOutput=journal
+# StandardError=journal
+
+[Install]
+WantedBy=default.target

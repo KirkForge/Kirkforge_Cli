@@ -16,6 +16,7 @@
 /// - `KIRKFORGE_FOLLOW_SYMLINKS` — "true" to allow following symlinks
 /// - `KIRKFORGE_BLOCK_BINARY` — "true" to block binary file reads
 use crate::shared::Config;
+use std::path::PathBuf;
 
 /// Load config with full layered resolution.
 ///
@@ -202,6 +203,19 @@ fn apply_env_overrides(cfg: &mut Config) {
             || val.eq_ignore_ascii_case("1")
             || val.eq_ignore_ascii_case("yes");
     }
+    if let Ok(val) = std::env::var("KIRKFORGE_DRY_RUN") {
+        cfg.dry_run = val.eq_ignore_ascii_case("true")
+            || val.eq_ignore_ascii_case("1")
+            || val.eq_ignore_ascii_case("yes");
+    }
+    if let Ok(val) = std::env::var("KIRKFORGE_CACHE_ENABLED") {
+        cfg.cache_enabled = val.eq_ignore_ascii_case("true")
+            || val.eq_ignore_ascii_case("1")
+            || val.eq_ignore_ascii_case("yes");
+    }
+    if let Ok(val) = std::env::var("KIRKFORGE_CACHE_DIR") {
+        cfg.cache_dir = Some(PathBuf::from(val));
+    }
 }
 
 /// Merge a parsed TOML table into a Config, field by field.
@@ -237,6 +251,15 @@ fn merge_toml_into_config(cfg: &mut Config, table: toml::Table) {
     }
     if let Some(Value::Boolean(v)) = table.get("carryover_enabled") {
         cfg.carryover_enabled = *v;
+    }
+    if let Some(Value::Boolean(v)) = table.get("dry_run") {
+        cfg.dry_run = *v;
+    }
+    if let Some(Value::Boolean(v)) = table.get("cache_enabled") {
+        cfg.cache_enabled = *v;
+    }
+    if let Some(Value::String(v)) = table.get("cache_dir") {
+        cfg.cache_dir = Some(PathBuf::from(v));
     }
 
     // Arrays
@@ -293,6 +316,18 @@ pub fn config_diff_summary(before: &Config, after: &Config) -> String {
         diffs.push(format!(
             "bang_requires_approval: {} → {}",
             before.bang_requires_approval, after.bang_requires_approval
+        ));
+    }
+    if before.dry_run != after.dry_run {
+        diffs.push(format!(
+            "dry_run: {} → {}",
+            before.dry_run, after.dry_run
+        ));
+    }
+    if before.cache_enabled != after.cache_enabled {
+        diffs.push(format!(
+            "cache_enabled: {} → {}",
+            before.cache_enabled, after.cache_enabled
         ));
     }
     if before.sandbox_dir != after.sandbox_dir {
@@ -364,6 +399,30 @@ mod tests {
         apply_env_overrides(&mut cfg);
         assert!(!cfg.auto_approve);
         set_env("KIRKFORGE_AUTO_APPROVE", None);
+    }
+
+    #[test]
+    fn test_env_dry_run_true() {
+        let mut cfg = Config::default();
+        assert!(!cfg.dry_run);
+
+        set_env("KIRKFORGE_DRY_RUN", Some("true"));
+        apply_env_overrides(&mut cfg);
+        assert!(cfg.dry_run);
+        set_env("KIRKFORGE_DRY_RUN", None);
+    }
+
+    #[test]
+    fn test_env_dry_run_false() {
+        let mut cfg = Config {
+            dry_run: true,
+            ..Default::default()
+        };
+
+        set_env("KIRKFORGE_DRY_RUN", Some("false"));
+        apply_env_overrides(&mut cfg);
+        assert!(!cfg.dry_run);
+        set_env("KIRKFORGE_DRY_RUN", None);
     }
 
     #[test]

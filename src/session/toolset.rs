@@ -159,6 +159,7 @@ impl Toolset for CompositeToolset {
 mod tests {
     use super::*;
     use crate::shared::ToolOutcome;
+    use crate::tools::ToolContext;
     use serde_json::json;
 
     struct DummyTool {
@@ -175,7 +176,7 @@ mod tests {
             }
         }
 
-        async fn run(&self, _args: serde_json::Value) -> ToolOutcome {
+        async fn run(&self, _ctx: &ToolContext, _args: serde_json::Value) -> ToolOutcome {
             ToolOutcome::Success {
                 content: "ok".to_string(),
             }

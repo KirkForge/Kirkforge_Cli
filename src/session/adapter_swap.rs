@@ -14,7 +14,8 @@
 //!   any in-flight connections from the previous adapter.
 //! - A swap event is emitted as a TurnEvent token so the user sees the switch.
 
-use crate::adapters::{self, ModelAdapter};
+use crate::adapters::{self, caching::CachingAdapter, ModelAdapter};
+use crate::adapters::cache::ResponseCache;
 use crate::session::router;
 use crate::shared::Config;
 
@@ -65,10 +66,13 @@ impl AdapterSwap {
             return None;
         }
 
-        let new_adapter = adapters::adapter_for(
-            &suggested,
-            &self.ollama_host,
-            self.model_type_override.as_deref(),
+        let new_adapter = Self::wrap_cached(
+            config,
+            adapters::adapter_for(
+                &suggested,
+                &self.ollama_host,
+                self.model_type_override.as_deref(),
+            ),
         );
 
         let _old = std::mem::replace(adapter, new_adapter);
@@ -88,16 +92,35 @@ impl AdapterSwap {
     /// choice wins. Returns the name of the newly-installed adapter
     /// (which is the same as the input, after re-routing through
     /// `adapters::adapter_for` for any model-type inference).
-    pub fn force_swap(&mut self, model_name: &str, adapter: &mut Box<dyn ModelAdapter>) -> String {
-        let new_adapter = adapters::adapter_for(
-            model_name,
-            &self.ollama_host,
-            self.model_type_override.as_deref(),
+    pub fn force_swap(
+        &mut self,
+        model_name: &str,
+        adapter: &mut Box<dyn ModelAdapter>,
+        config: &Config,
+    ) -> String {
+        let new_adapter = Self::wrap_cached(
+            config,
+            adapters::adapter_for(
+                model_name,
+                &self.ollama_host,
+                self.model_type_override.as_deref(),
+            ),
         );
         let _old = std::mem::replace(adapter, new_adapter);
         // _old is dropped here, releasing any in-flight connections
         self.current_model_name = model_name.to_string();
         model_name.to_string()
+    }
+
+    /// Wrap a freshly-constructed adapter in the response cache when
+    /// caching is enabled, preserving the config's `json_mode` flag.
+    fn wrap_cached(config: &Config, adapter: Box<dyn ModelAdapter>) -> Box<dyn ModelAdapter> {
+        if config.cache_enabled {
+            let cache = ResponseCache::new(true, config.cache_dir.clone());
+            Box::new(CachingAdapter::new(adapter, cache, config.json_mode))
+        } else {
+            adapter
+        }
     }
 
     /// Resolve the final model name: consult the user's configured
@@ -252,7 +275,8 @@ mod tests {
             "http://localhost:11434".into(),
             None,
         );
-        let new = swap.force_swap("qwen2.5:3b", &mut make_dummy_adapter());
+        let cfg = Config::default();
+        let new = swap.force_swap("qwen2.5:3b", &mut make_dummy_adapter(), &cfg);
         assert_eq!(new, "qwen2.5:3b");
         assert_eq!(swap.current_model_name, "qwen2.5:3b");
     }
@@ -264,7 +288,8 @@ mod tests {
     #[test]
     fn test_force_swap_same_model_is_noop_in_effect() {
         let mut swap = AdapterSwap::new("qwen2.5:3b".into(), "http://localhost:11434".into(), None);
-        let new = swap.force_swap("qwen2.5:3b", &mut make_dummy_adapter());
+        let cfg = Config::default();
+        let new = swap.force_swap("qwen2.5:3b", &mut make_dummy_adapter(), &cfg);
         assert_eq!(new, "qwen2.5:3b");
         assert_eq!(swap.current_model_name, "qwen2.5:3b");
     }

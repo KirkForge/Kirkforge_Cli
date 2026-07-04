@@ -56,7 +56,7 @@ impl DaemonClient {
     }
 
     /// Health check.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub async fn ping(&mut self) -> anyhow::Result<()> {
         match self.call(Request::Ping).await? {
             Response::Ok { .. } => Ok(()),

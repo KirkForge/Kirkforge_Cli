@@ -68,7 +68,7 @@ impl ForkManager {
         std::fs::create_dir_all(&fork_dir)?;
 
         let fork_path = fork_dir.join("conversation.ndjson");
-        let mut fork_log = ConversationLog::open(fork_path.clone())?;
+        let mut fork_log = ConversationLog::open(fork_path.clone())?.0;
 
         // Copy messages up to the fork point
         let all_msgs = parent_conversation.all();
@@ -118,7 +118,7 @@ impl ForkManager {
             .iter()
             .find(|f| f.id == id)
             .ok_or_else(|| anyhow::anyhow!("Fork '{id}' not found"))?;
-        ConversationLog::open(fork.path.clone())
+        ConversationLog::open(fork.path.clone()).map(|(log, _outcome)| log)
     }
 
     /// Delete a fork and its files.
@@ -163,7 +163,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
 
         let log_path = dir.join("session.conv.ndjson");
-        let mut log = ConversationLog::open(log_path.clone()).unwrap();
+        let mut log = ConversationLog::open(log_path.clone()).unwrap().0;
 
         // Add some messages
         use crate::shared::{Message, Role};
@@ -203,7 +203,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
 
         let log_path = dir.join("session.conv.ndjson");
-        let log = ConversationLog::open(log_path.clone()).unwrap();
+        let log = ConversationLog::open(log_path.clone()).unwrap().0;
         let mut mgr = ForkManager::new("test", &log_path);
         let fork = mgr.create_fork("get-test", &log, -1).unwrap();
 
@@ -224,7 +224,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
 
         let log_path = dir.join("session.conv.ndjson");
-        let log = ConversationLog::open(log_path.clone()).unwrap();
+        let log = ConversationLog::open(log_path.clone()).unwrap().0;
         let mut mgr = ForkManager::new("test", &log_path);
         let fork = mgr.create_fork("del-me", &log, -1).unwrap();
 

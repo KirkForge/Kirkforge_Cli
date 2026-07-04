@@ -1,6 +1,6 @@
 use crate::session::undo::UndoKind;
-use crate::shared::{ToolDef, ToolOutcome};
-use crate::tools::{Tool, UndoStackRef};
+use crate::shared::{ToolDef, ToolError, ToolOutcome};
+use crate::tools::{Tool, ToolContext, UndoStackRef};
 use similar::{ChangeTag, TextDiff};
 use std::path::PathBuf;
 
@@ -51,31 +51,31 @@ impl Tool for EditFile {
         }
     }
 
-    async fn run(&self, args: serde_json::Value) -> ToolOutcome {
+    async fn run(&self, ctx: &ToolContext, args: serde_json::Value) -> ToolOutcome {
         let path = match args.get("path").and_then(|p| p.as_str()) {
             Some(p) => PathBuf::from(shellexpand::tilde(p).as_ref()),
             None => {
-                return ToolOutcome::Error {
-                    message: "Missing 'path' argument".into(),
-                }
+                return ToolOutcome::Failure(ToolError::invalid_args(
+                    "Missing 'path' argument",
+                ));
             }
         };
 
         let old = match args.get("old_string").and_then(|o| o.as_str()) {
             Some(o) => o.to_string(),
             None => {
-                return ToolOutcome::Error {
-                    message: "Missing 'old_string' argument".into(),
-                }
+                return ToolOutcome::Failure(ToolError::invalid_args(
+                    "Missing 'old_string' argument",
+                ));
             }
         };
 
         let new = match args.get("new_string").and_then(|n| n.as_str()) {
             Some(n) => n.to_string(),
             None => {
-                return ToolOutcome::Error {
-                    message: "Missing 'new_string' argument".into(),
-                }
+                return ToolOutcome::Failure(ToolError::invalid_args(
+                    "Missing 'new_string' argument",
+                ));
             }
         };
 
@@ -90,29 +90,71 @@ impl Tool for EditFile {
             match std::fs::read(&path) {
                 Ok(b) => b,
                 Err(e) => {
-                    return ToolOutcome::Error {
+                    return ToolOutcome::Failure(ToolError::Internal {
                         message: format!(
                             "Cannot read existing file {} for undo snapshot: {}. \
                              Refusing to edit without a snapshot.",
                             path.display(),
                             e
                         ),
-                    };
+                    });
                 }
             }
         } else {
             Vec::new()
         };
 
+        if ctx.dry_run {
+            let content = match String::from_utf8(prev_bytes.clone()) {
+                Ok(c) => c,
+                Err(_) => {
+                    return ToolOutcome::Failure(ToolError::Internal {
+                        message: format!(
+                            "{} is not valid UTF-8; cannot edit_file (use bash for binary content)",
+                            path.display()
+                        ),
+                    });
+                }
+            };
+            if !content.contains(&old) {
+                return ToolOutcome::Failure(ToolError::Execution {
+                    message: format!("Dry run: string not found in {}", path.display()),
+                    exit_code: None,
+                    stderr: String::new(),
+                });
+            }
+            let occurrences = content.matches(&old).count();
+            if occurrences > 1 {
+                return ToolOutcome::Failure(ToolError::Execution {
+                    message: format!(
+                        "Dry run: old_string matches {} times in {}; edit_file requires a unique match",
+                        occurrences,
+                        path.display()
+                    ),
+                    exit_code: None,
+                    stderr: String::new(),
+                });
+            }
+            let new_content = content.replacen(&old, &new, 1);
+            let diff = render_diff(&content, &new_content);
+            return ToolOutcome::Success {
+                content: format!(
+                    "Dry run: would edit {}:\n{}",
+                    path.display(),
+                    diff
+                ),
+            };
+        }
+
         let content = match String::from_utf8(prev_bytes.clone()) {
             Ok(c) => c,
             Err(_) => {
-                return ToolOutcome::Error {
+                return ToolOutcome::Failure(ToolError::Internal {
                     message: format!(
                         "{} is not valid UTF-8; cannot edit_file (use bash for binary content)",
                         path.display()
                     ),
-                };
+                });
             }
         };
 
@@ -134,14 +176,16 @@ impl Tool for EditFile {
                 // appears more than once, we cannot safely choose one.
                 let fuzzy_occurrences = normalized.matches(&old_normalized).count();
                 if fuzzy_occurrences > 1 {
-                    return ToolOutcome::Error {
+                    return ToolOutcome::Failure(ToolError::Execution {
                         message: format!(
                             "old_string matches {} times in {} after whitespace normalization; \
                              edit_file requires a unique match",
                             fuzzy_occurrences,
                             path.display()
                         ),
-                    };
+                        exit_code: None,
+                        stderr: String::new(),
+                    });
                 }
 
                 // Found fuzzy match — find the span in the normalized content,
@@ -204,18 +248,26 @@ impl Tool for EditFile {
                     let diff = render_diff(&content, &new_content);
                     return match std::fs::write(&path, &new_content) {
                         Ok(_) => {
-                            snapshot_for_undo(
+                            match snapshot_for_undo(
                                 &self.undo,
                                 UndoKind::Edit,
                                 &path,
                                 prev_existed,
                                 &prev_bytes,
-                            );
-                            ToolOutcome::FileEdit { path, diff }
+                            ) {
+                                Ok(()) => ToolOutcome::FileEdit { path, diff },
+                                Err(e) => ToolOutcome::Failure(ToolError::Internal {
+                                    message: format!(
+                                        "Edited {path}, but undo snapshot failed: {e}. \
+                                         The edit was applied; use git to revert if needed.",
+                                        path = path.display()
+                                    ),
+                                }),
+                            }
                         }
-                        Err(e) => ToolOutcome::Error {
+                        Err(e) => ToolOutcome::Failure(ToolError::Internal {
                             message: format!("Cannot write {}: {}", path.display(), e),
-                        },
+                        }),
                     };
                 }
             }
@@ -223,14 +275,16 @@ impl Tool for EditFile {
             // Still not found — find nearby context to help the model
             let context_lines: Vec<&str> = content.lines().take(10).collect();
             let preview = context_lines.join("\n");
-            return ToolOutcome::Error {
+            return ToolOutcome::Failure(ToolError::Execution {
                 message: format!(
                     "String not found in {}. First {} lines:\n{}",
                     path.display(),
                     context_lines.len(),
                     preview
                 ),
-            };
+                exit_code: None,
+                stderr: String::new(),
+            });
         }
 
         // Ambiguous exact match guard: if old_string appears more than
@@ -238,58 +292,65 @@ impl Tool for EditFile {
         // surprising. Force the model to include more context.
         let occurrences = content.matches(&old).count();
         if occurrences > 1 {
-            return ToolOutcome::Error {
+            return ToolOutcome::Failure(ToolError::Execution {
                 message: format!(
                     "old_string matches {} times in {}; edit_file requires a unique match",
                     occurrences,
                     path.display()
                 ),
-            };
+                exit_code: None,
+                stderr: String::new(),
+            });
         }
 
         let new_content = content.replacen(&old, &new, 1);
         let diff = render_diff(&content, &new_content);
 
         match std::fs::write(&path, &new_content) {
-            Ok(_) => {
-                snapshot_for_undo(&self.undo, UndoKind::Edit, &path, prev_existed, &prev_bytes);
-                ToolOutcome::FileEdit { path, diff }
-            }
-            Err(e) => ToolOutcome::Error {
-                message: format!("Cannot write {}: {}", path.display(), e),
+            Ok(_) => match snapshot_for_undo(
+                &self.undo,
+                UndoKind::Edit,
+                &path,
+                prev_existed,
+                &prev_bytes,
+            ) {
+                Ok(()) => ToolOutcome::FileEdit { path, diff },
+                Err(e) => ToolOutcome::Failure(ToolError::Internal {
+                    message: format!(
+                        "Edited {path}, but undo snapshot failed: {e}. \
+                         The edit was applied; use git to revert if needed.",
+                        path = path.display()
+                    ),
+                }),
             },
+            Err(e) => ToolOutcome::Failure(ToolError::Internal {
+                message: format!("Cannot write {}: {}", path.display(), e),
+            }),
         }
     }
 }
 
-/// Push a snapshot onto the undo stack, if one was supplied. On
-/// failure (disk full, permission denied), log a warning and
-/// continue — the edit still succeeded; it just won't be undoable.
+/// Push a snapshot onto the undo stack, if one was supplied.
+/// Returns an error so the caller can surface the failure to the user
+/// instead of silently leaving the edit un-undoable.
 fn snapshot_for_undo(
     undo: &Option<UndoStackRef>,
     kind: UndoKind,
     path: &std::path::Path,
     prev_existed: bool,
     prev_bytes: &[u8],
-) {
-    if let Some(stack) = undo {
-        match stack.lock() {
-            Ok(mut s) => {
-                if let Err(e) = s.push(kind, path, prev_existed, prev_bytes) {
-                    tracing::warn!(
-                        path = %path.display(),
-                        error = ?e,
-                        "edit succeeded but undo snapshot failed — edit will not be undoable"
-                    );
-                }
-            }
-            Err(e) => {
-                tracing::warn!(
-                    error = ?e,
-                    "undo stack mutex poisoned; edit will not be undoable"
-                );
-            }
+) -> anyhow::Result<()> {
+    let Some(stack) = undo else {
+        return Ok(());
+    };
+    match stack.lock() {
+        Ok(mut s) => {
+            s.push(kind, path, prev_existed, prev_bytes)?;
+            Ok(())
         }
+        Err(e) => Err(anyhow::anyhow!(
+            "undo stack mutex poisoned: {e}; edit will not be undoable"
+        )),
     }
 }
 
@@ -312,6 +373,7 @@ fn render_diff(old: &str, new: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tools::ToolContext;
 
     #[tokio::test]
     async fn test_fuzzy_fallback_preserves_original_formatting() {
@@ -322,13 +384,14 @@ mod tests {
         std::fs::write(&path, content).unwrap();
 
         let tool = EditFile::new(None);
+        let ctx = ToolContext::new();
         let args = serde_json::json!({
             "path": path.to_string_lossy(),
             "old_string": "let x = 1;",
             "new_string": "let y = 2;",
         });
 
-        let result = tool.run(args).await;
+        let result = tool.run(&ctx, args).await;
         match result {
             ToolOutcome::FileEdit { path: _, diff: _ } => {
                 let result_content = std::fs::read_to_string(&path).unwrap();
@@ -358,13 +421,14 @@ mod tests {
         std::fs::write(&path, content).unwrap();
 
         let tool = EditFile::new(None);
+        let ctx = ToolContext::new();
         let args = serde_json::json!({
             "path": path.to_string_lossy(),
             "old_string": "let x = 1;",
             "new_string": "let y = 2;",
         });
 
-        let result = tool.run(args).await;
+        let result = tool.run(&ctx, args).await;
         match result {
             ToolOutcome::FileEdit { path: _, diff: _ } => {
                 let result_content = std::fs::read_to_string(&path).unwrap();
@@ -414,12 +478,13 @@ mod tests {
             std::sync::Arc::new(std::sync::Mutex::new(UndoStack::for_session(&id).unwrap()));
 
         let tool = EditFile::new(Some(stack.clone()));
+        let ctx = ToolContext::new();
         let args = serde_json::json!({
             "path": path.to_string_lossy(),
             "old_string": "original",
             "new_string": "modified",
         });
-        let result = tool.run(args).await;
+        let result = tool.run(&ctx, args).await;
         assert!(matches!(result, ToolOutcome::FileEdit { .. }));
 
         // Stack should have one Edit entry, and pop should restore
@@ -444,14 +509,15 @@ mod tests {
         std::fs::write(&path, "fn foo() {}\nfn bar() {}\nfn foo() {}\n").unwrap();
 
         let tool = EditFile::new(None);
+        let ctx = ToolContext::new();
         let args = serde_json::json!({
             "path": path.to_string_lossy(),
             "old_string": "fn foo() {}",
             "new_string": "fn baz() {}",
         });
-        let result = tool.run(args).await;
+        let result = tool.run(&ctx, args).await;
         assert!(
-            matches!(result, ToolOutcome::Error { ref message } if message.contains("matches 2 times")),
+            matches!(result, ToolOutcome::Failure(ToolError::Execution { ref message, .. }) if message.contains("matches 2 times")),
             "expected ambiguous-match error, got {result:?}"
         );
         let _ = std::fs::remove_file(&path);
@@ -466,16 +532,38 @@ mod tests {
         std::fs::write(&path, "let x = 1;    \nlet y = 2;\nlet x = 1;\n").unwrap();
 
         let tool = EditFile::new(None);
+        let ctx = ToolContext::new();
         let args = serde_json::json!({
             "path": path.to_string_lossy(),
             "old_string": "let x = 1;",
             "new_string": "let z = 3;",
         });
-        let result = tool.run(args).await;
+        let result = tool.run(&ctx, args).await;
         assert!(
-            matches!(result, ToolOutcome::Error { ref message } if message.contains("matches 2 times")),
+            matches!(result, ToolOutcome::Failure(ToolError::Execution { ref message, .. }) if message.contains("matches 2 times")),
             "expected ambiguous fuzzy-match error, got {result:?}"
         );
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn test_edit_file_dry_run_does_not_modify_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("dry_run_edit.txt");
+        std::fs::write(&path, "fn old() {}\n").unwrap();
+
+        let tool = EditFile::new(None);
+        let ctx = ToolContext::with_dry_run(true);
+        let args = serde_json::json!({
+            "path": path.to_string_lossy(),
+            "old_string": "fn old() {}",
+            "new_string": "fn new() {}",
+        });
+        let result = tool.run(&ctx, args).await;
+        assert!(
+            matches!(result, ToolOutcome::Success { ref content } if content.contains("Dry run") && content.contains("would edit")),
+            "expected dry-run success, got {result:?}"
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "fn old() {}\n");
     }
 }

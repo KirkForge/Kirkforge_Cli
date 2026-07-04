@@ -1,7 +1,7 @@
 /// Tool to check the status of background bash jobs.
 use crate::session::bash_jobs::global_registry;
-use crate::shared::{ToolDef, ToolOutcome};
-use crate::tools::Tool;
+use crate::shared::{ToolDef, ToolError, ToolOutcome};
+use crate::tools::{Tool, ToolContext};
 
 pub struct BashStatus;
 
@@ -24,13 +24,13 @@ impl Tool for BashStatus {
         }
     }
 
-    async fn run(&self, args: serde_json::Value) -> ToolOutcome {
+    async fn run(&self, _ctx: &ToolContext, args: serde_json::Value) -> ToolOutcome {
         let job_id = match args.get("id").and_then(|v| v.as_u64()) {
             Some(id) => id,
             None => {
-                return ToolOutcome::Error {
-                    message: "Missing 'id' argument".into(),
-                }
+                return ToolOutcome::Failure(ToolError::invalid_args(
+                    "Missing 'id' argument",
+                ));
             }
         };
 
@@ -48,9 +48,11 @@ impl Tool for BashStatus {
                         };
                     }
                     crate::session::bash_jobs::JobStatus::Failed(e) => {
-                        return ToolOutcome::Error {
+                        return ToolOutcome::Failure(ToolError::Execution {
                             message: format!("Job #{} failed: {}", job.id, e),
-                        };
+                            exit_code: None,
+                            stderr: String::new(),
+                        });
                     }
                     crate::session::bash_jobs::JobStatus::Cancelled => "cancelled",
                 };
@@ -61,9 +63,9 @@ impl Tool for BashStatus {
                     ),
                 }
             }
-            None => ToolOutcome::Error {
+            None => ToolOutcome::Failure(ToolError::Internal {
                 message: format!("Job #{job_id} not found"),
-            },
+            }),
         }
     }
 }

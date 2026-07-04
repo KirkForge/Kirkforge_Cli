@@ -480,9 +480,16 @@ pub fn highlight_line(
         }
 
         // Single non-identifier character.
-        let ch = rest.chars().next().unwrap();
-        buf.push(ch);
-        i += ch.len_utf8();
+        if let Some(ch) = rest.chars().next() {
+            buf.push(ch);
+            i += ch.len_utf8();
+        } else {
+            // Defensive: `rest` should never be empty here because the
+            // loop guard checks `i < line.len()`, but malformed UTF-8 or
+            // an off-by-one in byte-vs-char indexing could land here.
+            // Break rather than panic so the TUI stays alive.
+            break;
+        }
     }
 
     flush_buf(&mut buf, &mut spans, base_style);

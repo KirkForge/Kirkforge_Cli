@@ -60,7 +60,7 @@ pub async fn handle_fork_command(args: &str, state: &mut AppState) -> String {
 
     // Open the conversation log to read the latest state
     match ConversationLog::open(log_path) {
-        Ok(conv_log) => {
+        Ok((conv_log, _outcome)) => {
             // Fork point: -1 (end) by default, or parse an optional count
             let fork_point: i64 = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(-1);
 
@@ -127,10 +127,11 @@ pub async fn handle_resume_command(
     };
 
     // Open the fork's conversation log and resume it.
-    match ConversationLog::open(fork.path.clone()) {
-        Ok(fork_log) => resume_conversation_log(fork_log, state, resume_tx).await,
-        Err(e) => format!("Error opening fork log: {e}"),
-    }
+    let fork_log = match ConversationLog::open(fork.path.clone()) {
+        Ok((log, _outcome)) => log,
+        Err(e) => return format!("Error opening fork log: {e}"),
+    };
+    resume_conversation_log(fork_log, state, resume_tx).await
 }
 
 /// Resume the TUI and executor into a new conversation log.

@@ -24,13 +24,7 @@ impl GeminiAdapter {
         Self {
             model: model.to_string(),
             api_base: ollama_host.trim_end_matches('/').to_string(),
-            client: reqwest::Client::builder()
-                .tcp_nodelay(true)
-                .build()
-                .unwrap_or_else(|e| {
-                    tracing::warn!(error = %e, "failed to build custom reqwest client; falling back to default");
-                    reqwest::Client::new()
-                }),
+            client: super::build_reqwest_client(),
             json_mode: false,
         }
     }
@@ -69,43 +63,18 @@ impl ModelAdapter for GeminiAdapter {
         );
         let url = format!("{}/api/chat", self.api_base);
 
-        let response = {
-            let mut attempt = 0u32;
-            loop {
-                attempt += 1;
-                match self
-                    .client
+        let response = super::send_with_retry(
+            &self.client,
+            || async {
+                self.client
                     .post(&url)
                     .json(&body)
-                    .timeout(std::time::Duration::from_secs(300))
+                    .timeout(std::time::Duration::from_secs(super::MODEL_REQUEST_TIMEOUT_SECS))
                     .send()
                     .await
-                {
-                    Err(e) if attempt < 3 && (e.is_connect() || e.is_timeout()) => {
-                        tracing::warn!(attempt, error = %e, "model request failed, retrying");
-                        tokio::time::sleep(std::time::Duration::from_secs(1u64 << (attempt - 1)))
-                            .await;
-                    }
-                    Err(e) => return Err(e.into()),
-                    Ok(r) => {
-                        let s = r.status().as_u16();
-                        if attempt < 3 && (s == 429 || s == 503) {
-                            tracing::warn!(
-                                attempt,
-                                status = s,
-                                "model returned transient error, retrying"
-                            );
-                            tokio::time::sleep(std::time::Duration::from_secs(
-                                1u64 << (attempt - 1),
-                            ))
-                            .await;
-                        } else {
-                            break r.error_for_status()?;
-                        }
-                    }
-                }
-            }
-        };
+            },
+        )
+        .await?;
 
         // Channel size: 4096 events. See deepseek.rs for the
         // rationale (2026-06-11 incident — 128 was too small for

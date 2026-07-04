@@ -234,8 +234,18 @@ impl UndoStack {
         // or the new snapshot fully visible. Never a half-truncated
         // file the loader might mistake for valid.
         let tmp_snap = snap_path.with_extension("snap.tmp");
-        std::fs::write(&tmp_snap, prev_bytes)?;
-        std::fs::rename(&tmp_snap, &snap_path)?;
+        std::fs::write(&tmp_snap, prev_bytes).map_err(|e| {
+            anyhow::anyhow!(
+                "cannot write undo snapshot for {}: {e}",
+                path.display()
+            )
+        })?;
+        std::fs::rename(&tmp_snap, &snap_path).map_err(|e| {
+            anyhow::anyhow!(
+                "cannot finalize undo snapshot for {}: {e}",
+                path.display()
+            )
+        })?;
 
         // Write the sidecar metadata.
         let meta = SerializedMeta {

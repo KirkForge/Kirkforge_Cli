@@ -1,7 +1,7 @@
 /// Tool to cancel a running background bash job.
 use crate::session::bash_jobs::global_registry;
-use crate::shared::{ToolDef, ToolOutcome};
-use crate::tools::Tool;
+use crate::shared::{ToolDef, ToolError, ToolOutcome};
+use crate::tools::{Tool, ToolContext};
 
 pub struct BashCancel;
 
@@ -24,13 +24,13 @@ impl Tool for BashCancel {
         }
     }
 
-    async fn run(&self, args: serde_json::Value) -> ToolOutcome {
+    async fn run(&self, _ctx: &ToolContext, args: serde_json::Value) -> ToolOutcome {
         let job_id = match args.get("id").and_then(|v| v.as_u64()) {
             Some(id) => id,
             None => {
-                return ToolOutcome::Error {
-                    message: "Missing 'id' argument".into(),
-                }
+                return ToolOutcome::Failure(ToolError::invalid_args(
+                    "Missing 'id' argument",
+                ));
             }
         };
 
@@ -41,12 +41,14 @@ impl Tool for BashCancel {
             }
         } else {
             match registry.get(job_id).await {
-                Some(job) => ToolOutcome::Error {
+                Some(job) => ToolOutcome::Failure(ToolError::Execution {
                     message: format!("Job #{} is not running (status: {:?})", job_id, job.status),
-                },
-                None => ToolOutcome::Error {
+                    exit_code: None,
+                    stderr: String::new(),
+                }),
+                None => ToolOutcome::Failure(ToolError::Internal {
                     message: format!("Job #{job_id} not found"),
-                },
+                }),
             }
         }
     }

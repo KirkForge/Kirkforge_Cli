@@ -27,6 +27,12 @@
 # coding. Default: false.
 # auto_approve = false
 
+# When true, destructive tools (write_file, edit_file, bash) report what they
+# would do without actually doing it. Read-only tools still run normally.
+# Useful for reviewing the model's intended edits before allowing them.
+# Default: false.
+# dry_run = false
+
 # When true, the `!command` passthrough routes through the same approval gate
 # as the bash tool. Default: false (passthrough is friction-free).
 # bang_requires_approval = false

@@ -33,6 +33,37 @@ jobs:
       - name: Build release binary
         run: cargo build --release --locked
 
+  integration:
+    runs-on: ubuntu-latest
+    services:
+      ollama:
+        image: ollama/ollama:latest
+        ports:
+          - 11434:11434
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Wait for Ollama and pull test model
+        timeout-minutes: 10
+        run: |
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:11434/api/tags >/dev/null 2>&1; then
+              break
+            fi
+            sleep 2
+          done
+          curl -fsS http://localhost:11434/api/tags >/dev/null
+          curl -fsS -X POST http://localhost:11434/api/pull \
+            -d '{"model": "qwen2.5:0.5b", "stream": false}'
+
+      - name: Run integration tests
+        run: cargo test --test integration_test -- --include-ignored --nocapture
+
   audit:
     runs-on: ubuntu-latest
     steps:

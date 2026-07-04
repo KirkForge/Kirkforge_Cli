@@ -153,6 +153,12 @@ enum Command {
         #[arg(long)]
         auto_approve: bool,
 
+        /// Preview destructive operations without applying them.
+        /// Read-only tools still run; write_file, edit_file, and bash
+        /// report what they would do.
+        #[arg(long)]
+        dry_run: bool,
+
         #[arg(short, long)]
         system: Option<String>,
 
@@ -242,6 +248,7 @@ async fn main() {
             host,
             model_type,
             auto_approve,
+            dry_run,
             system,
             resume,
             non_interactive,
@@ -257,6 +264,7 @@ async fn main() {
                 host,
                 model_type,
                 auto_approve,
+                dry_run,
                 system,
                 resume,
                 non_interactive,
@@ -326,11 +334,11 @@ fn handle_sessions_command(
     let content = match fmt {
         "ndjson" => std::fs::read_to_string(&path)?,
         "json" => {
-            let log = ConversationLog::open(path)?;
+            let (log, _) = ConversationLog::open(path)?;
             serde_json::to_string_pretty(log.all())?
         }
         "markdown" | "md" => {
-            let log = ConversationLog::open(path)?;
+            let (log, _) = ConversationLog::open(path)?;
             // Build ConversationEntry list from Message list for transcript formatter
             let entries: Vec<tui::app::ConversationEntry> = log
                 .all()
@@ -365,6 +373,7 @@ struct RunArgs {
     host: Option<String>,
     model_type: Option<String>,
     auto_approve: bool,
+    dry_run: bool,
     system: Option<String>,
     resume: Option<String>,
     non_interactive: bool,
@@ -382,6 +391,7 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
         host,
         model_type,
         auto_approve,
+        dry_run,
         system,
         resume,
         non_interactive,
@@ -401,6 +411,9 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     let model = model.unwrap_or_else(|| config.default_model.clone());
     if auto_approve {
         config.auto_approve = true;
+    }
+    if dry_run {
+        config.dry_run = true;
     }
 
     if let Err(e) = session::config::save_config(&config) {
@@ -501,9 +514,15 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
         .unwrap_or_else(|| session_id.to_string());
     daemon::client::try_touch(&touch_id, log_path.clone()).await;
 
-    let conversation = session::conversation::ConversationLog::open(log_path)?;
+    let (conversation, open_outcome) = session::conversation::ConversationLog::open(log_path)?;
+    if let session::conversation::OpenOutcome::Restored(messages) = open_outcome {
+        eprintln!("⚠️  Session log was corrupt; restored {messages} message(s) from checkpoint.");
+    }
 
-    let adapter = adapters::adapter_for(&model, ollama_host, model_type.as_deref());
+    let adapter = adapters::caching::maybe_wrap_cached(
+        adapters::adapter_for(&model, ollama_host, model_type.as_deref()),
+        &config,
+    );
 
     // ── Undo stack (review.md gap #7) ──
     // Per-session edit undo. Constructed here so the EditFile and
@@ -617,7 +636,7 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
             shared_config,
             adapter,
             tools,
-            conversation,
+            (conversation, open_outcome),
             system,
             undo_stack,
             &plugin_registry,
@@ -628,7 +647,7 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
             shared_config,
             adapter,
             tools,
-            conversation,
+            (conversation, open_outcome),
             system,
             output,
             max_turns,
@@ -668,7 +687,10 @@ async fn run_line_mode(
     config: crate::shared::SharedConfig,
     adapter: Box<dyn adapters::ModelAdapter>,
     tools: Vec<Arc<dyn tools::Tool>>,
-    conversation: session::conversation::ConversationLog,
+    conversation: (
+        session::conversation::ConversationLog,
+        session::conversation::OpenOutcome,
+    ),
     system: Option<String>,
     output: crate::shared::OutputFormat,
     max_turns: usize,
@@ -680,6 +702,7 @@ async fn run_line_mode(
     // read from /dev/tty so the user can actually approve or deny.
     let model_name = adapter.model_info().name.clone();
 
+    let (conversation, open_outcome) = conversation;
     let mut executor = session::executor::Executor::with_log_and_undo_and_plugins(
         adapter,
         tools,
@@ -689,6 +712,9 @@ async fn run_line_mode(
         None,
         Some(plugin_registry),
     );
+    if let session::conversation::OpenOutcome::Restored(messages) = open_outcome {
+        executor.set_recovered_messages(messages);
+    }
     executor.set_system_override(system.clone());
 
     let (approval_tx, approval_rx) =
@@ -1023,6 +1049,14 @@ fn emit_turn_events(
             session::executor::TurnEvent::PlanComplete => {
                 // Non-interactive mode does not enter plan mode, so this
                 // event should not arrive. If it does, ignore it.
+            }
+            session::executor::TurnEvent::Recovered { messages } => {
+                if output == crate::shared::OutputFormat::Text {
+                    eprintln!("\n[recovered] restored {messages} message(s) from checkpoint");
+                } else if output == crate::shared::OutputFormat::StreamJson {
+                    let line = serde_json::json!({"type": "recovered", "messages": messages});
+                    print_json_line(&line);
+                }
             }
             session::executor::TurnEvent::CompactionReport {
                 dropped_tool_results,

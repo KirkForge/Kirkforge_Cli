@@ -3,7 +3,7 @@ use crate::session::bash_jobs::global_registry;
 use crate::session::process_group::{kill_process_group, setup_process_group};
 use crate::shared::{ToolDef, ToolOutcome};
 use crate::tools::bash_minify;
-use crate::tools::Tool;
+use crate::tools::{Tool, ToolContext};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
@@ -158,15 +158,36 @@ impl Tool for Bash {
         }
     }
 
-    async fn run(&self, args: serde_json::Value) -> ToolOutcome {
+    async fn run(&self, ctx: &ToolContext, args: serde_json::Value) -> ToolOutcome {
         let cmd = match args.get("command").and_then(|c| c.as_str()) {
             Some(c) => c.to_string(),
             None => {
-                return ToolOutcome::Error {
-                    message: "Missing 'command' argument".into(),
-                }
+                return ToolOutcome::Failure(crate::shared::ToolError::invalid_args(
+                    "Missing 'command' argument",
+                ));
             }
         };
+
+        if ctx.dry_run {
+            // Validate the command through the same safety gate the real
+            // execution uses, even in dry-run mode, so the user sees whether
+            // the command would be allowed.
+            let workdir = args.get("workdir").and_then(|w| w.as_str());
+            if let Some(denied) = check_bash_command_str(
+                &cmd,
+                workdir,
+                &self.deny_list,
+                &self.path_guard,
+                self.bash_sandbox_workdir,
+            ) {
+                return ToolOutcome::Failure(crate::shared::ToolError::AccessDenied {
+                    message: denied,
+                });
+            }
+            return ToolOutcome::Success {
+                content: format!("Dry run: would execute bash command: {cmd}"),
+            };
+        }
 
         // Check for background mode
         if args
@@ -191,9 +212,9 @@ impl Tool for Bash {
                 Ok(id) => ToolOutcome::Success {
                     content: format!("Background job #{id} started. Use bash_status(id={id}) or bash_output(id={id}) to check results."),
                 },
-                Err(e) => ToolOutcome::Error {
-                    message: format!("Failed to start background job: {e}"),
-                },
+                Err(e) => ToolOutcome::Failure(crate::shared::ToolError::internal(format!(
+                    "Failed to start background job: {e}"
+                ))),
             }
         } else {
             // Normal foreground execution
@@ -202,7 +223,7 @@ impl Tool for Bash {
 
             let workdir_path = PathBuf::from(shellexpand::tilde(workdir).as_ref());
 
-            let result = run_shell(&cmd, &workdir_path, timeout_secs).await;
+            let result = run_shell_with_token(&cmd, &workdir_path, timeout_secs, Some(&ctx.token)).await;
 
             match result {
                 Ok(output) => {
@@ -227,6 +248,12 @@ impl Tool for Bash {
                         let content =
                             bash_minify::try_minify_build_log(&cmd, &content).unwrap_or(content);
                         ToolOutcome::Success { content }
+                    } else if is_timeout_marker(&output, timeout_secs) {
+                        // run_shell reports timeouts as a synthetic killed
+                        // status with a leading marker in stdout.
+                        ToolOutcome::Failure(crate::shared::ToolError::Timeout {
+                            after_secs: timeout_secs,
+                        })
                     } else {
                         // Error path: stdout is often the *real* signal on a
                         // failing build (rustc prints diagnostics to stdout
@@ -249,22 +276,35 @@ impl Tool for Bash {
                         } else {
                             format!("\nstderr:\n{}", output.stderr)
                         };
-                        ToolOutcome::Error {
+                        let exit_code = output.status.code().unwrap_or(-1);
+                        ToolOutcome::Failure(crate::shared::ToolError::Execution {
                             message: format!(
-                                "Command exited with code {}{}\nstdout:\n{}",
-                                output.status.code().unwrap_or(-1),
-                                stderr,
-                                minified_stdout
+                                "Command exited with code {exit_code}\nstdout:\n{minified_stdout}"
                             ),
-                        }
+                            exit_code: Some(exit_code),
+                            stderr,
+                        })
                     }
                 }
-                Err(e) => ToolOutcome::Error {
-                    message: format!("Failed to execute command: {e}"),
-                },
+                Err(ShellError::Cancelled) => {
+                    ToolOutcome::Failure(crate::shared::ToolError::Cancelled)
+                }
+                Err(e) => ToolOutcome::Failure(crate::shared::ToolError::internal(format!(
+                    "Failed to execute command: {e}"
+                ))),
             }
         }
     }
+}
+
+/// Heuristic to distinguish a timeout produced by `run_shell` from a
+/// genuine non-zero exit. `run_shell` prefixes stdout with the timeout
+/// marker when the timer fires, and synthesises a killed exit status.
+fn is_timeout_marker(output: &ShellOutput, timeout_secs: u64) -> bool {
+    !output.status.success()
+        && output
+            .stdout
+            .starts_with(&format!("[timed out after {timeout_secs} seconds]"))
 }
 
 pub struct ShellOutput {
@@ -290,7 +330,19 @@ pub async fn run_shell(
     cmd: &str,
     workdir: &Path,
     timeout_secs: u64,
-) -> Result<ShellOutput, String> {
+) -> Result<ShellOutput, ShellError> {
+    run_shell_with_token(cmd, workdir, timeout_secs, None).await
+}
+
+/// Run a shell command with optional cancellation. The cancellation
+/// token is polled alongside the child so a user cancel stops the shell
+/// as promptly as the timeout path does.
+pub async fn run_shell_with_token(
+    cmd: &str,
+    workdir: &Path,
+    timeout_secs: u64,
+    token: Option<&tokio_util::sync::CancellationToken>,
+) -> Result<ShellOutput, ShellError> {
     let mut proc = Command::new("/bin/sh");
     proc.arg("-c")
         .arg(cmd)
@@ -303,10 +355,16 @@ pub async fn run_shell(
 
     let mut child = proc
         .spawn()
-        .map_err(|e| format!("Failed to execute command: {e}"))?;
+        .map_err(|e| ShellError::Spawn(format!("Failed to execute command: {e}")))?;
 
-    let stdout = child.stdout.take().ok_or_else(|| "no stdout".to_string())?;
-    let stderr = child.stderr.take().ok_or_else(|| "no stderr".to_string())?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| ShellError::Spawn("no stdout".to_string()))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| ShellError::Spawn("no stderr".to_string()))?;
 
     let drain_stdout = tokio::spawn(drain_capped(stdout, MAX_BASH_OUTPUT_BYTES));
     let drain_stderr = tokio::spawn(drain_capped(stderr, MAX_BASH_OUTPUT_BYTES));
@@ -326,11 +384,10 @@ pub async fn run_shell(
             Ok(result)
         }
         _ = tokio::time::sleep_until(timeout_at) => {
-            // The child is still owned by the outer scope; kill the
-            // whole process group so grandchildren cannot outlive it
-            // and keep the pipes open.
-            kill_process_group(&mut child);
-            Err(())
+            Err(ShellErrorKind::Timeout)
+        }
+        _ = async { if let Some(t) = token { t.cancelled().await; } }, if token.is_some() => {
+            Err(ShellErrorKind::Cancelled)
         }
     };
 
@@ -348,11 +405,12 @@ pub async fn run_shell(
                 stderr: cap_to_string(raw_stderr, stderr_dropped),
             })
         }
-        Ok(Err(e)) => Err(format!("Failed to wait for command: {e}")),
-        Err(()) => {
+        Ok(Err(e)) => Err(ShellError::Spawn(format!("Failed to wait for command: {e}"))),
+        Err(ShellErrorKind::Timeout) => {
             // Timeout path. The child has been sent SIGKILL; the drain
             // tasks are still running and will see EOF as the pipes
             // close. Join them and report whatever they captured.
+            kill_process_group(&mut child);
             let (raw_stdout, stdout_dropped) = join_drain(drain_stdout, "stdout").await?;
             let (raw_stderr, stderr_dropped) = join_drain(drain_stderr, "stderr").await?;
             // Best-effort reap: the drain tasks have closed the pipes,
@@ -366,7 +424,20 @@ pub async fn run_shell(
                 stderr: cap_to_string(raw_stderr, stderr_dropped),
             })
         }
+        Err(ShellErrorKind::Cancelled) => {
+            kill_process_group(&mut child);
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(2), child.wait()).await;
+            Err(ShellError::Cancelled)
+        }
     }
+}
+
+/// Internal discriminant used only inside the `tokio::select!` so we can
+/// distinguish timeout from cancellation without allocating strings.
+#[derive(Debug, Clone, Copy)]
+enum ShellErrorKind {
+    Timeout,
+    Cancelled,
 }
 
 /// Join a drain task, awaiting its result with a bounded timeout.
@@ -379,14 +450,21 @@ const DRAIN_JOIN_TIMEOUT: Duration = Duration::from_secs(5);
 async fn join_drain(
     handle: tokio::task::JoinHandle<std::io::Result<(Vec<u8>, u64)>>,
     label: &str,
-) -> Result<(Vec<u8>, u64), String> {
+) -> Result<(Vec<u8>, u64), ShellError> {
     match tokio::time::timeout(DRAIN_JOIN_TIMEOUT, handle).await {
         Ok(Ok(Ok(pair))) => Ok(pair),
-        Ok(Ok(Err(e))) => Err(format!("drain {label}: {e}")),
-        Ok(Err(e)) => Err(format!("drain {label} task panicked: {e}")),
-        Err(_) => Err(format!(
-            "drain {label}: task did not finish within {DRAIN_JOIN_TIMEOUT:?}"
-        )),
+        Ok(Ok(Err(e))) => Err(ShellError::Drain {
+            label: label.to_string(),
+            message: e.to_string(),
+        }),
+        Ok(Err(e)) => Err(ShellError::Drain {
+            label: label.to_string(),
+            message: format!("task panicked: {e}"),
+        }),
+        Err(_) => Err(ShellError::Drain {
+            label: label.to_string(),
+            message: format!("task did not finish within {DRAIN_JOIN_TIMEOUT:?}"),
+        }),
     }
 }
 
@@ -398,6 +476,27 @@ pub fn cap_to_string(raw: Vec<u8>, dropped: u64) -> String {
         s.push_str(&TRUNCATED_MARKER_FMT.replace("{}", &dropped.to_string()));
     }
     s
+}
+
+/// Failure modes for a foreground shell invocation.
+#[derive(Debug, Clone)]
+pub enum ShellError {
+    /// Failed to spawn or wait on the child process.
+    Spawn(String),
+    /// A stdout/stderr drain task did not finish or panicked.
+    Drain { label: String, message: String },
+    /// The caller cancelled the invocation before it completed.
+    Cancelled,
+}
+
+impl std::fmt::Display for ShellError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Spawn(msg) => write!(f, "{msg}"),
+            Self::Drain { label, message } => write!(f, "drain {label}: {message}"),
+            Self::Cancelled => write!(f, "cancelled"),
+        }
+    }
 }
 
 /// Synthesize an `ExitStatus` that reports "killed by signal". We don't
@@ -712,6 +811,115 @@ mod tests {
             out.stdout.contains("[...truncated:"),
             "expected truncation marker, got: {:?}",
             &out.stdout[..out.stdout.len().min(200)]
+        );
+    }
+
+    /// A cancelled foreground `Bash` tool invocation returns a structured
+    /// `ToolError::Cancelled` and does not leave a long sleep running.
+    #[tokio::test]
+    async fn bash_tool_respects_cancellation_token() {
+        let tmp = std::env::temp_dir();
+        let marker = tmp.join(format!(
+            "kirkforge_bash_cancel_marker_{}",
+            std::process::id()
+        ));
+        let marker_str = marker.to_string_lossy().to_string();
+        let _ = std::fs::remove_file(&marker);
+
+        let tool = Bash::new(DenyList::default(), PathGuard::default(), false);
+        let ctx = crate::tools::ToolContext::new();
+        let args = serde_json::json!({
+            "command": format!("sleep 30; touch {marker_str}"),
+            "timeout": 60,
+        });
+
+        // Start the tool in a background task and cancel the token shortly
+        // after. We don't await the tool directly because we want to drive
+        // cancellation from outside.
+        let token = ctx.token.clone();
+        let handle = tokio::spawn(async move { tool.run(&ctx, args).await });
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        token.cancel();
+
+        let outcome = handle
+            .await
+            .expect("tool task should not panic");
+        assert!(
+            matches!(
+                outcome,
+                crate::shared::ToolOutcome::Failure(
+                    crate::shared::ToolError::Cancelled
+                )
+            ),
+            "expected Cancelled error, got {outcome:?}"
+        );
+
+        // Give any surviving descendant a short window to touch the marker.
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        assert!(
+            !marker.exists(),
+            "cancelled shell left a surviving descendant"
+        );
+    }
+
+    /// The Bash tool surfaces internal timeouts as a structured
+    /// `ToolError::Timeout` rather than an opaque string.
+    #[tokio::test]
+    async fn bash_tool_surfaces_structured_timeout() {
+        let tool = Bash::new(DenyList::default(), PathGuard::default(), false);
+        let ctx = crate::tools::ToolContext::new();
+        let args = serde_json::json!({
+            "command": "sleep 30",
+            "timeout": 1,
+        });
+
+        let outcome = tool.run(&ctx, args).await;
+        assert!(
+            matches!(
+                outcome,
+                crate::shared::ToolOutcome::Failure(
+                    crate::shared::ToolError::Timeout { after_secs: 1 }
+                )
+            ),
+            "expected Timeout error, got {outcome:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn bash_dry_run_does_not_execute_command() {
+        let tmp = tempfile::tempdir().unwrap();
+        let marker = tmp.path().join("marker.txt");
+        let marker_str = marker.to_string_lossy().to_string();
+
+        let tool = Bash::new(DenyList::default(), PathGuard::default(), false);
+        let ctx = crate::tools::ToolContext::with_dry_run(true);
+        let args = serde_json::json!({
+            "command": format!("touch {marker_str}"),
+        });
+
+        let outcome = tool.run(&ctx, args).await;
+        assert!(
+            matches!(outcome, crate::shared::ToolOutcome::Success { ref content } if content.contains("Dry run") && content.contains("touch")),
+            "expected dry-run success, got {outcome:?}"
+        );
+        assert!(
+            !marker.exists(),
+            "dry-run bash must not execute the command"
+        );
+    }
+
+    #[tokio::test]
+    async fn bash_dry_run_still_blocks_dangerous_command() {
+        let tool = Bash::new(DenyList::default(), PathGuard::default(), false);
+        let ctx = crate::tools::ToolContext::with_dry_run(true);
+        let args = serde_json::json!({
+            "command": "rm -rf /",
+        });
+
+        let outcome = tool.run(&ctx, args).await;
+        assert!(
+            matches!(outcome, crate::shared::ToolOutcome::Failure(crate::shared::ToolError::AccessDenied { .. })),
+            "expected dry-run access-denied error, got {outcome:?}"
         );
     }
 

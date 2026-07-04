@@ -1,6 +1,6 @@
 use crate::session::access::{GuardVerdict, PathGuard};
-use crate::shared::{ToolDef, ToolOutcome};
-use crate::tools::Tool;
+use crate::shared::{ToolDef, ToolError, ToolOutcome};
+use crate::tools::{Tool, ToolContext};
 use globset::{Glob as GlobPattern, GlobSet, GlobSetBuilder};
 use std::path::PathBuf;
 
@@ -38,13 +38,13 @@ impl Tool for Glob {
         }
     }
 
-    async fn run(&self, args: serde_json::Value) -> ToolOutcome {
+    async fn run(&self, _ctx: &ToolContext, args: serde_json::Value) -> ToolOutcome {
         let pattern = match args.get("pattern").and_then(|p| p.as_str()) {
             Some(p) => p.to_string(),
             None => {
-                return ToolOutcome::Error {
-                    message: "Missing 'pattern' argument".into(),
-                }
+                return ToolOutcome::Failure(ToolError::invalid_args(
+                    "Missing 'pattern' argument",
+                ));
             }
         };
 
@@ -53,9 +53,9 @@ impl Tool for Glob {
         let base_path = PathBuf::from(shellexpand::tilde(base_dir).as_ref());
 
         if !base_path.is_dir() {
-            return ToolOutcome::Error {
+            return ToolOutcome::Failure(ToolError::Internal {
                 message: format!("Base directory not found: {}", base_path.display()),
-            };
+            });
         }
 
         // Build glob set
@@ -65,9 +65,9 @@ impl Tool for Glob {
                 builder.add(g);
             }
             Err(e) => {
-                return ToolOutcome::Error {
-                    message: format!("Invalid glob pattern '{pattern}': {e}"),
-                }
+                return ToolOutcome::Failure(ToolError::invalid_args(format!(
+                    "Invalid glob pattern '{pattern}': {e}"
+                )));
             }
         }
         let glob_set = builder.build().unwrap_or_else(|_| GlobSet::empty());

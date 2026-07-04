@@ -28,13 +28,7 @@ impl GlmAdapter {
         Self {
             model: model.to_string(),
             api_base: ollama_host.trim_end_matches('/').to_string(),
-            client: reqwest::Client::builder()
-                .tcp_nodelay(true)
-                .build()
-                .unwrap_or_else(|e| {
-                    tracing::warn!(error = %e, "failed to build custom reqwest client; falling back to default");
-                    reqwest::Client::new()
-                }),
+            client: super::build_reqwest_client(),
             json_mode: false,
         }
     }
@@ -73,14 +67,18 @@ impl ModelAdapter for GlmAdapter {
         );
         let url = format!("{}/api/chat", self.api_base);
 
-        let response = self
-            .client
-            .post(&url)
-            .json(&body)
-            .timeout(std::time::Duration::from_secs(300))
-            .send()
-            .await?
-            .error_for_status()?;
+        let response = super::send_with_retry(
+            &self.client,
+            || async {
+                self.client
+                    .post(&url)
+                    .json(&body)
+                    .timeout(std::time::Duration::from_secs(super::MODEL_REQUEST_TIMEOUT_SECS))
+                    .send()
+                    .await
+            },
+        )
+        .await?;
 
         // Channel size: 4096 events. See deepseek.rs for the
         // rationale (2026-06-11 incident).

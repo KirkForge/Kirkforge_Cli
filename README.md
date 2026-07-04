@@ -4,21 +4,35 @@ A terminal coding assistant that runs locally against Ollama (or any OpenAI-comp
 
 ## Quick start
 
+### Install a release binary
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/KirkForge/Kirkforge_Cli/main/scripts/install.sh | sh
+```
+
+Or build from source with [Rust](https://rustup.rs):
+
+```bash
+cargo install --git https://github.com/KirkForge/Kirkforge_Cli
+```
+
+### Run
+
 ```bash
 # Requires a running Ollama server
-cargo run -- run
+kirkforge run
 
 # Resume the most recent session via the daemon
-cargo run -- run --auto-resume
+kirkforge run --auto-resume
 
 # Resume a specific session by id or prefix
-cargo run -- run --attach 2026-06-22-session-01
+kirkforge run --attach 2026-06-22-session-01
 
 # Non-interactive, multi-turn
-echo -e "fix the borrow check\n\n" | cargo run -- run --non-interactive --max-turns 5
+echo -e "fix the borrow check\n\n" | kirkforge run --non-interactive --max-turns 5
 
 # Start the session daemon manually (it is auto-started on demand)
-cargo run -- daemon
+kirkforge daemon
 ```
 
 ## Main features
@@ -27,7 +41,7 @@ cargo run -- daemon
 - **File tools** (`read_file`, `write_file`, `edit_file`) with approval gates, diff previews, and `/undo`.
 - **Bash tool** and `!` passthrough, sandboxed to a configurable working directory.
 - **Session management** — `/fork`, `/resume`, `/sessions`, `/save`, plus `--continue-session`, `--auto-resume`, and `--attach`.
-- **Session daemon** — background process tracks the last 5 sessions; the TUI shows a startup picker unless you resume explicitly.
+- **Session daemon** — background process tracks the last 5 sessions; the TUI shows a startup picker unless you resume explicitly. Example systemd unit and launchd plist are in [`docs/`](docs/).
 - **Config hot-reload** — edit `config.toml` and type `/reload` (or send `SIGHUP`) to update access control live.
 - **Permission rules** — Claude-Code-style allow/ask/deny rules per command/path; `Deny` rules use prefix matching while `Allow`/`Ask` rules stay anchored.
 - **Multimodal** — `read_image` for screenshots and images.
@@ -56,6 +70,25 @@ cargo clippy --all-targets -- -D warnings
 ./scripts/run-integration-tests.sh  # needs Ollama + qwen2.5:0.5b
 cargo build --release               # ~5.4 MB binary
 ```
+
+## Releases
+
+Release binaries for Linux (x86_64) and macOS (x86_64, Apple Silicon) are built automatically when a `v*.*.*` tag is pushed. See the [releases page](https://github.com/KirkForge/Kirkforge_Cli/releases) or use the install script above.
+
+## Daemon supervision
+
+The session daemon is started on demand, but you can also run it under your init system:
+
+- **systemd (Linux):** copy [`docs/kirkforge-daemon.service`](docs/kirkforge-daemon.service) to `~/.config/systemd/user/`, adjust the `ExecStart` path if needed, then:
+  ```bash
+  systemctl --user daemon-reload
+  systemctl --user enable --now kirkforge-daemon
+  ```
+- **launchd (macOS):** copy [`docs/com.kirkforge.daemon.plist`](docs/com.kirkforge.daemon.plist) to `~/Library/LaunchAgents/`, replace `USER` with your username, then:
+  ```bash
+  launchctl load ~/Library/LaunchAgents/com.kirkforge.daemon.plist
+  launchctl start com.kirkforge.daemon
+  ```
 
 ## Documentation
 

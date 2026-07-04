@@ -37,11 +37,32 @@ enum Command {
         #[arg(long)]
         host: Option<String>,
         #[arg(long)]
+        model_type: Option<String>,
+        #[arg(long)]
         auto_approve: bool,
+        #[arg(long)]
+        dry_run: bool,
         #[arg(short, long)]
         system: Option<String>,
+        #[arg(short, long)]
+        resume: Option<String>,
         #[arg(long)]
         non_interactive: bool,
+        #[arg(long, default_value = "text")]
+        output: String,
+        #[arg(long, default_value_t = 0)]
+        max_turns: usize,
+        #[arg(long)]
+        continue_session: Option<String>,
+        #[arg(long, conflicts_with = "continue_session", conflicts_with = "resume")]
+        auto_resume: bool,
+        #[arg(
+            long,
+            conflicts_with = "continue_session",
+            conflicts_with = "resume",
+            conflicts_with = "auto_resume"
+        )]
+        attach: Option<String>,
         #[arg(long)]
         no_tui: bool,
     },

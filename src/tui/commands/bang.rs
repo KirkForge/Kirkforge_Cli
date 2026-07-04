@@ -132,7 +132,7 @@ pub async fn run_bang_command(cmd: &str, config: &crate::shared::Config) -> Bang
             cmd: cmd.to_string(),
             exit_code: -1,
             stdout: String::new(),
-            stderr: e,
+            stderr: e.to_string(),
             timed_out: false,
             elapsed_ms,
         },

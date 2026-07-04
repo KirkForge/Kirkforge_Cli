@@ -231,7 +231,7 @@ pub fn resolve_session_id(id_or_prefix: &str) -> anyhow::Result<Option<PathBuf>>
 /// session matches the id or prefix.
 pub fn open_resolved(id_or_prefix: &str) -> anyhow::Result<Option<ConversationLog>> {
     if let Some(path) = resolve_session_id(id_or_prefix)? {
-        let log = ConversationLog::open(path)?;
+        let (log, _outcome) = ConversationLog::open(path)?;
         Ok(Some(log))
     } else {
         Ok(None)

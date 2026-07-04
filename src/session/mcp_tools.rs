@@ -13,8 +13,8 @@
 //! in `main.rs`.
 
 use crate::session::mcp_client::McpClientManager;
-use crate::shared::{ToolDef, ToolOutcome};
-use crate::tools::Tool;
+use crate::shared::{ToolDef, ToolError, ToolOutcome};
+use crate::tools::{Tool, ToolContext};
 use std::sync::Arc;
 
 /// A Tool trait implementation that forwards calls to an MCP server.
@@ -61,15 +61,15 @@ impl Tool for McpToolWrapper {
         self.def.clone()
     }
 
-    async fn run(&self, args: serde_json::Value) -> ToolOutcome {
+    async fn run(&self, _ctx: &ToolContext, args: serde_json::Value) -> ToolOutcome {
         match self.manager.call_tool(&self.full_name, args).await {
             Some(content) => ToolOutcome::Success { content },
-            None => ToolOutcome::Error {
+            None => ToolOutcome::Failure(ToolError::Internal {
                 message: format!(
                     "MCP tool '{}' failed: no response from server",
                     self.full_name
                 ),
-            },
+            }),
         }
     }
 }

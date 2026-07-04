@@ -152,11 +152,14 @@ async fn run_persona_task(
     undo_stack: Option<UndoStackRef>,
     cancelled: Arc<AtomicBool>,
 ) -> PersonaResult {
-    let adapter = adapters::adapter_for(&model_name, &ollama_host, None);
+    let adapter = adapters::caching::maybe_wrap_cached(
+        adapters::adapter_for(&model_name, &ollama_host, None),
+        &config,
+    );
     let tools = tools_for_persona(kind, undo_stack.clone(), supports_images, &config);
 
     let conversation = match ConversationLog::open(fork_path.clone()) {
-        Ok(c) => c,
+        Ok((c, _outcome)) => c,
         Err(e) => {
             return PersonaResult {
                 kind,
@@ -281,7 +284,7 @@ pub async fn start_persona(
     };
 
     let parent_log = match ConversationLog::open(parent_log_path.clone()) {
-        Ok(l) => l,
+        Ok((l, _outcome)) => l,
         Err(e) => return format!("Cannot open session log: {e}"),
     };
 

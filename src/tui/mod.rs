@@ -156,7 +156,10 @@ pub async fn run_tui(
     shared_config: crate::shared::SharedConfig,
     adapter: Box<dyn crate::adapters::ModelAdapter>,
     tools: Vec<std::sync::Arc<dyn Tool>>,
-    conversation_log: ConversationLog,
+    conversation: (
+        ConversationLog,
+        crate::session::conversation::OpenOutcome,
+    ),
     system: Option<String>,
     undo_stack: Option<crate::tools::UndoStackRef>,
     plugin_registry: &kirkforge_plugin_host::PluginRegistry,
@@ -178,9 +181,9 @@ pub async fn run_tui(
     // Capture the session identity from the conversation log before it
     // moves into the executor. This lets the TUI report the session id
     // and write transcript files to a predictable path.
-    state.log_path = Some(conversation_log.path().clone());
-    state.session_id = conversation_log
-        .path()
+    let conversation_log_path = conversation.0.path().clone();
+    state.log_path = Some(conversation_log_path.clone());
+    state.session_id = conversation_log_path
         .file_stem()
         .and_then(|f| f.to_str())
         .map(|s| s.trim_end_matches(".conv").to_string())
@@ -393,6 +396,7 @@ pub async fn run_tui(
     }
 
     // Spawn the executor on a background task
+    let (conversation_log, open_outcome) = conversation;
     let mut exe = executor::Executor::with_log_and_undo_and_plugins(
         adapter,
         tools,
@@ -406,6 +410,9 @@ pub async fn run_tui(
     // input. Without this, --system is silently dropped (was GPT 5.5
     // review finding #2).
     exe.set_system_override(system);
+    if let crate::session::conversation::OpenOutcome::Restored(messages) = open_outcome {
+        exe.set_recovered_messages(messages);
+    }
     let handle = tokio::spawn(async move {
         let _ = exe
             .run(
@@ -835,7 +842,7 @@ async fn handle_persona_complete(
     };
 
     let mut parent_log = match ConversationLog::open(parent_path.clone()) {
-        Ok(l) => l,
+        Ok((l, _outcome)) => l,
         Err(e) => {
             state.messages.push(ConversationEntry::new(
                 "system",
@@ -980,7 +987,7 @@ mod tests {
         let mut state = test_state_with_log(log_path.clone());
 
         // Pre-seed the parent log so we can verify it is not replaced.
-        let mut parent = ConversationLog::open(log_path.clone()).unwrap();
+        let mut parent = ConversationLog::open(log_path.clone()).unwrap().0;
         parent
             .append(Message {
                 role: Role::User,
@@ -1005,7 +1012,7 @@ mod tests {
         handle_persona_complete(result, &mut state, &resume_tx, &plan_tx).await;
 
         // Parent log grew by one system message.
-        let reloaded = ConversationLog::open(log_path).unwrap();
+        let reloaded = ConversationLog::open(log_path).unwrap().0;
         assert_eq!(reloaded.all().len(), 2);
         let merged = &reloaded.all()[1];
         assert_eq!(merged.role, Role::System);
@@ -1058,7 +1065,7 @@ mod tests {
         let mut state = test_state_with_log(log_path.clone());
 
         // Seed a single parent message.
-        let mut parent = ConversationLog::open(log_path.clone()).unwrap();
+        let mut parent = ConversationLog::open(log_path.clone()).unwrap().0;
         parent
             .append(Message {
                 role: Role::User,
@@ -1083,7 +1090,7 @@ mod tests {
         handle_persona_complete(result, &mut state, &resume_tx, &plan_tx).await;
 
         // Log on disk is untouched.
-        let reloaded = ConversationLog::open(log_path).unwrap();
+        let reloaded = ConversationLog::open(log_path).unwrap().0;
         assert_eq!(reloaded.all().len(), 1);
 
         // UI shows the error, not a merged summary.

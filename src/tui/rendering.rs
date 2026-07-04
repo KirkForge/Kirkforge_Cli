@@ -400,16 +400,6 @@ pub fn render_markdown_lines_with_query(text: &str, query: &str) -> Vec<Line<'st
     lines
 }
 
-/// Render markdown text without an active search query.
-///
-/// This is the convenience wrapper used by callers that don't need
-/// search highlighting (e.g., standalone preview rendering). Kept for
-/// the existing test suite and any future non-search consumers.
-#[allow(dead_code)]
-pub fn render_markdown_lines(text: &str) -> Vec<Line<'static>> {
-    render_markdown_lines_with_query(text, "")
-}
-
 /// Extract the text of every code block in a markdown string, in order.
 ///
 /// Returns a vector of block contents (without fence markers) for all
@@ -449,47 +439,6 @@ pub fn all_code_blocks(markdown: &str) -> Vec<String> {
         }
     }
     blocks
-}
-
-/// Extract the text of the most recent code block in a markdown string.
-///
-/// Walks the document and keeps the accumulated text of the last fenced
-/// or indented code block it sees. Returns `Some(content)` (without the
-/// fence markers) or `None` if there is no code block.
-///
-/// Kept for the existing test suite; new callers should prefer
-/// [`all_code_blocks`] which supports per-block copy cycling.
-#[allow(dead_code)]
-pub fn last_code_block(markdown: &str) -> Option<String> {
-    let parser = pulldown_cmark::Parser::new(markdown);
-    let mut in_block = false;
-    let mut content = String::new();
-    for event in parser {
-        match event {
-            Event::Start(Tag::CodeBlock(_)) => {
-                in_block = true;
-                content.clear();
-            }
-            Event::End(TagEnd::CodeBlock) => {
-                in_block = false;
-            }
-            Event::Text(t) if in_block => {
-                content.push_str(&t);
-            }
-            _ => {}
-        }
-    }
-    // Keep a trailing incomplete block too (malformed markdown).
-    if !content.is_empty() || in_block {
-        let trimmed = content.trim_end().to_string();
-        if trimmed.is_empty() {
-            None
-        } else {
-            Some(trimmed)
-        }
-    } else {
-        None
-    }
 }
 
 /// Format a duration for display.
@@ -696,7 +645,7 @@ mod tests {
 
     #[test]
     fn test_markdown_bold() {
-        let lines = render_markdown_lines("**bold text**");
+        let lines = render_markdown_lines_with_query("**bold text**", "");
         assert_eq!(lines.len(), 1);
         assert_eq!(
             lines[0].spans,
@@ -709,7 +658,7 @@ mod tests {
 
     #[test]
     fn test_markdown_inline_code() {
-        let lines = render_markdown_lines("use `cargo test`");
+        let lines = render_markdown_lines_with_query("use `cargo test`", "");
         assert_eq!(lines.len(), 1);
         assert_eq!(
             lines[0].spans,
@@ -722,7 +671,7 @@ mod tests {
 
     #[test]
     fn test_markdown_heading() {
-        let lines = render_markdown_lines("# Title\n\nbody");
+        let lines = render_markdown_lines_with_query("# Title\n\nbody", "");
         assert_eq!(lines.len(), 3);
         assert_eq!(
             lines[0].spans,
@@ -739,7 +688,7 @@ mod tests {
 
     #[test]
     fn test_markdown_unordered_list() {
-        let lines = render_markdown_lines("- a\n- b\n- c");
+        let lines = render_markdown_lines_with_query("- a\n- b\n- c", "");
         assert_eq!(lines.len(), 3);
         assert_eq!(lines[0].spans[0].content, "- ");
         assert_eq!(lines[0].spans[1].content, "a");
@@ -751,7 +700,7 @@ mod tests {
 
     #[test]
     fn test_markdown_ordered_list() {
-        let lines = render_markdown_lines("1. first\n2. second");
+        let lines = render_markdown_lines_with_query("1. first\n2. second", "");
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0].spans[0].content, "1. ");
         assert_eq!(lines[0].spans[1].content, "first");
@@ -761,7 +710,7 @@ mod tests {
 
     #[test]
     fn test_markdown_nested_inline_styles() {
-        let lines = render_markdown_lines("**bold *italic* bold**");
+        let lines = render_markdown_lines_with_query("**bold *italic* bold**", "");
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].spans.len(), 3);
         assert_eq!(
@@ -785,7 +734,7 @@ mod tests {
 
     #[test]
     fn test_markdown_code_block_with_lang_badge() {
-        let lines = render_markdown_lines("```rust\nfn main() {}\n```");
+        let lines = render_markdown_lines_with_query("```rust\nfn main() {}\n```", "");
         assert_eq!(lines.len(), 2);
         assert_eq!(
             lines[0].spans,
@@ -816,7 +765,7 @@ mod tests {
 
     #[test]
     fn test_markdown_code_block_without_language_uses_code_fallback() {
-        let lines = render_markdown_lines("```\nhello\n```");
+        let lines = render_markdown_lines_with_query("```\nhello\n```", "");
         assert_eq!(lines.len(), 2);
         assert_eq!(
             lines[0].spans,
@@ -837,7 +786,7 @@ mod tests {
 
     #[test]
     fn test_markdown_code_block_body_has_background() {
-        let lines = render_markdown_lines("```python\nprint(1)\n```");
+        let lines = render_markdown_lines_with_query("```python\nprint(1)\n```", "");
         let body = &lines[1];
         assert_eq!(body.spans[0].content, "▕ ");
         // Syntax highlighting splits `print(1)` into several spans; every
@@ -854,7 +803,7 @@ mod tests {
 
     #[test]
     fn test_markdown_indented_code_block_gets_border() {
-        let lines = render_markdown_lines("    indented\n    block");
+        let lines = render_markdown_lines_with_query("    indented\n    block", "");
         // Should produce a header and two body lines.
         assert!(lines.len() >= 3);
         assert_eq!(lines[0].spans[0].content, "▌ ");
@@ -864,7 +813,7 @@ mod tests {
 
     #[test]
     fn test_markdown_code_block_trims_trailing_newline_border() {
-        let lines = render_markdown_lines("```\na\n```");
+        let lines = render_markdown_lines_with_query("```\na\n```", "");
         // Should be header + one body line; no bare trailing border line.
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[1].spans.len(), 2);
@@ -873,7 +822,7 @@ mod tests {
 
     #[test]
     fn test_markdown_link() {
-        let lines = render_markdown_lines("see [docs](https://docs.rs)");
+        let lines = render_markdown_lines_with_query("see [docs](https://docs.rs)", "");
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].spans.len(), 2);
         assert_eq!(lines[0].spans[0].content, "see ");
@@ -963,35 +912,6 @@ mod tests {
         assert!(spans.contains(&"İ".to_string()));
         assert!(spans.contains(&"stan".to_string()));
         assert!(spans.contains(&"bul".to_string()));
-    }
-
-    #[test]
-    fn test_last_code_block_extracts_fenced_block() {
-        let md = "Some text.\n\n```rust\nfn main() {}\n```\n\nMore text.";
-        assert_eq!(
-            last_code_block(md),
-            Some("fn main() {}".to_string()),
-            "should return the last fenced code block without fence markers"
-        );
-    }
-
-    #[test]
-    fn test_last_code_block_returns_none_when_absent() {
-        assert_eq!(
-            last_code_block("No code here."),
-            None,
-            "plain markdown should have no code block"
-        );
-    }
-
-    #[test]
-    fn test_last_code_block_returns_last_of_multiple() {
-        let md = "```a\nfirst\n```\n\n```b\nsecond\n```";
-        assert_eq!(
-            last_code_block(md),
-            Some("second".to_string()),
-            "should prefer the last code block"
-        );
     }
 
     #[test]

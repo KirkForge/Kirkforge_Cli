@@ -1,5 +1,5 @@
-use crate::shared::{ToolDef, ToolOutcome};
-use crate::tools::Tool;
+use crate::shared::{ToolDef, ToolError, ToolOutcome};
+use crate::tools::{Tool, ToolContext};
 use std::path::PathBuf;
 
 pub struct ReadFile;
@@ -38,13 +38,13 @@ impl Tool for ReadFile {
         }
     }
 
-    async fn run(&self, args: serde_json::Value) -> ToolOutcome {
+    async fn run(&self, _ctx: &ToolContext, args: serde_json::Value) -> ToolOutcome {
         let path = match args.get("path").and_then(|p| p.as_str()) {
             Some(p) => PathBuf::from(shellexpand::tilde(p).as_ref()),
             None => {
-                return ToolOutcome::Error {
-                    message: "Missing 'path' argument".into(),
-                }
+                return ToolOutcome::Failure(ToolError::invalid_args(
+                    "Missing 'path' argument",
+                ));
             }
         };
 
@@ -54,9 +54,9 @@ impl Tool for ReadFile {
         let raw_content = match std::fs::read_to_string(&path) {
             Ok(c) => c,
             Err(e) => {
-                return ToolOutcome::Error {
+                return ToolOutcome::Failure(ToolError::Internal {
                     message: format!("Cannot read {}: {}", path.display(), e),
-                }
+                });
             }
         };
 
@@ -75,9 +75,9 @@ impl Tool for ReadFile {
         let total = lines.len();
 
         if offset >= total && total > 0 {
-            return ToolOutcome::Error {
+            return ToolOutcome::Failure(ToolError::Internal {
                 message: format!("Offset {offset} is beyond file length {total}"),
-            };
+            });
         }
 
         // File is empty after minification (e.g., all comments) — return a note

@@ -17,7 +17,7 @@ use crate::shared::{
     ToolOutcome,
 };
 use crate::tools::bash::check_bash_command;
-use crate::tools::{Tool, UndoStackRef};
+use crate::tools::{Tool, ToolContext, UndoStackRef};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -99,6 +99,12 @@ pub struct Executor {
     /// cannot implement while it is still "thinking". Entered via
     /// `/plan` and exited via `/implement` or user approval.
     plan_mode: bool,
+
+    /// If the conversation log was restored from a checkpoint on open,
+    /// this holds the number of recovered messages. It is emitted once
+    /// as a `TurnEvent::Recovered` at the start of the first turn so
+    /// the TUI/line-mode output can show a status line.
+    recovered_messages: Option<usize>,
 }
 
 /// Drop guard that fires the `post-turn` hook on every exit path of
@@ -246,9 +252,44 @@ impl Executor {
             carryover_target,
             undo_stack,
             plan_mode: false,
+            recovered_messages: None,
         };
         this.init_default_verifiers(plugin_registry);
         this
+    }
+
+    /// Record that the conversation log was restored from a checkpoint.
+    /// The count is emitted once as `TurnEvent::Recovered` on the first
+    /// turn. Call immediately after constructing the executor if the log
+    /// opener reported `OpenOutcome::Restored`.
+    pub fn set_recovered_messages(&mut self, count: usize) {
+        self.recovered_messages = Some(count);
+    }
+
+    /// Build a per-tool-call context linked to the turn's cancellation
+    /// state. The deadline is derived from the config's per-tool timeout
+    /// (default 30 s) unless the tool itself specifies a longer timeout
+    /// (e.g. bash) — the executor layer caps the outer wait, and the tool
+    /// is responsible for honouring its own internal deadline.
+    /// Per-tool-call hard timeout from the shared config. Clamped to
+    /// [1, 3600] seconds.
+    fn tool_call_timeout(&self) -> std::time::Duration {
+        let cfg = read_shared_config(&self.config);
+        let secs = cfg.tool_timeout_secs.unwrap_or(30).clamp(1, 3600);
+        std::time::Duration::from_secs(secs)
+    }
+
+    /// Build a per-tool-call context linked to the turn's cancellation
+    /// state and the session's dry-run flag.
+    fn tool_context_for_call(
+        &self,
+        cancelled: &std::sync::atomic::AtomicBool,
+    ) -> ToolContext {
+        let dry_run = read_shared_config(&self.config).dry_run;
+        ToolContext {
+            token: tool_cancel_token(cancelled),
+            dry_run,
+        }
     }
 
     /// Replace the shared config with `new` and rebuild access-control
@@ -458,9 +499,10 @@ impl Executor {
                 // token so the user sees the swap land. The next turn
                 // will use the new adapter.
                 Some(model_name) = model_rx.recv() => {
+                    let cfg_snapshot = read_shared_config(&self.config).clone();
                     let new_name = self
                         .adapter_swap
-                        .force_swap(&model_name, &mut self.adapter);
+                        .force_swap(&model_name, &mut self.adapter, &cfg_snapshot);
                     self.model_name = new_name.clone();
                     if event_tx
                         .send(TurnEvent::Token(format!(
@@ -889,8 +931,18 @@ impl Executor {
             self.hook_runner.clone(),
             crate::shared::read_shared_config(&self.config).clone(),
         );
-        self.run_turn_inner(user_input, approval_sender, cancelled, event_tx)
-            .await
+        let result = self
+            .run_turn_inner(user_input, approval_sender, cancelled, event_tx)
+            .await;
+        if result.is_ok() {
+            if let Err(e) = self.conversation.checkpoint() {
+                tracing::warn!(error = %e, "post-turn checkpoint failed");
+                let _ = event_tx.send(TurnEvent::Error(format!(
+                    "Checkpoint failed: {e}"
+                )));
+            }
+        }
+        result
     }
 
     /// Batched wrapper: run a turn into a private channel and return every
@@ -951,6 +1003,12 @@ impl Executor {
             self.carryover.last_user_message = user_input.to_string();
         }
 
+        // If this session was recovered from a checkpoint, tell the user
+        // once before any model output appears.
+        if let Some(count) = self.recovered_messages.take() {
+            let _ = event_tx.send(TurnEvent::Recovered { messages: count });
+        }
+
         let mut tool_calls: Vec<ToolInvocation> = Vec::new();
         let mut already_retried_parse = false;
 
@@ -973,8 +1031,16 @@ impl Executor {
                 IterationOutcome::Finished => return Ok(()),
                 IterationOutcome::ToolCalls(mut tcs) => {
                     for tc in &mut tcs {
-                        self.dispatch_tool_call(tc, approval_sender, event_tx)
+                        self.dispatch_tool_call(tc, approval_sender, cancelled, event_tx)
                             .await?;
+                    }
+                    // Checkpoint after a completed tool batch so a crash
+                    // before the next assistant response loses less work.
+                    if let Err(e) = self.conversation.checkpoint() {
+                        tracing::warn!(error = %e, "post-tool-batch checkpoint failed");
+                        let _ = event_tx.send(TurnEvent::Error(format!(
+                            "Checkpoint failed: {e}"
+                        )));
                     }
                 }
                 IterationOutcome::ParseError => {
@@ -1191,6 +1257,7 @@ impl Executor {
         &mut self,
         tc: &mut ToolInvocation,
         approval_sender: &mpsc::UnboundedSender<ApprovalRequest>,
+        cancelled: &std::sync::atomic::AtomicBool,
         event_tx: &mpsc::UnboundedSender<TurnEvent>,
     ) -> anyhow::Result<()> {
         let tool = match self.tools.resolve(&tc.name) {
@@ -1462,7 +1529,13 @@ impl Executor {
                         return Ok(());
                     }
 
-                    let outcome = tool.run(run_args.clone()).await;
+                    let ctx = self.tool_context_for_call(cancelled);
+                    let timeout = self.tool_call_timeout();
+                    let outcome = tokio::time::timeout(timeout, tool.run(&ctx, run_args.clone()))
+                        .await
+                        .unwrap_or(ToolOutcome::Failure(crate::shared::ToolError::Timeout {
+                            after_secs: timeout.as_secs(),
+                        }));
                     let edit_diff =
                         handle_tool_outcome(outcome, tc, event_tx, &mut self.conversation)?;
 
@@ -1617,7 +1690,13 @@ impl Executor {
             return Ok(());
         }
 
-        let outcome = tool.run(tc.arguments.clone()).await;
+        let ctx = self.tool_context_for_call(cancelled);
+        let timeout = self.tool_call_timeout();
+        let outcome = tokio::time::timeout(timeout, tool.run(&ctx, tc.arguments.clone()))
+            .await
+            .unwrap_or(ToolOutcome::Failure(crate::shared::ToolError::Timeout {
+                after_secs: timeout.as_secs(),
+            }));
 
         let (real_exit_code, real_stdout_len, real_stderr_len) = if tc.name == "bash" {
             extract_bash_metrics(&outcome)
@@ -1907,6 +1986,28 @@ pub enum TurnEvent {
     /// marker while plan mode is active. The TUI should prompt the user
     /// to approve exiting plan mode (e.g. via `/implement`).
     PlanComplete,
+
+    /// Emitted when the conversation log was corrupt on open and the
+    /// executor recovered from the most recent intact checkpoint.
+    /// Carries the number of restored messages so the TUI can show a
+    /// concise status line.
+    Recovered {
+        /// Number of messages restored from checkpoint.
+        messages: usize,
+    },
+}
+
+/// Cancellation token linked to the turn's `cancelled` atomic. A
+/// separate token is created per call so cancelling one tool does not
+/// cancel unrelated background work.
+fn tool_cancel_token(
+    cancelled: &std::sync::atomic::AtomicBool,
+) -> tokio_util::sync::CancellationToken {
+    let token = tokio_util::sync::CancellationToken::new();
+    if cancelled.load(Ordering::SeqCst) {
+        token.cancel();
+    }
+    token
 }
 
 const READ_ONLY_COMMANDS: &[&str] = &[
@@ -1998,6 +2099,7 @@ fn truncate_tool_output(outcome: ToolOutcome, max_chars: usize) -> ToolOutcome {
             }
         }
         ToolOutcome::Error { message } => ToolOutcome::Error { message },
+        ToolOutcome::Failure(err) => ToolOutcome::Failure(err.clone()),
         other => other,
     }
 }
@@ -2021,6 +2123,14 @@ fn extract_bash_metrics(outcome: &ToolOutcome) -> (Option<i32>, Option<usize>, O
                 .unwrap_or((message.len(), 0));
             (exit_code, Some(stdout_len), Some(stderr_len))
         }
+        ToolOutcome::Failure(crate::shared::ToolError::Execution {
+            exit_code, stderr, ..
+        }) => (*exit_code, Some(0), Some(stderr.len())),
+        ToolOutcome::Failure(crate::shared::ToolError::Timeout { .. })
+        | ToolOutcome::Failure(crate::shared::ToolError::Cancelled) => {
+            (Some(1), Some(0), Some(0))
+        }
+        ToolOutcome::Failure(_) => (Some(1), Some(0), Some(0)),
         _ => (None, None, None),
     }
 }
@@ -2213,6 +2323,28 @@ fn handle_tool_outcome(
                 conversation.append(recovery_msg)?;
             }
         }
+        ToolOutcome::Failure(err) => {
+            let message = err.to_user_message();
+            let _ = event_tx.send(TurnEvent::ToolResult {
+                name: tc.name.clone(),
+                output: format!("Error: {message}"),
+                success: false,
+            });
+            conversation.append(Message {
+                role: Role::Tool,
+                content: format!("Error: {message}"),
+                tool_call_id: Some(tc.id.clone()),
+                tool_name: Some(tc.name.clone()),
+                ..Default::default()
+            })?;
+
+            if let Some(hint) =
+                crate::session::error_recovery::analyze_error(&tc.name, &message, &tc.arguments)
+            {
+                let recovery_msg = crate::session::error_recovery::build_recovery_message(&hint);
+                conversation.append(recovery_msg)?;
+            }
+        }
         // `read_image` returns an Image outcome. We materialise it as
         // a `Role::Tool` message with `content_parts: [Image{…}]` set
         // and a short `content` projection that keeps the conversation
@@ -2394,7 +2526,7 @@ mod tests {
             self.def.clone()
         }
 
-        async fn run(&self, args: serde_json::Value) -> ToolOutcome {
+        async fn run(&self, _ctx: &ToolContext, args: serde_json::Value) -> ToolOutcome {
             *self.captured_args.lock().unwrap() = Some(args);
             self.outcome.clone()
         }
@@ -2445,6 +2577,10 @@ mod tests {
             max_persona_turns: 10,
             hooks_dir: None,
             commit_max_file_size: 5 * 1024 * 1024,
+            tool_timeout_secs: Some(30),
+            dry_run: false,
+            cache_enabled: false,
+            cache_dir: None,
         }
     }
 
@@ -2462,7 +2598,7 @@ mod tests {
             COUNTER.fetch_add(1, Ordering::SeqCst)
         ));
         let _ = std::fs::remove_file(&log_path);
-        let conversation = ConversationLog::open(log_path).unwrap();
+        let (conversation, _outcome) = ConversationLog::open(log_path).unwrap();
         Executor::with_log(adapter, tools, config, conversation, None)
     }
 

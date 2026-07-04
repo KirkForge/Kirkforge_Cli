@@ -1,3 +1,5 @@
+pub mod cache;
+pub mod caching;
 pub mod deepseek;
 pub mod gemini;
 pub mod glm;
@@ -6,6 +8,73 @@ pub mod openai_compat;
 pub mod tool_call_markup;
 
 use crate::shared::{ContentPart, ModelInfo, Role, StreamEvent};
+use std::future::Future;
+
+/// Maximum number of retries for transient model-request failures.
+const MODEL_MAX_RETRIES: u32 = 3;
+
+/// Timeout for a single model request. Long-running generation is handled
+/// by streaming; this covers the initial HTTP handshake.
+const MODEL_REQUEST_TIMEOUT_SECS: u64 = 300;
+
+/// Build a shared `reqwest::Client` for model adapters.
+///
+/// Falls back to `reqwest::Client::new()` if custom builder configuration
+/// fails (e.g. because of an environment-level connector restriction),
+/// logging the failure so operators can diagnose it. The fallback client
+/// is still fully functional; custom configuration here is only
+/// performance tuning (`tcp_nodelay`).
+pub fn build_reqwest_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .tcp_nodelay(true)
+        .build()
+        .unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "failed to build custom reqwest client; falling back to default");
+            reqwest::Client::new()
+        })
+}
+
+/// Send a model request with retries for transient failures.
+///
+/// Retries up to `MODEL_MAX_RETRIES` times on:
+/// - connect errors
+/// - timeout errors
+/// - HTTP 429 / 503
+///
+/// Uses exponential backoff starting at 1s. Returns the response on the
+/// first success, or the final error otherwise. This consolidates the
+/// retry logic that was duplicated across `openai_compat`, `deepseek`,
+/// `gemini`, and was missing from `glm`.
+pub async fn send_with_retry<F, Fut>(
+    _client: &reqwest::Client,
+    build_request: F,
+) -> anyhow::Result<reqwest::Response>
+where
+    F: Fn() -> Fut,
+    Fut: Future<Output = reqwest::Result<reqwest::Response>>,
+{
+    let mut attempt = 0u32;
+    loop {
+        attempt += 1;
+        match build_request().await {
+            Err(e) if attempt < MODEL_MAX_RETRIES && (e.is_connect() || e.is_timeout()) => {
+                tracing::warn!(attempt, error = %e, "model request failed, retrying");
+                tokio::time::sleep(std::time::Duration::from_secs(1u64 << (attempt - 1))).await;
+            }
+            Err(e) => return Err(e.into()),
+            Ok(r) => {
+                let s = r.status().as_u16();
+                if attempt < MODEL_MAX_RETRIES && (s == 429 || s == 503) {
+                    tracing::warn!(attempt, status = s, "model returned transient error, retrying");
+                    tokio::time::sleep(std::time::Duration::from_secs(1u64 << (attempt - 1)))
+                        .await;
+                } else {
+                    return Ok(r.error_for_status()?);
+                }
+            }
+        }
+    }
+}
 
 /// Build a message object for OpenAI-compatible requests.
 /// When `content_parts` is present and non-empty, emits the vision

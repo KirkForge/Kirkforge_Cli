@@ -133,6 +133,12 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
                 "📐 Plan complete. The model has finished exploring and designed an implementation plan. Type /implement to allow edits and continue.".to_string(),
             ));
         }
+        TurnEvent::Recovered { messages } => {
+            state.messages.push(ConversationEntry::new(
+                "system",
+                format!("🛟 Restored {messages} message(s) from checkpoint after a corrupt session log was detected."),
+            ));
+        }
         TurnEvent::CompactionReport {
             new_messages,
             dropped_tool_results,

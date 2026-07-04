@@ -1,6 +1,6 @@
 use crate::session::access::{GuardVerdict, PathGuard};
-use crate::shared::{Match as SearchMatch, ToolDef, ToolOutcome};
-use crate::tools::Tool;
+use crate::shared::{Match as SearchMatch, ToolDef, ToolError, ToolOutcome};
+use crate::tools::{Tool, ToolContext};
 use std::path::PathBuf;
 
 /// Maximum file size in bytes we'll attempt to read for grep (10 MB).
@@ -53,13 +53,13 @@ impl Tool for Grep {
         }
     }
 
-    async fn run(&self, args: serde_json::Value) -> ToolOutcome {
+    async fn run(&self, _ctx: &ToolContext, args: serde_json::Value) -> ToolOutcome {
         let pattern = match args.get("pattern").and_then(|p| p.as_str()) {
             Some(p) => p.to_string(),
             None => {
-                return ToolOutcome::Error {
-                    message: "Missing 'pattern' argument".into(),
-                }
+                return ToolOutcome::Failure(ToolError::invalid_args(
+                    "Missing 'pattern' argument",
+                ));
             }
         };
 
@@ -132,24 +132,24 @@ impl Tool for Grep {
             // ── Size + binary checks for single-file search ──
             if let Ok(meta) = std::fs::metadata(&search_path) {
                 if meta.len() > MAX_GREP_FILE_SIZE {
-                    return ToolOutcome::Error {
+                    return ToolOutcome::Failure(ToolError::Internal {
                         message: format!(
                             "File too large to search ({} bytes): {}",
                             meta.len(),
                             search_path.display()
                         ),
-                    };
+                    });
                 }
             }
             if is_binary_content(&search_path) {
-                return ToolOutcome::Error {
+                return ToolOutcome::Failure(ToolError::Internal {
                     message: format!("Cannot search binary file: {}", search_path.display()),
-                };
+                });
             }
             if let GuardVerdict::Denied(msg) = self.path_guard.check_read(&search_path) {
-                return ToolOutcome::Error {
-                    message: format!("🔒 Access denied: {msg}"),
-                };
+                return ToolOutcome::Failure(ToolError::AccessDenied {
+                    message: msg,
+                });
             }
             if let Ok(content) = std::fs::read_to_string(&search_path) {
                 let matches = find_matches(&content, &pattern, &search_path, context_lines);
@@ -157,9 +157,9 @@ impl Tool for Grep {
                 results = matches;
             }
         } else {
-            return ToolOutcome::Error {
+            return ToolOutcome::Failure(ToolError::Internal {
                 message: format!("Path not found: {}", search_path.display()),
-            };
+            });
         }
 
         if results.len() > max_matches {

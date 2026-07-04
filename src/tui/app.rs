@@ -16,6 +16,9 @@ use crate::shared::Config;
 #[derive(Debug, Clone, PartialEq)]
 pub enum ConnectionState {
     Disconnected,
+    // Reserved for async connection transitions; all rendering paths
+    // already handle it, so keep the variant even though it is not
+    // currently emitted.
     #[allow(dead_code)]
     Connecting,
     Connected {

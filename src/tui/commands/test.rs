@@ -26,7 +26,7 @@
 //! point for the test command; v2 will add `pytest` / `npm test`
 //! / `go test` arms there.
 
-use crate::tools::bash::run_shell;
+use crate::session::bash_runner::run_shell;
 use crate::tui::app::AppState;
 /// Default timeout in seconds when the user types `/test` with
 /// no argument. 5 minutes covers most real-world `cargo test`
@@ -88,7 +88,7 @@ pub async fn handle_test_command(args: &str, state: &mut AppState) -> String {
     };
     let workdir_str = workdir.to_string_lossy().to_string();
 
-    if let Some(reason) = crate::tools::bash::check_bash_command_str(
+    if let Some(reason) = crate::session::bash_runner::check_bash_command_str(
         cmd,
         Some(&workdir_str),
         &deny_list,

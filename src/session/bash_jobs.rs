@@ -7,10 +7,10 @@
 /// Jobs run as tokio tasks and their output is captured asynchronously.
 /// The model or user can check job status, read output, or cancel jobs.
 use crate::session::access::{DenyList, PathGuard};
-use crate::session::process_group::{kill_process_group, reap_child, setup_process_group};
-use crate::tools::bash::{
+use crate::session::bash_runner::{
     cap_to_string, check_bash_command_str, drain_capped, MAX_BASH_OUTPUT_BYTES,
 };
+use crate::session::process_group::{kill_process_group, reap_child, setup_process_group};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;

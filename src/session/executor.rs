@@ -3,6 +3,7 @@ use crate::session::access::{
     access_from_config, warn_if_unsandboxed, DenyList, GuardVerdict, PathGuard, ReadGate,
 };
 use crate::session::adapter_swap::AdapterSwap;
+use crate::session::bash_runner::check_bash_command;
 use crate::session::carryover::CarryoverProfile;
 use crate::session::config::config_diff_summary;
 use crate::session::conversation::ConversationLog;
@@ -16,7 +17,6 @@ use crate::shared::{
     read_shared_config, Config, Message, Role, SharedConfig, StreamEvent, ToolDef, ToolInvocation,
     ToolOutcome,
 };
-use crate::tools::bash::check_bash_command;
 use crate::tools::{Tool, ToolContext, UndoStackRef};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;

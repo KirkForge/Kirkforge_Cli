@@ -98,7 +98,7 @@ pub async fn run_bang_command(cmd: &str, config: &crate::shared::Config) -> Bang
 
     let workdir_str = workdir.to_string_lossy().to_string();
 
-    if let Some(reason) = crate::tools::bash::check_bash_command_str(
+    if let Some(reason) = crate::session::bash_runner::check_bash_command_str(
         cmd,
         Some(&workdir_str),
         &deny_list,
@@ -116,7 +116,8 @@ pub async fn run_bang_command(cmd: &str, config: &crate::shared::Config) -> Bang
     }
 
     let start = Instant::now();
-    let result = crate::tools::bash::run_shell(cmd, workdir, BANG_DEFAULT_TIMEOUT_SECS).await;
+    let result =
+        crate::session::bash_runner::run_shell(cmd, workdir, BANG_DEFAULT_TIMEOUT_SECS).await;
     let elapsed_ms = start.elapsed().as_millis() as u64;
 
     match result {

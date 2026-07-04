@@ -27,11 +27,11 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use crate::session::access::access_from_config;
-use crate::session::process_group::{kill_process_group, setup_process_group};
-use crate::shared::Config;
-use crate::tools::bash::{
+use crate::session::bash_runner::{
     cap_to_string, check_bash_command_str, drain_capped, MAX_BASH_OUTPUT_BYTES,
 };
+use crate::session::process_group::{kill_process_group, setup_process_group};
+use crate::shared::Config;
 use kirkforge_plugin::Plugin;
 use kirkforge_plugin_host::PluginRegistry;
 

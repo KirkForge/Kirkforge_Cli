@@ -388,7 +388,9 @@ impl Executor {
         match tokio::runtime::Handle::try_current() {
             Ok(rt) => {
                 rt.spawn(async move {
-                    let _ = bus.register(h).await;
+                    if let Err(e) = bus.register(h).await {
+                        tracing::warn!(error = %e, "failed to register verifier handler on event bus");
+                    }
                 });
                 self.correction_loop = Some(CorrectionLoop::new(handler));
                 count
@@ -1051,8 +1053,11 @@ impl Executor {
                             tool_name: None,
                             token_count: None,
                         })?;
-                        let _ = event_tx
-                            .send(TurnEvent::Token("(JSON parse error, retrying…)\n".into()));
+                        crate::send_or_warn!(
+                            event_tx
+                                .send(TurnEvent::Token("(JSON parse error, retrying…)\n".into())),
+                            "TurnEvent receiver dropped; discarding event"
+                        );
                     } else {
                         return Ok(());
                     }
@@ -1982,9 +1987,14 @@ impl Drop for ApprovalResponder {
             // user decision — it happened because the handler dropped the
             // responder without sending a response (e.g. app shutdown, render
             // panic, or a handler bug).
-            let _ = tx.send(ApprovalResponse::DeniedWithReason(
-                "approval responder dropped without a user decision".into(),
-            ));
+            if tx
+                .send(ApprovalResponse::DeniedWithReason(
+                    "approval responder dropped without a user decision".into(),
+                ))
+                .is_err()
+            {
+                tracing::debug!("approval fallback response receiver already dropped");
+            }
         }
     }
 }

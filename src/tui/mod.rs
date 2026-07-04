@@ -414,7 +414,7 @@ pub async fn run_tui(
         exe.set_recovered_messages(messages);
     }
     let handle = tokio::spawn(async move {
-        let _ = exe
+        if let Err(e) = exe
             .run(
                 input_rx,
                 event_tx,
@@ -427,7 +427,10 @@ pub async fn run_tui(
                 config_rx,
                 plan_rx,
             )
-            .await;
+            .await
+        {
+            tracing::error!(error = %e, "executor task exited with an error");
+        }
     });
 
     // Event loop

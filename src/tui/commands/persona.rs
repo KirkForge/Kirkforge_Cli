@@ -194,7 +194,10 @@ async fn run_persona_task(
     let (approval_tx, mut approval_rx) = mpsc::unbounded_channel::<ApprovalRequest>();
     tokio::spawn(async move {
         while let Some(req) = approval_rx.recv().await {
-            let _ = req.response.send(ApprovalResponse::Approved);
+            crate::send_or_warn!(
+                req.response.send(ApprovalResponse::Approved),
+                "approval response receiver dropped; response discarded"
+            );
         }
     });
 
@@ -336,7 +339,10 @@ pub async fn start_persona(
             cancelled,
         )
         .await;
-        let _ = completion_tx.send(result);
+        crate::send_or_warn!(
+            completion_tx.send(result),
+            "persona completion channel receiver dropped"
+        );
     });
 
     state.persona_in_progress = Some(PersonaHandle {

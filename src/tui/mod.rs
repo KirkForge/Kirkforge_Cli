@@ -354,7 +354,10 @@ pub async fn run_tui(
                         // Forward the new snapshot to the executor,
                         // which owns the access-control rebuild. If the
                         // executor is gone (TUI exited) we drop it.
-                        let _ = reload_config_tx.send(fresh);
+                        crate::send_or_warn!(
+                            reload_config_tx.send(fresh),
+                            "config reload channel receiver dropped"
+                        );
                     }
                 });
             }
@@ -467,7 +470,7 @@ pub async fn run_tui(
     .await;
 
     // Signal any in-flight model call to abort before dropping channels.
-    let _ = cancel_tx.send(());
+    crate::send_or_warn!(cancel_tx.send(()), "cancel channel receiver dropped");
     // Drop all control senders so every receiver in the executor's
     // `tokio::select!` closes. The executor only breaks on the
     // `else => break` arm once *all* receivers are closed; dropping
@@ -876,7 +879,7 @@ async fn handle_persona_complete(
     }
 
     if result.kind == PersonaKind::Plan {
-        let _ = plan_tx.send(true);
+        crate::send_or_warn!(plan_tx.send(true), "plan-mode channel receiver dropped");
         state.messages.push(ConversationEntry::new(
             "system",
             "📐 Plan complete. Type /implement to allow edits and continue.".to_string(),

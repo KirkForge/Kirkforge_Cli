@@ -722,7 +722,7 @@ impl Executor {
                     // otherwise spin on a closed channel anyway).
                     let result = self.run_turn(&input, &approval_tx, &cancelled, &event_tx).await;
                     if let Err(e) = result {
-                        let _ = event_tx.send(TurnEvent::Error(format!("Turn failed: {e}")));
+                        crate::send_or_warn!(event_tx.send(TurnEvent::Error(format!("Turn failed: {e}"))), "TurnEvent receiver dropped; discarding event");
                         tracing::warn!(
                             error = %e,
                             "TUI event receiver may be dropped while reporting turn-failure event"
@@ -922,7 +922,10 @@ impl Executor {
         if result.is_ok() {
             if let Err(e) = self.conversation.checkpoint() {
                 tracing::warn!(error = %e, "post-turn checkpoint failed");
-                let _ = event_tx.send(TurnEvent::Error(format!("Checkpoint failed: {e}")));
+                crate::send_or_warn!(
+                    event_tx.send(TurnEvent::Error(format!("Checkpoint failed: {e}"))),
+                    "TurnEvent receiver dropped; discarding event"
+                );
             }
         }
         result
@@ -967,7 +970,10 @@ impl Executor {
                     .maybe_swap(&cfg_snapshot, &mut self.adapter, user_input);
             if let Some(new_model) = swapped {
                 self.model_name = new_model.clone();
-                let _ = event_tx.send(TurnEvent::Token(format!("🔀 Switched to {new_model}\n")));
+                crate::send_or_warn!(
+                    event_tx.send(TurnEvent::Token(format!("🔀 Switched to {new_model}\n"))),
+                    "TurnEvent receiver dropped; discarding event"
+                );
             }
         }
 
@@ -989,7 +995,10 @@ impl Executor {
         // If this session was recovered from a checkpoint, tell the user
         // once before any model output appears.
         if let Some(count) = self.recovered_messages.take() {
-            let _ = event_tx.send(TurnEvent::Recovered { messages: count });
+            crate::send_or_warn!(
+                event_tx.send(TurnEvent::Recovered { messages: count }),
+                "TurnEvent receiver dropped; discarding event"
+            );
         }
 
         let mut tool_calls: Vec<ToolInvocation> = Vec::new();
@@ -1021,7 +1030,10 @@ impl Executor {
                     // before the next assistant response loses less work.
                     if let Err(e) = self.conversation.checkpoint() {
                         tracing::warn!(error = %e, "post-tool-batch checkpoint failed");
-                        let _ = event_tx.send(TurnEvent::Error(format!("Checkpoint failed: {e}")));
+                        crate::send_or_warn!(
+                            event_tx.send(TurnEvent::Error(format!("Checkpoint failed: {e}"))),
+                            "TurnEvent receiver dropped; discarding event"
+                        );
                     }
                 }
                 IterationOutcome::ParseError => {
@@ -1048,7 +1060,10 @@ impl Executor {
             }
 
             if iteration + 1 >= max_iterations {
-                let _ = event_tx.send(TurnEvent::Error("Tool call loop limit reached".into()));
+                crate::send_or_warn!(
+                    event_tx.send(TurnEvent::Error("Tool call loop limit reached".into())),
+                    "TurnEvent receiver dropped; discarding event"
+                );
                 return Ok(());
             }
         }
@@ -1140,11 +1155,17 @@ impl Executor {
             match event {
                 StreamEvent::Text(t) => {
                     assistant_content.push_str(&t);
-                    let _ = event_tx.send(TurnEvent::Token(t));
+                    crate::send_or_warn!(
+                        event_tx.send(TurnEvent::Token(t)),
+                        "TurnEvent receiver dropped; discarding event"
+                    );
                 }
                 StreamEvent::Thinking(t) => {
                     assistant_thinking.push_str(&t);
-                    let _ = event_tx.send(TurnEvent::Thinking(t));
+                    crate::send_or_warn!(
+                        event_tx.send(TurnEvent::Thinking(t)),
+                        "TurnEvent receiver dropped; discarding event"
+                    );
                 }
                 StreamEvent::ToolCall(tc) => {
                     tool_calls_out.push(tc);
@@ -1153,7 +1174,10 @@ impl Executor {
                     if e.contains("parse") || e.contains("parseable") {
                         had_parse_error = true;
                     }
-                    let _ = event_tx.send(TurnEvent::Error(e));
+                    crate::send_or_warn!(
+                        event_tx.send(TurnEvent::Error(e)),
+                        "TurnEvent receiver dropped; discarding event"
+                    );
                 }
                 StreamEvent::Done {
                     finish_reason: _,
@@ -1198,7 +1222,10 @@ impl Executor {
                     // completion, surface a PlanComplete event so the TUI
                     // can ask the user to approve implementation.
                     if self.plan_mode && assistant_content.contains(PLAN_COMPLETE_MARKER) {
-                        let _ = event_tx.send(TurnEvent::PlanComplete);
+                        crate::send_or_warn!(
+                            event_tx.send(TurnEvent::PlanComplete),
+                            "TurnEvent receiver dropped; discarding event"
+                        );
                     }
 
                     if let Some(ref u) = usage {
@@ -1206,12 +1233,15 @@ impl Executor {
                         let completion = u.completion_tokens.unwrap_or(0);
                         let cost = crate::shared::calculate_cost(&self.model_name, u);
                         self.cost_tracking.record_turn(prompt, completion, cost);
-                        let _ = event_tx.send(TurnEvent::CostStats {
-                            prompt_tokens: prompt,
-                            completion_tokens: completion,
-                            turn_cost: cost,
-                            cumulative_cost: self.cost_tracking.cumulative_cost,
-                        });
+                        crate::send_or_warn!(
+                            event_tx.send(TurnEvent::CostStats {
+                                prompt_tokens: prompt,
+                                completion_tokens: completion,
+                                turn_cost: cost,
+                                cumulative_cost: self.cost_tracking.cumulative_cost,
+                            }),
+                            "TurnEvent receiver dropped; discarding event"
+                        );
                     }
 
                     if !tool_calls_out.is_empty() {
@@ -1245,7 +1275,10 @@ impl Executor {
             Some(t) => t,
             None => {
                 let err = format!("Unknown tool: {}", tc.name);
-                let _ = event_tx.send(TurnEvent::Error(err.clone()));
+                crate::send_or_warn!(
+                    event_tx.send(TurnEvent::Error(err.clone())),
+                    "TurnEvent receiver dropped; discarding event"
+                );
                 self.conversation.append(Message {
                     role: Role::Tool,
                     content: err,
@@ -1278,11 +1311,14 @@ impl Executor {
                     "📐 Plan mode blocked {}: only read-only discovery tools are allowed until you type /implement.",
                     tc.name
                 );
-                let _ = event_tx.send(TurnEvent::ToolResult {
-                    name: tc.name.clone(),
-                    output: reason.clone(),
-                    success: false,
-                });
+                crate::send_or_warn!(
+                    event_tx.send(TurnEvent::ToolResult {
+                        name: tc.name.clone(),
+                        output: reason.clone(),
+                        success: false,
+                    }),
+                    "TurnEvent receiver dropped; discarding event"
+                );
                 self.conversation.append(Message {
                     role: Role::Tool,
                     content: reason,
@@ -1359,11 +1395,14 @@ impl Executor {
                     .and_then(|v| v.as_str())
                     .unwrap_or(""),
             );
-            let _ = event_tx.send(TurnEvent::ToolResult {
-                name: tc.name.clone(),
-                output: reason.clone(),
-                success: false,
-            });
+            crate::send_or_warn!(
+                event_tx.send(TurnEvent::ToolResult {
+                    name: tc.name.clone(),
+                    output: reason.clone(),
+                    success: false,
+                }),
+                "TurnEvent receiver dropped; discarding event"
+            );
             self.conversation.append(Message {
                 role: Role::Tool,
                 content: reason,
@@ -1379,11 +1418,14 @@ impl Executor {
                 ApprovalDecision::Approved | ApprovalDecision::AlwaysApproved => {}
                 ApprovalDecision::Denied { reason } => {
                     let msg = format!("❌ Approval denied: {reason}");
-                    let _ = event_tx.send(TurnEvent::ToolResult {
-                        name: tc.name.clone(),
-                        output: msg.clone(),
-                        success: false,
-                    });
+                    crate::send_or_warn!(
+                        event_tx.send(TurnEvent::ToolResult {
+                            name: tc.name.clone(),
+                            output: msg.clone(),
+                            success: false,
+                        }),
+                        "TurnEvent receiver dropped; discarding event"
+                    );
                     self.conversation.append(Message {
                         role: Role::Tool,
                         content: msg,
@@ -1397,11 +1439,14 @@ impl Executor {
         }
 
         if let Some(denied) = check_deny_list(&self.deny_list, &tc.name, &tc.arguments) {
-            let _ = event_tx.send(TurnEvent::ToolResult {
-                name: tc.name.clone(),
-                output: denied.clone(),
-                success: false,
-            });
+            crate::send_or_warn!(
+                event_tx.send(TurnEvent::ToolResult {
+                    name: tc.name.clone(),
+                    output: denied.clone(),
+                    success: false,
+                }),
+                "TurnEvent receiver dropped; discarding event"
+            );
             self.conversation.append(Message {
                 role: Role::Tool,
                 content: denied,
@@ -1428,11 +1473,14 @@ impl Executor {
                 "write_file" | "edit_file" => self.path_guard.check_write(path),
                 _ => {
                     let denied = format!("🔒 Access denied: unsupported file tool '{}'", tc.name);
-                    let _ = event_tx.send(TurnEvent::ToolResult {
-                        name: tc.name.clone(),
-                        output: denied.clone(),
-                        success: false,
-                    });
+                    crate::send_or_warn!(
+                        event_tx.send(TurnEvent::ToolResult {
+                            name: tc.name.clone(),
+                            output: denied.clone(),
+                            success: false,
+                        }),
+                        "TurnEvent receiver dropped; discarding event"
+                    );
                     self.conversation.append(Message {
                         role: Role::Tool,
                         content: denied,
@@ -1451,11 +1499,14 @@ impl Executor {
                             self.read_gate.check_edit(path, &resolved)
                         {
                             let denied = format!("🔒 Access denied: {msg}");
-                            let _ = event_tx.send(TurnEvent::ToolResult {
-                                name: tc.name.clone(),
-                                output: denied.clone(),
-                                success: false,
-                            });
+                            crate::send_or_warn!(
+                                event_tx.send(TurnEvent::ToolResult {
+                                    name: tc.name.clone(),
+                                    output: denied.clone(),
+                                    success: false,
+                                }),
+                                "TurnEvent receiver dropped; discarding event"
+                            );
                             self.conversation.append(Message {
                                 role: Role::Tool,
                                 content: denied,
@@ -1479,10 +1530,13 @@ impl Executor {
                         }
                     }
 
-                    let _ = event_tx.send(TurnEvent::ToolStart {
-                        name: tc.name.clone(),
-                        args: run_args.clone(),
-                    });
+                    crate::send_or_warn!(
+                        event_tx.send(TurnEvent::ToolStart {
+                            name: tc.name.clone(),
+                            args: run_args.clone(),
+                        }),
+                        "TurnEvent receiver dropped; discarding event"
+                    );
 
                     // Pre-tool hook (may deny the operation).
                     let args_json = serde_json::to_string(&run_args).unwrap_or_default();
@@ -1495,11 +1549,14 @@ impl Executor {
                         .await
                     {
                         let denied = format!("❌ Hook denied {}: {}", tc.name, reason);
-                        let _ = event_tx.send(TurnEvent::ToolResult {
-                            name: tc.name.clone(),
-                            output: denied.clone(),
-                            success: false,
-                        });
+                        crate::send_or_warn!(
+                            event_tx.send(TurnEvent::ToolResult {
+                                name: tc.name.clone(),
+                                output: denied.clone(),
+                                success: false,
+                            }),
+                            "TurnEvent receiver dropped; discarding event"
+                        );
                         self.conversation.append(Message {
                             role: Role::Tool,
                             content: denied,
@@ -1538,11 +1595,14 @@ impl Executor {
                 }
                 GuardVerdict::Denied(msg) => {
                     let denied = format!("🔒 Access denied: {msg}");
-                    let _ = event_tx.send(TurnEvent::ToolResult {
-                        name: tc.name.clone(),
-                        output: denied.clone(),
-                        success: false,
-                    });
+                    crate::send_or_warn!(
+                        event_tx.send(TurnEvent::ToolResult {
+                            name: tc.name.clone(),
+                            output: denied.clone(),
+                            success: false,
+                        }),
+                        "TurnEvent receiver dropped; discarding event"
+                    );
                     self.conversation.append(Message {
                         role: Role::Tool,
                         content: denied,
@@ -1588,11 +1648,14 @@ impl Executor {
                 &self.path_guard,
                 bash_sandbox_workdir,
             ) {
-                let _ = event_tx.send(TurnEvent::ToolResult {
-                    name: tc.name.clone(),
-                    output: denied.clone(),
-                    success: false,
-                });
+                crate::send_or_warn!(
+                    event_tx.send(TurnEvent::ToolResult {
+                        name: tc.name.clone(),
+                        output: denied.clone(),
+                        success: false,
+                    }),
+                    "TurnEvent receiver dropped; discarding event"
+                );
                 self.conversation.append(Message {
                     role: Role::Tool,
                     content: denied,
@@ -1625,11 +1688,14 @@ impl Executor {
             let path = std::path::Path::new(path_str);
             if let GuardVerdict::Denied(msg) = check_search_path(&self.path_guard, path) {
                 let denied = format!("🔒 Access denied: {msg}");
-                let _ = event_tx.send(TurnEvent::ToolResult {
-                    name: tc.name.clone(),
-                    output: denied.clone(),
-                    success: false,
-                });
+                crate::send_or_warn!(
+                    event_tx.send(TurnEvent::ToolResult {
+                        name: tc.name.clone(),
+                        output: denied.clone(),
+                        success: false,
+                    }),
+                    "TurnEvent receiver dropped; discarding event"
+                );
                 self.conversation.append(Message {
                     role: Role::Tool,
                     content: denied,
@@ -1641,10 +1707,13 @@ impl Executor {
             }
         }
 
-        let _ = event_tx.send(TurnEvent::ToolStart {
-            name: tc.name.clone(),
-            args: tc.arguments.clone(),
-        });
+        crate::send_or_warn!(
+            event_tx.send(TurnEvent::ToolStart {
+                name: tc.name.clone(),
+                args: tc.arguments.clone(),
+            }),
+            "TurnEvent receiver dropped; discarding event"
+        );
 
         // Pre-tool hook: gating hooks may deny the call with exit code 2.
         let args_json = serde_json::to_string(&tc.arguments).unwrap_or_default();
@@ -1656,11 +1725,14 @@ impl Executor {
             )
             .await
         {
-            let _ = event_tx.send(TurnEvent::ToolResult {
-                name: tc.name.clone(),
-                output: reason.clone(),
-                success: false,
-            });
+            crate::send_or_warn!(
+                event_tx.send(TurnEvent::ToolResult {
+                    name: tc.name.clone(),
+                    output: reason.clone(),
+                    success: false,
+                }),
+                "TurnEvent receiver dropped; discarding event"
+            );
             self.conversation.append(Message {
                 role: Role::Tool,
                 content: reason,
@@ -1847,7 +1919,12 @@ impl Executor {
             return vec![];
         };
 
-        let _ = self.event_bus.dispatch(&event).await;
+        let handler_results = self.event_bus.dispatch(&event).await;
+        for r in handler_results {
+            if !r.success {
+                tracing::warn!(handler = %r.handler_id, message = %r.message, "event handler failed");
+            }
+        }
 
         let Some(ref correction_loop) = self.correction_loop else {
             return vec![];
@@ -2230,11 +2307,14 @@ fn handle_tool_outcome(
 ) -> anyhow::Result<Option<String>> {
     match outcome {
         ToolOutcome::Success { content } => {
-            let _ = event_tx.send(TurnEvent::ToolResult {
-                name: tc.name.clone(),
-                output: content.clone(),
-                success: true,
-            });
+            crate::send_or_warn!(
+                event_tx.send(TurnEvent::ToolResult {
+                    name: tc.name.clone(),
+                    output: content.clone(),
+                    success: true,
+                }),
+                "TurnEvent receiver dropped; discarding event"
+            );
             conversation.append(Message {
                 role: Role::Tool,
                 content,
@@ -2244,11 +2324,14 @@ fn handle_tool_outcome(
             })?;
         }
         ToolOutcome::FileContent { content, .. } => {
-            let _ = event_tx.send(TurnEvent::ToolResult {
-                name: tc.name.clone(),
-                output: content.clone(),
-                success: true,
-            });
+            crate::send_or_warn!(
+                event_tx.send(TurnEvent::ToolResult {
+                    name: tc.name.clone(),
+                    output: content.clone(),
+                    success: true,
+                }),
+                "TurnEvent receiver dropped; discarding event"
+            );
             conversation.append(Message {
                 role: Role::Tool,
                 content,
@@ -2261,11 +2344,14 @@ fn handle_tool_outcome(
             // Hand the rendered diff to the caller so the
             // BusEvent::Edit event downstream carries the real
             // diff text — see the docstring on this fn.
-            let _ = event_tx.send(TurnEvent::ToolResult {
-                name: tc.name.clone(),
-                output: diff.clone(),
-                success: true,
-            });
+            crate::send_or_warn!(
+                event_tx.send(TurnEvent::ToolResult {
+                    name: tc.name.clone(),
+                    output: diff.clone(),
+                    success: true,
+                }),
+                "TurnEvent receiver dropped; discarding event"
+            );
             conversation.append(Message {
                 role: Role::Tool,
                 content: diff.clone(),
@@ -2281,11 +2367,14 @@ fn handle_tool_outcome(
             total: _,
         } => {
             let output = format_grep_output(&path, &matches);
-            let _ = event_tx.send(TurnEvent::ToolResult {
-                name: tc.name.clone(),
-                output: output.clone(),
-                success: true,
-            });
+            crate::send_or_warn!(
+                event_tx.send(TurnEvent::ToolResult {
+                    name: tc.name.clone(),
+                    output: output.clone(),
+                    success: true,
+                }),
+                "TurnEvent receiver dropped; discarding event"
+            );
             conversation.append(Message {
                 role: Role::Tool,
                 content: output,
@@ -2295,11 +2384,14 @@ fn handle_tool_outcome(
             })?;
         }
         ToolOutcome::Error { message } => {
-            let _ = event_tx.send(TurnEvent::ToolResult {
-                name: tc.name.clone(),
-                output: format!("Error: {message}"),
-                success: false,
-            });
+            crate::send_or_warn!(
+                event_tx.send(TurnEvent::ToolResult {
+                    name: tc.name.clone(),
+                    output: format!("Error: {message}"),
+                    success: false,
+                }),
+                "TurnEvent receiver dropped; discarding event"
+            );
             conversation.append(Message {
                 role: Role::Tool,
                 content: format!("Error: {message}"),
@@ -2318,11 +2410,14 @@ fn handle_tool_outcome(
         }
         ToolOutcome::Failure(err) => {
             let message = err.to_user_message();
-            let _ = event_tx.send(TurnEvent::ToolResult {
-                name: tc.name.clone(),
-                output: format!("Error: {message}"),
-                success: false,
-            });
+            crate::send_or_warn!(
+                event_tx.send(TurnEvent::ToolResult {
+                    name: tc.name.clone(),
+                    output: format!("Error: {message}"),
+                    success: false,
+                }),
+                "TurnEvent receiver dropped; discarding event"
+            );
             conversation.append(Message {
                 role: Role::Tool,
                 content: format!("Error: {message}"),
@@ -2355,11 +2450,14 @@ fn handle_tool_outcome(
                 mime,
                 data_base64.len()
             );
-            let _ = event_tx.send(TurnEvent::ToolResult {
-                name: tc.name.clone(),
-                output: projection.clone(),
-                success: true,
-            });
+            crate::send_or_warn!(
+                event_tx.send(TurnEvent::ToolResult {
+                    name: tc.name.clone(),
+                    output: projection.clone(),
+                    success: true,
+                }),
+                "TurnEvent receiver dropped; discarding event"
+            );
             conversation.append(Message {
                 role: Role::Tool,
                 content: projection,
@@ -2398,10 +2496,13 @@ fn emit_correction_results(
     conversation: &mut ConversationLog,
 ) -> anyhow::Result<()> {
     for cr in &results {
-        let _ = event_tx.send(TurnEvent::Verification {
-            message: cr.message.clone(),
-            success: cr.success,
-        });
+        crate::send_or_warn!(
+            event_tx.send(TurnEvent::Verification {
+                message: cr.message.clone(),
+                success: cr.success,
+            }),
+            "TurnEvent receiver dropped; discarding event"
+        );
         conversation.append(Message {
             role: Role::Tool,
             content: cr.message.clone(),

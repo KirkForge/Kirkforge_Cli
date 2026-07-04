@@ -4,6 +4,8 @@
 //! lookup helpers for skills, tools, hooks, and verifiers declared by
 //! loaded plugins.
 
+#![cfg_attr(not(test), deny(clippy::unwrap_used))]
+
 mod compat;
 mod hook;
 mod sandbox;

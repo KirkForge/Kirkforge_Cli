@@ -10,6 +10,8 @@
 //! plugins are intentionally out of scope — they are a future phase once the
 //! trust model is proven.
 
+#![cfg_attr(not(test), deny(clippy::unwrap_used))]
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;

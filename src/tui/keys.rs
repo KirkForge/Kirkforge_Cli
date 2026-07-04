@@ -610,7 +610,10 @@ pub async fn handle_input_key(
                             return Ok(());
                         }
                         "/exit" | "/quit" => {
-                            let _ = cancel_tx.send(());
+                            crate::send_or_warn!(
+                                cancel_tx.send(()),
+                                "cancel channel receiver dropped"
+                            );
                             state.should_exit = true;
                             return Ok(());
                         }
@@ -768,7 +771,10 @@ pub async fn handle_input_key(
                             // the approved plan. The executor injects a
                             // system message telling the model it may
                             // proceed; we echo a local confirmation too.
-                            let _ = plan_tx.send(false);
+                            crate::send_or_warn!(
+                                plan_tx.send(false),
+                                "plan-mode channel receiver dropped"
+                            );
                             state.messages.push(ConversationEntry::new(
                                 "system",
                                 "✅ Plan mode disabled — implementation may begin.".to_string(),

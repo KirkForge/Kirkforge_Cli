@@ -1,6 +1,19 @@
 // Public/future surface in a binary crate: suppress dead-code warnings for pub items.
 #![allow(dead_code)]
 
+/// Send a value over a channel and log a warning if the receiver is gone.
+///
+/// Use this instead of `let _ = tx.send(...)` so channel drops are not silent.
+/// Works with mpsc, oneshot, and any `send` call that returns a `Result`.
+#[macro_export]
+macro_rules! send_or_warn {
+    ($expr:expr, $($fmt:tt)*) => {
+        if let ::core::result::Result::Err(_) = $expr {
+            ::tracing::warn!($($fmt)*);
+        }
+    };
+}
+
 pub mod minify;
 pub mod permission;
 

@@ -2,6 +2,10 @@
 // is a classic async Rust foot-gun that can deadlock the executor. The
 // codebase currently passes this check; deny it to keep it that way.
 #![deny(clippy::await_holding_lock)]
+// Stabilization lint: unwrap() in production code can crash the TUI. Tests
+// are allowed to unwrap for brevity; production code must use proper error
+// handling or explicit expect() with a justification.
+#![cfg_attr(not(test), deny(clippy::unwrap_used))]
 
 mod adapters;
 mod daemon;
@@ -685,9 +689,9 @@ fn spawn_non_interactive_approval_handler(
                 args = %req.args,
                 "non-interactive run denied approval for tool; use interactive mode or add a permission rule that explicitly allows this operation"
             );
-            let _ = req.response.send(session::executor::ApprovalResponse::DeniedWithReason(
+            crate::send_or_warn!(req.response.send(session::executor::ApprovalResponse::DeniedWithReason(
                 "non-interactive mode cannot approve destructive tools; use interactive mode or add a permission rule".into(),
-            ));
+            )), "approval response receiver dropped; response discarded");
         }
     });
 }
@@ -884,7 +888,10 @@ fn spawn_line_mode_approval_handler(
                 // If the tokio side already timed out, this send is
                 // harmless; the leftover thread will exit once the user
                 // finally provides input or the process terminates.
-                let _ = answer_tx.send(approved);
+                crate::send_or_warn!(
+                    answer_tx.send(approved),
+                    "line-mode answer channel receiver dropped"
+                );
             });
 
             let approved = tokio::time::timeout(std::time::Duration::from_secs(120), answer_rx)
@@ -900,7 +907,10 @@ fn spawn_line_mode_approval_handler(
             } else {
                 session::executor::ApprovalResponse::Denied
             };
-            let _ = req.response.send(resp);
+            crate::send_or_warn!(
+                req.response.send(resp),
+                "approval response receiver dropped; response discarded"
+            );
         }
     });
 }

@@ -1,6 +1,3 @@
-// Public/future surface in a binary crate: suppress dead-code warnings for pub items.
-#![allow(dead_code)]
-
 //! Per-session undo stack for file edits.
 //!
 //! Review.md gap #7: the model can `edit_file` and `write_file`, and

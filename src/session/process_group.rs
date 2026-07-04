@@ -1,6 +1,3 @@
-// Public/future surface in a binary crate: suppress dead-code warnings for pub items.
-#![allow(dead_code)]
-
 //! Process group helpers for cleaning up child processes and all of
 //! their descendants together.
 //!

@@ -1,6 +1,3 @@
-// Public/future surface in a binary crate: suppress dead-code warnings for pub items.
-#![allow(dead_code)]
-
 /// Background bash jobs — long-running command registry.
 ///
 /// Allows spawning bash commands that outlive a single tool call.

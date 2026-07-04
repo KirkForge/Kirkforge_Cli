@@ -1,6 +1,3 @@
-// Public/future surface in a binary crate: suppress dead-code warnings for pub items.
-#![allow(dead_code)]
-
 //! Smart model routing — task complexity classification.
 //!
 //! When enabled, the user's first message each turn is classified into a

@@ -1,6 +1,3 @@
-// Public/future surface in a binary crate: suppress dead-code warnings for pub items.
-#![allow(dead_code)]
-
 /// Session carryover profile — cross-session awareness with tiny footprint.
 ///
 /// Collects a minimal profile (~200 bytes JSON, ~55 tokens rendered) during

@@ -1,6 +1,3 @@
-// Public/future surface in a binary crate: suppress dead-code warnings for pub items.
-#![allow(dead_code)]
-
 //! Minimal MCP (Model Context Protocol) client via stdio transport.
 //!
 //! Spawns MCP servers as subprocesses, communicates via JSON-RPC 2.0 over

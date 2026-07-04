@@ -324,6 +324,20 @@ pub struct AppState {
     /// frames when nothing's happening, plus a 4Hz slow-tick when
     /// the spinner is animating.
     pub dirty: bool,
+
+    // ── Ollama pull progress (gap #22) ──────────────────────────
+    /// Latest pull-progress event received from `/api/pull`. Used by
+    /// the renderer to draw a progress bar in the chat panel. `None`
+    /// when no pull is in progress.
+    pub pull_progress: Option<PullProgress>,
+}
+
+/// Snapshot of an in-progress Ollama model pull.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PullProgress {
+    pub status: String,
+    pub completed: Option<u64>,
+    pub total: Option<u64>,
 }
 
 impl AppState {
@@ -380,6 +394,7 @@ impl AppState {
             // connection banner / status bar are non-empty even with
             // zero state mutations).
             dirty: true,
+            pull_progress: None,
         }
     }
 

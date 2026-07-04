@@ -1995,6 +1995,20 @@ pub enum TurnEvent {
         /// Number of messages restored from checkpoint.
         messages: usize,
     },
+
+    /// Progress of an asynchronous Ollama model pull triggered by
+    /// `/model <name>` when the model is missing locally. Rendered
+    /// in the TUI as a live progress bar.
+    PullProgress {
+        /// Human-readable status string from the Ollama `/api/pull`
+        /// stream (e.g. "pulling manifest", "downloading").
+        status: String,
+        /// Completed bytes so far; `None` when the server has not
+        /// reported a numeric value yet.
+        completed: Option<u64>,
+        /// Total bytes to download; `None` when the total is unknown.
+        total: Option<u64>,
+    },
 }
 
 /// Cancellation token linked to the turn's `cancelled` atomic. A

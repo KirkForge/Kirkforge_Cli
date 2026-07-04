@@ -1080,6 +1080,10 @@ fn emit_turn_events(
                     print_json_line(&line);
                 }
             }
+            session::executor::TurnEvent::PullProgress { .. } => {
+                // Non-interactive mode has no place to show a live
+                // progress bar; swallow the event silently.
+            }
         }
     }
 

@@ -139,6 +139,18 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
                 format!("🛟 Restored {messages} message(s) from checkpoint after a corrupt session log was detected."),
             ));
         }
+        TurnEvent::PullProgress {
+            status,
+            completed,
+            total,
+        } => {
+            state.pull_progress = Some(crate::tui::app::PullProgress {
+                status,
+                completed,
+                total,
+            });
+            state.mark_dirty();
+        }
         TurnEvent::CompactionReport {
             new_messages,
             dropped_tool_results,
@@ -781,5 +793,40 @@ mod tests {
         // The pending approval is now the new one
         assert!(s.pending_approval.is_some());
         assert_eq!(s.pending_approval.as_ref().unwrap().tool_name, "edit_file");
+    }
+
+    /// `PullProgress` updates `state.pull_progress` and marks state dirty
+    /// so the TUI re-renders the progress bar.
+    #[test]
+    fn pull_progress_updates_state_and_marks_dirty() {
+        let mut s = make_state();
+        s.dirty = false;
+        dispatch_turn_event(
+            &mut s,
+            TurnEvent::PullProgress {
+                status: "pulling manifest".into(),
+                completed: None,
+                total: None,
+            },
+        );
+        let p = s.pull_progress.as_ref().expect("pull_progress set");
+        assert_eq!(p.status, "pulling manifest");
+        assert!(p.completed.is_none());
+        assert!(p.total.is_none());
+        assert!(s.dirty, "progress event should mark state dirty");
+
+        // A later progress event overwrites the snapshot.
+        dispatch_turn_event(
+            &mut s,
+            TurnEvent::PullProgress {
+                status: "downloading".into(),
+                completed: Some(128 * 1024 * 1024),
+                total: Some(512 * 1024 * 1024),
+            },
+        );
+        let p = s.pull_progress.as_ref().expect("pull_progress still set");
+        assert_eq!(p.status, "downloading");
+        assert_eq!(p.completed, Some(128 * 1024 * 1024));
+        assert_eq!(p.total, Some(512 * 1024 * 1024));
     }
 }

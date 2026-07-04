@@ -71,14 +71,52 @@ fn message_header(entry: &ConversationEntry, prev: Option<&ConversationEntry>) -
     Line::from(spans)
 }
 
-/// Build the styled lines for a tool entry as a compact card.
+/// Render a one-line progress bar from a `PullProgress` snapshot.
 ///
-/// When collapsed, returns a single line: an optional timestamp, a
-/// right-pointing chevron, the `TOOL` badge, the summary, and a dim expand hint.
-///
-/// When expanded, returns a header line (with optional timestamp, chevron,
-/// badge, and summary), the wrapped tool body indented with a subtle left
-/// border, and a footer hint explaining how to collapse.
+/// Shows the status text, an ASCII bar, and a percentage/bytes label.
+/// When the total is unknown, the bar is empty and the label shows
+/// completed bytes or the status string.
+fn progress_line(p: &crate::tui::app::PullProgress) -> Line<'static> {
+    const BAR_WIDTH: usize = 20;
+
+    let (bar, label) = match (p.completed, p.total) {
+        (Some(c), Some(t)) if t > 0 => {
+            let pct = ((c as f64 / t as f64) * 100.0).min(100.0) as u8;
+            let filled = ((c as f64 / t as f64) * BAR_WIDTH as f64).min(BAR_WIDTH as f64) as usize;
+            let mut bar_chars: Vec<char> = vec!['['];
+            bar_chars.extend(std::iter::repeat_n('█', filled));
+            bar_chars.extend(std::iter::repeat_n('░', BAR_WIDTH - filled));
+            bar_chars.push(']');
+            let bar: String = bar_chars.into_iter().collect();
+            (bar, format!("{}% ({:.1}/{:.1} MB)", pct, mb(c), mb(t)))
+        }
+        (Some(c), _) => {
+            let bar = format!("[{}]", "░".repeat(BAR_WIDTH));
+            (bar, format!("{:.1} MB downloaded", mb(c)))
+        }
+        _ => {
+            let bar = format!("[{}]", "░".repeat(BAR_WIDTH));
+            (bar, p.status.clone())
+        }
+    };
+
+    Line::from(vec![
+        Span::styled(
+            " ⬇ ".to_string(),
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(p.status.clone(), Style::default().fg(Color::Cyan)),
+        Span::styled(" ".to_string(), Style::default()),
+        Span::styled(bar, Style::default().fg(Color::Cyan)),
+        Span::styled(" ".to_string(), Style::default()),
+        Span::styled(label, Style::default().fg(Color::DarkGray)),
+    ])
+}
+
+fn mb(bytes: u64) -> f64 {
+    bytes as f64 / (1024.0 * 1024.0)
+}
+
 fn tool_card_lines(
     entry: &ConversationEntry,
     prev: Option<&ConversationEntry>,
@@ -471,6 +509,13 @@ pub fn render_chat(f: &mut Frame, area: Rect, state: &mut AppState) {
                 .fg(Color::Green)
                 .add_modifier(Modifier::DIM),
         )]));
+        lines.push(Line::from(""));
+    }
+
+    // Pull-progress bar (gap #22): rendered above the conversation so
+    // it is always visible while a model is being downloaded.
+    if let Some(ref p) = state.pull_progress {
+        lines.push(progress_line(p));
         lines.push(Line::from(""));
     }
 
@@ -1041,6 +1086,62 @@ mod tests {
             }
         }
         count
+    }
+
+    #[test]
+    fn progress_bar_renders_percentage_and_bar() {
+        let mut state = make_state(ConnectionState::Connected {
+            model: "test".into(),
+            since: std::time::Instant::now(),
+        });
+        state.pull_progress = Some(crate::tui::app::PullProgress {
+            status: "downloading".into(),
+            completed: Some(128 * 1024 * 1024),
+            total: Some(512 * 1024 * 1024),
+        });
+
+        let buffer = render_state(&mut state, 80, 8);
+        let top = buffer_cell_text(&buffer, 1);
+        assert!(
+            top.contains("downloading"),
+            "progress line should contain status, got: {top:?}"
+        );
+        assert!(
+            top.contains("25%"),
+            "progress line should contain 25% label, got: {top:?}"
+        );
+        assert!(
+            top.contains("128.0/512.0 MB"),
+            "progress line should contain MB label, got: {top:?}"
+        );
+        assert!(
+            top.contains('█'),
+            "progress line should contain filled bar characters, got: {top:?}"
+        );
+        assert!(
+            top.contains('░'),
+            "progress line should contain empty bar characters, got: {top:?}"
+        );
+    }
+
+    #[test]
+    fn progress_bar_renders_status_when_total_unknown() {
+        let mut state = make_state(ConnectionState::Connected {
+            model: "test".into(),
+            since: std::time::Instant::now(),
+        });
+        state.pull_progress = Some(crate::tui::app::PullProgress {
+            status: "pulling manifest".into(),
+            completed: None,
+            total: None,
+        });
+
+        let buffer = render_state(&mut state, 80, 8);
+        let top = buffer_cell_text(&buffer, 1);
+        assert!(
+            top.contains("pulling manifest"),
+            "progress line should show status when total unknown, got: {top:?}"
+        );
     }
 
     #[test]

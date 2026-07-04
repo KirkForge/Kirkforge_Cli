@@ -30,7 +30,7 @@ use crate::session::access::access_from_config;
 use crate::session::bash_runner::{
     cap_to_string, check_bash_command_str, drain_capped, MAX_BASH_OUTPUT_BYTES,
 };
-use crate::session::process_group::{kill_process_group, setup_process_group};
+use crate::session::process_group::{kill_process_group, reap_child, setup_process_group};
 use crate::shared::Config;
 use kirkforge_plugin::Plugin;
 use kirkforge_plugin_host::PluginRegistry;
@@ -412,7 +412,7 @@ async fn run_hook_script(
             Ok(HookDecision::Allow)
         }
         Err(()) => {
-            let _ = tokio::time::timeout(Duration::from_secs(2), child.wait()).await;
+            reap_child(&mut child, Duration::from_secs(2)).await;
             let (_raw_stdout, _stdout_dropped) = join_hook_drain(drain_stdout, "stdout").await?;
             let (raw_stderr, stderr_dropped) = join_hook_drain(drain_stderr, "stderr").await?;
             let stderr_text = cap_to_string(raw_stderr, stderr_dropped);

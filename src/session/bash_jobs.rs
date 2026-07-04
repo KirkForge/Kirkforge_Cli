@@ -345,7 +345,7 @@ impl BashJobRegistry {
             for id in &job_ids {
                 if let Some(mut child) = children.remove(id) {
                     kill_process_group(&mut child);
-                    let _ = child.wait().await;
+                    reap_child(&mut child, Duration::from_secs(2)).await;
                 }
             }
         }

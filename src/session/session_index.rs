@@ -1,6 +1,3 @@
-// Public/future surface in a binary crate: suppress dead-code warnings for pub items.
-#![allow(dead_code)]
-
 //! Session index — list, prune, and delete prior sessions.
 //!
 //! Review.md gap #3: prior to this, the only way to find an old

@@ -1,6 +1,3 @@
-// Public/future surface in a binary crate: suppress dead-code warnings for pub items.
-#![allow(dead_code)]
-
 /// Skills system — slash-command skill registry and loader.
 ///
 /// Skills are reusable capabilities defined in SKILL.md files with

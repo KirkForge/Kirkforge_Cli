@@ -1,4 +1,4 @@
-// Public/future surface in a binary crate: suppress dead-code warnings for pub items.
+// Public/future API surface for upcoming phases; submodules expose symbols used by later work.
 #![allow(dead_code)]
 
 pub mod access;

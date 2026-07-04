@@ -1,4 +1,4 @@
-// Public/future surface in a binary crate: suppress dead-code warnings for pub items.
+// Partial prompt-compression implementation; unused symbols are wired up in Phase 10.
 #![allow(dead_code)]
 
 /// Language-aware source minification for prompt compression.

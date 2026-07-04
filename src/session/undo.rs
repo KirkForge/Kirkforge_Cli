@@ -56,7 +56,7 @@
 //!   couldn't be restored; the snapshot stays on disk for manual
 //!   recovery.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -150,7 +150,8 @@ impl UndoStack {
     pub fn for_session(session_id: &str) -> Result<Self> {
         let data_dir = crate::session::data_dir()?;
         let dir = data_dir.join("undo").join(session_id);
-        std::fs::create_dir_all(&dir)?;
+        std::fs::create_dir_all(&dir)
+            .with_context(|| format!("create undo directory {}", dir.display()))?;
 
         // Reconstruct the in-memory ops deque by listing the
         // snapshot files in order. A snapshot file is just bytes
@@ -254,12 +255,10 @@ impl UndoStack {
         // or the new snapshot fully visible. Never a half-truncated
         // file the loader might mistake for valid.
         let tmp_snap = snap_path.with_extension("snap.tmp");
-        std::fs::write(&tmp_snap, prev_bytes).map_err(|e| {
-            anyhow::anyhow!("cannot write undo snapshot for {}: {e}", path.display())
-        })?;
-        std::fs::rename(&tmp_snap, &snap_path).map_err(|e| {
-            anyhow::anyhow!("cannot finalize undo snapshot for {}: {e}", path.display())
-        })?;
+        std::fs::write(&tmp_snap, prev_bytes)
+            .with_context(|| format!("write undo snapshot {}", tmp_snap.display()))?;
+        std::fs::rename(&tmp_snap, &snap_path)
+            .with_context(|| format!("finalize undo snapshot {}", snap_path.display()))?;
 
         // Write the sidecar metadata.
         let meta = SerializedMeta {
@@ -271,7 +270,8 @@ impl UndoStack {
             timestamp: chrono::Local::now(),
         };
         let meta_json = serde_json::to_string_pretty(&meta)?;
-        std::fs::write(&meta_path, meta_json)?;
+        std::fs::write(&meta_path, meta_json)
+            .with_context(|| format!("write undo metadata {}", meta_path.display()))?;
 
         self.ops.push_back(UndoOp {
             seq,
@@ -304,14 +304,19 @@ impl UndoStack {
                     .and_then(|e| e.to_str())
                     .unwrap_or("tmp")
             ));
-            let bytes = std::fs::read(&snap_path)?;
-            std::fs::write(&tmp_target, &bytes)?;
-            std::fs::rename(&tmp_target, &op.path)?;
+            let bytes = std::fs::read(&snap_path)
+                .with_context(|| format!("read undo snapshot {}", snap_path.display()))?;
+            std::fs::write(&tmp_target, &bytes).with_context(|| {
+                format!("write undo restore temp file {}", tmp_target.display())
+            })?;
+            std::fs::rename(&tmp_target, &op.path)
+                .with_context(|| format!("finalize undo restore {}", op.path.display()))?;
         } else {
             // The file was created by the edit — restore means
             // remove it.
             if op.path.exists() {
-                std::fs::remove_file(&op.path)?;
+                std::fs::remove_file(&op.path)
+                    .with_context(|| format!("remove file during undo {}", op.path.display()))?;
             }
         }
 

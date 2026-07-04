@@ -1,4 +1,4 @@
-// Public/future surface in a binary crate: suppress dead-code warnings for pub items.
+// Public/shared API surface with fields/methods intentionally unused until later phases.
 #![allow(dead_code)]
 
 /// Send a value over a channel and log a warning if the receiver is gone.

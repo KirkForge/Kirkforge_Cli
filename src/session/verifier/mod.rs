@@ -1,6 +1,3 @@
-// Public/future surface in a binary crate: suppress dead-code warnings for pub items.
-#![allow(dead_code)]
-
 pub mod git;
 /// Verifier slots — deterministic post-execution checks and correction loop.
 ///

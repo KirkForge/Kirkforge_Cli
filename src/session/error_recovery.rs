@@ -1,6 +1,3 @@
-// Public/future surface in a binary crate: suppress dead-code warnings for pub items.
-#![allow(dead_code)]
-
 //! Error recovery — smart retry hints after tool failures.
 //!
 //! When a tool call fails (file not found, build error, permission denied),

@@ -1,6 +1,3 @@
-// Public/future surface in a binary crate: suppress dead-code warnings for pub items.
-#![allow(dead_code)]
-
 use crate::shared::Message;
 use anyhow::Context;
 use std::path::PathBuf;

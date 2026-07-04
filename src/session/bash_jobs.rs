@@ -7,7 +7,7 @@
 /// Jobs run as tokio tasks and their output is captured asynchronously.
 /// The model or user can check job status, read output, or cancel jobs.
 use crate::session::access::{DenyList, PathGuard};
-use crate::session::process_group::{kill_process_group, setup_process_group};
+use crate::session::process_group::{kill_process_group, reap_child, setup_process_group};
 use crate::tools::bash::{
     cap_to_string, check_bash_command_str, drain_capped, MAX_BASH_OUTPUT_BYTES,
 };
@@ -15,6 +15,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::sync::OnceLock;
+use std::time::Duration;
 use tokio::process::Child;
 use tokio::sync::Mutex;
 
@@ -221,7 +222,7 @@ impl BashJobRegistry {
             // arrives as the child closes its pipes), so partial output is
             // preserved.
             if status.is_none() {
-                let _ = tokio::time::timeout(std::time::Duration::from_secs(2), child.wait()).await;
+                reap_child(&mut child, Duration::from_secs(2)).await;
             }
 
             // Join the drain tasks to capture output (or partial output on
@@ -284,7 +285,7 @@ impl BashJobRegistry {
             let mut children = self.children.lock().await;
             if let Some(mut child) = children.remove(&id) {
                 kill_process_group(&mut child);
-                let _ = child.wait().await;
+                reap_child(&mut child, Duration::from_secs(2)).await;
             }
         }
 
@@ -310,7 +311,7 @@ impl BashJobRegistry {
             let mut children = self.children.lock().await;
             if let Some(mut child) = children.remove(&id) {
                 kill_process_group(&mut child);
-                let _ = child.wait().await;
+                reap_child(&mut child, Duration::from_secs(2)).await;
             }
         }
 

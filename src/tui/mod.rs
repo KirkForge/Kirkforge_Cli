@@ -65,9 +65,13 @@ pub(crate) struct TerminalGuard;
 
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
-        let _ = disable_raw_mode();
+        if let Err(e) = disable_raw_mode() {
+            tracing::debug!(error = %e, "failed to disable raw mode in terminal guard");
+        }
         let mut stdout = io::stdout();
-        let _ = execute!(stdout, LeaveAlternateScreen);
+        if let Err(e) = execute!(stdout, LeaveAlternateScreen) {
+            tracing::debug!(error = %e, "failed to leave alternate screen in terminal guard");
+        }
     }
 }
 
@@ -483,7 +487,12 @@ pub async fn run_tui(
         input_tx, cancel_tx, resume_tx, compact_tx, model_tx, undo_tx, plan_tx, persona_tx,
     ));
     // ponytail: 3s timeout so a hung Ollama HTTP call doesn't freeze the terminal
-    let _ = tokio::time::timeout(std::time::Duration::from_secs(3), handle).await;
+    if tokio::time::timeout(std::time::Duration::from_secs(3), handle)
+        .await
+        .is_err()
+    {
+        tracing::warn!("executor task did not shut down within 3 s");
+    }
 
     // Save carryover profile
     if let Some(ref target) = saved_profile {
@@ -493,8 +502,12 @@ pub async fn run_tui(
     }
 
     // Cleanup
-    let _ = disable_raw_mode();
-    let _ = execute!(terminal.backend_mut(), LeaveAlternateScreen);
+    if let Err(e) = disable_raw_mode() {
+        tracing::debug!(error = %e, "failed to disable raw mode during TUI shutdown");
+    }
+    if let Err(e) = execute!(terminal.backend_mut(), LeaveAlternateScreen) {
+        tracing::debug!(error = %e, "failed to leave alternate screen during TUI shutdown");
+    }
 
     res
 }

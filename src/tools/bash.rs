@@ -1,6 +1,6 @@
 use crate::session::access::{DenyList, PathGuard};
 use crate::session::bash_jobs::global_registry;
-use crate::session::process_group::{kill_process_group, setup_process_group};
+use crate::session::process_group::{kill_process_group, reap_child, setup_process_group};
 use crate::shared::{ToolDef, ToolOutcome};
 use crate::tools::bash_minify;
 use crate::tools::{Tool, ToolContext};
@@ -419,7 +419,7 @@ pub async fn run_shell_with_token(
             // Best-effort reap: the drain tasks have closed the pipes,
             // so the child should exit quickly. A short timeout prevents
             // a stuck child from wedging us.
-            let _ = tokio::time::timeout(std::time::Duration::from_secs(2), child.wait()).await;
+            reap_child(&mut child, Duration::from_secs(2)).await;
             let prefix = format!("[timed out after {timeout_secs} seconds]\n");
             Ok(ShellOutput {
                 status: synth_status_killed(),
@@ -429,7 +429,7 @@ pub async fn run_shell_with_token(
         }
         Err(ShellErrorKind::Cancelled) => {
             kill_process_group(&mut child);
-            let _ = tokio::time::timeout(std::time::Duration::from_secs(2), child.wait()).await;
+            reap_child(&mut child, Duration::from_secs(2)).await;
             Err(ShellError::Cancelled)
         }
     }

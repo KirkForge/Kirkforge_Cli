@@ -10,6 +10,7 @@
 //! alive — they keep stdout/stderr pipes open and can block drain tasks
 //! forever, erasing partial output.
 
+use std::time::Duration;
 use tokio::process::{Child, Command};
 
 #[cfg(unix)]
@@ -34,6 +35,8 @@ const SIGKILL: i32 = 9;
 pub fn setup_process_group(cmd: &mut Command) {
     unsafe {
         cmd.as_std_mut().pre_exec(|| {
+            // In a post-fork pre-exec hook we cannot call logging or
+            // allocation; ignore the result and continue exec.
             let _ = setpgid(0, 0);
             Ok(())
         });
@@ -52,12 +55,29 @@ pub fn setup_process_group(_cmd: &mut Command) {}
 pub fn kill_process_group(child: &mut Child) {
     if let Some(pid) = child.id() {
         unsafe {
-            let _ = killpg(pid as i32, SIGKILL);
+            if killpg(pid as i32, SIGKILL) != 0 {
+                tracing::warn!(pid, "failed to kill process group");
+            }
         }
     }
 }
 
 #[cfg(not(unix))]
 pub fn kill_process_group(child: &mut Child) {
-    let _ = child.start_kill();
+    if let Err(e) = child.start_kill() {
+        tracing::warn!(error = %e, "failed to start killing child process");
+    }
+}
+
+/// Wait for a child to exit, bounded by a timeout.
+///
+/// This is best-effort reaping: if the child does not exit in time it
+/// may become a zombie. The timeout prevents a stuck child from wedging
+/// the caller indefinitely.
+pub async fn reap_child(child: &mut Child, timeout: Duration) {
+    match tokio::time::timeout(timeout, child.wait()).await {
+        Ok(Ok(_status)) => {}
+        Ok(Err(e)) => tracing::warn!(error = %e, "failed to reap child process"),
+        Err(_) => tracing::warn!("timed out waiting for child process to exit"),
+    }
 }

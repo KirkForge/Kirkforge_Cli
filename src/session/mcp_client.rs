@@ -534,7 +534,7 @@ fn spawn_stderr_drain(stderr: Option<ChildStderr>) -> tokio::task::JoinHandle<()
 /// Kill a child and reap it asynchronously, bounded by a short timeout.
 fn spawn_child_reap(mut child: Child) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        let _ = tokio::time::timeout(Duration::from_secs(2), child.wait()).await;
+        crate::session::process_group::reap_child(&mut child, Duration::from_secs(2)).await;
     })
 }
 

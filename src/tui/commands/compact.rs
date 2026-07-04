@@ -16,11 +16,7 @@ use tokio::sync::mpsc;
 /// to skip the "no recent tool results to compact" short-circuit) but is
 /// currently ignored. Keeps the signature symmetric with
 /// `handle_fork_command` / `handle_resume_command`.
-pub async fn handle_compact_command(args: &str, compact_tx: &mpsc::UnboundedSender<()>) -> String {
-    // Reserved for future flags; explicit `_args` naming keeps clippy happy
-    // and signals the intent without forcing a `let _ = args;` no-op.
-    let _ = args;
-
+pub async fn handle_compact_command(_args: &str, compact_tx: &mpsc::UnboundedSender<()>) -> String {
     match compact_tx.send(()) {
         Ok(()) => "🧹 Compaction requested. The executor will rewrite the conversation log and the chat view will refresh when it finishes.".into(),
         Err(e) => format!("❌ Failed to send compact request to executor: {e}"),

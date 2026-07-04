@@ -784,7 +784,7 @@ async fn run_line_mode(
             .run_turn_collecting(&input, &approval_tx, &cancelled)
             .await?;
         let _turn_duration_ms = turn_started_at.elapsed().as_millis() as u64;
-        let turn_outcome = emit_turn_events(
+        let _ = emit_turn_events(
             &events,
             output,
             &mut total_prompt_tokens,
@@ -793,7 +793,6 @@ async fn run_line_mode(
             &mut all_tool_records,
             &mut final_error,
         );
-        let _ = turn_outcome;
     }
 
     if turn_no == 0 && system.is_none() {
@@ -860,7 +859,9 @@ fn spawn_line_mode_approval_handler(
             eprintln!("⚠️  Approval required: {}", req.tool_name);
             eprintln!("{args_preview}");
             eprint!("Approve? [y/N]: ");
-            let _ = std::io::stderr().flush();
+            if let Err(e) = std::io::stderr().flush() {
+                tracing::warn!(error = %e, "failed to flush stderr approval prompt");
+            }
 
             let tool_name = req.tool_name.clone();
             let (answer_tx, answer_rx) = tokio::sync::oneshot::channel::<bool>();
@@ -872,7 +873,9 @@ fn spawn_line_mode_approval_handler(
                     Ok(mut tty) => {
                         use std::io::BufRead;
                         let mut reader = std::io::BufReader::new(&mut tty);
-                        let _ = reader.read_line(&mut answer);
+                        if let Err(e) = reader.read_line(&mut answer) {
+                            tracing::warn!(error = %e, "failed to read approval answer from /dev/tty");
+                        }
                         let trimmed = answer.trim().to_ascii_lowercase();
                         trimmed == "y" || trimmed == "yes"
                     }
@@ -957,7 +960,9 @@ fn emit_turn_events(
             session::executor::TurnEvent::Token(t) => {
                 if output == crate::shared::OutputFormat::Text {
                     print!("{t}");
-                    let _ = std::io::stdout().flush();
+                    if let Err(e) = std::io::stdout().flush() {
+                        tracing::debug!(error = %e, "failed to flush stdout token");
+                    }
                 } else if output == crate::shared::OutputFormat::StreamJson {
                     let line = serde_json::json!({"type": "token", "content": t});
                     print_json_line(&line);
@@ -1023,7 +1028,6 @@ fn emit_turn_events(
                     // If the name in the result doesn't match the
                     // start (paranoia), prefer the start name. We
                     // already used `start_name`; nothing to do.
-                    let _ = name;
                 }
             }
             session::executor::TurnEvent::Verification { message, success } => {

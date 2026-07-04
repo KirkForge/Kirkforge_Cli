@@ -278,7 +278,7 @@ fn normalize_command_pattern(pattern: &str) -> String {
             if chars.peek() == Some(&'*') {
                 // Already a `**` (or longer run) — consume the next star
                 // and emit a double-star.
-                let _ = chars.next();
+                chars.next();
                 out.push('*');
                 out.push('*');
             } else {

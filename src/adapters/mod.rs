@@ -224,7 +224,7 @@ pub fn adapter_for(
 /// is asked to constrain its output to well-formed JSON.
 fn build_ollama_chat_body(
     model: &str,
-    model_info: &crate::shared::ModelInfo,
+    _model_info: &crate::shared::ModelInfo,
     messages: &[crate::shared::Message],
     tools: &[crate::shared::ToolDef],
     stream: bool,
@@ -321,11 +321,6 @@ fn build_ollama_chat_body(
     if json_mode {
         body["format"] = serde_json::Value::String("json".into());
     }
-
-    // Reference `model_info` so the parameter is part of the
-    // signature for forward-compat (e.g. when Ollama adds an
-    // `OLLAMA_KEEP_ALIVE` per-model knob). Currently a no-op.
-    let _ = model_info;
 
     body
 }

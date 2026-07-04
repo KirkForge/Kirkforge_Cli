@@ -354,8 +354,8 @@ fn parse_result_line_into(rest: &str, summary: &mut TestRunSummary) {
             }
             continue;
         }
-        // "0 measured" / "0 filtered out" — ignored (not stored in AST).
-        let _ = segment;
+        // "0 measured" / "0 filtered out" and any other unrecognized
+        // cargo-test summary fragments are intentionally ignored.
     }
     summary.total = summary.passed + summary.failed + summary.ignored;
 }

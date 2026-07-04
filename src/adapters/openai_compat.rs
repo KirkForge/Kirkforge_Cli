@@ -329,8 +329,10 @@ impl ModelAdapter for OpenAiCompatAdapter {
                                     if let Some(content) = delta.and_then(|d| d.get("content")) {
                                         if let Some(c) = content.as_str() {
                                             if !c.is_empty() {
-                                                let _ =
-                                                    tx.send(StreamEvent::Text(c.to_string())).await;
+                                                crate::send_or_warn!(
+                                                    tx.send(StreamEvent::Text(c.to_string())).await,
+                                                    "OpenAI compat stream event receiver dropped"
+                                                );
                                             }
                                         }
                                     }

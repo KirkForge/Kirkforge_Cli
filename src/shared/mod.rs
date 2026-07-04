@@ -681,6 +681,14 @@ pub struct Pricing {
     pub cache_read_per_mtok: f64,
 }
 
+const PRICING_FALLBACK: Pricing = Pricing {
+    model_prefix: "",
+    input_per_mtok: 0.0,
+    output_per_mtok: 0.0,
+    cache_write_per_mtok: 0.0,
+    cache_read_per_mtok: 0.0,
+};
+
 pub const PRICING_TABLE: &[Pricing] = &[
     Pricing {
         model_prefix: "opus-4",
@@ -734,11 +742,7 @@ pub fn calculate_cost(model: &str, usage: &TokenUsage) -> f64 {
     let p = PRICING_TABLE
         .iter()
         .find(|p| !p.model_prefix.is_empty() && model.starts_with(p.model_prefix))
-        .unwrap_or_else(|| {
-            PRICING_TABLE
-                .last()
-                .expect("PRICING_TABLE has fallback entry")
-        });
+        .unwrap_or_else(|| PRICING_TABLE.last().unwrap_or(&PRICING_FALLBACK));
 
     // Cached tokens are billed at the discounted read rate; the rest of
     // the prompt at the regular input rate. Servers that don't

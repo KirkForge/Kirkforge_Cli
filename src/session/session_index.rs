@@ -79,8 +79,14 @@ pub fn list_sessions() -> anyhow::Result<Vec<SessionEntry>> {
     }
     // Newest first (lexicographic on the rfc3339 string works for
     // same-timezone timestamps; we don't need strict correctness
-    // across timezones for a listing).
-    out.sort_by(|a, b| b.started_at.cmp(&a.started_at));
+    // across timezones for a listing). Tie-break on the session id so
+    // files created within the same second (common in tests and on
+    // low-resolution filesystems) still have a deterministic order.
+    out.sort_by(|a, b| {
+        b.started_at
+            .cmp(&a.started_at)
+            .then_with(|| b.id.cmp(&a.id))
+    });
     Ok(out)
 }
 
@@ -185,8 +191,13 @@ fn prune_oldest_in_dir(
         }
     }
 
-    // Newest first, matching list_sessions().
-    entries.sort_by(|a, b| b.started_at.cmp(&a.started_at));
+    // Newest first, matching list_sessions(). Tie-break on id for
+    // deterministic behaviour when mtimes are equal.
+    entries.sort_by(|a, b| {
+        b.started_at
+            .cmp(&a.started_at)
+            .then_with(|| b.id.cmp(&a.id))
+    });
 
     if entries.len() <= keep + delete_count {
         return Ok(Vec::new());

@@ -28,6 +28,7 @@
 //! --continue <id>`.
 
 use crate::session::conversation::ConversationLog;
+use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -61,7 +62,10 @@ pub fn list_sessions() -> anyhow::Result<Vec<SessionEntry>> {
     }
 
     let mut out = Vec::new();
-    for entry in std::fs::read_dir(&sessions_dir)?.flatten() {
+    for entry in std::fs::read_dir(&sessions_dir)
+        .with_context(|| format!("read sessions directory {}", sessions_dir.display()))?
+        .flatten()
+    {
         let path = entry.path();
         if !path.is_file() {
             continue;
@@ -151,7 +155,8 @@ pub fn delete_session(id: &str) -> anyhow::Result<bool> {
     if !path.exists() {
         return Ok(false);
     }
-    std::fs::remove_file(&path)?;
+    std::fs::remove_file(&path)
+        .with_context(|| format!("delete session file {}", path.display()))?;
     Ok(true)
 }
 
@@ -176,7 +181,10 @@ fn prune_oldest_in_dir(
 ) -> anyhow::Result<Vec<String>> {
     let mut entries = Vec::new();
     if sessions_dir.is_dir() {
-        for entry in std::fs::read_dir(sessions_dir)?.flatten() {
+        for entry in std::fs::read_dir(sessions_dir)
+            .with_context(|| format!("read sessions directory {}", sessions_dir.display()))?
+            .flatten()
+        {
             let path = entry.path();
             if !path.is_file() {
                 continue;
@@ -205,7 +213,13 @@ fn prune_oldest_in_dir(
     let to_delete = &entries[keep..keep + delete_count];
     let mut deleted = Vec::with_capacity(to_delete.len());
     for e in to_delete {
-        if std::fs::remove_file(&e.path).is_ok() {
+        if let Err(err) = std::fs::remove_file(&e.path) {
+            tracing::warn!(
+                path = %e.path.display(),
+                error = %err,
+                "failed to prune session file; skipping"
+            );
+        } else {
             deleted.push(e.id.clone());
         }
     }

@@ -2,6 +2,7 @@
 #![allow(dead_code)]
 
 use crate::shared::Message;
+use anyhow::Context;
 use std::path::PathBuf;
 
 /// Outcome of opening a conversation log.
@@ -35,7 +36,9 @@ impl ConversationLog {
     /// surface a notice to the user.
     pub fn open(path: PathBuf) -> anyhow::Result<(Self, OpenOutcome)> {
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
+            std::fs::create_dir_all(parent).with_context(|| {
+                format!("create conversation log directory {}", parent.display())
+            })?;
         }
 
         let (messages, outcome) = if path.exists() {
@@ -81,7 +84,8 @@ impl ConversationLog {
         let mut file = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
-            .open(&self.path)?;
+            .open(&self.path)
+            .with_context(|| format!("open conversation log {} for append", self.path.display()))?;
         writeln!(file, "{line}")?;
         file.sync_all()?;
         self.messages.push(msg);
@@ -116,7 +120,8 @@ impl ConversationLog {
         // Prune old checkpoints, keeping the most recent `MAX_CHECKPOINTS`.
         if let Some(parent) = self.path.parent() {
             let prefix = checkpoint_prefix(&self.path);
-            let mut checkpoints: Vec<PathBuf> = std::fs::read_dir(parent)?
+            let mut checkpoints: Vec<PathBuf> = std::fs::read_dir(parent)
+                .with_context(|| format!("list checkpoints in {}", parent.display()))?
                 .flatten()
                 .map(|e| e.path())
                 .filter(|p| {
@@ -154,7 +159,8 @@ impl ConversationLog {
             return Ok(false);
         };
         let prefix = checkpoint_prefix(&self.path);
-        let mut checkpoints: Vec<PathBuf> = std::fs::read_dir(parent)?
+        let mut checkpoints: Vec<PathBuf> = std::fs::read_dir(parent)
+            .with_context(|| format!("list checkpoints in {}", parent.display()))?
             .flatten()
             .map(|e| e.path())
             .filter(|p| {
@@ -191,14 +197,23 @@ impl ConversationLog {
                 .create(true)
                 .truncate(true)
                 .write(true)
-                .open(&tmp_path)?;
+                .open(&tmp_path)
+                .with_context(|| {
+                    format!("create temporary conversation log {}", tmp_path.display())
+                })?;
             for msg in messages {
                 let line = serde_json::to_string(msg)?;
                 writeln!(file, "{line}")?;
             }
             file.sync_all()?;
         }
-        std::fs::rename(&tmp_path, path)?;
+        std::fs::rename(&tmp_path, path).with_context(|| {
+            format!(
+                "commit conversation log from {} to {}",
+                tmp_path.display(),
+                path.display()
+            )
+        })?;
         Ok(())
     }
 
@@ -256,7 +271,8 @@ impl ConversationLog {
 /// corrupt so that callers can fall back to checkpoint recovery. A file
 /// that is empty or contains only whitespace is treated as an empty log.
 fn load_messages(path: &std::path::Path) -> anyhow::Result<Vec<Message>> {
-    let content = std::fs::read_to_string(path)?;
+    let content = std::fs::read_to_string(path)
+        .with_context(|| format!("read conversation log {}", path.display()))?;
     let mut messages = Vec::new();
     let mut had_non_empty_line = false;
     for line in content.lines().filter(|l| !l.trim().is_empty()) {

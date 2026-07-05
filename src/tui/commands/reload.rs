@@ -59,6 +59,26 @@ pub async fn handle_reload_command(
     }
 }
 
+/// Handle `/reload skills` command.
+///
+/// Re-scans registered skill paths and re-registers built-in skills on top.
+/// Returns a short summary for the TUI chat panel.
+pub fn handle_reload_skills_command(state: &mut AppState) -> String {
+    let before = state.skill_registry.len();
+    state.skill_registry.clear();
+    state.skill_registry.set_max_plugin_trust(
+        read_shared_config(&state.config).max_plugin_trust,
+    );
+    let scanned = state.skill_registry.scan_and_load().unwrap_or(0);
+    for skill in crate::session::skills::builtin_skills() {
+        state.skill_registry.register(skill);
+    }
+    let after = state.skill_registry.len();
+    format!(
+        "🧠 Reloaded skills: cleared {before}, rescanned {scanned}, now {after} registered."
+    )
+}
+
 /// Handle `/reload plugins` command.
 ///
 /// Re-scans the configured plugins directory using the current trust policy,

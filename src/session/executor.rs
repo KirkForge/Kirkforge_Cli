@@ -1126,7 +1126,7 @@ impl Executor {
             }
 
             let outcome = self
-                .stream_iteration(approval_sender, cancelled, event_tx, &mut tool_calls)
+                .stream_iteration(user_input, approval_sender, cancelled, event_tx, &mut tool_calls)
                 .await?;
 
             match outcome {
@@ -1191,6 +1191,7 @@ impl Executor {
     #[allow(unused_variables)]
     async fn stream_iteration(
         &mut self,
+        user_input: &str,
         approval_sender: &mpsc::UnboundedSender<ApprovalRequest>,
         cancelled: &AtomicBool,
         event_tx: &mpsc::UnboundedSender<TurnEvent>,
@@ -1211,11 +1212,40 @@ impl Executor {
             None
         };
 
+        // Snapshot memory knobs so we don't hold the config lock across
+        // the prompt-builder memory lookup.
+        let (memory_enabled, memory_max_tokens, memory_top_n) = {
+            let cfg = read_shared_config(&self.config);
+            (cfg.memory_enabled, cfg.memory_max_tokens, cfg.memory_top_n)
+        };
+
+        // Build a richer memory context from the current user turn plus
+        // the most recent assistant message, if any.
+        let memory_context = {
+            let history = self.conversation.all();
+            let mut ctx = String::from(user_input);
+            if let Some(last_assistant) = history.iter().rev().find(|m| {
+                matches!(m.role, Role::Assistant) && !m.content.is_empty()
+            }) {
+                ctx.push(' ');
+                ctx.push_str(&last_assistant.content);
+            }
+            if ctx.trim().is_empty() {
+                None
+            } else {
+                Some(ctx)
+            }
+        };
+
         let system = self.prompt_builder.build(
             &model_info.name,
             model_info.supports_thinking,
             &tool_names,
             carryover_block.as_deref(),
+            memory_context.as_deref(),
+            memory_enabled,
+            memory_max_tokens,
+            memory_top_n,
         );
 
         let history = self.conversation.all();
@@ -2836,6 +2866,9 @@ mod tests {
             dry_run: false,
             cache_enabled: false,
             cache_dir: None,
+            memory_enabled: false,
+            memory_max_tokens: 0,
+            memory_top_n: 0,
         }
     }
 

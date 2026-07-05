@@ -52,10 +52,54 @@ impl Skill {
     /// Render the full system prompt for this skill, appending user input.
     ///
     /// Plugin prompts may contain a `{{args}}` placeholder; it is replaced
-    /// with the user input before the standard suffix is appended.
+    /// with the raw user input before the standard suffix is appended.
     pub fn render_prompt(&self, user_input: &str) -> String {
         let body = self.prompt_body.replace("{{args}}", user_input);
         format!("{body}\n\nUser request: {user_input}")
+    }
+
+    /// Tokenise skill arguments like a POSIX shell: splits on whitespace,
+    /// respects double quotes, and supports backslash escapes.
+    ///
+    /// Returns an error if quotes are unbalanced. This is intentionally
+    /// simple and dependency-free.
+    pub fn tokenize_args(raw: &str) -> Result<Vec<String>, String> {
+        let mut args = Vec::new();
+        let mut current = String::new();
+        let mut in_quote = false;
+        let mut escaped = false;
+
+        for ch in raw.chars() {
+            if escaped {
+                current.push(ch);
+                escaped = false;
+                continue;
+            }
+            match ch {
+                '\\' => {
+                    escaped = true;
+                }
+                '"' => {
+                    in_quote = !in_quote;
+                }
+                c if c.is_whitespace() && !in_quote => {
+                    if !current.is_empty() {
+                        args.push(std::mem::take(&mut current));
+                    }
+                }
+                c => {
+                    current.push(c);
+                }
+            }
+        }
+
+        if in_quote {
+            return Err("unbalanced quote in skill arguments".into());
+        }
+        if !current.is_empty() {
+            args.push(current);
+        }
+        Ok(args)
     }
 }
 
@@ -323,6 +367,14 @@ impl SkillRegistry {
             false
         }
     }
+
+    /// Clear all registered skills and plugin state.
+    pub fn clear(&mut self) {
+        self.skills.clear();
+        self.triggers.clear();
+        self.plugin_registry = PluginRegistry::new();
+        self.plugin_warnings.clear();
+    }
 }
 
 /// Parse a SKILL.md file and return the skill.
@@ -430,6 +482,32 @@ pub fn builtin_skills() -> Vec<Skill> {
             },
             prompt_body: "Summarize the current git status, recent changes, \
                           and any obvious issues in the project."
+                .into(),
+            source_dir: PathBuf::from("."),
+        },
+        Skill {
+            meta: SkillMeta {
+                name: "explain".into(),
+                description: "Explain the selected code or concept".into(),
+                trigger: "/explain".into(),
+                model: Some("fast".into()),
+            },
+            prompt_body: "You are an expert tutor. Explain the user's request \
+                          clearly and concisely. If they referenced code, walk \
+                          through the relevant parts step by step."
+                .into(),
+            source_dir: PathBuf::from("."),
+        },
+        Skill {
+            meta: SkillMeta {
+                name: "docs".into(),
+                description: "Generate documentation for the current code".into(),
+                trigger: "/docs".into(),
+                model: Some("fast".into()),
+            },
+            prompt_body: "You are a technical writer. Produce clear documentation \
+                          (doc comments, README sections, or API notes) for the \
+                          code the user is asking about. Keep the tone concise."
                 .into(),
             source_dir: PathBuf::from("."),
         },
@@ -585,10 +663,12 @@ Body without closing delimiter."#;
     #[test]
     fn test_builtin_skills_loaded() {
         let skills = builtin_skills();
-        assert!(skills.len() >= 2);
+        assert!(skills.len() >= 4);
         let triggers: Vec<&str> = skills.iter().map(|s| s.meta.trigger.as_str()).collect();
         assert!(triggers.contains(&"/help"));
         assert!(triggers.contains(&"/status"));
+        assert!(triggers.contains(&"/explain"));
+        assert!(triggers.contains(&"/docs"));
     }
 
     #[test]
@@ -603,5 +683,48 @@ Body."#;
         let skill = parse_skill(content, PathBuf::from(".")).unwrap();
         assert_eq!(skill.meta.name, "explain");
         assert_eq!(skill.meta.trigger, "/explain");
+    }
+
+    #[test]
+    fn test_tokenize_args_plain() {
+        assert_eq!(
+            Skill::tokenize_args("--fix --all").unwrap(),
+            vec!["--fix", "--all"]
+        );
+    }
+
+    #[test]
+    fn test_tokenize_args_quoted() {
+        assert_eq!(
+            Skill::tokenize_args("--message \"hello world\"").unwrap(),
+            vec!["--message", "hello world"]
+        );
+    }
+
+    #[test]
+    fn test_tokenize_args_escaped_quote() {
+        assert_eq!(
+            Skill::tokenize_args("--msg \"say \\\"hi\\\"\"").unwrap(),
+            vec!["--msg", "say \"hi\""]
+        );
+    }
+
+    #[test]
+    fn test_tokenize_args_unbalanced_quote_fails() {
+        assert!(Skill::tokenize_args("--msg \"hello").is_err());
+    }
+
+    #[test]
+    fn test_tokenize_args_empty_returns_empty() {
+        assert!(Skill::tokenize_args("").unwrap().is_empty());
+        assert!(Skill::tokenize_args("   ").unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_tokenize_args_skips_extra_whitespace() {
+        assert_eq!(
+            Skill::tokenize_args("  a   b  c ").unwrap(),
+            vec!["a", "b", "c"]
+        );
     }
 }

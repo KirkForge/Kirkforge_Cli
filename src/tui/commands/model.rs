@@ -308,11 +308,11 @@ fn human_bytes(bytes: u64) -> String {
 /// Format a `PullLine` into a one-line user-facing progress message.
 fn format_pull_line(model: &str, line: &PullLine) -> String {
     if let (Some(completed), Some(total)) = (line.completed, line.total) {
-        let pct = if total == 0 {
-            0
-        } else {
-            ((completed * 100) / total).min(100)
-        };
+        let pct = completed
+            .checked_mul(100)
+            .and_then(|v| v.checked_div(total))
+            .unwrap_or(0)
+            .min(100);
         format!(
             "📥 Pulling {model}: {} ({} / {}, {}%)",
             line.status,

@@ -305,8 +305,7 @@ mod tests {
         let result = bash.run(&ctx, args).await;
         assert!(
             matches!(result, crate::shared::ToolOutcome::Success { .. }),
-            "huge timeout should be clamped and not panic, got {:?}",
-            result
+            "huge timeout should be clamped and not panic, got {result:?}"
         );
         assert!(
             marker.exists(),

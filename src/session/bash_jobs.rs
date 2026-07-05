@@ -581,14 +581,12 @@ mod tests {
             .await;
         assert!(
             next.is_err(),
-            "spawn should fail when all {} jobs are still running",
-            MAX_JOBS
+            "spawn should fail when all {MAX_JOBS} jobs are still running"
         );
         let err = next.unwrap_err().to_string();
         assert!(
             err.contains("Background job limit"),
-            "expected cap error, got: {}",
-            err
+            "expected cap error, got: {err}"
         );
 
         // Clean up the 64 long-running jobs so the test doesn't linger.

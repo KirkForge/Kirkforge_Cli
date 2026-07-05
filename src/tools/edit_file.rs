@@ -562,8 +562,7 @@ mod tests {
         let result = tool.run(&ctx, args).await;
         assert!(
             matches!(result, ToolOutcome::Error { ref message } if message.contains("whitespace-only")),
-            "expected whitespace-only rejection, got {:?}",
-            result
+            "expected whitespace-only rejection, got {result:?}"
         );
         let _ = std::fs::remove_file(&path);
     }

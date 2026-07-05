@@ -739,8 +739,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         assert!(
             matches!(result, GuardVerdict::Denied(ref msg) if msg.contains("File too large")),
-            "expected denial based on target size, got {:?}",
-            result
+            "expected denial based on target size, got {result:?}"
         );
     }
 

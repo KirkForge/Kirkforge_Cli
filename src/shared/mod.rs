@@ -207,6 +207,13 @@ pub struct Config {
     #[serde(default = "default_max_file_read_size")]
     pub max_file_read_size: usize,
 
+    /// Maximum size (in bytes) of an existing file that `edit_file` or
+    /// `write_file` may overwrite. Files larger than this are blocked
+    /// to prevent the model from silently clobbering large assets.
+    /// Default 1 MiB. Set to 0 to disable the limit.
+    #[serde(default = "default_max_overwrite_size")]
+    pub max_overwrite_size: usize,
+
     #[serde(default)]
     pub follow_symlinks: bool,
 
@@ -387,6 +394,10 @@ fn default_max_file_read_size() -> usize {
     1024 * 1024
 }
 
+fn default_max_overwrite_size() -> usize {
+    1024 * 1024
+}
+
 fn default_preserve_recent_messages() -> usize {
     2
 }
@@ -448,6 +459,7 @@ impl Default for Config {
             sandbox_dir: None,
             block_dotfiles: false,
             max_file_read_size: 1024 * 1024,
+            max_overwrite_size: 1024 * 1024,
             follow_symlinks: false,
             block_binary_reads: false,
             bash_sandbox_workdir: true,

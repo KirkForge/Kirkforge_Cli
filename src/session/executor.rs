@@ -2663,6 +2663,7 @@ mod tests {
             sandbox_dir: None,
             block_dotfiles: false,
             max_file_read_size: 1024 * 1024,
+            max_overwrite_size: 1024 * 1024,
             follow_symlinks: false,
             block_binary_reads: false,
             bash_sandbox_workdir: false,

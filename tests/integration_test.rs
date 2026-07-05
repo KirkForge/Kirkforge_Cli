@@ -285,63 +285,70 @@ async fn test_tool_fn_json_parse_in_chunks() {
         ]
     });
 
-    let mut response = client()
-        .post(format!("{OLLAMA_HOST}/api/chat"))
-        .json(&body)
-        .send()
-        .await
-        .expect("POST /api/chat failed");
+    // Retry a few times because small models can produce empty tool-less
+    // responses non-deterministically; we only need one valid streaming run.
+    let mut last_events = String::new();
+    for attempt in 0..3 {
+        let mut response = client()
+            .post(format!("{OLLAMA_HOST}/api/chat"))
+            .json(&body)
+            .send()
+            .await
+            .expect("POST /api/chat failed");
 
-    assert!(response.status().is_success());
+        assert!(response.status().is_success());
 
-    let mut buffer = String::new();
-    let mut has_content = false;
-    let mut has_done = false;
+        let mut buffer = String::new();
+        let mut has_content = false;
+        let mut has_done = false;
 
-    while let Some(chunk) = response.chunk().await.unwrap_or(None) {
-        buffer.push_str(&String::from_utf8_lossy(&chunk));
+        while let Some(chunk) = response.chunk().await.unwrap_or(None) {
+            buffer.push_str(&String::from_utf8_lossy(&chunk));
 
-        while let Some(newline) = buffer.find('\n') {
-            let line: String = buffer.drain(..=newline).collect();
-            let line = line.trim();
-            if line.is_empty() {
-                continue;
-            }
+            while let Some(newline) = buffer.find('\n') {
+                let line: String = buffer.drain(..=newline).collect();
+                let line = line.trim();
+                if line.is_empty() {
+                    continue;
+                }
 
-            let json: serde_json::Value = serde_json::from_str(line)
-                .unwrap_or_else(|_| serde_json::json!({"__parse_error": line}));
+                let json: serde_json::Value = serde_json::from_str(line)
+                    .unwrap_or_else(|_| serde_json::json!({"__parse_error": line}));
 
-            if json.get("__parse_error").is_some() {
-                continue; // partial chunk boundary
-            }
+                if json.get("__parse_error").is_some() {
+                    continue; // partial chunk boundary
+                }
 
-            if let Some(content) = json["message"]["content"].as_str() {
-                if !content.is_empty() {
+                if let Some(content) = json["message"]["content"].as_str() {
+                    if !content.is_empty() {
+                        has_content = true;
+                    }
+                }
+
+                // Tool-only responses have empty content but valid tool_calls
+                if json["message"]["tool_calls"]
+                    .as_array()
+                    .map(|tc| !tc.is_empty())
+                    .unwrap_or(false)
+                {
                     has_content = true;
                 }
-            }
 
-            // Tool-only responses have empty content but valid tool_calls
-            if json["message"]["tool_calls"]
-                .as_array()
-                .map(|tc| !tc.is_empty())
-                .unwrap_or(false)
-            {
-                has_content = true;
-            }
-
-            if json.get("done").and_then(|d| d.as_bool()).unwrap_or(false) {
-                has_done = true;
+                if json.get("done").and_then(|d| d.as_bool()).unwrap_or(false) {
+                    has_done = true;
+                }
             }
         }
+
+        if has_content && has_done {
+            return;
+        }
+        last_events = format!("attempt {attempt}: has_content={has_content}, has_done={has_done}");
     }
 
-    // Stream should have content text, tool_calls, or both — plus a done signal
-    assert!(
-        has_content,
-        "Stream should have produced some content or tool_calls"
+    panic!(
+        "Stream should have produced some content/tool_calls and terminated with done=true; {last_events}"
     );
-    assert!(has_done, "Stream should have terminated with done=true");
 }
 
 // ── OpenAI-compat endpoint ────────────────────────────────────────

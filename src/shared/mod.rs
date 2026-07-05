@@ -315,6 +315,30 @@ pub struct Config {
     #[serde(default = "default_max_plugin_trust")]
     pub max_plugin_trust: TrustTier,
 
+    /// If true, a plugin whose manifest `trust` exceeds `max_plugin_trust`
+    /// is rejected. If false, the plugin is loaded but its capabilities are
+    /// capped to `max_plugin_trust`. Default `true` — least surprise.
+    #[serde(default = "default_reject_on_excess_plugin_trust")]
+    pub reject_on_excess_plugin_trust: bool,
+
+    /// If true, every loaded plugin directory must contain a `.kirkforge.sig`
+    /// detached signature that can be verified with `minisign`. Off by
+    /// default.
+    #[serde(default)]
+    pub plugin_signature_validation: bool,
+
+    /// Path to the minisign public key used for plugin signature
+    /// validation. Required when `plugin_signature_validation` is true.
+    #[serde(default)]
+    pub plugin_public_key_path: Option<String>,
+
+    /// Extra environment variables to forward into plugin tool subprocesses.
+    /// A curated baseline (`PATH`, `HOME`, `USER`, `SHELL`, `KIRKFORGE_TOOL_ARGS`,
+    /// and a few locale/temp variables) is always forwarded; this list
+    /// adds application-specific variables.
+    #[serde(default)]
+    pub plugin_allowed_env_vars: Vec<String>,
+
     /// Maximum number of model↔tool iterations within a single turn.
     /// Each tool call response is fed back to the model, which may emit
     /// another tool call. This cap prevents runaway loops during large
@@ -406,6 +430,10 @@ fn default_max_plugin_trust() -> TrustTier {
     TrustTier::Shell
 }
 
+fn default_reject_on_excess_plugin_trust() -> bool {
+    true
+}
+
 fn default_max_tool_calls_per_turn() -> usize {
     50
 }
@@ -474,6 +502,10 @@ impl Default for Config {
             json_mode: false,
             preserve_recent_messages: default_preserve_recent_messages(),
             max_plugin_trust: default_max_plugin_trust(),
+            reject_on_excess_plugin_trust: default_reject_on_excess_plugin_trust(),
+            plugin_signature_validation: false,
+            plugin_public_key_path: None,
+            plugin_allowed_env_vars: vec![],
             max_tool_calls_per_turn: default_max_tool_calls_per_turn(),
             max_persona_turns: default_max_persona_turns(),
             hooks_dir: None,

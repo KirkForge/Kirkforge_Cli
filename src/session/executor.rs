@@ -1,4 +1,5 @@
 use crate::adapters::{tool_call_markup::extract_dsml_tool_calls, ModelAdapter};
+use crate::session::toolset::Toolset;
 use crate::session::access::{
     access_from_config, warn_if_unsandboxed, DenyList, GuardVerdict, PathGuard, ReadGate,
 };
@@ -17,7 +18,9 @@ use crate::shared::{
     read_shared_config, Config, Message, Role, SharedConfig, StreamEvent, ToolDef, ToolInvocation,
     ToolOutcome,
 };
-use crate::tools::{Tool, ToolContext, UndoStackRef};
+#[cfg(test)]
+use crate::tools::Tool;
+use crate::tools::{ToolContext, UndoStackRef};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -61,7 +64,7 @@ pub struct Executor {
     hook_runner: HookRunner,
     conversation: ConversationLog,
     prompt_builder: PromptBuilder,
-    tools: Box<dyn crate::session::toolset::Toolset>,
+    tools: crate::session::toolset::CompositeToolset,
     config: SharedConfig,
     cost_tracking: crate::shared::CostTracking,
     model_name: String,
@@ -136,7 +139,7 @@ impl Drop for PostTurnHookGuard {
 impl Executor {
     pub fn with_log(
         adapter: Box<dyn ModelAdapter>,
-        tools: Vec<Arc<dyn Tool>>,
+        tools: crate::session::toolset::CompositeToolset,
         config: Config,
         conversation: ConversationLog,
         carryover_target: Option<std::sync::Arc<std::sync::Mutex<CarryoverProfile>>>,
@@ -157,7 +160,7 @@ impl Executor {
     /// [`Self::with_log_and_undo_and_plugins`] to enable plugins.
     pub fn with_log_and_undo(
         adapter: Box<dyn ModelAdapter>,
-        tools: Vec<Arc<dyn Tool>>,
+        tools: crate::session::toolset::CompositeToolset,
         config: SharedConfig,
         conversation: ConversationLog,
         carryover_target: Option<std::sync::Arc<std::sync::Mutex<CarryoverProfile>>>,
@@ -178,7 +181,7 @@ impl Executor {
     /// `PluginRegistry`.
     pub fn with_log_and_undo_and_plugins(
         mut adapter: Box<dyn ModelAdapter>,
-        tools: Vec<Arc<dyn Tool>>,
+        tools: crate::session::toolset::CompositeToolset,
         config: SharedConfig,
         conversation: ConversationLog,
         carryover_target: Option<std::sync::Arc<std::sync::Mutex<CarryoverProfile>>>,
@@ -226,7 +229,7 @@ impl Executor {
             hook_runner,
             conversation,
             prompt_builder: PromptBuilder::new(),
-            tools: Box::new(crate::session::toolset::VecToolset::new("legacy", tools)),
+            tools,
             config,
             cost_tracking: crate::shared::CostTracking::default(),
             model_name,
@@ -306,8 +309,9 @@ impl Executor {
         use crate::session::verifier::{Verdict, Verifier};
 
         // Default slots need room for security, lint, git, rustfmt, plus
-        // any plugin verifiers registered below.
-        let slots = Arc::new(std::sync::RwLock::new(VerifierSlots::with_max_slots(5)));
+        // any plugin verifiers registered below. Use a generous cap so live
+        // plugin reload can add many plugin verifiers without running out.
+        let slots = Arc::new(std::sync::RwLock::new(VerifierSlots::with_max_slots(64)));
         let mut count = 0;
 
         struct SecV;
@@ -427,6 +431,76 @@ impl Executor {
         }
     }
 
+    /// Re-register plugin verifiers from a fresh registry while keeping the
+    /// built-in verifier slots intact.
+    ///
+    /// Returns the number of plugin verifiers now registered.
+    fn rebuild_plugin_verifiers(
+        &mut self,
+        registry: &kirkforge_plugin_host::PluginRegistry,
+    ) -> usize {
+        const BUILTIN_VERIFIERS: &[&str] = &["security", "lint", "git", "rustfmt"];
+
+        let Some(ref correction_loop) = self.correction_loop else {
+            return 0;
+        };
+        let handler = correction_loop.verifier_handler();
+        let slots = handler.slots();
+        let plugin_verifiers =
+            crate::session::verifier::plugin::verifiers_from_registry(registry);
+
+        let mut new_count = 0;
+        {
+            let mut s = slots.write().unwrap_or_else(|e| e.into_inner());
+            s.retain(|v| BUILTIN_VERIFIERS.contains(&v.name()));
+            for v in plugin_verifiers {
+                if s.register(v).is_ok() {
+                    new_count += 1;
+                }
+            }
+        }
+        new_count
+    }
+
+    /// Reload the plugin layer: tools, hooks, and verifiers.
+    ///
+    /// Built-in and MCP toolsets are preserved; only the plugin source is
+    /// replaced. Returns a short human-readable summary.
+    pub fn reload_plugins(
+        &mut self,
+        registry: &kirkforge_plugin_host::PluginRegistry,
+    ) -> String {
+        let cfg = read_shared_config(&self.config).clone();
+
+        // 1. Replace the plugin toolset.
+        let plugin_tools =
+            crate::session::plugin_tools::all_plugin_tools(registry, self.config.clone());
+        let plugin_tool_count = plugin_tools.len();
+        let plugin_set = Box::new(crate::session::toolset::VecToolset::new(
+            "plugin",
+            plugin_tools,
+        ));
+        self.tools.replace("plugin", plugin_set);
+
+        // 2. Rebuild hooks so built-in and plugin hooks are merged fresh.
+        let mut hook_runner = match &cfg.hooks_dir {
+            Some(dir) => HookRunner::new(dir.clone()),
+            None => HookRunner::default(),
+        };
+        hook_runner.load_plugin_hooks(registry);
+        self.hook_runner = hook_runner;
+
+        // 3. Rebuild plugin verifiers while keeping built-in verifiers.
+        let plugin_verifier_count = self.rebuild_plugin_verifiers(registry);
+
+        format!(
+            "Reloaded plugins: {} active plugin(s), {} plugin tool(s), {} plugin verifier(s)",
+            registry.active_count(),
+            plugin_tool_count,
+            plugin_verifier_count
+        )
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub async fn run(
         &mut self,
@@ -440,6 +514,7 @@ impl Executor {
         mut undo_rx: mpsc::UnboundedReceiver<()>,
         mut config_rx: mpsc::UnboundedReceiver<Config>,
         mut plan_rx: mpsc::UnboundedReceiver<bool>,
+        mut plugin_reload_rx: mpsc::UnboundedReceiver<kirkforge_plugin_host::PluginRegistry>,
     ) -> anyhow::Result<()> {
         let cancelled = Arc::new(AtomicBool::new(false));
 
@@ -554,6 +629,17 @@ impl Executor {
                     };
                     if event_tx.send(TurnEvent::Token(msg)).is_err() {
                         tracing::warn!("TUI event receiver dropped during config reload; exiting");
+                        self.flush_carryover();
+                        return Ok(());
+                    }
+                }
+                Some(registry) = plugin_reload_rx.recv() => {
+                    let summary = self.reload_plugins(&registry);
+                    if event_tx
+                        .send(TurnEvent::Token(format!("🔌 {summary}\n")))
+                        .is_err()
+                    {
+                        tracing::warn!("TUI event receiver dropped during plugin reload; exiting");
                         self.flush_carryover();
                         return Ok(());
                     }
@@ -2738,6 +2824,10 @@ mod tests {
             json_mode: false,
             preserve_recent_messages: 2,
             max_plugin_trust: kirkforge_plugin::TrustTier::Shell,
+            reject_on_excess_plugin_trust: true,
+            plugin_signature_validation: false,
+            plugin_public_key_path: None,
+            plugin_allowed_env_vars: vec![],
             max_tool_calls_per_turn: 10,
             max_persona_turns: 10,
             hooks_dir: None,
@@ -2764,7 +2854,12 @@ mod tests {
         ));
         remove_test_file(&log_path);
         let (conversation, _outcome) = ConversationLog::open(log_path).unwrap();
-        Executor::with_log(adapter, tools, config, conversation, None)
+        let mut composite = crate::session::toolset::CompositeToolset::empty();
+        composite.add(Box::new(crate::session::toolset::VecToolset::new(
+            "test",
+            tools,
+        )));
+        Executor::with_log(adapter, composite, config, conversation, None)
     }
 
     #[tokio::test]

@@ -16,6 +16,7 @@
 use crate::adapters;
 use crate::session::conversation::ConversationLog;
 use crate::session::executor::{ApprovalRequest, ApprovalResponse, Executor};
+use crate::session::toolset::{CompositeToolset, VecToolset};
 use crate::shared::{read_shared_config, Config, Role, SharedConfig};
 use crate::tools::{Tool, UndoStackRef};
 use crate::tui::app::AppState;
@@ -173,9 +174,11 @@ async fn run_persona_task(
     };
 
     let shared_config: SharedConfig = Arc::new(std::sync::RwLock::new(config.clone()));
+    let mut composite = CompositeToolset::empty();
+    composite.add(Box::new(VecToolset::new("persona", tools)));
     let mut executor = Executor::with_log_and_undo(
         adapter,
-        tools,
+        composite,
         shared_config,
         conversation,
         None,

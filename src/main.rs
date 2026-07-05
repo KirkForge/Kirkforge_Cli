@@ -16,11 +16,8 @@ mod tui;
 
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::Shell;
-use kirkforge_plugin::TrustTier;
-use kirkforge_plugin_host::TrustPolicy;
 use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
-use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing_subscriber::prelude::*;
 
@@ -607,14 +604,17 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     }
 
     // ── Plugin tools ──
-    let plugins_dir = session::data_dir()
-        .map(|d| d.join("plugins"))
-        .unwrap_or_else(|_| PathBuf::from(".local/share/kirkforge/plugins"));
-    let mut plugin_registry = kirkforge_plugin_host::PluginRegistry::new();
-    let plugin_warnings = plugin_registry
-        .load_from_dir(&plugins_dir, TrustPolicy::up_to(TrustTier::Shell))
-        .unwrap_or_default();
-    let plugin_tools = session::plugin_tools::all_plugin_tools(&plugin_registry);
+    let cfg_for_plugins = crate::shared::read_shared_config(&shared_config).clone();
+    let (plugin_registry, plugin_warnings) =
+        session::plugin_tools::load_plugin_registry(&cfg_for_plugins)
+            .unwrap_or_else(|e| {
+                tracing::warn!(error = %e, "failed to load plugin registry");
+                (kirkforge_plugin_host::PluginRegistry::new(), vec![])
+            });
+    let plugin_tools = session::plugin_tools::all_plugin_tools(
+        &plugin_registry,
+        shared_config.clone(),
+    );
     if !plugin_tools.is_empty() {
         toolset.add(Box::new(session::toolset::VecToolset::new(
             "plugin",
@@ -628,8 +628,6 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     for w in plugin_warnings {
         tracing::warn!(warning = %w, "plugin load warning");
     }
-
-    let tools = toolset.into_tools()?;
 
     if let Some(sys) = &system {
         // Wired into the executor's PromptBuilder before the first turn
@@ -649,7 +647,7 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
         tui::run_tui(
             shared_config,
             adapter,
-            tools,
+            toolset,
             (conversation, open_outcome),
             system,
             undo_stack,
@@ -660,7 +658,7 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
         run_line_mode(
             shared_config,
             adapter,
-            tools,
+            toolset,
             (conversation, open_outcome),
             system,
             output,
@@ -700,7 +698,7 @@ fn spawn_non_interactive_approval_handler(
 async fn run_line_mode(
     config: crate::shared::SharedConfig,
     adapter: Box<dyn adapters::ModelAdapter>,
-    tools: Vec<Arc<dyn tools::Tool>>,
+    tools: crate::session::toolset::CompositeToolset,
     conversation: (
         session::conversation::ConversationLog,
         session::conversation::OpenOutcome,
@@ -777,6 +775,25 @@ async fn run_line_mode(
                 println!("Exiting.");
             }
             break;
+        }
+
+        if trimmed == "/reload plugins" {
+            let cfg = crate::shared::read_shared_config(&config).clone();
+            match session::plugin_tools::load_plugin_registry(&cfg) {
+                Ok((registry, warnings)) => {
+                    let summary = executor.reload_plugins(&registry);
+                    if output == crate::shared::OutputFormat::Text {
+                        println!("🔌 {summary}");
+                    }
+                    for w in warnings {
+                        tracing::warn!(warning = %w, "plugin reload warning");
+                    }
+                }
+                Err(e) => {
+                    eprintln!("❌ Plugin reload failed: {e}");
+                }
+            }
+            continue;
         }
 
         let turn_started_at = std::time::Instant::now();

@@ -208,13 +208,17 @@ impl PathGuard {
         };
 
         // 4. Size limit
+        // Use the canonical path's metadata, not the original path's. When
+        // follow_symlinks is true the original may be a tiny symlink pointing
+        // to a huge file outside the size limit; measuring the symlink itself
+        // would let the oversized target through.
         if self.max_read_size > 0 {
-            let metadata = match std::fs::symlink_metadata(path) {
+            let metadata = match std::fs::metadata(&canonical) {
                 Ok(m) => m,
                 Err(e) => {
                     return GuardVerdict::Denied(format!(
                         "Cannot read metadata for '{}': {e}",
-                        path.display()
+                        canonical.display()
                     ));
                 }
             };
@@ -223,7 +227,7 @@ impl PathGuard {
                     "File too large ({} > {} bytes): {}",
                     metadata.len(),
                     self.max_read_size,
-                    path.display()
+                    canonical.display()
                 ));
             }
         }
@@ -708,6 +712,36 @@ mod tests {
         let result = guard.check_read(&tmp);
         remove_test_file(&tmp);
         assert!(matches!(result, GuardVerdict::Allowed(_)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_check_read_size_limit_follows_symlink_target() {
+        let dir = std::env::temp_dir().join("kirkforge_guard_symlink_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir(&dir).unwrap();
+
+        let target = dir.join("large_target.txt");
+        let link = dir.join("tiny_link");
+
+        // Target is larger than the default max_read_size (1 MiB).
+        let oversized = vec![b'x'; 1024 * 1024 + 1];
+        std::fs::write(&target, &oversized).unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        let guard = PathGuard {
+            follow_symlinks: true,
+            ..Default::default()
+        };
+
+        // The symlink itself is tiny, but the canonical target is oversized.
+        let result = guard.check_read(&link);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            matches!(result, GuardVerdict::Denied(ref msg) if msg.contains("File too large")),
+            "expected denial based on target size, got {:?}",
+            result
+        );
     }
 
     #[test]

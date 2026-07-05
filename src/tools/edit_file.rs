@@ -552,13 +552,14 @@ mod tests {
         // once after normalization.
         std::fs::write(&path, "fn main() {\n\n}\n").unwrap();
 
-        let tool = EditFile::new(None);
+        let tool = EditFile::new(None, crate::session::access::PathGuard::default());
+        let ctx = ToolContext::new();
         let args = serde_json::json!({
             "path": path.to_string_lossy(),
             "old_string": "   ",
             "new_string": "hello",
         });
-        let result = tool.run(args).await;
+        let result = tool.run(&ctx, args).await;
         assert!(
             matches!(result, ToolOutcome::Error { ref message } if message.contains("whitespace-only")),
             "expected whitespace-only rejection, got {:?}",

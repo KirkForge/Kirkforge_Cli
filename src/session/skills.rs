@@ -413,7 +413,10 @@ pub fn parse_skill(content: &str, source_dir: PathBuf) -> anyhow::Result<Skill> 
         .ok_or_else(|| anyhow::anyhow!("SKILL.md missing closing '---' delimiter"))?;
 
     let frontmatter_str = &after_first[..end_idx];
-    let body = after_first[end_idx + 5..].trim().to_string(); // skip "\n---\n"
+    // Skip only the 4-byte "\n---" delimiter; .trim() consumes any trailing
+    // newline or whitespace. This avoids an out-of-bounds slice when the
+    // closing delimiter is not followed by a newline.
+    let body = after_first[end_idx + "\n---".len()..].trim().to_string();
 
     let meta = parse_frontmatter(frontmatter_str)?;
 

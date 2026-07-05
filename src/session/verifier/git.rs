@@ -312,6 +312,8 @@ mod tests {
         }
 
         git(&tmp, &["init"]).await;
+        // Ensure the default branch is named "main" regardless of git version/config.
+        git(&tmp, &["branch", "-m", "main"]).await;
         git(&tmp, &["config", "user.email", "test@example.com"]).await;
         git(&tmp, &["config", "user.name", "Test User"]).await;
 

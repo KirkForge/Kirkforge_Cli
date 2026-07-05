@@ -739,4 +739,65 @@ command = "hooks/post-turn.sh"
         runner.load_plugin_hooks(&registry);
         assert!(runner.has("post-turn"));
     }
+
+    #[tokio::test]
+    async fn test_run_decision_merges_builtin_and_plugin_hooks_deterministically() {
+        let tmp = tempfile::tempdir().unwrap();
+        let plugins_dir = tmp.path().join("plugins");
+        let plugin_dir = plugins_dir.join("demo");
+        let plugin_hooks_dir = plugin_dir.join("hooks");
+        std::fs::create_dir_all(&plugin_hooks_dir).unwrap();
+        std::fs::write(
+            plugin_dir.join("kirkforge.toml"),
+            r#"
+name = "demo-hooks"
+version = "0.1.0"
+description = "demo"
+trust = "shell"
+
+[[capabilities]]
+type = "hook"
+event = "post-turn"
+command = "hooks/post-turn.sh"
+"#,
+        )
+        .unwrap();
+
+        let marker = tmp.path().join("order.txt");
+        let marker_str = marker.to_string_lossy().to_string();
+        std::fs::write(
+            plugin_hooks_dir.join("post-turn.sh"),
+            format!("#!/bin/bash\nprintf 'plugin\\n' >> {marker_str}"),
+        )
+        .unwrap();
+
+        let mut registry = PluginRegistry::new();
+        registry
+            .load_from_dir(
+                &plugins_dir,
+                TrustPolicy::up_to(kirkforge_plugin::TrustTier::Shell),
+            )
+            .unwrap();
+
+        let (hooks_tmp, hooks_dir) = temp_hooks_dir();
+        write_hook(
+            &hooks_dir,
+            "post-turn",
+            &format!("#!/bin/bash\nprintf 'built-in\\n' >> {marker_str}"),
+        );
+
+        let mut runner = HookRunner::new(hooks_dir);
+        runner.load_plugin_hooks(&registry);
+
+        let decision = runner.run_decision("post-turn", &[], &default_config()).await;
+        assert_eq!(decision, HookDecision::Allow);
+
+        let content = tokio::fs::read_to_string(&marker)
+            .await
+            .unwrap_or_default();
+        assert_eq!(content.trim(), "built-in\nplugin", "builtin/plugin hooks should run in deterministic order; got: {content:?}");
+
+        // Keep temporaries alive until after the assertions.
+        let _ = (tmp, hooks_tmp);
+    }
 }

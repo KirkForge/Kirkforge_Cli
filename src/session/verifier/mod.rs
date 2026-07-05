@@ -153,6 +153,14 @@ impl VerifierSlots {
         self.verifiers.len() < len_before
     }
 
+    /// Retain only verifiers that satisfy the predicate.
+    pub fn retain<F>(&mut self, mut f: F)
+    where
+        F: FnMut(&Arc<dyn Verifier>) -> bool,
+    {
+        self.verifiers.retain(|v| f(v));
+    }
+
     /// Run all verifiers against an event, applying truth model precedence.
     ///
     /// Returns the first definitive result:
@@ -217,6 +225,12 @@ impl VerifierHandler {
             pending_corrections: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             path_guard,
         }
+    }
+
+    /// Access the underlying verifier slots.
+    pub fn slots(&self,
+    ) -> Arc<std::sync::RwLock<VerifierSlots>> {
+        self.slots.clone()
     }
 
     /// Drain pending corrections (consumed by the correction loop).
@@ -313,6 +327,13 @@ impl CorrectionLoop {
             verifier_handler,
             max_iterations: 3,
         }
+    }
+
+    /// Access the verifier handler so the executor can mutate slots during
+    /// live plugin reload.
+    pub fn verifier_handler(&self,
+    ) -> Arc<VerifierHandler> {
+        self.verifier_handler.clone()
     }
 
     /// Create with a custom iteration limit.

@@ -13,6 +13,7 @@ use crate::shared::Config;
 use crate::tui::app::{AppState, ConversationEntry};
 use crate::tui::commands::{PersonaKind, PersonaResult};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use kirkforge_plugin_host::PluginRegistry;
 use tokio::sync::mpsc;
 
 /// Split a `!` command's formatted output into a one-line summary and the
@@ -159,6 +160,7 @@ pub async fn handle_input_key(
     plan_tx: &mpsc::UnboundedSender<bool>,
     persona_tx: &mpsc::UnboundedSender<PersonaResult>,
     event_tx: &mpsc::UnboundedSender<TurnEvent>,
+    plugin_reload_tx: &mpsc::UnboundedSender<PluginRegistry>,
 ) -> anyhow::Result<()> {
     // ── Session picker interceptor ─────────────────────────
     // When the recent-session picker overlay is active, all keys route
@@ -641,6 +643,8 @@ pub async fn handle_input_key(
   /implement Exit plan mode and allow the model to implement the approved plan.
   /commit   Commit changes safely: /commit shows status + suggested message; /commit \"message\" stages all and commits after sanitation checks; /commit --push \"message\" also pushes.
   /undo     Undo the most recent edit_file or write_file. /undo list shows the stack; /undo count prints the depth.
+  /reload   Reload config.toml and environment overrides.
+  /reload plugins  Re-scan the plugin directory and refresh plugin tools, hooks, and verifiers.
   /sessions List saved sessions, prune old ones, or delete one by id.
   /test     Run cargo test --no-fail-fast; surface a parsed pass/fail summary with file:line locations. Optional: /test <timeout-secs>.\n\nBash passthrough:\n  !<command>  Run a shell command directly — no model round trip, no approval. Output is shown as a collapsible tool entry. 30-second timeout; for long jobs use `!<cmd> &` and check /jobs.\n\n@-mentions (inline file context):\n  @<path>          Inline the file's contents into the prompt (minified by default). The TUI shows a status row per mention.\n  @<path>:raw      Inline the file verbatim, no minification.\n  @<path>:A-B      Inline lines A–B (1-indexed, inclusive on both ends).\n  @<path>:A-B:raw  Range + verbatim, combined.\n  @~/...           Tilde expansion supported (e.g. @~/notes.md).\n  Multiple @<path> tokens in one input are all expanded. Each mention is capped at 50 KB (head + tail + marker) and respects the same path-safety rules as the model's read_file tool. Failures (missing, denied, I/O) are shown in the TUI as ✗ rows and as quoted placeholders in the prompt, so the model can react.\n\nKeybindings:\n  Ctrl+T   Toggle tool output collapse (default ON)\n  Ctrl+F   Search the conversation (Enter to commit and jump, n / Shift+N to cycle, Esc to cancel)\n  Enter    Expand/collapse the most recent message (when input is empty)\n  Tab      Same as Enter (alternative expand gesture)\n  Ctrl+C   Cancel generation + clear input
   Ctrl+Shift+C  Copy last assistant message to clipboard\n  Ctrl+Shift+B  Copy a code block from the most recent assistant message (repeat to cycle blocks)\n  Ctrl+W   Delete word backward\n  Ctrl+U   Clear input line\n  Esc      Toggle thinking panel (or cancel search if Ctrl+F is active)\n\nStatus bar:\n  The bottom bar shows session model, time, cumulative cost, and a colour-coded budget indicator. Green (< 50%) = comfortable, yellow (50–80%) = consider /compact, red (> 80%) = compact now. The same data is available on demand via /status.\n".to_string();
@@ -690,8 +694,15 @@ pub async fn handle_input_key(
                             return Ok(());
                         }
                         "/reload" => {
-                            let msg =
-                                crate::tui::commands::handle_reload_command(config_tx, state).await;
+                            let args = args.trim();
+                            let msg = if args == "plugins" {
+                                crate::tui::commands::handle_reload_plugins_command(
+                                    plugin_reload_tx, state,
+                                )
+                                .await
+                            } else {
+                                crate::tui::commands::handle_reload_command(config_tx, state).await
+                            };
                             state.messages.push(ConversationEntry::new("system", msg));
                             return Ok(());
                         }

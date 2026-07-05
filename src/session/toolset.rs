@@ -94,6 +94,21 @@ impl CompositeToolset {
         self.toolsets.push(toolset);
     }
 
+    /// Replace the first inner toolset with the given `source` label, or
+    /// append it if no matching source exists.
+    ///
+    /// Used for live plugin reload: the executor keeps the built-in and MCP
+    /// layers and swaps only the plugin layer.
+    pub fn replace(&mut self, source: &str, toolset: Box<dyn Toolset>) -> bool {
+        if let Some(idx) = self.toolsets.iter().position(|t| t.source() == source) {
+            self.toolsets[idx] = toolset;
+            true
+        } else {
+            self.toolsets.push(toolset);
+            false
+        }
+    }
+
     /// Convenience constructor from a pre-built list.
     pub fn new(toolsets: Vec<Box<dyn Toolset>>) -> Self {
         Self { toolsets }

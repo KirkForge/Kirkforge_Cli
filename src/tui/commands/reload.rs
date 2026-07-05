@@ -4,9 +4,14 @@
 //! the TUI's shared config in place, and forwards a snapshot to the
 //! executor so it rebuilds access-control structures. The executor emits
 //! the user-visible confirmation token.
+//!
+//! `/reload plugins` re-scans the plugin directory and forwards a fresh
+//! `PluginRegistry` to the executor so it can swap the plugin toolset,
+//! hooks, and verifiers between turns.
 
 use crate::shared::{read_shared_config, Config};
 use crate::tui::app::AppState;
+use kirkforge_plugin_host::PluginRegistry;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -51,5 +56,45 @@ pub async fn handle_reload_command(
         "🔄 Reloaded config (no changes)".into()
     } else {
         format!("🔄 Reloaded config: {diff_summary}")
+    }
+}
+
+/// Handle `/reload plugins` command.
+///
+/// Re-scans the configured plugins directory using the current trust policy,
+/// forwards the fresh registry to the executor over the plugin-reload
+/// control channel, and returns a short summary for the TUI chat panel.
+pub async fn handle_reload_plugins_command(
+    plugin_reload_tx: &mpsc::UnboundedSender<PluginRegistry>,
+    state: &mut AppState,
+) -> String {
+    let cfg = read_shared_config(&state.config).clone();
+    let (registry, warnings) = match crate::session::plugin_tools::load_plugin_registry(&cfg) {
+        Ok(r) => r,
+        Err(e) => return format!("❌ Plugin reload failed: {e}"),
+    };
+
+    // Refresh the skill/plugin status summary in the status bar.
+    state.skill_registry.set_max_plugin_trust(cfg.max_plugin_trust);
+    if let Err(e) = state.skill_registry.scan_and_load() {
+        tracing::warn!(error = %e, "skill rescan during /reload plugins failed");
+    }
+    // Always re-register built-in skills on top.
+    for skill in crate::session::skills::builtin_skills() {
+        state.skill_registry.register(skill);
+    }
+    state.plugin_status = state.skill_registry.plugin_status_summary();
+
+    if plugin_reload_tx.send(registry).is_err() {
+        return "❌ Plugins re-scanned, but executor is not running.".into();
+    }
+
+    if warnings.is_empty() {
+        "🔌 Plugin reload requested.".into()
+    } else {
+        format!(
+            "🔌 Plugin reload requested. Warnings: {}",
+            warnings.join("; ")
+        )
     }
 }

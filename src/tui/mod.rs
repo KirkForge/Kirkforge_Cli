@@ -37,7 +37,6 @@ use crate::session::carryover::CarryoverProfile;
 use crate::session::conversation::ConversationLog;
 use crate::session::executor::{self, ApprovalRequest};
 use crate::shared::{Config, Message, Role};
-use crate::tools::Tool;
 use app::{AppState, ConnectionState, ConversationEntry};
 use commands::{messages_to_entries, notify_completed_jobs, PersonaKind, PersonaResult};
 use components::approval::render_approval_dialog;
@@ -184,7 +183,7 @@ async fn connection_probe_task(
 pub async fn run_tui(
     shared_config: crate::shared::SharedConfig,
     adapter: Box<dyn crate::adapters::ModelAdapter>,
-    tools: Vec<std::sync::Arc<dyn Tool>>,
+    tools: crate::session::toolset::CompositeToolset,
     conversation: (ConversationLog, crate::session::conversation::OpenOutcome),
     system: Option<String>,
     undo_stack: Option<crate::tools::UndoStackRef>,
@@ -301,6 +300,11 @@ pub async fn run_tui(
     // main executor is placed in plan mode so `/implement` remains the
     // approval gesture.
     let (plan_tx, plan_rx) = mpsc::unbounded_channel::<bool>();
+    // Plugin reload: TUI → Executor (sends a fresh PluginRegistry).
+    // `/reload plugins` re-scans the plugins directory and asks the
+    // executor to swap the plugin toolset, hooks, and verifiers.
+    let (plugin_reload_tx, plugin_reload_rx) =
+        mpsc::unbounded_channel::<kirkforge_plugin_host::PluginRegistry>();
     // Persona completion: background task → TUI event loop.
     // `/explore`, `/plan`, and `/coder` spawn fork-isolated subagents;
     // the result is merged back into the parent conversation here.
@@ -459,6 +463,7 @@ pub async fn run_tui(
                 undo_rx,
                 config_rx,
                 plan_rx,
+                plugin_reload_rx,
             )
             .await
         {
@@ -511,6 +516,7 @@ pub async fn run_tui(
         &config_tx,
         &plan_tx,
         &persona_tx,
+        &plugin_reload_tx,
         &mut slow_tick,
         &mut conn_probe_rx,
         &event_tx_for_commands,
@@ -526,7 +532,15 @@ pub async fn run_tui(
     // only `input_tx` left the others alive and caused the TUI to hang
     // on `handle.await` after `run_event_loop` returned.
     drop((
-        input_tx, cancel_tx, resume_tx, compact_tx, model_tx, undo_tx, plan_tx, persona_tx,
+        input_tx,
+        cancel_tx,
+        resume_tx,
+        compact_tx,
+        model_tx,
+        undo_tx,
+        plan_tx,
+        persona_tx,
+        plugin_reload_tx,
     ));
     // ponytail: 3s timeout so a hung Ollama HTTP call doesn't freeze the terminal
     if tokio::time::timeout(std::time::Duration::from_secs(3), handle)
@@ -571,6 +585,7 @@ async fn run_event_loop(
     config_tx: &mpsc::UnboundedSender<Config>,
     plan_tx: &mpsc::UnboundedSender<bool>,
     persona_tx: &mpsc::UnboundedSender<PersonaResult>,
+    plugin_reload_tx: &mpsc::UnboundedSender<kirkforge_plugin_host::PluginRegistry>,
     slow_tick: &mut tokio::time::Interval,
     conn_probe_rx: &mut mpsc::Receiver<ConnectionState>,
     event_tx_for_commands: &mpsc::UnboundedSender<executor::TurnEvent>,
@@ -732,6 +747,7 @@ async fn run_event_loop(
                         keys::handle_input_key(
                             key, state, input_tx, cancel_tx, resume_tx, compact_tx, model_tx,
                             undo_tx, config_tx, plan_tx, persona_tx, event_tx_for_commands,
+                            plugin_reload_tx,
                         )
                         .await?;
                     }
@@ -762,6 +778,7 @@ async fn run_event_loop(
                         keys::handle_input_key(
                             key, state, input_tx, cancel_tx, resume_tx, compact_tx, model_tx,
                             undo_tx, config_tx, plan_tx, persona_tx, event_tx_for_commands,
+                            plugin_reload_tx,
                         )
                         .await?;
                     }

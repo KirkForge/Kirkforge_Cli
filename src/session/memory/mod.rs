@@ -152,20 +152,17 @@ impl MemoryStore {
     /// Returns an empty string when there are no facts, so the caller can
     /// skip adding `<memory>` tags entirely.
     pub fn to_prompt_block(&self) -> String {
-        let facts = self.all();
+        self.to_prompt_block_for_facts(&self.all())
+    }
+
+    /// Render a selected subset of facts as a prompt-insertion block.
+    pub fn to_prompt_block_for_facts(&self, facts: &[MemoryFact]) -> String {
         if facts.is_empty() {
             return String::new();
         }
 
-        // Deduplicate by type category for compact injection
         let mut block = String::from("<!-- MEMORY: persisted facts from past sessions -->\n");
-
-        let mut seen_types = std::collections::HashSet::new();
-        for fact in &facts {
-            seen_types.insert(fact.metadata.get("type").cloned().unwrap_or_default());
-        }
-
-        for fact in &facts {
+        for fact in facts {
             let mtype = fact.metadata.get("type").cloned().unwrap_or_default();
             block.push_str(&format!(
                 "- [{}] {}: {}\n",
@@ -174,6 +171,71 @@ impl MemoryStore {
         }
 
         block
+    }
+
+    /// Score all facts against `context` using TF-IDF-style keyword matching,
+    /// then return the top-N subset that fits inside `max_tokens`.
+    ///
+    /// The score is purely lexical: terms from the context are matched against
+    /// the name, description, and body of every fact. Inverse document
+    /// frequency prevents ubiquitous words from drowning out rare, specific
+    /// terms. Ties are broken by fact name for determinism.
+    ///
+    /// Facts are selected greedily by score until the estimated token count
+    /// (chars / 4) reaches `max_tokens`. `top_n` caps how many facts are
+    /// considered regardless of budget.
+    pub fn select_for_context(
+        &self,
+        context: &str,
+        max_tokens: usize,
+        top_n: usize,
+    ) -> Vec<MemoryFact> {
+        let corpus = self.all();
+        if corpus.is_empty() || context.is_empty() {
+            return Vec::new();
+        }
+
+        let idf = compute_idf(&corpus);
+        let query_terms = tokenize(context);
+        if query_terms.is_empty() {
+            return Vec::new();
+        }
+
+        let mut scored: Vec<(f64, MemoryFact)> = corpus
+            .into_iter()
+            .map(|fact| {
+                let score = score_fact(&fact, &query_terms, &idf);
+                (score, fact)
+            })
+            .collect();
+
+        scored.sort_by(|a, b| {
+            b.0.partial_cmp(&a.0)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.1.name.cmp(&b.1.name))
+        });
+
+        let mut selected = Vec::new();
+        let mut tokens_used = 0usize;
+        for (score, fact) in scored.into_iter().take(top_n) {
+            if score <= 0.0 {
+                break;
+            }
+            let line = format!(
+                "- [{}] {}: {}\n",
+                fact.metadata.get("type").cloned().unwrap_or_default(),
+                fact.name,
+                fact.description
+            );
+            let est = line.len() / 4;
+            if tokens_used + est > max_tokens && !selected.is_empty() {
+                break;
+            }
+            tokens_used += est;
+            selected.push(fact);
+        }
+
+        selected
     }
 
     /// Build MEMORY.md index file.
@@ -329,6 +391,86 @@ pub fn parse_frontmatter(
     }
 
     Some((map, body.trim().to_string()))
+}
+
+/// Tokenise free text into lowercase, alphanumeric terms.
+///
+/// Drops one-character tokens and a small set of English stop words so
+/// they don't dominate TF-IDF scoring.
+fn tokenize(text: &str) -> Vec<String> {
+    const STOP_WORDS: &[&str] = &[
+        "the", "and", "for", "with", "this", "that", "you", "are", "use", "using", "from", "have",
+        "has", "had", "was", "will", "can", "should", "must", "may", "would", "could", "about",
+        "into", "over", "such", "than", "only", "some", "any", "each", "all", "but", "not", "also",
+    ];
+
+    text.to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|s| s.len() > 1)
+        .map(|s| s.to_string())
+        .filter(|s| !STOP_WORDS.contains(&s.as_str()))
+        .collect()
+}
+
+/// Compute inverse document frequency for each term in the corpus.
+fn compute_idf(corpus: &[MemoryFact]) -> std::collections::HashMap<String, f64> {
+    let n = corpus.len() as f64;
+    let mut doc_freq: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+
+    for fact in corpus {
+        let terms = tokenize(&format!("{} {} {}", fact.name, fact.description, fact.body));
+        let mut seen = std::collections::HashSet::new();
+        for term in terms {
+            if seen.insert(term.clone()) {
+                *doc_freq.entry(term).or_insert(0) += 1;
+            }
+        }
+    }
+
+    doc_freq
+        .into_iter()
+        .map(|(term, df)| {
+            let idf = (n / (1.0 + df as f64)).ln();
+            (term, idf)
+        })
+        .collect()
+}
+
+/// Score a single fact against the query terms.
+fn score_fact(
+    fact: &MemoryFact,
+    query_terms: &[String],
+    idf: &std::collections::HashMap<String, f64>,
+) -> f64 {
+    let fact_terms = tokenize(&format!("{} {} {}", fact.name, fact.description, fact.body));
+    let mut term_freq: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for term in fact_terms {
+        *term_freq.entry(term).or_insert(0) += 1;
+    }
+
+    let mut score = 0.0;
+    for term in query_terms {
+        if let Some(&idf_val) = idf.get(term) {
+            let tf = term_freq.get(term).copied().unwrap_or(0) as f64;
+            score += tf * idf_val;
+        }
+    }
+
+    // Small boost for exact name/description matches so highly relevant
+    // facts don't lose to longer bodies that happen to contain the term.
+    let name_lower = fact.name.to_lowercase();
+    let desc_lower = fact.description.to_lowercase();
+    for term in query_terms {
+        if name_lower == term.as_str() {
+            score += 5.0;
+        } else if name_lower.contains(term) {
+            score += 2.0;
+        } else if desc_lower.contains(term) {
+            score += 1.0;
+        }
+    }
+
+    score
 }
 
 /// Convert a description to a kebab-case slug.
@@ -529,5 +671,108 @@ mod tests {
         assert_eq!(facts.len(), 1);
         let mtype = facts[0].metadata.get("type").cloned().unwrap_or_default();
         assert_eq!(mtype, "user", "metadata: {:?}", facts[0].metadata);
+    }
+
+    #[test]
+    fn test_select_for_context_returns_relevant_fact() {
+        let store = temp_store();
+        store
+            .upsert(
+                "anyhow",
+                "Use anyhow",
+                "We use anyhow for errors, never unwrap in production.",
+                "feedback",
+            )
+            .unwrap();
+        store
+            .upsert(
+                "ratatui",
+                "TUI crate",
+                "This project uses ratatui for the terminal UI.",
+                "project",
+            )
+            .unwrap();
+
+        let selected =
+            store.select_for_context("How should I handle errors in this repo?", 100, 10);
+        assert!(!selected.is_empty(), "expected at least one fact");
+        assert_eq!(
+            selected[0].name, "anyhow",
+            "expected anyhow fact first, got: {selected:?}"
+        );
+        assert!(
+            !selected.iter().any(|f| f.name == "ratatui"),
+            "irrelevant fact should not be selected"
+        );
+    }
+
+    #[test]
+    fn test_select_for_context_respects_top_n() {
+        let store = temp_store();
+        for i in 0..5 {
+            store
+                .upsert(
+                    &format!("fact-{i}"),
+                    &format!("description {i}"),
+                    &format!("body {i} contains unique token xyzzy{i}"),
+                    "project",
+                )
+                .unwrap();
+        }
+
+        let selected = store.select_for_context("xyzzy2 token", 500, 1);
+        assert_eq!(selected.len(), 1, "top_n=1 should return one fact");
+        assert_eq!(selected[0].name, "fact-2");
+    }
+
+    #[test]
+    fn test_select_for_context_respects_token_budget() {
+        let store = temp_store();
+        for i in 0..5 {
+            let body = if i < 3 {
+                "body contains common token alpha"
+            } else {
+                "body contains other token beta"
+            };
+            store
+                .upsert(
+                    &format!("fact-{i}"),
+                    &format!("description {i}"),
+                    body,
+                    "project",
+                )
+                .unwrap();
+        }
+
+        // Only the first three facts share "common", so they score > 0.
+        // Each line is ~45 chars / 4 = ~11 tokens. Budget 15 should allow
+        // the first fact only.
+        let selected = store.select_for_context("common", 15, 10);
+        assert_eq!(
+            selected.len(),
+            1,
+            "budget should cap selection, got: {:?}",
+            selected.len()
+        );
+    }
+
+    #[test]
+    fn test_select_for_context_empty_context_returns_nothing() {
+        let store = temp_store();
+        store.upsert("fact", "desc", "body", "project").unwrap();
+        let selected = store.select_for_context("", 100, 10);
+        assert!(selected.is_empty());
+    }
+
+    #[test]
+    fn test_to_prompt_block_for_facts_subset() {
+        let store = temp_store();
+        store.upsert("a", "desc a", "body", "project").unwrap();
+        store.upsert("b", "desc b", "body", "project").unwrap();
+
+        let facts = store.all();
+        let block = store.to_prompt_block_for_facts(&facts[..1]);
+        assert!(block.contains("a"));
+        assert!(!block.contains("b"));
     }
 }

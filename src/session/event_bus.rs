@@ -1,6 +1,3 @@
-// Public/future surface in a binary crate: suppress dead-code warnings for pub items.
-#![allow(dead_code)]
-
 /// Event bus — pub/sub dispatcher for tool execution events.
 ///
 /// The event bus sits between tool execution and downstream consumers
@@ -182,6 +179,10 @@ pub struct BashExecEvent {
     pub exit_code: i32,
     pub stdout_len: usize,
     pub stderr_len: usize,
+    /// Working directory the command ran in, when known. Used by downstream
+    /// verifiers (e.g. the git verifier) to run follow-up checks in the
+    /// correct repository.
+    pub workdir: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -597,6 +598,7 @@ mod tests {
                 exit_code: 0,
                 stdout_len: 100,
                 stderr_len: 0,
+                workdir: None,
             }),
             EventKind::GitOperation => BusEvent::GitOperation(GitOperationEvent {
                 args: vec!["status".into()],

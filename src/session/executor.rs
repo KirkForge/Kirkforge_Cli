@@ -10,22 +10,27 @@ use crate::session::conversation::ConversationLog;
 use crate::session::event_bus::{BusEvent, EventBus};
 use crate::session::hooks::HookRunner;
 use crate::session::prompt::PromptBuilder;
+use crate::session::toolset::Toolset;
 use crate::session::verifier::CorrectionResult;
 use crate::session::verifier::{CorrectionLoop, VerifierHandler, VerifierSlots};
+use crate::shared::metrics::{record, MetricEvent};
 use crate::shared::permission::{evaluate, push_rule_unique, PermissionAction};
 use crate::shared::{
     read_shared_config, Config, Message, Role, SharedConfig, StreamEvent, ToolDef, ToolInvocation,
     ToolOutcome,
 };
-use crate::tools::{Tool, ToolContext, UndoStackRef};
+#[cfg(test)]
+use crate::tools::Tool;
+use crate::tools::{ToolContext, UndoStackRef};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::mpsc;
 
 enum IterationOutcome {
     ToolCalls(Vec<ToolInvocation>),
 
-    Finished,
+    Finished(crate::shared::FinishReason),
 
     ParseError,
 }
@@ -55,13 +60,50 @@ struct CompactHookStats {
     strategy: &'static str,
 }
 
+/// Classification helpers for [`ToolOutcome`] metrics.
+fn tool_outcome_success(outcome: &ToolOutcome) -> bool {
+    !matches!(
+        outcome,
+        ToolOutcome::Error { .. } | ToolOutcome::Failure { .. }
+    )
+}
+
+fn tool_error_kind(outcome: &ToolOutcome) -> Option<&'static str> {
+    match outcome {
+        ToolOutcome::Error { .. } => Some("error"),
+        ToolOutcome::Failure(err) => match err {
+            crate::shared::ToolError::InvalidArgs { .. } => Some("invalid_args"),
+            crate::shared::ToolError::AccessDenied { .. } => Some("access_denied"),
+            crate::shared::ToolError::Execution { .. } => Some("execution"),
+            crate::shared::ToolError::Timeout { .. } => Some("timeout"),
+            crate::shared::ToolError::Cancelled => Some("cancelled"),
+            crate::shared::ToolError::Internal { .. } => Some("internal"),
+        },
+        _ => None,
+    }
+}
+
+fn record_turn_metric(
+    model: &str,
+    start: Instant,
+    tool_calls: usize,
+    finish_reason: &crate::shared::FinishReason,
+) {
+    record(MetricEvent::Turn {
+        model: model.to_string(),
+        duration_ms: start.elapsed().as_millis() as u64,
+        tool_calls,
+        finish_reason: format!("{finish_reason:?}").to_lowercase(),
+    });
+}
+
 pub struct Executor {
     adapter: Box<dyn ModelAdapter>,
     adapter_swap: AdapterSwap,
     hook_runner: HookRunner,
     conversation: ConversationLog,
     prompt_builder: PromptBuilder,
-    tools: Box<dyn crate::session::toolset::Toolset>,
+    tools: crate::session::toolset::CompositeToolset,
     config: SharedConfig,
     cost_tracking: crate::shared::CostTracking,
     model_name: String,
@@ -136,7 +178,7 @@ impl Drop for PostTurnHookGuard {
 impl Executor {
     pub fn with_log(
         adapter: Box<dyn ModelAdapter>,
-        tools: Vec<Arc<dyn Tool>>,
+        tools: crate::session::toolset::CompositeToolset,
         config: Config,
         conversation: ConversationLog,
         carryover_target: Option<std::sync::Arc<std::sync::Mutex<CarryoverProfile>>>,
@@ -157,7 +199,7 @@ impl Executor {
     /// [`Self::with_log_and_undo_and_plugins`] to enable plugins.
     pub fn with_log_and_undo(
         adapter: Box<dyn ModelAdapter>,
-        tools: Vec<Arc<dyn Tool>>,
+        tools: crate::session::toolset::CompositeToolset,
         config: SharedConfig,
         conversation: ConversationLog,
         carryover_target: Option<std::sync::Arc<std::sync::Mutex<CarryoverProfile>>>,
@@ -178,7 +220,7 @@ impl Executor {
     /// `PluginRegistry`.
     pub fn with_log_and_undo_and_plugins(
         mut adapter: Box<dyn ModelAdapter>,
-        tools: Vec<Arc<dyn Tool>>,
+        tools: crate::session::toolset::CompositeToolset,
         config: SharedConfig,
         conversation: ConversationLog,
         carryover_target: Option<std::sync::Arc<std::sync::Mutex<CarryoverProfile>>>,
@@ -226,7 +268,7 @@ impl Executor {
             hook_runner,
             conversation,
             prompt_builder: PromptBuilder::new(),
-            tools: Box::new(crate::session::toolset::VecToolset::new("legacy", tools)),
+            tools,
             config,
             cost_tracking: crate::shared::CostTracking::default(),
             model_name,
@@ -305,7 +347,10 @@ impl Executor {
     ) -> usize {
         use crate::session::verifier::{Verdict, Verifier};
 
-        let slots = Arc::new(std::sync::RwLock::new(VerifierSlots::new()));
+        // Default slots need room for security, lint, git, rustfmt, plus
+        // any plugin verifiers registered below. Use a generous cap so live
+        // plugin reload can add many plugin verifiers without running out.
+        let slots = Arc::new(std::sync::RwLock::new(VerifierSlots::with_max_slots(64)));
         let mut count = 0;
 
         struct SecV;
@@ -368,6 +413,26 @@ impl Executor {
             }
         }
 
+        struct RustfmtV;
+        #[async_trait::async_trait]
+        impl Verifier for RustfmtV {
+            fn name(&self) -> &str {
+                "rustfmt"
+            }
+            fn priority(&self) -> u8 {
+                4
+            }
+            async fn verify(&self, event: &BusEvent) -> Verdict {
+                crate::session::verifier::rustfmt::verify_rustfmt(event).await
+            }
+        }
+        {
+            let mut s = slots.write().unwrap_or_else(|e| e.into_inner());
+            if s.register(Arc::new(RustfmtV)).is_ok() {
+                count += 1;
+            }
+        }
+
         // Register plugin verifiers (Phase 2.4).
         if let Some(registry) = plugin_registry {
             let plugin_verifiers =
@@ -405,6 +470,72 @@ impl Executor {
         }
     }
 
+    /// Re-register plugin verifiers from a fresh registry while keeping the
+    /// built-in verifier slots intact.
+    ///
+    /// Returns the number of plugin verifiers now registered.
+    fn rebuild_plugin_verifiers(
+        &mut self,
+        registry: &kirkforge_plugin_host::PluginRegistry,
+    ) -> usize {
+        const BUILTIN_VERIFIERS: &[&str] = &["security", "lint", "git", "rustfmt"];
+
+        let Some(ref correction_loop) = self.correction_loop else {
+            return 0;
+        };
+        let handler = correction_loop.verifier_handler();
+        let slots = handler.slots();
+        let plugin_verifiers = crate::session::verifier::plugin::verifiers_from_registry(registry);
+
+        let mut new_count = 0;
+        {
+            let mut s = slots.write().unwrap_or_else(|e| e.into_inner());
+            s.retain(|v| BUILTIN_VERIFIERS.contains(&v.name()));
+            for v in plugin_verifiers {
+                if s.register(v).is_ok() {
+                    new_count += 1;
+                }
+            }
+        }
+        new_count
+    }
+
+    /// Reload the plugin layer: tools, hooks, and verifiers.
+    ///
+    /// Built-in and MCP toolsets are preserved; only the plugin source is
+    /// replaced. Returns a short human-readable summary.
+    pub fn reload_plugins(&mut self, registry: &kirkforge_plugin_host::PluginRegistry) -> String {
+        let cfg = read_shared_config(&self.config).clone();
+
+        // 1. Replace the plugin toolset.
+        let plugin_tools =
+            crate::session::plugin_tools::all_plugin_tools(registry, self.config.clone());
+        let plugin_tool_count = plugin_tools.len();
+        let plugin_set = Box::new(crate::session::toolset::VecToolset::new(
+            "plugin",
+            plugin_tools,
+        ));
+        self.tools.replace("plugin", plugin_set);
+
+        // 2. Rebuild hooks so built-in and plugin hooks are merged fresh.
+        let mut hook_runner = match &cfg.hooks_dir {
+            Some(dir) => HookRunner::new(dir.clone()),
+            None => HookRunner::default(),
+        };
+        hook_runner.load_plugin_hooks(registry);
+        self.hook_runner = hook_runner;
+
+        // 3. Rebuild plugin verifiers while keeping built-in verifiers.
+        let plugin_verifier_count = self.rebuild_plugin_verifiers(registry);
+
+        format!(
+            "Reloaded plugins: {} active plugin(s), {} plugin tool(s), {} plugin verifier(s)",
+            registry.active_count(),
+            plugin_tool_count,
+            plugin_verifier_count
+        )
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub async fn run(
         &mut self,
@@ -418,6 +549,7 @@ impl Executor {
         mut undo_rx: mpsc::UnboundedReceiver<()>,
         mut config_rx: mpsc::UnboundedReceiver<Config>,
         mut plan_rx: mpsc::UnboundedReceiver<bool>,
+        mut plugin_reload_rx: mpsc::UnboundedReceiver<kirkforge_plugin_host::PluginRegistry>,
     ) -> anyhow::Result<()> {
         let cancelled = Arc::new(AtomicBool::new(false));
 
@@ -532,6 +664,17 @@ impl Executor {
                     };
                     if event_tx.send(TurnEvent::Token(msg)).is_err() {
                         tracing::warn!("TUI event receiver dropped during config reload; exiting");
+                        self.flush_carryover();
+                        return Ok(());
+                    }
+                }
+                Some(registry) = plugin_reload_rx.recv() => {
+                    let summary = self.reload_plugins(&registry);
+                    if event_tx
+                        .send(TurnEvent::Token(format!("🔌 {summary}\n")))
+                        .is_err()
+                    {
+                        tracing::warn!("TUI event receiver dropped during plugin reload; exiting");
                         self.flush_carryover();
                         return Ok(());
                     }
@@ -1005,6 +1148,7 @@ impl Executor {
 
         let mut tool_calls: Vec<ToolInvocation> = Vec::new();
         let mut already_retried_parse = false;
+        let turn_start = Instant::now();
 
         let max_iterations = read_shared_config(&self.config)
             .max_tool_calls_per_turn
@@ -1014,15 +1158,35 @@ impl Executor {
             if cancelled.load(Ordering::SeqCst) {
                 // The cancel watcher already emitted "Generation
                 // cancelled"; just return — events were already sent live.
+                record_turn_metric(
+                    &self.model_name,
+                    turn_start,
+                    tool_calls.len(),
+                    &crate::shared::FinishReason::Error,
+                );
                 return Ok(());
             }
 
             let outcome = self
-                .stream_iteration(approval_sender, cancelled, event_tx, &mut tool_calls)
+                .stream_iteration(
+                    user_input,
+                    approval_sender,
+                    cancelled,
+                    event_tx,
+                    &mut tool_calls,
+                )
                 .await?;
 
             match outcome {
-                IterationOutcome::Finished => return Ok(()),
+                IterationOutcome::Finished(finish_reason) => {
+                    record_turn_metric(
+                        &self.model_name,
+                        turn_start,
+                        tool_calls.len(),
+                        &finish_reason,
+                    );
+                    return Ok(());
+                }
                 IterationOutcome::ToolCalls(mut tcs) => {
                     for tc in &mut tcs {
                         self.dispatch_tool_call(tc, approval_sender, cancelled, event_tx)
@@ -1059,6 +1223,12 @@ impl Executor {
                             "TurnEvent receiver dropped; discarding event"
                         );
                     } else {
+                        record_turn_metric(
+                            &self.model_name,
+                            turn_start,
+                            tool_calls.len(),
+                            &crate::shared::FinishReason::Error,
+                        );
                         return Ok(());
                     }
                 }
@@ -1069,6 +1239,12 @@ impl Executor {
                     event_tx.send(TurnEvent::Error("Tool call loop limit reached".into())),
                     "TurnEvent receiver dropped; discarding event"
                 );
+                record_turn_metric(
+                    &self.model_name,
+                    turn_start,
+                    tool_calls.len(),
+                    &crate::shared::FinishReason::Length,
+                );
                 return Ok(());
             }
         }
@@ -1077,12 +1253,19 @@ impl Executor {
         // after this inner function returns. Do NOT add an explicit
         // `self.run_hook("post-turn", ...)` here — that double-fires
         // the hook on the natural completion path.
+        record_turn_metric(
+            &self.model_name,
+            turn_start,
+            tool_calls.len(),
+            &crate::shared::FinishReason::Stop,
+        );
         Ok(())
     }
 
     #[allow(unused_variables)]
     async fn stream_iteration(
         &mut self,
+        user_input: &str,
         approval_sender: &mpsc::UnboundedSender<ApprovalRequest>,
         cancelled: &AtomicBool,
         event_tx: &mpsc::UnboundedSender<TurnEvent>,
@@ -1103,11 +1286,42 @@ impl Executor {
             None
         };
 
+        // Snapshot memory knobs so we don't hold the config lock across
+        // the prompt-builder memory lookup.
+        let (memory_enabled, memory_max_tokens, memory_top_n) = {
+            let cfg = read_shared_config(&self.config);
+            (cfg.memory_enabled, cfg.memory_max_tokens, cfg.memory_top_n)
+        };
+
+        // Build a richer memory context from the current user turn plus
+        // the most recent assistant message, if any.
+        let memory_context = {
+            let history = self.conversation.all();
+            let mut ctx = String::from(user_input);
+            if let Some(last_assistant) = history
+                .iter()
+                .rev()
+                .find(|m| matches!(m.role, Role::Assistant) && !m.content.is_empty())
+            {
+                ctx.push(' ');
+                ctx.push_str(&last_assistant.content);
+            }
+            if ctx.trim().is_empty() {
+                None
+            } else {
+                Some(ctx)
+            }
+        };
+
         let system = self.prompt_builder.build(
             &model_info.name,
             model_info.supports_thinking,
             &tool_names,
             carryover_block.as_deref(),
+            memory_context.as_deref(),
+            memory_enabled,
+            memory_max_tokens,
+            memory_top_n,
         );
 
         let history = self.conversation.all();
@@ -1154,7 +1368,9 @@ impl Executor {
                     };
                     self.conversation.append(msg)?;
                 }
-                return Ok(IterationOutcome::Finished);
+                return Ok(IterationOutcome::Finished(
+                    crate::shared::FinishReason::Error,
+                ));
             }
 
             match event {
@@ -1185,7 +1401,7 @@ impl Executor {
                     );
                 }
                 StreamEvent::Done {
-                    finish_reason: _,
+                    finish_reason,
                     usage,
                 } => {
                     // Fallback: some models (notably DeepSeek cloud through
@@ -1256,7 +1472,7 @@ impl Executor {
                     return Ok(if had_parse_error {
                         IterationOutcome::ParseError
                     } else {
-                        IterationOutcome::Finished
+                        IterationOutcome::Finished(finish_reason)
                     });
                 }
             }
@@ -1265,7 +1481,9 @@ impl Executor {
         if had_parse_error {
             Ok(IterationOutcome::ParseError)
         } else {
-            Ok(IterationOutcome::Finished)
+            Ok(IterationOutcome::Finished(
+                crate::shared::FinishReason::Stop,
+            ))
         }
     }
 
@@ -1574,13 +1792,22 @@ impl Executor {
 
                     let ctx = self.tool_context_for_call(cancelled);
                     let timeout = self.tool_call_timeout();
+                    let tool_start = Instant::now();
                     let outcome = tokio::time::timeout(timeout, tool.run(&ctx, run_args.clone()))
                         .await
                         .unwrap_or(ToolOutcome::Failure(crate::shared::ToolError::Timeout {
                             after_secs: timeout.as_secs(),
                         }));
+                    let tool_duration = tool_start.elapsed();
+                    let outcome_for_emit = outcome.clone();
                     let edit_diff =
                         handle_tool_outcome(outcome, tc, event_tx, &mut self.conversation)?;
+                    record(MetricEvent::ToolCall {
+                        name: tc.name.clone(),
+                        success: tool_outcome_success(&outcome_for_emit),
+                        duration_ms: tool_duration.as_millis() as u64,
+                        error_kind: tool_error_kind(&outcome_for_emit).map(String::from),
+                    });
 
                     // Post-tool hook
                     self.run_hook(
@@ -1591,7 +1818,14 @@ impl Executor {
 
                     let crs = self
                         .emit_tool_event_and_correct(
-                            tc, &tc.name, &run_args, None, None, None, edit_diff,
+                            tc,
+                            &tc.name,
+                            &run_args,
+                            &outcome_for_emit,
+                            None,
+                            None,
+                            None,
+                            edit_diff,
                         )
                         .await;
                     self.collect_carryover(tc, &crs);
@@ -1750,11 +1984,13 @@ impl Executor {
 
         let ctx = self.tool_context_for_call(cancelled);
         let timeout = self.tool_call_timeout();
+        let tool_start = Instant::now();
         let outcome = tokio::time::timeout(timeout, tool.run(&ctx, tc.arguments.clone()))
             .await
             .unwrap_or(ToolOutcome::Failure(crate::shared::ToolError::Timeout {
                 after_secs: timeout.as_secs(),
             }));
+        let tool_duration = tool_start.elapsed();
 
         let (real_exit_code, real_stdout_len, real_stderr_len) = if tc.name == "bash" {
             extract_bash_metrics(&outcome)
@@ -1767,7 +2003,14 @@ impl Executor {
         } else {
             outcome
         };
+        let outcome_for_emit = outcome.clone();
         let edit_diff = handle_tool_outcome(outcome, tc, event_tx, &mut self.conversation)?;
+        record(MetricEvent::ToolCall {
+            name: tc.name.clone(),
+            success: tool_outcome_success(&outcome_for_emit),
+            duration_ms: tool_duration.as_millis() as u64,
+            error_kind: tool_error_kind(&outcome_for_emit).map(String::from),
+        });
 
         // Post-tool hook
         self.run_hook(
@@ -1781,6 +2024,7 @@ impl Executor {
                 tc,
                 &tc.name,
                 &tc.arguments,
+                &outcome_for_emit,
                 real_exit_code,
                 real_stdout_len,
                 real_stderr_len,
@@ -1806,39 +2050,46 @@ impl Executor {
             })
             .map_err(|_| anyhow::anyhow!("approval channel closed"))?;
 
-        match response_rx.await {
-            Ok(ApprovalResponse::Approved) => Ok(ApprovalDecision::Approved),
-            Ok(ApprovalResponse::Denied) => Ok(ApprovalDecision::Denied {
+        let decision = match response_rx.await {
+            Ok(ApprovalResponse::Approved) => ApprovalDecision::Approved,
+            Ok(ApprovalResponse::Denied) => ApprovalDecision::Denied {
                 reason: "User denied this operation".into(),
-            }),
-            Ok(ApprovalResponse::DeniedWithReason(reason)) => {
-                Ok(ApprovalDecision::Denied { reason })
-            }
+            },
+            Ok(ApprovalResponse::DeniedWithReason(reason)) => ApprovalDecision::Denied { reason },
             Ok(ApprovalResponse::AlwaysApprove) => {
                 let rule = crate::shared::permission::suggest_rule(&tc.name, &tc.arguments);
                 if let Ok(mut cfg) = self.config.write() {
                     push_rule_unique(&mut cfg.permission_rules, rule);
                 }
-                Ok(ApprovalDecision::AlwaysApproved)
+                ApprovalDecision::AlwaysApproved
             }
-            Err(_) => Ok(ApprovalDecision::Denied {
+            Err(_) => ApprovalDecision::Denied {
                 reason: "Approval channel closed".into(),
-            }),
-        }
+            },
+        };
+        record(MetricEvent::Approval {
+            action: match &decision {
+                ApprovalDecision::Approved => "approved".to_string(),
+                ApprovalDecision::Denied { .. } => "denied".to_string(),
+                ApprovalDecision::AlwaysApproved => "always_approved".to_string(),
+            },
+        });
+        Ok(decision)
     }
 
-    // The seven-arg clippy limit was already at the boundary for
-    // bash metrics (real_exit_code / real_stdout_len / real_stderr_len);
-    // the GPT 5.5 #9 fix added the `edit_diff` parameter, pushing us
-    // to 8. Suppress locally rather than refactor — the per-tool
-    // metrics are only meaningful for `bash` and would be empty
-    // Option fields for every other call site.
+    // The eight-arg clippy limit was already at the boundary for
+    // bash metrics (real_exit_code / real_stdout_len / real_stderr_len)
+    // plus `edit_diff`; Phase 5 added the `outcome` parameter so failed
+    // tool calls can emit `BusEvent::ToolError`. Suppress locally rather
+    // than refactor — the per-tool metrics are only meaningful for `bash`
+    // and would be empty Option fields for every other call site.
     #[allow(clippy::too_many_arguments)]
     async fn emit_tool_event_and_correct(
         &self,
         _tc: &ToolInvocation,
         tool_name: &str,
         args: &serde_json::Value,
+        outcome: &ToolOutcome,
         real_exit_code: Option<i32>,
         real_stdout_len: Option<usize>,
         real_stderr_len: Option<usize>,
@@ -1908,33 +2159,66 @@ impl Executor {
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
+                let workdir = args
+                    .get("workdir")
+                    .and_then(|v| v.as_str())
+                    .map(std::path::PathBuf::from);
                 Some(BusEvent::BashExec(
                     crate::session::event_bus::BashExecEvent {
                         command,
                         exit_code: real_exit_code.unwrap_or(0),
                         stdout_len: real_stdout_len.unwrap_or(0),
                         stderr_len: real_stderr_len.unwrap_or(0),
+                        workdir,
                     },
                 ))
             }
             _ => None,
         };
 
-        let Some(event) = bus_event else {
-            return vec![];
+        let error_event = match outcome {
+            ToolOutcome::Error { message } => Some(BusEvent::ToolError(
+                crate::session::event_bus::ToolErrorEvent {
+                    tool: tool_name.to_string(),
+                    error: message.clone(),
+                },
+            )),
+            ToolOutcome::Failure(err) => Some(BusEvent::ToolError(
+                crate::session::event_bus::ToolErrorEvent {
+                    tool: tool_name.to_string(),
+                    error: err.to_user_message(),
+                },
+            )),
+            _ => None,
         };
 
-        let handler_results = self.event_bus.dispatch(&event).await;
-        for r in handler_results {
-            if !r.success {
-                tracing::warn!(handler = %r.handler_id, message = %r.message, "event handler failed");
+        let mut corrections = Vec::new();
+
+        if let Some(ref event) = bus_event {
+            let handler_results = self.event_bus.dispatch(event).await;
+            for r in handler_results {
+                if !r.success {
+                    tracing::warn!(handler = %r.handler_id, message = %r.message, "event handler failed");
+                }
+            }
+            if let Some(ref correction_loop) = self.correction_loop {
+                corrections.extend(correction_loop.run(event).await);
             }
         }
 
-        let Some(ref correction_loop) = self.correction_loop else {
-            return vec![];
-        };
-        correction_loop.run(&event).await
+        if let Some(ref event) = error_event {
+            let handler_results = self.event_bus.dispatch(event).await;
+            for r in handler_results {
+                if !r.success {
+                    tracing::warn!(handler = %r.handler_id, message = %r.message, "event handler failed");
+                }
+            }
+            if let Some(ref correction_loop) = self.correction_loop {
+                corrections.extend(correction_loop.run(event).await);
+            }
+        }
+
+        corrections
     }
 }
 
@@ -2663,6 +2947,7 @@ mod tests {
             sandbox_dir: None,
             block_dotfiles: false,
             max_file_read_size: 1024 * 1024,
+            max_overwrite_size: 1024 * 1024,
             follow_symlinks: false,
             block_binary_reads: false,
             bash_sandbox_workdir: false,
@@ -2678,6 +2963,10 @@ mod tests {
             json_mode: false,
             preserve_recent_messages: 2,
             max_plugin_trust: kirkforge_plugin::TrustTier::Shell,
+            reject_on_excess_plugin_trust: true,
+            plugin_signature_validation: false,
+            plugin_public_key_path: None,
+            plugin_allowed_env_vars: vec![],
             max_tool_calls_per_turn: 10,
             max_persona_turns: 10,
             hooks_dir: None,
@@ -2686,6 +2975,10 @@ mod tests {
             dry_run: false,
             cache_enabled: false,
             cache_dir: None,
+            memory_enabled: false,
+            memory_max_tokens: 0,
+            memory_top_n: 0,
+            checkpoint_interval_messages: 0,
         }
     }
 
@@ -2704,7 +2997,11 @@ mod tests {
         ));
         remove_test_file(&log_path);
         let (conversation, _outcome) = ConversationLog::open(log_path).unwrap();
-        Executor::with_log(adapter, tools, config, conversation, None)
+        let mut composite = crate::session::toolset::CompositeToolset::empty();
+        composite.add(Box::new(crate::session::toolset::VecToolset::new(
+            "test", tools,
+        )));
+        Executor::with_log(adapter, composite, config, conversation, None)
     }
 
     #[tokio::test]
@@ -4991,11 +5288,10 @@ mod tests {
 
         // Second turn: same command should now match the rule and run
         // without sending an approval request. The timeout is generous
-        // because this test suite is heavily parallel and a 300 ms wall
-        // clock would flake under load; the goal is only to detect an
-        // infinite hang caused by a misplaced approval prompt.
+        // because this test suite is heavily parallel and the goal is only
+        // to detect an infinite hang caused by a misplaced approval prompt.
         let second_events = tokio::time::timeout(
-            std::time::Duration::from_secs(5),
+            std::time::Duration::from_secs(15),
             exe.run_turn_collecting("run tests again", &approval_tx2, never_cancelled()),
         )
         .await

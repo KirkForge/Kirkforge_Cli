@@ -75,18 +75,57 @@ pub async fn parse_ollama_ndjson_stream<B, E, S>(
     E: std::fmt::Display,
     S: tokio_stream::Stream<Item = Result<B, E>> + Unpin,
 {
-    let mut buffer = String::new();
+    let mut buffer: Vec<u8> = Vec::new();
     let mut tool_calls_buffer: Vec<ToolInvocation> = Vec::new();
 
     while let Some(chunk_result) = stream.next().await {
         match chunk_result {
             Ok(bytes) => {
-                buffer.push_str(&String::from_utf8_lossy(bytes.as_ref()));
+                buffer.extend_from_slice(bytes.as_ref());
 
-                // Ollama NDJSON: one JSON object per line
-                while let Some(newline_pos) = buffer.find('\n') {
-                    let line: String = buffer.drain(..=newline_pos).collect();
-                    let line = line.trim();
+                // Ollama NDJSON: one JSON object per line.  We split on
+                // newline bytes and only decode complete lines as UTF-8 so
+                // that a chunk boundary that falls in the middle of a
+                // multi-byte character never produces replacement
+                // characters and corrupts the JSON.
+                while let Some(newline_pos) = buffer.iter().position(|&b| b == b'\n') {
+                    // Drain the line *without* the trailing newline.
+                    let line_bytes: Vec<u8> = buffer.drain(..newline_pos).collect();
+                    // Consume the newline itself.
+                    buffer.drain(..1);
+
+                    // Tolerate \r\n by dropping a trailing carriage return.
+                    let line_bytes = if line_bytes.ends_with(b"\r") {
+                        &line_bytes[..line_bytes.len() - 1]
+                    } else {
+                        &line_bytes[..]
+                    };
+
+                    // Skip empty/whitespace lines.
+                    if line_bytes.iter().all(|&b| b.is_ascii_whitespace()) {
+                        continue;
+                    }
+
+                    let line = match std::str::from_utf8(line_bytes) {
+                        Ok(s) => s.trim(),
+                        Err(e) => {
+                            // A complete line that is not valid UTF-8 is a
+                            // server-side encoding error; waiting for more
+                            // bytes will not fix it.  Surface it and move
+                            // on rather than stalling forever.
+                            if !send_or_bail(
+                                &tx,
+                                StreamEvent::Error(format!("NDJSON line is not valid UTF-8: {e}")),
+                                "UTF-8 decode error",
+                            )
+                            .await
+                            {
+                                return;
+                            }
+                            continue;
+                        }
+                    };
+
                     if line.is_empty() {
                         continue;
                     }
@@ -265,21 +304,6 @@ pub async fn parse_ollama_ndjson_stream<B, E, S>(
     // `response` is no longer needed; the bytes stream is the only thing
     // we actually drive. (The arg was removed in commit 2 — see git log.)
 }
-
-/// Send a `StreamEvent` to the consumer. Returns `true` if the consumer
-/// is still listening, `false` if it dropped the receiver (and we
-/// already logged a `tracing::warn!` describing what couldn't be
-/// delivered). Used by the NDJSON / OpenAI-compat streaming parsers so
-/// that "consumer gone" produces a single, contextual log line per
-/// stream rather than N silent drops, and so the loop bails early
-/// instead of draining the upstream HTTP body into the void.
-///
-/// `kind` is a short human label for the event type (e.g. `"text
-/// chunk"`, `"done"`, `"tool call"`) — it appears in the warning
-/// message so the operator can tell what was lost.
-///
-/// `pub(crate)` because `openai_compat::stream_openai_chat` shares the
-/// same pattern; lifting it to a single helper keeps the warning
 /// message and bail-semantics consistent across both adapters.
 pub(crate) async fn send_or_bail(
     tx: &tokio::sync::mpsc::Sender<StreamEvent>,
@@ -466,6 +490,105 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    /// Regression: a chunk boundary that falls inside a multi-byte UTF-8
+    /// character used to corrupt the line via `from_utf8_lossy`
+    /// replacement characters and fail JSON parsing. The byte-buffer parser
+    /// must wait for the complete character (and the trailing newline) before
+    /// decoding.
+    #[tokio::test]
+    async fn ndjson_multibyte_char_split_across_chunks() {
+        // "héllo" contains a two-byte UTF-8 character for é (C3 A9).
+        let line = r#"{"message":{"content":"héllo"},"done":true,"done_reason":"stop"}"#;
+        let bytes = line.as_bytes();
+        // Find the byte index of the first byte of "é" (C3) and split there.
+        let split = bytes
+            .iter()
+            .position(|&b| b == 0xC3)
+            .expect("é should start with 0xC3");
+        let first = bytes[..split].to_vec();
+        let mut second = bytes[split..].to_vec();
+        second.push(b'\n');
+
+        let events = run_with_chunks(vec![first, second]).await;
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, StreamEvent::Text(s) if s == "héllo")),
+            "expected héllo text event, got {events:?}"
+        );
+        assert!(
+            matches!(events.last(), Some(StreamEvent::Done { .. })),
+            "expected Done"
+        );
+    }
+
+    /// Multiple complete NDJSON lines delivered in a single chunk must all
+    /// be parsed.
+    #[tokio::test]
+    async fn ndjson_multiple_lines_in_one_chunk() {
+        let body: Vec<u8> = [
+            line(r#"{"message":{"content":"a"},"done":false}"#),
+            line(r#"{"message":{"content":"b"},"done":false}"#),
+            line(r#"{"message":{"content":"c"},"done":true,"done_reason":"stop"}"#),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+
+        let events = run_with_chunks(vec![body]).await;
+        let texts: Vec<&str> = events
+            .iter()
+            .filter_map(|e| match e {
+                StreamEvent::Text(s) => Some(s.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(texts, vec!["a", "b", "c"]);
+    }
+
+    /// An incomplete final line at the end of a chunk must be retained and
+    /// completed by the next chunk.
+    #[tokio::test]
+    async fn ndjson_incomplete_line_completes_next_chunk() {
+        let first = r#"{"message":{"content":"first"},"done":true}"#;
+        // Split the first JSON line in the middle; the second chunk carries
+        // the rest plus a trailing newline.
+        let split = first.len() / 2;
+        let partial = first.as_bytes()[..split].to_vec();
+        let mut rest = first.as_bytes()[split..].to_vec();
+        rest.push(b'\n');
+
+        let events = run_with_chunks(vec![partial, rest]).await;
+        let texts: Vec<&str> = events
+            .iter()
+            .filter_map(|e| match e {
+                StreamEvent::Text(s) => Some(s.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(texts, vec!["first"]);
+        assert!(matches!(events.last(), Some(StreamEvent::Done { .. })));
+    }
+
+    /// Windows-style \\r\\n line endings must be tolerated.
+    #[tokio::test]
+    async fn ndjson_handles_crlf_line_endings() {
+        let body = b"{\"message\":{\"content\":\"hi\"},\"done\":true}\r\n".to_vec();
+        let events = run_with_chunks(vec![body]).await;
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, StreamEvent::Text(s) if s == "hi")));
+        assert!(matches!(events.last(), Some(StreamEvent::Done { .. })));
+    }
+
+    /// Helper like `run` but accepts raw byte chunks instead of pre-encoded
+    /// strings, so we can simulate arbitrary splits.
+    async fn run_with_chunks(items: Vec<Vec<u8>>) -> Vec<StreamEvent> {
+        let (tx, rx) = tokio::sync::mpsc::channel(64);
+        parse_ollama_ndjson_stream(tx, OllamaNdjsonConfig::GLM, chunks(items)).await;
+        drain(rx, 1024).await
     }
 
     #[test]

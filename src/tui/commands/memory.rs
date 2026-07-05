@@ -1,6 +1,3 @@
-// Public/future surface in a binary crate: suppress dead-code warnings for pub items.
-#![allow(dead_code)]
-
 //! `/memory` slash command — persistent semantic memory management.
 //!
 //! Subcommands:
@@ -179,11 +176,6 @@ pub fn handle_memory_command(args: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Override the memory store root for testing.
-    fn test_store(dir: &tempfile::TempDir) -> MemoryStore {
-        MemoryStore::open(dir.path().to_path_buf()).unwrap()
-    }
 
     #[test]
     fn test_detect_type_feedback() {

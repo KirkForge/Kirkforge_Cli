@@ -8,10 +8,12 @@
 //! The orchestrator calls us only when `state.pending_approval.is_none()`.
 
 use crate::session::conversation::ConversationLog;
+use crate::session::executor::TurnEvent;
 use crate::shared::Config;
 use crate::tui::app::{AppState, ConversationEntry};
 use crate::tui::commands::{PersonaKind, PersonaResult};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use kirkforge_plugin_host::PluginRegistry;
 use tokio::sync::mpsc;
 
 /// Split a `!` command's formatted output into a one-line summary and the
@@ -157,6 +159,8 @@ pub async fn handle_input_key(
     config_tx: &mpsc::UnboundedSender<Config>,
     plan_tx: &mpsc::UnboundedSender<bool>,
     persona_tx: &mpsc::UnboundedSender<PersonaResult>,
+    event_tx: &mpsc::UnboundedSender<TurnEvent>,
+    plugin_reload_tx: &mpsc::UnboundedSender<PluginRegistry>,
 ) -> anyhow::Result<()> {
     // ── Session picker interceptor ─────────────────────────
     // When the recent-session picker overlay is active, all keys route
@@ -535,26 +539,39 @@ pub async fn handle_input_key(
                 let rest = rest.to_string();
                 state.input.clear();
                 state.cursor_position = 0;
-                if crate::shared::read_shared_config(&state.config).bang_requires_approval {
-                    // Park the command on AppState and let the next
-                    // event-loop iteration render the approval dialog.
-                    // The user hits Y to run, N/Esc to discard. We
-                    // intentionally do NOT run the command here — that
-                    // would defeat the gate.
-                    state.pending_bang = Some(crate::tui::app::PendingBangCommand { cmd: rest });
-                    return Ok(());
-                }
+
                 let config = crate::shared::read_shared_config(&state.config).clone();
-                let out = crate::tui::commands::handle_bang_command(&rest, &config).await;
-                // Split into summary (first line) and full output so the
-                // collapse UX has something to show by default. The
-                // summary is "$ <cmd>\n<icon> exit <code>" — two lines.
-                // Full output is everything.
-                let (summary, full) = split_bang_summary(&out);
-                state
-                    .messages
-                    .push(crate::tui::app::ConversationEntry::tool(summary, full));
-                return Ok(());
+                match crate::tui::commands::bang_permission_action(&rest, &config) {
+                    crate::shared::permission::PermissionAction::Deny => {
+                        state.messages.push(crate::tui::app::ConversationEntry::new(
+                            "system",
+                            format!("🚫 Permission rule denied `!{rest}` — the command matches a deny rule."),
+                        ));
+                        return Ok(());
+                    }
+                    crate::shared::permission::PermissionAction::Ask => {
+                        // Park the command on AppState and let the next
+                        // event-loop iteration render the approval dialog.
+                        // The user hits Y to run, N/Esc to discard. We
+                        // intentionally do NOT run the command here — that
+                        // would defeat the gate.
+                        state.pending_bang =
+                            Some(crate::tui::app::PendingBangCommand { cmd: rest });
+                        return Ok(());
+                    }
+                    crate::shared::permission::PermissionAction::Allow => {
+                        let out = crate::tui::commands::handle_bang_command(&rest, &config).await;
+                        // Split into summary (first line) and full output so the
+                        // collapse UX has something to show by default. The
+                        // summary is "$ <cmd>\n<icon> exit <code>" — two lines.
+                        // Full output is everything.
+                        let (summary, full) = split_bang_summary(&out);
+                        state
+                            .messages
+                            .push(crate::tui::app::ConversationEntry::tool(summary, full));
+                        return Ok(());
+                    }
+                }
             }
 
             // If the most recent message is a collapsed tool entry and
@@ -627,7 +644,11 @@ pub async fn handle_input_key(
   /implement Exit plan mode and allow the model to implement the approved plan.
   /commit   Commit changes safely: /commit shows status + suggested message; /commit \"message\" stages all and commits after sanitation checks; /commit --push \"message\" also pushes.
   /undo     Undo the most recent edit_file or write_file. /undo list shows the stack; /undo count prints the depth.
-  /sessions List saved sessions, prune old ones, or delete one by id.
+  /reload   Reload config.toml and environment overrides.
+  /reload plugins  Re-scan the plugin directory and refresh plugin tools, hooks, and verifiers.
+  /reload skills   Re-scan project SKILL.md files and refresh built-in skills.
+  /sessions List/search saved sessions, prune old ones, or delete one by id.
+  /carryover Show or clear cross-session carryover profile.
   /test     Run cargo test --no-fail-fast; surface a parsed pass/fail summary with file:line locations. Optional: /test <timeout-secs>.\n\nBash passthrough:\n  !<command>  Run a shell command directly — no model round trip, no approval. Output is shown as a collapsible tool entry. 30-second timeout; for long jobs use `!<cmd> &` and check /jobs.\n\n@-mentions (inline file context):\n  @<path>          Inline the file's contents into the prompt (minified by default). The TUI shows a status row per mention.\n  @<path>:raw      Inline the file verbatim, no minification.\n  @<path>:A-B      Inline lines A–B (1-indexed, inclusive on both ends).\n  @<path>:A-B:raw  Range + verbatim, combined.\n  @~/...           Tilde expansion supported (e.g. @~/notes.md).\n  Multiple @<path> tokens in one input are all expanded. Each mention is capped at 50 KB (head + tail + marker) and respects the same path-safety rules as the model's read_file tool. Failures (missing, denied, I/O) are shown in the TUI as ✗ rows and as quoted placeholders in the prompt, so the model can react.\n\nKeybindings:\n  Ctrl+T   Toggle tool output collapse (default ON)\n  Ctrl+F   Search the conversation (Enter to commit and jump, n / Shift+N to cycle, Esc to cancel)\n  Enter    Expand/collapse the most recent message (when input is empty)\n  Tab      Same as Enter (alternative expand gesture)\n  Ctrl+C   Cancel generation + clear input
   Ctrl+Shift+C  Copy last assistant message to clipboard\n  Ctrl+Shift+B  Copy a code block from the most recent assistant message (repeat to cycle blocks)\n  Ctrl+W   Delete word backward\n  Ctrl+U   Clear input line\n  Esc      Toggle thinking panel (or cancel search if Ctrl+F is active)\n\nStatus bar:\n  The bottom bar shows session model, time, cumulative cost, and a colour-coded budget indicator. Green (< 50%) = comfortable, yellow (50–80%) = consider /compact, red (> 80%) = compact now. The same data is available on demand via /status.\n".to_string();
                             let skills = state.skill_registry.all();
@@ -676,8 +697,23 @@ pub async fn handle_input_key(
                             return Ok(());
                         }
                         "/reload" => {
-                            let msg =
-                                crate::tui::commands::handle_reload_command(config_tx, state).await;
+                            let args = args.trim();
+                            let msg = match args {
+                                "plugins" => {
+                                    crate::tui::commands::handle_reload_plugins_command(
+                                        plugin_reload_tx,
+                                        state,
+                                    )
+                                    .await
+                                }
+                                "skills" => {
+                                    crate::tui::commands::handle_reload_skills_command(state)
+                                }
+                                _ => {
+                                    crate::tui::commands::handle_reload_command(config_tx, state)
+                                        .await
+                                }
+                            };
                             state.messages.push(ConversationEntry::new("system", msg));
                             return Ok(());
                         }
@@ -690,9 +726,10 @@ pub async fn handle_input_key(
                             // return is just a "request accepted"
                             // confirmation so the user gets instant
                             // feedback.
-                            let msg =
-                                crate::tui::commands::handle_model_command(args, model_tx, state)
-                                    .await;
+                            let msg = crate::tui::commands::handle_model_command(
+                                args, model_tx, event_tx, state,
+                            )
+                            .await;
                             state.messages.push(ConversationEntry::new("system", msg));
                             return Ok(());
                         }
@@ -705,6 +742,11 @@ pub async fn handle_input_key(
                         }
                         "/memory" => {
                             let msg = crate::tui::commands::handle_memory_command(args);
+                            state.messages.push(ConversationEntry::new("system", msg));
+                            return Ok(());
+                        }
+                        "/metrics" => {
+                            let msg = crate::tui::commands::handle_metrics_command();
                             state.messages.push(ConversationEntry::new("system", msg));
                             return Ok(());
                         }
@@ -807,6 +849,11 @@ pub async fn handle_input_key(
                             state.messages.push(ConversationEntry::new("system", msg));
                             return Ok(());
                         }
+                        "/carryover" => {
+                            let msg = crate::tui::commands::handle_carryover_command(args, state);
+                            state.messages.push(ConversationEntry::new("system", msg));
+                            return Ok(());
+                        }
                         "/test" => {
                             // Runs the project's test suite via the
                             // same `Bash` tool the model uses, then
@@ -827,6 +874,13 @@ pub async fn handle_input_key(
                     }
 
                     if let Some(skill) = state.skill_registry.get_by_trigger(cmd) {
+                        if let Err(e) = crate::session::skills::Skill::tokenize_args(args) {
+                            state.messages.push(ConversationEntry::new(
+                                "system",
+                                format!("❌ Invalid arguments for {cmd}: {e}"),
+                            ));
+                            return Ok(());
+                        }
                         let rendered = skill.render_prompt(args);
                         state.messages.push(ConversationEntry::new(
                             "system",

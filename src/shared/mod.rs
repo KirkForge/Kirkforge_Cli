@@ -1,4 +1,4 @@
-// Public/future surface in a binary crate: suppress dead-code warnings for pub items.
+// Public/shared API surface with fields/methods intentionally unused until later phases.
 #![allow(dead_code)]
 
 /// Send a value over a channel and log a warning if the receiver is gone.
@@ -14,6 +14,7 @@ macro_rules! send_or_warn {
     };
 }
 
+pub mod metrics;
 pub mod minify;
 pub mod permission;
 
@@ -207,6 +208,13 @@ pub struct Config {
     #[serde(default = "default_max_file_read_size")]
     pub max_file_read_size: usize,
 
+    /// Maximum size (in bytes) of an existing file that `edit_file` or
+    /// `write_file` may overwrite. Files larger than this are blocked
+    /// to prevent the model from silently clobbering large assets.
+    /// Default 1 MiB. Set to 0 to disable the limit.
+    #[serde(default = "default_max_overwrite_size")]
+    pub max_overwrite_size: usize,
+
     #[serde(default)]
     pub follow_symlinks: bool,
 
@@ -308,6 +316,50 @@ pub struct Config {
     #[serde(default = "default_max_plugin_trust")]
     pub max_plugin_trust: TrustTier,
 
+    /// If true, a plugin whose manifest `trust` exceeds `max_plugin_trust`
+    /// is rejected. If false, the plugin is loaded but its capabilities are
+    /// capped to `max_plugin_trust`. Default `true` — least surprise.
+    #[serde(default = "default_reject_on_excess_plugin_trust")]
+    pub reject_on_excess_plugin_trust: bool,
+
+    /// If true, every loaded plugin directory must contain a `.kirkforge.sig`
+    /// detached signature that can be verified with `minisign`. Off by
+    /// default.
+    #[serde(default)]
+    pub plugin_signature_validation: bool,
+
+    /// Path to the minisign public key used for plugin signature
+    /// validation. Required when `plugin_signature_validation` is true.
+    #[serde(default)]
+    pub plugin_public_key_path: Option<String>,
+
+    /// Extra environment variables to forward into plugin tool subprocesses.
+    /// A curated baseline (`PATH`, `HOME`, `USER`, `SHELL`, `KIRKFORGE_TOOL_ARGS`,
+    /// and a few locale/temp variables) is always forwarded; this list
+    /// adds application-specific variables.
+    #[serde(default)]
+    pub plugin_allowed_env_vars: Vec<String>,
+
+    /// Enable injecting persisted memory facts into the system prompt.
+    #[serde(default = "default_memory_enabled")]
+    pub memory_enabled: bool,
+
+    /// Token budget for the memory block injected into the system prompt.
+    /// Facts are scored and selected greedily until this budget is reached.
+    #[serde(default = "default_memory_max_tokens")]
+    pub memory_max_tokens: usize,
+
+    /// Maximum number of memory facts to consider for injection per turn,
+    /// regardless of budget.
+    #[serde(default = "default_memory_top_n")]
+    pub memory_top_n: usize,
+
+    /// Write a conversation checkpoint every N messages. 0 disables
+    /// message-count checkpointing (the default). Checkpoints are still
+    /// written after each completed tool batch regardless of this value.
+    #[serde(default = "default_checkpoint_interval_messages")]
+    pub checkpoint_interval_messages: usize,
+
     /// Maximum number of model↔tool iterations within a single turn.
     /// Each tool call response is fed back to the model, which may emit
     /// another tool call. This cap prevents runaway loops during large
@@ -387,12 +439,20 @@ fn default_max_file_read_size() -> usize {
     1024 * 1024
 }
 
+fn default_max_overwrite_size() -> usize {
+    1024 * 1024
+}
+
 fn default_preserve_recent_messages() -> usize {
     2
 }
 
 fn default_max_plugin_trust() -> TrustTier {
     TrustTier::Shell
+}
+
+fn default_reject_on_excess_plugin_trust() -> bool {
+    true
 }
 
 fn default_max_tool_calls_per_turn() -> usize {
@@ -409,6 +469,22 @@ fn default_commit_max_file_size() -> u64 {
 
 fn default_tool_timeout_secs() -> Option<u64> {
     Some(30)
+}
+
+fn default_memory_enabled() -> bool {
+    true
+}
+
+fn default_memory_max_tokens() -> usize {
+    500
+}
+
+fn default_memory_top_n() -> usize {
+    10
+}
+
+fn default_checkpoint_interval_messages() -> usize {
+    0
 }
 
 impl Default for Config {
@@ -448,6 +524,7 @@ impl Default for Config {
             sandbox_dir: None,
             block_dotfiles: false,
             max_file_read_size: 1024 * 1024,
+            max_overwrite_size: 1024 * 1024,
             follow_symlinks: false,
             block_binary_reads: false,
             bash_sandbox_workdir: true,
@@ -462,6 +539,14 @@ impl Default for Config {
             json_mode: false,
             preserve_recent_messages: default_preserve_recent_messages(),
             max_plugin_trust: default_max_plugin_trust(),
+            reject_on_excess_plugin_trust: default_reject_on_excess_plugin_trust(),
+            plugin_signature_validation: false,
+            plugin_public_key_path: None,
+            plugin_allowed_env_vars: vec![],
+            memory_enabled: default_memory_enabled(),
+            memory_max_tokens: default_memory_max_tokens(),
+            memory_top_n: default_memory_top_n(),
+            checkpoint_interval_messages: default_checkpoint_interval_messages(),
             max_tool_calls_per_turn: default_max_tool_calls_per_turn(),
             max_persona_turns: default_max_persona_turns(),
             hooks_dir: None,

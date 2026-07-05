@@ -1,6 +1,3 @@
-// Public/future surface in a binary crate: suppress dead-code warnings for pub items.
-#![allow(dead_code)]
-
 mod compaction;
 pub mod summarizer;
 
@@ -48,12 +45,17 @@ impl PromptBuilder {
         self.system_override = override_prompt;
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn build(
         &mut self,
         model_name: &str,
         model_supports_thinking: bool,
         tool_names: &[&str],
         carryover_block: Option<&str>,
+        memory_context: Option<&str>,
+        memory_enabled: bool,
+        memory_max_tokens: usize,
+        memory_top_n: usize,
     ) -> Message {
         // Full override: the operator passed --system "..." or set
         // `system_override` directly. We still append the carryover
@@ -87,18 +89,28 @@ impl PromptBuilder {
             }
         }
 
-        // Inject persistent memory facts (if any)
-        let memory_block = match crate::session::memory::MemoryStore::default_store() {
-            Ok(store) => store.to_prompt_block(),
-            Err(e) => {
-                tracing::warn!(error = %e, "could not load memory store; skipping memory injection");
-                String::new()
+        // Inject persistent memory facts (if enabled)
+        if memory_enabled {
+            let memory_block = match crate::session::memory::MemoryStore::default_store() {
+                Ok(store) => {
+                    if let Some(ctx) = memory_context.filter(|s| !s.is_empty()) {
+                        let selected =
+                            store.select_for_context(ctx, memory_max_tokens, memory_top_n);
+                        store.to_prompt_block_for_facts(&selected)
+                    } else {
+                        store.to_prompt_block()
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "could not load memory store; skipping memory injection");
+                    String::new()
+                }
+            };
+            if !memory_block.is_empty() {
+                content.push_str("\n\n<memory>\n");
+                content.push_str(&memory_block);
+                content.push_str("\n</memory>");
             }
-        };
-        if !memory_block.is_empty() {
-            content.push_str("\n\n<memory>\n");
-            content.push_str(&memory_block);
-            content.push_str("\n</memory>");
         }
 
         Message {
@@ -461,7 +473,16 @@ mod tests {
     #[test]
     fn test_build_includes_tools() {
         let mut builder = PromptBuilder::new();
-        let msg = builder.build("test-model", false, &["read_file", "bash"], None);
+        let msg = builder.build(
+            "test-model",
+            false,
+            &["read_file", "bash"],
+            None,
+            None,
+            false,
+            0,
+            0,
+        );
         assert_eq!(msg.role, Role::System);
         assert!(!msg.content.is_empty());
     }
@@ -469,7 +490,7 @@ mod tests {
     #[test]
     fn test_build_prompt_requires_validation_and_no_artifact_injection() {
         let mut builder = PromptBuilder::new();
-        let msg = builder.build("test-model", false, &[], None);
+        let msg = builder.build("test-model", false, &[], None, None, false, 0, 0);
         assert!(
             msg.content.contains("run the project's build/test command"),
             "system prompt should instruct the agent to validate edits"
@@ -487,7 +508,7 @@ mod tests {
     #[test]
     fn test_build_supports_thinking() {
         let mut builder = PromptBuilder::new();
-        let msg = builder.build("test-model", true, &[], None);
+        let msg = builder.build("test-model", true, &[], None, None, false, 0, 0);
         assert!(!msg.content.is_empty());
     }
 

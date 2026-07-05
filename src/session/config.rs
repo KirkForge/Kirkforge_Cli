@@ -15,6 +15,13 @@
 /// - `KIRKFORGE_MAX_READ_SIZE` — max file read size in bytes
 /// - `KIRKFORGE_FOLLOW_SYMLINKS` — "true" to allow following symlinks
 /// - `KIRKFORGE_BLOCK_BINARY` — "true" to block binary file reads
+/// - `KIRKFORGE_REJECT_ON_EXCESS_PLUGIN_TRUST` — "true" to reject plugins above max trust
+/// - `KIRKFORGE_PLUGIN_SIGNATURE_VALIDATION` — "true" to require `.kirkforge.sig`
+/// - `KIRKFORGE_PLUGIN_PUBLIC_KEY_PATH` — minisign public key for plugin signatures
+/// - `KIRKFORGE_PLUGIN_ALLOWED_ENV_VARS` — comma-separated extra env vars for plugin tools
+/// - `KIRKFORGE_MEMORY_ENABLED` — "true"/"false" to enable or disable memory injection
+/// - `KIRKFORGE_MEMORY_MAX_TOKENS` — token budget for injected memory facts
+/// - `KIRKFORGE_MEMORY_TOP_N` — maximum number of facts to consider per turn
 use crate::shared::Config;
 use std::path::PathBuf;
 
@@ -236,6 +243,58 @@ fn apply_env_overrides(cfg: &mut Config) {
     if let Ok(val) = std::env::var("KIRKFORGE_CACHE_DIR") {
         cfg.cache_dir = Some(PathBuf::from(val));
     }
+
+    // KIRKFORGE_REJECT_ON_EXCESS_PLUGIN_TRUST
+    if let Ok(val) = std::env::var("KIRKFORGE_REJECT_ON_EXCESS_PLUGIN_TRUST") {
+        cfg.reject_on_excess_plugin_trust = val.eq_ignore_ascii_case("true");
+    }
+
+    // KIRKFORGE_PLUGIN_SIGNATURE_VALIDATION
+    if let Ok(val) = std::env::var("KIRKFORGE_PLUGIN_SIGNATURE_VALIDATION") {
+        cfg.plugin_signature_validation = val.eq_ignore_ascii_case("true");
+    }
+
+    // KIRKFORGE_PLUGIN_PUBLIC_KEY_PATH
+    if let Ok(val) = std::env::var("KIRKFORGE_PLUGIN_PUBLIC_KEY_PATH") {
+        cfg.plugin_public_key_path = if val.is_empty() { None } else { Some(val) };
+    }
+
+    // KIRKFORGE_PLUGIN_ALLOWED_ENV_VARS
+    if let Ok(val) = std::env::var("KIRKFORGE_PLUGIN_ALLOWED_ENV_VARS") {
+        cfg.plugin_allowed_env_vars = val
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+    }
+
+    // KIRKFORGE_MEMORY_ENABLED
+    if let Ok(val) = std::env::var("KIRKFORGE_MEMORY_ENABLED") {
+        cfg.memory_enabled = val.eq_ignore_ascii_case("true")
+            || val.eq_ignore_ascii_case("1")
+            || val.eq_ignore_ascii_case("yes");
+    }
+
+    // KIRKFORGE_MEMORY_MAX_TOKENS
+    if let Ok(val) = std::env::var("KIRKFORGE_MEMORY_MAX_TOKENS") {
+        if let Ok(n) = val.parse::<usize>() {
+            cfg.memory_max_tokens = n.max(1);
+        }
+    }
+
+    // KIRKFORGE_MEMORY_TOP_N
+    if let Ok(val) = std::env::var("KIRKFORGE_MEMORY_TOP_N") {
+        if let Ok(n) = val.parse::<usize>() {
+            cfg.memory_top_n = n.max(1);
+        }
+    }
+
+    // KIRKFORGE_CHECKPOINT_INTERVAL_MESSAGES
+    if let Ok(val) = std::env::var("KIRKFORGE_CHECKPOINT_INTERVAL_MESSAGES") {
+        if let Ok(n) = val.parse::<usize>() {
+            cfg.checkpoint_interval_messages = n;
+        }
+    }
 }
 
 /// Merge a parsed TOML table into a Config, field by field.
@@ -280,6 +339,37 @@ fn merge_toml_into_config(cfg: &mut Config, table: toml::Table) {
     }
     if let Some(Value::String(v)) = table.get("cache_dir") {
         cfg.cache_dir = Some(PathBuf::from(v));
+    }
+
+    // Plugin trust / sandbox knobs
+    if let Some(Value::Boolean(v)) = table.get("reject_on_excess_plugin_trust") {
+        cfg.reject_on_excess_plugin_trust = *v;
+    }
+    if let Some(Value::Boolean(v)) = table.get("plugin_signature_validation") {
+        cfg.plugin_signature_validation = *v;
+    }
+    if let Some(Value::String(v)) = table.get("plugin_public_key_path") {
+        cfg.plugin_public_key_path = if v.is_empty() { None } else { Some(v.clone()) };
+    }
+    if let Some(Value::Array(v)) = table.get("plugin_allowed_env_vars") {
+        cfg.plugin_allowed_env_vars = v
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect();
+    }
+
+    // Memory knobs
+    if let Some(Value::Boolean(v)) = table.get("memory_enabled") {
+        cfg.memory_enabled = *v;
+    }
+    if let Some(Value::Integer(v)) = table.get("memory_max_tokens") {
+        cfg.memory_max_tokens = (*v).max(1) as usize;
+    }
+    if let Some(Value::Integer(v)) = table.get("memory_top_n") {
+        cfg.memory_top_n = (*v).max(1) as usize;
+    }
+    if let Some(Value::Integer(v)) = table.get("checkpoint_interval_messages") {
+        cfg.checkpoint_interval_messages = (*v).max(0) as usize;
     }
 
     // Arrays
@@ -363,6 +453,48 @@ pub fn config_diff_summary(before: &Config, after: &Config) -> String {
         diffs.push(format!(
             "summarize_enabled: {} → {}",
             before.summarize_enabled, after.summarize_enabled
+        ));
+    }
+    if before.reject_on_excess_plugin_trust != after.reject_on_excess_plugin_trust {
+        diffs.push(format!(
+            "reject_on_excess_plugin_trust: {} → {}",
+            before.reject_on_excess_plugin_trust, after.reject_on_excess_plugin_trust
+        ));
+    }
+    if before.plugin_signature_validation != after.plugin_signature_validation {
+        diffs.push(format!(
+            "plugin_signature_validation: {} → {}",
+            before.plugin_signature_validation, after.plugin_signature_validation
+        ));
+    }
+    if before.plugin_public_key_path != after.plugin_public_key_path {
+        diffs.push(format!(
+            "plugin_public_key_path: {:?} → {:?}",
+            before.plugin_public_key_path, after.plugin_public_key_path
+        ));
+    }
+    if before.memory_enabled != after.memory_enabled {
+        diffs.push(format!(
+            "memory_enabled: {} → {}",
+            before.memory_enabled, after.memory_enabled
+        ));
+    }
+    if before.memory_max_tokens != after.memory_max_tokens {
+        diffs.push(format!(
+            "memory_max_tokens: {} → {}",
+            before.memory_max_tokens, after.memory_max_tokens
+        ));
+    }
+    if before.memory_top_n != after.memory_top_n {
+        diffs.push(format!(
+            "memory_top_n: {} → {}",
+            before.memory_top_n, after.memory_top_n
+        ));
+    }
+    if before.checkpoint_interval_messages != after.checkpoint_interval_messages {
+        diffs.push(format!(
+            "checkpoint_interval_messages: {} → {}",
+            before.checkpoint_interval_messages, after.checkpoint_interval_messages
         ));
     }
     diffs.join(", ")
@@ -616,5 +748,175 @@ mod tests {
             "internal fields leaked: {s}"
         );
         assert!(s.is_empty());
+    }
+
+    #[test]
+    fn test_env_reject_on_excess_plugin_trust() {
+        let mut cfg = Config::default();
+        assert!(cfg.reject_on_excess_plugin_trust);
+
+        set_env("KIRKFORGE_REJECT_ON_EXCESS_PLUGIN_TRUST", Some("false"));
+        apply_env_overrides(&mut cfg);
+        assert!(!cfg.reject_on_excess_plugin_trust);
+        set_env("KIRKFORGE_REJECT_ON_EXCESS_PLUGIN_TRUST", None);
+    }
+
+    #[test]
+    fn test_env_plugin_signature_validation() {
+        let mut cfg = Config::default();
+        assert!(!cfg.plugin_signature_validation);
+
+        set_env("KIRKFORGE_PLUGIN_SIGNATURE_VALIDATION", Some("true"));
+        apply_env_overrides(&mut cfg);
+        assert!(cfg.plugin_signature_validation);
+        set_env("KIRKFORGE_PLUGIN_SIGNATURE_VALIDATION", None);
+    }
+
+    #[test]
+    fn test_env_plugin_public_key_path() {
+        let mut cfg = Config::default();
+        set_env("KIRKFORGE_PLUGIN_PUBLIC_KEY_PATH", Some("/tmp/key.pub"));
+        apply_env_overrides(&mut cfg);
+        assert_eq!(cfg.plugin_public_key_path.as_deref(), Some("/tmp/key.pub"));
+        set_env("KIRKFORGE_PLUGIN_PUBLIC_KEY_PATH", None);
+    }
+
+    #[test]
+    fn test_env_plugin_allowed_env_vars() {
+        let mut cfg = Config::default();
+        set_env("KIRKFORGE_PLUGIN_ALLOWED_ENV_VARS", Some("FOO,BAR"));
+        apply_env_overrides(&mut cfg);
+        assert_eq!(cfg.plugin_allowed_env_vars, vec!["FOO", "BAR"]);
+        set_env("KIRKFORGE_PLUGIN_ALLOWED_ENV_VARS", None);
+    }
+
+    #[test]
+    fn test_merge_toml_plugin_trust_knobs() {
+        let mut cfg = Config::default();
+        let table: toml::Table = r#"
+            reject_on_excess_plugin_trust = false
+            plugin_signature_validation = true
+            plugin_public_key_path = "/opt/kirkforge/plugin.pub"
+            plugin_allowed_env_vars = ["CUSTOM_VAR"]
+        "#
+        .parse()
+        .unwrap();
+        merge_toml_into_config(&mut cfg, table);
+
+        assert!(!cfg.reject_on_excess_plugin_trust);
+        assert!(cfg.plugin_signature_validation);
+        assert_eq!(
+            cfg.plugin_public_key_path.as_deref(),
+            Some("/opt/kirkforge/plugin.pub")
+        );
+        assert_eq!(cfg.plugin_allowed_env_vars, vec!["CUSTOM_VAR"]);
+    }
+
+    #[test]
+    fn test_env_memory_enabled() {
+        let mut cfg = Config::default();
+        assert!(cfg.memory_enabled);
+
+        set_env("KIRKFORGE_MEMORY_ENABLED", Some("false"));
+        apply_env_overrides(&mut cfg);
+        assert!(!cfg.memory_enabled);
+        set_env("KIRKFORGE_MEMORY_ENABLED", None);
+    }
+
+    #[test]
+    fn test_env_memory_max_tokens() {
+        let mut cfg = Config::default();
+        set_env("KIRKFORGE_MEMORY_MAX_TOKENS", Some("250"));
+        apply_env_overrides(&mut cfg);
+        assert_eq!(cfg.memory_max_tokens, 250);
+        set_env("KIRKFORGE_MEMORY_MAX_TOKENS", None);
+    }
+
+    #[test]
+    fn test_env_memory_top_n() {
+        let mut cfg = Config::default();
+        set_env("KIRKFORGE_MEMORY_TOP_N", Some("5"));
+        apply_env_overrides(&mut cfg);
+        assert_eq!(cfg.memory_top_n, 5);
+        set_env("KIRKFORGE_MEMORY_TOP_N", None);
+    }
+
+    #[test]
+    fn test_merge_toml_memory_knobs() {
+        let mut cfg = Config::default();
+        let table: toml::Table = r#"
+            memory_enabled = false
+            memory_max_tokens = 300
+            memory_top_n = 3
+        "#
+        .parse()
+        .unwrap();
+        merge_toml_into_config(&mut cfg, table);
+
+        assert!(!cfg.memory_enabled);
+        assert_eq!(cfg.memory_max_tokens, 300);
+        assert_eq!(cfg.memory_top_n, 3);
+    }
+
+    #[test]
+    fn test_config_diff_summary_memory_knobs() {
+        let a = Config::default();
+        let b = Config {
+            memory_enabled: false,
+            memory_max_tokens: 250,
+            memory_top_n: 5,
+            ..Config::default()
+        };
+        let s = config_diff_summary(&a, &b);
+        assert!(s.contains("memory_enabled"), "got: {s}");
+        assert!(s.contains("memory_max_tokens"), "got: {s}");
+        assert!(s.contains("memory_top_n"), "got: {s}");
+    }
+
+    #[test]
+    fn test_env_checkpoint_interval_messages() {
+        let mut cfg = Config::default();
+        set_env("KIRKFORGE_CHECKPOINT_INTERVAL_MESSAGES", Some("20"));
+        apply_env_overrides(&mut cfg);
+        assert_eq!(cfg.checkpoint_interval_messages, 20);
+        set_env("KIRKFORGE_CHECKPOINT_INTERVAL_MESSAGES", None);
+    }
+
+    #[test]
+    fn test_merge_toml_checkpoint_interval_messages() {
+        let mut cfg = Config::default();
+        let table: toml::Table = r#"
+            checkpoint_interval_messages = 15
+        "#
+        .parse()
+        .unwrap();
+        merge_toml_into_config(&mut cfg, table);
+        assert_eq!(cfg.checkpoint_interval_messages, 15);
+    }
+
+    #[test]
+    fn test_config_diff_summary_checkpoint_interval_messages() {
+        let a = Config::default();
+        let b = Config {
+            checkpoint_interval_messages: 12,
+            ..Config::default()
+        };
+        let s = config_diff_summary(&a, &b);
+        assert!(s.contains("checkpoint_interval_messages"), "got: {s}");
+    }
+
+    #[test]
+    fn test_config_diff_summary_plugin_trust_knobs() {
+        let a = Config::default();
+        let b = Config {
+            reject_on_excess_plugin_trust: false,
+            plugin_signature_validation: true,
+            plugin_public_key_path: Some("/tmp/key.pub".into()),
+            ..Config::default()
+        };
+        let s = config_diff_summary(&a, &b);
+        assert!(s.contains("reject_on_excess_plugin_trust"), "got: {s}");
+        assert!(s.contains("plugin_signature_validation"), "got: {s}");
+        assert!(s.contains("plugin_public_key_path"), "got: {s}");
     }
 }

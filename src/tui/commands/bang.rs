@@ -36,6 +36,26 @@
 /// use `!cmd &` (background) and then `/jobs` to poll status.
 pub const BANG_DEFAULT_TIMEOUT_SECS: u64 = 30;
 
+use crate::shared::permission::{evaluate, PermissionAction};
+
+/// Decide what to do with a user-typed `!` command using the same
+/// permission-rule engine that governs the model's `bash` tool.
+///
+/// The command is evaluated as a `bash` tool call with a single
+/// `command` argument. The default action is `Allow` (the user typed
+/// `!` deliberately), unless `bang_requires_approval` is enabled, in
+/// which case the default is `Ask`. An explicit user rule can override
+/// either default and force `Allow`, `Ask`, or `Deny`.
+pub fn bang_permission_action(cmd: &str, config: &crate::shared::Config) -> PermissionAction {
+    let args = serde_json::json!({ "command": cmd });
+    let default = if config.bang_requires_approval {
+        PermissionAction::Ask
+    } else {
+        PermissionAction::Allow
+    };
+    evaluate(&config.permission_rules, "bash", &args, default)
+}
+
 /// What a `!` command actually did. Pure data — the formatting helpers
 /// turn this into a display string. Splitting spawn from formatting
 /// keeps the presentation policy testable without I/O.
@@ -250,4 +270,65 @@ pub async fn handle_bang_command(cmd: &str, config: &crate::shared::Config) -> S
     }
     let result = run_bang_command(cmd, config).await;
     format_bang_output(&result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::bang_permission_action;
+    use crate::shared::permission::{PermissionAction, PermissionRule};
+
+    fn test_config_with_rules(rules: Vec<PermissionRule>) -> crate::shared::Config {
+        crate::shared::Config {
+            permission_rules: rules,
+            ..crate::shared::Config::default()
+        }
+    }
+
+    #[test]
+    fn bang_permission_defaults_to_allow() {
+        let cfg = test_config_with_rules(vec![]);
+        assert_eq!(
+            bang_permission_action("echo hello", &cfg),
+            PermissionAction::Allow
+        );
+    }
+
+    #[test]
+    fn bang_permission_asks_when_gate_enabled() {
+        let mut cfg = test_config_with_rules(vec![]);
+        cfg.bang_requires_approval = true;
+        assert_eq!(
+            bang_permission_action("echo hello", &cfg),
+            PermissionAction::Ask
+        );
+    }
+
+    #[test]
+    fn bang_permission_rule_can_deny() {
+        let cfg = test_config_with_rules(vec![PermissionRule {
+            tool: "bash".to_string(),
+            key: "command".to_string(),
+            pattern: "rm -rf **".to_string(),
+            action: PermissionAction::Deny,
+        }]);
+        assert_eq!(
+            bang_permission_action("rm -rf /", &cfg),
+            PermissionAction::Deny
+        );
+    }
+
+    #[test]
+    fn bang_permission_rule_can_allow_past_gate() {
+        let cfg = test_config_with_rules(vec![PermissionRule {
+            tool: "bash".to_string(),
+            key: "command".to_string(),
+            pattern: "cargo test*".to_string(),
+            action: PermissionAction::Allow,
+        }]);
+        // Even with the gate on, an explicit allow rule wins.
+        assert_eq!(
+            bang_permission_action("cargo test", &cfg),
+            PermissionAction::Allow
+        );
+    }
 }

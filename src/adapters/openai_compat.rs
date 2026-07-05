@@ -137,6 +137,303 @@ async fn send_done_once(
     }
 }
 
+/// Drive an OpenAI-compatible `/v1/chat/completions` SSE byte stream into
+/// `StreamEvent` events.
+///
+/// This is the testable counterpart to the HTTP setup in
+/// [`OpenAiCompatAdapter::stream`]. It handles the same SSE framing,
+/// incremental tool-call accumulation, concatenated argument objects,
+/// duplicate id de-duplication, and `[DONE]` suppression as the public
+/// adapter.
+pub(crate) async fn parse_openai_compat_stream<B, E, S>(
+    tx: tokio::sync::mpsc::Sender<StreamEvent>,
+    mut stream: S,
+) where
+    B: AsRef<[u8]>,
+    E: std::fmt::Display,
+    S: tokio_stream::Stream<Item = Result<B, E>> + Unpin,
+{
+    let mut buffer = String::new();
+    let mut pending_tool_calls = ToolCallAccumulator::new();
+    let mut done_emitted = false;
+
+    while let Some(chunk_result) = stream.next().await {
+        match chunk_result {
+            Ok(bytes) => {
+                buffer.push_str(&String::from_utf8_lossy(bytes.as_ref()));
+
+                // SSE: data: {...}\n\n
+                //
+                // We accumulate bytes into `buffer` until we
+                // see a complete `data: ...\n\n` frame, then
+                // slice the payload out. We only **drain**
+                // consumed bytes after a successful JSON
+                // parse — if the parse fails, the model has
+                // streamed an event whose JSON body is
+                // incomplete (a `tool_calls.arguments`
+                // fragment with an unterminated string, in
+                // practice), and we need the next chunk to
+                // complete it. The outer stream loop will
+                // re-read more bytes into the same buffer
+                // and we'll retry from this position.
+                while let Some(start) = buffer.find("data: ") {
+                    let after_data = &buffer[start + 6..];
+                    // If the frame isn't complete yet
+                    // (no terminating `\n\n` and not at
+                    // the end of the buffer), wait for
+                    // more bytes.
+                    let sep = after_data.find("\n\n");
+                    let Some(sep_idx) = sep else {
+                        // Incomplete frame. Bail out of the
+                        // inner loop; the outer stream
+                        // loop will read more.
+                        break;
+                    };
+                    let line: String = after_data[..sep_idx].trim().to_string();
+                    // Drain only on the happy path — on
+                    // parse error we leave the frame in
+                    // place for the next read.
+                    let drain_to = start + 6 + sep_idx + 2;
+
+                    if line.is_empty() || line == "[DONE]" {
+                        buffer.drain(..drain_to);
+                        if line == "[DONE]" {
+                            // Some proxies send [DONE] after the
+                            // model has emitted tool_calls deltas
+                            // but before a finish_reason. Flush any
+                            // accumulated calls before closing the
+                            // stream so the executor sees them.
+                            for tc in pending_tool_calls.drain() {
+                                if !super::ollama_ndjson::send_or_bail(
+                                    &tx,
+                                    StreamEvent::ToolCall(tc),
+                                    "SSE [DONE] buffered tool call",
+                                )
+                                .await
+                                {
+                                    return;
+                                }
+                            }
+                            if !send_done_once(
+                                &tx,
+                                &mut done_emitted,
+                                StreamEvent::Done {
+                                    finish_reason: FinishReason::Stop,
+                                    usage: None,
+                                },
+                                "SSE [DONE] sentinel",
+                            )
+                            .await
+                            {
+                                return;
+                            }
+                        }
+                        continue;
+                    }
+
+                    match serde_json::from_str::<serde_json::Value>(&line) {
+                        Ok(json) => {
+                            buffer.drain(..drain_to);
+                            if let Some(err) = json.get("error") {
+                                if !super::ollama_ndjson::send_or_bail(
+                                    &tx,
+                                    StreamEvent::Error(
+                                        err.get("message")
+                                            .and_then(|m| m.as_str())
+                                            .unwrap_or("API error")
+                                            .to_string(),
+                                    ),
+                                    "OpenAI-compat API error",
+                                )
+                                .await
+                                {
+                                    return;
+                                }
+                                continue;
+                            }
+
+                            let choice = json
+                                .get("choices")
+                                .and_then(|c| c.as_array())
+                                .and_then(|c| c.first());
+
+                            let delta = choice.and_then(|c| c.get("delta"));
+                            let finish = choice.and_then(|c| c.get("finish_reason"));
+
+                            // Text content
+                            if let Some(content) = delta.and_then(|d| d.get("content")) {
+                                if let Some(c) = content.as_str() {
+                                    if !c.is_empty()
+                                        && !super::ollama_ndjson::send_or_bail(
+                                            &tx,
+                                            StreamEvent::Text(c.to_string()),
+                                            "OpenAI-compat text chunk",
+                                        )
+                                        .await
+                                    {
+                                        return;
+                                    }
+                                }
+                            }
+
+                            // Tool calls in delta — accumulate across chunks
+                            if let Some(tcs) = delta.and_then(|d| d.get("tool_calls")) {
+                                if let Some(calls) = tcs.as_array() {
+                                    for tc in calls {
+                                        let index =
+                                            tc.get("index").and_then(|i| i.as_u64()).unwrap_or(0)
+                                                as usize;
+                                        let id =
+                                            tc.get("id").and_then(|id| id.as_str()).unwrap_or("");
+                                        let name = tc
+                                            .get("function")
+                                            .and_then(|f| f.get("name"))
+                                            .and_then(|n| n.as_str());
+                                        let args = tc
+                                            .get("function")
+                                            .and_then(|f| f.get("arguments"))
+                                            .and_then(|a| a.as_str());
+                                        pending_tool_calls.accumulate(index, id, name, args);
+                                    }
+                                }
+                            }
+
+                            // Finish reason signals end
+                            if let Some(reason) = finish.and_then(|r| r.as_str()) {
+                                if reason == "tool_calls" && pending_tool_calls.is_empty()
+                                    && !super::ollama_ndjson::send_or_bail(
+                                        &tx,
+                                        StreamEvent::Error(
+                                            "Model emitted tool_calls finish_reason but no parseable tool calls".to_string()
+                                        ),
+                                        "OpenAI-compat tool-call finish with no parseable calls",
+                                    )
+                                    .await
+                                {
+                                    return;
+                                }
+                                for tc in pending_tool_calls.drain() {
+                                    if !super::ollama_ndjson::send_or_bail(
+                                        &tx,
+                                        StreamEvent::ToolCall(tc),
+                                        "OpenAI-compat accumulated tool call",
+                                    )
+                                    .await
+                                    {
+                                        return;
+                                    }
+                                }
+
+                                let finish_reason = match reason {
+                                    "length" => FinishReason::Length,
+                                    "tool_calls" => FinishReason::ToolCalls,
+                                    "error" => FinishReason::Error,
+                                    _ => FinishReason::Stop,
+                                };
+
+                                let usage = json.get("usage").map(|u| TokenUsage {
+                                    // Try OpenAI-style fields first, then
+                                    // Ollama-native names. Some
+                                    // OpenAI-compat proxies through
+                                    // Ollama emit the native names
+                                    // (prompt_eval_count / eval_count)
+                                    // even though the rest of the
+                                    // framing is OpenAI-compat. See
+                                    // `parse_token_usage` in
+                                    // ollama_ndjson.rs for the
+                                    // corresponding fix there.
+                                    prompt_tokens: u
+                                        .get("prompt_tokens")
+                                        .and_then(|v| v.as_u64())
+                                        .or_else(|| {
+                                            u.get("prompt_eval_count").and_then(|v| v.as_u64())
+                                        })
+                                        .map(|v| v as usize),
+                                    completion_tokens: u
+                                        .get("completion_tokens")
+                                        .and_then(|v| v.as_u64())
+                                        .or_else(|| u.get("eval_count").and_then(|v| v.as_u64()))
+                                        .map(|v| v as usize),
+                                    // Cache hit count. OpenAI's
+                                    // chat-completions endpoint
+                                    // surfaces it under
+                                    // `prompt_tokens_details.cached_tokens`;
+                                    // Anthropic-style responses
+                                    // (routed through some
+                                    // OpenAI-compat proxies) use
+                                    // the top-level
+                                    // `cache_read_input_tokens`.
+                                    // Either name is fine — we
+                                    // just look up both and
+                                    // tolerate absence.
+                                    cached_tokens: u
+                                        .get("cache_read_input_tokens")
+                                        .and_then(|v| v.as_u64())
+                                        .or_else(|| {
+                                            u.get("prompt_tokens_details")
+                                                .and_then(|d| d.get("cached_tokens"))
+                                                .and_then(|v| v.as_u64())
+                                        })
+                                        .map(|v| v as usize),
+                                });
+
+                                if !send_done_once(
+                                    &tx,
+                                    &mut done_emitted,
+                                    StreamEvent::Done {
+                                        finish_reason,
+                                        usage,
+                                    },
+                                    "OpenAI-compat done",
+                                )
+                                .await
+                                {
+                                    return;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            // The frame was complete (had
+                            // its `\n\n`) but its JSON body
+                            // is invalid. This is the
+                            // model streaming an event with
+                            // an unterminated string (a
+                            // `tool_calls.arguments`
+                            // fragment). Don't drain — the
+                            // next chunk will append the
+                            // continuation and we'll retry.
+                            // Don't notify the consumer —
+                            // it's a transient streaming
+                            // artefact, not an error.
+                            tracing::debug!(
+                                error = %e,
+                                line_bytes = line.len(),
+                                "openai_compat: incomplete JSON in event, waiting for more bytes"
+                            );
+                            break;
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                // Same shape as the Ollama adapter's
+                // transport-error branch: log if the
+                // consumer is also gone, then break.
+                if !super::ollama_ndjson::send_or_bail(
+                    &tx,
+                    StreamEvent::Error(e.to_string()),
+                    "OpenAI-compat transport error",
+                )
+                .await
+                {
+                    return;
+                }
+                break;
+            }
+        }
+    }
+}
+
 pub struct OpenAiCompatAdapter {
     model: String,
     api_base: String,
@@ -233,275 +530,7 @@ impl ModelAdapter for OpenAiCompatAdapter {
         // recorded. 4096 gives ~20x headroom.
         let (tx, rx) = tokio::sync::mpsc::channel::<StreamEvent>(4096);
 
-        tokio::spawn(async move {
-            let mut stream = response.bytes_stream();
-            let mut buffer = String::new();
-            let mut pending_tool_calls = ToolCallAccumulator::new();
-            let mut done_emitted = false;
-
-            while let Some(chunk_result) = stream.next().await {
-                match chunk_result {
-                    Ok(bytes) => {
-                        buffer.push_str(&String::from_utf8_lossy(&bytes));
-
-                        // SSE: data: {...}\n\n
-                        //
-                        // We accumulate bytes into `buffer` until we
-                        // see a complete `data: ...\n\n` frame, then
-                        // slice the payload out. We only **drain**
-                        // consumed bytes after a successful JSON
-                        // parse — if the parse fails, the model has
-                        // streamed an event whose JSON body is
-                        // incomplete (a `tool_calls.arguments`
-                        // fragment with an unterminated string, in
-                        // practice), and we need the next chunk to
-                        // complete it. The outer stream loop will
-                        // re-read more bytes into the same buffer
-                        // and we'll retry from this position.
-                        while let Some(start) = buffer.find("data: ") {
-                            let after_data = &buffer[start + 6..];
-                            // If the frame isn't complete yet
-                            // (no terminating `\n\n` and not at
-                            // the end of the buffer), wait for
-                            // more bytes.
-                            let sep = after_data.find("\n\n");
-                            let Some(sep_idx) = sep else {
-                                // Incomplete frame. Bail out of the
-                                // inner loop; the outer stream
-                                // loop will read more.
-                                break;
-                            };
-                            let line: String = after_data[..sep_idx].trim().to_string();
-                            // Drain only on the happy path — on
-                            // parse error we leave the frame in
-                            // place for the next read.
-                            let drain_to = start + 6 + sep_idx + 2;
-
-                            if line.is_empty() || line == "[DONE]" {
-                                buffer.drain(..drain_to);
-                                if line == "[DONE]"
-                                    && !send_done_once(
-                                        &tx,
-                                        &mut done_emitted,
-                                        StreamEvent::Done {
-                                            finish_reason: FinishReason::Stop,
-                                            usage: None,
-                                        },
-                                        "SSE [DONE] sentinel",
-                                    )
-                                    .await
-                                {
-                                    return;
-                                }
-                                continue;
-                            }
-
-                            match serde_json::from_str::<serde_json::Value>(&line) {
-                                Ok(json) => {
-                                    buffer.drain(..drain_to);
-                                    if let Some(err) = json.get("error") {
-                                        if !super::ollama_ndjson::send_or_bail(
-                                            &tx,
-                                            StreamEvent::Error(
-                                                err.get("message")
-                                                    .and_then(|m| m.as_str())
-                                                    .unwrap_or("API error")
-                                                    .to_string(),
-                                            ),
-                                            "OpenAI-compat API error",
-                                        )
-                                        .await
-                                        {
-                                            return;
-                                        }
-                                        continue;
-                                    }
-
-                                    let choice = json
-                                        .get("choices")
-                                        .and_then(|c| c.as_array())
-                                        .and_then(|c| c.first());
-
-                                    let delta = choice.and_then(|c| c.get("delta"));
-                                    let finish = choice.and_then(|c| c.get("finish_reason"));
-
-                                    // Text content
-                                    if let Some(content) = delta.and_then(|d| d.get("content")) {
-                                        if let Some(c) = content.as_str() {
-                                            if !c.is_empty() {
-                                                crate::send_or_warn!(
-                                                    tx.send(StreamEvent::Text(c.to_string())).await,
-                                                    "OpenAI compat stream event receiver dropped"
-                                                );
-                                            }
-                                        }
-                                    }
-
-                                    // Tool calls in delta — accumulate across chunks
-                                    if let Some(tcs) = delta.and_then(|d| d.get("tool_calls")) {
-                                        if let Some(calls) = tcs.as_array() {
-                                            for tc in calls {
-                                                let index = tc
-                                                    .get("index")
-                                                    .and_then(|i| i.as_u64())
-                                                    .unwrap_or(0)
-                                                    as usize;
-                                                let id = tc
-                                                    .get("id")
-                                                    .and_then(|id| id.as_str())
-                                                    .unwrap_or("");
-                                                let name = tc
-                                                    .get("function")
-                                                    .and_then(|f| f.get("name"))
-                                                    .and_then(|n| n.as_str());
-                                                let args = tc
-                                                    .get("function")
-                                                    .and_then(|f| f.get("arguments"))
-                                                    .and_then(|a| a.as_str());
-                                                pending_tool_calls
-                                                    .accumulate(index, id, name, args);
-                                            }
-                                        }
-                                    }
-
-                                    // Finish reason signals end
-                                    if let Some(reason) = finish.and_then(|r| r.as_str()) {
-                                        if reason == "tool_calls" && pending_tool_calls.is_empty()
-                                            && !super::ollama_ndjson::send_or_bail(
-                                                &tx,
-                                                StreamEvent::Error(
-                                                    "Model emitted tool_calls finish_reason but no parseable tool calls".to_string()
-                                                ),
-                                                "OpenAI-compat tool-call finish with no parseable calls",
-                                            )
-                                            .await
-                                            {
-                                                return;
-                                            }
-                                        for tc in pending_tool_calls.drain() {
-                                            if !super::ollama_ndjson::send_or_bail(
-                                                &tx,
-                                                StreamEvent::ToolCall(tc),
-                                                "OpenAI-compat accumulated tool call",
-                                            )
-                                            .await
-                                            {
-                                                return;
-                                            }
-                                        }
-
-                                        let finish_reason = match reason {
-                                            "length" => FinishReason::Length,
-                                            "tool_calls" => FinishReason::ToolCalls,
-                                            "error" => FinishReason::Error,
-                                            _ => FinishReason::Stop,
-                                        };
-
-                                        let usage = json.get("usage").map(|u| TokenUsage {
-                                            // Try OpenAI-style fields first, then
-                                            // Ollama-native names. Some
-                                            // OpenAI-compat proxies through
-                                            // Ollama emit the native names
-                                            // (prompt_eval_count / eval_count)
-                                            // even though the rest of the
-                                            // framing is OpenAI-compat. See
-                                            // `parse_token_usage` in
-                                            // ollama_ndjson.rs for the
-                                            // corresponding fix there.
-                                            prompt_tokens: u
-                                                .get("prompt_tokens")
-                                                .and_then(|v| v.as_u64())
-                                                .or_else(|| {
-                                                    u.get("prompt_eval_count")
-                                                        .and_then(|v| v.as_u64())
-                                                })
-                                                .map(|v| v as usize),
-                                            completion_tokens: u
-                                                .get("completion_tokens")
-                                                .and_then(|v| v.as_u64())
-                                                .or_else(|| {
-                                                    u.get("eval_count").and_then(|v| v.as_u64())
-                                                })
-                                                .map(|v| v as usize),
-                                            // Cache hit count. OpenAI's
-                                            // chat-completions endpoint
-                                            // surfaces it under
-                                            // `prompt_tokens_details.cached_tokens`;
-                                            // Anthropic-style responses
-                                            // (routed through some
-                                            // OpenAI-compat proxies) use
-                                            // the top-level
-                                            // `cache_read_input_tokens`.
-                                            // Either name is fine — we
-                                            // just look up both and
-                                            // tolerate absence.
-                                            cached_tokens: u
-                                                .get("cache_read_input_tokens")
-                                                .and_then(|v| v.as_u64())
-                                                .or_else(|| {
-                                                    u.get("prompt_tokens_details")
-                                                        .and_then(|d| d.get("cached_tokens"))
-                                                        .and_then(|v| v.as_u64())
-                                                })
-                                                .map(|v| v as usize),
-                                        });
-
-                                        if !send_done_once(
-                                            &tx,
-                                            &mut done_emitted,
-                                            StreamEvent::Done {
-                                                finish_reason,
-                                                usage,
-                                            },
-                                            "OpenAI-compat done",
-                                        )
-                                        .await
-                                        {
-                                            return;
-                                        }
-                                    }
-                                }
-                                Err(e) => {
-                                    // The frame was complete (had
-                                    // its `\n\n`) but its JSON body
-                                    // is invalid. This is the
-                                    // model streaming an event with
-                                    // an unterminated string (a
-                                    // `tool_calls.arguments`
-                                    // fragment). Don't drain — the
-                                    // next chunk will append the
-                                    // continuation and we'll retry.
-                                    // Don't notify the consumer —
-                                    // it's a transient streaming
-                                    // artefact, not an error.
-                                    tracing::debug!(
-                                        error = %e,
-                                        line_bytes = line.len(),
-                                        "openai_compat: incomplete JSON in event, waiting for more bytes"
-                                    );
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        // Same shape as the Ollama adapter's
-                        // transport-error branch: log if the
-                        // consumer is also gone, then break.
-                        if !super::ollama_ndjson::send_or_bail(
-                            &tx,
-                            StreamEvent::Error(e.to_string()),
-                            "OpenAI-compat transport error",
-                        )
-                        .await
-                        {
-                            return;
-                        }
-                        break;
-                    }
-                }
-            }
-        });
+        tokio::spawn(parse_openai_compat_stream(tx, response.bytes_stream()));
 
         Ok(rx)
     }
@@ -809,5 +838,167 @@ mod tests {
         let first = rx.recv().await;
         assert!(matches!(first, Some(StreamEvent::Done { .. })));
         assert!(rx.is_empty());
+    }
+
+    /// Drain the channel into a Vec, up to `max` events or until empty.
+    async fn drain(
+        mut rx: tokio::sync::mpsc::Receiver<StreamEvent>,
+        max: usize,
+    ) -> Vec<StreamEvent> {
+        let mut out = Vec::new();
+        for _ in 0..max {
+            match rx.recv().await {
+                Some(e) => out.push(e),
+                None => break,
+            }
+        }
+        out
+    }
+
+    /// Drive the public SSE parser over a sequence of byte chunks and
+    /// return everything the receiver sees.
+    async fn run_sse(chunks: Vec<Vec<u8>>) -> Vec<StreamEvent> {
+        let (tx, rx) = tokio::sync::mpsc::channel(64);
+        let stream = tokio_stream::iter(chunks.into_iter().map(Ok::<_, std::convert::Infallible>));
+        parse_openai_compat_stream(tx, stream).await;
+        drain(rx, 256).await
+    }
+
+    /// SSE frames are: `data: <json>\n\n`. Build one from a JSON value.
+    fn sse_data(value: serde_json::Value) -> Vec<u8> {
+        format!("data: {}\n\n", serde_json::to_string(&value).unwrap()).into_bytes()
+    }
+
+    fn sse_done() -> Vec<u8> {
+        b"data: [DONE]\n\n".to_vec()
+    }
+
+    /// [DONE] can arrive mid-stream after tool-call deltas but before a
+    /// finish_reason. The accumulated tool calls must be flushed first.
+    #[tokio::test]
+    async fn done_sentinel_flushes_buffered_tool_calls() {
+        let events = run_sse(vec![
+            sse_data(json!({
+                "choices": [{
+                    "delta": {
+                        "tool_calls": [{
+                            "index": 0,
+                            "id": "call_1",
+                            "function": {"name": "read_file", "arguments": ""}
+                        }]
+                    }
+                }]
+            })),
+            sse_data(json!({
+                "choices": [{
+                    "delta": {
+                        "tool_calls": [{
+                            "index": 0,
+                            "id": null,
+                            "function": {"name": null, "arguments": "{\"path\":\"a.md"}
+                        }]
+                    }
+                }]
+            })),
+            sse_data(json!({
+                "choices": [{
+                    "delta": {
+                        "tool_calls": [{
+                            "index": 0,
+                            "id": null,
+                            "function": {"name": null, "arguments": "\"}"}
+                        }]
+                    }
+                }]
+            })),
+            sse_done(),
+        ])
+        .await;
+
+        let tool_names: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                StreamEvent::ToolCall(tc) => Some(tc.name.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(tool_names, vec!["read_file"]);
+        assert!(
+            matches!(events.last(), Some(StreamEvent::Done { .. })),
+            "expected Done after [DONE], got {:?}",
+            events.last()
+        );
+    }
+
+    /// Some proxies send a finish_reason first and a trailing [DONE]
+    /// afterwards. Only one Done event should reach the consumer.
+    #[tokio::test]
+    async fn done_after_finish_is_suppressed() {
+        let events = run_sse(vec![
+            sse_data(json!({
+                "choices": [{
+                    "delta": {"content": "hi"},
+                    "finish_reason": "stop"
+                }]
+            })),
+            sse_done(),
+        ])
+        .await;
+
+        let dones: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(e, StreamEvent::Done { .. }))
+            .collect();
+        assert_eq!(dones.len(), 1, "expected exactly one Done, got {dones:?}");
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, StreamEvent::Text(s) if s == "hi")));
+    }
+
+    /// A single tool-call delta can be split across multiple SSE data
+    /// frames (and therefore multiple byte chunks). The accumulator must
+    /// reassemble the arguments object.
+    #[tokio::test]
+    async fn tool_call_arguments_split_across_sse_frames() {
+        let events = run_sse(vec![
+            sse_data(json!({
+                "choices": [{
+                    "delta": {
+                        "tool_calls": [{
+                            "index": 0,
+                            "id": "call_2",
+                            "function": {"name": "bash", "arguments": "{\"co"}
+                        }]
+                    }
+                }]
+            })),
+            sse_data(json!({
+                "choices": [{
+                    "delta": {
+                        "tool_calls": [{
+                            "index": 0,
+                            "id": null,
+                            "function": {"name": null, "arguments": "mmand\":\"ls\"}"}
+                        }]
+                    }
+                }]
+            })),
+            sse_data(json!({
+                "choices": [{
+                    "delta": {},
+                    "finish_reason": "tool_calls"
+                }]
+            })),
+        ])
+        .await;
+
+        let args: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                StreamEvent::ToolCall(tc) if tc.name == "bash" => Some(tc.arguments.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(args, vec![json!({"command": "ls"})]);
     }
 }

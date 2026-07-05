@@ -10,13 +10,6 @@ pub mod tool_call_markup;
 use crate::shared::{ContentPart, ModelInfo, Role, StreamEvent};
 use std::future::Future;
 
-/// Maximum number of retries for transient model-request failures.
-const MODEL_MAX_RETRIES: u32 = 3;
-
-/// Timeout for a single model request. Long-running generation is handled
-/// by streaming; this covers the initial HTTP handshake.
-const MODEL_REQUEST_TIMEOUT_SECS: u64 = 300;
-
 /// Build a shared `reqwest::Client` for model adapters.
 ///
 /// Falls back to `reqwest::Client::new()` if custom builder configuration
@@ -34,17 +27,46 @@ pub fn build_reqwest_client() -> reqwest::Client {
         })
 }
 
+/// Maximum number of retries for transient model-request failures.
+const MODEL_MAX_RETRIES: u32 = 3;
+
+/// Timeout for a single model request. Long-running generation is handled
+/// by streaming; this covers the initial HTTP handshake.
+const MODEL_REQUEST_TIMEOUT_SECS: u64 = 300;
+
+/// Decide whether an HTTP status code warrants a retry.
+///
+/// Retry on 429 (rate limit), 503 (service unavailable), and the whole 5xx
+/// range. Fail fast on any other 4xx — the request is malformed or
+/// unauthorized and repeating it will not help.
+pub(crate) fn should_retry_status(status: u16) -> bool {
+    status == 429 || status == 503 || (500..600).contains(&status)
+}
+
+/// Compute the backoff for retry `attempt` (1-indexed).
+///
+/// Uses exponential backoff starting at 1 s with a small deterministic
+/// jitter (up to 250 ms per attempt, capped at 1 s). The jitter is
+/// computed from the attempt number rather than a random source so tests
+/// are stable and no new dependency is required.
+pub(crate) fn retry_backoff(attempt: u32) -> std::time::Duration {
+    let shift = (attempt - 1).min(63);
+    let base_s = 1u64 << shift;
+    let jitter_ms = (attempt as u64).saturating_mul(250).min(1000);
+    std::time::Duration::from_millis(base_s.saturating_mul(1000).saturating_add(jitter_ms))
+}
+
 /// Send a model request with retries for transient failures.
 ///
 /// Retries up to `MODEL_MAX_RETRIES` times on:
 /// - connect errors
 /// - timeout errors
-/// - HTTP 429 / 503
+/// - HTTP 429 / 503 / 5xx
 ///
-/// Uses exponential backoff starting at 1s. Returns the response on the
-/// first success, or the final error otherwise. This consolidates the
-/// retry logic that was duplicated across `openai_compat`, `deepseek`,
-/// `gemini`, and was missing from `glm`.
+/// Uses exponential backoff with capped deterministic jitter. Returns the
+/// response on the first success, or the final error otherwise. This
+/// consolidates the retry logic that was duplicated across `openai_compat`,
+/// `deepseek`, `gemini`, and was missing from `glm`.
 pub async fn send_with_retry<F, Fut>(
     _client: &reqwest::Client,
     build_request: F,
@@ -59,18 +81,18 @@ where
         match build_request().await {
             Err(e) if attempt < MODEL_MAX_RETRIES && (e.is_connect() || e.is_timeout()) => {
                 tracing::warn!(attempt, error = %e, "model request failed, retrying");
-                tokio::time::sleep(std::time::Duration::from_secs(1u64 << (attempt - 1))).await;
+                tokio::time::sleep(retry_backoff(attempt)).await;
             }
             Err(e) => return Err(e.into()),
             Ok(r) => {
                 let s = r.status().as_u16();
-                if attempt < MODEL_MAX_RETRIES && (s == 429 || s == 503) {
+                if attempt < MODEL_MAX_RETRIES && should_retry_status(s) {
                     tracing::warn!(
                         attempt,
                         status = s,
                         "model returned transient error, retrying"
                     );
-                    tokio::time::sleep(std::time::Duration::from_secs(1u64 << (attempt - 1))).await;
+                    tokio::time::sleep(retry_backoff(attempt)).await;
                 } else {
                     return Ok(r.error_for_status()?);
                 }
@@ -451,4 +473,46 @@ fn build_openai_compat_body(
     }
 
     body
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn should_retry_5xx_and_rate_limit_statuses() {
+        assert!(should_retry_status(429));
+        assert!(should_retry_status(503));
+        assert!(should_retry_status(500));
+        assert!(should_retry_status(502));
+        assert!(should_retry_status(599));
+    }
+
+    #[test]
+    fn should_not_retry_other_4xx() {
+        assert!(!should_retry_status(400));
+        assert!(!should_retry_status(401));
+        assert!(!should_retry_status(403));
+        assert!(!should_retry_status(404));
+        assert!(!should_retry_status(422));
+    }
+
+    #[test]
+    fn backoff_grows_with_capped_jitter() {
+        let b1 = retry_backoff(1);
+        let b2 = retry_backoff(2);
+        let b3 = retry_backoff(3);
+
+        // Base doubles each attempt; jitter is small (≤1 s).
+        assert!(b1 >= std::time::Duration::from_secs(1));
+        assert!(b1 <= std::time::Duration::from_millis(1250));
+
+        assert!(b2 >= std::time::Duration::from_secs(2));
+        assert!(b2 <= std::time::Duration::from_millis(2500));
+
+        assert!(b3 >= std::time::Duration::from_secs(4));
+        assert!(b3 <= std::time::Duration::from_millis(5000));
+
+        assert!(b3 > b2 && b2 > b1);
+    }
 }

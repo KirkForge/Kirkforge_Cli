@@ -25,7 +25,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 /// Policy the host applies to all loaded plugins.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TrustPolicy {
     /// Highest tier the host will allow. Plugins requesting more are
     /// either blocked or downgraded (configurable).
@@ -35,6 +35,13 @@ pub struct TrustPolicy {
     /// plugin loaded with `max = shell` keeps shell tools but loses
     /// network ones). For v1 we reject by default — least surprise.
     pub reject_on_excess: bool,
+    /// If true, every loaded plugin directory must contain a
+    /// `.kirkforge.sig` detached signature file that can be verified with
+    /// `minisign`. Off by default.
+    pub verify_signatures: bool,
+    /// Path to the minisign public key used when `verify_signatures` is
+    /// true. Verification is skipped entirely if this is `None`.
+    pub signature_key_path: Option<std::path::PathBuf>,
 }
 
 impl Default for TrustPolicy {
@@ -42,6 +49,8 @@ impl Default for TrustPolicy {
         Self {
             max: TrustTier::Shell,
             reject_on_excess: true,
+            verify_signatures: false,
+            signature_key_path: None,
         }
     }
 }
@@ -52,7 +61,26 @@ impl TrustPolicy {
         Self {
             max,
             reject_on_excess: true,
+            verify_signatures: false,
+            signature_key_path: None,
         }
+    }
+
+    /// Enable or disable detached-minisign signature verification.
+    pub fn with_verify_signatures(
+        mut self,
+        verify: bool,
+        key_path: Option<std::path::PathBuf>,
+    ) -> Self {
+        self.verify_signatures = verify;
+        self.signature_key_path = key_path;
+        self
+    }
+
+    /// Set whether plugins whose trust exceeds `max` are rejected.
+    pub fn with_reject_on_excess(mut self, reject: bool) -> Self {
+        self.reject_on_excess = reject;
+        self
     }
 }
 
@@ -135,7 +163,21 @@ impl PluginRegistry {
                         warnings.push(format!("{}: {}", path.display(), e));
                         continue;
                     }
-                    let hosted = apply_policy(plugin, policy);
+
+                    if policy.verify_signatures {
+                        if let Err(e) =
+                            verify_plugin_signature(&path, policy.signature_key_path.as_deref())
+                        {
+                            warnings.push(format!(
+                                "{}: signature verification failed: {}",
+                                plugin.manifest().name,
+                                e
+                            ));
+                            continue;
+                        }
+                    }
+
+                    let hosted = apply_policy(plugin, &policy);
                     if let Some(ref reason) = hosted.rejection {
                         warnings.push(format!("{}: {}", hosted.plugin.manifest.name, reason));
                     } else {
@@ -234,11 +276,54 @@ impl PluginRegistry {
     }
 }
 
+/// Verify a plugin's detached minisign signature.
+///
+/// The signature file must be named `.kirkforge.sig` inside the plugin
+/// directory and must sign the manifest file `kirkforge.toml`. The
+/// configured public key is passed to `minisign -V`.
+fn verify_plugin_signature(
+    plugin_root: &std::path::Path,
+    key_path: Option<&std::path::Path>,
+) -> Result<(), String> {
+    let sig_path = plugin_root.join(".kirkforge.sig");
+    if !sig_path.exists() {
+        return Err("missing required .kirkforge.sig signature file".into());
+    }
+
+    let key_path = key_path.ok_or_else(|| {
+        "signature verification enabled but no plugin_public_key_path configured".to_string()
+    })?;
+
+    let manifest_path = plugin_root.join("kirkforge.toml");
+    let output = std::process::Command::new("minisign")
+        .arg("-V")
+        .arg("-m")
+        .arg(&manifest_path)
+        .arg("-x")
+        .arg(&sig_path)
+        .arg("-p")
+        .arg(key_path)
+        .output()
+        .map_err(|e| format!("failed to run minisign: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let reason = if stderr.trim().is_empty() {
+            format!("minisign exited with {:?}", output.status.code())
+        } else {
+            stderr.trim().to_string()
+        };
+        return Err(reason);
+    }
+
+    Ok(())
+}
+
 /// Apply the trust policy to a freshly loaded plugin.
 ///
 /// Rejected plugins are returned without indexing. Accepted plugins have their
 /// capabilities filtered down to those permitted by the effective trust tier.
-fn apply_policy(plugin: LoadedPlugin, policy: TrustPolicy) -> HostedPlugin {
+fn apply_policy(plugin: LoadedPlugin, policy: &TrustPolicy) -> HostedPlugin {
     if policy.reject_on_excess && !policy.max.permits(plugin.manifest.trust) {
         return HostedPlugin {
             effective_trust: plugin.manifest.trust,
@@ -369,5 +454,42 @@ command = "hooks/post-turn.sh"
             .unwrap();
         assert_eq!(reg.active_count(), 0);
         assert!(warnings.iter().any(|w| w.contains("exceeds")));
+    }
+
+    #[test]
+    fn registry_downgrades_excessive_trust_when_reject_on_excess_false() {
+        let tmp = tempfile::tempdir().unwrap();
+        let plugins = tmp.path().join("plugins");
+        let plugin_dir = plugins.join("downgraded");
+        make_test_plugin_dir(&plugin_dir, TrustTier::Network);
+
+        let mut reg = PluginRegistry::new();
+        let policy = TrustPolicy::up_to(TrustTier::Shell).with_reject_on_excess(false);
+        let warnings = reg.load_from_dir(&plugins, policy).unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        // Plugin stays active but its effective trust is capped at Shell.
+        assert_eq!(reg.active_count(), 1);
+        assert!(reg.skill_by_trigger("/hello").is_some());
+        assert!(!reg.hooks_for_event("post-turn").is_empty());
+    }
+
+    #[test]
+    fn registry_rejects_unsigned_plugin_when_signature_validation_enabled() {
+        let tmp = tempfile::tempdir().unwrap();
+        let plugins = tmp.path().join("plugins");
+        let plugin_dir = plugins.join("unsigned");
+        make_test_plugin_dir(&plugin_dir, TrustTier::Shell);
+
+        let mut reg = PluginRegistry::new();
+        let key_path = tmp.path().join("plugin.pub");
+        std::fs::write(&key_path, "dummy-key").unwrap();
+        let policy =
+            TrustPolicy::up_to(TrustTier::Shell).with_verify_signatures(true, Some(key_path));
+        let warnings = reg.load_from_dir(&plugins, policy).unwrap();
+        assert_eq!(reg.active_count(), 0);
+        assert!(
+            warnings.iter().any(|w| w.contains("signature")),
+            "warnings: {warnings:?}"
+        );
     }
 }

@@ -1,3 +1,4 @@
+use crate::session::access::PathGuard;
 use crate::session::undo::UndoKind;
 use crate::shared::{ToolDef, ToolError, ToolOutcome};
 use crate::tools::{Tool, ToolContext, UndoStackRef};
@@ -16,11 +17,12 @@ use std::path::PathBuf;
 /// useless for untracked files.
 pub struct EditFile {
     undo: Option<UndoStackRef>,
+    path_guard: PathGuard,
 }
 
 impl EditFile {
-    pub fn new(undo: Option<UndoStackRef>) -> Self {
-        Self { undo }
+    pub fn new(undo: Option<UndoStackRef>, path_guard: PathGuard) -> Self {
+        Self { undo, path_guard }
     }
 }
 
@@ -58,6 +60,15 @@ impl Tool for EditFile {
                 return ToolOutcome::Failure(ToolError::invalid_args("Missing 'path' argument"));
             }
         };
+
+        // Path-guard check before any read or write. This enforces deny_paths,
+        // deny_extensions, block_dotfiles, allowed_write_dirs, and sandbox
+        // containment from a single source of truth in access.rs.
+        if let crate::session::access::GuardVerdict::Denied(msg) =
+            self.path_guard.check_write(&path)
+        {
+            return ToolOutcome::Failure(ToolError::AccessDenied { message: msg });
+        }
 
         let old = match args.get("old_string").and_then(|o| o.as_str()) {
             Some(o) => o.to_string(),
@@ -240,7 +251,7 @@ impl Tool for EditFile {
                     new_content.push_str(&content[byte_start + span_orig_len..]);
 
                     let diff = render_diff(&content, &new_content);
-                    return match std::fs::write(&path, &new_content) {
+                    return match crate::tools::atomic_write::atomic_write(&path, &new_content) {
                         Ok(_) => {
                             match snapshot_for_undo(
                                 &self.undo,
@@ -300,7 +311,7 @@ impl Tool for EditFile {
         let new_content = content.replacen(&old, &new, 1);
         let diff = render_diff(&content, &new_content);
 
-        match std::fs::write(&path, &new_content) {
+        match crate::tools::atomic_write::atomic_write(&path, &new_content) {
             Ok(_) => match snapshot_for_undo(
                 &self.undo,
                 UndoKind::Edit,
@@ -378,7 +389,7 @@ mod tests {
         let path = dir.join("kirkforge_edit_fuzzy.txt");
         std::fs::write(&path, content).unwrap();
 
-        let tool = EditFile::new(None);
+        let tool = EditFile::new(None, crate::session::access::PathGuard::default());
         let ctx = ToolContext::new();
         let args = serde_json::json!({
             "path": path.to_string_lossy(),
@@ -415,7 +426,7 @@ mod tests {
         let path = dir.join("kirkforge_edit_fuzzy_crlf.txt");
         std::fs::write(&path, content).unwrap();
 
-        let tool = EditFile::new(None);
+        let tool = EditFile::new(None, crate::session::access::PathGuard::default());
         let ctx = ToolContext::new();
         let args = serde_json::json!({
             "path": path.to_string_lossy(),
@@ -472,7 +483,10 @@ mod tests {
         let stack =
             std::sync::Arc::new(std::sync::Mutex::new(UndoStack::for_session(&id).unwrap()));
 
-        let tool = EditFile::new(Some(stack.clone()));
+        let tool = EditFile::new(
+            Some(stack.clone()),
+            crate::session::access::PathGuard::default(),
+        );
         let ctx = ToolContext::new();
         let args = serde_json::json!({
             "path": path.to_string_lossy(),
@@ -503,7 +517,7 @@ mod tests {
         let path = dir.join("kirkforge_edit_ambiguous.txt");
         std::fs::write(&path, "fn foo() {}\nfn bar() {}\nfn foo() {}\n").unwrap();
 
-        let tool = EditFile::new(None);
+        let tool = EditFile::new(None, crate::session::access::PathGuard::default());
         let ctx = ToolContext::new();
         let args = serde_json::json!({
             "path": path.to_string_lossy(),
@@ -526,7 +540,7 @@ mod tests {
         // Same line twice with differing trailing whitespace.
         std::fs::write(&path, "let x = 1;    \nlet y = 2;\nlet x = 1;\n").unwrap();
 
-        let tool = EditFile::new(None);
+        let tool = EditFile::new(None, crate::session::access::PathGuard::default());
         let ctx = ToolContext::new();
         let args = serde_json::json!({
             "path": path.to_string_lossy(),
@@ -547,7 +561,7 @@ mod tests {
         let path = dir.path().join("dry_run_edit.txt");
         std::fs::write(&path, "fn old() {}\n").unwrap();
 
-        let tool = EditFile::new(None);
+        let tool = EditFile::new(None, crate::session::access::PathGuard::default());
         let ctx = ToolContext::with_dry_run(true);
         let args = serde_json::json!({
             "path": path.to_string_lossy(),
@@ -560,5 +574,109 @@ mod tests {
             "expected dry-run success, got {result:?}"
         );
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "fn old() {}\n");
+    }
+
+    /// `edit_file` must reject paths blocked by the PathGuard, e.g. dotfiles
+    /// when `block_dotfiles` is enabled.
+    #[tokio::test]
+    async fn test_edit_file_respects_path_guard_dotfiles() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".secret");
+        std::fs::write(&path, "old").unwrap();
+
+        let guard = crate::session::access::PathGuard {
+            block_dotfiles: true,
+            ..Default::default()
+        };
+        let tool = EditFile::new(None, guard);
+        let ctx = ToolContext::new();
+        let args = serde_json::json!({
+            "path": path.to_string_lossy(),
+            "old_string": "old",
+            "new_string": "new",
+        });
+        let result = tool.run(&ctx, args).await;
+        assert!(
+            matches!(
+                result,
+                ToolOutcome::Failure(ToolError::AccessDenied { ref message }) if message.contains("Dotfiles")
+            ),
+            "expected dotfile denial, got {result:?}"
+        );
+    }
+
+    /// `edit_file` must reject overwriting an existing file larger than
+    /// `max_overwrite_size`.
+    #[tokio::test]
+    async fn test_edit_file_blocks_large_overwrite() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("big.txt");
+        let big = "x".repeat(2048);
+        std::fs::write(&path, &big).unwrap();
+
+        let guard = crate::session::access::PathGuard {
+            max_overwrite_size: 1024,
+            ..Default::default()
+        };
+        let tool = EditFile::new(None, guard);
+        let ctx = ToolContext::new();
+        let args = serde_json::json!({
+            "path": path.to_string_lossy(),
+            "old_string": "xxxx",
+            "new_string": "yyyy",
+        });
+        let result = tool.run(&ctx, args).await;
+        assert!(
+            matches!(
+                result,
+                ToolOutcome::Failure(ToolError::AccessDenied { ref message })
+                    if message.contains("Refusing to overwrite")
+            ),
+            "expected large-file denial, got {result:?}"
+        );
+    }
+
+    /// On write failure the original file must remain untouched (atomic-write
+    /// regression guard). We simulate failure by editing into a read-only
+    /// directory so the temp file cannot be created.
+    #[tokio::test]
+    async fn test_edit_file_atomic_failure_preserves_original() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ro").join("file.txt");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "original content").unwrap();
+        // Make parent read-only so the temp file cannot be created.
+        let mut perms = std::fs::metadata(path.parent().unwrap())
+            .unwrap()
+            .permissions();
+        perms.set_readonly(true);
+        std::fs::set_permissions(path.parent().unwrap(), perms.clone()).unwrap();
+
+        let tool = EditFile::new(None, crate::session::access::PathGuard::default());
+        let ctx = ToolContext::new();
+        let args = serde_json::json!({
+            "path": path.to_string_lossy(),
+            "old_string": "original content",
+            "new_string": "new content",
+        });
+        let result = tool.run(&ctx, args).await;
+        // Restore permissions before assertions so cleanup can run.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            perms.set_mode(0o755);
+        }
+        #[cfg(not(unix))]
+        perms.set_readonly(false);
+        let _ = std::fs::set_permissions(path.parent().unwrap(), perms);
+        assert!(
+            matches!(result, ToolOutcome::Failure(ToolError::Internal { .. })),
+            "expected failure, got {result:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "original content",
+            "original file should be preserved on atomic-write failure"
+        );
     }
 }

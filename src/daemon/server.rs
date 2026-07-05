@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufStream};
 use tokio::net::{UnixListener, UnixStream};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Semaphore};
 
 /// Run the daemon until a shutdown request is received.
 ///
@@ -57,6 +57,7 @@ pub async fn run_daemon_at(socket_path: PathBuf, pid_path: PathBuf) -> anyhow::R
 
     let state = Arc::new(Mutex::new(DaemonState::new()));
     let shutdown = Arc::new(tokio::sync::Notify::new());
+    let concurrency = Arc::new(Semaphore::new(16));
 
     // Initial refresh.
     {
@@ -127,7 +128,14 @@ pub async fn run_daemon_at(socket_path: PathBuf, pid_path: PathBuf) -> anyhow::R
                     Ok((stream, _)) => {
                         let state = state.clone();
                         let shutdown = shutdown.clone();
-                        tokio::spawn(handle_client(stream, state, shutdown));
+                        let concurrency = concurrency.clone();
+                        tokio::spawn(async move {
+                            let Ok(_permit) = concurrency.acquire_owned().await else {
+                                tracing::warn!("daemon concurrency semaphore closed; dropping connection");
+                                return;
+                            };
+                            handle_client(stream, state, shutdown).await;
+                        });
                     }
                     Err(e) => {
                         tracing::warn!(error = %e, "daemon accept failed");
@@ -246,7 +254,23 @@ async fn handle_client(
         };
 
         let is_shutdown = matches!(req, Request::Shutdown);
-        let resp = handle_request(req, state.clone()).await;
+        let resp = match tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            handle_request(req, state.clone()),
+        )
+        .await
+        {
+            Ok(r) => r,
+            Err(_) => {
+                tracing::warn!("daemon request handler timed out; closing connection");
+                let _ = write_response(
+                    &mut stream,
+                    Response::error("request timed out".to_string()),
+                )
+                .await;
+                break;
+            }
+        };
         if write_response(&mut stream, resp).await.is_err() {
             break;
         }

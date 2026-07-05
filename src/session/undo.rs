@@ -67,6 +67,17 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// agent can't fill the disk.
 const MAX_ENTRIES: usize = 50;
 
+/// Maximum total bytes of snapshots kept on disk. A single 5 MiB
+/// file edited 11 times would otherwise consume 55 MiB; this cap
+/// keeps the undo directory bounded regardless of file sizes.
+#[cfg(not(test))]
+const MAX_TOTAL_SNAPSHOT_BYTES: u64 = 50 * 1024 * 1024;
+
+/// Test override so the total-size cap can be exercised without writing
+/// tens of megabytes to disk in every test run.
+#[cfg(test)]
+const MAX_TOTAL_SNAPSHOT_BYTES: u64 = 2 * 1024 * 1024;
+
 /// One entry in the undo stack. The snapshot lives in a file on
 /// disk; this struct holds just the metadata needed to display the
 /// stack and restore on demand.
@@ -142,6 +153,9 @@ pub struct UndoStack {
     /// Persisted to `<dir>/next_seq` so a session continuation
     /// doesn't reuse a sequence number (a future feature).
     next_seq: AtomicU64,
+    /// Sum of `snapshot_size` for all entries currently in `ops`. Kept
+    /// in sync so the total-size cap trim does not require a second pass.
+    total_snapshot_bytes: u64,
 }
 
 impl UndoStack {
@@ -190,6 +204,7 @@ impl UndoStack {
         // Sort by seq to be robust to readdir ordering.
         let mut ops_vec: Vec<UndoOp> = ops.into_iter().collect();
         ops_vec.sort_by_key(|op| op.seq);
+        let total_snapshot_bytes = ops_vec.iter().map(|op| op.snapshot_size).sum();
         let ops: VecDeque<UndoOp> = ops_vec.into_iter().collect();
 
         Ok(Self {
@@ -197,6 +212,7 @@ impl UndoStack {
             dir,
             ops,
             next_seq: AtomicU64::new(max_seq + 1),
+            total_snapshot_bytes,
         })
     }
 
@@ -239,10 +255,31 @@ impl UndoStack {
         prev_existed: bool,
         prev_bytes: &[u8],
     ) -> Result<u64> {
+        let new_bytes = prev_bytes.len() as u64;
+
         // FIFO-trim the oldest entry if we're at the cap.
         while self.ops.len() >= MAX_ENTRIES {
             if let Some(oldest) = self.ops.pop_front() {
+                self.total_snapshot_bytes = self
+                    .total_snapshot_bytes
+                    .saturating_sub(oldest.snapshot_size);
                 self.remove_snapshot(oldest.seq);
+            }
+        }
+
+        // Trim oldest entries until the new snapshot fits under the total
+        // byte budget. A single snapshot bigger than the cap is still allowed
+        // — the user needs at least one undo — but everything older is evicted.
+        while !self.ops.is_empty()
+            && self.total_snapshot_bytes.saturating_add(new_bytes) > MAX_TOTAL_SNAPSHOT_BYTES
+        {
+            if let Some(oldest) = self.ops.pop_front() {
+                self.total_snapshot_bytes = self
+                    .total_snapshot_bytes
+                    .saturating_sub(oldest.snapshot_size);
+                self.remove_snapshot(oldest.seq);
+            } else {
+                break;
             }
         }
 
@@ -273,12 +310,13 @@ impl UndoStack {
         std::fs::write(&meta_path, meta_json)
             .with_context(|| format!("write undo metadata {}", meta_path.display()))?;
 
+        self.total_snapshot_bytes += new_bytes;
         self.ops.push_back(UndoOp {
             seq,
             kind,
             path: path.to_path_buf(),
             prev_existed,
-            snapshot_size: prev_bytes.len() as u64,
+            snapshot_size: new_bytes,
             timestamp: meta.timestamp,
         });
 
@@ -292,6 +330,7 @@ impl UndoStack {
         let Some(op) = self.ops.pop_back() else {
             return Ok(None);
         };
+        self.total_snapshot_bytes = self.total_snapshot_bytes.saturating_sub(op.snapshot_size);
         let snap_path = self.snapshot_path(op.seq);
 
         if op.prev_existed {
@@ -345,6 +384,19 @@ impl UndoStack {
     /// Number of entries currently on the stack.
     pub fn len(&self) -> usize {
         self.ops.len()
+    }
+
+    /// Remove every snapshot and metadata file, and clear the in-memory stack.
+    /// Returns the number of entries removed. The next `push` starts from the
+    /// same sequence counter (clear does not reset it).
+    pub fn clear(&mut self) -> Result<usize> {
+        let count = self.ops.len();
+        let seqs: Vec<u64> = self.ops.drain(..).map(|op| op.seq).collect();
+        for seq in seqs {
+            self.remove_snapshot(seq);
+        }
+        self.total_snapshot_bytes = 0;
+        Ok(count)
     }
 
     fn snapshot_path(&self, seq: u64) -> PathBuf {
@@ -503,6 +555,47 @@ mod tests {
         // The seq numbers should be strictly increasing.
         assert!(list[0].seq < list[1].seq);
         assert!(list[1].seq < list[2].seq);
+    }
+
+    /// Total snapshot-size cap: oldest entries are evicted once the
+    /// budget would be exceeded.
+    #[test]
+    fn test_total_size_cap_evicts_oldest() {
+        let mut stack = fresh_stack();
+        let target = env::temp_dir().join("kirkforge_undo_size_cap.txt");
+        // Push two 1.5 MiB snapshots. With the 2 MiB test cap, the second
+        // push should evict the first.
+        let one_and_half = 3 * 1024 * 1024 / 2;
+        for i in 0..2 {
+            let content = vec![b'a' + i; one_and_half];
+            std::fs::write(&target, &content).unwrap();
+            let prev = std::fs::read(&target).unwrap();
+            stack
+                .push(UndoKind::Edit, &target, true, &prev)
+                .expect("push");
+            // Pretend an edit happened.
+            std::fs::write(&target, vec![b'0' + i; one_and_half]).unwrap();
+        }
+        assert_eq!(stack.len(), 1, "only the newest snapshot should remain");
+        assert!(
+            stack.list()[0].snapshot_size >= 1024 * 1024,
+            "remaining entry should be the large one"
+        );
+    }
+
+    /// `clear` removes every entry and zeros the total byte count.
+    #[test]
+    fn test_clear_empties_stack_and_disk() {
+        let mut stack = fresh_stack();
+        let target = env::temp_dir().join("kirkforge_undo_clear.txt");
+        std::fs::write(&target, b"v1").unwrap();
+        let prev = std::fs::read(&target).unwrap();
+        stack.push(UndoKind::Edit, &target, true, &prev).unwrap();
+
+        let removed = stack.clear().expect("clear");
+        assert_eq!(removed, 1);
+        assert!(stack.is_empty());
+        assert_eq!(stack.total_snapshot_bytes, 0);
     }
 
     /// Persistence: a fresh `for_session` call reconstructs the

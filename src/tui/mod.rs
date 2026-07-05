@@ -37,7 +37,6 @@ use crate::session::carryover::CarryoverProfile;
 use crate::session::conversation::ConversationLog;
 use crate::session::executor::{self, ApprovalRequest};
 use crate::shared::{Config, Message, Role};
-use crate::tools::Tool;
 use app::{AppState, ConnectionState, ConversationEntry};
 use commands::{messages_to_entries, notify_completed_jobs, PersonaKind, PersonaResult};
 use components::approval::render_approval_dialog;
@@ -115,23 +114,16 @@ fn run_session_picker_sync(
     }
 }
 
-/// One-shot probe of the configured Ollama endpoint.
+/// One-shot probe of the configured Ollama endpoint with a caller-chosen
+/// timeout.
 ///
 /// Returns `Connected { model, since: now }` if `${ollama_host}/api/tags`
-/// responds with 2xx within a 2-second budget, `Error(msg)` on transport
-/// failure or non-2xx status, and `Disconnected` only if the host string
-/// is empty or unparseable.
-///
-/// We hit `/api/tags` rather than `/api/version` because it doubles as a
-/// "do we have this model?" check, and the response (a JSON object
-/// listing the available models) is what the executor's smart router
-/// will consult anyway. A 2s budget is generous — local Ollama answers
-/// in <50ms, and the cloud route usually <500ms.
-///
-/// Failure modes are non-fatal: the TUI starts up either way, the user
-/// can still type, and the first turn will surface the underlying
-/// connection error via the executor's normal error path.
-async fn probe_ollama_connection(config: &Config) -> ConnectionState {
+/// responds with 2xx within the budget, `Error(msg)` on transport failure or
+/// non-2xx status, and `Disconnected` only if the host string is empty.
+async fn probe_ollama_connection_with_timeout(
+    config: &Config,
+    timeout: std::time::Duration,
+) -> ConnectionState {
     let host = config.ollama_host.trim_end_matches('/');
     if host.is_empty() {
         return ConnectionState::Error("empty ollama_host in config".into());
@@ -140,10 +132,7 @@ async fn probe_ollama_connection(config: &Config) -> ConnectionState {
     let model = config.default_model.clone();
     let since = Instant::now();
 
-    let client = match reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(2))
-        .build()
-    {
+    let client = match reqwest::Client::builder().timeout(timeout).build() {
         Ok(c) => c,
         Err(e) => return ConnectionState::Error(format!("client build failed: {e}")),
     };
@@ -155,11 +144,42 @@ async fn probe_ollama_connection(config: &Config) -> ConnectionState {
     }
 }
 
+/// Startup probe with a generous 2-second budget.
+async fn probe_ollama_connection(config: &Config) -> ConnectionState {
+    probe_ollama_connection_with_timeout(config, std::time::Duration::from_secs(2)).await
+}
+
+/// Background task that probes the Ollama endpoint every `interval` and
+/// reports the resulting `ConnectionState` back to the TUI event loop. The
+/// probe uses a short timeout so a flaky/unreachable host does not block
+/// the task for long.
+async fn connection_probe_task(
+    config: crate::shared::SharedConfig,
+    tx: tokio::sync::mpsc::Sender<ConnectionState>,
+    interval: std::time::Duration,
+) {
+    let mut tick = tokio::time::interval(interval);
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        tick.tick().await;
+        let cfg = {
+            let guard = crate::shared::read_shared_config(&config);
+            guard.clone()
+        };
+        let state =
+            probe_ollama_connection_with_timeout(&cfg, std::time::Duration::from_secs(1)).await;
+        if tx.send(state).await.is_err() {
+            // TUI loop has shut down; stop probing.
+            break;
+        }
+    }
+}
+
 /// Run the TUI event loop.
 pub async fn run_tui(
     shared_config: crate::shared::SharedConfig,
     adapter: Box<dyn crate::adapters::ModelAdapter>,
-    tools: Vec<std::sync::Arc<dyn Tool>>,
+    tools: crate::session::toolset::CompositeToolset,
     conversation: (ConversationLog, crate::session::conversation::OpenOutcome),
     system: Option<String>,
     undo_stack: Option<crate::tools::UndoStackRef>,
@@ -276,6 +296,11 @@ pub async fn run_tui(
     // main executor is placed in plan mode so `/implement` remains the
     // approval gesture.
     let (plan_tx, plan_rx) = mpsc::unbounded_channel::<bool>();
+    // Plugin reload: TUI → Executor (sends a fresh PluginRegistry).
+    // `/reload plugins` re-scans the plugins directory and asks the
+    // executor to swap the plugin toolset, hooks, and verifiers.
+    let (plugin_reload_tx, plugin_reload_rx) =
+        mpsc::unbounded_channel::<kirkforge_plugin_host::PluginRegistry>();
     // Persona completion: background task → TUI event loop.
     // `/explore`, `/plan`, and `/coder` spawn fork-isolated subagents;
     // the result is merged back into the parent conversation here.
@@ -417,6 +442,10 @@ pub async fn run_tui(
     if let crate::session::conversation::OpenOutcome::Restored(messages) = open_outcome {
         exe.set_recovered_messages(messages);
     }
+    // Keep a sender clone for slash-commands (e.g. /model pull progress)
+    // that need to inject TurnEvent tokens into the TUI event stream.
+    let event_tx_for_commands = event_tx.clone();
+
     let handle = tokio::spawn(async move {
         if let Err(e) = exe
             .run(
@@ -430,6 +459,7 @@ pub async fn run_tui(
                 undo_rx,
                 config_rx,
                 plan_rx,
+                plugin_reload_rx,
             )
             .await
         {
@@ -455,6 +485,17 @@ pub async fn run_tui(
     let mut slow_tick = tokio::time::interval(std::time::Duration::from_millis(125));
     slow_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
+    // Periodic connection health probe. A 30 s interval is frequent enough
+    // to surface a host/model outage quickly while keeping request volume
+    // negligible against a local Ollama endpoint. The probe runs on its own
+    // task so a 1 s probe timeout never blocks the executor or UI.
+    let (conn_probe_tx, mut conn_probe_rx) = mpsc::channel::<ConnectionState>(1);
+    tokio::spawn(connection_probe_task(
+        shared_config.clone(),
+        conn_probe_tx,
+        std::time::Duration::from_secs(30),
+    ));
+
     let res = run_event_loop(
         &mut terminal,
         &mut state,
@@ -471,7 +512,10 @@ pub async fn run_tui(
         &config_tx,
         &plan_tx,
         &persona_tx,
+        &plugin_reload_tx,
         &mut slow_tick,
+        &mut conn_probe_rx,
+        &event_tx_for_commands,
         &shutdown_for_loop,
     )
     .await;
@@ -484,7 +528,15 @@ pub async fn run_tui(
     // only `input_tx` left the others alive and caused the TUI to hang
     // on `handle.await` after `run_event_loop` returned.
     drop((
-        input_tx, cancel_tx, resume_tx, compact_tx, model_tx, undo_tx, plan_tx, persona_tx,
+        input_tx,
+        cancel_tx,
+        resume_tx,
+        compact_tx,
+        model_tx,
+        undo_tx,
+        plan_tx,
+        persona_tx,
+        plugin_reload_tx,
     ));
     // ponytail: 3s timeout so a hung Ollama HTTP call doesn't freeze the terminal
     if tokio::time::timeout(std::time::Duration::from_secs(3), handle)
@@ -529,7 +581,10 @@ async fn run_event_loop(
     config_tx: &mpsc::UnboundedSender<Config>,
     plan_tx: &mpsc::UnboundedSender<bool>,
     persona_tx: &mpsc::UnboundedSender<PersonaResult>,
+    plugin_reload_tx: &mpsc::UnboundedSender<kirkforge_plugin_host::PluginRegistry>,
     slow_tick: &mut tokio::time::Interval,
+    conn_probe_rx: &mut mpsc::Receiver<ConnectionState>,
+    event_tx_for_commands: &mpsc::UnboundedSender<executor::TurnEvent>,
     // One-shot shutdown signal. Fired by:
     //   - the SIGHUP handler (Unix, pty-close)
     //   - the kb-reader thread (crossterm `event::read()` Err)
@@ -578,6 +633,7 @@ async fn run_event_loop(
         let mut had_approval_pending =
             state.pending_approval.is_some() || state.pending_bang.is_some();
         let mut dirty_from_tick = false;
+        let mut new_connection_state: Option<ConnectionState> = None;
 
         tokio::select! {
             // Bias the select! slightly toward real events so we
@@ -605,6 +661,11 @@ async fn run_event_loop(
                     // process it after the select! without holding a
                     // borrow across the await point.
                     persona_result = Some(result);
+                }
+            }
+            st = conn_probe_rx.recv() => {
+                if let Some(state) = st {
+                    new_connection_state = Some(state);
                 }
             }
             // Shutdown arm: SIGHUP or kb-reader-thread EOF. Higher
@@ -637,6 +698,14 @@ async fn run_event_loop(
         if let Some(result) = persona_result {
             handle_persona_complete(result, state, resume_tx, plan_tx).await;
             state.mark_dirty();
+        }
+        if let Some(new_state) = new_connection_state {
+            // Only redraw when the status actually changes so a
+            // stable connection does not waste frames.
+            if state.connection != new_state {
+                state.connection = new_state;
+                state.mark_dirty();
+            }
         }
         // Jobs and kb events are also work that may have been
         // waiting. We always drain jobs (cheap) and process any
@@ -672,8 +741,19 @@ async fn run_event_loop(
                         approval_keys::handle_approval_key(key, state);
                     } else {
                         keys::handle_input_key(
-                            key, state, input_tx, cancel_tx, resume_tx, compact_tx, model_tx,
-                            undo_tx, config_tx, plan_tx, persona_tx,
+                            key,
+                            state,
+                            input_tx,
+                            cancel_tx,
+                            resume_tx,
+                            compact_tx,
+                            model_tx,
+                            undo_tx,
+                            config_tx,
+                            plan_tx,
+                            persona_tx,
+                            event_tx_for_commands,
+                            plugin_reload_tx,
                         )
                         .await?;
                     }
@@ -702,8 +782,19 @@ async fn run_event_loop(
                         approval_keys::handle_approval_key(key, state);
                     } else {
                         keys::handle_input_key(
-                            key, state, input_tx, cancel_tx, resume_tx, compact_tx, model_tx,
-                            undo_tx, config_tx, plan_tx, persona_tx,
+                            key,
+                            state,
+                            input_tx,
+                            cancel_tx,
+                            resume_tx,
+                            compact_tx,
+                            model_tx,
+                            undo_tx,
+                            config_tx,
+                            plan_tx,
+                            persona_tx,
+                            event_tx_for_commands,
+                            plugin_reload_tx,
                         )
                         .await?;
                     }

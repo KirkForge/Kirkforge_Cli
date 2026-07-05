@@ -68,14 +68,17 @@ impl Tool for Bash {
             }
         };
 
+        let timeout_secs = args.get("timeout").and_then(|t| t.as_u64()).unwrap_or(30);
+        let workdir = args.get("workdir").and_then(|w| w.as_str()).unwrap_or(".");
+        let workdir_path = PathBuf::from(shellexpand::tilde(workdir).as_ref());
+
         if ctx.dry_run {
             // Validate the command through the same safety gate the real
             // execution uses, even in dry-run mode, so the user sees whether
             // the command would be allowed.
-            let workdir = args.get("workdir").and_then(|w| w.as_str());
             if let Some(denied) = check_bash_command_str(
                 &cmd,
-                workdir,
+                Some(workdir),
                 &self.deny_list,
                 &self.path_guard,
                 self.bash_sandbox_workdir,
@@ -85,7 +88,10 @@ impl Tool for Bash {
                 });
             }
             return ToolOutcome::Success {
-                content: format!("Dry run: would execute bash command: {cmd}"),
+                content: format!(
+                    "Dry run: would execute bash command: {cmd}\n  workdir: {}\n  timeout: {timeout_secs}s",
+                    workdir_path.display()
+                ),
             };
         }
 
@@ -118,11 +124,6 @@ impl Tool for Bash {
             }
         } else {
             // Normal foreground execution
-            let timeout_secs = args.get("timeout").and_then(|t| t.as_u64()).unwrap_or(30);
-            let workdir = args.get("workdir").and_then(|w| w.as_str()).unwrap_or(".");
-
-            let workdir_path = PathBuf::from(shellexpand::tilde(workdir).as_ref());
-
             let result =
                 run_shell_with_token(&cmd, &workdir_path, timeout_secs, Some(&ctx.token)).await;
 
@@ -190,9 +191,11 @@ impl Tool for Bash {
                 Err(ShellError::Cancelled) => {
                     ToolOutcome::Failure(crate::shared::ToolError::Cancelled)
                 }
-                Err(e) => ToolOutcome::Failure(crate::shared::ToolError::internal(format!(
-                    "Failed to execute command: {e}"
-                ))),
+                Err(e) => ToolOutcome::Failure(crate::shared::ToolError::Execution {
+                    message: format!("Failed to execute command: {e}"),
+                    exit_code: None,
+                    stderr: String::new(),
+                }),
             }
         }
     }
@@ -308,6 +311,31 @@ mod tests {
                 crate::shared::ToolOutcome::Failure(crate::shared::ToolError::AccessDenied { .. })
             ),
             "expected dry-run access-denied error, got {outcome:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn bash_dry_run_includes_workdir_and_timeout() {
+        let tool = Bash::new(DenyList::default(), PathGuard::default(), false);
+        let ctx = crate::tools::ToolContext::with_dry_run(true);
+        let args = serde_json::json!({
+            "command": "echo hello",
+            "workdir": ".",
+            "timeout": 42,
+        });
+
+        let outcome = tool.run(&ctx, args).await;
+        let content = match outcome {
+            crate::shared::ToolOutcome::Success { content } => content,
+            other => panic!("expected dry-run success, got {other:?}"),
+        };
+        assert!(
+            content.contains("workdir:"),
+            "dry-run output should include workdir: {content}"
+        );
+        assert!(
+            content.contains("timeout: 42s"),
+            "dry-run output should include timeout: {content}"
         );
     }
 }

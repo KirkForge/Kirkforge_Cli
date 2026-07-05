@@ -219,8 +219,13 @@ impl Tool for PluginToolWrapper {
             }),
             Finish::Timeout => {
                 kill_process_group(&mut child);
-                let _ = join_plugin_drain(drain_stdout, "stdout").await;
-                let _ = join_plugin_drain(drain_stderr, "stderr").await;
+                // Drains are best-effort after a kill; the timeout outcome is
+                // already determined, so ignore any drain errors.
+                #[allow(unused_must_use)]
+                {
+                    join_plugin_drain(drain_stdout, "stdout").await;
+                    join_plugin_drain(drain_stderr, "stderr").await;
+                }
                 reap_child(&mut child, Duration::from_secs(2)).await;
                 ToolOutcome::Failure(ToolError::Timeout {
                     after_secs: timeout_secs,
@@ -228,8 +233,13 @@ impl Tool for PluginToolWrapper {
             }
             Finish::Cancelled => {
                 kill_process_group(&mut child);
-                let _ = join_plugin_drain(drain_stdout, "stdout").await;
-                let _ = join_plugin_drain(drain_stderr, "stderr").await;
+                // Drains are best-effort after a kill; the cancelled outcome is
+                // already determined, so ignore any drain errors.
+                #[allow(unused_must_use)]
+                {
+                    join_plugin_drain(drain_stdout, "stdout").await;
+                    join_plugin_drain(drain_stderr, "stderr").await;
+                }
                 reap_child(&mut child, Duration::from_secs(2)).await;
                 ToolOutcome::Failure(ToolError::Cancelled)
             }

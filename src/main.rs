@@ -888,7 +888,7 @@ async fn run_line_mode(
             .run_turn_collecting(&input, &approval_tx, &cancelled)
             .await?;
         let _turn_duration_ms = turn_started_at.elapsed().as_millis() as u64;
-        let _ = emit_turn_events(
+        emit_turn_events(
             &events,
             output,
             &mut total_prompt_tokens,
@@ -1037,8 +1037,7 @@ fn print_json_line(value: &serde_json::Value) {
 /// Per-turn event emission, extracted from the pre-M4 single-turn
 /// loop so the multi-turn driver can call it once per turn without
 /// duplicating the 165-line match. Mutates the running totals in
-/// place; returns the `final_error` (if any) so the caller can
-/// keep a "most recent error" pointer for the JSON summary.
+/// place; the caller reads `final_error` directly for the JSON summary.
 #[allow(clippy::too_many_arguments)]
 fn emit_turn_events(
     events: &[session::executor::TurnEvent],
@@ -1048,7 +1047,7 @@ fn emit_turn_events(
     cumulative_cost: &mut f64,
     tool_records: &mut Vec<crate::shared::ToolCallRecord>,
     final_error: &mut Option<String>,
-) -> Option<String> {
+) {
     // Per-tool timing + structured records for the JSON summary.
     // `ToolStart` arms the timer; the matching `ToolResult` reads
     // it and pushes a `ToolCallRecord` into `tool_records`. Tools
@@ -1214,8 +1213,6 @@ fn emit_turn_events(
             }
         }
     }
-
-    final_error.clone()
 }
 
 /// Resolve a `--continue-session` value to a log path.

@@ -34,7 +34,10 @@ pub fn setup_process_group(cmd: &mut Command) {
         cmd.as_std_mut().pre_exec(|| {
             // In a post-fork pre-exec hook we cannot call logging or
             // allocation; ignore the result and continue exec.
-            let _ = setpgid(0, 0);
+            #[allow(unused_must_use)]
+            {
+                setpgid(0, 0);
+            }
             Ok(())
         });
     }

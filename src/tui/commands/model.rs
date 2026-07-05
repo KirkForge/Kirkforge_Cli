@@ -341,9 +341,12 @@ pub async fn run_ollama_pull(
     {
         Ok(c) => c,
         Err(e) => {
-            let _ = event_tx.send(TurnEvent::Token(format!(
-                "❌ Could not start pull for {model}: {e}"
-            )));
+            crate::send_or_warn!(
+                event_tx.send(TurnEvent::Token(format!(
+                    "❌ Could not start pull for {model}: {e}"
+                ))),
+                "TUI dropped pull-error event"
+            );
             return;
         }
     };
@@ -352,19 +355,25 @@ pub async fn run_ollama_pull(
     let response = match client.post(&url).json(&body).send().await {
         Ok(resp) => resp,
         Err(e) => {
-            let _ = event_tx.send(TurnEvent::Token(format!(
-                "❌ Pull request for {model} failed: {e}"
-            )));
+            crate::send_or_warn!(
+                event_tx.send(TurnEvent::Token(format!(
+                    "❌ Pull request for {model} failed: {e}"
+                ))),
+                "TUI dropped pull-request error event"
+            );
             return;
         }
     };
 
     let status = response.status();
     if !status.is_success() {
-        let _ = event_tx.send(TurnEvent::Token(format!(
-            "❌ Pull request for {model} returned HTTP {}",
-            status.as_u16()
-        )));
+        crate::send_or_warn!(
+            event_tx.send(TurnEvent::Token(format!(
+                "❌ Pull request for {model} returned HTTP {}",
+                status.as_u16()
+            ))),
+            "TUI dropped pull-status error event"
+        );
         return;
     }
 
@@ -375,9 +384,12 @@ pub async fn run_ollama_pull(
         let chunk = match chunk {
             Ok(c) => c,
             Err(e) => {
-                let _ = event_tx.send(TurnEvent::Token(format!(
-                    "⚠️ Pull stream for {model} interrupted: {e}"
-                )));
+                crate::send_or_warn!(
+                    event_tx.send(TurnEvent::Token(format!(
+                        "⚠️ Pull stream for {model} interrupted: {e}"
+                    ))),
+                    "TUI dropped pull-stream interruption event"
+                );
                 continue;
             }
         };
@@ -400,15 +412,24 @@ pub async fn run_ollama_pull(
                 // "success" or by repeating the model name; we treat
                 // any status containing "success" as done.
                 if parsed.status.to_ascii_lowercase().contains("success") {
-                    let _ = event_tx.send(TurnEvent::Token(format!(
-                        "✅ Pull for {model} complete. Switching now…"
-                    )));
-                    let _ = switch_tx.send(model.to_string());
+                    crate::send_or_warn!(
+                        event_tx.send(TurnEvent::Token(format!(
+                            "✅ Pull for {model} complete. Switching now…"
+                        ))),
+                        "TUI dropped pull-complete event"
+                    );
+                    crate::send_or_warn!(
+                        switch_tx.send(model.to_string()),
+                        "executor model channel dropped during pull completion"
+                    );
                     return;
                 }
 
                 let msg = format_pull_line(model, &parsed);
-                let _ = event_tx.send(TurnEvent::Token(msg + "\n"));
+                crate::send_or_warn!(
+                    event_tx.send(TurnEvent::Token(msg + "\n")),
+                    "TUI dropped pull-progress event"
+                );
             }
         }
     }
@@ -416,10 +437,16 @@ pub async fn run_ollama_pull(
     // Stream ended without an explicit success line; the pull may still
     // have completed. Try to switch anyway and let the executor surface
     // any remaining problem on the next turn.
-    let _ = event_tx.send(TurnEvent::Token(format!(
-        "✅ Pull stream for {model} ended. Switching now…"
-    )));
-    let _ = switch_tx.send(model.to_string());
+    crate::send_or_warn!(
+        event_tx.send(TurnEvent::Token(format!(
+            "✅ Pull stream for {model} ended. Switching now…"
+        ))),
+        "TUI dropped pull-stream-ended event"
+    );
+    crate::send_or_warn!(
+        switch_tx.send(model.to_string()),
+        "executor model channel dropped after pull stream ended"
+    );
 }
 
 #[cfg(test)]

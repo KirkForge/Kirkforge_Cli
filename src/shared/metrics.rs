@@ -88,7 +88,9 @@ fn rotate_if_needed(path: &PathBuf) {
         return;
     }
     let backup = path.with_extension("ndjson.1");
-    let _ = std::fs::rename(path, &backup);
+    if let Err(e) = std::fs::rename(path, &backup) {
+        tracing::warn!(error = %e, "failed to rotate metrics log backup");
+    }
 }
 
 /// Record a metric event.

@@ -8,6 +8,10 @@ use crate::tools::bash_minify;
 use crate::tools::{Tool, ToolContext};
 use std::path::PathBuf;
 
+/// Maximum bash timeout in seconds. Clamped to prevent Duration/Instant
+/// overflow when a model passes an enormous value.
+const MAX_BASH_TIMEOUT_SECS: u64 = 24 * 60 * 60; // 24 hours
+
 pub struct Bash {
     deny_list: DenyList,
     path_guard: PathGuard,
@@ -68,7 +72,11 @@ impl Tool for Bash {
             }
         };
 
-        let timeout_secs = args.get("timeout").and_then(|t| t.as_u64()).unwrap_or(30);
+        let timeout_secs = args
+            .get("timeout")
+            .and_then(|t| t.as_u64())
+            .unwrap_or(30)
+            .min(MAX_BASH_TIMEOUT_SECS);
         let workdir = args.get("workdir").and_then(|w| w.as_str()).unwrap_or(".");
         let workdir_path = PathBuf::from(shellexpand::tilde(workdir).as_ref());
 
@@ -103,7 +111,10 @@ impl Tool for Bash {
         {
             let registry = global_registry();
             let workdir = args.get("workdir").and_then(|w| w.as_str());
-            let timeout = args.get("timeout").and_then(|t| t.as_u64());
+            let timeout = args
+                .get("timeout")
+                .and_then(|t| t.as_u64())
+                .map(|t| t.min(MAX_BASH_TIMEOUT_SECS));
             match registry
                 .spawn(
                     &cmd,
@@ -271,6 +282,37 @@ mod tests {
             ),
             "expected Timeout error, got {outcome:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn bash_timeout_clamped_to_max() {
+        let bash = Bash::new(DenyList::default(), PathGuard::default(), false);
+        let tmp = std::env::temp_dir();
+        let marker = tmp.join(format!(
+            "kirkforge_bash_huge_timeout_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&marker);
+
+        let args = serde_json::json!({
+            "command": format!("sleep 2; touch {}", marker.to_string_lossy()),
+            "timeout": u64::MAX,
+        });
+
+        // Should not panic on Duration overflow; with the clamp it will run
+        // for 2 seconds and succeed.
+        let ctx = crate::tools::ToolContext::new();
+        let result = bash.run(&ctx, args).await;
+        assert!(
+            matches!(result, crate::shared::ToolOutcome::Success { .. }),
+            "huge timeout should be clamped and not panic, got {:?}",
+            result
+        );
+        assert!(
+            marker.exists(),
+            "command should have completed and touched marker"
+        );
+        let _ = std::fs::remove_file(&marker);
     }
 
     #[tokio::test]

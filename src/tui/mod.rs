@@ -395,33 +395,6 @@ pub async fn run_tui(
             }
         }
 
-        // SIGHUP also fires a shutdown signal so the TUI exits when
-        // the controlling terminal goes away (wezterm pane close,
-        // SSH disconnect, etc.). This is a *second* independent
-        // signal stream for the same signal — tokio's `signal()`
-        // allows multiple subscribers, and the OS delivers SIGHUP
-        // to both. The reload handler above keeps its display-only
-        // behaviour; this handler is the actual exit path.
-        //
-        // We register it on every Unix target (macOS included) so
-        // the fix is portable across the box's OSes. If signal()
-        // fails (extremely rare — only when the process has
-        // exhausted its signal-handler table) we log and continue;
-        // the kb-thread EOF path above is the fallback.
-        let shutdown_for_hup = shutdown.clone();
-        match signal(SignalKind::hangup()) {
-            Ok(mut hup) => {
-                tokio::spawn(async move {
-                    if hup.recv().await.is_some() {
-                        tracing::info!("SIGHUP received; shutting down TUI");
-                        shutdown_for_hup.notify_one();
-                    }
-                });
-            }
-            Err(e) => {
-                tracing::warn!("Could not install SIGHUP shutdown handler: {}", e);
-            }
-        }
     }
 
     // Spawn the executor on a background task

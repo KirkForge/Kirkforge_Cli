@@ -320,7 +320,9 @@ fn merge_toml_into_config(cfg: &mut Config, table: toml::Table) {
         cfg.block_dotfiles = *v;
     }
     if let Some(Value::Integer(v)) = table.get("max_file_read_size") {
-        cfg.max_file_read_size = *v as usize;
+        if let Ok(n) = usize::try_from(*v) {
+            cfg.max_file_read_size = n;
+        }
     }
     if let Some(Value::Boolean(v)) = table.get("follow_symlinks") {
         cfg.follow_symlinks = *v;
@@ -635,6 +637,23 @@ mod tests {
         // Unset fields keep defaults
         assert_eq!(cfg.ollama_host, "http://localhost:11434");
         assert!(!cfg.auto_approve);
+    }
+
+    #[test]
+    fn test_merge_toml_negative_max_read_size_is_ignored() {
+        let mut cfg = Config::default();
+        let default_size = cfg.max_file_read_size;
+        let table: toml::Table = r#"
+            max_file_read_size = -1
+        "#
+        .parse()
+        .unwrap();
+        merge_toml_into_config(&mut cfg, table);
+
+        assert_eq!(
+            cfg.max_file_read_size, default_size,
+            "negative max_file_read_size should be ignored, not wrap to usize::MAX"
+        );
     }
 
     #[test]

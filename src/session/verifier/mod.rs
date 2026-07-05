@@ -496,6 +496,15 @@ async fn apply_text_fix(
         }
     }
 
+    if fix.original.is_empty() {
+        tracing::warn!(
+            description = %fix.description,
+            file = %path.display(),
+            "auto-fix refused: empty original"
+        );
+        return false;
+    }
+
     if !path.exists() {
         return false;
     }
@@ -838,6 +847,46 @@ mod tests {
         };
         assert!(!apply_text_fix(&fix, &guard).await);
         remove_test_file(&path);
+    }
+
+    #[tokio::test]
+    async fn test_apply_text_fix_empty_replacement_deletes() {
+        let dir = std::env::temp_dir();
+        let path = dir.join("kirkforge_fix_delete.txt");
+        std::fs::write(&path, "use std::fs;\nfn main() {}\n").unwrap();
+
+        let fix = FixSuggestion {
+            description: "remove unused import".into(),
+            file: path.clone(),
+            original: "use std::fs;\n".into(),
+            replacement: "".into(),
+            severity: "warning".into(),
+            command: None,
+        };
+        assert!(apply_text_fix(
+            &fix,
+            &crate::session::access::PathGuard::default(),
+        )
+        .await);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "fn main() {}\n");
+        remove_test_file(&path);
+    }
+
+    #[tokio::test]
+    async fn test_apply_text_fix_empty_original_refused() {
+        let fix = FixSuggestion {
+            description: "fix".into(),
+            file: PathBuf::from("/tmp/kirkforge_empty_original.txt"),
+            original: "".into(),
+            replacement: "new".into(),
+            severity: "warning".into(),
+            command: None,
+        };
+        assert!(!apply_text_fix(
+            &fix,
+            &crate::session::access::PathGuard::default(),
+        )
+        .await);
     }
 
     #[tokio::test]

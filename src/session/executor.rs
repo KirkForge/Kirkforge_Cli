@@ -2869,6 +2869,7 @@ mod tests {
             memory_enabled: false,
             memory_max_tokens: 0,
             memory_top_n: 0,
+            checkpoint_interval_messages: 0,
         }
     }
 

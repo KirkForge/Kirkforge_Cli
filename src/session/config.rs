@@ -288,6 +288,13 @@ fn apply_env_overrides(cfg: &mut Config) {
             cfg.memory_top_n = n.max(1);
         }
     }
+
+    // KIRKFORGE_CHECKPOINT_INTERVAL_MESSAGES
+    if let Ok(val) = std::env::var("KIRKFORGE_CHECKPOINT_INTERVAL_MESSAGES") {
+        if let Ok(n) = val.parse::<usize>() {
+            cfg.checkpoint_interval_messages = n;
+        }
+    }
 }
 
 /// Merge a parsed TOML table into a Config, field by field.
@@ -360,6 +367,9 @@ fn merge_toml_into_config(cfg: &mut Config, table: toml::Table) {
     }
     if let Some(Value::Integer(v)) = table.get("memory_top_n") {
         cfg.memory_top_n = (*v).max(1) as usize;
+    }
+    if let Some(Value::Integer(v)) = table.get("checkpoint_interval_messages") {
+        cfg.checkpoint_interval_messages = (*v).max(0) as usize;
     }
 
     // Arrays
@@ -479,6 +489,12 @@ pub fn config_diff_summary(before: &Config, after: &Config) -> String {
         diffs.push(format!(
             "memory_top_n: {} → {}",
             before.memory_top_n, after.memory_top_n
+        ));
+    }
+    if before.checkpoint_interval_messages != after.checkpoint_interval_messages {
+        diffs.push(format!(
+            "checkpoint_interval_messages: {} → {}",
+            before.checkpoint_interval_messages, after.checkpoint_interval_messages
         ));
     }
     diffs.join(", ")
@@ -855,6 +871,38 @@ mod tests {
         assert!(s.contains("memory_enabled"), "got: {s}");
         assert!(s.contains("memory_max_tokens"), "got: {s}");
         assert!(s.contains("memory_top_n"), "got: {s}");
+    }
+
+    #[test]
+    fn test_env_checkpoint_interval_messages() {
+        let mut cfg = Config::default();
+        set_env("KIRKFORGE_CHECKPOINT_INTERVAL_MESSAGES", Some("20"));
+        apply_env_overrides(&mut cfg);
+        assert_eq!(cfg.checkpoint_interval_messages, 20);
+        set_env("KIRKFORGE_CHECKPOINT_INTERVAL_MESSAGES", None);
+    }
+
+    #[test]
+    fn test_merge_toml_checkpoint_interval_messages() {
+        let mut cfg = Config::default();
+        let table: toml::Table = r#"
+            checkpoint_interval_messages = 15
+        "#
+        .parse()
+        .unwrap();
+        merge_toml_into_config(&mut cfg, table);
+        assert_eq!(cfg.checkpoint_interval_messages, 15);
+    }
+
+    #[test]
+    fn test_config_diff_summary_checkpoint_interval_messages() {
+        let a = Config::default();
+        let b = Config {
+            checkpoint_interval_messages: 12,
+            ..Config::default()
+        };
+        let s = config_diff_summary(&a, &b);
+        assert!(s.contains("checkpoint_interval_messages"), "got: {s}");
     }
 
     #[test]

@@ -22,6 +22,12 @@ pub enum OpenOutcome {
 pub struct ConversationLog {
     path: PathBuf,
     messages: Vec<Message>,
+    /// Write a checkpoint every N messages. 0 disables message-count
+    /// checkpointing; the log is still checkpointed after each completed
+    /// tool batch by the executor.
+    checkpoint_interval: usize,
+    /// Messages appended since the last periodic checkpoint.
+    messages_since_checkpoint: usize,
 }
 
 impl ConversationLog {
@@ -46,6 +52,8 @@ impl ConversationLog {
                     let mut log = Self {
                         path: path.clone(),
                         messages: Vec::new(),
+                        checkpoint_interval: 0,
+                        messages_since_checkpoint: 0,
                     };
                     match log.restore_from_checkpoint() {
                         Ok(true) => {
@@ -67,7 +75,24 @@ impl ConversationLog {
             (Vec::new(), OpenOutcome::Created)
         };
 
-        Ok((Self { path, messages }, outcome))
+        Ok((
+            Self {
+                path,
+                messages,
+                checkpoint_interval: 0,
+                messages_since_checkpoint: 0,
+            },
+            outcome,
+        ))
+    }
+
+    /// Configure how often a checkpoint is written based on message count.
+    ///
+    /// Returns `self` so callers can chain after `ConversationLog::open`.
+    pub fn with_checkpoint_interval(mut self, interval: usize) -> Self {
+        self.checkpoint_interval = interval;
+        self.messages_since_checkpoint = 0;
+        self
     }
 
     /// Append a message to the log (both in-memory and on disk).
@@ -77,15 +102,25 @@ impl ConversationLog {
     /// loses at most the message currently being appended.
     pub fn append(&mut self, msg: Message) -> anyhow::Result<()> {
         let line = serde_json::to_string(&msg)?;
+        let bytes = format!("{line}\n");
         use std::io::Write;
         let mut file = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(&self.path)
             .with_context(|| format!("open conversation log {} for append", self.path.display()))?;
-        writeln!(file, "{line}")?;
+        file.write_all(bytes.as_bytes())
+            .with_context(|| format!("append to conversation log {}", self.path.display()))?;
         file.sync_all()?;
         self.messages.push(msg);
+
+        if self.checkpoint_interval > 0 {
+            self.messages_since_checkpoint += 1;
+            if self.messages_since_checkpoint >= self.checkpoint_interval {
+                self.checkpoint()?;
+                self.messages_since_checkpoint = 0;
+            }
+        }
         Ok(())
     }
 
@@ -271,18 +306,16 @@ fn load_messages(path: &std::path::Path) -> anyhow::Result<Vec<Message>> {
     let content = std::fs::read_to_string(path)
         .with_context(|| format!("read conversation log {}", path.display()))?;
     let mut messages = Vec::new();
-    let mut had_non_empty_line = false;
     for line in content.lines().filter(|l| !l.trim().is_empty()) {
-        had_non_empty_line = true;
         match serde_json::from_str::<Message>(line) {
             Ok(m) => messages.push(m),
             Err(e) => {
-                tracing::warn!(error = %e, line = %line, "skipping corrupt log line");
+                anyhow::bail!(
+                    "corrupt conversation log line in {}: {e}",
+                    path.display()
+                );
             }
         }
-    }
-    if messages.is_empty() && had_non_empty_line {
-        anyhow::bail!("conversation log contains no valid messages");
     }
     Ok(messages)
 }
@@ -303,7 +336,7 @@ mod tests {
     use crate::shared::Message;
 
     #[test]
-    fn test_open_skips_corrupt_lines_and_keeps_valid_ones() {
+    fn test_open_fails_on_corrupt_line_and_starts_empty() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("test.ndjson");
         let lines = [
@@ -314,13 +347,41 @@ mod tests {
         std::fs::write(&path, lines.join("\n")).unwrap();
 
         let (log, outcome) = ConversationLog::open(path).unwrap();
-        assert_eq!(outcome, OpenOutcome::Loaded);
-        let messages: Vec<&Message> = log.all().iter().collect();
-        assert_eq!(messages.len(), 2);
-        assert_eq!(messages[0].role, crate::shared::Role::User);
-        assert_eq!(messages[0].content, "hello");
-        assert_eq!(messages[1].role, crate::shared::Role::Assistant);
-        assert_eq!(messages[1].content, "hi");
+        // No checkpoint exists, so a corrupt log starts empty rather than
+        // silently truncating.
+        assert_eq!(outcome, OpenOutcome::StartedEmpty);
+        assert!(log.is_empty());
+    }
+
+    #[test]
+    fn test_open_restores_from_checkpoint_when_corrupt_line_seen() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("session.conv.ndjson");
+
+        let (mut log, _outcome) = ConversationLog::open(path.clone()).unwrap();
+        log.append(Message {
+            role: crate::shared::Role::User,
+            content: "first".into(),
+            ..Default::default()
+        })
+        .unwrap();
+
+        let checkpoint = log.checkpoint().unwrap();
+        assert!(checkpoint.exists());
+
+        // Append a second message, then corrupt the main log after it.
+        log.append(Message {
+            role: crate::shared::Role::User,
+            content: "second".into(),
+            ..Default::default()
+        })
+        .unwrap();
+        std::fs::write(&path, "not json").unwrap();
+
+        let (restored, outcome) = ConversationLog::open(path).unwrap();
+        assert_eq!(outcome, OpenOutcome::Restored(1));
+        assert_eq!(restored.len(), 1);
+        assert_eq!(restored.last().unwrap().content, "first");
     }
 
     #[test]
@@ -380,6 +441,39 @@ mod tests {
         assert!(restored.restore_from_checkpoint().unwrap());
         assert_eq!(restored.len(), 1);
         assert_eq!(restored.last().unwrap().content, "first");
+    }
+
+    #[test]
+    fn test_periodic_checkpoint_every_n_messages() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("session.conv.ndjson");
+
+        let (mut log, _outcome) = ConversationLog::open(path.clone()).unwrap();
+        log = log.with_checkpoint_interval(3);
+        for i in 0..5 {
+            log.append(Message {
+                role: crate::shared::Role::User,
+                content: format!("msg {i}"),
+                ..Default::default()
+            })
+            .unwrap();
+        }
+
+        let checkpoints: Vec<_> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| {
+                p.file_name()
+                    .and_then(|f| f.to_str())
+                    .map(|f| f.starts_with("session.conv.ndjson.checkpoint-") && f.ends_with(".ndjson"))
+                    .unwrap_or(false)
+            })
+            .collect();
+        assert!(
+            !checkpoints.is_empty(),
+            "interval=3 should produce at least one checkpoint after 5 appends"
+        );
     }
 
     #[test]

@@ -231,6 +231,16 @@ pub fn load_carryover() -> CarryoverProfile {
     }
 }
 
+/// Delete the persisted carryover profile from disk.
+pub fn clear_carryover() {
+    let path = carryover_path();
+    if path.exists() {
+        if let Err(e) = std::fs::remove_file(&path) {
+            tracing::warn!(error = %e, path = %path.display(), "failed to delete carryover profile");
+        }
+    }
+}
+
 /// Save the carryover profile to disk, pruning to top-5 tools first.
 pub fn save_carryover(profile: &CarryoverProfile) {
     let mut pruned = profile.clone();

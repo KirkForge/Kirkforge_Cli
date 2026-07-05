@@ -1,4 +1,4 @@
-//! Session index — list, prune, and delete prior sessions.
+//! Session index — list, prune, delete, and search prior sessions.
 //!
 //! Review.md gap #3: prior to this, the only way to find an old
 //! session was to `ls ~/.local/share/kirkforge/sessions/` and open the
@@ -11,6 +11,12 @@
 //! table. `/sessions prune N` deletes the oldest N keeping the K
 //! most recent; `/sessions delete <id>` removes one. Both prune and
 //! delete are local file ops — they don't touch any in-memory state.
+//!
+//! A small NDJSON metadata index (`sessions/.index.ndjson`) caches
+//! the summary so listing and searching are fast even with hundreds
+//! of sessions. The index is rewritten atomically after any mutating
+//! operation and falls back to a full directory scan if it is
+//! missing or unreadable.
 //!
 //! # Format assumption
 //!
@@ -45,6 +51,173 @@ pub struct SessionEntry {
     pub size_bytes: u64,
 }
 
+/// Path to the cached NDJSON session metadata index.
+fn index_path() -> anyhow::Result<PathBuf> {
+    let data_dir = crate::session::data_dir()?;
+    Ok(data_dir.join("sessions").join(".index.ndjson"))
+}
+
+/// Cached session metadata index.
+#[derive(Debug, Clone)]
+pub struct SessionIndex {
+    path: PathBuf,
+    entries: Vec<SessionEntry>,
+}
+
+impl SessionIndex {
+    /// Load the existing index, or rebuild it from a directory scan
+    /// if the index is missing or unreadable.
+    pub fn load_or_refresh() -> anyhow::Result<Self> {
+        let path = index_path()?;
+        if let Some(entries) = load_index(&path) {
+            return Ok(Self { path, entries });
+        }
+        let mut s = Self {
+            path,
+            entries: Vec::new(),
+        };
+        s.refresh()?;
+        Ok(s)
+    }
+
+    /// Return a sorted view (newest first) of the indexed sessions.
+    pub fn list(&self) -> Vec<SessionEntry> {
+        self.entries.clone()
+    }
+
+    /// Search indexed sessions by id, date, or message count.
+    /// The query is matched case-insensitively against:
+    /// - the session id,
+    /// - the `started_at` rfc3339 string,
+    /// - the stringified `message_count`.
+    pub fn search(&self, query: &str) -> Vec<SessionEntry> {
+        let q = query.to_lowercase();
+        self.entries
+            .iter()
+            .filter(|e| {
+                e.id.to_lowercase().contains(&q)
+                    || e.started_at.to_lowercase().contains(&q)
+                    || e.message_count.to_string().contains(query)
+            })
+            .cloned()
+            .collect()
+    }
+
+    /// Re-scan the sessions directory and rewrite the index.
+    pub fn refresh(&mut self) -> anyhow::Result<()> {
+        let sessions_dir = crate::session::data_dir()?.join("sessions");
+        let mut entries = Vec::new();
+        if sessions_dir.is_dir() {
+            for entry in std::fs::read_dir(&sessions_dir)
+                .with_context(|| format!("read sessions directory {}", sessions_dir.display()))?
+                .flatten()
+            {
+                let path = entry.path();
+                if !path.is_file() {
+                    continue;
+                }
+                let fname = path.file_name().and_then(|f| f.to_str()).unwrap_or("");
+                if !fname.ends_with(".conv.ndjson") {
+                    continue;
+                }
+                if let Some(summary) = summarize_file(&path) {
+                    entries.push(summary);
+                }
+            }
+        }
+        entries.sort_by(|a, b| {
+            b.started_at
+                .cmp(&a.started_at)
+                .then_with(|| b.id.cmp(&a.id))
+        });
+        self.entries = entries;
+        self.save()?;
+        Ok(())
+    }
+
+    /// Update the index for a touched session. Creates the entry if it
+    /// is not already present.
+    pub fn touch(&mut self, id: &str, path: &std::path::Path) -> anyhow::Result<()> {
+        let summary = summarize_file(path).unwrap_or_else(|| SessionEntry {
+            id: id.to_string(),
+            path: path.to_path_buf(),
+            started_at: chrono::Local::now().to_rfc3339(),
+            message_count: 0,
+            size_bytes: 0,
+        });
+        if let Some(idx) = self.entries.iter().position(|e| e.id == id) {
+            self.entries[idx] = summary;
+        } else {
+            self.entries.push(summary);
+        }
+        self.entries.sort_by(|a, b| {
+            b.started_at
+                .cmp(&a.started_at)
+                .then_with(|| b.id.cmp(&a.id))
+        });
+        self.save()?;
+        Ok(())
+    }
+
+    /// Remove a session from the index. Does nothing if the id is absent.
+    pub fn remove(&mut self, id: &str) -> anyhow::Result<()> {
+        let before = self.entries.len();
+        self.entries.retain(|e| e.id != id);
+        if self.entries.len() != before {
+            self.save()?;
+        }
+        Ok(())
+    }
+
+    /// Write the index atomically (temp file + rename).
+    fn save(&self) -> anyhow::Result<()> {
+        if let Some(parent) = self.path.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("create index directory {}", parent.display()))?;
+        }
+        let tmp = self.path.with_extension("tmp");
+        {
+            use std::io::Write;
+            let mut file = std::fs::OpenOptions::new()
+                .create(true)
+                .truncate(true)
+                .write(true)
+                .open(&tmp)
+                .with_context(|| format!("create temporary index {}", tmp.display()))?;
+            for e in &self.entries {
+                let line = serde_json::to_string(e)?;
+                writeln!(file, "{line}")?;
+            }
+            file.sync_all()?;
+        }
+        std::fs::rename(&tmp, &self.path).with_context(|| {
+            format!(
+                "commit session index from {} to {}",
+                tmp.display(),
+                self.path.display()
+            )
+        })?;
+        Ok(())
+    }
+}
+
+/// Load the NDJSON index from disk. Returns `None` if the file is
+/// missing or any line is unreadable.
+fn load_index(path: &std::path::Path) -> Option<Vec<SessionEntry>> {
+    let content = std::fs::read_to_string(path).ok()?;
+    let mut entries = Vec::new();
+    for line in content.lines().filter(|l| !l.trim().is_empty()) {
+        match serde_json::from_str::<SessionEntry>(line) {
+            Ok(e) => entries.push(e),
+            Err(e) => {
+                tracing::warn!(path = %path.display(), error = %e, "session index corrupt; rebuilding");
+                return None;
+            }
+        }
+    }
+    Some(entries)
+}
+
 /// Enumerate sessions in `<data_dir>/sessions/`, sorted newest-first
 /// by `started_at`.
 ///
@@ -52,43 +225,21 @@ pub struct SessionEntry {
 /// listing is best-effort and a single corrupt file shouldn't
 /// break `/sessions` for the rest.
 pub fn list_sessions() -> anyhow::Result<Vec<SessionEntry>> {
-    let data_dir = crate::session::data_dir()?;
-    let sessions_dir = data_dir.join("sessions");
-    if !sessions_dir.is_dir() {
-        return Ok(Vec::new());
-    }
+    Ok(SessionIndex::load_or_refresh()?.list())
+}
 
-    let mut out = Vec::new();
-    for entry in std::fs::read_dir(&sessions_dir)
-        .with_context(|| format!("read sessions directory {}", sessions_dir.display()))?
-        .flatten()
-    {
-        let path = entry.path();
-        if !path.is_file() {
-            continue;
-        }
-        // Match `*.conv.ndjson` (the convention `main.rs` uses when
-        // creating new sessions). Other files in the dir — forks,
-        // unrelated state — are ignored.
-        let fname = path.file_name().and_then(|f| f.to_str()).unwrap_or("");
-        if !fname.ends_with(".conv.ndjson") {
-            continue;
-        }
-        if let Some(summary) = summarize_file(&path) {
-            out.push(summary);
+/// Search indexed sessions by id, date, or message count.
+pub fn search_sessions(query: &str) -> anyhow::Result<Vec<SessionEntry>> {
+    Ok(SessionIndex::load_or_refresh()?.search(query))
+}
+
+/// Update the index after a session has been touched/created.
+pub fn touch_session(id: &str, path: &std::path::Path) {
+    if let Ok(mut index) = SessionIndex::load_or_refresh() {
+        if let Err(e) = index.touch(id, path) {
+            tracing::warn!(error = %e, "failed to update session index after touch");
         }
     }
-    // Newest first (lexicographic on the rfc3339 string works for
-    // same-timezone timestamps; we don't need strict correctness
-    // across timezones for a listing). Tie-break on the session id so
-    // files created within the same second (common in tests and on
-    // low-resolution filesystems) still have a deterministic order.
-    out.sort_by(|a, b| {
-        b.started_at
-            .cmp(&a.started_at)
-            .then_with(|| b.id.cmp(&a.id))
-    });
-    Ok(out)
 }
 
 /// Read a single session file and produce a `SessionEntry`.
@@ -154,6 +305,11 @@ pub fn delete_session(id: &str) -> anyhow::Result<bool> {
     }
     std::fs::remove_file(&path)
         .with_context(|| format!("delete session file {}", path.display()))?;
+    if let Ok(mut index) = SessionIndex::load_or_refresh() {
+        if let Err(e) = index.remove(id) {
+            tracing::warn!(error = %e, "failed to update session index after delete");
+        }
+    }
     Ok(true)
 }
 
@@ -166,7 +322,14 @@ pub fn delete_session(id: &str) -> anyhow::Result<bool> {
 /// sessions, nothing is removed.
 pub fn prune_oldest(keep: usize, delete_count: usize) -> anyhow::Result<Vec<String>> {
     let sessions_dir = crate::session::data_dir()?.join("sessions");
-    prune_oldest_in_dir(&sessions_dir, keep, delete_count)
+    let deleted = prune_oldest_in_dir(&sessions_dir, keep, delete_count)?;
+    // Rebuild the index so subsequent listings/search are accurate.
+    if let Ok(mut index) = SessionIndex::load_or_refresh() {
+        if let Err(e) = index.refresh() {
+            tracing::warn!(error = %e, "failed to refresh session index after prune");
+        }
+    }
+    Ok(deleted)
 }
 
 /// Internal variant that works on an explicit directory so tests can
@@ -343,5 +506,61 @@ mod tests {
         assert!(sessions_dir
             .join("2026-06-03-session-03.conv.ndjson")
             .exists());
+    }
+
+    #[test]
+    fn test_session_index_roundtrip() {
+        let _guard = crate::session::test_data_dir_lock().blocking_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let previous = std::env::var("KIRKFORGE_DATA_DIR").ok();
+        std::env::set_var("KIRKFORGE_DATA_DIR", dir.path());
+
+        let sessions_dir = dir.path().join("sessions");
+        std::fs::create_dir_all(&sessions_dir).unwrap();
+        let path = sessions_dir.join("roundtrip-session.conv.ndjson");
+        std::fs::write(&path, "{\"role\":\"user\",\"content\":\"x\"}\n").unwrap();
+
+        let entries = list_sessions().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].id, "roundtrip-session");
+
+        // Index file should have been created.
+        assert!(sessions_dir.join(".index.ndjson").exists());
+
+        match previous {
+            Some(v) => std::env::set_var("KIRKFORGE_DATA_DIR", v),
+            None => std::env::remove_var("KIRKFORGE_DATA_DIR"),
+        }
+    }
+
+    #[test]
+    fn test_search_sessions_filters_by_id_and_date() {
+        let _guard = crate::session::test_data_dir_lock().blocking_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let previous = std::env::var("KIRKFORGE_DATA_DIR").ok();
+        std::env::set_var("KIRKFORGE_DATA_DIR", dir.path());
+
+        let sessions_dir = dir.path().join("sessions");
+        std::fs::create_dir_all(&sessions_dir).unwrap();
+        for id in ["alpha-session", "beta-session"] {
+            std::fs::write(
+                sessions_dir.join(format!("{id}.conv.ndjson")),
+                "{\"role\":\"user\",\"content\":\"x\"}\n",
+            )
+            .unwrap();
+        }
+
+        let alpha = search_sessions("alpha").unwrap();
+        assert_eq!(alpha.len(), 1);
+        assert_eq!(alpha[0].id, "alpha-session");
+
+        // Every session should have a rfc3339 date containing the current year.
+        let all = search_sessions("2026").unwrap();
+        assert_eq!(all.len(), 2);
+
+        match previous {
+            Some(v) => std::env::set_var("KIRKFORGE_DATA_DIR", v),
+            None => std::env::remove_var("KIRKFORGE_DATA_DIR"),
+        }
     }
 }

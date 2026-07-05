@@ -5,7 +5,7 @@
 //! plugin, MCP) into a single view. This crate provides the trait and a
 //! plugin-backed implementation.
 
-use crate::tool::{PluginTool, KIRKFORGE_TOOL_ARGS};
+use crate::tool::PluginTool;
 use crate::PluginRegistry;
 use kirkforge_plugin::{Capability, Plugin};
 
@@ -102,10 +102,7 @@ impl Toolset for PluginToolset<'_> {
         let tool = PluginTool::from_capability(&cap, plugin.root())
             .ok_or_else(|| anyhow::anyhow!("plugin tool {name} has no command"))?;
 
-        let result = tool.execute(args)?;
-        // Ensure callers can see the env var name we use.
-        let _ = KIRKFORGE_TOOL_ARGS;
-        Ok(result)
+        tool.execute(args).map_err(|e| anyhow::anyhow!("{e}"))
     }
 }
 

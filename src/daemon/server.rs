@@ -208,7 +208,7 @@ fn daemonize() -> anyhow::Result<()> {
     if let Ok(v) = std::env::var("KIRKFORGE_DATA_DIR") {
         cmd.env("KIRKFORGE_DATA_DIR", v);
     }
-    let _ = cmd.spawn().context("spawn daemon foreground process")?;
+    cmd.spawn().context("spawn daemon foreground process")?;
     std::process::exit(0);
 }
 
@@ -263,11 +263,14 @@ async fn handle_client(
             Ok(r) => r,
             Err(_) => {
                 tracing::warn!("daemon request handler timed out; closing connection");
-                let _ = write_response(
+                if let Err(e) = write_response(
                     &mut stream,
                     Response::error("request timed out".to_string()),
                 )
-                .await;
+                .await
+                {
+                    tracing::warn!(error = %e, "failed to write timeout response to daemon client");
+                }
                 break;
             }
         };

@@ -318,11 +318,11 @@ impl McpClient {
         match tokio::time::timeout(REQUEST_TIMEOUT, write_fut).await {
             Ok(Ok(())) => {}
             Ok(Err(e)) => {
-                let _ = self.pending.lock().await.remove(&id);
+                self.pending.lock().await.remove(&id);
                 return Err(e);
             }
             Err(_) => {
-                let _ = self.pending.lock().await.remove(&id);
+                self.pending.lock().await.remove(&id);
                 tracing::warn!(id = id, "MCP request write timed out");
                 return Err(McpError::Timeout);
             }
@@ -339,7 +339,7 @@ impl McpClient {
             }
             Err(_) => {
                 // Response didn't arrive in time. Clean up the waiter.
-                let _ = self.pending.lock().await.remove(&id);
+                self.pending.lock().await.remove(&id);
                 tracing::warn!(id = id, "MCP request timed out waiting for response");
                 Err(McpError::Timeout)
             }
@@ -578,24 +578,33 @@ impl McpClient {
     async fn disconnect(&mut self) {
         // Signal the background tasks to stop.
         if let Some(tx) = self.reader_shutdown_tx.take() {
-            let _ = tx.send(());
+            crate::send_or_warn!(
+                tx.send(()),
+                "MCP reader shutdown receiver dropped before disconnect"
+            );
         }
         if let Some(tx) = self.stderr_shutdown_tx.take() {
-            let _ = tx.send(());
+            crate::send_or_warn!(
+                tx.send(()),
+                "MCP stderr drain shutdown receiver dropped before disconnect"
+            );
         }
 
         // Close stdin so the server sees EOF.
         {
             let mut guard = self.stdin.lock().await;
-            let _ = guard.take();
+            guard.take();
         }
 
-        // Wait for the background tasks to finish.
-        if let Some(handle) = self.reader_task.take() {
-            let _ = tokio::time::timeout(Duration::from_secs(2), handle).await;
-        }
-        if let Some(handle) = self.stderr_drain.take() {
-            let _ = tokio::time::timeout(Duration::from_secs(2), handle).await;
+        // Wait for the background tasks to finish (best-effort).
+        #[allow(unused_must_use)]
+        {
+            if let Some(handle) = self.reader_task.take() {
+                tokio::time::timeout(Duration::from_secs(2), handle).await;
+            }
+            if let Some(handle) = self.stderr_drain.take() {
+                tokio::time::timeout(Duration::from_secs(2), handle).await;
+            }
         }
 
         self.alive.store(false, Ordering::SeqCst);
@@ -618,10 +627,16 @@ impl Drop for McpClient {
         // the background tasks and kill the child. A synchronous Drop cannot
         // await, so reaping is best-effort.
         if let Some(tx) = self.reader_shutdown_tx.take() {
-            let _ = tx.send(());
+            crate::send_or_warn!(
+                tx.send(()),
+                "MCP reader shutdown receiver dropped during Drop"
+            );
         }
         if let Some(tx) = self.stderr_shutdown_tx.take() {
-            let _ = tx.send(());
+            crate::send_or_warn!(
+                tx.send(()),
+                "MCP stderr drain shutdown receiver dropped during Drop"
+            );
         }
 
         if let Ok(mut guard) = self.child.lock() {

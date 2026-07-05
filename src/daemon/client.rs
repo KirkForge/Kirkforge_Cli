@@ -137,7 +137,7 @@ fn start_daemon() -> anyhow::Result<()> {
     let current_exe = std::env::current_exe().context("get current executable")?;
     let mut cmd = std::process::Command::new(current_exe);
     cmd.arg("daemon");
-    let _ = cmd.spawn().context("spawn daemon process")?;
+    cmd.spawn().context("spawn daemon process")?;
     Ok(())
 }
 

@@ -154,7 +154,12 @@ async fn run_persona_task(
     cancelled: Arc<AtomicBool>,
 ) -> PersonaResult {
     let adapter = adapters::caching::maybe_wrap_cached(
-        adapters::adapter_for(&model_name, &ollama_host, None),
+        adapters::adapter_for(
+            &model_name,
+            &ollama_host,
+            None,
+            config.request_timeout_secs,
+        ),
         &config,
     );
     let tools = tools_for_persona(kind, undo_stack.clone(), supports_images, &config);

@@ -324,6 +324,11 @@ fn merge_toml_into_config(cfg: &mut Config, table: toml::Table) {
             cfg.max_file_read_size = n;
         }
     }
+    if let Some(Value::Integer(v)) = table.get("request_timeout_secs") {
+        if let Ok(n) = u64::try_from(*v) {
+            cfg.request_timeout_secs = n;
+        }
+    }
     if let Some(Value::Boolean(v)) = table.get("follow_symlinks") {
         cfg.follow_symlinks = *v;
     }

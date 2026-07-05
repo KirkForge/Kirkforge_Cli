@@ -30,10 +30,6 @@ pub fn build_reqwest_client() -> reqwest::Client {
 /// Maximum number of retries for transient model-request failures.
 const MODEL_MAX_RETRIES: u32 = 3;
 
-/// Timeout for a single model request. Long-running generation is handled
-/// by streaming; this covers the initial HTTP handshake.
-const MODEL_REQUEST_TIMEOUT_SECS: u64 = 300;
-
 /// Decide whether an HTTP status code warrants a retry.
 ///
 /// Retry on 429 (rate limit), 503 (service unavailable), and the whole 5xx
@@ -201,6 +197,7 @@ pub fn adapter_for(
     model_name: &str,
     ollama_host: &str,
     model_type_override: Option<&str>,
+    timeout_secs: u64,
 ) -> Box<dyn ModelAdapter> {
     let override_lower = model_type_override.map(|s| s.to_lowercase());
     match adapter_kind_for(model_name, model_type_override) {
@@ -214,12 +211,12 @@ pub fn adapter_for(
                 || lower.starts_with("glm")
                 || lower.contains("chatglm")
             {
-                Box::new(glm::GlmAdapter::new(ollama_host, model_name))
+                Box::new(glm::GlmAdapter::new(ollama_host, model_name, timeout_secs))
             } else if override_lower.as_deref() == Some("deepseek") || lower.starts_with("deepseek")
             {
-                Box::new(deepseek::DeepSeekAdapter::new(ollama_host, model_name))
+                Box::new(deepseek::DeepSeekAdapter::new(ollama_host, model_name, timeout_secs))
             } else if override_lower.as_deref() == Some("gemini") || lower.starts_with("gemini") {
-                Box::new(gemini::GeminiAdapter::new(ollama_host, model_name))
+                Box::new(gemini::GeminiAdapter::new(ollama_host, model_name, timeout_secs))
             } else {
                 // With the current classification this branch is
                 // unreachable, but keep the previous permissive
@@ -227,12 +224,14 @@ pub fn adapter_for(
                 Box::new(openai_compat::OpenAiCompatAdapter::new(
                     ollama_host,
                     model_name,
+                    timeout_secs,
                 ))
             }
         }
         AdapterKind::OpenAiCompat => Box::new(openai_compat::OpenAiCompatAdapter::new(
             ollama_host,
             model_name,
+            timeout_secs,
         )),
     }
 }

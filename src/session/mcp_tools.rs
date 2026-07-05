@@ -16,6 +16,7 @@ use crate::session::mcp_client::McpClientManager;
 use crate::shared::{ToolDef, ToolError, ToolOutcome};
 use crate::tools::{Tool, ToolContext};
 use std::sync::Arc;
+use std::time::Duration;
 
 /// A Tool trait implementation that forwards calls to an MCP server.
 ///
@@ -62,13 +63,19 @@ impl Tool for McpToolWrapper {
     }
 
     async fn run(&self, _ctx: &ToolContext, args: serde_json::Value) -> ToolOutcome {
-        match self.manager.call_tool(&self.full_name, args).await {
-            Some(content) => ToolOutcome::Success { content },
-            None => ToolOutcome::Failure(ToolError::Internal {
-                message: format!(
-                    "MCP tool '{}' failed: no response from server",
-                    self.full_name
-                ),
+        // Defensive outer timeout in case `call_tool` gets stuck in a
+        // reconnect loop. The manager has its own per-request timeout; this
+        // catches any slow path above it.
+        const TOOL_TIMEOUT: Duration = Duration::from_secs(60);
+        match tokio::time::timeout(
+            TOOL_TIMEOUT,
+            self.manager.call_tool(&self.full_name, args),
+        )
+        .await
+        {
+            Ok(outcome) => outcome,
+            Err(_) => ToolOutcome::Failure(ToolError::Timeout {
+                after_secs: TOOL_TIMEOUT.as_secs(),
             }),
         }
     }

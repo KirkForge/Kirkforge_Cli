@@ -309,4 +309,47 @@ mod tests {
             json!({"path": "src/main.rs", "append": true, "lines": 42})
         );
     }
+
+    /// An unclosed invoke tag must leave the rest of the content untouched
+    /// so we never silently eat model output.
+    #[test]
+    fn unclosed_invoke_left_in_place() {
+        let content = r#"Start <｜DSML｜invoke name="bash"> no close"#;
+        let (cleaned, calls) = extract_dsml_tool_calls(content);
+        assert!(calls.is_empty());
+        assert_eq!(cleaned, content);
+    }
+
+    /// Mixed ASCII and full-width delimiters in the same input must both be
+    /// recognized and removed from the cleaned text.
+    #[test]
+    fn mixed_ascii_and_fullwidth_delimiters() {
+        let content = r#"<|DSML|invoke name="read_file"><｜DSML｜parameter name="path">/etc/hosts</｜DSML｜parameter></|DSML|invoke>"#;
+        let (cleaned, calls) = extract_dsml_tool_calls(content);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "read_file");
+        assert_eq!(calls[0].arguments, json!({"path": "/etc/hosts"}));
+        assert!(!cleaned.contains("DSML"));
+    }
+
+    /// Empty parameter values must be preserved as an empty string rather
+    /// than dropped.
+    #[test]
+    fn empty_parameter_value_becomes_empty_string() {
+        let content = r#"<｜DSML｜invoke name="bash"><｜DSML｜parameter name="command"></｜DSML｜parameter></｜DSML｜invoke>"#;
+        let (cleaned, calls) = extract_dsml_tool_calls(content);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].arguments, json!({"command": ""}));
+        assert!(cleaned.is_empty());
+    }
+
+    /// A parameter value that is not valid JSON must fall back to a plain
+    /// string instead of being discarded.
+    #[test]
+    fn invalid_json_parameter_falls_back_to_string() {
+        let content = r#"<｜DSML｜invoke name="bash"><｜DSML｜parameter name="command">{not json}</｜DSML｜parameter></｜DSML｜invoke>"#;
+        let (_cleaned, calls) = extract_dsml_tool_calls(content);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].arguments, json!({"command": "{not json}"}));
+    }
 }

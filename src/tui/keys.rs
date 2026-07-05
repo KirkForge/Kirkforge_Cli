@@ -8,6 +8,7 @@
 //! The orchestrator calls us only when `state.pending_approval.is_none()`.
 
 use crate::session::conversation::ConversationLog;
+use crate::session::executor::TurnEvent;
 use crate::shared::Config;
 use crate::tui::app::{AppState, ConversationEntry};
 use crate::tui::commands::{PersonaKind, PersonaResult};
@@ -157,6 +158,7 @@ pub async fn handle_input_key(
     config_tx: &mpsc::UnboundedSender<Config>,
     plan_tx: &mpsc::UnboundedSender<bool>,
     persona_tx: &mpsc::UnboundedSender<PersonaResult>,
+    event_tx: &mpsc::UnboundedSender<TurnEvent>,
 ) -> anyhow::Result<()> {
     // ── Session picker interceptor ─────────────────────────
     // When the recent-session picker overlay is active, all keys route
@@ -702,9 +704,10 @@ pub async fn handle_input_key(
                             // return is just a "request accepted"
                             // confirmation so the user gets instant
                             // feedback.
-                            let msg =
-                                crate::tui::commands::handle_model_command(args, model_tx, state)
-                                    .await;
+                            let msg = crate::tui::commands::handle_model_command(
+                                args, model_tx, event_tx, state,
+                            )
+                            .await;
                             state.messages.push(ConversationEntry::new("system", msg));
                             return Ok(());
                         }

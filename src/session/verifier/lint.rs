@@ -49,11 +49,7 @@ fn find_cargo_root(path: &Path) -> Option<PathBuf> {
 
 /// Parse a single cargo JSON line and, if it is a warning/error for the
 /// target file, return a `FixSuggestion`.
-fn parse_clippy_json(
-    line: &str,
-    target_path: &Path,
-    cargo_root: &Path,
-) -> Option<FixSuggestion> {
+fn parse_clippy_json(line: &str, target_path: &Path, cargo_root: &Path) -> Option<FixSuggestion> {
     let value: serde_json::Value = serde_json::from_str(line).ok()?;
     if value.get("reason").and_then(|v| v.as_str()) != Some("compiler-message") {
         return None;
@@ -67,10 +63,7 @@ fn parse_clippy_json(
     let spans = message.get("spans")?.as_array()?;
     for span in spans {
         let file_name = span.get("file_name").and_then(|v| v.as_str())?;
-        let line_start = span
-            .get("line_start")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0) as usize;
+        let line_start = span.get("line_start").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
         let resolved = cargo_root.join(file_name);
         if resolved == target_path {
             return Some(FixSuggestion {
@@ -195,11 +188,7 @@ edition = "2021"
 "#,
         )
         .unwrap();
-        std::fs::write(
-            dir.join("src/main.rs"),
-            "fn main() {\n    let x = 1;\n}\n",
-        )
-        .unwrap();
+        std::fs::write(dir.join("src/main.rs"), "fn main() {\n    let x = 1;\n}\n").unwrap();
 
         let path = dir.join("src/main.rs");
         let event = BusEvent::FileWrite(FileWriteEvent {

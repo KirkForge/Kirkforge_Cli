@@ -67,11 +67,8 @@ impl Tool for McpToolWrapper {
         // reconnect loop. The manager has its own per-request timeout; this
         // catches any slow path above it.
         const TOOL_TIMEOUT: Duration = Duration::from_secs(60);
-        match tokio::time::timeout(
-            TOOL_TIMEOUT,
-            self.manager.call_tool(&self.full_name, args),
-        )
-        .await
+        match tokio::time::timeout(TOOL_TIMEOUT, self.manager.call_tool(&self.full_name, args))
+            .await
         {
             Ok(outcome) => outcome,
             Err(_) => ToolOutcome::Failure(ToolError::Timeout {

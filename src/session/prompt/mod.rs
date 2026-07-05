@@ -94,7 +94,8 @@ impl PromptBuilder {
             let memory_block = match crate::session::memory::MemoryStore::default_store() {
                 Ok(store) => {
                     if let Some(ctx) = memory_context.filter(|s| !s.is_empty()) {
-                        let selected = store.select_for_context(ctx, memory_max_tokens, memory_top_n);
+                        let selected =
+                            store.select_for_context(ctx, memory_max_tokens, memory_top_n);
                         store.to_prompt_block_for_facts(&selected)
                     } else {
                         store.to_prompt_block()
@@ -472,7 +473,16 @@ mod tests {
     #[test]
     fn test_build_includes_tools() {
         let mut builder = PromptBuilder::new();
-        let msg = builder.build("test-model", false, &["read_file", "bash"], None, None, false, 0, 0);
+        let msg = builder.build(
+            "test-model",
+            false,
+            &["read_file", "bash"],
+            None,
+            None,
+            false,
+            0,
+            0,
+        );
         assert_eq!(msg.role, Role::System);
         assert!(!msg.content.is_empty());
     }

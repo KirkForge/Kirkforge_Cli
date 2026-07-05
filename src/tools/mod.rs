@@ -97,7 +97,10 @@ pub fn all_tools(
 ) -> Vec<Arc<dyn Tool>> {
     let mut tools: Vec<Arc<dyn Tool>> = vec![
         Arc::new(read_file::ReadFile),
-        Arc::new(write_file::WriteFile::new(undo_stack.clone(), path_guard.clone())),
+        Arc::new(write_file::WriteFile::new(
+            undo_stack.clone(),
+            path_guard.clone(),
+        )),
         Arc::new(edit_file::EditFile::new(undo_stack, path_guard.clone())),
         Arc::new(bash::Bash::new(
             deny_list.clone(),

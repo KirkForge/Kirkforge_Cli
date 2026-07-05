@@ -1,5 +1,4 @@
 use crate::adapters::{tool_call_markup::extract_dsml_tool_calls, ModelAdapter};
-use crate::session::toolset::Toolset;
 use crate::session::access::{
     access_from_config, warn_if_unsandboxed, DenyList, GuardVerdict, PathGuard, ReadGate,
 };
@@ -11,6 +10,7 @@ use crate::session::conversation::ConversationLog;
 use crate::session::event_bus::{BusEvent, EventBus};
 use crate::session::hooks::HookRunner;
 use crate::session::prompt::PromptBuilder;
+use crate::session::toolset::Toolset;
 use crate::session::verifier::CorrectionResult;
 use crate::session::verifier::{CorrectionLoop, VerifierHandler, VerifierSlots};
 use crate::shared::permission::{evaluate, push_rule_unique, PermissionAction};
@@ -446,8 +446,7 @@ impl Executor {
         };
         let handler = correction_loop.verifier_handler();
         let slots = handler.slots();
-        let plugin_verifiers =
-            crate::session::verifier::plugin::verifiers_from_registry(registry);
+        let plugin_verifiers = crate::session::verifier::plugin::verifiers_from_registry(registry);
 
         let mut new_count = 0;
         {
@@ -466,10 +465,7 @@ impl Executor {
     ///
     /// Built-in and MCP toolsets are preserved; only the plugin source is
     /// replaced. Returns a short human-readable summary.
-    pub fn reload_plugins(
-        &mut self,
-        registry: &kirkforge_plugin_host::PluginRegistry,
-    ) -> String {
+    pub fn reload_plugins(&mut self, registry: &kirkforge_plugin_host::PluginRegistry) -> String {
         let cfg = read_shared_config(&self.config).clone();
 
         // 1. Replace the plugin toolset.
@@ -1126,7 +1122,13 @@ impl Executor {
             }
 
             let outcome = self
-                .stream_iteration(user_input, approval_sender, cancelled, event_tx, &mut tool_calls)
+                .stream_iteration(
+                    user_input,
+                    approval_sender,
+                    cancelled,
+                    event_tx,
+                    &mut tool_calls,
+                )
                 .await?;
 
             match outcome {
@@ -1224,9 +1226,11 @@ impl Executor {
         let memory_context = {
             let history = self.conversation.all();
             let mut ctx = String::from(user_input);
-            if let Some(last_assistant) = history.iter().rev().find(|m| {
-                matches!(m.role, Role::Assistant) && !m.content.is_empty()
-            }) {
+            if let Some(last_assistant) = history
+                .iter()
+                .rev()
+                .find(|m| matches!(m.role, Role::Assistant) && !m.content.is_empty())
+            {
                 ctx.push(' ');
                 ctx.push_str(&last_assistant.content);
             }
@@ -1730,7 +1734,14 @@ impl Executor {
 
                     let crs = self
                         .emit_tool_event_and_correct(
-                            tc, &tc.name, &run_args, &outcome_for_emit, None, None, None, edit_diff,
+                            tc,
+                            &tc.name,
+                            &run_args,
+                            &outcome_for_emit,
+                            None,
+                            None,
+                            None,
+                            edit_diff,
                         )
                         .await;
                     self.collect_carryover(tc, &crs);
@@ -2890,8 +2901,7 @@ mod tests {
         let (conversation, _outcome) = ConversationLog::open(log_path).unwrap();
         let mut composite = crate::session::toolset::CompositeToolset::empty();
         composite.add(Box::new(crate::session::toolset::VecToolset::new(
-            "test",
-            tools,
+            "test", tools,
         )));
         Executor::with_log(adapter, composite, config, conversation, None)
     }

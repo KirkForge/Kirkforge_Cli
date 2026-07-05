@@ -137,10 +137,7 @@ impl Tool for PluginToolWrapper {
             Ok(c) => c,
             Err(e) => {
                 return ToolOutcome::Failure(ToolError::Execution {
-                    message: format!(
-                        "failed to spawn plugin tool '{}': {e}",
-                        self.def.name
-                    ),
+                    message: format!("failed to spawn plugin tool '{}': {e}", self.def.name),
                     exit_code: None,
                     stderr: String::new(),
                 });
@@ -209,20 +206,14 @@ impl Tool for PluginToolWrapper {
                     }
                 } else {
                     ToolOutcome::Failure(ToolError::Execution {
-                        message: format!(
-                            "plugin tool '{}' exited unsuccessfully",
-                            self.def.name
-                        ),
+                        message: format!("plugin tool '{}' exited unsuccessfully", self.def.name),
                         exit_code: status.code(),
                         stderr: stderr_text,
                     })
                 }
             }
             Finish::Status(Err(e)) => ToolOutcome::Failure(ToolError::Execution {
-                message: format!(
-                    "failed to wait for plugin tool '{}': {e}",
-                    self.def.name
-                ),
+                message: format!("failed to wait for plugin tool '{}': {e}", self.def.name),
                 exit_code: None,
                 stderr: String::new(),
             }),
@@ -283,9 +274,7 @@ pub fn trust_policy_from_config(cfg: &Config) -> TrustPolicy {
 ///
 /// Returns the registry together with any load warnings (e.g. rejected or
 /// signature-invalid plugins).
-pub fn load_plugin_registry(
-    cfg: &Config,
-) -> anyhow::Result<(PluginRegistry, Vec<String>)> {
+pub fn load_plugin_registry(cfg: &Config) -> anyhow::Result<(PluginRegistry, Vec<String>)> {
     let dir = plugins_dir();
     let mut registry = PluginRegistry::new();
     let warnings = registry
@@ -353,8 +342,7 @@ command = "greet.sh"
 "#,
         )
         .unwrap();
-        std::fs::write(plugin_dir.join("greet.sh"), "#!/bin/sh\nprintf 'hello'")
-            .unwrap();
+        std::fs::write(plugin_dir.join("greet.sh"), "#!/bin/sh\nprintf 'hello'").unwrap();
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -380,7 +368,9 @@ command = "greet.sh"
         assert_eq!(tools.len(), 1);
         assert_eq!(tools[0].def().name, "demo/greet");
 
-        let outcome = tools[0].run(&ToolContext::new(), serde_json::Value::Null).await;
+        let outcome = tools[0]
+            .run(&ToolContext::new(), serde_json::Value::Null)
+            .await;
         assert!(
             matches!(outcome, ToolOutcome::Success { ref content } if content == "hello"),
             "got: {outcome:?}"
@@ -419,7 +409,9 @@ command = "greet.sh"
         let tools = all_plugin_tools(&reg, cfg);
         assert_eq!(tools.len(), 1);
 
-        let outcome = tools[0].run(&ToolContext::new(), serde_json::Value::Null).await;
+        let outcome = tools[0]
+            .run(&ToolContext::new(), serde_json::Value::Null)
+            .await;
         let cwd = match outcome {
             ToolOutcome::Success { content } => content,
             other => panic!("expected Success, got {other:?}"),
@@ -460,7 +452,9 @@ command = "greet.sh"
 
         std::env::set_var("KIRKFORGE_SECRET_VAR", "leaked");
         let tools = all_plugin_tools(&reg, cfg);
-        let outcome = tools[0].run(&ToolContext::new(), serde_json::Value::Null).await;
+        let outcome = tools[0]
+            .run(&ToolContext::new(), serde_json::Value::Null)
+            .await;
         std::env::remove_var("KIRKFORGE_SECRET_VAR");
 
         assert!(

@@ -66,17 +66,15 @@ pub async fn handle_reload_command(
 pub fn handle_reload_skills_command(state: &mut AppState) -> String {
     let before = state.skill_registry.len();
     state.skill_registry.clear();
-    state.skill_registry.set_max_plugin_trust(
-        read_shared_config(&state.config).max_plugin_trust,
-    );
+    state
+        .skill_registry
+        .set_max_plugin_trust(read_shared_config(&state.config).max_plugin_trust);
     let scanned = state.skill_registry.scan_and_load().unwrap_or(0);
     for skill in crate::session::skills::builtin_skills() {
         state.skill_registry.register(skill);
     }
     let after = state.skill_registry.len();
-    format!(
-        "🧠 Reloaded skills: cleared {before}, rescanned {scanned}, now {after} registered."
-    )
+    format!("🧠 Reloaded skills: cleared {before}, rescanned {scanned}, now {after} registered.")
 }
 
 /// Handle `/reload plugins` command.
@@ -95,7 +93,9 @@ pub async fn handle_reload_plugins_command(
     };
 
     // Refresh the skill/plugin status summary in the status bar.
-    state.skill_registry.set_max_plugin_trust(cfg.max_plugin_trust);
+    state
+        .skill_registry
+        .set_max_plugin_trust(cfg.max_plugin_trust);
     if let Err(e) = state.skill_registry.scan_and_load() {
         tracing::warn!(error = %e, "skill rescan during /reload plugins failed");
     }

@@ -114,7 +114,6 @@ fn run_session_picker_sync(
     }
 }
 
-
 /// One-shot probe of the configured Ollama endpoint with a caller-chosen
 /// timeout.
 ///
@@ -167,11 +166,8 @@ async fn connection_probe_task(
             let guard = crate::shared::read_shared_config(&config);
             guard.clone()
         };
-        let state = probe_ollama_connection_with_timeout(
-            &cfg,
-            std::time::Duration::from_secs(1),
-        )
-        .await;
+        let state =
+            probe_ollama_connection_with_timeout(&cfg, std::time::Duration::from_secs(1)).await;
         if tx.send(state).await.is_err() {
             // TUI loop has shut down; stop probing.
             break;
@@ -745,8 +741,18 @@ async fn run_event_loop(
                         approval_keys::handle_approval_key(key, state);
                     } else {
                         keys::handle_input_key(
-                            key, state, input_tx, cancel_tx, resume_tx, compact_tx, model_tx,
-                            undo_tx, config_tx, plan_tx, persona_tx, event_tx_for_commands,
+                            key,
+                            state,
+                            input_tx,
+                            cancel_tx,
+                            resume_tx,
+                            compact_tx,
+                            model_tx,
+                            undo_tx,
+                            config_tx,
+                            plan_tx,
+                            persona_tx,
+                            event_tx_for_commands,
                             plugin_reload_tx,
                         )
                         .await?;
@@ -776,8 +782,18 @@ async fn run_event_loop(
                         approval_keys::handle_approval_key(key, state);
                     } else {
                         keys::handle_input_key(
-                            key, state, input_tx, cancel_tx, resume_tx, compact_tx, model_tx,
-                            undo_tx, config_tx, plan_tx, persona_tx, event_tx_for_commands,
+                            key,
+                            state,
+                            input_tx,
+                            cancel_tx,
+                            resume_tx,
+                            compact_tx,
+                            model_tx,
+                            undo_tx,
+                            config_tx,
+                            plan_tx,
+                            persona_tx,
+                            event_tx_for_commands,
                             plugin_reload_tx,
                         )
                         .await?;

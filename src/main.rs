@@ -558,10 +558,8 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     daemon::client::try_touch(&touch_id, log_path.clone()).await;
     crate::session::session_index::touch_session(&touch_id, &log_path);
 
-    let (mut conversation, open_outcome) =
-        session::conversation::ConversationLog::open(log_path)?;
-    conversation =
-        conversation.with_checkpoint_interval(config.checkpoint_interval_messages);
+    let (mut conversation, open_outcome) = session::conversation::ConversationLog::open(log_path)?;
+    conversation = conversation.with_checkpoint_interval(config.checkpoint_interval_messages);
     if let session::conversation::OpenOutcome::Restored(messages) = open_outcome {
         eprintln!("⚠️  Session log was corrupt; restored {messages} message(s) from checkpoint.");
     }
@@ -642,15 +640,12 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     // ── Plugin tools ──
     let cfg_for_plugins = crate::shared::read_shared_config(&shared_config).clone();
     let (plugin_registry, plugin_warnings) =
-        session::plugin_tools::load_plugin_registry(&cfg_for_plugins)
-            .unwrap_or_else(|e| {
-                tracing::warn!(error = %e, "failed to load plugin registry");
-                (kirkforge_plugin_host::PluginRegistry::new(), vec![])
-            });
-    let plugin_tools = session::plugin_tools::all_plugin_tools(
-        &plugin_registry,
-        shared_config.clone(),
-    );
+        session::plugin_tools::load_plugin_registry(&cfg_for_plugins).unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "failed to load plugin registry");
+            (kirkforge_plugin_host::PluginRegistry::new(), vec![])
+        });
+    let plugin_tools =
+        session::plugin_tools::all_plugin_tools(&plugin_registry, shared_config.clone());
     if !plugin_tools.is_empty() {
         toolset.add(Box::new(session::toolset::VecToolset::new(
             "plugin",
@@ -847,7 +842,10 @@ async fn run_line_mode(
                 if profile.session_count == 0 {
                     println!("No carryover profile yet.");
                 } else {
-                    println!("{}", session::carryover::CarryoverProfile::to_prompt_block(&profile));
+                    println!(
+                        "{}",
+                        session::carryover::CarryoverProfile::to_prompt_block(&profile)
+                    );
                 }
             }
             continue;

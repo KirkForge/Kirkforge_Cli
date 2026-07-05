@@ -51,10 +51,7 @@ fn show_carryover() -> String {
         lines.push(format!("Last topic: {}", profile.last_user_message));
     }
     if !profile.recent_paths.is_empty() {
-        lines.push(format!(
-            "Active paths: {}",
-            profile.recent_paths.join(", ")
-        ));
+        lines.push(format!("Active paths: {}", profile.recent_paths.join(", ")));
     }
     if !profile.tool_usage.is_empty() {
         let mut tools: Vec<(&String, &u64)> = profile.tool_usage.iter().collect();

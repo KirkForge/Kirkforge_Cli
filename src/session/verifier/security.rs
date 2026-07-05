@@ -81,13 +81,16 @@ fn shannon_entropy(s: &str) -> f64 {
 
 /// Extract the token immediately following `prefix` inside `content` and,
 /// if it is long and high-entropy, return an `Unfixable` verdict.
-fn scan_entropy_prefix(content: &str, prefix: &str, name: &str, path: &std::path::Path) -> Option<Verdict> {
+fn scan_entropy_prefix(
+    content: &str,
+    prefix: &str,
+    name: &str,
+    path: &std::path::Path,
+) -> Option<Verdict> {
     for (idx, matched) in content.match_indices(prefix) {
         let start = idx + matched.len();
         let rest = &content[start..];
-        let end = rest
-            .find(|c: char| !is_token_char(c))
-            .unwrap_or(rest.len());
+        let end = rest.find(|c: char| !is_token_char(c)).unwrap_or(rest.len());
         let token = &rest[..end];
         if token.len() >= MIN_TOKEN_LEN && shannon_entropy(token) > ENTROPY_THRESHOLD {
             return Some(Verdict::Unfixable(VerificationError {
@@ -143,7 +146,10 @@ async fn trufflehog_scan(path: &std::path::Path) -> Option<Verdict> {
             return Some(Verdict::Unfixable(VerificationError {
                 description: "trufflehog detected a potential secret".into(),
                 file: Some(path.to_path_buf()),
-                details: format!("trufflehog reported a finding in {}: {line}", path.display()),
+                details: format!(
+                    "trufflehog reported a finding in {}: {line}",
+                    path.display()
+                ),
             }));
         }
     }
@@ -268,11 +274,7 @@ mod tests {
         let dir = std::env::temp_dir();
         let path = dir.join("kirkforge_sec_edit_key.txt");
         // Use a long high-entropy token so the entropy detector catches it.
-        std::fs::write(
-            &path,
-            "api_key = \"sk-abcdefghijklmnopqrstuvwxyz012345\"",
-        )
-        .unwrap();
+        std::fs::write(&path, "api_key = \"sk-abcdefghijklmnopqrstuvwxyz012345\"").unwrap();
 
         let event = BusEvent::Edit(EditEvent {
             path: path.clone(),
@@ -304,11 +306,7 @@ mod tests {
         let dir = std::env::temp_dir();
         let path = dir.join("kirkforge_sec_key.txt");
         // High-entropy token long enough to trip the entropy detector.
-        std::fs::write(
-            &path,
-            "api_key = \"sk-abcdefghijklmnopqrstuvwxyz012345\"",
-        )
-        .unwrap();
+        std::fs::write(&path, "api_key = \"sk-abcdefghijklmnopqrstuvwxyz012345\"").unwrap();
 
         let event = BusEvent::FileWrite(FileWriteEvent {
             path: path.clone(),
@@ -405,5 +403,4 @@ mod tests {
         );
         remove_test_file(&path);
     }
-
 }

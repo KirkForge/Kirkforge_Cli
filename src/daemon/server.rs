@@ -254,11 +254,20 @@ async fn handle_client(
         };
 
         let is_shutdown = matches!(req, Request::Shutdown);
-        let resp = match tokio::time::timeout(std::time::Duration::from_secs(30), handle_request(req, state.clone())).await {
+        let resp = match tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            handle_request(req, state.clone()),
+        )
+        .await
+        {
             Ok(r) => r,
             Err(_) => {
                 tracing::warn!("daemon request handler timed out; closing connection");
-                let _ = write_response(&mut stream, Response::error("request timed out".to_string())).await;
+                let _ = write_response(
+                    &mut stream,
+                    Response::error("request timed out".to_string()),
+                )
+                .await;
                 break;
             }
         };

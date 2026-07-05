@@ -260,8 +260,9 @@ impl UndoStack {
         // FIFO-trim the oldest entry if we're at the cap.
         while self.ops.len() >= MAX_ENTRIES {
             if let Some(oldest) = self.ops.pop_front() {
-                self.total_snapshot_bytes =
-                    self.total_snapshot_bytes.saturating_sub(oldest.snapshot_size);
+                self.total_snapshot_bytes = self
+                    .total_snapshot_bytes
+                    .saturating_sub(oldest.snapshot_size);
                 self.remove_snapshot(oldest.seq);
             }
         }
@@ -270,13 +271,12 @@ impl UndoStack {
         // byte budget. A single snapshot bigger than the cap is still allowed
         // — the user needs at least one undo — but everything older is evicted.
         while !self.ops.is_empty()
-            && self
-                .total_snapshot_bytes
-                .saturating_add(new_bytes) > MAX_TOTAL_SNAPSHOT_BYTES
+            && self.total_snapshot_bytes.saturating_add(new_bytes) > MAX_TOTAL_SNAPSHOT_BYTES
         {
             if let Some(oldest) = self.ops.pop_front() {
-                self.total_snapshot_bytes =
-                    self.total_snapshot_bytes.saturating_sub(oldest.snapshot_size);
+                self.total_snapshot_bytes = self
+                    .total_snapshot_bytes
+                    .saturating_sub(oldest.snapshot_size);
                 self.remove_snapshot(oldest.seq);
             } else {
                 break;
@@ -330,8 +330,7 @@ impl UndoStack {
         let Some(op) = self.ops.pop_back() else {
             return Ok(None);
         };
-        self.total_snapshot_bytes =
-            self.total_snapshot_bytes.saturating_sub(op.snapshot_size);
+        self.total_snapshot_bytes = self.total_snapshot_bytes.saturating_sub(op.snapshot_size);
         let snap_path = self.snapshot_path(op.seq);
 
         if op.prev_existed {

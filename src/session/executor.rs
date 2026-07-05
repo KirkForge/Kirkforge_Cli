@@ -305,7 +305,9 @@ impl Executor {
     ) -> usize {
         use crate::session::verifier::{Verdict, Verifier};
 
-        let slots = Arc::new(std::sync::RwLock::new(VerifierSlots::new()));
+        // Default slots need room for security, lint, git, rustfmt, plus
+        // any plugin verifiers registered below.
+        let slots = Arc::new(std::sync::RwLock::new(VerifierSlots::with_max_slots(5)));
         let mut count = 0;
 
         struct SecV;
@@ -364,6 +366,26 @@ impl Executor {
         {
             let mut s = slots.write().unwrap_or_else(|e| e.into_inner());
             if s.register(Arc::new(GitV)).is_ok() {
+                count += 1;
+            }
+        }
+
+        struct RustfmtV;
+        #[async_trait::async_trait]
+        impl Verifier for RustfmtV {
+            fn name(&self) -> &str {
+                "rustfmt"
+            }
+            fn priority(&self) -> u8 {
+                4
+            }
+            async fn verify(&self, event: &BusEvent) -> Verdict {
+                crate::session::verifier::rustfmt::verify_rustfmt(event).await
+            }
+        }
+        {
+            let mut s = slots.write().unwrap_or_else(|e| e.into_inner());
+            if s.register(Arc::new(RustfmtV)).is_ok() {
                 count += 1;
             }
         }
@@ -1579,6 +1601,7 @@ impl Executor {
                         .unwrap_or(ToolOutcome::Failure(crate::shared::ToolError::Timeout {
                             after_secs: timeout.as_secs(),
                         }));
+                    let outcome_for_emit = outcome.clone();
                     let edit_diff =
                         handle_tool_outcome(outcome, tc, event_tx, &mut self.conversation)?;
 
@@ -1591,7 +1614,7 @@ impl Executor {
 
                     let crs = self
                         .emit_tool_event_and_correct(
-                            tc, &tc.name, &run_args, None, None, None, edit_diff,
+                            tc, &tc.name, &run_args, &outcome_for_emit, None, None, None, edit_diff,
                         )
                         .await;
                     self.collect_carryover(tc, &crs);
@@ -1767,6 +1790,7 @@ impl Executor {
         } else {
             outcome
         };
+        let outcome_for_emit = outcome.clone();
         let edit_diff = handle_tool_outcome(outcome, tc, event_tx, &mut self.conversation)?;
 
         // Post-tool hook
@@ -1781,6 +1805,7 @@ impl Executor {
                 tc,
                 &tc.name,
                 &tc.arguments,
+                &outcome_for_emit,
                 real_exit_code,
                 real_stdout_len,
                 real_stderr_len,
@@ -1827,18 +1852,19 @@ impl Executor {
         }
     }
 
-    // The seven-arg clippy limit was already at the boundary for
-    // bash metrics (real_exit_code / real_stdout_len / real_stderr_len);
-    // the GPT 5.5 #9 fix added the `edit_diff` parameter, pushing us
-    // to 8. Suppress locally rather than refactor — the per-tool
-    // metrics are only meaningful for `bash` and would be empty
-    // Option fields for every other call site.
+    // The eight-arg clippy limit was already at the boundary for
+    // bash metrics (real_exit_code / real_stdout_len / real_stderr_len)
+    // plus `edit_diff`; Phase 5 added the `outcome` parameter so failed
+    // tool calls can emit `BusEvent::ToolError`. Suppress locally rather
+    // than refactor — the per-tool metrics are only meaningful for `bash`
+    // and would be empty Option fields for every other call site.
     #[allow(clippy::too_many_arguments)]
     async fn emit_tool_event_and_correct(
         &self,
         _tc: &ToolInvocation,
         tool_name: &str,
         args: &serde_json::Value,
+        outcome: &ToolOutcome,
         real_exit_code: Option<i32>,
         real_stdout_len: Option<usize>,
         real_stderr_len: Option<usize>,
@@ -1908,33 +1934,66 @@ impl Executor {
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
+                let workdir = args
+                    .get("workdir")
+                    .and_then(|v| v.as_str())
+                    .map(std::path::PathBuf::from);
                 Some(BusEvent::BashExec(
                     crate::session::event_bus::BashExecEvent {
                         command,
                         exit_code: real_exit_code.unwrap_or(0),
                         stdout_len: real_stdout_len.unwrap_or(0),
                         stderr_len: real_stderr_len.unwrap_or(0),
+                        workdir,
                     },
                 ))
             }
             _ => None,
         };
 
-        let Some(event) = bus_event else {
-            return vec![];
+        let error_event = match outcome {
+            ToolOutcome::Error { message } => Some(BusEvent::ToolError(
+                crate::session::event_bus::ToolErrorEvent {
+                    tool: tool_name.to_string(),
+                    error: message.clone(),
+                },
+            )),
+            ToolOutcome::Failure(err) => Some(BusEvent::ToolError(
+                crate::session::event_bus::ToolErrorEvent {
+                    tool: tool_name.to_string(),
+                    error: err.to_user_message(),
+                },
+            )),
+            _ => None,
         };
 
-        let handler_results = self.event_bus.dispatch(&event).await;
-        for r in handler_results {
-            if !r.success {
-                tracing::warn!(handler = %r.handler_id, message = %r.message, "event handler failed");
+        let mut corrections = Vec::new();
+
+        if let Some(ref event) = bus_event {
+            let handler_results = self.event_bus.dispatch(event).await;
+            for r in handler_results {
+                if !r.success {
+                    tracing::warn!(handler = %r.handler_id, message = %r.message, "event handler failed");
+                }
+            }
+            if let Some(ref correction_loop) = self.correction_loop {
+                corrections.extend(correction_loop.run(event).await);
             }
         }
 
-        let Some(ref correction_loop) = self.correction_loop else {
-            return vec![];
-        };
-        correction_loop.run(&event).await
+        if let Some(ref event) = error_event {
+            let handler_results = self.event_bus.dispatch(event).await;
+            for r in handler_results {
+                if !r.success {
+                    tracing::warn!(handler = %r.handler_id, message = %r.message, "event handler failed");
+                }
+            }
+            if let Some(ref correction_loop) = self.correction_loop {
+                corrections.extend(correction_loop.run(event).await);
+            }
+        }
+
+        corrections
     }
 }
 

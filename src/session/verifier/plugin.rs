@@ -221,6 +221,62 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn failing_plugin_verifier_includes_env_vars_in_stderr() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_path_buf();
+        let script = root.join("env-check.sh");
+        #[cfg(unix)]
+        {
+            std::fs::write(
+                &script,
+                "#!/bin/sh\necho \"$KF_VERIFIER_NAME $KF_EVENT_KIND $(echo \"$KF_EVENT_JSON\" | head -c 200)\" >&2\nexit 1\n",
+            )
+            .unwrap();
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&script).unwrap().permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&script, perms).unwrap();
+        }
+        #[cfg(not(unix))]
+        {
+            std::fs::write(
+                &script,
+                "echo %KF_VERIFIER_NAME% %KF_EVENT_KIND%\nexit 1\n",
+            )
+            .unwrap();
+        }
+
+        let pv = PluginVerifier {
+            name: "env-check".into(),
+            command: PathBuf::from("env-check.sh"),
+            plugin_root: root,
+        };
+        let adapter = PluginVerifierAdapter::new(pv, 1);
+        let event = BusEvent::FileRead(FileReadEvent {
+            path: PathBuf::from("src/lib.rs"),
+            size_bytes: 100,
+            truncated: false,
+        });
+        let verdict = adapter.verify(&event).await;
+        match verdict {
+            Verdict::Unfixable(err) => {
+                assert!(err.details.contains("env-check"), "details: {}", err.details);
+                assert!(
+                    err.details.contains("file_read") || err.details.contains("FileRead"),
+                    "details: {}",
+                    err.details
+                );
+                assert!(
+                    err.details.contains("src/lib.rs"),
+                    "event JSON substring missing: {}",
+                    err.details
+                );
+            }
+            other => panic!("expected Unfixable, got {other:?}"),
+        }
+    }
+
     #[test]
     fn verifiers_from_registry_builds_adapters() {
         let tmp = tempfile::tempdir().unwrap();

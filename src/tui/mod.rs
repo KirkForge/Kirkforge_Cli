@@ -122,6 +122,7 @@ fn run_session_picker_sync(
 /// non-2xx status, and `Disconnected` only if the host string is empty.
 async fn probe_ollama_connection_with_timeout(
     config: &Config,
+    model: &str,
     timeout: std::time::Duration,
 ) -> ConnectionState {
     let host = config.ollama_host.trim_end_matches('/');
@@ -129,7 +130,7 @@ async fn probe_ollama_connection_with_timeout(
         return ConnectionState::Error("empty ollama_host in config".into());
     }
     let url = format!("{host}/api/tags");
-    let model = config.default_model.clone();
+    let model = model.to_string();
     let since = Instant::now();
 
     let client = match reqwest::Client::builder().timeout(timeout).build() {
@@ -145,8 +146,8 @@ async fn probe_ollama_connection_with_timeout(
 }
 
 /// Startup probe with a generous 2-second budget.
-async fn probe_ollama_connection(config: &Config) -> ConnectionState {
-    probe_ollama_connection_with_timeout(config, std::time::Duration::from_secs(2)).await
+async fn probe_ollama_connection(config: &Config, model: &str) -> ConnectionState {
+    probe_ollama_connection_with_timeout(config, model, std::time::Duration::from_secs(2)).await
 }
 
 /// Background task that probes the Ollama endpoint every `interval` and
@@ -166,8 +167,12 @@ async fn connection_probe_task(
             let guard = crate::shared::read_shared_config(&config);
             guard.clone()
         };
-        let state =
-            probe_ollama_connection_with_timeout(&cfg, std::time::Duration::from_secs(1)).await;
+        let state = probe_ollama_connection_with_timeout(
+            &cfg,
+            &cfg.default_model,
+            std::time::Duration::from_secs(1),
+        )
+        .await;
         if tx.send(state).await.is_err() {
             // TUI loop has shut down; stop probing.
             break;
@@ -194,6 +199,7 @@ pub async fn run_tui(
     let _guard = TerminalGuard;
 
     let cfg_for_startup = crate::shared::read_shared_config(&shared_config).clone();
+    let active_model = adapter.model_info().name.clone();
 
     // ── AppState ──
     let mut state = AppState::new(shared_config.clone());
@@ -221,7 +227,7 @@ pub async fn run_tui(
     // the bar will continue to show the last-known state. A v2
     // improvement would be a periodic background probe driven by
     // the SIGHUP / reconnect signal path.
-    state.connection = probe_ollama_connection(&cfg_for_startup).await;
+    state.connection = probe_ollama_connection(&cfg_for_startup, &active_model).await;
 
     // Surface PathGuard sandbox posture in the TUI. `freeze_launch_sandbox`
     // already set `sandbox_dir` to the cwd by default, so `unsandboxed`
@@ -392,34 +398,6 @@ pub async fn run_tui(
             }
             Err(e) => {
                 tracing::warn!("Could not install SIGHUP handler: {}", e);
-            }
-        }
-
-        // SIGHUP also fires a shutdown signal so the TUI exits when
-        // the controlling terminal goes away (wezterm pane close,
-        // SSH disconnect, etc.). This is a *second* independent
-        // signal stream for the same signal — tokio's `signal()`
-        // allows multiple subscribers, and the OS delivers SIGHUP
-        // to both. The reload handler above keeps its display-only
-        // behaviour; this handler is the actual exit path.
-        //
-        // We register it on every Unix target (macOS included) so
-        // the fix is portable across the box's OSes. If signal()
-        // fails (extremely rare — only when the process has
-        // exhausted its signal-handler table) we log and continue;
-        // the kb-thread EOF path above is the fallback.
-        let shutdown_for_hup = shutdown.clone();
-        match signal(SignalKind::hangup()) {
-            Ok(mut hup) => {
-                tokio::spawn(async move {
-                    if hup.recv().await.is_some() {
-                        tracing::info!("SIGHUP received; shutting down TUI");
-                        shutdown_for_hup.notify_one();
-                    }
-                });
-            }
-            Err(e) => {
-                tracing::warn!("Could not install SIGHUP shutdown handler: {}", e);
             }
         }
     }

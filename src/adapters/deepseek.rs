@@ -20,15 +20,17 @@ pub struct DeepSeekAdapter {
     api_base: String,
     client: reqwest::Client,
     json_mode: bool,
+    timeout_secs: u64,
 }
 
 impl DeepSeekAdapter {
-    pub fn new(ollama_host: &str, model: &str) -> Self {
+    pub fn new(ollama_host: &str, model: &str, timeout_secs: u64) -> Self {
         Self {
             model: model.to_string(),
             api_base: ollama_host.trim_end_matches('/').to_string(),
             client: super::build_reqwest_client(),
             json_mode: false,
+            timeout_secs,
         }
     }
 }
@@ -70,9 +72,7 @@ impl ModelAdapter for DeepSeekAdapter {
             self.client
                 .post(&url)
                 .json(&body)
-                .timeout(std::time::Duration::from_secs(
-                    super::MODEL_REQUEST_TIMEOUT_SECS,
-                ))
+                .timeout(std::time::Duration::from_secs(self.timeout_secs))
                 .send()
                 .await
         })

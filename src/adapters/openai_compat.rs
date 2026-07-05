@@ -439,16 +439,18 @@ pub struct OpenAiCompatAdapter {
     api_base: String,
     client: reqwest::Client,
     json_mode: bool,
+    timeout_secs: u64,
 }
 
 impl OpenAiCompatAdapter {
-    pub fn new(ollama_host: &str, model: &str) -> Self {
+    pub fn new(ollama_host: &str, model: &str, timeout_secs: u64) -> Self {
         let api_base = ollama_host.trim_end_matches('/').to_string();
         Self {
             model: model.to_string(),
             api_base,
             client: super::build_reqwest_client(),
             json_mode: false,
+            timeout_secs,
         }
     }
 }
@@ -509,9 +511,7 @@ impl ModelAdapter for OpenAiCompatAdapter {
             self.client
                 .post(&url)
                 .json(&body)
-                .timeout(std::time::Duration::from_secs(
-                    super::MODEL_REQUEST_TIMEOUT_SECS,
-                ))
+                .timeout(std::time::Duration::from_secs(self.timeout_secs))
                 .send()
                 .await
         })

@@ -195,8 +195,10 @@ fn find_matches(
                 .map(|(j, l)| format!("{}:{}", before_start + j + 1, l))
                 .collect();
 
-            let context_after: Vec<String> = lines[i + 1..=(i + context).min(lines.len() - 1)]
+            let context_after: Vec<String> = lines
                 .iter()
+                .skip(i + 1)
+                .take(context)
                 .enumerate()
                 .map(|(j, l)| format!("{}:{}", i + j + 2, l))
                 .collect();
@@ -237,4 +239,20 @@ fn is_binary_content(path: &std::path::Path) -> bool {
     let mut buf = vec![0u8; BINARY_SCAN_BYTES];
     let n = file.read(&mut buf).unwrap_or(0);
     buf[..n].contains(&0x00)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    /// Matching the last line must not panic when building context_after.
+    #[test]
+    fn find_matches_last_line_no_context_panic() {
+        let content = "line one\nline two\nfn main() {}";
+        let matches = find_matches(content, "main", Path::new("test.rs"), 2);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].line_number, 3);
+        assert!(matches[0].context_after.is_empty());
+    }
 }

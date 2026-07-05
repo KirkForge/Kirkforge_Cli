@@ -364,7 +364,11 @@ pub async fn handle_input_key(
                 let line = if blocks.is_empty() {
                     "📋 No code block to copy".to_string()
                 } else {
-                    let idx = state.code_block_copy_index % blocks.len();
+                    // Start at the most recent (last) block and cycle backward on
+                    // repeated presses. `blocks` is in document order, so the last
+                    // block is at blocks.len() - 1.
+                    let offset = state.code_block_copy_index % blocks.len();
+                    let idx = (blocks.len() - 1).wrapping_sub(offset);
                     state.code_block_copy_index = (state.code_block_copy_index + 1) % blocks.len();
                     let text = &blocks[idx];
                     match crate::tui::clipboard::copy_to_clipboard(text) {

@@ -572,7 +572,12 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     }
 
     let adapter = adapters::caching::maybe_wrap_cached(
-        adapters::adapter_for(&model, ollama_host, model_type.as_deref()),
+        adapters::adapter_for(
+            &model,
+            ollama_host,
+            model_type.as_deref(),
+            config.request_timeout_secs,
+        ),
         &config,
     );
 

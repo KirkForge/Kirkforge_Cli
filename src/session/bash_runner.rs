@@ -802,7 +802,9 @@ mod tests {
                 false,
             );
             assert!(
-                result.as_ref().is_some_and(|m| m.contains("privilege escalation")),
+                result
+                    .as_ref()
+                    .is_some_and(|m| m.contains("privilege escalation")),
                 "{cmd} should be blocked, got: {result:?}"
             );
         }
@@ -818,7 +820,10 @@ mod tests {
             &PathGuard::default(),
             false,
         );
-        assert!(result.is_none(), "sudoku should not be blocked, got: {result:?}");
+        assert!(
+            result.is_none(),
+            "sudoku should not be blocked, got: {result:?}"
+        );
     }
 
     #[test]

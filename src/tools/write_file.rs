@@ -117,8 +117,7 @@ impl Tool for WriteFile {
             Vec::new()
         };
 
-        match crate::tools::atomic_write::atomic_write(&path, &content,
-        ) {
+        match crate::tools::atomic_write::atomic_write(&path, &content) {
             Ok(_) => match snapshot_for_undo(&self.undo, &path, prev_existed, &prev_bytes) {
                 Ok(()) => ToolOutcome::Success {
                     content: format!("Wrote {} bytes to {}", content.len(), path.display()),
@@ -222,10 +221,9 @@ mod tests {
         let tool = WriteFile::new(None, guard);
         let ctx = ToolContext::new();
         let out = tool
-            .run(&ctx,
-                args(&path.display().to_string(),
-                    "-----BEGIN PRIVATE KEY-----\n"
-                )
+            .run(
+                &ctx,
+                args(&path.display().to_string(), "-----BEGIN PRIVATE KEY-----\n"),
             )
             .await;
         assert!(
@@ -254,11 +252,7 @@ mod tests {
         let tool = WriteFile::new(None, guard);
         let ctx = ToolContext::new();
         let out = tool
-            .run(&ctx,
-                args(&path.display().to_string(),
-                    "small"
-                )
-            )
+            .run(&ctx, args(&path.display().to_string(), "small"))
             .await;
         assert!(
             matches!(
@@ -279,18 +273,16 @@ mod tests {
         let path = dir.path().join("ro").join("file.txt");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, "original").unwrap();
-        let mut perms = std::fs::metadata(path.parent().unwrap()).unwrap().permissions();
+        let mut perms = std::fs::metadata(path.parent().unwrap())
+            .unwrap()
+            .permissions();
         perms.set_readonly(true);
         std::fs::set_permissions(path.parent().unwrap(), perms.clone()).unwrap();
 
         let tool = WriteFile::new(None, crate::session::access::PathGuard::default());
         let ctx = ToolContext::new();
         let out = tool
-            .run(&ctx,
-                args(&path.display().to_string(),
-                    "new content"
-                )
-            )
+            .run(&ctx, args(&path.display().to_string(), "new content"))
             .await;
         #[cfg(unix)]
         {

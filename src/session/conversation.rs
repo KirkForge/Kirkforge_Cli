@@ -310,10 +310,7 @@ fn load_messages(path: &std::path::Path) -> anyhow::Result<Vec<Message>> {
         match serde_json::from_str::<Message>(line) {
             Ok(m) => messages.push(m),
             Err(e) => {
-                anyhow::bail!(
-                    "corrupt conversation log line in {}: {e}",
-                    path.display()
-                );
+                anyhow::bail!("corrupt conversation log line in {}: {e}", path.display());
             }
         }
     }
@@ -466,7 +463,9 @@ mod tests {
             .filter(|p| {
                 p.file_name()
                     .and_then(|f| f.to_str())
-                    .map(|f| f.starts_with("session.conv.ndjson.checkpoint-") && f.ends_with(".ndjson"))
+                    .map(|f| {
+                        f.starts_with("session.conv.ndjson.checkpoint-") && f.ends_with(".ndjson")
+                    })
                     .unwrap_or(false)
             })
             .collect();

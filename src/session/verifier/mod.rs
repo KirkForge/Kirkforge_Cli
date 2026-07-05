@@ -228,8 +228,7 @@ impl VerifierHandler {
     }
 
     /// Access the underlying verifier slots.
-    pub fn slots(&self,
-    ) -> Arc<std::sync::RwLock<VerifierSlots>> {
+    pub fn slots(&self) -> Arc<std::sync::RwLock<VerifierSlots>> {
         self.slots.clone()
     }
 
@@ -331,8 +330,7 @@ impl CorrectionLoop {
 
     /// Access the verifier handler so the executor can mutate slots during
     /// live plugin reload.
-    pub fn verifier_handler(&self,
-    ) -> Arc<VerifierHandler> {
+    pub fn verifier_handler(&self) -> Arc<VerifierHandler> {
         self.verifier_handler.clone()
     }
 
@@ -398,18 +396,11 @@ impl CorrectionLoop {
                                 )
                             }
                         } else {
-                            let ok = apply_text_fix(
-                                &fix,
-                                &self.verifier_handler.path_guard,
-                            )
-                            .await;
+                            let ok = apply_text_fix(&fix, &self.verifier_handler.path_guard).await;
                             (
                                 ok,
                                 if ok {
-                                    format!(
-                                        "Auto-fixed: {} — {}",
-                                        fix.severity, fix.description
-                                    )
+                                    format!("Auto-fixed: {} — {}", fix.severity, fix.description)
                                 } else {
                                     format!(
                                         "Failed to auto-fix: {} — {}",
@@ -788,11 +779,7 @@ mod tests {
             severity: "warning".into(),
             command: None,
         };
-        assert!(!apply_text_fix(
-            &fix,
-            &crate::session::access::PathGuard::default(),
-        )
-        .await);
+        assert!(!apply_text_fix(&fix, &crate::session::access::PathGuard::default(),).await);
     }
 
     #[tokio::test]
@@ -842,20 +829,19 @@ mod tests {
         std::fs::write(&path, "hello world").unwrap();
 
         // `true` is a harmless no-op command that exits successfully.
-        assert!(apply_command_fix(
-            "true",
-            &path,
-            &crate::session::access::PathGuard::default(),
-        )
-        .await);
+        assert!(
+            apply_command_fix("true", &path, &crate::session::access::PathGuard::default(),).await
+        );
 
         // `false` exits unsuccessfully.
-        assert!(!apply_command_fix(
-            "false",
-            &path,
-            &crate::session::access::PathGuard::default(),
-        )
-        .await);
+        assert!(
+            !apply_command_fix(
+                "false",
+                &path,
+                &crate::session::access::PathGuard::default(),
+            )
+            .await
+        );
 
         remove_test_file(&path);
     }
@@ -888,7 +874,10 @@ mod tests {
         let event = make_edit_event();
         let results = loop_.run(&event).await;
         assert_eq!(results.len(), 1);
-        assert!(results[0].success, "suggestion should be reported as success");
+        assert!(
+            results[0].success,
+            "suggestion should be reported as success"
+        );
         assert!(results[0].message.contains("Verifier suggestion"));
         assert!(results[0].message.contains("ambiguous issue"));
     }
@@ -913,10 +902,7 @@ mod tests {
                 1
             }
             async fn verify(&self, _event: &BusEvent) -> Verdict {
-                if self
-                    .fired
-                    .swap(true, std::sync::atomic::Ordering::SeqCst)
-                {
+                if self.fired.swap(true, std::sync::atomic::Ordering::SeqCst) {
                     return Verdict::Clean;
                 }
                 Verdict::Fixable(FixSuggestion {

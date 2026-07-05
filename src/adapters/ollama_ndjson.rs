@@ -115,9 +115,7 @@ pub async fn parse_ollama_ndjson_stream<B, E, S>(
                             // on rather than stalling forever.
                             if !send_or_bail(
                                 &tx,
-                                StreamEvent::Error(format!(
-                                    "NDJSON line is not valid UTF-8: {e}"
-                                )),
+                                StreamEvent::Error(format!("NDJSON line is not valid UTF-8: {e}")),
                                 "UTF-8 decode error",
                             )
                             .await
@@ -515,7 +513,9 @@ mod tests {
 
         let events = run_with_chunks(vec![first, second]).await;
         assert!(
-            events.iter().any(|e| matches!(e, StreamEvent::Text(s) if s == "héllo")),
+            events
+                .iter()
+                .any(|e| matches!(e, StreamEvent::Text(s) if s == "héllo")),
             "expected héllo text event, got {events:?}"
         );
         assert!(
@@ -577,7 +577,9 @@ mod tests {
     async fn ndjson_handles_crlf_line_endings() {
         let body = b"{\"message\":{\"content\":\"hi\"},\"done\":true}\r\n".to_vec();
         let events = run_with_chunks(vec![body]).await;
-        assert!(events.iter().any(|e| matches!(e, StreamEvent::Text(s) if s == "hi")));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, StreamEvent::Text(s) if s == "hi")));
         assert!(matches!(events.last(), Some(StreamEvent::Done { .. })));
     }
 

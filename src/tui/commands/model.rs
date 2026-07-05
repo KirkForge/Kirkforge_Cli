@@ -362,8 +362,9 @@ pub async fn run_ollama_pull(
     let status = response.status();
     if !status.is_success() {
         let _ = event_tx.send(TurnEvent::Token(format!(
-            "❌ Pull request for {model} returned HTTP {}"
-        , status.as_u16())));
+            "❌ Pull request for {model} returned HTTP {}",
+            status.as_u16()
+        )));
         return;
     }
 

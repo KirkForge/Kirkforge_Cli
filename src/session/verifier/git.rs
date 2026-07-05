@@ -18,7 +18,10 @@ pub async fn verify_git(event: &BusEvent) -> Verdict {
             success,
         }) => verify_git_operation(args, output, *success).await,
         BusEvent::BashExec(BashExecEvent {
-            command, exit_code, workdir, ..
+            command,
+            exit_code,
+            workdir,
+            ..
         }) => {
             // Only react to bash commands that look like git commands
             if command.trim_start().starts_with("git ") {
@@ -300,7 +303,12 @@ mod tests {
                 .output()
                 .await
                 .expect("git command failed");
-            assert!(out.status.success(), "git {:?} failed: {}", args, String::from_utf8_lossy(&out.stderr));
+            assert!(
+                out.status.success(),
+                "git {:?} failed: {}",
+                args,
+                String::from_utf8_lossy(&out.stderr)
+            );
         }
 
         git(&tmp, &["init"]).await;

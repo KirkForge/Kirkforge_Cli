@@ -329,7 +329,10 @@ mod tests {
             crate::shared::ToolOutcome::Success { content } => content,
             other => panic!("expected dry-run success, got {other:?}"),
         };
-        assert!(content.contains("workdir:"), "dry-run output should include workdir: {content}");
+        assert!(
+            content.contains("workdir:"),
+            "dry-run output should include workdir: {content}"
+        );
         assert!(
             content.contains("timeout: 42s"),
             "dry-run output should include timeout: {content}"

@@ -555,7 +555,8 @@ pub async fn handle_input_key(
                         // The user hits Y to run, N/Esc to discard. We
                         // intentionally do NOT run the command here — that
                         // would defeat the gate.
-                        state.pending_bang = Some(crate::tui::app::PendingBangCommand { cmd: rest });
+                        state.pending_bang =
+                            Some(crate::tui::app::PendingBangCommand { cmd: rest });
                         return Ok(());
                     }
                     crate::shared::permission::PermissionAction::Allow => {
@@ -700,12 +701,18 @@ pub async fn handle_input_key(
                             let msg = match args {
                                 "plugins" => {
                                     crate::tui::commands::handle_reload_plugins_command(
-                                        plugin_reload_tx, state,
+                                        plugin_reload_tx,
+                                        state,
                                     )
                                     .await
                                 }
-                                "skills" => crate::tui::commands::handle_reload_skills_command(state),
-                                _ => crate::tui::commands::handle_reload_command(config_tx, state).await,
+                                "skills" => {
+                                    crate::tui::commands::handle_reload_skills_command(state)
+                                }
+                                _ => {
+                                    crate::tui::commands::handle_reload_command(config_tx, state)
+                                        .await
+                                }
                             };
                             state.messages.push(ConversationEntry::new("system", msg));
                             return Ok(());
@@ -838,8 +845,7 @@ pub async fn handle_input_key(
                             return Ok(());
                         }
                         "/carryover" => {
-                            let msg =
-                                crate::tui::commands::handle_carryover_command(args, state);
+                            let msg = crate::tui::commands::handle_carryover_command(args, state);
                             state.messages.push(ConversationEntry::new("system", msg));
                             return Ok(());
                         }

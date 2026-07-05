@@ -251,8 +251,7 @@ impl Tool for EditFile {
                     new_content.push_str(&content[byte_start + span_orig_len..]);
 
                     let diff = render_diff(&content, &new_content);
-                    return match crate::tools::atomic_write::atomic_write(&path, &new_content,
-                    ) {
+                    return match crate::tools::atomic_write::atomic_write(&path, &new_content) {
                         Ok(_) => {
                             match snapshot_for_undo(
                                 &self.undo,
@@ -312,8 +311,7 @@ impl Tool for EditFile {
         let new_content = content.replacen(&old, &new, 1);
         let diff = render_diff(&content, &new_content);
 
-        match crate::tools::atomic_write::atomic_write(&path, &new_content,
-        ) {
+        match crate::tools::atomic_write::atomic_write(&path, &new_content) {
             Ok(_) => match snapshot_for_undo(
                 &self.undo,
                 UndoKind::Edit,
@@ -485,7 +483,10 @@ mod tests {
         let stack =
             std::sync::Arc::new(std::sync::Mutex::new(UndoStack::for_session(&id).unwrap()));
 
-        let tool = EditFile::new(Some(stack.clone()), crate::session::access::PathGuard::default());
+        let tool = EditFile::new(
+            Some(stack.clone()),
+            crate::session::access::PathGuard::default(),
+        );
         let ctx = ToolContext::new();
         let args = serde_json::json!({
             "path": path.to_string_lossy(),
@@ -645,7 +646,9 @@ mod tests {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, "original content").unwrap();
         // Make parent read-only so the temp file cannot be created.
-        let mut perms = std::fs::metadata(path.parent().unwrap()).unwrap().permissions();
+        let mut perms = std::fs::metadata(path.parent().unwrap())
+            .unwrap()
+            .permissions();
         perms.set_readonly(true);
         std::fs::set_permissions(path.parent().unwrap(), perms.clone()).unwrap();
 

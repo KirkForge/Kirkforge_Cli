@@ -69,7 +69,8 @@ fn search_sessions_text(query: &str) -> String {
         Ok(entries) if entries.is_empty() => {
             format!("No sessions matching '{query}'.")
         }
-        Ok(entries) => format_session_table(&entries,
+        Ok(entries) => format_session_table(
+            &entries,
             &format!("Search results for '{query}' ({} total):\n", entries.len()),
         ),
         Err(e) => format!("Error searching sessions: {e}"),

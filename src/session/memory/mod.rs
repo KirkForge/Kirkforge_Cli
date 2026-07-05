@@ -399,10 +399,9 @@ pub fn parse_frontmatter(
 /// they don't dominate TF-IDF scoring.
 fn tokenize(text: &str) -> Vec<String> {
     const STOP_WORDS: &[&str] = &[
-        "the", "and", "for", "with", "this", "that", "you", "are", "use",
-        "using", "from", "have", "has", "had", "was", "will", "can", "should",
-        "must", "may", "would", "could", "about", "into", "over", "such",
-        "than", "only", "some", "any", "each", "all", "but", "not", "also",
+        "the", "and", "for", "with", "this", "that", "you", "are", "use", "using", "from", "have",
+        "has", "had", "was", "will", "can", "should", "must", "may", "would", "could", "about",
+        "into", "over", "such", "than", "only", "some", "any", "each", "all", "but", "not", "also",
     ];
 
     text.to_lowercase()
@@ -416,8 +415,7 @@ fn tokenize(text: &str) -> Vec<String> {
 /// Compute inverse document frequency for each term in the corpus.
 fn compute_idf(corpus: &[MemoryFact]) -> std::collections::HashMap<String, f64> {
     let n = corpus.len() as f64;
-    let mut doc_freq: std::collections::HashMap<String, usize> =
-        std::collections::HashMap::new();
+    let mut doc_freq: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
 
     for fact in corpus {
         let terms = tokenize(&format!("{} {} {}", fact.name, fact.description, fact.body));
@@ -445,8 +443,7 @@ fn score_fact(
     idf: &std::collections::HashMap<String, f64>,
 ) -> f64 {
     let fact_terms = tokenize(&format!("{} {} {}", fact.name, fact.description, fact.body));
-    let mut term_freq: std::collections::HashMap<String, usize> =
-        std::collections::HashMap::new();
+    let mut term_freq: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     for term in fact_terms {
         *term_freq.entry(term).or_insert(0) += 1;
     }
@@ -680,15 +677,29 @@ mod tests {
     fn test_select_for_context_returns_relevant_fact() {
         let store = temp_store();
         store
-            .upsert("anyhow", "Use anyhow", "We use anyhow for errors, never unwrap in production.", "feedback")
+            .upsert(
+                "anyhow",
+                "Use anyhow",
+                "We use anyhow for errors, never unwrap in production.",
+                "feedback",
+            )
             .unwrap();
         store
-            .upsert("ratatui", "TUI crate", "This project uses ratatui for the terminal UI.", "project")
+            .upsert(
+                "ratatui",
+                "TUI crate",
+                "This project uses ratatui for the terminal UI.",
+                "project",
+            )
             .unwrap();
 
-        let selected = store.select_for_context("How should I handle errors in this repo?", 100, 10);
+        let selected =
+            store.select_for_context("How should I handle errors in this repo?", 100, 10);
         assert!(!selected.is_empty(), "expected at least one fact");
-        assert_eq!(selected[0].name, "anyhow", "expected anyhow fact first, got: {selected:?}");
+        assert_eq!(
+            selected[0].name, "anyhow",
+            "expected anyhow fact first, got: {selected:?}"
+        );
         assert!(
             !selected.iter().any(|f| f.name == "ratatui"),
             "irrelevant fact should not be selected"
@@ -700,7 +711,8 @@ mod tests {
         let store = temp_store();
         for i in 0..5 {
             store
-                .upsert(&format!("fact-{i}"),
+                .upsert(
+                    &format!("fact-{i}"),
                     &format!("description {i}"),
                     &format!("body {i} contains unique token xyzzy{i}"),
                     "project",
@@ -736,7 +748,12 @@ mod tests {
         // Each line is ~45 chars / 4 = ~11 tokens. Budget 15 should allow
         // the first fact only.
         let selected = store.select_for_context("common", 15, 10);
-        assert_eq!(selected.len(), 1, "budget should cap selection, got: {:?}", selected.len());
+        assert_eq!(
+            selected.len(),
+            1,
+            "budget should cap selection, got: {:?}",
+            selected.len()
+        );
     }
 
     #[test]

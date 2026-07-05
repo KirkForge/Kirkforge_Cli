@@ -165,7 +165,9 @@ impl PluginRegistry {
                     }
 
                     if policy.verify_signatures {
-                        if let Err(e) = verify_plugin_signature(&path, policy.signature_key_path.as_deref()) {
+                        if let Err(e) =
+                            verify_plugin_signature(&path, policy.signature_key_path.as_deref())
+                        {
                             warnings.push(format!(
                                 "{}: signature verification failed: {}",
                                 plugin.manifest().name,
@@ -481,8 +483,8 @@ command = "hooks/post-turn.sh"
         let mut reg = PluginRegistry::new();
         let key_path = tmp.path().join("plugin.pub");
         std::fs::write(&key_path, "dummy-key").unwrap();
-        let policy = TrustPolicy::up_to(TrustTier::Shell)
-            .with_verify_signatures(true, Some(key_path));
+        let policy =
+            TrustPolicy::up_to(TrustTier::Shell).with_verify_signatures(true, Some(key_path));
         let warnings = reg.load_from_dir(&plugins, policy).unwrap();
         assert_eq!(reg.active_count(), 0);
         assert!(

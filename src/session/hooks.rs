@@ -789,13 +789,17 @@ command = "hooks/post-turn.sh"
         let mut runner = HookRunner::new(hooks_dir);
         runner.load_plugin_hooks(&registry);
 
-        let decision = runner.run_decision("post-turn", &[], &default_config()).await;
+        let decision = runner
+            .run_decision("post-turn", &[], &default_config())
+            .await;
         assert_eq!(decision, HookDecision::Allow);
 
-        let content = tokio::fs::read_to_string(&marker)
-            .await
-            .unwrap_or_default();
-        assert_eq!(content.trim(), "built-in\nplugin", "builtin/plugin hooks should run in deterministic order; got: {content:?}");
+        let content = tokio::fs::read_to_string(&marker).await.unwrap_or_default();
+        assert_eq!(
+            content.trim(),
+            "built-in\nplugin",
+            "builtin/plugin hooks should run in deterministic order; got: {content:?}"
+        );
 
         // Keep temporaries alive until after the assertions.
         let _ = (tmp, hooks_tmp);

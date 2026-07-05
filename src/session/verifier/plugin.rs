@@ -240,11 +240,7 @@ mod tests {
         }
         #[cfg(not(unix))]
         {
-            std::fs::write(
-                &script,
-                "echo %KF_VERIFIER_NAME% %KF_EVENT_KIND%\nexit 1\n",
-            )
-            .unwrap();
+            std::fs::write(&script, "echo %KF_VERIFIER_NAME% %KF_EVENT_KIND%\nexit 1\n").unwrap();
         }
 
         let pv = PluginVerifier {
@@ -261,7 +257,11 @@ mod tests {
         let verdict = adapter.verify(&event).await;
         match verdict {
             Verdict::Unfixable(err) => {
-                assert!(err.details.contains("env-check"), "details: {}", err.details);
+                assert!(
+                    err.details.contains("env-check"),
+                    "details: {}",
+                    err.details
+                );
                 assert!(
                     err.details.contains("file_read") || err.details.contains("FileRead"),
                     "details: {}",

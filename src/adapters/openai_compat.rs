@@ -280,15 +280,11 @@ pub(crate) async fn parse_openai_compat_stream<B, E, S>(
                             if let Some(tcs) = delta.and_then(|d| d.get("tool_calls")) {
                                 if let Some(calls) = tcs.as_array() {
                                     for tc in calls {
-                                        let index = tc
-                                            .get("index")
-                                            .and_then(|i| i.as_u64())
-                                            .unwrap_or(0)
-                                            as usize;
-                                        let id = tc
-                                            .get("id")
-                                            .and_then(|id| id.as_str())
-                                            .unwrap_or("");
+                                        let index =
+                                            tc.get("index").and_then(|i| i.as_u64()).unwrap_or(0)
+                                                as usize;
+                                        let id =
+                                            tc.get("id").and_then(|id| id.as_str()).unwrap_or("");
                                         let name = tc
                                             .get("function")
                                             .and_then(|f| f.get("name"))
@@ -297,8 +293,7 @@ pub(crate) async fn parse_openai_compat_stream<B, E, S>(
                                             .get("function")
                                             .and_then(|f| f.get("arguments"))
                                             .and_then(|a| a.as_str());
-                                        pending_tool_calls
-                                            .accumulate(index, id, name, args);
+                                        pending_tool_calls.accumulate(index, id, name, args);
                                     }
                                 }
                             }
@@ -351,16 +346,13 @@ pub(crate) async fn parse_openai_compat_stream<B, E, S>(
                                         .get("prompt_tokens")
                                         .and_then(|v| v.as_u64())
                                         .or_else(|| {
-                                            u.get("prompt_eval_count")
-                                                .and_then(|v| v.as_u64())
+                                            u.get("prompt_eval_count").and_then(|v| v.as_u64())
                                         })
                                         .map(|v| v as usize),
                                     completion_tokens: u
                                         .get("completion_tokens")
                                         .and_then(|v| v.as_u64())
-                                        .or_else(|| {
-                                            u.get("eval_count").and_then(|v| v.as_u64())
-                                        })
+                                        .or_else(|| u.get("eval_count").and_then(|v| v.as_u64()))
                                         .map(|v| v as usize),
                                     // Cache hit count. OpenAI's
                                     // chat-completions endpoint
@@ -958,7 +950,9 @@ mod tests {
             .filter(|e| matches!(e, StreamEvent::Done { .. }))
             .collect();
         assert_eq!(dones.len(), 1, "expected exactly one Done, got {dones:?}");
-        assert!(events.iter().any(|e| matches!(e, StreamEvent::Text(s) if s == "hi")));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, StreamEvent::Text(s) if s == "hi")));
     }
 
     /// A single tool-call delta can be split across multiple SSE data

@@ -13,6 +13,7 @@ use crate::session::prompt::PromptBuilder;
 use crate::session::toolset::Toolset;
 use crate::session::verifier::CorrectionResult;
 use crate::session::verifier::{CorrectionLoop, VerifierHandler, VerifierSlots};
+use crate::shared::metrics::{record, MetricEvent};
 use crate::shared::permission::{evaluate, push_rule_unique, PermissionAction};
 use crate::shared::{
     read_shared_config, Config, Message, Role, SharedConfig, StreamEvent, ToolDef, ToolInvocation,
@@ -23,12 +24,13 @@ use crate::tools::Tool;
 use crate::tools::{ToolContext, UndoStackRef};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::mpsc;
 
 enum IterationOutcome {
     ToolCalls(Vec<ToolInvocation>),
 
-    Finished,
+    Finished(crate::shared::FinishReason),
 
     ParseError,
 }
@@ -56,6 +58,43 @@ struct CompactHookStats {
     condensed_assistant_turns: usize,
     summarised_messages: usize,
     strategy: &'static str,
+}
+
+/// Classification helpers for [`ToolOutcome`] metrics.
+fn tool_outcome_success(outcome: &ToolOutcome) -> bool {
+    !matches!(
+        outcome,
+        ToolOutcome::Error { .. } | ToolOutcome::Failure { .. }
+    )
+}
+
+fn tool_error_kind(outcome: &ToolOutcome) -> Option<&'static str> {
+    match outcome {
+        ToolOutcome::Error { .. } => Some("error"),
+        ToolOutcome::Failure(err) => match err {
+            crate::shared::ToolError::InvalidArgs { .. } => Some("invalid_args"),
+            crate::shared::ToolError::AccessDenied { .. } => Some("access_denied"),
+            crate::shared::ToolError::Execution { .. } => Some("execution"),
+            crate::shared::ToolError::Timeout { .. } => Some("timeout"),
+            crate::shared::ToolError::Cancelled => Some("cancelled"),
+            crate::shared::ToolError::Internal { .. } => Some("internal"),
+        },
+        _ => None,
+    }
+}
+
+fn record_turn_metric(
+    model: &str,
+    start: Instant,
+    tool_calls: usize,
+    finish_reason: &crate::shared::FinishReason,
+) {
+    record(MetricEvent::Turn {
+        model: model.to_string(),
+        duration_ms: start.elapsed().as_millis() as u64,
+        tool_calls,
+        finish_reason: format!("{finish_reason:?}").to_lowercase(),
+    });
 }
 
 pub struct Executor {
@@ -1109,6 +1148,7 @@ impl Executor {
 
         let mut tool_calls: Vec<ToolInvocation> = Vec::new();
         let mut already_retried_parse = false;
+        let turn_start = Instant::now();
 
         let max_iterations = read_shared_config(&self.config)
             .max_tool_calls_per_turn
@@ -1118,6 +1158,12 @@ impl Executor {
             if cancelled.load(Ordering::SeqCst) {
                 // The cancel watcher already emitted "Generation
                 // cancelled"; just return — events were already sent live.
+                record_turn_metric(
+                    &self.model_name,
+                    turn_start,
+                    tool_calls.len(),
+                    &crate::shared::FinishReason::Error,
+                );
                 return Ok(());
             }
 
@@ -1132,7 +1178,15 @@ impl Executor {
                 .await?;
 
             match outcome {
-                IterationOutcome::Finished => return Ok(()),
+                IterationOutcome::Finished(finish_reason) => {
+                    record_turn_metric(
+                        &self.model_name,
+                        turn_start,
+                        tool_calls.len(),
+                        &finish_reason,
+                    );
+                    return Ok(());
+                }
                 IterationOutcome::ToolCalls(mut tcs) => {
                     for tc in &mut tcs {
                         self.dispatch_tool_call(tc, approval_sender, cancelled, event_tx)
@@ -1169,6 +1223,12 @@ impl Executor {
                             "TurnEvent receiver dropped; discarding event"
                         );
                     } else {
+                        record_turn_metric(
+                            &self.model_name,
+                            turn_start,
+                            tool_calls.len(),
+                            &crate::shared::FinishReason::Error,
+                        );
                         return Ok(());
                     }
                 }
@@ -1179,6 +1239,12 @@ impl Executor {
                     event_tx.send(TurnEvent::Error("Tool call loop limit reached".into())),
                     "TurnEvent receiver dropped; discarding event"
                 );
+                record_turn_metric(
+                    &self.model_name,
+                    turn_start,
+                    tool_calls.len(),
+                    &crate::shared::FinishReason::Length,
+                );
                 return Ok(());
             }
         }
@@ -1187,6 +1253,12 @@ impl Executor {
         // after this inner function returns. Do NOT add an explicit
         // `self.run_hook("post-turn", ...)` here — that double-fires
         // the hook on the natural completion path.
+        record_turn_metric(
+            &self.model_name,
+            turn_start,
+            tool_calls.len(),
+            &crate::shared::FinishReason::Stop,
+        );
         Ok(())
     }
 
@@ -1296,7 +1368,9 @@ impl Executor {
                     };
                     self.conversation.append(msg)?;
                 }
-                return Ok(IterationOutcome::Finished);
+                return Ok(IterationOutcome::Finished(
+                    crate::shared::FinishReason::Error,
+                ));
             }
 
             match event {
@@ -1327,7 +1401,7 @@ impl Executor {
                     );
                 }
                 StreamEvent::Done {
-                    finish_reason: _,
+                    finish_reason,
                     usage,
                 } => {
                     // Fallback: some models (notably DeepSeek cloud through
@@ -1398,7 +1472,7 @@ impl Executor {
                     return Ok(if had_parse_error {
                         IterationOutcome::ParseError
                     } else {
-                        IterationOutcome::Finished
+                        IterationOutcome::Finished(finish_reason)
                     });
                 }
             }
@@ -1407,7 +1481,9 @@ impl Executor {
         if had_parse_error {
             Ok(IterationOutcome::ParseError)
         } else {
-            Ok(IterationOutcome::Finished)
+            Ok(IterationOutcome::Finished(
+                crate::shared::FinishReason::Stop,
+            ))
         }
     }
 
@@ -1716,14 +1792,22 @@ impl Executor {
 
                     let ctx = self.tool_context_for_call(cancelled);
                     let timeout = self.tool_call_timeout();
+                    let tool_start = Instant::now();
                     let outcome = tokio::time::timeout(timeout, tool.run(&ctx, run_args.clone()))
                         .await
                         .unwrap_or(ToolOutcome::Failure(crate::shared::ToolError::Timeout {
                             after_secs: timeout.as_secs(),
                         }));
+                    let tool_duration = tool_start.elapsed();
                     let outcome_for_emit = outcome.clone();
                     let edit_diff =
                         handle_tool_outcome(outcome, tc, event_tx, &mut self.conversation)?;
+                    record(MetricEvent::ToolCall {
+                        name: tc.name.clone(),
+                        success: tool_outcome_success(&outcome_for_emit),
+                        duration_ms: tool_duration.as_millis() as u64,
+                        error_kind: tool_error_kind(&outcome_for_emit).map(String::from),
+                    });
 
                     // Post-tool hook
                     self.run_hook(
@@ -1900,11 +1984,13 @@ impl Executor {
 
         let ctx = self.tool_context_for_call(cancelled);
         let timeout = self.tool_call_timeout();
+        let tool_start = Instant::now();
         let outcome = tokio::time::timeout(timeout, tool.run(&ctx, tc.arguments.clone()))
             .await
             .unwrap_or(ToolOutcome::Failure(crate::shared::ToolError::Timeout {
                 after_secs: timeout.as_secs(),
             }));
+        let tool_duration = tool_start.elapsed();
 
         let (real_exit_code, real_stdout_len, real_stderr_len) = if tc.name == "bash" {
             extract_bash_metrics(&outcome)
@@ -1919,6 +2005,12 @@ impl Executor {
         };
         let outcome_for_emit = outcome.clone();
         let edit_diff = handle_tool_outcome(outcome, tc, event_tx, &mut self.conversation)?;
+        record(MetricEvent::ToolCall {
+            name: tc.name.clone(),
+            success: tool_outcome_success(&outcome_for_emit),
+            duration_ms: tool_duration.as_millis() as u64,
+            error_kind: tool_error_kind(&outcome_for_emit).map(String::from),
+        });
 
         // Post-tool hook
         self.run_hook(
@@ -1958,25 +2050,31 @@ impl Executor {
             })
             .map_err(|_| anyhow::anyhow!("approval channel closed"))?;
 
-        match response_rx.await {
-            Ok(ApprovalResponse::Approved) => Ok(ApprovalDecision::Approved),
-            Ok(ApprovalResponse::Denied) => Ok(ApprovalDecision::Denied {
+        let decision = match response_rx.await {
+            Ok(ApprovalResponse::Approved) => ApprovalDecision::Approved,
+            Ok(ApprovalResponse::Denied) => ApprovalDecision::Denied {
                 reason: "User denied this operation".into(),
-            }),
-            Ok(ApprovalResponse::DeniedWithReason(reason)) => {
-                Ok(ApprovalDecision::Denied { reason })
-            }
+            },
+            Ok(ApprovalResponse::DeniedWithReason(reason)) => ApprovalDecision::Denied { reason },
             Ok(ApprovalResponse::AlwaysApprove) => {
                 let rule = crate::shared::permission::suggest_rule(&tc.name, &tc.arguments);
                 if let Ok(mut cfg) = self.config.write() {
                     push_rule_unique(&mut cfg.permission_rules, rule);
                 }
-                Ok(ApprovalDecision::AlwaysApproved)
+                ApprovalDecision::AlwaysApproved
             }
-            Err(_) => Ok(ApprovalDecision::Denied {
+            Err(_) => ApprovalDecision::Denied {
                 reason: "Approval channel closed".into(),
-            }),
-        }
+            },
+        };
+        record(MetricEvent::Approval {
+            action: match &decision {
+                ApprovalDecision::Approved => "approved".to_string(),
+                ApprovalDecision::Denied { .. } => "denied".to_string(),
+                ApprovalDecision::AlwaysApproved => "always_approved".to_string(),
+            },
+        });
+        Ok(decision)
     }
 
     // The eight-arg clippy limit was already at the boundary for
@@ -5190,11 +5288,10 @@ mod tests {
 
         // Second turn: same command should now match the rule and run
         // without sending an approval request. The timeout is generous
-        // because this test suite is heavily parallel and a 300 ms wall
-        // clock would flake under load; the goal is only to detect an
-        // infinite hang caused by a misplaced approval prompt.
+        // because this test suite is heavily parallel and the goal is only
+        // to detect an infinite hang caused by a misplaced approval prompt.
         let second_events = tokio::time::timeout(
-            std::time::Duration::from_secs(5),
+            std::time::Duration::from_secs(15),
             exe.run_turn_collecting("run tests again", &approval_tx2, never_cancelled()),
         )
         .await

@@ -26,6 +26,7 @@ pub mod rustfmt;
 pub mod security;
 
 use crate::session::event_bus::{BusEvent, EventHandler, EventKind, HandlerResult};
+use crate::shared::metrics::{record, MetricEvent};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -244,26 +245,43 @@ impl VerifierHandler {
         let verifiers: Vec<Arc<dyn Verifier>> = {
             let slots = self.slots.read().unwrap_or_else(|e| e.into_inner());
             if slots.is_empty() {
+                record(MetricEvent::Verifier {
+                    name: "none".to_string(),
+                    verdict: "clean".to_string(),
+                });
                 return Verdict::Clean;
             }
             slots.all_verifiers()
         };
 
         // Run truth-model precedence: first non-clean, non-skipped wins
-        let verdict = {
+        let (verdict, decisive_name) = {
             let mut verdict = Verdict::Clean;
+            let mut name = "aggregate".to_string();
             for verifier in &verifiers {
                 let v = verifier.verify(event).await;
                 match &v {
                     Verdict::Clean | Verdict::Skipped(_) => continue,
                     Verdict::Fixable(_) | Verdict::Unfixable(_) => {
+                        name = verifier.name().to_string();
                         verdict = v;
                         break;
                     }
                 }
             }
-            verdict
+            (verdict, name)
         };
+
+        let verdict_label = match &verdict {
+            Verdict::Clean => "clean",
+            Verdict::Fixable(_) => "fixable",
+            Verdict::Unfixable(_) => "unfixable",
+            Verdict::Skipped(_) => "skipped",
+        };
+        record(MetricEvent::Verifier {
+            name: decisive_name,
+            verdict: verdict_label.to_string(),
+        });
 
         // Collect fixable suggestions
         if let Verdict::Fixable(ref fix) = verdict {

@@ -14,6 +14,7 @@ macro_rules! send_or_warn {
     };
 }
 
+pub mod metrics;
 pub mod minify;
 pub mod permission;
 

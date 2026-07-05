@@ -436,11 +436,23 @@ mod tests {
             .await
             .unwrap();
 
-        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        // Poll until both short jobs finish; under a saturated tokio runtime
+        // a fixed sleep can fire before the spawn tasks are scheduled.
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        while reg.running_count().await > 0 {
+            if tokio::time::Instant::now() > deadline {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
 
         let list = reg.list().await;
         assert_eq!(list.len(), 2);
-        assert_eq!(reg.running_count().await, 0); // both completed
+        assert_eq!(
+            reg.running_count().await,
+            0,
+            "echo jobs should have completed"
+        );
     }
 
     #[tokio::test]

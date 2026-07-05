@@ -221,6 +221,8 @@ enum Command {
     /// Print shell completion script and exit.
     /// Example: kirkforge completions bash >> ~/.bashrc
     Completions { shell: Shell },
+    /// Show operational metrics summary (tool calls, verifiers, turns, approvals).
+    Metrics,
     /// List, search, and export past sessions.
     /// Without arguments, lists recent sessions (newest first).
     /// With --export, writes the session to stdout or a file.
@@ -300,6 +302,11 @@ async fn main() {
                 "kirkforge",
                 &mut std::io::stdout(),
             );
+            Ok(())
+        }
+        Command::Metrics => {
+            let summary = crate::shared::metrics::summarize();
+            println!("{}", crate::shared::metrics::format_summary(&summary));
             Ok(())
         }
         Command::Sessions {

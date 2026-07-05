@@ -19,6 +19,9 @@
 /// - `KIRKFORGE_PLUGIN_SIGNATURE_VALIDATION` — "true" to require `.kirkforge.sig`
 /// - `KIRKFORGE_PLUGIN_PUBLIC_KEY_PATH` — minisign public key for plugin signatures
 /// - `KIRKFORGE_PLUGIN_ALLOWED_ENV_VARS` — comma-separated extra env vars for plugin tools
+/// - `KIRKFORGE_MEMORY_ENABLED` — "true"/"false" to enable or disable memory injection
+/// - `KIRKFORGE_MEMORY_MAX_TOKENS` — token budget for injected memory facts
+/// - `KIRKFORGE_MEMORY_TOP_N` — maximum number of facts to consider per turn
 use crate::shared::Config;
 use std::path::PathBuf;
 
@@ -264,6 +267,27 @@ fn apply_env_overrides(cfg: &mut Config) {
             .filter(|s| !s.is_empty())
             .collect();
     }
+
+    // KIRKFORGE_MEMORY_ENABLED
+    if let Ok(val) = std::env::var("KIRKFORGE_MEMORY_ENABLED") {
+        cfg.memory_enabled = val.eq_ignore_ascii_case("true")
+            || val.eq_ignore_ascii_case("1")
+            || val.eq_ignore_ascii_case("yes");
+    }
+
+    // KIRKFORGE_MEMORY_MAX_TOKENS
+    if let Ok(val) = std::env::var("KIRKFORGE_MEMORY_MAX_TOKENS") {
+        if let Ok(n) = val.parse::<usize>() {
+            cfg.memory_max_tokens = n.max(1);
+        }
+    }
+
+    // KIRKFORGE_MEMORY_TOP_N
+    if let Ok(val) = std::env::var("KIRKFORGE_MEMORY_TOP_N") {
+        if let Ok(n) = val.parse::<usize>() {
+            cfg.memory_top_n = n.max(1);
+        }
+    }
 }
 
 /// Merge a parsed TOML table into a Config, field by field.
@@ -325,6 +349,17 @@ fn merge_toml_into_config(cfg: &mut Config, table: toml::Table) {
             .iter()
             .filter_map(|v| v.as_str().map(String::from))
             .collect();
+    }
+
+    // Memory knobs
+    if let Some(Value::Boolean(v)) = table.get("memory_enabled") {
+        cfg.memory_enabled = *v;
+    }
+    if let Some(Value::Integer(v)) = table.get("memory_max_tokens") {
+        cfg.memory_max_tokens = (*v).max(1) as usize;
+    }
+    if let Some(Value::Integer(v)) = table.get("memory_top_n") {
+        cfg.memory_top_n = (*v).max(1) as usize;
     }
 
     // Arrays
@@ -426,6 +461,24 @@ pub fn config_diff_summary(before: &Config, after: &Config) -> String {
         diffs.push(format!(
             "plugin_public_key_path: {:?} → {:?}",
             before.plugin_public_key_path, after.plugin_public_key_path
+        ));
+    }
+    if before.memory_enabled != after.memory_enabled {
+        diffs.push(format!(
+            "memory_enabled: {} → {}",
+            before.memory_enabled, after.memory_enabled
+        ));
+    }
+    if before.memory_max_tokens != after.memory_max_tokens {
+        diffs.push(format!(
+            "memory_max_tokens: {} → {}",
+            before.memory_max_tokens, after.memory_max_tokens
+        ));
+    }
+    if before.memory_top_n != after.memory_top_n {
+        diffs.push(format!(
+            "memory_top_n: {} → {}",
+            before.memory_top_n, after.memory_top_n
         ));
     }
     diffs.join(", ")
@@ -741,6 +794,67 @@ mod tests {
             Some("/opt/kirkforge/plugin.pub")
         );
         assert_eq!(cfg.plugin_allowed_env_vars, vec!["CUSTOM_VAR"]);
+    }
+
+    #[test]
+    fn test_env_memory_enabled() {
+        let mut cfg = Config::default();
+        assert!(cfg.memory_enabled);
+
+        set_env("KIRKFORGE_MEMORY_ENABLED", Some("false"));
+        apply_env_overrides(&mut cfg);
+        assert!(!cfg.memory_enabled);
+        set_env("KIRKFORGE_MEMORY_ENABLED", None);
+    }
+
+    #[test]
+    fn test_env_memory_max_tokens() {
+        let mut cfg = Config::default();
+        set_env("KIRKFORGE_MEMORY_MAX_TOKENS", Some("250"));
+        apply_env_overrides(&mut cfg);
+        assert_eq!(cfg.memory_max_tokens, 250);
+        set_env("KIRKFORGE_MEMORY_MAX_TOKENS", None);
+    }
+
+    #[test]
+    fn test_env_memory_top_n() {
+        let mut cfg = Config::default();
+        set_env("KIRKFORGE_MEMORY_TOP_N", Some("5"));
+        apply_env_overrides(&mut cfg);
+        assert_eq!(cfg.memory_top_n, 5);
+        set_env("KIRKFORGE_MEMORY_TOP_N", None);
+    }
+
+    #[test]
+    fn test_merge_toml_memory_knobs() {
+        let mut cfg = Config::default();
+        let table: toml::Table = r#"
+            memory_enabled = false
+            memory_max_tokens = 300
+            memory_top_n = 3
+        "#
+        .parse()
+        .unwrap();
+        merge_toml_into_config(&mut cfg, table);
+
+        assert!(!cfg.memory_enabled);
+        assert_eq!(cfg.memory_max_tokens, 300);
+        assert_eq!(cfg.memory_top_n, 3);
+    }
+
+    #[test]
+    fn test_config_diff_summary_memory_knobs() {
+        let a = Config::default();
+        let b = Config {
+            memory_enabled: false,
+            memory_max_tokens: 250,
+            memory_top_n: 5,
+            ..Config::default()
+        };
+        let s = config_diff_summary(&a, &b);
+        assert!(s.contains("memory_enabled"), "got: {s}");
+        assert!(s.contains("memory_max_tokens"), "got: {s}");
+        assert!(s.contains("memory_top_n"), "got: {s}");
     }
 
     #[test]

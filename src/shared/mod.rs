@@ -339,6 +339,20 @@ pub struct Config {
     #[serde(default)]
     pub plugin_allowed_env_vars: Vec<String>,
 
+    /// Enable injecting persisted memory facts into the system prompt.
+    #[serde(default = "default_memory_enabled")]
+    pub memory_enabled: bool,
+
+    /// Token budget for the memory block injected into the system prompt.
+    /// Facts are scored and selected greedily until this budget is reached.
+    #[serde(default = "default_memory_max_tokens")]
+    pub memory_max_tokens: usize,
+
+    /// Maximum number of memory facts to consider for injection per turn,
+    /// regardless of budget.
+    #[serde(default = "default_memory_top_n")]
+    pub memory_top_n: usize,
+
     /// Maximum number of model↔tool iterations within a single turn.
     /// Each tool call response is fed back to the model, which may emit
     /// another tool call. This cap prevents runaway loops during large
@@ -450,6 +464,18 @@ fn default_tool_timeout_secs() -> Option<u64> {
     Some(30)
 }
 
+fn default_memory_enabled() -> bool {
+    true
+}
+
+fn default_memory_max_tokens() -> usize {
+    500
+}
+
+fn default_memory_top_n() -> usize {
+    10
+}
+
 impl Default for Config {
     fn default() -> Self {
         // `sandbox_dir` is left as `None` here. The launch-time
@@ -506,6 +532,9 @@ impl Default for Config {
             plugin_signature_validation: false,
             plugin_public_key_path: None,
             plugin_allowed_env_vars: vec![],
+            memory_enabled: default_memory_enabled(),
+            memory_max_tokens: default_memory_max_tokens(),
+            memory_top_n: default_memory_top_n(),
             max_tool_calls_per_turn: default_max_tool_calls_per_turn(),
             max_persona_turns: default_max_persona_turns(),
             hooks_dir: None,

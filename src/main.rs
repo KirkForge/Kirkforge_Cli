@@ -796,6 +796,26 @@ async fn run_line_mode(
             continue;
         }
 
+        if trimmed == "/reload skills" {
+            // Line mode has no AppState skill registry; just report that the
+            // interactive skill reload is a TUI-only feature.
+            if output == crate::shared::OutputFormat::Text {
+                println!("🧠 Skill reload is only available in the TUI. Use /help to see available line-mode commands.");
+            }
+            continue;
+        }
+
+        if trimmed == "/help" || trimmed == "/h" || trimmed == "/?" {
+            if output == crate::shared::OutputFormat::Text {
+                println!("Built-in line-mode commands:");
+                println!("  /exit, /quit          Exit the session");
+                println!("  /reload               Reload config.toml");
+                println!("  /reload plugins       Re-scan plugin directory");
+                println!("  /help                 Show this help");
+            }
+            continue;
+        }
+
         let turn_started_at = std::time::Instant::now();
         let events = executor
             .run_turn_collecting(&input, &approval_tx, &cancelled)

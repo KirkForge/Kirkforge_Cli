@@ -214,9 +214,17 @@ pub fn adapter_for(
                 Box::new(glm::GlmAdapter::new(ollama_host, model_name, timeout_secs))
             } else if override_lower.as_deref() == Some("deepseek") || lower.starts_with("deepseek")
             {
-                Box::new(deepseek::DeepSeekAdapter::new(ollama_host, model_name, timeout_secs))
+                Box::new(deepseek::DeepSeekAdapter::new(
+                    ollama_host,
+                    model_name,
+                    timeout_secs,
+                ))
             } else if override_lower.as_deref() == Some("gemini") || lower.starts_with("gemini") {
-                Box::new(gemini::GeminiAdapter::new(ollama_host, model_name, timeout_secs))
+                Box::new(gemini::GeminiAdapter::new(
+                    ollama_host,
+                    model_name,
+                    timeout_secs,
+                ))
             } else {
                 // With the current classification this branch is
                 // unreachable, but keep the previous permissive

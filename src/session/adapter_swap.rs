@@ -300,7 +300,12 @@ mod tests {
     /// the same model" gesture.
     #[test]
     fn test_force_swap_same_model_is_noop_in_effect() {
-        let mut swap = AdapterSwap::new("qwen2.5:3b".into(), "http://localhost:11434".into(), None, 300);
+        let mut swap = AdapterSwap::new(
+            "qwen2.5:3b".into(),
+            "http://localhost:11434".into(),
+            None,
+            300,
+        );
         let cfg = Config::default();
         let new = swap.force_swap("qwen2.5:3b", &mut make_dummy_adapter(), &cfg);
         assert_eq!(new, "qwen2.5:3b");

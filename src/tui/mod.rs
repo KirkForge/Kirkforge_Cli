@@ -400,7 +400,6 @@ pub async fn run_tui(
                 tracing::warn!("Could not install SIGHUP handler: {}", e);
             }
         }
-
     }
 
     // Spawn the executor on a background task

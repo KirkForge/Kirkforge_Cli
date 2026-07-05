@@ -570,14 +570,28 @@ mod tests {
         let reg = BashJobRegistry::new();
         for i in 0..MAX_JOBS {
             let id = reg
-                .spawn("sleep 30", None, None, &DenyList::default(), &PathGuard::default(), false)
+                .spawn(
+                    "sleep 30",
+                    None,
+                    None,
+                    &DenyList::default(),
+                    &PathGuard::default(),
+                    false,
+                )
                 .await
                 .unwrap();
             assert_eq!(id as usize, i + 1);
         }
 
         let next = reg
-            .spawn("echo overflow", None, None, &DenyList::default(), &PathGuard::default(), false)
+            .spawn(
+                "echo overflow",
+                None,
+                None,
+                &DenyList::default(),
+                &PathGuard::default(),
+                false,
+            )
             .await;
         assert!(
             next.is_err(),

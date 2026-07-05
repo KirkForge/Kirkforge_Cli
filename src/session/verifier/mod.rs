@@ -863,11 +863,7 @@ mod tests {
             severity: "warning".into(),
             command: None,
         };
-        assert!(apply_text_fix(
-            &fix,
-            &crate::session::access::PathGuard::default(),
-        )
-        .await);
+        assert!(apply_text_fix(&fix, &crate::session::access::PathGuard::default(),).await);
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "fn main() {}\n");
         remove_test_file(&path);
     }
@@ -882,11 +878,7 @@ mod tests {
             severity: "warning".into(),
             command: None,
         };
-        assert!(!apply_text_fix(
-            &fix,
-            &crate::session::access::PathGuard::default(),
-        )
-        .await);
+        assert!(!apply_text_fix(&fix, &crate::session::access::PathGuard::default(),).await);
     }
 
     #[tokio::test]

@@ -84,7 +84,11 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install cargo-tarpaulin
-        run: cargo install cargo-tarpaulin --locked
+        # Prebuilt binary avoids pulling in cargo-platform 0.3.3, whose
+        # MSRV is now Rust 1.91 while the repo pins 1.88.0.
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-tarpaulin
 
       - name: Generate coverage report
         run: cargo tarpaulin --out Xml --locked --workspace

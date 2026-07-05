@@ -395,6 +395,11 @@ pub struct Config {
     #[serde(default)]
     pub hooks_dir: Option<PathBuf>,
 
+    /// HTTP request timeout in seconds for model API calls. Increase for
+    /// slow local models (e.g. 600 for a 3B quant on CPU).
+    #[serde(default = "default_request_timeout_secs")]
+    pub request_timeout_secs: u64,
+
     /// When `true`, successful model streams are cached on disk and replayed
     /// for identical subsequent requests. Keys are content-addressed by
     /// `(model, system_prompt_hash, messages_hash, tools_hash, json_mode)`.
@@ -469,6 +474,10 @@ fn default_commit_max_file_size() -> u64 {
 
 fn default_tool_timeout_secs() -> Option<u64> {
     Some(30)
+}
+
+fn default_request_timeout_secs() -> u64 {
+    600
 }
 
 fn default_memory_enabled() -> bool {
@@ -552,6 +561,7 @@ impl Default for Config {
             hooks_dir: None,
             commit_max_file_size: default_commit_max_file_size(),
             tool_timeout_secs: default_tool_timeout_secs(),
+            request_timeout_secs: default_request_timeout_secs(),
             dry_run: false,
             cache_enabled: false,
             cache_dir: None,

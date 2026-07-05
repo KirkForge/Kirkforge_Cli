@@ -28,6 +28,8 @@ pub struct AdapterSwap {
     /// Model-type override hint (GLM/DeepSeek/Gemini), preserved from session
     /// startup.
     model_type_override: Option<String>,
+    /// HTTP request timeout in seconds, read from config at construction.
+    timeout_secs: u64,
 }
 
 impl AdapterSwap {
@@ -36,11 +38,13 @@ impl AdapterSwap {
         model_name: String,
         ollama_host: String,
         model_type_override: Option<String>,
+        timeout_secs: u64,
     ) -> Self {
         Self {
             current_model_name: model_name,
             ollama_host,
             model_type_override,
+            timeout_secs,
         }
     }
 
@@ -72,6 +76,7 @@ impl AdapterSwap {
                 &suggested,
                 &self.ollama_host,
                 self.model_type_override.as_deref(),
+                self.timeout_secs,
             ),
         );
 
@@ -104,6 +109,7 @@ impl AdapterSwap {
                 model_name,
                 &self.ollama_host,
                 self.model_type_override.as_deref(),
+                self.timeout_secs,
             ),
         );
         let _old = std::mem::replace(adapter, new_adapter);
@@ -163,6 +169,7 @@ mod tests {
             "deepseek-v4-pro:cloud".into(),
             "http://localhost:11434".into(),
             None,
+            300,
         );
         let config = make_config(false);
 
@@ -182,6 +189,7 @@ mod tests {
             "deepseek-v4-pro:cloud".into(),
             "http://localhost:11434".into(),
             None,
+            300,
         );
         let config = make_config(true);
 
@@ -200,6 +208,7 @@ mod tests {
             "deepseek-v4-pro:cloud".into(),
             "http://localhost:11434".into(),
             None,
+            300,
         );
         let config = make_config(true);
 
@@ -216,6 +225,7 @@ mod tests {
             "deepseek-v4-flash:cloud".into(),
             "http://localhost:11434".into(),
             None,
+            300,
         );
         let config = make_config(true);
 
@@ -236,6 +246,7 @@ mod tests {
             "deepseek-v4-flash:cloud".into(),
             "http://localhost:11434".into(),
             None,
+            300,
         );
         let config = Config::default();
         // Map is empty — should return the default
@@ -251,6 +262,7 @@ mod tests {
             "deepseek-v4-flash:cloud".into(),
             "http://localhost:11434".into(),
             None,
+            300,
         );
         let mut config = Config::default();
         config
@@ -274,6 +286,7 @@ mod tests {
             "deepseek-v4-pro:cloud".into(),
             "http://localhost:11434".into(),
             None,
+            300,
         );
         let cfg = Config::default();
         let new = swap.force_swap("qwen2.5:3b", &mut make_dummy_adapter(), &cfg);
@@ -287,7 +300,12 @@ mod tests {
     /// the same model" gesture.
     #[test]
     fn test_force_swap_same_model_is_noop_in_effect() {
-        let mut swap = AdapterSwap::new("qwen2.5:3b".into(), "http://localhost:11434".into(), None);
+        let mut swap = AdapterSwap::new(
+            "qwen2.5:3b".into(),
+            "http://localhost:11434".into(),
+            None,
+            300,
+        );
         let cfg = Config::default();
         let new = swap.force_swap("qwen2.5:3b", &mut make_dummy_adapter(), &cfg);
         assert_eq!(new, "qwen2.5:3b");
@@ -302,6 +320,7 @@ mod tests {
         Box::new(OpenAiCompatAdapter::new(
             "http://localhost:11434",
             "deepseek-v4-pro:cloud",
+            300,
         ))
     }
 }

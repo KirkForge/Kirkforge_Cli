@@ -243,6 +243,7 @@ impl Executor {
             model_name.clone(),
             cfg.ollama_host.clone(),
             None, // model_type_override not available here; set via CLI
+            cfg.request_timeout_secs,
         );
 
         let mut hook_runner = match &cfg.hooks_dir {
@@ -2972,6 +2973,7 @@ mod tests {
             hooks_dir: None,
             commit_max_file_size: 5 * 1024 * 1024,
             tool_timeout_secs: Some(30),
+            request_timeout_secs: 300,
             dry_run: false,
             cache_enabled: false,
             cache_dir: None,

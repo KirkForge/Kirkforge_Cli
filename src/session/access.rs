@@ -100,7 +100,7 @@ pub enum GuardVerdict {
 ///
 /// Checks are applied in a fixed order so the error message is
 /// deterministic: deny list → symlink → sandbox → size → binary
-/// (reads) / extension → dotfile → symlink → sandbox → allowed
+/// (reads) / extension → dotfile → size → symlink → allowed
 /// directories (writes).
 #[derive(Debug, Clone)]
 pub struct PathGuard {
@@ -112,6 +112,9 @@ pub struct PathGuard {
     pub block_dotfiles: bool,
     /// Maximum file size in bytes for reads (0 = unlimited).
     pub max_read_size: usize,
+    /// Maximum size (in bytes) of an existing file that may be overwritten
+    /// by `edit_file` or `write_file` (0 = unlimited).
+    pub max_overwrite_size: usize,
     /// Deny list reference.
     pub deny_list: DenyList,
     /// If false, symlinks are rejected entirely.
@@ -324,7 +327,29 @@ impl PathGuard {
             }
         }
 
-        // 5. Symlink guard for existing files (don't follow symlinks on write)
+        // 5. Large-file overwrite guard. We check the existing file size so
+        //    the model cannot silently clobber a large asset.
+        if self.max_overwrite_size > 0 && path.exists() {
+            let metadata = match std::fs::metadata(path) {
+                Ok(m) => m,
+                Err(e) => {
+                    return GuardVerdict::Denied(format!(
+                        "Cannot read metadata for '{}': {e}",
+                        path.display()
+                    ));
+                }
+            };
+            if metadata.len() > self.max_overwrite_size as u64 {
+                return GuardVerdict::Denied(format!(
+                    "Refusing to overwrite {} ({} bytes) because it exceeds the {}-byte limit",
+                    path.display(),
+                    metadata.len(),
+                    self.max_overwrite_size
+                ));
+            }
+        }
+
+        // 6. Symlink guard for existing files (don't follow symlinks on write)
         if path.exists() {
             let metadata = match std::fs::symlink_metadata(path) {
                 Ok(m) => m,
@@ -401,6 +426,7 @@ impl Default for PathGuard {
     fn default() -> Self {
         Self {
             sandbox_dir: None,
+            max_overwrite_size: 1024 * 1024,
             deny_extensions: vec![
                 ".pem".into(),
                 ".key".into(),
@@ -543,6 +569,7 @@ pub fn access_from_config(config: &crate::shared::Config) -> (DenyList, PathGuar
         deny_extensions,
         block_dotfiles: config.block_dotfiles,
         max_read_size: config.max_file_read_size,
+        max_overwrite_size: config.max_overwrite_size,
         deny_list: deny_list.clone(),
         follow_symlinks: config.follow_symlinks,
         allowed_write_dirs: allowed_dirs,

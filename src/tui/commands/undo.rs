@@ -14,7 +14,7 @@
 use crate::tui::app::AppState;
 use tokio::sync::mpsc;
 
-/// Handle `/undo` and `/undo list`.
+/// Handle `/undo`, `/undo list`, `/undo count`, and `/undo clear`.
 ///
 /// `/undo` (no args) pops the most recent edit and restores the
 /// file. The user sees a system message with what was undone.
@@ -24,6 +24,9 @@ use tokio::sync::mpsc;
 /// `/undo count` is a small convenience: prints the current depth
 /// of the stack. Useful for scripts that want to check before
 /// running a destructive operation.
+///
+/// `/undo clear` removes every snapshot from disk and empties the
+/// stack. Destructive — there is no recovery after a clear.
 pub fn handle_undo_command(
     args: &str,
     undo_tx: &mpsc::UnboundedSender<()>,
@@ -60,8 +63,20 @@ pub fn handle_undo_command(
             };
             format!("Undo stack contains {} entr{}", count, if count == 1 { "y" } else { "ies" })
         }
+        "clear" => {
+            let Some(ref stack) = state.undo_stack else {
+                return "Undo unavailable: no undo stack for this session.".to_string();
+            };
+            match stack.lock() {
+                Ok(mut s) => match s.clear() {
+                    Ok(n) => format!("🗑️ Cleared {n} undo entr{}.", if n == 1 { "y" } else { "ies" }),
+                    Err(e) => format!("Failed to clear undo stack: {e}"),
+                },
+                Err(e) => format!("Undo stack mutex poisoned: {e}"),
+            }
+        }
         _ => format!(
-            "Usage: /undo [list|count]\n\nUnknown argument '{args}'. /undo pops the most recent edit; /undo list shows the stack; /undo count prints the depth."
+            "Usage: /undo [list|count|clear]\n\nUnknown argument '{args}'. /undo pops the most recent edit; /undo list shows the stack; /undo count prints the depth; /undo clear empties the stack."
         ),
     }
 }
@@ -262,6 +277,27 @@ mod tests {
         assert!(
             rx.try_recv().is_err(),
             "pop signal should not have been sent"
+        );
+    }
+
+    /// `/undo clear` empties the stack and removes snapshot files.
+    #[test]
+    fn test_undo_clear_empties_stack() {
+        let (mut state, stack_ref, target) = state_with_stack();
+        std::fs::write(&target, b"v1").unwrap();
+        {
+            let mut s = stack_ref.lock().unwrap();
+            let prev = std::fs::read(&target).unwrap();
+            s.push(crate::session::undo::UndoKind::Edit, &target, true, &prev)
+                .unwrap();
+        }
+        state.undo_stack = Some(stack_ref.clone());
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let out = handle_undo_command("clear", &tx, &mut state);
+        assert!(out.contains("Cleared 1 undo entry"), "got: {out}");
+        assert!(
+            stack_ref.lock().unwrap().is_empty(),
+            "stack should be empty after clear"
         );
     }
 }

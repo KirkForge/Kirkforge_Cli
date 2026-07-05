@@ -745,6 +745,11 @@ pub async fn handle_input_key(
                             state.messages.push(ConversationEntry::new("system", msg));
                             return Ok(());
                         }
+                        "/metrics" => {
+                            let msg = crate::tui::commands::handle_metrics_command();
+                            state.messages.push(ConversationEntry::new("system", msg));
+                            return Ok(());
+                        }
                         "/save" => {
                             let msg = crate::tui::commands::handle_save_command(args, state);
                             state.messages.push(ConversationEntry::new("system", msg));

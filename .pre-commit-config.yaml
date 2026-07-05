@@ -14,3 +14,19 @@ repos:
         language: golang
         pass_filenames: false
         stages: [pre-commit, pre-push]
+
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: cargo fmt --check
+        entry: cargo fmt --check
+        language: system
+        pass_filenames: false
+        stages: [pre-commit, pre-push]
+
+      - id: cargo-clippy
+        name: cargo clippy --all-targets -- -D warnings
+        entry: cargo clippy --all-targets -- -D warnings
+        language: system
+        pass_filenames: false
+        stages: [pre-push]

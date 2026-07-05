@@ -38,9 +38,11 @@
 //!   (transport/parse/timeout) we still switch but warn the user.
 
 use crate::adapters::{self, AdapterKind};
+use crate::session::executor::TurnEvent;
 use crate::shared::read_shared_config;
 use crate::tui::app::AppState;
 use tokio::sync::mpsc;
+use tokio_stream::StreamExt;
 
 /// Result of validating a requested model against the Ollama `/api/tags`
 /// local model list.
@@ -65,6 +67,7 @@ pub enum ModelValidation {
 pub async fn handle_model_command(
     args: &str,
     model_tx: &mpsc::UnboundedSender<String>,
+    event_tx: &mpsc::UnboundedSender<TurnEvent>,
     state: &AppState,
 ) -> String {
     let name = args.trim();
@@ -92,7 +95,20 @@ pub async fn handle_model_command(
                     Err(_) => "Executor is not running; cannot switch model.".to_string(),
                 },
                 ModelValidation::NotFound { similar } => {
-                    let mut msg = format!("Model '{name}' not found in Ollama's local model list.");
+                    // The model is missing locally. Instead of refusing,
+                    // start an Ollama `/api/pull` in the background and
+                    // stream progress into the chat. Once the pull finishes
+                    // successfully we ask the executor to switch to it.
+                    let host = ollama_host.clone();
+                    let model = name.to_string();
+                    let event_tx = event_tx.clone();
+                    let switch_tx = model_tx.clone();
+                    tokio::spawn(async move {
+                        run_ollama_pull(&host, &model, &event_tx, &switch_tx).await;
+                    });
+                    let mut msg = format!(
+                        "Model '{name}' is not present locally. Starting Ollama pull in the background; progress will appear in the chat. Once complete, the session will switch to it automatically."
+                    );
                     if !similar.is_empty() {
                         msg.push_str("\nDid you mean:\n");
                         for s in similar {
@@ -252,6 +268,159 @@ pub async fn validate_ollama_model(
     }
 }
 
+/// A single NDJSON line from Ollama's `/api/pull` stream.
+#[derive(Debug, Clone, Default)]
+struct PullLine {
+    status: String,
+    completed: Option<u64>,
+    total: Option<u64>,
+}
+
+/// Parse one `/api/pull` NDJSON line. Returns `None` when the line is empty
+/// or lacks a status field.
+fn parse_pull_line(line: &str) -> Option<PullLine> {
+    let value: serde_json::Value = serde_json::from_str(line).ok()?;
+    let status = value.get("status")?.as_str()?.to_string();
+    let completed = value.get("completed").and_then(|v| v.as_u64());
+    let total = value.get("total").and_then(|v| v.as_u64());
+    Some(PullLine {
+        status,
+        completed,
+        total,
+    })
+}
+
+/// Convert a byte count into a compact human-readable string.
+fn human_bytes(bytes: u64) -> String {
+    const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
+    let mut size = bytes as f64;
+    let mut unit = UNITS[0];
+    for u in UNITS.iter().take(4) {
+        unit = u;
+        if size < 1024.0 {
+            break;
+        }
+        size /= 1024.0;
+    }
+    format!("{size:.1} {unit}")
+}
+
+/// Format a `PullLine` into a one-line user-facing progress message.
+fn format_pull_line(model: &str, line: &PullLine) -> String {
+    if let (Some(completed), Some(total)) = (line.completed, line.total) {
+        let pct = if total == 0 {
+            0
+        } else {
+            ((completed * 100) / total).min(100)
+        };
+        format!(
+            "📥 Pulling {model}: {} ({} / {}, {}%)",
+            line.status,
+            human_bytes(completed),
+            human_bytes(total),
+            pct
+        )
+    } else {
+        format!("📥 Pulling {model}: {}", line.status)
+    }
+}
+
+/// Run an Ollama `/api/pull` stream, posting progress to the TUI as
+/// `TurnEvent::Token` messages and switching models when the pull
+/// completes successfully. Errors are also surfaced as tokens.
+pub async fn run_ollama_pull(
+    ollama_host: &str,
+    model: &str,
+    event_tx: &mpsc::UnboundedSender<TurnEvent>,
+    switch_tx: &mpsc::UnboundedSender<String>,
+) {
+    let url = format!("{}/api/pull", ollama_host.trim_end_matches('/'));
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(300))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            let _ = event_tx.send(TurnEvent::Token(format!(
+                "❌ Could not start pull for {model}: {e}"
+            )));
+            return;
+        }
+    };
+
+    let body = serde_json::json!({"model": model, "stream": true});
+    let response = match client.post(&url).json(&body).send().await {
+        Ok(resp) => resp,
+        Err(e) => {
+            let _ = event_tx.send(TurnEvent::Token(format!(
+                "❌ Pull request for {model} failed: {e}"
+            )));
+            return;
+        }
+    };
+
+    let status = response.status();
+    if !status.is_success() {
+        let _ = event_tx.send(TurnEvent::Token(format!(
+            "❌ Pull request for {model} returned HTTP {}"
+        , status.as_u16())));
+        return;
+    }
+
+    let mut stream = response.bytes_stream();
+    let mut buffer = Vec::<u8>::new();
+
+    while let Some(chunk) = stream.next().await {
+        let chunk = match chunk {
+            Ok(c) => c,
+            Err(e) => {
+                let _ = event_tx.send(TurnEvent::Token(format!(
+                    "⚠️ Pull stream for {model} interrupted: {e}"
+                )));
+                continue;
+            }
+        };
+        buffer.extend_from_slice(&chunk);
+        while let Some(pos) = buffer.iter().position(|&b| b == b'\n') {
+            let line_bytes: Vec<u8> = buffer.drain(..pos).collect();
+            buffer.drain(..1); // drop the newline itself
+            let line_bytes = if line_bytes.ends_with(b"\r") {
+                line_bytes[..line_bytes.len().saturating_sub(1)].to_vec()
+            } else {
+                line_bytes
+            };
+            let line = match std::str::from_utf8(&line_bytes) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+
+            if let Some(parsed) = parse_pull_line(line) {
+                // Ollama marks completion with status strings like
+                // "success" or by repeating the model name; we treat
+                // any status containing "success" as done.
+                if parsed.status.to_ascii_lowercase().contains("success") {
+                    let _ = event_tx.send(TurnEvent::Token(format!(
+                        "✅ Pull for {model} complete. Switching now…"
+                    )));
+                    let _ = switch_tx.send(model.to_string());
+                    return;
+                }
+
+                let msg = format_pull_line(model, &parsed);
+                let _ = event_tx.send(TurnEvent::Token(msg + "\n"));
+            }
+        }
+    }
+
+    // Stream ended without an explicit success line; the pull may still
+    // have completed. Try to switch anyway and let the executor surface
+    // any remaining problem on the next turn.
+    let _ = event_tx.send(TurnEvent::Token(format!(
+        "✅ Pull stream for {model} ended. Switching now…"
+    )));
+    let _ = switch_tx.send(model.to_string());
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -263,12 +432,61 @@ mod tests {
         )))
     }
 
+    #[test]
+    fn parse_pull_line_extracts_status_and_progress() {
+        let line = r#"{"status":"pulling manifest","completed":1024,"total":4096}"#;
+        let parsed = parse_pull_line(line).expect("valid line");
+        assert_eq!(parsed.status, "pulling manifest");
+        assert_eq!(parsed.completed, Some(1024));
+        assert_eq!(parsed.total, Some(4096));
+    }
+
+    #[test]
+    fn parse_pull_line_returns_none_for_missing_status() {
+        assert!(parse_pull_line(r#"{"completed":100}"#).is_none());
+        assert!(parse_pull_line("").is_none());
+        assert!(parse_pull_line("not json").is_none());
+    }
+
+    #[test]
+    fn format_pull_line_includes_percent_and_human_bytes() {
+        let line = PullLine {
+            status: "pulling layer".to_string(),
+            completed: Some(1_500_000),
+            total: Some(3_000_000),
+        };
+        let out = format_pull_line("qwen2.5:3b", &line);
+        assert!(out.contains("Pulling qwen2.5:3b"), "{out}");
+        assert!(out.contains("1.4 MB / 2.9 MB"), "{out}");
+        assert!(out.contains("50%"), "{out}");
+    }
+
+    #[test]
+    fn format_pull_line_without_progress_shows_status_only() {
+        let line = PullLine {
+            status: "verifying manifest".to_string(),
+            completed: None,
+            total: None,
+        };
+        let out = format_pull_line("llama3.2:latest", &line);
+        assert!(out.contains("verifying manifest"), "{out}");
+        assert!(!out.contains("/"), "{out}");
+    }
+
+    #[test]
+    fn human_bytes_scales_units() {
+        assert_eq!(human_bytes(512), "512.0 B");
+        assert_eq!(human_bytes(2048), "2.0 KB");
+        assert_eq!(human_bytes(2_000_000), "1.9 MB");
+    }
+
     /// Empty args → usage hint, no send.
     #[tokio::test]
     async fn test_empty_args_returns_usage() {
         let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+        let (_event_tx, _event_rx) = mpsc::unbounded_channel::<TurnEvent>();
         let state = dummy_state();
-        let out = handle_model_command("", &tx, &state).await;
+        let out = handle_model_command("", &tx, &_event_tx, &state).await;
         assert!(out.starts_with("Usage"), "got: {out}");
         assert!(out.contains("/model"), "got: {out}");
         // No message on the channel.
@@ -279,8 +497,9 @@ mod tests {
     #[tokio::test]
     async fn test_whitespace_args_returns_usage() {
         let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+        let (_event_tx, _event_rx) = mpsc::unbounded_channel::<TurnEvent>();
         let state = dummy_state();
-        let out = handle_model_command("   \t  ", &tx, &state).await;
+        let out = handle_model_command("   \t  ", &tx, &_event_tx, &state).await;
         assert!(out.starts_with("Usage"), "got: {out}");
         assert!(rx.try_recv().is_err());
     }
@@ -290,8 +509,9 @@ mod tests {
     #[tokio::test]
     async fn test_named_args_sends_to_channel() {
         let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+        let (_event_tx, _event_rx) = mpsc::unbounded_channel::<TurnEvent>();
         let state = dummy_state();
-        let out = handle_model_command("qwen2.5:3b", &tx, &state).await;
+        let out = handle_model_command("qwen2.5:3b", &tx, &_event_tx, &state).await;
         assert_eq!(out, "Switching to qwen2.5:3b…");
         let received = rx.try_recv().expect("channel should have a value");
         assert_eq!(received, "qwen2.5:3b");
@@ -303,8 +523,9 @@ mod tests {
     #[tokio::test]
     async fn test_named_args_preserves_case() {
         let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+        let (_event_tx, _event_rx) = mpsc::unbounded_channel::<TurnEvent>();
         let state = dummy_state();
-        let out = handle_model_command("GPT-OSS-120B", &tx, &state).await;
+        let out = handle_model_command("GPT-OSS-120B", &tx, &_event_tx, &state).await;
         assert!(out.contains("GPT-OSS-120B"), "got: {out}");
         let received = rx.try_recv().expect("channel should have a value");
         assert_eq!(received, "GPT-OSS-120B");
@@ -316,8 +537,9 @@ mod tests {
     async fn test_closed_channel_returns_graceful_error() {
         let (tx, rx) = mpsc::unbounded_channel::<String>();
         drop(rx);
+        let (_event_tx, _event_rx) = mpsc::unbounded_channel::<TurnEvent>();
         let state = dummy_state();
-        let out = handle_model_command("qwen2.5:3b", &tx, &state).await;
+        let out = handle_model_command("qwen2.5:3b", &tx, &_event_tx, &state).await;
         assert!(out.contains("Executor"), "got: {out}");
         assert!(out.contains("not running"), "got: {out}");
     }

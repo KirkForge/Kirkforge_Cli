@@ -194,7 +194,8 @@ pub async fn resume_conversation_log(
     state.log_path = Some(new_log_path.clone());
 
     // Touch the daemon so this resumed session is now the most recent.
-    let _ = crate::daemon::client::try_touch(&new_id, new_log_path.clone()).await;
+    // `try_touch` logs its own errors; no additional handling needed here.
+    crate::daemon::client::try_touch(&new_id, new_log_path.clone()).await;
 
     format!(
         "✅ Resumed session '{new_id}' — {entry_count} messages reloaded. Type a message to continue.",

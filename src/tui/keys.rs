@@ -535,26 +535,38 @@ pub async fn handle_input_key(
                 let rest = rest.to_string();
                 state.input.clear();
                 state.cursor_position = 0;
-                if crate::shared::read_shared_config(&state.config).bang_requires_approval {
-                    // Park the command on AppState and let the next
-                    // event-loop iteration render the approval dialog.
-                    // The user hits Y to run, N/Esc to discard. We
-                    // intentionally do NOT run the command here — that
-                    // would defeat the gate.
-                    state.pending_bang = Some(crate::tui::app::PendingBangCommand { cmd: rest });
-                    return Ok(());
-                }
+
                 let config = crate::shared::read_shared_config(&state.config).clone();
-                let out = crate::tui::commands::handle_bang_command(&rest, &config).await;
-                // Split into summary (first line) and full output so the
-                // collapse UX has something to show by default. The
-                // summary is "$ <cmd>\n<icon> exit <code>" — two lines.
-                // Full output is everything.
-                let (summary, full) = split_bang_summary(&out);
-                state
-                    .messages
-                    .push(crate::tui::app::ConversationEntry::tool(summary, full));
-                return Ok(());
+                match crate::tui::commands::bang_permission_action(&rest, &config) {
+                    crate::shared::permission::PermissionAction::Deny => {
+                        state.messages.push(crate::tui::app::ConversationEntry::new(
+                            "system",
+                            format!("🚫 Permission rule denied `!{rest}` — the command matches a deny rule."),
+                        ));
+                        return Ok(());
+                    }
+                    crate::shared::permission::PermissionAction::Ask => {
+                        // Park the command on AppState and let the next
+                        // event-loop iteration render the approval dialog.
+                        // The user hits Y to run, N/Esc to discard. We
+                        // intentionally do NOT run the command here — that
+                        // would defeat the gate.
+                        state.pending_bang = Some(crate::tui::app::PendingBangCommand { cmd: rest });
+                        return Ok(());
+                    }
+                    crate::shared::permission::PermissionAction::Allow => {
+                        let out = crate::tui::commands::handle_bang_command(&rest, &config).await;
+                        // Split into summary (first line) and full output so the
+                        // collapse UX has something to show by default. The
+                        // summary is "$ <cmd>\n<icon> exit <code>" — two lines.
+                        // Full output is everything.
+                        let (summary, full) = split_bang_summary(&out);
+                        state
+                            .messages
+                            .push(crate::tui::app::ConversationEntry::tool(summary, full));
+                        return Ok(());
+                    }
+                }
             }
 
             // If the most recent message is a collapsed tool entry and

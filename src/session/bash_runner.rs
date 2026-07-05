@@ -357,6 +357,31 @@ const DANGEROUS_SHELL_COMMANDS: &[&str] = &[
     "> /dev/null < /dev/sda",
 ];
 
+/// Privilege-escalation commands. These require interactive authentication
+/// or can switch users, so they are blocked in model-driven execution.
+const PRIVILEGE_ESCALATION_COMMANDS: &[&str] = &["sudo", "su", "doas"];
+
+/// Interactive password-prompt patterns. Blocking these prevents the model
+/// from accidentally hanging on a hidden `read -s` or password utility.
+const INTERACTIVE_PASSWORD_PATTERNS: &[&str] = &["read -s", "stty -echo", "passwd"];
+
+/// Dangerous redirection prefixes. Any stdout overwrite or `tee` into these
+/// system-sensitive directories is blocked regardless of approval state.
+const DANGEROUS_REDIRECTION_PATTERNS: &[&str] = &[
+    "> /etc/",
+    ">> /etc/",
+    ">| /etc/",
+    "> ~/.ssh/",
+    ">> ~/.ssh/",
+    ">| ~/.ssh/",
+    "> /root/",
+    ">> /root/",
+    ">| /root/",
+    "tee /etc/",
+    "tee ~/.ssh/",
+    "tee /root/",
+];
+
 /// True if `pattern` appears in `cmd` at a word boundary (start/end of
 /// string, whitespace, or shell metacharacter). Used so `rm -rf /` blocks
 /// the exact dangerous command even when it appears inside a pipeline.
@@ -475,7 +500,30 @@ pub fn check_bash_command_str(
         }
     }
 
-    // 5. User-configured path deny list. Tokenize the command and check
+    // 5. Privilege escalation, password prompts, and dangerous redirections.
+    for pat in PRIVILEGE_ESCALATION_COMMANDS {
+        if word_boundary_match(cmd, pat) {
+            return Some(format!(
+                "🔒 Command blocked: privilege escalation command '{pat}' is not allowed"
+            ));
+        }
+    }
+    for pat in INTERACTIVE_PASSWORD_PATTERNS {
+        if word_boundary_match(cmd, pat) {
+            return Some(format!(
+                "🔒 Command blocked: interactive password prompt '{pat}' is not allowed"
+            ));
+        }
+    }
+    for pat in DANGEROUS_REDIRECTION_PATTERNS {
+        if cmd.contains(pat) {
+            return Some(format!(
+                "🔒 Command blocked: dangerous redirection to system path '{pat}'"
+            ));
+        }
+    }
+
+    // 6. User-configured path deny list. Tokenize the command and check
     //    each token as a path.
     for token in cmd.split_whitespace() {
         if deny_list.is_path_denied(Path::new(token)) {
@@ -738,6 +786,97 @@ mod tests {
                 .as_ref()
                 .is_some_and(|m| m.contains("cannot be resolved")),
             "unresolvable workdir should be rejected, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_check_bash_command_str_blocks_privilege_escalation() {
+        // Commands chosen to avoid earlier deny-list/path checks so the
+        // assertion verifies the privilege-escalation pattern itself.
+        for cmd in ["sudo apt update", "su - root", "doas ls"] {
+            let result = check_bash_command_str(
+                cmd,
+                None,
+                &DenyList::default(),
+                &PathGuard::default(),
+                false,
+            );
+            assert!(
+                result.as_ref().is_some_and(|m| m.contains("privilege escalation")),
+                "{cmd} should be blocked, got: {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_check_bash_command_str_allows_sudo_in_larger_word() {
+        // `sudoku` or `sudoers` should not trip the `sudo` boundary check.
+        let result = check_bash_command_str(
+            "echo sudoku",
+            None,
+            &DenyList::default(),
+            &PathGuard::default(),
+            false,
+        );
+        assert!(result.is_none(), "sudoku should not be blocked, got: {result:?}");
+    }
+
+    #[test]
+    fn test_check_bash_command_str_blocks_password_prompts() {
+        for cmd in ["read -s password", "stty -echo; read", "passwd root"] {
+            let result = check_bash_command_str(
+                cmd,
+                None,
+                &DenyList::default(),
+                &PathGuard::default(),
+                false,
+            );
+            assert!(
+                result
+                    .as_ref()
+                    .is_some_and(|m| m.contains("interactive password prompt")),
+                "{cmd} should be blocked, got: {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_check_bash_command_str_blocks_dangerous_redirections() {
+        // Use /etc/hosts (not in the earlier denied-path list) so we verify
+        // the dangerous-redirection patterns directly.
+        for cmd in [
+            "echo foo > /etc/hosts",
+            "echo bar >| /etc/hosts",
+            "echo baz | tee /etc/hosts",
+        ] {
+            let result = check_bash_command_str(
+                cmd,
+                None,
+                &DenyList::default(),
+                &PathGuard::default(),
+                false,
+            );
+            assert!(
+                result
+                    .as_ref()
+                    .is_some_and(|m| m.contains("dangerous redirection")),
+                "{cmd} should be blocked, got: {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_check_bash_command_str_allows_safe_redirections() {
+        let result = check_bash_command_str(
+            "echo foo > /tmp/out.txt",
+            None,
+            &DenyList::default(),
+            &PathGuard::default(),
+            false,
+        );
+        assert!(
+            result.is_none(),
+            "redirect to /tmp should be allowed, got: {result:?}"
         );
     }
 }

@@ -1,4 +1,5 @@
 pub mod bang;
+pub mod carryover;
 pub mod commit;
 pub mod compact;
 pub mod fork;
@@ -18,6 +19,7 @@ pub mod test_parse;
 pub mod undo;
 
 pub use bang::*;
+pub use carryover::*;
 pub use commit::*;
 pub use compact::*;
 pub use fork::*;

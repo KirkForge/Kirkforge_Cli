@@ -15,7 +15,7 @@
 use crate::session::session_index;
 use crate::tui::app::AppState;
 
-/// Handle `/sessions [list|prune|delete]`.
+/// Handle `/sessions [list|search|prune|delete]`.
 pub fn handle_sessions_command(args: &str, _state: &mut AppState) -> String {
     let args = args.trim();
     let mut parts = args.split_whitespace();
@@ -23,6 +23,10 @@ pub fn handle_sessions_command(args: &str, _state: &mut AppState) -> String {
 
     match sub {
         "list" | "" => list_sessions_text(),
+        "search" => match parts.next() {
+            Some(query) => search_sessions_text(query),
+            None => "Usage: /sessions search <query>".to_string(),
+        },
         "prune" => {
             // /sessions prune [N] [keep K]
             let n: usize = parts.next().and_then(|s| s.parse().ok()).unwrap_or(5);
@@ -42,11 +46,12 @@ pub fn handle_sessions_command(args: &str, _state: &mut AppState) -> String {
     }
 }
 
-const SESSIONS_HELP: &str = "/sessions — list, prune, and delete saved sessions
+const SESSIONS_HELP: &str = "/sessions — list, search, prune, and delete saved sessions
 
 Usage:
   /sessions                  List all sessions (newest first)
   /sessions list             Same as above
+  /sessions search <query>  Search by id, date, or message count
   /sessions prune [N] [keep K]
                              Delete the oldest N sessions, keeping
                              the K most recent. Defaults: N=5, K=10.
@@ -58,34 +63,52 @@ Each line in the NDJSON is a JSON message in the conversation.
 Tip: combine with /resume <id> to load a prior session into the
 current TUI.";
 
+/// Format the search results as a multi-line table.
+fn search_sessions_text(query: &str) -> String {
+    match session_index::search_sessions(query) {
+        Ok(entries) if entries.is_empty() => {
+            format!("No sessions matching '{query}'.")
+        }
+        Ok(entries) => format_session_table(&entries,
+            &format!("Search results for '{query}' ({} total):\n", entries.len()),
+        ),
+        Err(e) => format!("Error searching sessions: {e}"),
+    }
+}
+
 /// Format the session list as a multi-line table.
 fn list_sessions_text() -> String {
     match session_index::list_sessions() {
         Ok(entries) if entries.is_empty() => {
             "No sessions found in ~/.local/share/kirkforge/sessions/.".to_string()
         }
-        Ok(entries) => {
-            let mut out = format!("Sessions ({} total, newest first):\n", entries.len());
-            out.push_str(&format!(
-                "  {:<30}  {:<8}  {:<20}  {}\n",
-                "ID", "MSGS", "STARTED", "SIZE"
-            ));
-            for e in &entries {
-                let size = human_size(e.size_bytes);
-                let started = short_ts(&e.started_at);
-                out.push_str(&format!(
-                    "  {:<30}  {:<8}  {:<20}  {}\n",
-                    truncate_id(&e.id, 30),
-                    e.message_count,
-                    started,
-                    size,
-                ));
-            }
-            out.push_str("\nUse /sessions delete <id> to remove one, /sessions prune to clean up.");
-            out
-        }
+        Ok(entries) => format_session_table(
+            &entries,
+            &format!("Sessions ({} total, newest first):\n", entries.len()),
+        ),
         Err(e) => format!("Error listing sessions: {e}"),
     }
+}
+
+fn format_session_table(entries: &[session_index::SessionEntry], header: &str) -> String {
+    let mut out = header.to_string();
+    out.push_str(&format!(
+        "  {:<30}  {:<8}  {:<20}  {}\n",
+        "ID", "MSGS", "STARTED", "SIZE"
+    ));
+    for e in entries {
+        let size = human_size(e.size_bytes);
+        let started = short_ts(&e.started_at);
+        out.push_str(&format!(
+            "  {:<30}  {:<8}  {:<20}  {}\n",
+            truncate_id(&e.id, 30),
+            e.message_count,
+            started,
+            size,
+        ));
+    }
+    out.push_str("\nUse /sessions delete <id> to remove one, /sessions prune to clean up.");
+    out
 }
 
 fn prune_sessions_text(delete_count: usize, keep: usize) -> String {

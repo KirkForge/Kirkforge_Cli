@@ -221,9 +221,10 @@ enum Command {
     /// Print shell completion script and exit.
     /// Example: kirkforge completions bash >> ~/.bashrc
     Completions { shell: Shell },
-    /// List and export past sessions.
+    /// List, search, and export past sessions.
     /// Without arguments, lists recent sessions (newest first).
     /// With --export, writes the session to stdout or a file.
+    /// With --search, filters sessions by id, date, or message count.
     Sessions {
         /// Session id or id prefix to export. Omit to list all sessions.
         id: Option<String>,
@@ -235,6 +236,10 @@ enum Command {
         /// Write export to this file instead of stdout.
         #[arg(long, short)]
         output: Option<PathBuf>,
+
+        /// Search sessions by id, date, or message count.
+        #[arg(long, value_name = "QUERY", conflicts_with = "export")]
+        search: Option<String>,
     },
     /// Run the background session daemon.
     Daemon {
@@ -297,7 +302,12 @@ async fn main() {
             );
             Ok(())
         }
-        Command::Sessions { id, export, output } => handle_sessions_command(id, export, output),
+        Command::Sessions {
+            id,
+            export,
+            output,
+            search,
+        } => handle_sessions_command(id, export, output, search),
         Command::Daemon { foreground, stop } => daemon::server::run_daemon(foreground, stop).await,
     };
 
@@ -311,9 +321,31 @@ fn handle_sessions_command(
     id: Option<String>,
     export: Option<String>,
     out_path: Option<PathBuf>,
+    search: Option<String>,
 ) -> anyhow::Result<()> {
     use session::conversation::ConversationLog;
-    use session::session_index::{list_sessions, resolve_session_id};
+    use session::session_index::{list_sessions, resolve_session_id, search_sessions};
+
+    // Search takes priority over list when no id/export is given.
+    if let Some(query) = search {
+        let entries = search_sessions(&query).unwrap_or_default();
+        if entries.is_empty() {
+            println!("No sessions matching '{query}'.");
+            return Ok(());
+        }
+        println!("{:<30} {:>6} {:>10}  started", "ID", "msgs", "size");
+        println!("{}", "-".repeat(60));
+        for e in &entries {
+            println!(
+                "{:<30} {:>6} {:>10}  {}",
+                e.id,
+                e.message_count,
+                format!("{:.1} KB", e.size_bytes as f64 / 1024.0),
+                e.started_at
+            );
+        }
+        return Ok(());
+    }
 
     // No id → list
     if id.is_none() && export.is_none() {
@@ -524,8 +556,12 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
         .map(|s| s.trim_end_matches(".conv").to_string())
         .unwrap_or_else(|| session_id.to_string());
     daemon::client::try_touch(&touch_id, log_path.clone()).await;
+    crate::session::session_index::touch_session(&touch_id, &log_path);
 
-    let (conversation, open_outcome) = session::conversation::ConversationLog::open(log_path)?;
+    let (mut conversation, open_outcome) =
+        session::conversation::ConversationLog::open(log_path)?;
+    conversation =
+        conversation.with_checkpoint_interval(config.checkpoint_interval_messages);
     if let session::conversation::OpenOutcome::Restored(messages) = open_outcome {
         eprintln!("⚠️  Session log was corrupt; restored {messages} message(s) from checkpoint.");
     }
@@ -805,12 +841,33 @@ async fn run_line_mode(
             continue;
         }
 
+        if trimmed == "/carryover show" || trimmed == "/carryover" {
+            let profile = session::carryover::load_carryover();
+            if output == crate::shared::OutputFormat::Text {
+                if profile.session_count == 0 {
+                    println!("No carryover profile yet.");
+                } else {
+                    println!("{}", session::carryover::CarryoverProfile::to_prompt_block(&profile));
+                }
+            }
+            continue;
+        }
+
+        if trimmed == "/carryover clear" {
+            session::carryover::clear_carryover();
+            if output == crate::shared::OutputFormat::Text {
+                println!("Carryover profile cleared.");
+            }
+            continue;
+        }
+
         if trimmed == "/help" || trimmed == "/h" || trimmed == "/?" {
             if output == crate::shared::OutputFormat::Text {
                 println!("Built-in line-mode commands:");
                 println!("  /exit, /quit          Exit the session");
                 println!("  /reload               Reload config.toml");
                 println!("  /reload plugins       Re-scan plugin directory");
+                println!("  /carryover            Show or clear cross-session carryover");
                 println!("  /help                 Show this help");
             }
             continue;

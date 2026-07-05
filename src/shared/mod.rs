@@ -353,6 +353,12 @@ pub struct Config {
     #[serde(default = "default_memory_top_n")]
     pub memory_top_n: usize,
 
+    /// Write a conversation checkpoint every N messages. 0 disables
+    /// message-count checkpointing (the default). Checkpoints are still
+    /// written after each completed tool batch regardless of this value.
+    #[serde(default = "default_checkpoint_interval_messages")]
+    pub checkpoint_interval_messages: usize,
+
     /// Maximum number of model↔tool iterations within a single turn.
     /// Each tool call response is fed back to the model, which may emit
     /// another tool call. This cap prevents runaway loops during large
@@ -476,6 +482,10 @@ fn default_memory_top_n() -> usize {
     10
 }
 
+fn default_checkpoint_interval_messages() -> usize {
+    0
+}
+
 impl Default for Config {
     fn default() -> Self {
         // `sandbox_dir` is left as `None` here. The launch-time
@@ -535,6 +545,7 @@ impl Default for Config {
             memory_enabled: default_memory_enabled(),
             memory_max_tokens: default_memory_max_tokens(),
             memory_top_n: default_memory_top_n(),
+            checkpoint_interval_messages: default_checkpoint_interval_messages(),
             max_tool_calls_per_turn: default_max_tool_calls_per_turn(),
             max_persona_turns: default_max_persona_turns(),
             hooks_dir: None,

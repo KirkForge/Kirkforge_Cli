@@ -58,64 +58,58 @@ impl Tool for ReadFile {
             }
         };
 
-        // Apply minification before slicing if requested
+        let raw_lines: Vec<&str> = raw_content.lines().collect();
+        let raw_total = raw_lines.len();
+
+        if offset >= raw_total && raw_total > 0 {
+            return ToolOutcome::Failure(ToolError::Internal {
+                message: format!("Offset {offset} is beyond file length {raw_total}"),
+            });
+        }
+
+        if raw_total == 0 {
+            return ToolOutcome::Success {
+                content: format!("{} — empty file", path.display()),
+            };
+        }
+
+        let end = std::cmp::min(offset.saturating_add(limit), raw_total);
+        let selected_raw = raw_lines[offset..end].join("\n");
+        let truncated = end < raw_total;
+
+        // Apply minification to the selected slice only, so offset/limit
+        // refer to the original file lines. Whole-file reads still show
+        // the byte-saved summary.
         let minify = args
             .get("minify")
             .and_then(|m| m.as_bool())
             .unwrap_or(false);
-        let content = if minify {
-            crate::shared::minify::minify_source(&path, &raw_content)
+        let selected = if minify {
+            crate::shared::minify::minify_source(&path, &selected_raw)
         } else {
-            raw_content.clone()
+            selected_raw
         };
 
-        let lines: Vec<&str> = content.lines().collect();
-        let total = lines.len();
-
-        if offset >= total && total > 0 {
-            return ToolOutcome::Failure(ToolError::Internal {
-                message: format!("Offset {offset} is beyond file length {total}"),
-            });
-        }
-
-        // File is empty after minification (e.g., all comments) — return a note
-        if total == 0 {
-            let note = if minify {
-                format!(
-                    "{} — file is empty after minification (was {} bytes of comments/whitespace)",
-                    path.display(),
-                    raw_content.len()
-                )
-            } else {
-                format!("{} — empty file", path.display())
-            };
-            return ToolOutcome::Success { content: note };
-        }
-
-        let end = std::cmp::min(offset + limit, total);
-        let selected = lines[offset..end].join("\n");
-        let truncated = end < total;
-
-        let display = if offset == 0 && end >= total {
+        let display = if offset == 0 && end >= raw_total {
             if minify {
+                let full_minified = crate::shared::minify::minify_source(&path, &raw_content);
                 format!(
                     "{} (minified, was {} bytes → now {} bytes)\n{}",
                     path.display(),
                     raw_content.len(),
-                    content.len(),
-                    content,
+                    full_minified.len(),
+                    full_minified,
                 )
             } else {
-                content
+                raw_content
             }
         } else {
             let header = format!(
-                "{}:{} (showing lines {}-{} of {})",
+                "{} (showing lines {}-{} of {})",
                 path.display(),
                 offset + 1,
-                offset + 1,
                 end,
-                total
+                raw_total
             );
             format!(
                 "{header}\n{sep}\n{selected}",

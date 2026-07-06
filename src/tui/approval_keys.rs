@@ -138,6 +138,11 @@ pub fn handle_approval_key(key: KeyEvent, state: &mut AppState) {
         KeyCode::Char('a') | KeyCode::Char('A') => Some(ApprovalResponse::AlwaysApprove),
         KeyCode::Char('q') | KeyCode::Char('Q') => Some(ApprovalResponse::Denied),
         KeyCode::Esc => Some(ApprovalResponse::Denied),
+        KeyCode::Tab => {
+            state.pending_approval = Some(approval);
+            state.approval_diff_side_by_side = !state.approval_diff_side_by_side;
+            return;
+        }
         // Scroll keys — operate on the args preview, NOT the chat.
         // (Approval-mode keys never reach the chat-view scroll handler.)
         KeyCode::PageUp => {
@@ -352,6 +357,19 @@ mod tests {
         // Scroll state reset for the next approval.
         assert_eq!(s.approval_scroll, 0);
         assert_eq!(s.approval_max_scroll, 0);
+    }
+
+    /// Tab toggles side-by-side diff mode without consuming the approval.
+    #[test]
+    fn test_tab_toggles_side_by_side() {
+        let mut s = make_state_with_approval(json!({"command": "ls"}));
+        assert!(!s.approval_diff_side_by_side);
+        handle_approval_key(key(KeyCode::Tab), &mut s);
+        assert!(s.pending_approval.is_some());
+        assert!(s.approval_diff_side_by_side);
+        handle_approval_key(key(KeyCode::Tab), &mut s);
+        assert!(s.pending_approval.is_some());
+        assert!(!s.approval_diff_side_by_side);
     }
 
     /// Unknown keys leave both the approval and the scroll state intact.

@@ -16,6 +16,10 @@ resolver = "2"
 name = "startup"
 harness = false
 
+[[bench]]
+name = "first_token_latency"
+harness = false
+
 [workspace.dependencies]
 kirkforge-plugin = { path = "crates/kirkforge-plugin" }
 kirkforge-plugin-host = { path = "crates/kirkforge-plugin-host" }
@@ -94,6 +98,12 @@ bincode = "1.3"
 [dev-dependencies]
 # Test-only: create real temporary files for @-mention expansion tests
 tempfile = "3"
+# Property-based testing for edit-file diff application and other invariants.
+proptest = "1.6"
+# Statistical benchmarking harness for first-token latency.
+criterion = { version = "0.5", features = ["async_tokio"] }
+# HTTP mock server for Ollama adapter integration tests without a live model.
+wiremock = "0.6"
 
 [build-dependencies]
 clap_mangen = "0.2"

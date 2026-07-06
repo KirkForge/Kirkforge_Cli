@@ -36,6 +36,7 @@ run_step() {
 # Core checks always run.
 run_step "Check formatting" cargo fmt --check
 run_step "Run unit tests" cargo test --locked --workspace
+run_step "Run smoke tests" cargo test --test smoke_test
 run_step "Run Clippy" cargo clippy --all-targets -- -D warnings
 
 if [ "$QUICK" != "quick" ]; then

@@ -11,7 +11,7 @@
 //!
 //! # Architecture
 //!
-//! ```
+//! ```text
 //! conversation (oldest → newest)
 //! ┌──────────┬─────────────────────┬──────────────┐
 //! │ anchor   │  summarise-able     │  working set │

@@ -401,9 +401,14 @@ mod tests {
 
     /// Drive the parser over a sequence of NDJSON lines and return the events.
     async fn run(lines: &[&str]) -> Vec<StreamEvent> {
+        run_config(lines, OllamaNdjsonConfig::GLM).await
+    }
+
+    /// Drive the parser with an explicit adapter config.
+    async fn run_config(lines: &[&str], config: OllamaNdjsonConfig) -> Vec<StreamEvent> {
         let body: Vec<u8> = lines.iter().flat_map(|l| line(l)).collect();
         let (tx, rx) = tokio::sync::mpsc::channel(64);
-        parse_ollama_ndjson_stream(tx, OllamaNdjsonConfig::GLM, chunks(vec![body])).await;
+        parse_ollama_ndjson_stream(tx, config, chunks(vec![body])).await;
         drain(rx, 1024).await
     }
 
@@ -648,5 +653,201 @@ mod tests {
     #[test]
     fn gemini_config_has_no_thinking() {
         assert_eq!(OllamaNdjsonConfig::GEMINI.thinking_field, None);
+    }
+
+    /// DeepSeek uses `reasoning_content` for its chain-of-thought channel.
+    #[tokio::test]
+    async fn deepseek_reasoning_content_is_emitted() {
+        let events = run_config(
+            &[
+                r#"{"message":{"reasoning_content":"step one","content":""},"done":false}"#,
+                r#"{"message":{"reasoning_content":"","content":"answer"},"done":true,"done_reason":"stop"}"#,
+            ],
+            OllamaNdjsonConfig::DEEPSEEK,
+        )
+        .await;
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, StreamEvent::Thinking(s) if s == "step one")));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, StreamEvent::Text(s) if s == "answer")));
+        assert!(matches!(events.last(), Some(StreamEvent::Done { .. })));
+    }
+
+    /// Empty thinking/reasoning strings must not produce Thinking events.
+    #[tokio::test]
+    async fn empty_thinking_field_is_skipped() {
+        let events = run(&[
+            r#"{"message":{"thinking":"","content":"hi"},"done":true,"done_reason":"stop"}"#,
+        ])
+        .await;
+        assert!(!events.iter().any(|e| matches!(e, StreamEvent::Thinking(_))));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, StreamEvent::Text(s) if s == "hi")));
+    }
+
+    /// An API-level `error` field on a JSON line must surface as a
+    /// StreamEvent::Error with the message text.
+    #[tokio::test]
+    async fn api_error_field_surfaces_as_error_event() {
+        let events = run(&[
+            r#"{"error":"model not found"}"#,
+            r#"{"message":{"content":"x"},"done":true,"done_reason":"stop"}"#,
+        ])
+        .await;
+        assert!(events.iter().any(|e| matches!(
+            e,
+            StreamEvent::Error(s) if s == "model not found"
+        )));
+    }
+
+    /// A malformed JSON line must be reported, and parsing continues on
+    /// the next line.
+    #[tokio::test]
+    async fn malformed_json_line_emits_parse_error_and_continues() {
+        let events = run(&[
+            r#"{"message":{"content":"a"},"done":false}"#,
+            r#"{not json}"#,
+            r#"{"message":{"content":"b"},"done":true,"done_reason":"stop"}"#,
+        ])
+        .await;
+        assert!(events.iter().any(|e| matches!(
+            e,
+            StreamEvent::Error(s) if s.starts_with("JSON parse:")
+        )));
+        let texts: Vec<&str> = events
+            .iter()
+            .filter_map(|e| match e {
+                StreamEvent::Text(s) => Some(s.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(texts, vec!["a", "b"]);
+    }
+
+    /// A complete line that is not valid UTF-8 is an encoding error; the
+    /// parser surfaces it and keeps going.
+    #[tokio::test]
+    async fn invalid_utf8_line_emits_error_and_continues() {
+        let mut bad = vec![0xC3]; // lone continuation byte is invalid
+        bad.push(b'\n');
+        let rest = line(r#"{"message":{"content":"ok"},"done":true}"#);
+        let events = run_with_chunks(vec![bad, rest]).await;
+        assert!(events.iter().any(|e| matches!(
+            e,
+            StreamEvent::Error(s) if s.starts_with("NDJSON line is not valid UTF-8")
+        )));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, StreamEvent::Text(s) if s == "ok")));
+    }
+
+    /// A transport error on the upstream byte stream becomes the last
+    /// event delivered before the parser exits.
+    #[tokio::test]
+    async fn transport_error_becomes_error_event() {
+        let items = vec![Ok::<_, std::io::Error>(line(
+            r#"{"message":{"content":"partial"},"done":false}"#,
+        ))];
+        let stream = tokio_stream::iter(items).chain(tokio_stream::iter(vec![Err(
+            std::io::Error::other("connection reset"),
+        )]));
+        let (tx, rx) = tokio::sync::mpsc::channel(16);
+        parse_ollama_ndjson_stream(tx, OllamaNdjsonConfig::GLM, stream).await;
+        let events = drain(rx, 16).await;
+        assert!(events.iter().any(|e| matches!(
+            e,
+            StreamEvent::Error(s) if s == "connection reset"
+        )));
+    }
+
+    /// `done_reason: "length"` must map to FinishReason::Length.
+    #[tokio::test]
+    async fn done_reason_length_maps_to_length_finish() {
+        let events =
+            run(&[r#"{"message":{"content":"..."},"done":true,"done_reason":"length"}"#]).await;
+        assert!(matches!(
+            events.last(),
+            Some(StreamEvent::Done {
+                finish_reason: FinishReason::Length,
+                ..
+            })
+        ));
+    }
+
+    /// `done_reason: "error"` must map to FinishReason::Error.
+    #[tokio::test]
+    async fn done_reason_error_maps_to_error_finish() {
+        let events =
+            run(&[r#"{"message":{"content":"!"},"done":true,"done_reason":"error"}"#]).await;
+        assert!(matches!(
+            events.last(),
+            Some(StreamEvent::Done {
+                finish_reason: FinishReason::Error,
+                ..
+            })
+        ));
+    }
+
+    /// Tool-call entries that are malformed (no parseable function name and
+    /// arguments) must trigger an error event when non-empty raw array is
+    /// present.
+    #[tokio::test]
+    async fn malformed_tool_calls_emits_error() {
+        let events = run(&[
+            r#"{"message":{"content":"","tool_calls":[{"bad":"shape"}]},"done":true,"done_reason":"tool_calls"}"#,
+        ])
+        .await;
+        assert!(events.iter().any(|e| matches!(
+            e,
+            StreamEvent::Error(s) if s == "Model emitted tool_calls with no parseable entries"
+        )));
+    }
+
+    #[test]
+    fn parse_token_usage_reads_cached_count() {
+        let u = json!({"prompt_tokens": 10, "completion_tokens": 20, "cached_count": 5});
+        let t = parse_token_usage(&u);
+        assert_eq!(t.cached_tokens, Some(5));
+    }
+
+    #[test]
+    fn parse_token_usage_reads_cached_tokens_alias() {
+        let u = json!({"prompt_tokens": 10, "completion_tokens": 20, "cached_tokens": 6});
+        let t = parse_token_usage(&u);
+        assert_eq!(t.cached_tokens, Some(6));
+    }
+
+    #[test]
+    fn parse_token_usage_reads_prompt_tokens_details_cached() {
+        let u = json!({"prompt_tokens": 10, "completion_tokens": 20, "prompt_tokens_details": {"cached_tokens": 7}});
+        let t = parse_token_usage(&u);
+        assert_eq!(t.cached_tokens, Some(7));
+    }
+
+    /// Empty and whitespace-only lines between NDJSON objects must be
+    /// silently skipped.
+    #[tokio::test]
+    async fn empty_and_whitespace_lines_are_skipped() {
+        let body: Vec<u8> = [
+            line(r#"{"message":{"content":"a"},"done":false}"#),
+            b"\n".to_vec(),
+            b"   \n".to_vec(),
+            line(r#"{"message":{"content":"b"},"done":true,"done_reason":"stop"}"#),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        let events = run_with_chunks(vec![body]).await;
+        let texts: Vec<&str> = events
+            .iter()
+            .filter_map(|e| match e {
+                StreamEvent::Text(s) => Some(s.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(texts, vec!["a", "b"]);
     }
 }

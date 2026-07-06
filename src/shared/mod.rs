@@ -14,6 +14,7 @@ macro_rules! send_or_warn {
     };
 }
 
+pub mod audit;
 pub mod metrics;
 pub mod minify;
 pub mod permission;
@@ -204,6 +205,13 @@ pub struct Config {
 
     #[serde(default)]
     pub block_dotfiles: bool,
+
+    /// When `true` (the default), writes to dotfiles that are ignored by git
+    /// are blocked. The user can still override with an explicit permission
+    /// rule. This prevents the model from silently creating `.env`, `.pem`,
+    /// or other git-ignored secrets files.
+    #[serde(default = "default_block_gitignored_dotfiles")]
+    pub block_gitignored_dotfiles: bool,
 
     #[serde(default = "default_max_file_read_size")]
     pub max_file_read_size: usize,
@@ -411,6 +419,12 @@ pub struct Config {
     /// the default `~/.local/share/kirkforge/cache/` is used.
     #[serde(default)]
     pub cache_dir: Option<PathBuf>,
+
+    /// Optional path for the append-only JSONL audit log. When `None`, the
+    /// default `<data_dir>/audit.ndjson` is used. Set to an empty string to
+    /// disable auditing.
+    #[serde(default)]
+    pub audit_log_path: Option<PathBuf>,
 }
 
 /// Configuration for a single MCP server connection.
@@ -437,6 +451,10 @@ fn default_carryover_enabled() -> bool {
 }
 
 fn default_bash_sandbox_workdir() -> bool {
+    true
+}
+
+fn default_block_gitignored_dotfiles() -> bool {
     true
 }
 
@@ -532,6 +550,7 @@ impl Default for Config {
             allowed_write_dirs: vec![],
             sandbox_dir: None,
             block_dotfiles: false,
+            block_gitignored_dotfiles: default_block_gitignored_dotfiles(),
             max_file_read_size: 1024 * 1024,
             max_overwrite_size: 1024 * 1024,
             follow_symlinks: false,
@@ -565,6 +584,7 @@ impl Default for Config {
             dry_run: false,
             cache_enabled: false,
             cache_dir: None,
+            audit_log_path: None,
         }
     }
 }

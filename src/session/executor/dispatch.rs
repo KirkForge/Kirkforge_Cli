@@ -147,6 +147,10 @@ impl Executor {
                     .and_then(|v| v.as_str())
                     .unwrap_or(""),
             );
+            if is_destructive {
+                self.audit_log
+                    .log_destructive(&tc.name, &tc.arguments, false, Some(&reason));
+            }
             crate::send_or_warn!(
                 event_tx.send(TurnEvent::ToolResult {
                     name: tc.name.clone(),
@@ -170,6 +174,10 @@ impl Executor {
                 ApprovalDecision::Approved | ApprovalDecision::AlwaysApproved => {}
                 ApprovalDecision::Denied { reason } => {
                     let msg = format!("❌ Approval denied: {reason}");
+                    if is_destructive {
+                        self.audit_log
+                            .log_destructive(&tc.name, &tc.arguments, false, Some(&msg));
+                    }
                     crate::send_or_warn!(
                         event_tx.send(TurnEvent::ToolResult {
                             name: tc.name.clone(),
@@ -190,7 +198,34 @@ impl Executor {
             }
         }
 
+        if let Some(denied) = check_url_in_args(&tc.arguments, &self.deny_list) {
+            if is_destructive {
+                self.audit_log
+                    .log_destructive(&tc.name, &tc.arguments, false, Some(&denied));
+            }
+            crate::send_or_warn!(
+                event_tx.send(TurnEvent::ToolResult {
+                    name: tc.name.clone(),
+                    output: denied.clone(),
+                    success: false,
+                }),
+                "TurnEvent receiver dropped; discarding event"
+            );
+            self.conversation.append(Message {
+                role: Role::Tool,
+                content: denied,
+                tool_call_id: Some(tc.id.clone()),
+                tool_name: Some(tc.name.clone()),
+                ..Default::default()
+            })?;
+            return Ok(());
+        }
+
         if let Some(denied) = check_deny_list(&self.deny_list, &tc.name, &tc.arguments) {
+            if is_destructive {
+                self.audit_log
+                    .log_destructive(&tc.name, &tc.arguments, false, Some(&denied));
+            }
             crate::send_or_warn!(
                 event_tx.send(TurnEvent::ToolResult {
                     name: tc.name.clone(),
@@ -363,6 +398,8 @@ impl Executor {
                 }
                 GuardVerdict::Denied(msg) => {
                     let denied = format!("🔒 Access denied: {msg}");
+                    self.audit_log
+                        .log_destructive(&tc.name, &tc.arguments, false, Some(&denied));
                     crate::send_or_warn!(
                         event_tx.send(TurnEvent::ToolResult {
                             name: tc.name.clone(),
@@ -423,6 +460,8 @@ impl Executor {
                 &self.path_guard,
                 bash_sandbox_workdir,
             ) {
+                self.audit_log
+                    .log_destructive(&tc.name, &tc.arguments, false, Some(&denied));
                 crate::send_or_warn!(
                     event_tx.send(TurnEvent::ToolResult {
                         name: tc.name.clone(),
@@ -500,6 +539,10 @@ impl Executor {
             )
             .await
         {
+            if is_destructive {
+                self.audit_log
+                    .log_destructive(&tc.name, &tc.arguments, false, Some(&reason));
+            }
             crate::send_or_warn!(
                 event_tx.send(TurnEvent::ToolResult {
                     name: tc.name.clone(),
@@ -541,6 +584,14 @@ impl Executor {
         };
         let outcome_for_emit = outcome.clone();
         let edit_diff = handle_tool_outcome(outcome, tc, event_tx, &mut self.conversation)?;
+        if is_destructive {
+            self.audit_log.log_destructive(
+                &tc.name,
+                &tc.arguments,
+                tool_outcome_success(&outcome_for_emit),
+                None,
+            );
+        }
         record(MetricEvent::ToolCall {
             name: tc.name.clone(),
             success: tool_outcome_success(&outcome_for_emit),

@@ -13,6 +13,7 @@ use crate::session::event_bus::EventBus;
 use crate::session::hooks::HookRunner;
 use crate::session::prompt::PromptBuilder;
 use crate::session::verifier::{CorrectionLoop, CorrectionResult, VerifierHandler, VerifierSlots};
+use crate::shared::audit::AuditLog;
 use crate::shared::{read_shared_config, Config, Message, Role, SharedConfig, ToolInvocation};
 use crate::tools::{ToolContext, UndoStackRef};
 use std::sync::Arc;
@@ -45,6 +46,7 @@ pub struct Executor {
     path_guard: PathGuard,
     read_gate: ReadGate,
     event_bus: EventBus,
+    audit_log: Arc<AuditLog>,
     correction_loop: Option<CorrectionLoop>,
 
     carryover: CarryoverProfile,
@@ -129,6 +131,17 @@ impl Executor {
         let (deny_list, path_guard, read_gate) = access_from_config(&cfg);
         warn_if_unsandboxed(&path_guard);
 
+        let audit_log_path = cfg
+            .audit_log_path
+            .clone()
+            .filter(|p| !p.as_os_str().is_empty())
+            .or_else(|| {
+                crate::session::data_dir()
+                    .ok()
+                    .map(|d| d.join("audit.ndjson"))
+            });
+        let audit_log = Arc::new(AuditLog::new(audit_log_path));
+
         // Push the session-level JSON-mode flag down to the active
         // adapter. The trait method has a default no-op for adapters
         // that don't support it, so unknown models (and the test
@@ -173,6 +186,7 @@ impl Executor {
             path_guard,
             read_gate,
             event_bus,
+            audit_log,
             correction_loop: None,
             carryover,
             carryover_enabled,

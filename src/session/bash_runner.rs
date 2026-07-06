@@ -884,4 +884,23 @@ mod tests {
             "redirect to /tmp should be allowed, got: {result:?}"
         );
     }
+
+    #[test]
+    fn test_check_bash_command_str_blocks_denied_url() {
+        let mut deny_list = DenyList::default();
+        deny_list
+            .url_patterns
+            .push("https://internal.example.com".into());
+        let result = check_bash_command_str(
+            "curl https://internal.example.com/secrets",
+            None,
+            &deny_list,
+            &PathGuard::default(),
+            false,
+        );
+        assert!(
+            result.as_ref().is_some_and(|m| m.contains("denied URL")),
+            "denied URL in bash command should be blocked, got: {result:?}"
+        );
+    }
 }

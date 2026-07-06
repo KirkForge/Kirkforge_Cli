@@ -52,8 +52,13 @@ impl DenyList {
 
     /// Returns true if `url` starts with any blocked prefix.
     pub fn is_url_denied(&self, url: &str) -> bool {
-        self.url_patterns.iter().any(|p| url.starts_with(p))
+        url_is_denied(url, &self.url_patterns)
     }
+}
+
+/// Returns true if `url` starts with any blocked prefix in `patterns`.
+pub fn url_is_denied(url: &str, patterns: &[String]) -> bool {
+    patterns.iter().any(|p| !p.is_empty() && url.starts_with(p))
 }
 
 impl Default for DenyList {
@@ -110,6 +115,8 @@ pub struct PathGuard {
     pub deny_extensions: Vec<String>,
     /// Block writes to dotfiles (files starting with `.`).
     pub block_dotfiles: bool,
+    /// Block writes to dotfiles that are ignored by git.
+    pub block_gitignored_dotfiles: bool,
     /// Maximum file size in bytes for reads (0 = unlimited).
     pub max_read_size: usize,
     /// Maximum size (in bytes) of an existing file that may be overwritten
@@ -132,6 +139,30 @@ impl PathGuard {
     /// to surface a config warning.
     pub fn is_sandboxed(&self) -> bool {
         self.sandbox_dir.is_some() || !self.allowed_write_dirs.is_empty()
+    }
+
+    /// Returns true if `path` is ignored by git in the working directory.
+    ///
+    /// Uses `git check-ignore --quiet <path>`. If git is unavailable, the
+    /// directory is not a repo, or the path is not ignored, returns `false`.
+    /// This is intentionally fail-open: the block happens only when we can
+    /// positively confirm the dotfile is git-ignored.
+    fn is_gitignored(&self, path: &Path) -> bool {
+        let workdir = self
+            .sandbox_dir
+            .as_deref()
+            .unwrap_or_else(|| Path::new("."));
+        let output = match std::process::Command::new("git")
+            .arg("check-ignore")
+            .arg("--quiet")
+            .arg(path)
+            .current_dir(workdir)
+            .output()
+        {
+            Ok(o) => o,
+            Err(_) => return false,
+        };
+        output.status.success()
     }
 
     /// Check whether `path` may be traversed (listed or read).
@@ -206,6 +237,16 @@ impl PathGuard {
             GuardVerdict::Allowed(c) => c,
             GuardVerdict::Denied(msg) => return GuardVerdict::Denied(msg),
         };
+
+        // 3b. When we followed a symlink, the original deny-list check may not
+        //     have caught the canonical target. Re-check the resolved path so
+        //     a symlink inside the sandbox cannot point to a denied file.
+        if self.follow_symlinks && self.deny_list.is_path_denied(&canonical) {
+            return GuardVerdict::Denied(format!(
+                "Path denied by deny list: {}",
+                canonical.display()
+            ));
+        }
 
         // 4. Size limit
         // Use the canonical path's metadata, not the original path's. When
@@ -331,6 +372,20 @@ impl PathGuard {
             }
         }
 
+        // 4b. Git-ignored dotfile block (default on). Fail-open when git is
+        //     unavailable so we do not accidentally block writes in a non-repo.
+        if self.block_gitignored_dotfiles {
+            if let Some(name) = path.file_name() {
+                if name.to_string_lossy().starts_with('.') && self.is_gitignored(path) {
+                    return GuardVerdict::Denied(format!(
+                        "Git-ignored dotfile write blocked: {}. \
+                         Add an explicit permission rule if you really need this file.",
+                        path.display()
+                    ));
+                }
+            }
+        }
+
         // 5. Large-file overwrite guard. We check the existing file size so
         //    the model cannot silently clobber a large asset.
         if self.max_overwrite_size > 0 && path.exists() {
@@ -443,6 +498,7 @@ impl Default for PathGuard {
                 ".exe".into(),
             ],
             block_dotfiles: false,
+            block_gitignored_dotfiles: false,
             max_read_size: 1024 * 1024, // 1 MB
             deny_list: DenyList::default(),
             follow_symlinks: false,
@@ -572,6 +628,7 @@ pub fn access_from_config(config: &crate::shared::Config) -> (DenyList, PathGuar
         sandbox_dir,
         deny_extensions,
         block_dotfiles: config.block_dotfiles,
+        block_gitignored_dotfiles: config.block_gitignored_dotfiles,
         max_read_size: config.max_file_read_size,
         max_overwrite_size: config.max_overwrite_size,
         deny_list: deny_list.clone(),
@@ -999,6 +1056,117 @@ mod tests {
         assert!(
             !guard_none.is_sandboxed(),
             "sandbox_dir = None must produce an unsandboxed guard"
+        );
+    }
+
+    // ── Git-ignored dotfile blocking ────────────────────────────────
+
+    fn setup_gitignored_dotfile_repo(suffix: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("kirkforge_guard_gitignored_test_{suffix}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Minimal git repo.
+        std::process::Command::new("git")
+            .arg("init")
+            .arg("--quiet")
+            .current_dir(&dir)
+            .output()
+            .expect("git init should succeed");
+        std::process::Command::new("git")
+            .args(["config", "user.email", "test@example.com"])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.name", "Test User"])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+
+        // Ignore a dotfile name that is NOT in the default deny list so the
+        // git-ignored check is the one that fires.
+        std::fs::write(dir.join(".gitignore"), ".ignored_local\n").unwrap();
+
+        dir
+    }
+
+    #[test]
+    fn test_path_guard_blocks_gitignored_dotfiles() {
+        let dir = setup_gitignored_dotfile_repo("blocked");
+        let guard = PathGuard {
+            sandbox_dir: Some(dir.clone()),
+            block_gitignored_dotfiles: true,
+            ..Default::default()
+        };
+
+        let result = guard.check_write(&dir.join(".ignored_local"));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            matches!(result, GuardVerdict::Denied(ref msg) if msg.contains("Git-ignored dotfile")),
+            "expected git-ignored dotfile denial, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_path_guard_allows_non_gitignored_dotfiles() {
+        let dir = setup_gitignored_dotfile_repo("nonignored");
+        let guard = PathGuard {
+            sandbox_dir: Some(dir.clone()),
+            block_gitignored_dotfiles: true,
+            ..Default::default()
+        };
+
+        // `.tracked` is a dotfile but is not git-ignored.
+        let result = guard.check_write(&dir.join(".tracked"));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            matches!(result, GuardVerdict::Allowed(_)),
+            "expected non-gitignored dotfile to be allowed, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_path_guard_allows_gitignored_dotfiles_when_disabled() {
+        let dir = setup_gitignored_dotfile_repo("disabled");
+        let guard = PathGuard {
+            sandbox_dir: Some(dir.clone()),
+            block_gitignored_dotfiles: false,
+            ..Default::default()
+        };
+
+        let result = guard.check_write(&dir.join(".ignored_local"));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            matches!(result, GuardVerdict::Allowed(_)),
+            "expected ignored dotfile allowed when disabled, got {result:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_check_read_rechecks_deny_list_on_canonical_target() {
+        let dir = std::env::temp_dir().join("kirkforge_deny_symlink_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir(&dir).unwrap();
+
+        let target = dir.join("secret.pem");
+        let link = dir.join("safe_link");
+        std::fs::write(&target, "secret").unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        let guard = PathGuard {
+            sandbox_dir: Some(dir.clone()),
+            follow_symlinks: true,
+            ..Default::default()
+        };
+
+        // The symlink name is not denied, but its canonical target is *.pem.
+        let result = guard.check_read(&link);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            matches!(result, GuardVerdict::Denied(ref msg) if msg.contains("secret.pem")),
+            "expected denial of symlink target, got {result:?}"
         );
     }
 }

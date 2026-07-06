@@ -30,6 +30,8 @@ pub struct CompactHookStats {
     pub(crate) dropped_tool_results: usize,
     pub(crate) condensed_assistant_turns: usize,
     pub(crate) summarised_messages: usize,
+    pub(crate) tokens_before: usize,
+    pub(crate) tokens_after: usize,
     pub(crate) strategy: &'static str,
 }
 #[derive(Debug)]
@@ -70,6 +72,8 @@ pub enum TurnEvent {
         condensed_assistant_turns: usize,
         original_count: usize,
         compacted_count: usize,
+        tokens_before: usize,
+        tokens_after: usize,
     },
 
     /// Emitted when the assistant's response contains the plan-complete

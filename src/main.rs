@@ -1190,11 +1190,13 @@ fn emit_turn_events(
                 condensed_assistant_turns,
                 original_count,
                 compacted_count,
-                ..
+                tokens_before,
+                tokens_after,
+                new_messages: _,
             } => {
                 if output == crate::shared::OutputFormat::Text {
                     eprintln!(
-                        "\n[compaction] {original_count} → {compacted_count} messages, dropped {dropped_tool_results} tool result(s), condensed {condensed_assistant_turns} assistant turn(s).",
+                        "\n[compaction] {original_count} → {compacted_count} messages ({tokens_before} → {tokens_after} tokens), dropped {dropped_tool_results} tool result(s), condensed {condensed_assistant_turns} assistant turn(s).",
                     );
                 } else if output == crate::shared::OutputFormat::StreamJson {
                     let line = serde_json::json!({
@@ -1203,6 +1205,8 @@ fn emit_turn_events(
                         "compacted_count": compacted_count,
                         "dropped_tool_results": dropped_tool_results,
                         "condensed_assistant_turns": condensed_assistant_turns,
+                        "tokens_before": tokens_before,
+                        "tokens_after": tokens_after,
                     });
                     print_json_line(&line);
                 }

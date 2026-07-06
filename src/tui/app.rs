@@ -219,6 +219,12 @@ pub struct AppState {
     /// off-by-N pattern as `max_scroll` for the chat view).
     pub approval_max_scroll: usize,
 
+    /// Toggle between unified diff and side-by-side diff in the
+    /// approval dialog. Side-by-side needs at least 80 columns, so
+    /// the renderer falls back to unified when the terminal is too
+    /// narrow even if this flag is true.
+    pub approval_diff_side_by_side: bool,
+
     // ── Budget indicator (v1.2-p6) ─────────────────────────────────
     /// The prompt token count of the most recent turn.
     ///
@@ -385,6 +391,7 @@ impl AppState {
             last_content_width: 0,
             approval_scroll: 0,
             approval_max_scroll: 0,
+            approval_diff_side_by_side: false,
             last_turn_prompt_tokens: 0,
             pending_bang: None,
             search_mode: false,
@@ -459,6 +466,39 @@ impl AppState {
             .nth(self.cursor_position)
             .map(|(b, _)| b)
             .unwrap_or(self.input.len())
+    }
+
+    /// Number of logical lines in the input buffer (split on `\n`).
+    /// Includes the empty trailing line created by a final newline so the
+    /// user can keep typing after pressing Shift+Enter.
+    #[inline]
+    pub fn input_line_count(&self) -> usize {
+        self.input.split('\n').count()
+    }
+
+    /// Return the cursor position as `(line, column)` char indices.
+    pub fn cursor_line_col(&self) -> (usize, usize) {
+        let mut line = 0usize;
+        let mut col = 0usize;
+        for (i, c) in self.input.chars().enumerate() {
+            if i == self.cursor_position {
+                return (line, col);
+            }
+            if c == '\n' {
+                line += 1;
+                col = 0;
+            } else {
+                col += 1;
+            }
+        }
+        (line, col)
+    }
+
+    /// Visible height of the input box in terminal rows, including borders.
+    /// Grows with the line count up to `max_rows`.
+    pub fn input_visible_height(&self, max_rows: u16) -> u16 {
+        let lines = self.input_line_count();
+        lines.min(max_rows as usize).max(1) as u16 + 2
     }
 }
 

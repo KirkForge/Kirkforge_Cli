@@ -28,7 +28,14 @@ pub fn render_approval_dialog(
     // (A 12-line fixed dialog truncated the args preview to 4 lines,
     // which made it impossible to read a 200-char `edit_file` argument
     // before approving it.)
-    let dialog_width = area.width.min(60);
+    // When side-by-side diff is requested and the terminal is wide
+    // enough, expand to 80 cols so the two panes are readable.
+    let use_side_by_side = state.approval_diff_side_by_side && area.width >= 80;
+    let dialog_width = if use_side_by_side {
+        area.width.min(80)
+    } else {
+        area.width.min(60)
+    };
     let dialog_height = (area.height * 3 / 4).clamp(10, area.height);
     let x = (area.width.saturating_sub(dialog_width)) / 2;
     let y = (area.height.saturating_sub(dialog_height)) / 2;
@@ -92,12 +99,43 @@ pub fn render_approval_dialog(
             None
         }
     };
+    let path = approval
+        .args
+        .get("path")
+        .and_then(|v| v.as_str())
+        .unwrap_or("-");
+    let diff_stats = crate::tui::components::diff_preview::diff_stats(approval, &reader);
+    let is_outside_cwd = match approval.tool_name.as_str() {
+        "edit_file" | "write_file" => cwd.as_ref().is_some_and(|base| {
+            std::path::Path::new(path)
+                .canonicalize()
+                .map(|canon| !canon.starts_with(base))
+                .unwrap_or(true)
+        }),
+        _ => false,
+    };
+
     let diff_lines = crate::tui::components::diff_preview::format_edit_diff_preview(
         approval,
         dialog_width as usize,
         &reader,
     );
-    if !diff_lines.is_empty() {
+    if use_side_by_side {
+        let side_lines = crate::tui::components::diff_preview::format_side_by_side_diff(
+            approval,
+            dialog_width as usize,
+            &reader,
+        );
+        if !side_lines.is_empty() {
+            visible_lines.push(Line::from(Span::styled(
+                " ── Side-by-side diff ──",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )));
+            visible_lines.extend(side_lines);
+        }
+    } else if !diff_lines.is_empty() {
         // Separator between args and diff.
         visible_lines.push(Line::from(Span::styled(
             " ── Diff preview ──",
@@ -171,12 +209,22 @@ pub fn render_approval_dialog(
         .constraints(constraints)
         .split(inner);
 
-    // [0] Tool name + risk hint
+    // [0] Compact risk summary + risk hint
+    let (added, deleted) = diff_stats
+        .as_ref()
+        .map(|s| (s.added, s.deleted))
+        .unwrap_or((0, 0));
+    let risk_level = risk_summary_level(approval, is_outside_cwd);
+    let summary_color = risk_summary_color(risk_level);
+    let summary = format!(
+        "{}  •  {}  •  +{} / -{} lines  •  {}",
+        approval.tool_name, path, added, deleted, risk_level
+    );
     let name_text = Paragraph::new(vec![
         Line::from(Span::styled(
-            format!(" Tool: {}", approval.tool_name),
+            summary,
             Style::default()
-                .fg(Color::Yellow)
+                .fg(summary_color)
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(Span::styled(
@@ -212,8 +260,13 @@ pub fn render_approval_dialog(
     }
 
     // [last] Instructions
+    let mut instr =
+        String::from(" [Y]es  [N]o  [A]lways  [Esc/Q] cancel    ^C exit    ↑↓ PgUp/PgDn");
+    if area.width >= 80 {
+        instr.push_str("    [Tab] side-by-side");
+    }
     let instr_text = Paragraph::new(vec![Line::from(Span::styled(
-        " [Y]es  [N]o  [A]lways  [Esc/Q] cancel    ^C exit    ↑↓ PgUp/PgDn",
+        instr,
         Style::default().fg(Color::Green),
     ))])
     .alignment(Alignment::Center);
@@ -344,6 +397,28 @@ fn risk_color(approval: &PendingApproval) -> Color {
         Color::Red
     } else {
         Color::Yellow
+    }
+}
+
+/// Human-readable risk level for the compact summary line.
+/// Outside-the-working-directory paths or destructive hints are
+/// classified as "high risk"; read-only work is "low risk".
+fn risk_summary_level(approval: &PendingApproval, is_outside_cwd: bool) -> &'static str {
+    let hint = risk_hint(approval);
+    if is_outside_cwd || hint.starts_with("destructive") {
+        "high risk"
+    } else if hint == "read-only" {
+        "low risk"
+    } else {
+        "medium risk"
+    }
+}
+
+fn risk_summary_color(level: &str) -> Color {
+    match level {
+        "low risk" => Color::Green,
+        "high risk" => Color::Red,
+        _ => Color::Yellow,
     }
 }
 
@@ -505,6 +580,23 @@ mod tests {
     fn test_risk_hint_write_file() {
         let a = make_approval("write_file", json!({"path": "x", "content": "y"}));
         assert_eq!(risk_hint(&a), "creates or overwrites a file");
+    }
+
+    /// Risk summary level mirrors the hint and flags outside-cwd paths.
+    #[test]
+    fn test_risk_summary_level() {
+        let read_only = make_approval("bash", json!({"command": "ls"}));
+        assert_eq!(risk_summary_level(&read_only, false), "low risk");
+
+        let destructive = make_approval("bash", json!({"command": "rm -rf build"}));
+        assert_eq!(risk_summary_level(&destructive, false), "high risk");
+
+        let edit = make_approval(
+            "edit_file",
+            json!({"path": "src/main.rs", "old_string": "a", "new_string": "b"}),
+        );
+        assert_eq!(risk_summary_level(&edit, false), "medium risk");
+        assert_eq!(risk_summary_level(&edit, true), "high risk");
     }
 
     /// `wrap_line` is the building block of `format_args_preview`.

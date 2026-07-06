@@ -12,6 +12,139 @@ struct ListState {
     number: u64,
 }
 
+#[derive(Debug, Default)]
+struct TableState {
+    alignments: Vec<pulldown_cmark::Alignment>,
+    rows: Vec<Vec<String>>,
+    current_row: Vec<String>,
+    current_cell: String,
+}
+
+impl TableState {
+    fn start_cell(&mut self) {
+        self.current_cell.clear();
+    }
+
+    fn end_cell(&mut self) {
+        let cell = std::mem::take(&mut self.current_cell);
+        self.current_row.push(cell.trim().to_string());
+    }
+
+    fn end_row(&mut self) {
+        if !self.current_row.is_empty() {
+            self.rows.push(std::mem::take(&mut self.current_row));
+        }
+    }
+}
+
+/// Render a collected table as plain-text grid lines.
+///
+/// `width` is the content width in columns; cells are truncated with an
+/// ellipsis rather than wrapped, keeping each row one line tall.
+fn render_table(state: TableState, query: &str, width: usize) -> Vec<Line<'static>> {
+    let TableState {
+        alignments, rows, ..
+    } = state;
+    if rows.is_empty() {
+        return Vec::new();
+    }
+
+    let col_count = alignments
+        .len()
+        .max(rows.first().map(|r| r.len()).unwrap_or(0));
+    let usable_width = width.saturating_sub(col_count.saturating_sub(1) * 3 + 2); // "| " and " |" around cells
+    let min_col = 3usize;
+    let max_col = if col_count == 0 {
+        return Vec::new();
+    } else {
+        (usable_width / col_count).max(min_col)
+    };
+
+    // Compute per-column max width, capped at max_col.
+    let mut col_widths = vec![min_col; col_count];
+    for row in &rows {
+        for (i, cell) in row.iter().enumerate().take(col_count) {
+            let visual_len = cell.chars().count();
+            col_widths[i] = col_widths[i].max(visual_len).min(max_col);
+        }
+    }
+
+    let base_style = Style::default().fg(Color::White);
+    let mut out: Vec<Line<'static>> = Vec::new();
+
+    // Render separator after header if there is more than one row.
+    let has_header = rows.len() > 1;
+
+    for (row_idx, row) in rows.iter().enumerate() {
+        let mut spans: Vec<Span<'static>> = Vec::new();
+        spans.push(Span::raw("| "));
+        for (col, w) in col_widths.iter().enumerate().take(col_count) {
+            let cell = row.get(col).map(|s| s.as_str()).unwrap_or("");
+            let padded = format_table_cell(cell, *w, alignments.get(col));
+            let cell_spans = highlight_line_spans(
+                &padded,
+                query,
+                if row_idx == 0 && has_header {
+                    base_style.add_modifier(Modifier::BOLD)
+                } else {
+                    base_style
+                },
+            );
+            spans.extend(cell_spans);
+            spans.push(Span::raw(" | "));
+        }
+        // Remove the trailing " | " after the last cell and replace with " |".
+        if spans.len() >= 2 {
+            spans.truncate(spans.len().saturating_sub(1));
+            spans.push(Span::raw(" |"));
+        }
+        out.push(Line::from(spans));
+
+        if row_idx == 0 && has_header {
+            let mut sep = String::from("|");
+            for w in &col_widths {
+                sep.push_str(&"-".repeat(*w));
+                sep.push('|');
+            }
+            out.push(Line::from(Span::styled(
+                sep,
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
+    }
+
+    out
+}
+
+fn format_table_cell(
+    text: &str,
+    width: usize,
+    align: Option<&pulldown_cmark::Alignment>,
+) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let visual_len = chars.len();
+    if visual_len > width {
+        let keep = width.saturating_sub(1);
+        let mut s: String = chars.into_iter().take(keep).collect();
+        s.push('…');
+        return s;
+    }
+    let pad = width.saturating_sub(visual_len);
+    match align {
+        Some(pulldown_cmark::Alignment::Center) => {
+            let left = pad / 2;
+            let right = pad - left;
+            format!("{}{}{}", " ".repeat(left), text, " ".repeat(right))
+        }
+        Some(pulldown_cmark::Alignment::Right) => {
+            format!("{}{}", " ".repeat(pad), text)
+        }
+        _ => {
+            format!("{}{}", text, " ".repeat(pad))
+        }
+    }
+}
+
 fn current_style(style_stack: &[Style]) -> Style {
     style_stack
         .iter()
@@ -167,16 +300,46 @@ pub(crate) fn highlight_line_spans(
     spans
 }
 
+fn blockquote_style() -> Style {
+    Style::default()
+        .fg(Color::Rgb(180, 180, 180))
+        .add_modifier(Modifier::ITALIC)
+}
+
 fn flush_current(lines: &mut Vec<Line<'static>>, current_line: &mut Vec<Span<'static>>) {
-    if !current_line.is_empty() {
+    flush_current_with_prefix(lines, current_line, 0);
+}
+
+fn flush_current_with_prefix(
+    lines: &mut Vec<Line<'static>>,
+    current_line: &mut Vec<Span<'static>>,
+    blockquote_depth: usize,
+) {
+    if current_line.is_empty() {
+        return;
+    }
+    if blockquote_depth > 0 {
+        let mut prefixed = vec![Span::styled(
+            "▌".repeat(blockquote_depth) + " ",
+            blockquote_style(),
+        )];
+        prefixed.extend(std::mem::take(current_line));
+        lines.push(Line::from(prefixed));
+    } else {
         lines.push(Line::from(std::mem::take(current_line)));
     }
 }
 
-/// Push a single blank line, but avoid stacking multiple blanks.
-fn push_blank(lines: &mut Vec<Line<'static>>) {
+fn push_blank_with_depth(lines: &mut Vec<Line<'static>>, blockquote_depth: usize) {
     if lines.last().map(|l| !l.spans.is_empty()).unwrap_or(true) {
-        lines.push(Line::from(""));
+        if blockquote_depth > 0 {
+            lines.push(Line::from(Span::styled(
+                "▌".repeat(blockquote_depth) + " ",
+                blockquote_style(),
+            )));
+        } else {
+            lines.push(Line::from(""));
+        }
     }
 }
 
@@ -184,12 +347,18 @@ fn push_blank(lines: &mut Vec<Line<'static>>) {
 ///
 /// Uses `pulldown-cmark` for full CommonMark support: headings, paragraphs,
 /// unordered/ordered lists, links, code blocks, bold, italic, strikethrough,
-/// and inline code. Blockquotes render as plain paragraphs in this version.
+/// inline code, blockquotes, and tables. `content_width` sizes table columns;
+/// pass `0` to render cells as-is.
 ///
 /// Search matches for `query` are highlighted inline (case-insensitive).
 /// Pass an empty string to skip highlighting.
-pub fn render_markdown_lines_with_query(text: &str, query: &str) -> Vec<Line<'static>> {
-    let parser = pulldown_cmark::Parser::new(text);
+pub fn render_markdown_lines_with_query(
+    text: &str,
+    query: &str,
+    content_width: usize,
+) -> Vec<Line<'static>> {
+    let options = pulldown_cmark::Options::ENABLE_TABLES;
+    let parser = pulldown_cmark::Parser::new_ext(text, options);
     let mut lines: Vec<Line<'static>> = Vec::new();
     let mut current_line: Vec<Span<'static>> = Vec::new();
     let mut style_stack: Vec<Style> = Vec::new();
@@ -198,6 +367,8 @@ pub fn render_markdown_lines_with_query(text: &str, query: &str) -> Vec<Line<'st
     let mut code_block_badge_emitted = false;
     let mut code_highlighter = highlighter_for(None);
     let mut list_stack: Vec<ListState> = Vec::new();
+    let mut blockquote_depth: usize = 0;
+    let mut table_state: Option<TableState> = None;
 
     for event in parser {
         match event {
@@ -272,16 +443,42 @@ pub fn render_markdown_lines_with_query(text: &str, query: &str) -> Vec<Line<'st
                             .add_modifier(Modifier::ITALIC),
                     );
                 }
+                Tag::BlockQuote(_) => {
+                    blockquote_depth += 1;
+                    style_stack.push(blockquote_style());
+                }
+                Tag::Table(alignments) => {
+                    flush_current_with_prefix(&mut lines, &mut current_line, blockquote_depth);
+                    table_state = Some(TableState {
+                        alignments,
+                        ..Default::default()
+                    });
+                }
+                Tag::TableHead => {
+                    if let Some(ref mut t) = table_state {
+                        t.start_cell();
+                    }
+                }
+                Tag::TableRow => {
+                    if let Some(ref mut t) = table_state {
+                        t.current_row.clear();
+                    }
+                }
+                Tag::TableCell => {
+                    if let Some(ref mut t) = table_state {
+                        t.start_cell();
+                    }
+                }
                 _ => {}
             },
             Event::End(tag) => match tag {
                 TagEnd::Paragraph => {
-                    flush_current(&mut lines, &mut current_line);
-                    push_blank(&mut lines);
+                    flush_current_with_prefix(&mut lines, &mut current_line, blockquote_depth);
+                    push_blank_with_depth(&mut lines, blockquote_depth);
                 }
                 TagEnd::Heading(_) => {
-                    flush_current(&mut lines, &mut current_line);
-                    push_blank(&mut lines);
+                    flush_current_with_prefix(&mut lines, &mut current_line, blockquote_depth);
+                    push_blank_with_depth(&mut lines, blockquote_depth);
                     style_stack.pop();
                 }
                 TagEnd::Strong
@@ -292,28 +489,60 @@ pub fn render_markdown_lines_with_query(text: &str, query: &str) -> Vec<Line<'st
                     style_stack.pop();
                 }
                 TagEnd::CodeBlock => {
-                    flush_current(&mut lines, &mut current_line);
+                    flush_current_with_prefix(&mut lines, &mut current_line, blockquote_depth);
                     in_code_block = false;
                     code_block_lang = None;
                     code_block_badge_emitted = false;
                     code_highlighter = highlighter_for(None);
-                    push_blank(&mut lines);
+                    push_blank_with_depth(&mut lines, blockquote_depth);
                 }
                 TagEnd::Item => {
-                    flush_current(&mut lines, &mut current_line);
+                    flush_current_with_prefix(&mut lines, &mut current_line, blockquote_depth);
                 }
                 TagEnd::List(_) => {
                     list_stack.pop();
-                    push_blank(&mut lines);
+                    push_blank_with_depth(&mut lines, blockquote_depth);
+                }
+                TagEnd::BlockQuote(_) => {
+                    flush_current_with_prefix(&mut lines, &mut current_line, blockquote_depth);
+                    blockquote_depth = blockquote_depth.saturating_sub(1);
+                    style_stack.pop();
+                    push_blank_with_depth(&mut lines, blockquote_depth);
+                }
+                TagEnd::Table => {
+                    if let Some(t) = table_state.take() {
+                        let table_lines = render_table(t, query, content_width);
+                        for line in table_lines {
+                            lines.push(line);
+                        }
+                        push_blank_with_depth(&mut lines, blockquote_depth);
+                    }
+                }
+                TagEnd::TableHead => {
+                    if let Some(ref mut t) = table_state {
+                        t.end_row();
+                    }
+                }
+                TagEnd::TableRow => {
+                    if let Some(ref mut t) = table_state {
+                        t.end_row();
+                    }
+                }
+                TagEnd::TableCell => {
+                    if let Some(ref mut t) = table_state {
+                        t.end_cell();
+                    }
                 }
                 _ => {}
             },
             Event::Text(t) => {
-                if in_code_block {
+                if let Some(ref mut table) = table_state {
+                    table.current_cell.push_str(&t);
+                } else if in_code_block {
                     // Code blocks render as standalone bordered lines; flush any
                     // open inline line first so the border/background block is
                     // self-contained.
-                    flush_current(&mut lines, &mut current_line);
+                    flush_current_with_prefix(&mut lines, &mut current_line, blockquote_depth);
                     if !code_block_badge_emitted {
                         code_block_badge_emitted = true;
                         lines.push(code_block_header_line(&code_block_lang));
@@ -329,7 +558,15 @@ pub fn render_markdown_lines_with_query(text: &str, query: &str) -> Vec<Line<'st
                             // bare border line; skip it.
                             continue;
                         }
-                        let mut line_spans = vec![Span::styled("▕ ", border_style)];
+                        let mut line_spans = if blockquote_depth > 0 {
+                            vec![Span::styled(
+                                "▌".repeat(blockquote_depth) + " ",
+                                blockquote_style(),
+                            )]
+                        } else {
+                            Vec::new()
+                        };
+                        line_spans.push(Span::styled("▕ ", border_style));
                         if !chunk.is_empty() {
                             let code_spans = highlight_line(&mut code_highlighter, chunk, style);
                             if query.is_empty() {
@@ -352,12 +589,12 @@ pub fn render_markdown_lines_with_query(text: &str, query: &str) -> Vec<Line<'st
                 current_line.extend(highlight_line_spans(&c, query, inline_code_style()));
             }
             Event::SoftBreak | Event::HardBreak => {
-                flush_current(&mut lines, &mut current_line);
+                flush_current_with_prefix(&mut lines, &mut current_line, blockquote_depth);
             }
             Event::Rule => {
-                flush_current(&mut lines, &mut current_line);
+                flush_current_with_prefix(&mut lines, &mut current_line, blockquote_depth);
                 lines.push(Line::from("─".repeat(40)));
-                push_blank(&mut lines);
+                push_blank_with_depth(&mut lines, blockquote_depth);
             }
             Event::Html(h) => {
                 current_line.push(Span::styled(
@@ -390,14 +627,24 @@ pub fn render_markdown_lines_with_query(text: &str, query: &str) -> Vec<Line<'st
         }
     }
 
-    flush_current(&mut lines, &mut current_line);
+    flush_current_with_prefix(&mut lines, &mut current_line, blockquote_depth);
 
     // Trim trailing blank lines so the chat panel doesn't pad the end.
-    while lines.last().map(|l| l.spans.is_empty()).unwrap_or(false) {
+    // Blockquote blank lines carry a "▌ " prefix span, so we treat any
+    // line whose spans are empty or consist only of prefix bars as blank.
+    while lines.last().map(is_visual_blank).unwrap_or(false) {
         lines.pop();
     }
 
     lines
+}
+
+/// True if a line is visually blank (empty or only blockquote prefix bars).
+fn is_visual_blank(line: &Line) -> bool {
+    line.spans.iter().all(|s| {
+        let trimmed = s.content.trim();
+        trimmed.is_empty() || trimmed.chars().all(|c| c == '▌' || c == ' ')
+    })
 }
 
 /// Extract the text of every code block in a markdown string, in order.
@@ -645,7 +892,7 @@ mod tests {
 
     #[test]
     fn test_markdown_bold() {
-        let lines = render_markdown_lines_with_query("**bold text**", "");
+        let lines = render_markdown_lines_with_query("**bold text**", "", 80);
         assert_eq!(lines.len(), 1);
         assert_eq!(
             lines[0].spans,
@@ -658,7 +905,7 @@ mod tests {
 
     #[test]
     fn test_markdown_inline_code() {
-        let lines = render_markdown_lines_with_query("use `cargo test`", "");
+        let lines = render_markdown_lines_with_query("use `cargo test`", "", 80);
         assert_eq!(lines.len(), 1);
         assert_eq!(
             lines[0].spans,
@@ -671,7 +918,7 @@ mod tests {
 
     #[test]
     fn test_markdown_heading() {
-        let lines = render_markdown_lines_with_query("# Title\n\nbody", "");
+        let lines = render_markdown_lines_with_query("# Title\n\nbody", "", 80);
         assert_eq!(lines.len(), 3);
         assert_eq!(
             lines[0].spans,
@@ -688,7 +935,7 @@ mod tests {
 
     #[test]
     fn test_markdown_unordered_list() {
-        let lines = render_markdown_lines_with_query("- a\n- b\n- c", "");
+        let lines = render_markdown_lines_with_query("- a\n- b\n- c", "", 80);
         assert_eq!(lines.len(), 3);
         assert_eq!(lines[0].spans[0].content, "- ");
         assert_eq!(lines[0].spans[1].content, "a");
@@ -700,7 +947,7 @@ mod tests {
 
     #[test]
     fn test_markdown_ordered_list() {
-        let lines = render_markdown_lines_with_query("1. first\n2. second", "");
+        let lines = render_markdown_lines_with_query("1. first\n2. second", "", 80);
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0].spans[0].content, "1. ");
         assert_eq!(lines[0].spans[1].content, "first");
@@ -710,7 +957,7 @@ mod tests {
 
     #[test]
     fn test_markdown_nested_inline_styles() {
-        let lines = render_markdown_lines_with_query("**bold *italic* bold**", "");
+        let lines = render_markdown_lines_with_query("**bold *italic* bold**", "", 80);
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].spans.len(), 3);
         assert_eq!(
@@ -734,7 +981,7 @@ mod tests {
 
     #[test]
     fn test_markdown_code_block_with_lang_badge() {
-        let lines = render_markdown_lines_with_query("```rust\nfn main() {}\n```", "");
+        let lines = render_markdown_lines_with_query("```rust\nfn main() {}\n```", "", 80);
         assert_eq!(lines.len(), 2);
         assert_eq!(
             lines[0].spans,
@@ -765,7 +1012,7 @@ mod tests {
 
     #[test]
     fn test_markdown_code_block_without_language_uses_code_fallback() {
-        let lines = render_markdown_lines_with_query("```\nhello\n```", "");
+        let lines = render_markdown_lines_with_query("```\nhello\n```", "", 80);
         assert_eq!(lines.len(), 2);
         assert_eq!(
             lines[0].spans,
@@ -786,7 +1033,7 @@ mod tests {
 
     #[test]
     fn test_markdown_code_block_body_has_background() {
-        let lines = render_markdown_lines_with_query("```python\nprint(1)\n```", "");
+        let lines = render_markdown_lines_with_query("```python\nprint(1)\n```", "", 80);
         let body = &lines[1];
         assert_eq!(body.spans[0].content, "▕ ");
         // Syntax highlighting splits `print(1)` into several spans; every
@@ -803,7 +1050,7 @@ mod tests {
 
     #[test]
     fn test_markdown_indented_code_block_gets_border() {
-        let lines = render_markdown_lines_with_query("    indented\n    block", "");
+        let lines = render_markdown_lines_with_query("    indented\n    block", "", 80);
         // Should produce a header and two body lines.
         assert!(lines.len() >= 3);
         assert_eq!(lines[0].spans[0].content, "▌ ");
@@ -813,7 +1060,7 @@ mod tests {
 
     #[test]
     fn test_markdown_code_block_trims_trailing_newline_border() {
-        let lines = render_markdown_lines_with_query("```\na\n```", "");
+        let lines = render_markdown_lines_with_query("```\na\n```", "", 80);
         // Should be header + one body line; no bare trailing border line.
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[1].spans.len(), 2);
@@ -822,7 +1069,7 @@ mod tests {
 
     #[test]
     fn test_markdown_link() {
-        let lines = render_markdown_lines_with_query("see [docs](https://docs.rs)", "");
+        let lines = render_markdown_lines_with_query("see [docs](https://docs.rs)", "", 80);
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].spans.len(), 2);
         assert_eq!(lines[0].spans[0].content, "see ");
@@ -839,7 +1086,7 @@ mod tests {
 
     #[test]
     fn test_markdown_search_highlight_in_plain_text() {
-        let lines = render_markdown_lines_with_query("hello world", "world");
+        let lines = render_markdown_lines_with_query("hello world", "world", 80);
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].spans.len(), 2);
         assert_eq!(lines[0].spans[0].content, "hello ");
@@ -852,7 +1099,7 @@ mod tests {
 
     #[test]
     fn test_markdown_search_highlight_in_inline_code() {
-        let lines = render_markdown_lines_with_query("use `cargo test`", "cargo");
+        let lines = render_markdown_lines_with_query("use `cargo test`", "cargo", 80);
         assert_eq!(lines.len(), 1);
         // "use " + "cargo" (highlight) + " test" (plain inline code style)
         assert_eq!(lines[0].spans[0].content, "use ");
@@ -866,7 +1113,7 @@ mod tests {
 
     #[test]
     fn test_markdown_search_highlight_in_code_block() {
-        let lines = render_markdown_lines_with_query("```python\nprint(needle)\n```", "needle");
+        let lines = render_markdown_lines_with_query("```python\nprint(needle)\n```", "needle", 80);
         // Header + one body line.
         assert_eq!(lines.len(), 2);
         let body = &lines[1];
@@ -887,7 +1134,7 @@ mod tests {
         // folded string, which would slice the original mid-character and
         // panic. The mapping-aware renderer must align to original byte
         // boundaries.
-        let lines = render_markdown_lines_with_query("İstanbul", "stan");
+        let lines = render_markdown_lines_with_query("İstanbul", "stan", 80);
         assert_eq!(lines.len(), 1);
         let spans: Vec<String> = lines[0]
             .spans
@@ -905,7 +1152,7 @@ mod tests {
         // Code-block highlighting uses `highlight_spans` on the already
         // syntax-highlighted spans, so it must also translate folded offsets
         // back to original byte boundaries.
-        let lines = render_markdown_lines_with_query("```\nİstanbul\n```", "stan");
+        let lines = render_markdown_lines_with_query("```\nİstanbul\n```", "stan", 80);
         assert!(lines.len() >= 2);
         let body = &lines[1];
         let spans: Vec<String> = body.spans.iter().map(|s| s.content.to_string()).collect();
@@ -932,5 +1179,67 @@ mod tests {
     #[test]
     fn test_all_code_blocks_returns_none_for_plain_text() {
         assert!(all_code_blocks("No code here.").is_empty());
+    }
+
+    #[test]
+    fn test_markdown_blockquote_renders_with_bar_and_muted_style() {
+        let lines = render_markdown_lines_with_query("> quoted line", "", 80);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].spans[0].content, "▌ ");
+        assert_eq!(lines[0].spans[1].content, "quoted line");
+        assert!(
+            lines[0].spans[1].style.add_modifier == Modifier::ITALIC,
+            "blockquote text should be italic"
+        );
+    }
+
+    #[test]
+    fn test_markdown_nested_blockquote_renders_multiple_bars() {
+        let lines = render_markdown_lines_with_query(">> nested quote", "", 80);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].spans[0].content, "▌▌ ");
+    }
+
+    #[test]
+    fn test_markdown_table_renders_grid() {
+        let md = "| Name | Value |\n|------|-------|\n| foo  | bar   |";
+        let lines = render_markdown_lines_with_query(md, "", 80);
+        assert!(
+            lines.iter().any(|l| l
+                .spans
+                .iter()
+                .map(|s| s.content.as_ref())
+                .collect::<String>()
+                == "| Name | Value |"),
+            "expected header row, got: {lines:?}"
+        );
+        assert!(
+            lines.iter().any(|l| l
+                .spans
+                .iter()
+                .map(|s| s.content.as_ref())
+                .collect::<String>()
+                == "|----|-----|"),
+            "expected separator, got: {lines:?}"
+        );
+        assert!(
+            lines.iter().any(|l| l
+                .spans
+                .iter()
+                .map(|s| s.content.as_ref())
+                .collect::<String>()
+                == "| foo  | bar   |"),
+            "expected body row, got: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn test_markdown_table_search_highlight() {
+        let md = "| A | B |\n|---|---|\n| x | y |";
+        let lines = render_markdown_lines_with_query(md, "y", 80);
+        assert!(lines.iter().any(|l| l
+            .spans
+            .iter()
+            .any(|s| s.content == "y" && matches!(s.style.bg, Some(Color::Yellow)))));
     }
 }

@@ -122,6 +122,32 @@ fn delete_word_backward(input: &str, cursor_byte: usize) -> (String, usize) {
     (new_input, new_cursor)
 }
 
+/// Return the byte bounds (start, end) of the current line's content,
+/// excluding the surrounding `\n` characters. `cursor_byte` must be a
+/// valid char boundary inside `input`.
+fn current_line_bounds(input: &str, cursor_byte: usize) -> (usize, usize) {
+    let line_start = input[..cursor_byte].rfind('\n').map(|p| p + 1).unwrap_or(0);
+    let line_end = input[cursor_byte..]
+        .find('\n')
+        .map(|p| cursor_byte + p)
+        .unwrap_or(input.len());
+    (line_start, line_end)
+}
+
+/// Convert a `(line, column)` position into the corresponding char-index
+/// cursor position. Columns beyond the line length are clamped to the
+/// line length (i.e. the `\n` position or the end of the string).
+fn char_index_for_line_col(input: &str, target_line: usize, target_col: usize) -> usize {
+    let mut idx = 0usize;
+    for (line_no, line) in input.split('\n').enumerate() {
+        if line_no == target_line {
+            return idx + target_col.min(line.chars().count());
+        }
+        idx += line.chars().count() + 1; // +1 for the newline itself
+    }
+    input.chars().count()
+}
+
 /// Direction for post-search match navigation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SearchDirection {
@@ -436,16 +462,31 @@ pub async fn handle_input_key(
                         return Ok(());
                     }
                     'w' => {
-                        // Ctrl+W: delete word backward using char-index cursor
-                        let (new_input, new_cursor) =
-                            delete_word_backward(&state.input, state.cursor_byte());
-                        state.input = new_input;
-                        state.cursor_position = new_cursor;
+                        // Ctrl+W: delete word backward within the current line.
+                        let byte_pos = state.cursor_byte();
+                        let (line_start, line_end) = current_line_bounds(&state.input, byte_pos);
+                        let line = &state.input[line_start..line_end];
+                        let rel_cursor = byte_pos - line_start;
+                        let (new_line, new_rel_cursor) = delete_word_backward(line, rel_cursor);
+                        state.input = format!(
+                            "{}{}{}",
+                            &state.input[..line_start],
+                            new_line,
+                            &state.input[line_end..]
+                        );
+                        state.cursor_position =
+                            state.input[..line_start].chars().count() + new_rel_cursor;
                     }
                     'u' => {
-                        // Ctrl+U: clear line
-                        state.input.clear();
-                        state.cursor_position = 0;
+                        // Ctrl+U: clear from the start of the current line to
+                        // the cursor. In a single-line input this clears the
+                        // whole line; in a multi-line input it clears only the
+                        // current line's prefix.
+                        let byte_pos = state.cursor_byte();
+                        let (line_start, _) = current_line_bounds(&state.input, byte_pos);
+                        state.input =
+                            format!("{}{}", &state.input[..line_start], &state.input[byte_pos..]);
+                        state.cursor_position = state.input[..line_start].chars().count();
                     }
                     'l' => {
                         // Ctrl+L: clear screen (terminal handles this)
@@ -511,23 +552,52 @@ pub async fn handle_input_key(
             }
         }
         KeyCode::Left => {
-            if state.cursor_position > 0 {
+            let (line, col) = state.cursor_line_col();
+            if col > 0 {
                 state.cursor_position -= 1;
+            } else if line > 0 {
+                let lines: Vec<&str> = state.input.split('\n').collect();
+                let prev_len = lines[line - 1].chars().count();
+                state.cursor_position = char_index_for_line_col(&state.input, line - 1, prev_len);
             }
         }
         KeyCode::Right => {
-            let char_count = state.input.chars().count();
-            if state.cursor_position < char_count {
+            let (line, col) = state.cursor_line_col();
+            let lines: Vec<&str> = state.input.split('\n').collect();
+            let line_len = lines[line].chars().count();
+            if col < line_len {
                 state.cursor_position += 1;
+            } else if line + 1 < lines.len() {
+                state.cursor_position = char_index_for_line_col(&state.input, line + 1, 0);
             }
         }
         KeyCode::Home => {
-            state.cursor_position = 0;
+            let (line, _) = state.cursor_line_col();
+            state.cursor_position = char_index_for_line_col(&state.input, line, 0);
         }
         KeyCode::End => {
-            state.cursor_position = state.input.chars().count();
+            let (line, _) = state.cursor_line_col();
+            let line_len = state
+                .input
+                .split('\n')
+                .nth(line)
+                .map(|l| l.chars().count())
+                .unwrap_or(0);
+            state.cursor_position = char_index_for_line_col(&state.input, line, line_len);
         }
         KeyCode::Enter => {
+            // Shift+Enter / Alt+Enter insert a literal newline instead of
+            // submitting the input. This is the only way to type multi-line
+            // prompts in the TUI input box.
+            if key
+                .modifiers
+                .intersects(KeyModifiers::SHIFT | KeyModifiers::ALT)
+            {
+                let byte_pos = state.cursor_byte();
+                state.input.insert(byte_pos, '\n');
+                state.cursor_position += 1;
+                return Ok(());
+            }
             // v1.2-p14 — `!` bash passthrough. A line beginning with `!`
             // (and at least one non-`!` char after it) runs directly via
             // /bin/sh with no model round trip and (when
@@ -977,15 +1047,35 @@ pub async fn handle_input_key(
             state.thinking_panel_visible = !state.thinking_panel_visible;
         }
         KeyCode::Up => {
-            // Scroll up (see older content)
-            state.auto_scroll = false;
-            state.scroll_offset = state.scroll_offset.saturating_sub(1);
+            if state.input.contains('\n') {
+                let (line, col) = state.cursor_line_col();
+                if line > 0 {
+                    let lines: Vec<&str> = state.input.split('\n').collect();
+                    let new_col = col.min(lines[line - 1].chars().count());
+                    state.cursor_position =
+                        char_index_for_line_col(&state.input, line - 1, new_col);
+                }
+            } else {
+                // Scroll up (see older content)
+                state.auto_scroll = false;
+                state.scroll_offset = state.scroll_offset.saturating_sub(1);
+            }
         }
         KeyCode::Down => {
-            // Scroll down (see newer content)
-            // Clamp to max_scroll so the view doesn't run off the bottom
-            // waiting for the next render to correct it.
-            state.scroll_offset = (state.scroll_offset + 1).min(state.max_scroll);
+            if state.input.contains('\n') {
+                let (line, col) = state.cursor_line_col();
+                let lines: Vec<&str> = state.input.split('\n').collect();
+                if line + 1 < lines.len() {
+                    let new_col = col.min(lines[line + 1].chars().count());
+                    state.cursor_position =
+                        char_index_for_line_col(&state.input, line + 1, new_col);
+                }
+            } else {
+                // Scroll down (see newer content)
+                // Clamp to max_scroll so the view doesn't run off the bottom
+                // waiting for the next render to correct it.
+                state.scroll_offset = (state.scroll_offset + 1).min(state.max_scroll);
+            }
         }
         KeyCode::PageUp => {
             state.auto_scroll = false;
@@ -1060,7 +1150,7 @@ mod tests {
         check(input, cursor_byte, "héllo", 5);
     }
 
-    use super::handle_input_key;
+    use super::{char_index_for_line_col, handle_input_key};
     use crate::session::conversation::ConversationLog;
     use crate::session::executor::TurnEvent;
     use crate::shared::Config;
@@ -1102,6 +1192,189 @@ mod tests {
             search_nav_direction(&key('N', KeyModifiers::CONTROL | KeyModifiers::SHIFT)),
             None
         );
+    }
+
+    #[test]
+    fn char_index_for_line_col_maps_back_to_position() {
+        // line 0: "ab", line 1: "c"
+        let input = "ab\nc";
+        assert_eq!(char_index_for_line_col(input, 0, 0), 0);
+        assert_eq!(char_index_for_line_col(input, 0, 1), 1);
+        assert_eq!(char_index_for_line_col(input, 0, 2), 2); // before newline
+        assert_eq!(char_index_for_line_col(input, 1, 0), 3);
+        assert_eq!(char_index_for_line_col(input, 1, 1), 4);
+        // Clamp past end.
+        assert_eq!(char_index_for_line_col(input, 1, 10), 4);
+    }
+
+    #[tokio::test]
+    async fn shift_enter_inserts_newline_without_sending() {
+        let mut state = AppState::new(Arc::new(RwLock::new(Config::default())));
+        state.input = "hello".into();
+        state.cursor_position = 5;
+
+        let (input_tx, _input_rx) = mpsc::unbounded_channel();
+        let (cancel_tx, _cancel_rx) = mpsc::unbounded_channel();
+        let (resume_tx, _resume_rx) = mpsc::unbounded_channel::<ConversationLog>();
+        let (compact_tx, _compact_rx) = mpsc::unbounded_channel();
+        let (model_tx, _model_rx) = mpsc::unbounded_channel();
+        let (undo_tx, _undo_rx) = mpsc::unbounded_channel();
+        let (config_tx, _config_rx) = mpsc::unbounded_channel::<Config>();
+        let (plan_tx, _plan_rx) = mpsc::unbounded_channel::<bool>();
+        let (persona_tx, _persona_rx) = mpsc::unbounded_channel::<PersonaResult>();
+        let (event_tx, _event_rx) = mpsc::unbounded_channel::<TurnEvent>();
+        let (plugin_reload_tx, _plugin_reload_rx) =
+            mpsc::unbounded_channel::<kirkforge_plugin_host::PluginRegistry>();
+
+        let result = handle_input_key(
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT),
+            &mut state,
+            &input_tx,
+            &cancel_tx,
+            &resume_tx,
+            &compact_tx,
+            &model_tx,
+            &undo_tx,
+            &config_tx,
+            &plan_tx,
+            &persona_tx,
+            &event_tx,
+            &plugin_reload_tx,
+        )
+        .await;
+        assert!(result.is_ok());
+        assert_eq!(state.input, "hello\n");
+        assert_eq!(state.cursor_position, 6);
+        // No message sent.
+        assert!(state.messages.is_empty());
+    }
+
+    #[tokio::test]
+    async fn arrow_keys_move_across_input_lines() {
+        let mut state = AppState::new(Arc::new(RwLock::new(Config::default())));
+        state.input = "ab\ncd".into();
+        // Start at end: line 1, col 2 (char index 4).
+        state.cursor_position = 4;
+
+        let (input_tx, _input_rx) = mpsc::unbounded_channel();
+        let (cancel_tx, _cancel_rx) = mpsc::unbounded_channel();
+        let (resume_tx, _resume_rx) = mpsc::unbounded_channel::<ConversationLog>();
+        let (compact_tx, _compact_rx) = mpsc::unbounded_channel();
+        let (model_tx, _model_rx) = mpsc::unbounded_channel();
+        let (undo_tx, _undo_rx) = mpsc::unbounded_channel();
+        let (config_tx, _config_rx) = mpsc::unbounded_channel::<Config>();
+        let (plan_tx, _plan_rx) = mpsc::unbounded_channel::<bool>();
+        let (persona_tx, _persona_rx) = mpsc::unbounded_channel::<PersonaResult>();
+        let (event_tx, _event_rx) = mpsc::unbounded_channel::<TurnEvent>();
+        let (plugin_reload_tx, _plugin_reload_rx) =
+            mpsc::unbounded_channel::<kirkforge_plugin_host::PluginRegistry>();
+
+        #[allow(clippy::too_many_arguments)]
+        async fn send(
+            state: &mut AppState,
+            key: KeyEvent,
+            input_tx: &mpsc::UnboundedSender<String>,
+            cancel_tx: &mpsc::UnboundedSender<()>,
+            resume_tx: &mpsc::UnboundedSender<ConversationLog>,
+            compact_tx: &mpsc::UnboundedSender<CompactRequest>,
+            model_tx: &mpsc::UnboundedSender<String>,
+            undo_tx: &mpsc::UnboundedSender<()>,
+            config_tx: &mpsc::UnboundedSender<Config>,
+            plan_tx: &mpsc::UnboundedSender<bool>,
+            persona_tx: &mpsc::UnboundedSender<PersonaResult>,
+            event_tx: &mpsc::UnboundedSender<TurnEvent>,
+            plugin_reload_tx: &mpsc::UnboundedSender<kirkforge_plugin_host::PluginRegistry>,
+        ) {
+            handle_input_key(
+                key,
+                state,
+                input_tx,
+                cancel_tx,
+                resume_tx,
+                compact_tx,
+                model_tx,
+                undo_tx,
+                config_tx,
+                plan_tx,
+                persona_tx,
+                event_tx,
+                plugin_reload_tx,
+            )
+            .await
+            .unwrap();
+        }
+
+        send(
+            &mut state,
+            KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+            &input_tx,
+            &cancel_tx,
+            &resume_tx,
+            &compact_tx,
+            &model_tx,
+            &undo_tx,
+            &config_tx,
+            &plan_tx,
+            &persona_tx,
+            &event_tx,
+            &plugin_reload_tx,
+        )
+        .await;
+        assert_eq!(state.cursor_position, 1); // col 1 on line 0 (clamped from 2)
+
+        send(
+            &mut state,
+            KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+            &input_tx,
+            &cancel_tx,
+            &resume_tx,
+            &compact_tx,
+            &model_tx,
+            &undo_tx,
+            &config_tx,
+            &plan_tx,
+            &persona_tx,
+            &event_tx,
+            &plugin_reload_tx,
+        )
+        .await;
+        assert_eq!(state.cursor_position, 4); // back to end of line 1
+
+        send(
+            &mut state,
+            KeyEvent::new(KeyCode::Home, KeyModifiers::NONE),
+            &input_tx,
+            &cancel_tx,
+            &resume_tx,
+            &compact_tx,
+            &model_tx,
+            &undo_tx,
+            &config_tx,
+            &plan_tx,
+            &persona_tx,
+            &event_tx,
+            &plugin_reload_tx,
+        )
+        .await;
+        assert_eq!(state.cursor_position, 3); // start of line 1
+
+        send(
+            &mut state,
+            KeyEvent::new(KeyCode::Left, KeyModifiers::NONE),
+            &input_tx,
+            &cancel_tx,
+            &resume_tx,
+            &compact_tx,
+            &model_tx,
+            &undo_tx,
+            &config_tx,
+            &plan_tx,
+            &persona_tx,
+            &event_tx,
+            &plugin_reload_tx,
+        )
+        .await;
+        assert_eq!(state.cursor_position, 2); // end of line 0
     }
 
     #[tokio::test]

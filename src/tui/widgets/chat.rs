@@ -240,7 +240,8 @@ fn render_entry_lines(
     let mut lines = vec![message_header(entry, prev)];
 
     if entry.role == "assistant" {
-        let md_lines = render_markdown_lines_with_query(&entry.content, search_query);
+        let md_lines =
+            render_markdown_lines_with_query(&entry.content, search_query, content_width);
         for md_line in md_lines {
             if md_line.spans.is_empty()
                 || (md_line.spans.len() == 1 && md_line.spans[0].content.is_empty())

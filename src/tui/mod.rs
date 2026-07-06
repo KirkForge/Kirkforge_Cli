@@ -36,6 +36,7 @@ pub mod widgets;
 use crate::session::carryover::CarryoverProfile;
 use crate::session::conversation::ConversationLog;
 use crate::session::executor::{self, ApprovalRequest};
+use crate::session::prompt::CompactRequest;
 use crate::shared::{Config, Message, Role};
 use app::{AppState, ConnectionState, ConversationEntry};
 use commands::{messages_to_entries, notify_completed_jobs, PersonaKind, PersonaResult};
@@ -281,8 +282,8 @@ pub async fn run_tui(
     let (cancel_tx, cancel_rx) = mpsc::unbounded_channel::<()>();
     // Resume: TUI → Executor (sends a ConversationLog to swap in for fork resumption)
     let (resume_tx, resume_rx) = mpsc::unbounded_channel::<ConversationLog>();
-    // Compact: TUI → Executor (sends () to trigger a /compact pass)
-    let (compact_tx, compact_rx) = mpsc::unbounded_channel::<()>();
+    // Compact: TUI → Executor (sends CompactRequest to trigger a /compact pass)
+    let (compact_tx, compact_rx) = mpsc::unbounded_channel::<CompactRequest>();
     // Model swap: TUI → Executor (sends a model name to install mid-session)
     // Review.md gap #5. Mirror of the other control channels. The
     // TUI owns the sender (passed into `keys::handle_input_key`); the
@@ -553,7 +554,7 @@ async fn run_event_loop(
     input_tx: &mpsc::UnboundedSender<String>,
     cancel_tx: &mpsc::UnboundedSender<()>,
     resume_tx: &mpsc::UnboundedSender<ConversationLog>,
-    compact_tx: &mpsc::UnboundedSender<()>,
+    compact_tx: &mpsc::UnboundedSender<CompactRequest>,
     model_tx: &mpsc::UnboundedSender<String>,
     undo_tx: &mpsc::UnboundedSender<()>,
     config_tx: &mpsc::UnboundedSender<Config>,

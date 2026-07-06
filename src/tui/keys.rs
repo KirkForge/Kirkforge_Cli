@@ -874,6 +874,16 @@ pub async fn handle_input_key(
                             state.messages.push(ConversationEntry::new("system", msg));
                             return Ok(());
                         }
+                        "/plugins" => {
+                            let msg = crate::tui::commands::handle_plugins_command(
+                                args,
+                                state,
+                                plugin_reload_tx,
+                            )
+                            .await;
+                            state.messages.push(ConversationEntry::new("system", msg));
+                            return Ok(());
+                        }
                         _ => {}
                     }
 

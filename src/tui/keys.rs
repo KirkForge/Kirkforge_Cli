@@ -874,6 +874,16 @@ pub async fn handle_input_key(
                             state.messages.push(ConversationEntry::new("system", msg));
                             return Ok(());
                         }
+                        "/plugins" => {
+                            let msg = crate::tui::commands::handle_plugins_command(
+                                args,
+                                state,
+                                plugin_reload_tx,
+                            )
+                            .await;
+                            state.messages.push(ConversationEntry::new("system", msg));
+                            return Ok(());
+                        }
                         _ => {}
                     }
 
@@ -1040,7 +1050,15 @@ mod tests {
         check(input, cursor_byte, "héllo", 5);
     }
 
+    use super::handle_input_key;
+    use crate::session::conversation::ConversationLog;
+    use crate::session::executor::TurnEvent;
+    use crate::shared::Config;
+    use crate::tui::app::AppState;
+    use crate::tui::commands::PersonaResult;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use std::sync::{Arc, RwLock};
+    use tokio::sync::mpsc;
 
     fn key(c: char, mods: KeyModifiers) -> KeyEvent {
         KeyEvent::new(KeyCode::Char(c), mods)
@@ -1073,6 +1091,50 @@ mod tests {
         assert_eq!(
             search_nav_direction(&key('N', KeyModifiers::CONTROL | KeyModifiers::SHIFT)),
             None
+        );
+    }
+
+    #[tokio::test]
+    async fn enter_runs_plugins_command_and_pushes_system_message() {
+        let mut state = AppState::new(Arc::new(RwLock::new(Config::default())));
+        state.input = "/plugins list".into();
+
+        let (input_tx, _input_rx) = mpsc::unbounded_channel();
+        let (cancel_tx, _cancel_rx) = mpsc::unbounded_channel();
+        let (resume_tx, _resume_rx) = mpsc::unbounded_channel::<ConversationLog>();
+        let (compact_tx, _compact_rx) = mpsc::unbounded_channel();
+        let (model_tx, _model_rx) = mpsc::unbounded_channel();
+        let (undo_tx, _undo_rx) = mpsc::unbounded_channel();
+        let (config_tx, _config_rx) = mpsc::unbounded_channel::<Config>();
+        let (plan_tx, _plan_rx) = mpsc::unbounded_channel::<bool>();
+        let (persona_tx, _persona_rx) = mpsc::unbounded_channel::<PersonaResult>();
+        let (event_tx, _event_rx) = mpsc::unbounded_channel::<TurnEvent>();
+        let (plugin_reload_tx, _plugin_reload_rx) =
+            mpsc::unbounded_channel::<kirkforge_plugin_host::PluginRegistry>();
+
+        let result = handle_input_key(
+            KeyEvent::from(KeyCode::Enter),
+            &mut state,
+            &input_tx,
+            &cancel_tx,
+            &resume_tx,
+            &compact_tx,
+            &model_tx,
+            &undo_tx,
+            &config_tx,
+            &plan_tx,
+            &persona_tx,
+            &event_tx,
+            &plugin_reload_tx,
+        )
+        .await;
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(state.messages.len(), 1);
+        assert_eq!(state.messages[0].role, "system");
+        assert!(
+            state.messages[0].content.contains("Active plugins"),
+            "unexpected message: {}",
+            state.messages[0].content
         );
     }
 }

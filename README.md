@@ -49,6 +49,21 @@ kirkforge daemon
 - **Enforced plan mode** — `/plan` locks the executor to read-only tools until you type `/implement`.
 - **Subagent personas** — `/explore`, `/plan`, and `/coder` run isolated fork sessions with restricted toolsets and merge a summary back.
 - **Safe git commit helper** — `/commit` shows status, runs pre-commit sanitation (large files, secrets, conflict markers, unstaged debris) and suggests a conventional-commit message; `/commit "message"` stages all changes and commits after sanitation; `/commit --push "message"` also pushes.
+- **Runtime plugins** — drop a plugin folder into `~/.local/share/kirkforge/plugins/<name>/` and toggle it without restarting: `/plugins list`, `/plugins enable <name>`, `/plugins disable <name>`, `/plugins reload`, `/plugins trust <name> <tier>`.
+
+## Plugins
+
+Plugins are filesystem folders under `~/.local/share/kirkforge/plugins/<name>/`. Each folder must contain a `kirkforge.toml` manifest and any tool/hook/verifier scripts it declares. The host loads them at startup and caps each plugin to the `max_plugin_trust` tier in `config.toml` (read-only → shell → network → unsafe).
+
+Use the TUI slash commands to manage plugins at runtime:
+
+- `/plugins list` — show active, blocked, and available plugin directories.
+- `/plugins enable <name>` — load an available plugin directory.
+- `/plugins disable <name>` — unload a plugin and remove its tools/skills.
+- `/plugins reload` — full rescan of the plugins directory.
+- `/plugins trust <name> <tier>` — session-only re-enable with a specific trust tier.
+
+Satellite repos are kept as distinct folders. To consume one, copy its `plugin/` directory into `~/.local/share/kirkforge/plugins/<name>/` rather than merging code into this repo.
 
 ## Config
 

@@ -36,6 +36,9 @@ pub struct SkillMeta {
     pub trigger: String,
     /// Model hint: "fast", "default", or a specific model name
     pub model: Option<String>,
+    /// If this skill came from a plugin, the plugin name. Used for per-plugin
+    /// unload.
+    pub plugin_name: Option<String>,
 }
 
 /// A loaded skill ready to invoke.
@@ -171,26 +174,56 @@ impl SkillRegistry {
         self.plugin_warnings = warnings;
 
         let mut count = 0;
-        for trigger in self.plugin_registry.skill_triggers() {
-            let Some((manifest, plugin)) = self.plugin_registry.skill_by_trigger(&trigger) else {
+        let plugin_entries: Vec<(
+            kirkforge_plugin::PluginManifest,
+            std::sync::Arc<kirkforge_plugin::LoadedPlugin>,
+        )> = self
+            .plugin_registry
+            .active_plugins()
+            .iter()
+            .map(|p| {
+                (
+                    p.plugin.manifest.clone(),
+                    std::sync::Arc::new(p.plugin.clone()),
+                )
+            })
+            .collect();
+        for (manifest, plugin_arc) in plugin_entries {
+            let plugin = plugin_arc.as_ref() as &dyn kirkforge_plugin::Plugin;
+            count += self.add_plugin(&manifest, plugin);
+        }
+        Ok(count)
+    }
+
+    /// Register skills from one plugin manifest and plugin instance.
+    /// Returns the number of skills added.
+    pub fn add_plugin(
+        &mut self,
+        manifest: &kirkforge_plugin::PluginManifest,
+        plugin: &dyn kirkforge_plugin::Plugin,
+    ) -> usize {
+        let plugins_dir = crate::session::data_dir()
+            .map(|d| d.join("plugins"))
+            .unwrap_or_else(|_| PathBuf::from(".local/share/kirkforge/plugins"));
+
+        let mut count = 0;
+        for cap in &manifest.capabilities {
+            let Capability::Skill {
+                trigger,
+                model_hint,
+                ..
+            } = cap
+            else {
                 continue;
             };
-            let prompt_template = plugin.skill_prompt(&trigger, "").unwrap_or_default();
-            let model_hint = manifest.capabilities.iter().find_map(|c| match c {
-                Capability::Skill {
-                    trigger: t,
-                    model_hint,
-                    ..
-                } if t == &trigger => model_hint.clone(),
-                _ => None,
-            });
-
+            let prompt_template = plugin.skill_prompt(trigger, "").unwrap_or_default();
             let skill = Skill {
                 meta: SkillMeta {
                     name: format!("{}-{}", manifest.name, trigger.trim_start_matches('/')),
                     description: format!("{} [{} plugin]", manifest.description, manifest.trust),
                     trigger: trigger.clone(),
-                    model: model_hint,
+                    model: model_hint.clone(),
+                    plugin_name: Some(manifest.name.clone()),
                 },
                 prompt_body: prompt_template,
                 source_dir: plugin
@@ -203,7 +236,23 @@ impl SkillRegistry {
             self.register(skill);
             count += 1;
         }
-        Ok(count)
+        count
+    }
+
+    /// Remove all skills registered from a named plugin.
+    /// Returns true if any skills were removed.
+    pub fn remove_plugin(&mut self, name: &str) -> bool {
+        let names_to_remove: Vec<String> = self
+            .skills
+            .values()
+            .filter(|s| s.meta.plugin_name.as_deref() == Some(name))
+            .map(|s| s.meta.name.clone())
+            .collect();
+        let removed = !names_to_remove.is_empty();
+        for name in names_to_remove {
+            self.remove(&name);
+        }
+        removed
     }
 
     /// Warnings emitted while loading plugins (trust rejections, parse
@@ -470,6 +519,7 @@ pub fn builtin_skills() -> Vec<Skill> {
                 description: "Show available slash commands".into(),
                 trigger: "/help".into(),
                 model: None,
+                plugin_name: None,
             },
             prompt_body: "List all available skills and their descriptions. \
                           Format as a bullet list with the trigger and description."
@@ -482,6 +532,7 @@ pub fn builtin_skills() -> Vec<Skill> {
                 description: "Show project status summary".into(),
                 trigger: "/status".into(),
                 model: Some("fast".into()),
+                plugin_name: None,
             },
             prompt_body: "Summarize the current git status, recent changes, \
                           and any obvious issues in the project."
@@ -494,6 +545,7 @@ pub fn builtin_skills() -> Vec<Skill> {
                 description: "Explain the selected code or concept".into(),
                 trigger: "/explain".into(),
                 model: Some("fast".into()),
+                plugin_name: None,
             },
             prompt_body: "You are an expert tutor. Explain the user's request \
                           clearly and concisely. If they referenced code, walk \
@@ -507,6 +559,7 @@ pub fn builtin_skills() -> Vec<Skill> {
                 description: "Generate documentation for the current code".into(),
                 trigger: "/docs".into(),
                 model: Some("fast".into()),
+                plugin_name: None,
             },
             prompt_body: "You are a technical writer. Produce clear documentation \
                           (doc comments, README sections, or API notes) for the \
@@ -609,6 +662,7 @@ Body without closing delimiter."#;
                 description: "Run clippy".into(),
                 trigger: "/lint".into(),
                 model: None,
+                plugin_name: None,
             },
             prompt_body: "Run cargo clippy.".into(),
             source_dir: PathBuf::from("."),
@@ -635,6 +689,7 @@ Body without closing delimiter."#;
                 description: "Temp skill".into(),
                 trigger: "/temp".into(),
                 model: None,
+                plugin_name: None,
             },
             prompt_body: "temp".into(),
             source_dir: PathBuf::from("."),
@@ -654,6 +709,7 @@ Body without closing delimiter."#;
                 description: "Test".into(),
                 trigger: "/test".into(),
                 model: None,
+                plugin_name: None,
             },
             prompt_body: "You are a testing assistant.".into(),
             source_dir: PathBuf::from("."),

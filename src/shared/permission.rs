@@ -888,4 +888,138 @@ mod tests {
             assert_eq!(json_str, expected, "mismatch for {variant:?}");
         }
     }
+
+    // ── additional rule-type coverage ─────────────────────────────
+
+    #[test]
+    fn test_evaluate_ask_rule_matching() {
+        let rules = vec![rule("bash", "command", "ls", PermissionAction::Ask)];
+        assert_eq!(
+            evaluate(
+                &rules,
+                "bash",
+                &json!({"command": "ls"}),
+                PermissionAction::Allow
+            ),
+            PermissionAction::Ask,
+            "explicit Ask rule should override Allow default"
+        );
+    }
+
+    #[test]
+    fn test_evaluate_allow_rule_does_not_affect_other_tools() {
+        let rules = vec![rule("bash", "command", "ls", PermissionAction::Allow)];
+        assert_eq!(
+            evaluate(
+                &rules,
+                "edit_file",
+                &json!({"path": "src/main.rs"}),
+                PermissionAction::Ask
+            ),
+            PermissionAction::Ask,
+            "bash allow rule must not apply to edit_file"
+        );
+    }
+
+    #[test]
+    fn test_evaluate_ask_rule_on_path() {
+        let rules = vec![rule(
+            "write_file",
+            "path",
+            "secrets.txt",
+            PermissionAction::Ask,
+        )];
+        assert_eq!(
+            evaluate(
+                &rules,
+                "write_file",
+                &json!({"path": "secrets.txt"}),
+                PermissionAction::Allow
+            ),
+            PermissionAction::Ask
+        );
+    }
+
+    #[test]
+    fn test_evaluate_missing_key_ask_falls_to_default() {
+        let rules = vec![rule("bash", "command", "rm *", PermissionAction::Ask)];
+        // args has no `command` key — Ask rule is skipped, default applies.
+        assert_eq!(
+            evaluate(
+                &rules,
+                "bash",
+                &json!({"path": "x"}),
+                PermissionAction::Allow
+            ),
+            PermissionAction::Allow
+        );
+    }
+
+    #[test]
+    fn test_evaluate_non_string_key_ask_is_skipped() {
+        // A non-string value cannot be matched by an Ask rule; it should
+        // fall through to the default rather than treating the rule as a match.
+        let rules = vec![rule("bash", "command", "rm *", PermissionAction::Ask)];
+        assert_eq!(
+            evaluate(
+                &rules,
+                "bash",
+                &json!({"command": 42}),
+                PermissionAction::Allow
+            ),
+            PermissionAction::Allow
+        );
+    }
+
+    #[test]
+    fn test_evaluate_missing_key_allow_falls_to_default() {
+        let rules = vec![rule("bash", "command", "rm *", PermissionAction::Allow)];
+        assert_eq!(
+            evaluate(&rules, "bash", &json!({"path": "x"}), PermissionAction::Ask),
+            PermissionAction::Ask
+        );
+    }
+
+    #[test]
+    fn test_suggest_rule_read_file_uses_path_key() {
+        let r = suggest_rule("read_file", &json!({"path": "src/main.rs"}));
+        assert_eq!(r.tool, "read_file");
+        assert_eq!(r.key, "path");
+        assert_eq!(r.pattern, "src/main.rs");
+        assert_eq!(r.action, PermissionAction::Allow);
+    }
+
+    #[test]
+    fn test_rule_toml_roundtrip_ask_and_deny() {
+        for action in [PermissionAction::Ask, PermissionAction::Deny] {
+            let r = rule("write_file", "path", "*.txt", action);
+            let toml_str = toml::to_string(&r).unwrap();
+            let parsed: PermissionRule = toml::from_str(&toml_str).unwrap();
+            assert_eq!(parsed, r, "round-trip failed for {action:?}");
+        }
+    }
+
+    #[test]
+    fn test_glob_match_question_mark_does_not_cross_slash() {
+        // `?` matches exactly one character in the current segment.
+        assert!(glob_match("a?c", "abc"));
+        assert!(
+            !glob_match("a?c", "a/c"),
+            "? must not match a path separator"
+        );
+    }
+
+    #[test]
+    fn test_glob_match_double_star_prefix() {
+        // `**` followed by a literal `/` crosses path segments; the value must
+        // contain a slash to consume that literal. This is the same behaviour
+        // documented for `src/**/*.rs` in `test_glob_match_star_in_middle`.
+        assert!(!glob_match("**/foo.rs", "foo.rs"));
+        assert!(glob_match("**/foo.rs", "src/foo.rs"));
+        assert!(glob_match("**/foo.rs", "src/lib/foo.rs"));
+        assert!(!glob_match("**/foo.rs", "src/foo.txt"));
+        // Standalone `**` with no surrounding slash matches anything.
+        assert!(glob_match("**", "foo.rs"));
+        assert!(glob_match("**", "a/b/c"));
+    }
 }

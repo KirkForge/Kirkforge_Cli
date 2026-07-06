@@ -54,6 +54,9 @@ directories = "6"
 # System prompt templating
 handlebars = "6"
 
+# Line-mode history and editing
+rustyline = "14"
+
 # Diff display
 similar = "2"
 

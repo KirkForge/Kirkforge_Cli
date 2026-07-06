@@ -814,11 +814,12 @@ async fn run_event_loop(
 
         terminal.draw(|f| {
             let size = f.area();
+            let input_height = state.input_visible_height(5);
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
                     Constraint::Min(1),
-                    Constraint::Length(3),
+                    Constraint::Length(input_height),
                     Constraint::Length(1),
                 ])
                 .split(size);

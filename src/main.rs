@@ -9,6 +9,7 @@
 
 mod adapters;
 mod daemon;
+mod line_mode;
 mod session;
 mod shared;
 mod tools;
@@ -470,6 +471,12 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
         tracing::warn!(error = %e, "failed to persist updated config");
     }
 
+    // Honor `NO_COLOR` / `TERM=dumb` consistently across all user-facing
+    // output, including the session-restoration message printed before the
+    // TUI/line-mode branch is chosen.
+    let no_color =
+        std::env::var("NO_COLOR").is_ok() || std::env::var("TERM").is_ok_and(|t| t == "dumb");
+
     // Resolve the launch-time cwd exactly once, then freeze it on the
     // Config. Review.md arch concern #3: previously, `Config::default()`
     // did this resolution, which (a) ran before any validation, and
@@ -568,7 +575,9 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     let (mut conversation, open_outcome) = session::conversation::ConversationLog::open(log_path)?;
     conversation = conversation.with_checkpoint_interval(config.checkpoint_interval_messages);
     if let session::conversation::OpenOutcome::Restored(messages) = open_outcome {
-        eprintln!("⚠️  Session log was corrupt; restored {messages} message(s) from checkpoint.");
+        let warn_icon = line_mode::symbol(no_color, "⚠️");
+        let warn_sep = if warn_icon.is_empty() { "" } else { " " };
+        eprintln!("{warn_icon}{warn_sep}Session log was corrupt; restored {messages} message(s) from checkpoint.");
     }
 
     let adapter = adapters::caching::maybe_wrap_cached(
@@ -683,8 +692,6 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     // the TUI cannot render. Fall back to the same line-mode loop that
     // --non-interactive uses, but read from stdin instead of a pre-baked
     // prompt list so the user can still chat.
-    let no_color =
-        std::env::var("NO_COLOR").is_ok() || std::env::var("TERM").is_ok_and(|t| t == "dumb");
     let use_tui = !no_tui && !non_interactive && !no_color && std::io::stdout().is_terminal();
     if use_tui {
         tui::run_tui(
@@ -707,6 +714,7 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
             output,
             max_turns,
             non_interactive,
+            no_color,
             &plugin_registry,
         )
         .await
@@ -750,6 +758,7 @@ async fn run_line_mode(
     output: crate::shared::OutputFormat,
     max_turns: usize,
     non_interactive: bool,
+    no_color: bool,
     plugin_registry: &kirkforge_plugin_host::PluginRegistry,
 ) -> anyhow::Result<()> {
     // If running in non-interactive mode (scripted), deny all approvals.
@@ -778,7 +787,7 @@ async fn run_line_mode(
     if non_interactive {
         spawn_non_interactive_approval_handler(approval_rx);
     } else {
-        spawn_line_mode_approval_handler(approval_rx);
+        spawn_line_mode_approval_handler(approval_rx, no_color);
     }
 
     if let Some(sys) = &system {
@@ -787,9 +796,7 @@ async fn run_line_mode(
 
     let cancelled = std::sync::atomic::AtomicBool::new(false);
 
-    let stdin = std::io::stdin();
-    let mut reader = stdin.lock();
-    let mut line_buf = String::new();
+    let mut line_reader = line_mode::LineReader::new(!non_interactive)?;
     let mut turn_no: usize = 0;
     let mut total_prompt_tokens: usize = 0;
     let mut total_completion_tokens: usize = 0;
@@ -798,7 +805,7 @@ async fn run_line_mode(
     let mut final_error: Option<String> = None;
     let overall_started = std::time::Instant::now();
 
-    while let Some(input) = next_prompt(&mut reader, &mut line_buf)? {
+    while let Some(input) = line_reader.next_line().await? {
         turn_no += 1;
         if max_turns > 0 && turn_no > max_turns {
             tracing::info!(
@@ -826,14 +833,18 @@ async fn run_line_mode(
                 Ok((registry, warnings)) => {
                     let summary = executor.reload_plugins(&registry);
                     if output == crate::shared::OutputFormat::Text {
-                        println!("🔌 {summary}");
+                        let icon = line_mode::symbol(no_color, "🔌");
+                        let sep = if icon.is_empty() { "" } else { " " };
+                        println!("{icon}{sep}{summary}");
                     }
                     for w in warnings {
                         tracing::warn!(warning = %w, "plugin reload warning");
                     }
                 }
                 Err(e) => {
-                    eprintln!("❌ Plugin reload failed: {e}");
+                    let icon = line_mode::symbol(no_color, "❌");
+                    let sep = if icon.is_empty() { "" } else { " " };
+                    eprintln!("{icon}{sep}Plugin reload failed: {e}");
                 }
             }
             continue;
@@ -843,7 +854,9 @@ async fn run_line_mode(
             // Line mode has no AppState skill registry; just report that the
             // interactive skill reload is a TUI-only feature.
             if output == crate::shared::OutputFormat::Text {
-                println!("🧠 Skill reload is only available in the TUI. Use /help to see available line-mode commands.");
+                let icon = line_mode::symbol(no_color, "🧠");
+                let sep = if icon.is_empty() { "" } else { " " };
+                println!("{icon}{sep}Skill reload is only available in the TUI. Use /help to see available line-mode commands.");
             }
             continue;
         }
@@ -952,6 +965,7 @@ async fn run_line_mode(
 /// the runtime alive while it waits forever on a quiet terminal.
 fn spawn_line_mode_approval_handler(
     mut approval_rx: mpsc::UnboundedReceiver<session::executor::ApprovalRequest>,
+    no_color: bool,
 ) {
     tokio::spawn(async move {
         while let Some(req) = approval_rx.recv().await {
@@ -959,8 +973,10 @@ fn spawn_line_mode_approval_handler(
                 Ok(s) => s,
                 Err(_) => req.args.to_string(),
             };
+            let warn_icon = line_mode::symbol(no_color, "⚠️");
+            let warn_sep = if warn_icon.is_empty() { "" } else { " " };
             eprintln!();
-            eprintln!("⚠️  Approval required: {}", req.tool_name);
+            eprintln!("{warn_icon}{warn_sep}Approval required: {}", req.tool_name);
             eprintln!("{args_preview}");
             eprint!("Approve? [y/N]: ");
             if let Err(e) = std::io::stderr().flush() {
@@ -1252,6 +1268,7 @@ fn resolve_continue_path(value: &str) -> anyhow::Result<std::path::PathBuf> {
 /// one-shot `run_turn` flow. The function is pure (it takes a
 /// `&mut String` buffer for reuse, but otherwise has no side
 /// effects) and is the unit-testable seam for the loop driver.
+#[cfg(test)]
 fn next_prompt<R: std::io::BufRead>(
     reader: &mut R,
     buf: &mut String,

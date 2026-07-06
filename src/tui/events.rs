@@ -157,6 +157,8 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
             condensed_assistant_turns,
             original_count,
             compacted_count,
+            tokens_before,
+            tokens_after,
         } => {
             // Rebuild the TUI's display list from the new
             // executor-side history. The executor is already
@@ -204,7 +206,7 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
             rebuilt.push(ConversationEntry::new(
                 "system",
                 format!(
-                    "🧹 Compacted: {original_count} → {compacted_count} messages, dropped {dropped_tool_results} tool result(s), condensed {condensed_assistant_turns} assistant turn(s)."
+                    "🧹 Compacted: {original_count} → {compacted_count} messages ({tokens_before} → {tokens_after} tokens), dropped {dropped_tool_results} tool result(s), condensed {condensed_assistant_turns} assistant turn(s)."
                 ),
             ));
             state.messages = rebuilt;
@@ -603,6 +605,8 @@ mod tests {
                 condensed_assistant_turns: 2,
                 original_count: 10,
                 compacted_count: 4,
+                tokens_before: 100,
+                tokens_after: 20,
             },
         );
         // The two kept messages plus the status line
@@ -645,6 +649,8 @@ mod tests {
                 condensed_assistant_turns: 0,
                 original_count: 10,
                 compacted_count: 2,
+                tokens_before: 100,
+                tokens_after: 2,
             },
         );
         // "hi" (2) + "hello" (5) = 7 chars, /4 = 1 token each, + 1 = 2.
@@ -691,6 +697,8 @@ mod tests {
                 condensed_assistant_turns: 0,
                 original_count: 1,
                 compacted_count: 1,
+                tokens_before: 2000,
+                tokens_after: 2000,
             },
         );
         // The tool call alone is ~2k tokens (8k chars / 4).
@@ -726,6 +734,8 @@ mod tests {
                 condensed_assistant_turns: 5,
                 original_count: 50,
                 compacted_count: 4,
+                tokens_before: 110_000,
+                tokens_after: 200,
             },
         );
         // 4 messages * 200 chars / 4 = 200 tokens total.

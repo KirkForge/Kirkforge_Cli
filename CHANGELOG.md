@@ -21,6 +21,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Default model changed from `deepseek-v4-flash:cloud` to `qwen2.5:7b` so fresh Ollama installs work out of the box
 - `NO_COLOR` / `TERM=dumb` now detected at startup; falls back to line-mode instead of TUI
 
+### Added (Phase 13 — testing, benchmarks, coverage)
+- `src/lib.rs` library target so `benches/` and `tests/` can exercise real adapter/parser code without duplication.
+- Criterion benchmark `benches/first_token_latency.rs` measuring NDJSON parser first-token latency.
+- Mock Ollama server integration tests (`tests/mock_ollama.rs`) using `wiremock` so adapter streaming paths run in CI without a live model.
+- Property-based tests for `edit_file` exact/fuzzy replacement invariants via `proptest`.
+- Additional `ollama_ndjson` parser regression tests for malformed JSON, non-UTF-8 lines, transport errors, empty thinking, `done_reason` variants, and cached token shapes.
+- Adapter-selection unit tests covering GLM/DeepSeek/Gemini/OpenAI-compat routing and override behavior.
+
 ### Fixed
 - Config file (`~/.local/share/kirkforge/config.toml`) now created with `0o600` permissions instead of world-readable `0644`; all three write paths covered (create, hot-reload, `save_config`)
 - TUI exit no longer hangs for minutes when an Ollama HTTP call is in-flight:

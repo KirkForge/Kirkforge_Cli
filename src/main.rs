@@ -7,16 +7,9 @@
 // handling or explicit expect() with a justification.
 #![cfg_attr(not(test), deny(clippy::unwrap_used))]
 
-mod adapters;
-mod daemon;
-mod line_mode;
-mod session;
-mod shared;
-mod tools;
-mod tui;
-
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::Shell;
+use kirkforge::{adapters, daemon, line_mode, session, shared, tools, tui};
 use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
 use tokio::sync::mpsc;
@@ -181,7 +174,7 @@ enum Command {
         non_interactive: bool,
 
         #[arg(long, default_value = "text")]
-        output: crate::shared::OutputFormat,
+        output: kirkforge::shared::OutputFormat,
 
         /// Cap on the number of turns in non-interactive mode. Each
         /// non-empty line on stdin is one turn. 0 = unlimited (run
@@ -306,8 +299,8 @@ async fn main() {
             Ok(())
         }
         Command::Metrics => {
-            let summary = crate::shared::metrics::summarize();
-            println!("{}", crate::shared::metrics::format_summary(&summary));
+            let summary = kirkforge::shared::metrics::summarize();
+            println!("{}", kirkforge::shared::metrics::format_summary(&summary));
             Ok(())
         }
         Command::Sessions {
@@ -428,7 +421,7 @@ struct RunArgs {
     system: Option<String>,
     resume: Option<String>,
     non_interactive: bool,
-    output: crate::shared::OutputFormat,
+    output: kirkforge::shared::OutputFormat,
     max_turns: usize,
     continue_session: Option<String>,
     auto_resume: bool,
@@ -548,7 +541,7 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
                 // In machine-readable output modes the hint would pollute
                 // stderr that callers may capture; only show it in plain
                 // text mode where a human is reading the terminal.
-                if output == crate::shared::OutputFormat::Text {
+                if output == kirkforge::shared::OutputFormat::Text {
                     print_recent_sessions_hint(&sessions);
                 }
                 let sessions_dir = data_dir.join("sessions");
@@ -570,7 +563,7 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
         .map(|s| s.trim_end_matches(".conv").to_string())
         .unwrap_or_else(|| session_id.to_string());
     daemon::client::try_touch(&touch_id, log_path.clone()).await;
-    crate::session::session_index::touch_session(&touch_id, &log_path);
+    kirkforge::session::session_index::touch_session(&touch_id, &log_path);
 
     let (mut conversation, open_outcome) = session::conversation::ConversationLog::open(log_path)?;
     conversation = conversation.with_checkpoint_interval(config.checkpoint_interval_messages);
@@ -644,7 +637,7 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     let shared_config = std::sync::Arc::new(std::sync::RwLock::new(config));
 
     // --- MCP tools ---
-    let cfg_for_mcp = crate::shared::read_shared_config(&shared_config).clone();
+    let cfg_for_mcp = kirkforge::shared::read_shared_config(&shared_config).clone();
     if !cfg_for_mcp.mcp_servers.is_empty() {
         let mcp_mgr = session::mcp_client::McpClientManager::new(&cfg_for_mcp.mcp_servers).await;
         let mcp_tool_count = mcp_mgr.tool_count();
@@ -659,7 +652,7 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     }
 
     // ── Plugin tools ──
-    let cfg_for_plugins = crate::shared::read_shared_config(&shared_config).clone();
+    let cfg_for_plugins = kirkforge::shared::read_shared_config(&shared_config).clone();
     let (plugin_registry, plugin_warnings) =
         session::plugin_tools::load_plugin_registry(&cfg_for_plugins).unwrap_or_else(|e| {
             tracing::warn!(error = %e, "failed to load plugin registry");
@@ -738,7 +731,7 @@ fn spawn_non_interactive_approval_handler(
                 args = %req.args,
                 "non-interactive run denied approval for tool; use interactive mode or add a permission rule that explicitly allows this operation"
             );
-            crate::send_or_warn!(req.response.send(session::executor::ApprovalResponse::DeniedWithReason(
+            kirkforge::send_or_warn!(req.response.send(session::executor::ApprovalResponse::DeniedWithReason(
                 "non-interactive mode cannot approve destructive tools; use interactive mode or add a permission rule".into(),
             )), "approval response receiver dropped; response discarded");
         }
@@ -747,15 +740,15 @@ fn spawn_non_interactive_approval_handler(
 
 #[allow(clippy::too_many_arguments)]
 async fn run_line_mode(
-    config: crate::shared::SharedConfig,
+    config: kirkforge::shared::SharedConfig,
     adapter: Box<dyn adapters::ModelAdapter>,
-    tools: crate::session::toolset::CompositeToolset,
+    tools: kirkforge::session::toolset::CompositeToolset,
     conversation: (
         session::conversation::ConversationLog,
         session::conversation::OpenOutcome,
     ),
     system: Option<String>,
-    output: crate::shared::OutputFormat,
+    output: kirkforge::shared::OutputFormat,
     max_turns: usize,
     non_interactive: bool,
     no_color: bool,
@@ -801,7 +794,7 @@ async fn run_line_mode(
     let mut total_prompt_tokens: usize = 0;
     let mut total_completion_tokens: usize = 0;
     let mut cumulative_cost: f64 = 0.0;
-    let mut all_tool_records: Vec<crate::shared::ToolCallRecord> = Vec::new();
+    let mut all_tool_records: Vec<kirkforge::shared::ToolCallRecord> = Vec::new();
     let mut final_error: Option<String> = None;
     let overall_started = std::time::Instant::now();
 
@@ -821,18 +814,18 @@ async fn run_line_mode(
         // `/quit` behave consistently with the TUI.
         let trimmed = input.trim();
         if trimmed == "/exit" || trimmed == "/quit" {
-            if output == crate::shared::OutputFormat::Text {
+            if output == kirkforge::shared::OutputFormat::Text {
                 println!("Exiting.");
             }
             break;
         }
 
         if trimmed == "/reload plugins" {
-            let cfg = crate::shared::read_shared_config(&config).clone();
+            let cfg = kirkforge::shared::read_shared_config(&config).clone();
             match session::plugin_tools::load_plugin_registry(&cfg) {
                 Ok((registry, warnings)) => {
                     let summary = executor.reload_plugins(&registry);
-                    if output == crate::shared::OutputFormat::Text {
+                    if output == kirkforge::shared::OutputFormat::Text {
                         let icon = line_mode::symbol(no_color, "🔌");
                         let sep = if icon.is_empty() { "" } else { " " };
                         println!("{icon}{sep}{summary}");
@@ -853,7 +846,7 @@ async fn run_line_mode(
         if trimmed == "/reload skills" {
             // Line mode has no AppState skill registry; just report that the
             // interactive skill reload is a TUI-only feature.
-            if output == crate::shared::OutputFormat::Text {
+            if output == kirkforge::shared::OutputFormat::Text {
                 let icon = line_mode::symbol(no_color, "🧠");
                 let sep = if icon.is_empty() { "" } else { " " };
                 println!("{icon}{sep}Skill reload is only available in the TUI. Use /help to see available line-mode commands.");
@@ -863,7 +856,7 @@ async fn run_line_mode(
 
         if trimmed == "/carryover show" || trimmed == "/carryover" {
             let profile = session::carryover::load_carryover();
-            if output == crate::shared::OutputFormat::Text {
+            if output == kirkforge::shared::OutputFormat::Text {
                 if profile.session_count == 0 {
                     println!("No carryover profile yet.");
                 } else {
@@ -878,14 +871,14 @@ async fn run_line_mode(
 
         if trimmed == "/carryover clear" {
             session::carryover::clear_carryover();
-            if output == crate::shared::OutputFormat::Text {
+            if output == kirkforge::shared::OutputFormat::Text {
                 println!("Carryover profile cleared.");
             }
             continue;
         }
 
         if trimmed == "/help" || trimmed == "/h" || trimmed == "/?" {
-            if output == crate::shared::OutputFormat::Text {
+            if output == kirkforge::shared::OutputFormat::Text {
                 println!("Built-in line-mode commands:");
                 println!("  /exit, /quit          Exit the session");
                 println!("  /reload               Reload config.toml");
@@ -917,16 +910,16 @@ async fn run_line_mode(
         return Ok(());
     }
 
-    if output == crate::shared::OutputFormat::Text {
+    if output == kirkforge::shared::OutputFormat::Text {
         println!();
     }
 
-    if output == crate::shared::OutputFormat::Json {
+    if output == kirkforge::shared::OutputFormat::Json {
         let total_duration_ms = overall_started.elapsed().as_millis() as u64;
         let recorded_messages: Vec<_> = executor.conversation_log().all().to_vec();
-        let summary = crate::shared::SessionSummary {
+        let summary = kirkforge::shared::SessionSummary {
             version: "1.0".into(),
-            session: crate::shared::SessionInfo {
+            session: kirkforge::shared::SessionInfo {
                 id: if non_interactive {
                     "non-interactive".into()
                 } else {
@@ -938,7 +931,7 @@ async fn run_line_mode(
             },
             messages: recorded_messages,
             tool_calls: all_tool_records,
-            usage: crate::shared::UsageSummary {
+            usage: kirkforge::shared::UsageSummary {
                 prompt_tokens: total_prompt_tokens,
                 completion_tokens: total_completion_tokens,
                 total_tokens: total_prompt_tokens + total_completion_tokens,
@@ -1011,7 +1004,7 @@ fn spawn_line_mode_approval_handler(
                 // If the tokio side already timed out, this send is
                 // harmless; the leftover thread will exit once the user
                 // finally provides input or the process terminates.
-                crate::send_or_warn!(
+                kirkforge::send_or_warn!(
                     answer_tx.send(approved),
                     "line-mode answer channel receiver dropped"
                 );
@@ -1030,7 +1023,7 @@ fn spawn_line_mode_approval_handler(
             } else {
                 session::executor::ApprovalResponse::Denied
             };
-            crate::send_or_warn!(
+            kirkforge::send_or_warn!(
                 req.response.send(resp),
                 "approval response receiver dropped; response discarded"
             );
@@ -1057,11 +1050,11 @@ fn print_json_line(value: &serde_json::Value) {
 #[allow(clippy::too_many_arguments)]
 fn emit_turn_events(
     events: &[session::executor::TurnEvent],
-    output: crate::shared::OutputFormat,
+    output: kirkforge::shared::OutputFormat,
     total_prompt_tokens: &mut usize,
     total_completion_tokens: &mut usize,
     cumulative_cost: &mut f64,
-    tool_records: &mut Vec<crate::shared::ToolCallRecord>,
+    tool_records: &mut Vec<kirkforge::shared::ToolCallRecord>,
     final_error: &mut Option<String>,
 ) {
     // Per-tool timing + structured records for the JSON summary.
@@ -1077,26 +1070,26 @@ fn emit_turn_events(
     for event in events {
         match event {
             session::executor::TurnEvent::Token(t) => {
-                if output == crate::shared::OutputFormat::Text {
+                if output == kirkforge::shared::OutputFormat::Text {
                     print!("{t}");
                     if let Err(e) = std::io::stdout().flush() {
                         tracing::debug!(error = %e, "failed to flush stdout token");
                     }
-                } else if output == crate::shared::OutputFormat::StreamJson {
+                } else if output == kirkforge::shared::OutputFormat::StreamJson {
                     let line = serde_json::json!({"type": "token", "content": t});
                     print_json_line(&line);
                 }
             }
             session::executor::TurnEvent::Thinking(t) => {
-                if output == crate::shared::OutputFormat::Text {
+                if output == kirkforge::shared::OutputFormat::Text {
                     eprintln!("\n[thinking] {t}");
-                } else if output == crate::shared::OutputFormat::StreamJson {
+                } else if output == kirkforge::shared::OutputFormat::StreamJson {
                     let line = serde_json::json!({"type": "thinking", "content": t});
                     print_json_line(&line);
                 }
             }
             session::executor::TurnEvent::ToolStart { name, args } => {
-                if output == crate::shared::OutputFormat::StreamJson {
+                if output == kirkforge::shared::OutputFormat::StreamJson {
                     let line = serde_json::json!({"type": "tool_start", "name": name});
                     print_json_line(&line);
                 }
@@ -1113,14 +1106,14 @@ fn emit_turn_events(
                 output: result,
                 success,
             } => {
-                if output == crate::shared::OutputFormat::StreamJson {
+                if output == kirkforge::shared::OutputFormat::StreamJson {
                     let line = serde_json::json!({
                         "type": "tool_result",
                         "name": name,
                         "content": result,
                     });
                     print_json_line(&line);
-                } else if output == crate::shared::OutputFormat::Text {
+                } else if output == kirkforge::shared::OutputFormat::Text {
                     // Keep non-interactive output compact: one line per tool,
                     // and only the body if it failed. Successful tool churn is
                     // the main source of terminal spam.
@@ -1136,7 +1129,7 @@ fn emit_turn_events(
                 // empty args + zero duration.
                 if let Some((start_name, start_args, start_time)) = in_flight.take() {
                     let duration_ms = start_time.elapsed().as_millis() as u64;
-                    let record = crate::shared::ToolCallRecord {
+                    let record = kirkforge::shared::ToolCallRecord {
                         name: start_name,
                         arguments: start_args,
                         result: result.clone(),
@@ -1150,7 +1143,7 @@ fn emit_turn_events(
                 }
             }
             session::executor::TurnEvent::Verification { message, success } => {
-                if output == crate::shared::OutputFormat::StreamJson {
+                if output == kirkforge::shared::OutputFormat::StreamJson {
                     let line = serde_json::json!({
                         "type": "verification",
                         "message": message,
@@ -1161,9 +1154,9 @@ fn emit_turn_events(
             }
             session::executor::TurnEvent::Error(e) => {
                 *final_error = Some(e.clone());
-                if output == crate::shared::OutputFormat::Text {
+                if output == kirkforge::shared::OutputFormat::Text {
                     eprintln!("\n[error] {e}");
-                } else if output == crate::shared::OutputFormat::StreamJson {
+                } else if output == kirkforge::shared::OutputFormat::StreamJson {
                     let line = serde_json::json!({"type": "error", "content": e});
                     print_json_line(&line);
                 }
@@ -1178,7 +1171,7 @@ fn emit_turn_events(
                 *total_completion_tokens += completion_tokens;
                 *cumulative_cost = *cum_cost;
 
-                if output == crate::shared::OutputFormat::StreamJson {
+                if output == kirkforge::shared::OutputFormat::StreamJson {
                     let line = serde_json::json!({
                         "type": "cost",
                         "prompt_tokens": prompt_tokens,
@@ -1194,9 +1187,9 @@ fn emit_turn_events(
                 // event should not arrive. If it does, ignore it.
             }
             session::executor::TurnEvent::Recovered { messages } => {
-                if output == crate::shared::OutputFormat::Text {
+                if output == kirkforge::shared::OutputFormat::Text {
                     eprintln!("\n[recovered] restored {messages} message(s) from checkpoint");
-                } else if output == crate::shared::OutputFormat::StreamJson {
+                } else if output == kirkforge::shared::OutputFormat::StreamJson {
                     let line = serde_json::json!({"type": "recovered", "messages": messages});
                     print_json_line(&line);
                 }
@@ -1210,11 +1203,11 @@ fn emit_turn_events(
                 tokens_after,
                 new_messages: _,
             } => {
-                if output == crate::shared::OutputFormat::Text {
+                if output == kirkforge::shared::OutputFormat::Text {
                     eprintln!(
                         "\n[compaction] {original_count} → {compacted_count} messages ({tokens_before} → {tokens_after} tokens), dropped {dropped_tool_results} tool result(s), condensed {condensed_assistant_turns} assistant turn(s).",
                     );
-                } else if output == crate::shared::OutputFormat::StreamJson {
+                } else if output == kirkforge::shared::OutputFormat::StreamJson {
                     let line = serde_json::json!({
                         "type": "compaction",
                         "original_count": original_count,
@@ -1287,12 +1280,12 @@ fn next_prompt<R: std::io::BufRead>(
 
 /// Print a hint listing recent sessions when running non-interactively
 /// without an explicit resume target.
-fn print_recent_sessions_hint(sessions: &[crate::session::session_index::SessionEntry]) {
+fn print_recent_sessions_hint(sessions: &[kirkforge::session::session_index::SessionEntry]) {
     eprintln!("Recent sessions (run with --auto-resume or --attach <id> to resume):");
     for (i, e) in sessions
         .iter()
         .enumerate()
-        .take(crate::daemon::RECENT_SESSIONS_LIMIT)
+        .take(kirkforge::daemon::RECENT_SESSIONS_LIMIT)
     {
         eprintln!(
             "  {}. {} — {} messages — {}",

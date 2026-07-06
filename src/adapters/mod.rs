@@ -522,4 +522,65 @@ mod tests {
 
         assert!(b3 > b2 && b2 > b1);
     }
+
+    #[test]
+    fn adapter_kind_for_classifies_models() {
+        assert_eq!(
+            adapter_kind_for("qwen2.5:7b", None),
+            AdapterKind::OpenAiCompat
+        );
+        assert_eq!(adapter_kind_for("glm-5", None), AdapterKind::Ollama);
+        assert_eq!(adapter_kind_for("chatglm3", None), AdapterKind::Ollama);
+        assert_eq!(adapter_kind_for("deepseek-v4", None), AdapterKind::Ollama);
+        assert_eq!(adapter_kind_for("gemini-3", None), AdapterKind::Ollama);
+    }
+
+    #[test]
+    fn adapter_kind_for_override_wins() {
+        assert_eq!(
+            adapter_kind_for("my-model", Some("glm")),
+            AdapterKind::Ollama
+        );
+        assert_eq!(
+            adapter_kind_for("my-model", Some("openai")),
+            AdapterKind::OpenAiCompat
+        );
+    }
+
+    #[test]
+    fn adapter_for_selects_glm() {
+        let adapter = adapter_for("glm-5", "http://localhost:11434", None, 30);
+        let info = adapter.model_info();
+        assert_eq!(info.name, "glm-5");
+        assert!(info.supports_thinking);
+    }
+
+    #[test]
+    fn adapter_for_selects_deepseek() {
+        let adapter = adapter_for("deepseek-v4", "http://localhost:11434/", None, 30);
+        let info = adapter.model_info();
+        assert_eq!(info.name, "deepseek-v4");
+        assert!(info.supports_thinking);
+    }
+
+    #[test]
+    fn adapter_for_selects_gemini() {
+        let adapter = adapter_for("gemini-3", "http://host/", None, 30);
+        let info = adapter.model_info();
+        assert_eq!(info.name, "gemini-3");
+        assert!(info.supports_images);
+    }
+
+    #[test]
+    fn adapter_for_selects_openai_compat() {
+        let adapter = adapter_for("qwen2.5:7b", "http://host/", None, 30);
+        assert_eq!(adapter.model_info().name, "qwen2.5:7b");
+    }
+
+    #[test]
+    fn adapter_for_override_selects_concrete_adapter() {
+        // A non-GLM name with override "glm" should still route to GLM.
+        let adapter = adapter_for("my-glm", "http://host/", Some("glm"), 30);
+        assert!(adapter.model_info().supports_thinking);
+    }
 }

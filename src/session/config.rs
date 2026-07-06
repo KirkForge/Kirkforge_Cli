@@ -511,10 +511,14 @@ pub fn config_diff_summary(before: &Config, after: &Config) -> String {
 mod tests {
     use super::*;
 
-    /// Helper to temporarily set an env var for a test.
-    /// Since Rust tests run in parallel, each test function sets/unsets
-    /// the vars it needs — env mutation is safe because each test thread
-    /// has its own env map in practice.
+    /// Serialize tests that mutate process-wide environment variables.
+    /// Rust unit tests run in parallel by default; `std::env::set_var` is
+    /// process-wide, so concurrent env tests can observe each other's state
+    /// and fail sporadically.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Helper to temporarily set an env var for a test. Must be called
+    /// while `ENV_LOCK` is held.
     fn set_env(key: &str, val: Option<&str>) {
         match val {
             Some(v) => std::env::set_var(key, v),
@@ -524,6 +528,7 @@ mod tests {
 
     #[test]
     fn test_env_overrides_model() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
         assert_eq!(cfg.default_model, "qwen2.5:7b");
 
@@ -535,6 +540,7 @@ mod tests {
 
     #[test]
     fn test_env_auto_approve_true() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
         assert!(!cfg.auto_approve);
 
@@ -546,6 +552,7 @@ mod tests {
 
     #[test]
     fn test_env_auto_approve_false() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config {
             auto_approve: true,
             ..Default::default()
@@ -559,6 +566,7 @@ mod tests {
 
     #[test]
     fn test_env_dry_run_true() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
         assert!(!cfg.dry_run);
 
@@ -570,6 +578,7 @@ mod tests {
 
     #[test]
     fn test_env_dry_run_false() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config {
             dry_run: true,
             ..Default::default()
@@ -583,6 +592,7 @@ mod tests {
 
     #[test]
     fn test_env_block_dotfiles() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
         set_env("KIRKFORGE_BLOCK_DOTFILES", Some("true"));
         apply_env_overrides(&mut cfg);
@@ -592,6 +602,7 @@ mod tests {
 
     #[test]
     fn test_env_follow_symlinks() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
         set_env("KIRKFORGE_FOLLOW_SYMLINKS", Some("true"));
         apply_env_overrides(&mut cfg);
@@ -601,6 +612,7 @@ mod tests {
 
     #[test]
     fn test_env_block_binary() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
         set_env("KIRKFORGE_BLOCK_BINARY", Some("true"));
         apply_env_overrides(&mut cfg);
@@ -610,6 +622,7 @@ mod tests {
 
     #[test]
     fn test_env_max_read_size() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
         set_env("KIRKFORGE_MAX_READ_SIZE", Some("65536"));
         apply_env_overrides(&mut cfg);
@@ -619,6 +632,7 @@ mod tests {
 
     #[test]
     fn test_env_bad_max_read_size_ignored() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
         set_env("KIRKFORGE_MAX_READ_SIZE", Some("not-a-number"));
         apply_env_overrides(&mut cfg);
@@ -776,6 +790,7 @@ mod tests {
 
     #[test]
     fn test_env_reject_on_excess_plugin_trust() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
         assert!(cfg.reject_on_excess_plugin_trust);
 
@@ -787,6 +802,7 @@ mod tests {
 
     #[test]
     fn test_env_plugin_signature_validation() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
         assert!(!cfg.plugin_signature_validation);
 
@@ -798,6 +814,7 @@ mod tests {
 
     #[test]
     fn test_env_plugin_public_key_path() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
         set_env("KIRKFORGE_PLUGIN_PUBLIC_KEY_PATH", Some("/tmp/key.pub"));
         apply_env_overrides(&mut cfg);
@@ -807,6 +824,7 @@ mod tests {
 
     #[test]
     fn test_env_plugin_allowed_env_vars() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
         set_env("KIRKFORGE_PLUGIN_ALLOWED_ENV_VARS", Some("FOO,BAR"));
         apply_env_overrides(&mut cfg);
@@ -838,6 +856,7 @@ mod tests {
 
     #[test]
     fn test_env_memory_enabled() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
         assert!(cfg.memory_enabled);
 
@@ -849,6 +868,7 @@ mod tests {
 
     #[test]
     fn test_env_memory_max_tokens() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
         set_env("KIRKFORGE_MEMORY_MAX_TOKENS", Some("250"));
         apply_env_overrides(&mut cfg);
@@ -858,6 +878,7 @@ mod tests {
 
     #[test]
     fn test_env_memory_top_n() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
         set_env("KIRKFORGE_MEMORY_TOP_N", Some("5"));
         apply_env_overrides(&mut cfg);
@@ -899,6 +920,7 @@ mod tests {
 
     #[test]
     fn test_env_checkpoint_interval_messages() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
         set_env("KIRKFORGE_CHECKPOINT_INTERVAL_MESSAGES", Some("20"));
         apply_env_overrides(&mut cfg);

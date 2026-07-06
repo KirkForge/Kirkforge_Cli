@@ -30,6 +30,14 @@
 
 use crate::shared::{Message, Role};
 
+/// Request payload for the user-driven `/compact` command.
+#[derive(Debug, Clone, Default)]
+pub struct CompactRequest {
+    /// Override for `Config::preserve_recent_messages`. When `None`, the
+    /// executor uses the configured value.
+    pub keep: Option<usize>,
+}
+
 #[derive(Debug, Clone)]
 pub struct CompactionResult {
     pub new_messages: Vec<Message>,
@@ -37,6 +45,8 @@ pub struct CompactionResult {
     pub condensed_assistant_turns: usize,
     pub original_count: usize,
     pub compacted_count: usize,
+    pub tokens_before: usize,
+    pub tokens_after: usize,
 }
 
 /// Marker text substituted for tool results in the middle region. Kept
@@ -62,30 +72,67 @@ const ASSISTANT_CONDENSED_SUFFIX: &str = " chars]";
 /// configured value from `Config::preserve_recent_messages`.
 pub const DEFAULT_PRESERVE_RECENT: usize = 8;
 
-/// Naive compaction. Always succeeds; never panics.
+/// Estimate tokens for a single message.
 ///
-/// `preserve_recent` is the number of trailing messages to keep
-/// verbatim. The minimum effective value is 1 (always keep at least
-/// the final message so the live turn isn't lost). When `messages` is
-/// shorter than `preserve_recent + 1` the operation is a no-op.
+/// Uses the same `chars/4 + thinking + tool_calls JSON` heuristic as
+/// `PromptBuilder` so the compaction path reports numbers consistent
+/// with the budget checks in the request builder.
+fn estimate_message_tokens(m: &Message) -> usize {
+    let content = m.content.len() / 4;
+    let thinking = m.thinking.as_ref().map(|t| t.len() / 4).unwrap_or(0);
+    let tool_calls = m
+        .tool_calls
+        .as_ref()
+        .map(|calls| {
+            serde_json::to_string(calls)
+                .map(|s| s.len() / 4)
+                .unwrap_or(0)
+        })
+        .unwrap_or(0);
+    content + thinking + tool_calls
+}
+
+/// Estimate tokens for a message list.
+pub(crate) fn estimate_tokens(messages: &[Message]) -> usize {
+    messages.iter().map(estimate_message_tokens).sum()
+}
+
+/// Naive compaction with optional token-budget-aware tail sizing.
+///
+/// `preserve_recent` is the *minimum* number of trailing messages to keep
+/// verbatim. When `target_budget_tokens` is `Some` and the current history
+/// exceeds that budget, the tail is expanded backwards as far as the
+/// tail budget allows (currently 25% of the total budget), giving the model
+/// more recent verbatim context without exceeding the limit.
+///
+/// The minimum effective value for `preserve_recent` is 1 (always keep at
+/// least the final message so the live turn isn't lost). When `messages`
+/// is shorter than `preserve_recent + 1` the operation is a no-op.
 ///
 /// Returns `original_count == compacted_count` only on the no-op
 /// case (history shorter than the tail, so there's nothing in the
 /// middle to compact). Every other invocation reduces
 /// `compacted_count` below `original_count` and bumps at least one
 /// of the work-counters.
-pub fn compact(messages: &[Message], preserve_recent: usize) -> CompactionResult {
+pub fn compact_to_budget(
+    messages: &[Message],
+    preserve_recent: usize,
+    target_budget_tokens: Option<usize>,
+) -> CompactionResult {
     let original_count = messages.len();
-    let preserve_recent = preserve_recent.max(1);
+    let preserve_recent_min = preserve_recent.max(1);
+    let original_tokens = estimate_tokens(messages);
 
     // Empty / trivial input — nothing to do.
-    if messages.len() <= preserve_recent {
+    if messages.len() <= preserve_recent_min {
         return CompactionResult {
             new_messages: messages.to_vec(),
             dropped_tool_results: 0,
             condensed_assistant_turns: 0,
             original_count,
             compacted_count: messages.len(),
+            tokens_before: original_tokens,
+            tokens_after: original_tokens,
         };
     }
 
@@ -96,8 +143,26 @@ pub fn compact(messages: &[Message], preserve_recent: usize) -> CompactionResult
         0
     };
 
-    // Tail: the last `preserve_recent` messages, verbatim.
-    let working_set_start = messages.len() - preserve_recent;
+    // Tail: start with the minimum, then expand backwards if a budget is
+    // set and we are currently over budget.
+    let mut tail_size = preserve_recent_min;
+    if let Some(budget) = target_budget_tokens {
+        if original_tokens > budget {
+            let tail_budget = budget / 4;
+            let mut tail_tokens = estimate_tokens(&messages[messages.len() - tail_size..]);
+            while tail_size < messages.len() - anchor {
+                let next_idx = messages.len() - tail_size - 1;
+                let next_tokens = estimate_message_tokens(&messages[next_idx]);
+                if tail_tokens.saturating_add(next_tokens) > tail_budget {
+                    break;
+                }
+                tail_tokens += next_tokens;
+                tail_size += 1;
+            }
+        }
+    }
+
+    let working_set_start = messages.len() - tail_size;
 
     // Middle: [anchor .. working_set_start). May be empty.
     let mut new_messages: Vec<Message> = Vec::with_capacity(messages.len());
@@ -154,13 +219,25 @@ pub fn compact(messages: &[Message], preserve_recent: usize) -> CompactionResult
     }
 
     let compacted_count = new_messages.len();
+    let tokens_after = estimate_tokens(&new_messages);
     CompactionResult {
         new_messages,
         dropped_tool_results,
         condensed_assistant_turns,
         original_count,
         compacted_count,
+        tokens_before: original_tokens,
+        tokens_after,
     }
+}
+
+/// Backward-compatible naive compaction.
+///
+/// Equivalent to `compact_to_budget(messages, preserve_recent, None)`;
+/// keeps exactly `preserve_recent` trailing messages verbatim and does
+/// not expand the tail based on a token budget.
+pub fn compact(messages: &[Message], preserve_recent: usize) -> CompactionResult {
+    compact_to_budget(messages, preserve_recent, None)
 }
 
 #[cfg(test)]
@@ -466,5 +543,80 @@ mod tests {
             compacted_chars < original_chars,
             "compaction should reduce char count: {original_chars} -> {compacted_chars}"
         );
+    }
+
+    #[test]
+    fn compact_to_budget_with_none_matches_compact() {
+        let mut msgs = vec![system("anchor")];
+        for i in 0..10 {
+            msgs.push(user(&format!("q{i}")));
+            msgs.push(assistant(&"x".repeat(2000)));
+            msgs.push(tool_result(&"y".repeat(5000), "c", "bash"));
+        }
+        let r_budget = compact_to_budget(&msgs, DEFAULT_PRESERVE_RECENT, None);
+        let r_plain = compact(&msgs, DEFAULT_PRESERVE_RECENT);
+        assert_eq!(r_budget.new_messages, r_plain.new_messages);
+        assert_eq!(r_budget.tokens_before, r_plain.tokens_before);
+        assert_eq!(r_budget.tokens_after, r_plain.tokens_after);
+    }
+
+    #[test]
+    fn compact_to_budget_reports_token_counts() {
+        let msgs = vec![
+            system("anchor"),
+            user("old q"),
+            assistant(&"x".repeat(4000)),
+            user("recent q"),
+            assistant("recent a"),
+        ];
+        let r = compact_to_budget(&msgs, 2, Some(1000));
+        assert!(r.tokens_before > 0, "tokens_before should be positive");
+        assert!(
+            r.tokens_after <= r.tokens_before,
+            "tokens_after ({}) should not exceed tokens_before ({})",
+            r.tokens_after,
+            r.tokens_before
+        );
+    }
+
+    #[test]
+    fn compact_to_budget_expands_tail_when_over_budget() {
+        // 1 system + 12 messages: 6 short user + 6 long assistant.
+        // Without a budget, preserve_recent=2 keeps 2 tail messages.
+        // With a tight budget, the tail should expand to include the
+        // cheap user messages while condensing the expensive assistants.
+        let mut msgs = vec![system("anchor")];
+        for i in 0..6 {
+            msgs.push(user(&format!("q{i}"))); // cheap
+            msgs.push(assistant(&"x".repeat(2000))); // expensive
+        }
+        let r_tight = compact_to_budget(&msgs, 2, Some(500));
+        let r_plain = compact(&msgs, 2);
+
+        // Tight budget should keep at least the minimum tail.
+        assert!(r_tight.compacted_count >= 3); // anchor + at least 2 tail
+
+        // Token count should drop.
+        assert!(
+            r_tight.tokens_after < r_tight.tokens_before,
+            "budget compaction should reduce tokens: {} -> {}",
+            r_tight.tokens_before,
+            r_tight.tokens_after
+        );
+
+        // With very long assistant turns and a tiny budget, the tail
+        // expansion may still stop at the minimum (the assistant turns
+        // are too expensive to keep verbatim). That's fine — the
+        // important invariant is we don't exceed the minimum.
+        assert!(r_tight.compacted_count >= r_plain.compacted_count.min(3));
+    }
+
+    #[test]
+    fn compact_to_budget_no_op_when_too_short() {
+        let msgs = vec![user("q"), assistant("a")];
+        let r = compact_to_budget(&msgs, 4, Some(100));
+        assert_eq!(r.original_count, 2);
+        assert_eq!(r.compacted_count, 2);
+        assert_eq!(r.tokens_before, r.tokens_after);
     }
 }

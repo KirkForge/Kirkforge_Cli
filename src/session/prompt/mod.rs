@@ -1,7 +1,8 @@
-mod compaction;
+pub(crate) mod compaction;
 pub mod summarizer;
 
-pub use compaction::compact;
+pub use compaction::CompactRequest;
+pub(crate) use compaction::{compact_to_budget, estimate_tokens};
 
 use crate::shared::{Message, Role};
 use std::collections::HashMap;

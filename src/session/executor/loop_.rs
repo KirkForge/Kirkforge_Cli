@@ -1,6 +1,7 @@
 //! Long-running executor control loop.
 
 use crate::session::conversation::ConversationLog;
+use crate::session::prompt::CompactRequest;
 use crate::shared::{read_shared_config, Config, Message, Role};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -19,7 +20,7 @@ impl Executor {
         approval_tx: mpsc::UnboundedSender<ApprovalRequest>,
         mut cancel_rx: mpsc::UnboundedReceiver<()>,
         mut resume_rx: mpsc::UnboundedReceiver<ConversationLog>,
-        mut compact_rx: mpsc::UnboundedReceiver<()>,
+        mut compact_rx: mpsc::UnboundedReceiver<CompactRequest>,
         mut model_rx: mpsc::UnboundedReceiver<String>,
         mut undo_rx: mpsc::UnboundedReceiver<()>,
         mut config_rx: mpsc::UnboundedReceiver<Config>,
@@ -163,7 +164,7 @@ impl Executor {
                         return Ok(());
                     }
                 }
-                Some(()) = compact_rx.recv() => {
+                Some(req) = compact_rx.recv() => {
                     let history = self.conversation.all().to_vec();
 
                     // Snapshot the config fields we need; the guard must
@@ -177,18 +178,23 @@ impl Executor {
                             cfg.preserve_recent_messages,
                         )
                     };
+                    let keep = req.keep.unwrap_or(preserve_recent).max(1);
+                    let original_tokens = crate::session::prompt::estimate_tokens(&history
+                    );
 
                     // Notify lifecycle hooks that compaction is starting.
                     self.run_compact_hook(
                         "pre-compact",
                         CompactHookStats {
                             message_count: history.len(),
-                            preserve_recent,
+                            preserve_recent: keep,
                             original_count: history.len(),
                             result_count: history.len(),
                             dropped_tool_results: 0,
                             condensed_assistant_turns: 0,
                             summarised_messages: 0,
+                            tokens_before: original_tokens,
+                            tokens_after: original_tokens,
                             strategy: "pending",
                         },
                     );
@@ -198,8 +204,8 @@ impl Executor {
 
                     // Try LLM-based summarization if enabled
                     if summarize_enabled && history.len() > 2 {
-                        // Preserve the system anchor and last 4 turns
-                        let working_set_size = 8; // 4 user↔assistant pairs ≈ 8 messages
+                        // Preserve the system anchor and `keep` recent messages.
+                        let working_set_size = keep;
                         let anchor = if !history.is_empty()
                             && matches!(history[0].role, Role::System)
                         {
@@ -249,6 +255,10 @@ impl Executor {
                                         new_msgs.push(msg.clone());
                                     }
 
+                                    let tokens_after = crate::session::prompt::compaction::estimate_tokens(
+                                        &new_msgs
+                                    );
+
                                     if let Err(e) = self.conversation.replace_all(new_msgs.clone())
                                     {
                                         if event_tx
@@ -264,12 +274,14 @@ impl Executor {
                                         did_summarize = true;
                                         compact_stats = Some(CompactHookStats {
                                             message_count: history.len(),
-                                            preserve_recent,
+                                            preserve_recent: keep,
                                             original_count: history.len(),
                                             result_count: new_msgs.len(),
                                             dropped_tool_results: 0,
                                             condensed_assistant_turns: 0,
                                             summarised_messages: result.summarised_messages,
+                                            tokens_before: original_tokens,
+                                            tokens_after,
                                             strategy: "summarize",
                                         });
                                         let report = TurnEvent::Token(format!(
@@ -299,15 +311,22 @@ impl Executor {
                     // Fall back to naive truncation if summarization didn't run or failed
                     if !did_summarize {
                         let history = self.conversation.all();
-                        let result = crate::session::prompt::compact(history, preserve_recent);
+                        let target_budget = self.adapter.model_info().max_context_tokens * 9 / 10;
+                        let result = crate::session::prompt::compact_to_budget(
+                            history,
+                            keep,
+                            Some(target_budget),
+                        );
                         compact_stats = Some(CompactHookStats {
                             message_count: history.len(),
-                            preserve_recent,
+                            preserve_recent: keep,
                             original_count: result.original_count,
                             result_count: result.compacted_count,
                             dropped_tool_results: result.dropped_tool_results,
                             condensed_assistant_turns: result.condensed_assistant_turns,
                             summarised_messages: 0,
+                            tokens_before: result.tokens_before,
+                            tokens_after: result.tokens_after,
                             strategy: "naive",
                         });
                         let report = if let Err(e) = self.conversation.replace_all(result.new_messages.clone()) {
@@ -319,6 +338,8 @@ impl Executor {
                                 condensed_assistant_turns: result.condensed_assistant_turns,
                                 original_count: result.original_count,
                                 compacted_count: result.compacted_count,
+                                tokens_before: result.tokens_before,
+                                tokens_after: result.tokens_after,
                             }
                         };
                         if event_tx.send(report).is_err() {

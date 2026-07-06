@@ -2,13 +2,14 @@ name: CI
 
 on:
   push:
-    branches: [main, dev]
+    branches: [main, dev, merge, "phase/**"]
   pull_request:
-    branches: [main]
+    branches: [main, dev]
 
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -Dwarnings
+  RUST_TOOLCHAIN: "1.88.0"
 
 jobs:
   # Fast-fail formatting check. Required before the expensive quality
@@ -19,7 +20,10 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: rustfmt
 
       - name: Check formatting
         run: cargo fmt --check
@@ -31,7 +35,10 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: clippy
 
       - uses: Swatinem/rust-cache@v2
 
@@ -46,34 +53,21 @@ jobs:
 
   integration:
     runs-on: ubuntu-latest
-    services:
-      ollama:
-        image: ollama/ollama:latest
-        ports:
-          - 11434:11434
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Wait for Ollama and pull test model
-        timeout-minutes: 10
-        run: |
-          for i in $(seq 1 30); do
-            if curl -fsS http://localhost:11434/api/tags >/dev/null 2>&1; then
-              break
-            fi
-            sleep 2
-          done
-          curl -fsS http://localhost:11434/api/tags >/dev/null
-          curl -fsS -X POST http://localhost:11434/api/pull \
-            -d '{"model": "qwen2.5:0.5b", "stream": false}'
+      - name: Run integration tests (mock server)
+        run: cargo test --test integration_test
 
-      - name: Run integration tests
-        run: cargo test --test integration_test -- --include-ignored --nocapture
+      - name: Run smoke tests
+        run: cargo test --test smoke_test
 
   coverage:
     runs-on: ubuntu-latest
@@ -81,7 +75,11 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+
+      - uses: Swatinem/rust-cache@v2
 
       - name: Install cargo-tarpaulin
         # Prebuilt binary avoids pulling in cargo-platform 0.3.3, whose
@@ -91,7 +89,37 @@ jobs:
           tool: cargo-tarpaulin
 
       - name: Generate coverage report
-        run: cargo tarpaulin --out Xml --locked --workspace
+        run: cargo tarpaulin --out Xml --locked --workspace --timeout 120
+
+      - name: Enforce coverage gate
+        run: |
+          python3 - <<'PY'
+          import xml.etree.ElementTree as ET
+          import sys
+          tree = ET.parse('cobertura.xml')
+          root = tree.getroot()
+          packages = root.find('packages')
+          targets = {'src/session': 70.0, 'src/tools': 70.0, 'src/adapters': 70.0}
+          failed = False
+          for prefix, threshold in targets.items():
+              line_rate = 0.0
+              lines_valid = 0
+              lines_covered = 0
+              for pkg in packages.findall('package'):
+                  name = pkg.attrib.get('name', '')
+                  if name == prefix or name.startswith(prefix + '/'):
+                      for cls in pkg.findall('classes/class'):
+                          for line in cls.findall('lines/line'):
+                              lines_valid += 1
+                              if int(line.attrib.get('hits', 0)) > 0:
+                                  lines_covered += 1
+              if lines_valid > 0:
+                  line_rate = lines_covered / lines_valid * 100
+              print(f'{prefix}/: {lines_covered}/{lines_valid} lines covered ({line_rate:.1f}%, threshold {threshold}%)')
+              if line_rate < threshold:
+                  failed = True
+          sys.exit(1 if failed else 0)
+          PY
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
@@ -105,7 +133,9 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
 
       - uses: Swatinem/rust-cache@v2
 

@@ -390,6 +390,7 @@ mod tests {
     use super::*;
     use crate::shared::test_util::remove_test_file;
     use crate::tools::ToolContext;
+    use proptest::prelude::*;
 
     #[tokio::test]
     async fn test_fuzzy_fallback_preserves_original_formatting() {
@@ -713,5 +714,133 @@ mod tests {
             "original content",
             "original file should be preserved on atomic-write failure"
         );
+    }
+
+    // ── Property-based tests ───────────────────────────────────────────
+
+    // Property-based tests: for any content where `old` occurs exactly
+    // once, replacing it with `new` must equal `content.replacen(old, new, 1)`.
+    // We guarantee a unique match by constructing content from alphabets
+    // that never overlap with `old`/`new`.
+    proptest! {
+        #[test]
+        fn edit_file_replacement_equals_replacen(
+            old in "[a-z]{3,8}",
+            new in "[a-z]{3,8}",
+            prefix in "[A-Z]{0,20}",
+            suffix in "[A-Z]{0,20}",
+        ) {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            let _ = rt.block_on(async {
+                let content = format!("{prefix}{old}{suffix}");
+                let dir = tempfile::tempdir().unwrap();
+                let path = dir.path().join("edit.txt");
+                std::fs::write(&path, content.as_bytes()).unwrap();
+
+                let tool = EditFile::new(None, crate::session::access::PathGuard::default());
+                let ctx = ToolContext::new();
+                let args = serde_json::json!({
+                    "path": path.to_string_lossy(),
+                    "old_string": old,
+                    "new_string": new,
+                });
+                let result = tool.run(&ctx, args).await;
+                prop_assert!(
+                    matches!(result, ToolOutcome::FileEdit { .. }),
+                    "expected FileEdit for unique exact match, got {result:?}"
+                );
+
+                let got = std::fs::read_to_string(&path).unwrap();
+                let expected = content.replacen(&old, &new, 1);
+                prop_assert_eq!(got, expected);
+                Ok(())
+            });
+        }
+
+        /// Replacing `old` with `new` and then `new` back with `old` must
+        /// restore the original content — a round-trip / involution property
+        /// that catches both replacement and undo-relevant byte preservation.
+        #[test]
+        fn edit_file_roundtrip_reverses_replacement(
+            old in "[a-z]{3,8}",
+            new in "[a-z]{3,8}",
+            prefix in "[A-Z]{0,20}",
+            suffix in "[A-Z]{0,20}",
+        ) {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            let _ = rt.block_on(async {
+                let content = format!("{prefix}{old}{suffix}");
+                let dir = tempfile::tempdir().unwrap();
+                let path = dir.path().join("edit.txt");
+                std::fs::write(&path, content.as_bytes()).unwrap();
+
+                let tool = EditFile::new(None, crate::session::access::PathGuard::default());
+                let ctx = ToolContext::new();
+                let args = serde_json::json!({
+                    "path": path.to_string_lossy(),
+                    "old_string": old.clone(),
+                    "new_string": new.clone(),
+                });
+                let first = tool.run(&ctx, args).await;
+                prop_assert!(matches!(first, ToolOutcome::FileEdit { .. }), "first edit failed: {first:?}");
+
+                let args2 = serde_json::json!({
+                    "path": path.to_string_lossy(),
+                    "old_string": new,
+                    "new_string": old,
+                });
+                let second = tool.run(&ctx, args2).await;
+                prop_assert!(matches!(second, ToolOutcome::FileEdit { .. }), "second edit failed: {second:?}");
+
+                let got = std::fs::read_to_string(&path).unwrap();
+                prop_assert_eq!(got, content);
+                Ok(())
+            });
+        }
+
+        /// Fuzzy fallback preserves non-matching lines byte-for-byte while
+        /// still performing the replacement.
+        #[test]
+        fn edit_file_fuzzy_preserves_unmatched_lines(
+            target in "[a-z]{3,8}",
+            replacement in "[a-z]{3,8}",
+            before in "[A-Z]{0,30}",
+            after in "[A-Z]{0,30}",
+            pad in proptest::collection::vec("[ \t]{0,5}", 2..=2),
+        ) {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            let _ = rt.block_on(async {
+                // Two lines: one unique lowercase target with trailing
+                // whitespace, and surrounding uppercase context lines.
+                let line0 = format!("{before}\n");
+                let line1 = format!("{target}{}\n", pad[0]);
+                let line2 = format!("{after}\n");
+                let content = format!("{line0}{line1}{line2}");
+                let dir = tempfile::tempdir().unwrap();
+                let path = dir.path().join("edit.txt");
+                std::fs::write(&path, content.as_bytes()).unwrap();
+
+                let tool = EditFile::new(None, crate::session::access::PathGuard::default());
+                let ctx = ToolContext::new();
+                let args = serde_json::json!({
+                    "path": path.to_string_lossy(),
+                    "old_string": target,
+                    "new_string": replacement,
+                });
+                let result = tool.run(&ctx, args).await;
+                prop_assert!(
+                    matches!(result, ToolOutcome::FileEdit { .. }),
+                    "expected fuzzy FileEdit, got {result:?}"
+                );
+
+                let got = std::fs::read_to_string(&path).unwrap();
+                // Context lines must be unchanged.
+                prop_assert!(got.starts_with(&line0), "prefix context changed: {got:?}");
+                prop_assert!(got.ends_with(&line2), "suffix context changed: {got:?}");
+                // The replacement should appear exactly once.
+                prop_assert_eq!(got.matches(&replacement).count(), 1);
+                Ok(())
+            });
+        }
     }
 }

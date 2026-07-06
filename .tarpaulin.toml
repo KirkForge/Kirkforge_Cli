@@ -1,6 +1,10 @@
 [tarpaulin]
 # Skip integration tests that require a live Ollama server; unit tests cover
 # the bulk of the logic.
-exclude-files = ["tests/integration_test.rs"]
-# Exclude the binary entry point and build script from coverage targets.
-exclude = ["kirkforge", "build_script_build"]
+exclude-files = ["tests/integration_test.rs", "src/main.rs"]
+# Exclude the build script from coverage targets.
+exclude = ["build_script_build"]
+# Give slow tests enough time to finish.
+timeout = "120"
+# LLVM engine avoids segfaults when tracing tests that spawn subprocesses.
+engine = "Llvm"

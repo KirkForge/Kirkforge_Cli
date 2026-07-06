@@ -2,6 +2,7 @@
 use crate::session::session_fork::ForkManager;
 use crate::session::skills::SkillRegistry;
 use crate::shared::{ModelInfo, SharedConfig};
+use kirkforge_plugin_host::PluginRegistry;
 use ratatui::text::Line;
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -297,6 +298,12 @@ pub struct AppState {
     /// status bar. Example: "🔒2 ⚡1". `None` when no plugins are loaded.
     pub plugin_status: Option<String>,
 
+    // ── Runtime plugin registry (Phase 11) ────────────────────────────
+    /// In-TUI copy of the active plugin registry. Mutated by `/plugins`
+    /// commands and forwarded to the executor over the plugin-reload
+    /// channel so the toolset/hook/verifier view updates between turns.
+    pub plugin_registry: PluginRegistry,
+
     // ── PathGuard sandbox indicator (v1.2-p12 follow-up) ─────────────
     /// If true, the session is intentionally unsandboxed. The TUI chat
     /// banner and status bar surface this so the operator sees the
@@ -389,6 +396,7 @@ impl AppState {
             undo_stack: None,
             session_picker: None,
             plugin_status: None,
+            plugin_registry: PluginRegistry::new(),
             unsandboxed: false,
             // Start dirty so the first frame draws immediately (the
             // connection banner / status bar are non-empty even with

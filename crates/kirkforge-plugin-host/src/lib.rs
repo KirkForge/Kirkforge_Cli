@@ -181,7 +181,7 @@ impl PluginRegistry {
                     if let Some(ref reason) = hosted.rejection {
                         warnings.push(format!("{}: {}", hosted.plugin.manifest.name, reason));
                     } else {
-                        self.index(hosted);
+                        self.push_and_index(hosted);
                     }
                 }
                 Err(e) => {
@@ -193,11 +193,19 @@ impl PluginRegistry {
         Ok(warnings)
     }
 
-    /// Index a hosted plugin's capabilities.
-    fn index(&mut self, hosted: HostedPlugin) {
+    /// Add a hosted plugin to the registry and index its capabilities.
+    fn push_and_index(&mut self, hosted: HostedPlugin) {
         let idx = self.plugins.len();
-        let manifest = hosted.plugin.manifest().clone();
         self.plugins.push(hosted);
+        self.index_at(idx);
+    }
+
+    /// Index capabilities for the plugin at position `idx`.
+    fn index_at(&mut self, idx: usize) {
+        let Some(hosted) = self.plugins.get(idx) else {
+            return;
+        };
+        let manifest = hosted.plugin.manifest().clone();
 
         for cap in &manifest.capabilities {
             match cap {
@@ -218,6 +226,80 @@ impl PluginRegistry {
                 }
             }
         }
+    }
+
+    /// Rebuild all capability index maps from the plugin vector.
+    ///
+    /// Used after `remove` because removing a plugin shifts indices of all
+    /// later plugins, invalidating the existing maps.
+    fn rebuild_indexes(&mut self) {
+        self.skills_by_trigger.clear();
+        self.tools_by_name.clear();
+        self.hooks_by_event.clear();
+        self.verifiers_by_name.clear();
+        for idx in 0..self.plugins.len() {
+            self.index_at(idx);
+        }
+    }
+
+    /// Load a single plugin directory by path and apply `policy`.
+    ///
+    /// Returns the plugin name on success. If the plugin is rejected by the
+    /// trust policy, returns the rejection reason as an error.
+    pub fn load_one(&mut self, plugin_dir: &Path, policy: TrustPolicy) -> anyhow::Result<String> {
+        let plugin = LoadedPlugin::load(plugin_dir).map_err(|e| {
+            anyhow::anyhow!("failed to load plugin from {}: {}", plugin_dir.display(), e)
+        })?;
+
+        plugin
+            .manifest()
+            .validate_api_version()
+            .map_err(|e| anyhow::anyhow!("{}: {}", plugin_dir.display(), e))?;
+
+        if policy.verify_signatures {
+            verify_plugin_signature(plugin_dir, policy.signature_key_path.as_deref()).map_err(
+                |e| {
+                    anyhow::anyhow!(
+                        "{}: signature verification failed: {}",
+                        plugin.manifest().name,
+                        e
+                    )
+                },
+            )?;
+        }
+
+        let hosted = apply_policy(plugin, &policy);
+        if let Some(ref reason) = hosted.rejection {
+            anyhow::bail!("{}: {}", hosted.plugin.manifest().name, reason);
+        }
+
+        let name = hosted.plugin.manifest().name.clone();
+        // Remove any existing plugin with the same name before loading the new one.
+        self.remove(&name);
+        self.push_and_index(hosted);
+        Ok(name)
+    }
+
+    /// Remove an active plugin by name.
+    ///
+    /// Returns true if a plugin was removed.
+    pub fn remove(&mut self, name: &str) -> bool {
+        let len_before = self.plugins.len();
+        self.plugins.retain(|p| p.plugin.manifest().name != name);
+        if self.plugins.len() == len_before {
+            return false;
+        }
+        self.rebuild_indexes();
+        true
+    }
+
+    /// Find an active plugin by name.
+    pub fn find_active_by_name(&self, name: &str) -> Option<(&PluginManifest, &dyn Plugin)> {
+        let hosted = self
+            .plugins
+            .iter()
+            .find(|p| p.plugin.manifest().name == name && p.is_active())?;
+        Some((&hosted.plugin.manifest, &hosted.plugin as &dyn Plugin))
     }
 
     /// Find an active plugin by skill trigger.
@@ -491,5 +573,71 @@ command = "hooks/post-turn.sh"
             warnings.iter().any(|w| w.contains("signature")),
             "warnings: {warnings:?}"
         );
+    }
+
+    #[test]
+    fn load_one_loads_single_plugin() {
+        let tmp = tempfile::tempdir().unwrap();
+        let plugin_dir = tmp.path().join("test-plugin");
+        make_test_plugin_dir(&plugin_dir, TrustTier::Shell);
+
+        let mut reg = PluginRegistry::new();
+        let name = reg
+            .load_one(&plugin_dir, TrustPolicy::up_to(TrustTier::Shell))
+            .unwrap();
+        assert_eq!(name, "test-plugin");
+        assert_eq!(reg.active_count(), 1);
+        assert!(reg.skill_by_trigger("/hello").is_some());
+        assert!(!reg.hooks_for_event("post-turn").is_empty());
+    }
+
+    #[test]
+    fn load_one_rejects_excess_trust() {
+        let tmp = tempfile::tempdir().unwrap();
+        let plugin_dir = tmp.path().join("risky");
+        make_test_plugin_dir(&plugin_dir, TrustTier::Unsafe);
+
+        let mut reg = PluginRegistry::new();
+        let err = reg
+            .load_one(&plugin_dir, TrustPolicy::up_to(TrustTier::Shell))
+            .unwrap_err();
+        assert!(err.to_string().contains("exceeds"));
+        assert_eq!(reg.active_count(), 0);
+    }
+
+    #[test]
+    fn remove_deletes_plugin_and_updates_indexes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let plugin_dir = tmp.path().join("test-plugin");
+        make_test_plugin_dir(&plugin_dir, TrustTier::Shell);
+
+        let mut reg = PluginRegistry::new();
+        reg.load_one(&plugin_dir, TrustPolicy::up_to(TrustTier::Shell))
+            .unwrap();
+        assert!(reg.remove("test-plugin"));
+        assert_eq!(reg.active_count(), 0);
+        assert!(reg.skill_by_trigger("/hello").is_none());
+        assert!(reg.hooks_for_event("post-turn").is_empty());
+    }
+
+    #[test]
+    fn remove_returns_false_when_missing() {
+        let mut reg = PluginRegistry::new();
+        assert!(!reg.remove("nonexistent"));
+    }
+
+    #[test]
+    fn load_one_replaces_existing_same_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let plugin_dir = tmp.path().join("test-plugin");
+        make_test_plugin_dir(&plugin_dir, TrustTier::Shell);
+
+        let mut reg = PluginRegistry::new();
+        reg.load_one(&plugin_dir, TrustPolicy::up_to(TrustTier::Shell))
+            .unwrap();
+        reg.load_one(&plugin_dir, TrustPolicy::up_to(TrustTier::Shell))
+            .unwrap();
+        assert_eq!(reg.active_count(), 1);
+        assert!(reg.skill_by_trigger("/hello").is_some());
     }
 }

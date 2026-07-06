@@ -34,6 +34,8 @@
 //! directly to the prefix characters.
 
 use crate::tui::app::PendingApproval;
+use ratatui::style::{Color, Style};
+use ratatui::text::{Line, Span};
 use similar::{ChangeTag, TextDiff};
 
 /// A pure function that resolves a path to its current bytes on
@@ -75,15 +77,15 @@ fn format_edit_file_diff(
         Some(p) => p,
         None => return Vec::new(),
     };
-    let new_string = match args.get("new_string").and_then(|v| v.as_str()) {
-        Some(s) => s,
-        None => return Vec::new(),
-    };
-    let current = reader(path).unwrap_or_default();
+    let (current, new_content, is_new) = old_and_new_content(approval, reader);
+    if current.is_empty() && is_new {
+        // New file path: show everything as additions.
+        return format_new_file_diff(path, &new_content, wrap_width);
+    }
 
     let mut out = Vec::new();
-    push_header(&mut out, path, current.is_empty());
-    push_unified_diff(&mut out, &current, new_string, wrap_width);
+    push_header(&mut out, path, false);
+    push_unified_diff(&mut out, &current, &new_content, wrap_width);
     out
 }
 
@@ -102,31 +104,109 @@ fn format_write_file_diff(
         .get("path")
         .and_then(|v| v.as_str())
         .unwrap_or("(unknown)");
-    let content = match args.get("content").and_then(|v| v.as_str()) {
-        Some(s) => s,
-        None => return Vec::new(),
-    };
+    if args.get("content").and_then(|v| v.as_str()).is_none() {
+        return Vec::new();
+    }
 
-    let current = reader(path).unwrap_or_default();
-    if current.is_empty() {
-        // New file path: show everything as additions.
-        let mut out = Vec::new();
-        let header = format!("+++ {path} (new file)");
-        out.push(header);
-        out.push(String::new());
-        let width = wrap_width.max(8).saturating_sub(2);
-        for line in content.lines() {
-            for wrapped in wrap_diff_line(line, width) {
-                out.push(format!("+ {wrapped}"));
-            }
-        }
-        return out;
+    let (current, new_content, is_new) = old_and_new_content(approval, reader);
+    if is_new {
+        return format_new_file_diff(path, &new_content, wrap_width);
     }
 
     // Overwrite of an existing file: show the real diff.
     let mut out = Vec::new();
     push_header(&mut out, path, false);
-    push_unified_diff(&mut out, &current, content, wrap_width);
+    push_unified_diff(&mut out, &current, &new_content, wrap_width);
+    out
+}
+
+/// Line-level statistics for a file edit preview.
+#[derive(Debug, Default, PartialEq)]
+pub struct DiffStats {
+    /// Lines that will be added.
+    pub added: usize,
+    /// Lines that will be removed.
+    pub deleted: usize,
+    /// True when the target file does not currently exist.
+    pub is_new_file: bool,
+}
+
+/// Resolve the old and new file contents for an `edit_file` or
+/// `write_file` approval. Returns `None` for other tool names.
+pub fn diff_stats(approval: &PendingApproval, reader: FileReader<'_>) -> Option<DiffStats> {
+    let (old, new, is_new) = old_and_new_content(approval, reader);
+    let diff = TextDiff::from_lines(&old, &new);
+    let mut added = 0usize;
+    let mut deleted = 0usize;
+    for change in diff.iter_all_changes() {
+        match change.tag() {
+            ChangeTag::Insert => added += 1,
+            ChangeTag::Delete => deleted += 1,
+            ChangeTag::Equal => {}
+        }
+    }
+    Some(DiffStats {
+        added,
+        deleted,
+        is_new_file: is_new,
+    })
+}
+
+/// Resolve the old and new full file contents for an `edit_file` or
+/// `write_file` approval. The boolean flag is true when the target
+/// file is missing/empty, which lets callers treat the whole change
+/// as a creation.
+fn old_and_new_content(
+    approval: &PendingApproval,
+    reader: FileReader<'_>,
+) -> (String, String, bool) {
+    match approval.tool_name.as_str() {
+        "edit_file" => {
+            let args = &approval.args;
+            let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
+            let old_string = args
+                .get("old_string")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let new_string = args
+                .get("new_string")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let current = reader(path).unwrap_or_default();
+            let new_content = if old_string.is_empty() {
+                new_string.to_string()
+            } else if current.contains(old_string) {
+                current.replacen(old_string, new_string, 1)
+            } else {
+                new_string.to_string()
+            };
+            let is_new = current.is_empty();
+            (current, new_content, is_new)
+        }
+        "write_file" => {
+            let args = &approval.args;
+            let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
+            let content = args.get("content").and_then(|v| v.as_str()).unwrap_or("");
+            let current = reader(path).unwrap_or_default();
+            let is_new = current.is_empty();
+            (current, content.to_string(), is_new)
+        }
+        _ => (String::new(), String::new(), false),
+    }
+}
+
+/// Format a new-file diff as a list of prefixed display lines.
+fn format_new_file_diff(path: &str, content: &str, wrap_width: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    let header = format!("+++ {path} (new file)");
+    out.push(header);
+    out.push(String::new());
+    let width = wrap_width.max(8).saturating_sub(2);
+    for line in content.lines() {
+        for wrapped in wrap_diff_line(line, width) {
+            out.push(format!("+ {wrapped}"));
+        }
+    }
     out
 }
 
@@ -188,6 +268,121 @@ fn wrap_diff_line(line: &str, width: usize) -> Vec<String> {
     out
 }
 
+/// Render a side-by-side diff as ratatui `Line`s.
+///
+/// `width` is the full inner dialog width in cells. Returns an empty
+/// vector when `width` is below 80 or when the approval is not for
+/// `edit_file`/`write_file`.
+pub fn format_side_by_side_diff(
+    approval: &PendingApproval,
+    width: usize,
+    reader: FileReader<'_>,
+) -> Vec<Line<'static>> {
+    if width < 80 {
+        return Vec::new();
+    }
+    let (old, new, _) = old_and_new_content(approval, reader);
+    render_side_by_side(&old, &new, width)
+}
+
+fn render_side_by_side(old: &str, new: &str, width: usize) -> Vec<Line<'static>> {
+    let pane_width = (width.saturating_sub(3)) / 2;
+    if pane_width < 8 {
+        return Vec::new();
+    }
+
+    let diff = TextDiff::from_lines(old, new);
+    let mut out: Vec<Line<'static>> = Vec::new();
+    let mut old_buf: Vec<&str> = Vec::new();
+    let mut new_buf: Vec<&str> = Vec::new();
+
+    for change in diff.iter_all_changes() {
+        match change.tag() {
+            ChangeTag::Delete => old_buf.push(change.value().trim_end_matches('\n')),
+            ChangeTag::Insert => new_buf.push(change.value().trim_end_matches('\n')),
+            ChangeTag::Equal => {
+                flush_side_by_side(&mut out, &old_buf, &new_buf, pane_width);
+                old_buf.clear();
+                new_buf.clear();
+                let text = change.value().trim_end_matches('\n');
+                out.push(build_side_line(
+                    text,
+                    text,
+                    Color::Gray,
+                    Color::Gray,
+                    pane_width,
+                ));
+            }
+        }
+    }
+    flush_side_by_side(&mut out, &old_buf, &new_buf, pane_width);
+
+    out
+}
+
+fn flush_side_by_side(
+    out: &mut Vec<Line<'static>>,
+    old_buf: &[&str],
+    new_buf: &[&str],
+    pane_width: usize,
+) {
+    if old_buf.is_empty() && new_buf.is_empty() {
+        return;
+    }
+    let rows = old_buf.len().max(new_buf.len());
+    for i in 0..rows {
+        let left = old_buf.get(i).copied().unwrap_or("");
+        let right = new_buf.get(i).copied().unwrap_or("");
+        let (left_color, right_color) = if old_buf.is_empty() {
+            (Color::DarkGray, Color::Green)
+        } else if new_buf.is_empty() {
+            (Color::Red, Color::DarkGray)
+        } else {
+            (Color::Red, Color::Green)
+        };
+        out.push(build_side_line(
+            left,
+            right,
+            left_color,
+            right_color,
+            pane_width,
+        ));
+    }
+}
+
+fn build_side_line(
+    left: &str,
+    right: &str,
+    left_color: Color,
+    right_color: Color,
+    pane_width: usize,
+) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(
+            pad_or_truncate(left, pane_width),
+            Style::default().fg(left_color),
+        ),
+        Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            pad_or_truncate(right, pane_width),
+            Style::default().fg(right_color),
+        ),
+    ])
+}
+
+fn pad_or_truncate(text: &str, width: usize) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let count = chars.len();
+    if count > width {
+        let keep = width.saturating_sub(1);
+        let mut s: String = chars.into_iter().take(keep).collect();
+        s.push('…');
+        s
+    } else {
+        let pad = width.saturating_sub(count);
+        format!("{text}{}", " ".repeat(pad))
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -342,5 +537,81 @@ mod tests {
         for l in &plus_lines {
             assert!(l.chars().count() <= 32, "wrapped line too long: {l:?}");
         }
+    }
+
+    /// `diff_stats` reports added/deleted lines for an edit preview.
+    #[test]
+    fn test_diff_stats_for_edit_file() {
+        let a = approval(
+            "edit_file",
+            json!({
+                "path": "src/main.rs",
+                "old_string": "fn main() {\n    println!(\"hi\");\n}\n",
+                "new_string": "fn main() {\n    println!(\"hello\");\n}\n"
+            }),
+        );
+        let reader = |p: &str| {
+            if p == "src/main.rs" {
+                Some("fn main() {\n    println!(\"hi\");\n}\n".to_string())
+            } else {
+                None
+            }
+        };
+        let stats = diff_stats(&a, &reader).unwrap();
+        assert_eq!(stats.added, 1);
+        assert_eq!(stats.deleted, 1);
+        assert!(!stats.is_new_file);
+    }
+
+    /// `diff_stats` for a new file reports all lines as additions.
+    #[test]
+    fn test_diff_stats_for_new_file() {
+        let a = approval(
+            "write_file",
+            json!({
+                "path": "src/created.rs",
+                "content": "fn created() {}\n"
+            }),
+        );
+        let reader = |_: &str| None;
+        let stats = diff_stats(&a, &reader).unwrap();
+        assert_eq!(stats.added, 1);
+        assert_eq!(stats.deleted, 0);
+        assert!(stats.is_new_file);
+    }
+
+    /// Side-by-side diff returns empty when the dialog is too narrow.
+    #[test]
+    fn test_side_by_side_returns_empty_when_narrow() {
+        let a = approval(
+            "write_file",
+            json!({
+                "path": "x.rs",
+                "content": "fn x() {}\n"
+            }),
+        );
+        let reader = |_: &str| None;
+        let lines = format_side_by_side_diff(&a, 60, &reader);
+        assert!(lines.is_empty());
+    }
+
+    /// Side-by-side diff renders two panes for a simple edit.
+    #[test]
+    fn test_side_by_side_renders_two_panes() {
+        let a = approval(
+            "edit_file",
+            json!({
+                "path": "x.rs",
+                "old_string": "old line\n",
+                "new_string": "new line\n"
+            }),
+        );
+        let reader = |_: &str| Some("old line\n".to_string());
+        let lines = format_side_by_side_diff(&a, 80, &reader);
+        assert!(!lines.is_empty(), "expected side-by-side lines, got none");
+        // Every line should contain the gutter between panes.
+        assert!(lines
+            .iter()
+            .all(|l| l.spans.iter().any(|s| s.content.contains('│'))));
     }
 }

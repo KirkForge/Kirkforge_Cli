@@ -7,10 +7,11 @@ use crate::session::event_bus::{BusEvent, EditEvent, FileWriteEvent};
 /// - Dangerous shell commands in scripts
 /// - Path traversal vulnerabilities
 ///
-/// Optionally, if `trufflehog` is installed at `/usr/local/bin/trufflehog`,
-/// the verifier also runs `trufflehog filesystem --no-update --json <path>`
+/// Optionally, if `trufflehog` is installed on `PATH` (or at a known fallback
+/// location), the verifier also runs `trufflehog filesystem --no-update --json <path>`
 /// as a second opinion.
 use crate::session::verifier::{Verdict, VerificationError};
+use std::path::{Path, PathBuf};
 
 /// Minimum length of a candidate high-entropy token after its prefix.
 const MIN_TOKEN_LEN: usize = 16;
@@ -33,13 +34,19 @@ const SECRET_PATTERNS: &[(&str, &str)] = &[
 
 /// Secret prefixes that are followed by a high-entropy value. Used after the
 /// fast-path substring scan as a more precise detector for random tokens.
+///
+/// These intentionally overlap with the fast-path list used by the pre-commit
+/// `git_sanitation.rs` scanner so both passes agree on the most common secret
+/// prefixes (`sk-`, `ghp_`, `github_pat_`, `glpat-`, `AKIA`).
 const ENTROPY_PREFIXES: &[(&str, &str)] = &[
     ("OpenAI API key", "sk-"),
     ("GitHub personal-access token", "ghp_"),
+    ("GitHub fine-grained PAT", "github_pat_"),
     ("GitHub OAuth token", "gho_"),
     ("GitHub user-to-server token", "ghu_"),
     ("GitHub server-to-server token", "ghs_"),
     ("GitHub refresh token", "ghr_"),
+    ("GitLab personal-access token", "glpat-"),
     ("AWS access key", "AKIA"),
 ];
 
@@ -117,15 +124,60 @@ fn entropy_scan(content: &str, path: &std::path::Path) -> Option<Verdict> {
     None
 }
 
-/// Run `trufflehog filesystem --no-update --json <path>` if the binary is
-/// installed at the expected location. Any JSON output line is treated as a
-/// finding and produces an `Unfixable` verdict.
-async fn trufflehog_scan(path: &std::path::Path) -> Option<Verdict> {
-    const TRUFFLEHOG: &str = "/usr/local/bin/trufflehog";
-    if !std::path::Path::new(TRUFFLEHOG).exists() {
-        return None;
+/// Find the `trufflehog` executable.
+///
+/// Searches `PATH` first, then falls back to the two common installation
+/// locations. Returns `None` if no binary is found.
+fn trufflehog_path() -> Option<PathBuf> {
+    find_in_path("trufflehog")
+        .or_else(|| probe_path("/usr/local/bin/trufflehog"))
+        .or_else(|| probe_path("/usr/bin/trufflehog"))
+}
+
+/// Probe a single absolute path for an executable `trufflehog` binary.
+fn probe_path(p: &str) -> Option<PathBuf> {
+    let pb = PathBuf::from(p);
+    if pb.is_file() {
+        Some(pb)
+    } else {
+        None
     }
-    let output = match tokio::process::Command::new(TRUFFLEHOG)
+}
+
+/// Search `PATH` for an executable named `name`.
+///
+/// On Windows it also tries `name.exe`. This avoids a shell dependency so the
+/// search works on Unix, macOS, and Windows without extra crates.
+fn find_in_path(name: &str) -> Option<PathBuf> {
+    let path_env = std::env::var_os("PATH")?;
+    let sep = if cfg!(windows) { ';' } else { ':' };
+    #[cfg(windows)]
+    let exe_name = format!("{name}.exe");
+    for dir in path_env.to_str()?.split(sep) {
+        let candidate = PathBuf::from(dir).join(name);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+        #[cfg(windows)]
+        {
+            let candidate_exe = PathBuf::from(dir).join(&exe_name);
+            if candidate_exe.is_file() {
+                return Some(candidate_exe);
+            }
+        }
+    }
+    None
+}
+
+/// Run `trufflehog filesystem --no-update --json <path>` if a `trufflehog`
+/// binary is available. Any JSON output line is treated as a finding and
+/// produces an `Unfixable` verdict.
+async fn trufflehog_scan(path: &Path) -> Option<Verdict> {
+    let binary = match trufflehog_path() {
+        Some(b) => b,
+        None => return None,
+    };
+    let output = match tokio::process::Command::new(&binary)
         .arg("filesystem")
         .arg("--no-update")
         .arg("--json")
@@ -402,5 +454,61 @@ mod tests {
             "low-entropy sk- placeholder should not be flagged"
         );
         remove_test_file(&path);
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn test_trufflehog_path_discovery() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir();
+        let path = dir.join("kirkforge_sec_trufflehog.txt");
+        let fake_bin_dir = dir.join("kirkforge_fake_bin");
+        let fake_trufflehog = fake_bin_dir.join("trufflehog");
+        std::fs::create_dir_all(&fake_bin_dir).unwrap();
+
+        // Fake trufflehog emits a JSON finding only when the marker variable is set.
+        // This avoids spurious findings in other concurrent tests if PATH leaks.
+        let script = "#!/bin/sh\nif [ \"$1\" = \"filesystem\" ] && [ \"$KIRKFORGE_FAKE_TRUFFLEHOG\" = \"1\" ]; then echo '{\"detector_name\":\"test\"}'; fi\n";
+        std::fs::write(&fake_trufflehog, script).unwrap();
+        let mut perms = std::fs::metadata(&fake_trufflehog).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&fake_trufflehog, perms).unwrap();
+
+        // Use a low-entropy file so the local entropy check stays Clean.
+        std::fs::write(&path, "api_key = \"sk-aaaaaaaaaaaaaaaa\"").unwrap();
+
+        let original_path = std::env::var_os("PATH").clone();
+        let new_path = format!(
+            "{}:{}",
+            fake_bin_dir.display(),
+            original_path
+                .as_ref()
+                .map(|s| s.to_string_lossy())
+                .unwrap_or_default()
+        );
+        std::env::set_var("PATH", new_path);
+        std::env::set_var("KIRKFORGE_FAKE_TRUFFLEHOG", "1");
+
+        let event = BusEvent::FileWrite(FileWriteEvent {
+            path: path.clone(),
+            content_length: 40,
+        });
+        let v = verify_security(&event).await;
+
+        if let Some(p) = original_path {
+            std::env::set_var("PATH", p);
+        } else {
+            std::env::remove_var("PATH");
+        }
+        std::env::remove_var("KIRKFORGE_FAKE_TRUFFLEHOG");
+        remove_test_file(&path);
+        remove_test_file(&fake_trufflehog);
+        let _ = std::fs::remove_dir(&fake_bin_dir);
+
+        assert!(
+            matches!(v, Verdict::Unfixable(_)),
+            "trufflehog discovered via PATH should produce a finding"
+        );
     }
 }

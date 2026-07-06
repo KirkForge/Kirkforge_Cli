@@ -1,6 +1,6 @@
 //! Free helper functions used by the executor.
 
-use crate::session::access::{DenyList, GuardVerdict, PathGuard};
+use crate::session::access::{url_is_denied, DenyList, GuardVerdict, PathGuard};
 use crate::session::conversation::ConversationLog;
 use crate::session::verifier::CorrectionResult;
 use crate::shared::metrics::{record, MetricEvent};
@@ -200,12 +200,19 @@ pub(crate) fn check_search_path(path_guard: &PathGuard, path: &std::path::Path) 
     }
 
     // 2. Resolve to the longest existing ancestor so glob patterns
-    //    still get a containment check. If nothing in the path exists
-    //    (e.g. the model is searching a freshly-deleted directory),
-    //    fall back to the literal path; the sandbox check below will
-    //    deny it because we can't prove containment.
+    //    still get a containment check. Fail closed if we cannot resolve
+    //    the path or any existing ancestor — a non-canonical path could
+    //    pass a naive prefix check while resolving outside the sandbox.
     let check = if path.exists() {
-        path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+        match path.canonicalize() {
+            Ok(c) => c,
+            Err(e) => {
+                return GuardVerdict::Denied(format!(
+                    "Cannot resolve search path '{}': {e} (refusing unverified search)",
+                    path.display()
+                ));
+            }
+        }
     } else {
         let mut cur = path.to_path_buf();
         while !cur.exists() {
@@ -213,7 +220,15 @@ pub(crate) fn check_search_path(path_guard: &PathGuard, path: &std::path::Path) 
                 break;
             }
         }
-        cur.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+        match cur.canonicalize() {
+            Ok(c) => c,
+            Err(e) => {
+                return GuardVerdict::Denied(format!(
+                    "Cannot resolve search path '{}': {e} (refusing unverified search)",
+                    path.display()
+                ));
+            }
+        }
     };
 
     // 3. Sandbox containment on the resolved ancestor.
@@ -262,6 +277,25 @@ pub(crate) fn check_deny_list(
             }
         }
         _ => {}
+    }
+    None
+}
+
+/// Pre-flight URL deny-list check for tool arguments.
+///
+/// Scans the common URL argument keys (`url`, `endpoint`, `api_url`) and
+/// returns a denial message if any value starts with a blocked prefix. This
+/// is defensive plumbing: no built-in tool currently fetches URLs, but MCP
+/// or plugin tools may expose a `url` parameter in the future.
+pub(crate) fn check_url_in_args(args: &serde_json::Value, deny_list: &DenyList) -> Option<String> {
+    if let Some(obj) = args.as_object() {
+        for key in ["url", "endpoint", "api_url"] {
+            if let Some(url) = obj.get(key).and_then(|v| v.as_str()) {
+                if url_is_denied(url, &deny_list.url_patterns) {
+                    return Some(format!("🔒 URL denied by deny list: {url}"));
+                }
+            }
+        }
     }
     None
 }
@@ -491,4 +525,71 @@ pub(crate) fn emit_correction_results(
         })?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_check_search_path_fails_closed_on_unresolvable_path() {
+        // A relative path with no existing components cannot be resolved,
+        // so the function must deny rather than falling back to the literal
+        // path (which could accidentally pass a sandbox prefix check).
+        let dir = std::env::temp_dir().join("kirkforge_search_unresolvable_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir(&dir).unwrap();
+
+        let guard = crate::session::access::PathGuard {
+            sandbox_dir: Some(dir.clone()),
+            ..Default::default()
+        };
+
+        let result = check_search_path(
+            &guard,
+            std::path::Path::new("totally_nonexistent_dir/search"),
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            matches!(result, GuardVerdict::Denied(ref msg) if msg.contains("Cannot resolve search path")),
+            "expected fail-closed denial, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_check_url_in_args_blocks_denied_url() {
+        let mut deny_list = DenyList::default();
+        deny_list
+            .url_patterns
+            .push("https://internal.example.com".into());
+        let args = serde_json::json!({"url": "https://internal.example.com/secrets"});
+        let result = check_url_in_args(&args, &deny_list);
+        assert!(
+            result.as_ref().is_some_and(|m| m.contains("URL denied")),
+            "denied url argument should be blocked, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_check_url_in_args_allows_safe_url() {
+        let deny_list = DenyList::default();
+        let args = serde_json::json!({"url": "https://api.example.com/data"});
+        assert!(
+            check_url_in_args(&args, &deny_list).is_none(),
+            "safe url argument should be allowed"
+        );
+    }
+
+    #[test]
+    fn test_check_url_in_args_checks_endpoint_and_api_url() {
+        let mut deny_list = DenyList::default();
+        deny_list.url_patterns.push("http://100.100.100.200".into());
+        for key in ["endpoint", "api_url"] {
+            let args = serde_json::json!({key: "http://100.100.100.200/latest/meta-data/"});
+            assert!(
+                check_url_in_args(&args, &deny_list).is_some(),
+                "denied {key} argument should be blocked"
+            );
+        }
+    }
 }

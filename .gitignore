@@ -1,5 +1,7 @@
 # Build artifacts
 target/
+__pycache__/
+*.pyc
 
 # Editor / OS cruft
 *.swp

@@ -425,6 +425,16 @@ pub struct Config {
     /// disable auditing.
     #[serde(default)]
     pub audit_log_path: Option<PathBuf>,
+
+    /// Workspace plugin sources: a name → directory path mapping for plugins
+    /// that live outside the data-directory plugins folder (e.g. sibling
+    /// repositories). These can be toggled on/off via `enabled_plugins`.
+    #[serde(default)]
+    pub plugin_sources: HashMap<String, PathBuf>,
+
+    /// Names from `plugin_sources` that should be loaded at startup.
+    #[serde(default)]
+    pub enabled_plugins: Vec<String>,
 }
 
 /// Configuration for a single MCP server connection.
@@ -585,6 +595,8 @@ impl Default for Config {
             cache_enabled: false,
             cache_dir: None,
             audit_log_path: None,
+            plugin_sources: HashMap::new(),
+            enabled_plugins: vec![],
         }
     }
 }

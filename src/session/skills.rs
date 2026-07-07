@@ -145,8 +145,8 @@ impl SkillRegistry {
     /// Scan all registered paths and load any SKILL.md files found.
     ///
     /// Also loads plugin directories from `~/.local/share/kirkforge/plugins`
-    /// and registers any plugin skills whose trust tier is allowed.
-    pub fn scan_and_load(&mut self) -> anyhow::Result<usize> {
+    /// and any enabled workspace plugin sources, then registers their skills.
+    pub fn scan_and_load(&mut self, cfg: &crate::shared::Config) -> anyhow::Result<usize> {
         let mut count = 0;
         let paths = self.scan_paths.clone();
         for base in &paths {
@@ -155,22 +155,26 @@ impl SkillRegistry {
             }
             count += self.load_from_dir(base)?;
         }
-        count += self.load_plugins()?;
+        count += self.load_plugins(cfg)?;
         Ok(count)
     }
 
-    /// Load plugins from the canonical data-directory plugins folder and
-    /// register their skills.
-    fn load_plugins(&mut self) -> anyhow::Result<usize> {
+    /// Load plugins from the canonical data-directory plugins folder, any
+    /// enabled workspace plugin sources, and register their skills.
+    fn load_plugins(&mut self, cfg: &crate::shared::Config) -> anyhow::Result<usize> {
         let plugins_dir = crate::session::data_dir()
             .map(|d| d.join("plugins"))
             .unwrap_or_else(|_| PathBuf::from(".local/share/kirkforge/plugins"));
 
         self.plugin_registry = PluginRegistry::new();
-        let warnings = self
+        let mut warnings = self
             .plugin_registry
             .load_from_dir(&plugins_dir, TrustPolicy::up_to(self.max_plugin_trust))
             .unwrap_or_default();
+        warnings.extend(crate::session::plugin_tools::load_workspace_plugins(
+            &mut self.plugin_registry,
+            cfg,
+        ));
         self.plugin_warnings = warnings;
 
         let mut count = 0;

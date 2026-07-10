@@ -39,6 +39,15 @@ run_step "Run unit tests" cargo test --locked --workspace
 run_step "Run smoke tests" cargo test --test smoke_test
 run_step "Run Clippy" cargo clippy --all-targets -- -D warnings
 
+# Optional Node SDK pass when the vendored package is present.
+if [ -d "npm/kirkforge-plugin" ] && [ -f "npm/kirkforge-plugin/package.json" ]; then
+    if [ "$QUICK" = "quick" ]; then
+        run_step "Build Node SDK" bash -c 'cd npm/kirkforge-plugin && npm run build'
+    else
+        run_step "Run Node SDK tests" bash -c 'cd npm/kirkforge-plugin && npm test'
+    fi
+fi
+
 if [ "$QUICK" != "quick" ]; then
     run_step "Build release binary" cargo build --release --locked
 

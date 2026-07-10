@@ -1,4 +1,6 @@
 import { execFile } from "node:child_process";
+import { createRequire } from "node:module";
+import { existsSync } from "node:fs";
 import { relative, resolve, isAbsolute } from "node:path";
 import { ok, err } from "@kirkforge/core-types";
 import type { Result } from "@kirkforge/core-types";
@@ -10,6 +12,25 @@ interface PyrightOpts {
   eventBus?: EventBus;
   files?: string[];
   command?: string;
+}
+
+/** Resolve the pyright binary, preferring the local install and falling back to PATH. */
+function resolvePyrightCommand(): string {
+  const cwdBin = resolve(process.cwd(), "node_modules", ".bin", "pyright");
+  if (existsSync(cwdBin)) {
+    return cwdBin;
+  }
+  try {
+    const require = createRequire(import.meta.url);
+    const pkg = require.resolve("pyright/package.json");
+    const index = resolve(pkg, "..", "index.js");
+    if (existsSync(index)) {
+      return index;
+    }
+  } catch {
+    // fall back to PATH lookup
+  }
+  return "pyright";
 }
 
 export interface PythonTypesReport {
@@ -90,7 +111,7 @@ export class PyrightEmitter {
 
     try {
       const { stdout, stderr } = await runTool(
-        this.opts.command ?? "pyright",
+        this.opts.command ?? resolvePyrightCommand(),
         ["--outputjson", ...targets],
         cwd,
       );

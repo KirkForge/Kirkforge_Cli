@@ -16,18 +16,18 @@ const NODE = process.execPath;
 const activeChildren = new Set<ChildProcess>();
 
 function run(args: string[]) {
-  const child = execFile(NODE, [CLI, ...args], { timeout: 30000 });
-  activeChildren.add(child);
-  const promise = execFileAsync(NODE, [CLI, ...args], {
-    timeout: 30000,
-  });
+  const promise = execFileAsync(NODE, [CLI, ...args], { timeout: 30000 });
+  if (promise.child) {
+    activeChildren.add(promise.child);
+    promise.child.on("exit", () => activeChildren.delete(promise.child!));
+  }
   return promise;
 }
 
 afterAll(() => {
   for (const child of activeChildren) {
     try {
-      child.kill("SIGTERM");
+      if (!child.killed) child.kill("SIGTERM");
     } catch {
       // already dead
     }

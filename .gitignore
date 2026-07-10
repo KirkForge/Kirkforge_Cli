@@ -1,5 +1,10 @@
 # Build artifacts
 target/
+__pycache__/
+*.pyc
+node_modules/
+dist/
+*.tsbuildinfo
 
 # Editor / OS cruft
 *.swp

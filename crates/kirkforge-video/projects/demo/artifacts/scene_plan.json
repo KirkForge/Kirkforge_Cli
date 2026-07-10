@@ -1,0 +1,58 @@
+{
+  "kind": "scene_plan",
+  "scenes": [
+    {
+      "duration_s": 3.0,
+      "subtitle": "research → compose",
+      "title": "Pipeline Demo",
+      "type": "hero_title"
+    },
+    {
+      "duration_s": 3.0,
+      "label": "stages, fully resumable",
+      "number": "7",
+      "type": "stat_card"
+    },
+    {
+      "bars": [
+        {
+          "color": "#3aa0ff",
+          "label": "Research",
+          "value": 0.05
+        },
+        {
+          "color": "#ffcc00",
+          "label": "Proposal",
+          "value": 0.02
+        },
+        {
+          "color": "#6cd07a",
+          "label": "Script",
+          "value": 0.02
+        },
+        {
+          "color": "#ff5a5a",
+          "label": "Compose",
+          "value": 0.3
+        }
+      ],
+      "duration_s": 6.0,
+      "title": "Pipeline time per stage (s)",
+      "type": "bar_chart"
+    },
+    {
+      "duration_s": 4.0,
+      "lines": [
+        "agentic",
+        "FFmpeg-native",
+        "Rust"
+      ],
+      "type": "caption_overlay"
+    },
+    {
+      "duration_s": 2.0,
+      "title": "kirkforge.video",
+      "type": "end_tag"
+    }
+  ]
+}

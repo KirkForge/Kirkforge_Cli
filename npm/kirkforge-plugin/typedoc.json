@@ -1,0 +1,18 @@
+{
+  "$schema": "https://typedoc.org/schema.json",
+  "entryPoints": ["packages/plugin/src/index.ts"],
+  "out": "docs/api",
+  "name": "KirkForge",
+  "includeVersion": true,
+  "readme": "none",
+  "excludePrivate": true,
+  "excludeExternals": true,
+  "plugin": [],
+  "navigation": {
+    "includeCategories": true,
+    "includeGroups": true
+  },
+  "categorizeByGroup": true,
+  "sort": ["source-order"],
+  "kindSortOrder": ["Class", "Interface", "Function", "TypeAlias", "Variable"]
+}

@@ -1,0 +1,15 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "./src",
+    "outDir": "./dist",
+    "composite": true
+  },
+  "references": [
+    { "path": "../core-types" },
+    { "path": "../core-events" },
+    { "path": "../core-logging" }
+  ],
+  "exclude": ["dist", "**/*.test.ts"],
+  "include": ["src"]
+}

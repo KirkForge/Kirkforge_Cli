@@ -1,0 +1,25 @@
+{
+  "name": "@kirkforge/agent-core",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "dependencies": {
+    "@kirkforge/core-types": "*",
+    "@kirkforge/core-errors": "*",
+    "@kirkforge/model-config": "*",
+    "@kirkforge/model-client": "*",
+    "@kirkforge/prompt-core": "*",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {},
+  "files": [
+    "dist/"
+  ]
+}

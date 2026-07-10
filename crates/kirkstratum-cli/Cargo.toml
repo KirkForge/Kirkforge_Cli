@@ -1,0 +1,31 @@
+[package]
+name = "kirkstratum-cli"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+license = "MIT"
+repository = "https://github.com/KirkForge/KirkForge-Cli"
+description = "CLI for the Stratum context-compression pipeline"
+keywords = ["compression", "llm", "context", "prompt"]
+categories = ["command-line-utilities", "development-tools"]
+
+[[bin]]
+name = "stratum"
+path = "src/main.rs"
+
+[dependencies]
+kirkstratum-core = { path = "../kirkstratum-core" }
+kirkstratum-hosts = { path = "../kirkstratum-hosts" }
+clap = { version = "4", features = ["derive", "env"] }
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+toml = "0.8"
+serde_json = "1"
+serde = { version = "1", features = ["derive"] }
+clap_complete = "4"
+
+[dev-dependencies]
+assert_cmd = "2"
+tempfile = "3"
+predicates = "3"

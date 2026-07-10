@@ -1,0 +1,59 @@
+{
+  "$schema": "./rename-schema.json",
+  "_comment": "Curated TypeScript / JavaScript package renames and removed packages. Each entry: old import name -> new canonical name. Add entries with care — these trigger lint warnings in real code.",
+  "request": {
+    "replacedBy": "undici or node-fetch",
+    "deprecatedSince": "2020",
+    "reason": "The 'request' package was officially deprecated in 2020. For Node 18+, use the built-in fetch. For broader compatibility, use undici or node-fetch."
+  },
+  "mkdirp": {
+    "replacedBy": "fs.mkdir({ recursive: true })",
+    "deprecatedSince": "2022",
+    "reason": "Node 10.12+ supports fs.mkdir with the recursive option natively. The mkdirp package is no longer needed for new code."
+  },
+  "rimraf": {
+    "replacedBy": "fs.rm(path, { recursive: true, force: true })",
+    "deprecatedSince": "2023",
+    "reason": "Node 14.14+ supports fs.rm with recursive and force options. rimraf is still maintained for cross-platform safety, but native works for most cases."
+  },
+  "nock": {
+    "replacedBy": "msw or undici MockAgent",
+    "deprecatedSince": "ongoing (2024+)",
+    "reason": "nock has been in maintenance-only mode. msw or undici's built-in MockAgent are the modern alternatives."
+  },
+  "moment": {
+    "replacedBy": "date-fns or luxon or Day.js",
+    "deprecatedSince": "2020 (maintenance mode)",
+    "reason": "moment is in maintenance-only mode. It is large (~290 KB minified) and mutable. date-fns and luxon are tree-shakeable, immutable alternatives. Day.js is a 2 KB moment-compatible API."
+  },
+  "glob": {
+    "replacedBy": "fast-glob or tinyglobby",
+    "deprecatedSince": "stable",
+    "reason": "The 'glob' package is the classic, but fast-glob and tinyglobby are faster and actively maintained for build tooling use cases."
+  },
+  "tslib": {
+    "replacedBy": "(built-in since TypeScript 2.7)",
+    "deprecatedSince": "stable",
+    "reason": "TypeScript 2.7+ inlines tslib helpers (e.g. __awaiter, __rest) automatically. The tslib npm package is only needed when targeting older runtimes."
+  },
+  "node-uuid": {
+    "replacedBy": "uuid",
+    "deprecatedSince": "2017",
+    "reason": "node-uuid was renamed to uuid in 2017. The uuid package is the maintained successor."
+  },
+  "babel-polyfill": {
+    "replacedBy": "core-js",
+    "deprecatedSince": "2018",
+    "reason": "babel-polyfill was deprecated in favor of core-js/stable with @babel/preset-env's useBuiltIns: 'usage' option."
+  },
+  "q": {
+    "replacedBy": "native Promises or p-limit",
+    "deprecatedSince": "2017",
+    "reason": "The 'q' promise library was the standard before native Promises landed. For new code, use native Promises; for throttling, use p-limit or p-queue."
+  },
+  "axios-retry": {
+    "replacedBy": "axios interceptors",
+    "deprecatedSince": "stable",
+    "reason": "axios-retry is still maintained but for most retry patterns, a small axios interceptor is sufficient. Native fetch + undici also handles retries."
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "name": "@kirkforge/core-rbac",
+  "version": "1.0.0",
+  "private": "false",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "dependencies": {
+    "@kirkforge/core-errors": "*",
+    "@kirkforge/core-types": "*",
+    "jose": "^6.2.3"
+  },
+  "files": [
+    "dist/"
+  ]
+}

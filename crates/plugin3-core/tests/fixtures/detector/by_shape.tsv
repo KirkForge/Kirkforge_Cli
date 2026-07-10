@@ -1,0 +1,10 @@
+TestRunner	running 5 tests\ntest foo ... ok
+TestRunner	test result: ok. 12 passed; 0 failed
+Compiler	error[E0001]: mismatched types
+Compiler	warning: unused variable
+Json	{"key": "value", "n": 1}
+Json	[1, 2, 3]
+SearchResults	src/main.rs:1: let x = 1;
+SearchResults	src/lib.rs:42: pub fn foo() {}
+Unknown	hello world
+Unknown	plain prose with no signal lines

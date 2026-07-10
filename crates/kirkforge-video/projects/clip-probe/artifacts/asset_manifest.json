@@ -1,0 +1,47 @@
+{
+  "entries": [
+    {
+      "duration_s": 3.0,
+      "index": 0,
+      "kind": "hero_title",
+      "source": "synthesized"
+    },
+    {
+      "duration_s": 3.0,
+      "index": 1,
+      "kind": "stat_card",
+      "source": "synthesized"
+    },
+    {
+      "duration_s": 3.0,
+      "index": 2,
+      "kind": "stat_card",
+      "source": "synthesized"
+    },
+    {
+      "duration_s": 3.0,
+      "index": 3,
+      "kind": "stat_card",
+      "source": "synthesized"
+    },
+    {
+      "duration_s": 6.0,
+      "index": 4,
+      "kind": "bar_chart",
+      "source": "synthesized"
+    },
+    {
+      "duration_s": 2.0,
+      "index": 5,
+      "kind": "end_tag",
+      "source": "synthesized"
+    }
+  ],
+  "kind": "asset_manifest",
+  "missing": [],
+  "summary": {
+    "external": 0,
+    "synthesized": 6,
+    "total": 6
+  }
+}

@@ -1,0 +1,25 @@
+# ADR-0006 § should_slice threshold drift corpus
+# Format: <kind>\t<bytes>\t<expected_decision>
+# where expected_decision is "keep" or "slice(<head>,<tail>)".
+# Each kind's threshold boundary is exercised twice: once just
+# below (keep) and once at-or-above (slice). FileContent is the
+# exception — its threshold is usize::MAX so we exercise 1 MB.
+FileContent	1048576	keep
+GenericShell	2047	keep
+GenericShell	2048	slice(4096,4096)
+GenericShell	4096	slice(4096,4096)
+BuildLog	4095	keep
+BuildLog	4096	slice(4096,4096)
+BuildLog	8192	slice(4096,4096)
+Json	4095	keep
+Json	4096	slice(4096,4096)
+Unknown	8191	keep
+Unknown	8192	slice(4096,4096)
+TestRunner	8191	keep
+TestRunner	8192	slice(4096,4096)
+TestRunner	16384	slice(4096,4096)
+Compiler	8191	keep
+Compiler	8192	slice(4096,4096)
+SearchResults	16383	keep
+SearchResults	16384	slice(4096,4096)
+SearchResults	32768	slice(4096,4096)

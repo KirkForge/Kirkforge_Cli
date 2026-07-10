@@ -64,6 +64,41 @@ A standalone CLI, `kirkforge-plugin`, ships in `KirkForge-Plugin/apps/plugin-cli
 - Path dependencies require both repos to be checked out side-by-side.
   For release we can switch to published crates or git submodules.
 
+## Workspace Plugin Sources
+
+In addition to plugins installed under `data_dir/plugins`, operators can
+register **workspace plugin sources**: plugin directories that live outside
+the data directory (for example, sibling repositories such as
+`KirkForge-Plugin`, `KirkForge-Draw`, or `KirkForge-Video`).
+
+Configuration is stored in `config.toml`:
+
+```toml
+[plugin_sources]
+demo = "/home/user/src/KirkForge-Plugin/plugin"
+draw = "/home/user/src/KirkForge-Draw/plugin"
+
+enabled_plugins = ["demo"]
+```
+
+- `plugin_sources` — a name → directory path mapping.
+- `enabled_plugins` — names from `plugin_sources` that should be loaded at
+  startup.
+
+Both fields can also be set via environment variables:
+
+- `KIRKFORGE_PLUGIN_SOURCES=name1=/path/one,name2=/path/two`
+- `KIRKFORGE_ENABLED_PLUGINS=name1,name2`
+
+The TUI provides slash commands for runtime management:
+
+- `/plugins add <name> <path>` — register a workspace source.
+- `/plugins remove <name>` — unregister a source and unload it.
+- `/plugins toggle <name>` — enable or disable a source; persists to config.
+- `/plugins sources` — list configured sources and their enabled/active state.
+- `/plugins setup` — show a quick-start summary.
+- `/plugins reload` — rescan all sources and apply the current config.
+
 ## Implementation Notes
 
 - `KirkForge-Plugin` workspace members:
@@ -74,3 +109,8 @@ A standalone CLI, `kirkforge-plugin`, ships in `KirkForge-Plugin/apps/plugin-cli
   `path = "../KirkForge-Plugin/crates/..."`.
 - `src/session/skills.rs` wraps `PluginRegistry` and surfaces plugin trust
   tiers in the TUI status bar.
+- `src/session/plugin_tools.rs` loads workspace sources through
+  `load_workspace_plugins` and merges them into the executor-facing registry.
+- `src/tui/commands/plugins.rs` implements `/plugins toggle`, `add`, `remove`,
+  `sources`, and `setup`, persisting mutations through
+  `session::config::save_config`.

@@ -7,6 +7,12 @@ on:
 
 permissions:
   contents: write
+  id-token: write
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  RUST_TOOLCHAIN: "1.88.0"
 
 jobs:
   build:
@@ -17,25 +23,66 @@ jobs:
         include:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
+            cross: false
+            archive_ext: tar.gz
           - target: x86_64-apple-darwin
             os: macos-latest
+            cross: false
+            archive_ext: tar.gz
           - target: aarch64-apple-darwin
             os: macos-latest
+            cross: false
+            archive_ext: tar.gz
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            cross: false
+            archive_ext: zip
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            cross: true
+            archive_ext: tar.gz
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+            cross: true
+            archive_ext: tar.gz
+
     runs-on: ${{ matrix.os }}
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set source date epoch
+        shell: bash
+        run: |
+          echo "SOURCE_DATE_EPOCH=$(git log -1 --pretty=%ct)" >> "$GITHUB_ENV"
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           targets: ${{ matrix.target }}
+
+      - name: Install cross
+        if: matrix.cross
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cross
 
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
 
       - name: Build release binary
-        run: cargo build --release --locked --target ${{ matrix.target }}
+        shell: bash
+        run: |
+          if [ "${{ matrix.cross }}" = "true" ]; then
+            cross build --release --locked --target ${{ matrix.target }}
+          else
+            cargo build --release --locked --target ${{ matrix.target }}
+          fi
 
       - name: Package binary
         shell: bash
@@ -46,22 +93,29 @@ jobs:
             bin_name="${bin_name}.exe"
           fi
           cp "target/${{ matrix.target }}/release/${bin_name}" "dist/${bin_name}"
-          archive="kirkforge-${{ matrix.target }}.tar.gz"
-          tar -czf "dist/${archive}" -C dist "${bin_name}"
+          archive="kirkforge-${{ matrix.target }}.${{ matrix.archive_ext }}"
+          if [ "${{ matrix.archive_ext }}" = "zip" ]; then
+            powershell -Command "Compress-Archive -Path 'dist\\${bin_name}' -DestinationPath 'dist\\${archive}'"
+          else
+            tar -czf "dist/${archive}" -C dist "${bin_name}"
+          fi
           rm "dist/${bin_name}"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: kirkforge-${{ matrix.target }}
-          path: dist/*.tar.gz
+          path: dist/kirkforge-${{ matrix.target }}.*
 
   release:
     name: Create GitHub release
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -70,8 +124,47 @@ jobs:
           pattern: kirkforge-*
           merge-multiple: true
 
-      - name: Create release
+      - name: Generate checksums
+        shell: bash
+        run: |
+          cd dist
+          sha256sum kirkforge-* > SHA256SUMS.txt
+          cd ..
+          cat dist/SHA256SUMS.txt
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign checksums
+        shell: bash
+        continue-on-error: true
+        run: |
+          cd dist
+          cosign sign-blob --yes \
+            --output-signature SHA256SUMS.txt.sig \
+            --output-certificate SHA256SUMS.txt.pem \
+            SHA256SUMS.txt
+
+      - name: Extract release notes from CHANGELOG
+        id: notes
+        shell: bash
+        run: |
+          if python3 scripts/extract-release-notes.py "${GITHUB_REF_NAME}" > release-notes.md; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create release (changelog notes)
+        if: steps.notes.outputs.found == 'true'
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/*.tar.gz
+          files: dist/*
+          body_path: release-notes.md
+
+      - name: Create release (generated notes)
+        if: steps.notes.outputs.found != 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
           generate_release_notes: true

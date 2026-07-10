@@ -49,21 +49,37 @@ kirkforge daemon
 - **Enforced plan mode** — `/plan` locks the executor to read-only tools until you type `/implement`.
 - **Subagent personas** — `/explore`, `/plan`, and `/coder` run isolated fork sessions with restricted toolsets and merge a summary back.
 - **Safe git commit helper** — `/commit` shows status, runs pre-commit sanitation (large files, secrets, conflict markers, unstaged debris) and suggests a conventional-commit message; `/commit "message"` stages all changes and commits after sanitation; `/commit --push "message"` also pushes.
-- **Runtime plugins** — drop a plugin folder into `~/.local/share/kirkforge/plugins/<name>/` and toggle it without restarting: `/plugins list`, `/plugins enable <name>`, `/plugins disable <name>`, `/plugins reload`, `/plugins trust <name> <tier>`.
+- **Runtime plugins** — drop a plugin folder into `~/.local/share/kirkforge/plugins/<name>/` or toggle a built-in workspace source without restarting: `/plugins list`, `/plugins enable <name>`, `/plugins disable <name>`, `/plugins toggle <name>`, `/plugins reload`, `/plugins trust <name> <tier>`.
 
 ## Plugins
 
-Plugins are filesystem folders under `~/.local/share/kirkforge/plugins/<name>/`. Each folder must contain a `kirkforge.toml` manifest and any tool/hook/verifier scripts it declares. The host loads them at startup and caps each plugin to the `max_plugin_trust` tier in `config.toml` (read-only → shell → network → unsafe).
+Plugins are filesystem folders containing a `kirkforge.toml` manifest plus any tool/hook/verifier scripts it declares. The host loads them at startup and caps each plugin to the `max_plugin_trust` tier in `config.toml` (read-only → shell → network → unsafe).
 
-Use the TUI slash commands to manage plugins at runtime:
+### Built-in workspace sources
 
-- `/plugins list` — show active, blocked, and available plugin directories.
-- `/plugins enable <name>` — load an available plugin directory.
+This repo ships with five satellite plugins under `plugins/<name>/`. Each plugin’s source code also lives in this repo so everything builds together:
+
+- `plugins/kirkforge-draw/` / `crates/kirkforge-draw*` — terminal diagram editor (`/draw`, `draw_render`, `draw_edit`).
+- `plugins/kirkforge-video/` / `crates/kirkforge-video` — FFmpeg-native video pipeline (`/video`, `video_pipeline`, `video_render`, …).
+- `plugins/stratum/` / `crates/kirkstratum*` — context compression pipeline (`/stratum`, `stratum_run`, …).
+- `plugins/kirkforge-plugin3/` / `crates/plugin3*` — token-budget assistant (`/budget`, `plugin3_budget_*`, …).
+- `plugins/kirkforge-plugin/` / `npm/kirkforge-plugin` — KirkForge-Plugin SDK verification CLI (`/kirkforge`, `plugin_verify`, …).
+
+They are registered as workspace plugin sources by default but left **disabled** until you toggle them on. The plugin tool scripts prefer binaries built by this workspace (`target/release/<bin>` or `target/debug/<bin>`) and fall back to `PATH` for the Node SDK or any externally installed build.
+
+### Runtime commands
+
+Use the TUI slash commands to manage plugins without restarting:
+
+- `/plugins list` — show active, blocked, available, and workspace plugin sources.
+- `/plugins enable <name>` — load an available plugin directory from `~/.local/share/kirkforge/plugins/`.
 - `/plugins disable <name>` — unload a plugin and remove its tools/skills.
-- `/plugins reload` — full rescan of the plugins directory.
+- `/plugins toggle <name>` — enable or disable a built-in workspace source persistently.
+- `/plugins reload` — full rescan of the plugins directory and workspace sources.
 - `/plugins trust <name> <tier>` — session-only re-enable with a specific trust tier.
-
-Satellite repos are kept as distinct folders. To consume one, copy its `plugin/` directory into `~/.local/share/kirkforge/plugins/<name>/` rather than merging code into this repo.
+- `/plugins sources` — list configured workspace plugin sources.
+- `/plugins add <name> <path>` / `/plugins remove <name>` — register or unregister a workspace source.
+- `/plugins setup` — quick-start help for workspace sources.
 
 ## Config
 
@@ -85,6 +101,16 @@ cargo clippy --all-targets -- -D warnings
 ./scripts/run-integration-tests.sh  # needs Ollama + qwen2.5:0.5b
 cargo build --release               # ~5.4 MB binary
 ```
+
+The Rust satellites build automatically with the workspace (`cargo build --workspace --release`). The Node SDK under `npm/kirkforge-plugin/` must be built separately:
+
+```bash
+cd npm/kirkforge-plugin
+npm install
+npm run build
+```
+
+This produces `apps/cli/dist/index.js`, which the `plugins/kirkforge-plugin/` tool scripts invoke.
 
 ## Releases
 

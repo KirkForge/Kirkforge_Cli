@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Deterministic delegation plugin for coding agents \u2014 verification, correction, and routing layer that plugs into Codex, Claude Code, OpenCode, and LangChain-style systems",
+  "description": "Deterministic delegation plugin for coding agents — verification, correction, and routing layer that plugs into Codex, Claude Code, OpenCode, and LangChain-style systems",
   "workspaces": [
     "packages/*",
     "apps/*"
@@ -35,6 +35,7 @@
     "eslint": "^10.4.0",
     "globals": "^17.6.0",
     "prettier": "^3.0.0",
+    "pyright": "^1.1.411",
     "tsx": "^4.7.0",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.59.4",

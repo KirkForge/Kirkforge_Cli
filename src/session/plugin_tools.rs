@@ -314,6 +314,14 @@ pub fn load_workspace_plugins(registry: &mut PluginRegistry, cfg: &Config) -> Ve
                 }
             }
         };
+        let resolved = if resolved.exists() {
+            resolved
+        } else {
+            // Production install fallback: the compile-time workspace paths only
+            // exist when running from the source tree. Installed releases ship
+            // bundled plugins under the data directory (`~/.local/share/kirkforge/plugins`).
+            plugins_dir().join(name)
+        };
         if !resolved.exists() {
             warnings.push(format!(
                 "{name}: plugin source directory does not exist: {resolved}",

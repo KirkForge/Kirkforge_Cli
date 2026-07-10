@@ -62,6 +62,19 @@ for bin in kirkforge kfd plugin3 stratum kirkforge-video; do
     chmod +x "$BIN_DIR/$bin"
 done
 
+DATA_DIR="${DATA_DIR:-$PREFIX/share/kirkforge}"
+PLUGIN_DIR="$DATA_DIR/plugins"
+mkdir -p "$PLUGIN_DIR"
+if [ -d "$tmpdir/plugins" ]; then
+    for plugin in "$tmpdir"/plugins/*/; do
+        [ -d "$plugin" ] || continue
+        name="$(basename "$plugin")"
+        rm -rf "$PLUGIN_DIR/$name"
+        cp -R "$plugin" "$PLUGIN_DIR/$name"
+    done
+    echo "Installed bundled plugins to $PLUGIN_DIR"
+fi
+
 echo "Installed binaries to $BIN_DIR: kirkforge kfd plugin3 stratum kirkforge-video"
 
 if ! echo "$PATH" | tr ':' '\n' | grep -qx "$BIN_DIR"; then

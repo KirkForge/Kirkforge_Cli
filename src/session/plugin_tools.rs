@@ -639,6 +639,81 @@ prompt = "hello"
         assert!(warnings[0].contains("does not exist"));
     }
 
+    struct DataDirGuard {
+        prior: Option<String>,
+    }
+
+    impl DataDirGuard {
+        fn set(value: &str) -> Self {
+            let prior = std::env::var("KIRKFORGE_DATA_DIR").ok();
+            std::env::set_var("KIRKFORGE_DATA_DIR", value);
+            Self { prior }
+        }
+    }
+
+    impl Drop for DataDirGuard {
+        fn drop(&mut self) {
+            match &self.prior {
+                Some(v) => std::env::set_var("KIRKFORGE_DATA_DIR", v),
+                None => std::env::remove_var("KIRKFORGE_DATA_DIR"),
+            }
+        }
+    }
+
+    /// When a configured workspace plugin source path does not exist (e.g. a
+    /// release binary whose compile-time source-repo paths are stale), the host
+    /// falls back to the data-directory plugins folder before giving up.
+    #[test]
+    fn workspace_plugin_source_falls_back_to_data_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let plugins = tmp.path().join("plugins");
+        let demo = plugins.join("demo");
+        std::fs::create_dir_all(&demo).unwrap();
+        std::fs::write(
+            demo.join("kirkforge.toml"),
+            r#"
+name = "demo"
+version = "0.1.0"
+description = "demo"
+trust = "shell"
+
+[[capabilities]]
+type = "tool"
+name = "demo/hello"
+description = "hello"
+command = "hello.sh"
+"#,
+        )
+        .unwrap();
+        std::fs::write(demo.join("hello.sh"), "#!/bin/sh\nprintf hello").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(demo.join("hello.sh"))
+                .unwrap()
+                .permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(demo.join("hello.sh"), perms).unwrap();
+        }
+
+        let _guard = DataDirGuard::set(&tmp.path().to_string_lossy());
+        let cfg = Config {
+            plugin_sources: [("demo".to_string(), PathBuf::from("/nonexistent/demo"))]
+                .into_iter()
+                .collect(),
+            enabled_plugins: vec!["demo".to_string()],
+            ..Config::default()
+        };
+
+        let mut registry = PluginRegistry::new();
+        let warnings = load_workspace_plugins(&mut registry, &cfg);
+        assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+        assert!(
+            registry.find_active_by_name("demo").is_some(),
+            "demo plugin should load from data-dir fallback"
+        );
+    }
+
     /// Verify the built-in workspace plugin sources are registered by default,
     /// exist on disk, and can be loaded by the plugin host under the default
     /// trust policy. They remain disabled unless the operator toggles them on.

@@ -1,0 +1,92 @@
+# Stratum plugin manifest for KirkForge-Cli.
+# Drop this directory into ~/.local/share/kirkforge/plugins/stratum/
+# after installing the `stratum` binary (see README.md).
+
+name = "stratum"
+version = "0.1.0"
+description = "Compression and rules pipeline for agent context via the stratum CLI"
+trust = "shell"
+
+# ── Core pipeline tools ───────────────────────────────────────────────────────
+
+[[capabilities]]
+type = "tool"
+name = "stratum_run"
+description = "Run the stratum compression pipeline on stdin. Useful for compacting large context (logs, search results, diffs) before feeding it to the model."
+schema = { type = "object", properties = { mode = { type = "string", enum = ["off", "lite", "full", "ultra"], description = "Pipeline mode override (off/lite/full/ultra)" }, token_budget = { type = "integer", description = "Token budget for the bloat heuristic" }, json = { type = "boolean", description = "Emit JSON output", default = false }, dry_run = { type = "boolean", description = "Preview transforms without emitting output", default = false }, max_input_size = { type = "integer", description = "Maximum input size in bytes" } } }
+command = "tools/run.sh"
+
+[[capabilities]]
+type = "tool"
+name = "stratum_apply"
+description = "Apply the stratum pipeline to a file or stdin with optional content-type override."
+schema = { type = "object", properties = { file = { type = "string", description = "Path to input file; omit to read stdin" }, content_type = { type = "string", enum = ["json_array", "json_object", "source_code", "search_results", "build_output", "git_diff", "html", "plain_text"], description = "Force content-type detection" }, mode = { type = "string", enum = ["off", "lite", "full", "ultra"], description = "Pipeline mode override" }, token_budget = { type = "integer", description = "Token budget for the bloat heuristic" }, json = { type = "boolean", description = "Emit JSON output", default = false }, dry_run = { type = "boolean", description = "Preview transforms without emitting output", default = false } } }
+command = "tools/apply.sh"
+
+[[capabilities]]
+type = "tool"
+name = "stratum_rules"
+description = "Emit the canonical ruleset for the active or requested stratum mode."
+schema = { type = "object", properties = { mode = { type = "string", enum = ["off", "lite", "full", "ultra"], description = "Mode to emit rules for (default: current/active)" }, json = { type = "boolean", description = "Emit JSON output", default = false } } }
+command = "tools/rules.sh"
+
+[[capabilities]]
+type = "tool"
+name = "stratum_mode"
+description = "Show the active stratum mode, or set it for this invocation."
+schema = { type = "object", properties = { value = { type = "string", enum = ["off", "lite", "full", "ultra"], description = "Mode value to set; omit to show current mode" }, json = { type = "boolean", description = "Emit JSON output", default = false } } }
+command = "tools/mode.sh"
+
+[[capabilities]]
+type = "tool"
+name = "stratum_config_validate"
+description = "Validate the effective stratum configuration. Exits non-zero if the config is invalid."
+schema = { type = "object", properties = { json = { type = "boolean", description = "Emit JSON output", default = false } } }
+command = "tools/config_validate.sh"
+
+# ── Skill (slash command) ────────────────────────────────────────────────────
+
+[[capabilities]]
+type = "skill"
+trigger = "/stratum"
+prompt = """
+You are a Stratum pipeline assistant for KirkForge-Cli.
+
+Stratum is a compression and rules pipeline for agent context. It takes large payloads (logs, search results, diffs, JSON) and emits compacted context suitable for feeding to an LLM.
+
+Available plugin tools:
+- stratum_run: run the pipeline on stdin (useful for compacting context before passing it to the model).
+- stratum_apply: apply the pipeline to a specific file.
+- stratum_rules: show the canonical ruleset for a mode.
+- stratum_mode: show or set the active mode.
+- stratum_config_validate: validate the effective stratum config.
+
+When the user asks for Stratum help:
+1. Call stratum_mode to show the active mode.
+2. Call stratum_rules with that mode to show the rules.
+3. Summarise the rules and suggest the best tool for the user's request.
+
+When the user wants to compress context:
+1. Prefer stratum_run if they have text to pipe in (the KirkForge runtime will supply stdin).
+2. Prefer stratum_apply if they want to process a file.
+3. Mention the mode/token_budget options only if the user wants fine-grained control.
+
+User request: {{args}}
+"""
+model-hint = "default"
+
+# ── Lifecycle hooks ──────────────────────────────────────────────────────────
+
+# On session start, emit the active ruleset so the model knows the compression
+# contract for this session.
+[[capabilities]]
+type = "hook"
+event = "session-start"
+command = "hooks/session-start.sh"
+
+# Before a bash tool is invoked, validate the stratum config so configuration
+# drift is surfaced early.
+[[capabilities]]
+type = "hook"
+event = "pre-tool-bash"
+command = "hooks/pre-tool-bash.sh"

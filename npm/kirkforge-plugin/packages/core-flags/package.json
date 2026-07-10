@@ -1,0 +1,17 @@
+{
+  "name": "@kirkforge/core-flags",
+  "version": "1.0.0",
+  "private": "false",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "dependencies": {
+    "@kirkforge/core-types": "*"
+  },
+  "files": [
+    "dist/"
+  ]
+}

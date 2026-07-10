@@ -1,0 +1,25 @@
+[package]
+name = "kirkstratum-core"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+license = "MIT"
+repository = "https://github.com/KirkForge/KirkForge-Cli"
+description = "Context-compression toolkit for LLM prompts"
+keywords = ["compression", "llm", "context", "prompt"]
+categories = ["text-processing", "development-tools"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+thiserror = "1"
+tracing = "0.1"
+blake3 = "1"
+toml = "0.8"
+
+[dev-dependencies]
+proptest = "1"
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "compression"
+harness = false

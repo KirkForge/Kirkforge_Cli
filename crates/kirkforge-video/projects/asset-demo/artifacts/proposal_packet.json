@@ -1,0 +1,8 @@
+{
+  "concepts": [],
+  "kind": "proposal_packet",
+  "promise": "DataExplainer",
+  "render_runtime": "ffmpeg",
+  "renderer_family": "data_explainer",
+  "selected_concept": null
+}

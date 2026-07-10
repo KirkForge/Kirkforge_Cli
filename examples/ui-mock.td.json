@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "objects": [
+    {
+      "type": "box",
+      "id": "window",
+      "z": 1,
+      "parentId": null,
+      "color": "white",
+      "left": 0, "top": 0, "right": 50, "bottom": 18,
+      "style": "double"
+    },
+    {
+      "type": "box",
+      "id": "titlebar",
+      "z": 2,
+      "parentId": null,
+      "color": "blue",
+      "left": 1, "top": 1, "right": 49, "bottom": 2,
+      "style": "light"
+    },
+    {
+      "type": "box",
+      "id": "sidebar",
+      "z": 3,
+      "parentId": null,
+      "color": "cyan",
+      "left": 1, "top": 3, "right": 14, "bottom": 17,
+      "style": "light"
+    },
+    {
+      "type": "box",
+      "id": "main",
+      "z": 4,
+      "parentId": null,
+      "color": "white",
+      "left": 15, "top": 3, "right": 49, "bottom": 17,
+      "style": "light"
+    },
+    {
+      "type": "text",
+      "id": "title",
+      "z": 5,
+      "parentId": null,
+      "color": "yellow",
+      "x": 22, "y": 2,
+      "content": " kirkforge-draw ",
+      "border": "underline"
+    }
+  ]
+}

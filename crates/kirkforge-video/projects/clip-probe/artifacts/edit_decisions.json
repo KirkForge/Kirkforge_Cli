@@ -1,0 +1,9 @@
+{
+  "cuts": [],
+  "kind": "edit_decisions",
+  "render_runtime": "ffmpeg",
+  "risk_summary": {
+    "average": 2.944444417953491,
+    "verdict": "Acceptable"
+  }
+}

@@ -1,0 +1,70 @@
+{
+  "version": 1,
+  "objects": [
+    {
+      "type": "box",
+      "id": "router",
+      "z": 1,
+      "parentId": null,
+      "color": "magenta",
+      "left": 20, "top": 0, "right": 30, "bottom": 2,
+      "style": "heavy"
+    },
+    {
+      "type": "box",
+      "id": "host_a",
+      "z": 2,
+      "parentId": null,
+      "color": "green",
+      "left": 0, "top": 8, "right": 9, "bottom": 10,
+      "style": "light"
+    },
+    {
+      "type": "box",
+      "id": "host_b",
+      "z": 3,
+      "parentId": null,
+      "color": "green",
+      "left": 20, "top": 8, "right": 29, "bottom": 10,
+      "style": "light"
+    },
+    {
+      "type": "box",
+      "id": "host_c",
+      "z": 4,
+      "parentId": null,
+      "color": "green",
+      "left": 40, "top": 8, "right": 49, "bottom": 10,
+      "style": "light"
+    },
+    {
+      "type": "elbow",
+      "id": "link_a",
+      "z": 5,
+      "parentId": null,
+      "color": "yellow",
+      "x1": 4, "y1": 8, "x2": 20, "y2": 2,
+      "style": "light",
+      "orientation": "horizontal-first"
+    },
+    {
+      "type": "line",
+      "id": "link_b",
+      "z": 6,
+      "parentId": null,
+      "color": "yellow",
+      "x1": 25, "y1": 2, "x2": 25, "y2": 8,
+      "style": "smooth"
+    },
+    {
+      "type": "elbow",
+      "id": "link_c",
+      "z": 7,
+      "parentId": null,
+      "color": "yellow",
+      "x1": 30, "y1": 2, "x2": 44, "y2": 8,
+      "style": "light",
+      "orientation": "horizontal-first"
+    }
+  ]
+}

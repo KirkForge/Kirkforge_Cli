@@ -1,0 +1,72 @@
+{
+  "width": 1920,
+  "height": 1080,
+  "fps": 30,
+  "scenes": [
+    {
+      "type": "hero_title",
+      "text": "FocusFlow",
+      "subtitle": "Distraction-free deep work, on demand",
+      "duration_s": 3.0
+    },
+    {
+      "type": "stat_card",
+      "number": "3.2x",
+      "label": "more output per hour",
+      "duration_s": 3.0
+    },
+    {
+      "type": "stat_card",
+      "number": "47%",
+      "label": "- fewer context switches",
+      "duration_s": 3.0
+    },
+    {
+      "type": "stat_card",
+      "number": "89%",
+      "label": "report deeper focus blocks",
+      "duration_s": 3.0
+    },
+    {
+      "type": "stat_card",
+      "number": "$4.2B",
+      "label": "annual productivity loss to context switching",
+      "duration_s": 3.0
+    },
+    {
+      "type": "bar_chart",
+      "title": "FocusFlow by magnitude",
+      "bars": [
+        {
+          "label": "more output per ho",
+          "value": 0.05,
+          "color": "#3aa0ff"
+        },
+        {
+          "label": "- fewer context sw",
+          "value": 0.31136376,
+          "color": "#ffcc00"
+        },
+        {
+          "label": "report deeper focu",
+          "value": 0.37218615,
+          "color": "#6cd07a"
+        },
+        {
+          "label": "annual productivit",
+          "value": 1.0,
+          "color": "#ff5a5a"
+        }
+      ],
+      "duration_s": 6.0
+    },
+    {
+      "type": "end_tag",
+      "text": "focusflow.app",
+      "duration_s": 2.0
+    }
+  ],
+  "audio": {
+    "kind": "silent"
+  }
+}

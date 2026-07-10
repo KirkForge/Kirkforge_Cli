@@ -1,0 +1,105 @@
+# KirkForge-Plugin3 manifest.
+# Drop this directory into ~/.local/share/kirkforge/plugins/kirkforge-plugin3/
+# to make the output-side token-budget assistant available inside KirkForge-Cli.
+
+name = "kirkforge-plugin3"
+version = "0.1.0"
+description = "Output-side token-budget assistant for KirkForge-Cli"
+trust = "shell"
+
+# ── Skill (slash command) ────────────────────────────────────────────────────
+
+[[capabilities]]
+type = "skill"
+trigger = "/budget"
+prompt = """
+You are a token-budget assistant backed by the plugin3 output-side budget tool.
+
+When the user asks about tokens, budget, spending, or compaction, use the following tools:
+
+1. Call `plugin3_budget_status` to show the current budget state.
+2. If the user wants to change the ceiling, call `plugin3_budget_set` with {"ceiling": <number>}.
+3. If the budget is near or over the ceiling, suggest `plugin3_budget_compact`.
+4. Use `plugin3_budget_report` to summarize spending.
+5. If something looks wrong, run `plugin3_self_check` and report the results.
+
+Always report the numbers returned by the budget/report tools in a concise summary.
+
+User request: {{args}}
+"""
+model-hint = "default"
+
+# ── Budget tools ─────────────────────────────────────────────────────────────
+
+[[capabilities]]
+type = "tool"
+name = "plugin3_budget_status"
+description = "Show the current token budget status."
+schema = { type = "object", properties = {} }
+command = "tools/budget_status.sh"
+
+[[capabilities]]
+type = "tool"
+name = "plugin3_budget_set"
+description = "Set the token budget ceiling."
+schema = { type = "object", properties = { ceiling = { type = "integer", description = "Token ceiling" } }, required = ["ceiling"] }
+command = "tools/budget_set.sh"
+
+[[capabilities]]
+type = "tool"
+name = "plugin3_budget_compact"
+description = "Compact the budget store to reclaim records."
+schema = { type = "object", properties = {} }
+command = "tools/budget_compact.sh"
+
+[[capabilities]]
+type = "tool"
+name = "plugin3_budget_report"
+description = "Print a spending report."
+schema = { type = "object", properties = {} }
+command = "tools/report.sh"
+
+# ── Store / config / diagnostic tools ──────────────────────────────────────
+
+[[capabilities]]
+type = "tool"
+name = "plugin3_store_get"
+description = "Retrieve a stored marker by key."
+schema = { type = "object", properties = { marker = { type = "string", description = "Marker key" } }, required = ["marker"] }
+command = "tools/store_get.sh"
+
+[[capabilities]]
+type = "tool"
+name = "plugin3_config_validate"
+description = "Validate plugin3 configuration."
+schema = { type = "object", properties = {} }
+command = "tools/config_validate.sh"
+
+[[capabilities]]
+type = "tool"
+name = "plugin3_self_check"
+description = "Run plugin3 self-check diagnostics."
+schema = { type = "object", properties = {} }
+command = "tools/self_check.sh"
+
+# ── Lifecycle hooks ────────────────────────────────────────────────────────
+
+[[capabilities]]
+type = "hook"
+event = "post-tool-bash"
+command = "hooks/post-tool-bash.sh"
+
+[[capabilities]]
+type = "hook"
+event = "post-tool-write_file"
+command = "hooks/post-tool-write_file.sh"
+
+[[capabilities]]
+type = "hook"
+event = "session-start"
+command = "hooks/session-start.sh"
+
+[[capabilities]]
+type = "hook"
+event = "pre-compact"
+command = "hooks/pre-compact.sh"

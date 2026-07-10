@@ -1,0 +1,99 @@
+{
+  "$schema": "./rename-schema.json",
+  "_comment": "Curated Python package renames. Each entry: old import name -> new canonical name. Add entries with care — these trigger lint warnings in real code.",
+  "PyPDF2": {
+    "replacedBy": "pypdf",
+    "deprecatedSince": "2022",
+    "reason": "PyPDF2 was renamed to pypdf. The PyPDF2 package still exists for legacy installs but is unmaintained."
+  },
+  "sklearn": {
+    "replacedBy": "scikit-learn",
+    "deprecatedSince": "pre-2020",
+    "reason": "The PyPI distribution is 'scikit-learn'; 'sklearn' is the import name from older docs and won't install via pip."
+  },
+  "PIL": {
+    "replacedBy": "Pillow",
+    "deprecatedSince": "2011",
+    "reason": "PIL was abandoned in 2011. Pillow is the maintained fork; the import name is still PIL."
+  },
+  "cv2": {
+    "replacedBy": "opencv-python",
+    "deprecatedSince": "stable",
+    "reason": "The PyPI package is 'opencv-python' (or 'opencv-contrib-python'); the import name is 'cv2'. Common confusion — this is the canonical name and DOES work, so this entry is informational only."
+  },
+  "BeautifulSoup": {
+    "replacedBy": "bs4",
+    "deprecatedSince": "2012",
+    "reason": "BeautifulSoup (capital S) is the old package. The current import name is 'bs4' (from 'beautifulsoup4' on PyPI)."
+  },
+  "yaml": {
+    "replacedBy": "pyyaml",
+    "deprecatedSince": "pre-2017",
+    "reason": "Common confusion: pip installs 'pyyaml' but the import name is 'yaml'. This is correct usage, not deprecated — entry is informational."
+  },
+  "urllib2": {
+    "replacedBy": "urllib.request",
+    "deprecatedSince": "Python 3 (2008)",
+    "reason": "urllib2 was renamed to urllib.request in Python 3. If you see this import, the code is Python 2."
+  },
+  "urlparse": {
+    "replacedBy": "urllib.parse",
+    "deprecatedSince": "Python 3 (2008)",
+    "reason": "urlparse was moved to urllib.parse in Python 3."
+  },
+  "distutils": {
+    "replacedBy": "setuptools",
+    "deprecatedSince": "Python 3.10 (2021), removed in 3.12 (2023)",
+    "reason": "distutils was deprecated in Python 3.10 and removed in 3.12. Use setuptools.distutils or the standard library alternatives."
+  },
+  "imp": {
+    "replacedBy": "importlib",
+    "deprecatedSince": "Python 3.4 (2014), removed in 3.12 (2023)",
+    "reason": "The 'imp' module was deprecated in Python 3.4 and removed in 3.12. Use importlib instead."
+  },
+  "optparse": {
+    "replacedBy": "argparse",
+    "deprecatedSince": "Python 3.2 (2011)",
+    "reason": "optparse has been superseded by argparse since Python 3.2."
+  },
+  "commands": {
+    "replacedBy": "subprocess",
+    "deprecatedSince": "Python 3 (2008)",
+    "reason": "The 'commands' module was removed in Python 3. Use subprocess instead."
+  },
+  "md5": {
+    "replacedBy": "hashlib",
+    "deprecatedSince": "Python 3 (2008)",
+    "reason": "The 'md5' module was removed in Python 3. Use hashlib.md5() instead."
+  },
+  "sha": {
+    "replacedBy": "hashlib",
+    "deprecatedSince": "Python 3 (2008)",
+    "reason": "The 'sha' module was removed in Python 3. Use hashlib.sha1() instead."
+  },
+  "htmllib": {
+    "replacedBy": "html.parser",
+    "deprecatedSince": "Python 3 (2008)",
+    "reason": "The 'htmllib' module was removed in Python 3. Use html.parser instead."
+  },
+  "mutex": {
+    "replacedBy": "threading",
+    "deprecatedSince": "Python 3 (2008)",
+    "reason": "The 'mutex' module was removed in Python 3. Use threading.Lock() instead."
+  },
+  "new": {
+    "replacedBy": "types.SimpleNamespace",
+    "deprecatedSince": "Python 3 (2008)",
+    "reason": "The 'new' module was removed in Python 3. Use types.SimpleNamespace for similar functionality."
+  },
+  "robotparser": {
+    "replacedBy": "urllib.robotparser",
+    "deprecatedSince": "Python 3 (2008)",
+    "reason": "robotparser was moved to urllib.robotparser in Python 3."
+  },
+  "whichdb": {
+    "replacedBy": "dbm",
+    "deprecatedSince": "Python 3.13 (2024)",
+    "reason": "The 'whichdb' module was deprecated in Python 3.13. Use dbm directly."
+  }
+}

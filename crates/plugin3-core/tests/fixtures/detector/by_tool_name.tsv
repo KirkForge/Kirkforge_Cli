@@ -1,0 +1,29 @@
+cargo test	TestRunner	anything
+jest	TestRunner	anything
+pytest	TestRunner	anything
+mocha	TestRunner	anything
+rustc	Compiler	anything
+cargo build	Compiler	anything
+tsc	Compiler	anything
+gcc	Compiler	anything
+cmake	BuildLog	anything
+make	BuildLog	anything
+gradle	BuildLog	anything
+rg	SearchResults	anything
+grep	SearchResults	anything
+ag	SearchResults	anything
+cat	FileContent	anything
+# ponytail: ADR-0006 § Layered detection originally only matched
+# CLI tool names ("cargo test", "jest", "cat"). Claude Code's
+# PostToolUse event sends the *host-side* tool id ("Bash", "Read",
+# "Edit", "Write", "Glob", "Grep") — without these rows, a 500 KB
+# `cat foo.txt` issued via the Read tool falls through to Unknown
+# (THRESHOLD_VERBOSE=8k) and gets sliced. The mapping pins the
+# tool-name fast path so the wrong-default regression surfaces
+# here, not in a user report.
+Bash	GenericShell	anything
+Read	FileContent	anything
+Write	FileContent	anything
+Edit	FileContent	anything
+Glob	FileContent	anything
+Grep	SearchResults	anything

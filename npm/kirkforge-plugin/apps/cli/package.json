@@ -1,0 +1,27 @@
+{
+  "name": "@kirkforge/cli",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "bin": {
+    "kirkforge": "./dist/index.js"
+  },
+  "dependencies": {
+    "@kirkforge/core-types": "*",
+    "@kirkforge/core-errors": "*",
+    "@kirkforge/core-events": "*",
+    "@kirkforge/core-logging": "*",
+    "@kirkforge/core-config": "*",
+    "@kirkforge/model-config": "*",
+    "@kirkforge/orchestrator": "*",
+    "@kirkforge/memory-palace": "*",
+    "@kirkforge/plugin": "*",
+    "@kirkforge/core-schemas": "*",
+    "commander": "^14.0.3",
+    "@kirkforge/core-tenancy": "*",
+    "@kirkforge/core-enterprise": "*",
+    "@kirkforge/core-policy": "*",
+    "@kirkforge/core-rbac": "*"
+  },
+  "devDependencies": {}
+}

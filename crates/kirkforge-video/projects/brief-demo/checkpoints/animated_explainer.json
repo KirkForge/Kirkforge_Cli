@@ -1,0 +1,33 @@
+{
+  "pipeline": "animated_explainer",
+  "records": {
+    "research": {
+      "artifact": "projects/brief-demo/artifacts/research_brief.json",
+      "completed_at": "epoch:1783203396"
+    },
+    "proposal": {
+      "artifact": "projects/brief-demo/artifacts/proposal_packet.json",
+      "completed_at": "epoch:1783203396"
+    },
+    "script": {
+      "artifact": "projects/brief-demo/artifacts/script.json",
+      "completed_at": "epoch:1783203396"
+    },
+    "scene_plan": {
+      "artifact": "projects/brief-demo/artifacts/scene_plan.json",
+      "completed_at": "epoch:1783203396"
+    },
+    "assets": {
+      "artifact": "projects/brief-demo/artifacts/asset_manifest.json",
+      "completed_at": "epoch:1783203396"
+    },
+    "edit": {
+      "artifact": "projects/brief-demo/artifacts/edit_decisions.json",
+      "completed_at": "epoch:1783203396"
+    },
+    "compose": {
+      "artifact": "projects/brief-demo/artifacts/composition.json",
+      "completed_at": "epoch:1783203396"
+    }
+  }
+}

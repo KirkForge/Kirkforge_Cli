@@ -1,0 +1,19 @@
+[package]
+name = "kirkforge-draw-core"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+license = "MIT"
+repository = "https://github.com/KirkForge/KirkForge-Cli"
+description = "Pure document model and editor state for KirkForge-Draw"
+
+[lib]
+name = "kirkforge_draw_core"
+path = "src/lib.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+unicode-segmentation = "1"
+unicode-width = "0.2"

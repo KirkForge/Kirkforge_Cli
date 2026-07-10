@@ -573,4 +573,42 @@ prompt = "hello"
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("does not exist"));
     }
+
+    /// Verify the built-in workspace plugin sources are registered by default,
+    /// exist on disk, and can be loaded by the plugin host under the default
+    /// trust policy. They remain disabled unless the operator toggles them on.
+    #[test]
+    fn default_plugin_sources_are_present_and_loadable() {
+        let expected = [
+            "kirkforge-draw",
+            "kirkforge-video",
+            "stratum",
+            "kirkforge-plugin3",
+            "kirkforge-plugin",
+        ];
+        let base = Config::default();
+        for name in expected {
+            assert!(
+                base.plugin_sources.contains_key(name),
+                "built-in plugin source '{name}' is missing from default config"
+            );
+        }
+
+        let cfg = Config {
+            plugin_sources: base.plugin_sources,
+            enabled_plugins: expected.iter().map(|s| s.to_string()).collect(),
+            ..Config::default()
+        };
+
+        let mut registry = PluginRegistry::new();
+        let warnings = load_workspace_plugins(&mut registry, &cfg);
+        // All built-in sources exist and load with the default Shell trust policy.
+        assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+        for name in expected {
+            assert!(
+                registry.find_active_by_name(name).is_some(),
+                "built-in plugin source '{name}' did not load"
+            );
+        }
+    }
 }

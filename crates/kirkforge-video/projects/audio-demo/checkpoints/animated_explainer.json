@@ -1,0 +1,33 @@
+{
+  "pipeline": "animated_explainer",
+  "records": {
+    "research": {
+      "artifact": "projects/audio-demo/artifacts/research_brief.json",
+      "completed_at": "epoch:1783204420"
+    },
+    "proposal": {
+      "artifact": "projects/audio-demo/artifacts/proposal_packet.json",
+      "completed_at": "epoch:1783204420"
+    },
+    "script": {
+      "artifact": "projects/audio-demo/artifacts/script.json",
+      "completed_at": "epoch:1783204420"
+    },
+    "scene_plan": {
+      "artifact": "projects/audio-demo/artifacts/scene_plan.json",
+      "completed_at": "epoch:1783204420"
+    },
+    "assets": {
+      "artifact": "projects/audio-demo/artifacts/asset_manifest.json",
+      "completed_at": "epoch:1783204420"
+    },
+    "edit": {
+      "artifact": "projects/audio-demo/artifacts/edit_decisions.json",
+      "completed_at": "epoch:1783204420"
+    },
+    "compose": {
+      "artifact": "projects/audio-demo/artifacts/composition.json",
+      "completed_at": "epoch:1783204420"
+    }
+  }
+}

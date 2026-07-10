@@ -1,0 +1,30 @@
+{
+  "average": 2.6944444,
+  "verdict": "acceptable",
+  "dimensions": {
+    "decorative_visuals": {
+      "score": 3.0,
+      "reason": "motion share=0.00"
+    },
+    "repetition": {
+      "score": 2.5,
+      "reason": "max-kind share=0.50"
+    },
+    "typography_overreliance": {
+      "score": 3.3333333,
+      "reason": "text share=0.83"
+    },
+    "unsupported_cinematic_claims": {
+      "score": 2.0,
+      "reason": "text-leading=true, has_clip=false"
+    },
+    "weak_motion": {
+      "score": 3.3333333,
+      "reason": "static share=0.83"
+    },
+    "weak_shot_intent": {
+      "score": 2.0,
+      "reason": "cuts/sec=0.30"
+    }
+  }
+}

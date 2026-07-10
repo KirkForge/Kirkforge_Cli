@@ -425,6 +425,16 @@ pub struct Config {
     /// disable auditing.
     #[serde(default)]
     pub audit_log_path: Option<PathBuf>,
+
+    /// Workspace plugin sources: a name → directory path mapping for plugins
+    /// that live outside the data-directory plugins folder (e.g. sibling
+    /// repositories). These can be toggled on/off via `enabled_plugins`.
+    #[serde(default = "default_plugin_sources")]
+    pub plugin_sources: HashMap<String, PathBuf>,
+
+    /// Names from `plugin_sources` that should be loaded at startup.
+    #[serde(default)]
+    pub enabled_plugins: Vec<String>,
 }
 
 /// Configuration for a single MCP server connection.
@@ -484,6 +494,35 @@ fn default_max_tool_calls_per_turn() -> usize {
 
 fn default_max_persona_turns() -> usize {
     10
+}
+
+/// Built-in workspace plugin sources that ship with this repo.
+///
+/// Each entry points to a directory containing a `kirkforge.toml` manifest.
+/// The sources are registered by default but left disabled; use
+/// `/plugins toggle <name>` to enable them persistently. The external binaries
+/// these plugins invoke (`kfd`, `kirkforge-video`, `stratum`, `plugin3`, and the
+/// KirkForge-Plugin SDK Node CLI) must be installed on `PATH` separately.
+fn default_plugin_sources() -> HashMap<String, PathBuf> {
+    let mut sources = HashMap::new();
+    sources.insert(
+        "kirkforge-draw".into(),
+        PathBuf::from("plugins/kirkforge-draw"),
+    );
+    sources.insert(
+        "kirkforge-video".into(),
+        PathBuf::from("plugins/kirkforge-video"),
+    );
+    sources.insert("stratum".into(), PathBuf::from("plugins/stratum"));
+    sources.insert(
+        "kirkforge-plugin3".into(),
+        PathBuf::from("plugins/kirkforge-plugin3"),
+    );
+    sources.insert(
+        "kirkforge-plugin".into(),
+        PathBuf::from("plugins/kirkforge-plugin"),
+    );
+    sources
 }
 
 fn default_commit_max_file_size() -> u64 {
@@ -585,6 +624,8 @@ impl Default for Config {
             cache_enabled: false,
             cache_dir: None,
             audit_log_path: None,
+            plugin_sources: default_plugin_sources(),
+            enabled_plugins: vec![],
         }
     }
 }

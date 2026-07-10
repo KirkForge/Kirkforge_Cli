@@ -1,0 +1,61 @@
+# ADR-0005 § decide drift corpus
+# Format: <ceiling>\t<approaching_ratio>\t<used>\t<incoming>\t<recent>\t<expected>
+# where <recent> is either "-" (empty list) or "key1:bytes1,key2:bytes2".
+# expected is one of:
+#   allow
+#   warn(<remaining>)
+#   slice(<target_key>,<slice_to>)
+#   compact
+# The corpus exercises each of the four Intervention branches plus
+# the threshold boundaries so a contributor who reorders the
+# Under/Approaching/Over check, swaps `saturating_sub` for `sub`,
+# or changes SLICE_OVERHEAD surfaces here.
+#
+# Boundaries of note:
+#   - Under → Approaching transition is at used == ceiling * ratio.
+#   - can_send boundary is used + incoming vs ceiling (off-by-one
+#     sensitive; ceil above makes the boundary inclusive).
+#   - Slice branch fires when largest_recent > needed + SLICE_OVERHEAD
+#     (256). Rows below pin both sides of that inequality.
+
+# --- Allow branch (Under state, can_send) ---
+100	0.8	0	50	-	allow
+100	0.8	10	50	-	allow
+1000	0.5	100	50	-	allow
+
+# --- Warn branch (Approaching state, can_send) ---
+# used=85, ceiling=100, ratio=0.85 ≥ 0.8 → Approaching. can_send(5) true.
+100	0.8	85	5	-	warn(15)
+# used=80, ratio=0.8 ≥ 0.8 → Approaching. can_send(10) true.
+100	0.8	80	10	-	warn(20)
+# used=100, ceiling=100, ratio=1.0 ≥ 1.0 → Over. can_send(0) true. Warn with remaining=0.
+100	0.8	100	0	-	warn(0)
+
+# --- Slice branch (Over state, can't_send, largest fits) ---
+# used=90, ceiling=100, can_send(30)=false. needed=30-(100-90)=20.
+# largest=50000, 50000 > 20+256 → Slice. target=largest, slice_to=50000-20=49980.
+100	0.8	90	30	a:5000,b:50000	slice(b,49980)
+# Single recent entry; Slice picks it.
+100	0.8	90	30	a:50000	slice(a,49980)
+# largest picked by max_by_key, not first.
+100	0.8	90	30	a:5000,b:50000,c:10000	slice(b,49980)
+# exact boundary: largest == needed + SLICE_OVERHEAD → fails the strict
+# inequality, falls through to Compact.
+# needed=20, needed+SLICE_OVERHEAD=276, largest=276 → 276 > 276 is false → Compact.
+100	0.8	90	30	a:276	compact
+# one above the boundary: 277 → Slice.
+100	0.8	90	30	a:277	slice(a,257)
+
+# --- Compact branch (Over state, can't fit even after Slice) ---
+# largest too small to free needed+SLICE_OVERHEAD.
+100	0.8	90	30	a:100	compact
+# No recent outputs at all.
+100	0.8	90	30	-	compact
+# All recent outputs small enough that no single one frees needed.
+# used=190, ceiling=200, remaining=10, needed=50-10=40.
+# max=100, 100 > 40+256=296 false → Compact.
+200	0.8	190	50	a:50,b:100	compact
+
+# --- Multi-output with one fitting, one not (boundary check) ---
+# needed=20, candidates: a:300, b:50. max_by_key picks a (300). 300 > 20+256 → Slice a.
+100	0.8	90	30	a:300,b:50	slice(a,280)

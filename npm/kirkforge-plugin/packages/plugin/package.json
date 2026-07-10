@@ -1,0 +1,50 @@
+{
+  "name": "@kirkforge/plugin",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "dependencies": {
+    "@kirkforge/core-types": "^1.0.0",
+    "@kirkforge/core-events": "^1.0.0",
+    "@kirkforge/correction-core": "^1.0.0",
+    "@kirkforge/orchestrator": "^1.0.0",
+    "@kirkforge/memory-palace": "^1.0.0",
+    "@kirkforge/core-rbac": "^1.0.0",
+    "@kirkforge/core-tenancy": "^1.0.0",
+    "@kirkforge/core-enterprise": "^1.0.0"
+  },
+  "devDependencies": {},
+  "private": false,
+  "license": "Apache-2.0",
+  "files": [
+    "dist/",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kirkforge/kirkforge.git",
+    "directory": "packages/plugin"
+  },
+  "keywords": [
+    "verification",
+    "linting",
+    "agent",
+    "codex",
+    "claude-code",
+    "opencode",
+    "deterministic",
+    "kirkforge"
+  ],
+  "author": "KirkForge Contributors"
+}

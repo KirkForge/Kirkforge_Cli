@@ -1,0 +1,13 @@
+[package]
+name = "kirkstratum-hosts"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+license = "MIT"
+repository = "https://github.com/KirkForge/KirkForge-Cli"
+description = "Host-specific adapters for the Stratum compression pipeline"
+keywords = ["compression", "llm", "context", "prompt"]
+categories = ["development-tools"]
+
+[dependencies]
+kirkstratum-core = { path = "../kirkstratum-core" }

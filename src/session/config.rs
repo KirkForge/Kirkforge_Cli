@@ -19,6 +19,8 @@
 /// - `KIRKFORGE_PLUGIN_SIGNATURE_VALIDATION` — "true" to require `.kirkforge.sig`
 /// - `KIRKFORGE_PLUGIN_PUBLIC_KEY_PATH` — minisign public key for plugin signatures
 /// - `KIRKFORGE_PLUGIN_ALLOWED_ENV_VARS` — comma-separated extra env vars for plugin tools
+/// - `KIRKFORGE_PLUGIN_SOURCES` — comma-separated `name=path` workspace plugin sources
+/// - `KIRKFORGE_ENABLED_PLUGINS` — comma-separated names from `plugin_sources` to load
 /// - `KIRKFORGE_MEMORY_ENABLED` — "true"/"false" to enable or disable memory injection
 /// - `KIRKFORGE_MEMORY_MAX_TOKENS` — token budget for injected memory facts
 /// - `KIRKFORGE_MEMORY_TOP_N` — maximum number of facts to consider per turn
@@ -268,6 +270,20 @@ fn apply_env_overrides(cfg: &mut Config) {
             .collect();
     }
 
+    // KIRKFORGE_PLUGIN_SOURCES
+    if let Ok(val) = std::env::var("KIRKFORGE_PLUGIN_SOURCES") {
+        cfg.plugin_sources = parse_plugin_sources_env(&val);
+    }
+
+    // KIRKFORGE_ENABLED_PLUGINS
+    if let Ok(val) = std::env::var("KIRKFORGE_ENABLED_PLUGINS") {
+        cfg.enabled_plugins = val
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+    }
+
     // KIRKFORGE_MEMORY_ENABLED
     if let Ok(val) = std::env::var("KIRKFORGE_MEMORY_ENABLED") {
         cfg.memory_enabled = val.eq_ignore_ascii_case("true")
@@ -377,6 +393,20 @@ fn merge_toml_into_config(cfg: &mut Config, table: toml::Table) {
     }
     if let Some(Value::Integer(v)) = table.get("checkpoint_interval_messages") {
         cfg.checkpoint_interval_messages = (*v).max(0) as usize;
+    }
+
+    // Workspace plugin sources
+    if let Some(Value::Table(v)) = table.get("plugin_sources") {
+        cfg.plugin_sources = v
+            .iter()
+            .filter_map(|(k, val)| val.as_str().map(|s| (k.clone(), PathBuf::from(s))))
+            .collect();
+    }
+    if let Some(Value::Array(v)) = table.get("enabled_plugins") {
+        cfg.enabled_plugins = v
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect();
     }
 
     // Arrays
@@ -504,7 +534,38 @@ pub fn config_diff_summary(before: &Config, after: &Config) -> String {
             before.checkpoint_interval_messages, after.checkpoint_interval_messages
         ));
     }
+    if before.enabled_plugins != after.enabled_plugins {
+        diffs.push(format!(
+            "enabled_plugins: {:?} → {:?}",
+            before.enabled_plugins, after.enabled_plugins
+        ));
+    }
     diffs.join(", ")
+}
+
+/// Parse `KIRKFORGE_PLUGIN_SOURCES` env var.
+///
+/// Format: comma-separated `name=path` entries. Entries without `=` are
+/// ignored. Paths are kept exactly as written; the loader canonicalizes
+/// them at use time.
+fn parse_plugin_sources_env(value: &str) -> std::collections::HashMap<String, PathBuf> {
+    let mut out = std::collections::HashMap::new();
+    for entry in value.split(',') {
+        let entry = entry.trim();
+        if entry.is_empty() {
+            continue;
+        }
+        let Some((name, path)) = entry.split_once('=') else {
+            continue;
+        };
+        let name = name.trim().to_string();
+        let path = path.trim().to_string();
+        if name.is_empty() || path.is_empty() {
+            continue;
+        }
+        out.insert(name, PathBuf::from(path));
+    }
+    out
 }
 
 #[cfg(test)]

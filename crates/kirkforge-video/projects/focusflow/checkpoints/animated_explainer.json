@@ -1,0 +1,33 @@
+{
+  "pipeline": "animated_explainer",
+  "records": {
+    "research": {
+      "artifact": "projects/focusflow/artifacts/research_brief.json",
+      "completed_at": "epoch:1783207137"
+    },
+    "proposal": {
+      "artifact": "projects/focusflow/artifacts/proposal_packet.json",
+      "completed_at": "epoch:1783207137"
+    },
+    "script": {
+      "artifact": "projects/focusflow/artifacts/script.json",
+      "completed_at": "epoch:1783207137"
+    },
+    "scene_plan": {
+      "artifact": "projects/focusflow/artifacts/scene_plan.json",
+      "completed_at": "epoch:1783207137"
+    },
+    "assets": {
+      "artifact": "projects/focusflow/artifacts/asset_manifest.json",
+      "completed_at": "epoch:1783207137"
+    },
+    "edit": {
+      "artifact": "projects/focusflow/artifacts/edit_decisions.json",
+      "completed_at": "epoch:1783207137"
+    },
+    "compose": {
+      "artifact": "projects/focusflow/artifacts/composition.json",
+      "completed_at": "epoch:1783207137"
+    }
+  }
+}

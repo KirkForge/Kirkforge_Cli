@@ -1,0 +1,58 @@
+# KirkForge manifest for the kirkforge-draw plugin.
+# Drop this directory into ~/.local/share/kirkforge/plugins/ to enable.
+# Remove the directory to disable. See docs/adr/0006-on-off-and-persistence.md.
+
+name = "kirkforge-draw"
+version = "0.1.0"
+description = "Terminal diagram editor and planner"
+trust = "shell"
+
+# Slash command: ask the model to plan a diagram and emit a .td.json artifact.
+[[capabilities]]
+type = "skill"
+trigger = "/draw"
+prompt = """
+You are a planning assistant. The user will describe a system, flow, or layout
+they want diagrammed.
+
+Produce a single .td.json document. Save it to ./out/<slug>.td.json (slug-ify
+the user's request). The document is a termDRAW/KirkForge-Draw diagram:
+
+- version: 1
+- objects: array of { id, z, parentId, color, type, ...type-specific fields }
+- types: "box" | "line" | "elbow" | "paint" | "text"
+- colors: "white" | "red" | "orange" | "yellow" | "green" | "cyan" | "blue" | "magenta"
+- box.style: "auto" | "light" | "heavy" | "double" | "dashed"
+- line.style / elbow.style: "smooth" | "light" | "double" | "dashed"
+- elbow.orientation: "horizontal-first" | "vertical-first"
+- text.border: "none" | "single" | "double" | "underline"
+
+After writing the file, run `kfd --load <path> --fenced` to render it and paste
+the fenced result back to the user.
+
+User request: {{args}}
+"""
+model-hint = "default"
+
+# Shell tool: render a .td.json to fenced markdown, no TUI.
+[[capabilities]]
+type = "tool"
+name = "draw_render"
+description = "Render a KirkForge-Draw .td.json document to a fenced markdown code block. No interactive TUI."
+schema = { type = "object", properties = { path = { type = "string", description = "Path to the .td.json file" } }, required = ["path"] }
+command = "tools/render.sh"
+
+# Shell tool: open the editor on a file.
+[[capabilities]]
+type = "tool"
+name = "draw_edit"
+description = "Open the kfd terminal editor on a .td.json file. Pops a TUI subprocess; the user saves the new document in place."
+schema = { type = "object", properties = { path = { type = "string", description = "Path to the .td.json file (will be created if missing)" } }, required = ["path"] }
+command = "tools/edit.sh"
+
+# Optional hook: after each model turn, suggest rendering any new .td.json
+# in the working directory.
+[[capabilities]]
+type = "hook"
+event = "post-turn"
+command = "hooks/post-turn.sh"

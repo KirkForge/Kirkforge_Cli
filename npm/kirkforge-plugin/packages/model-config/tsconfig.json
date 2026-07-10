@@ -1,0 +1,21 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "./src",
+    "outDir": "./dist",
+    "composite": true
+  },
+  "references": [
+    {
+      "path": "../core-types"
+    },
+    {
+      "path": "../core-errors"
+    },
+    {
+      "path": "../core-secrets"
+    }
+  ],
+  "exclude": ["dist", "**/*.test.ts"],
+  "include": ["src"]
+}

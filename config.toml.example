@@ -152,3 +152,21 @@
 # Maximum file size (in bytes) allowed in a `/commit`. Files larger than this
 # are a hard blocker. Default: 5242880 (5 MiB).
 # commit_max_file_size = 5242880
+
+# ---------------------------------------------------------------------------
+# Workspace plugin sources
+# ---------------------------------------------------------------------------
+#
+# The CLI ships with five built-in plugin sources under the `plugins/` directory.
+# They are registered by default but disabled; enable the ones you want with
+# `enabled_plugins` and toggle them at runtime with `/plugins toggle <name>`.
+# Relative paths resolve against the current working directory.
+#
+# [plugin_sources]
+# kirkforge-draw = "plugins/kirkforge-draw"
+# kirkforge-video = "plugins/kirkforge-video"
+# stratum = "plugins/stratum"
+# kirkforge-plugin3 = "plugins/kirkforge-plugin3"
+# kirkforge-plugin = "plugins/kirkforge-plugin"
+#
+# enabled_plugins = ["kirkforge-draw"]

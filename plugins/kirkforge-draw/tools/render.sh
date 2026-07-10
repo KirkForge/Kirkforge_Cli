@@ -18,4 +18,4 @@ if [[ ! -f "$PATH_ARG" ]]; then
   die "draw_render: file not found: $PATH_ARG"
 fi
 
-exec "$KFD" --load "$PATH_ARG" --fenced --plain-output
+exec "$KFD" --load "$PATH_ARG" --fenced --plain

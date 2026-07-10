@@ -2,10 +2,11 @@
 # Build every component of the unified KirkForge workspace.
 #
 # Usage:
-#   scripts/build-all.sh           # debug build
-#   scripts/build-all.sh --release # release build
-#   scripts/build-all.sh --node    # build Node SDK only
+#   scripts/build-all.sh           # debug build of Rust + Node SDK
+#   scripts/build-all.sh --release # release build of Rust + Node SDK
 #   scripts/build-all.sh --rust    # build Rust workspace only
+#   scripts/build-all.sh --node    # build Node SDK only
+#   scripts/build-all.sh --test    # run Node SDK tests too
 #
 # Produces:
 #   - target/<profile>/kirkforge
@@ -20,6 +21,7 @@ set -euo pipefail
 PROFILE="debug"
 BUILD_RUST=true
 BUILD_NODE=true
+RUN_NODE_TESTS=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -35,6 +37,10 @@ while [[ $# -gt 0 ]]; do
         --node)
             BUILD_RUST=false
             BUILD_NODE=true
+            shift
+            ;;
+        --test)
+            RUN_NODE_TESTS=true
             shift
             ;;
         --help|-h)
@@ -67,6 +73,10 @@ if [ "$BUILD_NODE" = true ]; then
         npm ci
     fi
     npm run build
+    if [ "$RUN_NODE_TESTS" = true ]; then
+        echo "==> Running Node SDK tests"
+        npm test
+    fi
 fi
 
 echo "==> Done"

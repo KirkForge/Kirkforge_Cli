@@ -1,6 +1,5 @@
 # KirkForge-Plugin SDK filesystem plugin manifest.
-# Drop this directory into ~/.local/share/kirkforge/plugins/kirkforge-plugin/
-# to expose the KirkForge-Plugin verification CLI inside KirkForge-Cli.
+# The Node SDK builds from npm/kirkforge-plugin in this workspace.
 
 name = "kirkforge-plugin"
 version = "1.0.0"

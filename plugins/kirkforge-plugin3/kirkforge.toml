@@ -1,6 +1,5 @@
 # KirkForge-Plugin3 manifest.
-# Drop this directory into ~/.local/share/kirkforge/plugins/kirkforge-plugin3/
-# to make the output-side token-budget assistant available inside KirkForge-Cli.
+# The plugin3 binary builds from crates/plugin3-cli in this workspace.
 
 name = "kirkforge-plugin3"
 version = "0.1.0"

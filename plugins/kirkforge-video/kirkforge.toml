@@ -1,6 +1,5 @@
 # KirkForge-Video plugin manifest.
-# Drop this directory into ~/.local/share/kirkforge/plugins/kirkforge-video/
-# to make the video pipeline available inside the KirkForge CLI.
+# The kirkforge-video binary builds from crates/kirkforge-video in this workspace.
 
 name = "kirkforge-video"
 version = "0.1.0"

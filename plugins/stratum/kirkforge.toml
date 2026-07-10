@@ -1,6 +1,5 @@
 # Stratum plugin manifest for KirkForge-Cli.
-# Drop this directory into ~/.local/share/kirkforge/plugins/stratum/
-# after installing the `stratum` binary (see README.md).
+# The stratum binary builds from crates/kirkstratum-cli in this workspace.
 
 name = "stratum"
 version = "0.1.0"

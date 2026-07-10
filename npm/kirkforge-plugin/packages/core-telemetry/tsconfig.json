@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.package.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "composite": true,
+    "rootDir": "src"
+  },
+  "include": ["src"],
+  "references": [{ "path": "../core-types" }, { "path": "../core-logging" }]
+}

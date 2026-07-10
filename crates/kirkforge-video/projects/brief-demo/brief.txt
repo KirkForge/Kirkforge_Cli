@@ -1,0 +1,4 @@
+KirkForge Video
+agentic FFmpeg-native
+Rust from first principles
+resumable checkpoints

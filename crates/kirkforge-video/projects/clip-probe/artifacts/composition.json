@@ -1,0 +1,61 @@
+{
+  "width": 1920,
+  "height": 1080,
+  "fps": 30,
+  "scenes": [
+    {
+      "type": "hero_title",
+      "text": "Clip Demo",
+      "subtitle": "Probe exercise",
+      "duration_s": 3.0
+    },
+    {
+      "type": "stat_card",
+      "number": "50%",
+      "label": "claim",
+      "duration_s": 3.0
+    },
+    {
+      "type": "stat_card",
+      "number": "3.2x",
+      "label": "lift",
+      "duration_s": 3.0
+    },
+    {
+      "type": "stat_card",
+      "number": "$4.2B",
+      "label": "",
+      "duration_s": 3.0
+    },
+    {
+      "type": "bar_chart",
+      "title": "Clip Demo by magnitude",
+      "bars": [
+        {
+          "label": "claim",
+          "value": 0.31725803,
+          "color": "#3aa0ff"
+        },
+        {
+          "label": "lift",
+          "value": 0.05,
+          "color": "#ffcc00"
+        },
+        {
+          "label": "",
+          "value": 1.0,
+          "color": "#6cd07a"
+        }
+      ],
+      "duration_s": 6.0
+    },
+    {
+      "type": "end_tag",
+      "text": "probe.tag",
+      "duration_s": 2.0
+    }
+  ],
+  "audio": {
+    "kind": "silent"
+  }
+}

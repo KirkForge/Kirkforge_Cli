@@ -1,0 +1,131 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022"],
+    "types": ["node"],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "composite": true
+  },
+  "files": [],
+  "exclude": ["node_modules", "dist", "**/tests"],
+  "references": [
+    {
+      "path": "apps/cli"
+    },
+    {
+      "path": "apps/mcp"
+    },
+    {
+      "path": "packages/agent-core"
+    },
+    {
+      "path": "packages/core-config"
+    },
+    {
+      "path": "packages/core-enterprise"
+    },
+    {
+      "path": "packages/core-errors"
+    },
+    {
+      "path": "packages/core-events"
+    },
+    {
+      "path": "packages/core-flags"
+    },
+    {
+      "path": "packages/core-logging"
+    },
+    {
+      "path": "packages/core-policy"
+    },
+    {
+      "path": "packages/core-rbac"
+    },
+    {
+      "path": "packages/core-sandbox"
+    },
+    {
+      "path": "packages/core-schemas"
+    },
+    {
+      "path": "packages/core-secrets"
+    },
+    {
+      "path": "packages/core-telemetry"
+    },
+    {
+      "path": "packages/core-tenancy"
+    },
+    {
+      "path": "packages/core-types"
+    },
+    {
+      "path": "packages/correction-core"
+    },
+    {
+      "path": "packages/memory-palace"
+    },
+    {
+      "path": "packages/model-client"
+    },
+    {
+      "path": "packages/model-config"
+    },
+    {
+      "path": "packages/orchestrator"
+    },
+    {
+      "path": "packages/plugin"
+    },
+    {
+      "path": "packages/prompt-core"
+    },
+    {
+      "path": "packages/tool-gitnexus"
+    },
+    {
+      "path": "packages/tool-graphify"
+    },
+    {
+      "path": "packages/tool-lint-c"
+    },
+    {
+      "path": "packages/tool-lint-core"
+    },
+    {
+      "path": "packages/tool-lint-go"
+    },
+    {
+      "path": "packages/tool-lint-py"
+    },
+    {
+      "path": "packages/tool-lint-rs"
+    },
+    {
+      "path": "packages/tool-lint-sh"
+    },
+    {
+      "path": "packages/tool-lint-sql"
+    },
+    {
+      "path": "packages/tool-lint-ts"
+    },
+    {
+      "path": "packages/tool-pyright"
+    },
+    {
+      "path": "packages/tool-tsc"
+    }
+  ]
+}

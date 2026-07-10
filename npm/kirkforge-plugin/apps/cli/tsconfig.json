@@ -1,0 +1,51 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "./src",
+    "outDir": "./dist",
+    "composite": true
+  },
+  "references": [
+    {
+      "path": "../../packages/core-config"
+    },
+    {
+      "path": "../../packages/core-enterprise"
+    },
+    {
+      "path": "../../packages/core-errors"
+    },
+    {
+      "path": "../../packages/core-events"
+    },
+    {
+      "path": "../../packages/core-logging"
+    },
+    {
+      "path": "../../packages/core-policy"
+    },
+    {
+      "path": "../../packages/core-rbac"
+    },
+    {
+      "path": "../../packages/core-tenancy"
+    },
+    {
+      "path": "../../packages/core-types"
+    },
+    {
+      "path": "../../packages/memory-palace"
+    },
+    {
+      "path": "../../packages/model-config"
+    },
+    {
+      "path": "../../packages/orchestrator"
+    },
+    {
+      "path": "../../packages/plugin"
+    }
+  ],
+  "exclude": ["dist", "**/*.test.ts"],
+  "include": ["src"]
+}

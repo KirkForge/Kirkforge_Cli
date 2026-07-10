@@ -1,0 +1,4 @@
+{"category":"research_scope","choice":"user-provided brief only","reason":"no external research API in this build","options_considered":["web_search","user_brief"],"rejected_because":["web_search: no API key"]}
+{"category":"delivery_promise","choice":"DataExplainer","reason":"rules: still_fallback=true requires_video=false min_motion=0","options_considered":["MotionLed","SourceLed","DataExplainer","TeacherExplainer","ScreenDemo","AvatarPresenter","Hybrid","Localization"],"rejected_because":[]}
+{"category":"composition_synthesis","choice":"scene_plan → composition.json","reason":"7 scenes synthesized","options_considered":["scene_plan","manual_composition"],"rejected_because":[]}
+{"category":"slideshow_risk","choice":"Acceptable","reason":"avg=2.79","options_considered":["ship","revise"],"rejected_because":[]}

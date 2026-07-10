@@ -1,0 +1,27 @@
+{
+  "name": "@kirkforge/memory-palace",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./sqlite-adapter": {
+      "types": "./dist/sqlite-adapter.d.ts",
+      "import": "./dist/sqlite-adapter.js"
+    }
+  },
+  "dependencies": {
+    "@kirkforge/core-types": "*"
+  },
+  "optionalDependencies": {
+    "better-sqlite3": "^12.10.0",
+    "@types/better-sqlite3": "^7.6.13"
+  },
+  "files": [
+    "dist/"
+  ]
+}

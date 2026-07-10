@@ -1,0 +1,22 @@
+{
+  "name": "@kirkforge/core-config",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "dependencies": {
+    "@kirkforge/core-schemas": "*",
+    "@kirkforge/core-errors": "*",
+    "@kirkforge/core-types": "*"
+  },
+  "devDependencies": {},
+  "files": [
+    "dist/"
+  ]
+}

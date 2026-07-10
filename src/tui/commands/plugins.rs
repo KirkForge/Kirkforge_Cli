@@ -7,7 +7,7 @@
 //! - `reload` — full rescan of the plugins directory.
 //! - `trust <name> <tier>` — session-only re-enable with a specific trust tier.
 
-use crate::shared::read_shared_config;
+use crate::shared::{read_shared_config, SharedConfig};
 use crate::tui::app::AppState;
 use kirkforge_plugin::TrustTier;
 use kirkforge_plugin_host::{PluginRegistry, TrustPolicy};
@@ -20,8 +20,13 @@ pub enum PluginsOp {
     List,
     Enable { name: String },
     Disable { name: String },
+    Toggle { name: String },
     Reload,
     Trust { name: String, tier: String },
+    Setup,
+    Sources,
+    Add { name: String, path: String },
+    Remove { name: String },
 }
 
 /// Parse `/plugins` arguments into an operation.
@@ -45,7 +50,34 @@ pub fn parse(args: &str) -> Result<PluginsOp, String> {
                 .to_string();
             Ok(PluginsOp::Disable { name })
         }
+        "toggle" => {
+            let name = tokens
+                .next()
+                .ok_or("Usage: /plugins toggle <name>")?
+                .to_string();
+            Ok(PluginsOp::Toggle { name })
+        }
         "reload" => Ok(PluginsOp::Reload),
+        "setup" => Ok(PluginsOp::Setup),
+        "sources" => Ok(PluginsOp::Sources),
+        "add" => {
+            let name = tokens
+                .next()
+                .ok_or("Usage: /plugins add <name> <path>")?
+                .to_string();
+            let path = tokens
+                .next()
+                .ok_or("Usage: /plugins add <name> <path>")?
+                .to_string();
+            Ok(PluginsOp::Add { name, path })
+        }
+        "remove" => {
+            let name = tokens
+                .next()
+                .ok_or("Usage: /plugins remove <name>")?
+                .to_string();
+            Ok(PluginsOp::Remove { name })
+        }
         "trust" => {
             let name = tokens
                 .next()
@@ -58,7 +90,7 @@ pub fn parse(args: &str) -> Result<PluginsOp, String> {
             Ok(PluginsOp::Trust { name, tier })
         }
         _ => Err(format!(
-            "Unknown /plugins subcommand '{cmd}'. Usage: /plugins list | enable <name> | disable <name> | reload | trust <name> <tier>",
+            "Unknown /plugins subcommand '{cmd}'. Usage: /plugins list | enable <name> | disable <name> | toggle <name> | reload | trust <name> <tier> | setup | sources | add <name> <path> | remove <name>",
         )),
     }
 }
@@ -73,10 +105,17 @@ pub async fn handle_plugins_command(
         Ok(PluginsOp::List) => list_plugins(state),
         Ok(PluginsOp::Enable { name }) => enable_plugin(&name, state, plugin_reload_tx).await,
         Ok(PluginsOp::Disable { name }) => disable_plugin(&name, state, plugin_reload_tx),
+        Ok(PluginsOp::Toggle { name }) => toggle_plugin(&name, state, plugin_reload_tx).await,
         Ok(PluginsOp::Reload) => reload_plugins(state, plugin_reload_tx).await,
         Ok(PluginsOp::Trust { name, tier }) => {
             trust_plugin(&name, &tier, state, plugin_reload_tx).await
         }
+        Ok(PluginsOp::Setup) => setup_plugin_sources(state, plugin_reload_tx).await,
+        Ok(PluginsOp::Sources) => list_sources(state),
+        Ok(PluginsOp::Add { name, path }) => {
+            add_source(&name, &path, state, plugin_reload_tx).await
+        }
+        Ok(PluginsOp::Remove { name }) => remove_source(&name, state, plugin_reload_tx),
         Err(e) => e,
     }
 }
@@ -118,6 +157,29 @@ fn list_plugins(state: &AppState) -> String {
             }
         }
         Err(e) => lines.push(format!("Available plugin directories: {e}")),
+    }
+
+    let cfg = read_shared_config(&state.config);
+    if cfg.plugin_sources.is_empty() {
+        lines.push("Workspace plugin sources: none (use /plugins add <name> <path>)".to_string());
+    } else {
+        lines.push(format!(
+            "Workspace plugin sources ({}):",
+            cfg.plugin_sources.len()
+        ));
+        let enabled: std::collections::HashSet<&String> = cfg.enabled_plugins.iter().collect();
+        for (name, path) in &cfg.plugin_sources {
+            let status = if enabled.contains(name) {
+                if active_names.contains(name) {
+                    "on ✓"
+                } else {
+                    "on (not loaded)"
+                }
+            } else {
+                "off"
+            };
+            lines.push(format!("  - {name} -> {} [{status}]", path.display()));
+        }
     }
 
     lines.join("\n")
@@ -208,7 +270,7 @@ async fn reload_plugins(
     state
         .skill_registry
         .set_max_plugin_trust(cfg.max_plugin_trust);
-    if let Err(e) = state.skill_registry.scan_and_load() {
+    if let Err(e) = state.skill_registry.scan_and_load(&cfg) {
         tracing::warn!(error = %e, "skill rescan during /plugins reload failed");
     }
     for skill in crate::session::skills::builtin_skills() {
@@ -397,6 +459,173 @@ fn plugin_status_summary(registry: &PluginRegistry, warnings: &[String]) -> Opti
     } else {
         Some(parts.join(" "))
     }
+}
+
+/// `toggle <name>` — persistently enable/disable a workspace plugin source.
+async fn toggle_plugin(
+    name: &str,
+    state: &mut AppState,
+    plugin_reload_tx: &mpsc::UnboundedSender<PluginRegistry>,
+) -> String {
+    {
+        let mut cfg = write_shared_config(&state.config);
+        if !cfg.plugin_sources.contains_key(name) {
+            return format!("❌ Unknown workspace plugin source '{name}'. Use /plugins sources to see configured sources, or /plugins add {name} <path>.");
+        }
+        let was_enabled = cfg.enabled_plugins.iter().any(|n| n == name);
+        if was_enabled {
+            cfg.enabled_plugins.retain(|n| n != name);
+        } else {
+            cfg.enabled_plugins.push(name.to_string());
+        }
+        if let Err(e) = crate::session::config::save_config(&cfg) {
+            return format!("❌ Failed to save config while toggling '{name}': {e}");
+        }
+    }
+
+    reload_plugins(state, plugin_reload_tx).await
+}
+
+/// `setup` — show a quick-start message for workspace plugin sources.
+async fn setup_plugin_sources(
+    state: &AppState,
+    _plugin_reload_tx: &mpsc::UnboundedSender<PluginRegistry>,
+) -> String {
+    let cfg = read_shared_config(&state.config);
+    let mut lines = vec![
+        "Workspace plugin source setup:".to_string(),
+        "  /plugins add <name> <path>   — register a plugin directory".to_string(),
+        "  /plugins remove <name>       — unregister a source".to_string(),
+        "  /plugins toggle <name>        — enable or disable a source (persists)".to_string(),
+        "  /plugins sources             — list configured sources".to_string(),
+        "  /plugins reload              — rescan and apply current config".to_string(),
+        String::new(),
+    ];
+    if cfg.plugin_sources.is_empty() {
+        lines.push("No workspace sources configured yet.".to_string());
+    } else {
+        lines.push(format!(
+            "Configured sources ({}):",
+            cfg.plugin_sources.len()
+        ));
+        for (name, path) in &cfg.plugin_sources {
+            let enabled = if cfg.enabled_plugins.iter().any(|n| n == name) {
+                "on"
+            } else {
+                "off"
+            };
+            lines.push(format!("  - {name} -> {} [{enabled}]", path.display()));
+        }
+    }
+    lines.join("\n")
+}
+
+/// `sources` — list configured workspace plugin sources and their enabled state.
+fn list_sources(state: &AppState) -> String {
+    let cfg = read_shared_config(&state.config);
+    if cfg.plugin_sources.is_empty() {
+        return "No workspace plugin sources configured. Use /plugins add <name> <path>."
+            .to_string();
+    }
+
+    let active = active_plugin_names(&state.plugin_registry);
+    let mut lines = Vec::new();
+    lines.push(format!(
+        "Workspace plugin sources ({}):",
+        cfg.plugin_sources.len()
+    ));
+    for (name, path) in &cfg.plugin_sources {
+        let enabled = cfg.enabled_plugins.iter().any(|n| n == name);
+        let status = match (enabled, active.contains(name)) {
+            (true, true) => "enabled, active",
+            (true, false) => "enabled, inactive",
+            (false, _) => "disabled",
+        };
+        lines.push(format!("  - {name} -> {} [{status}]", path.display()));
+    }
+    lines.join("\n")
+}
+
+/// `add <name> <path>` — register a workspace plugin source.
+async fn add_source(
+    name: &str,
+    path: &str,
+    state: &mut AppState,
+    plugin_reload_tx: &mpsc::UnboundedSender<PluginRegistry>,
+) -> String {
+    let resolved = resolve_source_path(path);
+    if !resolved.exists() {
+        return format!(
+            "❌ Plugin source path does not exist: {resolved}",
+            resolved = resolved.display()
+        );
+    }
+    if !resolved.is_dir() {
+        return format!(
+            "❌ Plugin source path is not a directory: {resolved}",
+            resolved = resolved.display()
+        );
+    }
+
+    {
+        let mut cfg = write_shared_config(&state.config);
+        cfg.plugin_sources
+            .insert(name.to_string(), resolved.clone());
+        if let Err(e) = crate::session::config::save_config(&cfg) {
+            return format!("❌ Failed to save config while adding source '{name}': {e}");
+        }
+    }
+
+    reload_plugins(state, plugin_reload_tx).await
+}
+
+/// `remove <name>` — unregister a workspace plugin source.
+fn remove_source(
+    name: &str,
+    state: &mut AppState,
+    plugin_reload_tx: &mpsc::UnboundedSender<PluginRegistry>,
+) -> String {
+    {
+        let mut cfg = write_shared_config(&state.config);
+        if cfg.plugin_sources.remove(name).is_none() {
+            return format!("❌ No workspace plugin source named '{name}'.");
+        }
+        cfg.enabled_plugins.retain(|n| n != name);
+        if let Err(e) = crate::session::config::save_config(&cfg) {
+            return format!("❌ Failed to save config while removing source '{name}': {e}");
+        }
+    }
+
+    // Unload the plugin if it is currently active; the registry will not be
+    // re-loaded from this source on the next /plugins reload either.
+    state.skill_registry.remove_plugin(name);
+    state.plugin_registry.remove(name);
+    state.plugin_status = plugin_status_summary(&state.plugin_registry, &blocked_warnings(state));
+    crate::send_or_warn!(
+        plugin_reload_tx.send(state.plugin_registry.clone()),
+        "plugin registry receiver dropped; executor may have exited"
+    );
+
+    format!("🔌 Removed workspace plugin source '{name}'.")
+}
+
+/// Resolve a workspace source path relative to the current directory.
+fn resolve_source_path(path: &str) -> PathBuf {
+    let p = PathBuf::from(path);
+    if p.is_absolute() {
+        p
+    } else if let Ok(cwd) = std::env::current_dir() {
+        cwd.join(p)
+    } else {
+        p
+    }
+}
+
+/// Mutable access to shared config, recovering from lock poisoning.
+fn write_shared_config(
+    cfg: &SharedConfig,
+) -> std::sync::RwLockWriteGuard<'_, crate::shared::Config> {
+    cfg.write().unwrap_or_else(|e| e.into_inner())
 }
 
 #[cfg(test)]
@@ -648,5 +877,51 @@ prompt = "Demo skill"
             .unwrap();
         assert_eq!(hosted.plugin.manifest.trust, TrustTier::Shell);
         assert_eq!(hosted.effective_trust, TrustTier::Shell);
+    }
+
+    #[test]
+    fn parse_workspace_source_commands() {
+        assert_eq!(
+            parse("toggle foo").unwrap(),
+            PluginsOp::Toggle {
+                name: "foo".to_string()
+            }
+        );
+        assert_eq!(parse("setup").unwrap(), PluginsOp::Setup);
+        assert_eq!(parse("sources").unwrap(), PluginsOp::Sources);
+        assert_eq!(
+            parse("add foo /path/to/foo").unwrap(),
+            PluginsOp::Add {
+                name: "foo".to_string(),
+                path: "/path/to/foo".to_string()
+            }
+        );
+        assert_eq!(
+            parse("remove foo").unwrap(),
+            PluginsOp::Remove {
+                name: "foo".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn parse_rejects_missing_workspace_arguments() {
+        assert!(parse("toggle").unwrap_err().contains("Usage:"));
+        assert!(parse("add").unwrap_err().contains("Usage:"));
+        assert!(parse("add foo").unwrap_err().contains("Usage:"));
+        assert!(parse("remove").unwrap_err().contains("Usage:"));
+    }
+
+    #[test]
+    fn resolve_source_path_keeps_absolute_paths() {
+        let p = resolve_source_path("/tmp/demo");
+        assert_eq!(p, PathBuf::from("/tmp/demo"));
+    }
+
+    #[test]
+    fn resolve_source_path_joins_relative_to_cwd() {
+        let cwd = std::env::current_dir().unwrap();
+        let p = resolve_source_path("./demo");
+        assert_eq!(p, cwd.join("demo"));
     }
 }

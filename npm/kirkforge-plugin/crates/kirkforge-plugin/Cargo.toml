@@ -1,0 +1,23 @@
+[package]
+name = "kirkforge-plugin"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "SDK for authoring KirkForge plugins — manifest, trust tiers, and capabilities."
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = "1"
+tracing = { workspace = true }
+toml = { workspace = true }
+sha2 = { workspace = true }
+ed25519-dalek = { workspace = true }
+hex = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+tempfile = "3"
+rand = "0.8"

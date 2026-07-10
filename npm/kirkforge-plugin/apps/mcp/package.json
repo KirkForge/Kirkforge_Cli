@@ -1,0 +1,23 @@
+{
+  "name": "@kirkforge/mcp",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "dependencies": {
+    "@kirkforge/plugin": "^1.0.0",
+    "@kirkforge/memory-palace": "^1.0.0",
+    "@kirkforge/core-types": "^1.0.0",
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  },
+  "files": [
+    "dist/",
+    "README.md"
+  ],
+  "bin": {
+    "kirkforge-mcp": "./dist/index.js"
+  }
+}

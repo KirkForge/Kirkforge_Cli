@@ -1,0 +1,56 @@
+{
+  "width": 1920,
+  "height": 1080,
+  "fps": 30,
+  "scenes": [
+    {
+      "type": "hero_title",
+      "text": "KirkForge Video",
+      "subtitle": "agentic FFmpeg-native",
+      "duration_s": 3.0
+    },
+    {
+      "type": "stat_card",
+      "number": "7",
+      "label": "stages, fully resumable",
+      "duration_s": 3.0
+    },
+    {
+      "type": "bar_chart",
+      "title": "Pipeline time per stage (s)",
+      "bars": [
+        {
+          "label": "Research",
+          "value": 0.05,
+          "color": "#3aa0ff"
+        },
+        {
+          "label": "Proposal",
+          "value": 0.02,
+          "color": "#ffcc00"
+        },
+        {
+          "label": "Script",
+          "value": 0.02,
+          "color": "#6cd07a"
+        },
+        {
+          "label": "Compose",
+          "value": 0.3,
+          "color": "#ff5a5a"
+        }
+      ],
+      "duration_s": 6.0
+    },
+    {
+      "type": "caption_overlay",
+      "lines": [],
+      "duration_s": 4.0
+    },
+    {
+      "type": "end_tag",
+      "text": "resumable checkpoints",
+      "duration_s": 2.0
+    }
+  ]
+}

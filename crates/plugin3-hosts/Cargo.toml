@@ -1,0 +1,12 @@
+[package]
+name = "plugin3-hosts"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+license = "MIT"
+repository = "https://github.com/KirkForge/KirkForge-Cli"
+description = "Host-side adapters for the Plugin3 budget assistant"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

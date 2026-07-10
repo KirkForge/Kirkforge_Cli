@@ -1,0 +1,23 @@
+# Default Stratum pipeline config. Embedded via include_str!.
+# Override at runtime with `--config path/to.toml`.
+
+reformat_target_ratio = 0.05
+bloat_threshold = 0.5
+offload_fallback_ratio = 0.85
+transform_timeout_ms = 30000
+
+[per_domain.json_object]
+bloat_threshold = 0.5
+
+[per_domain.json_array]
+bloat_threshold = 0.5
+
+[per_domain.build_output]
+bloat_threshold = 0.3
+reformat_target_ratio = 0.1
+
+[per_domain.git_diff]
+bloat_threshold = 0.6
+
+[per_domain.search_results]
+bloat_threshold = 0.4

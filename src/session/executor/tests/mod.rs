@@ -177,6 +177,8 @@ fn make_config(auto_approve: bool) -> Config {
         memory_max_tokens: 0,
         memory_top_n: 0,
         checkpoint_interval_messages: 0,
+        plugin_sources: std::collections::HashMap::new(),
+        enabled_plugins: vec![],
     }
 }
 

@@ -1,0 +1,77 @@
+# KirkForge-Plugin SDK filesystem plugin manifest.
+# Drop this directory into ~/.local/share/kirkforge/plugins/kirkforge-plugin/
+# to expose the KirkForge-Plugin verification CLI inside KirkForge-Cli.
+
+name = "kirkforge-plugin"
+version = "1.0.0"
+description = "KirkForge-Plugin SDK verification CLI exposed as KirkForge-Cli filesystem plugin"
+trust = "shell"
+
+# ── Verification tools ───────────────────────────────────────────────────────
+
+[[capabilities]]
+type = "tool"
+name = "plugin_verify"
+description = "Run deterministic verification emitters without calling a model. Reports lint, type, security, graph, and overall status."
+schema = { type = "object", properties = { task = { type = "string", description = "Task description used only for verifier language routing" }, json = { type = "boolean", description = "Emit JSON instead of human-readable text", default = false } } }
+command = "tools/verify.sh"
+
+[[capabilities]]
+type = "tool"
+name = "plugin_verify_workspace"
+description = "Run deterministic verification on a workspace directory and output a ReducedStatePacket."
+schema = { type = "object", properties = { workspace = { type = "string", description = "Path to the workspace directory" }, file = { type = "string", description = "Specific file path to verify (repeatable; pass space-separated paths here)" }, language = { type = "string", description = "Task language (typescript, javascript, python, etc.)" }, description = { type = "string", description = "Task description for language profile detection" }, taskId = { type = "string", description = "Task identifier for the verification run" } }, required = ["workspace"] }
+command = "tools/verify-workspace.sh"
+
+[[capabilities]]
+type = "tool"
+name = "plugin_audit_verify"
+description = "Verify the integrity of a KirkForge audit JSONL chain (checks sequential hashes)."
+schema = { type = "object", properties = { file = { type = "string", description = "Path to audit JSONL file" }, json = { type = "boolean", description = "Emit JSON instead of human-readable text", default = false } }, required = ["file"] }
+command = "tools/audit-verify.sh"
+
+# ── Diagnostic tools ─────────────────────────────────────────────────────────
+
+[[capabilities]]
+type = "tool"
+name = "plugin_doctor"
+description = "Probe local verification tools (ESLint, TypeScript, Ruff, Pyright, Bandit, GitNexus, Graphify) and report capabilities."
+schema = { type = "object", properties = { pretty = { type = "boolean", description = "Human-readable output instead of JSON", default = false } } }
+command = "tools/doctor.sh"
+
+[[capabilities]]
+type = "tool"
+name = "plugin_health"
+description = "Show orchestrator health and SLO status."
+schema = { type = "object", properties = {} }
+command = "tools/health.sh"
+
+[[capabilities]]
+type = "tool"
+name = "plugin_tools"
+description = "List registered verification tools available in the KirkForge-Plugin SDK."
+schema = { type = "object", properties = {} }
+command = "tools/tools.sh"
+
+# ── Skill (slash command) ────────────────────────────────────────────────────
+
+[[capabilities]]
+type = "skill"
+trigger = "/kirkforge"
+prompt = """
+You are a KirkForge-Plugin SDK assistant. The SDK provides deterministic LLM output verification, workspace verification, and audit-chain integrity checks.
+
+When the user asks for verification, diagnostics, or audit checks, use the following tools:
+
+1. `plugin_doctor` with {} to report which external verification tools are available.
+2. `plugin_tools` with {} to list the built-in lint engines and type checkers.
+3. To verify the current workspace, call `plugin_verify_workspace` with {"workspace": "<absolute path>"}. Optionally pass `language`, `description`, or `taskId`.
+4. For a quick verification summary without a workspace path, call `plugin_verify` with {"task": "<description>"}.
+5. To check an audit log's chain integrity, call `plugin_audit_verify` with {"file": "<audit.jsonl path>"}.
+6. To check orchestrator health, call `plugin_health` with {}.
+
+Always report the tool output verbatim, highlighting any CRITICAL or FAILED results first.
+
+User request: {{args}}
+"""
+model-hint = "default"

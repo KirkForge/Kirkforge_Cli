@@ -1,0 +1,90 @@
+# KirkForge-Video plugin manifest.
+# Drop this directory into ~/.local/share/kirkforge/plugins/kirkforge-video/
+# to make the video pipeline available inside the KirkForge CLI.
+
+name = "kirkforge-video"
+version = "0.1.0"
+description = "Instruction-driven video production pipeline for KirkForge-Cli"
+trust = "shell"
+
+# ── Discovery tools ──────────────────────────────────────────────────────────
+
+[[capabilities]]
+type = "tool"
+name = "video_demos"
+description = "List demos, pipelines, render profiles, or internal tools available in kirkforge-video."
+schema = { type = "object", properties = { command = { type = "string", enum = ["demos", "pipelines", "profiles", "tools"], description = "What catalog to list" } }, required = ["command"] }
+command = "tools/video_demos.sh"
+
+# ── Pipeline tools ───────────────────────────────────────────────────────────
+
+[[capabilities]]
+type = "tool"
+name = "video_pipeline"
+description = "Run a full video pipeline (research → proposal → script → scene_plan → assets → edit → compose). If a brief path is given, it is copied into the project first."
+schema = { type = "object", properties = { kind = { type = "string", description = "Pipeline kind (animated_explainer, cinematic, screen_demo)", default = "animated_explainer" }, project = { type = "string", description = "Project directory path (absolute or relative to CWD)", default = "projects/default" }, brief = { type = "string", description = "Optional markdown brief file to seed the project" } } }
+command = "tools/video_pipeline.sh"
+
+[[capabilities]]
+type = "tool"
+name = "video_render"
+description = "Render an existing scene_plan.json to render/final.mp4. Optionally override with a media profile (tiktok, youtube_shorts, etc.)."
+schema = { type = "object", properties = { project = { type = "string", description = "Project directory", default = "projects/default" }, profile = { type = "string", description = "Media profile name" } } }
+command = "tools/video_render.sh"
+
+[[capabilities]]
+type = "tool"
+name = "video_validate"
+description = "Validate a scene_plan.json and its filter graph without rendering. Accepts a scene_plan.json path or a project directory."
+schema = { type = "object", properties = { path = { type = "string", description = "Path to scene_plan.json or a project directory containing artifacts/scene_plan.json", default = "projects/default" } }, required = ["path"] }
+command = "tools/video_validate.sh"
+
+[[capabilities]]
+type = "tool"
+name = "video_from_brief"
+description = "Shorthand: copy a brief markdown file into the project and run the pipeline."
+schema = { type = "object", properties = { brief = { type = "string", description = "Path to brief markdown file" }, project = { type = "string", description = "Project directory", default = "projects/default" }, kind = { type = "string", description = "Pipeline kind", default = "animated_explainer" } }, required = ["brief"] }
+command = "tools/video_pipeline.sh"
+
+# ── Diagnostic tools ─────────────────────────────────────────────────────────
+
+[[capabilities]]
+type = "tool"
+name = "video_doctor"
+description = "Probe FFmpeg capabilities or validate a project directory's artifacts."
+schema = { type = "object", properties = { check = { type = "string", enum = ["ffmpeg", "project"], description = "Which check to run" }, project = { type = "string", description = "Project directory for project check", default = "projects/default" }, ffmpeg_path = { type = "string", description = "Path to ffmpeg binary for ffmpeg check", default = "ffmpeg" }, json = { type = "boolean", description = "Emit JSON instead of human-readable text", default = false } }, required = ["check"] }
+command = "tools/video_doctor.sh"
+
+[[capabilities]]
+type = "tool"
+name = "video_risk"
+description = "Score slideshow risk for a scene plan. Either pass a project directory (reads composition.json) or a list of scene kinds + duration."
+schema = { type = "object", properties = { project = { type = "string", description = "Project directory containing artifacts/composition.json" }, kinds = { type = "array", items = { type = "string" }, description = "Scene kind tags (ignored if project is given)" }, duration_s = { type = "number", description = "Duration in seconds when using kinds", default = 30 } } }
+command = "tools/video_risk.sh"
+
+[[capabilities]]
+type = "tool"
+name = "video_decision_log"
+description = "Print recent entries from a project's decision_log.jsonl."
+schema = { type = "object", properties = { project = { type = "string", description = "Project directory", default = "projects/default" }, since_s = { type = "integer", description = "Only show entries newer than this many seconds ago" }, category = { type = "string", description = "Filter by category (e.g. slideshow_risk, asset_transcode)" } } }
+command = "tools/video_decision_log.sh"
+
+# ── Skill (slash command) ──────────────────────────────────────────────────
+
+[[capabilities]]
+type = "skill"
+trigger = "/video"
+prompt = """
+You are a video production assistant using the KirkForge-Video FFmpeg-native pipeline.
+
+When the user asks for a video, follow this sequence:
+
+1. Call `video_demos` with {"command": "pipelines"} to see available pipeline kinds.
+2. Pick the best pipeline for the request (default animated_explainer).
+3. If the user provided a brief markdown file path, call `video_pipeline` with {"kind": "...", "project": "projects/<slug>", "brief": "<path>"}. Otherwise ask the user for a brief or a project directory.
+4. After the pipeline finishes, call `video_render` with {"project": "projects/<slug>"} to produce render/final.mp4.
+5. Report the output path and any slideshow-risk score from the render output.
+
+User request: {{args}}
+"""
+model-hint = "default"

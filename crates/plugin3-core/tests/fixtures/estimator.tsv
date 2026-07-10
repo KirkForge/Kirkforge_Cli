@@ -1,0 +1,16 @@
+# ponytail: ADR-0005 § Negative — "the drift test pins the
+# estimator's output for a known corpus". Each row is
+# `<input>\t<expected_tokens>`. A contributor who swaps the
+# 3 vs 4 chars-per-token divisor surfaces here, not via a
+# silently-inflated budget burn.
+#
+# The estimator's heuristic: starts with `{`/`[`/`fn ` → divide
+# by 3; otherwise divide by 4. The corpus mixes JSON, prose, and
+# source to exercise both branches.
+
+hello world	2
+hello world hello world	5
+{"key":"value"}	5
+[1,2,3,4,5,6,7,8,9,10]	7
+fn foo() { return 42; }	7
+the quick brown fox jumps over the lazy dog	10

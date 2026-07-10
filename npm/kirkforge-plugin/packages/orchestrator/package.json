@@ -1,0 +1,62 @@
+{
+  "name": "@kirkforge/orchestrator",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./path-safety.js": {
+      "types": "./dist/path-safety.d.ts",
+      "import": "./dist/path-safety.js"
+    },
+    "./health-server": {
+      "types": "./dist/health-server.d.ts",
+      "import": "./dist/health-server.js"
+    },
+    "./event-log": {
+      "types": "./dist/event-log.d.ts",
+      "import": "./dist/event-log.js"
+    },
+    "./slo-monitor": {
+      "types": "./dist/slo-monitor.d.ts",
+      "import": "./dist/slo-monitor.js"
+    }
+  },
+  "dependencies": {
+    "@kirkforge/core-types": "*",
+    "@kirkforge/core-errors": "*",
+    "@kirkforge/core-events": "*",
+    "@kirkforge/core-logging": "*",
+    "@kirkforge/model-config": "*",
+    "@kirkforge/model-client": "*",
+    "@kirkforge/agent-core": "*",
+    "@kirkforge/prompt-core": "*",
+    "@kirkforge/tool-tsc": "*",
+    "@kirkforge/tool-pyright": "*",
+    "@kirkforge/tool-gitnexus": "*",
+    "@kirkforge/tool-graphify": "*",
+    "@kirkforge/memory-palace": "*",
+    "@kirkforge/correction-core": "*",
+    "zod": "^4.4.3",
+    "@opentelemetry/api": "^1.9.0",
+    "@kirkforge/core-telemetry": "*",
+    "@kirkforge/tool-lint-sh": "*",
+    "@kirkforge/tool-lint-c": "*",
+    "@kirkforge/tool-lint-rs": "*",
+    "@kirkforge/tool-lint-go": "*",
+    "@kirkforge/tool-lint-sql": "*",
+    "@kirkforge/tool-lint-ts": "*",
+    "@kirkforge/tool-lint-py": "*",
+    "@kirkforge/tool-lint-imports": "*",
+    "@kirkforge/core-policy": "*",
+    "@kirkforge/core-rbac": "*"
+  },
+  "devDependencies": {},
+  "files": [
+    "dist/"
+  ]
+}

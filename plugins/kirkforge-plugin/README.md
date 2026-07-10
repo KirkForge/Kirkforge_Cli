@@ -1,6 +1,6 @@
 # KirkForge-Plugin filesystem plugin
 
-This directory packages the [KirkForge-Plugin SDK](https://github.com/KirkForge/KirkForge-Plugin) as a KirkForge-Cli filesystem plugin, exposing the TypeScript CLI commands as KirkForge tools.
+This directory packages the KirkForge-Plugin SDK as a KirkForge-Cli filesystem plugin, exposing the TypeScript CLI commands as KirkForge tools. The Node SDK source lives in `npm/kirkforge-plugin` in this workspace.
 
 ## Installation
 
@@ -8,13 +8,13 @@ Copy this directory to the KirkForge plugins folder:
 
 ```bash
 mkdir -p ~/.local/share/kirkforge/plugins/
-cp -r /path/to/KirkForge-Plugin/plugin ~/.local/share/kirkforge/plugins/kirkforge-plugin/
+cp -r plugins/kirkforge-plugin ~/.local/share/kirkforge/plugins/kirkforge-plugin/
 ```
 
 The tool scripts locate the CLI entry point in the following order:
 
-1. `~/.local/share/kirkforge/plugins/kirkforge-plugin/apps/cli/dist/index.js` — when the whole KirkForge-Plugin repo is installed as the plugin directory.
-2. `~/.local/share/kirkforge/plugins/kirkforge-plugin/../../apps/cli/dist/index.js` — when only the `plugin/` folder is copied but the parent repo is adjacent.
+1. `npm/kirkforge-plugin/apps/cli/dist/index.js` — when running inside this workspace.
+2. `~/.local/share/kirkforge/plugins/kirkforge-plugin/apps/cli/dist/index.js` — when the whole plugin directory is copied.
 3. `kirkforge` on `PATH` — if the CLI binary/executable is installed globally.
 
 After restarting KirkForge-Cli, the plugin's tools and skill become available.
@@ -22,7 +22,7 @@ After restarting KirkForge-Cli, the plugin's tools and skill become available.
 ## Prerequisites
 
 - **Node.js >= 20.0.0** (required to run the bundled CLI).
-- The CLI is invoked from `apps/cli/dist/index.js`, which is already compiled in this repo. To rebuild it run `npm run build` from the plugin repo root.
+- The CLI is invoked from `apps/cli/dist/index.js`. Rebuild with `npm run build` from `npm/kirkforge-plugin/`.
 - **Optional:** `tsx` is only needed if you want to run the source directly (e.g. `npm run cli -- verify`). The plugin scripts use the prebuilt `dist` output, so `tsx` is not required at runtime.
 
 ## Available tools

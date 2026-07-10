@@ -1,20 +1,19 @@
 # KirkForge-Video plugin for KirkForge-Cli
 
-This directory is a [KirkForge plugin](https://github.com/KirkForge/KirkForge-Cli/blob/main/docs/adr/013-rust-native-plugin-system.md) that exposes the `kirkforge-video` pipeline as tools inside the `kirkforge` TUI/CLI.
+This directory is a KirkForge plugin that exposes the `kirkforge-video` pipeline as tools inside the `kirkforge` TUI/CLI. The binary builds from `crates/kirkforge-video` in this workspace.
 
 ## Install
 
-1. Build or install the `kirkforge-video` binary:
+1. Build the `kirkforge-video` binary from this workspace:
    ```bash
-   cargo build --release
-   # or
-   cargo install --path . --bin kirkforge-video
+   cargo build --workspace --release
    ```
+   The plugin tool scripts prefer `target/release/kirkforge-video` and fall back to `kirkforge-video` on `PATH`.
 
 2. Copy this directory into the KirkForge plugins folder:
    ```bash
    mkdir -p ~/.local/share/kirkforge/plugins
-   cp -R plugin ~/.local/share/kirkforge/plugins/kirkforge-video
+   cp -R plugins/kirkforge-video ~/.local/share/kirkforge/plugins/kirkforge-video
    ```
 
 3. Set `max_plugin_trust = "shell"` (or higher) in `~/.local/share/kirkforge/config.toml`, because the plugin shells out to `kirkforge-video` and FFmpeg.
@@ -47,10 +46,9 @@ Assistant: video_render {"project": "projects/focusflow"}
 
 The shell tools look for `kirkforge-video` in this order:
 
-1. Next to the script itself (for local development).
-2. `../../target/release/kirkforge-video` and `../../target/debug/kirkforge-video`.
-3. `${HOME}/.cargo/bin/kirkforge-video`.
-4. Any `kirkforge-video` on `PATH`.
+1. `../../../target/release/kirkforge-video` and `../../../target/debug/kirkforge-video` (workspace-built binary).
+2. Next to the script itself (for local development).
+3. Any `kirkforge-video` on `PATH`.
 
 If you installed the binary somewhere else, add it to `PATH` or symlink it into `~/.cargo/bin`.
 

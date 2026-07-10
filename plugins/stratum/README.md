@@ -1,33 +1,29 @@
 # Stratum plugin for KirkForge-Cli
 
-This directory packages the [Stratum](https://github.com/kirkstratum/stratum) compression/rules pipeline as a KirkForge-Cli filesystem plugin.
+This directory packages the Stratum compression/rules pipeline as a KirkForge-Cli filesystem plugin. The `stratum` binary builds from `crates/kirkstratum-cli` in this workspace.
 
 ## Installation
 
-1. Build and install the `stratum` binary:
+1. Build the `stratum` binary from this workspace:
 
    ```bash
-   cargo install --path crates/kirkstratum-cli
+   cargo build --workspace --release
    ```
 
-   or, once published:
-
-   ```bash
-   cargo install stratum
-   ```
+   The plugin tool scripts prefer `target/release/stratum` and fall back to `stratum` on `PATH`.
 
 2. Copy this directory to the KirkForge plugin path:
 
    ```bash
    mkdir -p ~/.local/share/kirkforge/plugins
-   cp -r /path/to/KirkForge-Plugin2/plugin ~/.local/share/kirkforge/plugins/stratum
+   cp -r plugins/stratum ~/.local/share/kirkforge/plugins/stratum
    ```
 
 3. Restart KirkForge-Cli or reload plugins. The manifest declares `trust = "shell"`, so ensure your KirkForge configuration allows shell-tier plugins.
 
 ## Requirements
 
-- `stratum` must be on `PATH`.
+- `stratum` binary (workspace-built or on `PATH`).
 - `jq` is optional but recommended for robust argument parsing.
 
 ## Provided tools

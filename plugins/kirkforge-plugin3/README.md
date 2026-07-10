@@ -1,19 +1,19 @@
 # KirkForge-Plugin3 plugin for KirkForge-Cli
 
-This directory is a [KirkForge filesystem plugin](https://github.com/KirkForge/KirkForge-Cli/blob/main/docs/adr/013-rust-native-plugin-system.md) that exposes the `plugin3` output-side token-budget tool as tools, a skill, and lifecycle hooks inside the `kirkforge` TUI/CLI.
+This directory is a KirkForge filesystem plugin that exposes the `plugin3` output-side token-budget tool as tools, a skill, and lifecycle hooks inside the `kirkforge` TUI/CLI. The `plugin3` binary builds from `crates/plugin3-cli` in this workspace.
 
 ## Install
 
-1. Build the `plugin3` binary from the repo root:
+1. Build the `plugin3` binary from this workspace:
    ```bash
-   cargo build --release --bin plugin3
+   cargo build --workspace --release
    ```
-   Make sure `plugin3` is on your `PATH`, e.g. by copying `target/release/plugin3` to `~/.cargo/bin/` or symlinking it.
+   The plugin tool scripts prefer `target/release/plugin3` and fall back to `plugin3` on `PATH`.
 
 2. Copy this directory into the KirkForge plugins folder:
    ```bash
    mkdir -p ~/.local/share/kirkforge/plugins
-   cp -R /path/to/KirkForge-Plugin3/plugin ~/.local/share/kirkforge/plugins/kirkforge-plugin3
+   cp -R plugins/kirkforge-plugin3 ~/.local/share/kirkforge/plugins/kirkforge-plugin3
    ```
 
 3. Set `max_plugin_trust = "shell"` (or higher) in `~/.local/share/kirkforge/config.toml`, because the plugin shells out to `plugin3`.
@@ -55,8 +55,8 @@ Each hook constructs a JSON payload from `KF_EVENT`, `KF_TOOL_NAME`, `KF_TOOL_AR
 
 The shell scripts look for `plugin3` in this order:
 
-1. Next to the script itself (for local development).
-2. `../../target/release/plugin3` and `../../target/debug/plugin3` relative to the script.
+1. `../../../target/release/plugin3` and `../../../target/debug/plugin3` relative to the script (workspace-built binary).
+2. Next to the script itself (for local development).
 3. Any `plugin3` on `PATH`.
 
 If you installed the binary somewhere else, add it to `PATH` or symlink it next to the scripts.

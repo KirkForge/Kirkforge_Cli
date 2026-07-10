@@ -11,6 +11,15 @@ BIN_DIR="$PREFIX/bin"
 # Detect target triple.
 os=$(uname -s | tr '[:upper:]' '[:lower:]')
 arch=$(uname -m)
+
+case "$os" in
+    mingw*|msys*|cygwin*)
+        echo "Windows native install is not supported by this shell script." >&2
+        echo "Download the release .zip for x86_64-pc-windows-msvc and extract it manually." >&2
+        exit 1
+        ;;
+esac
+
 case "$arch" in
     x86_64) target="x86_64-unknown-linux-gnu" ;;
     aarch64|arm64)
@@ -48,10 +57,12 @@ curl -fsSL "$url" -o "$tmpdir/$archive"
 tar -xzf "$tmpdir/$archive" -C "$tmpdir"
 
 mkdir -p "$BIN_DIR"
-cp "$tmpdir/kirkforge" "$BIN_DIR/kirkforge"
-chmod +x "$BIN_DIR/kirkforge"
+for bin in kirkforge kfd plugin3 stratum kirkforge-video; do
+    cp "$tmpdir/$bin" "$BIN_DIR/$bin"
+    chmod +x "$BIN_DIR/$bin"
+done
 
-echo "Installed kirkforge to $BIN_DIR/kirkforge"
+echo "Installed binaries to $BIN_DIR: kirkforge kfd plugin3 stratum kirkforge-video"
 
 if ! echo "$PATH" | tr ':' '\n' | grep -qx "$BIN_DIR"; then
     echo "Warning: $BIN_DIR is not on your PATH. Add it to your shell profile:"

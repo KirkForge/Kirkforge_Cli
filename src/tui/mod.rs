@@ -414,6 +414,7 @@ pub async fn run_tui(
         undo_stack,
         Some(plugin_registry),
     );
+    exe.set_session_id(state.session_id.clone());
     // Apply --system override before the executor starts processing
     // input. Without this, --system is silently dropped (was GPT 5.5
     // review finding #2).

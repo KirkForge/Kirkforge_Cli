@@ -84,22 +84,28 @@ jobs:
             cargo build --release --locked --target ${{ matrix.target }}
           fi
 
-      - name: Package binary
+      - name: Package binaries
         shell: bash
         run: |
           mkdir -p dist
-          bin_name=kirkforge
+          bins=(kirkforge kfd plugin3 stratum kirkforge-video)
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            bin_name="${bin_name}.exe"
+            ext=".exe"
+          else
+            ext=""
           fi
-          cp "target/${{ matrix.target }}/release/${bin_name}" "dist/${bin_name}"
+          for bin in "${bins[@]}"; do
+            cp "target/${{ matrix.target }}/release/${bin}${ext}" "dist/${bin}${ext}"
+          done
           archive="kirkforge-${{ matrix.target }}.${{ matrix.archive_ext }}"
           if [ "${{ matrix.archive_ext }}" = "zip" ]; then
-            powershell -Command "Compress-Archive -Path 'dist\\${bin_name}' -DestinationPath 'dist\\${archive}'"
+            powershell -Command "Compress-Archive -Path 'dist\kirkforge.exe','dist\kfd.exe','dist\plugin3.exe','dist\stratum.exe','dist\kirkforge-video.exe' -DestinationPath 'dist\${archive}'"
           else
-            tar -czf "dist/${archive}" -C dist "${bin_name}"
+            tar -czf "dist/${archive}" -C dist $(for b in "${bins[@]}"; do echo "${b}${ext}"; done)
           fi
-          rm "dist/${bin_name}"
+          for bin in "${bins[@]}"; do
+            rm "dist/${bin}${ext}"
+          done
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

@@ -709,6 +709,7 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
             non_interactive,
             no_color,
             &plugin_registry,
+            session_id.to_string(),
         )
         .await
     }
@@ -753,6 +754,7 @@ async fn run_line_mode(
     non_interactive: bool,
     no_color: bool,
     plugin_registry: &kirkforge_plugin_host::PluginRegistry,
+    session_id: String,
 ) -> anyhow::Result<()> {
     // If running in non-interactive mode (scripted), deny all approvals.
     // If running in line-mode interactive (no TUI), prompt on stderr and
@@ -769,6 +771,7 @@ async fn run_line_mode(
         None,
         Some(plugin_registry),
     );
+    executor.set_session_id(session_id);
     if let session::conversation::OpenOutcome::Restored(messages) = open_outcome {
         executor.set_recovered_messages(messages);
     }

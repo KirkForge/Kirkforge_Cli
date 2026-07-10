@@ -90,7 +90,7 @@ default_model = "qwen2.5:3b"
 ollama_host = "http://localhost:11434"
 auto_approve = false
 bang_requires_approval = true
-sandbox_dir = ""  # empty = current directory
+sandbox_dir = "."  # "." = current directory; "" = unsandboxed (escape hatch)
 ```
 
 ## Development

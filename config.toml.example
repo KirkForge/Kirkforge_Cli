@@ -41,10 +41,11 @@
 # Sandbox and filesystem access
 # ---------------------------------------------------------------------------
 
-# Working directory the bash tool defaults to and is confined inside. Empty
-# string ("") resolves to the current working directory at launch time.
-# Setting an explicit path overrides cwd capture. Default: "".
-# sandbox_dir = ""
+# Working directory the bash tool defaults to and is confined inside. When
+# omitted, the launch-time current working directory is used (sandboxed).
+# An explicit path overrides cwd capture. An empty string ("") is the
+# explicit opt-out that disables the sandbox. Default: omitted (cwd).
+# sandbox_dir = "."
 
 # When true, the bash tool forces its subprocess cwd inside `sandbox_dir` and
 # rejects explicit `workdir` args that escape it. Default: true.

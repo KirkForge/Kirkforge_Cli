@@ -28,12 +28,9 @@ find_cli() {
             return 0
         fi
     done
-    local path_bin
-    path_bin="$(command -v kirkforge 2>/dev/null || true)"
-    if [ -n "$path_bin" ]; then
-        printf '%s' "$path_bin"
-        return 0
-    fi
+    # Intentionally no PATH fallback: the callers execute the result with
+    # `node <path>`, so returning the Rust `kirkforge` binary (or any
+    # non-JS executable) would cause Node to fail parsing an ELF file.
     return 1
 }
 

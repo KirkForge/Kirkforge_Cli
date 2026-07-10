@@ -30,7 +30,13 @@ fi
 ARGS=(--workspace "$WORKSPACE")
 
 if [ -n "$FILE" ]; then
-  for f in $FILE; do
+  # The schema documents `file` as space-separated paths. Split safely so
+  # leading/trailing whitespace is ignored and plain spaces work for the
+  # common case; paths containing spaces themselves are not supported by
+  # this schema spelling.
+  IFS=' ' read -ra file_paths <<<"$FILE"
+  for f in "${file_paths[@]}"; do
+    [ -n "$f" ] || continue
     ARGS+=(--file "$f")
   done
 fi

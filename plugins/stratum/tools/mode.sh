@@ -29,4 +29,4 @@ fi
 
 [ "$json_out" = "true" ] && args+=("--json")
 
-exec "$STRATUM" "${args[@]}" mode $value
+exec "$STRATUM" "${args[@]}" mode ${value:+"$value"}

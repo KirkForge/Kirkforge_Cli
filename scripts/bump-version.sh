@@ -30,7 +30,9 @@ PY
 echo "Bumped Cargo.toml version to $NEW_VERSION"
 
 # Refresh Cargo.lock so the new version is recorded.
-cargo check --locked
+# --locked is intentionally omitted: bumping the workspace version makes the
+# previous lockfile stale, and we want Cargo to rewrite it before the commit.
+cargo check
 echo "Refreshed Cargo.lock"
 
 # Split the current Unreleased section into a new empty Unreleased plus a versioned section.

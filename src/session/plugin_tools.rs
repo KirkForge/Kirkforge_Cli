@@ -70,7 +70,10 @@ impl PluginToolWrapper {
     /// Resolve the working directory for the plugin tool subprocess.
     ///
     /// If the operator configured a non-empty `sandbox_dir`, the tool runs
-    /// there. Otherwise it falls back to the plugin root (legacy v1 behaviour).
+    /// there. An empty or missing `sandbox_dir` resolves to the current
+    /// working directory so plugin tools operate on the user's project,
+    /// not the plugin installation directory. Only if cwd cannot be
+    /// determined do we fall back to the plugin root as a last resort.
     fn sandbox_dir(&self, cfg: &Config) -> PathBuf {
         cfg.sandbox_dir
             .as_ref()
@@ -82,6 +85,7 @@ impl PluginToolWrapper {
                     Some(p.to_path_buf())
                 }
             })
+            .or_else(|| std::env::current_dir().ok())
             .unwrap_or_else(|| self.plugin_root.clone())
     }
 
@@ -478,6 +482,58 @@ command = "greet.sh"
         assert_eq!(
             std::fs::canonicalize(Path::new(&cwd)).unwrap_or_else(|_| PathBuf::from(&cwd)),
             std::fs::canonicalize(&sandbox).unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn sandbox_uses_current_dir_when_sandbox_dir_empty() {
+        let (_tmp, reg, cfg) = make_greet_plugin();
+        {
+            let mut cfg = cfg.write().unwrap();
+            // Explicit empty string is the "unsandboxed" escape hatch, but
+            // plugin tools must still run in the user's cwd, not the plugin
+            // installation directory.
+            cfg.sandbox_dir = Some(String::new());
+        }
+
+        let plugin_dir = reg
+            .active_plugins()
+            .first()
+            .unwrap()
+            .plugin
+            .root()
+            .to_path_buf();
+        std::fs::write(plugin_dir.join("greet.sh"), "#!/bin/sh\npwd").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(plugin_dir.join("greet.sh"))
+                .unwrap()
+                .permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(plugin_dir.join("greet.sh"), perms).unwrap();
+        }
+
+        let tools = all_plugin_tools(&reg, cfg);
+        let outcome = tools[0]
+            .run(&ToolContext::new(), serde_json::Value::Null)
+            .await;
+        let cwd = match outcome {
+            ToolOutcome::Success { content } => content,
+            other => panic!("expected Success, got {other:?}"),
+        }
+        .trim()
+        .to_string();
+        let expected = std::env::current_dir().unwrap();
+        assert_eq!(
+            std::fs::canonicalize(Path::new(&cwd)).unwrap_or_else(|_| PathBuf::from(&cwd)),
+            std::fs::canonicalize(&expected).unwrap()
+        );
+
+        // Sanity check: the cwd is NOT the plugin directory.
+        assert_ne!(
+            std::fs::canonicalize(Path::new(&cwd)).unwrap_or_else(|_| PathBuf::from(&cwd)),
+            std::fs::canonicalize(&plugin_dir).unwrap()
         );
     }
 

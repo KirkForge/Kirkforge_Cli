@@ -505,22 +505,22 @@ fn default_max_persona_turns() -> usize {
 /// KirkForge-Plugin SDK Node CLI) must be installed on `PATH` separately.
 fn default_plugin_sources() -> HashMap<String, PathBuf> {
     let mut sources = HashMap::new();
-    sources.insert(
-        "kirkforge-draw".into(),
-        PathBuf::from("plugins/kirkforge-draw"),
-    );
+    // Anchor bundled plugin sources to the workspace root at compile time so
+    // they remain valid regardless of the process working directory.
+    let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    sources.insert("kirkforge-draw".into(), base.join("plugins/kirkforge-draw"));
     sources.insert(
         "kirkforge-video".into(),
-        PathBuf::from("plugins/kirkforge-video"),
+        base.join("plugins/kirkforge-video"),
     );
-    sources.insert("stratum".into(), PathBuf::from("plugins/stratum"));
+    sources.insert("stratum".into(), base.join("plugins/stratum"));
     sources.insert(
         "kirkforge-plugin3".into(),
-        PathBuf::from("plugins/kirkforge-plugin3"),
+        base.join("plugins/kirkforge-plugin3"),
     );
     sources.insert(
         "kirkforge-plugin".into(),
-        PathBuf::from("plugins/kirkforge-plugin"),
+        base.join("plugins/kirkforge-plugin"),
     );
     sources
 }

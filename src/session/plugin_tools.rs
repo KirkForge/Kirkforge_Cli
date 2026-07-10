@@ -103,6 +103,7 @@ impl PluginToolWrapper {
             }
         }
         env.push((KIRKFORGE_TOOL_ARGS.to_string(), args.to_string()));
+        env.push(("KIRKFORGE_TOOL_ARGS_JSON".to_string(), args.to_string()));
         env
     }
 }

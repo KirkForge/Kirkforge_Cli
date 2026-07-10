@@ -258,13 +258,15 @@ mod tests {
     // value is restored after the catch is the regression check.
     #[test]
     fn env_guard_restores_prior_value_on_panic() {
-        if std::env::var("PLUGIN3_CONFIG_DIR").is_ok() {
-            eprintln!("skipping: PLUGIN3_CONFIG_DIR already set in this environment");
-            return;
-        }
-        let prior = std::env::var("PLUGIN3_CONFIG_DIR").ok();
-        // Inner closure sets the override, then panics. The
-        // EnvGuard's Drop runs during the unwind.
+        // Hold the env mutex for the whole test so a parallel test cannot
+        // mutate PLUGIN3_CONFIG_DIR between the inner guard's Drop and the
+        // assertion. The reentrant mutex allows this outer guard and the
+        // inner guard to coexist on the same thread.
+        let outer_prior = "/tmp/cfg-outer-panic";
+        let _g_outer = EnvGuard::set("PLUGIN3_CONFIG_DIR", outer_prior);
+
+        // Inner closure sets a nested override, then panics. The
+        // EnvGuard's Drop runs during the unwind and restores to outer_prior.
         let result = std::panic::catch_unwind(|| {
             let _g = EnvGuard::set("PLUGIN3_CONFIG_DIR", "/tmp/cfg-from-guard");
             // While the guard is live, the env var must be set.
@@ -276,15 +278,16 @@ mod tests {
             panic!("forced unwind to exercise Drop");
         });
         assert!(result.is_err(), "inner closure must have panicked");
-        // After the unwind completes and the guard's Drop ran, the
-        // env var must be restored to its prior state. The whole
-        // point of the guard: no leak.
+        // After the unwind completes and the inner guard's Drop ran, the
+        // env var must be restored to the outer guard's value. The whole
+        // point of the guard: no leak, even across a panic.
         let now = std::env::var("PLUGIN3_CONFIG_DIR").ok();
         assert_eq!(
-            now, prior,
-            "EnvGuard Drop must restore the prior value (or unset if there was none); \
-             got {now:?}, expected {prior:?}. A leak here means a failed assertion \
-             in env_overrides_take_precedence_over_xdg would pollute the next test."
+            now,
+            Some(outer_prior.to_string()),
+            "EnvGuard Drop must restore the prior value during unwind; \
+             got {now:?}, expected Some({outer_prior:?}). A leak here means a failed \
+             assertion in env_overrides_take_precedence_over_xdg would pollute the next test."
         );
     }
 

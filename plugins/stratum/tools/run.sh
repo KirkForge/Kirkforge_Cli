@@ -7,6 +7,8 @@ set -euo pipefail
 source "$(dirname "$0")/common.sh"
 STRATUM="$(find_stratum)" || die "stratum_run: stratum binary not found (build the workspace or install stratum on PATH)"
 
+KIRKFORGE_TOOL_ARGS_JSON="${KIRKFORGE_TOOL_ARGS_JSON:-${KIRKFORGE_TOOL_ARGS:-}}"
+
 if [ -z "${KIRKFORGE_TOOL_ARGS_JSON:-}" ]; then
   echo "Usage: KIRKFORGE_TOOL_ARGS_JSON='{...}' $0"
   echo "Run the stratum pipeline on stdin."

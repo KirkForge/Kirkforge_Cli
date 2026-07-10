@@ -62,7 +62,7 @@ impl ResponseCache {
         // 2. On-disk
         let path = self.path_for(&key);
         let bytes = std::fs::read(&path).ok()?;
-        let events: Vec<StreamEvent> = bincode::deserialize(&bytes).ok()?;
+        let events: Vec<StreamEvent> = serde_json::from_slice(&bytes).ok()?;
 
         // Promote to memory for future hits.
         let mut mem = self.memory.lock().unwrap_or_else(|e| e.into_inner());
@@ -105,7 +105,7 @@ impl ResponseCache {
                 );
             }
         }
-        if let Ok(bytes) = bincode::serialize(events) {
+        if let Ok(bytes) = serde_json::to_vec(events) {
             if let Err(e) = std::fs::write(&path, bytes) {
                 tracing::warn!(
                     error = %e,

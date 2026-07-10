@@ -4,12 +4,13 @@ set -euo pipefail
 # plugin3_common.sh — shared helpers for KirkForge-Plugin3 plugin tools.
 # Sourced by the tool scripts; not invoked directly.
 
-# Read KIRKFORGE_TOOL_ARGS (or KIRKFORGE_TOOL_ARGS_JSON) or fall back to first arg.
+# Read KIRKFORGE_TOOL_ARGS_JSON (or KIRKFORGE_TOOL_ARGS) or fall back to first arg.
+# The host now sets both to the same value, but JSON is the canonical variable.
 tool_args() {
-    if [[ -n "${KIRKFORGE_TOOL_ARGS:-}" ]]; then
-        printf '%s' "$KIRKFORGE_TOOL_ARGS"
-    elif [[ -n "${KIRKFORGE_TOOL_ARGS_JSON:-}" ]]; then
+    if [[ -n "${KIRKFORGE_TOOL_ARGS_JSON:-}" ]]; then
         printf '%s' "$KIRKFORGE_TOOL_ARGS_JSON"
+    elif [[ -n "${KIRKFORGE_TOOL_ARGS:-}" ]]; then
+        printf '%s' "$KIRKFORGE_TOOL_ARGS"
     elif [[ $# -gt 0 ]]; then
         printf '%s' "$1"
     else

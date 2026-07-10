@@ -4,9 +4,11 @@ set -euo pipefail
 # video_common.sh — shared helpers for KirkForge-Video plugin tools.
 # Sourced by the tool scripts; not invoked directly.
 
-# Read KIRKFORGE_TOOL_ARGS or fall back to first arg.
+# Read KIRKFORGE_TOOL_ARGS_JSON (preferred) or KIRKFORGE_TOOL_ARGS, falling back to first arg.
 tool_args() {
-    if [[ -n "${KIRKFORGE_TOOL_ARGS:-}" ]]; then
+    if [[ -n "${KIRKFORGE_TOOL_ARGS_JSON:-}" ]]; then
+        printf '%s' "$KIRKFORGE_TOOL_ARGS_JSON"
+    elif [[ -n "${KIRKFORGE_TOOL_ARGS:-}" ]]; then
         printf '%s' "$KIRKFORGE_TOOL_ARGS"
     elif [[ $# -gt 0 ]]; then
         printf '%s' "$1"

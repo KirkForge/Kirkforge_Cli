@@ -61,6 +61,13 @@ static PATH_OVERRIDE: Mutex<Option<PathBuf>> = Mutex::new(None);
 #[cfg(test)]
 static TEST_LOCK: Mutex<()> = Mutex::new(());
 
+/// Unique counter so each `with_test_path` invocation gets its own temp
+/// directory. Using only `process::id()` caused every test in the same process
+/// to share one path, and a slow/interleaved test could see the directory
+/// removed by a faster neighbour under heavy parallelism.
+#[cfg(test)]
+static TEST_DIR_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// Resolve the metrics log path inside the platform data directory.
 pub fn metrics_path() -> Option<PathBuf> {
     #[cfg(test)]
@@ -261,13 +268,18 @@ where
     F: FnOnce(PathBuf, MutexGuard<'static, ()>) -> R,
 {
     let lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let dir = std::env::temp_dir().join(format!("kirkforge_metrics_test_{}", std::process::id()));
+    let counter = TEST_DIR_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let dir = std::env::temp_dir().join(format!(
+        "kirkforge_metrics_test_{}_{}",
+        std::process::id(),
+        counter
+    ));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("metrics.ndjson");
     {
         let mut guard = PATH_OVERRIDE.lock().unwrap_or_else(|e| e.into_inner());
-        *guard = Some(path);
+        *guard = Some(path.clone());
     }
     let result = f(dir.clone(), lock);
     {

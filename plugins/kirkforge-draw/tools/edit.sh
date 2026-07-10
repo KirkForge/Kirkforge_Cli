@@ -6,7 +6,7 @@ source "$(dirname "$0")/common.sh"
 
 KFD="$(find_kfd)" || die "draw_edit: kfd binary not found (build the workspace or install kfd on PATH)"
 
-ARGS="${KIRKFORGE_TOOL_ARGS:-}"
+ARGS="${KIRKFORGE_TOOL_ARGS_JSON:-${KIRKFORGE_TOOL_ARGS:-}}"
 PATH_ARG="$(printf '%s' "$ARGS" | sed -n 's/.*"path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
 
 if [[ -z "$PATH_ARG" ]]; then

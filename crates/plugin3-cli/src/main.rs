@@ -261,7 +261,12 @@ fn main() {
             kind.map(Into::into),
             json || cli.json,
         ),
-        Command::SelfCheck => self_check(),
+        Command::SelfCheck => {
+            if let Err(e) = self_check() {
+                eprintln!("plugin3 self-check failed: {e}");
+                std::process::exit(1);
+            }
+        }
         Command::Config {
             show_sources,
             validate,
@@ -325,7 +330,7 @@ mod commands;
 
 // ---- Self-check --------------------------------------------------------
 
-fn self_check() {
+fn self_check() -> Result<(), Box<dyn std::error::Error>> {
     // Slicing round-trip on a synthetic 50 KB blob.
     let store = InMemoryOffloadStore::new();
     let slicer = HeadTailSlicer {
@@ -333,14 +338,23 @@ fn self_check() {
         tail_bytes: 256,
     };
     let input = "x".repeat(50_000) + "Y_END";
-    let out = slicer
-        .apply(&input, &store)
-        .expect("self-check slicing should succeed on synthetic input");
-    assert_eq!(out.head.len(), 256);
-    assert_eq!(out.tail.len(), 256);
-    assert!(out.tail.ends_with("Y_END"), "tail should end with sentinel");
-    assert!(out.offload_marker.is_some());
-    assert!(out.bytes_saved > 0);
+    let out = slicer.apply(&input, &store)?;
+    if out.head.len() != 256 {
+        return Err(format!("self-check: head length {} != 256", out.head.len()).into());
+    }
+    if out.tail.len() != 256 {
+        return Err(format!("self-check: tail length {} != 256", out.tail.len()).into());
+    }
+    if !out.tail.ends_with("Y_END") {
+        return Err("self-check: tail does not end with sentinel".into());
+    }
+    let marker = out
+        .offload_marker
+        .as_ref()
+        .ok_or("self-check produced no offload marker")?;
+    if out.bytes_saved == 0 {
+        return Err("self-check: bytes_saved is zero".into());
+    }
 
     // Budget state transitions.
     let mut b = TokenBudget {
@@ -348,28 +362,40 @@ fn self_check() {
         approaching_ratio: 0.8,
         used: 0,
     };
-    assert_eq!(b.state(), BudgetState::Under);
+    if b.state() != BudgetState::Under {
+        return Err(format!("self-check: fresh budget state {:?} != Under", b.state()).into());
+    }
     b.record(80);
-    assert_eq!(b.state(), BudgetState::Approaching);
+    if b.state() != BudgetState::Approaching {
+        return Err(format!("self-check: budget state {:?} != Approaching", b.state()).into());
+    }
     b.record(20);
-    assert_eq!(b.state(), BudgetState::Over);
+    if b.state() != BudgetState::Over {
+        return Err(format!("self-check: budget state {:?} != Over", b.state()).into());
+    }
 
     // Offload retrieval round-trip via marker.
-    let marker = out
-        .offload_marker
-        .as_ref()
-        .expect("self-check produced an offload marker");
-    let key = plugin3_core::parse_slice_marker(marker).expect("self-check marker parses");
-    let recovered = store.get(key).expect("self-check recovers offloaded slice");
-    assert_eq!(recovered.len(), out.bytes_saved);
+    let key = plugin3_core::parse_slice_marker(marker)
+        .ok_or("self-check: marker does not contain a valid key")?;
+    let recovered = store.get(key)?;
+    if recovered.len() != out.bytes_saved {
+        return Err(format!(
+            "self-check: recovered length {} != bytes_saved {}",
+            recovered.len(),
+            out.bytes_saved
+        )
+        .into());
+    }
 
     // Hook registry (ADR-0009). Serialising must not panic and
     // must produce a parseable JSON object for both the
     // ClaudeCode (3-slot) and Cursor/Aider (empty) hosts. Drift
     // tests in `hooks::drift_tests` pin the exact field names.
     let cfg = hooks::register_hooks(hooks::current_host());
-    let s = serde_json::to_string(&cfg).expect("HookConfig serialises");
-    assert!(s.starts_with('{'), "HookConfig serialises to object: {s}");
+    let s = serde_json::to_string(&cfg)?;
+    if !s.starts_with('{') {
+        return Err(format!("self-check: HookConfig serialises to non-object: {s}").into());
+    }
 
     // Exit helpers (ADR-0015). A smoke compile + message path:
     // build the format strings the helpers would emit, then assert
@@ -377,11 +403,16 @@ fn self_check() {
     // `-> !` (no return), so the drift test in `validate_tests`
     // pins the actual exit code via subprocess.
     let cfg_msg = format!("config failure with {} checks", 1);
-    assert!(cfg_msg.contains("config failure"));
+    if !cfg_msg.contains("config failure") {
+        return Err("self-check: config helper message malformed".into());
+    }
     let usage_msg = format!("usage failure with {} args", 2);
-    assert!(usage_msg.contains("usage failure"));
+    if !usage_msg.contains("usage failure") {
+        return Err("self-check: usage helper message malformed".into());
+    }
 
     println!("plugin3 self-check OK (slicing + budget + offload round-trip)");
+    Ok(())
 }
 
 // ---- Helpers -----------------------------------------------------------

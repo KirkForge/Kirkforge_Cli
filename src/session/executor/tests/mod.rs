@@ -1272,6 +1272,9 @@ fn test_is_read_only_bash_read_only_pipe_allowed() {
 fn test_is_read_only_bash_redirect_blocked() {
     assert!(!is_read_only_bash("ls > out.txt"));
     assert!(!is_read_only_bash("grep foo file >> log.txt"));
+    // Redirections in later pipe segments must also be blocked.
+    assert!(!is_read_only_bash("cat file | sort > out.txt"));
+    assert!(!is_read_only_bash("cat file | grep foo >> log.txt"));
 }
 
 #[test]
@@ -1279,12 +1282,19 @@ fn test_is_read_only_bash_chaining_blocked() {
     assert!(!is_read_only_bash("ls && rm -rf /"));
     assert!(!is_read_only_bash("cat file; rm file"));
     assert!(!is_read_only_bash("ls || true"));
+    // Chaining in later pipe segments must also be blocked.
+    assert!(!is_read_only_bash("cat file | sort; rm file"));
+    assert!(!is_read_only_bash("cat file | sort && rm file"));
+    assert!(!is_read_only_bash("cat file | sort || rm file"));
 }
 
 #[test]
 fn test_is_read_only_bash_substitution_blocked() {
     assert!(!is_read_only_bash("echo $(rm -rf /)"));
     assert!(!is_read_only_bash("echo `ls`"));
+    // Command substitution in later pipe segments must also be blocked.
+    assert!(!is_read_only_bash("cat file | sort $(rm -rf /)"));
+    assert!(!is_read_only_bash("cat file | sort `ls`"));
 }
 
 #[test]

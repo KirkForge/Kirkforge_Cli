@@ -92,32 +92,30 @@ pub(crate) fn is_read_only_bash(cmd: &str) -> bool {
         }
     }
 
-    let rest = &trimmed[first.len()..];
-
-    if rest.contains('>') {
-        return false;
-    }
-
-    // Every pipe segment must itself be a read-only command. The first
-    // segment's command is already validated above; this catches a
-    // read-only producer piped into a writing consumer — e.g.
-    // `cat list | xargs rm`, `… | tee /etc/file`, `… | sh`. Without this,
-    // such a pipeline would be auto-approved despite mutating state.
+    // Every pipe segment must itself be a read-only command, and no segment
+    // may contain shell metacharacters that could escape the read-only guard.
+    // Without this, a pipeline such as `cat list | sort > /tmp/out` or
+    // `cat list | sort; rm -rf /` would be auto-approved despite mutating
+    // state or executing arbitrary commands.
     for segment in trimmed.split('|') {
         let seg = segment.trim();
         if let Some(word) = seg.split_whitespace().next() {
             if !READ_ONLY_COMMANDS.contains(&word) {
                 return false;
             }
+        } else {
+            // Empty segment would be a malformed pipe; require approval.
+            return false;
         }
-    }
-
-    if rest.contains(';') || rest.contains("&&") || rest.contains("||") {
-        return false;
-    }
-
-    if rest.contains("$(") || rest.contains('`') {
-        return false;
+        if seg.contains('>')
+            || seg.contains(';')
+            || seg.contains("&&")
+            || seg.contains("||")
+            || seg.contains("$(")
+            || seg.contains('`')
+        {
+            return false;
+        }
     }
 
     true

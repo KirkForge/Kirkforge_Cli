@@ -8,6 +8,7 @@
 
 use std::path::{Path, PathBuf};
 
+use anyhow::Context;
 use async_trait::async_trait;
 use serde::Deserialize;
 
@@ -582,7 +583,7 @@ async fn build_assets(dir: &Path, arts: &Path, reg: &ToolRegistry) -> Result<Str
                                     let transcode = needs_transcode(&out.meta, pb);
                                     entry
                                         .as_object_mut()
-                                        .expect("asset entry is a JSON object")
+                                        .context("asset entry is a JSON object")?
                                         .insert("probed".into(), out.meta);
                                     if let Some(mut plan) = transcode {
                                         // ponytail: run the transcode plan
@@ -594,7 +595,7 @@ async fn build_assets(dir: &Path, arts: &Path, reg: &ToolRegistry) -> Result<Str
                                         match run_transcode_plan(reg, &plan).await {
                                             Ok(_) => {
                                                 plan.as_object_mut()
-                                                    .expect("transcode plan is a JSON object")
+                                                    .context("transcode plan is a JSON object")?
                                                     .insert(
                                                         "applied".into(),
                                                         serde_json::json!(true),
@@ -616,13 +617,13 @@ async fn build_assets(dir: &Path, arts: &Path, reg: &ToolRegistry) -> Result<Str
                                             }
                                             Err(e) => {
                                                 plan.as_object_mut()
-                                                    .expect("transcode plan is a JSON object")
+                                                    .context("transcode plan is a JSON object")?
                                                     .insert(
                                                         "applied".into(),
                                                         serde_json::json!(false),
                                                     );
                                                 plan.as_object_mut()
-                                                    .expect("transcode plan is a JSON object")
+                                                    .context("transcode plan is a JSON object")?
                                                     .insert(
                                                         "error".into(),
                                                         serde_json::json!(e.to_string()),
@@ -644,7 +645,7 @@ async fn build_assets(dir: &Path, arts: &Path, reg: &ToolRegistry) -> Result<Str
                                         }
                                         entry
                                             .as_object_mut()
-                                            .expect("asset entry is a JSON object")
+                                            .context("asset entry is a JSON object")?
                                             .insert("transcode".into(), plan);
                                     }
                                 }

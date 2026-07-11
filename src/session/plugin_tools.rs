@@ -93,12 +93,21 @@ impl PluginToolWrapper {
     ///
     /// Only the baseline allowlist and any explicitly-configured
     /// `plugin_allowed_env_vars` are forwarded. This prevents a plugin tool
-    /// from inheriting sensitive or irrelevant session state.
+    /// from inheriting sensitive or irrelevant session state. PATH is passed
+    /// through the same sanitizer as the model's bash tool so plugin shell
+    /// wrappers can reliably resolve `bash`, `node`, `jq`, `python3`, etc.
     fn curated_env(&self, cfg: &Config, args: &serde_json::Value) -> Vec<(String, String)> {
         let mut env = Vec::new();
         for key in BASELINE_ENV_VARS {
             if let Ok(v) = std::env::var(key) {
-                env.push(((*key).to_string(), v));
+                // PATH gets sanitized so plugin wrappers don't fail when the
+                // host launches kirkforge with a minimal or world-writable PATH.
+                let value = if *key == "PATH" {
+                    crate::session::bash_runner::sanitized_path(&v)
+                } else {
+                    v
+                };
+                env.push(((*key).to_string(), value));
             }
         }
         for key in &cfg.plugin_allowed_env_vars {
@@ -597,6 +606,68 @@ command = "greet.sh"
         assert!(
             matches!(outcome, ToolOutcome::Success { ref content } if content.is_empty()),
             "unlisted env var leaked into plugin tool: {outcome:?}"
+        );
+    }
+
+    /// Plugin tool subprocesses receive a sanitized PATH so shell wrappers can
+    /// resolve standard utilities even when kirkforge is launched with a minimal
+    /// or world-writable PATH.
+    #[tokio::test]
+    async fn curated_env_sanitizes_path_for_plugin_tools() {
+        let (_tmp, reg, cfg) = make_greet_plugin();
+        let plugin_dir = reg
+            .active_plugins()
+            .first()
+            .unwrap()
+            .plugin
+            .root()
+            .to_path_buf();
+
+        // Script asks the shell to locate `sh` via PATH. With an empty/malicious
+        // host PATH this would fail; the sanitized PATH must include /bin.
+        std::fs::write(
+            plugin_dir.join("greet.sh"),
+            "#!/bin/sh\ncommand -v sh || printf 'NOT_FOUND'",
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(plugin_dir.join("greet.sh"))
+                .unwrap()
+                .permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(plugin_dir.join("greet.sh"), perms).unwrap();
+        }
+
+        struct PathGuard {
+            prior: Option<String>,
+        }
+        impl PathGuard {
+            fn set(value: &str) -> Self {
+                let prior = std::env::var("PATH").ok();
+                std::env::set_var("PATH", value);
+                Self { prior }
+            }
+        }
+        impl Drop for PathGuard {
+            fn drop(&mut self) {
+                match &self.prior {
+                    Some(p) => std::env::set_var("PATH", p),
+                    None => std::env::remove_var("PATH"),
+                }
+            }
+        }
+
+        let _guard = PathGuard::set("/tmp/evil");
+        let tools = all_plugin_tools(&reg, cfg);
+        let outcome = tools[0]
+            .run(&ToolContext::new(), serde_json::Value::Null)
+            .await;
+
+        assert!(
+            matches!(outcome, ToolOutcome::Success { ref content } if content.trim().ends_with("/bin/sh")),
+            "plugin tool should resolve sh via sanitized PATH, got: {outcome:?}"
         );
     }
 

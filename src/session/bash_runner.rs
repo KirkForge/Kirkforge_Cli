@@ -65,18 +65,18 @@ fn is_world_writable(_path: &Path) -> bool {
     false
 }
 
-/// Curated PATH for model-driven shell commands.
+/// Curated PATH for subprocesses that resolve external commands.
 ///
 /// Starts from the supplied PATH string, drops relative entries and
 /// world-writable non-system directories (e.g. `/tmp`), and prepends a core
 /// set of standard system directories so basic tooling (`bash`, `cargo`,
-/// `git`, etc.) remains resolvable even on hosts where a system directory
-/// happens to be world-writable. This closes a PATH-shadowing attack where
-/// the model writes a malicious binary to a writable directory and
-/// manipulates PATH so a legitimate-looking command resolves to it, while
+/// `git`, `node`, etc.) remains resolvable even on hosts where a system
+/// directory happens to be world-writable. This closes a PATH-shadowing
+/// attack where a malicious binary in a writable directory is placed
+/// earlier on PATH so a legitimate-looking command resolves to it, while
 /// still preserving common non-writable user directories (e.g.
 /// `~/.cargo/bin`).
-fn sanitized_path(original: &str) -> String {
+pub(crate) fn sanitized_path(original: &str) -> String {
     use std::collections::HashSet;
 
     let sep = if cfg!(windows) { ';' } else { ':' };

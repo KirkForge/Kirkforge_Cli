@@ -3,6 +3,7 @@
 use crate::daemon::paths;
 use crate::daemon::{DaemonState, Request, Response};
 use anyhow::Context;
+use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufStream};
@@ -207,6 +208,18 @@ fn daemonize() -> anyhow::Result<()> {
     cmd.arg("daemon").arg("--foreground");
     if let Ok(v) = std::env::var("KIRKFORGE_DATA_DIR") {
         cmd.env("KIRKFORGE_DATA_DIR", v);
+    }
+    // Create a new session so the daemon survives the closing of the
+    // terminal/session that spawned it. Without setsid the daemon
+    // remains in the parent's process group and gets SIGHUP (which we
+    // treat as shutdown) when the user logs out or the parent exits.
+    unsafe {
+        cmd.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
     }
     cmd.spawn().context("spawn daemon foreground process")?;
     std::process::exit(0);

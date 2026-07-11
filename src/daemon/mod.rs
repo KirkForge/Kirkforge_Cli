@@ -106,8 +106,14 @@ impl DaemonState {
     }
 
     /// Refresh the recent list from disk.
+    ///
+    /// This re-scans the sessions directory rather than reusing the
+    /// cached `.index.ndjson`, so newly appended messages are reflected
+    /// in the daemon's recent-session list.
     pub fn refresh(&mut self) {
-        match crate::session::session_index::list_sessions() {
+        match crate::session::session_index::SessionIndex::load_or_refresh()
+            .and_then(|mut index| index.refresh().map(|_| index.list()))
+        {
             Ok(entries) => {
                 self.recent = entries.into_iter().take(RECENT_SESSIONS_LIMIT).collect();
             }

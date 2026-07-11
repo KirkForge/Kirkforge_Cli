@@ -728,13 +728,22 @@ prompt = "hello"
 
     struct DataDirGuard {
         prior: Option<String>,
+        _lock: tokio::sync::MutexGuard<'static, ()>,
     }
 
     impl DataDirGuard {
         fn set(value: &str) -> Self {
+            let _lock = crate::session::test_data_dir_lock().blocking_lock();
             let prior = std::env::var("KIRKFORGE_DATA_DIR").ok();
             std::env::set_var("KIRKFORGE_DATA_DIR", value);
-            Self { prior }
+            Self { prior, _lock }
+        }
+
+        async fn set_async(value: &str) -> Self {
+            let _lock = crate::session::test_data_dir_lock().lock().await;
+            let prior = std::env::var("KIRKFORGE_DATA_DIR").ok();
+            std::env::set_var("KIRKFORGE_DATA_DIR", value);
+            Self { prior, _lock }
         }
     }
 
@@ -946,7 +955,7 @@ command = "hello.sh"
         let installed_stratum_tools = installed_plugins.join("stratum/tools");
         std::fs::copy(&stratum_bin, installed_stratum_tools.join("stratum")).unwrap();
 
-        let _data_guard = DataDirGuard::set(&tmp.path().to_string_lossy());
+        let _data_guard = DataDirGuard::set_async(&tmp.path().to_string_lossy()).await;
         let (registry, warnings) = load_plugin_registry(&Config::default())
             .expect("loading installed plugins should not fail");
         assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
@@ -1002,7 +1011,7 @@ command = "hello.sh"
         copy_dir_all(&repo_plugins, &installed_plugins).unwrap();
         copy_dir_all(&repo_npm, &installed_npm).unwrap();
 
-        let _guard = DataDirGuard::set(&tmp.path().to_string_lossy());
+        let _guard = DataDirGuard::set_async(&tmp.path().to_string_lossy()).await;
         let (registry, warnings) = load_plugin_registry(&Config::default())
             .expect("loading installed plugins should not fail");
         assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");

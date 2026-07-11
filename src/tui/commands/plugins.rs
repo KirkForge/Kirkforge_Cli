@@ -638,17 +638,11 @@ fn write_shared_config(
 mod tests {
     use super::*;
     use crate::shared::Config;
-    use std::sync::{Arc, OnceLock};
-    use tokio::sync::Mutex as TokioMutex;
-
-    /// Serialize tests that mutate the process-wide `KIRKFORGE_DATA_DIR` env var.
-    static ENV_LOCK: OnceLock<TokioMutex<()>> = OnceLock::new();
-
-    fn env_lock() -> &'static TokioMutex<()> {
-        ENV_LOCK.get_or_init(|| TokioMutex::new(()))
-    }
+    use std::sync::Arc;
 
     /// Sets `KIRKFORGE_DATA_DIR` to `dir` for the lifetime of the guard.
+    /// Uses the crate-wide `test_data_dir_lock()` so every test that mutates
+    /// the data directory is serialized against every other such test.
     struct TempDataDir {
         prev: Option<std::ffi::OsString>,
         _guard: tokio::sync::MutexGuard<'static, ()>,
@@ -656,7 +650,7 @@ mod tests {
 
     impl TempDataDir {
         async fn new(dir: &std::path::Path) -> Self {
-            let guard = env_lock().lock().await;
+            let guard = crate::session::test_data_dir_lock().lock().await;
             let prev = std::env::var_os("KIRKFORGE_DATA_DIR");
             std::env::set_var("KIRKFORGE_DATA_DIR", dir.as_os_str());
             Self {

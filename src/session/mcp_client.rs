@@ -157,6 +157,11 @@ impl McpClient {
         for (k, v) in &config.env_vars {
             cmd.env(k, v);
         }
+        // Sanitize PATH before spawning so a minimal or world-writable host
+        // PATH cannot shadow standard system directories (e.g. a relative
+        // entry that looks like `bash` or `npx`).
+        let path = std::env::var("PATH").unwrap_or_default();
+        cmd.env("PATH", crate::session::bash_runner::sanitized_path(&path));
         cmd.stdin(std::process::Stdio::piped());
         cmd.stdout(std::process::Stdio::piped());
         cmd.stderr(std::process::Stdio::piped());

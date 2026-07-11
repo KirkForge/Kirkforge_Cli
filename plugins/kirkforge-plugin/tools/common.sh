@@ -9,8 +9,9 @@ set -euo pipefail
 #
 # Resolution order:
 #   1. $KIRKFORGE_CLI_JS override (useful for custom installs and CI).
-#   2. Same-directory / source-layout candidate:
-#      <plugin-root>/../npm/kirkforge-plugin/apps/cli/dist/index.js
+#   2. Same-directory / source-layout candidate (resolved from tools/ up to the
+#      workspace or data-directory root):
+#      ../../../npm/kirkforge-plugin/apps/cli/dist/index.js
 #   3. Global npm install:
 #      $(npm root -g)/@kirkforge/cli/dist/index.js
 #
@@ -20,8 +21,19 @@ set -euo pipefail
 # scripts that Node cannot execute directly. Use $KIRKFORGE_CLI_JS to point
 # at a JS entry point for custom installs.
 
+# Return 0 if $1 looks like a file Node can execute directly (.js/.cjs/.mjs).
+_is_node_script() {
+    case "$1" in
+        *.js|*.cjs|*.mjs) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 find_cli() {
     if [[ -n "${KIRKFORGE_CLI_JS:-}" && -f "$KIRKFORGE_CLI_JS" ]]; then
+        if ! _is_node_script "$KIRKFORGE_CLI_JS"; then
+            die "KIRKFORGE_CLI_JS must point to a .js/.cjs/.mjs file (got: $KIRKFORGE_CLI_JS)"
+        fi
         printf '%s' "$KIRKFORGE_CLI_JS"
         return 0
     fi
@@ -29,14 +41,14 @@ find_cli() {
     local script_dir
     script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     local candidate="${script_dir}/../../../npm/kirkforge-plugin/apps/cli/dist/index.js"
-    if [ -f "$candidate" ]; then
+    if [ -f "$candidate" ] && _is_node_script "$candidate"; then
         printf '%s' "$candidate"
         return 0
     fi
 
     if command -v npm >/dev/null 2>&1; then
         candidate="$(npm root -g 2>/dev/null)/@kirkforge/cli/dist/index.js"
-        if [ -f "$candidate" ]; then
+        if [ -f "$candidate" ] && _is_node_script "$candidate"; then
             printf '%s' "$candidate"
             return 0
         fi

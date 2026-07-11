@@ -11,7 +11,7 @@ export function registerHealth(program: Command): void {
         shutdown: _shutdown,
         policyEngine: _policyEngine,
         auditLogger: _auditLogger,
-      } = await createBootstrap({});
+      } = await createBootstrap({ allowMissingModel: true });
       const h = orchestrator.healthCheck();
       console.log(`Status:         ${h.status}`);
       console.log(

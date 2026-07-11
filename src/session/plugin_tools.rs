@@ -102,8 +102,20 @@ impl PluginToolWrapper {
             if let Ok(v) = std::env::var(key) {
                 // PATH gets sanitized so plugin wrappers don't fail when the
                 // host launches kirkforge with a minimal or world-writable PATH.
+                // If the bundled Node SDK is installed in the data directory,
+                // prepend its node_modules/.bin so Node SDK tools (tsc, pyright)
+                // resolve without requiring a global install.
                 let value = if *key == "PATH" {
-                    crate::session::bash_runner::sanitized_path(&v)
+                    let sanitized = crate::session::bash_runner::sanitized_path(&v);
+                    let npm_bin = crate::session::data_dir()
+                        .ok()
+                        .map(|p| p.join("npm/kirkforge-plugin/node_modules/.bin"))
+                        .filter(|p| p.is_dir());
+                    if let Some(npm_bin) = npm_bin {
+                        format!("{}:{}", npm_bin.display(), sanitized)
+                    } else {
+                        sanitized
+                    }
                 } else {
                     v
                 };

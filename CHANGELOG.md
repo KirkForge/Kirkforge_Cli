@@ -6,10 +6,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Fixed (deep audit — eighth pass)
+- Restored accidentally deleted `npm/kirkforge-plugin/packages/tool-gitnexus` files (still a production dependency of the orchestrator) and fixed the compile error in `src/index.ts` where the git-repo branch referenced an undefined `paths` shorthand
+- `npm/kirkforge-plugin/apps/cli/src/bootstrap.ts` now supports `allowMissingModel`; the `verify` and `health` commands use it so deterministic verification and health checks work without requiring `OLLAMA_BASE_URL` or provider API keys
 - `npm/kirkforge-plugin/packages/tool-pyright/package.json` now declares `pyright` as a runtime dependency so the verifier ships a guaranteed binary instead of relying on a global install
-- `plugins/kirkforge-plugin/tools/common.sh` `find_cli()` now resolves the JS entry point via `$KIRKFORGE_CLI_JS`, the source-layout sibling, or a global npm install of `@kirkforge/cli`; the unsafe PATH-installed `kirkforge` fallback is removed because it could select the Rust ELF binary or an npm shell wrapper, neither of which `node <path>` can execute
+- `plugins/kirkforge-plugin/tools/common.sh` `find_cli()` now resolves the JS entry point via `$KIRKFORGE_CLI_JS`, the source-layout sibling, or a global npm install of `@kirkforge/cli`; the unsafe PATH-installed `kirkforge` fallback is removed, and resolved paths are validated to end in `.js`/`.cjs`/`.mjs` before being passed to `node`
 - `plugins/kirkforge-draw/tools/edit.sh` removed; it was never exposed in the manifest and cannot work in a null-stdin/non-TTY host environment
 - `npm/kirkforge-plugin/packages/tool-tsc/src/index.ts` now resolves `tsc` from the bundled `typescript` dependency (or a local `node_modules/.bin` install) instead of `npx`, and accepts an optional `command` override for deterministic testing
+- `src/session/plugin_tools.rs` now prepends the bundled Node SDK's `node_modules/.bin` to the curated `PATH` passed to plugin tools, so `tsc`/`pyright`/etc. resolve without a global install
+- `scripts/install.sh` now warns when `node` is missing or older than Node 20, which is required by the bundled Node SDK plugin
+- `src/session/executor/tests/mod.rs` `test_cancelled_tool_batch_appends_placeholders` no longer races a 50 ms timer against executor batch scheduling; it waits for the first tool to start before setting cancellation, eliminating the observed flake
+- `npm/kirkforge-plugin/package.json` dev scripts `cli` and `self-verify` now point at the built `apps/cli/dist/index.js` instead of stripped source files
 - Bumped OpenTelemetry dependencies across `npm/kirkforge-plugin/package.json` and `packages/core-telemetry/package.json` to patched versions; `npm audit` now reports 0 vulnerabilities
 
 ### Fixed (deep audit — seventh pass)

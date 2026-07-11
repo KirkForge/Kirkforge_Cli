@@ -20,12 +20,12 @@
     "clean": "rm -rf packages/*/dist apps/*/dist packages/*/tsconfig.tsbuildinfo apps/*/tsconfig.tsbuildinfo",
     "test:adapter": "bash examples/shell-adapter/test-adapter.sh",
     "ci": "bash scripts/ci.sh",
-    "cli": "npx tsx apps/cli/src/index.ts",
+    "cli": "node apps/cli/dist/index.js",
     "test:ci": "bash scripts/test-batched.sh",
     "test:e2e": "vitest run e2e/",
     "test:all": "bash scripts/test-batched.sh && vitest run e2e/",
     "docs:api": "typedoc",
-    "self-verify": "npx tsx apps/cli/src/index.ts verify --task \"verify self\""
+    "self-verify": "node apps/cli/dist/index.js verify --task \"verify self\""
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",

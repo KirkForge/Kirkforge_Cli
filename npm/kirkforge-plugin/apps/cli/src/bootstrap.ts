@@ -48,6 +48,13 @@ export interface BootstrapOpts {
   noOtel?: boolean;
   /** Workspace path for tenant scoping. Defaults to cwd. */
   workspace?: string;
+  /**
+   * Allow the bootstrap to proceed without a configured model provider.
+   * Commands that never call a model (e.g. verify, health, audit-verify)
+   * can set this so the CLI works in installs that have no OLLAMA_BASE_URL
+   * or API keys configured.
+   */
+  allowMissingModel?: boolean;
 }
 
 export interface BootstrapResult {
@@ -221,12 +228,21 @@ export async function createBootstrap(opts: BootstrapOpts): Promise<BootstrapRes
   // ── Model config (with secrets resolution) ──────────────────────────
   const env = process.env as Record<string, string | undefined>;
   const modelConfigResult = await buildModelConfigAsync(secretsManager, env);
+  let modelConfig: import("@kirkforge/model-config").ModelConfig;
   if (!modelConfigResult.ok) {
-    throw new Error(
-      `Model config error: ${modelConfigResult.error.message}. Set OLLAMA_BASE_URL or provider API keys.`,
-    );
+    if (opts.allowMissingModel) {
+      logger.warn(
+        `[bootstrap] No model provider configured; proceeding with a no-provider config because allowMissingModel is set.`,
+      );
+      modelConfig = { providers: {}, defaultProvider: "none" };
+    } else {
+      throw new Error(
+        `Model config error: ${modelConfigResult.error.message}. Set OLLAMA_BASE_URL or provider API keys.`,
+      );
+    }
+  } else {
+    modelConfig = modelConfigResult.value;
   }
-  const modelConfig = modelConfigResult.value;
   if (opts.provider) {
     if (!modelConfig.providers[opts.provider]) {
       const available = Object.keys(modelConfig.providers);

@@ -13,7 +13,7 @@ export function registerVerify(program: Command): void {
         shutdown: _shutdown,
         policyEngine: _policyEngine,
         auditLogger: _auditLogger,
-      } = await createBootstrap(opts);
+      } = await createBootstrap({ ...opts, allowMissingModel: true });
       const packet = await orchestrator.verify({ description: opts.task });
 
       if (opts.json) {

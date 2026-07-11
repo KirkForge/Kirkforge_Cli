@@ -2510,11 +2510,13 @@ async fn test_always_approve_rule_round_trips_to_next_turn() {
 }
 
 /// Tool that sleeps for a fixed duration before returning. Used to exercise
-/// cancellation mid-batch.
+/// cancellation mid-batch. An optional `start_tx` signals when `run` begins so
+/// tests can set cancellation deterministically after the first call starts.
 struct SleepingTool {
     def: ToolDef,
     sleep_ms: u64,
     call_count: Arc<Mutex<usize>>,
+    start_tx: Arc<std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>>,
 }
 
 #[async_trait::async_trait]
@@ -2524,6 +2526,11 @@ impl Tool for SleepingTool {
     }
 
     async fn run(&self, _ctx: &ToolContext, _args: serde_json::Value) -> ToolOutcome {
+        if let Ok(mut guard) = self.start_tx.lock() {
+            if let Some(tx) = guard.take() {
+                let _ = tx.send(());
+            }
+        }
         *self.call_count.lock().unwrap() += 1;
         tokio::time::sleep(std::time::Duration::from_millis(self.sleep_ms)).await;
         ToolOutcome::Success {
@@ -2536,6 +2543,7 @@ impl Tool for SleepingTool {
 /// for any tool calls that were skipped, so the conversation stays balanced.
 #[tokio::test]
 async fn test_cancelled_tool_batch_appends_placeholders() {
+    let (start_tx, start_rx) = tokio::sync::oneshot::channel();
     let tool = SleepingTool {
         def: ToolDef {
             name: "sleep",
@@ -2544,6 +2552,7 @@ async fn test_cancelled_tool_batch_appends_placeholders() {
         },
         sleep_ms: 200,
         call_count: Arc::new(Mutex::new(0)),
+        start_tx: Arc::new(std::sync::Mutex::new(Some(start_tx))),
     };
     let call_count = tool.call_count.clone();
 
@@ -2573,7 +2582,10 @@ async fn test_cancelled_tool_batch_appends_placeholders() {
     let cancelled = Arc::new(AtomicBool::new(false));
     let cancelled_flag = cancelled.clone();
     tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        // Wait until the first tool has actually started, then cancel. This
+        // makes the test deterministic instead of racing a 50 ms timer against
+        // the executor's batch-launch timing.
+        let _ = start_rx.await;
         cancelled_flag.store(true, std::sync::atomic::Ordering::SeqCst);
     });
 

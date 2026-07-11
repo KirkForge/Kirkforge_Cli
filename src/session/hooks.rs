@@ -580,8 +580,12 @@ mod tests {
             &default_config(),
         );
 
+        // Give the fire-and-forget spawned hook a chance to be scheduled
+        // before we start polling the marker file.
+        tokio::task::yield_now().await;
+
         let mut content = String::new();
-        for _ in 0..40 {
+        for _ in 0..100 {
             if let Ok(c) = std::fs::read_to_string(&marker) {
                 content = c;
                 if content.trim() == "bash,pre-tool-bash" {

@@ -435,11 +435,44 @@ mod tests {
     use super::*;
     use std::env;
 
-    /// Helper: a fresh UndoStack in a temp dir, with a unique
-    /// session id. We use a synthetic session id rather than
-    /// touching the real data dir so tests don't pollute it.
-    fn fresh_stack() -> UndoStack {
-        let _ = env::set_current_dir(env::temp_dir());
+    /// Guard that atomically creates a temp data directory, sets
+    /// `KIRKFORGE_DATA_DIR` to it, and cleans it up on drop. The
+    /// shared `test_data_dir_lock` prevents concurrent tests from
+    /// racing on the environment variable or deleting each other's
+    /// temp directories.
+    struct DataDirGuard {
+        dir: PathBuf,
+        _lock: tokio::sync::MutexGuard<'static, ()>,
+    }
+
+    impl DataDirGuard {
+        fn new() -> Self {
+            let _lock = crate::session::test_data_dir_lock().blocking_lock();
+            let dir = env::temp_dir().join(format!(
+                "kirkforge-undo-test-{}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            std::fs::create_dir_all(&dir).expect("create temp data dir");
+            env::set_var("KIRKFORGE_DATA_DIR", &dir);
+            Self { dir, _lock }
+        }
+    }
+
+    impl Drop for DataDirGuard {
+        fn drop(&mut self) {
+            env::remove_var("KIRKFORGE_DATA_DIR");
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    /// Helper: a fresh UndoStack in an isolated temp data dir, with a
+    /// unique session id. The returned guard must live as long as the
+    /// stack so the data directory stays valid for the whole test.
+    fn fresh_stack() -> (UndoStack, DataDirGuard) {
+        let guard = DataDirGuard::new();
         let id = format!(
             "test-{}",
             std::time::SystemTime::now()
@@ -447,13 +480,14 @@ mod tests {
                 .unwrap()
                 .as_nanos()
         );
-        UndoStack::for_session(&id).expect("for_session")
+        let stack = UndoStack::for_session(&id).expect("for_session");
+        (stack, guard)
     }
 
     /// Round-trip: push a snapshot, pop it, file content reverts.
     #[test]
     fn test_push_pop_round_trip_existing_file() {
-        let mut stack = fresh_stack();
+        let (mut stack, _guard) = fresh_stack();
         let target = env::temp_dir().join("kirkforge_undo_target.txt");
         std::fs::write(&target, b"original content").unwrap();
 
@@ -476,7 +510,7 @@ mod tests {
     /// Round-trip: file created by the edit. Pop removes the file.
     #[test]
     fn test_push_pop_round_trip_new_file() {
-        let mut stack = fresh_stack();
+        let (mut stack, _guard) = fresh_stack();
         let target = env::temp_dir().join("kirkforge_undo_new.txt");
         // Pre-edit state: file does not exist.
         assert!(!target.exists());
@@ -499,7 +533,7 @@ mod tests {
     /// LIFO order: pop returns the most recent push.
     #[test]
     fn test_pop_returns_most_recent() {
-        let mut stack = fresh_stack();
+        let (mut stack, _guard) = fresh_stack();
         let a = env::temp_dir().join("kirkforge_undo_a.txt");
         let b = env::temp_dir().join("kirkforge_undo_b.txt");
         std::fs::write(&a, b"A1").unwrap();
@@ -528,7 +562,7 @@ mod tests {
     /// FIFO trim at the cap: 51st push removes the 1st.
     #[test]
     fn test_fifo_trim_at_max() {
-        let mut stack = fresh_stack();
+        let (mut stack, _guard) = fresh_stack();
         let target = env::temp_dir().join("kirkforge_undo_trim.txt");
         for i in 0..(MAX_ENTRIES + 1) {
             std::fs::write(&target, format!("v{i}")).unwrap();
@@ -543,7 +577,7 @@ mod tests {
     /// `list` returns entries in chronological order.
     #[test]
     fn test_list_in_chronological_order() {
-        let mut stack = fresh_stack();
+        let (mut stack, _guard) = fresh_stack();
         let target = env::temp_dir().join("kirkforge_undo_list.txt");
         for i in 0..3 {
             std::fs::write(&target, format!("v{i}")).unwrap();
@@ -561,7 +595,7 @@ mod tests {
     /// budget would be exceeded.
     #[test]
     fn test_total_size_cap_evicts_oldest() {
-        let mut stack = fresh_stack();
+        let (mut stack, _guard) = fresh_stack();
         let target = env::temp_dir().join("kirkforge_undo_size_cap.txt");
         // Push two 1.5 MiB snapshots. With the 2 MiB test cap, the second
         // push should evict the first.
@@ -586,7 +620,7 @@ mod tests {
     /// `clear` removes every entry and zeros the total byte count.
     #[test]
     fn test_clear_empties_stack_and_disk() {
-        let mut stack = fresh_stack();
+        let (mut stack, _guard) = fresh_stack();
         let target = env::temp_dir().join("kirkforge_undo_clear.txt");
         std::fs::write(&target, b"v1").unwrap();
         let prev = std::fs::read(&target).unwrap();
@@ -604,6 +638,7 @@ mod tests {
     /// feature, it's a good sanity test.
     #[test]
     fn test_for_session_reconstructs_from_disk() {
+        let _guard = DataDirGuard::new();
         let id = format!(
             "test-recon-{}",
             std::time::SystemTime::now()

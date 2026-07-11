@@ -135,7 +135,7 @@ impl Pipeline for AnimatedExplainer {
                         "title": "(from brief)",
                         "data_points": [],
                     }),
-                )
+                )?
             }
             Stage::Proposal => {
                 let promise = load_promise(dir);
@@ -169,7 +169,7 @@ impl Pipeline for AnimatedExplainer {
                         "render_runtime": "ffmpeg",
                         "promise": format!("{promise:?}"),
                     }),
-                )
+                )?
             }
             Stage::Script => {
                 // ponytail: if a brief exists, lift its first non-empty line
@@ -184,11 +184,11 @@ impl Pipeline for AnimatedExplainer {
                         "narration": narration,
                         "enhancement_cues": [],
                     }),
-                )
+                )?
             }
             Stage::Narration => build_narration(dir, &arts).await?,
             Stage::ScenePlan => {
-                write_json(&arts.join("scene_plan.json"), &scene_plan_with_brief(dir))
+                write_json(&arts.join("scene_plan.json"), &scene_plan_with_brief(dir))?
             }
             Stage::Assets => build_assets(dir, &arts, reg).await?,
             Stage::Edit => build_edit_decisions(dir, &arts).await?,
@@ -679,7 +679,7 @@ async fn build_assets(dir: &Path, arts: &Path, reg: &ToolRegistry) -> Result<Str
             "synthesized": entries.iter().filter(|e| e["source"] == "synthesized").count(),
         }
     });
-    Ok(write_json(&arts.join("asset_manifest.json"), &manifest))
+    write_json(&arts.join("asset_manifest.json"), &manifest)
 }
 
 /// ponytail: Edit stage reads risk + assets, emits cut decisions. Currently
@@ -736,13 +736,13 @@ async fn build_edit_decisions(dir: &Path, arts: &Path) -> Result<String> {
         "cuts": cuts,
         "risk_summary": {"average": avg, "verdict": verdict},
     });
-    Ok(write_json(&arts.join("edit_decisions.json"), &decisions))
+    write_json(&arts.join("edit_decisions.json"), &decisions)
 }
 
 /// Write a JSON value to disk and return the path as a String.
-fn write_json(path: &Path, v: &serde_json::Value) -> String {
-    std::fs::write(path, serde_json::to_string_pretty(v).unwrap()).unwrap();
-    path.to_string_lossy().into_owned()
+fn write_json(path: &Path, v: &serde_json::Value) -> Result<String> {
+    std::fs::write(path, serde_json::to_string_pretty(v)?)?;
+    Ok(path.to_string_lossy().into_owned())
 }
 
 /// ponytail: lift a short narration line from `<project>/brief.txt` — first

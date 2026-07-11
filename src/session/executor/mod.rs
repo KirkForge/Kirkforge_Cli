@@ -485,19 +485,21 @@ impl Executor {
     /// Exit plan mode and inject a system message telling the model it
     /// may now implement the plan. Returns the message content so the
     /// caller can echo it to the user if desired.
-    pub fn exit_plan_mode(&mut self) -> anyhow::Result<String> {
+    pub async fn exit_plan_mode(&mut self) -> anyhow::Result<String> {
         self.plan_mode = false;
         let msg = "Plan mode exited — you may now implement the plan.".to_string();
-        self.conversation.append(Message {
-            role: Role::System,
-            content: msg.clone(),
-            content_parts: None,
-            thinking: None,
-            tool_calls: None,
-            tool_call_id: None,
-            tool_name: None,
-            token_count: None,
-        })?;
+        self.conversation
+            .append_async(Message {
+                role: Role::System,
+                content: msg.clone(),
+                content_parts: None,
+                thinking: None,
+                tool_calls: None,
+                tool_call_id: None,
+                tool_name: None,
+                token_count: None,
+            })
+            .await?;
         Ok(msg)
     }
 

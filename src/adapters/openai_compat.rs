@@ -145,6 +145,11 @@ async fn send_done_once(
 /// incremental tool-call accumulation, concatenated argument objects,
 /// duplicate id de-duplication, and `[DONE]` suppression as the public
 /// adapter.
+/// Maximum bytes the SSE parser will accumulate while waiting for a complete
+/// `data: ...\n\n` frame. A misbehaving server that never emits a frame
+/// terminator would otherwise grow the buffer without bound.
+const MAX_SSE_BUFFER_BYTES: usize = 8 * 1024 * 1024;
+
 pub(crate) async fn parse_openai_compat_stream<B, E, S>(
     tx: tokio::sync::mpsc::Sender<StreamEvent>,
     mut stream: S,
@@ -161,6 +166,15 @@ pub(crate) async fn parse_openai_compat_stream<B, E, S>(
         match chunk_result {
             Ok(bytes) => {
                 buffer.push_str(&String::from_utf8_lossy(bytes.as_ref()));
+                if buffer.len() > MAX_SSE_BUFFER_BYTES {
+                    let _ = tx
+                        .send(StreamEvent::Error(format!(
+                            "SSE frame buffer exceeded {} MiB limit; aborting stream",
+                            MAX_SSE_BUFFER_BYTES / (1024 * 1024)
+                        )))
+                        .await;
+                    return;
+                }
 
                 // SSE: data: {...}\n\n
                 //

@@ -201,7 +201,7 @@ pub async fn handle_input_key(
         let consumed = picker.handle_key(key);
         if consumed && picker.is_confirmed() {
             if let Some(path) = picker.selected_path() {
-                match crate::session::conversation::ConversationLog::open(path) {
+                match crate::session::conversation::ConversationLog::open_async(path).await {
                     Ok((log, _outcome)) => {
                         let msg =
                             crate::tui::commands::resume_conversation_log(log, state, resume_tx)

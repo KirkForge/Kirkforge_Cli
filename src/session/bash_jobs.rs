@@ -112,21 +112,32 @@ impl BashJobRegistry {
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
 
         // ── Job cap: evict oldest completed jobs if at limit ──
-        {
+        // The cap check, eviction, and insertion must happen under one lock
+        // hold to avoid a TOCTOU race where two spawns both see a free slot
+        // and exceed MAX_JOBS.
+        let to_remove: Vec<u64> = {
             let mut jobs = self.jobs.lock().await;
             if jobs.len() >= MAX_JOBS {
-                let to_remove: Vec<u64> = jobs
+                let ids: Vec<u64> = jobs
                     .iter()
                     .filter(|(_, j)| j.status != JobStatus::Running)
                     .map(|(&id, _)| id)
                     .collect();
-                for rid in to_remove {
-                    jobs.remove(&rid);
+                for rid in &ids {
+                    jobs.remove(rid);
                 }
-                if jobs.len() >= MAX_JOBS {
-                    return Err(anyhow::anyhow!(
-                        "Background job limit ({MAX_JOBS}) reached; wait for jobs to finish or cancel them."
-                    ));
+                ids
+            } else {
+                Vec::new()
+            }
+        };
+        // Clean up any lingering child handles for evicted jobs so process
+        // handles don't leak and the cap bookkeeping stays honest.
+        if !to_remove.is_empty() {
+            let mut children = self.children.lock().await;
+            for rid in to_remove {
+                if let Some(mut child) = children.remove(&rid) {
+                    kill_process_group(&mut child);
                 }
             }
         }
@@ -134,6 +145,13 @@ impl BashJobRegistry {
         let job = BashJob::new(id, command.to_string());
         {
             let mut jobs = self.jobs.lock().await;
+            // Re-check under the same lock before inserting; if another task
+            // grabbed the last slot while we cleaned up child handles, reject.
+            if jobs.len() >= MAX_JOBS {
+                return Err(anyhow::anyhow!(
+                    "Background job limit ({MAX_JOBS}) reached; wait for jobs to finish or cancel them."
+                ));
+            }
             jobs.insert(id, job);
         }
 

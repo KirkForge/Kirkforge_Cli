@@ -844,7 +844,13 @@ impl McpClientManager {
             }
         }
 
-        // Client died; try to reconnect once.
+        // Client died; try to reconnect once. Take the write lock before
+        // connecting so concurrent callers don't race to reconnect and
+        // overwrite each other's successful clients with failing ones.
+        let mut guard = slot.write().await;
+        if guard.is_alive() {
+            return guard.call_tool(server_name, args).await;
+        }
         let new_client = match McpClient::connect(config).await {
             Some(c) => Arc::new(c),
             None => {
@@ -854,7 +860,6 @@ impl McpClientManager {
             }
         };
         let result = new_client.call_tool(server_name, args).await;
-        let mut guard = slot.write().await;
         *guard = new_client;
         result
     }

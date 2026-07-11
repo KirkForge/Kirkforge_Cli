@@ -56,7 +56,7 @@ impl Executor {
             .run_turn_inner(user_input, approval_sender, cancelled, event_tx)
             .await;
         if result.is_ok() {
-            if let Err(e) = self.conversation.checkpoint() {
+            if let Err(e) = self.conversation.checkpoint_async().await {
                 tracing::warn!(error = %e, "post-turn checkpoint failed");
                 crate::send_or_warn!(
                     event_tx.send(TurnEvent::Error(format!("Checkpoint failed: {e}"))),
@@ -113,16 +113,18 @@ impl Executor {
             }
         }
 
-        self.conversation.append(Message {
-            role: Role::User,
-            content: user_input.to_string(),
-            content_parts: None,
-            thinking: None,
-            tool_calls: None,
-            tool_call_id: None,
-            tool_name: None,
-            token_count: None,
-        })?;
+        self.conversation
+            .append_async(Message {
+                role: Role::User,
+                content: user_input.to_string(),
+                content_parts: None,
+                thinking: None,
+                tool_calls: None,
+                tool_call_id: None,
+                tool_name: None,
+                token_count: None,
+            })
+            .await?;
 
         if self.carryover_enabled {
             self.carryover.last_user_message = user_input.to_string();
@@ -185,7 +187,7 @@ impl Executor {
                     }
                     // Checkpoint after a completed tool batch so a crash
                     // before the next assistant response loses less work.
-                    if let Err(e) = self.conversation.checkpoint() {
+                    if let Err(e) = self.conversation.checkpoint_async().await {
                         tracing::warn!(error = %e, "post-tool-batch checkpoint failed");
                         crate::send_or_warn!(
                             event_tx.send(TurnEvent::Error(format!("Checkpoint failed: {e}"))),
@@ -198,16 +200,18 @@ impl Executor {
                         already_retried_parse = true;
 
                         let retry_msg = "Your previous response contained a tool call with malformed JSON arguments. Re-emit ONLY the tool call with the corrected JSON — no additional text, no explanation.";
-                        self.conversation.append(Message {
-                            role: Role::User,
-                            content: retry_msg.into(),
-                            content_parts: None,
-                            thinking: None,
-                            tool_calls: None,
-                            tool_call_id: None,
-                            tool_name: None,
-                            token_count: None,
-                        })?;
+                        self.conversation
+                            .append_async(Message {
+                                role: Role::User,
+                                content: retry_msg.into(),
+                                content_parts: None,
+                                thinking: None,
+                                tool_calls: None,
+                                tool_call_id: None,
+                                tool_name: None,
+                                token_count: None,
+                            })
+                            .await?;
                         crate::send_or_warn!(
                             event_tx
                                 .send(TurnEvent::Token("(JSON parse error, retrying…)\n".into())),
@@ -357,7 +361,7 @@ impl Executor {
                         },
                         ..Default::default()
                     };
-                    self.conversation.append(msg)?;
+                    self.conversation.append_async(msg).await?;
                 }
                 return Ok(IterationOutcome::Finished(
                     crate::shared::FinishReason::Error,
@@ -428,7 +432,7 @@ impl Executor {
                         tool_name: None,
                         token_count: usage.as_ref().and_then(|u| u.completion_tokens),
                     };
-                    self.conversation.append(msg)?;
+                    self.conversation.append_async(msg).await?;
 
                     // If we're in plan mode and the assistant signalled
                     // completion, surface a PlanComplete event so the TUI

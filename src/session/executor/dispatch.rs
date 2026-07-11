@@ -31,13 +31,15 @@ impl Executor {
                     event_tx.send(TurnEvent::Error(err.clone())),
                     "TurnEvent receiver dropped; discarding event"
                 );
-                self.conversation.append(Message {
-                    role: Role::Tool,
-                    content: err,
-                    tool_call_id: Some(tc.id.clone()),
-                    tool_name: Some(tc.name.clone()),
-                    ..Default::default()
-                })?;
+                self.conversation
+                    .append_async(Message {
+                        role: Role::Tool,
+                        content: err,
+                        tool_call_id: Some(tc.id.clone()),
+                        tool_name: Some(tc.name.clone()),
+                        ..Default::default()
+                    })
+                    .await?;
                 return Ok(());
             }
         };
@@ -71,13 +73,15 @@ impl Executor {
                     }),
                     "TurnEvent receiver dropped; discarding event"
                 );
-                self.conversation.append(Message {
-                    role: Role::Tool,
-                    content: reason,
-                    tool_call_id: Some(tc.id.clone()),
-                    tool_name: Some(tc.name.clone()),
-                    ..Default::default()
-                })?;
+                self.conversation
+                    .append_async(Message {
+                        role: Role::Tool,
+                        content: reason,
+                        tool_call_id: Some(tc.id.clone()),
+                        tool_name: Some(tc.name.clone()),
+                        ..Default::default()
+                    })
+                    .await?;
                 return Ok(());
             }
         }
@@ -159,13 +163,15 @@ impl Executor {
                 }),
                 "TurnEvent receiver dropped; discarding event"
             );
-            self.conversation.append(Message {
-                role: Role::Tool,
-                content: reason,
-                tool_call_id: Some(tc.id.clone()),
-                tool_name: Some(tc.name.clone()),
-                ..Default::default()
-            })?;
+            self.conversation
+                .append_async(Message {
+                    role: Role::Tool,
+                    content: reason,
+                    tool_call_id: Some(tc.id.clone()),
+                    tool_name: Some(tc.name.clone()),
+                    ..Default::default()
+                })
+                .await?;
             return Ok(());
         }
 
@@ -186,13 +192,15 @@ impl Executor {
                         }),
                         "TurnEvent receiver dropped; discarding event"
                     );
-                    self.conversation.append(Message {
-                        role: Role::Tool,
-                        content: msg,
-                        tool_call_id: Some(tc.id.clone()),
-                        tool_name: Some(tc.name.clone()),
-                        ..Default::default()
-                    })?;
+                    self.conversation
+                        .append_async(Message {
+                            role: Role::Tool,
+                            content: msg,
+                            tool_call_id: Some(tc.id.clone()),
+                            tool_name: Some(tc.name.clone()),
+                            ..Default::default()
+                        })
+                        .await?;
                     return Ok(());
                 }
             }
@@ -211,13 +219,15 @@ impl Executor {
                 }),
                 "TurnEvent receiver dropped; discarding event"
             );
-            self.conversation.append(Message {
-                role: Role::Tool,
-                content: denied,
-                tool_call_id: Some(tc.id.clone()),
-                tool_name: Some(tc.name.clone()),
-                ..Default::default()
-            })?;
+            self.conversation
+                .append_async(Message {
+                    role: Role::Tool,
+                    content: denied,
+                    tool_call_id: Some(tc.id.clone()),
+                    tool_name: Some(tc.name.clone()),
+                    ..Default::default()
+                })
+                .await?;
             return Ok(());
         }
 
@@ -234,13 +244,15 @@ impl Executor {
                 }),
                 "TurnEvent receiver dropped; discarding event"
             );
-            self.conversation.append(Message {
-                role: Role::Tool,
-                content: denied,
-                tool_call_id: Some(tc.id.clone()),
-                tool_name: Some(tc.name.clone()),
-                ..Default::default()
-            })?;
+            self.conversation
+                .append_async(Message {
+                    role: Role::Tool,
+                    content: denied,
+                    tool_call_id: Some(tc.id.clone()),
+                    tool_name: Some(tc.name.clone()),
+                    ..Default::default()
+                })
+                .await?;
             return Ok(());
         }
 
@@ -268,13 +280,15 @@ impl Executor {
                         }),
                         "TurnEvent receiver dropped; discarding event"
                     );
-                    self.conversation.append(Message {
-                        role: Role::Tool,
-                        content: denied,
-                        tool_call_id: Some(tc.id.clone()),
-                        tool_name: Some(tc.name.clone()),
-                        ..Default::default()
-                    })?;
+                    self.conversation
+                        .append_async(Message {
+                            role: Role::Tool,
+                            content: denied,
+                            tool_call_id: Some(tc.id.clone()),
+                            tool_name: Some(tc.name.clone()),
+                            ..Default::default()
+                        })
+                        .await?;
                     return Ok(());
                 }
             };
@@ -294,13 +308,15 @@ impl Executor {
                                 }),
                                 "TurnEvent receiver dropped; discarding event"
                             );
-                            self.conversation.append(Message {
-                                role: Role::Tool,
-                                content: denied,
-                                tool_call_id: Some(tc.id.clone()),
-                                tool_name: Some(tc.name.clone()),
-                                ..Default::default()
-                            })?;
+                            self.conversation
+                                .append_async(Message {
+                                    role: Role::Tool,
+                                    content: denied,
+                                    tool_call_id: Some(tc.id.clone()),
+                                    tool_name: Some(tc.name.clone()),
+                                    ..Default::default()
+                                })
+                                .await?;
                             return Ok(());
                         }
                     }
@@ -344,13 +360,15 @@ impl Executor {
                             }),
                             "TurnEvent receiver dropped; discarding event"
                         );
-                        self.conversation.append(Message {
-                            role: Role::Tool,
-                            content: denied,
-                            tool_call_id: Some(tc.id.clone()),
-                            tool_name: Some(tc.name.clone()),
-                            ..Default::default()
-                        })?;
+                        self.conversation
+                            .append_async(Message {
+                                role: Role::Tool,
+                                content: denied,
+                                tool_call_id: Some(tc.id.clone()),
+                                tool_name: Some(tc.name.clone()),
+                                ..Default::default()
+                            })
+                            .await?;
                         return Ok(());
                     }
 
@@ -365,7 +383,7 @@ impl Executor {
                     let tool_duration = tool_start.elapsed();
                     let outcome_for_emit = outcome.clone();
                     let edit_diff =
-                        handle_tool_outcome(outcome, tc, event_tx, &mut self.conversation)?;
+                        handle_tool_outcome(outcome, tc, event_tx, &mut self.conversation).await?;
                     record(MetricEvent::ToolCall {
                         name: tc.name.clone(),
                         success: tool_outcome_success(&outcome_for_emit),
@@ -393,7 +411,7 @@ impl Executor {
                         )
                         .await;
                     self.collect_carryover(tc, &crs);
-                    emit_correction_results(crs, tc, event_tx, &mut self.conversation)?;
+                    emit_correction_results(crs, tc, event_tx, &mut self.conversation).await?;
                     return Ok(());
                 }
                 GuardVerdict::Denied(msg) => {
@@ -408,13 +426,15 @@ impl Executor {
                         }),
                         "TurnEvent receiver dropped; discarding event"
                     );
-                    self.conversation.append(Message {
-                        role: Role::Tool,
-                        content: denied,
-                        tool_call_id: Some(tc.id.clone()),
-                        tool_name: Some(tc.name.clone()),
-                        ..Default::default()
-                    })?;
+                    self.conversation
+                        .append_async(Message {
+                            role: Role::Tool,
+                            content: denied,
+                            tool_call_id: Some(tc.id.clone()),
+                            tool_name: Some(tc.name.clone()),
+                            ..Default::default()
+                        })
+                        .await?;
                     return Ok(());
                 }
             }
@@ -470,13 +490,15 @@ impl Executor {
                     }),
                     "TurnEvent receiver dropped; discarding event"
                 );
-                self.conversation.append(Message {
-                    role: Role::Tool,
-                    content: denied,
-                    tool_call_id: Some(tc.id.clone()),
-                    tool_name: Some(tc.name.clone()),
-                    ..Default::default()
-                })?;
+                self.conversation
+                    .append_async(Message {
+                        role: Role::Tool,
+                        content: denied,
+                        tool_call_id: Some(tc.id.clone()),
+                        tool_name: Some(tc.name.clone()),
+                        ..Default::default()
+                    })
+                    .await?;
                 return Ok(());
             }
         }
@@ -510,13 +532,15 @@ impl Executor {
                     }),
                     "TurnEvent receiver dropped; discarding event"
                 );
-                self.conversation.append(Message {
-                    role: Role::Tool,
-                    content: denied,
-                    tool_call_id: Some(tc.id.clone()),
-                    tool_name: Some(tc.name.clone()),
-                    ..Default::default()
-                })?;
+                self.conversation
+                    .append_async(Message {
+                        role: Role::Tool,
+                        content: denied,
+                        tool_call_id: Some(tc.id.clone()),
+                        tool_name: Some(tc.name.clone()),
+                        ..Default::default()
+                    })
+                    .await?;
                 return Ok(());
             }
         }
@@ -551,13 +575,15 @@ impl Executor {
                 }),
                 "TurnEvent receiver dropped; discarding event"
             );
-            self.conversation.append(Message {
-                role: Role::Tool,
-                content: reason,
-                tool_call_id: Some(tc.id.clone()),
-                tool_name: Some(tc.name.clone()),
-                ..Default::default()
-            })?;
+            self.conversation
+                .append_async(Message {
+                    role: Role::Tool,
+                    content: reason,
+                    tool_call_id: Some(tc.id.clone()),
+                    tool_name: Some(tc.name.clone()),
+                    ..Default::default()
+                })
+                .await?;
             return Ok(());
         }
 
@@ -583,7 +609,7 @@ impl Executor {
             outcome
         };
         let outcome_for_emit = outcome.clone();
-        let edit_diff = handle_tool_outcome(outcome, tc, event_tx, &mut self.conversation)?;
+        let edit_diff = handle_tool_outcome(outcome, tc, event_tx, &mut self.conversation).await?;
         if is_destructive {
             self.audit_log.log_destructive(
                 &tc.name,
@@ -619,7 +645,7 @@ impl Executor {
             )
             .await;
         self.collect_carryover(tc, &crs);
-        emit_correction_results(crs, tc, event_tx, &mut self.conversation)?;
+        emit_correction_results(crs, tc, event_tx, &mut self.conversation).await?;
         Ok(())
     }
 

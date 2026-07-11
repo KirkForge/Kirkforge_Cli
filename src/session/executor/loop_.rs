@@ -117,7 +117,7 @@ impl Executor {
                     let msg = if enable {
                         "📐 Plan mode enabled — only read-only tools are permitted. Type /implement when ready.\n".to_string()
                     } else {
-                        match self.exit_plan_mode() {
+                        match self.exit_plan_mode().await {
                             Ok(m) => format!("✅ {m}\n"),
                             Err(e) => {
                                 tracing::warn!("exit_plan_mode failed: {}", e);
@@ -259,7 +259,7 @@ impl Executor {
                                         &new_msgs
                                     );
 
-                                    if let Err(e) = self.conversation.replace_all(new_msgs.clone())
+                                    if let Err(e) = self.conversation.replace_all_async(new_msgs.clone()).await
                                     {
                                         if event_tx
                                             .send(TurnEvent::Error(format!(
@@ -329,7 +329,7 @@ impl Executor {
                             tokens_after: result.tokens_after,
                             strategy: "naive",
                         });
-                        let report = if let Err(e) = self.conversation.replace_all(result.new_messages.clone()) {
+                        let report = if let Err(e) = self.conversation.replace_all_async(result.new_messages.clone()).await {
                             TurnEvent::Error(format!("Compaction failed: {e}"))
                         } else {
                             TurnEvent::CompactionReport {

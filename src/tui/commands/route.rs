@@ -36,7 +36,13 @@ fn default_model_for_tier(tier: &str) -> &'static str {
         "simple" => "qwen2.5:3b",
         "medium" => "deepseek-v4-flash:cloud",
         "complex" => "deepseek-v4-pro:cloud",
-        _ => unreachable!("validated tier"),
+        _ => {
+            // Defensive fallback: parse_tier is the gatekeeper, but if the
+            // tier leaks through from a future routing_model_map key, keep
+            // the CLI alive and surface the unknown tier clearly.
+            tracing::warn!(tier = %tier, "unknown tier in default_model_for_tier; falling back to simple");
+            "qwen2.5:3b"
+        }
     }
 }
 

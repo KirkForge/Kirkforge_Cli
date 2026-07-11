@@ -309,7 +309,7 @@ pub(crate) fn check_url_in_args(args: &serde_json::Value, deny_list: &DenyList) 
 /// `BusEvent::Edit` carries the *real* diff, not the user's `old_string`
 /// (which is what the previous implementation used — see GPT 5.5
 /// review finding #9).
-pub(crate) fn handle_tool_outcome(
+pub(crate) async fn handle_tool_outcome(
     outcome: ToolOutcome,
     tc: &ToolInvocation,
     event_tx: &mpsc::UnboundedSender<TurnEvent>,
@@ -325,13 +325,15 @@ pub(crate) fn handle_tool_outcome(
                 }),
                 "TurnEvent receiver dropped; discarding event"
             );
-            conversation.append(Message {
-                role: Role::Tool,
-                content,
-                tool_call_id: Some(tc.id.clone()),
-                tool_name: Some(tc.name.clone()),
-                ..Default::default()
-            })?;
+            conversation
+                .append_async(Message {
+                    role: Role::Tool,
+                    content,
+                    tool_call_id: Some(tc.id.clone()),
+                    tool_name: Some(tc.name.clone()),
+                    ..Default::default()
+                })
+                .await?;
         }
         ToolOutcome::FileContent { content, .. } => {
             crate::send_or_warn!(
@@ -342,13 +344,15 @@ pub(crate) fn handle_tool_outcome(
                 }),
                 "TurnEvent receiver dropped; discarding event"
             );
-            conversation.append(Message {
-                role: Role::Tool,
-                content,
-                tool_call_id: Some(tc.id.clone()),
-                tool_name: Some(tc.name.clone()),
-                ..Default::default()
-            })?;
+            conversation
+                .append_async(Message {
+                    role: Role::Tool,
+                    content,
+                    tool_call_id: Some(tc.id.clone()),
+                    tool_name: Some(tc.name.clone()),
+                    ..Default::default()
+                })
+                .await?;
         }
         ToolOutcome::FileEdit { diff, .. } => {
             // Hand the rendered diff to the caller so the
@@ -362,13 +366,15 @@ pub(crate) fn handle_tool_outcome(
                 }),
                 "TurnEvent receiver dropped; discarding event"
             );
-            conversation.append(Message {
-                role: Role::Tool,
-                content: diff.clone(),
-                tool_call_id: Some(tc.id.clone()),
-                tool_name: Some(tc.name.clone()),
-                ..Default::default()
-            })?;
+            conversation
+                .append_async(Message {
+                    role: Role::Tool,
+                    content: diff.clone(),
+                    tool_call_id: Some(tc.id.clone()),
+                    tool_name: Some(tc.name.clone()),
+                    ..Default::default()
+                })
+                .await?;
             return Ok(Some(diff));
         }
         ToolOutcome::GrepMatches {
@@ -385,13 +391,15 @@ pub(crate) fn handle_tool_outcome(
                 }),
                 "TurnEvent receiver dropped; discarding event"
             );
-            conversation.append(Message {
-                role: Role::Tool,
-                content: output,
-                tool_call_id: Some(tc.id.clone()),
-                tool_name: Some(tc.name.clone()),
-                ..Default::default()
-            })?;
+            conversation
+                .append_async(Message {
+                    role: Role::Tool,
+                    content: output,
+                    tool_call_id: Some(tc.id.clone()),
+                    tool_name: Some(tc.name.clone()),
+                    ..Default::default()
+                })
+                .await?;
         }
         ToolOutcome::Error { message } => {
             crate::send_or_warn!(
@@ -402,13 +410,15 @@ pub(crate) fn handle_tool_outcome(
                 }),
                 "TurnEvent receiver dropped; discarding event"
             );
-            conversation.append(Message {
-                role: Role::Tool,
-                content: format!("Error: {message}"),
-                tool_call_id: Some(tc.id.clone()),
-                tool_name: Some(tc.name.clone()),
-                ..Default::default()
-            })?;
+            conversation
+                .append_async(Message {
+                    role: Role::Tool,
+                    content: format!("Error: {message}"),
+                    tool_call_id: Some(tc.id.clone()),
+                    tool_name: Some(tc.name.clone()),
+                    ..Default::default()
+                })
+                .await?;
 
             // Attempt error recovery — analyze the error and inject a hint
             if let Some(hint) =
@@ -428,13 +438,15 @@ pub(crate) fn handle_tool_outcome(
                 }),
                 "TurnEvent receiver dropped; discarding event"
             );
-            conversation.append(Message {
-                role: Role::Tool,
-                content: format!("Error: {message}"),
-                tool_call_id: Some(tc.id.clone()),
-                tool_name: Some(tc.name.clone()),
-                ..Default::default()
-            })?;
+            conversation
+                .append_async(Message {
+                    role: Role::Tool,
+                    content: format!("Error: {message}"),
+                    tool_call_id: Some(tc.id.clone()),
+                    tool_name: Some(tc.name.clone()),
+                    ..Default::default()
+                })
+                .await?;
 
             if let Some(hint) =
                 crate::session::error_recovery::analyze_error(&tc.name, &message, &tc.arguments)
@@ -468,17 +480,19 @@ pub(crate) fn handle_tool_outcome(
                 }),
                 "TurnEvent receiver dropped; discarding event"
             );
-            conversation.append(Message {
-                role: Role::Tool,
-                content: projection,
-                content_parts: Some(vec![crate::shared::ContentPart::Image {
-                    data_base64,
-                    mime,
-                }]),
-                tool_call_id: Some(tc.id.clone()),
-                tool_name: Some(tc.name.clone()),
-                ..Default::default()
-            })?;
+            conversation
+                .append_async(Message {
+                    role: Role::Tool,
+                    content: projection,
+                    content_parts: Some(vec![crate::shared::ContentPart::Image {
+                        data_base64,
+                        mime,
+                    }]),
+                    tool_call_id: Some(tc.id.clone()),
+                    tool_name: Some(tc.name.clone()),
+                    ..Default::default()
+                })
+                .await?;
         }
     }
     Ok(None)
@@ -502,7 +516,7 @@ pub(crate) fn format_grep_output(
     out
 }
 
-pub(crate) fn emit_correction_results(
+pub(crate) async fn emit_correction_results(
     results: Vec<CorrectionResult>,
     tc: &ToolInvocation,
     event_tx: &mpsc::UnboundedSender<TurnEvent>,

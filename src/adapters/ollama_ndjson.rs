@@ -20,6 +20,11 @@
 use crate::shared::{FinishReason, StreamEvent, TokenUsage, ToolInvocation};
 use tokio_stream::StreamExt;
 
+/// Maximum bytes the NDJSON parser will accumulate while waiting for a
+/// complete line. A misbehaving server that never emits a newline would
+/// otherwise grow the buffer without bound.
+const MAX_NDJSON_BUFFER_BYTES: usize = 8 * 1024 * 1024;
+
 /// Per-adapter knobs for [`parse_ollama_ndjson_stream`].
 #[derive(Clone)]
 pub struct OllamaNdjsonConfig {
@@ -82,6 +87,15 @@ pub async fn parse_ollama_ndjson_stream<B, E, S>(
         match chunk_result {
             Ok(bytes) => {
                 buffer.extend_from_slice(bytes.as_ref());
+                if buffer.len() > MAX_NDJSON_BUFFER_BYTES {
+                    let _ = tx
+                        .send(StreamEvent::Error(format!(
+                            "NDJSON line buffer exceeded {} MiB limit; aborting stream",
+                            MAX_NDJSON_BUFFER_BYTES / (1024 * 1024)
+                        )))
+                        .await;
+                    return;
+                }
 
                 // Ollama NDJSON: one JSON object per line.  We split on
                 // newline bytes and only decode complete lines as UTF-8 so

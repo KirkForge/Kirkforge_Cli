@@ -59,7 +59,7 @@ pub async fn handle_fork_command(args: &str, state: &mut AppState) -> String {
     };
 
     // Open the conversation log to read the latest state
-    match ConversationLog::open(log_path) {
+    match ConversationLog::open_async(log_path).await {
         Ok((conv_log, _outcome)) => {
             // Fork point: -1 (end) by default, or parse an optional count
             let fork_point: i64 = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(-1);
@@ -127,7 +127,7 @@ pub async fn handle_resume_command(
     };
 
     // Open the fork's conversation log and resume it.
-    let fork_log = match ConversationLog::open(fork.path.clone()) {
+    let fork_log = match ConversationLog::open_async(fork.path.clone()).await {
         Ok((log, _outcome)) => log,
         Err(e) => return format!("Error opening fork log: {e}"),
     };

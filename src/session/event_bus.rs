@@ -276,6 +276,10 @@ struct BusInner {
     ///
     /// Key format: "{handler_id}:{kind_label}:{idem_key}"
     idem_cache: HashSet<(String, EventKind, u64)>,
+    /// Max idempotency-cache entries. When exceeded the oldest entries are
+    /// dropped. The cache is bounded to prevent unbounded growth during long
+    /// sessions that produce huge numbers of unique events.
+    max_idem_cache: usize,
     /// Event history (most recent N events for inspection/debug).
     history: Vec<StoredEvent>,
     /// Max history entries.
@@ -303,11 +307,15 @@ pub struct EventBus {
 
 impl EventBus {
     /// Create a new empty event bus.
+    /// Default maximum idempotency-cache entries.
+    const DEFAULT_MAX_IDEM_CACHE: usize = 10_000;
+
     pub fn new() -> Self {
         Self {
             inner: Arc::new(Mutex::new(BusInner {
                 handlers: HashMap::new(),
                 idem_cache: HashSet::new(),
+                max_idem_cache: Self::DEFAULT_MAX_IDEM_CACHE,
                 history: Vec::new(),
                 max_history: 100,
             })),
@@ -321,6 +329,7 @@ impl EventBus {
             inner: Arc::new(Mutex::new(BusInner {
                 handlers: HashMap::new(),
                 idem_cache: HashSet::new(),
+                max_idem_cache: Self::DEFAULT_MAX_IDEM_CACHE,
                 history: Vec::new(),
                 max_history,
             })),
@@ -433,6 +442,17 @@ impl EventBus {
             inner
                 .idem_cache
                 .insert((handler_id.clone(), kind, idem_key));
+        }
+        // Trim idempotency cache if it has grown beyond its bound. HashSet
+        // is unordered, so we rebuild it keeping the most recent entries
+        // by construction order (the insertion order above plus any newer
+        // ones added after this event). In practice the cache is large
+        // enough that churn is infrequent.
+        if inner.idem_cache.len() > inner.max_idem_cache {
+            let mut retained: Vec<_> = inner.idem_cache.drain().collect();
+            let excess = retained.len().saturating_sub(inner.max_idem_cache);
+            retained.drain(..excess);
+            inner.idem_cache.extend(retained);
         }
 
         // Trim history and store

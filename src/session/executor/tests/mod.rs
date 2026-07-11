@@ -1230,9 +1230,14 @@ fn test_is_read_only_bash_find_destructive_flags_blocked() {
     assert!(!is_read_only_bash("find . -type f -delete"));
     assert!(!is_read_only_bash("find . -exec rm {} \\;"));
     assert!(!is_read_only_bash("find . -exec sh {} \\;"));
+    assert!(!is_read_only_bash("find . -execdir rm {} \\;"));
     assert!(!is_read_only_bash("find . -ok rm {} \\;"));
+    assert!(!is_read_only_bash("find . -okdir rm {} \\;"));
     assert!(!is_read_only_bash("find . -fprint out.txt"));
     assert!(!is_read_only_bash("find . -fls out.txt"));
+    // Destructive find must not slip through as a later pipe segment.
+    assert!(!is_read_only_bash("cat list | find . -delete"));
+    assert!(!is_read_only_bash("cat list | find . -exec rm {} \\;"));
 }
 
 #[test]
@@ -1349,6 +1354,9 @@ fn test_is_read_only_bash_git_mutating_subcommands_blocked() {
     assert!(!is_read_only_bash("git rebase main"));
     assert!(!is_read_only_bash("git stash"));
     assert!(!is_read_only_bash("git"));
+    // Mutating git must not slip through as a later pipe segment.
+    assert!(!is_read_only_bash("cat list | git add src/main.rs"));
+    assert!(!is_read_only_bash("cat list | git commit -m 'wip'"));
 }
 
 /// Regression test for GPT 5.5 review finding #9: the

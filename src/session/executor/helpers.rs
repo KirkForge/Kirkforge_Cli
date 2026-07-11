@@ -110,39 +110,47 @@ pub(crate) fn is_read_only_bash(cmd: &str) -> bool {
         return false;
     }
 
-    // `find` is read-only for discovery, but several flags mutate the
-    // filesystem. Require approval for any find command that looks
-    // destructive.
-    if first == "find" {
-        let lowered = trimmed.to_lowercase();
-        for flag in [" -delete", " -exec", " -ok", " -fprint", " -fls"] {
-            if lowered.contains(flag) {
-                return false;
-            }
-        }
-    }
-
-    // `git` is in the read-only list only so it can reach this extra check.
-    // The subcommand decides whether the invocation is truly read-only.
-    if first == "git" && !git_command_is_read_only(trimmed) {
-        return false;
-    }
-
     // Every pipe segment must itself be a read-only command, and no segment
     // may contain shell metacharacters that could escape the read-only guard.
     // Without this, a pipeline such as `cat list | sort > /tmp/out` or
     // `cat list | sort; rm -rf /` would be auto-approved despite mutating
     // state or executing arbitrary commands.
+    //
+    // Command-specific guards (`find` destructive flags, `git` subcommand
+    // allowlist) are applied to each segment so a read-only producer cannot
+    // hide a mutating consumer later in the pipeline.
     for segment in trimmed.split('|') {
         let seg = segment.trim();
-        if let Some(word) = seg.split_whitespace().next() {
-            if !READ_ONLY_COMMANDS.contains(&word) {
-                return false;
-            }
-        } else {
-            // Empty segment would be a malformed pipe; require approval.
+        let word = match seg.split_whitespace().next() {
+            Some(w) => w,
+            None => return false, // malformed pipe segment
+        };
+
+        if !READ_ONLY_COMMANDS.contains(&word) {
             return false;
         }
+
+        if word == "find" {
+            let lowered = seg.to_lowercase();
+            for flag in [
+                " -delete",
+                " -exec",
+                " -execdir",
+                " -ok",
+                " -okdir",
+                " -fprint",
+                " -fls",
+            ] {
+                if lowered.contains(flag) {
+                    return false;
+                }
+            }
+        }
+
+        if word == "git" && !git_command_is_read_only(seg) {
+            return false;
+        }
+
         if seg.contains('>')
             || seg.contains(';')
             || seg.contains("&&")

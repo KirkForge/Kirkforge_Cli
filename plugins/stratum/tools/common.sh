@@ -99,12 +99,14 @@ json_get_integer() {
 }
 
 # Extract a top-level boolean value.
+# Accepts common truthy spellings (true, True, 1, yes, y, on) so model-provided
+# string values are handled consistently with the Node SDK plugin wrappers.
 json_get_bool() {
     local json="$1" key="$2" default="${3:-false}"
     local value
     value="$(json_get_string "$json" "$key" "$default")"
-    case "$value" in
-        true|True|1) printf 'true' ;;
+    case "${value,,}" in
+        true|1|yes|y|on) printf 'true' ;;
         *) printf 'false' ;;
     esac
 }

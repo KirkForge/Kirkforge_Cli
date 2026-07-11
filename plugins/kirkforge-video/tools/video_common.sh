@@ -103,13 +103,15 @@ json_get_string() {
 }
 
 # Extract a top-level boolean value as "true"/"false".
+# Accepts common truthy spellings (true, 1, yes, y, on) so model-provided string
+# values are handled consistently across all filesystem plugin wrappers.
 json_get_bool() {
     local json="$1" key="$2" default="${3:-false}"
     local raw
     raw="$(json_get_string "$json" "$key" "$default")"
     case "${raw,,}" in
-        true|1|yes) printf 'true' ;;
-        *)          printf 'false' ;;
+        true|1|yes|y|on) printf 'true' ;;
+        *)             printf 'false' ;;
     esac
 }
 

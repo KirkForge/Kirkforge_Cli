@@ -772,6 +772,8 @@ pub struct McpClientManager {
     clients: Vec<ClientSlot>,
     tools: HashMap<String, (usize, String)>, // full_name → (client_index, server_tool_name)
     tool_defs_cache: HashMap<String, McpToolDef>, // full_name → tool definition
+    /// Human-readable warnings collected while connecting servers.
+    warnings: Vec<String>,
 }
 
 impl McpClientManager {
@@ -781,6 +783,7 @@ impl McpClientManager {
         let mut tools: HashMap<String, (usize, String)> = HashMap::new();
         let mut tool_defs_cache: HashMap<String, McpToolDef> = HashMap::new();
         let mut configs: Vec<McpServerConfig> = Vec::new();
+        let mut warnings: Vec<String> = Vec::new();
 
         for config in servers.iter() {
             if let Some(client) = McpClient::connect(config).await {
@@ -811,11 +814,17 @@ impl McpClientManager {
                     "MCP server connected"
                 );
             } else {
-                tracing::warn!(
-                    server = %config.name,
-                    "Failed to connect to MCP server"
-                );
+                let msg = format!("Failed to connect to MCP server '{}'", config.name);
+                tracing::warn!(server = %config.name, "{}", msg);
+                warnings.push(msg);
             }
+        }
+
+        if !servers.is_empty() && tools.is_empty() {
+            warnings.push(
+                "No MCP tools discovered; configured MCP servers are unavailable or exposed no tools"
+                    .to_string(),
+            );
         }
 
         Self {
@@ -823,6 +832,7 @@ impl McpClientManager {
             clients,
             tools,
             tool_defs_cache,
+            warnings,
         }
     }
 
@@ -846,7 +856,13 @@ impl McpClientManager {
             clients: vec![],
             tools,
             tool_defs_cache,
+            warnings: vec![],
         }
+    }
+
+    /// Return startup warnings so callers can surface them to the user.
+    pub fn warnings(&self) -> &[String] {
+        &self.warnings
     }
 
     /// Return cached tool definitions for creating Tool wrappers.
@@ -969,6 +985,19 @@ mod tests {
         assert_eq!(mgr.tool_count(), 0);
     }
 
+    #[tokio::test]
+    async fn test_manager_collects_warning_for_failed_connect() {
+        let servers = vec![make_config("test", "/nonexistent/command/xyzzy")];
+        let mgr = McpClientManager::new(&servers).await;
+        assert!(
+            mgr.warnings()
+                .iter()
+                .any(|w| w.contains("test") && w.contains("Failed to connect")),
+            "expected a startup warning naming the failed server, got {:?}",
+            mgr.warnings()
+        );
+    }
+
     #[test]
     fn test_has_tool() {
         let mgr = McpClientManager {
@@ -980,6 +1009,7 @@ mod tests {
                 m
             },
             tool_defs_cache: HashMap::new(),
+            warnings: vec![],
         };
         assert!(mgr.has_tool("mcp/test/echo"));
         assert!(!mgr.has_tool("mcp/nonexistent/foo"));

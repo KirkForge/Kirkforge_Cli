@@ -44,20 +44,17 @@ describe("TscEmitter", () => {
     try {
       // Create a real tsconfig.json so the emitter attempts the spawn
       writeFileSync(join(tmpDir, "tsconfig.json"), '{"compilerOptions":{"strict":true}}');
-      // Force PATH to a directory where `npx tsc` cannot be resolved.
-      // The emitter's execFile("npx", ["tsc", ...]) will throw ENOENT.
-      const originalPath = process.env.PATH;
-      process.env.PATH = "/var/empty/no-such-dir";
-      try {
-        const emitter = new TscEmitter({ cwd: tmpDir });
-        const result = await emitter.emit("test-task-enoent");
-        // FAIL-CLOSED: result must be err, not ok with errors:0
-        expect(result.ok).toBe(false);
-        if (!result.ok) {
-          expect(result.error.message).toMatch(/tsc binary not found|ENOENT/);
-        }
-      } finally {
-        process.env.PATH = originalPath;
+      // Force a command that does not exist; even if a bundled `typescript` is
+      // available, the explicit command override must be honored and produce ENOENT.
+      const emitter = new TscEmitter({
+        cwd: tmpDir,
+        command: "definitely-not-tsc-xyz-12345",
+      });
+      const result = await emitter.emit("test-task-enoent");
+      // FAIL-CLOSED: result must be err, not ok with errors:0
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.message).toMatch(/tsc binary not found|ENOENT/);
       }
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });

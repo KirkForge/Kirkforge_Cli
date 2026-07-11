@@ -204,14 +204,57 @@ impl Executor {
                     return Ok(());
                 }
                 IterationOutcome::ToolCalls(mut tcs) => {
-                    for tc in &mut tcs {
+                    let mut cancelled_idx = tcs.len();
+                    for (idx, tc) in tcs.iter_mut().enumerate() {
                         if cancelled.load(Ordering::SeqCst) {
                             tracing::debug!("tool batch short-circuited by cancellation");
+                            cancelled_idx = idx;
                             break;
                         }
                         self.dispatch_tool_call(tc, approval_sender, cancelled, event_tx)
                             .await?;
                     }
+
+                    // Cancellation may have left requested tool calls without
+                    // results. Append placeholder tool-result messages so the
+                    // conversation stays consistent and the next model turn
+                    // doesn't see orphaned tool-call ids.
+                    for skipped in &tcs[cancelled_idx..] {
+                        let msg = format!("Tool call {} cancelled before execution", skipped.id);
+                        crate::send_or_warn!(
+                            event_tx
+                                .send(TurnEvent::ToolResult {
+                                    name: skipped.name.clone(),
+                                    output: msg.clone(),
+                                    success: false,
+                                })
+                                .await,
+                            "TurnEvent receiver dropped; discarding event"
+                        );
+                        self.conversation
+                            .append_async(Message {
+                                role: Role::Tool,
+                                content: msg,
+                                tool_call_id: Some(skipped.id.clone()),
+                                tool_name: Some(skipped.name.clone()),
+                                ..Default::default()
+                            })
+                            .await?;
+                    }
+
+                    if cancelled_idx < tcs.len() {
+                        // The turn was cancelled; do not continue to another
+                        // model iteration. Returning Ok lets `run_turn` run
+                        // the post-turn hook and checkpoint as usual.
+                        record_turn_metric(
+                            &self.model_name,
+                            turn_start,
+                            tool_calls.len(),
+                            &crate::shared::FinishReason::Error,
+                        );
+                        return Ok(());
+                    }
+
                     // Checkpoint after a completed tool batch so a crash
                     // before the next assistant response loses less work.
                     if let Err(e) = self.conversation.checkpoint_async().await {
@@ -395,6 +438,34 @@ impl Executor {
                     };
                     self.conversation.append_async(msg).await?;
                 }
+
+                // If the assistant had emitted tool calls before the user
+                // cancelled, append placeholder results so the conversation
+                // history stays balanced and the next turn doesn't see
+                // orphaned tool-call ids.
+                for tc in tool_calls_out.iter() {
+                    let result = format!("Tool call {} cancelled before execution", tc.id);
+                    crate::send_or_warn!(
+                        event_tx
+                            .send(TurnEvent::ToolResult {
+                                name: tc.name.clone(),
+                                output: result.clone(),
+                                success: false,
+                            })
+                            .await,
+                        "TurnEvent receiver dropped; discarding event"
+                    );
+                    self.conversation
+                        .append_async(Message {
+                            role: Role::Tool,
+                            content: result,
+                            tool_call_id: Some(tc.id.clone()),
+                            tool_name: Some(tc.name.clone()),
+                            ..Default::default()
+                        })
+                        .await?;
+                }
+
                 return Ok(IterationOutcome::Finished(
                     crate::shared::FinishReason::Error,
                 ));

@@ -11,7 +11,7 @@ use crate::shared::{
     Config, FinishReason, Message, ModelInfo, Role, StreamEvent, TokenUsage, ToolCallStyle,
     ToolDef, ToolInvocation, ToolOutcome,
 };
-use crate::tools::Tool;
+use crate::tools::{Tool, ToolContext};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
@@ -2507,4 +2507,131 @@ async fn test_always_approve_rule_round_trips_to_next_turn() {
             .iter()
             .any(|e| matches!(e, TurnEvent::ToolResult { name, output, .. } if name == "bash" && output == "ran!"));
     assert!(has_result, "second turn should execute the allowed command");
+}
+
+/// Tool that sleeps for a fixed duration before returning. Used to exercise
+/// cancellation mid-batch.
+struct SleepingTool {
+    def: ToolDef,
+    sleep_ms: u64,
+    call_count: Arc<Mutex<usize>>,
+}
+
+#[async_trait::async_trait]
+impl Tool for SleepingTool {
+    fn def(&self) -> ToolDef {
+        self.def.clone()
+    }
+
+    async fn run(&self, _ctx: &ToolContext, _args: serde_json::Value) -> ToolOutcome {
+        *self.call_count.lock().unwrap() += 1;
+        tokio::time::sleep(std::time::Duration::from_millis(self.sleep_ms)).await;
+        ToolOutcome::Success {
+            content: "done".into(),
+        }
+    }
+}
+
+/// Cancellation during a multi-tool batch must append placeholder results
+/// for any tool calls that were skipped, so the conversation stays balanced.
+#[tokio::test]
+async fn test_cancelled_tool_batch_appends_placeholders() {
+    let tool = SleepingTool {
+        def: ToolDef {
+            name: "sleep",
+            description: "sleep",
+            parameters: serde_json::json!({"type": "object", "properties": {}}),
+        },
+        sleep_ms: 200,
+        call_count: Arc::new(Mutex::new(0)),
+    };
+    let call_count = tool.call_count.clone();
+
+    let adapter = MockAdapter::new(
+        vec![
+            StreamEvent::ToolCall(ToolInvocation {
+                id: "call-1".into(),
+                name: "sleep".into(),
+                arguments: serde_json::json!({}),
+            }),
+            StreamEvent::ToolCall(ToolInvocation {
+                id: "call-2".into(),
+                name: "sleep".into(),
+                arguments: serde_json::json!({}),
+            }),
+            StreamEvent::Done {
+                finish_reason: FinishReason::ToolCalls,
+                usage: None,
+            },
+        ],
+        make_info(),
+    );
+
+    let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
+    let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(true));
+
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let cancelled_flag = cancelled.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        cancelled_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+    });
+
+    let events = exe
+        .run_turn_collecting("run two", &approval_tx, &cancelled)
+        .await
+        .unwrap();
+
+    // Exactly one tool should have run to completion; the second was cancelled.
+    assert_eq!(
+        *call_count.lock().unwrap(),
+        1,
+        "only the first tool call should execute"
+    );
+
+    let results: Vec<_> = events
+        .iter()
+        .filter_map(|e| match e {
+            TurnEvent::ToolResult { name, output, .. } => Some((name.as_str(), output.as_str())),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(
+        results.len(),
+        2,
+        "there should be a result for both requested tool calls"
+    );
+    assert_eq!(results[0], ("sleep", "done"), "first call should succeed");
+    assert!(
+        results[1].1.contains("cancelled"),
+        "second call should report cancellation, got {:?}",
+        results[1]
+    );
+
+    let msgs = exe.conversation.all();
+    let assistant_tool_calls: Vec<_> = msgs
+        .iter()
+        .filter_map(|m| {
+            if m.role == Role::Assistant {
+                m.tool_calls.clone()
+            } else {
+                None
+            }
+        })
+        .flatten()
+        .collect();
+    assert_eq!(
+        assistant_tool_calls.len(),
+        2,
+        "assistant requested two tools"
+    );
+
+    let tool_results: Vec<_> = msgs.iter().filter(|m| m.role == Role::Tool).collect();
+    assert_eq!(
+        tool_results.len(),
+        2,
+        "conversation must contain two tool-result messages"
+    );
+    assert!(tool_results[1].content.contains("cancelled"));
 }

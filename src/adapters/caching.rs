@@ -93,13 +93,26 @@ impl ModelAdapter for CachingAdapter {
                     break;
                 }
             }
-            cache.put(
-                &model_name,
-                &messages_owned,
-                &tools_owned,
-                json_mode,
-                &events,
-            );
+            // Only cache complete streams — the final event must be Done.
+            // A dropped consumer, a cancelled turn, or an adapter that exits
+            // without a terminal event would otherwise poison the cache with
+            // a truncated response.
+            let complete = matches!(events.last(), Some(StreamEvent::Done { .. }));
+            if complete {
+                cache.put(
+                    &model_name,
+                    &messages_owned,
+                    &tools_owned,
+                    json_mode,
+                    &events,
+                );
+            } else {
+                tracing::debug!(
+                    model = %model_name,
+                    event_count = events.len(),
+                    "Stream incomplete; skipping cache write"
+                );
+            }
         });
 
         Ok(rx_out)
@@ -213,5 +226,37 @@ mod tests {
             }
             assert_eq!(got, events);
         }
+    }
+
+    #[tokio::test]
+    async fn caching_adapter_skips_cache_when_consumer_drops() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = ResponseCache::new(true, Some(tmp.path().into()));
+        let events = vec![
+            StreamEvent::Text("first".into()),
+            StreamEvent::Text("second".into()),
+        ];
+        let inner = adapter(events.clone());
+        let wrapped = CachingAdapter::new(inner, cache.clone(), false);
+
+        let messages: Vec<Message> = vec![];
+        let tools: Vec<ToolDef> = vec![];
+
+        // Consume only the first event, then drop the receiver.
+        let mut rx = wrapped.stream(&messages, &tools).await.unwrap();
+        let _first = rx.recv().await;
+        drop(rx);
+
+        // Give the forwarder a moment to observe the closed receiver.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // The cache must remain empty for this key; a truncated stream
+        // must not be replayed on a later identical request.
+        assert!(
+            cache
+                .get(&wrapped.model_info().name, &messages, &tools, false)
+                .is_none(),
+            "partial stream should not be cached"
+        );
     }
 }

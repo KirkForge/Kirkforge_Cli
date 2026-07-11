@@ -24,6 +24,11 @@
 /// - `KIRKFORGE_MEMORY_ENABLED` — "true"/"false" to enable or disable memory injection
 /// - `KIRKFORGE_MEMORY_MAX_TOKENS` — token budget for injected memory facts
 /// - `KIRKFORGE_MEMORY_TOP_N` — maximum number of facts to consider per turn
+/// - `KIRKFORGE_REQUEST_TIMEOUT_SECS` — model request timeout (clamped to ≥1 s)
+///
+/// Boolean env vars accept `true`/`1`/`yes` (case-insensitive) for true and
+/// `false`/`0`/`no` for false. Unrecognized values leave the prior layer
+/// unchanged.
 use crate::shared::Config;
 use std::path::PathBuf;
 
@@ -31,6 +36,27 @@ use std::path::PathBuf;
 /// on Windows). Falls back to the original string if expansion fails.
 fn expand_tilde_str(s: &str) -> String {
     shellexpand::tilde(s).into_owned()
+}
+
+/// Parse a boolean environment variable value consistently.
+///
+/// Treats "true", "1", "yes" (case-insensitive) as true,
+/// "false", "0", "no" (case-insensitive) as false, and any other value as
+/// `None` so the config default is preserved.
+fn parse_bool_env(val: &str) -> Option<bool> {
+    if val.eq_ignore_ascii_case("true")
+        || val.eq_ignore_ascii_case("1")
+        || val.eq_ignore_ascii_case("yes")
+    {
+        Some(true)
+    } else if val.eq_ignore_ascii_case("false")
+        || val.eq_ignore_ascii_case("0")
+        || val.eq_ignore_ascii_case("no")
+    {
+        Some(false)
+    } else {
+        None
+    }
 }
 
 /// Load config with full layered resolution.
@@ -212,9 +238,9 @@ fn apply_env_overrides(cfg: &mut Config) {
 
     // KIRKFORGE_AUTO_APPROVE
     if let Ok(val) = std::env::var("KIRKFORGE_AUTO_APPROVE") {
-        cfg.auto_approve = val.eq_ignore_ascii_case("true")
-            || val.eq_ignore_ascii_case("1")
-            || val.eq_ignore_ascii_case("yes");
+        if let Some(v) = parse_bool_env(&val) {
+            cfg.auto_approve = v;
+        }
     }
 
     // KIRKFORGE_SANDBOX_DIR
@@ -228,7 +254,9 @@ fn apply_env_overrides(cfg: &mut Config) {
 
     // KIRKFORGE_BLOCK_DOTFILES
     if let Ok(val) = std::env::var("KIRKFORGE_BLOCK_DOTFILES") {
-        cfg.block_dotfiles = val.eq_ignore_ascii_case("true");
+        if let Some(v) = parse_bool_env(&val) {
+            cfg.block_dotfiles = v;
+        }
     }
 
     // KIRKFORGE_MAX_READ_SIZE
@@ -240,29 +268,33 @@ fn apply_env_overrides(cfg: &mut Config) {
 
     // KIRKFORGE_FOLLOW_SYMLINKS
     if let Ok(val) = std::env::var("KIRKFORGE_FOLLOW_SYMLINKS") {
-        cfg.follow_symlinks = val.eq_ignore_ascii_case("true");
+        if let Some(v) = parse_bool_env(&val) {
+            cfg.follow_symlinks = v;
+        }
     }
 
     // KIRKFORGE_BLOCK_BINARY
     if let Ok(val) = std::env::var("KIRKFORGE_BLOCK_BINARY") {
-        cfg.block_binary_reads = val.eq_ignore_ascii_case("true");
+        if let Some(v) = parse_bool_env(&val) {
+            cfg.block_binary_reads = v;
+        }
     }
 
     // KIRKFORGE_CARRYOVER_ENABLED
     if let Ok(val) = std::env::var("KIRKFORGE_CARRYOVER_ENABLED") {
-        cfg.carryover_enabled = val.eq_ignore_ascii_case("true")
-            || val.eq_ignore_ascii_case("1")
-            || val.eq_ignore_ascii_case("yes");
+        if let Some(v) = parse_bool_env(&val) {
+            cfg.carryover_enabled = v;
+        }
     }
     if let Ok(val) = std::env::var("KIRKFORGE_DRY_RUN") {
-        cfg.dry_run = val.eq_ignore_ascii_case("true")
-            || val.eq_ignore_ascii_case("1")
-            || val.eq_ignore_ascii_case("yes");
+        if let Some(v) = parse_bool_env(&val) {
+            cfg.dry_run = v;
+        }
     }
     if let Ok(val) = std::env::var("KIRKFORGE_CACHE_ENABLED") {
-        cfg.cache_enabled = val.eq_ignore_ascii_case("true")
-            || val.eq_ignore_ascii_case("1")
-            || val.eq_ignore_ascii_case("yes");
+        if let Some(v) = parse_bool_env(&val) {
+            cfg.cache_enabled = v;
+        }
     }
     if let Ok(val) = std::env::var("KIRKFORGE_CACHE_DIR") {
         cfg.cache_dir = Some(PathBuf::from(expand_tilde_str(&val)));
@@ -270,12 +302,16 @@ fn apply_env_overrides(cfg: &mut Config) {
 
     // KIRKFORGE_REJECT_ON_EXCESS_PLUGIN_TRUST
     if let Ok(val) = std::env::var("KIRKFORGE_REJECT_ON_EXCESS_PLUGIN_TRUST") {
-        cfg.reject_on_excess_plugin_trust = val.eq_ignore_ascii_case("true");
+        if let Some(v) = parse_bool_env(&val) {
+            cfg.reject_on_excess_plugin_trust = v;
+        }
     }
 
     // KIRKFORGE_PLUGIN_SIGNATURE_VALIDATION
     if let Ok(val) = std::env::var("KIRKFORGE_PLUGIN_SIGNATURE_VALIDATION") {
-        cfg.plugin_signature_validation = val.eq_ignore_ascii_case("true");
+        if let Some(v) = parse_bool_env(&val) {
+            cfg.plugin_signature_validation = v;
+        }
     }
 
     // KIRKFORGE_PLUGIN_PUBLIC_KEY_PATH
@@ -312,9 +348,9 @@ fn apply_env_overrides(cfg: &mut Config) {
 
     // KIRKFORGE_MEMORY_ENABLED
     if let Ok(val) = std::env::var("KIRKFORGE_MEMORY_ENABLED") {
-        cfg.memory_enabled = val.eq_ignore_ascii_case("true")
-            || val.eq_ignore_ascii_case("1")
-            || val.eq_ignore_ascii_case("yes");
+        if let Some(v) = parse_bool_env(&val) {
+            cfg.memory_enabled = v;
+        }
     }
 
     // KIRKFORGE_MEMORY_MAX_TOKENS
@@ -331,12 +367,23 @@ fn apply_env_overrides(cfg: &mut Config) {
         }
     }
 
+    // KIRKFORGE_REQUEST_TIMEOUT_SECS
+    if let Ok(val) = std::env::var("KIRKFORGE_REQUEST_TIMEOUT_SECS") {
+        if let Ok(n) = val.parse::<u64>() {
+            cfg.request_timeout_secs = n.max(1);
+        }
+    }
+
     // KIRKFORGE_CHECKPOINT_INTERVAL_MESSAGES
     if let Ok(val) = std::env::var("KIRKFORGE_CHECKPOINT_INTERVAL_MESSAGES") {
         if let Ok(n) = val.parse::<usize>() {
             cfg.checkpoint_interval_messages = n;
         }
     }
+
+    // Clamp after all layers so a config file or env override cannot set an
+    // unusable zero-second timeout.
+    cfg.request_timeout_secs = cfg.request_timeout_secs.max(1);
 }
 
 /// Merge a parsed TOML table into a Config, field by field.
@@ -368,7 +415,7 @@ fn merge_toml_into_config(cfg: &mut Config, table: toml::Table) {
     }
     if let Some(Value::Integer(v)) = table.get("request_timeout_secs") {
         if let Ok(n) = u64::try_from(*v) {
-            cfg.request_timeout_secs = n;
+            cfg.request_timeout_secs = n.max(1);
         }
     }
     if let Some(Value::Boolean(v)) = table.get("follow_symlinks") {
@@ -1055,5 +1102,52 @@ mod tests {
         assert!(s.contains("reject_on_excess_plugin_trust"), "got: {s}");
         assert!(s.contains("plugin_signature_validation"), "got: {s}");
         assert!(s.contains("plugin_public_key_path"), "got: {s}");
+    }
+
+    #[test]
+    fn parse_bool_env_recognizes_true_and_false_variants() {
+        assert_eq!(parse_bool_env("true"), Some(true));
+        assert_eq!(parse_bool_env("True"), Some(true));
+        assert_eq!(parse_bool_env("1"), Some(true));
+        assert_eq!(parse_bool_env("yes"), Some(true));
+        assert_eq!(parse_bool_env("false"), Some(false));
+        assert_eq!(parse_bool_env("False"), Some(false));
+        assert_eq!(parse_bool_env("0"), Some(false));
+        assert_eq!(parse_bool_env("no"), Some(false));
+        assert_eq!(parse_bool_env("maybe"), None);
+        assert_eq!(parse_bool_env(""), None);
+    }
+
+    #[test]
+    fn test_merge_toml_zero_request_timeout_is_clamped() {
+        let mut cfg = Config::default();
+        let table: toml::Table = r#"
+            request_timeout_secs = 0
+        "#
+        .parse()
+        .unwrap();
+        merge_toml_into_config(&mut cfg, table);
+        assert_eq!(
+            cfg.request_timeout_secs, 1,
+            "zero timeout must be clamped to 1 second"
+        );
+    }
+
+    #[test]
+    fn test_env_request_timeout_override_and_clamp() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut cfg = Config::default();
+        set_env("KIRKFORGE_REQUEST_TIMEOUT_SECS", Some("0"));
+        apply_env_overrides(&mut cfg);
+        assert_eq!(
+            cfg.request_timeout_secs, 1,
+            "env zero timeout must be clamped"
+        );
+
+        set_env("KIRKFORGE_REQUEST_TIMEOUT_SECS", Some("45"));
+        apply_env_overrides(&mut cfg);
+        assert_eq!(cfg.request_timeout_secs, 45);
+
+        set_env("KIRKFORGE_REQUEST_TIMEOUT_SECS", None);
     }
 }

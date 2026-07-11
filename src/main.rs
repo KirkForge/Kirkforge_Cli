@@ -665,6 +665,10 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     let cfg_for_mcp = kirkforge::shared::read_shared_config(&shared_config).clone();
     if !cfg_for_mcp.mcp_servers.is_empty() {
         let mcp_mgr = session::mcp_client::McpClientManager::new(&cfg_for_mcp.mcp_servers).await;
+        for warning in mcp_mgr.warnings() {
+            eprintln!("MCP warning: {warning}");
+            tracing::warn!(warning = %warning, "MCP startup warning");
+        }
         let mcp_tool_count = mcp_mgr.tool_count();
         if mcp_tool_count > 0 {
             let mcp_mgr = std::sync::Arc::new(mcp_mgr);

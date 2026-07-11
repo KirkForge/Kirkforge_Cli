@@ -148,14 +148,14 @@ pub async fn parse_ollama_ndjson_stream<B, E, S>(
                         Ok(json) => {
                             // API-level error
                             if let Some(err) = json.get("error") {
-                                if !send_or_bail(
-                                    &tx,
-                                    StreamEvent::Error(
-                                        err.as_str().unwrap_or("unknown error").to_string(),
-                                    ),
-                                    "API error event",
-                                )
-                                .await
+                                let msg = err
+                                    .get("message")
+                                    .and_then(|m| m.as_str())
+                                    .or_else(|| err.as_str())
+                                    .map(String::from)
+                                    .unwrap_or_else(|| err.to_string());
+                                if !send_or_bail(&tx, StreamEvent::Error(msg), "API error event")
+                                    .await
                                 {
                                     return;
                                 }
@@ -516,6 +516,17 @@ mod tests {
     /// replacement characters and fail JSON parsing. The byte-buffer parser
     /// must wait for the complete character (and the trailing newline) before
     /// decoding.
+    #[tokio::test]
+    async fn structured_api_error_surfaces_message() {
+        let events = run(&[r#"{"error":{"message":"model 'qwen' not found"}}"#]).await;
+        assert!(
+            events.iter().any(
+                |e| matches!(e, StreamEvent::Error(s) if s.contains("model 'qwen' not found"))
+            ),
+            "expected structured API error message, got {events:?}"
+        );
+    }
+
     #[tokio::test]
     async fn ndjson_multibyte_char_split_across_chunks() {
         // "héllo" contains a two-byte UTF-8 character for é (C3 A9).

@@ -11,12 +11,14 @@ set -euo pipefail
 #   1. $KIRKFORGE_CLI_JS override (useful for custom installs and CI).
 #   2. Same-directory / source-layout candidate:
 #      <plugin-root>/../npm/kirkforge-plugin/apps/cli/dist/index.js
-#   3. Global npm install:
+#   3. PATH-installed `kirkforge` command (global npm bin or other package
+#      manager symlink), which is typically a JS script with a shebang.
+#   4. Global npm install:
 #      $(npm root -g)/@kirkforge/cli/dist/index.js
 #
-# There is no PATH fallback for the Rust `kirkforge` binary: callers execute
-# the result with `node <path>`, so a non-JS executable would cause Node to
-# fail parsing an ELF file.
+# Callers execute the result with `node <path>`; the resolved file must be a
+# JavaScript file (or a shebang JS wrapper). A native ELF binary would cause
+# Node to fail parsing it.
 find_cli() {
     if [[ -n "${KIRKFORGE_CLI_JS:-}" && -f "$KIRKFORGE_CLI_JS" ]]; then
         printf '%s' "$KIRKFORGE_CLI_JS"
@@ -27,6 +29,12 @@ find_cli() {
     script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     local candidate="${script_dir}/../../../npm/kirkforge-plugin/apps/cli/dist/index.js"
     if [ -f "$candidate" ]; then
+        printf '%s' "$candidate"
+        return 0
+    fi
+
+    candidate="$(command -v kirkforge 2>/dev/null || true)"
+    if [ -n "$candidate" ] && [ -f "$candidate" ]; then
         printf '%s' "$candidate"
         return 0
     fi

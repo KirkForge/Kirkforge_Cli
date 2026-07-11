@@ -3,6 +3,7 @@ import type { Result } from "@kirkforge/core-types";
 import type { EventBus } from "@kirkforge/core-events";
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
+import { createRequire } from "node:module";
 import { resolve } from "node:path";
 
 export interface TscReport {
@@ -12,9 +13,34 @@ export interface TscReport {
   details: Array<{ file: string; line: number; code: string; message: string }>;
 }
 
+/** Resolve the tsc binary, preferring a local install and falling back to PATH. */
+function resolveTscCommand(): string {
+  const cwdBin = resolve(process.cwd(), "node_modules", ".bin", "tsc");
+  if (existsSync(cwdBin)) {
+    return cwdBin;
+  }
+  try {
+    const require = createRequire(import.meta.url);
+    const pkg = require.resolve("typescript/package.json");
+    const bin = resolve(pkg, "..", "bin", "tsc");
+    if (existsSync(bin)) {
+      return bin;
+    }
+  } catch {
+    // fall back to PATH lookup via npx
+  }
+  return "npx tsc";
+}
+
 export class TscEmitter {
   constructor(
-    private opts: { cwd: string; eventBus?: EventBus; tsconfigPath?: string; files?: string[] },
+    private opts: {
+      cwd: string;
+      eventBus?: EventBus;
+      tsconfigPath?: string;
+      files?: string[];
+      command?: string;
+    },
   ) {}
 
   async emit(taskId: string): Promise<Result<TscReport, Error>> {
@@ -54,8 +80,8 @@ export class TscEmitter {
       });
 
     try {
-      const { stdout, stderr } = await execAsync("npx", [
-        "tsc",
+      const cmd = this.opts.command ?? resolveTscCommand();
+      const { stdout, stderr } = await execAsync(cmd, [
         "--noEmit",
         "--project",
         tsconfigPath,

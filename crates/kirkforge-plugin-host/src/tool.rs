@@ -1,8 +1,9 @@
 //! Plugin-defined tool wrapper.
 //!
 //! v1 tools are shell scripts. The host serializes the tool arguments as JSON
-//! in the `KIRKFORGE_TOOL_ARGS` environment variable and reads the tool result
-//! from stdout. A non-zero exit code becomes an error using stderr as the
+//! in the `KIRKFORGE_TOOL_ARGS_JSON` environment variable (the legacy
+//! `KIRKFORGE_TOOL_ARGS` alias is also set for compatibility) and reads the tool
+//! result from stdout. A non-zero exit code becomes an error using stderr as the
 //! message.
 
 use kirkforge_plugin::Capability;

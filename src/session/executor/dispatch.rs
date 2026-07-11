@@ -21,14 +21,14 @@ impl Executor {
         tc: &mut ToolInvocation,
         approval_sender: &mpsc::UnboundedSender<ApprovalRequest>,
         cancelled: &std::sync::atomic::AtomicBool,
-        event_tx: &mpsc::UnboundedSender<TurnEvent>,
+        event_tx: &mpsc::Sender<TurnEvent>,
     ) -> anyhow::Result<()> {
         let tool = match self.tools.resolve(&tc.name) {
             Some(t) => t,
             None => {
                 let err = format!("Unknown tool: {}", tc.name);
                 crate::send_or_warn!(
-                    event_tx.send(TurnEvent::Error(err.clone())),
+                    event_tx.send(TurnEvent::Error(err.clone())).await,
                     "TurnEvent receiver dropped; discarding event"
                 );
                 self.conversation
@@ -66,11 +66,13 @@ impl Executor {
                     tc.name
                 );
                 crate::send_or_warn!(
-                    event_tx.send(TurnEvent::ToolResult {
-                        name: tc.name.clone(),
-                        output: reason.clone(),
-                        success: false,
-                    }),
+                    event_tx
+                        .send(TurnEvent::ToolResult {
+                            name: tc.name.clone(),
+                            output: reason.clone(),
+                            success: false,
+                        })
+                        .await,
                     "TurnEvent receiver dropped; discarding event"
                 );
                 self.conversation
@@ -84,6 +86,34 @@ impl Executor {
                     .await?;
                 return Ok(());
             }
+        }
+
+        // Pre-flight schema validation: reject malformed calls before they
+        // reach approval or the tool implementation. This is especially
+        // important for plugin/MCP tools whose scripts would otherwise fail
+        // with obscure shell errors.
+        if let Some(reason) = validate_args_against_schema(&tc.arguments, &tool.def().parameters) {
+            let err = format!("❌ Invalid arguments for {}: {reason}", tc.name);
+            crate::send_or_warn!(
+                event_tx
+                    .send(TurnEvent::ToolResult {
+                        name: tc.name.clone(),
+                        output: err.clone(),
+                        success: false,
+                    })
+                    .await,
+                "TurnEvent receiver dropped; discarding event"
+            );
+            self.conversation
+                .append_async(Message {
+                    role: Role::Tool,
+                    content: err,
+                    tool_call_id: Some(tc.id.clone()),
+                    tool_name: Some(tc.name.clone()),
+                    ..Default::default()
+                })
+                .await?;
+            return Ok(());
         }
 
         // Snapshot the permission config so we don't hold the read
@@ -156,11 +186,13 @@ impl Executor {
                     .log_destructive(&tc.name, &tc.arguments, false, Some(&reason));
             }
             crate::send_or_warn!(
-                event_tx.send(TurnEvent::ToolResult {
-                    name: tc.name.clone(),
-                    output: reason.clone(),
-                    success: false,
-                }),
+                event_tx
+                    .send(TurnEvent::ToolResult {
+                        name: tc.name.clone(),
+                        output: reason.clone(),
+                        success: false,
+                    })
+                    .await,
                 "TurnEvent receiver dropped; discarding event"
             );
             self.conversation
@@ -185,11 +217,13 @@ impl Executor {
                             .log_destructive(&tc.name, &tc.arguments, false, Some(&msg));
                     }
                     crate::send_or_warn!(
-                        event_tx.send(TurnEvent::ToolResult {
-                            name: tc.name.clone(),
-                            output: msg.clone(),
-                            success: false,
-                        }),
+                        event_tx
+                            .send(TurnEvent::ToolResult {
+                                name: tc.name.clone(),
+                                output: msg.clone(),
+                                success: false,
+                            })
+                            .await,
                         "TurnEvent receiver dropped; discarding event"
                     );
                     self.conversation
@@ -212,11 +246,13 @@ impl Executor {
                     .log_destructive(&tc.name, &tc.arguments, false, Some(&denied));
             }
             crate::send_or_warn!(
-                event_tx.send(TurnEvent::ToolResult {
-                    name: tc.name.clone(),
-                    output: denied.clone(),
-                    success: false,
-                }),
+                event_tx
+                    .send(TurnEvent::ToolResult {
+                        name: tc.name.clone(),
+                        output: denied.clone(),
+                        success: false,
+                    })
+                    .await,
                 "TurnEvent receiver dropped; discarding event"
             );
             self.conversation
@@ -237,11 +273,13 @@ impl Executor {
                     .log_destructive(&tc.name, &tc.arguments, false, Some(&denied));
             }
             crate::send_or_warn!(
-                event_tx.send(TurnEvent::ToolResult {
-                    name: tc.name.clone(),
-                    output: denied.clone(),
-                    success: false,
-                }),
+                event_tx
+                    .send(TurnEvent::ToolResult {
+                        name: tc.name.clone(),
+                        output: denied.clone(),
+                        success: false,
+                    })
+                    .await,
                 "TurnEvent receiver dropped; discarding event"
             );
             self.conversation
@@ -273,11 +311,13 @@ impl Executor {
                 _ => {
                     let denied = format!("🔒 Access denied: unsupported file tool '{}'", tc.name);
                     crate::send_or_warn!(
-                        event_tx.send(TurnEvent::ToolResult {
-                            name: tc.name.clone(),
-                            output: denied.clone(),
-                            success: false,
-                        }),
+                        event_tx
+                            .send(TurnEvent::ToolResult {
+                                name: tc.name.clone(),
+                                output: denied.clone(),
+                                success: false,
+                            })
+                            .await,
                         "TurnEvent receiver dropped; discarding event"
                     );
                     self.conversation
@@ -301,11 +341,13 @@ impl Executor {
                         {
                             let denied = format!("🔒 Access denied: {msg}");
                             crate::send_or_warn!(
-                                event_tx.send(TurnEvent::ToolResult {
-                                    name: tc.name.clone(),
-                                    output: denied.clone(),
-                                    success: false,
-                                }),
+                                event_tx
+                                    .send(TurnEvent::ToolResult {
+                                        name: tc.name.clone(),
+                                        output: denied.clone(),
+                                        success: false,
+                                    })
+                                    .await,
                                 "TurnEvent receiver dropped; discarding event"
                             );
                             self.conversation
@@ -334,10 +376,12 @@ impl Executor {
                     }
 
                     crate::send_or_warn!(
-                        event_tx.send(TurnEvent::ToolStart {
-                            name: tc.name.clone(),
-                            args: run_args.clone(),
-                        }),
+                        event_tx
+                            .send(TurnEvent::ToolStart {
+                                name: tc.name.clone(),
+                                args: run_args.clone(),
+                            })
+                            .await,
                         "TurnEvent receiver dropped; discarding event"
                     );
 
@@ -353,11 +397,13 @@ impl Executor {
                     {
                         let denied = format!("❌ Hook denied {}: {}", tc.name, reason);
                         crate::send_or_warn!(
-                            event_tx.send(TurnEvent::ToolResult {
-                                name: tc.name.clone(),
-                                output: denied.clone(),
-                                success: false,
-                            }),
+                            event_tx
+                                .send(TurnEvent::ToolResult {
+                                    name: tc.name.clone(),
+                                    output: denied.clone(),
+                                    success: false,
+                                })
+                                .await,
                             "TurnEvent receiver dropped; discarding event"
                         );
                         self.conversation
@@ -419,11 +465,13 @@ impl Executor {
                     self.audit_log
                         .log_destructive(&tc.name, &tc.arguments, false, Some(&denied));
                     crate::send_or_warn!(
-                        event_tx.send(TurnEvent::ToolResult {
-                            name: tc.name.clone(),
-                            output: denied.clone(),
-                            success: false,
-                        }),
+                        event_tx
+                            .send(TurnEvent::ToolResult {
+                                name: tc.name.clone(),
+                                output: denied.clone(),
+                                success: false,
+                            })
+                            .await,
                         "TurnEvent receiver dropped; discarding event"
                     );
                     self.conversation
@@ -483,11 +531,13 @@ impl Executor {
                 self.audit_log
                     .log_destructive(&tc.name, &tc.arguments, false, Some(&denied));
                 crate::send_or_warn!(
-                    event_tx.send(TurnEvent::ToolResult {
-                        name: tc.name.clone(),
-                        output: denied.clone(),
-                        success: false,
-                    }),
+                    event_tx
+                        .send(TurnEvent::ToolResult {
+                            name: tc.name.clone(),
+                            output: denied.clone(),
+                            success: false,
+                        })
+                        .await,
                     "TurnEvent receiver dropped; discarding event"
                 );
                 self.conversation
@@ -525,11 +575,13 @@ impl Executor {
             if let GuardVerdict::Denied(msg) = check_search_path(&self.path_guard, path) {
                 let denied = format!("🔒 Access denied: {msg}");
                 crate::send_or_warn!(
-                    event_tx.send(TurnEvent::ToolResult {
-                        name: tc.name.clone(),
-                        output: denied.clone(),
-                        success: false,
-                    }),
+                    event_tx
+                        .send(TurnEvent::ToolResult {
+                            name: tc.name.clone(),
+                            output: denied.clone(),
+                            success: false,
+                        })
+                        .await,
                     "TurnEvent receiver dropped; discarding event"
                 );
                 self.conversation
@@ -546,10 +598,12 @@ impl Executor {
         }
 
         crate::send_or_warn!(
-            event_tx.send(TurnEvent::ToolStart {
-                name: tc.name.clone(),
-                args: tc.arguments.clone(),
-            }),
+            event_tx
+                .send(TurnEvent::ToolStart {
+                    name: tc.name.clone(),
+                    args: tc.arguments.clone(),
+                })
+                .await,
             "TurnEvent receiver dropped; discarding event"
         );
 
@@ -568,11 +622,13 @@ impl Executor {
                     .log_destructive(&tc.name, &tc.arguments, false, Some(&reason));
             }
             crate::send_or_warn!(
-                event_tx.send(TurnEvent::ToolResult {
-                    name: tc.name.clone(),
-                    output: reason.clone(),
-                    success: false,
-                }),
+                event_tx
+                    .send(TurnEvent::ToolResult {
+                        name: tc.name.clone(),
+                        output: reason.clone(),
+                        success: false,
+                    })
+                    .await,
                 "TurnEvent receiver dropped; discarding event"
             );
             self.conversation

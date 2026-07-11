@@ -1,3 +1,5 @@
+#![cfg_attr(not(test), deny(clippy::unwrap_used))]
+
 //! `kfd` — the standalone KirkForge-Draw terminal editor.
 //!
 //! Modes:

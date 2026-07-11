@@ -195,10 +195,13 @@ async fn enable_plugin(
     let dir = plugin_dir(name);
     let policy = TrustPolicy::up_to(cfg.max_plugin_trust);
 
-    let loaded_name = match state.plugin_registry.load_one(&dir, policy) {
-        Ok(n) => n,
+    let (loaded_name, load_warnings) = match state.plugin_registry.load_one(&dir, policy) {
+        Ok(r) => r,
         Err(e) => return format!("❌ Failed to enable plugin '{name}': {e}"),
     };
+    for w in load_warnings {
+        tracing::warn!(warning = %w, "plugin load warning");
+    }
 
     // Replace any stale skills from a previous load of the same plugin.
     state.skill_registry.remove_plugin(&loaded_name);
@@ -314,10 +317,13 @@ async fn trust_plugin(
     let dir = plugin_dir(name);
     let policy = TrustPolicy::up_to(tier);
 
-    let loaded_name = match state.plugin_registry.load_one(&dir, policy) {
-        Ok(n) => n,
+    let (loaded_name, load_warnings) = match state.plugin_registry.load_one(&dir, policy) {
+        Ok(r) => r,
         Err(e) => return format!("❌ Failed to set trust tier for '{name}': {e}"),
     };
+    for w in load_warnings {
+        tracing::warn!(warning = %w, "plugin load warning");
+    }
 
     let skills_added =
         if let Some((manifest, plugin)) = state.plugin_registry.find_active_by_name(&loaded_name) {

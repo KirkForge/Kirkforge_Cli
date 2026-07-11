@@ -56,8 +56,9 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// Maximum time the reader task waits for a single line from the MCP
 /// server's stdout before treating the connection as dead. This prevents a
 /// server that emits partial output and never sends a newline from hanging
-/// the reader forever.
-const READER_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
+/// the reader forever. A well-behaved server should emit responses and
+/// keepalives far more frequently than this.
+const READER_IDLE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Maximum length of a single JSON-RPC line accepted from the server.
 /// Anything longer is treated as a misbehaving server and disconnects.
@@ -102,7 +103,19 @@ impl From<std::io::Error> for McpError {
 }
 
 /// Type alias for the in-flight request map used by the reader task.
-type PendingMap = Arc<Mutex<HashMap<u64, oneshot::Sender<Result<serde_json::Value, McpError>>>>>;
+/// JSON-RPC 2.0 permits `id` to be a string or a number, so the key is a
+/// normalized string representation.
+type PendingMap = Arc<Mutex<HashMap<String, oneshot::Sender<Result<serde_json::Value, McpError>>>>>;
+
+/// Normalize a JSON-RPC `id` value (string or number) to a map key.
+/// Returns `None` for absent or null ids (notifications).
+fn json_id_to_string(id: &serde_json::Value) -> Option<String> {
+    match id {
+        serde_json::Value::String(s) => Some(s.clone()),
+        serde_json::Value::Number(n) => Some(n.to_string()),
+        _ => None,
+    }
+}
 
 /// A single MCP server connection.
 ///
@@ -286,29 +299,30 @@ impl McpClient {
             return Err(McpError::Disconnected);
         }
 
-        let id = {
+        let id_num = {
             let mut guard = self.next_id.lock().await;
             let id = *guard;
             *guard += 1;
             id
         };
+        let id = id_num.to_string();
 
         // Inject the id into the request object.
         let mut req_with_id = req.clone();
         if let Some(obj) = req_with_id.as_object_mut() {
-            obj.insert("id".to_string(), serde_json::json!(id));
+            obj.insert("id".to_string(), serde_json::json!(id_num));
         }
 
         let line = serde_json::to_string(&req_with_id)
             .map_err(|e| McpError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e)))?;
-        tracing::debug!(id = id, request = %line, "MCP request");
+        tracing::debug!(id = %id, request = %line, "MCP request");
 
         // Register the response waiter before writing, so an
         // out-of-order or very fast response can still be routed.
         let (tx, rx) = oneshot::channel();
         {
             let mut pending = self.pending.lock().await;
-            pending.insert(id, tx);
+            pending.insert(id.clone(), tx);
         }
 
         // Write the request to the child's stdin with the same timeout
@@ -333,7 +347,7 @@ impl McpClient {
             }
             Err(_) => {
                 self.pending.lock().await.remove(&id);
-                tracing::warn!(id = id, "MCP request write timed out");
+                tracing::warn!(id = %id, "MCP request write timed out");
                 return Err(McpError::Timeout);
             }
         }
@@ -350,7 +364,7 @@ impl McpClient {
             Err(_) => {
                 // Response didn't arrive in time. Clean up the waiter.
                 self.pending.lock().await.remove(&id);
-                tracing::warn!(id = id, "MCP request timed out waiting for response");
+                tracing::warn!(id = %id, "MCP request timed out waiting for response");
                 Err(McpError::Timeout)
             }
         }
@@ -457,10 +471,10 @@ impl McpClient {
                                 tracing::debug!(server = %server_name, "MCP stdout closed");
                                 break;
                             }
-                            Ok(Ok(n)) if n > MAX_LINE_LEN => {
+                            Ok(Ok(_)) if buf.len() > MAX_LINE_LEN => {
                                 tracing::warn!(
                                     server = %server_name,
-                                    bytes = n,
+                                    bytes = buf.len(),
                                     "MCP response line exceeded maximum length; disconnecting"
                                 );
                                 break;
@@ -490,23 +504,38 @@ impl McpClient {
                     continue;
                 };
 
-                let Some(id) = resp.get("id").and_then(|i| i.as_u64()) else {
-                    // Notifications have no id; ignore (or log at debug).
+                let Some(id) = resp.get("id").and_then(json_id_to_string) else {
+                    // Notifications have no id (or id is null); ignore.
                     tracing::debug!(server = %server_name, response = %resp, "MCP notification");
                     continue;
                 };
 
                 Self::dispatch_response(id, resp, &pending, &server_name).await;
             }
+            Self::fail_all_pending(pending).await;
             alive.store(false, Ordering::SeqCst);
         })
     }
 
+    /// Wake every in-flight request with `error`. Called when the reader
+    /// exits (EOF, read error, idle timeout, oversized line) so callers do
+    /// not wait the full `REQUEST_TIMEOUT` before discovering the client is
+    /// dead.
+    async fn fail_all_pending(pending: PendingMap) {
+        let waiters: Vec<_> = {
+            let mut guard = pending.lock().await;
+            guard.drain().map(|(_, tx)| tx).collect()
+        };
+        for tx in waiters {
+            let _ = tx.send(Err(McpError::Disconnected));
+        }
+    }
+
     /// Route a single parsed JSON-RPC response to its waiter.
     async fn dispatch_response(
-        id: u64,
+        id: String,
         resp: serde_json::Value,
-        pending: &Mutex<HashMap<u64, oneshot::Sender<Result<serde_json::Value, McpError>>>>,
+        pending: &Mutex<HashMap<String, oneshot::Sender<Result<serde_json::Value, McpError>>>>,
         server_name: &str,
     ) {
         // Check for JSON-RPC error before handing the response off.
@@ -519,7 +548,7 @@ impl McpClient {
                 .to_string();
             tracing::warn!(
                 server = %server_name,
-                id = id,
+                id = %id,
                 code = code,
                 message = %message,
                 "MCP JSON-RPC error"
@@ -535,10 +564,10 @@ impl McpClient {
         };
         if let Some(sender) = sender {
             if sender.send(to_send).is_err() {
-                tracing::debug!(id = id, "MCP response receiver dropped");
+                tracing::debug!(id = %id, "MCP response receiver dropped");
             }
         } else {
-            tracing::debug!(server = %server_name, id = id, "MCP response for unknown or timed-out request");
+            tracing::debug!(server = %server_name, id = %id, "MCP response for unknown or timed-out request");
         }
     }
 
@@ -969,14 +998,14 @@ mod tests {
     async fn test_dispatch_response_routes_error() {
         let pending: PendingMap = Arc::new(Mutex::new(HashMap::new()));
         let (tx, rx) = oneshot::channel();
-        pending.lock().await.insert(7, tx);
+        pending.lock().await.insert("7".to_string(), tx);
 
         let resp = serde_json::json!({
             "jsonrpc": "2.0",
             "id": 7,
             "error": { "code": -32601, "message": "Method not found" }
         });
-        McpClient::dispatch_response(7, resp, &pending, "test").await;
+        McpClient::dispatch_response("7".to_string(), resp, &pending, "test").await;
 
         let err = rx
             .await
@@ -993,14 +1022,14 @@ mod tests {
     async fn test_dispatch_response_routes_success() {
         let pending: PendingMap = Arc::new(Mutex::new(HashMap::new()));
         let (tx, rx) = oneshot::channel();
-        pending.lock().await.insert(42, tx);
+        pending.lock().await.insert("42".to_string(), tx);
 
         let resp = serde_json::json!({
             "jsonrpc": "2.0",
             "id": 42,
             "result": { "tools": [] }
         });
-        McpClient::dispatch_response(42, resp.clone(), &pending, "test").await;
+        McpClient::dispatch_response("42".to_string(), resp.clone(), &pending, "test").await;
 
         let got = rx
             .await
@@ -1016,7 +1045,7 @@ mod tests {
         let pending: PendingMap = Arc::new(Mutex::new(HashMap::new()));
         let resp = serde_json::json!({ "jsonrpc": "2.0", "id": 99, "result": {} });
         // Should not panic and should not block.
-        McpClient::dispatch_response(99, resp, &pending, "test").await;
+        McpClient::dispatch_response("99".to_string(), resp, &pending, "test").await;
     }
 
     /// `McpError` renders a human-readable message so operators can

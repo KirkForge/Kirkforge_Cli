@@ -275,7 +275,7 @@ pub async fn run_tui(
     // User input: TUI → Executor
     let (input_tx, input_rx) = mpsc::unbounded_channel::<String>();
     // Stream events: Executor → TUI
-    let (event_tx, mut event_rx) = mpsc::unbounded_channel::<executor::TurnEvent>();
+    let (event_tx, mut event_rx) = mpsc::channel::<executor::TurnEvent>(10_000);
     // Approval requests: Executor → TUI
     let (approval_tx, mut approval_rx) = mpsc::unbounded_channel::<ApprovalRequest>();
     // Cancellation: TUI → Executor (sends () to cancel current turn)
@@ -383,7 +383,7 @@ pub async fn run_tui(
                 let reload_shared_config = shared_config.clone();
                 tokio::spawn(async move {
                     while hup.recv().await.is_some() {
-                        let fresh = crate::session::config::load_config();
+                        let (fresh, _warning) = crate::session::config::load_config();
                         if let Ok(mut cfg) = reload_shared_config.write() {
                             *cfg = fresh.clone();
                         }
@@ -402,6 +402,48 @@ pub async fn run_tui(
             }
         }
     }
+
+    // SIGINT / SIGTERM graceful shutdown.
+    // Drives the same `shutdown` Notify used by the keyboard reader thread
+    // when the pty closes, so Ctrl-C or a termination signal restores the
+    // terminal, saves carryover profile, and flushes the executor instead of
+    // killing the process outright.
+    let shutdown_for_signal = shutdown.clone();
+    tokio::spawn(async move {
+        let ctrl_c = tokio::signal::ctrl_c();
+        #[cfg(unix)]
+        let term_fut = {
+            use tokio::signal::unix::{signal, SignalKind};
+            signal(SignalKind::terminate()).ok()
+        };
+        #[cfg(not(unix))]
+        let term_fut: Option<()> = None;
+
+        tokio::select! {
+            biased;
+            _ = ctrl_c => {
+                tracing::info!("SIGINT received; signalling graceful TUI shutdown");
+                shutdown_for_signal.notify_one();
+            }
+            _ = async {
+                #[cfg(unix)]
+                {
+                    if let Some(mut s) = term_fut {
+                        let _ = s.recv().await;
+                    } else {
+                        std::future::pending::<()>().await;
+                    }
+                }
+                #[cfg(not(unix))]
+                {
+                    std::future::pending::<()>().await;
+                }
+            } => {
+                tracing::info!("SIGTERM received; signalling graceful TUI shutdown");
+                shutdown_for_signal.notify_one();
+            }
+        }
+    });
 
     // Spawn the executor on a background task
     let (conversation_log, open_outcome) = conversation;
@@ -426,7 +468,7 @@ pub async fn run_tui(
     // that need to inject TurnEvent tokens into the TUI event stream.
     let event_tx_for_commands = event_tx.clone();
 
-    let handle = tokio::spawn(async move {
+    let mut handle = tokio::spawn(async move {
         if let Err(e) = exe
             .run(
                 input_rx,
@@ -518,12 +560,16 @@ pub async fn run_tui(
         persona_tx,
         plugin_reload_tx,
     ));
-    // ponytail: 3s timeout so a hung Ollama HTTP call doesn't freeze the terminal
-    if tokio::time::timeout(std::time::Duration::from_secs(3), handle)
+    // ponytail: 3s timeout so a hung Ollama HTTP call doesn't freeze the
+    // terminal. Dropping a tokio JoinHandle detaches the task and lets it
+    // keep running in the background, so explicitly abort and await it.
+    if tokio::time::timeout(std::time::Duration::from_secs(3), &mut handle)
         .await
         .is_err()
     {
-        tracing::warn!("executor task did not shut down within 3 s");
+        tracing::warn!("executor task did not shut down within 3 s; aborting");
+        handle.abort();
+        let _ = handle.await;
     }
 
     // Save carryover profile
@@ -548,7 +594,7 @@ pub async fn run_tui(
 async fn run_event_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     state: &mut AppState,
-    event_rx: &mut mpsc::UnboundedReceiver<executor::TurnEvent>,
+    event_rx: &mut mpsc::Receiver<executor::TurnEvent>,
     approval_rx: &mut mpsc::UnboundedReceiver<ApprovalRequest>,
     persona_rx: &mut mpsc::UnboundedReceiver<PersonaResult>,
     kb_rx: &mut mpsc::UnboundedReceiver<Event>,
@@ -564,7 +610,7 @@ async fn run_event_loop(
     plugin_reload_tx: &mpsc::UnboundedSender<kirkforge_plugin_host::PluginRegistry>,
     slow_tick: &mut tokio::time::Interval,
     conn_probe_rx: &mut mpsc::Receiver<ConnectionState>,
-    event_tx_for_commands: &mpsc::UnboundedSender<executor::TurnEvent>,
+    event_tx_for_commands: &mpsc::Sender<executor::TurnEvent>,
     // One-shot shutdown signal. Fired by:
     //   - the SIGHUP handler (Unix, pty-close)
     //   - the kb-reader thread (crossterm `event::read()` Err)
@@ -616,12 +662,12 @@ async fn run_event_loop(
         let mut new_connection_state: Option<ConnectionState> = None;
 
         tokio::select! {
-            // Bias the select! slightly toward real events so we
-            // don't drop a kb event when the slow-tick happens to
-            // fire at the same instant. `tokio::select!` polls
-            // branches top-to-bottom; the slow-tick is the lowest
-            // priority, so it'll only fire when nothing else is
-            // ready.
+            biased;
+            // Bias the select! toward real events so we don't drop a
+            // kb event when the slow-tick happens to fire at the same
+            // instant. `biased;` makes `tokio::select!` poll branches
+            // top-to-bottom; the slow-tick is the lowest priority, so
+            // it'll only fire when nothing else is ready.
             ev = kb_rx.recv() => {
                 kb_event = ev;
             }

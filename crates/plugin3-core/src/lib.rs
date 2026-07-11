@@ -1,3 +1,5 @@
+#![cfg_attr(not(test), deny(clippy::unwrap_used))]
+
 //! plugin3-core — pure logic for tool output slicing, token budgeting,
 //! offload storage, and usage emission. No host I/O.
 

@@ -6,23 +6,18 @@ set -euo pipefail
 
 source "$(dirname "$0")/common.sh"
 
-CLI_JS="$(find_cli)" || die "KirkForge CLI not found. Ensure the bundled npm/kirkforge-plugin tree is installed next to the plugins directory."
+CLI_JS="$(find_cli)" || die "KirkForge CLI not found. Ensure the bundled npm/kirkforge-plugin tree is installed next to the plugins directory or set KIRKFORGE_CLI_JS."
 require_node
 
-if [ -z "${KIRKFORGE_TOOL_ARGS_JSON:-}" ]; then
-  echo "Usage: provide KIRKFORGE_TOOL_ARGS_JSON such as {\"task\":\"verify self\",\"json\":true}"
-  exit 1
-fi
-
-TASK=$(node -e 'const a=JSON.parse(process.env.KIRKFORGE_TOOL_ARGS_JSON||"{}"); console.log(a.task||"")')
-JSON_FLAG=$(node -e 'const a=JSON.parse(process.env.KIRKFORGE_TOOL_ARGS_JSON||"{}"); console.log(a.json?"--json":"")')
+TASK=$(node_json_arg "task")
+JSON_FLAG=$(node_json_arg "json" "false")
 
 ARGS=()
 if [ -n "$TASK" ]; then
   ARGS+=(--task "$TASK")
 fi
-if [ -n "$JSON_FLAG" ]; then
-  ARGS+=("$JSON_FLAG")
+if [ "$JSON_FLAG" = "true" ]; then
+  ARGS+=(--json)
 fi
 
 exec node "$CLI_JS" verify "${ARGS[@]}"

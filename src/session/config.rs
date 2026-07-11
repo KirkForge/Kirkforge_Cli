@@ -27,6 +27,12 @@
 use crate::shared::Config;
 use std::path::PathBuf;
 
+/// Expand a leading `~` in a path string using `$HOME` (or the equivalent
+/// on Windows). Falls back to the original string if expansion fails.
+fn expand_tilde_str(s: &str) -> String {
+    shellexpand::tilde(s).into_owned()
+}
+
 /// Load config with full layered resolution.
 ///
 /// 1. Start with defaults
@@ -35,8 +41,12 @@ use std::path::PathBuf;
 ///
 /// The config is NOT written to disk here — that's the caller's
 /// responsibility (e.g., on first run or when CLI overrides are provided).
-pub fn load_config() -> Config {
+///
+/// Returns the resolved config and an optional human-readable warning if
+/// the config file existed but could not be fully parsed.
+pub fn load_config() -> (Config, Option<String>) {
     let mut cfg = Config::default();
+    let mut warning: Option<String> = None;
 
     // Layer 1: config file
     let path = super::config_path();
@@ -44,7 +54,9 @@ pub fn load_config() -> Config {
         match toml::from_str::<Config>(&content) {
             Ok(file_cfg) => cfg = file_cfg,
             Err(e) => {
-                tracing::warn!("Failed to parse config ({}), merging with defaults", e);
+                let msg = format!("Failed to parse config ({e}), merging with defaults");
+                tracing::warn!(%msg);
+                warning = Some(msg);
                 // Try partial merge: parse what we can
                 if let Ok(table) = content.parse::<toml::Table>() {
                     merge_toml_into_config(&mut cfg, table);
@@ -56,7 +68,7 @@ pub fn load_config() -> Config {
     // Layer 2: environment variables
     apply_env_overrides(&mut cfg);
 
-    cfg
+    (cfg, warning)
 }
 
 /// Load config and write a default file on first run.
@@ -67,7 +79,10 @@ pub fn load_or_create_config() -> Config {
     let path = super::config_path();
     let exists = path.exists();
 
-    let cfg = load_config();
+    let (cfg, warning) = load_config();
+    if let Some(w) = warning {
+        eprintln!("Warning: {} ({})", w, path.display());
+    }
 
     if !exists {
         // Write the default config to disk
@@ -95,13 +110,16 @@ pub fn load_or_create_config() -> Config {
                         );
                     }
                 }
-                tracing::info!("Created default config at {}", path.display());
+                tracing::info!(
+                    "Config file created at {}. Edit it to customize model, host, etc.",
+                    path.display()
+                );
+            } else {
+                tracing::warn!(path = %path.display(), "Failed to write default config file");
             }
+        } else {
+            tracing::warn!(path = %path.display(), "Failed to serialize default config");
         }
-        tracing::info!(
-            "Config file created at {}. Edit it to customize model, host, etc.",
-            path.display()
-        );
     }
 
     cfg
@@ -201,7 +219,11 @@ fn apply_env_overrides(cfg: &mut Config) {
 
     // KIRKFORGE_SANDBOX_DIR
     if let Ok(val) = std::env::var("KIRKFORGE_SANDBOX_DIR") {
-        cfg.sandbox_dir = if val.is_empty() { None } else { Some(val) };
+        cfg.sandbox_dir = if val.is_empty() {
+            None
+        } else {
+            Some(expand_tilde_str(&val))
+        };
     }
 
     // KIRKFORGE_BLOCK_DOTFILES
@@ -243,7 +265,7 @@ fn apply_env_overrides(cfg: &mut Config) {
             || val.eq_ignore_ascii_case("yes");
     }
     if let Ok(val) = std::env::var("KIRKFORGE_CACHE_DIR") {
-        cfg.cache_dir = Some(PathBuf::from(val));
+        cfg.cache_dir = Some(PathBuf::from(expand_tilde_str(&val)));
     }
 
     // KIRKFORGE_REJECT_ON_EXCESS_PLUGIN_TRUST
@@ -258,7 +280,11 @@ fn apply_env_overrides(cfg: &mut Config) {
 
     // KIRKFORGE_PLUGIN_PUBLIC_KEY_PATH
     if let Ok(val) = std::env::var("KIRKFORGE_PLUGIN_PUBLIC_KEY_PATH") {
-        cfg.plugin_public_key_path = if val.is_empty() { None } else { Some(val) };
+        cfg.plugin_public_key_path = if val.is_empty() {
+            None
+        } else {
+            Some(expand_tilde_str(&val))
+        };
     }
 
     // KIRKFORGE_PLUGIN_ALLOWED_ENV_VARS
@@ -330,7 +356,7 @@ fn merge_toml_into_config(cfg: &mut Config, table: toml::Table) {
         cfg.auto_approve = *v;
     }
     if let Some(Value::String(v)) = table.get("sandbox_dir") {
-        cfg.sandbox_dir = Some(v.clone());
+        cfg.sandbox_dir = Some(expand_tilde_str(v));
     }
     if let Some(Value::Boolean(v)) = table.get("block_dotfiles") {
         cfg.block_dotfiles = *v;
@@ -361,7 +387,7 @@ fn merge_toml_into_config(cfg: &mut Config, table: toml::Table) {
         cfg.cache_enabled = *v;
     }
     if let Some(Value::String(v)) = table.get("cache_dir") {
-        cfg.cache_dir = Some(PathBuf::from(v));
+        cfg.cache_dir = Some(PathBuf::from(expand_tilde_str(v)));
     }
 
     // Plugin trust / sandbox knobs
@@ -372,7 +398,11 @@ fn merge_toml_into_config(cfg: &mut Config, table: toml::Table) {
         cfg.plugin_signature_validation = *v;
     }
     if let Some(Value::String(v)) = table.get("plugin_public_key_path") {
-        cfg.plugin_public_key_path = if v.is_empty() { None } else { Some(v.clone()) };
+        cfg.plugin_public_key_path = if v.is_empty() {
+            None
+        } else {
+            Some(expand_tilde_str(v))
+        };
     }
     if let Some(Value::Array(v)) = table.get("plugin_allowed_env_vars") {
         cfg.plugin_allowed_env_vars = v
@@ -413,7 +443,7 @@ fn merge_toml_into_config(cfg: &mut Config, table: toml::Table) {
     if let Some(Value::Array(v)) = table.get("deny_paths") {
         cfg.deny_paths = v
             .iter()
-            .filter_map(|v| v.as_str().map(String::from))
+            .filter_map(|v| v.as_str().map(expand_tilde_str))
             .collect();
     }
     if let Some(Value::Array(v)) = table.get("deny_urls") {
@@ -431,7 +461,7 @@ fn merge_toml_into_config(cfg: &mut Config, table: toml::Table) {
     if let Some(Value::Array(v)) = table.get("allowed_write_dirs") {
         cfg.allowed_write_dirs = v
             .iter()
-            .filter_map(|v| v.as_str().map(String::from))
+            .filter_map(|v| v.as_str().map(expand_tilde_str))
             .collect();
     }
 }
@@ -563,7 +593,7 @@ fn parse_plugin_sources_env(value: &str) -> std::collections::HashMap<String, Pa
         if name.is_empty() || path.is_empty() {
             continue;
         }
-        out.insert(name, PathBuf::from(path));
+        out.insert(name, PathBuf::from(expand_tilde_str(&path)));
     }
     out
 }

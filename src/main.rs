@@ -22,7 +22,7 @@ use tracing_subscriber::prelude::*;
 /// write logs to `<data_dir>/kirkforge.log` and additionally mirror them
 /// to stderr when `KIRKFORGE_LOG_STDERR=1` is set (useful for daemon or
 /// non-interactive debugging).
-fn init_tracing(log_level: &str) {
+fn init_tracing(log_level: &str) -> anyhow::Result<()> {
     // Writer enum so that a failure to open the log file falls back to
     // a null sink instead of panicking on `/dev/null`.
     enum LogWriter {
@@ -45,8 +45,11 @@ fn init_tracing(log_level: &str) {
             }
         }
     }
-    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(log_level));
+    let env_filter = match tracing_subscriber::EnvFilter::try_from_default_env() {
+        Ok(f) => f,
+        Err(_) => tracing_subscriber::EnvFilter::try_new(log_level)
+            .map_err(|e| anyhow::anyhow!("invalid log level '{log_level}': {e}"))?,
+    };
 
     let log_file = session::data_dir()
         .map(|d| d.join("kirkforge.log"))
@@ -95,6 +98,7 @@ fn init_tracing(log_level: &str) {
     } else {
         registry.init();
     }
+    Ok(())
 }
 
 /// Map an anyhow error to a structured exit code.
@@ -252,7 +256,10 @@ enum Command {
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
-    init_tracing(&cli.log_level);
+    if let Err(e) = init_tracing(&cli.log_level) {
+        eprintln!("{e:#}");
+        std::process::exit(2);
+    }
 
     let result = match cli.command {
         Command::Run {
@@ -472,9 +479,15 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
         config.dry_run = true;
     }
 
-    if let Err(e) = session::config::save_config(&config) {
-        tracing::warn!(error = %e, "failed to persist updated config");
-    }
+    // CLI flags are transient runtime overrides; do not persist them to
+    // config.toml. `load_or_create_config` already wrote a default file on
+    // first run, and explicit in-session config changes are saved by their
+    // respective handlers (e.g. /reload). Persisting here made a single
+    // scripted invocation permanently flip `auto_approve` or `dry_run`.
+    //
+    // We keep the loaded/merged config object for the rest of the session.
+    //
+    // Previously: `session::config::save_config(&config)` was called here.
 
     // Honor `NO_COLOR` / `TERM=dumb` consistently across all user-facing
     // output, including the session-restoration message printed before the
@@ -666,10 +679,13 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     // ── Plugin tools ──
     let cfg_for_plugins = kirkforge::shared::read_shared_config(&shared_config).clone();
     let (plugin_registry, plugin_warnings) =
-        session::plugin_tools::load_plugin_registry(&cfg_for_plugins).unwrap_or_else(|e| {
-            tracing::warn!(error = %e, "failed to load plugin registry");
-            (kirkforge_plugin_host::PluginRegistry::new(), vec![])
-        });
+        match session::plugin_tools::load_plugin_registry(&cfg_for_plugins) {
+            Ok(rw) => rw,
+            Err(e) => {
+                eprintln!("Warning: failed to load plugin registry: {e:#}");
+                (kirkforge_plugin_host::PluginRegistry::new(), vec![])
+            }
+        };
     let plugin_tools =
         session::plugin_tools::all_plugin_tools(&plugin_registry, shared_config.clone());
     if !plugin_tools.is_empty() {
@@ -683,6 +699,7 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
         );
     }
     for w in plugin_warnings {
+        eprintln!("Plugin warning: {w}");
         tracing::warn!(warning = %w, "plugin load warning");
     }
 

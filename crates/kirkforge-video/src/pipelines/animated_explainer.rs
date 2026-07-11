@@ -582,7 +582,7 @@ async fn build_assets(dir: &Path, arts: &Path, reg: &ToolRegistry) -> Result<Str
                                     let transcode = needs_transcode(&out.meta, pb);
                                     entry
                                         .as_object_mut()
-                                        .unwrap()
+                                        .expect("asset entry is a JSON object")
                                         .insert("probed".into(), out.meta);
                                     if let Some(mut plan) = transcode {
                                         // ponytail: run the transcode plan
@@ -593,10 +593,12 @@ async fn build_assets(dir: &Path, arts: &Path, reg: &ToolRegistry) -> Result<Str
                                         // source.
                                         match run_transcode_plan(reg, &plan).await {
                                             Ok(_) => {
-                                                plan.as_object_mut().unwrap().insert(
-                                                    "applied".into(),
-                                                    serde_json::json!(true),
-                                                );
+                                                plan.as_object_mut()
+                                                    .expect("transcode plan is a JSON object")
+                                                    .insert(
+                                                        "applied".into(),
+                                                        serde_json::json!(true),
+                                                    );
                                                 log.append(&Decision {
                                                     category: "asset_transcode".into(),
                                                     choice: "applied".into(),
@@ -613,14 +615,18 @@ async fn build_assets(dir: &Path, arts: &Path, reg: &ToolRegistry) -> Result<Str
                                                 })?;
                                             }
                                             Err(e) => {
-                                                plan.as_object_mut().unwrap().insert(
-                                                    "applied".into(),
-                                                    serde_json::json!(false),
-                                                );
-                                                plan.as_object_mut().unwrap().insert(
-                                                    "error".into(),
-                                                    serde_json::json!(e.to_string()),
-                                                );
+                                                plan.as_object_mut()
+                                                    .expect("transcode plan is a JSON object")
+                                                    .insert(
+                                                        "applied".into(),
+                                                        serde_json::json!(false),
+                                                    );
+                                                plan.as_object_mut()
+                                                    .expect("transcode plan is a JSON object")
+                                                    .insert(
+                                                        "error".into(),
+                                                        serde_json::json!(e.to_string()),
+                                                    );
                                                 log.append(&Decision {
                                                     category: "asset_transcode".into(),
                                                     choice: "failed".into(),
@@ -638,7 +644,7 @@ async fn build_assets(dir: &Path, arts: &Path, reg: &ToolRegistry) -> Result<Str
                                         }
                                         entry
                                             .as_object_mut()
-                                            .unwrap()
+                                            .expect("asset entry is a JSON object")
                                             .insert("transcode".into(), plan);
                                     }
                                 }

@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+#![cfg_attr(not(test), deny(clippy::unwrap_used))]
 
 //! `stratum` binary: command-line interface to the Stratum compression and
 //! rules pipeline.

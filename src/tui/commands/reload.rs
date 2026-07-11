@@ -20,7 +20,7 @@ pub async fn handle_reload_command(
     config_tx: &mpsc::UnboundedSender<Config>,
     state: &mut AppState,
 ) -> String {
-    let fresh = crate::session::config::load_config();
+    let (fresh, _warning) = crate::session::config::load_config();
     let before = read_shared_config(&state.config).clone();
     let diff_summary = crate::session::config::config_diff_summary(&before, &fresh);
 

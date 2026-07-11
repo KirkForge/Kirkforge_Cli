@@ -110,6 +110,11 @@ impl PluginToolWrapper {
         env.push(("KIRKFORGE_TOOL_ARGS_JSON".to_string(), args.to_string()));
         env
     }
+
+    /// Maximum serialized argument size passed via environment variable.
+    /// Most platforms cap the total environment block (Linux ~128 KiB,
+    /// macOS smaller), so fail early instead of getting a cryptic `E2BIG`.
+    const MAX_ENV_ARGS_BYTES: usize = 64 * 1024;
 }
 
 #[async_trait::async_trait]
@@ -119,6 +124,17 @@ impl Tool for PluginToolWrapper {
     }
 
     async fn run(&self, ctx: &ToolContext, args: serde_json::Value) -> ToolOutcome {
+        let args_json = args.to_string();
+        if args_json.len() > Self::MAX_ENV_ARGS_BYTES {
+            return ToolOutcome::Failure(ToolError::InvalidArgs {
+                message: format!(
+                    "plugin tool arguments exceed {} bytes ({} bytes); pass smaller payloads",
+                    Self::MAX_ENV_ARGS_BYTES,
+                    args_json.len()
+                ),
+            });
+        }
+
         let cfg = read_shared_config(&self.shared_config).clone();
         let cmd_path = self.plugin_root.join(&self.command);
         let cwd = self.sandbox_dir(&cfg);
@@ -330,8 +346,9 @@ pub fn load_workspace_plugins(registry: &mut PluginRegistry, cfg: &Config) -> Ve
             ));
             continue;
         }
-        if let Err(e) = registry.load_one(&resolved, policy.clone()) {
-            warnings.push(format!("{name}: {e}"));
+        match registry.load_one(&resolved, policy.clone()) {
+            Ok((_, plugin_warnings)) => warnings.extend(plugin_warnings),
+            Err(e) => warnings.push(format!("{name}: {e}")),
         }
     }
 
@@ -659,38 +676,6 @@ prompt = "hello"
         }
     }
 
-    struct PathGuard {
-        prior: Option<String>,
-    }
-
-    impl PathGuard {
-        fn prepend(dir: &std::path::Path) -> Self {
-            let prior = std::env::var("PATH").ok();
-            let mut parts: Vec<std::path::PathBuf> = vec![dir.to_path_buf()];
-            if let Ok(ref path) = std::env::var("PATH") {
-                parts.extend(path.split(':').map(std::path::PathBuf::from));
-            }
-            std::env::set_var(
-                "PATH",
-                parts
-                    .iter()
-                    .map(|p| p.to_string_lossy().to_string())
-                    .collect::<Vec<_>>()
-                    .join(":"),
-            );
-            Self { prior }
-        }
-    }
-
-    impl Drop for PathGuard {
-        fn drop(&mut self) {
-            match &self.prior {
-                Some(v) => std::env::set_var("PATH", v),
-                None => std::env::remove_var("PATH"),
-            }
-        }
-    }
-
     /// When a configured workspace plugin source path does not exist (e.g. a
     /// release binary whose compile-time source-repo paths are stale), the host
     /// falls back to the data-directory plugins folder before giving up.
@@ -884,8 +869,13 @@ command = "hello.sh"
         let repo_plugins = repo_root.join("plugins");
         copy_dir_all(&repo_plugins, &installed_plugins).unwrap();
 
+        // Copy the stratum binary next to the plugin scripts so the installed
+        // layout can resolve it without mutating the global PATH (which would
+        // race with other concurrent tests).
+        let installed_stratum_tools = installed_plugins.join("stratum/tools");
+        std::fs::copy(&stratum_bin, installed_stratum_tools.join("stratum")).unwrap();
+
         let _data_guard = DataDirGuard::set(&tmp.path().to_string_lossy());
-        let _path_guard = PathGuard::prepend(stratum_bin.parent().unwrap());
         let (registry, warnings) = load_plugin_registry(&Config::default())
             .expect("loading installed plugins should not fail");
         assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");

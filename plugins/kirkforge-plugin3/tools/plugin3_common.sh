@@ -26,8 +26,11 @@ find_plugin3_bin() {
     script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     local candidates=(
         "$script_dir/plugin3"
+        "$script_dir/plugin3.exe"
         "$script_dir/../../../target/release/plugin3"
+        "$script_dir/../../../target/release/plugin3.exe"
         "$script_dir/../../../target/debug/plugin3"
+        "$script_dir/../../../target/debug/plugin3.exe"
         "$(command -v plugin3 2>/dev/null || true)"
     )
     for c in "${candidates[@]}"; do
@@ -87,8 +90,15 @@ json_get_string() {
 }
 
 # Extract a top-level integer value from a JSON object.
+# A caller-supplied empty default is preserved so that missing keys can be
+# detected; when no default is supplied the fallback is 0.
 json_get_integer() {
-    local json="$1" key="$2" default="${3:-0}"
+    local json="$1" key="$2" default
+    if [[ $# -ge 3 ]]; then
+        default="$3"
+    else
+        default="0"
+    fi
     local value
     value="$(json_get_string "$json" "$key" "$default")"
     value="${value%.*}"

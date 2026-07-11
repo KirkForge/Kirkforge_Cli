@@ -1,3 +1,5 @@
+#![cfg_attr(not(test), deny(clippy::unwrap_used))]
+
 use clap::Parser;
 use tracing_subscriber::EnvFilter;
 

@@ -18,8 +18,8 @@ command = "tools/run.sh"
 [[capabilities]]
 type = "tool"
 name = "stratum_apply"
-description = "Apply the stratum pipeline to a file or stdin with optional content-type override."
-schema = { type = "object", properties = { file = { type = "string", description = "Path to input file; omit to read stdin" }, content_type = { type = "string", enum = ["json_array", "json_object", "source_code", "search_results", "build_output", "git_diff", "html", "plain_text"], description = "Force content-type detection" }, mode = { type = "string", enum = ["off", "lite", "full", "ultra"], description = "Pipeline mode override" }, token_budget = { type = "integer", description = "Token budget for the bloat heuristic" }, json = { type = "boolean", description = "Emit JSON output", default = false }, dry_run = { type = "boolean", description = "Preview transforms without emitting output", default = false } } }
+description = "Apply the stratum pipeline to a file with optional content-type override."
+schema = { type = "object", properties = { file = { type = "string", description = "Path to input file" }, content_type = { type = "string", enum = ["json_array", "json_object", "source_code", "search_results", "build_output", "git_diff", "html", "plain_text"], description = "Force content-type detection" }, mode = { type = "string", enum = ["off", "lite", "full", "ultra"], description = "Pipeline mode override" }, token_budget = { type = "integer", description = "Token budget for the bloat heuristic" }, json = { type = "boolean", description = "Emit JSON output", default = false }, dry_run = { type = "boolean", description = "Preview transforms without emitting output", default = false } }, required = ["file"] }
 command = "tools/apply.sh"
 
 [[capabilities]]
@@ -66,8 +66,8 @@ When the user asks for Stratum help:
 3. Summarise the rules and suggest the best tool for the user's request.
 
 When the user wants to compress context:
-1. Prefer stratum_run with an `input` field if they have a short block of text to compact inline.
-2. Prefer stratum_apply if they want to process a file or a large block of text.
+1. Prefer stratum_run with an `input` field if they have inline text to compact.
+2. Prefer stratum_apply with a `file` field if they want to process a file.
 3. Mention the mode/token_budget options only if the user wants fine-grained control.
 
 User request: {{args}}

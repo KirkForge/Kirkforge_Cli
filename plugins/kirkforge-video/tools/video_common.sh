@@ -29,8 +29,11 @@ find_video_bin() {
     # on PATH or next to the script (copied by the user).
     local candidates=(
         "$script_dir/kirkforge-video"
+        "$script_dir/kirkforge-video.exe"
         "$script_dir/../../../target/release/kirkforge-video"
+        "$script_dir/../../../target/release/kirkforge-video.exe"
         "$script_dir/../../../target/debug/kirkforge-video"
+        "$script_dir/../../../target/debug/kirkforge-video.exe"
         "$(command -v kirkforge-video 2>/dev/null || true)"
     )
     for c in "${candidates[@]}"; do

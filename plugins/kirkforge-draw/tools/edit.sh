@@ -6,8 +6,8 @@ source "$(dirname "$0")/common.sh"
 
 KFD="$(find_kfd)" || die "draw_edit: kfd binary not found (build the workspace or install kfd on PATH)"
 
-ARGS="${KIRKFORGE_TOOL_ARGS_JSON:-{}}"
-PATH_ARG="$(printf '%s' "$ARGS" | sed -n 's/.*"path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+ARGS="${KIRKFORGE_TOOL_ARGS_JSON:-"{}"}"
+PATH_ARG="$(json_get_string "$ARGS" "path" "")"
 
 if [[ -z "$PATH_ARG" ]]; then
   die "draw_edit: missing 'path' argument"

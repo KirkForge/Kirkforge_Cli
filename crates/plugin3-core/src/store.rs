@@ -97,20 +97,23 @@ impl InMemoryOffloadStore {
 impl OffloadStore for InMemoryOffloadStore {
     fn put(&self, bytes: &[u8]) -> Result<String, StoreError> {
         let key = make_key(bytes);
-        self.map.lock().unwrap().insert(key.clone(), bytes.to_vec());
+        self.map
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(key.clone(), bytes.to_vec());
         Ok(key)
     }
     fn get(&self, key: &str) -> Result<Vec<u8>, StoreError> {
         validate_key(key)?;
         self.map
             .lock()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .get(key)
             .cloned()
             .ok_or_else(|| StoreError::NotFound(key.to_string()))
     }
     fn len(&self) -> usize {
-        self.map.lock().unwrap().len()
+        self.map.lock().unwrap_or_else(|e| e.into_inner()).len()
     }
     fn backend_name(&self) -> &'static str {
         "memory"

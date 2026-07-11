@@ -40,7 +40,7 @@ impl Executor {
         user_input: &str,
         approval_sender: &mpsc::UnboundedSender<ApprovalRequest>,
         cancelled: &AtomicBool,
-        event_tx: &mpsc::UnboundedSender<TurnEvent>,
+        event_tx: &mpsc::Sender<TurnEvent>,
     ) -> anyhow::Result<()> {
         // Post-turn hook: fires on every exit path (Ok / Err / panic /
         // cancel / max-iterations / parse-error second retry) via the
@@ -59,7 +59,9 @@ impl Executor {
             if let Err(e) = self.conversation.checkpoint_async().await {
                 tracing::warn!(error = %e, "post-turn checkpoint failed");
                 crate::send_or_warn!(
-                    event_tx.send(TurnEvent::Error(format!("Checkpoint failed: {e}"))),
+                    event_tx
+                        .send(TurnEvent::Error(format!("Checkpoint failed: {e}")))
+                        .await,
                     "TurnEvent receiver dropped; discarding event"
                 );
             }
@@ -68,21 +70,38 @@ impl Executor {
     }
 
     /// Batched wrapper: run a turn into a private channel and return every
-    /// event as a `Vec`. The channel is unbounded, so all events are
-    // buffered by the time the turn completes and `try_recv` drains them
-    // without blocking. Keeps the old `run_turn` return shape for callers
-    // that want a slice (tests, non-interactive line mode, persona runner).
+    /// event as a `Vec`. Keeps the old `run_turn` return shape for callers
+    /// that want a slice (tests, non-interactive line mode, persona runner).
     pub async fn run_turn_collecting(
         &mut self,
         user_input: &str,
         approval_sender: &mpsc::UnboundedSender<ApprovalRequest>,
         cancelled: &AtomicBool,
     ) -> anyhow::Result<Vec<TurnEvent>> {
-        let (tx, mut rx) = mpsc::unbounded_channel::<TurnEvent>();
-        self.run_turn(user_input, approval_sender, cancelled, &tx)
+        // `run_turn` is the only producer and there is no concurrent
+        // consumer. A plain bounded channel would deadlock once it fills:
+        // `run_turn` blocks on `send().await`, but the receiver cannot
+        // drain until `run_turn` returns. We keep a bounded channel at the
+        // producer boundary for backpressure during normal operation, and
+        // spawn a forwarding task that drains it into an unbounded channel.
+        let (bounded_tx, mut bounded_rx) = mpsc::channel::<TurnEvent>(10_000);
+        let (unbounded_tx, mut unbounded_rx) = mpsc::unbounded_channel::<TurnEvent>();
+
+        let forwarder = tokio::spawn(async move {
+            while let Some(ev) = bounded_rx.recv().await {
+                if unbounded_tx.send(ev).is_err() {
+                    break;
+                }
+            }
+        });
+
+        self.run_turn(user_input, approval_sender, cancelled, &bounded_tx)
             .await?;
+        drop(bounded_tx);
+        let _ = forwarder.await;
+
         let mut events = Vec::new();
-        while let Ok(ev) = rx.try_recv() {
+        while let Ok(ev) = unbounded_rx.try_recv() {
             events.push(ev);
         }
         Ok(events)
@@ -93,7 +112,7 @@ impl Executor {
         user_input: &str,
         approval_sender: &mpsc::UnboundedSender<ApprovalRequest>,
         cancelled: &AtomicBool,
-        event_tx: &mpsc::UnboundedSender<TurnEvent>,
+        event_tx: &mpsc::Sender<TurnEvent>,
     ) -> anyhow::Result<()> {
         // --- adapter hot-swap via smart routing ---
         let routing_enabled = read_shared_config(&self.config).routing_enabled;
@@ -107,7 +126,9 @@ impl Executor {
             if let Some(new_model) = swapped {
                 self.model_name = new_model.clone();
                 crate::send_or_warn!(
-                    event_tx.send(TurnEvent::Token(format!("🔀 Switched to {new_model}\n"))),
+                    event_tx
+                        .send(TurnEvent::Token(format!("🔀 Switched to {new_model}\n")))
+                        .await,
                     "TurnEvent receiver dropped; discarding event"
                 );
             }
@@ -134,7 +155,9 @@ impl Executor {
         // once before any model output appears.
         if let Some(count) = self.recovered_messages.take() {
             crate::send_or_warn!(
-                event_tx.send(TurnEvent::Recovered { messages: count }),
+                event_tx
+                    .send(TurnEvent::Recovered { messages: count })
+                    .await,
                 "TurnEvent receiver dropped; discarding event"
             );
         }
@@ -182,6 +205,10 @@ impl Executor {
                 }
                 IterationOutcome::ToolCalls(mut tcs) => {
                     for tc in &mut tcs {
+                        if cancelled.load(Ordering::SeqCst) {
+                            tracing::debug!("tool batch short-circuited by cancellation");
+                            break;
+                        }
                         self.dispatch_tool_call(tc, approval_sender, cancelled, event_tx)
                             .await?;
                     }
@@ -190,7 +217,9 @@ impl Executor {
                     if let Err(e) = self.conversation.checkpoint_async().await {
                         tracing::warn!(error = %e, "post-tool-batch checkpoint failed");
                         crate::send_or_warn!(
-                            event_tx.send(TurnEvent::Error(format!("Checkpoint failed: {e}"))),
+                            event_tx
+                                .send(TurnEvent::Error(format!("Checkpoint failed: {e}")))
+                                .await,
                             "TurnEvent receiver dropped; discarding event"
                         );
                     }
@@ -214,7 +243,8 @@ impl Executor {
                             .await?;
                         crate::send_or_warn!(
                             event_tx
-                                .send(TurnEvent::Token("(JSON parse error, retrying…)\n".into())),
+                                .send(TurnEvent::Token("(JSON parse error, retrying…)\n".into()))
+                                .await,
                             "TurnEvent receiver dropped; discarding event"
                         );
                     } else {
@@ -231,7 +261,9 @@ impl Executor {
 
             if iteration + 1 >= max_iterations {
                 crate::send_or_warn!(
-                    event_tx.send(TurnEvent::Error("Tool call loop limit reached".into())),
+                    event_tx
+                        .send(TurnEvent::Error("Tool call loop limit reached".into()))
+                        .await,
                     "TurnEvent receiver dropped; discarding event"
                 );
                 record_turn_metric(
@@ -263,7 +295,7 @@ impl Executor {
         user_input: &str,
         approval_sender: &mpsc::UnboundedSender<ApprovalRequest>,
         cancelled: &AtomicBool,
-        event_tx: &mpsc::UnboundedSender<TurnEvent>,
+        event_tx: &mpsc::Sender<TurnEvent>,
         tool_calls_out: &mut Vec<ToolInvocation>,
     ) -> anyhow::Result<IterationOutcome> {
         let model_info = self.adapter.model_info();
@@ -372,14 +404,14 @@ impl Executor {
                 StreamEvent::Text(t) => {
                     assistant_content.push_str(&t);
                     crate::send_or_warn!(
-                        event_tx.send(TurnEvent::Token(t)),
+                        event_tx.send(TurnEvent::Token(t)).await,
                         "TurnEvent receiver dropped; discarding event"
                     );
                 }
                 StreamEvent::Thinking(t) => {
                     assistant_thinking.push_str(&t);
                     crate::send_or_warn!(
-                        event_tx.send(TurnEvent::Thinking(t)),
+                        event_tx.send(TurnEvent::Thinking(t)).await,
                         "TurnEvent receiver dropped; discarding event"
                     );
                 }
@@ -391,7 +423,7 @@ impl Executor {
                         had_parse_error = true;
                     }
                     crate::send_or_warn!(
-                        event_tx.send(TurnEvent::Error(e)),
+                        event_tx.send(TurnEvent::Error(e)).await,
                         "TurnEvent receiver dropped; discarding event"
                     );
                 }
@@ -439,7 +471,7 @@ impl Executor {
                     // can ask the user to approve implementation.
                     if self.plan_mode && assistant_content.contains(PLAN_COMPLETE_MARKER) {
                         crate::send_or_warn!(
-                            event_tx.send(TurnEvent::PlanComplete),
+                            event_tx.send(TurnEvent::PlanComplete).await,
                             "TurnEvent receiver dropped; discarding event"
                         );
                     }
@@ -450,12 +482,14 @@ impl Executor {
                         let cost = crate::shared::calculate_cost(&self.model_name, u);
                         self.cost_tracking.record_turn(prompt, completion, cost);
                         crate::send_or_warn!(
-                            event_tx.send(TurnEvent::CostStats {
-                                prompt_tokens: prompt,
-                                completion_tokens: completion,
-                                turn_cost: cost,
-                                cumulative_cost: self.cost_tracking.cumulative_cost,
-                            }),
+                            event_tx
+                                .send(TurnEvent::CostStats {
+                                    prompt_tokens: prompt,
+                                    completion_tokens: completion,
+                                    turn_cost: cost,
+                                    cumulative_cost: self.cost_tracking.cumulative_cost,
+                                })
+                                .await,
                             "TurnEvent receiver dropped; discarding event"
                         );
                     }

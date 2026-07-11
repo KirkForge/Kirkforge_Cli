@@ -151,18 +151,28 @@ impl PathGuard {
         let workdir = self
             .sandbox_dir
             .as_deref()
-            .unwrap_or_else(|| Path::new("."));
-        let output = match std::process::Command::new("git")
-            .arg("check-ignore")
-            .arg("--quiet")
-            .arg(path)
-            .current_dir(workdir)
-            .output()
-        {
-            Ok(o) => o,
-            Err(_) => return false,
-        };
-        output.status.success()
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf();
+        let path = path.to_path_buf();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let output = match std::process::Command::new("git")
+                .arg("check-ignore")
+                .arg("--quiet")
+                .arg(&path)
+                .current_dir(workdir)
+                .output()
+            {
+                Ok(o) => o,
+                Err(_) => {
+                    let _ = tx.send(false);
+                    return;
+                }
+            };
+            let _ = tx.send(output.status.success());
+        });
+        rx.recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap_or(false)
     }
 
     /// Check whether `path` may be traversed (listed or read).

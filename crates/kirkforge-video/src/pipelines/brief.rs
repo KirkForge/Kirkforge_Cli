@@ -278,7 +278,8 @@ fn parse_quote(body: &str) -> Option<Quote> {
 
 /// Extract a `Stat` from a list item if it contains a number.
 fn extract_stat(item: &str) -> Option<Stat> {
-    let re = Regex::new(r"(\$?\d+(?:\.\d+)?\s*[%bBmMkKxX]?)").unwrap();
+    let re = Regex::new(r"(\$?\d+(?:\.\d+)?\s*[%bBmMkKxX]?)")
+        .expect("stat regex is hard-coded and valid");
     let m = re.find(item)?;
     let number = m.as_str().trim().to_string();
     // label = item minus the matched number, trimmed

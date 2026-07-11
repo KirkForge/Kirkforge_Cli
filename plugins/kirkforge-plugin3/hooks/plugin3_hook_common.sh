@@ -10,8 +10,11 @@ find_plugin3_bin() {
     script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     local candidates=(
         "$script_dir/plugin3"
+        "$script_dir/plugin3.exe"
         "$script_dir/../../../target/release/plugin3"
+        "$script_dir/../../../target/release/plugin3.exe"
         "$script_dir/../../../target/debug/plugin3"
+        "$script_dir/../../../target/debug/plugin3.exe"
         "$(command -v plugin3 2>/dev/null || true)"
     )
     for c in "${candidates[@]}"; do

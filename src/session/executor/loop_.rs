@@ -16,7 +16,7 @@ impl Executor {
     pub async fn run(
         &mut self,
         mut input_rx: mpsc::UnboundedReceiver<String>,
-        event_tx: mpsc::UnboundedSender<TurnEvent>,
+        event_tx: mpsc::Sender<TurnEvent>,
         approval_tx: mpsc::UnboundedSender<ApprovalRequest>,
         mut cancel_rx: mpsc::UnboundedReceiver<()>,
         mut resume_rx: mpsc::UnboundedReceiver<ConversationLog>,
@@ -42,6 +42,7 @@ impl Executor {
                 cancel_watcher_cancelled.store(true, Ordering::SeqCst);
                 if cancel_event_tx
                     .send(TurnEvent::Token("\n⚠️ Generation cancelled\n".into()))
+                    .await
                     .is_err()
                 {
                     tracing::warn!("TUI event receiver dropped; cancel watcher exiting");
@@ -81,7 +82,7 @@ impl Executor {
                     } else {
                         "Undo unavailable: no undo stack for this session.".to_string()
                     };
-                    if event_tx.send(TurnEvent::Token(msg)).is_err() {
+                    if event_tx.send(TurnEvent::Token(msg)).await.is_err() {
                         tracing::warn!("TUI event receiver dropped during /undo; exiting");
                         self.flush_carryover();
                         return Ok(());
@@ -103,6 +104,7 @@ impl Executor {
                         .send(TurnEvent::Token(format!(
                             "🔀 Switched to {new_name}\n"
                         )))
+                        .await
                         .is_err()
                     {
                         tracing::warn!(
@@ -125,7 +127,7 @@ impl Executor {
                             }
                         }
                     };
-                    if event_tx.send(TurnEvent::Token(msg)).is_err() {
+                    if event_tx.send(TurnEvent::Token(msg)).await.is_err() {
                         tracing::warn!("TUI event receiver dropped during plan-mode toggle; exiting");
                         self.flush_carryover();
                         return Ok(());
@@ -138,7 +140,7 @@ impl Executor {
                     } else {
                         format!("🔄 Reloaded config: {diff_summary}\n")
                     };
-                    if event_tx.send(TurnEvent::Token(msg)).is_err() {
+                    if event_tx.send(TurnEvent::Token(msg)).await.is_err() {
                         tracing::warn!("TUI event receiver dropped during config reload; exiting");
                         self.flush_carryover();
                         return Ok(());
@@ -148,6 +150,7 @@ impl Executor {
                     let summary = self.reload_plugins(&registry);
                     if event_tx
                         .send(TurnEvent::Token(format!("🔌 {summary}\n")))
+                        .await
                         .is_err()
                     {
                         tracing::warn!("TUI event receiver dropped during plugin reload; exiting");
@@ -158,7 +161,7 @@ impl Executor {
                 Some(new_log) = resume_rx.recv() => {
 
                     self.replace_conversation(new_log);
-                    if event_tx.send(TurnEvent::Token("✅ Resumed from fork\n".into())).is_err() {
+                    if event_tx.send(TurnEvent::Token("✅ Resumed from fork\n".into())).await.is_err() {
                         tracing::warn!("TUI event receiver dropped during /resume; exiting");
                         self.flush_carryover();
                         return Ok(());
@@ -265,6 +268,7 @@ impl Executor {
                                             .send(TurnEvent::Error(format!(
                                                 "Summarization failed: {e}"
                                             )))
+                                            .await
                                             .is_err()
                                         {
                                             self.flush_carryover();
@@ -292,7 +296,7 @@ impl Executor {
                                             result.tokens_after,
                                             (1.0 - result.tokens_after as f64 / result.tokens_before.max(1) as f64) * 100.0,
                                         ));
-                                        if event_tx.send(report).is_err() {
+                                        if event_tx.send(report).await.is_err() {
                                             self.flush_carryover();
                                             return Ok(());
                                         }
@@ -342,7 +346,7 @@ impl Executor {
                                 tokens_after: result.tokens_after,
                             }
                         };
-                        if event_tx.send(report).is_err() {
+                        if event_tx.send(report).await.is_err() {
                             tracing::warn!("TUI event receiver dropped during /compact; exiting");
                             self.flush_carryover();
                             return Ok(());
@@ -363,7 +367,7 @@ impl Executor {
                     // otherwise spin on a closed channel anyway).
                     let result = self.run_turn(&input, &approval_tx, &cancelled, &event_tx).await;
                     if let Err(e) = result {
-                        crate::send_or_warn!(event_tx.send(TurnEvent::Error(format!("Turn failed: {e}"))), "TurnEvent receiver dropped; discarding event");
+                        crate::send_or_warn!(event_tx.send(TurnEvent::Error(format!("Turn failed: {e}"))).await, "TurnEvent receiver dropped; discarding event");
                         tracing::warn!(
                             error = %e,
                             "TUI event receiver may be dropped while reporting turn-failure event"

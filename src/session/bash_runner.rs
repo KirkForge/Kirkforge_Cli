@@ -48,6 +48,109 @@ pub(crate) fn shell_program() -> &'static str {
     "sh"
 }
 
+/// True if `path` is world-writable (Unix other bit set). On non-Unix
+/// platforms we cannot easily determine this, so we conservatively treat
+/// the directory as safe and rely on the absolute-path filter.
+#[cfg(unix)]
+fn is_world_writable(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    match std::fs::metadata(path) {
+        Ok(m) => m.permissions().mode() & 0o002 != 0,
+        Err(_) => false,
+    }
+}
+
+#[cfg(not(unix))]
+fn is_world_writable(_path: &Path) -> bool {
+    false
+}
+
+/// Curated PATH for model-driven shell commands.
+///
+/// Starts from the supplied PATH string, drops relative entries and
+/// world-writable non-system directories (e.g. `/tmp`), and prepends a core
+/// set of standard system directories so basic tooling (`bash`, `cargo`,
+/// `git`, etc.) remains resolvable even on hosts where a system directory
+/// happens to be world-writable. This closes a PATH-shadowing attack where
+/// the model writes a malicious binary to a writable directory and
+/// manipulates PATH so a legitimate-looking command resolves to it, while
+/// still preserving common non-writable user directories (e.g.
+/// `~/.cargo/bin`).
+fn sanitized_path(original: &str) -> String {
+    use std::collections::HashSet;
+
+    let sep = if cfg!(windows) { ';' } else { ':' };
+
+    // Standard system directories are always included, and listed first so
+    // they cannot be shadowed by a writable directory that happens to appear
+    // earlier in the original PATH.
+    let system_dirs: &[&str] = if cfg!(windows) {
+        &[
+            r"C:\Windows\System32",
+            r"C:\Windows",
+            r"C:\Program Files\Git\usr\bin",
+        ]
+    } else {
+        &[
+            "/usr/local/sbin",
+            "/usr/local/bin",
+            "/usr/sbin",
+            "/usr/bin",
+            "/sbin",
+            "/bin",
+        ]
+    };
+
+    let mut seen = HashSet::new();
+    let mut kept = Vec::new();
+
+    for dir in system_dirs {
+        if seen.insert((*dir).to_string()) {
+            kept.push((*dir).to_string());
+        }
+    }
+
+    for entry in original.split(sep) {
+        if entry.is_empty() {
+            continue;
+        }
+        let path = Path::new(entry);
+        if !path.is_absolute() {
+            continue;
+        }
+        // System directories were already added above.
+        if system_dirs.contains(&entry) {
+            continue;
+        }
+        if is_world_writable(path) {
+            continue;
+        }
+        if seen.insert(entry.to_string()) {
+            kept.push(entry.to_string());
+        }
+    }
+
+    if kept.is_empty() {
+        if cfg!(windows) {
+            String::from(r"C:\Windows\System32;C:\Windows;C:\Program Files\Git\usr\bin")
+        } else {
+            String::from("/usr/bin:/bin:/usr/local/bin")
+        }
+    } else {
+        kept.join(&sep.to_string())
+    }
+}
+
+/// Return a curated PATH for the current process, reading the host PATH once.
+///
+/// This is the entry point used by the model's bash tool; tests should call
+/// `sanitized_path` directly with a constructed string to avoid mutating
+/// global environment state.
+fn model_command_path() -> String {
+    let original = std::env::var("PATH").unwrap_or_default();
+    sanitized_path(&original)
+}
+
 /// Reader that stops accepting bytes once `cap` is reached but keeps
 /// draining the underlying pipe so the child process doesn't block on a
 /// full pipe buffer. Anything past the cap is discarded (counted, not
@@ -179,7 +282,8 @@ pub async fn run_shell_with_token(
         .current_dir(workdir)
         .kill_on_drop(true)
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stderr(Stdio::piped())
+        .env("PATH", model_command_path());
 
     setup_process_group(&mut proc);
 
@@ -583,7 +687,9 @@ fn redirects_to_dangerous_path(cmd: &str) -> Option<&'static str> {
         while j < bytes.len() && !is_shell_token_separator(bytes[j]) {
             j += 1;
         }
-        let target = std::str::from_utf8(&bytes[start..j]).unwrap_or("").to_lowercase();
+        let target = std::str::from_utf8(&bytes[start..j])
+            .unwrap_or("")
+            .to_lowercase();
         for prefix in DANGEROUS_REDIRECTION_TARGETS {
             if target.starts_with(prefix) || target == prefix.trim_end_matches('/') {
                 return Some(*prefix);
@@ -1145,7 +1251,9 @@ mod tests {
                 false,
             );
             assert!(
-                result.as_ref().is_some_and(|m| m.contains("dangerous pattern")),
+                result
+                    .as_ref()
+                    .is_some_and(|m| m.contains("dangerous pattern")),
                 "{cmd} should be blocked, got: {result:?}"
             );
         }
@@ -1168,7 +1276,9 @@ mod tests {
                 false,
             );
             assert!(
-                result.as_ref().is_some_and(|m| m.contains("dangerous redirection")),
+                result
+                    .as_ref()
+                    .is_some_and(|m| m.contains("dangerous redirection")),
                 "{cmd} should be blocked, got: {result:?}"
             );
         }
@@ -1190,7 +1300,9 @@ mod tests {
                 false,
             );
             assert!(
-                result.as_ref().is_some_and(|m| m.contains("dangerous redirection")),
+                result
+                    .as_ref()
+                    .is_some_and(|m| m.contains("dangerous redirection")),
                 "{cmd} should be blocked, got: {result:?}"
             );
         }
@@ -1207,7 +1319,9 @@ mod tests {
             false,
         );
         assert!(
-            result.as_ref().is_some_and(|m| m.contains("dangerous pattern")),
+            result
+                .as_ref()
+                .is_some_and(|m| m.contains("dangerous pattern")),
             "rm -rf \\/ should be blocked, got: {result:?}"
         );
     }
@@ -1247,5 +1361,61 @@ mod tests {
             result.as_ref().is_some_and(|m| m.contains("denied URL")),
             "denied URL in bash command should be blocked, got: {result:?}"
         );
+    }
+
+    /// `sanitized_path` keeps absolute, non-world-writable directories and
+    /// drops relative or world-writable non-system entries. System directories
+    /// are always included even if they happen to be world-writable.
+    #[test]
+    fn test_sanitized_path_filters_world_writable_and_relative() {
+        let tmp = std::env::temp_dir();
+        let safe = tmp.join("kirkforge_safe_path_test");
+        let _ = std::fs::remove_dir_all(&safe);
+        std::fs::create_dir_all(&safe).unwrap();
+        // Ensure the test directory is NOT world-writable.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&safe).unwrap().permissions();
+            perms.set_mode(0o700);
+            std::fs::set_permissions(&safe, perms).unwrap();
+        }
+
+        let sep = if cfg!(windows) { ';' } else { ':' };
+        let constructed = format!(".{sep}{safe}{sep}/tmp{sep}/usr/bin", safe = safe.display());
+        let result = sanitized_path(&constructed);
+
+        let parts: Vec<&str> = result.split(sep).collect();
+        assert!(
+            !parts.contains(&"."),
+            "relative path '.' should be dropped, got: {result}"
+        );
+        assert!(
+            !parts.contains(&"/tmp"),
+            "world-writable /tmp should be dropped, got: {result}"
+        );
+        assert!(
+            parts.contains(&"/usr/bin"),
+            "safe system path should be kept, got: {result}"
+        );
+        let safe_str = safe.to_string_lossy().to_string();
+        assert!(
+            parts.contains(&safe_str.as_str()),
+            "safe test dir should be kept, got: {result}"
+        );
+
+        let _ = std::fs::remove_dir_all(&safe);
+    }
+
+    /// When the supplied PATH is empty, fall back to a known-safe set.
+    #[test]
+    fn test_sanitized_path_fallback_when_empty() {
+        let result = sanitized_path("");
+        if cfg!(windows) {
+            assert!(result.contains(r"C:\Windows\System32"), "got: {result}");
+        } else {
+            assert!(result.contains("/usr/bin"), "got: {result}");
+            assert!(result.contains("/bin"), "got: {result}");
+        }
     }
 }

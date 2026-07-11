@@ -7,15 +7,11 @@ set -euo pipefail
 source "$(dirname "$0")/common.sh"
 STRATUM="$(find_stratum)" || die "stratum_config_validate: stratum binary not found (build the workspace or install stratum on PATH)"
 
-: "${KIRKFORGE_TOOL_ARGS_JSON:={}}"
+ARGS="$(stratum_args)"
 
 args=("--validate")
 
-if command -v jq >/dev/null 2>&1; then
-  json_out=$(jq -r '.json // false' <<<"$KIRKFORGE_TOOL_ARGS_JSON")
-else
-  json_out=$(echo "$KIRKFORGE_TOOL_ARGS_JSON" | grep -o '"json"[[:space:]]*:[[:space:]]*true' >/dev/null 2>&1 && echo true || echo false)
-fi
+json_out="$(json_get_bool "$ARGS" "json" "false")"
 
 [ "$json_out" = "true" ] && args+=("--json")
 

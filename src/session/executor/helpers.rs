@@ -300,6 +300,104 @@ pub(crate) fn check_url_in_args(args: &serde_json::Value, deny_list: &DenyList) 
     None
 }
 
+/// Lightweight pre-flight validation of tool arguments against a JSON Schema
+/// fragment. Only the `required` array and per-property `type` fields are
+/// checked; this is enough to catch the most common model failures (missing a
+/// required parameter, passing a string where an integer is expected) before
+/// handing the call to a plugin script or MCP server.
+///
+/// Returns `None` when the arguments look valid, or `Some(reason)` when they
+/// do not.
+pub(crate) fn validate_args_against_schema(
+    args: &serde_json::Value,
+    schema: &serde_json::Value,
+) -> Option<String> {
+    let properties = schema.get("properties").and_then(|p| p.as_object())?;
+    let required = schema
+        .get("required")
+        .and_then(|r| r.as_array())
+        .map(|r| {
+            r.iter()
+                .filter_map(|v| v.as_str())
+                .collect::<std::collections::HashSet<_>>()
+        })
+        .unwrap_or_default();
+
+    let args_obj = match args.as_object() {
+        Some(o) => o,
+        None => return Some(format!("arguments must be a JSON object, got {args}")),
+    };
+
+    for req in &required {
+        if !args_obj.contains_key(*req) {
+            return Some(format!("missing required argument '{req}'"));
+        }
+    }
+
+    for (key, value) in args_obj {
+        let prop_schema = match properties.get(key) {
+            Some(s) => s,
+            None => continue, // unknown keys are allowed; the tool can ignore them
+        };
+        let expected = prop_schema.get("type").and_then(|t| t.as_str());
+        if let Some(expected) = expected {
+            if let Some(reason) = value_matches_type(value, expected, key) {
+                return Some(reason);
+            }
+            // Validate array item types if declared.
+            if expected == "array" {
+                if let Some(items) = prop_schema.get("items") {
+                    if let Some(item_type) = items.get("type").and_then(|t| t.as_str()) {
+                        if let Some(arr) = value.as_array() {
+                            for (idx, item) in arr.iter().enumerate() {
+                                if let Some(reason) = value_matches_type(item, item_type, key) {
+                                    return Some(format!(
+                                        "array item {idx} for '{key}' has wrong type: {reason}"
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
+fn value_matches_type(value: &serde_json::Value, expected: &str, key: &str) -> Option<String> {
+    let ok = match expected {
+        "string" => value.is_string(),
+        "integer" => value.is_i64() || value.is_u64(),
+        "number" => value.is_number(),
+        "boolean" => value.is_boolean(),
+        "array" => value.is_array(),
+        "object" => value.is_object(),
+        "null" => value.is_null(),
+        _ => true, // unknown type in schema is ignored
+    };
+    if ok {
+        None
+    } else {
+        Some(format!(
+            "argument '{key}' expected type '{expected}', got {}",
+            json_value_type_name(value)
+        ))
+    }
+}
+
+fn json_value_type_name(value: &serde_json::Value) -> &'static str {
+    match value {
+        serde_json::Value::String(_) => "string",
+        serde_json::Value::Number(_) => "number",
+        serde_json::Value::Bool(_) => "boolean",
+        serde_json::Value::Array(_) => "array",
+        serde_json::Value::Object(_) => "object",
+        serde_json::Value::Null => "null",
+    }
+}
+
 /// Process a tool outcome: append the conversation log entry, push a
 /// `TurnEvent::ToolResult` for downstream consumers, and (on error) try
 /// to surface a recovery hint.
@@ -312,17 +410,19 @@ pub(crate) fn check_url_in_args(args: &serde_json::Value, deny_list: &DenyList) 
 pub(crate) async fn handle_tool_outcome(
     outcome: ToolOutcome,
     tc: &ToolInvocation,
-    event_tx: &mpsc::UnboundedSender<TurnEvent>,
+    event_tx: &mpsc::Sender<TurnEvent>,
     conversation: &mut ConversationLog,
 ) -> anyhow::Result<Option<String>> {
     match outcome {
         ToolOutcome::Success { content } => {
             crate::send_or_warn!(
-                event_tx.send(TurnEvent::ToolResult {
-                    name: tc.name.clone(),
-                    output: content.clone(),
-                    success: true,
-                }),
+                event_tx
+                    .send(TurnEvent::ToolResult {
+                        name: tc.name.clone(),
+                        output: content.clone(),
+                        success: true,
+                    })
+                    .await,
                 "TurnEvent receiver dropped; discarding event"
             );
             conversation
@@ -337,11 +437,13 @@ pub(crate) async fn handle_tool_outcome(
         }
         ToolOutcome::FileContent { content, .. } => {
             crate::send_or_warn!(
-                event_tx.send(TurnEvent::ToolResult {
-                    name: tc.name.clone(),
-                    output: content.clone(),
-                    success: true,
-                }),
+                event_tx
+                    .send(TurnEvent::ToolResult {
+                        name: tc.name.clone(),
+                        output: content.clone(),
+                        success: true,
+                    })
+                    .await,
                 "TurnEvent receiver dropped; discarding event"
             );
             conversation
@@ -359,11 +461,13 @@ pub(crate) async fn handle_tool_outcome(
             // BusEvent::Edit event downstream carries the real
             // diff text — see the docstring on this fn.
             crate::send_or_warn!(
-                event_tx.send(TurnEvent::ToolResult {
-                    name: tc.name.clone(),
-                    output: diff.clone(),
-                    success: true,
-                }),
+                event_tx
+                    .send(TurnEvent::ToolResult {
+                        name: tc.name.clone(),
+                        output: diff.clone(),
+                        success: true,
+                    })
+                    .await,
                 "TurnEvent receiver dropped; discarding event"
             );
             conversation
@@ -384,11 +488,13 @@ pub(crate) async fn handle_tool_outcome(
         } => {
             let output = format_grep_output(&path, &matches);
             crate::send_or_warn!(
-                event_tx.send(TurnEvent::ToolResult {
-                    name: tc.name.clone(),
-                    output: output.clone(),
-                    success: true,
-                }),
+                event_tx
+                    .send(TurnEvent::ToolResult {
+                        name: tc.name.clone(),
+                        output: output.clone(),
+                        success: true,
+                    })
+                    .await,
                 "TurnEvent receiver dropped; discarding event"
             );
             conversation
@@ -403,11 +509,13 @@ pub(crate) async fn handle_tool_outcome(
         }
         ToolOutcome::Error { message } => {
             crate::send_or_warn!(
-                event_tx.send(TurnEvent::ToolResult {
-                    name: tc.name.clone(),
-                    output: format!("Error: {message}"),
-                    success: false,
-                }),
+                event_tx
+                    .send(TurnEvent::ToolResult {
+                        name: tc.name.clone(),
+                        output: format!("Error: {message}"),
+                        success: false,
+                    })
+                    .await,
                 "TurnEvent receiver dropped; discarding event"
             );
             conversation
@@ -431,11 +539,13 @@ pub(crate) async fn handle_tool_outcome(
         ToolOutcome::Failure(err) => {
             let message = err.to_user_message();
             crate::send_or_warn!(
-                event_tx.send(TurnEvent::ToolResult {
-                    name: tc.name.clone(),
-                    output: format!("Error: {message}"),
-                    success: false,
-                }),
+                event_tx
+                    .send(TurnEvent::ToolResult {
+                        name: tc.name.clone(),
+                        output: format!("Error: {message}"),
+                        success: false,
+                    })
+                    .await,
                 "TurnEvent receiver dropped; discarding event"
             );
             conversation
@@ -473,11 +583,13 @@ pub(crate) async fn handle_tool_outcome(
                 data_base64.len()
             );
             crate::send_or_warn!(
-                event_tx.send(TurnEvent::ToolResult {
-                    name: tc.name.clone(),
-                    output: projection.clone(),
-                    success: true,
-                }),
+                event_tx
+                    .send(TurnEvent::ToolResult {
+                        name: tc.name.clone(),
+                        output: projection.clone(),
+                        success: true,
+                    })
+                    .await,
                 "TurnEvent receiver dropped; discarding event"
             );
             conversation
@@ -519,15 +631,17 @@ pub(crate) fn format_grep_output(
 pub(crate) async fn emit_correction_results(
     results: Vec<CorrectionResult>,
     tc: &ToolInvocation,
-    event_tx: &mpsc::UnboundedSender<TurnEvent>,
+    event_tx: &mpsc::Sender<TurnEvent>,
     conversation: &mut ConversationLog,
 ) -> anyhow::Result<()> {
     for cr in &results {
         crate::send_or_warn!(
-            event_tx.send(TurnEvent::Verification {
-                message: cr.message.clone(),
-                success: cr.success,
-            }),
+            event_tx
+                .send(TurnEvent::Verification {
+                    message: cr.message.clone(),
+                    success: cr.success,
+                })
+                .await,
             "TurnEvent receiver dropped; discarding event"
         );
         conversation.append(Message {
@@ -605,5 +719,68 @@ mod tests {
                 "denied {key} argument should be blocked"
             );
         }
+    }
+
+    #[test]
+    fn test_validate_args_missing_required() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": { "workspace": { "type": "string" } },
+            "required": ["workspace"]
+        });
+        let args = serde_json::json!({});
+        assert!(
+            validate_args_against_schema(&args, &schema)
+                .is_some_and(|m| m.contains("missing required argument 'workspace'")),
+            "missing required arg should be rejected"
+        );
+    }
+
+    #[test]
+    fn test_validate_args_wrong_type() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": { "timeout": { "type": "integer" } }
+        });
+        let args = serde_json::json!({"timeout": "thirty"});
+        assert!(
+            validate_args_against_schema(&args, &schema)
+                .is_some_and(|m| m.contains("expected type 'integer'")),
+            "wrong type should be rejected, got: {:?}",
+            validate_args_against_schema(&args, &schema)
+        );
+    }
+
+    #[test]
+    fn test_validate_args_array_item_type() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "file": { "type": "array", "items": { "type": "string" } }
+            }
+        });
+        let args = serde_json::json!({"file": ["a.txt", 1]});
+        assert!(
+            validate_args_against_schema(&args, &schema)
+                .is_some_and(|m| m.contains("array item 1")),
+            "array item with wrong type should be rejected"
+        );
+    }
+
+    #[test]
+    fn test_validate_args_allows_valid_call() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "workspace": { "type": "string" },
+                "timeout": { "type": "integer" }
+            },
+            "required": ["workspace"]
+        });
+        let args = serde_json::json!({"workspace": "/tmp/ws", "timeout": 30});
+        assert!(
+            validate_args_against_schema(&args, &schema).is_none(),
+            "valid args should pass validation"
+        );
     }
 }

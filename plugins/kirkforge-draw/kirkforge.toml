@@ -41,14 +41,6 @@ description = "Render a KirkForge-Draw .td.json document to a fenced markdown co
 schema = { type = "object", properties = { path = { type = "string", description = "Path to the .td.json file" } }, required = ["path"] }
 command = "tools/render.sh"
 
-# Shell tool: open the editor on a file.
-[[capabilities]]
-type = "tool"
-name = "draw_edit"
-description = "Open the kfd terminal editor on a .td.json file. Pops a TUI subprocess; the user saves the new document in place."
-schema = { type = "object", properties = { path = { type = "string", description = "Path to the .td.json file (will be created if missing)" } }, required = ["path"] }
-command = "tools/edit.sh"
-
 # Optional hook: after each model turn, suggest rendering any new .td.json
 # in the working directory.
 [[capabilities]]

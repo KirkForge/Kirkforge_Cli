@@ -19,7 +19,7 @@ command = "tools/verify.sh"
 type = "tool"
 name = "plugin_verify_workspace"
 description = "Run deterministic verification on a workspace directory and output a ReducedStatePacket."
-schema = { type = "object", properties = { workspace = { type = "string", description = "Path to the workspace directory" }, file = { type = "string", description = "Specific file path to verify (repeatable; pass space-separated paths here)" }, language = { type = "string", description = "Task language (typescript, javascript, python, etc.)" }, description = { type = "string", description = "Task description for language profile detection" }, taskId = { type = "string", description = "Task identifier for the verification run" } }, required = ["workspace"] }
+schema = { type = "object", properties = { workspace = { type = "string", description = "Path to the workspace directory" }, file = { type = "array", items = { type = "string", description = "Specific file path to verify" }, description = "Optional file path(s) to verify; pass a single-element array for one file" }, language = { type = "string", description = "Task language (typescript, javascript, python, etc.)" }, description = { type = "string", description = "Task description for language profile detection" }, taskId = { type = "string", description = "Task identifier for the verification run" } }, required = ["workspace"] }
 command = "tools/verify-workspace.sh"
 
 [[capabilities]]

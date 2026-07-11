@@ -96,7 +96,7 @@ pub fn all_tools(
     bash_sandbox_workdir: bool,
 ) -> Vec<Arc<dyn Tool>> {
     let mut tools: Vec<Arc<dyn Tool>> = vec![
-        Arc::new(read_file::ReadFile),
+        Arc::new(read_file::ReadFile::new(path_guard.clone())),
         Arc::new(write_file::WriteFile::new(
             undo_stack.clone(),
             path_guard.clone(),

@@ -181,7 +181,7 @@ impl PluginRegistry {
                     if let Some(ref reason) = hosted.rejection {
                         warnings.push(format!("{}: {}", hosted.plugin.manifest.name, reason));
                     } else {
-                        self.push_and_index(hosted);
+                        warnings.extend(self.push_and_index(hosted));
                     }
                 }
                 Err(e) => {
@@ -194,26 +194,39 @@ impl PluginRegistry {
     }
 
     /// Add a hosted plugin to the registry and index its capabilities.
-    fn push_and_index(&mut self, hosted: HostedPlugin) {
+    fn push_and_index(&mut self, hosted: HostedPlugin) -> Vec<String> {
         let idx = self.plugins.len();
         self.plugins.push(hosted);
-        self.index_at(idx);
+        self.index_at(idx)
     }
 
-    /// Index capabilities for the plugin at position `idx`.
-    fn index_at(&mut self, idx: usize) {
+    /// Index capabilities for the plugin at position `idx`. Returns warnings
+    /// for duplicate capabilities that silently shadow an existing entry.
+    fn index_at(&mut self, idx: usize) -> Vec<String> {
+        let mut warnings = Vec::new();
         let Some(hosted) = self.plugins.get(idx) else {
-            return;
+            return warnings;
         };
         let manifest = hosted.plugin.manifest().clone();
+        let plugin_name = &manifest.name;
 
         for cap in &manifest.capabilities {
             match cap {
                 Capability::Skill { trigger, .. } => {
-                    self.skills_by_trigger.insert(trigger.clone(), idx);
+                    if let Some(prev) = self.skills_by_trigger.insert(trigger.clone(), idx) {
+                        let prev_name = self.plugins[prev].plugin.manifest().name.clone();
+                        warnings.push(format!(
+                            "skill trigger '{trigger}' from plugin '{plugin_name}' shadows plugin '{prev_name}'"
+                        ));
+                    }
                 }
                 Capability::Tool { name, .. } => {
-                    self.tools_by_name.insert(name.clone(), idx);
+                    if let Some(prev) = self.tools_by_name.insert(name.clone(), idx) {
+                        let prev_name = self.plugins[prev].plugin.manifest().name.clone();
+                        warnings.push(format!(
+                            "tool '{name}' from plugin '{plugin_name}' shadows plugin '{prev_name}'"
+                        ));
+                    }
                 }
                 Capability::Hook { event, .. } => {
                     self.hooks_by_event
@@ -222,10 +235,16 @@ impl PluginRegistry {
                         .push(idx);
                 }
                 Capability::Verifier { name, .. } => {
-                    self.verifiers_by_name.insert(name.clone(), idx);
+                    if let Some(prev) = self.verifiers_by_name.insert(name.clone(), idx) {
+                        let prev_name = self.plugins[prev].plugin.manifest().name.clone();
+                        warnings.push(format!(
+                            "verifier '{name}' from plugin '{plugin_name}' shadows plugin '{prev_name}'"
+                        ));
+                    }
                 }
             }
         }
+        warnings
     }
 
     /// Rebuild all capability index maps from the plugin vector.
@@ -238,15 +257,23 @@ impl PluginRegistry {
         self.hooks_by_event.clear();
         self.verifiers_by_name.clear();
         for idx in 0..self.plugins.len() {
-            self.index_at(idx);
+            // Warnings from rebuild are not propagated because remove()
+            // cannot return them; duplicates here indicate the same
+            // capability remained after removing the previous owner.
+            let _ = self.index_at(idx);
         }
     }
 
     /// Load a single plugin directory by path and apply `policy`.
     ///
-    /// Returns the plugin name on success. If the plugin is rejected by the
-    /// trust policy, returns the rejection reason as an error.
-    pub fn load_one(&mut self, plugin_dir: &Path, policy: TrustPolicy) -> anyhow::Result<String> {
+    /// Returns the plugin name and any duplicate-capability warnings on
+    /// success. If the plugin is rejected by the trust policy, returns the
+    /// rejection reason as an error.
+    pub fn load_one(
+        &mut self,
+        plugin_dir: &Path,
+        policy: TrustPolicy,
+    ) -> anyhow::Result<(String, Vec<String>)> {
         let plugin = LoadedPlugin::load(plugin_dir).map_err(|e| {
             anyhow::anyhow!("failed to load plugin from {}: {}", plugin_dir.display(), e)
         })?;
@@ -276,8 +303,8 @@ impl PluginRegistry {
         let name = hosted.plugin.manifest().name.clone();
         // Remove any existing plugin with the same name before loading the new one.
         self.remove(&name);
-        self.push_and_index(hosted);
-        Ok(name)
+        let warnings = self.push_and_index(hosted);
+        Ok((name, warnings))
     }
 
     /// Remove an active plugin by name.
@@ -582,7 +609,7 @@ command = "hooks/post-turn.sh"
         make_test_plugin_dir(&plugin_dir, TrustTier::Shell);
 
         let mut reg = PluginRegistry::new();
-        let name = reg
+        let (name, _warnings) = reg
             .load_one(&plugin_dir, TrustPolicy::up_to(TrustTier::Shell))
             .unwrap();
         assert_eq!(name, "test-plugin");

@@ -186,7 +186,7 @@ pub async fn handle_input_key(
     config_tx: &mpsc::UnboundedSender<Config>,
     plan_tx: &mpsc::UnboundedSender<bool>,
     persona_tx: &mpsc::UnboundedSender<PersonaResult>,
-    event_tx: &mpsc::UnboundedSender<TurnEvent>,
+    event_tx: &mpsc::Sender<TurnEvent>,
     plugin_reload_tx: &mpsc::UnboundedSender<PluginRegistry>,
 ) -> anyhow::Result<()> {
     // ── Session picker interceptor ─────────────────────────
@@ -1222,7 +1222,7 @@ mod tests {
         let (config_tx, _config_rx) = mpsc::unbounded_channel::<Config>();
         let (plan_tx, _plan_rx) = mpsc::unbounded_channel::<bool>();
         let (persona_tx, _persona_rx) = mpsc::unbounded_channel::<PersonaResult>();
-        let (event_tx, _event_rx) = mpsc::unbounded_channel::<TurnEvent>();
+        let (event_tx, _event_rx) = mpsc::channel::<TurnEvent>(10_000);
         let (plugin_reload_tx, _plugin_reload_rx) =
             mpsc::unbounded_channel::<kirkforge_plugin_host::PluginRegistry>();
 
@@ -1265,7 +1265,7 @@ mod tests {
         let (config_tx, _config_rx) = mpsc::unbounded_channel::<Config>();
         let (plan_tx, _plan_rx) = mpsc::unbounded_channel::<bool>();
         let (persona_tx, _persona_rx) = mpsc::unbounded_channel::<PersonaResult>();
-        let (event_tx, _event_rx) = mpsc::unbounded_channel::<TurnEvent>();
+        let (event_tx, _event_rx) = mpsc::channel::<TurnEvent>(10_000);
         let (plugin_reload_tx, _plugin_reload_rx) =
             mpsc::unbounded_channel::<kirkforge_plugin_host::PluginRegistry>();
 
@@ -1282,7 +1282,7 @@ mod tests {
             config_tx: &mpsc::UnboundedSender<Config>,
             plan_tx: &mpsc::UnboundedSender<bool>,
             persona_tx: &mpsc::UnboundedSender<PersonaResult>,
-            event_tx: &mpsc::UnboundedSender<TurnEvent>,
+            event_tx: &mpsc::Sender<TurnEvent>,
             plugin_reload_tx: &mpsc::UnboundedSender<kirkforge_plugin_host::PluginRegistry>,
         ) {
             handle_input_key(
@@ -1391,7 +1391,7 @@ mod tests {
         let (config_tx, _config_rx) = mpsc::unbounded_channel::<Config>();
         let (plan_tx, _plan_rx) = mpsc::unbounded_channel::<bool>();
         let (persona_tx, _persona_rx) = mpsc::unbounded_channel::<PersonaResult>();
-        let (event_tx, _event_rx) = mpsc::unbounded_channel::<TurnEvent>();
+        let (event_tx, _event_rx) = mpsc::channel::<TurnEvent>(10_000);
         let (plugin_reload_tx, _plugin_reload_rx) =
             mpsc::unbounded_channel::<kirkforge_plugin_host::PluginRegistry>();
 

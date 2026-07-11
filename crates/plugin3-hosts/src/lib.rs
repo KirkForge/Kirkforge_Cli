@@ -1,3 +1,5 @@
+#![cfg_attr(not(test), deny(clippy::unwrap_used))]
+
 //! plugin3-hosts — host detection and canonical payload schemas.
 //! Per ADR-0013.
 //!

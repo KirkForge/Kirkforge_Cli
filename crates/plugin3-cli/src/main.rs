@@ -1,3 +1,5 @@
+#![cfg_attr(not(test), deny(clippy::unwrap_used))]
+
 //! plugin3 CLI — host hooks + budget + cost reporting.
 //! Per ADR-0009, 0010, 0015. Minimal MVP: hooks speak JSON on stdin/stdout.
 
@@ -331,7 +333,9 @@ fn self_check() {
         tail_bytes: 256,
     };
     let input = "x".repeat(50_000) + "Y_END";
-    let out = slicer.apply(&input, &store).unwrap();
+    let out = slicer
+        .apply(&input, &store)
+        .expect("self-check slicing should succeed on synthetic input");
     assert_eq!(out.head.len(), 256);
     assert_eq!(out.tail.len(), 256);
     assert!(out.tail.ends_with("Y_END"), "tail should end with sentinel");
@@ -351,9 +355,12 @@ fn self_check() {
     assert_eq!(b.state(), BudgetState::Over);
 
     // Offload retrieval round-trip via marker.
-    let marker = out.offload_marker.as_ref().unwrap();
-    let key = plugin3_core::parse_slice_marker(marker).unwrap();
-    let recovered = store.get(key).unwrap();
+    let marker = out
+        .offload_marker
+        .as_ref()
+        .expect("self-check produced an offload marker");
+    let key = plugin3_core::parse_slice_marker(marker).expect("self-check marker parses");
+    let recovered = store.get(key).expect("self-check recovers offloaded slice");
     assert_eq!(recovered.len(), out.bytes_saved);
 
     // Hook registry (ADR-0009). Serialising must not panic and

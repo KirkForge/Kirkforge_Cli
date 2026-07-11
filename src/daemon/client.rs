@@ -26,9 +26,9 @@ mod unix_imp {
 
         /// Try to connect to a daemon at an explicit socket path.
         pub async fn connect_at(path: PathBuf) -> anyhow::Result<Self> {
-            let stream = UnixStream::connect(&path)
-                .await
-                .with_context(|| format!("failed to connect to daemon socket at {}", path.display()))?;
+            let stream = UnixStream::connect(&path).await.with_context(|| {
+                format!("failed to connect to daemon socket at {}", path.display())
+            })?;
             Ok(Self {
                 stream: BufStream::new(stream),
             })
@@ -83,7 +83,8 @@ mod unix_imp {
                     let mut out = Vec::with_capacity(arr.len());
                     for v in arr {
                         out.push(
-                            serde_json::from_value::<SessionEntry>(v).context("parse session entry")?,
+                            serde_json::from_value::<SessionEntry>(v)
+                                .context("parse session entry")?,
                         );
                     }
                     Ok(out)

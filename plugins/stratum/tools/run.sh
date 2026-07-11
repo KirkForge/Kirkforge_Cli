@@ -7,26 +7,15 @@ set -euo pipefail
 source "$(dirname "$0")/common.sh"
 STRATUM="$(find_stratum)" || die "stratum_run: stratum binary not found (build the workspace or install stratum on PATH)"
 
-: "${KIRKFORGE_TOOL_ARGS_JSON:={}}"
+ARGS="$(stratum_args)"
 
 args=()
 
-input=""
-if command -v jq >/dev/null 2>&1; then
-  input=$(jq -r '.input // empty' <<<"$KIRKFORGE_TOOL_ARGS_JSON")
-  mode=$(jq -r '.mode // empty' <<<"$KIRKFORGE_TOOL_ARGS_JSON")
-  token_budget=$(jq -r '.token_budget // empty' <<<"$KIRKFORGE_TOOL_ARGS_JSON")
-  json_out=$(jq -r '.json // false' <<<"$KIRKFORGE_TOOL_ARGS_JSON")
-  dry_run=$(jq -r '.dry_run // false' <<<"$KIRKFORGE_TOOL_ARGS_JSON")
-  max_input_size=$(jq -r '.max_input_size // empty' <<<"$KIRKFORGE_TOOL_ARGS_JSON")
-else
-  input=$(echo "$KIRKFORGE_TOOL_ARGS_JSON" | grep -o '"input"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*"\([^"]*\)"/\1/' || true)
-  mode=$(echo "$KIRKFORGE_TOOL_ARGS_JSON" | grep -o '"mode"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*"\([^"]*\)"/\1/' || true)
-  token_budget=$(echo "$KIRKFORGE_TOOL_ARGS_JSON" | grep -o '"token_budget"[[:space:]]*:[[:space:]]*[0-9]*' | sed 's/.*://' || true)
-  json_out=$(echo "$KIRKFORGE_TOOL_ARGS_JSON" | grep -o '"json"[[:space:]]*:[[:space:]]*true' >/dev/null 2>&1 && echo true || echo false)
-  dry_run=$(echo "$KIRKFORGE_TOOL_ARGS_JSON" | grep -o '"dry_run"[[:space:]]*:[[:space:]]*true' >/dev/null 2>&1 && echo true || echo false)
-  max_input_size=$(echo "$KIRKFORGE_TOOL_ARGS_JSON" | grep -o '"max_input_size"[[:space:]]*:[[:space:]]*[0-9]*' | sed 's/.*://' || true)
-fi
+mode="$(json_get_string "$ARGS" "mode" "")"
+token_budget="$(json_get_integer "$ARGS" "token_budget" "")"
+json_out="$(json_get_bool "$ARGS" "json" "false")"
+dry_run="$(json_get_bool "$ARGS" "dry_run" "false")"
+max_input_size="$(json_get_integer "$ARGS" "max_input_size" "")"
 
 [ -n "$mode" ] && args+=("--mode" "$mode")
 [ -n "$token_budget" ] && args+=("--token-budget" "$token_budget")
@@ -34,8 +23,9 @@ fi
 [ "$dry_run" = "true" ] && args+=("--dry-run")
 [ -n "$max_input_size" ] && args+=("--max-input-size" "$max_input_size")
 
-if [ -z "$input" ]; then
+if ! json_has_key "$ARGS" "input"; then
   die "stratum_run: missing 'input' field; pass the text to compress as input, or use stratum_apply for files"
 fi
 
+input="$(json_get_string "$ARGS" "input" "")"
 printf '%s' "$input" | "$STRATUM" "${args[@]}" run

@@ -49,7 +49,10 @@ pub async fn run_pipeline(
     if comp_path.exists() {
         let comp: Composition = serde_json::from_str(&std::fs::read_to_string(&comp_path)?)?;
         let out = project_dir.join("render").join("final.mp4");
-        std::fs::create_dir_all(out.parent().unwrap())?;
+        let out_dir = out.parent().ok_or_else(|| {
+            crate::error::KfError::Artifact("render/final.mp4 has no parent".into())
+        })?;
+        std::fs::create_dir_all(out_dir)?;
         crate::compose::render::render_composition(&comp, &out).await?;
         tracing::info!(path = %out.display(), "rendered final video");
     }

@@ -59,7 +59,7 @@ Plugins are filesystem folders containing a `kirkforge.toml` manifest plus any t
 
 This repo ships with five satellite plugins under `plugins/<name>/`. Each plugin’s source code also lives in this repo so everything builds together:
 
-- `plugins/kirkforge-draw/` / `crates/kirkforge-draw*` — terminal diagram editor (`/draw`, `draw_render`, `draw_edit`).
+- `plugins/kirkforge-draw/` / `crates/kirkforge-draw*` — terminal diagram editor (`/draw`, `draw_render`).
 - `plugins/kirkforge-video/` / `crates/kirkforge-video` — FFmpeg-native video pipeline (`/video`, `video_pipeline`, `video_render`, …).
 - `plugins/stratum/` / `crates/kirkstratum*` — context compression pipeline (`/stratum`, `stratum_run`, …).
 - `plugins/kirkforge-plugin3/` / `crates/plugin3*` — token-budget assistant (`/budget`, `plugin3_budget_*`, …).

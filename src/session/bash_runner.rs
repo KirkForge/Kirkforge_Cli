@@ -228,7 +228,7 @@ pub async fn run_shell_with_token(
             reap_child(&mut child, Duration::from_secs(2)).await;
             let prefix = format!("[timed out after {timeout_secs} seconds]\n");
             Ok(ShellOutput {
-                status: synth_status_killed(),
+                status: synth_status_killed()?,
                 stdout: format!("{}{}", prefix, cap_to_string(raw_stdout, stdout_dropped)),
                 stderr: cap_to_string(raw_stderr, stderr_dropped),
             })
@@ -313,32 +313,34 @@ impl std::fmt::Display for ShellError {
 /// child was dropped — but the call site only reads `.success()` and
 /// `.code()`, and we want it to take the error branch and prepend the
 /// timeout marker.
-fn synth_status_killed() -> std::process::ExitStatus {
+fn synth_status_killed() -> Result<std::process::ExitStatus, ShellError> {
     #[cfg(unix)]
     {
         use std::os::unix::process::ExitStatusExt;
         // On Unix, `ExitStatus::from_raw(N)` represents "killed by signal N"
         // (the `wait()` convention stores the signal number directly in the
         // low bits when WIFSIGNALED). SIGKILL = 9.
-        std::process::ExitStatus::from_raw(9)
+        Ok(std::process::ExitStatus::from_raw(9))
     }
     #[cfg(windows)]
     {
         use std::os::windows::process::ExitStatusExt;
         // On Windows, `from_raw` is the exit code. Returning 9 keeps
         // `.success()` false and `.code()` returning `Some(9)`.
-        std::process::ExitStatus::from_raw(9)
+        Ok(std::process::ExitStatus::from_raw(9))
     }
     #[cfg(not(any(unix, windows)))]
     {
         // Exotic target fallback: spawn a trivial command that exits 9.
         // This path is only reached on timeout, so the overhead is
-        // acceptable and better than failing to compile.
+        // acceptable and better than failing to compile. Propagate the
+        // spawn error instead of panicking so a missing `sh` doesn't abort
+        // the CLI.
         std::process::Command::new("sh")
             .arg("-c")
             .arg("exit 9")
             .status()
-            .expect("fallback status command")
+            .map_err(|e| ShellError::Spawn(format!("fallback status command failed: {e}")))
     }
 }
 

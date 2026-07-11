@@ -20,6 +20,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `scripts/bump-version.sh` no longer runs `cargo check --locked` after a version bump, which previously failed because the lockfile was stale
 - `plugin3-core` integration test `state_drift` now uses `EnvGuard` to prevent env-var leakage on panic
 - Line-mode interactive editor no longer panics on concurrent `next_line` calls; returns a clean error instead
+- `bash_runner` exotic-target timeout fallback no longer panics if the fallback `sh` command fails to spawn; the error now propagates as a `ShellError::Spawn`
 - Release archives and `install.sh` now ship/install the bundled `plugins/` directory to `~/.local/share/kirkforge/plugins/`; workspace plugin sources fall back to the data directory when compile-time source paths are absent
 - All five bundled filesystem plugins load without warnings; plugin3 hooks are dual-mode and emit proper KirkForge no-op responses when `KF_EVENT` is set
 - `kirkforge-draw` render/edit tools use `--render` and correct argument handling for non-TTY execution

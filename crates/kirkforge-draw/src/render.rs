@@ -134,14 +134,15 @@ pub fn format_validate_report(report: &kirkforge_draw_core::ValidateReport, path
 pub fn format_validate_report_json(
     report: &kirkforge_draw_core::ValidateReport,
     path: &str,
-) -> String {
+) -> anyhow::Result<String> {
     use serde_json::json;
     let value = json!({
         "path": path,
         "ok": report.is_ok(),
         "report": report,
     });
-    serde_json::to_string_pretty(&value).expect("ValidateReport serialization is infallible")
+    serde_json::to_string_pretty(&value)
+        .map_err(|e| anyhow::anyhow!("failed to serialize validate report: {e}"))
 }
 
 fn kind_label(k: kirkforge_draw_core::ObjectKind) -> &'static str {
@@ -368,7 +369,7 @@ mod tests {
             r#"{{"version":{DRAW_DOCUMENT_VERSION},"objects":[{{"type":"box","id":"b","z":1,"color":"white","left":0,"top":0,"right":2,"bottom":2,"style":"light"}}]}}"#
         );
         let report = validate_document(&json);
-        let out = format_validate_report_json(&report, "demo.td.json");
+        let out = format_validate_report_json(&report, "demo.td.json").unwrap();
         // Round-trip: the helper's output is parseable JSON.
         let parsed: serde_json::Value = serde_json::from_str(&out)
             .unwrap_or_else(|e| panic!("invalid JSON output: {e}; got {out:?}"));
@@ -391,7 +392,7 @@ mod tests {
         );
         let report = validate_document(&json);
         assert!(!report.is_ok());
-        let out = format_validate_report_json(&report, "demo.td.json");
+        let out = format_validate_report_json(&report, "demo.td.json").unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
         // Top-level ok flag flips to false on any flagged bucket.
         assert_eq!(parsed["ok"], serde_json::Value::Bool(false));

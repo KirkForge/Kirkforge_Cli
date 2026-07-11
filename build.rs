@@ -85,11 +85,12 @@ enum Command {
     },
 }
 
-fn main() {
-    let out = PathBuf::from(std::env::var("OUT_DIR").unwrap());
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let out = PathBuf::from(std::env::var("OUT_DIR")?);
     let man = clap_mangen::Man::new(Cli::command());
     let mut buf = vec![];
-    man.render(&mut buf).expect("man page render failed");
-    std::fs::write(out.join("kirkforge.1"), buf).expect("write kirkforge.1");
+    man.render(&mut buf)?;
+    std::fs::write(out.join("kirkforge.1"), buf)?;
     println!("cargo:rerun-if-changed=build.rs");
+    Ok(())
 }

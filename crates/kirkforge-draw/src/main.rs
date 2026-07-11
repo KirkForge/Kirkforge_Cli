@@ -139,7 +139,7 @@ fn run() -> anyhow::Result<std::process::ExitCode> {
             .ok_or_else(|| anyhow::anyhow!("--validate requires --load <path>"))?;
         let report = run_validate(path)?;
         if cli.json {
-            println!("{}", format_validate_report_json(&report, path));
+            println!("{}", format_validate_report_json(&report, path)?);
         } else {
             print!("{}", format_validate_report(&report, path));
         }

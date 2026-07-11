@@ -301,10 +301,11 @@ pub(crate) fn check_url_in_args(args: &serde_json::Value, deny_list: &DenyList) 
 }
 
 /// Lightweight pre-flight validation of tool arguments against a JSON Schema
-/// fragment. Only the `required` array and per-property `type` fields are
-/// checked; this is enough to catch the most common model failures (missing a
-/// required parameter, passing a string where an integer is expected) before
-/// handing the call to a plugin script or MCP server.
+/// fragment. The `required` array, per-property `type`, `anyOf`, and `oneOf`
+/// fields are checked; this is enough to catch the most common model failures
+/// (missing a required parameter, passing a string where an integer is
+/// expected, passing a string where either a string or an array is acceptable)
+/// before handing the call to a plugin script or MCP server.
 ///
 /// Returns `None` when the arguments look valid, or `Some(reason)` when they
 /// do not.
@@ -339,23 +340,59 @@ pub(crate) fn validate_args_against_schema(
             Some(s) => s,
             None => continue, // unknown keys are allowed; the tool can ignore them
         };
-        let expected = prop_schema.get("type").and_then(|t| t.as_str());
-        if let Some(expected) = expected {
-            if let Some(reason) = value_matches_type(value, expected, key) {
-                return Some(reason);
+        if let Some(reason) = value_matches_schema(value, prop_schema, key) {
+            return Some(reason);
+        }
+    }
+
+    None
+}
+
+/// Returns `None` if `value` satisfies `schema`, or `Some(reason)` otherwise.
+/// Supports `type`, `anyOf`, `oneOf`, and array `items`.
+fn value_matches_schema(
+    value: &serde_json::Value,
+    schema: &serde_json::Value,
+    key: &str,
+) -> Option<String> {
+    // JSON Schema combinators: the value is valid if it matches at least one
+    // of the listed sub-schemas. We treat `oneOf` the same as `anyOf` for this
+    // lightweight validator; the goal is to allow polymorphic fields (e.g.
+    // "string or array of strings") without accidentally rejecting valid calls.
+    for combinator in ["anyOf", "oneOf"] {
+        if let Some(alternatives) = schema.get(combinator).and_then(|a| a.as_array()) {
+            if alternatives.is_empty() {
+                return None;
             }
-            // Validate array item types if declared.
-            if expected == "array" {
-                if let Some(items) = prop_schema.get("items") {
-                    if let Some(item_type) = items.get("type").and_then(|t| t.as_str()) {
-                        if let Some(arr) = value.as_array() {
-                            for (idx, item) in arr.iter().enumerate() {
-                                if let Some(reason) = value_matches_type(item, item_type, key) {
-                                    return Some(format!(
-                                        "array item {idx} for '{key}' has wrong type: {reason}"
-                                    ));
-                                }
-                            }
+            let mut reasons = Vec::new();
+            for alt in alternatives {
+                if let Some(reason) = value_matches_schema(value, alt, key) {
+                    reasons.push(reason);
+                } else {
+                    return None;
+                }
+            }
+            return Some(format!(
+                "argument '{key}' did not match any of the {combinator} schemas ({})",
+                reasons.join("; ")
+            ));
+        }
+    }
+
+    let expected = schema.get("type").and_then(|t| t.as_str());
+    if let Some(expected) = expected {
+        if let Some(reason) = value_matches_type(value, expected, key) {
+            return Some(reason);
+        }
+        // Validate array item types if declared.
+        if expected == "array" {
+            if let Some(items) = schema.get("items") {
+                if let Some(arr) = value.as_array() {
+                    for (idx, item) in arr.iter().enumerate() {
+                        if let Some(reason) = value_matches_schema(item, items, key) {
+                            return Some(format!(
+                                "array item {idx} for '{key}' has wrong type: {reason}"
+                            ));
                         }
                     }
                 }
@@ -781,6 +818,36 @@ mod tests {
         assert!(
             validate_args_against_schema(&args, &schema).is_none(),
             "valid args should pass validation"
+        );
+    }
+
+    #[test]
+    fn test_validate_args_anyof_accepts_string_or_array() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "file": {
+                    "anyOf": [
+                        { "type": "string" },
+                        { "type": "array", "items": { "type": "string" } }
+                    ]
+                }
+            }
+        });
+        assert!(
+            validate_args_against_schema(&serde_json::json!({"file": "single.txt"}), &schema)
+                .is_none(),
+            "single string should match anyOf"
+        );
+        assert!(
+            validate_args_against_schema(&serde_json::json!({"file": ["a.txt", "b.txt"]}), &schema)
+                .is_none(),
+            "string array should match anyOf"
+        );
+        assert!(
+            validate_args_against_schema(&serde_json::json!({"file": 42}), &schema)
+                .is_some_and(|m| m.contains("did not match any of the anyOf schemas")),
+            "wrong type should be rejected by anyOf"
         );
     }
 }

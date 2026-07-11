@@ -57,6 +57,15 @@ find_cli() {
     return 1
 }
 
+# Return true (exit 0) if the string argument looks truthy.
+# Accepts "true", "1", "yes", and case-insensitive variants.
+node_is_truthy() {
+    case "${1,,}" in
+        true|1|yes|y|on) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 # Extract a scalar value from KIRKFORGE_TOOL_ARGS_JSON, defaulting on missing,
 # null, or empty. Invalid JSON is reported as a tool error and the script exits.
 node_json_arg() {

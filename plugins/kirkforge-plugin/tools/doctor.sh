@@ -13,7 +13,7 @@ require_node
 PRETTY_FLAG=$(node_json_arg "pretty" "false")
 
 ARGS=()
-if [ "$PRETTY_FLAG" = "true" ]; then
+if node_is_truthy "$PRETTY_FLAG"; then
   ARGS+=(--pretty)
 fi
 

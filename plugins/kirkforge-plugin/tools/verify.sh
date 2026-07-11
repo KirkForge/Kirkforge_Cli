@@ -16,7 +16,7 @@ ARGS=()
 if [ -n "$TASK" ]; then
   ARGS+=(--task "$TASK")
 fi
-if [ "$JSON_FLAG" = "true" ]; then
+if node_is_truthy "$JSON_FLAG"; then
   ARGS+=(--json)
 fi
 

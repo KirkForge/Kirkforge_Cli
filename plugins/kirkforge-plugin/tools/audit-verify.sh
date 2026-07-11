@@ -19,7 +19,7 @@ if [ -z "$FILE" ]; then
 fi
 
 ARGS=(--file "$FILE")
-if [ "$JSON_FLAG" = "true" ]; then
+if node_is_truthy "$JSON_FLAG"; then
   ARGS+=(--json)
 fi
 

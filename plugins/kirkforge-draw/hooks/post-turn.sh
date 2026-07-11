@@ -19,4 +19,13 @@ fi
 
 # One-line notice; the model decides whether to render.
 names=$(printf '%s\n' "${hits[@]}" | sort -u | head -5 | paste -sd, -)
-printf '{"verdict":"allow","message":"Found new .td.json: %s. Render with kfd --load <path> --fenced if useful."}\n' "$names"
+if command -v jq > /dev/null 2>&1; then
+  jq -n --arg names "$names" '{"verdict":"allow","message":"Found new .td.json: \($names). Render with kfd --load <path> --fenced if useful."}'
+elif command -v python3 > /dev/null 2>&1; then
+  python3 -c 'import json,sys; print(json.dumps({"verdict":"allow","message":f"Found new .td.json: {sys.argv[1]}. Render with kfd --load <path> --fenced if useful."}))' "$names"
+else
+  # Minimal escaping fallback.
+  names="${names//\\/\\\\}"
+  names="${names//\"/\\\"}"
+  printf '{"verdict":"allow","message":"Found new .td.json: %s. Render with kfd --load <path> --fenced if useful."}\n' "$names"
+fi

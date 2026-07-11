@@ -7,14 +7,7 @@ set -euo pipefail
 source "$(dirname "$0")/common.sh"
 STRATUM="$(find_stratum)" || die "stratum_mode: stratum binary not found (build the workspace or install stratum on PATH)"
 
-KIRKFORGE_TOOL_ARGS_JSON="${KIRKFORGE_TOOL_ARGS_JSON:-${KIRKFORGE_TOOL_ARGS:-}}"
-
-if [ -z "${KIRKFORGE_TOOL_ARGS_JSON:-}" ]; then
-  echo "Usage: KIRKFORGE_TOOL_ARGS_JSON='{...}' $0"
-  echo "Show or set the active stratum mode."
-  echo "JSON keys: value, json"
-  exit 1
-fi
+: "${KIRKFORGE_TOOL_ARGS_JSON:={}}"
 
 args=()
 value=""

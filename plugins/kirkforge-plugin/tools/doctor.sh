@@ -8,8 +8,9 @@ set -euo pipefail
 source "$(dirname "$0")/common.sh"
 
 CLI_JS="$(find_cli)" || die "KirkForge CLI not found. Ensure apps/cli/dist/index.js exists or kirkforge is on PATH."
+require_node
 
-: "${KIRKFORGE_TOOL_ARGS_JSON:=${KIRKFORGE_TOOL_ARGS:-}}"
+: "${KIRKFORGE_TOOL_ARGS_JSON:={}}"
 if [ -z "$KIRKFORGE_TOOL_ARGS_JSON" ]; then
   KIRKFORGE_TOOL_ARGS_JSON="{}"
 fi

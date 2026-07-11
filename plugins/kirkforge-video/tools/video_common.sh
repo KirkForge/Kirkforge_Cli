@@ -4,12 +4,11 @@ set -euo pipefail
 # video_common.sh — shared helpers for KirkForge-Video plugin tools.
 # Sourced by the tool scripts; not invoked directly.
 
-# Read KIRKFORGE_TOOL_ARGS_JSON (preferred) or KIRKFORGE_TOOL_ARGS, falling back to first arg.
+# Read KIRKFORGE_TOOL_ARGS_JSON, falling back to the first positional arg.
+# The host always sets KIRKFORGE_TOOL_ARGS_JSON to a valid JSON object.
 tool_args() {
     if [[ -n "${KIRKFORGE_TOOL_ARGS_JSON:-}" ]]; then
         printf '%s' "$KIRKFORGE_TOOL_ARGS_JSON"
-    elif [[ -n "${KIRKFORGE_TOOL_ARGS:-}" ]]; then
-        printf '%s' "$KIRKFORGE_TOOL_ARGS"
     elif [[ $# -gt 0 ]]; then
         printf '%s' "$1"
     else
@@ -56,7 +55,17 @@ resolve_path() {
 # Print JSON error and exit non-zero.
 die_json() {
     local msg="$1"
-    printf '{"error":"%s"}\n' "$msg" >&2
+    if command -v jq > /dev/null 2>&1; then
+        jq -n --arg msg "$msg" '{"error":$msg}' >&2
+    elif command -v python3 > /dev/null 2>&1; then
+        python3 -c 'import json,sys; print(json.dumps({"error":sys.argv[1]}))' "$msg" >&2
+    else
+        # Minimal escaping for systems without jq/python3.
+        msg="${msg//\\/\\\\}"
+        msg="${msg//\"/\\\"}"
+        msg="${msg//$'\n'/\\n}"
+        printf '{"error":"%s"}\n' "$msg" >&2
+    fi
     exit 1
 }
 
@@ -73,7 +82,7 @@ json_get_string() {
     fi
 
     if command -v python3 > /dev/null 2>&1; then
-        value="$(printf '%s' "$json" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('${key}', '${default}'))")"
+        value="$(printf '%s' "$json" | KEY="$key" DEFAULT="$default" python3 -c 'import sys,json,os; d=json.load(sys.stdin); k=os.environ["KEY"]; v=d.get(k, os.environ["DEFAULT"]); print(v if v is not None else os.environ["DEFAULT"])')"
         printf '%s' "$value"
         return 0
     fi
@@ -111,7 +120,7 @@ json_get_string_array() {
     fi
 
     if command -v python3 >/dev/null 2>&1; then
-        printf '%s' "$json" | python3 -c "import sys,json; d=json.load(sys.stdin); print(' '.join(d.get('${key}', [])))"
+        printf '%s' "$json" | KEY="$key" python3 -c 'import sys,json,os; d=json.load(sys.stdin); k=os.environ["KEY"]; v=d.get(k, []); print(" ".join(v if v is not None else []))'
         return 0
     fi
 

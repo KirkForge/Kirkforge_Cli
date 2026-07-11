@@ -34,6 +34,11 @@ find_cli() {
     return 1
 }
 
+# Verify that Node.js is available; tools in this plugin execute the CLI via node.
+require_node() {
+    command -v node >/dev/null 2>&1 || die "node is required but not installed"
+}
+
 # Print usage error and exit non-zero.
 die() {
     printf '%s\n' "$1" >&2

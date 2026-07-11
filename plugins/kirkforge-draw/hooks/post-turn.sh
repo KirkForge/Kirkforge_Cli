@@ -4,8 +4,12 @@
 # Verdict shape: {"verdict":"allow|deny","message":"..."}
 set -euo pipefail
 
-# Read and discard the event (we don't need its contents).
-cat >/dev/null
+# Under Claude Code the event JSON arrives on stdin; consume it so the
+# host pipe does not block. Under KirkForge hooks receive only env vars,
+# so leave stdin alone (the host already provides a null stdin).
+if [ -z "${KF_EVENT:-}" ]; then
+    cat >/dev/null
+fi
 
 # Quiet when nothing to do.
 shopt -s nullglob

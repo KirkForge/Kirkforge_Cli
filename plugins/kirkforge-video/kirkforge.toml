@@ -12,7 +12,7 @@ trust = "shell"
 type = "tool"
 name = "video_demos"
 description = "List demos, pipelines, render profiles, or internal tools available in kirkforge-video."
-schema = { type = "object", properties = { command = { type = "string", enum = ["demos", "pipelines", "profiles", "tools"], description = "What catalog to list" } }, required = ["command"] }
+schema = { type = "object", properties = { command = { type = "string", enum = ["demos", "pipelines", "profiles", "tools"], description = "What catalog to list", default = "demos" } } }
 command = "tools/video_demos.sh"
 
 # ── Pipeline tools ───────────────────────────────────────────────────────────
@@ -35,7 +35,7 @@ command = "tools/video_render.sh"
 type = "tool"
 name = "video_validate"
 description = "Validate a scene_plan.json and its filter graph without rendering. Accepts a scene_plan.json path or a project directory."
-schema = { type = "object", properties = { path = { type = "string", description = "Path to scene_plan.json or a project directory containing artifacts/scene_plan.json", default = "projects/default" } }, required = ["path"] }
+schema = { type = "object", properties = { path = { type = "string", description = "Path to scene_plan.json or a project directory containing artifacts/scene_plan.json", default = "projects/default" } } }
 command = "tools/video_validate.sh"
 
 [[capabilities]]
@@ -51,7 +51,7 @@ command = "tools/video_pipeline.sh"
 type = "tool"
 name = "video_doctor"
 description = "Probe FFmpeg capabilities or validate a project directory's artifacts."
-schema = { type = "object", properties = { check = { type = "string", enum = ["ffmpeg", "project"], description = "Which check to run" }, project = { type = "string", description = "Project directory for project check", default = "projects/default" }, ffmpeg_path = { type = "string", description = "Path to ffmpeg binary for ffmpeg check", default = "ffmpeg" }, json = { type = "boolean", description = "Emit JSON instead of human-readable text", default = false } }, required = ["check"] }
+schema = { type = "object", properties = { check = { type = "string", enum = ["ffmpeg", "project"], description = "Which check to run", default = "ffmpeg" }, project = { type = "string", description = "Project directory for project check", default = "projects/default" }, ffmpeg_path = { type = "string", description = "Path to ffmpeg binary for ffmpeg check", default = "ffmpeg" }, json = { type = "boolean", description = "Emit JSON instead of human-readable text", default = false } } }
 command = "tools/video_doctor.sh"
 
 [[capabilities]]

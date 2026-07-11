@@ -128,6 +128,7 @@ impl Tool for PluginToolWrapper {
         let mut command = tokio::process::Command::new(&cmd_path);
         command
             .current_dir(&cwd)
+            .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true)
@@ -345,9 +346,7 @@ pub fn load_workspace_plugins(registry: &mut PluginRegistry, cfg: &Config) -> Ve
 pub fn load_plugin_registry(cfg: &Config) -> anyhow::Result<(PluginRegistry, Vec<String>)> {
     let dir = plugins_dir();
     let mut registry = PluginRegistry::new();
-    let mut warnings = registry
-        .load_from_dir(&dir, trust_policy_from_config(cfg))
-        .unwrap_or_default();
+    let mut warnings = registry.load_from_dir(&dir, trust_policy_from_config(cfg))?;
     warnings.extend(load_workspace_plugins(&mut registry, cfg));
     Ok((registry, warnings))
 }
@@ -660,6 +659,38 @@ prompt = "hello"
         }
     }
 
+    struct PathGuard {
+        prior: Option<String>,
+    }
+
+    impl PathGuard {
+        fn prepend(dir: &std::path::Path) -> Self {
+            let prior = std::env::var("PATH").ok();
+            let mut parts: Vec<std::path::PathBuf> = vec![dir.to_path_buf()];
+            if let Ok(ref path) = std::env::var("PATH") {
+                parts.extend(path.split(':').map(std::path::PathBuf::from));
+            }
+            std::env::set_var(
+                "PATH",
+                parts
+                    .iter()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .collect::<Vec<_>>()
+                    .join(":"),
+            );
+            Self { prior }
+        }
+    }
+
+    impl Drop for PathGuard {
+        fn drop(&mut self) {
+            match &self.prior {
+                Some(v) => std::env::set_var("PATH", v),
+                None => std::env::remove_var("PATH"),
+            }
+        }
+    }
+
     /// When a configured workspace plugin source path does not exist (e.g. a
     /// release binary whose compile-time source-repo paths are stale), the host
     /// falls back to the data-directory plugins folder before giving up.
@@ -714,6 +745,48 @@ command = "hello.sh"
         );
     }
 
+    /// Recursively copy `src` into `dst`, preserving permissions on Unix and
+    /// symlinks where possible. Used by installed-layout regression tests.
+    fn copy_dir_all(
+        src: impl AsRef<std::path::Path>,
+        dst: impl AsRef<std::path::Path>,
+    ) -> std::io::Result<()> {
+        std::fs::create_dir_all(&dst)?;
+        for entry in std::fs::read_dir(src)? {
+            let entry = entry?;
+            let ty = entry.file_type()?;
+            let dest_path = dst.as_ref().join(entry.file_name());
+            if ty.is_dir() {
+                copy_dir_all(entry.path(), &dest_path)?;
+            } else if ty.is_symlink() {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::symlink;
+                    let target = std::fs::read_link(entry.path())?;
+                    symlink(target, dest_path)?;
+                }
+                #[cfg(not(unix))]
+                {
+                    // On Windows follow the symlink; bundled plugins contain
+                    // no symlinks that matter at load time.
+                    if entry.path().is_dir() {
+                        copy_dir_all(entry.path(), &dest_path)?;
+                    } else {
+                        std::fs::copy(entry.path(), &dest_path)?;
+                    }
+                }
+            } else {
+                std::fs::copy(entry.path(), &dest_path)?;
+                #[cfg(unix)]
+                {
+                    let perms = entry.metadata()?.permissions();
+                    std::fs::set_permissions(&dest_path, perms)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Installed-layout regression: when the data directory contains a copy of
     /// the bundled `plugins/` tree (as `install.sh` produces), the plugin host
     /// loads every bundled plugin from that directory without warnings. This
@@ -721,47 +794,6 @@ command = "hello.sh"
     /// missing from the installed plugin root.
     #[test]
     fn bundled_plugins_load_from_data_dir() {
-        /// Recursively copy `src` into `dst`, preserving permissions on Unix.
-        fn copy_dir_all(
-            src: impl AsRef<std::path::Path>,
-            dst: impl AsRef<std::path::Path>,
-        ) -> std::io::Result<()> {
-            std::fs::create_dir_all(&dst)?;
-            for entry in std::fs::read_dir(src)? {
-                let entry = entry?;
-                let ty = entry.file_type()?;
-                let dest_path = dst.as_ref().join(entry.file_name());
-                if ty.is_dir() {
-                    copy_dir_all(entry.path(), &dest_path)?;
-                } else if ty.is_symlink() {
-                    #[cfg(unix)]
-                    {
-                        use std::os::unix::fs::symlink;
-                        let target = std::fs::read_link(entry.path())?;
-                        symlink(target, dest_path)?;
-                    }
-                    #[cfg(not(unix))]
-                    {
-                        // On Windows follow the symlink; bundled plugins contain
-                        // no symlinks that matter at load time.
-                        if entry.path().is_dir() {
-                            copy_dir_all(entry.path(), &dest_path)?;
-                        } else {
-                            std::fs::copy(entry.path(), &dest_path)?;
-                        }
-                    }
-                } else {
-                    std::fs::copy(entry.path(), &dest_path)?;
-                    #[cfg(unix)]
-                    {
-                        let perms = entry.metadata()?.permissions();
-                        std::fs::set_permissions(&dest_path, perms)?;
-                    }
-                }
-            }
-            Ok(())
-        }
-
         let tmp = tempfile::tempdir().unwrap();
         let installed_plugins = tmp.path().join("plugins");
 
@@ -792,6 +824,142 @@ command = "hello.sh"
                 "expected bundled plugin {expected:?} to load from data dir; got {names:?}"
             );
         }
+    }
+
+    /// Every declared tool command file must exist in the installed plugin root.
+    /// This catches manifest drift and packaging mistakes that omit a tool
+    /// script from a release archive.
+    #[test]
+    fn bundled_plugin_tool_commands_exist_in_data_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let installed_plugins = tmp.path().join("plugins");
+        let repo_plugins = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("plugins");
+        copy_dir_all(&repo_plugins, &installed_plugins).unwrap();
+
+        let _guard = DataDirGuard::set(&tmp.path().to_string_lossy());
+        let (registry, warnings) = load_plugin_registry(&Config::default())
+            .expect("loading installed plugins should not fail");
+        assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+
+        for hosted in registry.active_plugins() {
+            let root = hosted.plugin.root().to_path_buf();
+            for cap in hosted.plugin.tools() {
+                if let kirkforge_plugin::Capability::Tool {
+                    name,
+                    command: Some(cmd),
+                    ..
+                } = cap
+                {
+                    let path = root.join(cmd);
+                    assert!(
+                        path.exists(),
+                        "tool {name:?} command missing: {}",
+                        path.display()
+                    );
+                }
+            }
+        }
+    }
+
+    /// End-to-end installed-layout regression for a Rust-binary-backed plugin:
+    /// `stratum_mode` must return the active mode through the host's
+    /// `PluginToolWrapper`. Skipped when the workspace `stratum` binary is not
+    /// built (e.g. a bare `cargo test -p kirkforge`).
+    #[tokio::test]
+    async fn bundled_stratum_mode_tool_executes_via_host() {
+        let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let stratum_bin = [
+            repo_root.join("target/debug/stratum"),
+            repo_root.join("target/release/stratum"),
+        ]
+        .into_iter()
+        .find(|p| p.exists());
+        let Some(stratum_bin) = stratum_bin else {
+            eprintln!("skipping stratum_mode end-to-end test: stratum binary not built");
+            return;
+        };
+
+        let tmp = tempfile::tempdir().unwrap();
+        let installed_plugins = tmp.path().join("plugins");
+        let repo_plugins = repo_root.join("plugins");
+        copy_dir_all(&repo_plugins, &installed_plugins).unwrap();
+
+        let _data_guard = DataDirGuard::set(&tmp.path().to_string_lossy());
+        let _path_guard = PathGuard::prepend(stratum_bin.parent().unwrap());
+        let (registry, warnings) = load_plugin_registry(&Config::default())
+            .expect("loading installed plugins should not fail");
+        assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+
+        let tools = all_plugin_tools(
+            &registry,
+            Arc::new(std::sync::RwLock::new(Config::default())),
+        );
+        let tool = tools
+            .iter()
+            .find(|t| t.def().name == "stratum_mode")
+            .expect("stratum_mode should be registered");
+
+        let outcome = tool.run(&ToolContext::new(), serde_json::json!({})).await;
+        assert!(
+            matches!(outcome, ToolOutcome::Success { ref content } if content.trim() == "full"),
+            "expected stratum_mode to return 'full', got {outcome:?}"
+        );
+    }
+
+    /// End-to-end installed-layout regression for the Node SDK plugin: the
+    /// bundled `npm/kirkforge-plugin` tree must be reachable from the plugin
+    /// scripts so that `plugin_tools` can list verification engines through the
+    /// host's `PluginToolWrapper`. Skipped when node or the built SDK is not
+    /// available (e.g. a bare `cargo test -p kirkforge` without `npm ci`).
+    #[tokio::test]
+    async fn bundled_node_sdk_tool_executes_via_host() {
+        fn which_node() -> Option<PathBuf> {
+            std::env::var("PATH").ok().and_then(|path| {
+                path.split(':').find_map(|dir| {
+                    let candidate = PathBuf::from(dir).join("node");
+                    if candidate.is_file() {
+                        Some(candidate)
+                    } else {
+                        None
+                    }
+                })
+            })
+        }
+
+        let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let repo_sdk = repo_root.join("npm/kirkforge-plugin/apps/cli/dist/index.js");
+        if which_node().is_none() || !repo_sdk.exists() {
+            eprintln!("skipping Node SDK end-to-end test: node or built SDK not available");
+            return;
+        }
+
+        let tmp = tempfile::tempdir().unwrap();
+        let installed_plugins = tmp.path().join("plugins");
+        let installed_npm = tmp.path().join("npm/kirkforge-plugin");
+        let repo_plugins = repo_root.join("plugins");
+        let repo_npm = repo_root.join("npm/kirkforge-plugin");
+        copy_dir_all(&repo_plugins, &installed_plugins).unwrap();
+        copy_dir_all(&repo_npm, &installed_npm).unwrap();
+
+        let _guard = DataDirGuard::set(&tmp.path().to_string_lossy());
+        let (registry, warnings) = load_plugin_registry(&Config::default())
+            .expect("loading installed plugins should not fail");
+        assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+
+        let tools = all_plugin_tools(
+            &registry,
+            Arc::new(std::sync::RwLock::new(Config::default())),
+        );
+        let tool = tools
+            .iter()
+            .find(|t| t.def().name == "plugin_tools")
+            .expect("plugin_tools should be registered");
+
+        let outcome = tool.run(&ToolContext::new(), serde_json::json!({})).await;
+        assert!(
+            matches!(outcome, ToolOutcome::Success { ref content } if content.contains("KirkForge Native Lint Engines")),
+            "expected plugin_tools to list native lint engines, got {outcome:?}"
+        );
     }
 
     /// Verify the built-in workspace plugin sources are registered by default,

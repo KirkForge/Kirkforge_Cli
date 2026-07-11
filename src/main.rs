@@ -309,7 +309,19 @@ async fn main() {
             output,
             search,
         } => handle_sessions_command(id, export, output, search),
-        Command::Daemon { foreground, stop } => daemon::server::run_daemon(foreground, stop).await,
+        Command::Daemon { foreground, stop } => {
+            #[cfg(unix)]
+            {
+                daemon::server::run_daemon(foreground, stop).await
+            }
+            #[cfg(windows)]
+            {
+                let _ = (foreground, stop);
+                Err(anyhow::anyhow!(
+                    "session daemon is not supported on Windows"
+                ))
+            }
+        }
     };
 
     if let Err(e) = result {
@@ -948,12 +960,59 @@ async fn run_line_mode(
     Ok(())
 }
 
+/// Read a single line approval answer from the terminal.
+///
+/// On Unix, reads from the controlling terminal (`/dev/tty`) so it does
+/// not compete with stdin prompt reading. On Windows there is no
+/// equivalent device, so we read from stdin; the line-mode main loop is
+/// not reading stdin while a tool call is awaiting approval.
+#[cfg(unix)]
+fn read_approval_answer(_tool_name: &str) -> bool {
+    let mut answer = String::new();
+    match std::fs::OpenOptions::new().read(true).open("/dev/tty") {
+        Ok(mut tty) => {
+            use std::io::BufRead;
+            let mut reader = std::io::BufReader::new(&mut tty);
+            if let Err(e) = reader.read_line(&mut answer) {
+                tracing::warn!(error = %e, "failed to read approval answer from /dev/tty");
+            }
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "line-mode approval: no /dev/tty available; denying");
+            return false;
+        }
+    }
+    let trimmed = answer.trim().to_ascii_lowercase();
+    trimmed == "y" || trimmed == "yes"
+}
+
+#[cfg(windows)]
+fn read_approval_answer(_tool_name: &str) -> bool {
+    use std::io::BufRead;
+    let mut answer = String::new();
+    let stdin = std::io::stdin();
+    let mut reader = std::io::BufReader::new(stdin.lock());
+    if let Err(e) = reader.read_line(&mut answer) {
+        tracing::warn!(error = %e, "failed to read approval answer from stdin");
+        return false;
+    }
+    let trimmed = answer.trim().to_ascii_lowercase();
+    trimmed == "y" || trimmed == "yes"
+}
+
+#[cfg(not(any(unix, windows)))]
+fn read_approval_answer(_tool_name: &str) -> bool {
+    tracing::warn!("line-mode approval is not supported on this platform");
+    false
+}
+
 /// Spawn an approval responder for interactive line mode.
 ///
 /// When the TUI is disabled, destructive tool calls still need a human
 /// decision. This handler prints the request to stderr and reads a line
-/// from `/dev/tty` (the controlling terminal) so it does not compete
-/// with stdin prompt reading. `y`/`yes` approves; anything else denies.
+/// from the controlling terminal when available, or stdin on Windows, so
+/// it does not compete with prompt reading. `y`/`yes` approves; anything
+/// else denies.
 ///
 /// The read is performed on a detached OS thread with a timeout so the
 /// process can still exit cleanly when stdin reaches EOF or the user
@@ -982,28 +1041,9 @@ fn spawn_line_mode_approval_handler(
             let tool_name = req.tool_name.clone();
             let (answer_tx, answer_rx) = tokio::sync::oneshot::channel::<bool>();
 
-            // Detached thread: reads /dev/tty and sends the answer back.
+            // Detached thread: reads the terminal and sends the answer back.
             std::thread::spawn(move || {
-                let mut answer = String::new();
-                let approved = match std::fs::OpenOptions::new().read(true).open("/dev/tty") {
-                    Ok(mut tty) => {
-                        use std::io::BufRead;
-                        let mut reader = std::io::BufReader::new(&mut tty);
-                        if let Err(e) = reader.read_line(&mut answer) {
-                            tracing::warn!(error = %e, "failed to read approval answer from /dev/tty");
-                        }
-                        let trimmed = answer.trim().to_ascii_lowercase();
-                        trimmed == "y" || trimmed == "yes"
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            tool = %tool_name,
-                            error = %e,
-                            "line-mode approval: no /dev/tty available; denying"
-                        );
-                        false
-                    }
-                };
+                let approved = read_approval_answer(&tool_name);
                 // If the tokio side already timed out, this send is
                 // harmless; the leftover thread will exit once the user
                 // finally provides input or the process terminates.

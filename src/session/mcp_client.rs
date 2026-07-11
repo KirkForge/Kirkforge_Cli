@@ -53,6 +53,16 @@ const STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 /// Time budget for a single JSON-RPC request/response round-trip.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Maximum time the reader task waits for a single line from the MCP
+/// server's stdout before treating the connection as dead. This prevents a
+/// server that emits partial output and never sends a newline from hanging
+/// the reader forever.
+const READER_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// Maximum length of a single JSON-RPC line accepted from the server.
+/// Anything longer is treated as a misbehaving server and disconnects.
+const MAX_LINE_LEN: usize = 1 << 20;
+
 /// Errors that can occur when sending a JSON-RPC request to an MCP
 /// server.
 #[derive(Debug)]
@@ -441,15 +451,30 @@ impl McpClient {
                         tracing::debug!(server = %server_name, "MCP reader shutting down");
                         break;
                     }
-                    result = read_fut => {
+                    result = tokio::time::timeout(READER_IDLE_TIMEOUT, read_fut) => {
                         match result {
-                            Ok(0) => {
+                            Ok(Ok(0)) => {
                                 tracing::debug!(server = %server_name, "MCP stdout closed");
                                 break;
                             }
-                            Ok(_) => {}
-                            Err(e) => {
+                            Ok(Ok(n)) if n > MAX_LINE_LEN => {
+                                tracing::warn!(
+                                    server = %server_name,
+                                    bytes = n,
+                                    "MCP response line exceeded maximum length; disconnecting"
+                                );
+                                break;
+                            }
+                            Ok(Ok(_)) => {}
+                            Ok(Err(e)) => {
                                 tracing::warn!(server = %server_name, error = %e, "MCP stdout read error");
+                                break;
+                            }
+                            Err(_) => {
+                                tracing::warn!(
+                                    server = %server_name,
+                                    "MCP reader idle timeout; disconnecting"
+                                );
                                 break;
                             }
                         }

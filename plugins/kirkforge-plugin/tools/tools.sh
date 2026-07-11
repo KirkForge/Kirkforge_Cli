@@ -6,7 +6,7 @@ set -euo pipefail
 
 source "$(dirname "$0")/common.sh"
 
-CLI_JS="$(find_cli)" || die "KirkForge CLI not found. Ensure apps/cli/dist/index.js exists or kirkforge is on PATH."
+CLI_JS="$(find_cli)" || die "KirkForge CLI not found. Ensure the bundled npm/kirkforge-plugin tree is installed next to the plugins directory."
 require_node
 
 exec node "$CLI_JS" tools

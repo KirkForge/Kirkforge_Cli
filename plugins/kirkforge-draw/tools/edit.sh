@@ -18,4 +18,11 @@ if [[ ! -f "$PATH_ARG" ]]; then
   printf '{"version":1,"objects":[]}\n' > "$PATH_ARG"
 fi
 
+# The KirkForge host runs plugin tools with a non-interactive (null) stdin so
+# they cannot accidentally consume user input. A TUI editor needs a real
+# terminal; fail cleanly instead of launching into a broken/captured screen.
+if [[ ! -t 0 ]]; then
+  die "draw_edit requires an interactive terminal; run: $KFD --load $PATH_ARG"
+fi
+
 exec "$KFD" --load "$PATH_ARG"

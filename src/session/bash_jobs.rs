@@ -5,7 +5,7 @@
 /// The model or user can check job status, read output, or cancel jobs.
 use crate::session::access::{DenyList, PathGuard};
 use crate::session::bash_runner::{
-    cap_to_string, check_bash_command_str, drain_capped, MAX_BASH_OUTPUT_BYTES,
+    cap_to_string, check_bash_command_str, drain_capped, shell_program, MAX_BASH_OUTPUT_BYTES,
 };
 use crate::session::process_group::{kill_process_group, reap_child, setup_process_group};
 use std::collections::HashMap;
@@ -155,7 +155,7 @@ impl BashJobRegistry {
             jobs.insert(id, job);
         }
 
-        let mut proc = tokio::process::Command::new("sh");
+        let mut proc = tokio::process::Command::new(shell_program());
         proc.args(["-c", command])
             .kill_on_drop(true)
             .stdout(std::process::Stdio::piped())

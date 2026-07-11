@@ -25,6 +25,29 @@ pub const MAX_BASH_OUTPUT_BYTES: usize = 1024 * 1024;
 const TRUNCATED_MARKER_FMT: &str =
     "\n[...truncated: {} bytes omitted, output exceeded 1 MiB cap...]\n";
 
+/// Shell interpreter used for model-driven bash commands.
+///
+/// Unix releases use `/bin/sh` because POSIX `sh` is always present and the
+/// deny-list/safety logic is written for Unix shell syntax. Windows releases
+/// target the `bash` executable shipped with Git for Windows / WSL so the
+/// same safety logic applies; if it is not on PATH the spawn will fail with
+/// a clear message instead of silently using `cmd.exe` and bypassing the
+/// safety gate.
+#[cfg(unix)]
+pub(crate) fn shell_program() -> &'static str {
+    "/bin/sh"
+}
+
+#[cfg(windows)]
+pub(crate) fn shell_program() -> &'static str {
+    "bash"
+}
+
+#[cfg(not(any(unix, windows)))]
+pub(crate) fn shell_program() -> &'static str {
+    "sh"
+}
+
 /// Reader that stops accepting bytes once `cap` is reached but keeps
 /// draining the underlying pipe so the child process doesn't block on a
 /// full pipe buffer. Anything past the cap is discarded (counted, not
@@ -150,7 +173,7 @@ pub async fn run_shell_with_token(
     timeout_secs: u64,
     token: Option<&tokio_util::sync::CancellationToken>,
 ) -> Result<ShellOutput, ShellError> {
-    let mut proc = Command::new("/bin/sh");
+    let mut proc = Command::new(shell_program());
     proc.arg("-c")
         .arg(cmd)
         .current_dir(workdir)
@@ -336,7 +359,7 @@ fn synth_status_killed() -> Result<std::process::ExitStatus, ShellError> {
         // acceptable and better than failing to compile. Propagate the
         // spawn error instead of panicking so a missing `sh` doesn't abort
         // the CLI.
-        std::process::Command::new("sh")
+        std::process::Command::new(shell_program())
             .arg("-c")
             .arg("exit 9")
             .status()
@@ -346,15 +369,32 @@ fn synth_status_killed() -> Result<std::process::ExitStatus, ShellError> {
 
 /// Dangerous shell-command substrings. These are blocked regardless of
 /// approval state because they can destroy data or compromise the host.
+///
+/// Most literal variants are listed explicitly; the safety check also
+/// normalizes the command (stripping quotes, comments, and extra whitespace)
+/// so trivial evasions such as `r'm -rf /'` or `chmod -R 777  /` are still
+/// caught.
 const DANGEROUS_SHELL_COMMANDS: &[&str] = &[
     "rm -rf /",
     "rm -rf /*",
+    "rm -fr /",
+    "rm -fr /*",
+    "rm --no-preserve-root -rf /",
+    "rm --no-preserve-root -fr /",
+    "rm -rf --no-preserve-root /",
+    "rm -fr --no-preserve-root /",
     ":(){ :|:& };:",
     "> /dev/sda",
     "mkfs.",
     "dd if=/dev/zero of=",
+    "dd if=/dev/random of=",
+    "dd if=/dev/urandom of=",
     "chmod -R 777 /",
     "chmod 777 /",
+    "chmod -R a+rwx /",
+    "chmod a+rwx /",
+    "chown -R root:root /",
+    "chown root:root /",
     "dd if=/dev/random",
     "> /dev/null < /dev/sda",
 ];
@@ -369,6 +409,11 @@ const INTERACTIVE_PASSWORD_PATTERNS: &[&str] = &["read -s", "stty -echo", "passw
 
 /// Dangerous redirection prefixes. Any stdout overwrite or `tee` into these
 /// system-sensitive directories is blocked regardless of approval state.
+///
+/// These are the exact raw-string patterns checked before normalization; the
+/// safety check also scans the normalized command with
+/// [`redirects_to_dangerous_path`] and [`tee_to_dangerous_path`] so spacing,
+/// quoting, and Windows-path variants are caught as well.
 const DANGEROUS_REDIRECTION_PATTERNS: &[&str] = &[
     "> /etc/",
     ">> /etc/",
@@ -382,6 +427,12 @@ const DANGEROUS_REDIRECTION_PATTERNS: &[&str] = &[
     "tee /etc/",
     "tee ~/.ssh/",
     "tee /root/",
+    "> C:/Windows/",
+    ">> C:/Windows/",
+    "> C:\\Windows\\",
+    ">> C:\\Windows\\",
+    "> %SystemRoot%",
+    ">> %SystemRoot%",
 ];
 
 /// True if `pattern` appears in `cmd` at a word boundary (start/end of
@@ -403,6 +454,167 @@ fn word_boundary_match(cmd: &str, pattern: &str) -> bool {
         i += 1;
     }
     false
+}
+
+/// Normalize a shell command so that trivial quoting/whitespace/comment
+/// evasions do not defeat the deny-list. This is a preprocessor, not a shell
+/// parser: it removes comments, strips single/double quotes, collapses
+/// whitespace, lowercases alphabetic characters, and strips simple backslash
+/// escapes. Backticks are intentionally left intact because they denote
+/// command substitution, which the safety layer treats literally.
+fn normalize_for_safety(cmd: &str) -> String {
+    let mut out = String::with_capacity(cmd.len());
+    let mut chars = cmd.chars().peekable();
+    let mut in_single = false;
+    let mut in_double = false;
+    while let Some(c) = chars.next() {
+        if in_single {
+            if c == '\'' {
+                in_single = false;
+            } else {
+                out.push(c.to_ascii_lowercase());
+            }
+            continue;
+        }
+        if in_double {
+            if c == '"' {
+                in_double = false;
+            } else if c == '\\' {
+                // Preserve the escaped character's literal value inside double
+                // quotes so "r\"m -rf /" still normalizes to "rm -rf /".
+                out.push(chars.next().unwrap_or(c).to_ascii_lowercase());
+            } else {
+                out.push(c.to_ascii_lowercase());
+            }
+            continue;
+        }
+        match c {
+            '\'' => in_single = true,
+            '"' => in_double = true,
+            '#' => break, // comment to end of line
+            '\\' => {
+                // Strip simple backslash escapes outside quotes.
+                if let Some(next) = chars.next() {
+                    out.push(next.to_ascii_lowercase());
+                }
+            }
+            c => out.push(c.to_ascii_lowercase()),
+        }
+    }
+    // Collapse whitespace to single spaces and trim.
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// True if `b` is a shell token separator for redirection-target scanning.
+fn is_shell_token_separator(b: u8) -> bool {
+    matches!(
+        b,
+        b' ' | b'\t' | b'\n' | b'|' | b';' | b'&' | b'(' | b')' | b'<' | b'>' | b'`'
+    )
+}
+
+/// Path prefixes that a model-driven shell should never be allowed to
+/// overwrite, either via redirection or via `tee`. Includes Unix system paths,
+/// raw block devices, Windows-style paths, and the Git-Bash/WSL mount forms
+/// so the same gate works across platforms.
+const DANGEROUS_REDIRECTION_TARGETS: &[&str] = &[
+    "/etc/",
+    "~/.ssh/",
+    "/root/",
+    "/home/",
+    "/usr/",
+    "/bin/",
+    "/sbin/",
+    "/lib/",
+    "/lib64/",
+    "/boot/",
+    "/dev/sda",
+    "/dev/hda",
+    "/dev/nvme",
+    "/dev/xvd",
+    "/dev/vd",
+    "/dev/mmcblk",
+    "%systemroot%",
+    "%userprofile%",
+    "c:\\windows",
+    "c:\\programdata",
+    "c:\\users\\",
+    "/c/windows/",
+    "/mnt/c/windows/",
+];
+
+/// True if the normalized command redirects output to a system-sensitive
+/// path. This catches `> /etc/hosts`, `>>  /root/.bashrc`, `>|"~/.ssh"`,
+/// `2>/etc/passwd`, `&> /dev/sda`, etc., including Windows paths seen
+/// through Git-Bash/WSL mounts.
+fn redirects_to_dangerous_path(cmd: &str) -> Option<&'static str> {
+    let normalized = normalize_for_safety(cmd);
+    let bytes = normalized.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        // Detect output redirection operators, optionally prefixed by a fd
+        // (`1>`, `2>`, `&>`) or the clobber form (`>|`).
+        let op_len = if bytes[i] == b'>' {
+            if i + 1 < bytes.len() && matches!(bytes[i + 1], b'>' | b'|') {
+                2
+            } else {
+                1
+            }
+        } else if i + 1 < bytes.len()
+            && (bytes[i].is_ascii_digit() || bytes[i] == b'&')
+            && bytes[i + 1] == b'>'
+        {
+            2
+        } else {
+            0
+        };
+
+        if op_len == 0 {
+            i += 1;
+            continue;
+        }
+
+        // Find the redirection target, skipping whitespace.
+        let mut j = i + op_len;
+        while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+            j += 1;
+        }
+        let start = j;
+        while j < bytes.len() && !is_shell_token_separator(bytes[j]) {
+            j += 1;
+        }
+        let target = std::str::from_utf8(&bytes[start..j]).unwrap_or("").to_lowercase();
+        for prefix in DANGEROUS_REDIRECTION_TARGETS {
+            if target.starts_with(prefix) || target == prefix.trim_end_matches('/') {
+                return Some(*prefix);
+            }
+        }
+        i = j;
+    }
+    None
+}
+
+/// True if the command uses `tee` to write to a system-sensitive path.
+fn tee_to_dangerous_path(cmd: &str) -> Option<&'static str> {
+    let normalized = normalize_for_safety(cmd);
+    // Tokenize naively and look for a `tee` word followed by a dangerous path.
+    let tokens: Vec<&str> = normalized.split_whitespace().collect();
+    for window in tokens.windows(2) {
+        let is_tee = window[0] == "tee"
+            || window[0].ends_with("|tee")
+            || window[0].ends_with(";tee")
+            || window[0].ends_with("&&tee")
+            || window[0].ends_with("||tee");
+        if is_tee {
+            let target = window[1].to_lowercase();
+            for prefix in DANGEROUS_REDIRECTION_TARGETS {
+                if target.starts_with(prefix) || target == prefix.trim_end_matches('/') {
+                    return Some(*prefix);
+                }
+            }
+        }
+    }
+    None
 }
 
 /// Safety check for a bash command. Returns `Some(reason)` if the command
@@ -473,15 +685,26 @@ pub fn check_bash_command_str(
         }
     }
 
+    let normalized = normalize_for_safety(cmd);
+
     // 4. Built-in dangerous shell patterns and hard-coded system paths.
+    //    Check both the raw command and a normalized copy (quotes stripped,
+    //    whitespace collapsed, comments removed, lowercased) so trivial
+    //    quoting/whitespace evasions do not bypass the gate.
     for pattern in DANGEROUS_SHELL_COMMANDS {
         let needs_word_boundary = pattern.ends_with('/') || pattern.ends_with(' ');
-        let matches = if needs_word_boundary {
+        let pattern_lower = pattern.to_ascii_lowercase();
+        let matches_raw = if needs_word_boundary {
             word_boundary_match(cmd, pattern)
         } else {
             cmd.contains(pattern)
         };
-        if matches {
+        let matches_normalized = if needs_word_boundary {
+            word_boundary_match(&normalized, &pattern_lower)
+        } else {
+            normalized.contains(&pattern_lower)
+        };
+        if matches_raw || matches_normalized {
             return Some(format!(
                 "🔒 Command blocked: dangerous pattern '{pattern}' detected"
             ));
@@ -495,7 +718,7 @@ pub fn check_bash_command_str(
         "~/.ssh",
         "/root/",
     ] {
-        if cmd.contains(pat) {
+        if cmd.contains(pat) || normalized.contains(pat) {
             return Some(format!(
                 "🔒 Command blocked: references denied path '{pat}'"
             ));
@@ -504,30 +727,44 @@ pub fn check_bash_command_str(
 
     // 5. Privilege escalation, password prompts, and dangerous redirections.
     for pat in PRIVILEGE_ESCALATION_COMMANDS {
-        if word_boundary_match(cmd, pat) {
+        let pat_lower = pat.to_ascii_lowercase();
+        if word_boundary_match(cmd, pat) || word_boundary_match(&normalized, &pat_lower) {
             return Some(format!(
                 "🔒 Command blocked: privilege escalation command '{pat}' is not allowed"
             ));
         }
     }
     for pat in INTERACTIVE_PASSWORD_PATTERNS {
-        if word_boundary_match(cmd, pat) {
+        let pat_lower = pat.to_ascii_lowercase();
+        if word_boundary_match(cmd, pat) || word_boundary_match(&normalized, &pat_lower) {
             return Some(format!(
                 "🔒 Command blocked: interactive password prompt '{pat}' is not allowed"
             ));
         }
     }
     for pat in DANGEROUS_REDIRECTION_PATTERNS {
-        if cmd.contains(pat) {
+        let pat_lower = pat.to_ascii_lowercase();
+        if cmd.contains(pat) || normalized.contains(&pat_lower) {
             return Some(format!(
                 "🔒 Command blocked: dangerous redirection to system path '{pat}'"
             ));
         }
     }
+    if let Some(prefix) = redirects_to_dangerous_path(cmd) {
+        return Some(format!(
+            "🔒 Command blocked: dangerous redirection to system path '{prefix}'"
+        ));
+    }
+    if let Some(prefix) = tee_to_dangerous_path(cmd) {
+        return Some(format!(
+            "🔒 Command blocked: dangerous redirection to system path '{prefix}'"
+        ));
+    }
 
     // 6. User-configured path deny list. Tokenize the command and check
-    //    each token as a path.
-    for token in cmd.split_whitespace() {
+    //    each token as a path, using normalized tokens so quoted paths are
+    //    still evaluated.
+    for token in normalized.split_whitespace() {
         if deny_list.is_path_denied(Path::new(token)) {
             return Some(format!(
                 "🔒 Command blocked: references denied path '{token}'"
@@ -884,6 +1121,112 @@ mod tests {
         assert!(
             result.is_none(),
             "redirect to /tmp should be allowed, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_check_bash_command_str_blocks_quoted_dangerous_command() {
+        // Trivial quoting evasions must not bypass the deny-list.
+        for cmd in [
+            "r'm -rf /'",
+            "rm '-rf' /",
+            "rm -rf / # cleanup",
+            "rm -rf  /",
+            "rm -rf / ; echo done",
+            "rm -fr /",
+            "rm --no-preserve-root -rf /",
+            "chmod -R  777 /",
+        ] {
+            let result = check_bash_command_str(
+                cmd,
+                None,
+                &DenyList::default(),
+                &PathGuard::default(),
+                false,
+            );
+            assert!(
+                result.as_ref().is_some_and(|m| m.contains("dangerous pattern")),
+                "{cmd} should be blocked, got: {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_check_bash_command_str_blocks_quoted_redirection() {
+        // Redirections with extra whitespace or quotes must still be caught.
+        for cmd in [
+            "echo foo >  /etc/hosts",
+            "echo bar >| '/etc/hosts'",
+            "echo baz 2>/etc/hosts",
+            "echo qux &> /etc/hosts",
+        ] {
+            let result = check_bash_command_str(
+                cmd,
+                None,
+                &DenyList::default(),
+                &PathGuard::default(),
+                false,
+            );
+            assert!(
+                result.as_ref().is_some_and(|m| m.contains("dangerous redirection")),
+                "{cmd} should be blocked, got: {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_check_bash_command_str_blocks_windows_redirections() {
+        for cmd in [
+            "echo pwned > C:/Windows/System32/drivers/etc/hosts",
+            "echo pwned > C:\\Windows\\System32\\drivers\\etc\\hosts",
+            "echo pwned > /c/windows/System32/drivers/etc/hosts",
+            "echo pwned | tee /mnt/c/windows/temp/out.txt",
+        ] {
+            let result = check_bash_command_str(
+                cmd,
+                None,
+                &DenyList::default(),
+                &PathGuard::default(),
+                false,
+            );
+            assert!(
+                result.as_ref().is_some_and(|m| m.contains("dangerous redirection")),
+                "{cmd} should be blocked, got: {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_check_bash_command_str_blocks_backslash_escape_variant() {
+        // `rm -rf \/` is the same destructive command to the shell.
+        let result = check_bash_command_str(
+            "rm -rf \\/",
+            None,
+            &DenyList::default(),
+            &PathGuard::default(),
+            false,
+        );
+        assert!(
+            result.as_ref().is_some_and(|m| m.contains("dangerous pattern")),
+            "rm -rf \\/ should be blocked, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_check_bash_command_str_allows_quoted_safe_strings() {
+        // A safe string that happens to contain a dangerous-looking literal is
+        // still a false positive we accept for safety, but a benign command
+        // without a real redirection must pass.
+        let result = check_bash_command_str(
+            "echo 'hello world'",
+            None,
+            &DenyList::default(),
+            &PathGuard::default(),
+            false,
+        );
+        assert!(
+            result.is_none(),
+            "benign echo should be allowed, got: {result:?}"
         );
     }
 

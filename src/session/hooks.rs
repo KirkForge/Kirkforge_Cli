@@ -319,6 +319,7 @@ async fn run_hook_script(
     let mut cmd = tokio::process::Command::new("bash");
     cmd.arg(script)
         .kill_on_drop(true)
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     setup_process_group(&mut cmd);

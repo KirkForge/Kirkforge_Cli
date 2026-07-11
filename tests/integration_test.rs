@@ -11,10 +11,14 @@
 use std::time::Duration;
 
 /// Shared reqwest client for all integration tests.
+///
+/// The timeout is intentionally generous (120 s).  The 0.5b test model can
+/// take tens of seconds to generate a response on a loaded machine, and the
+/// previous 60 s ceiling caused flaky failures on otherwise-healthy runs.
 fn client() -> reqwest::Client {
     reqwest::Client::builder()
         .tcp_nodelay(true)
-        .timeout(Duration::from_secs(60))
+        .timeout(Duration::from_secs(120))
         .build()
         .expect("reqwest client")
 }

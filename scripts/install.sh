@@ -75,6 +75,13 @@ if [ -d "$tmpdir/plugins" ]; then
     echo "Installed bundled plugins to $PLUGIN_DIR"
 fi
 
+if [ -d "$tmpdir/npm" ]; then
+    NPM_DIR="$DATA_DIR/npm"
+    rm -rf "$NPM_DIR"
+    cp -R -P "$tmpdir/npm" "$NPM_DIR"
+    echo "Installed bundled Node SDK to $NPM_DIR"
+fi
+
 echo "Installed binaries to $BIN_DIR: kirkforge kfd plugin3 stratum kirkforge-video"
 
 if ! echo "$PATH" | tr ':' '\n' | grep -qx "$BIN_DIR"; then

@@ -84,7 +84,40 @@ jobs:
             cargo build --release --locked --target ${{ matrix.target }}
           fi
 
-      - name: Package binaries and plugins
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: npm/kirkforge-plugin/package-lock.json
+
+      - name: Build bundled Node SDK
+        shell: bash
+        run: |
+          cd npm/kirkforge-plugin
+          npm ci
+          npm run build
+          npm prune --production
+
+      - name: Strip Node SDK dev artifacts
+        shell: bash
+        run: |
+          cd npm/kirkforge-plugin
+          # Workspace source/tests/source maps are not needed at runtime.
+          find apps packages -type f \( -name "*.map" -o -name "*.test.ts" -o -name "*.test.js" -o -name "*.test.d.ts" \) -delete
+          find apps packages -type d \( -name tests -o -name src \) -exec rm -rf {} +
+          # Top-level repo files are not needed in the release bundle.
+          find . -maxdepth 2 -type f \( \
+            -name "README.md" -o -name "CHANGELOG.md" -o -name "eslint.config.js" -o -name "eslint.config.mjs" -o \
+            -name "vitest.config.ts" -o -name "typedoc.json" -o -name "tsconfig.json" -o -name "tsconfig.package.json" -o \
+            -name "tsconfig.tsbuildinfo" \
+          \) -delete
+          rm -rf e2e examples scripts
+          # Strip documentation/type-only artifacts from third-party dependencies.
+          find node_modules -type f \( -name "*.map" -o -name "*.d.ts" -o -name "README*" -o -name "CHANGELOG*" -o -name "LICENSE*" -o -name "*.md" \) -delete
+          find node_modules -type d \( -name tests -o -name test -o -name __tests__ -o -name docs -o -name examples \) -exec rm -rf {} +
+
+      - name: Package binaries, plugins, and Node SDK
         shell: bash
         run: |
           mkdir -p dist
@@ -98,16 +131,18 @@ jobs:
             cp "target/${{ matrix.target }}/release/${bin}${ext}" "dist/${bin}${ext}"
           done
           cp -R plugins dist/plugins
+          mkdir -p dist/npm
+          cp -R -P npm/kirkforge-plugin dist/npm/kirkforge-plugin
           archive="kirkforge-${{ matrix.target }}.${{ matrix.archive_ext }}"
           if [ "${{ matrix.archive_ext }}" = "zip" ]; then
-            powershell -Command "Compress-Archive -Path 'dist\kirkforge.exe','dist\kfd.exe','dist\plugin3.exe','dist\stratum.exe','dist\kirkforge-video.exe','dist\plugins' -DestinationPath 'dist\${archive}'"
+            powershell -Command "Compress-Archive -Path 'dist\kirkforge.exe','dist\kfd.exe','dist\plugin3.exe','dist\stratum.exe','dist\kirkforge-video.exe','dist\plugins','dist\npm' -DestinationPath 'dist\${archive}'"
           else
-            tar -czf "dist/${archive}" -C dist $(for b in "${bins[@]}"; do echo "${b}${ext}"; done) plugins
+            tar -czf "dist/${archive}" -C dist $(for b in "${bins[@]}"; do echo "${b}${ext}"; done) plugins npm
           fi
           for bin in "${bins[@]}"; do
             rm "dist/${bin}${ext}"
           done
-          rm -rf dist/plugins
+          rm -rf dist/plugins dist/npm
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

@@ -714,6 +714,86 @@ command = "hello.sh"
         );
     }
 
+    /// Installed-layout regression: when the data directory contains a copy of
+    /// the bundled `plugins/` tree (as `install.sh` produces), the plugin host
+    /// loads every bundled plugin from that directory without warnings. This
+    /// catches packaging mistakes that leave tools referenced by a manifest
+    /// missing from the installed plugin root.
+    #[test]
+    fn bundled_plugins_load_from_data_dir() {
+        /// Recursively copy `src` into `dst`, preserving permissions on Unix.
+        fn copy_dir_all(
+            src: impl AsRef<std::path::Path>,
+            dst: impl AsRef<std::path::Path>,
+        ) -> std::io::Result<()> {
+            std::fs::create_dir_all(&dst)?;
+            for entry in std::fs::read_dir(src)? {
+                let entry = entry?;
+                let ty = entry.file_type()?;
+                let dest_path = dst.as_ref().join(entry.file_name());
+                if ty.is_dir() {
+                    copy_dir_all(entry.path(), &dest_path)?;
+                } else if ty.is_symlink() {
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::symlink;
+                        let target = std::fs::read_link(entry.path())?;
+                        symlink(target, dest_path)?;
+                    }
+                    #[cfg(not(unix))]
+                    {
+                        // On Windows follow the symlink; bundled plugins contain
+                        // no symlinks that matter at load time.
+                        if entry.path().is_dir() {
+                            copy_dir_all(entry.path(), &dest_path)?;
+                        } else {
+                            std::fs::copy(entry.path(), &dest_path)?;
+                        }
+                    }
+                } else {
+                    std::fs::copy(entry.path(), &dest_path)?;
+                    #[cfg(unix)]
+                    {
+                        let perms = entry.metadata()?.permissions();
+                        std::fs::set_permissions(&dest_path, perms)?;
+                    }
+                }
+            }
+            Ok(())
+        }
+
+        let tmp = tempfile::tempdir().unwrap();
+        let installed_plugins = tmp.path().join("plugins");
+
+        // Copy the in-repo bundled plugins into a temp data directory so we
+        // exercise the same code path an installed release uses.
+        let repo_plugins = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("plugins");
+        copy_dir_all(&repo_plugins, &installed_plugins).unwrap();
+
+        let _guard = DataDirGuard::set(&tmp.path().to_string_lossy());
+        let (registry, warnings) = load_plugin_registry(&Config::default())
+            .expect("loading installed plugins should not fail");
+        assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+
+        let names: Vec<_> = registry
+            .active_plugins()
+            .iter()
+            .map(|p| p.plugin.manifest().name.clone())
+            .collect();
+        for expected in [
+            "kirkforge-draw",
+            "kirkforge-video",
+            "stratum",
+            "kirkforge-plugin3",
+            "kirkforge-plugin",
+        ] {
+            assert!(
+                names.contains(&expected.to_string()),
+                "expected bundled plugin {expected:?} to load from data dir; got {names:?}"
+            );
+        }
+    }
+
     /// Verify the built-in workspace plugin sources are registered by default,
     /// exist on disk, and can be loaded by the plugin host under the default
     /// trust policy. They remain disabled unless the operator toggles them on.

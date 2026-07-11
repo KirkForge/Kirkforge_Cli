@@ -28,6 +28,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Dependency hardening: `bincode` replaced with `serde_json`, `paste` removed, `ratatui` upgraded to 0.30, and vulnerable/deprecated crates (`crossbeam-epoch`, `quinn-proto`, `anyhow`, `lru`) refreshed
 - Flaky tests fixed in `plugin3-core` env guard and `shared::metrics` log rotation
 - Release archives and `install.sh` now ship/install the bundled `npm/kirkforge-plugin` Node SDK so `kirkforge-plugin` shell tools (`health`, `doctor`, `tools`, `verify`, ...) work from an installed layout
+- Added regression test `bundled_plugins_load_from_data_dir` that exercises the installed-layout plugin loading path
 
 ### Added
 - `/plugins` slash-command family for runtime plugin mount/unmount: `list`, `enable <name>`, `disable <name>`, `reload`, `trust <name> <tier>`. The executor picks up the new registry snapshot on the next turn without restarting.

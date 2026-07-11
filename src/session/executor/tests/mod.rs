@@ -1327,6 +1327,30 @@ fn test_is_read_only_bash_ps_and_jobs() {
     assert!(is_read_only_bash("help"));
 }
 
+#[test]
+fn test_is_read_only_bash_git_read_only_subcommands_allowed() {
+    assert!(is_read_only_bash("git status"));
+    assert!(is_read_only_bash("git status -s"));
+    assert!(is_read_only_bash("git log --oneline -5"));
+    assert!(is_read_only_bash("git diff HEAD~1"));
+    assert!(is_read_only_bash("git show HEAD:src/main.rs"));
+    assert!(is_read_only_bash("git --no-pager -C /some/repo log"));
+    assert!(is_read_only_bash("git ls-files | grep foo"));
+}
+
+#[test]
+fn test_is_read_only_bash_git_mutating_subcommands_blocked() {
+    assert!(!is_read_only_bash("git add src/main.rs"));
+    assert!(!is_read_only_bash("git commit -m 'wip'"));
+    assert!(!is_read_only_bash("git push origin main"));
+    assert!(!is_read_only_bash("git checkout -b feature"));
+    assert!(!is_read_only_bash("git reset --hard HEAD"));
+    assert!(!is_read_only_bash("git merge feature"));
+    assert!(!is_read_only_bash("git rebase main"));
+    assert!(!is_read_only_bash("git stash"));
+    assert!(!is_read_only_bash("git"));
+}
+
 /// Regression test for GPT 5.5 review finding #9: the
 /// `BusEvent::Edit` used to carry the user's `old_string` as the
 /// `diff` field, which made the event useless to downstream

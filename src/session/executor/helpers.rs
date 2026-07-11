@@ -61,8 +61,38 @@ const READ_ONLY_COMMANDS: &[&str] = &[
     "df", "env", "printenv", "true", "false", "dirname", "basename", "realpath", "readlink",
     "grep", "rg", "sort", "wc", "cut", "tr", "uniq", "fold", "nl", "diff", "cmp", "comm", "jq",
     "date", "cal", "whoami", "id", "uname", "hostname", "uptime", "ps", "free", "lscpu", "lsblk",
-    "lsof", "dmesg", "nproc", "arch", "tty", "jobs", "help", "find",
+    "lsof", "dmesg", "nproc", "arch", "tty", "jobs", "help", "find", "git",
 ];
+
+/// Git subcommands that are inherently read-only.  The model commonly asks for
+/// `git status`, `git log`, `git diff`, and `git show`; allowing these avoids
+/// constant approval prompts while still requiring explicit approval for any
+/// mutating subcommand (`add`, `commit`, `push`, `checkout`, `reset`, ...).
+const READ_ONLY_GIT_SUBCOMMANDS: &[&str] =
+    &["status", "log", "diff", "show", "ls-files", "rev-parse"];
+
+/// Return true if the git command appears to be a read-only query.
+///
+/// This parses the command line just enough to skip global options (`-C`,
+/// `--no-pager`, etc.) and look at the actual subcommand.  It rejects empty
+/// or unknown subcommands so a bare `git` or `git add` does not auto-approve.
+fn git_command_is_read_only(cmd: &str) -> bool {
+    let mut tokens = cmd.split_whitespace().skip(1).peekable();
+    let subcommand = loop {
+        match tokens.next() {
+            Some(tok) if tok.starts_with('-') => {
+                // Global options that consume a following argument.
+                if tok == "-C" {
+                    tokens.next();
+                }
+                continue;
+            }
+            Some(tok) => break tok,
+            None => return false,
+        }
+    };
+    READ_ONLY_GIT_SUBCOMMANDS.contains(&subcommand)
+}
 
 pub(crate) fn is_read_only_bash(cmd: &str) -> bool {
     let trimmed = cmd.trim();
@@ -90,6 +120,12 @@ pub(crate) fn is_read_only_bash(cmd: &str) -> bool {
                 return false;
             }
         }
+    }
+
+    // `git` is in the read-only list only so it can reach this extra check.
+    // The subcommand decides whether the invocation is truly read-only.
+    if first == "git" && !git_command_is_read_only(trimmed) {
+        return false;
     }
 
     // Every pipe segment must itself be a read-only command, and no segment

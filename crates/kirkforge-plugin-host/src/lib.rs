@@ -470,6 +470,9 @@ fn apply_policy(plugin: LoadedPlugin, policy: &TrustPolicy) -> (HostedPlugin, Ve
 /// Remove capabilities from a plugin that require more trust than the
 /// effective tier allows, drop any capability whose command path would escape
 /// the plugin root, and drop any capability whose command file does not exist.
+///
+/// Command paths are canonicalised so symlinks inside the plugin root that
+/// point outside it are also rejected.
 fn filter_capabilities(
     mut plugin: LoadedPlugin,
     tier: TrustTier,
@@ -477,36 +480,43 @@ fn filter_capabilities(
 ) -> LoadedPlugin {
     let allowed = SandboxPolicy::filter(tier, &plugin.manifest.capabilities);
     let root = plugin.root.clone();
+    let canonical_root = match std::fs::canonicalize(&root) {
+        Ok(r) => r,
+        Err(e) => {
+            warnings.push(format!(
+                "cannot canonicalise plugin root '{}': {e}; dropping all capabilities",
+                root.display()
+            ));
+            plugin.skill_prompts.clear();
+            plugin.hooks.clear();
+            plugin.verifiers.clear();
+            plugin.tools.clear();
+            plugin.manifest.capabilities.clear();
+            return plugin;
+        }
+    };
 
     let mut validated = Vec::with_capacity(allowed.len());
     for cap in allowed {
         if let Some(cmd) = paths::capability_command(&cap) {
-            if !paths::is_command_within_root(&root, cmd) {
+            let abs = match root.join(cmd).canonicalize() {
+                Ok(p) => p,
+                Err(e) => {
+                    warnings.push(format!(
+                        "{}: command path '{}' is not accessible: {e}; dropping capability",
+                        capability_label(&cap),
+                        cmd.display()
+                    ));
+                    continue;
+                }
+            };
+            if !abs.starts_with(&canonical_root) {
                 warnings.push(format!(
-                    "{}: command path '{}' escapes plugin root; dropping capability",
+                    "{}: command path '{}' resolves outside plugin root; dropping capability",
                     capability_label(&cap),
                     cmd.display()
                 ));
                 continue;
-            }
-            match root.join(cmd).try_exists() {
-                Ok(true) => {}
-                Ok(false) => {
-                    warnings.push(format!(
-                        "{}: command path '{}' does not exist; dropping capability",
-                        capability_label(&cap),
-                        cmd.display()
-                    ));
-                    continue;
-                }
-                Err(e) => {
-                    warnings.push(format!(
-                        "{}: cannot access command path '{}': {e}; dropping capability",
-                        capability_label(&cap),
-                        cmd.display()
-                    ));
-                    continue;
-                }
             }
         }
         validated.push(cap);
@@ -666,6 +676,9 @@ command = "hooks/post-turn.sh"
             perms.set_mode(0o755);
             std::fs::set_permissions(plugin_dir.join("tools/ok.sh"), perms).unwrap();
         }
+        // Create the file outside the plugin root so canonicalisation can
+        // resolve the relative escape and confirm it leaves the root.
+        std::fs::write(plugins.join("evil.sh"), "#!/bin/sh\n").unwrap();
         std::fs::write(
             plugin_dir.join("kirkforge.toml"),
             r#"
@@ -703,7 +716,9 @@ command = "tools/ok.sh"
             "valid tool should be kept"
         );
         assert!(
-            warnings.iter().any(|w| w.contains("escapes plugin root")),
+            warnings
+                .iter()
+                .any(|w| w.contains("resolves outside plugin root")),
             "expected command-escape warning, got: {warnings:?}"
         );
     }
@@ -735,7 +750,9 @@ command = "/bin/sh"
             .load_one(&plugin_dir, TrustPolicy::up_to(TrustTier::Shell))
             .unwrap();
         assert!(
-            warnings.iter().any(|w| w.contains("escapes plugin root")),
+            warnings
+                .iter()
+                .any(|w| w.contains("resolves outside plugin root")),
             "expected command-escape warning, got: {warnings:?}"
         );
         assert!(reg.tool_by_name("bad/escape").is_none());
@@ -774,8 +791,53 @@ command = "tools/missing.sh"
             "missing tool command should be dropped"
         );
         assert!(
-            warnings.iter().any(|w| w.contains("does not exist")),
+            warnings.iter().any(|w| w.contains("is not accessible")),
             "expected missing-file warning, got: {warnings:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn registry_drops_tool_with_symlink_escaping_root() {
+        use std::os::unix::fs::symlink;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let plugins = tmp.path().join("plugins");
+        let plugin_dir = plugins.join("bad-symlink");
+        std::fs::create_dir_all(plugin_dir.join("tools")).unwrap();
+        // A symlink inside the plugin root that points to a file outside it.
+        symlink("/bin/sh", plugin_dir.join("tools/escape.sh")).unwrap();
+        std::fs::write(
+            plugin_dir.join("kirkforge.toml"),
+            r#"
+name = "bad-symlink"
+version = "0.1.0"
+description = "bad"
+trust = "shell"
+
+[[capabilities]]
+type = "tool"
+name = "bad/escape"
+description = "escapes via symlink"
+command = "tools/escape.sh"
+"#,
+        )
+        .unwrap();
+
+        let mut reg = PluginRegistry::new();
+        let warnings = reg
+            .load_from_dir(&plugins, TrustPolicy::up_to(TrustTier::Shell))
+            .unwrap();
+        assert_eq!(reg.active_count(), 1);
+        assert!(
+            reg.tool_by_name("bad/escape").is_none(),
+            "symlink-escaped tool should be dropped"
+        );
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("resolves outside plugin root")),
+            "expected symlink-escape warning, got: {warnings:?}"
         );
     }
 

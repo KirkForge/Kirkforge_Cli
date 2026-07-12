@@ -18,13 +18,14 @@ Produce a single .td.json document. Save it to ./out/<slug>.td.json (slug-ify
 the user's request). The document is a termDRAW/KirkForge-Draw diagram:
 
 - version: 1
-- objects: array of { id, z, parentId, color, type, ...type-specific fields }
+- objects: array of { id, z, parentId?, color, type, ...type-specific fields }
 - types: "box" | "line" | "elbow" | "paint" | "text"
 - colors: "white" | "red" | "orange" | "yellow" | "green" | "cyan" | "blue" | "magenta"
-- box.style: "auto" | "light" | "heavy" | "double" | "dashed"
-- line.style / elbow.style: "smooth" | "light" | "double" | "dashed"
-- elbow.orientation: "horizontal-first" | "vertical-first"
-- text.border: "none" | "single" | "double" | "underline"
+- box fields: left, top, right, bottom, style ("auto" | "light" | "heavy" | "double" | "dashed")
+- line fields: x1, y1, x2, y2, style ("smooth" | "light" | "double" | "dashed")
+- elbow fields: x1, y1, x2, y2, style ("smooth" | "light" | "double" | "dashed"), orientation ("horizontal-first" | "vertical-first")
+- paint fields: points (array of { x, y }), brush (string)
+- text fields: x, y, content (string), border ("none" | "single" | "double" | "underline")
 
 After writing the file, run `kfd --load <path> --fenced` to render it and paste
 the fenced result back to the user.

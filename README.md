@@ -65,7 +65,7 @@ This repo ships with five satellite plugins under `plugins/<name>/`. Each plugin
 - `plugins/kirkforge-plugin3/` / `crates/plugin3*` — token-budget assistant (`/budget`, `plugin3_budget_*`, …).
 - `plugins/kirkforge-plugin/` / `npm/kirkforge-plugin` — KirkForge-Plugin SDK verification CLI (`/kirkforge`, `plugin_verify`, …).
 
-They are registered as workspace plugin sources by default but left **disabled** until you toggle them on. The plugin tool scripts prefer binaries built by this workspace (`target/release/<bin>` or `target/debug/<bin>`) and fall back to `PATH` for the Node SDK or any externally installed build.
+They are registered as workspace plugin sources and **enabled by default** (when their directories exist). Use `/plugins toggle <name>` to disable a bundled plugin persistently. The plugin tool scripts prefer binaries built by this workspace (`target/release/<bin>` or `target/debug/<bin>`) and fall back to `PATH` for the Node SDK or any externally installed build.
 
 ### Runtime commands
 

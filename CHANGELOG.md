@@ -33,6 +33,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `src/daemon/server.rs` `daemonize()` now calls `setsid()` before spawning the foreground daemon, so the auto-started session daemon survives the closing of the spawning terminal/session instead of receiving SIGHUP and shutting down
 - Verified local `x86_64-unknown-linux-musl` release build after installing `musl-tools`; the resulting binary is a working static-pie executable. `aarch64-unknown-linux-musl` remains CI-verified via `cross` because the host lacks the aarch64 musl toolchain.
 - `src/shared/metrics.rs` `record()` now serializes the full event line into a single buffer and guards the rotate/open/write sequence with a global mutex, fixing concurrent metric writes that produced concatenated NDJSON lines and caused `read_events()` to drop events
+- `src/shared/mod.rs` default `enabled_plugins` now lists the five bundled plugins (`kirkforge-draw`, `kirkforge-video`, `stratum`, `kirkforge-plugin3`, `kirkforge-plugin`) so fresh configs and installed releases load them without manual toggling; `config.toml.example` reflects the new default
+- `plugins/kirkforge-draw/kirkforge.toml` `/draw` prompt now documents the real `.td.json` schema (`box`: `left`/`top`/`right`/`bottom`; `line`/`elbow`: `x1`/`y1`/`x2`/`y2`; `paint`: `points`/`brush`; `text`: `x`/`y`/`content`/`border`) instead of the incorrect `x`/`y`/`w`/`h`/`text` box fields; diagrams produced by the model now validate and render
+- `src/session/plugin_tools.rs` `curated_env()` now prepends the source-layout `npm/kirkforge-plugin/node_modules/.bin` to the plugin tool PATH in addition to the data-directory install, so source builds of kirkforge resolve `tsc`/`pyright` for Node SDK tools without a global install; added `npm_bin_dirs()` unit tests for both layouts
+- `README.md` plugin section now states that the five bundled workspace plugins are enabled by default instead of disabled
 
 ### Fixed (deep audit — seventh pass)
 - `src/session/mcp_client.rs` `McpClientManager` now collects startup warnings (failed MCP server connections, zero discovered tools) and exposes them via `warnings()`

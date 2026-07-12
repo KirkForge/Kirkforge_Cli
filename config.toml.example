@@ -159,9 +159,11 @@
 # ---------------------------------------------------------------------------
 #
 # The CLI ships with five built-in plugin sources under the `plugins/` directory.
-# They are registered by default but disabled; enable the ones you want with
-# `enabled_plugins` and toggle them at runtime with `/plugins toggle <name>`.
-# Relative paths resolve against the current working directory.
+# They are enabled by default (in the order below) when the directories exist.
+# Disable individual plugins at runtime with `/plugins toggle <name>` or remove
+# them from `enabled_plugins`. Relative paths resolve against the current working
+# directory; in an installed release the bundled plugins are looked up under
+# `~/.local/share/kirkforge/plugins/<name>`.
 #
 # [plugin_sources]
 # kirkforge-draw = "plugins/kirkforge-draw"
@@ -170,4 +172,4 @@
 # kirkforge-plugin3 = "plugins/kirkforge-plugin3"
 # kirkforge-plugin = "plugins/kirkforge-plugin"
 #
-# enabled_plugins = ["kirkforge-draw"]
+enabled_plugins = ["kirkforge-draw", "kirkforge-video", "stratum", "kirkforge-plugin3", "kirkforge-plugin"]

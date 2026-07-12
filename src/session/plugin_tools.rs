@@ -34,6 +34,43 @@ const BASELINE_ENV_VARS: &[&str] = &[
     "LC_MESSAGES",
 ];
 
+/// Return the Node SDK `node_modules/.bin` directories that should be
+/// prepended to the plugin tool PATH.
+///
+/// Two layouts are supported:
+///   1. Installed/data-directory layout (`~/.local/share/kirkforge/npm/...`).
+///   2. Source layout: when the running binary is under `<repo>/target/`,
+///      the workspace sibling `<repo>/npm/kirkforge-plugin/node_modules/.bin`
+///      is also included so development builds resolve `tsc`/`pyright` without
+///      a global install.
+fn npm_bin_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+
+    if let Ok(data_dir) = crate::session::data_dir() {
+        let installed = data_dir.join("npm/kirkforge-plugin/node_modules/.bin");
+        if installed.is_dir() {
+            dirs.push(installed);
+        }
+    }
+
+    if let Ok(exe) = std::env::current_exe() {
+        // Walk up from the binary looking for a workspace/source-layout Node SDK.
+        // Handles both release/debug binaries at `<repo>/target/{release,debug}/kirkforge`
+        // and test binaries at `<repo>/target/{release,debug}/deps/kirkforge-<hash>`.
+        let mut current = exe.parent();
+        while let Some(dir) = current {
+            let candidate = dir.join("npm/kirkforge-plugin/node_modules/.bin");
+            if candidate.is_dir() && !dirs.contains(&candidate) {
+                dirs.push(candidate);
+                break;
+            }
+            current = dir.parent();
+        }
+    }
+
+    dirs
+}
+
 /// A `Tool` trait implementation that forwards calls to a v1 plugin tool script.
 pub struct PluginToolWrapper {
     def: ToolDef,
@@ -102,19 +139,23 @@ impl PluginToolWrapper {
             if let Ok(v) = std::env::var(key) {
                 // PATH gets sanitized so plugin wrappers don't fail when the
                 // host launches kirkforge with a minimal or world-writable PATH.
-                // If the bundled Node SDK is installed in the data directory,
-                // prepend its node_modules/.bin so Node SDK tools (tsc, pyright)
-                // resolve without requiring a global install.
+                // Prepend any bundled Node SDK `node_modules/.bin` directories
+                // (data-directory install or source-layout sibling) so Node SDK
+                // tools like tsc and pyright resolve without a global install.
                 let value = if *key == "PATH" {
                     let sanitized = crate::session::bash_runner::sanitized_path(&v);
-                    let npm_bin = crate::session::data_dir()
-                        .ok()
-                        .map(|p| p.join("npm/kirkforge-plugin/node_modules/.bin"))
-                        .filter(|p| p.is_dir());
-                    if let Some(npm_bin) = npm_bin {
-                        format!("{}:{}", npm_bin.display(), sanitized)
-                    } else {
+                    let npm_bins = npm_bin_dirs();
+                    if npm_bins.is_empty() {
                         sanitized
+                    } else {
+                        let mut path = npm_bins
+                            .iter()
+                            .map(|p| p.display().to_string())
+                            .collect::<Vec<_>>()
+                            .join(":");
+                        path.push(':');
+                        path.push_str(&sanitized);
+                        path
                     }
                 } else {
                     v
@@ -766,6 +807,48 @@ prompt = "hello"
                 None => std::env::remove_var("KIRKFORGE_DATA_DIR"),
             }
         }
+    }
+
+    /// `npm_bin_dirs()` must include the source-layout Node SDK bin directory
+    /// when the running binary lives under the workspace `target/` tree, even if
+    /// the data directory has no Node SDK installed. This lets developers run
+    /// Node SDK plugin tools from a source build without a global `tsc`/`pyright`.
+    #[test]
+    fn npm_bin_dirs_includes_source_layout_from_target_binary() {
+        let tmp = tempfile::tempdir().unwrap();
+        let _guard = DataDirGuard::set(tmp.path().to_string_lossy().as_ref());
+
+        let dirs = npm_bin_dirs();
+        let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let source_bin = repo_root.join("npm/kirkforge-plugin/node_modules/.bin");
+        assert!(
+            dirs.contains(&source_bin),
+            "expected npm_bin_dirs to contain source-layout bin {source_bin:?}; got {dirs:?}"
+        );
+
+        // The temporary data directory has no npm install, so no data-dir entry
+        // should be present.
+        let data_bin = tmp.path().join("npm/kirkforge-plugin/node_modules/.bin");
+        assert!(
+            !dirs.contains(&data_bin),
+            "unexpected data-dir bin {data_bin:?} in {dirs:?}"
+        );
+    }
+
+    /// When the data directory contains a bundled Node SDK install, its bin
+    /// directory is also included alongside the source-layout candidate.
+    #[test]
+    fn npm_bin_dirs_includes_data_dir_install() {
+        let tmp = tempfile::tempdir().unwrap();
+        let data_bin = tmp.path().join("npm/kirkforge-plugin/node_modules/.bin");
+        std::fs::create_dir_all(&data_bin).unwrap();
+        let _guard = DataDirGuard::set(tmp.path().to_string_lossy().as_ref());
+
+        let dirs = npm_bin_dirs();
+        assert!(
+            dirs.contains(&data_bin),
+            "expected npm_bin_dirs to contain data-dir bin {data_bin:?}; got {dirs:?}"
+        );
     }
 
     /// When a configured workspace plugin source path does not exist (e.g. a

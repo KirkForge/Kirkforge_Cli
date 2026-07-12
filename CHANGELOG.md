@@ -49,6 +49,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `npm/kirkforge-plugin/apps/cli/src/shared.ts` `ALL_MODES` now includes `task-decompose`, matching the `DelegationMode` type in `@kirkforge/core-types`; the `observe`/`delegate`/`run` CLIs no longer reject valid task-decompose modes
 - `npm/kirkforge-plugin/apps/cli/src/bootstrap.ts` removed unused duplicate `ALL_MODES` export to avoid a stale, divergent copy of the mode list
 - `src/session/session_index.rs` `search_sessions` now searches message content in addition to id/date/count, so `kirkforge sessions --search <text>` finds conversations by what was actually said; added unit test `test_search_sessions_matches_content`
+- `src/session/config.rs` `apply_env_overrides` now honors `KIRKFORGE_BANG_REQUIRES_APPROVAL`, `KIRKFORGE_JSON_MODE`, `KIRKFORGE_BASH_SANDBOX_WORKDIR`, `KIRKFORGE_BLOCK_GITIGNORED_DOTFILES`, `KIRKFORGE_MAX_OVERWRITE_SIZE`, `KIRKFORGE_SUMMARIZE_MODEL`, `KIRKFORGE_ROUTING_ENABLED`, `KIRKFORGE_ROUTER_MODEL`, `KIRKFORGE_COMMIT_MAX_FILE_SIZE`, `KIRKFORGE_PRESERVE_RECENT_MESSAGES`, `KIRKFORGE_MAX_TOOL_CALLS_PER_TURN`, `KIRKFORGE_MAX_PERSONA_TURNS`, `KIRKFORGE_TOOL_TIMEOUT_SECS`, `KIRKFORGE_AUDIT_LOG_PATH`, and `KIRKFORGE_HOOKS_DIR`; `merge_toml_into_config` partial-recovery path now covers the same fields plus `routing_model_map`; added tests for all new overrides
 
 ### Fixed (deep audit — seventh pass)
 - `src/session/mcp_client.rs` `McpClientManager` now collects startup warnings (failed MCP server connections, zero discovered tools) and exposes them via `warnings()`

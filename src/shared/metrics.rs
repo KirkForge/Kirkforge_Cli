@@ -9,12 +9,22 @@ use serde::{Deserialize, Serialize};
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
+use std::sync::Mutex;
 #[cfg(test)]
-use std::sync::{Mutex, MutexGuard};
+use std::sync::MutexGuard;
 
 /// Maximum size of the active metrics log before rotation. Older logs are
 /// moved to `metrics.ndjson.1`; earlier rotations are overwritten.
 const MAX_LOG_BYTES: u64 = 5 * 1024 * 1024;
+
+/// Global serialize-and-append lock.
+///
+/// `record()` opens, rotates, and writes to the same file from many
+/// concurrent tasks. Without serialization, the content and newline of
+/// two events can interleave, producing one line like
+/// `{"event":"a"}{"event":"b"}\n` and a following blank line. The lock
+/// keeps each event's full write atomic relative to other events.
+static RECORD_LOCK: Mutex<()> = Mutex::new(());
 
 /// A metric event. Serialized as one NDJSON line.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -118,11 +128,18 @@ pub fn record(event: MetricEvent) {
         return;
     };
 
+    // Serialize the whole event (content + newline) into one buffer and
+    // guard the rotate/open/write sequence so concurrent records cannot
+    // interleave content and newlines.
+    let _guard = RECORD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     rotate_if_needed(&path);
 
     match open_metrics_file(&path) {
         Ok(mut file) => {
-            if let Err(e) = writeln!(file, "{line}") {
+            // Write the line with a single syscall to keep each record
+            // atomic even if the lock were ever removed.
+            let buf = format!("{line}\n");
+            if let Err(e) = file.write_all(buf.as_bytes()) {
                 tracing::warn!(error = %e, "failed to write metric event");
             }
         }
@@ -360,6 +377,35 @@ mod tests {
                 events[0],
                 MetricEvent::Approval { ref action } if action == "denied"
             ));
+        });
+    }
+
+    #[test]
+    fn test_concurrent_records_are_not_interleaved() {
+        with_test_path(|_dir, _lock| {
+            let mut handles = Vec::new();
+            for i in 0..100 {
+                handles.push(std::thread::spawn(move || {
+                    record(MetricEvent::ToolCall {
+                        name: format!("tool-{i}"),
+                        success: true,
+                        duration_ms: i as u64,
+                        error_kind: None,
+                    });
+                }));
+            }
+            for h in handles {
+                h.join().unwrap();
+            }
+
+            let events = read_events();
+            assert_eq!(events.len(), 100);
+            for event in &events {
+                assert!(
+                    matches!(event, MetricEvent::ToolCall { .. }),
+                    "each line should parse as one ToolCall, got {event:?}"
+                );
+            }
         });
     }
 

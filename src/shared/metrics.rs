@@ -110,12 +110,9 @@ fn rotate_if_needed(path: &PathBuf) {
     }
 }
 
-/// Record a metric event.
-///
-/// Events are appended synchronously; failures are logged via `tracing`
-/// but never propagated, so a metrics write error cannot break a turn.
-pub fn record(event: MetricEvent) {
-    let line = match serde_json::to_string(&event) {
+/// Write a serialized event to the given log path under the global lock.
+fn write_event(path: &PathBuf, event: &MetricEvent) {
+    let line = match serde_json::to_string(event) {
         Ok(s) => s,
         Err(e) => {
             tracing::warn!(error = %e, "failed to serialize metric event");
@@ -123,18 +120,13 @@ pub fn record(event: MetricEvent) {
         }
     };
 
-    let Some(path) = metrics_path() else {
-        tracing::debug!("no metrics path available; dropping event");
-        return;
-    };
-
     // Serialize the whole event (content + newline) into one buffer and
     // guard the rotate/open/write sequence so concurrent records cannot
     // interleave content and newlines.
     let _guard = RECORD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    rotate_if_needed(&path);
+    rotate_if_needed(path);
 
-    match open_metrics_file(&path) {
+    match open_metrics_file(path) {
         Ok(mut file) => {
             // Write the line with a single syscall to keep each record
             // atomic even if the lock were ever removed.
@@ -147,6 +139,18 @@ pub fn record(event: MetricEvent) {
             tracing::warn!(error = %e, path = %path.display(), "failed to open metrics file");
         }
     }
+}
+
+/// Record a metric event.
+///
+/// Events are appended synchronously; failures are logged via `tracing`
+/// but never propagated, so a metrics write error cannot break a turn.
+pub fn record(event: MetricEvent) {
+    let Some(path) = metrics_path() else {
+        tracing::debug!("no metrics path available; dropping event");
+        return;
+    };
+    write_event(&path, &event);
 }
 
 /// Summary statistics computed from the metrics log.
@@ -383,15 +387,20 @@ mod tests {
     #[test]
     fn test_concurrent_records_are_not_interleaved() {
         with_test_path(|_dir, _lock| {
+            let path = metrics_path().unwrap();
             let mut handles = Vec::new();
             for i in 0..100 {
+                let p = path.clone();
                 handles.push(std::thread::spawn(move || {
-                    record(MetricEvent::ToolCall {
-                        name: format!("tool-{i}"),
-                        success: true,
-                        duration_ms: i as u64,
-                        error_kind: None,
-                    });
+                    write_event(
+                        &p,
+                        &MetricEvent::ToolCall {
+                            name: format!("tool-{i}"),
+                            success: true,
+                            duration_ms: i as u64,
+                            error_kind: None,
+                        },
+                    );
                 }));
             }
             for h in handles {

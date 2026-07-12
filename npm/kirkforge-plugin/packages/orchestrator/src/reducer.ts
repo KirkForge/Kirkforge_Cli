@@ -267,7 +267,11 @@ export class StateReducer {
       artifactEnforcement
     )
       overall = "fail";
-    else if (lint.warnings > 0 || sec.high > 0 || graphAdvisory) overall = "warn";
+    // Warnings alone are not blocking: they are surfaced in the per-slot counts
+    // but should not trigger a correction loop. Only high-severity security
+    // findings (when security is advisory) and advisory graph broken edges
+    // elevate the aggregate verdict to warn.
+    else if (sec.high > 0 || graphAdvisory) overall = "warn";
 
     const contributingSignals: ReducedStatePacket["contributingSignals"] = [];
     for (const [kind, signals] of map) {

@@ -85,19 +85,24 @@ impl SessionIndex {
         self.entries.clone()
     }
 
-    /// Search indexed sessions by id, date, or message count.
+    /// Search indexed sessions by id, date, message count, or message content.
     /// The query is matched case-insensitively against:
     /// - the session id,
     /// - the `started_at` rfc3339 string,
-    /// - the stringified `message_count`.
+    /// - the stringified `message_count`,
+    /// - the raw text of every message in the session.
     pub fn search(&self, query: &str) -> Vec<SessionEntry> {
         let q = query.to_lowercase();
         self.entries
             .iter()
             .filter(|e| {
-                e.id.to_lowercase().contains(&q)
+                if e.id.to_lowercase().contains(&q)
                     || e.started_at.to_lowercase().contains(&q)
                     || e.message_count.to_string().contains(query)
+                {
+                    return true;
+                }
+                session_content_matches(&e.path, &q)
             })
             .cloned()
             .collect()
@@ -228,9 +233,40 @@ pub fn list_sessions() -> anyhow::Result<Vec<SessionEntry>> {
     Ok(SessionIndex::load_or_refresh()?.list())
 }
 
-/// Search indexed sessions by id, date, or message count.
+/// Search indexed sessions by id, date, message count, or message content.
 pub fn search_sessions(query: &str) -> anyhow::Result<Vec<SessionEntry>> {
     Ok(SessionIndex::load_or_refresh()?.search(query))
+}
+
+/// Check whether a session file contains `query` (case-insensitive) anywhere
+/// in its message text. Returns `false` on any read/parse error so search
+/// never breaks because of one corrupt line.
+fn session_content_matches(path: &std::path::Path, q: &str) -> bool {
+    let content = match std::fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(path = %path.display(), error = %e, "failed to read session for search");
+            return false;
+        }
+    };
+    content
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .any(|line| {
+            // Fast path: plain substring on the raw JSON line covers most
+            // user text because `Message::content` is serialized as a string.
+            // If the JSON is minified/escaped in an unusual way, fall back to
+            // a best-effort parse and inspect known text fields.
+            if line.to_lowercase().contains(q) {
+                return true;
+            }
+            match serde_json::from_str::<crate::shared::Message>(line) {
+                Ok(m) => m.content.to_lowercase().contains(q)
+                    || m.thinking.as_deref().unwrap_or("").to_lowercase().contains(q)
+                    || m.tool_name.as_deref().unwrap_or("").to_lowercase().contains(q),
+                Err(_) => false,
+            }
+        })
 }
 
 /// Update the index after a session has been touched/created.
@@ -557,6 +593,40 @@ mod tests {
         // Every session should have a rfc3339 date containing the current year.
         let all = search_sessions("2026").unwrap();
         assert_eq!(all.len(), 2);
+
+        match previous {
+            Some(v) => std::env::set_var("KIRKFORGE_DATA_DIR", v),
+            None => std::env::remove_var("KIRKFORGE_DATA_DIR"),
+        }
+    }
+
+    /// Search should match message content, not just metadata.
+    #[test]
+    fn test_search_sessions_matches_content() {
+        let _guard = crate::session::test_data_dir_lock().blocking_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let previous = std::env::var("KIRKFORGE_DATA_DIR").ok();
+        std::env::set_var("KIRKFORGE_DATA_DIR", dir.path());
+
+        let sessions_dir = dir.path().join("sessions");
+        std::fs::create_dir_all(&sessions_dir).unwrap();
+        std::fs::write(
+            sessions_dir.join("hello-session.conv.ndjson"),
+            "{\"role\":\"user\",\"content\":\"hello world\"}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            sessions_dir.join("other-session.conv.ndjson"),
+            "{\"role\":\"user\",\"content\":\"something else\"}\n",
+        )
+        .unwrap();
+
+        let results = search_sessions("world").unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id, "hello-session");
+
+        let none = search_sessions("notfound").unwrap();
+        assert!(none.is_empty());
 
         match previous {
             Some(v) => std::env::set_var("KIRKFORGE_DATA_DIR", v),

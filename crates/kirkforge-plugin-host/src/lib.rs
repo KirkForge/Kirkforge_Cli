@@ -468,8 +468,8 @@ fn apply_policy(plugin: LoadedPlugin, policy: &TrustPolicy) -> (HostedPlugin, Ve
 }
 
 /// Remove capabilities from a plugin that require more trust than the
-/// effective tier allows, and drop any capability whose command path would
-/// escape the plugin root.
+/// effective tier allows, drop any capability whose command path would escape
+/// the plugin root, and drop any capability whose command file does not exist.
 fn filter_capabilities(
     mut plugin: LoadedPlugin,
     tier: TrustTier,
@@ -488,6 +488,25 @@ fn filter_capabilities(
                     cmd.display()
                 ));
                 continue;
+            }
+            match root.join(cmd).try_exists() {
+                Ok(true) => {}
+                Ok(false) => {
+                    warnings.push(format!(
+                        "{}: command path '{}' does not exist; dropping capability",
+                        capability_label(&cap),
+                        cmd.display()
+                    ));
+                    continue;
+                }
+                Err(e) => {
+                    warnings.push(format!(
+                        "{}: cannot access command path '{}': {e}; dropping capability",
+                        capability_label(&cap),
+                        cmd.display()
+                    ));
+                    continue;
+                }
             }
         }
         validated.push(cap);
@@ -551,6 +570,16 @@ command = "hooks/post-turn.sh"
             ),
         )
         .unwrap();
+        std::fs::write(root.join("hooks/post-turn.sh"), "#!/bin/sh\nexit 0\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(root.join("hooks/post-turn.sh"))
+                .unwrap()
+                .permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(root.join("hooks/post-turn.sh"), perms).unwrap();
+        }
     }
 
     #[test]
@@ -627,6 +656,16 @@ command = "hooks/post-turn.sh"
         let plugins = tmp.path().join("plugins");
         let plugin_dir = plugins.join("bad");
         std::fs::create_dir_all(plugin_dir.join("tools")).unwrap();
+        std::fs::write(plugin_dir.join("tools/ok.sh"), "#!/bin/sh\nprintf ok\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(plugin_dir.join("tools/ok.sh"))
+                .unwrap()
+                .permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(plugin_dir.join("tools/ok.sh"), perms).unwrap();
+        }
         std::fs::write(
             plugin_dir.join("kirkforge.toml"),
             r#"
@@ -700,6 +739,44 @@ command = "/bin/sh"
             "expected command-escape warning, got: {warnings:?}"
         );
         assert!(reg.tool_by_name("bad/escape").is_none());
+    }
+
+    #[test]
+    fn registry_drops_tool_with_missing_command_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let plugins = tmp.path().join("plugins");
+        let plugin_dir = plugins.join("missing");
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        std::fs::write(
+            plugin_dir.join("kirkforge.toml"),
+            r#"
+name = "missing"
+version = "0.1.0"
+description = "missing"
+trust = "shell"
+
+[[capabilities]]
+type = "tool"
+name = "missing/tool"
+description = "missing command"
+command = "tools/missing.sh"
+"#,
+        )
+        .unwrap();
+
+        let mut reg = PluginRegistry::new();
+        let warnings = reg
+            .load_from_dir(&plugins, TrustPolicy::up_to(TrustTier::Shell))
+            .unwrap();
+        assert_eq!(reg.active_count(), 1);
+        assert!(
+            reg.tool_by_name("missing/tool").is_none(),
+            "missing tool command should be dropped"
+        );
+        assert!(
+            warnings.iter().any(|w| w.contains("does not exist")),
+            "expected missing-file warning, got: {warnings:?}"
+        );
     }
 
     #[test]

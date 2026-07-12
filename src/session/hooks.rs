@@ -712,7 +712,8 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let plugins_dir = tmp.path().join("plugins");
         let plugin_dir = plugins_dir.join("demo");
-        std::fs::create_dir_all(&plugin_dir).unwrap();
+        let plugin_hooks_dir = plugin_dir.join("hooks");
+        std::fs::create_dir_all(&plugin_hooks_dir).unwrap();
         std::fs::write(
             plugin_dir.join("kirkforge.toml"),
             r#"
@@ -728,6 +729,7 @@ command = "hooks/post-turn.sh"
 "#,
         )
         .unwrap();
+        std::fs::write(plugin_hooks_dir.join("post-turn.sh"), "#!/bin/bash\n").unwrap();
 
         let mut registry = PluginRegistry::new();
         let warnings = registry

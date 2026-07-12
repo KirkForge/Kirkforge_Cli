@@ -8,6 +8,7 @@
 
 mod compat;
 mod hook;
+mod paths;
 mod sandbox;
 mod tool;
 mod toolset;
@@ -177,7 +178,8 @@ impl PluginRegistry {
                         }
                     }
 
-                    let hosted = apply_policy(plugin, &policy);
+                    let (hosted, policy_warnings) = apply_policy(plugin, &policy);
+                    warnings.extend(policy_warnings);
                     if let Some(ref reason) = hosted.rejection {
                         warnings.push(format!("{}: {}", hosted.plugin.manifest.name, reason));
                     } else {
@@ -295,7 +297,7 @@ impl PluginRegistry {
             )?;
         }
 
-        let hosted = apply_policy(plugin, &policy);
+        let (hosted, policy_warnings) = apply_policy(plugin, &policy);
         if let Some(ref reason) = hosted.rejection {
             anyhow::bail!("{}: {}", hosted.plugin.manifest().name, reason);
         }
@@ -303,7 +305,8 @@ impl PluginRegistry {
         let name = hosted.plugin.manifest().name.clone();
         // Remove any existing plugin with the same name before loading the new one.
         self.remove(&name);
-        let warnings = self.push_and_index(hosted);
+        let mut warnings = policy_warnings;
+        warnings.extend(self.push_and_index(hosted));
         Ok((name, warnings))
     }
 
@@ -431,10 +434,13 @@ fn verify_plugin_signature(
 /// Apply the trust policy to a freshly loaded plugin.
 ///
 /// Rejected plugins are returned without indexing. Accepted plugins have their
-/// capabilities filtered down to those permitted by the effective trust tier.
-fn apply_policy(plugin: LoadedPlugin, policy: &TrustPolicy) -> HostedPlugin {
+/// capabilities filtered down to those permitted by the effective trust tier and
+/// to command paths that stay inside the plugin root. Returns any warnings
+/// produced while filtering.
+fn apply_policy(plugin: LoadedPlugin, policy: &TrustPolicy) -> (HostedPlugin, Vec<String>) {
+    let mut warnings = Vec::new();
     if policy.reject_on_excess && !policy.max.permits(plugin.manifest.trust) {
-        return HostedPlugin {
+        let hosted = HostedPlugin {
             effective_trust: plugin.manifest.trust,
             rejection: Some(format!(
                 "trust tier '{}' exceeds host maximum '{}'",
@@ -442,6 +448,7 @@ fn apply_policy(plugin: LoadedPlugin, policy: &TrustPolicy) -> HostedPlugin {
             )),
             plugin,
         };
+        return (hosted, warnings);
     }
 
     let effective = if policy.max.permits(plugin.manifest.trust) {
@@ -450,37 +457,69 @@ fn apply_policy(plugin: LoadedPlugin, policy: &TrustPolicy) -> HostedPlugin {
         policy.max
     };
 
-    let plugin = filter_capabilities_by_tier(plugin, effective);
+    let plugin = filter_capabilities(plugin, effective, &mut warnings);
 
-    HostedPlugin {
+    let hosted = HostedPlugin {
         plugin,
         effective_trust: effective,
         rejection: None,
-    }
+    };
+    (hosted, warnings)
 }
 
 /// Remove capabilities from a plugin that require more trust than the
-/// effective tier allows.
-fn filter_capabilities_by_tier(mut plugin: LoadedPlugin, tier: TrustTier) -> LoadedPlugin {
+/// effective tier allows, and drop any capability whose command path would
+/// escape the plugin root.
+fn filter_capabilities(
+    mut plugin: LoadedPlugin,
+    tier: TrustTier,
+    warnings: &mut Vec<String>,
+) -> LoadedPlugin {
     let allowed = SandboxPolicy::filter(tier, &plugin.manifest.capabilities);
+    let root = plugin.root.clone();
+
+    let mut validated = Vec::with_capacity(allowed.len());
+    for cap in allowed {
+        if let Some(cmd) = paths::capability_command(&cap) {
+            if !paths::is_command_within_root(&root, cmd) {
+                warnings.push(format!(
+                    "{}: command path '{}' escapes plugin root; dropping capability",
+                    capability_label(&cap),
+                    cmd.display()
+                ));
+                continue;
+            }
+        }
+        validated.push(cap);
+    }
 
     plugin.skill_prompts.retain(|trigger, _| {
-        allowed
+        validated
             .iter()
             .any(|cap| matches!(cap, Capability::Skill { trigger: t, .. } if t == trigger))
     });
     plugin
         .hooks
-        .retain(|cap| allowed.iter().any(|allowed| allowed == cap));
+        .retain(|cap| validated.iter().any(|allowed| allowed == cap));
     plugin
         .verifiers
-        .retain(|cap| allowed.iter().any(|allowed| allowed == cap));
+        .retain(|cap| validated.iter().any(|allowed| allowed == cap));
     plugin
         .tools
-        .retain(|cap| allowed.iter().any(|allowed| allowed == cap));
-    plugin.manifest.capabilities = allowed;
+        .retain(|cap| validated.iter().any(|allowed| allowed == cap));
+    plugin.manifest.capabilities = validated;
 
     plugin
+}
+
+/// Human-readable identifier for a capability, used in warnings.
+fn capability_label(cap: &Capability) -> String {
+    match cap {
+        Capability::Skill { trigger, .. } => format!("skill '{trigger}'"),
+        Capability::Tool { name, .. } => format!("tool '{name}'"),
+        Capability::Hook { event, .. } => format!("hook '{event}'"),
+        Capability::Verifier { name, .. } => format!("verifier '{name}'"),
+    }
 }
 
 #[cfg(test)]
@@ -580,6 +619,87 @@ command = "hooks/post-turn.sh"
         assert_eq!(reg.active_count(), 1);
         assert!(reg.skill_by_trigger("/hello").is_some());
         assert!(!reg.hooks_for_event("post-turn").is_empty());
+    }
+
+    #[test]
+    fn registry_drops_capability_with_command_outside_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let plugins = tmp.path().join("plugins");
+        let plugin_dir = plugins.join("bad");
+        std::fs::create_dir_all(plugin_dir.join("tools")).unwrap();
+        std::fs::write(
+            plugin_dir.join("kirkforge.toml"),
+            r#"
+name = "bad"
+version = "0.1.0"
+description = "bad"
+trust = "shell"
+
+[[capabilities]]
+type = "tool"
+name = "bad/escape"
+description = "escapes plugin root"
+command = "../evil.sh"
+
+[[capabilities]]
+type = "tool"
+name = "bad/ok"
+description = "stays inside plugin root"
+command = "tools/ok.sh"
+"#,
+        )
+        .unwrap();
+
+        let mut reg = PluginRegistry::new();
+        let warnings = reg
+            .load_from_dir(&plugins, TrustPolicy::up_to(TrustTier::Shell))
+            .unwrap();
+        assert_eq!(reg.active_count(), 1);
+        assert!(
+            reg.tool_by_name("bad/escape").is_none(),
+            "escaped tool should be dropped"
+        );
+        assert!(
+            reg.tool_by_name("bad/ok").is_some(),
+            "valid tool should be kept"
+        );
+        assert!(
+            warnings.iter().any(|w| w.contains("escapes plugin root")),
+            "expected command-escape warning, got: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn load_one_warns_when_capability_command_escapes_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let plugin_dir = tmp.path().join("bad");
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        std::fs::write(
+            plugin_dir.join("kirkforge.toml"),
+            r#"
+name = "bad"
+version = "0.1.0"
+description = "bad"
+trust = "shell"
+
+[[capabilities]]
+type = "tool"
+name = "bad/escape"
+description = "escapes plugin root"
+command = "/bin/sh"
+"#,
+        )
+        .unwrap();
+
+        let mut reg = PluginRegistry::new();
+        let (_name, warnings) = reg
+            .load_one(&plugin_dir, TrustPolicy::up_to(TrustTier::Shell))
+            .unwrap();
+        assert!(
+            warnings.iter().any(|w| w.contains("escapes plugin root")),
+            "expected command-escape warning, got: {warnings:?}"
+        );
+        assert!(reg.tool_by_name("bad/escape").is_none());
     }
 
     #[test]

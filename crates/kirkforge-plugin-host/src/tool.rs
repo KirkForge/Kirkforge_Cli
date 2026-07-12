@@ -45,6 +45,9 @@ impl PluginTool {
                 command,
             } => {
                 let command = command.clone()?;
+                if !crate::paths::is_command_within_root(plugin_root, &command) {
+                    return None;
+                }
                 Some(Self {
                     name: name.clone(),
                     description: description.clone(),

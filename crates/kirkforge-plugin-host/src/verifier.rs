@@ -39,6 +39,9 @@ impl PluginVerifier {
         match cap {
             Capability::Verifier { name, command, .. } => {
                 let command = command.clone()?;
+                if !crate::paths::is_command_within_root(plugin_root, &command) {
+                    return None;
+                }
                 Some(Self {
                     name: name.clone(),
                     command,

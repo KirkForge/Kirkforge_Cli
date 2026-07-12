@@ -17,9 +17,35 @@ import type {
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 import { safeRelativePath } from "@kirkforge/orchestrator/path-safety.js";
 
 const execFileAsync = promisify(execFile);
+
+const MAX_PARENT_TRAVERSAL = 6;
+
+/**
+ * Search for a bundled tool in `node_modules/.bin` directories starting from
+ * the plugin module location and, when invoked via the CLI wrapper, from the
+ * CLI entry point. This lets `doctor()` report workspace-bundled tools (tsc,
+ * pyright, eslint) even when the plugin host passes a curated PATH that does
+ * not include the workspace's `node_modules/.bin`.
+ */
+function resolveBundledBinary(name: string): string | undefined {
+  const moduleFile = fileURLToPath(import.meta.url);
+  const cliFile = process.argv[1];
+  for (const startFile of [moduleFile, cliFile]) {
+    if (!startFile) continue;
+    let dir = dirname(startFile);
+    for (let i = 0; i < MAX_PARENT_TRAVERSAL && dir !== dirname(dir); i++) {
+      const candidate = join(dir, "node_modules", ".bin", name);
+      if (existsSync(candidate)) return candidate;
+      dir = dirname(dir);
+    }
+  }
+  return undefined;
+}
 
 export type { ReducedStatePacket } from "@kirkforge/correction-core";
 export type { TaskLanguage } from "@kirkforge/correction-core";
@@ -235,8 +261,9 @@ const INTERNAL_TOOLS = new Set(["secdev", "gitnexus", "graphify"]);
 
 async function probeTool(name: string, args: string[] = ["--version"]): Promise<ToolCapability> {
   const source: "external" | "internal" = INTERNAL_TOOLS.has(name) ? "internal" : "external";
+  const bundledPath = resolveBundledBinary(name);
   try {
-    const { stdout } = await execFileAsync(name, args, { timeout: 5000 });
+    const { stdout } = await execFileAsync(bundledPath ?? name, args, { timeout: 5000 });
     const firstLine = stdout.trim().split("\n")[0];
     const version = firstLine ? firstLine.trim() : undefined;
     return { available: true, version, source };

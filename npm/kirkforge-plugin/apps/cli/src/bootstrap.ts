@@ -36,7 +36,6 @@ export const VERSION: string = (() => {
     return "0.0.0";
   }
 })();
-export const ALL_MODES = ["hard-prompt", "schema-contract", "artifact"] as const;
 
 export interface BootstrapOpts {
   provider?: string;

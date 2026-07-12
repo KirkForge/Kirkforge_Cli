@@ -322,7 +322,10 @@ export class Orchestrator {
     task: { taskId?: string; description?: string; files?: string[] } = {},
   ): Promise<ReducedStatePacket> {
     const taskId = task.taskId ?? `verify-${Date.now()}`;
-    const profile = detectTaskProfile(task.description ?? "verify current TypeScript workspace");
+    // Default to a language-neutral profile so `verify` on a non-TypeScript
+    // workspace does not fail-closed because there is no tsconfig.json to check.
+    // The user can override by passing --task with a language-specific description.
+    const profile = detectTaskProfile(task.description ?? "verify current workspace");
     await runVerifiers(
       this as unknown as OrchestratorInternals,
       taskId,

@@ -237,7 +237,7 @@ enum Command {
         #[arg(long, short)]
         output: Option<PathBuf>,
 
-        /// Search sessions by id, date, or message count.
+        /// Search sessions by id, date, message count, or message content.
         #[arg(long, value_name = "QUERY", conflicts_with = "export")]
         search: Option<String>,
     },

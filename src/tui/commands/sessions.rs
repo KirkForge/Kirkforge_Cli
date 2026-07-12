@@ -51,7 +51,7 @@ const SESSIONS_HELP: &str = "/sessions — list, search, prune, and delete saved
 Usage:
   /sessions                  List all sessions (newest first)
   /sessions list             Same as above
-  /sessions search <query>  Search by id, date, or message count
+  /sessions search <query>  Search by id, date, message count, or message content
   /sessions prune [N] [keep K]
                              Delete the oldest N sessions, keeping
                              the K most recent. Defaults: N=5, K=10.

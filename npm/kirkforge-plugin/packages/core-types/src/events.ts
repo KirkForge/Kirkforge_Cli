@@ -16,7 +16,14 @@ export interface VerifyLintEvent {
     suppressed?: number;
     filesScanned: number;
     durationMs: number;
-    details: Array<{ file: string; line: number; rule: string; message: string }>;
+    details: Array<{
+      file: string;
+      line: number;
+      rule: string;
+      severity?: string;
+      category?: string;
+      message: string;
+    }>;
   };
   source?: string;
   timestamp: string;

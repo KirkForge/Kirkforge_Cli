@@ -261,9 +261,19 @@ fn session_content_matches(path: &std::path::Path, q: &str) -> bool {
                 return true;
             }
             match serde_json::from_str::<crate::shared::Message>(line) {
-                Ok(m) => m.content.to_lowercase().contains(q)
-                    || m.thinking.as_deref().unwrap_or("").to_lowercase().contains(q)
-                    || m.tool_name.as_deref().unwrap_or("").to_lowercase().contains(q),
+                Ok(m) => {
+                    m.content.to_lowercase().contains(q)
+                        || m.thinking
+                            .as_deref()
+                            .unwrap_or("")
+                            .to_lowercase()
+                            .contains(q)
+                        || m.tool_name
+                            .as_deref()
+                            .unwrap_or("")
+                            .to_lowercase()
+                            .contains(q)
+                }
                 Err(_) => false,
             }
         })

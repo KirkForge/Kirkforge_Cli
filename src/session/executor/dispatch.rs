@@ -335,7 +335,14 @@ impl Executor {
 
             match verdict {
                 GuardVerdict::Allowed(resolved) => {
-                    if tc.name == "edit_file" {
+                    // Read-before-edit gate. `edit_file` always needs a prior
+                    // read. `write_file` only needs one when it overwrites an
+                    // existing file — a brand-new file can't have been read.
+                    // Without this, write_file could blindly clobber a file
+                    // the model never inspected (review.md High finding).
+                    let needs_read_gate =
+                        tc.name == "edit_file" || (tc.name == "write_file" && path.exists());
+                    if needs_read_gate {
                         if let GuardVerdict::Denied(msg) =
                             self.read_gate.check_edit(path, &resolved)
                         {

@@ -809,6 +809,216 @@ async fn test_deny_paths_blocks_write_file_even_with_auto_approve() {
     );
 }
 
+/// `write_file` overwriting an existing file must respect the
+/// read-before-edit gate — without this it could blindly clobber a
+/// file the model never inspected (review.md High finding). Here the
+/// target exists but was never `read_file`d, so the tool must not run.
+#[tokio::test]
+async fn test_write_file_overwrite_blocked_without_read() {
+    let tmp = std::env::temp_dir().join(format!(
+        "kirkforge_write_gate_test_{}.txt",
+        std::process::id()
+    ));
+    std::fs::write(&tmp, "original").expect("seed existing file");
+    let _cleanup = CleanupFile(tmp.clone());
+
+    let captured = Arc::new(Mutex::new(None));
+    let tool = MockTool {
+        def: ToolDef {
+            name: "write_file",
+            description: "write to a file",
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {"path": {"type": "string"}, "content": {"type": "string"}}
+            }),
+        },
+        captured_args: captured.clone(),
+        outcome: ToolOutcome::Success {
+            content: "wrote".into(),
+        },
+    };
+
+    let adapter = MockAdapter::new(
+        vec![
+            StreamEvent::ToolCall(ToolInvocation {
+                id: "call-1".into(),
+                name: "write_file".into(),
+                arguments: serde_json::json!({
+                    "path": tmp.to_string_lossy(),
+                    "content": "overwritten"
+                }),
+            }),
+            StreamEvent::Done {
+                finish_reason: FinishReason::ToolCalls,
+                usage: None,
+            },
+        ],
+        make_info(),
+    );
+
+    let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
+    let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(true));
+    let events = exe
+        .run_turn_collecting("overwrite", &approval_tx, never_cancelled())
+        .await
+        .unwrap();
+
+    assert!(
+        captured.lock().unwrap().is_none(),
+        "write_file must not run when overwriting an unread existing file"
+    );
+    let denied = events.iter().any(|e| {
+        matches!(
+            e,
+            TurnEvent::ToolResult { name, output, .. }
+                if name == "write_file" && output.contains("Read-before-edit")
+        )
+    });
+    assert!(
+        denied,
+        "Expected a read-before-edit refusal, got events: {events:?}"
+    );
+}
+
+/// Once the existing file has been read, `write_file` may overwrite it.
+#[tokio::test]
+async fn test_write_file_overwrite_allowed_after_read() {
+    let tmp = std::env::temp_dir().join(format!(
+        "kirkforge_write_gate_read_test_{}.txt",
+        std::process::id()
+    ));
+    std::fs::write(&tmp, "original").expect("seed existing file");
+    let _cleanup = CleanupFile(tmp.clone());
+
+    let captured = Arc::new(Mutex::new(None));
+    let tool = MockTool {
+        def: ToolDef {
+            name: "write_file",
+            description: "write to a file",
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {"path": {"type": "string"}, "content": {"type": "string"}}
+            }),
+        },
+        captured_args: captured.clone(),
+        outcome: ToolOutcome::Success {
+            content: "wrote".into(),
+        },
+    };
+
+    let adapter = MockAdapter::new(
+        vec![
+            StreamEvent::ToolCall(ToolInvocation {
+                id: "call-1".into(),
+                name: "write_file".into(),
+                arguments: serde_json::json!({
+                    "path": tmp.to_string_lossy(),
+                    "content": "overwritten"
+                }),
+            }),
+            StreamEvent::Done {
+                finish_reason: FinishReason::ToolCalls,
+                usage: None,
+            },
+        ],
+        make_info(),
+    );
+
+    let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
+    let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(true));
+    // Mark as read first — the gate now permits the overwrite.
+    exe.read_gate.mark_read(&tmp);
+
+    let events = exe
+        .run_turn_collecting("overwrite", &approval_tx, never_cancelled())
+        .await
+        .unwrap();
+
+    assert!(
+        captured.lock().unwrap().is_some(),
+        "write_file should run when the existing file was read first"
+    );
+    let ran = events.iter().any(|e| {
+        matches!(
+            e,
+            TurnEvent::ToolResult { name, success, .. } if name == "write_file" && *success
+        )
+    });
+    assert!(
+        ran,
+        "Expected write_file to succeed, got events: {events:?}"
+    );
+}
+
+/// A brand-new file has never existed, so read-before-edit does not
+/// apply — `write_file` creates it without a prior read.
+#[tokio::test]
+async fn test_write_file_new_file_allowed_without_read() {
+    let tmp = std::env::temp_dir().join(format!(
+        "kirkforge_write_gate_new_test_{}.txt",
+        std::process::id()
+    ));
+    // Ensure it does NOT exist going in; clean up after.
+    let _ = std::fs::remove_file(&tmp);
+    let _cleanup = CleanupFile(tmp.clone());
+
+    let captured = Arc::new(Mutex::new(None));
+    let tool = MockTool {
+        def: ToolDef {
+            name: "write_file",
+            description: "write to a file",
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {"path": {"type": "string"}, "content": {"type": "string"}}
+            }),
+        },
+        captured_args: captured.clone(),
+        outcome: ToolOutcome::Success {
+            content: "wrote".into(),
+        },
+    };
+
+    let adapter = MockAdapter::new(
+        vec![
+            StreamEvent::ToolCall(ToolInvocation {
+                id: "call-1".into(),
+                name: "write_file".into(),
+                arguments: serde_json::json!({
+                    "path": tmp.to_string_lossy(),
+                    "content": "brand new"
+                }),
+            }),
+            StreamEvent::Done {
+                finish_reason: FinishReason::ToolCalls,
+                usage: None,
+            },
+        ],
+        make_info(),
+    );
+
+    let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
+    let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(true));
+    let events = exe
+        .run_turn_collecting("create", &approval_tx, never_cancelled())
+        .await
+        .unwrap();
+
+    assert!(
+        captured.lock().unwrap().is_some(),
+        "write_file should run for a brand-new file with no prior read"
+    );
+    let ran = events.iter().any(|e| {
+        matches!(
+            e,
+            TurnEvent::ToolResult { name, success, .. } if name == "write_file" && *success
+        )
+    });
+    assert!(
+        ran,
+        "Expected write_file to succeed, got events: {events:?}"
+    );
+}
+
 #[tokio::test]
 async fn test_dangerous_shell_blocked_even_with_allow_all_rule() {
     let captured = Arc::new(Mutex::new(None));

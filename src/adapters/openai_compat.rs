@@ -192,12 +192,23 @@ pub(crate) async fn parse_openai_compat_stream<B, E, S>(
                 // and we'll retry from this position.
                 while let Some(start) = buffer.find("data: ") {
                     let after_data = &buffer[start + 6..];
-                    // If the frame isn't complete yet
-                    // (no terminating `\n\n` and not at
-                    // the end of the buffer), wait for
-                    // more bytes.
-                    let sep = after_data.find("\n\n");
-                    let Some(sep_idx) = sep else {
+                    // If the frame isn't complete yet (no
+                    // terminating blank line and not at the
+                    // end of the buffer), wait for more bytes.
+                    //
+                    // SSE frames end at a blank line, and the HTML5
+                    // spec allows LF (`\n\n`), CRLF (`\r\n\r\n`), and
+                    // CR (`\r\r`) line endings. A reverse proxy or
+                    // OpenAI-compatible server using CRLF would never
+                    // satisfy a `\n\n`-only search, so the frame would
+                    // look incomplete forever and the buffer would
+                    // grow to the cap and abort the stream. Take the
+                    // earliest terminator present.
+                    let sep = ["\n\n", "\r\n\r\n", "\r\r"]
+                        .into_iter()
+                        .filter_map(|t| after_data.find(t).map(|i| (i, t.len())))
+                        .min_by_key(|(i, _)| *i);
+                    let Some((sep_idx, term_len)) = sep else {
                         // Incomplete frame. Bail out of the
                         // inner loop; the outer stream
                         // loop will read more.
@@ -207,7 +218,7 @@ pub(crate) async fn parse_openai_compat_stream<B, E, S>(
                     // Drain only on the happy path — on
                     // parse error we leave the frame in
                     // place for the next read.
-                    let drain_to = start + 6 + sep_idx + 2;
+                    let drain_to = start + 6 + sep_idx + term_len;
 
                     if line.is_empty() || line == "[DONE]" {
                         buffer.drain(..drain_to);
@@ -967,6 +978,39 @@ mod tests {
         assert!(events
             .iter()
             .any(|e| matches!(e, StreamEvent::Text(s) if s == "hi")));
+    }
+
+    /// Regression: some OpenAI-compatible servers and reverse proxies emit
+    /// SSE frames with CRLF line endings (`data: ...\r\n\r\n`) instead of
+    /// LF. The HTML5 spec permits this. A `\n\n`-only terminator search
+    /// would never match a CRLF frame, so it would look incomplete forever
+    /// and the buffer would grow to the cap and abort the stream. The
+    /// parser accepts `\n\n`, `\r\n\r\n`, and `\r\r`; this feeds it a
+    /// CRLF-framed content delta plus a CRLF `[DONE]` and asserts the
+    /// content and the Done event both surface.
+    #[tokio::test]
+    async fn sse_accepts_crlf_line_endings() {
+        let content = format!(
+            "data: {}\r\n\r\n",
+            serde_json::to_string(&json!({
+                "choices": [{"delta": {"content": "hi"}, "finish_reason": "stop"}]
+            }))
+            .unwrap()
+        );
+        let done = "data: [DONE]\r\n\r\n";
+        let events = run_sse(vec![content.into_bytes(), done.as_bytes().to_vec()]).await;
+
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, StreamEvent::Text(s) if s == "hi")),
+            "expected content 'hi' from CRLF frame, got {events:?}"
+        );
+        assert!(
+            matches!(events.last(), Some(StreamEvent::Done { .. })),
+            "expected Done after CRLF [DONE], got {:?}",
+            events.last()
+        );
     }
 
     /// A single tool-call delta can be split across multiple SSE data

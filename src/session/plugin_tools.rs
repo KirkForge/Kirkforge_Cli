@@ -818,9 +818,17 @@ prompt = "hello"
         let tmp = tempfile::tempdir().unwrap();
         let _guard = DataDirGuard::set(tmp.path().to_string_lossy().as_ref());
 
-        let dirs = npm_bin_dirs();
         let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let source_bin = repo_root.join("npm/kirkforge-plugin/node_modules/.bin");
+        // The source-layout Node SDK install only exists after `npm ci`, which
+        // the Rust CI jobs don't run. The detection logic is what we're testing,
+        // not whether a sibling language's install happened, so ensure the
+        // gitignored dir is present before reading. `create_dir_all` is a no-op
+        // when an install already exists; otherwise it makes an empty `.bin`
+        // (node_modules is gitignored, so this never pollutes the tree).
+        std::fs::create_dir_all(&source_bin).unwrap();
+
+        let dirs = npm_bin_dirs();
         assert!(
             dirs.contains(&source_bin),
             "expected npm_bin_dirs to contain source-layout bin {source_bin:?}; got {dirs:?}"

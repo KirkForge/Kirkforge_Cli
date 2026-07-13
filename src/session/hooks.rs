@@ -540,9 +540,15 @@ mod tests {
         runner.run("post-turn", &[("KF_EVENT", "post-turn")], &default_config());
 
         // Poll for the marker so the test stays stable under heavy
-        // parallel test loads. Give up after ~2 seconds.
+        // parallel test loads. The budget MUST exceed the 5-second hook
+        // execution timeout (see `run_hook_script`): under load the
+        // fire-and-forget bash subprocess can be starved of CPU for
+        // several seconds before it even starts, so a tight budget
+        // races the hook's own timeout and flakes. 15s = 5s hook
+        // timeout + ~10s scheduling slop; the common case still breaks
+        // on first read of the correct content.
         let mut content = String::from("not-run");
-        for _ in 0..40 {
+        for _ in 0..300 {
             if let Ok(c) = std::fs::read_to_string(&marker) {
                 content = c;
                 if content.trim() == "post-turn" {
@@ -584,8 +590,16 @@ mod tests {
         // before we start polling the marker file.
         tokio::task::yield_now().await;
 
+        // Poll for the marker. The budget MUST exceed the 5-second hook
+        // execution timeout (see `run_hook_script`): under heavy parallel
+        // test load the spawned bash subprocess can be starved of CPU for
+        // several seconds before it starts, so a 5s polling budget races
+        // the hook's own 5s timeout and flakes (observed: full
+        // `impact-fallback.sh` run went red here once). 15s = 5s hook
+        // timeout + ~10s scheduling slop; the common case still breaks on
+        // first read of the correct content.
         let mut content = String::new();
-        for _ in 0..100 {
+        for _ in 0..300 {
             if let Ok(c) = std::fs::read_to_string(&marker) {
                 content = c;
                 if content.trim() == "bash,pre-tool-bash" {

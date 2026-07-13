@@ -54,6 +54,38 @@ trap 'rm -rf "$tmpdir"' EXIT
 
 echo "Downloading kirkforge $tag for $target..."
 curl -fsSL "$url" -o "$tmpdir/$archive"
+
+# Verify the archive against the release checksum file before extracting.
+# The release workflow publishes SHA256SUMS.txt alongside every archive;
+# refusing to install when it is missing or the hash mismatches guards
+# against a tampered or truncated download.
+sums_url="https://github.com/$REPO/releases/download/$tag/SHA256SUMS.txt"
+curl -fsSL "$sums_url" -o "$tmpdir/SHA256SUMS.txt"
+
+# shasum is native on macOS; sha256sum is the Linux norm. Pick whichever exists.
+if command -v shasum >/dev/null 2>&1; then
+    actual=$(shasum -a 256 "$tmpdir/$archive" | awk '{print $1}')
+elif command -v sha256sum >/dev/null 2>&1; then
+    actual=$(sha256sum "$tmpdir/$archive" | awk '{print $1}')
+else
+    echo "Need 'shasum' or 'sha256sum' to verify the download; neither found." >&2
+    exit 1
+fi
+
+# sha256sum lines look like "<hash>  <file>" (text) or "<hash> *<file>" (binary).
+expected=$(awk -v f="$archive" '{ gsub(/^\*/, "", $2); if ($2 == f) print $1 }' "$tmpdir/SHA256SUMS.txt")
+if [ -z "$expected" ]; then
+    echo "No checksum entry for $archive in SHA256SUMS.txt — refusing to install." >&2
+    exit 1
+fi
+if [ "$actual" != "$expected" ]; then
+    echo "Checksum mismatch for $archive — refusing to install." >&2
+    echo "  expected: $expected" >&2
+    echo "  actual:   $actual" >&2
+    exit 1
+fi
+echo "Verified checksum for $archive."
+
 tar -xzf "$tmpdir/$archive" -C "$tmpdir"
 
 mkdir -p "$BIN_DIR"

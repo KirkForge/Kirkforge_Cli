@@ -44,8 +44,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
+use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::sync::{oneshot, Mutex};
+
+mod error;
+mod spawn;
+
+use error::McpError;
+use spawn::{spawn_child_reap, spawn_stderr_drain};
 
 /// Time budget for the MCP handshake (`initialize` request).
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
@@ -63,44 +69,6 @@ const READER_IDLE_TIMEOUT: Duration = Duration::from_secs(10);
 /// Maximum length of a single JSON-RPC line accepted from the server.
 /// Anything longer is treated as a misbehaving server and disconnects.
 const MAX_LINE_LEN: usize = 1 << 20;
-
-/// Errors that can occur when sending a JSON-RPC request to an MCP
-/// server.
-#[derive(Debug)]
-enum McpError {
-    /// The request could not be written to the server's stdin, or
-    /// the server closed its stdin pipe.
-    Io(std::io::Error),
-    /// The server did not produce a response within `REQUEST_TIMEOUT`.
-    Timeout,
-    /// The server returned a JSON-RPC error object.
-    JsonRpc { code: i64, message: String },
-    /// The response channel closed before a response arrived (server
-    /// process likely exited).
-    ChannelClosed,
-    /// The client has been disconnected or the server process exited.
-    Disconnected,
-}
-
-impl std::fmt::Display for McpError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            McpError::Io(e) => write!(f, "I/O error: {e}"),
-            McpError::Timeout => write!(f, "request timed out"),
-            McpError::JsonRpc { code, message } => {
-                write!(f, "JSON-RPC error {code}: {message}")
-            }
-            McpError::ChannelClosed => write!(f, "response channel closed"),
-            McpError::Disconnected => write!(f, "MCP client disconnected"),
-        }
-    }
-}
-
-impl From<std::io::Error> for McpError {
-    fn from(err: std::io::Error) -> Self {
-        McpError::Io(err)
-    }
-}
 
 /// Type alias for the in-flight request map used by the reader task.
 /// JSON-RPC 2.0 permits `id` to be a string or a number, so the key is a
@@ -707,45 +675,6 @@ impl Drop for McpClient {
             }
         }
     }
-}
-
-/// Spawn a task that drains a child's stderr into tracing logs.
-fn spawn_stderr_drain(
-    stderr: Option<ChildStderr>,
-    mut shutdown: oneshot::Receiver<()>,
-) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
-        let Some(stderr) = stderr else { return };
-        let mut reader = BufReader::new(stderr);
-        let mut buf = String::new();
-        loop {
-            buf.clear();
-            tokio::select! {
-                biased;
-                _ = &mut shutdown => break,
-                result = reader.read_line(&mut buf) => {
-                    match result {
-                        Ok(0) | Err(_) => break,
-                        Ok(_) => {
-                            if !buf.is_empty() {
-                                let line = buf.trim_end_matches('\n').trim_end_matches('\r');
-                                if !line.is_empty() {
-                                    tracing::debug!(target: "mcp_stderr", "{}", line);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    })
-}
-
-/// Kill a child and reap it asynchronously, bounded by a short timeout.
-fn spawn_child_reap(mut child: Child) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
-        reap_child(&mut child, Duration::from_secs(2)).await;
-    })
 }
 
 /// A tool definition returned by an MCP server.

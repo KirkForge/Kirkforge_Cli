@@ -408,13 +408,37 @@ mod tests {
             }
 
             let events = read_events();
-            assert_eq!(events.len(), 100);
-            for event in &events {
-                assert!(
-                    matches!(event, MetricEvent::ToolCall { .. }),
-                    "each line should parse as one ToolCall, got {event:?}"
-                );
-            }
+
+            // The 100 writes go through `write_event` directly (not
+            // `record()`), so they target `path` regardless of the global
+            // PATH_OVERRIDE. But `read_events()` resolves via PATH_OVERRIDE,
+            // and production `record()` calls in OTHER tests (verifier /
+            // executor / approval) also resolve via that same global — so
+            // under parallel test execution a `record()` from another test
+            // can land in this file as an extra, well-formed event. That is
+            // a cross-test isolation artefact, not a write-interleaving
+            // failure. The invariant we actually care about is that our 100
+            // concurrent writes all survived intact: interleaving that
+            // merged two events into one line would make serde reject it
+            // and drop the line, so the `tool-N` name would go missing.
+            // Assert the exact set of names is present rather than the raw
+            // line count, which would flake on a contaminating write.
+            use std::collections::HashSet;
+            let ours: HashSet<String> = events
+                .iter()
+                .filter_map(|e| match e {
+                    MetricEvent::ToolCall { name, .. } if name.starts_with("tool-") => {
+                        Some(name.clone())
+                    }
+                    _ => None,
+                })
+                .collect();
+            let expected: HashSet<String> = (0u64..100).map(|i| format!("tool-{i}")).collect();
+            assert_eq!(
+                ours, expected,
+                "all 100 concurrent writes must be present and intact; \
+                 extra events from other tests' record() are tolerated"
+            );
         });
     }
 

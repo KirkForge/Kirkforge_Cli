@@ -8,6 +8,7 @@
 
 mod compat;
 mod hook;
+mod paths;
 mod sandbox;
 mod tool;
 mod toolset;
@@ -177,11 +178,12 @@ impl PluginRegistry {
                         }
                     }
 
-                    let hosted = apply_policy(plugin, &policy);
+                    let (hosted, policy_warnings) = apply_policy(plugin, &policy);
+                    warnings.extend(policy_warnings);
                     if let Some(ref reason) = hosted.rejection {
                         warnings.push(format!("{}: {}", hosted.plugin.manifest.name, reason));
                     } else {
-                        self.push_and_index(hosted);
+                        warnings.extend(self.push_and_index(hosted));
                     }
                 }
                 Err(e) => {
@@ -194,26 +196,39 @@ impl PluginRegistry {
     }
 
     /// Add a hosted plugin to the registry and index its capabilities.
-    fn push_and_index(&mut self, hosted: HostedPlugin) {
+    fn push_and_index(&mut self, hosted: HostedPlugin) -> Vec<String> {
         let idx = self.plugins.len();
         self.plugins.push(hosted);
-        self.index_at(idx);
+        self.index_at(idx)
     }
 
-    /// Index capabilities for the plugin at position `idx`.
-    fn index_at(&mut self, idx: usize) {
+    /// Index capabilities for the plugin at position `idx`. Returns warnings
+    /// for duplicate capabilities that silently shadow an existing entry.
+    fn index_at(&mut self, idx: usize) -> Vec<String> {
+        let mut warnings = Vec::new();
         let Some(hosted) = self.plugins.get(idx) else {
-            return;
+            return warnings;
         };
         let manifest = hosted.plugin.manifest().clone();
+        let plugin_name = &manifest.name;
 
         for cap in &manifest.capabilities {
             match cap {
                 Capability::Skill { trigger, .. } => {
-                    self.skills_by_trigger.insert(trigger.clone(), idx);
+                    if let Some(prev) = self.skills_by_trigger.insert(trigger.clone(), idx) {
+                        let prev_name = self.plugins[prev].plugin.manifest().name.clone();
+                        warnings.push(format!(
+                            "skill trigger '{trigger}' from plugin '{plugin_name}' shadows plugin '{prev_name}'"
+                        ));
+                    }
                 }
                 Capability::Tool { name, .. } => {
-                    self.tools_by_name.insert(name.clone(), idx);
+                    if let Some(prev) = self.tools_by_name.insert(name.clone(), idx) {
+                        let prev_name = self.plugins[prev].plugin.manifest().name.clone();
+                        warnings.push(format!(
+                            "tool '{name}' from plugin '{plugin_name}' shadows plugin '{prev_name}'"
+                        ));
+                    }
                 }
                 Capability::Hook { event, .. } => {
                     self.hooks_by_event
@@ -222,10 +237,16 @@ impl PluginRegistry {
                         .push(idx);
                 }
                 Capability::Verifier { name, .. } => {
-                    self.verifiers_by_name.insert(name.clone(), idx);
+                    if let Some(prev) = self.verifiers_by_name.insert(name.clone(), idx) {
+                        let prev_name = self.plugins[prev].plugin.manifest().name.clone();
+                        warnings.push(format!(
+                            "verifier '{name}' from plugin '{plugin_name}' shadows plugin '{prev_name}'"
+                        ));
+                    }
                 }
             }
         }
+        warnings
     }
 
     /// Rebuild all capability index maps from the plugin vector.
@@ -238,15 +259,23 @@ impl PluginRegistry {
         self.hooks_by_event.clear();
         self.verifiers_by_name.clear();
         for idx in 0..self.plugins.len() {
-            self.index_at(idx);
+            // Warnings from rebuild are not propagated because remove()
+            // cannot return them; duplicates here indicate the same
+            // capability remained after removing the previous owner.
+            let _ = self.index_at(idx);
         }
     }
 
     /// Load a single plugin directory by path and apply `policy`.
     ///
-    /// Returns the plugin name on success. If the plugin is rejected by the
-    /// trust policy, returns the rejection reason as an error.
-    pub fn load_one(&mut self, plugin_dir: &Path, policy: TrustPolicy) -> anyhow::Result<String> {
+    /// Returns the plugin name and any duplicate-capability warnings on
+    /// success. If the plugin is rejected by the trust policy, returns the
+    /// rejection reason as an error.
+    pub fn load_one(
+        &mut self,
+        plugin_dir: &Path,
+        policy: TrustPolicy,
+    ) -> anyhow::Result<(String, Vec<String>)> {
         let plugin = LoadedPlugin::load(plugin_dir).map_err(|e| {
             anyhow::anyhow!("failed to load plugin from {}: {}", plugin_dir.display(), e)
         })?;
@@ -268,7 +297,7 @@ impl PluginRegistry {
             )?;
         }
 
-        let hosted = apply_policy(plugin, &policy);
+        let (hosted, policy_warnings) = apply_policy(plugin, &policy);
         if let Some(ref reason) = hosted.rejection {
             anyhow::bail!("{}: {}", hosted.plugin.manifest().name, reason);
         }
@@ -276,8 +305,9 @@ impl PluginRegistry {
         let name = hosted.plugin.manifest().name.clone();
         // Remove any existing plugin with the same name before loading the new one.
         self.remove(&name);
-        self.push_and_index(hosted);
-        Ok(name)
+        let mut warnings = policy_warnings;
+        warnings.extend(self.push_and_index(hosted));
+        Ok((name, warnings))
     }
 
     /// Remove an active plugin by name.
@@ -404,10 +434,13 @@ fn verify_plugin_signature(
 /// Apply the trust policy to a freshly loaded plugin.
 ///
 /// Rejected plugins are returned without indexing. Accepted plugins have their
-/// capabilities filtered down to those permitted by the effective trust tier.
-fn apply_policy(plugin: LoadedPlugin, policy: &TrustPolicy) -> HostedPlugin {
+/// capabilities filtered down to those permitted by the effective trust tier and
+/// to command paths that stay inside the plugin root. Returns any warnings
+/// produced while filtering.
+fn apply_policy(plugin: LoadedPlugin, policy: &TrustPolicy) -> (HostedPlugin, Vec<String>) {
+    let mut warnings = Vec::new();
     if policy.reject_on_excess && !policy.max.permits(plugin.manifest.trust) {
-        return HostedPlugin {
+        let hosted = HostedPlugin {
             effective_trust: plugin.manifest.trust,
             rejection: Some(format!(
                 "trust tier '{}' exceeds host maximum '{}'",
@@ -415,6 +448,7 @@ fn apply_policy(plugin: LoadedPlugin, policy: &TrustPolicy) -> HostedPlugin {
             )),
             plugin,
         };
+        return (hosted, warnings);
     }
 
     let effective = if policy.max.permits(plugin.manifest.trust) {
@@ -423,37 +457,98 @@ fn apply_policy(plugin: LoadedPlugin, policy: &TrustPolicy) -> HostedPlugin {
         policy.max
     };
 
-    let plugin = filter_capabilities_by_tier(plugin, effective);
+    let plugin = filter_capabilities(plugin, effective, &mut warnings);
 
-    HostedPlugin {
+    let hosted = HostedPlugin {
         plugin,
         effective_trust: effective,
         rejection: None,
-    }
+    };
+    (hosted, warnings)
 }
 
 /// Remove capabilities from a plugin that require more trust than the
-/// effective tier allows.
-fn filter_capabilities_by_tier(mut plugin: LoadedPlugin, tier: TrustTier) -> LoadedPlugin {
+/// effective tier allows, drop any capability whose command path would escape
+/// the plugin root, and drop any capability whose command file does not exist.
+///
+/// Command paths are canonicalised so symlinks inside the plugin root that
+/// point outside it are also rejected.
+fn filter_capabilities(
+    mut plugin: LoadedPlugin,
+    tier: TrustTier,
+    warnings: &mut Vec<String>,
+) -> LoadedPlugin {
     let allowed = SandboxPolicy::filter(tier, &plugin.manifest.capabilities);
+    let root = plugin.root.clone();
+    let canonical_root = match std::fs::canonicalize(&root) {
+        Ok(r) => r,
+        Err(e) => {
+            warnings.push(format!(
+                "cannot canonicalise plugin root '{}': {e}; dropping all capabilities",
+                root.display()
+            ));
+            plugin.skill_prompts.clear();
+            plugin.hooks.clear();
+            plugin.verifiers.clear();
+            plugin.tools.clear();
+            plugin.manifest.capabilities.clear();
+            return plugin;
+        }
+    };
+
+    let mut validated = Vec::with_capacity(allowed.len());
+    for cap in allowed {
+        if let Some(cmd) = paths::capability_command(&cap) {
+            let abs = match root.join(cmd).canonicalize() {
+                Ok(p) => p,
+                Err(e) => {
+                    warnings.push(format!(
+                        "{}: command path '{}' is not accessible: {e}; dropping capability",
+                        capability_label(&cap),
+                        cmd.display()
+                    ));
+                    continue;
+                }
+            };
+            if !abs.starts_with(&canonical_root) {
+                warnings.push(format!(
+                    "{}: command path '{}' resolves outside plugin root; dropping capability",
+                    capability_label(&cap),
+                    cmd.display()
+                ));
+                continue;
+            }
+        }
+        validated.push(cap);
+    }
 
     plugin.skill_prompts.retain(|trigger, _| {
-        allowed
+        validated
             .iter()
             .any(|cap| matches!(cap, Capability::Skill { trigger: t, .. } if t == trigger))
     });
     plugin
         .hooks
-        .retain(|cap| allowed.iter().any(|allowed| allowed == cap));
+        .retain(|cap| validated.iter().any(|allowed| allowed == cap));
     plugin
         .verifiers
-        .retain(|cap| allowed.iter().any(|allowed| allowed == cap));
+        .retain(|cap| validated.iter().any(|allowed| allowed == cap));
     plugin
         .tools
-        .retain(|cap| allowed.iter().any(|allowed| allowed == cap));
-    plugin.manifest.capabilities = allowed;
+        .retain(|cap| validated.iter().any(|allowed| allowed == cap));
+    plugin.manifest.capabilities = validated;
 
     plugin
+}
+
+/// Human-readable identifier for a capability, used in warnings.
+fn capability_label(cap: &Capability) -> String {
+    match cap {
+        Capability::Skill { trigger, .. } => format!("skill '{trigger}'"),
+        Capability::Tool { name, .. } => format!("tool '{name}'"),
+        Capability::Hook { event, .. } => format!("hook '{event}'"),
+        Capability::Verifier { name, .. } => format!("verifier '{name}'"),
+    }
 }
 
 #[cfg(test)]
@@ -485,6 +580,16 @@ command = "hooks/post-turn.sh"
             ),
         )
         .unwrap();
+        std::fs::write(root.join("hooks/post-turn.sh"), "#!/bin/sh\nexit 0\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(root.join("hooks/post-turn.sh"))
+                .unwrap()
+                .permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(root.join("hooks/post-turn.sh"), perms).unwrap();
+        }
     }
 
     #[test]
@@ -556,6 +661,187 @@ command = "hooks/post-turn.sh"
     }
 
     #[test]
+    fn registry_drops_capability_with_command_outside_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let plugins = tmp.path().join("plugins");
+        let plugin_dir = plugins.join("bad");
+        std::fs::create_dir_all(plugin_dir.join("tools")).unwrap();
+        std::fs::write(plugin_dir.join("tools/ok.sh"), "#!/bin/sh\nprintf ok\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(plugin_dir.join("tools/ok.sh"))
+                .unwrap()
+                .permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(plugin_dir.join("tools/ok.sh"), perms).unwrap();
+        }
+        // Create the file outside the plugin root so canonicalisation can
+        // resolve the relative escape and confirm it leaves the root.
+        std::fs::write(plugins.join("evil.sh"), "#!/bin/sh\n").unwrap();
+        std::fs::write(
+            plugin_dir.join("kirkforge.toml"),
+            r#"
+name = "bad"
+version = "0.1.0"
+description = "bad"
+trust = "shell"
+
+[[capabilities]]
+type = "tool"
+name = "bad/escape"
+description = "escapes plugin root"
+command = "../evil.sh"
+
+[[capabilities]]
+type = "tool"
+name = "bad/ok"
+description = "stays inside plugin root"
+command = "tools/ok.sh"
+"#,
+        )
+        .unwrap();
+
+        let mut reg = PluginRegistry::new();
+        let warnings = reg
+            .load_from_dir(&plugins, TrustPolicy::up_to(TrustTier::Shell))
+            .unwrap();
+        assert_eq!(reg.active_count(), 1);
+        assert!(
+            reg.tool_by_name("bad/escape").is_none(),
+            "escaped tool should be dropped"
+        );
+        assert!(
+            reg.tool_by_name("bad/ok").is_some(),
+            "valid tool should be kept"
+        );
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("resolves outside plugin root")),
+            "expected command-escape warning, got: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn load_one_warns_when_capability_command_escapes_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let plugin_dir = tmp.path().join("bad");
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        std::fs::write(
+            plugin_dir.join("kirkforge.toml"),
+            r#"
+name = "bad"
+version = "0.1.0"
+description = "bad"
+trust = "shell"
+
+[[capabilities]]
+type = "tool"
+name = "bad/escape"
+description = "escapes plugin root"
+command = "/bin/sh"
+"#,
+        )
+        .unwrap();
+
+        let mut reg = PluginRegistry::new();
+        let (_name, warnings) = reg
+            .load_one(&plugin_dir, TrustPolicy::up_to(TrustTier::Shell))
+            .unwrap();
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("resolves outside plugin root")),
+            "expected command-escape warning, got: {warnings:?}"
+        );
+        assert!(reg.tool_by_name("bad/escape").is_none());
+    }
+
+    #[test]
+    fn registry_drops_tool_with_missing_command_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let plugins = tmp.path().join("plugins");
+        let plugin_dir = plugins.join("missing");
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        std::fs::write(
+            plugin_dir.join("kirkforge.toml"),
+            r#"
+name = "missing"
+version = "0.1.0"
+description = "missing"
+trust = "shell"
+
+[[capabilities]]
+type = "tool"
+name = "missing/tool"
+description = "missing command"
+command = "tools/missing.sh"
+"#,
+        )
+        .unwrap();
+
+        let mut reg = PluginRegistry::new();
+        let warnings = reg
+            .load_from_dir(&plugins, TrustPolicy::up_to(TrustTier::Shell))
+            .unwrap();
+        assert_eq!(reg.active_count(), 1);
+        assert!(
+            reg.tool_by_name("missing/tool").is_none(),
+            "missing tool command should be dropped"
+        );
+        assert!(
+            warnings.iter().any(|w| w.contains("is not accessible")),
+            "expected missing-file warning, got: {warnings:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn registry_drops_tool_with_symlink_escaping_root() {
+        use std::os::unix::fs::symlink;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let plugins = tmp.path().join("plugins");
+        let plugin_dir = plugins.join("bad-symlink");
+        std::fs::create_dir_all(plugin_dir.join("tools")).unwrap();
+        // A symlink inside the plugin root that points to a file outside it.
+        symlink("/bin/sh", plugin_dir.join("tools/escape.sh")).unwrap();
+        std::fs::write(
+            plugin_dir.join("kirkforge.toml"),
+            r#"
+name = "bad-symlink"
+version = "0.1.0"
+description = "bad"
+trust = "shell"
+
+[[capabilities]]
+type = "tool"
+name = "bad/escape"
+description = "escapes via symlink"
+command = "tools/escape.sh"
+"#,
+        )
+        .unwrap();
+
+        let mut reg = PluginRegistry::new();
+        let warnings = reg
+            .load_from_dir(&plugins, TrustPolicy::up_to(TrustTier::Shell))
+            .unwrap();
+        assert_eq!(reg.active_count(), 1);
+        assert!(
+            reg.tool_by_name("bad/escape").is_none(),
+            "symlink-escaped tool should be dropped"
+        );
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("resolves outside plugin root")),
+            "expected symlink-escape warning, got: {warnings:?}"
+        );
+    }
+
+    #[test]
     fn registry_rejects_unsigned_plugin_when_signature_validation_enabled() {
         let tmp = tempfile::tempdir().unwrap();
         let plugins = tmp.path().join("plugins");
@@ -582,7 +868,7 @@ command = "hooks/post-turn.sh"
         make_test_plugin_dir(&plugin_dir, TrustTier::Shell);
 
         let mut reg = PluginRegistry::new();
-        let name = reg
+        let (name, _warnings) = reg
             .load_one(&plugin_dir, TrustPolicy::up_to(TrustTier::Shell))
             .unwrap();
         assert_eq!(name, "test-plugin");

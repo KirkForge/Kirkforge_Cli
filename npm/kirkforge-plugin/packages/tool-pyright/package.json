@@ -13,7 +13,8 @@
   "dependencies": {
     "@kirkforge/core-types": "*",
     "@kirkforge/core-events": "*",
-    "@kirkforge/core-logging": "*"
+    "@kirkforge/core-logging": "*",
+    "pyright": "^1.1.411"
   },
   "devDependencies": {},
   "files": [

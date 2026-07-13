@@ -4,10 +4,11 @@ set -euo pipefail
 # video_common.sh — shared helpers for KirkForge-Video plugin tools.
 # Sourced by the tool scripts; not invoked directly.
 
-# Read KIRKFORGE_TOOL_ARGS or fall back to first arg.
+# Read KIRKFORGE_TOOL_ARGS_JSON, falling back to the first positional arg.
+# The host always sets KIRKFORGE_TOOL_ARGS_JSON to a valid JSON object.
 tool_args() {
-    if [[ -n "${KIRKFORGE_TOOL_ARGS:-}" ]]; then
-        printf '%s' "$KIRKFORGE_TOOL_ARGS"
+    if [[ -n "${KIRKFORGE_TOOL_ARGS_JSON:-}" ]]; then
+        printf '%s' "$KIRKFORGE_TOOL_ARGS_JSON"
     elif [[ $# -gt 0 ]]; then
         printf '%s' "$1"
     else
@@ -23,13 +24,17 @@ tool_args() {
 find_video_bin() {
     local script_dir
     script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    local target_dir="${CARGO_TARGET_DIR:-${script_dir}/../../../target}"
     # When run from the source repo, plugin/tools/ is two levels below the workspace root.
     # When installed to ~/.local/share/kirkforge/plugins/kirkforge-video/, the binary must be
     # on PATH or next to the script (copied by the user).
     local candidates=(
         "$script_dir/kirkforge-video"
-        "$script_dir/../../../target/release/kirkforge-video"
-        "$script_dir/../../../target/debug/kirkforge-video"
+        "$script_dir/kirkforge-video.exe"
+        "$target_dir/release/kirkforge-video"
+        "$target_dir/release/kirkforge-video.exe"
+        "$target_dir/debug/kirkforge-video"
+        "$target_dir/debug/kirkforge-video.exe"
         "$(command -v kirkforge-video 2>/dev/null || true)"
     )
     for c in "${candidates[@]}"; do
@@ -54,7 +59,17 @@ resolve_path() {
 # Print JSON error and exit non-zero.
 die_json() {
     local msg="$1"
-    printf '{"error":"%s"}\n' "$msg" >&2
+    if command -v jq > /dev/null 2>&1; then
+        jq -n --arg msg "$msg" '{"error":$msg}' >&2
+    elif command -v python3 > /dev/null 2>&1; then
+        python3 -c 'import json,sys; print(json.dumps({"error":sys.argv[1]}))' "$msg" >&2
+    else
+        # Minimal escaping for systems without jq/python3.
+        msg="${msg//\\/\\\\}"
+        msg="${msg//\"/\\\"}"
+        msg="${msg//$'\n'/\\n}"
+        printf '{"error":"%s"}\n' "$msg" >&2
+    fi
     exit 1
 }
 
@@ -71,31 +86,27 @@ json_get_string() {
     fi
 
     if command -v python3 > /dev/null 2>&1; then
-        value="$(printf '%s' "$json" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('${key}', '${default}'))")"
+        value="$(printf '%s' "$json" | KEY="$key" DEFAULT="$default" python3 -c 'import sys,json,os; d=json.load(sys.stdin); k=os.environ["KEY"]; v=d.get(k, os.environ["DEFAULT"]); print(v if v is not None else os.environ["DEFAULT"])')"
         printf '%s' "$value"
         return 0
     fi
 
-    # Pure-bash fallback: naive, works for flat values without escaped quotes.
-    if [[ "$json" =~ \"${key}\":[[:space:]]*\"([^\"]+)\" ]]; then
-        printf '%s' "${BASH_REMATCH[1]}"
-        return 0
-    fi
-    if [[ "$json" =~ \"${key}\":[[:space:]]*(true|false|[0-9]+\.?[0-9]*) ]]; then
-        printf '%s' "${BASH_REMATCH[1]}"
-        return 0
-    fi
-    printf '%s' "$default"
+    # Pure-bash fallback removed: jq or python3 is required to safely
+    # extract JSON values. This avoids silent wrong answers for keys that
+    # appear as substrings or values containing escaped quotes.
+    die_json "json_get_string: jq or python3 is required to parse tool arguments"
 }
 
 # Extract a top-level boolean value as "true"/"false".
+# Accepts common truthy spellings (true, 1, yes, y, on) so model-provided string
+# values are handled consistently across all filesystem plugin wrappers.
 json_get_bool() {
     local json="$1" key="$2" default="${3:-false}"
     local raw
     raw="$(json_get_string "$json" "$key" "$default")"
     case "${raw,,}" in
-        true|1|yes) printf 'true' ;;
-        *)          printf 'false' ;;
+        true|1|yes|y|on) printf 'true' ;;
+        *)             printf 'false' ;;
     esac
 }
 
@@ -109,17 +120,10 @@ json_get_string_array() {
     fi
 
     if command -v python3 >/dev/null 2>&1; then
-        printf '%s' "$json" | python3 -c "import sys,json; d=json.load(sys.stdin); print(' '.join(d.get('${key}', [])))"
+        printf '%s' "$json" | KEY="$key" python3 -c 'import sys,json,os; d=json.load(sys.stdin); k=os.environ["KEY"]; v=d.get(k, []); print(" ".join(v if v is not None else []))'
         return 0
     fi
 
-    # Fallback: extract quoted strings between [ and ].
-    if [[ "$json" =~ \"${key}\":[[:space:]]*\[([^\]]*)\] ]]; then
-        local inner="${BASH_REMATCH[1]}"
-        # Remove quotes and commas, keep spaces between values.
-        inner="${inner//\"/}"
-        inner="${inner//,/ }"
-        printf '%s' "$inner"
-        return 0
-    fi
+    # Fallback removed: jq or python3 is required to safely parse arrays.
+    die_json "json_get_string_array: jq or python3 is required to parse tool arguments"
 }

@@ -32,7 +32,7 @@ This directory is a KirkForge filesystem plugin that exposes the `plugin3` outpu
 | `plugin3_config_validate` | `plugin3 config --validate` | `{}` |
 | `plugin3_self_check` | `plugin3 self-check` | `{}` |
 
-All tool arguments are passed via the `KIRKFORGE_TOOL_ARGS` environment variable as JSON. Tools write their results to stdout.
+All tool arguments are passed via the `KIRKFORGE_TOOL_ARGS_JSON` environment variable as JSON. Tools write their results to stdout.
 
 ## Skill
 

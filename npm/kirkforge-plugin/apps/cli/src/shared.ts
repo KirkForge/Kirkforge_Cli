@@ -13,7 +13,12 @@ export const VERSION: string = (() => {
   }
 })();
 
-export const ALL_MODES = ["hard-prompt", "schema-contract", "artifact"];
+export const ALL_MODES: string[] = [
+  "hard-prompt",
+  "schema-contract",
+  "artifact",
+  "task-decompose",
+];
 
 export function exitError(message: string, json?: boolean): never {
   if (json) {

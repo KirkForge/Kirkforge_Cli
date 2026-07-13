@@ -6,144 +6,11 @@ use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Tag, TagEnd};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
-#[derive(Debug, Default)]
-struct ListState {
-    ordered: bool,
-    number: u64,
-}
+mod format;
+mod table;
+use table::{render_table, ListState, TableState};
 
-#[derive(Debug, Default)]
-struct TableState {
-    alignments: Vec<pulldown_cmark::Alignment>,
-    rows: Vec<Vec<String>>,
-    current_row: Vec<String>,
-    current_cell: String,
-}
-
-impl TableState {
-    fn start_cell(&mut self) {
-        self.current_cell.clear();
-    }
-
-    fn end_cell(&mut self) {
-        let cell = std::mem::take(&mut self.current_cell);
-        self.current_row.push(cell.trim().to_string());
-    }
-
-    fn end_row(&mut self) {
-        if !self.current_row.is_empty() {
-            self.rows.push(std::mem::take(&mut self.current_row));
-        }
-    }
-}
-
-/// Render a collected table as plain-text grid lines.
-///
-/// `width` is the content width in columns; cells are truncated with an
-/// ellipsis rather than wrapped, keeping each row one line tall.
-fn render_table(state: TableState, query: &str, width: usize) -> Vec<Line<'static>> {
-    let TableState {
-        alignments, rows, ..
-    } = state;
-    if rows.is_empty() {
-        return Vec::new();
-    }
-
-    let col_count = alignments
-        .len()
-        .max(rows.first().map(|r| r.len()).unwrap_or(0));
-    let usable_width = width.saturating_sub(col_count.saturating_sub(1) * 3 + 2); // "| " and " |" around cells
-    let min_col = 3usize;
-    let max_col = if col_count == 0 {
-        return Vec::new();
-    } else {
-        (usable_width / col_count).max(min_col)
-    };
-
-    // Compute per-column max width, capped at max_col.
-    let mut col_widths = vec![min_col; col_count];
-    for row in &rows {
-        for (i, cell) in row.iter().enumerate().take(col_count) {
-            let visual_len = cell.chars().count();
-            col_widths[i] = col_widths[i].max(visual_len).min(max_col);
-        }
-    }
-
-    let base_style = Style::default().fg(Color::White);
-    let mut out: Vec<Line<'static>> = Vec::new();
-
-    // Render separator after header if there is more than one row.
-    let has_header = rows.len() > 1;
-
-    for (row_idx, row) in rows.iter().enumerate() {
-        let mut spans: Vec<Span<'static>> = Vec::new();
-        spans.push(Span::raw("| "));
-        for (col, w) in col_widths.iter().enumerate().take(col_count) {
-            let cell = row.get(col).map(|s| s.as_str()).unwrap_or("");
-            let padded = format_table_cell(cell, *w, alignments.get(col));
-            let cell_spans = highlight_line_spans(
-                &padded,
-                query,
-                if row_idx == 0 && has_header {
-                    base_style.add_modifier(Modifier::BOLD)
-                } else {
-                    base_style
-                },
-            );
-            spans.extend(cell_spans);
-            spans.push(Span::raw(" | "));
-        }
-        // Remove the trailing " | " after the last cell and replace with " |".
-        if spans.len() >= 2 {
-            spans.truncate(spans.len().saturating_sub(1));
-            spans.push(Span::raw(" |"));
-        }
-        out.push(Line::from(spans));
-
-        if row_idx == 0 && has_header {
-            let mut sep = String::from("|");
-            for w in &col_widths {
-                sep.push_str(&"-".repeat(*w));
-                sep.push('|');
-            }
-            out.push(Line::from(Span::styled(
-                sep,
-                Style::default().fg(Color::DarkGray),
-            )));
-        }
-    }
-
-    out
-}
-
-fn format_table_cell(
-    text: &str,
-    width: usize,
-    align: Option<&pulldown_cmark::Alignment>,
-) -> String {
-    let chars: Vec<char> = text.chars().collect();
-    let visual_len = chars.len();
-    if visual_len > width {
-        let keep = width.saturating_sub(1);
-        let mut s: String = chars.into_iter().take(keep).collect();
-        s.push('…');
-        return s;
-    }
-    let pad = width.saturating_sub(visual_len);
-    match align {
-        Some(pulldown_cmark::Alignment::Center) => {
-            let left = pad / 2;
-            let right = pad - left;
-            format!("{}{}{}", " ".repeat(left), text, " ".repeat(right))
-        }
-        Some(pulldown_cmark::Alignment::Right) => {
-            format!("{}{}", " ".repeat(pad), text)
-        }
-        _ => {
-            format!("{}{}", text, " ".repeat(pad))
-        }
-    }
-}
+pub use format::{budget_pct, format_budget_indicator, format_duration, format_token_count};
 
 fn current_style(style_stack: &[Style]) -> Style {
     style_stack
@@ -688,98 +555,6 @@ pub fn all_code_blocks(markdown: &str) -> Vec<String> {
     blocks
 }
 
-/// Format a duration for display.
-pub fn format_duration(secs: f64) -> String {
-    if secs < 60.0 {
-        format!("{secs:.1}s")
-    } else if secs < 3600.0 {
-        format!("{:.0}m {:.0}s", secs / 60.0, secs % 60.0)
-    } else {
-        format!("{:.0}h {:.0}m", secs / 3600.0, (secs % 3600.0) / 60.0)
-    }
-}
-
-/// Token budget formatting: "12.4K / 128K"
-pub fn format_token_count(tokens: usize) -> String {
-    if tokens < 1000 {
-        tokens.to_string()
-    } else {
-        format!("{:.1}K", tokens as f64 / 1000.0)
-    }
-}
-
-/// Format a token-budget indicator for the status bar.
-///
-/// Returns a `(text, color)` pair. The text is one of:
-/// - `""` (empty) when `max == 0` or `used == 0` AND `max == 0` — i.e. the
-///   caller hasn't supplied a budget. Caller should fall back to the
-///   plain `↑N` display in that case.
-/// - `"<used>"` (e.g. `"12.4K"`) when `max == 0` — same fallback,
-///   but we still return the formatted used count so the caller can
-///   use it without recomputing.
-/// - `"<used>/<max> (P%)"` (e.g. `"12.4K/128K (10%)"`) when both
-///   `used > 0` and `max > 0`.
-///
-/// The color is the budget-pressure threshold:
-/// - `Green`  — `< 50%`  (comfortable)
-/// - `Yellow` — `50–80%` (getting tight, consider `/compact`)
-/// - `Red`    — `80–95%` (compact now)
-/// - `LightRed` (Rgb 255, 100, 100) — `> 95%` (the B1.x layers are kicking in)
-///
-/// Why this lives in `rendering.rs` and not `status.rs`: the helper
-/// is pure (string + color out, no ratatui types) so it's trivially
-/// unit-testable without a frame buffer. The status widget just
-/// consumes the output.
-pub fn format_budget_indicator(used: usize, max: usize) -> (String, Color) {
-    match budget_pct(used, max) {
-        None => {
-            // No budget known (model not connected yet, or model has
-            // 0 max_context_tokens in its config). Return the plain
-            // used-count so the caller can fall back to `↑N`.
-            (format_token_count(used), Color::DarkGray)
-        }
-        Some(pct) => {
-            let color = if pct < 50 {
-                Color::Green
-            } else if pct < 80 {
-                Color::Yellow
-            } else if pct < 95 {
-                Color::Red
-            } else {
-                Color::Rgb(255, 100, 100) // light red — "the cliff is here"
-            };
-
-            let text = format!(
-                "{}/{} ({}%)",
-                format_token_count(used),
-                format_token_count(max),
-                pct
-            );
-
-            (text, color)
-        }
-    }
-}
-
-/// Compute the context-budget percentage used, in `0..=100`.
-///
-/// Returns `None` if `max == 0` (no model connected yet, or the
-/// model reports `0` for `max_context_tokens`). Caller should
-/// treat `None` as "no recommendation can be made."
-///
-/// Uses `saturating_mul` + `checked_div` so an absurd `used` value
-/// can't overflow and a zero `max` is the only failure mode.
-pub fn budget_pct(used: usize, max: usize) -> Option<u8> {
-    if max == 0 {
-        return None;
-    }
-    // saturating_mul prevents overflow; checked_div returns Some
-    // because we just guarded max > 0. Clamp to 100 because used
-    // can exceed max (e.g. after a tool cap that pushed past the
-    // model's advertised context).
-    Some((used.saturating_mul(100) / max).min(100) as u8)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1241,5 +1016,78 @@ mod tests {
             .spans
             .iter()
             .any(|s| s.content == "y" && matches!(s.style.bg, Some(Color::Yellow)))));
+    }
+
+    /// Edge case: entirely empty input should not panic.
+    #[test]
+    fn test_markdown_empty_input() {
+        let lines = render_markdown_lines_with_query("", "", 80);
+        assert!(lines.is_empty() || (lines.len() == 1 && lines[0].spans.is_empty()));
+    }
+
+    /// Edge case: nested lists render correct indentation and numbering,
+    /// including a blank separator line before the next top-level item.
+    #[test]
+    fn test_markdown_nested_ordered_list() {
+        let lines = render_markdown_lines_with_query(
+            "1. outer\n   1. inner a\n   2. inner b\n2. next",
+            "",
+            80,
+        );
+        assert_eq!(lines.len(), 5);
+        assert_eq!(lines[0].spans[0].content, "1. ");
+        assert_eq!(lines[0].spans[1].content, "outer");
+        assert_eq!(lines[1].spans[0].content, "  1. ");
+        assert_eq!(lines[1].spans[1].content, "inner a");
+        assert_eq!(lines[2].spans[0].content, "  2. ");
+        assert_eq!(lines[2].spans[1].content, "inner b");
+        assert!(lines[3].spans.is_empty());
+        assert_eq!(lines[4].spans[0].content, "2. ");
+        assert_eq!(lines[4].spans[1].content, "next");
+    }
+
+    /// Edge case: bold + italic inline combination is rendered as a
+    /// single span with both modifiers.
+    #[test]
+    fn test_markdown_bold_italic_combined() {
+        let lines = render_markdown_lines_with_query("***bold italic*** plain", "", 80);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].spans.len(), 2);
+        assert_eq!(
+            lines[0].spans[0],
+            Span::styled(
+                "bold italic",
+                Style::default()
+                    .add_modifier(Modifier::BOLD)
+                    .add_modifier(Modifier::ITALIC)
+            )
+        );
+        assert_eq!(lines[0].spans[1].content, " plain");
+    }
+
+    /// Edge case: long inline code should not be truncated or split into
+    /// multiple lines unless wrapping is implemented; here we just verify
+    /// the whole content survives in one line.
+    #[test]
+    fn test_markdown_long_inline_code_survives() {
+        let long = "a".repeat(200);
+        let lines = render_markdown_lines_with_query(&format!("`{long}`"), "", 80);
+        assert_eq!(lines.len(), 1);
+        let text: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(text, long);
+    }
+
+    /// Edge case: search highlight should still split inside a bold span.
+    #[test]
+    fn test_markdown_search_highlight_inside_bold() {
+        let lines = render_markdown_lines_with_query("**hello world**", "world", 80);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].spans.len(), 2);
+        assert_eq!(lines[0].spans[0].content, "hello ");
+        assert_eq!(lines[0].spans[1].content, "world");
+        assert!(
+            lines[0].spans[1].style.bg == Some(Color::Yellow),
+            "search match should have yellow background"
+        );
     }
 }

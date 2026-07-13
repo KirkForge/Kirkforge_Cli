@@ -4,11 +4,28 @@ import { ok, err } from "@kirkforge/core-types";
 import type { Result } from "@kirkforge/core-types";
 import type { EventBus } from "@kirkforge/core-events";
 import { walkFiles } from "@kirkforge/core-logging";
-import type { LintRule, LintFinding } from "./rules.js";
+import type { LintRule, LintFinding, Severity } from "./rules.js";
 import { RuleRegistry } from "./rules.js";
 
 const SCANNABLE_EXTS = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts"]);
 const MAX_LINES = 200;
+
+// Generated / dependency directories that should never be linted by default.
+const DEFAULT_IGNORE_PATTERNS = [
+  ".git/",
+  ".gitnexus/",
+  "node_modules/",
+  "target/",
+  "dist/",
+  ".claude/",
+  "coverage/",
+];
+
+function fileExtension(relPath: string): string {
+  const dot = relPath.lastIndexOf(".");
+  if (dot <= 0) return "";
+  return relPath.slice(dot);
+}
 
 // ── Suppression directive patterns ──
 const RE_DISABLE_LINE = /kirkforge-lint-disable-line\s*(?:([a-z0-9-,\s]+))?\s*$/;
@@ -121,7 +138,14 @@ export interface LintReport {
   suppressed: number;
   filesScanned: number;
   durationMs: number;
-  details: Array<{ file: string; line: number; rule: string; message: string }>;
+  details: Array<{
+    file: string;
+    line: number;
+    rule: string;
+    severity: Severity;
+    category: string;
+    message: string;
+  }>;
 }
 
 export class LintEngine {
@@ -138,7 +162,7 @@ export class LintEngine {
     this.eventBus = opts.eventBus;
     this.files = opts.files;
     this.extensions = opts.extensions ?? SCANNABLE_EXTS;
-    this.ignorePatterns = opts.ignorePatterns ?? [];
+    this.ignorePatterns = [...DEFAULT_IGNORE_PATTERNS, ...(opts.ignorePatterns ?? [])];
   }
 
   addRule(rule: LintRule): void {
@@ -157,23 +181,24 @@ export class LintEngine {
       let suppressedCount = 0;
 
       const includeFilter = (rel: string): boolean => {
-        const ext = rel.slice(rel.lastIndexOf("."));
-        return this.extensions.has(ext);
+        return this.extensions.has(fileExtension(rel));
       };
 
       const allFiles: string[] = this.files
         ? this.files
-            .filter((f) => this.extensions.has(f.slice(f.lastIndexOf("."))))
+            .filter((f) => this.extensions.has(fileExtension(f)))
             .map((f) => relative(this.cwd, resolve(this.cwd, f)))
         : await walkFiles(this.cwd, includeFilter);
 
+      let filesScanned = 0;
       for (const relPath of allFiles) {
-        // Skip files matching ignore patterns
+        // Skip files matching ignore patterns (default + user-supplied)
         if (matchIgnorePattern(relPath, this.ignorePatterns)) continue;
 
         const filePath = resolve(this.cwd, relPath);
         try {
           const content = await readFile(filePath, "utf-8");
+          filesScanned++;
           const lines = content.split("\n");
 
           // Pre-compute block-level suppressions for this file
@@ -240,12 +265,14 @@ export class LintEngine {
         errors: errorFindings.length,
         warnings: warningFindings.length,
         suppressed: suppressedCount,
-        filesScanned: allFiles.length,
+        filesScanned,
         durationMs: Date.now() - startedAt,
         details: [...errorFindings, ...warningFindings].map((f) => ({
           file: f.file,
           line: f.line,
           rule: f.rule,
+          severity: f.severity,
+          category: f.category,
           message: f.message,
         })),
       };
@@ -310,7 +337,16 @@ export class LintEngine {
         suppressed: 0,
         filesScanned: 0,
         durationMs: Date.now() - startedAt,
-        details: [{ file: "<lint-engine>", line: 0, rule: "verifier-error", message }],
+        details: [
+          {
+            file: "<lint-engine>",
+            line: 0,
+            rule: "verifier-error",
+            severity: "critical",
+            category: "safety",
+            message,
+          },
+        ],
       };
       await this.eventBus?.emit({
         kind: "verify.lint",

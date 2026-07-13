@@ -9,12 +9,22 @@ use serde::{Deserialize, Serialize};
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
+use std::sync::Mutex;
 #[cfg(test)]
-use std::sync::{Mutex, MutexGuard};
+use std::sync::MutexGuard;
 
 /// Maximum size of the active metrics log before rotation. Older logs are
 /// moved to `metrics.ndjson.1`; earlier rotations are overwritten.
 const MAX_LOG_BYTES: u64 = 5 * 1024 * 1024;
+
+/// Global serialize-and-append lock.
+///
+/// `record()` opens, rotates, and writes to the same file from many
+/// concurrent tasks. Without serialization, the content and newline of
+/// two events can interleave, producing one line like
+/// `{"event":"a"}{"event":"b"}\n` and a following blank line. The lock
+/// keeps each event's full write atomic relative to other events.
+static RECORD_LOCK: Mutex<()> = Mutex::new(());
 
 /// A metric event. Serialized as one NDJSON line.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -61,6 +71,13 @@ static PATH_OVERRIDE: Mutex<Option<PathBuf>> = Mutex::new(None);
 #[cfg(test)]
 static TEST_LOCK: Mutex<()> = Mutex::new(());
 
+/// Unique counter so each `with_test_path` invocation gets its own temp
+/// directory. Using only `process::id()` caused every test in the same process
+/// to share one path, and a slow/interleaved test could see the directory
+/// removed by a faster neighbour under heavy parallelism.
+#[cfg(test)]
+static TEST_DIR_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// Resolve the metrics log path inside the platform data directory.
 pub fn metrics_path() -> Option<PathBuf> {
     #[cfg(test)]
@@ -93,12 +110,9 @@ fn rotate_if_needed(path: &PathBuf) {
     }
 }
 
-/// Record a metric event.
-///
-/// Events are appended synchronously; failures are logged via `tracing`
-/// but never propagated, so a metrics write error cannot break a turn.
-pub fn record(event: MetricEvent) {
-    let line = match serde_json::to_string(&event) {
+/// Write a serialized event to the given log path under the global lock.
+fn write_event(path: &PathBuf, event: &MetricEvent) {
+    let line = match serde_json::to_string(event) {
         Ok(s) => s,
         Err(e) => {
             tracing::warn!(error = %e, "failed to serialize metric event");
@@ -106,16 +120,18 @@ pub fn record(event: MetricEvent) {
         }
     };
 
-    let Some(path) = metrics_path() else {
-        tracing::debug!("no metrics path available; dropping event");
-        return;
-    };
+    // Serialize the whole event (content + newline) into one buffer and
+    // guard the rotate/open/write sequence so concurrent records cannot
+    // interleave content and newlines.
+    let _guard = RECORD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    rotate_if_needed(path);
 
-    rotate_if_needed(&path);
-
-    match open_metrics_file(&path) {
+    match open_metrics_file(path) {
         Ok(mut file) => {
-            if let Err(e) = writeln!(file, "{line}") {
+            // Write the line with a single syscall to keep each record
+            // atomic even if the lock were ever removed.
+            let buf = format!("{line}\n");
+            if let Err(e) = file.write_all(buf.as_bytes()) {
                 tracing::warn!(error = %e, "failed to write metric event");
             }
         }
@@ -123,6 +139,18 @@ pub fn record(event: MetricEvent) {
             tracing::warn!(error = %e, path = %path.display(), "failed to open metrics file");
         }
     }
+}
+
+/// Record a metric event.
+///
+/// Events are appended synchronously; failures are logged via `tracing`
+/// but never propagated, so a metrics write error cannot break a turn.
+pub fn record(event: MetricEvent) {
+    let Some(path) = metrics_path() else {
+        tracing::debug!("no metrics path available; dropping event");
+        return;
+    };
+    write_event(&path, &event);
 }
 
 /// Summary statistics computed from the metrics log.
@@ -261,13 +289,18 @@ where
     F: FnOnce(PathBuf, MutexGuard<'static, ()>) -> R,
 {
     let lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let dir = std::env::temp_dir().join(format!("kirkforge_metrics_test_{}", std::process::id()));
+    let counter = TEST_DIR_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let dir = std::env::temp_dir().join(format!(
+        "kirkforge_metrics_test_{}_{}",
+        std::process::id(),
+        counter
+    ));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("metrics.ndjson");
     {
         let mut guard = PATH_OVERRIDE.lock().unwrap_or_else(|e| e.into_inner());
-        *guard = Some(path);
+        *guard = Some(path.clone());
     }
     let result = f(dir.clone(), lock);
     {
@@ -348,6 +381,64 @@ mod tests {
                 events[0],
                 MetricEvent::Approval { ref action } if action == "denied"
             ));
+        });
+    }
+
+    #[test]
+    fn test_concurrent_records_are_not_interleaved() {
+        with_test_path(|_dir, _lock| {
+            let path = metrics_path().unwrap();
+            let mut handles = Vec::new();
+            for i in 0..100 {
+                let p = path.clone();
+                handles.push(std::thread::spawn(move || {
+                    write_event(
+                        &p,
+                        &MetricEvent::ToolCall {
+                            name: format!("tool-{i}"),
+                            success: true,
+                            duration_ms: i as u64,
+                            error_kind: None,
+                        },
+                    );
+                }));
+            }
+            for h in handles {
+                h.join().unwrap();
+            }
+
+            let events = read_events();
+
+            // The 100 writes go through `write_event` directly (not
+            // `record()`), so they target `path` regardless of the global
+            // PATH_OVERRIDE. But `read_events()` resolves via PATH_OVERRIDE,
+            // and production `record()` calls in OTHER tests (verifier /
+            // executor / approval) also resolve via that same global — so
+            // under parallel test execution a `record()` from another test
+            // can land in this file as an extra, well-formed event. That is
+            // a cross-test isolation artefact, not a write-interleaving
+            // failure. The invariant we actually care about is that our 100
+            // concurrent writes all survived intact: interleaving that
+            // merged two events into one line would make serde reject it
+            // and drop the line, so the `tool-N` name would go missing.
+            // Assert the exact set of names is present rather than the raw
+            // line count, which would flake on a contaminating write.
+            use std::collections::HashSet;
+            let ours: HashSet<String> = events
+                .iter()
+                .filter_map(|e| match e {
+                    MetricEvent::ToolCall { name, .. } if name.starts_with("tool-") => {
+                        Some(name.clone())
+                    }
+                    _ => None,
+                })
+                .collect();
+            let expected: HashSet<String> = (0u64..100).map(|i| format!("tool-{i}")).collect();
+            assert_eq!(
+                ours, expected,
+                "all 100 concurrent writes must be present and intact; \
+                 extra events from other tests' record() are tolerated"
+            );
         });
     }
 

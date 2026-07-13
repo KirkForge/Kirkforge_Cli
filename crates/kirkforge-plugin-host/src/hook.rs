@@ -40,11 +40,16 @@ impl PluginHook {
     /// Build a `PluginHook` from a hook capability.
     pub fn from_capability(cap: &Capability, plugin_root: &Path) -> Option<Self> {
         match cap {
-            Capability::Hook { event, command } => Some(Self {
-                event: event.clone(),
-                command: command.clone(),
-                plugin_root: plugin_root.to_path_buf(),
-            }),
+            Capability::Hook { event, command } => {
+                if !crate::paths::is_command_within_root(plugin_root, command) {
+                    return None;
+                }
+                Some(Self {
+                    event: event.clone(),
+                    command: command.clone(),
+                    plugin_root: plugin_root.to_path_buf(),
+                })
+            }
             _ => None,
         }
     }

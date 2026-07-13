@@ -11,7 +11,7 @@ use crate::shared::{
     Config, FinishReason, Message, ModelInfo, Role, StreamEvent, TokenUsage, ToolCallStyle,
     ToolDef, ToolInvocation, ToolOutcome,
 };
-use crate::tools::Tool;
+use crate::tools::{Tool, ToolContext};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
@@ -809,6 +809,216 @@ async fn test_deny_paths_blocks_write_file_even_with_auto_approve() {
     );
 }
 
+/// `write_file` overwriting an existing file must respect the
+/// read-before-edit gate — without this it could blindly clobber a
+/// file the model never inspected (review.md High finding). Here the
+/// target exists but was never `read_file`d, so the tool must not run.
+#[tokio::test]
+async fn test_write_file_overwrite_blocked_without_read() {
+    let tmp = std::env::temp_dir().join(format!(
+        "kirkforge_write_gate_test_{}.txt",
+        std::process::id()
+    ));
+    std::fs::write(&tmp, "original").expect("seed existing file");
+    let _cleanup = CleanupFile(tmp.clone());
+
+    let captured = Arc::new(Mutex::new(None));
+    let tool = MockTool {
+        def: ToolDef {
+            name: "write_file",
+            description: "write to a file",
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {"path": {"type": "string"}, "content": {"type": "string"}}
+            }),
+        },
+        captured_args: captured.clone(),
+        outcome: ToolOutcome::Success {
+            content: "wrote".into(),
+        },
+    };
+
+    let adapter = MockAdapter::new(
+        vec![
+            StreamEvent::ToolCall(ToolInvocation {
+                id: "call-1".into(),
+                name: "write_file".into(),
+                arguments: serde_json::json!({
+                    "path": tmp.to_string_lossy(),
+                    "content": "overwritten"
+                }),
+            }),
+            StreamEvent::Done {
+                finish_reason: FinishReason::ToolCalls,
+                usage: None,
+            },
+        ],
+        make_info(),
+    );
+
+    let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
+    let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(true));
+    let events = exe
+        .run_turn_collecting("overwrite", &approval_tx, never_cancelled())
+        .await
+        .unwrap();
+
+    assert!(
+        captured.lock().unwrap().is_none(),
+        "write_file must not run when overwriting an unread existing file"
+    );
+    let denied = events.iter().any(|e| {
+        matches!(
+            e,
+            TurnEvent::ToolResult { name, output, .. }
+                if name == "write_file" && output.contains("Read-before-edit")
+        )
+    });
+    assert!(
+        denied,
+        "Expected a read-before-edit refusal, got events: {events:?}"
+    );
+}
+
+/// Once the existing file has been read, `write_file` may overwrite it.
+#[tokio::test]
+async fn test_write_file_overwrite_allowed_after_read() {
+    let tmp = std::env::temp_dir().join(format!(
+        "kirkforge_write_gate_read_test_{}.txt",
+        std::process::id()
+    ));
+    std::fs::write(&tmp, "original").expect("seed existing file");
+    let _cleanup = CleanupFile(tmp.clone());
+
+    let captured = Arc::new(Mutex::new(None));
+    let tool = MockTool {
+        def: ToolDef {
+            name: "write_file",
+            description: "write to a file",
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {"path": {"type": "string"}, "content": {"type": "string"}}
+            }),
+        },
+        captured_args: captured.clone(),
+        outcome: ToolOutcome::Success {
+            content: "wrote".into(),
+        },
+    };
+
+    let adapter = MockAdapter::new(
+        vec![
+            StreamEvent::ToolCall(ToolInvocation {
+                id: "call-1".into(),
+                name: "write_file".into(),
+                arguments: serde_json::json!({
+                    "path": tmp.to_string_lossy(),
+                    "content": "overwritten"
+                }),
+            }),
+            StreamEvent::Done {
+                finish_reason: FinishReason::ToolCalls,
+                usage: None,
+            },
+        ],
+        make_info(),
+    );
+
+    let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
+    let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(true));
+    // Mark as read first — the gate now permits the overwrite.
+    exe.read_gate.mark_read(&tmp);
+
+    let events = exe
+        .run_turn_collecting("overwrite", &approval_tx, never_cancelled())
+        .await
+        .unwrap();
+
+    assert!(
+        captured.lock().unwrap().is_some(),
+        "write_file should run when the existing file was read first"
+    );
+    let ran = events.iter().any(|e| {
+        matches!(
+            e,
+            TurnEvent::ToolResult { name, success, .. } if name == "write_file" && *success
+        )
+    });
+    assert!(
+        ran,
+        "Expected write_file to succeed, got events: {events:?}"
+    );
+}
+
+/// A brand-new file has never existed, so read-before-edit does not
+/// apply — `write_file` creates it without a prior read.
+#[tokio::test]
+async fn test_write_file_new_file_allowed_without_read() {
+    let tmp = std::env::temp_dir().join(format!(
+        "kirkforge_write_gate_new_test_{}.txt",
+        std::process::id()
+    ));
+    // Ensure it does NOT exist going in; clean up after.
+    let _ = std::fs::remove_file(&tmp);
+    let _cleanup = CleanupFile(tmp.clone());
+
+    let captured = Arc::new(Mutex::new(None));
+    let tool = MockTool {
+        def: ToolDef {
+            name: "write_file",
+            description: "write to a file",
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {"path": {"type": "string"}, "content": {"type": "string"}}
+            }),
+        },
+        captured_args: captured.clone(),
+        outcome: ToolOutcome::Success {
+            content: "wrote".into(),
+        },
+    };
+
+    let adapter = MockAdapter::new(
+        vec![
+            StreamEvent::ToolCall(ToolInvocation {
+                id: "call-1".into(),
+                name: "write_file".into(),
+                arguments: serde_json::json!({
+                    "path": tmp.to_string_lossy(),
+                    "content": "brand new"
+                }),
+            }),
+            StreamEvent::Done {
+                finish_reason: FinishReason::ToolCalls,
+                usage: None,
+            },
+        ],
+        make_info(),
+    );
+
+    let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
+    let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(true));
+    let events = exe
+        .run_turn_collecting("create", &approval_tx, never_cancelled())
+        .await
+        .unwrap();
+
+    assert!(
+        captured.lock().unwrap().is_some(),
+        "write_file should run for a brand-new file with no prior read"
+    );
+    let ran = events.iter().any(|e| {
+        matches!(
+            e,
+            TurnEvent::ToolResult { name, success, .. } if name == "write_file" && *success
+        )
+    });
+    assert!(
+        ran,
+        "Expected write_file to succeed, got events: {events:?}"
+    );
+}
+
 #[tokio::test]
 async fn test_dangerous_shell_blocked_even_with_allow_all_rule() {
     let captured = Arc::new(Mutex::new(None));
@@ -1230,9 +1440,14 @@ fn test_is_read_only_bash_find_destructive_flags_blocked() {
     assert!(!is_read_only_bash("find . -type f -delete"));
     assert!(!is_read_only_bash("find . -exec rm {} \\;"));
     assert!(!is_read_only_bash("find . -exec sh {} \\;"));
+    assert!(!is_read_only_bash("find . -execdir rm {} \\;"));
     assert!(!is_read_only_bash("find . -ok rm {} \\;"));
+    assert!(!is_read_only_bash("find . -okdir rm {} \\;"));
     assert!(!is_read_only_bash("find . -fprint out.txt"));
     assert!(!is_read_only_bash("find . -fls out.txt"));
+    // Destructive find must not slip through as a later pipe segment.
+    assert!(!is_read_only_bash("cat list | find . -delete"));
+    assert!(!is_read_only_bash("cat list | find . -exec rm {} \\;"));
 }
 
 #[test]
@@ -1272,6 +1487,9 @@ fn test_is_read_only_bash_read_only_pipe_allowed() {
 fn test_is_read_only_bash_redirect_blocked() {
     assert!(!is_read_only_bash("ls > out.txt"));
     assert!(!is_read_only_bash("grep foo file >> log.txt"));
+    // Redirections in later pipe segments must also be blocked.
+    assert!(!is_read_only_bash("cat file | sort > out.txt"));
+    assert!(!is_read_only_bash("cat file | grep foo >> log.txt"));
 }
 
 #[test]
@@ -1279,12 +1497,19 @@ fn test_is_read_only_bash_chaining_blocked() {
     assert!(!is_read_only_bash("ls && rm -rf /"));
     assert!(!is_read_only_bash("cat file; rm file"));
     assert!(!is_read_only_bash("ls || true"));
+    // Chaining in later pipe segments must also be blocked.
+    assert!(!is_read_only_bash("cat file | sort; rm file"));
+    assert!(!is_read_only_bash("cat file | sort && rm file"));
+    assert!(!is_read_only_bash("cat file | sort || rm file"));
 }
 
 #[test]
 fn test_is_read_only_bash_substitution_blocked() {
     assert!(!is_read_only_bash("echo $(rm -rf /)"));
     assert!(!is_read_only_bash("echo `ls`"));
+    // Command substitution in later pipe segments must also be blocked.
+    assert!(!is_read_only_bash("cat file | sort $(rm -rf /)"));
+    assert!(!is_read_only_bash("cat file | sort `ls`"));
 }
 
 #[test]
@@ -1315,6 +1540,33 @@ fn test_is_read_only_bash_ps_and_jobs() {
     assert!(is_read_only_bash("ps aux"));
     assert!(is_read_only_bash("jobs"));
     assert!(is_read_only_bash("help"));
+}
+
+#[test]
+fn test_is_read_only_bash_git_read_only_subcommands_allowed() {
+    assert!(is_read_only_bash("git status"));
+    assert!(is_read_only_bash("git status -s"));
+    assert!(is_read_only_bash("git log --oneline -5"));
+    assert!(is_read_only_bash("git diff HEAD~1"));
+    assert!(is_read_only_bash("git show HEAD:src/main.rs"));
+    assert!(is_read_only_bash("git --no-pager -C /some/repo log"));
+    assert!(is_read_only_bash("git ls-files | grep foo"));
+}
+
+#[test]
+fn test_is_read_only_bash_git_mutating_subcommands_blocked() {
+    assert!(!is_read_only_bash("git add src/main.rs"));
+    assert!(!is_read_only_bash("git commit -m 'wip'"));
+    assert!(!is_read_only_bash("git push origin main"));
+    assert!(!is_read_only_bash("git checkout -b feature"));
+    assert!(!is_read_only_bash("git reset --hard HEAD"));
+    assert!(!is_read_only_bash("git merge feature"));
+    assert!(!is_read_only_bash("git rebase main"));
+    assert!(!is_read_only_bash("git stash"));
+    assert!(!is_read_only_bash("git"));
+    // Mutating git must not slip through as a later pipe segment.
+    assert!(!is_read_only_bash("cat list | git add src/main.rs"));
+    assert!(!is_read_only_bash("cat list | git commit -m 'wip'"));
 }
 
 /// Regression test for GPT 5.5 review finding #9: the
@@ -2507,4 +2759,143 @@ async fn test_always_approve_rule_round_trips_to_next_turn() {
             .iter()
             .any(|e| matches!(e, TurnEvent::ToolResult { name, output, .. } if name == "bash" && output == "ran!"));
     assert!(has_result, "second turn should execute the allowed command");
+}
+
+/// Tool that sleeps for a fixed duration before returning. Used to exercise
+/// cancellation mid-batch. An optional `start_tx` signals when `run` begins so
+/// tests can set cancellation deterministically after the first call starts.
+struct SleepingTool {
+    def: ToolDef,
+    sleep_ms: u64,
+    call_count: Arc<Mutex<usize>>,
+    start_tx: Arc<std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>>,
+}
+
+#[async_trait::async_trait]
+impl Tool for SleepingTool {
+    fn def(&self) -> ToolDef {
+        self.def.clone()
+    }
+
+    async fn run(&self, _ctx: &ToolContext, _args: serde_json::Value) -> ToolOutcome {
+        if let Ok(mut guard) = self.start_tx.lock() {
+            if let Some(tx) = guard.take() {
+                let _ = tx.send(());
+            }
+        }
+        *self.call_count.lock().unwrap() += 1;
+        tokio::time::sleep(std::time::Duration::from_millis(self.sleep_ms)).await;
+        ToolOutcome::Success {
+            content: "done".into(),
+        }
+    }
+}
+
+/// Cancellation during a multi-tool batch must append placeholder results
+/// for any tool calls that were skipped, so the conversation stays balanced.
+#[tokio::test]
+async fn test_cancelled_tool_batch_appends_placeholders() {
+    let (start_tx, start_rx) = tokio::sync::oneshot::channel();
+    let tool = SleepingTool {
+        def: ToolDef {
+            name: "sleep",
+            description: "sleep",
+            parameters: serde_json::json!({"type": "object", "properties": {}}),
+        },
+        sleep_ms: 200,
+        call_count: Arc::new(Mutex::new(0)),
+        start_tx: Arc::new(std::sync::Mutex::new(Some(start_tx))),
+    };
+    let call_count = tool.call_count.clone();
+
+    let adapter = MockAdapter::new(
+        vec![
+            StreamEvent::ToolCall(ToolInvocation {
+                id: "call-1".into(),
+                name: "sleep".into(),
+                arguments: serde_json::json!({}),
+            }),
+            StreamEvent::ToolCall(ToolInvocation {
+                id: "call-2".into(),
+                name: "sleep".into(),
+                arguments: serde_json::json!({}),
+            }),
+            StreamEvent::Done {
+                finish_reason: FinishReason::ToolCalls,
+                usage: None,
+            },
+        ],
+        make_info(),
+    );
+
+    let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
+    let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(true));
+
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let cancelled_flag = cancelled.clone();
+    tokio::spawn(async move {
+        // Wait until the first tool has actually started, then cancel. This
+        // makes the test deterministic instead of racing a 50 ms timer against
+        // the executor's batch-launch timing.
+        let _ = start_rx.await;
+        cancelled_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+    });
+
+    let events = exe
+        .run_turn_collecting("run two", &approval_tx, &cancelled)
+        .await
+        .unwrap();
+
+    // Exactly one tool should have run to completion; the second was cancelled.
+    assert_eq!(
+        *call_count.lock().unwrap(),
+        1,
+        "only the first tool call should execute"
+    );
+
+    let results: Vec<_> = events
+        .iter()
+        .filter_map(|e| match e {
+            TurnEvent::ToolResult { name, output, .. } => Some((name.as_str(), output.as_str())),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(
+        results.len(),
+        2,
+        "there should be a result for both requested tool calls"
+    );
+    assert_eq!(results[0], ("sleep", "done"), "first call should succeed");
+    assert!(
+        results[1].1.contains("cancelled"),
+        "second call should report cancellation, got {:?}",
+        results[1]
+    );
+
+    let msgs = exe.conversation.all();
+    let assistant_tool_calls: Vec<_> = msgs
+        .iter()
+        .filter_map(|m| {
+            if m.role == Role::Assistant {
+                m.tool_calls.clone()
+            } else {
+                None
+            }
+        })
+        .flatten()
+        .collect();
+    assert_eq!(
+        assistant_tool_calls.len(),
+        2,
+        "assistant requested two tools"
+    );
+
+    let tool_results: Vec<_> = msgs.iter().filter(|m| m.role == Role::Tool).collect();
+    assert_eq!(
+        tool_results.len(),
+        2,
+        "conversation must contain two tool-result messages"
+    );
+    assert!(tool_results[1].content.contains("cancelled"));
 }

@@ -22,42 +22,69 @@ fn missing_key(provider: &str) -> KfError {
 }
 
 macro_rules! provider_stub {
-    ($name:literal, $capabilities:expr, $provider:expr) => {
+    ($struct:ident, $name:literal, $capabilities:expr, $provider:expr) => {
         // ponytail: one struct per provider, lowercase name = snake_case tool id
-        // as registered. UpperCamelCase struct name keeps rustc happy.
-        paste::paste! {
-            pub struct [<$name:camel>];
-            impl [<$name:camel>] { pub fn new() -> Self { Self } }
-            impl Default for [<$name:camel>] { fn default() -> Self { Self::new() } }
+        // as registered. UpperCamelCase struct name is passed explicitly.
+        pub struct $struct;
+        impl $struct {
+            pub fn new() -> Self {
+                Self
+            }
+        }
+        impl Default for $struct {
+            fn default() -> Self {
+                Self::new()
+            }
+        }
 
-            #[async_trait]
-            impl Tool for [<$name:camel>] {
-                fn name(&self) -> &'static str { $name }
-                fn tier(&self) -> ToolTier { ToolTier::Provider }
-                fn stability(&self) -> ToolStability { ToolStability::Experimental }
-                fn capabilities(&self) -> &'static [&'static str] { &$capabilities }
+        #[async_trait]
+        impl Tool for $struct {
+            fn name(&self) -> &'static str {
+                $name
+            }
+            fn tier(&self) -> ToolTier {
+                ToolTier::Provider
+            }
+            fn stability(&self) -> ToolStability {
+                ToolStability::Experimental
+            }
+            fn capabilities(&self) -> &'static [&'static str] {
+                &$capabilities
+            }
 
-                async fn invoke(&self, _project: &Path, _op: &str, _params: serde_json::Value) -> Result<ToolOutput> {
-                    Err(missing_key($provider))
-                }
+            async fn invoke(
+                &self,
+                _project: &Path,
+                _op: &str,
+                _params: serde_json::Value,
+            ) -> Result<ToolOutput> {
+                Err(missing_key($provider))
             }
         }
     };
 }
 
 provider_stub!(
+    Veo,
     "veo",
     ["text_to_video", "image_to_video", "extend_clip"],
     "veo"
 );
 provider_stub!(
+    Runway,
     "runway",
     ["text_to_video", "image_to_video", "act_two"],
     "runway"
 );
-provider_stub!("elevenlabs", ["tts", "voice_clone", "dub"], "elevenlabs");
-provider_stub!("suno", ["music_generate", "lyrics_generate"], "suno");
 provider_stub!(
+    Elevenlabs,
+    "elevenlabs",
+    ["tts", "voice_clone", "dub"],
+    "elevenlabs"
+);
+provider_stub!(Suno, "suno", ["music_generate", "lyrics_generate"], "suno");
+provider_stub!(
+    OpenaiImage,
     "openai_image",
     ["text_to_image", "edit", "variation"],
     "openai_image"

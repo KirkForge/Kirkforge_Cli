@@ -1,3 +1,5 @@
+#![cfg_attr(not(test), deny(clippy::unwrap_used))]
+
 //! `kfd` — the standalone KirkForge-Draw terminal editor.
 //!
 //! Modes:
@@ -35,7 +37,7 @@ struct Cli {
     load: Option<String>,
 
     /// Path to write the rendered art to (instead of stdout).
-    #[arg(long, short = 'o')]
+    #[arg(long, short = 'o', requires = "render")]
     output: Option<String>,
 
     /// Render the document non-interactively (requires --load).
@@ -43,15 +45,15 @@ struct Cli {
     render: bool,
 
     /// Output a fenced markdown code block (with --render).
-    #[arg(long)]
+    #[arg(long, requires = "render")]
     fenced: bool,
 
     /// Output plain text (default; with --render).
-    #[arg(long)]
+    #[arg(long, requires = "render")]
     plain: bool,
 
     /// Output ANSI-colored terminal text (with --render).
-    #[arg(long)]
+    #[arg(long, requires = "render")]
     ansi: bool,
 
     /// Validate a `.td.json` file (requires --load). Prints a report
@@ -62,7 +64,7 @@ struct Cli {
     /// Emit the `--validate` report as pretty-printed JSON instead of
     /// the human-readable block. Stable shape; safe for `jq` /
     /// build-pipeline consumers.
-    #[arg(long)]
+    #[arg(long, requires = "validate")]
     json: bool,
 
     /// Print the version and exit.
@@ -137,7 +139,7 @@ fn run() -> anyhow::Result<std::process::ExitCode> {
             .ok_or_else(|| anyhow::anyhow!("--validate requires --load <path>"))?;
         let report = run_validate(path)?;
         if cli.json {
-            println!("{}", format_validate_report_json(&report, path));
+            println!("{}", format_validate_report_json(&report, path)?);
         } else {
             print!("{}", format_validate_report(&report, path));
         }

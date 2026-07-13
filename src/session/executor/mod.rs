@@ -71,6 +71,10 @@ pub struct Executor {
     /// as a `TurnEvent::Recovered` at the start of the first turn so
     /// the TUI/line-mode output can show a status line.
     recovered_messages: Option<usize>,
+
+    /// Unique identifier for this session, forwarded to lifecycle hooks as
+    /// `KF_SESSION_ID`. Populated by the caller after construction.
+    session_id: String,
 }
 
 impl Executor {
@@ -194,6 +198,7 @@ impl Executor {
             undo_stack,
             plan_mode: false,
             recovered_messages: None,
+            session_id: String::new(),
         };
         this.init_default_verifiers(plugin_registry);
         this
@@ -205,6 +210,12 @@ impl Executor {
     /// opener reported `OpenOutcome::Restored`.
     pub fn set_recovered_messages(&mut self, count: usize) {
         self.recovered_messages = Some(count);
+    }
+
+    /// Set the session identifier forwarded to lifecycle hooks as
+    /// `KF_SESSION_ID`.
+    pub fn set_session_id(&mut self, id: String) {
+        self.session_id = id;
     }
 
     /// Build a per-tool-call context linked to the turn's cancellation
@@ -474,19 +485,21 @@ impl Executor {
     /// Exit plan mode and inject a system message telling the model it
     /// may now implement the plan. Returns the message content so the
     /// caller can echo it to the user if desired.
-    pub fn exit_plan_mode(&mut self) -> anyhow::Result<String> {
+    pub async fn exit_plan_mode(&mut self) -> anyhow::Result<String> {
         self.plan_mode = false;
         let msg = "Plan mode exited — you may now implement the plan.".to_string();
-        self.conversation.append(Message {
-            role: Role::System,
-            content: msg.clone(),
-            content_parts: None,
-            thinking: None,
-            tool_calls: None,
-            tool_call_id: None,
-            tool_name: None,
-            token_count: None,
-        })?;
+        self.conversation
+            .append_async(Message {
+                role: Role::System,
+                content: msg.clone(),
+                content_parts: None,
+                thinking: None,
+                tool_calls: None,
+                tool_call_id: None,
+                tool_name: None,
+                token_count: None,
+            })
+            .await?;
         Ok(msg)
     }
 
@@ -495,6 +508,9 @@ impl Executor {
     fn run_hook(&self, event: &str, tool_name: Option<&str>, args_json: Option<&str>) {
         let mut env_vars: Vec<(&str, &str)> = Vec::new();
         env_vars.push(("KF_EVENT", event));
+        if !self.session_id.is_empty() {
+            env_vars.push(("KF_SESSION_ID", &self.session_id));
+        }
         if let Some(name) = tool_name {
             env_vars.push(("KF_TOOL_NAME", name));
         }
@@ -543,6 +559,10 @@ impl Executor {
         args_json: Option<&str>,
     ) -> Option<String> {
         let mut env_vars: Vec<(&str, &str)> = Vec::new();
+        env_vars.push(("KF_EVENT", event));
+        if !self.session_id.is_empty() {
+            env_vars.push(("KF_SESSION_ID", &self.session_id));
+        }
         if let Some(name) = tool_name {
             env_vars.push(("KF_TOOL_NAME", name));
         }

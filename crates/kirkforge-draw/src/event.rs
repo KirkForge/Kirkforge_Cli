@@ -527,7 +527,7 @@ fn handle_key(app: &mut App, key: KeyEvent) {
         // arms hit the same `state.redo()` helper so the
         // outcome is identical regardless of which one the
         // user reaches for.
-        KeyCode::Char('z') if ctrl && shift && !alt => {
+        KeyCode::Char(c) if (c == 'z' || c == 'Z') && ctrl && shift && !alt => {
             if !app.state.redo() {
                 app.status = "nothing to redo".into();
             }

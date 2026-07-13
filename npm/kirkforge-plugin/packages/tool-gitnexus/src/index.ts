@@ -37,7 +37,6 @@ async function countLines(filePath: string): Promise<number> {
   try {
     const content = await readFile(filePath, "utf8");
     if (content.length === 0) return 0;
-    // Count newlines — last line without trailing newline still counts
     const lines = content.split("\n");
     return lines[lines.length - 1] === "" ? lines.length - 1 : lines.length;
   } catch {
@@ -66,7 +65,6 @@ export class GitnexusEmitter {
     const { cwd, eventBus } = this.opts;
     const isRepo = await gitRepoExists(cwd);
 
-    // ── Not a git repo: use writtenFiles as source of truth ──────────
     if (!isRepo) {
       const paths = [...this.writtenFiles];
       let insertions = 0;
@@ -100,7 +98,6 @@ export class GitnexusEmitter {
       return ok(report);
     }
 
-    // ── Git repo: collect tracked + untracked, merge writtenFiles ────
     try {
       const headOutput = await git(["rev-parse", "--verify", "HEAD"], cwd);
       const emptyTree = "4b825dc642cb6eb9a060e54bf899d153036e3e7a";
@@ -112,13 +109,11 @@ export class GitnexusEmitter {
       const trackedPaths = trackedOutput.split("\n").filter(Boolean);
       const untrackedPaths = untrackedOutput.split("\n").filter(Boolean);
 
-      // Merge writtenFiles so artifact-emitted files that aren't yet staged are included
       const writtenNotInGit = this.writtenFiles.filter(
         (wf) => !trackedPaths.includes(wf) && !untrackedPaths.includes(wf),
       );
       const allPaths = [...new Set([...trackedPaths, ...untrackedPaths, ...writtenNotInGit])];
 
-      // Git shortstat covers tracked changes only
       let insertions = 0,
         deletions = 0;
       const stat = await git(["diff", ref, "--shortstat"], cwd);
@@ -127,11 +122,9 @@ export class GitnexusEmitter {
       if (im) insertions = parseInt(im[1]!);
       if (dm) deletions = parseInt(dm[1]!);
 
-      // Estimate insertions for untracked files (git doesn't count these)
       for (const rel of untrackedPaths) {
         insertions += await countLines(join(cwd, rel));
       }
-      // Also count lines for writtenFiles that git doesn't know about yet
       for (const rel of writtenNotInGit) {
         insertions += await countLines(join(cwd, rel));
       }

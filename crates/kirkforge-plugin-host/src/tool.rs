@@ -1,8 +1,9 @@
 //! Plugin-defined tool wrapper.
 //!
 //! v1 tools are shell scripts. The host serializes the tool arguments as JSON
-//! in the `KIRKFORGE_TOOL_ARGS` environment variable and reads the tool result
-//! from stdout. A non-zero exit code becomes an error using stderr as the
+//! in the `KIRKFORGE_TOOL_ARGS_JSON` environment variable (the legacy
+//! `KIRKFORGE_TOOL_ARGS` alias is also set for compatibility) and reads the tool
+//! result from stdout. A non-zero exit code becomes an error using stderr as the
 //! message.
 
 use kirkforge_plugin::Capability;
@@ -11,6 +12,8 @@ use std::process::Command;
 
 /// Environment variable used to pass tool arguments to a v1 plugin tool.
 pub const KIRKFORGE_TOOL_ARGS: &str = "KIRKFORGE_TOOL_ARGS";
+/// Alias used by plugin tool scripts that need `jq`-style JSON parsing.
+pub const KIRKFORGE_TOOL_ARGS_JSON: &str = "KIRKFORGE_TOOL_ARGS_JSON";
 
 /// A plugin tool that can be executed.
 #[derive(Debug, Clone)]
@@ -42,6 +45,9 @@ impl PluginTool {
                 command,
             } => {
                 let command = command.clone()?;
+                if !crate::paths::is_command_within_root(plugin_root, &command) {
+                    return None;
+                }
                 Some(Self {
                     name: name.clone(),
                     description: description.clone(),
@@ -65,6 +71,7 @@ impl PluginTool {
         let output = loop {
             match Command::new(&cmd_path)
                 .env(KIRKFORGE_TOOL_ARGS, args.to_string())
+                .env(KIRKFORGE_TOOL_ARGS_JSON, args.to_string())
                 .current_dir(&self.plugin_root)
                 .output()
             {
@@ -128,10 +135,13 @@ mod tests {
 
     #[test]
     fn receives_args_in_env() {
-        let (_tmp, tool) = make_tool("args.sh", "echo \"$KIRKFORGE_TOOL_ARGS\"");
+        let (_tmp, tool) = make_tool(
+            "args.sh",
+            "printf '%s' \"$KIRKFORGE_TOOL_ARGS\"; printf '%s' \"$KIRKFORGE_TOOL_ARGS_JSON\"",
+        );
         let args = serde_json::json!({"n": 7});
         let out = tool.execute(args.clone()).unwrap();
-        assert_eq!(out, args.to_string());
+        assert_eq!(out, format!("{args}{args}"));
     }
 
     #[test]

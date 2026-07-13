@@ -1,3 +1,5 @@
+#![cfg_attr(not(test), deny(clippy::unwrap_used))]
+
 //! Pure document model and editor state for KirkForge-Draw.
 //!
 //! This crate is terminal-free. It owns the `.td.json` document model, the

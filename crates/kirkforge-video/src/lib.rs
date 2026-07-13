@@ -1,3 +1,5 @@
+#![cfg_attr(not(test), deny(clippy::unwrap_used))]
+
 //! KirkForge Video — instruction-driven video production in Rust.
 //! See ADR-001 for architecture.
 

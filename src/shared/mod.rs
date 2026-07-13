@@ -433,7 +433,7 @@ pub struct Config {
     pub plugin_sources: HashMap<String, PathBuf>,
 
     /// Names from `plugin_sources` that should be loaded at startup.
-    #[serde(default)]
+    #[serde(default = "default_enabled_plugins")]
     pub enabled_plugins: Vec<String>,
 }
 
@@ -499,30 +499,43 @@ fn default_max_persona_turns() -> usize {
 /// Built-in workspace plugin sources that ship with this repo.
 ///
 /// Each entry points to a directory containing a `kirkforge.toml` manifest.
-/// The sources are registered by default but left disabled; use
-/// `/plugins toggle <name>` to enable them persistently. The external binaries
-/// these plugins invoke (`kfd`, `kirkforge-video`, `stratum`, `plugin3`, and the
-/// KirkForge-Plugin SDK Node CLI) must be installed on `PATH` separately.
+/// The sources are registered by default and enabled when their directories
+/// exist, so a fresh build or an installed release loads bundled plugins
+/// without extra configuration. Use `/plugins toggle <name>` to disable them
+/// persistently. The external binaries these plugins invoke (`kfd`,
+/// `kirkforge-video`, `stratum`, `plugin3`, and the KirkForge-Plugin SDK Node
+/// CLI) are shipped in release archives or built from the same workspace.
 fn default_plugin_sources() -> HashMap<String, PathBuf> {
     let mut sources = HashMap::new();
-    sources.insert(
-        "kirkforge-draw".into(),
-        PathBuf::from("plugins/kirkforge-draw"),
-    );
+    // Anchor bundled plugin sources to the workspace root at compile time so
+    // they remain valid regardless of the process working directory.
+    let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    sources.insert("kirkforge-draw".into(), base.join("plugins/kirkforge-draw"));
     sources.insert(
         "kirkforge-video".into(),
-        PathBuf::from("plugins/kirkforge-video"),
+        base.join("plugins/kirkforge-video"),
     );
-    sources.insert("stratum".into(), PathBuf::from("plugins/stratum"));
+    sources.insert("stratum".into(), base.join("plugins/stratum"));
     sources.insert(
         "kirkforge-plugin3".into(),
-        PathBuf::from("plugins/kirkforge-plugin3"),
+        base.join("plugins/kirkforge-plugin3"),
     );
     sources.insert(
         "kirkforge-plugin".into(),
-        PathBuf::from("plugins/kirkforge-plugin"),
+        base.join("plugins/kirkforge-plugin"),
     );
     sources
+}
+
+/// Default list of bundled plugins to load at startup.
+///
+/// Matches the keys in [`default_plugin_sources`]. On a development build these
+/// resolve to the workspace `plugins/` tree; in an installed release they fall
+/// back to `~/.local/share/kirkforge/plugins/<name>` (copied by `install.sh`).
+fn default_enabled_plugins() -> Vec<String> {
+    let mut names: Vec<String> = default_plugin_sources().keys().cloned().collect();
+    names.sort();
+    names
 }
 
 fn default_commit_max_file_size() -> u64 {
@@ -625,7 +638,7 @@ impl Default for Config {
             cache_dir: None,
             audit_log_path: None,
             plugin_sources: default_plugin_sources(),
-            enabled_plugins: vec![],
+            enabled_plugins: default_enabled_plugins(),
         }
     }
 }

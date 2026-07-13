@@ -144,10 +144,51 @@ struct PartialPipelineConfig {
 
 impl Default for PipelineConfig {
     fn default() -> Self {
-        // SAFETY: `DEFAULT_TOML` is a checked-in file and `from_toml` must
-        // succeed for the compiled binary to be usable. A panic here is the
-        // appropriate response for a corrupt build artifact.
-        Self::from_toml(DEFAULT_TOML).expect("embedded config/pipeline.toml must parse")
+        // Keep this in sync with `config/pipeline.toml`. The test
+        // `embedded_toml_matches_default_values` fails CI if the two drift.
+        let mut per_domain = HashMap::new();
+        per_domain.insert(
+            ContentType::JsonObject,
+            DomainOverrides {
+                bloat_threshold: Some(Ratio::new_unchecked(0.5)),
+                reformat_target_ratio: None,
+            },
+        );
+        per_domain.insert(
+            ContentType::JsonArray,
+            DomainOverrides {
+                bloat_threshold: Some(Ratio::new_unchecked(0.5)),
+                reformat_target_ratio: None,
+            },
+        );
+        per_domain.insert(
+            ContentType::BuildOutput,
+            DomainOverrides {
+                bloat_threshold: Some(Ratio::new_unchecked(0.3)),
+                reformat_target_ratio: Some(Ratio::new_unchecked(0.1)),
+            },
+        );
+        per_domain.insert(
+            ContentType::GitDiff,
+            DomainOverrides {
+                bloat_threshold: Some(Ratio::new_unchecked(0.6)),
+                reformat_target_ratio: None,
+            },
+        );
+        per_domain.insert(
+            ContentType::SearchResults,
+            DomainOverrides {
+                bloat_threshold: Some(Ratio::new_unchecked(0.4)),
+                reformat_target_ratio: None,
+            },
+        );
+        Self {
+            reformat_target_ratio: Ratio::new_unchecked(0.05),
+            bloat_threshold: Ratio::new_unchecked(0.5),
+            offload_fallback_ratio: Ratio::new_unchecked(0.85),
+            per_domain,
+            transform_timeout_ms: 30_000,
+        }
     }
 }
 

@@ -10,11 +10,17 @@
 /// - `KIRKFORGE_MODEL` — default model name
 /// - `KIRKFORGE_HOST` — Ollama host URL
 /// - `KIRKFORGE_AUTO_APPROVE` — "true" to auto-approve destructive calls
+/// - `KIRKFORGE_DRY_RUN` — "true" to make destructive tools report only
 /// - `KIRKFORGE_SANDBOX_DIR` — sandbox directory path
 /// - `KIRKFORGE_BLOCK_DOTFILES` — "true" to block dotfile writes
+/// - `KIRKFORGE_BLOCK_GITIGNORED_DOTFILES` — "true" to block git-ignored dotfile writes
 /// - `KIRKFORGE_MAX_READ_SIZE` — max file read size in bytes
+/// - `KIRKFORGE_MAX_OVERWRITE_SIZE` — max existing file size that write tools may overwrite
 /// - `KIRKFORGE_FOLLOW_SYMLINKS` — "true" to allow following symlinks
 /// - `KIRKFORGE_BLOCK_BINARY` — "true" to block binary file reads
+/// - `KIRKFORGE_BASH_SANDBOX_WORKDIR` — "true"/"false" to force bash cwd into the sandbox
+/// - `KIRKFORGE_BANG_REQUIRES_APPROVAL` — "true" to route `!` passthrough through approval gate
+/// - `KIRKFORGE_JSON_MODE` — "true" to request JSON-formatted model responses
 /// - `KIRKFORGE_REJECT_ON_EXCESS_PLUGIN_TRUST` — "true" to reject plugins above max trust
 /// - `KIRKFORGE_PLUGIN_SIGNATURE_VALIDATION` — "true" to require `.kirkforge.sig`
 /// - `KIRKFORGE_PLUGIN_PUBLIC_KEY_PATH` — minisign public key for plugin signatures
@@ -24,8 +30,57 @@
 /// - `KIRKFORGE_MEMORY_ENABLED` — "true"/"false" to enable or disable memory injection
 /// - `KIRKFORGE_MEMORY_MAX_TOKENS` — token budget for injected memory facts
 /// - `KIRKFORGE_MEMORY_TOP_N` — maximum number of facts to consider per turn
+/// - `KIRKFORGE_REQUEST_TIMEOUT_SECS` — model request timeout (clamped to ≥1 s)
+/// - `KIRKFORGE_TOOL_TIMEOUT_SECS` — per-tool hard timeout (clamped to [1, 3600])
+/// - `KIRKFORGE_CHECKPOINT_INTERVAL_MESSAGES` — write a checkpoint every N messages
+/// - `KIRKFORGE_SUMMARIZE_MODEL` — fast model used by `/compact`
+/// - `KIRKFORGE_ROUTING_ENABLED` — "true" to enable smart model routing
+/// - `KIRKFORGE_ROUTER_MODEL` — model used for routing classification
+/// - `KIRKFORGE_COMMIT_MAX_FILE_SIZE` — max file size allowed in `/commit`
+/// - `KIRKFORGE_PRESERVE_RECENT_MESSAGES` — number of recent messages kept verbatim on compact
+/// - `KIRKFORGE_MAX_TOOL_CALLS_PER_TURN` — cap on model↔tool iterations per turn
+/// - `KIRKFORGE_MAX_PERSONA_TURNS` — cap on fork-isolated persona turns
+/// - `KIRKFORGE_AUDIT_LOG_PATH` — path for the append-only JSONL audit log (empty disables)
+/// - `KIRKFORGE_HOOKS_DIR` — directory containing lifecycle hook scripts
+///
+/// Boolean env vars accept `true`/`1`/`yes` (case-insensitive) for true and
+/// `false`/`0`/`no` for false. Unrecognized values leave the prior layer
+/// unchanged.
 use crate::shared::Config;
 use std::path::PathBuf;
+
+mod env_overrides;
+
+// Re-import so `load_config` and the in-file tests (which use
+// `use super::*`) keep seeing `apply_env_overrides` at the same path.
+use env_overrides::apply_env_overrides;
+
+/// Expand a leading `~` in a path string using `$HOME` (or the equivalent
+/// on Windows). Falls back to the original string if expansion fails.
+fn expand_tilde_str(s: &str) -> String {
+    shellexpand::tilde(s).into_owned()
+}
+
+/// Parse a boolean environment variable value consistently.
+///
+/// Treats "true", "1", "yes" (case-insensitive) as true,
+/// "false", "0", "no" (case-insensitive) as false, and any other value as
+/// `None` so the config default is preserved.
+fn parse_bool_env(val: &str) -> Option<bool> {
+    if val.eq_ignore_ascii_case("true")
+        || val.eq_ignore_ascii_case("1")
+        || val.eq_ignore_ascii_case("yes")
+    {
+        Some(true)
+    } else if val.eq_ignore_ascii_case("false")
+        || val.eq_ignore_ascii_case("0")
+        || val.eq_ignore_ascii_case("no")
+    {
+        Some(false)
+    } else {
+        None
+    }
+}
 
 /// Load config with full layered resolution.
 ///
@@ -35,8 +90,12 @@ use std::path::PathBuf;
 ///
 /// The config is NOT written to disk here — that's the caller's
 /// responsibility (e.g., on first run or when CLI overrides are provided).
-pub fn load_config() -> Config {
+///
+/// Returns the resolved config and an optional human-readable warning if
+/// the config file existed but could not be fully parsed.
+pub fn load_config() -> (Config, Option<String>) {
     let mut cfg = Config::default();
+    let mut warning: Option<String> = None;
 
     // Layer 1: config file
     let path = super::config_path();
@@ -44,7 +103,9 @@ pub fn load_config() -> Config {
         match toml::from_str::<Config>(&content) {
             Ok(file_cfg) => cfg = file_cfg,
             Err(e) => {
-                tracing::warn!("Failed to parse config ({}), merging with defaults", e);
+                let msg = format!("Failed to parse config ({e}), merging with defaults");
+                tracing::warn!(%msg);
+                warning = Some(msg);
                 // Try partial merge: parse what we can
                 if let Ok(table) = content.parse::<toml::Table>() {
                     merge_toml_into_config(&mut cfg, table);
@@ -56,7 +117,7 @@ pub fn load_config() -> Config {
     // Layer 2: environment variables
     apply_env_overrides(&mut cfg);
 
-    cfg
+    (cfg, warning)
 }
 
 /// Load config and write a default file on first run.
@@ -67,7 +128,10 @@ pub fn load_or_create_config() -> Config {
     let path = super::config_path();
     let exists = path.exists();
 
-    let cfg = load_config();
+    let (cfg, warning) = load_config();
+    if let Some(w) = warning {
+        eprintln!("Warning: {} ({})", w, path.display());
+    }
 
     if !exists {
         // Write the default config to disk
@@ -95,13 +159,16 @@ pub fn load_or_create_config() -> Config {
                         );
                     }
                 }
-                tracing::info!("Created default config at {}", path.display());
+                tracing::info!(
+                    "Config file created at {}. Edit it to customize model, host, etc.",
+                    path.display()
+                );
+            } else {
+                tracing::warn!(path = %path.display(), "Failed to write default config file");
             }
+        } else {
+            tracing::warn!(path = %path.display(), "Failed to serialize default config");
         }
-        tracing::info!(
-            "Config file created at {}. Edit it to customize model, host, etc.",
-            path.display()
-        );
     }
 
     cfg
@@ -176,143 +243,6 @@ pub fn freeze_launch_sandbox(config: &mut Config) -> Option<String> {
     }
 }
 
-/// Apply environment variable overrides to a Config.
-fn apply_env_overrides(cfg: &mut Config) {
-    // KIRKFORGE_MODEL
-    if let Ok(val) = std::env::var("KIRKFORGE_MODEL") {
-        if !val.is_empty() {
-            cfg.default_model = val;
-        }
-    }
-
-    // KIRKFORGE_HOST
-    if let Ok(val) = std::env::var("KIRKFORGE_HOST") {
-        if !val.is_empty() {
-            cfg.ollama_host = val;
-        }
-    }
-
-    // KIRKFORGE_AUTO_APPROVE
-    if let Ok(val) = std::env::var("KIRKFORGE_AUTO_APPROVE") {
-        cfg.auto_approve = val.eq_ignore_ascii_case("true")
-            || val.eq_ignore_ascii_case("1")
-            || val.eq_ignore_ascii_case("yes");
-    }
-
-    // KIRKFORGE_SANDBOX_DIR
-    if let Ok(val) = std::env::var("KIRKFORGE_SANDBOX_DIR") {
-        cfg.sandbox_dir = if val.is_empty() { None } else { Some(val) };
-    }
-
-    // KIRKFORGE_BLOCK_DOTFILES
-    if let Ok(val) = std::env::var("KIRKFORGE_BLOCK_DOTFILES") {
-        cfg.block_dotfiles = val.eq_ignore_ascii_case("true");
-    }
-
-    // KIRKFORGE_MAX_READ_SIZE
-    if let Ok(val) = std::env::var("KIRKFORGE_MAX_READ_SIZE") {
-        if let Ok(n) = val.parse::<usize>() {
-            cfg.max_file_read_size = n;
-        }
-    }
-
-    // KIRKFORGE_FOLLOW_SYMLINKS
-    if let Ok(val) = std::env::var("KIRKFORGE_FOLLOW_SYMLINKS") {
-        cfg.follow_symlinks = val.eq_ignore_ascii_case("true");
-    }
-
-    // KIRKFORGE_BLOCK_BINARY
-    if let Ok(val) = std::env::var("KIRKFORGE_BLOCK_BINARY") {
-        cfg.block_binary_reads = val.eq_ignore_ascii_case("true");
-    }
-
-    // KIRKFORGE_CARRYOVER_ENABLED
-    if let Ok(val) = std::env::var("KIRKFORGE_CARRYOVER_ENABLED") {
-        cfg.carryover_enabled = val.eq_ignore_ascii_case("true")
-            || val.eq_ignore_ascii_case("1")
-            || val.eq_ignore_ascii_case("yes");
-    }
-    if let Ok(val) = std::env::var("KIRKFORGE_DRY_RUN") {
-        cfg.dry_run = val.eq_ignore_ascii_case("true")
-            || val.eq_ignore_ascii_case("1")
-            || val.eq_ignore_ascii_case("yes");
-    }
-    if let Ok(val) = std::env::var("KIRKFORGE_CACHE_ENABLED") {
-        cfg.cache_enabled = val.eq_ignore_ascii_case("true")
-            || val.eq_ignore_ascii_case("1")
-            || val.eq_ignore_ascii_case("yes");
-    }
-    if let Ok(val) = std::env::var("KIRKFORGE_CACHE_DIR") {
-        cfg.cache_dir = Some(PathBuf::from(val));
-    }
-
-    // KIRKFORGE_REJECT_ON_EXCESS_PLUGIN_TRUST
-    if let Ok(val) = std::env::var("KIRKFORGE_REJECT_ON_EXCESS_PLUGIN_TRUST") {
-        cfg.reject_on_excess_plugin_trust = val.eq_ignore_ascii_case("true");
-    }
-
-    // KIRKFORGE_PLUGIN_SIGNATURE_VALIDATION
-    if let Ok(val) = std::env::var("KIRKFORGE_PLUGIN_SIGNATURE_VALIDATION") {
-        cfg.plugin_signature_validation = val.eq_ignore_ascii_case("true");
-    }
-
-    // KIRKFORGE_PLUGIN_PUBLIC_KEY_PATH
-    if let Ok(val) = std::env::var("KIRKFORGE_PLUGIN_PUBLIC_KEY_PATH") {
-        cfg.plugin_public_key_path = if val.is_empty() { None } else { Some(val) };
-    }
-
-    // KIRKFORGE_PLUGIN_ALLOWED_ENV_VARS
-    if let Ok(val) = std::env::var("KIRKFORGE_PLUGIN_ALLOWED_ENV_VARS") {
-        cfg.plugin_allowed_env_vars = val
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect();
-    }
-
-    // KIRKFORGE_PLUGIN_SOURCES
-    if let Ok(val) = std::env::var("KIRKFORGE_PLUGIN_SOURCES") {
-        cfg.plugin_sources = parse_plugin_sources_env(&val);
-    }
-
-    // KIRKFORGE_ENABLED_PLUGINS
-    if let Ok(val) = std::env::var("KIRKFORGE_ENABLED_PLUGINS") {
-        cfg.enabled_plugins = val
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect();
-    }
-
-    // KIRKFORGE_MEMORY_ENABLED
-    if let Ok(val) = std::env::var("KIRKFORGE_MEMORY_ENABLED") {
-        cfg.memory_enabled = val.eq_ignore_ascii_case("true")
-            || val.eq_ignore_ascii_case("1")
-            || val.eq_ignore_ascii_case("yes");
-    }
-
-    // KIRKFORGE_MEMORY_MAX_TOKENS
-    if let Ok(val) = std::env::var("KIRKFORGE_MEMORY_MAX_TOKENS") {
-        if let Ok(n) = val.parse::<usize>() {
-            cfg.memory_max_tokens = n.max(1);
-        }
-    }
-
-    // KIRKFORGE_MEMORY_TOP_N
-    if let Ok(val) = std::env::var("KIRKFORGE_MEMORY_TOP_N") {
-        if let Ok(n) = val.parse::<usize>() {
-            cfg.memory_top_n = n.max(1);
-        }
-    }
-
-    // KIRKFORGE_CHECKPOINT_INTERVAL_MESSAGES
-    if let Ok(val) = std::env::var("KIRKFORGE_CHECKPOINT_INTERVAL_MESSAGES") {
-        if let Ok(n) = val.parse::<usize>() {
-            cfg.checkpoint_interval_messages = n;
-        }
-    }
-}
-
 /// Merge a parsed TOML table into a Config, field by field.
 ///
 /// This handles partial configs gracefully — missing fields keep
@@ -330,7 +260,7 @@ fn merge_toml_into_config(cfg: &mut Config, table: toml::Table) {
         cfg.auto_approve = *v;
     }
     if let Some(Value::String(v)) = table.get("sandbox_dir") {
-        cfg.sandbox_dir = Some(v.clone());
+        cfg.sandbox_dir = Some(expand_tilde_str(v));
     }
     if let Some(Value::Boolean(v)) = table.get("block_dotfiles") {
         cfg.block_dotfiles = *v;
@@ -342,7 +272,7 @@ fn merge_toml_into_config(cfg: &mut Config, table: toml::Table) {
     }
     if let Some(Value::Integer(v)) = table.get("request_timeout_secs") {
         if let Ok(n) = u64::try_from(*v) {
-            cfg.request_timeout_secs = n;
+            cfg.request_timeout_secs = n.max(1);
         }
     }
     if let Some(Value::Boolean(v)) = table.get("follow_symlinks") {
@@ -361,7 +291,72 @@ fn merge_toml_into_config(cfg: &mut Config, table: toml::Table) {
         cfg.cache_enabled = *v;
     }
     if let Some(Value::String(v)) = table.get("cache_dir") {
-        cfg.cache_dir = Some(PathBuf::from(v));
+        cfg.cache_dir = Some(PathBuf::from(expand_tilde_str(v)));
+    }
+    if let Some(Value::Boolean(v)) = table.get("bang_requires_approval") {
+        cfg.bang_requires_approval = *v;
+    }
+    if let Some(Value::Boolean(v)) = table.get("json_mode") {
+        cfg.json_mode = *v;
+    }
+    if let Some(Value::Boolean(v)) = table.get("bash_sandbox_workdir") {
+        cfg.bash_sandbox_workdir = *v;
+    }
+    if let Some(Value::Boolean(v)) = table.get("block_gitignored_dotfiles") {
+        cfg.block_gitignored_dotfiles = *v;
+    }
+    if let Some(Value::Integer(v)) = table.get("max_overwrite_size") {
+        if let Ok(n) = usize::try_from(*v) {
+            cfg.max_overwrite_size = n;
+        }
+    }
+    if let Some(Value::String(v)) = table.get("summarize_model") {
+        cfg.summarize_model = v.clone();
+    }
+    if let Some(Value::Boolean(v)) = table.get("routing_enabled") {
+        cfg.routing_enabled = *v;
+    }
+    if let Some(Value::String(v)) = table.get("router_model") {
+        cfg.router_model = v.clone();
+    }
+    if let Some(Value::Table(v)) = table.get("routing_model_map") {
+        cfg.routing_model_map = v
+            .iter()
+            .filter_map(|(k, val)| val.as_str().map(|s| (k.clone(), s.to_string())))
+            .collect();
+    }
+    if let Some(Value::Integer(v)) = table.get("commit_max_file_size") {
+        if let Ok(n) = u64::try_from(*v) {
+            cfg.commit_max_file_size = n;
+        }
+    }
+    if let Some(Value::Integer(v)) = table.get("preserve_recent_messages") {
+        cfg.preserve_recent_messages = (*v).max(1) as usize;
+    }
+    if let Some(Value::Integer(v)) = table.get("max_tool_calls_per_turn") {
+        cfg.max_tool_calls_per_turn = (*v).max(1) as usize;
+    }
+    if let Some(Value::Integer(v)) = table.get("max_persona_turns") {
+        cfg.max_persona_turns = (*v).max(1) as usize;
+    }
+    if let Some(Value::Integer(v)) = table.get("tool_timeout_secs") {
+        if let Ok(n) = u64::try_from(*v) {
+            cfg.tool_timeout_secs = Some(n.clamp(1, 3600));
+        }
+    }
+    if let Some(Value::String(v)) = table.get("audit_log_path") {
+        cfg.audit_log_path = if v.is_empty() {
+            None
+        } else {
+            Some(PathBuf::from(expand_tilde_str(v)))
+        };
+    }
+    if let Some(Value::String(v)) = table.get("hooks_dir") {
+        cfg.hooks_dir = if v.is_empty() {
+            None
+        } else {
+            Some(PathBuf::from(expand_tilde_str(v)))
+        };
     }
 
     // Plugin trust / sandbox knobs
@@ -372,7 +367,11 @@ fn merge_toml_into_config(cfg: &mut Config, table: toml::Table) {
         cfg.plugin_signature_validation = *v;
     }
     if let Some(Value::String(v)) = table.get("plugin_public_key_path") {
-        cfg.plugin_public_key_path = if v.is_empty() { None } else { Some(v.clone()) };
+        cfg.plugin_public_key_path = if v.is_empty() {
+            None
+        } else {
+            Some(expand_tilde_str(v))
+        };
     }
     if let Some(Value::Array(v)) = table.get("plugin_allowed_env_vars") {
         cfg.plugin_allowed_env_vars = v
@@ -413,7 +412,7 @@ fn merge_toml_into_config(cfg: &mut Config, table: toml::Table) {
     if let Some(Value::Array(v)) = table.get("deny_paths") {
         cfg.deny_paths = v
             .iter()
-            .filter_map(|v| v.as_str().map(String::from))
+            .filter_map(|v| v.as_str().map(expand_tilde_str))
             .collect();
     }
     if let Some(Value::Array(v)) = table.get("deny_urls") {
@@ -431,7 +430,7 @@ fn merge_toml_into_config(cfg: &mut Config, table: toml::Table) {
     if let Some(Value::Array(v)) = table.get("allowed_write_dirs") {
         cfg.allowed_write_dirs = v
             .iter()
-            .filter_map(|v| v.as_str().map(String::from))
+            .filter_map(|v| v.as_str().map(expand_tilde_str))
             .collect();
     }
 }
@@ -563,7 +562,7 @@ fn parse_plugin_sources_env(value: &str) -> std::collections::HashMap<String, Pa
         if name.is_empty() || path.is_empty() {
             continue;
         }
-        out.insert(name, PathBuf::from(path));
+        out.insert(name, PathBuf::from(expand_tilde_str(&path)));
     }
     out
 }
@@ -748,6 +747,142 @@ mod tests {
 
         assert_eq!(cfg.deny_paths.len(), 2);
         assert!(cfg.deny_paths.contains(&"**/.ssh/**".into()));
+    }
+
+    #[test]
+    fn test_env_misc_overrides() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut cfg = Config::default();
+
+        set_env("KIRKFORGE_BANG_REQUIRES_APPROVAL", Some("true"));
+        set_env("KIRKFORGE_JSON_MODE", Some("true"));
+        set_env("KIRKFORGE_BASH_SANDBOX_WORKDIR", Some("false"));
+        set_env("KIRKFORGE_BLOCK_GITIGNORED_DOTFILES", Some("false"));
+        set_env("KIRKFORGE_MAX_OVERWRITE_SIZE", Some("2097152"));
+        set_env("KIRKFORGE_SUMMARIZE_MODEL", Some("my-summarize-model"));
+        set_env("KIRKFORGE_ROUTING_ENABLED", Some("true"));
+        set_env("KIRKFORGE_ROUTER_MODEL", Some("my-router-model"));
+        set_env("KIRKFORGE_COMMIT_MAX_FILE_SIZE", Some("1048576"));
+        set_env("KIRKFORGE_PRESERVE_RECENT_MESSAGES", Some("5"));
+        set_env("KIRKFORGE_MAX_TOOL_CALLS_PER_TURN", Some("25"));
+        set_env("KIRKFORGE_MAX_PERSONA_TURNS", Some("3"));
+        set_env("KIRKFORGE_TOOL_TIMEOUT_SECS", Some("60"));
+        set_env("KIRKFORGE_AUDIT_LOG_PATH", Some("/tmp/kf-audit.ndjson"));
+        set_env("KIRKFORGE_HOOKS_DIR", Some("/tmp/kf-hooks"));
+
+        apply_env_overrides(&mut cfg);
+
+        assert!(cfg.bang_requires_approval);
+        assert!(cfg.json_mode);
+        assert!(!cfg.bash_sandbox_workdir);
+        assert!(!cfg.block_gitignored_dotfiles);
+        assert_eq!(cfg.max_overwrite_size, 2_097_152);
+        assert_eq!(cfg.summarize_model, "my-summarize-model");
+        assert!(cfg.routing_enabled);
+        assert_eq!(cfg.router_model, "my-router-model");
+        assert_eq!(cfg.commit_max_file_size, 1_048_576);
+        assert_eq!(cfg.preserve_recent_messages, 5);
+        assert_eq!(cfg.max_tool_calls_per_turn, 25);
+        assert_eq!(cfg.max_persona_turns, 3);
+        assert_eq!(cfg.tool_timeout_secs, Some(60));
+        assert_eq!(
+            cfg.audit_log_path,
+            Some(PathBuf::from("/tmp/kf-audit.ndjson"))
+        );
+        assert_eq!(cfg.hooks_dir, Some(PathBuf::from("/tmp/kf-hooks")));
+
+        set_env("KIRKFORGE_BANG_REQUIRES_APPROVAL", None);
+        set_env("KIRKFORGE_JSON_MODE", None);
+        set_env("KIRKFORGE_BASH_SANDBOX_WORKDIR", None);
+        set_env("KIRKFORGE_BLOCK_GITIGNORED_DOTFILES", None);
+        set_env("KIRKFORGE_MAX_OVERWRITE_SIZE", None);
+        set_env("KIRKFORGE_SUMMARIZE_MODEL", None);
+        set_env("KIRKFORGE_ROUTING_ENABLED", None);
+        set_env("KIRKFORGE_ROUTER_MODEL", None);
+        set_env("KIRKFORGE_COMMIT_MAX_FILE_SIZE", None);
+        set_env("KIRKFORGE_PRESERVE_RECENT_MESSAGES", None);
+        set_env("KIRKFORGE_MAX_TOOL_CALLS_PER_TURN", None);
+        set_env("KIRKFORGE_MAX_PERSONA_TURNS", None);
+        set_env("KIRKFORGE_TOOL_TIMEOUT_SECS", None);
+        set_env("KIRKFORGE_AUDIT_LOG_PATH", None);
+        set_env("KIRKFORGE_HOOKS_DIR", None);
+    }
+
+    #[test]
+    fn test_env_tool_timeout_secs_is_clamped() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut cfg = Config::default();
+
+        set_env("KIRKFORGE_TOOL_TIMEOUT_SECS", Some("0"));
+        apply_env_overrides(&mut cfg);
+        assert_eq!(cfg.tool_timeout_secs, Some(1));
+
+        set_env("KIRKFORGE_TOOL_TIMEOUT_SECS", Some("7200"));
+        apply_env_overrides(&mut cfg);
+        assert_eq!(cfg.tool_timeout_secs, Some(3600));
+
+        set_env("KIRKFORGE_TOOL_TIMEOUT_SECS", None);
+    }
+
+    #[test]
+    fn test_merge_toml_misc_fields() {
+        let mut cfg = Config::default();
+        let table: toml::Table = r#"
+            bang_requires_approval = true
+            json_mode = true
+            bash_sandbox_workdir = false
+            block_gitignored_dotfiles = false
+            max_overwrite_size = 2097152
+            summarize_model = "my-summarize-model"
+            routing_enabled = true
+            router_model = "my-router-model"
+            routing_model_map = { simple = "qwen2.5:3b" }
+            commit_max_file_size = 1048576
+            preserve_recent_messages = 5
+            max_tool_calls_per_turn = 25
+            max_persona_turns = 3
+            tool_timeout_secs = 60
+            audit_log_path = "/tmp/kf-audit.ndjson"
+            hooks_dir = "/tmp/kf-hooks"
+        "#
+        .parse()
+        .unwrap();
+        merge_toml_into_config(&mut cfg, table);
+
+        assert!(cfg.bang_requires_approval);
+        assert!(cfg.json_mode);
+        assert!(!cfg.bash_sandbox_workdir);
+        assert!(!cfg.block_gitignored_dotfiles);
+        assert_eq!(cfg.max_overwrite_size, 2_097_152);
+        assert_eq!(cfg.summarize_model, "my-summarize-model");
+        assert!(cfg.routing_enabled);
+        assert_eq!(cfg.router_model, "my-router-model");
+        assert_eq!(
+            cfg.routing_model_map.get("simple"),
+            Some(&"qwen2.5:3b".to_string())
+        );
+        assert_eq!(cfg.commit_max_file_size, 1_048_576);
+        assert_eq!(cfg.preserve_recent_messages, 5);
+        assert_eq!(cfg.max_tool_calls_per_turn, 25);
+        assert_eq!(cfg.max_persona_turns, 3);
+        assert_eq!(cfg.tool_timeout_secs, Some(60));
+        assert_eq!(
+            cfg.audit_log_path,
+            Some(PathBuf::from("/tmp/kf-audit.ndjson"))
+        );
+        assert_eq!(cfg.hooks_dir, Some(PathBuf::from("/tmp/kf-hooks")));
+    }
+
+    #[test]
+    fn test_merge_toml_tool_timeout_secs_is_clamped() {
+        let mut cfg = Config::default();
+        let table: toml::Table = r#"
+            tool_timeout_secs = 7200
+        "#
+        .parse()
+        .unwrap();
+        merge_toml_into_config(&mut cfg, table);
+        assert_eq!(cfg.tool_timeout_secs, Some(3600));
     }
 
     /// `freeze_launch_sandbox` is the new launch-time cwd resolution
@@ -1025,5 +1160,52 @@ mod tests {
         assert!(s.contains("reject_on_excess_plugin_trust"), "got: {s}");
         assert!(s.contains("plugin_signature_validation"), "got: {s}");
         assert!(s.contains("plugin_public_key_path"), "got: {s}");
+    }
+
+    #[test]
+    fn parse_bool_env_recognizes_true_and_false_variants() {
+        assert_eq!(parse_bool_env("true"), Some(true));
+        assert_eq!(parse_bool_env("True"), Some(true));
+        assert_eq!(parse_bool_env("1"), Some(true));
+        assert_eq!(parse_bool_env("yes"), Some(true));
+        assert_eq!(parse_bool_env("false"), Some(false));
+        assert_eq!(parse_bool_env("False"), Some(false));
+        assert_eq!(parse_bool_env("0"), Some(false));
+        assert_eq!(parse_bool_env("no"), Some(false));
+        assert_eq!(parse_bool_env("maybe"), None);
+        assert_eq!(parse_bool_env(""), None);
+    }
+
+    #[test]
+    fn test_merge_toml_zero_request_timeout_is_clamped() {
+        let mut cfg = Config::default();
+        let table: toml::Table = r#"
+            request_timeout_secs = 0
+        "#
+        .parse()
+        .unwrap();
+        merge_toml_into_config(&mut cfg, table);
+        assert_eq!(
+            cfg.request_timeout_secs, 1,
+            "zero timeout must be clamped to 1 second"
+        );
+    }
+
+    #[test]
+    fn test_env_request_timeout_override_and_clamp() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut cfg = Config::default();
+        set_env("KIRKFORGE_REQUEST_TIMEOUT_SECS", Some("0"));
+        apply_env_overrides(&mut cfg);
+        assert_eq!(
+            cfg.request_timeout_secs, 1,
+            "env zero timeout must be clamped"
+        );
+
+        set_env("KIRKFORGE_REQUEST_TIMEOUT_SECS", Some("45"));
+        apply_env_overrides(&mut cfg);
+        assert_eq!(cfg.request_timeout_secs, 45);
+
+        set_env("KIRKFORGE_REQUEST_TIMEOUT_SECS", None);
     }
 }

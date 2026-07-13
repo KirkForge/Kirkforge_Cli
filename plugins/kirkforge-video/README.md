@@ -32,7 +32,7 @@ This directory is a KirkForge plugin that exposes the `kirkforge-video` pipeline
 | `video_risk` | `kirkforge-video risk ...` | `{"project": "projects/default"}` or `{"kinds": ["hero_title", "stat_card"], "duration_s": 30}` |
 | `video_decision_log` | `kirkforge-video decision-log ...` | `{"project": "projects/default", "since_s": 3600}` |
 
-All arguments are passed via the `KIRKFORGE_TOOL_ARGS` env var as JSON. Tools write their results to stdout.
+All arguments are passed via the `KIRKFORGE_TOOL_ARGS_JSON` env var as JSON. Tools write their results to stdout.
 
 ## Example chat turns
 

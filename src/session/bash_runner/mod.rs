@@ -1,4 +1,3 @@
-use crate::session::access::{DenyList, PathGuard};
 use crate::session::process_group::{kill_process_group, reap_child, setup_process_group};
 use std::path::Path;
 use std::process::Stdio;
@@ -24,6 +23,132 @@ pub const MAX_BASH_OUTPUT_BYTES: usize = 1024 * 1024;
 /// filter (e.g. `head -n 1000`).
 const TRUNCATED_MARKER_FMT: &str =
     "\n[...truncated: {} bytes omitted, output exceeded 1 MiB cap...]\n";
+
+/// Shell interpreter used for model-driven bash commands.
+///
+/// Unix releases use `/bin/sh` because POSIX `sh` is always present and the
+/// deny-list/safety logic is written for Unix shell syntax. Windows releases
+/// target the `bash` executable shipped with Git for Windows / WSL so the
+/// same safety logic applies; if it is not on PATH the spawn will fail with
+/// a clear message instead of silently using `cmd.exe` and bypassing the
+/// safety gate.
+#[cfg(unix)]
+pub(crate) fn shell_program() -> &'static str {
+    "/bin/sh"
+}
+
+#[cfg(windows)]
+pub(crate) fn shell_program() -> &'static str {
+    "bash"
+}
+
+#[cfg(not(any(unix, windows)))]
+pub(crate) fn shell_program() -> &'static str {
+    "sh"
+}
+
+/// True if `path` is world-writable (Unix other bit set). On non-Unix
+/// platforms we cannot easily determine this, so we conservatively treat
+/// the directory as safe and rely on the absolute-path filter.
+#[cfg(unix)]
+fn is_world_writable(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    match std::fs::metadata(path) {
+        Ok(m) => m.permissions().mode() & 0o002 != 0,
+        Err(_) => false,
+    }
+}
+
+#[cfg(not(unix))]
+fn is_world_writable(_path: &Path) -> bool {
+    false
+}
+
+/// Curated PATH for subprocesses that resolve external commands.
+///
+/// Starts from the supplied PATH string, drops relative entries and
+/// world-writable non-system directories (e.g. `/tmp`), and prepends a core
+/// set of standard system directories so basic tooling (`bash`, `cargo`,
+/// `git`, `node`, etc.) remains resolvable even on hosts where a system
+/// directory happens to be world-writable. This closes a PATH-shadowing
+/// attack where a malicious binary in a writable directory is placed
+/// earlier on PATH so a legitimate-looking command resolves to it, while
+/// still preserving common non-writable user directories (e.g.
+/// `~/.cargo/bin`).
+pub(crate) fn sanitized_path(original: &str) -> String {
+    use std::collections::HashSet;
+
+    let sep = if cfg!(windows) { ';' } else { ':' };
+
+    // Standard system directories are always included, and listed first so
+    // they cannot be shadowed by a writable directory that happens to appear
+    // earlier in the original PATH.
+    let system_dirs: &[&str] = if cfg!(windows) {
+        &[
+            r"C:\Windows\System32",
+            r"C:\Windows",
+            r"C:\Program Files\Git\usr\bin",
+        ]
+    } else {
+        &[
+            "/usr/local/sbin",
+            "/usr/local/bin",
+            "/usr/sbin",
+            "/usr/bin",
+            "/sbin",
+            "/bin",
+        ]
+    };
+
+    let mut seen = HashSet::new();
+    let mut kept = Vec::new();
+
+    for dir in system_dirs {
+        if seen.insert((*dir).to_string()) {
+            kept.push((*dir).to_string());
+        }
+    }
+
+    for entry in original.split(sep) {
+        if entry.is_empty() {
+            continue;
+        }
+        let path = Path::new(entry);
+        if !path.is_absolute() {
+            continue;
+        }
+        // System directories were already added above.
+        if system_dirs.contains(&entry) {
+            continue;
+        }
+        if is_world_writable(path) {
+            continue;
+        }
+        if seen.insert(entry.to_string()) {
+            kept.push(entry.to_string());
+        }
+    }
+
+    if kept.is_empty() {
+        if cfg!(windows) {
+            String::from(r"C:\Windows\System32;C:\Windows;C:\Program Files\Git\usr\bin")
+        } else {
+            String::from("/usr/bin:/bin:/usr/local/bin")
+        }
+    } else {
+        kept.join(&sep.to_string())
+    }
+}
+
+/// Return a curated PATH for the current process, reading the host PATH once.
+///
+/// This is the entry point used by the model's bash tool; tests should call
+/// `sanitized_path` directly with a constructed string to avoid mutating
+/// global environment state.
+fn model_command_path() -> String {
+    let original = std::env::var("PATH").unwrap_or_default();
+    sanitized_path(&original)
+}
 
 /// Reader that stops accepting bytes once `cap` is reached but keeps
 /// draining the underlying pipe so the child process doesn't block on a
@@ -150,13 +275,14 @@ pub async fn run_shell_with_token(
     timeout_secs: u64,
     token: Option<&tokio_util::sync::CancellationToken>,
 ) -> Result<ShellOutput, ShellError> {
-    let mut proc = Command::new("/bin/sh");
+    let mut proc = Command::new(shell_program());
     proc.arg("-c")
         .arg(cmd)
         .current_dir(workdir)
         .kill_on_drop(true)
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stderr(Stdio::piped())
+        .env("PATH", model_command_path());
 
     setup_process_group(&mut proc);
 
@@ -228,7 +354,7 @@ pub async fn run_shell_with_token(
             reap_child(&mut child, Duration::from_secs(2)).await;
             let prefix = format!("[timed out after {timeout_secs} seconds]\n");
             Ok(ShellOutput {
-                status: synth_status_killed(),
+                status: synth_status_killed()?,
                 stdout: format!("{}{}", prefix, cap_to_string(raw_stdout, stdout_dropped)),
                 stderr: cap_to_string(raw_stderr, stderr_dropped),
             })
@@ -313,245 +439,45 @@ impl std::fmt::Display for ShellError {
 /// child was dropped — but the call site only reads `.success()` and
 /// `.code()`, and we want it to take the error branch and prepend the
 /// timeout marker.
-fn synth_status_killed() -> std::process::ExitStatus {
+fn synth_status_killed() -> Result<std::process::ExitStatus, ShellError> {
     #[cfg(unix)]
     {
         use std::os::unix::process::ExitStatusExt;
         // On Unix, `ExitStatus::from_raw(N)` represents "killed by signal N"
         // (the `wait()` convention stores the signal number directly in the
         // low bits when WIFSIGNALED). SIGKILL = 9.
-        std::process::ExitStatus::from_raw(9)
+        Ok(std::process::ExitStatus::from_raw(9))
     }
     #[cfg(windows)]
     {
         use std::os::windows::process::ExitStatusExt;
         // On Windows, `from_raw` is the exit code. Returning 9 keeps
         // `.success()` false and `.code()` returning `Some(9)`.
-        std::process::ExitStatus::from_raw(9)
+        Ok(std::process::ExitStatus::from_raw(9))
     }
     #[cfg(not(any(unix, windows)))]
     {
         // Exotic target fallback: spawn a trivial command that exits 9.
         // This path is only reached on timeout, so the overhead is
-        // acceptable and better than failing to compile.
-        std::process::Command::new("sh")
+        // acceptable and better than failing to compile. Propagate the
+        // spawn error instead of panicking so a missing `sh` doesn't abort
+        // the CLI.
+        std::process::Command::new(shell_program())
             .arg("-c")
             .arg("exit 9")
             .status()
-            .expect("fallback status command")
+            .map_err(|e| ShellError::Spawn(format!("fallback status command failed: {e}")))
     }
 }
 
-/// Dangerous shell-command substrings. These are blocked regardless of
-/// approval state because they can destroy data or compromise the host.
-const DANGEROUS_SHELL_COMMANDS: &[&str] = &[
-    "rm -rf /",
-    "rm -rf /*",
-    ":(){ :|:& };:",
-    "> /dev/sda",
-    "mkfs.",
-    "dd if=/dev/zero of=",
-    "chmod -R 777 /",
-    "chmod 777 /",
-    "dd if=/dev/random",
-    "> /dev/null < /dev/sda",
-];
-
-/// Privilege-escalation commands. These require interactive authentication
-/// or can switch users, so they are blocked in model-driven execution.
-const PRIVILEGE_ESCALATION_COMMANDS: &[&str] = &["sudo", "su", "doas"];
-
-/// Interactive password-prompt patterns. Blocking these prevents the model
-/// from accidentally hanging on a hidden `read -s` or password utility.
-const INTERACTIVE_PASSWORD_PATTERNS: &[&str] = &["read -s", "stty -echo", "passwd"];
-
-/// Dangerous redirection prefixes. Any stdout overwrite or `tee` into these
-/// system-sensitive directories is blocked regardless of approval state.
-const DANGEROUS_REDIRECTION_PATTERNS: &[&str] = &[
-    "> /etc/",
-    ">> /etc/",
-    ">| /etc/",
-    "> ~/.ssh/",
-    ">> ~/.ssh/",
-    ">| ~/.ssh/",
-    "> /root/",
-    ">> /root/",
-    ">| /root/",
-    "tee /etc/",
-    "tee ~/.ssh/",
-    "tee /root/",
-];
-
-/// True if `pattern` appears in `cmd` at a word boundary (start/end of
-/// string, whitespace, or shell metacharacter). Used so `rm -rf /` blocks
-/// the exact dangerous command even when it appears inside a pipeline.
-fn word_boundary_match(cmd: &str, pattern: &str) -> bool {
-    let boundaries = [' ', '\t', '\n', '|', ';', '&', '(', ')', '<', '>', '\0'];
-    let p: Vec<char> = pattern.chars().collect();
-    let chars: Vec<char> = cmd.chars().collect();
-    let mut i = 0;
-    while i + p.len() <= chars.len() {
-        if chars[i..i + p.len()].iter().collect::<String>() == *pattern {
-            let start_ok = i == 0 || boundaries.contains(&chars[i - 1]);
-            let end_ok = i + p.len() >= chars.len() || boundaries.contains(&chars[i + p.len()]);
-            if start_ok && end_ok {
-                return true;
-            }
-        }
-        i += 1;
-    }
-    false
-}
-
-/// Safety check for a bash command. Returns `Some(reason)` if the command
-/// should be blocked, `None` if it may proceed.
-///
-/// This is shared between the model's `bash` tool, the `!` bang passthrough,
-/// the `/test` slash command, and lifecycle hooks so every shell execution
-/// goes through the same sandbox, deny-list, and dangerous-pattern gates.
-pub fn check_bash_command_str(
-    cmd: &str,
-    workdir: Option<&str>,
-    deny_list: &DenyList,
-    path_guard: &PathGuard,
-    bash_sandbox_workdir: bool,
-) -> Option<String> {
-    // 1. Sandboxed workdir policy. If enabled, reject an explicit workdir
-    //    that points outside the sandbox. If we cannot canonicalize the path
-    //    we deny: a non-canonical path containing `..` could pass the
-    //    prefix check while resolving outside the sandbox.
-    if bash_sandbox_workdir {
-        if let Some(workdir) = workdir {
-            if !workdir.is_empty() {
-                let workdir_path = Path::new(workdir);
-                let resolved = match workdir_path.canonicalize() {
-                    Ok(p) => p,
-                    Err(_) => {
-                        return Some(format!(
-                            "🔒 Bash workdir cannot be resolved: {workdir} (sandbox enforcement active)"
-                        ));
-                    }
-                };
-                if let Some(ref sandbox) = path_guard.sandbox_dir {
-                    let sb = match sandbox.canonicalize() {
-                        Ok(p) => p,
-                        Err(_) => {
-                            return Some(format!(
-                                "🔒 Sandbox directory cannot be resolved: {}",
-                                sandbox.display()
-                            ));
-                        }
-                    };
-                    if !resolved.starts_with(&sb) {
-                        return Some(format!(
-                            "🔒 Bash workdir outside sandbox: {} (sandbox: {})",
-                            workdir,
-                            sandbox.display()
-                        ));
-                    }
-                }
-            }
-        }
-    }
-
-    // 2. Hard-coded metadata endpoint blocks.
-    if cmd.contains("169.254.169.254")
-        || cmd.contains("metadata.google")
-        || cmd.contains("metadata.aws")
-    {
-        return Some("🔒 Command blocked: contains reference to metadata endpoints".into());
-    }
-
-    // 3. User-configured URL deny list.
-    for url_prefix in &deny_list.url_patterns {
-        if !url_prefix.is_empty() && cmd.contains(url_prefix) {
-            return Some(format!(
-                "🔒 Command blocked: references denied URL '{url_prefix}'"
-            ));
-        }
-    }
-
-    // 4. Built-in dangerous shell patterns and hard-coded system paths.
-    for pattern in DANGEROUS_SHELL_COMMANDS {
-        let needs_word_boundary = pattern.ends_with('/') || pattern.ends_with(' ');
-        let matches = if needs_word_boundary {
-            word_boundary_match(cmd, pattern)
-        } else {
-            cmd.contains(pattern)
-        };
-        if matches {
-            return Some(format!(
-                "🔒 Command blocked: dangerous pattern '{pattern}' detected"
-            ));
-        }
-    }
-
-    for pat in [
-        "/etc/shadow",
-        "/etc/passwd",
-        "/etc/sudoers",
-        "~/.ssh",
-        "/root/",
-    ] {
-        if cmd.contains(pat) {
-            return Some(format!(
-                "🔒 Command blocked: references denied path '{pat}'"
-            ));
-        }
-    }
-
-    // 5. Privilege escalation, password prompts, and dangerous redirections.
-    for pat in PRIVILEGE_ESCALATION_COMMANDS {
-        if word_boundary_match(cmd, pat) {
-            return Some(format!(
-                "🔒 Command blocked: privilege escalation command '{pat}' is not allowed"
-            ));
-        }
-    }
-    for pat in INTERACTIVE_PASSWORD_PATTERNS {
-        if word_boundary_match(cmd, pat) {
-            return Some(format!(
-                "🔒 Command blocked: interactive password prompt '{pat}' is not allowed"
-            ));
-        }
-    }
-    for pat in DANGEROUS_REDIRECTION_PATTERNS {
-        if cmd.contains(pat) {
-            return Some(format!(
-                "🔒 Command blocked: dangerous redirection to system path '{pat}'"
-            ));
-        }
-    }
-
-    // 6. User-configured path deny list. Tokenize the command and check
-    //    each token as a path.
-    for token in cmd.split_whitespace() {
-        if deny_list.is_path_denied(Path::new(token)) {
-            return Some(format!(
-                "🔒 Command blocked: references denied path '{token}'"
-            ));
-        }
-    }
-
-    None
-}
-
-/// JSON-args wrapper around [`check_bash_command_str`] for the model's
-/// `bash` tool invocation path.
-pub fn check_bash_command(
-    args: &serde_json::Value,
-    deny_list: &DenyList,
-    path_guard: &PathGuard,
-    bash_sandbox_workdir: bool,
-) -> Option<String> {
-    let cmd = args.get("command").and_then(|c| c.as_str()).unwrap_or("");
-    let workdir = args.get("workdir").and_then(|w| w.as_str());
-    check_bash_command_str(cmd, workdir, deny_list, path_guard, bash_sandbox_workdir)
-}
+mod safety;
+pub use safety::{check_bash_command, check_bash_command_str};
 
 #[cfg(test)]
 mod tests {
+    use super::safety::word_boundary_match;
     use super::*;
+    use crate::session::access::{DenyList, PathGuard};
     use crate::shared::test_util::remove_test_file;
 
     /// Small input passes through `cap_to_string` unchanged.
@@ -886,6 +812,120 @@ mod tests {
     }
 
     #[test]
+    fn test_check_bash_command_str_blocks_quoted_dangerous_command() {
+        // Trivial quoting evasions must not bypass the deny-list.
+        for cmd in [
+            "r'm -rf /'",
+            "rm '-rf' /",
+            "rm -rf / # cleanup",
+            "rm -rf  /",
+            "rm -rf / ; echo done",
+            "rm -fr /",
+            "rm --no-preserve-root -rf /",
+            "chmod -R  777 /",
+        ] {
+            let result = check_bash_command_str(
+                cmd,
+                None,
+                &DenyList::default(),
+                &PathGuard::default(),
+                false,
+            );
+            assert!(
+                result
+                    .as_ref()
+                    .is_some_and(|m| m.contains("dangerous pattern")),
+                "{cmd} should be blocked, got: {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_check_bash_command_str_blocks_quoted_redirection() {
+        // Redirections with extra whitespace or quotes must still be caught.
+        for cmd in [
+            "echo foo >  /etc/hosts",
+            "echo bar >| '/etc/hosts'",
+            "echo baz 2>/etc/hosts",
+            "echo qux &> /etc/hosts",
+        ] {
+            let result = check_bash_command_str(
+                cmd,
+                None,
+                &DenyList::default(),
+                &PathGuard::default(),
+                false,
+            );
+            assert!(
+                result
+                    .as_ref()
+                    .is_some_and(|m| m.contains("dangerous redirection")),
+                "{cmd} should be blocked, got: {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_check_bash_command_str_blocks_windows_redirections() {
+        for cmd in [
+            "echo pwned > C:/Windows/System32/drivers/etc/hosts",
+            "echo pwned > C:\\Windows\\System32\\drivers\\etc\\hosts",
+            "echo pwned > /c/windows/System32/drivers/etc/hosts",
+            "echo pwned | tee /mnt/c/windows/temp/out.txt",
+        ] {
+            let result = check_bash_command_str(
+                cmd,
+                None,
+                &DenyList::default(),
+                &PathGuard::default(),
+                false,
+            );
+            assert!(
+                result
+                    .as_ref()
+                    .is_some_and(|m| m.contains("dangerous redirection")),
+                "{cmd} should be blocked, got: {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_check_bash_command_str_blocks_backslash_escape_variant() {
+        // `rm -rf \/` is the same destructive command to the shell.
+        let result = check_bash_command_str(
+            "rm -rf \\/",
+            None,
+            &DenyList::default(),
+            &PathGuard::default(),
+            false,
+        );
+        assert!(
+            result
+                .as_ref()
+                .is_some_and(|m| m.contains("dangerous pattern")),
+            "rm -rf \\/ should be blocked, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_check_bash_command_str_allows_quoted_safe_strings() {
+        // A safe string that happens to contain a dangerous-looking literal is
+        // still a false positive we accept for safety, but a benign command
+        // without a real redirection must pass.
+        let result = check_bash_command_str(
+            "echo 'hello world'",
+            None,
+            &DenyList::default(),
+            &PathGuard::default(),
+            false,
+        );
+        assert!(
+            result.is_none(),
+            "benign echo should be allowed, got: {result:?}"
+        );
+    }
+
+    #[test]
     fn test_check_bash_command_str_blocks_denied_url() {
         let mut deny_list = DenyList::default();
         deny_list
@@ -902,5 +942,61 @@ mod tests {
             result.as_ref().is_some_and(|m| m.contains("denied URL")),
             "denied URL in bash command should be blocked, got: {result:?}"
         );
+    }
+
+    /// `sanitized_path` keeps absolute, non-world-writable directories and
+    /// drops relative or world-writable non-system entries. System directories
+    /// are always included even if they happen to be world-writable.
+    #[test]
+    fn test_sanitized_path_filters_world_writable_and_relative() {
+        let tmp = std::env::temp_dir();
+        let safe = tmp.join("kirkforge_safe_path_test");
+        let _ = std::fs::remove_dir_all(&safe);
+        std::fs::create_dir_all(&safe).unwrap();
+        // Ensure the test directory is NOT world-writable.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&safe).unwrap().permissions();
+            perms.set_mode(0o700);
+            std::fs::set_permissions(&safe, perms).unwrap();
+        }
+
+        let sep = if cfg!(windows) { ';' } else { ':' };
+        let constructed = format!(".{sep}{safe}{sep}/tmp{sep}/usr/bin", safe = safe.display());
+        let result = sanitized_path(&constructed);
+
+        let parts: Vec<&str> = result.split(sep).collect();
+        assert!(
+            !parts.contains(&"."),
+            "relative path '.' should be dropped, got: {result}"
+        );
+        assert!(
+            !parts.contains(&"/tmp"),
+            "world-writable /tmp should be dropped, got: {result}"
+        );
+        assert!(
+            parts.contains(&"/usr/bin"),
+            "safe system path should be kept, got: {result}"
+        );
+        let safe_str = safe.to_string_lossy().to_string();
+        assert!(
+            parts.contains(&safe_str.as_str()),
+            "safe test dir should be kept, got: {result}"
+        );
+
+        let _ = std::fs::remove_dir_all(&safe);
+    }
+
+    /// When the supplied PATH is empty, fall back to a known-safe set.
+    #[test]
+    fn test_sanitized_path_fallback_when_empty() {
+        let result = sanitized_path("");
+        if cfg!(windows) {
+            assert!(result.contains(r"C:\Windows\System32"), "got: {result}");
+        } else {
+            assert!(result.contains("/usr/bin"), "got: {result}");
+            assert!(result.contains("/bin"), "got: {result}");
+        }
     }
 }

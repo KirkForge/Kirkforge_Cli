@@ -23,3 +23,4 @@ CLAUDE.md
 # Knowledge-graph outputs (graphify + gitnexus indexes)
 graphify-out/
 .gitnexus/
+.gitnexus.bak/

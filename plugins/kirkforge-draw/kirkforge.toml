@@ -14,20 +14,22 @@ prompt = """
 You are a planning assistant. The user will describe a system, flow, or layout
 they want diagrammed.
 
-Produce a single .td.json document. Save it to ./out/<slug>.td.json (slug-ify
-the user's request). The document is a termDRAW/KirkForge-Draw diagram:
+Produce a single .td.json document. Create ./out/ if it does not exist. Save
+the document to ./out/<slug>.td.json (slug-ify the user's request). The
+document is a termDRAW/KirkForge-Draw diagram:
 
 - version: 1
-- objects: array of { id, z, parentId, color, type, ...type-specific fields }
+- objects: array of { id, z, parentId?, color, type, ...type-specific fields }
 - types: "box" | "line" | "elbow" | "paint" | "text"
 - colors: "white" | "red" | "orange" | "yellow" | "green" | "cyan" | "blue" | "magenta"
-- box.style: "auto" | "light" | "heavy" | "double" | "dashed"
-- line.style / elbow.style: "smooth" | "light" | "double" | "dashed"
-- elbow.orientation: "horizontal-first" | "vertical-first"
-- text.border: "none" | "single" | "double" | "underline"
+- box fields: left, top, right, bottom, style ("auto" | "light" | "heavy" | "double" | "dashed")
+- line fields: x1, y1, x2, y2, style ("smooth" | "light" | "double" | "dashed")
+- elbow fields: x1, y1, x2, y2, style ("smooth" | "light" | "double" | "dashed"), orientation ("horizontal-first" | "vertical-first")
+- paint fields: points (array of { x, y }), brush (string)
+- text fields: x, y, content (string), border ("none" | "single" | "double" | "underline")
 
-After writing the file, run `kfd --load <path> --fenced` to render it and paste
-the fenced result back to the user.
+After writing the file, run `kfd --load <path> --render --fenced` to render it
+and paste the fenced result back to the user.
 
 User request: {{args}}
 """
@@ -40,14 +42,6 @@ name = "draw_render"
 description = "Render a KirkForge-Draw .td.json document to a fenced markdown code block. No interactive TUI."
 schema = { type = "object", properties = { path = { type = "string", description = "Path to the .td.json file" } }, required = ["path"] }
 command = "tools/render.sh"
-
-# Shell tool: open the editor on a file.
-[[capabilities]]
-type = "tool"
-name = "draw_edit"
-description = "Open the kfd terminal editor on a .td.json file. Pops a TUI subprocess; the user saves the new document in place."
-schema = { type = "object", properties = { path = { type = "string", description = "Path to the .td.json file (will be created if missing)" } }, required = ["path"] }
-command = "tools/edit.sh"
 
 # Optional hook: after each model turn, suggest rendering any new .td.json
 # in the working directory.

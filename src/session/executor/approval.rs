@@ -3,10 +3,15 @@
 use crate::shared::metrics::{record, MetricEvent};
 use crate::shared::permission::push_rule_unique;
 use crate::shared::ToolInvocation;
+use std::time::Duration;
 use tokio::sync::mpsc;
 
 use super::types::ApprovalDecision;
 use super::Executor;
+
+/// Maximum time to wait for a user approval decision. Prevents a hung UI
+/// or mis-wired handler from blocking the executor forever.
+const APPROVAL_TIMEOUT: Duration = Duration::from_secs(300);
 
 pub struct ApprovalRequest {
     pub tool_name: String,
@@ -95,21 +100,26 @@ impl Executor {
             })
             .map_err(|_| anyhow::anyhow!("approval channel closed"))?;
 
-        let decision = match response_rx.await {
-            Ok(ApprovalResponse::Approved) => ApprovalDecision::Approved,
-            Ok(ApprovalResponse::Denied) => ApprovalDecision::Denied {
+        let decision = match tokio::time::timeout(APPROVAL_TIMEOUT, response_rx).await {
+            Ok(Ok(ApprovalResponse::Approved)) => ApprovalDecision::Approved,
+            Ok(Ok(ApprovalResponse::Denied)) => ApprovalDecision::Denied {
                 reason: "User denied this operation".into(),
             },
-            Ok(ApprovalResponse::DeniedWithReason(reason)) => ApprovalDecision::Denied { reason },
-            Ok(ApprovalResponse::AlwaysApprove) => {
+            Ok(Ok(ApprovalResponse::DeniedWithReason(reason))) => {
+                ApprovalDecision::Denied { reason }
+            }
+            Ok(Ok(ApprovalResponse::AlwaysApprove)) => {
                 let rule = crate::shared::permission::suggest_rule(&tc.name, &tc.arguments);
                 if let Ok(mut cfg) = self.config.write() {
                     push_rule_unique(&mut cfg.permission_rules, rule);
                 }
                 ApprovalDecision::AlwaysApproved
             }
-            Err(_) => ApprovalDecision::Denied {
+            Ok(Err(_)) => ApprovalDecision::Denied {
                 reason: "Approval channel closed".into(),
+            },
+            Err(_) => ApprovalDecision::Denied {
+                reason: "Approval timed out after 5 minutes".into(),
             },
         };
         record(MetricEvent::Approval {

@@ -282,7 +282,7 @@ const MAX_DISPLAY_MESSAGES: usize = 2000;
 /// How many messages to retain after a prune (keeps the most recent ones).
 const KEEP_DISPLAY_MESSAGES: usize = 1500;
 
-pub fn drain_turn_events(state: &mut AppState, event_rx: &mut mpsc::UnboundedReceiver<TurnEvent>) {
+pub fn drain_turn_events(state: &mut AppState, event_rx: &mut mpsc::Receiver<TurnEvent>) {
     let mut any = false;
     while let Ok(ev) = event_rx.try_recv() {
         dispatch_turn_event(state, ev);
@@ -752,10 +752,10 @@ mod tests {
     #[test]
     fn drain_turn_events_pulls_all() {
         let mut s = make_state();
-        let (tx, mut rx) = mpsc::unbounded_channel::<TurnEvent>();
-        tx.send(TurnEvent::Token("a".into())).unwrap();
-        tx.send(TurnEvent::Token("b".into())).unwrap();
-        tx.send(TurnEvent::Token("c".into())).unwrap();
+        let (tx, mut rx) = mpsc::channel::<TurnEvent>(10_000);
+        tx.try_send(TurnEvent::Token("a".into())).unwrap();
+        tx.try_send(TurnEvent::Token("b".into())).unwrap();
+        tx.try_send(TurnEvent::Token("c".into())).unwrap();
         drain_turn_events(&mut s, &mut rx);
         assert_eq!(s.messages.len(), 1);
         assert_eq!(s.messages[0].content, "abc");

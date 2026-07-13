@@ -56,6 +56,8 @@ jobs:
 
   integration:
     runs-on: ubuntu-latest
+    env:
+      TEST_MODEL: qwen2.5:0.5b
     steps:
       - uses: actions/checkout@v4
 
@@ -66,8 +68,40 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Run integration tests (mock server)
-        run: cargo test --test integration_test
+      - name: Cache Ollama models
+        uses: actions/cache@v4
+        with:
+          path: ~/.ollama/models
+          key: ollama-models-${{ env.TEST_MODEL }}-${{ runner.os }}-${{ hashFiles('tests/integration_test.rs') }}
+          restore-keys: |
+            ollama-models-${{ env.TEST_MODEL }}-${{ runner.os }}-
+            ollama-models-${{ env.TEST_MODEL }}-
+
+      - name: Install and start Ollama
+        shell: bash
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          ollama serve >/tmp/ollama.log 2>&1 &
+          for i in {1..30}; do
+            if curl -fsS http://localhost:11434/api/tags >/dev/null 2>&1; then
+              echo "Ollama ready"
+              break
+            fi
+            sleep 1
+          done
+          curl -fsS http://localhost:11434/api/tags >/dev/null || { echo "Ollama failed to start"; cat /tmp/ollama.log; exit 1; }
+
+      - name: Pull test model
+        shell: bash
+        run: |
+          if ! curl -fsS http://localhost:11434/api/tags | grep -q "${TEST_MODEL}"; then
+            ollama pull "${TEST_MODEL}"
+          else
+            echo "Test model ${TEST_MODEL} already cached"
+          fi
+
+      - name: Run integration tests against Ollama
+        run: cargo test --test integration_test -- --include-ignored
 
       - name: Run smoke tests
         run: cargo test --test smoke_test
@@ -147,6 +181,30 @@ jobs:
 
       - name: Audit dependencies
         run: cargo audit || true
+
+  # Build and test the vendored KirkForge-Plugin Node SDK. The local CI
+  # script (scripts/ci-local.sh) already covers this; run it in CI too so
+  # the plugin wrapper cannot silently break.
+  node-sdk:
+    runs-on: ubuntu-latest
+    needs: fmt
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: npm/kirkforge-plugin/package-lock.json
+
+      - name: Install Node SDK dependencies
+        run: npm ci
+        working-directory: npm/kirkforge-plugin
+
+      - name: Run Node SDK tests
+        run: npm test
+        working-directory: npm/kirkforge-plugin
 
   # Surface the health of the GitNexus code-intelligence index in every
   # build log. This does not fail CI (the index is optional), but it

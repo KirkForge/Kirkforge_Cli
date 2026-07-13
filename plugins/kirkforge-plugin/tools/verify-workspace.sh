@@ -3,23 +3,18 @@ set -euo pipefail
 
 # Run the kirkforge CLI `verify-workspace` command.
 # Expects arguments in KIRKFORGE_TOOL_ARGS_JSON as:
-#   { workspace: string, file?: string, language?: string, description?: string, taskId?: string }
-# `file` may be a single path or space-separated paths.
+#   { workspace: string, file?: string | string[], language?: string, description?: string, taskId?: string }
+# `file` may be a single path or an array of paths.
 
 source "$(dirname "$0")/common.sh"
 
-CLI_JS="$(find_cli)" || die "KirkForge CLI not found. Ensure apps/cli/dist/index.js exists or kirkforge is on PATH."
+CLI_JS="$(find_cli)" || die "KirkForge CLI not found. Ensure the bundled npm/kirkforge-plugin tree is installed next to the plugins directory or set KIRKFORGE_CLI_JS."
+require_node
 
-if [ -z "${KIRKFORGE_TOOL_ARGS_JSON:-}" ]; then
-  echo "Usage: provide KIRKFORGE_TOOL_ARGS_JSON such as {\"workspace\":\"/path/to/project\"}"
-  exit 1
-fi
-
-WORKSPACE=$(node -e 'const a=JSON.parse(process.env.KIRKFORGE_TOOL_ARGS_JSON||"{}"); console.log(a.workspace||"")')
-FILE=$(node -e 'const a=JSON.parse(process.env.KIRKFORGE_TOOL_ARGS_JSON||"{}"); console.log(a.file||"")')
-LANGUAGE=$(node -e 'const a=JSON.parse(process.env.KIRKFORGE_TOOL_ARGS_JSON||"{}"); console.log(a.language||"")')
-DESCRIPTION=$(node -e 'const a=JSON.parse(process.env.KIRKFORGE_TOOL_ARGS_JSON||"{}"); console.log(a.description||"")')
-TASK_ID=$(node -e 'const a=JSON.parse(process.env.KIRKFORGE_TOOL_ARGS_JSON||"{}"); console.log(a.taskId||"")')
+WORKSPACE=$(node_json_arg "workspace")
+LANGUAGE=$(node_json_arg "language")
+DESCRIPTION=$(node_json_arg "description")
+TASK_ID=$(node_json_arg "taskId")
 
 if [ -z "$WORKSPACE" ]; then
   echo "Error: workspace is required"
@@ -29,11 +24,13 @@ fi
 
 ARGS=(--workspace "$WORKSPACE")
 
-if [ -n "$FILE" ]; then
-  for f in $FILE; do
-    ARGS+=(--file "$f")
-  done
-fi
+# Read file paths (string or array) one per line so spaces in paths are preserved.
+mapfile -t file_paths < <(node_json_file_arg)
+for f in "${file_paths[@]}"; do
+  [ -n "$f" ] || continue
+  ARGS+=(--file "$f")
+done
+
 if [ -n "$LANGUAGE" ]; then
   ARGS+=(--language "$LANGUAGE")
 fi

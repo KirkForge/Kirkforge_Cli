@@ -174,7 +174,12 @@ mod tests {
         assert!(suggestion.command.is_none());
     }
 
+    // This test spawns `cargo clippy` in a temporary project. It cannot run
+    // concurrently with another `cargo` invocation because the Cargo package
+    // cache lock serializes all cargo processes, so it is ignored by default.
+    // Run it separately when needed: `cargo test --workspace -- --ignored`.
     #[tokio::test]
+    #[ignore = "spawns cargo clippy; run separately with cargo test --workspace -- --ignored"]
     async fn test_clippy_warning_on_temp_project() {
         let dir = std::env::temp_dir().join("kirkforge_lint_test");
         let _ = std::fs::remove_dir_all(&dir);

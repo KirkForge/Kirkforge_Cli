@@ -11,7 +11,7 @@ import {
   existsSync,
 } from "node:fs";
 import { randomBytes } from "node:crypto";
-import { resolve, relative, dirname, isAbsolute } from "node:path";
+import { resolve, relative, dirname } from "node:path";
 import { extensionForLanguage, type TaskProfile } from "./task-profile.js";
 import {
   disallowedArtifact,

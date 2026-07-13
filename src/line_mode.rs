@@ -80,9 +80,11 @@ impl LineReader {
                 editor,
                 history_path,
             } => {
-                let mut editor = *editor
-                    .take()
-                    .expect("interactive editor should never be used concurrently");
+                let mut editor = *editor.take().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "interactive editor is already in use (concurrent next_line call)"
+                    )
+                })?;
                 let history_path = history_path.clone();
                 let (editor_back, result) = tokio::task::spawn_blocking(move || {
                     let result = editor.readline(PROMPT);

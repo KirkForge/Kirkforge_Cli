@@ -41,10 +41,11 @@
 # Sandbox and filesystem access
 # ---------------------------------------------------------------------------
 
-# Working directory the bash tool defaults to and is confined inside. Empty
-# string ("") resolves to the current working directory at launch time.
-# Setting an explicit path overrides cwd capture. Default: "".
-# sandbox_dir = ""
+# Working directory the bash tool defaults to and is confined inside. When
+# omitted, the launch-time current working directory is used (sandboxed).
+# An explicit path overrides cwd capture. An empty string ("") is the
+# explicit opt-out that disables the sandbox. Default: omitted (cwd).
+# sandbox_dir = "."
 
 # When true, the bash tool forces its subprocess cwd inside `sandbox_dir` and
 # rejects explicit `workdir` args that escape it. Default: true.
@@ -54,12 +55,20 @@
 # directories (e.g. ~/.ssh). Default: false.
 # block_dotfiles = false
 
+# When true, write_file/edit_file also reject paths inside git-ignored dotfile
+# directories such as .env files. Default: true.
+# block_gitignored_dotfiles = true
+
 # When true, read_file rejects binary files instead of returning truncated
 # base64. Default: false.
 # block_binary_reads = false
 
 # Maximum bytes the read_file tool returns. Default: 1048576 (1 MiB).
 # max_file_read_size = 1048576
+
+# Maximum size (in bytes) of an existing file that write_file/edit_file may
+# overwrite. Set to 0 to disable the limit. Default: 1048576 (1 MiB).
+# max_overwrite_size = 1048576
 
 # When true, read_file follows symlinks. Default: false.
 # follow_symlinks = false
@@ -94,6 +103,14 @@
 # Maximum characters of a single tool result that are kept in context.
 # Default: 4000.
 # max_tool_result_chars = 4000
+
+# Number of recent messages kept verbatim during context compaction. Must be
+# at least 1. Default: 2 (one user turn + one assistant turn).
+# preserve_recent_messages = 2
+
+# Maximum model↔tool iterations within a single turn. Prevents runaway loops
+# during large codebase analysis. Default: 50.
+# max_tool_calls_per_turn = 50
 
 # ---------------------------------------------------------------------------
 # Summarization (optional LLM-based compaction)
@@ -154,13 +171,31 @@
 # commit_max_file_size = 5242880
 
 # ---------------------------------------------------------------------------
+# Observability
+# ---------------------------------------------------------------------------
+
+# Per-tool hard timeout in seconds. Individual tools may apply shorter
+# internal timeouts. Clamped to [1, 3600]. Default: 30.
+# tool_timeout_secs = 30
+
+# Optional path for the append-only JSONL audit log. Set to an empty string
+# to disable auditing. Default: <data_dir>/audit.ndjson.
+# audit_log_path = ""
+
+# Optional directory containing lifecycle hook scripts (`<event>.sh`). When
+# omitted, the default `~/.local/share/kirkforge/hooks/` is used.
+# hooks_dir = ""
+
+# ---------------------------------------------------------------------------
 # Workspace plugin sources
 # ---------------------------------------------------------------------------
 #
 # The CLI ships with five built-in plugin sources under the `plugins/` directory.
-# They are registered by default but disabled; enable the ones you want with
-# `enabled_plugins` and toggle them at runtime with `/plugins toggle <name>`.
-# Relative paths resolve against the current working directory.
+# They are enabled by default (in the order below) when the directories exist.
+# Disable individual plugins at runtime with `/plugins toggle <name>` or remove
+# them from `enabled_plugins`. Relative paths resolve against the current working
+# directory; in an installed release the bundled plugins are looked up under
+# `~/.local/share/kirkforge/plugins/<name>`.
 #
 # [plugin_sources]
 # kirkforge-draw = "plugins/kirkforge-draw"
@@ -169,4 +204,4 @@
 # kirkforge-plugin3 = "plugins/kirkforge-plugin3"
 # kirkforge-plugin = "plugins/kirkforge-plugin"
 #
-# enabled_plugins = ["kirkforge-draw"]
+enabled_plugins = ["kirkforge-draw", "kirkforge-video", "stratum", "kirkforge-plugin3", "kirkforge-plugin"]

@@ -1,15 +1,18 @@
 //! Free helper functions used by the executor.
+//!
+//! Tool-outcome processing (`handle_tool_outcome`, `emit_correction_results`)
+//! lives in [`outcome`]; it is re-exported here so `use super::helpers::*;`
+//! in `dispatch.rs` keeps working unchanged.
+
+mod outcome;
+
+pub(crate) use outcome::{emit_correction_results, handle_tool_outcome};
 
 use crate::session::access::{url_is_denied, DenyList, GuardVerdict, PathGuard};
-use crate::session::conversation::ConversationLog;
-use crate::session::verifier::CorrectionResult;
 use crate::shared::metrics::{record, MetricEvent};
-use crate::shared::{Message, Role, ToolInvocation, ToolOutcome};
+use crate::shared::ToolOutcome;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
-use tokio::sync::mpsc;
-
-use super::TurnEvent;
 
 pub(crate) fn tool_outcome_success(outcome: &ToolOutcome) -> bool {
     !matches!(
@@ -61,8 +64,38 @@ const READ_ONLY_COMMANDS: &[&str] = &[
     "df", "env", "printenv", "true", "false", "dirname", "basename", "realpath", "readlink",
     "grep", "rg", "sort", "wc", "cut", "tr", "uniq", "fold", "nl", "diff", "cmp", "comm", "jq",
     "date", "cal", "whoami", "id", "uname", "hostname", "uptime", "ps", "free", "lscpu", "lsblk",
-    "lsof", "dmesg", "nproc", "arch", "tty", "jobs", "help", "find",
+    "lsof", "dmesg", "nproc", "arch", "tty", "jobs", "help", "find", "git",
 ];
+
+/// Git subcommands that are inherently read-only.  The model commonly asks for
+/// `git status`, `git log`, `git diff`, and `git show`; allowing these avoids
+/// constant approval prompts while still requiring explicit approval for any
+/// mutating subcommand (`add`, `commit`, `push`, `checkout`, `reset`, ...).
+const READ_ONLY_GIT_SUBCOMMANDS: &[&str] =
+    &["status", "log", "diff", "show", "ls-files", "rev-parse"];
+
+/// Return true if the git command appears to be a read-only query.
+///
+/// This parses the command line just enough to skip global options (`-C`,
+/// `--no-pager`, etc.) and look at the actual subcommand.  It rejects empty
+/// or unknown subcommands so a bare `git` or `git add` does not auto-approve.
+fn git_command_is_read_only(cmd: &str) -> bool {
+    let mut tokens = cmd.split_whitespace().skip(1).peekable();
+    let subcommand = loop {
+        match tokens.next() {
+            Some(tok) if tok.starts_with('-') => {
+                // Global options that consume a following argument.
+                if tok == "-C" {
+                    tokens.next();
+                }
+                continue;
+            }
+            Some(tok) => break tok,
+            None => return false,
+        }
+    };
+    READ_ONLY_GIT_SUBCOMMANDS.contains(&subcommand)
+}
 
 pub(crate) fn is_read_only_bash(cmd: &str) -> bool {
     let trimmed = cmd.trim();
@@ -80,44 +113,56 @@ pub(crate) fn is_read_only_bash(cmd: &str) -> bool {
         return false;
     }
 
-    // `find` is read-only for discovery, but several flags mutate the
-    // filesystem. Require approval for any find command that looks
-    // destructive.
-    if first == "find" {
-        let lowered = trimmed.to_lowercase();
-        for flag in [" -delete", " -exec", " -ok", " -fprint", " -fls"] {
-            if lowered.contains(flag) {
-                return false;
-            }
-        }
-    }
-
-    let rest = &trimmed[first.len()..];
-
-    if rest.contains('>') {
-        return false;
-    }
-
-    // Every pipe segment must itself be a read-only command. The first
-    // segment's command is already validated above; this catches a
-    // read-only producer piped into a writing consumer — e.g.
-    // `cat list | xargs rm`, `… | tee /etc/file`, `… | sh`. Without this,
-    // such a pipeline would be auto-approved despite mutating state.
+    // Every pipe segment must itself be a read-only command, and no segment
+    // may contain shell metacharacters that could escape the read-only guard.
+    // Without this, a pipeline such as `cat list | sort > /tmp/out` or
+    // `cat list | sort; rm -rf /` would be auto-approved despite mutating
+    // state or executing arbitrary commands.
+    //
+    // Command-specific guards (`find` destructive flags, `git` subcommand
+    // allowlist) are applied to each segment so a read-only producer cannot
+    // hide a mutating consumer later in the pipeline.
     for segment in trimmed.split('|') {
         let seg = segment.trim();
-        if let Some(word) = seg.split_whitespace().next() {
-            if !READ_ONLY_COMMANDS.contains(&word) {
-                return false;
+        let word = match seg.split_whitespace().next() {
+            Some(w) => w,
+            None => return false, // malformed pipe segment
+        };
+
+        if !READ_ONLY_COMMANDS.contains(&word) {
+            return false;
+        }
+
+        if word == "find" {
+            let lowered = seg.to_lowercase();
+            for flag in [
+                " -delete",
+                " -exec",
+                " -execdir",
+                " -ok",
+                " -okdir",
+                " -fprint",
+                " -fls",
+            ] {
+                if lowered.contains(flag) {
+                    return false;
+                }
             }
         }
-    }
 
-    if rest.contains(';') || rest.contains("&&") || rest.contains("||") {
-        return false;
-    }
+        if word == "git" && !git_command_is_read_only(seg) {
+            return false;
+        }
 
-    if rest.contains("$(") || rest.contains('`') {
-        return false;
+        if seg.contains('>')
+            || seg.contains(';')
+            || seg.contains("&&")
+            || seg.contains("||")
+            || seg.contains("$(")
+            || seg.contains('`')
+        {
+            return false;
+        }
     }
 
     true
@@ -300,231 +345,139 @@ pub(crate) fn check_url_in_args(args: &serde_json::Value, deny_list: &DenyList) 
     None
 }
 
-/// Process a tool outcome: append the conversation log entry, push a
-/// `TurnEvent::ToolResult` for downstream consumers, and (on error) try
-/// to surface a recovery hint.
+/// Lightweight pre-flight validation of tool arguments against a JSON Schema
+/// fragment. The `required` array, per-property `type`, `anyOf`, and `oneOf`
+/// fields are checked; this is enough to catch the most common model failures
+/// (missing a required parameter, passing a string where an integer is
+/// expected, passing a string where either a string or an array is acceptable)
+/// before handing the call to a plugin script or MCP server.
 ///
-/// Returns the rendered diff string when the outcome was a `FileEdit`.
-/// This is propagated up to `emit_tool_event_and_correct` so the
-/// `BusEvent::Edit` carries the *real* diff, not the user's `old_string`
-/// (which is what the previous implementation used — see GPT 5.5
-/// review finding #9).
-pub(crate) fn handle_tool_outcome(
-    outcome: ToolOutcome,
-    tc: &ToolInvocation,
-    event_tx: &mpsc::UnboundedSender<TurnEvent>,
-    conversation: &mut ConversationLog,
-) -> anyhow::Result<Option<String>> {
-    match outcome {
-        ToolOutcome::Success { content } => {
-            crate::send_or_warn!(
-                event_tx.send(TurnEvent::ToolResult {
-                    name: tc.name.clone(),
-                    output: content.clone(),
-                    success: true,
-                }),
-                "TurnEvent receiver dropped; discarding event"
-            );
-            conversation.append(Message {
-                role: Role::Tool,
-                content,
-                tool_call_id: Some(tc.id.clone()),
-                tool_name: Some(tc.name.clone()),
-                ..Default::default()
-            })?;
-        }
-        ToolOutcome::FileContent { content, .. } => {
-            crate::send_or_warn!(
-                event_tx.send(TurnEvent::ToolResult {
-                    name: tc.name.clone(),
-                    output: content.clone(),
-                    success: true,
-                }),
-                "TurnEvent receiver dropped; discarding event"
-            );
-            conversation.append(Message {
-                role: Role::Tool,
-                content,
-                tool_call_id: Some(tc.id.clone()),
-                tool_name: Some(tc.name.clone()),
-                ..Default::default()
-            })?;
-        }
-        ToolOutcome::FileEdit { diff, .. } => {
-            // Hand the rendered diff to the caller so the
-            // BusEvent::Edit event downstream carries the real
-            // diff text — see the docstring on this fn.
-            crate::send_or_warn!(
-                event_tx.send(TurnEvent::ToolResult {
-                    name: tc.name.clone(),
-                    output: diff.clone(),
-                    success: true,
-                }),
-                "TurnEvent receiver dropped; discarding event"
-            );
-            conversation.append(Message {
-                role: Role::Tool,
-                content: diff.clone(),
-                tool_call_id: Some(tc.id.clone()),
-                tool_name: Some(tc.name.clone()),
-                ..Default::default()
-            })?;
-            return Ok(Some(diff));
-        }
-        ToolOutcome::GrepMatches {
-            path,
-            matches,
-            total: _,
-        } => {
-            let output = format_grep_output(&path, &matches);
-            crate::send_or_warn!(
-                event_tx.send(TurnEvent::ToolResult {
-                    name: tc.name.clone(),
-                    output: output.clone(),
-                    success: true,
-                }),
-                "TurnEvent receiver dropped; discarding event"
-            );
-            conversation.append(Message {
-                role: Role::Tool,
-                content: output,
-                tool_call_id: Some(tc.id.clone()),
-                tool_name: Some(tc.name.clone()),
-                ..Default::default()
-            })?;
-        }
-        ToolOutcome::Error { message } => {
-            crate::send_or_warn!(
-                event_tx.send(TurnEvent::ToolResult {
-                    name: tc.name.clone(),
-                    output: format!("Error: {message}"),
-                    success: false,
-                }),
-                "TurnEvent receiver dropped; discarding event"
-            );
-            conversation.append(Message {
-                role: Role::Tool,
-                content: format!("Error: {message}"),
-                tool_call_id: Some(tc.id.clone()),
-                tool_name: Some(tc.name.clone()),
-                ..Default::default()
-            })?;
+/// Returns `None` when the arguments look valid, or `Some(reason)` when they
+/// do not.
+pub(crate) fn validate_args_against_schema(
+    args: &serde_json::Value,
+    schema: &serde_json::Value,
+) -> Option<String> {
+    let properties = schema.get("properties").and_then(|p| p.as_object())?;
+    let required = schema
+        .get("required")
+        .and_then(|r| r.as_array())
+        .map(|r| {
+            r.iter()
+                .filter_map(|v| v.as_str())
+                .collect::<std::collections::HashSet<_>>()
+        })
+        .unwrap_or_default();
 
-            // Attempt error recovery — analyze the error and inject a hint
-            if let Some(hint) =
-                crate::session::error_recovery::analyze_error(&tc.name, &message, &tc.arguments)
-            {
-                let recovery_msg = crate::session::error_recovery::build_recovery_message(&hint);
-                conversation.append(recovery_msg)?;
-            }
-        }
-        ToolOutcome::Failure(err) => {
-            let message = err.to_user_message();
-            crate::send_or_warn!(
-                event_tx.send(TurnEvent::ToolResult {
-                    name: tc.name.clone(),
-                    output: format!("Error: {message}"),
-                    success: false,
-                }),
-                "TurnEvent receiver dropped; discarding event"
-            );
-            conversation.append(Message {
-                role: Role::Tool,
-                content: format!("Error: {message}"),
-                tool_call_id: Some(tc.id.clone()),
-                tool_name: Some(tc.name.clone()),
-                ..Default::default()
-            })?;
+    let args_obj = match args.as_object() {
+        Some(o) => o,
+        None => return Some(format!("arguments must be a JSON object, got {args}")),
+    };
 
-            if let Some(hint) =
-                crate::session::error_recovery::analyze_error(&tc.name, &message, &tc.arguments)
-            {
-                let recovery_msg = crate::session::error_recovery::build_recovery_message(&hint);
-                conversation.append(recovery_msg)?;
-            }
-        }
-        // `read_image` returns an Image outcome. We materialise it as
-        // a `Role::Tool` message with `content_parts: [Image{…}]` set
-        // and a short `content` projection that keeps the conversation
-        // log human-readable. The PromptBuilder's image-attach step
-        // (see `src/session/prompt/mod.rs`) splices the image onto the
-        // next user turn so the model actually sees it inline.
-        ToolOutcome::Image {
-            path,
-            mime,
-            data_base64,
-        } => {
-            let projection = format!(
-                "[image: {} ({}, {} bytes)]",
-                path.display(),
-                mime,
-                data_base64.len()
-            );
-            crate::send_or_warn!(
-                event_tx.send(TurnEvent::ToolResult {
-                    name: tc.name.clone(),
-                    output: projection.clone(),
-                    success: true,
-                }),
-                "TurnEvent receiver dropped; discarding event"
-            );
-            conversation.append(Message {
-                role: Role::Tool,
-                content: projection,
-                content_parts: Some(vec![crate::shared::ContentPart::Image {
-                    data_base64,
-                    mime,
-                }]),
-                tool_call_id: Some(tc.id.clone()),
-                tool_name: Some(tc.name.clone()),
-                ..Default::default()
-            })?;
+    for req in &required {
+        if !args_obj.contains_key(*req) {
+            return Some(format!("missing required argument '{req}'"));
         }
     }
-    Ok(None)
+
+    for (key, value) in args_obj {
+        let prop_schema = match properties.get(key) {
+            Some(s) => s,
+            None => continue, // unknown keys are allowed; the tool can ignore them
+        };
+        if let Some(reason) = value_matches_schema(value, prop_schema, key) {
+            return Some(reason);
+        }
+    }
+
+    None
 }
 
-pub(crate) fn format_grep_output(
-    path: &std::path::Path,
-    matches: &[crate::shared::Match],
-) -> String {
-    let mut out = format!("Matches in {}:\n", path.display());
-    for m in matches {
-        for ctx in &m.context_before {
-            out.push_str(&format!("  {ctx}\n"));
+/// Returns `None` if `value` satisfies `schema`, or `Some(reason)` otherwise.
+/// Supports `type`, `anyOf`, `oneOf`, and array `items`.
+fn value_matches_schema(
+    value: &serde_json::Value,
+    schema: &serde_json::Value,
+    key: &str,
+) -> Option<String> {
+    // JSON Schema combinators: the value is valid if it matches at least one
+    // of the listed sub-schemas. We treat `oneOf` the same as `anyOf` for this
+    // lightweight validator; the goal is to allow polymorphic fields (e.g.
+    // "string or array of strings") without accidentally rejecting valid calls.
+    for combinator in ["anyOf", "oneOf"] {
+        if let Some(alternatives) = schema.get(combinator).and_then(|a| a.as_array()) {
+            if alternatives.is_empty() {
+                return None;
+            }
+            let mut reasons = Vec::new();
+            for alt in alternatives {
+                if let Some(reason) = value_matches_schema(value, alt, key) {
+                    reasons.push(reason);
+                } else {
+                    return None;
+                }
+            }
+            return Some(format!(
+                "argument '{key}' did not match any of the {combinator} schemas ({})",
+                reasons.join("; ")
+            ));
         }
-        out.push_str(&format!(">{}: {}\n", m.line_number, m.line));
-        for ctx in &m.context_after {
-            out.push_str(&format!("  {ctx}\n"));
-        }
-        out.push('\n');
     }
-    out
+
+    let expected = schema.get("type").and_then(|t| t.as_str());
+    if let Some(expected) = expected {
+        if let Some(reason) = value_matches_type(value, expected, key) {
+            return Some(reason);
+        }
+        // Validate array item types if declared.
+        if expected == "array" {
+            if let Some(items) = schema.get("items") {
+                if let Some(arr) = value.as_array() {
+                    for (idx, item) in arr.iter().enumerate() {
+                        if let Some(reason) = value_matches_schema(item, items, key) {
+                            return Some(format!(
+                                "array item {idx} for '{key}' has wrong type: {reason}"
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    None
 }
 
-pub(crate) fn emit_correction_results(
-    results: Vec<CorrectionResult>,
-    tc: &ToolInvocation,
-    event_tx: &mpsc::UnboundedSender<TurnEvent>,
-    conversation: &mut ConversationLog,
-) -> anyhow::Result<()> {
-    for cr in &results {
-        crate::send_or_warn!(
-            event_tx.send(TurnEvent::Verification {
-                message: cr.message.clone(),
-                success: cr.success,
-            }),
-            "TurnEvent receiver dropped; discarding event"
-        );
-        conversation.append(Message {
-            role: Role::Tool,
-            content: cr.message.clone(),
-            tool_call_id: Some(tc.id.clone()),
-            tool_name: Some(format!("verifier:{}", cr.verifier)),
-            ..Default::default()
-        })?;
+fn value_matches_type(value: &serde_json::Value, expected: &str, key: &str) -> Option<String> {
+    let ok = match expected {
+        "string" => value.is_string(),
+        "integer" => value.is_i64() || value.is_u64(),
+        "number" => value.is_number(),
+        "boolean" => value.is_boolean(),
+        "array" => value.is_array(),
+        "object" => value.is_object(),
+        "null" => value.is_null(),
+        _ => true, // unknown type in schema is ignored
+    };
+    if ok {
+        None
+    } else {
+        Some(format!(
+            "argument '{key}' expected type '{expected}', got {}",
+            json_value_type_name(value)
+        ))
     }
-    Ok(())
+}
+
+fn json_value_type_name(value: &serde_json::Value) -> &'static str {
+    match value {
+        serde_json::Value::String(_) => "string",
+        serde_json::Value::Number(_) => "number",
+        serde_json::Value::Bool(_) => "boolean",
+        serde_json::Value::Array(_) => "array",
+        serde_json::Value::Object(_) => "object",
+        serde_json::Value::Null => "null",
+    }
 }
 
 #[cfg(test)]
@@ -591,5 +544,98 @@ mod tests {
                 "denied {key} argument should be blocked"
             );
         }
+    }
+
+    #[test]
+    fn test_validate_args_missing_required() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": { "workspace": { "type": "string" } },
+            "required": ["workspace"]
+        });
+        let args = serde_json::json!({});
+        assert!(
+            validate_args_against_schema(&args, &schema)
+                .is_some_and(|m| m.contains("missing required argument 'workspace'")),
+            "missing required arg should be rejected"
+        );
+    }
+
+    #[test]
+    fn test_validate_args_wrong_type() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": { "timeout": { "type": "integer" } }
+        });
+        let args = serde_json::json!({"timeout": "thirty"});
+        assert!(
+            validate_args_against_schema(&args, &schema)
+                .is_some_and(|m| m.contains("expected type 'integer'")),
+            "wrong type should be rejected, got: {:?}",
+            validate_args_against_schema(&args, &schema)
+        );
+    }
+
+    #[test]
+    fn test_validate_args_array_item_type() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "file": { "type": "array", "items": { "type": "string" } }
+            }
+        });
+        let args = serde_json::json!({"file": ["a.txt", 1]});
+        assert!(
+            validate_args_against_schema(&args, &schema)
+                .is_some_and(|m| m.contains("array item 1")),
+            "array item with wrong type should be rejected"
+        );
+    }
+
+    #[test]
+    fn test_validate_args_allows_valid_call() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "workspace": { "type": "string" },
+                "timeout": { "type": "integer" }
+            },
+            "required": ["workspace"]
+        });
+        let args = serde_json::json!({"workspace": "/tmp/ws", "timeout": 30});
+        assert!(
+            validate_args_against_schema(&args, &schema).is_none(),
+            "valid args should pass validation"
+        );
+    }
+
+    #[test]
+    fn test_validate_args_anyof_accepts_string_or_array() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "file": {
+                    "anyOf": [
+                        { "type": "string" },
+                        { "type": "array", "items": { "type": "string" } }
+                    ]
+                }
+            }
+        });
+        assert!(
+            validate_args_against_schema(&serde_json::json!({"file": "single.txt"}), &schema)
+                .is_none(),
+            "single string should match anyOf"
+        );
+        assert!(
+            validate_args_against_schema(&serde_json::json!({"file": ["a.txt", "b.txt"]}), &schema)
+                .is_none(),
+            "string array should match anyOf"
+        );
+        assert!(
+            validate_args_against_schema(&serde_json::json!({"file": 42}), &schema)
+                .is_some_and(|m| m.contains("did not match any of the anyOf schemas")),
+            "wrong type should be rejected by anyOf"
+        );
     }
 }

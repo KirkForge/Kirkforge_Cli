@@ -29,12 +29,34 @@ pub mod verifier;
 
 use crate::shared::SessionId;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 #[cfg(test)]
 pub(crate) fn test_data_dir_lock() -> &'static tokio::sync::Mutex<()> {
-    use std::sync::OnceLock;
     static LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+}
+
+/// Ensures the canonical data directory exists and is not world-readable.
+/// Runs at most once per process to avoid repeated filesystem calls.
+fn ensure_private_data_dir(dir: &std::path::Path) {
+    static INIT: OnceLock<()> = OnceLock::new();
+    INIT.get_or_init(|| {
+        if let Err(e) = std::fs::create_dir_all(dir) {
+            tracing::warn!(error = %e, path = %dir.display(), "failed to create data directory");
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Err(e) = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)) {
+                tracing::warn!(
+                    error = %e,
+                    path = %dir.display(),
+                    "failed to set data directory permissions"
+                );
+            }
+        }
+    });
 }
 
 pub fn data_dir() -> anyhow::Result<PathBuf> {
@@ -45,7 +67,9 @@ pub fn data_dir() -> anyhow::Result<PathBuf> {
     }
     let project = directories::ProjectDirs::from("", "", "kirkforge")
         .ok_or_else(|| anyhow::anyhow!("Cannot determine data directory"))?;
-    Ok(project.data_dir().to_path_buf())
+    let dir = project.data_dir().to_path_buf();
+    ensure_private_data_dir(&dir);
+    Ok(dir)
 }
 
 pub fn config_path() -> PathBuf {

@@ -107,6 +107,9 @@
       "path": "packages/tool-lint-go"
     },
     {
+      "path": "packages/tool-lint-imports"
+    },
+    {
       "path": "packages/tool-lint-py"
     },
     {

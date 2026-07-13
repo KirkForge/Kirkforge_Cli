@@ -44,8 +44,16 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
+use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::sync::{oneshot, Mutex};
+
+mod error;
+mod manager;
+mod spawn;
+
+use error::McpError;
+pub use manager::{McpClientManager, McpToolDef};
+use spawn::{spawn_child_reap, spawn_stderr_drain};
 
 /// Time budget for the MCP handshake (`initialize` request).
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
@@ -53,46 +61,31 @@ const STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 /// Time budget for a single JSON-RPC request/response round-trip.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Errors that can occur when sending a JSON-RPC request to an MCP
-/// server.
-#[derive(Debug)]
-enum McpError {
-    /// The request could not be written to the server's stdin, or
-    /// the server closed its stdin pipe.
-    Io(std::io::Error),
-    /// The server did not produce a response within `REQUEST_TIMEOUT`.
-    Timeout,
-    /// The server returned a JSON-RPC error object.
-    JsonRpc { code: i64, message: String },
-    /// The response channel closed before a response arrived (server
-    /// process likely exited).
-    ChannelClosed,
-    /// The client has been disconnected or the server process exited.
-    Disconnected,
-}
+/// Maximum time the reader task waits for a single line from the MCP
+/// server's stdout before treating the connection as dead. This prevents a
+/// server that emits partial output and never sends a newline from hanging
+/// the reader forever. A well-behaved server should emit responses and
+/// keepalives far more frequently than this.
+const READER_IDLE_TIMEOUT: Duration = Duration::from_secs(10);
 
-impl std::fmt::Display for McpError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            McpError::Io(e) => write!(f, "I/O error: {e}"),
-            McpError::Timeout => write!(f, "request timed out"),
-            McpError::JsonRpc { code, message } => {
-                write!(f, "JSON-RPC error {code}: {message}")
-            }
-            McpError::ChannelClosed => write!(f, "response channel closed"),
-            McpError::Disconnected => write!(f, "MCP client disconnected"),
-        }
-    }
-}
-
-impl From<std::io::Error> for McpError {
-    fn from(err: std::io::Error) -> Self {
-        McpError::Io(err)
-    }
-}
+/// Maximum length of a single JSON-RPC line accepted from the server.
+/// Anything longer is treated as a misbehaving server and disconnects.
+const MAX_LINE_LEN: usize = 1 << 20;
 
 /// Type alias for the in-flight request map used by the reader task.
-type PendingMap = Arc<Mutex<HashMap<u64, oneshot::Sender<Result<serde_json::Value, McpError>>>>>;
+/// JSON-RPC 2.0 permits `id` to be a string or a number, so the key is a
+/// normalized string representation.
+type PendingMap = Arc<Mutex<HashMap<String, oneshot::Sender<Result<serde_json::Value, McpError>>>>>;
+
+/// Normalize a JSON-RPC `id` value (string or number) to a map key.
+/// Returns `None` for absent or null ids (notifications).
+fn json_id_to_string(id: &serde_json::Value) -> Option<String> {
+    match id {
+        serde_json::Value::String(s) => Some(s.clone()),
+        serde_json::Value::Number(n) => Some(n.to_string()),
+        _ => None,
+    }
+}
 
 /// A single MCP server connection.
 ///
@@ -134,6 +127,11 @@ impl McpClient {
         for (k, v) in &config.env_vars {
             cmd.env(k, v);
         }
+        // Sanitize PATH before spawning so a minimal or world-writable host
+        // PATH cannot shadow standard system directories (e.g. a relative
+        // entry that looks like `bash` or `npx`).
+        let path = std::env::var("PATH").unwrap_or_default();
+        cmd.env("PATH", crate::session::bash_runner::sanitized_path(&path));
         cmd.stdin(std::process::Stdio::piped());
         cmd.stdout(std::process::Stdio::piped());
         cmd.stderr(std::process::Stdio::piped());
@@ -276,29 +274,30 @@ impl McpClient {
             return Err(McpError::Disconnected);
         }
 
-        let id = {
+        let id_num = {
             let mut guard = self.next_id.lock().await;
             let id = *guard;
             *guard += 1;
             id
         };
+        let id = id_num.to_string();
 
         // Inject the id into the request object.
         let mut req_with_id = req.clone();
         if let Some(obj) = req_with_id.as_object_mut() {
-            obj.insert("id".to_string(), serde_json::json!(id));
+            obj.insert("id".to_string(), serde_json::json!(id_num));
         }
 
         let line = serde_json::to_string(&req_with_id)
             .map_err(|e| McpError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e)))?;
-        tracing::debug!(id = id, request = %line, "MCP request");
+        tracing::debug!(id = %id, request = %line, "MCP request");
 
         // Register the response waiter before writing, so an
         // out-of-order or very fast response can still be routed.
         let (tx, rx) = oneshot::channel();
         {
             let mut pending = self.pending.lock().await;
-            pending.insert(id, tx);
+            pending.insert(id.clone(), tx);
         }
 
         // Write the request to the child's stdin with the same timeout
@@ -323,7 +322,7 @@ impl McpClient {
             }
             Err(_) => {
                 self.pending.lock().await.remove(&id);
-                tracing::warn!(id = id, "MCP request write timed out");
+                tracing::warn!(id = %id, "MCP request write timed out");
                 return Err(McpError::Timeout);
             }
         }
@@ -340,7 +339,7 @@ impl McpClient {
             Err(_) => {
                 // Response didn't arrive in time. Clean up the waiter.
                 self.pending.lock().await.remove(&id);
-                tracing::warn!(id = id, "MCP request timed out waiting for response");
+                tracing::warn!(id = %id, "MCP request timed out waiting for response");
                 Err(McpError::Timeout)
             }
         }
@@ -441,15 +440,30 @@ impl McpClient {
                         tracing::debug!(server = %server_name, "MCP reader shutting down");
                         break;
                     }
-                    result = read_fut => {
+                    result = tokio::time::timeout(READER_IDLE_TIMEOUT, read_fut) => {
                         match result {
-                            Ok(0) => {
+                            Ok(Ok(0)) => {
                                 tracing::debug!(server = %server_name, "MCP stdout closed");
                                 break;
                             }
-                            Ok(_) => {}
-                            Err(e) => {
+                            Ok(Ok(_)) if buf.len() > MAX_LINE_LEN => {
+                                tracing::warn!(
+                                    server = %server_name,
+                                    bytes = buf.len(),
+                                    "MCP response line exceeded maximum length; disconnecting"
+                                );
+                                break;
+                            }
+                            Ok(Ok(_)) => {}
+                            Ok(Err(e)) => {
                                 tracing::warn!(server = %server_name, error = %e, "MCP stdout read error");
+                                break;
+                            }
+                            Err(_) => {
+                                tracing::warn!(
+                                    server = %server_name,
+                                    "MCP reader idle timeout; disconnecting"
+                                );
                                 break;
                             }
                         }
@@ -465,23 +479,38 @@ impl McpClient {
                     continue;
                 };
 
-                let Some(id) = resp.get("id").and_then(|i| i.as_u64()) else {
-                    // Notifications have no id; ignore (or log at debug).
+                let Some(id) = resp.get("id").and_then(json_id_to_string) else {
+                    // Notifications have no id (or id is null); ignore.
                     tracing::debug!(server = %server_name, response = %resp, "MCP notification");
                     continue;
                 };
 
                 Self::dispatch_response(id, resp, &pending, &server_name).await;
             }
+            Self::fail_all_pending(pending).await;
             alive.store(false, Ordering::SeqCst);
         })
     }
 
+    /// Wake every in-flight request with `error`. Called when the reader
+    /// exits (EOF, read error, idle timeout, oversized line) so callers do
+    /// not wait the full `REQUEST_TIMEOUT` before discovering the client is
+    /// dead.
+    async fn fail_all_pending(pending: PendingMap) {
+        let waiters: Vec<_> = {
+            let mut guard = pending.lock().await;
+            guard.drain().map(|(_, tx)| tx).collect()
+        };
+        for tx in waiters {
+            let _ = tx.send(Err(McpError::Disconnected));
+        }
+    }
+
     /// Route a single parsed JSON-RPC response to its waiter.
     async fn dispatch_response(
-        id: u64,
+        id: String,
         resp: serde_json::Value,
-        pending: &Mutex<HashMap<u64, oneshot::Sender<Result<serde_json::Value, McpError>>>>,
+        pending: &Mutex<HashMap<String, oneshot::Sender<Result<serde_json::Value, McpError>>>>,
         server_name: &str,
     ) {
         // Check for JSON-RPC error before handing the response off.
@@ -494,7 +523,7 @@ impl McpClient {
                 .to_string();
             tracing::warn!(
                 server = %server_name,
-                id = id,
+                id = %id,
                 code = code,
                 message = %message,
                 "MCP JSON-RPC error"
@@ -510,10 +539,10 @@ impl McpClient {
         };
         if let Some(sender) = sender {
             if sender.send(to_send).is_err() {
-                tracing::debug!(id = id, "MCP response receiver dropped");
+                tracing::debug!(id = %id, "MCP response receiver dropped");
             }
         } else {
-            tracing::debug!(server = %server_name, id = id, "MCP response for unknown or timed-out request");
+            tracing::debug!(server = %server_name, id = %id, "MCP response for unknown or timed-out request");
         }
     }
 
@@ -650,231 +679,6 @@ impl Drop for McpClient {
     }
 }
 
-/// Spawn a task that drains a child's stderr into tracing logs.
-fn spawn_stderr_drain(
-    stderr: Option<ChildStderr>,
-    mut shutdown: oneshot::Receiver<()>,
-) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
-        let Some(stderr) = stderr else { return };
-        let mut reader = BufReader::new(stderr);
-        let mut buf = String::new();
-        loop {
-            buf.clear();
-            tokio::select! {
-                biased;
-                _ = &mut shutdown => break,
-                result = reader.read_line(&mut buf) => {
-                    match result {
-                        Ok(0) | Err(_) => break,
-                        Ok(_) => {
-                            if !buf.is_empty() {
-                                let line = buf.trim_end_matches('\n').trim_end_matches('\r');
-                                if !line.is_empty() {
-                                    tracing::debug!(target: "mcp_stderr", "{}", line);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    })
-}
-
-/// Kill a child and reap it asynchronously, bounded by a short timeout.
-fn spawn_child_reap(mut child: Child) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
-        reap_child(&mut child, Duration::from_secs(2)).await;
-    })
-}
-
-/// A tool definition returned by an MCP server.
-#[derive(Debug, Clone)]
-pub struct McpToolDef {
-    pub name: String,
-    pub description: String,
-    pub parameters: serde_json::Value,
-}
-
-/// A slot in the manager that can be replaced on reconnect.
-type ClientSlot = Arc<tokio::sync::RwLock<Arc<McpClient>>>;
-
-/// Manages a collection of MCP server clients.
-///
-/// Created at session startup from the `mcp_servers` config array.
-/// Each server's tools are prefixed with `mcp/<server>/` to avoid
-/// collisions with built-in tools.
-pub struct McpClientManager {
-    /// Original configs, kept so a crashed client can be restarted.
-    configs: Vec<McpServerConfig>,
-    /// Connected clients. The index matches the `clients` index stored in
-    /// `tools`. A client can be replaced when it dies.
-    clients: Vec<ClientSlot>,
-    tools: HashMap<String, (usize, String)>, // full_name → (client_index, server_tool_name)
-    tool_defs_cache: HashMap<String, McpToolDef>, // full_name → tool definition
-}
-
-impl McpClientManager {
-    /// Connect to all configured MCP servers and discover their tools.
-    pub async fn new(servers: &[McpServerConfig]) -> Self {
-        let mut clients: Vec<ClientSlot> = Vec::new();
-        let mut tools: HashMap<String, (usize, String)> = HashMap::new();
-        let mut tool_defs_cache: HashMap<String, McpToolDef> = HashMap::new();
-        let mut configs: Vec<McpServerConfig> = Vec::new();
-
-        for config in servers.iter() {
-            if let Some(client) = McpClient::connect(config).await {
-                let client = Arc::new(client);
-                let server_tools = client.list_tools().await;
-                // Index by the slot this client will occupy in `clients`,
-                // NOT the config position — a server that fails to connect
-                // is never pushed, so config indices and `clients` indices
-                // diverge once any earlier server fails.
-                let client_idx = clients.len();
-                for t in &server_tools {
-                    let full_name = format!("mcp/{}/{}", config.name, t.name);
-                    tools.insert(full_name.clone(), (client_idx, t.name.clone()));
-                    tool_defs_cache.insert(
-                        full_name.clone(),
-                        McpToolDef {
-                            name: t.name.clone(),
-                            description: t.description.clone(),
-                            parameters: t.parameters.clone(),
-                        },
-                    );
-                }
-                clients.push(Arc::new(tokio::sync::RwLock::new(client)));
-                configs.push(config.clone());
-                tracing::info!(
-                    server = %config.name,
-                    tool_count = server_tools.len(),
-                    "MCP server connected"
-                );
-            } else {
-                tracing::warn!(
-                    server = %config.name,
-                    "Failed to connect to MCP server"
-                );
-            }
-        }
-
-        Self {
-            configs,
-            clients,
-            tools,
-            tool_defs_cache,
-        }
-    }
-
-    /// Constructor for tests — no server processes needed.
-    pub fn with_tools(defs: Vec<(String, String, serde_json::Value)>) -> Self {
-        let mut tools = HashMap::new();
-        let mut tool_defs_cache = HashMap::new();
-        for (idx, (full_name, desc, params)) in defs.iter().enumerate() {
-            tools.insert(full_name.clone(), (idx, String::new()));
-            tool_defs_cache.insert(
-                full_name.clone(),
-                McpToolDef {
-                    name: String::new(),
-                    description: desc.clone(),
-                    parameters: params.clone(),
-                },
-            );
-        }
-        Self {
-            configs: vec![],
-            clients: vec![],
-            tools,
-            tool_defs_cache,
-        }
-    }
-
-    /// Return cached tool definitions for creating Tool wrappers.
-    /// Returns (full_name, description, parameters) for each discovered tool.
-    pub fn tool_defs(&self) -> Vec<(String, String, serde_json::Value)> {
-        self.tool_defs_cache
-            .iter()
-            .map(|(name, def)| {
-                (
-                    name.clone(),
-                    def.description.clone(),
-                    def.parameters.clone(),
-                )
-            })
-            .collect()
-    }
-
-    /// Call an MCP tool by its full name (e.g., "mcp/gitnexus/context").
-    pub async fn call_tool(&self, full_name: &str, args: serde_json::Value) -> ToolOutcome {
-        let (client_idx, server_name) = match self.tools.get(full_name) {
-            Some(pair) => pair,
-            None => {
-                return ToolOutcome::Failure(ToolError::Internal {
-                    message: format!("unknown MCP tool '{full_name}'"),
-                });
-            }
-        };
-        let slot = match self.clients.get(*client_idx) {
-            Some(entry) => entry,
-            None => {
-                return ToolOutcome::Failure(ToolError::Internal {
-                    message: format!(
-                        "MCP tool '{full_name}' references a server slot that no longer exists"
-                    ),
-                });
-            }
-        };
-        let config = match self.configs.get(*client_idx) {
-            Some(c) => c,
-            None => {
-                return ToolOutcome::Failure(ToolError::Internal {
-                    message: format!(
-                        "MCP tool '{full_name}' references a server config that no longer exists"
-                    ),
-                });
-            }
-        };
-
-        // Fast path: client is alive.
-        {
-            let client = slot.read().await;
-            if client.is_alive() {
-                return client.call_tool(server_name, args).await;
-            }
-        }
-
-        // Client died; try to reconnect once.
-        let new_client = match McpClient::connect(config).await {
-            Some(c) => Arc::new(c),
-            None => {
-                return ToolOutcome::Failure(ToolError::Internal {
-                    message: format!("MCP server '{}' is unavailable", config.name),
-                });
-            }
-        };
-        let result = new_client.call_tool(server_name, args).await;
-        let mut guard = slot.write().await;
-        *guard = new_client;
-        result
-    }
-
-    /// Return the number of connected servers.
-    pub fn server_count(&self) -> usize {
-        self.clients.len()
-    }
-
-    /// Return the number of tools across all servers.
-    pub fn tool_count(&self) -> usize {
-        self.tools.len()
-    }
-
-    /// Check whether a tool with the given full name exists.
-    pub fn has_tool(&self, full_name: &str) -> bool {
-        self.tools.contains_key(full_name)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -905,6 +709,19 @@ mod tests {
         assert_eq!(mgr.tool_count(), 0);
     }
 
+    #[tokio::test]
+    async fn test_manager_collects_warning_for_failed_connect() {
+        let servers = vec![make_config("test", "/nonexistent/command/xyzzy")];
+        let mgr = McpClientManager::new(&servers).await;
+        assert!(
+            mgr.warnings()
+                .iter()
+                .any(|w| w.contains("test") && w.contains("Failed to connect")),
+            "expected a startup warning naming the failed server, got {:?}",
+            mgr.warnings()
+        );
+    }
+
     #[test]
     fn test_has_tool() {
         let mgr = McpClientManager {
@@ -916,6 +733,7 @@ mod tests {
                 m
             },
             tool_defs_cache: HashMap::new(),
+            warnings: vec![],
         };
         assert!(mgr.has_tool("mcp/test/echo"));
         assert!(!mgr.has_tool("mcp/nonexistent/foo"));
@@ -939,14 +757,14 @@ mod tests {
     async fn test_dispatch_response_routes_error() {
         let pending: PendingMap = Arc::new(Mutex::new(HashMap::new()));
         let (tx, rx) = oneshot::channel();
-        pending.lock().await.insert(7, tx);
+        pending.lock().await.insert("7".to_string(), tx);
 
         let resp = serde_json::json!({
             "jsonrpc": "2.0",
             "id": 7,
             "error": { "code": -32601, "message": "Method not found" }
         });
-        McpClient::dispatch_response(7, resp, &pending, "test").await;
+        McpClient::dispatch_response("7".to_string(), resp, &pending, "test").await;
 
         let err = rx
             .await
@@ -963,14 +781,14 @@ mod tests {
     async fn test_dispatch_response_routes_success() {
         let pending: PendingMap = Arc::new(Mutex::new(HashMap::new()));
         let (tx, rx) = oneshot::channel();
-        pending.lock().await.insert(42, tx);
+        pending.lock().await.insert("42".to_string(), tx);
 
         let resp = serde_json::json!({
             "jsonrpc": "2.0",
             "id": 42,
             "result": { "tools": [] }
         });
-        McpClient::dispatch_response(42, resp.clone(), &pending, "test").await;
+        McpClient::dispatch_response("42".to_string(), resp.clone(), &pending, "test").await;
 
         let got = rx
             .await
@@ -986,7 +804,7 @@ mod tests {
         let pending: PendingMap = Arc::new(Mutex::new(HashMap::new()));
         let resp = serde_json::json!({ "jsonrpc": "2.0", "id": 99, "result": {} });
         // Should not panic and should not block.
-        McpClient::dispatch_response(99, resp, &pending, "test").await;
+        McpClient::dispatch_response("99".to_string(), resp, &pending, "test").await;
     }
 
     /// `McpError` renders a human-readable message so operators can

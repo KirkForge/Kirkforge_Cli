@@ -7,17 +7,14 @@ set -euo pipefail
 
 source "$(dirname "$0")/common.sh"
 
-CLI_JS="$(find_cli)" || die "KirkForge CLI not found. Ensure apps/cli/dist/index.js exists or kirkforge is on PATH."
+CLI_JS="$(find_cli)" || die "KirkForge CLI not found. Ensure the bundled npm/kirkforge-plugin tree is installed next to the plugins directory or set KIRKFORGE_CLI_JS."
+require_node
 
-if [ -z "${KIRKFORGE_TOOL_ARGS_JSON:-}" ]; then
-  KIRKFORGE_TOOL_ARGS_JSON="{}"
-fi
-
-PRETTY_FLAG=$(node -e 'const a=JSON.parse(process.env.KIRKFORGE_TOOL_ARGS_JSON||"{}"); console.log(a.pretty?"--pretty":"")')
+PRETTY_FLAG=$(node_json_arg "pretty" "false")
 
 ARGS=()
-if [ -n "$PRETTY_FLAG" ]; then
-  ARGS+=("$PRETTY_FLAG")
+if node_is_truthy "$PRETTY_FLAG"; then
+  ARGS+=(--pretty)
 fi
 
 exec node "$CLI_JS" doctor "${ARGS[@]}"

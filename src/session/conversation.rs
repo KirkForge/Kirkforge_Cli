@@ -86,6 +86,14 @@ impl ConversationLog {
         ))
     }
 
+    /// Async version of [`open`]: offloads directory creation and log loading
+    /// (including checkpoint recovery) to a dedicated thread pool.
+    pub async fn open_async(path: PathBuf) -> anyhow::Result<(Self, OpenOutcome)> {
+        tokio::task::spawn_blocking(move || Self::open(path))
+            .await
+            .context("conversation log open task panicked")?
+    }
+
     /// Configure how often a checkpoint is written based on message count.
     ///
     /// Returns `self` so callers can chain after `ConversationLog::open`.
@@ -118,6 +126,38 @@ impl ConversationLog {
             self.messages_since_checkpoint += 1;
             if self.messages_since_checkpoint >= self.checkpoint_interval {
                 self.checkpoint()?;
+                self.messages_since_checkpoint = 0;
+            }
+        }
+        Ok(())
+    }
+
+    /// Async version of [`append`]: offloads the blocking disk write to a
+    /// dedicated thread pool so the Tokio runtime keeps making progress.
+    pub async fn append_async(&mut self, msg: Message) -> anyhow::Result<()> {
+        let line = serde_json::to_string(&msg)?;
+        let bytes = format!("{line}\n");
+        let path = self.path.clone();
+        tokio::task::spawn_blocking(move || {
+            use std::io::Write;
+            let mut file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&path)
+                .with_context(|| format!("open conversation log {} for append", path.display()))?;
+            file.write_all(bytes.as_bytes())
+                .with_context(|| format!("append to conversation log {}", path.display()))?;
+            file.sync_all()?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await
+        .context("conversation log append task panicked")??;
+        self.messages.push(msg);
+
+        if self.checkpoint_interval > 0 {
+            self.messages_since_checkpoint += 1;
+            if self.messages_since_checkpoint >= self.checkpoint_interval {
+                self.checkpoint_async().await?;
                 self.messages_since_checkpoint = 0;
             }
         }
@@ -181,6 +221,60 @@ impl ConversationLog {
         Ok(checkpoint_path)
     }
 
+    /// Async version of [`checkpoint`]: offloads the blocking copy and prune
+    /// operations to a dedicated thread pool.
+    pub async fn checkpoint_async(&self) -> anyhow::Result<PathBuf> {
+        const MAX_CHECKPOINTS: usize = 5;
+
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let path = self.path.clone();
+        let messages = self.messages.clone();
+        tokio::task::spawn_blocking(move || {
+            let filename = path
+                .file_name()
+                .and_then(|f| f.to_str())
+                .map(|f| format!("{f}.checkpoint-{nanos}.ndjson"))
+                .unwrap_or_else(|| format!("conversation.checkpoint-{nanos}.ndjson"));
+            let checkpoint_path = path.with_file_name(filename);
+            Self::write_atomic_static(&checkpoint_path, &messages)?;
+
+            if let Some(parent) = path.parent() {
+                let prefix = checkpoint_prefix(&path);
+                let mut checkpoints: Vec<PathBuf> = std::fs::read_dir(parent)
+                    .with_context(|| format!("list checkpoints in {}", parent.display()))?
+                    .flatten()
+                    .map(|e| e.path())
+                    .filter(|p| {
+                        p.file_name()
+                            .and_then(|f| f.to_str())
+                            .map(|f| f.starts_with(&prefix) && f.ends_with(".ndjson"))
+                            .unwrap_or(false)
+                    })
+                    .collect();
+                checkpoints.sort();
+                while checkpoints.len() > MAX_CHECKPOINTS {
+                    let oldest = checkpoints.remove(0);
+                    if let Err(e) = std::fs::remove_file(&oldest) {
+                        if e.kind() != std::io::ErrorKind::NotFound {
+                            tracing::warn!(
+                                error = %e,
+                                path = %oldest.display(),
+                                "Failed to prune old conversation checkpoint"
+                            );
+                        }
+                    }
+                }
+            }
+
+            Ok::<_, anyhow::Error>(checkpoint_path)
+        })
+        .await
+        .context("conversation log checkpoint task panicked")?
+    }
+
     /// Restore from the most recent intact checkpoint file.
     ///
     /// Returns `Ok(true)` if a checkpoint was found and restored,
@@ -222,6 +316,12 @@ impl ConversationLog {
 
     /// Write `messages` to `path` atomically via temp file + rename.
     fn write_atomic(&self, path: &std::path::Path, messages: &[Message]) -> anyhow::Result<()> {
+        Self::write_atomic_static(path, messages)
+    }
+
+    /// Static variant of [`write_atomic`] so it can be used inside
+    /// `spawn_blocking` closures that do not capture `self`.
+    fn write_atomic_static(path: &std::path::Path, messages: &[Message]) -> anyhow::Result<()> {
         use std::io::Write;
         let tmp_path = path.with_extension("ndjson.tmp");
         {
@@ -266,6 +366,18 @@ impl ConversationLog {
     /// context.
     pub fn replace_all(&mut self, messages: Vec<Message>) -> anyhow::Result<()> {
         self.write_atomic(&self.path, &messages)?;
+        self.messages = messages;
+        Ok(())
+    }
+
+    /// Async version of [`replace_all`]: offloads the blocking atomic rewrite
+    /// to a dedicated thread pool.
+    pub async fn replace_all_async(&mut self, messages: Vec<Message>) -> anyhow::Result<()> {
+        let path = self.path.clone();
+        let messages_for_task = messages.clone();
+        tokio::task::spawn_blocking(move || Self::write_atomic_static(&path, &messages_for_task))
+            .await
+            .context("conversation log replace_all task panicked")??;
         self.messages = messages;
         Ok(())
     }
@@ -505,5 +617,81 @@ mod tests {
             })
             .collect();
         assert_eq!(checkpoints.len(), 5, "oldest checkpoints should be pruned");
+    }
+
+    /// Edge case: if the most recent checkpoint is corrupt, recovery should
+    /// fall back to the next older intact checkpoint.
+    #[test]
+    fn test_open_falls_back_to_older_checkpoint_when_latest_corrupt() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("session.conv.ndjson");
+
+        let (mut log, _outcome) = ConversationLog::open(path.clone()).unwrap();
+        log.append(Message {
+            role: crate::shared::Role::User,
+            content: "first".into(),
+            ..Default::default()
+        })
+        .unwrap();
+        let first_checkpoint = log.checkpoint().unwrap();
+
+        log.append(Message {
+            role: crate::shared::Role::User,
+            content: "second".into(),
+            ..Default::default()
+        })
+        .unwrap();
+        let second_checkpoint = log.checkpoint().unwrap();
+
+        // Corrupt the main log and the newest checkpoint.
+        std::fs::write(&path, "not json").unwrap();
+        std::fs::write(&second_checkpoint, "not json").unwrap();
+
+        let (restored, outcome) = ConversationLog::open(path).unwrap();
+        assert_eq!(outcome, OpenOutcome::Restored(1));
+        assert_eq!(restored.len(), 1);
+        assert_eq!(restored.last().unwrap().content, "first");
+        assert!(first_checkpoint.exists());
+    }
+
+    /// Edge case: a partially truncated final NDJSON line is treated as
+    /// corrupt, falling back to checkpoint recovery instead of silently
+    /// dropping the trailing fragment.
+    #[test]
+    fn test_open_handles_truncated_final_line() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("session.conv.ndjson");
+
+        let (mut log, _outcome) = ConversationLog::open(path.clone()).unwrap();
+        log.append(Message {
+            role: crate::shared::Role::User,
+            content: "first".into(),
+            ..Default::default()
+        })
+        .unwrap();
+        log.checkpoint().unwrap();
+
+        // Append a valid line, then truncate mid-way through the next object.
+        let partial = r#"{"role":"user","content":""#;
+        let first_json = serde_json::to_string(log.last().unwrap()).unwrap();
+        std::fs::write(&path, format!("{first_json}\n{partial}")).unwrap();
+
+        let (restored, outcome) = ConversationLog::open(path).unwrap();
+        assert_eq!(outcome, OpenOutcome::Restored(1));
+        assert_eq!(restored.len(), 1);
+        assert_eq!(restored.last().unwrap().content, "first");
+    }
+
+    /// Edge case: a log file containing only whitespace is treated as empty
+    /// rather than corrupt.
+    #[test]
+    fn test_open_whitespace_only_log_is_empty() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("session.conv.ndjson");
+        std::fs::write(&path, "   \n\n\t\n").unwrap();
+
+        let (log, outcome) = ConversationLog::open(path).unwrap();
+        assert_eq!(outcome, OpenOutcome::Loaded);
+        assert!(log.is_empty());
     }
 }

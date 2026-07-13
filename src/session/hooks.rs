@@ -319,6 +319,7 @@ async fn run_hook_script(
     let mut cmd = tokio::process::Command::new("bash");
     cmd.arg(script)
         .kill_on_drop(true)
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     setup_process_group(&mut cmd);
@@ -539,9 +540,15 @@ mod tests {
         runner.run("post-turn", &[("KF_EVENT", "post-turn")], &default_config());
 
         // Poll for the marker so the test stays stable under heavy
-        // parallel test loads. Give up after ~2 seconds.
+        // parallel test loads. The budget MUST exceed the 5-second hook
+        // execution timeout (see `run_hook_script`): under load the
+        // fire-and-forget bash subprocess can be starved of CPU for
+        // several seconds before it even starts, so a tight budget
+        // races the hook's own timeout and flakes. 15s = 5s hook
+        // timeout + ~10s scheduling slop; the common case still breaks
+        // on first read of the correct content.
         let mut content = String::from("not-run");
-        for _ in 0..40 {
+        for _ in 0..300 {
             if let Ok(c) = std::fs::read_to_string(&marker) {
                 content = c;
                 if content.trim() == "post-turn" {
@@ -579,8 +586,20 @@ mod tests {
             &default_config(),
         );
 
+        // Give the fire-and-forget spawned hook a chance to be scheduled
+        // before we start polling the marker file.
+        tokio::task::yield_now().await;
+
+        // Poll for the marker. The budget MUST exceed the 5-second hook
+        // execution timeout (see `run_hook_script`): under heavy parallel
+        // test load the spawned bash subprocess can be starved of CPU for
+        // several seconds before it starts, so a 5s polling budget races
+        // the hook's own 5s timeout and flakes (observed: full
+        // `impact-fallback.sh` run went red here once). 15s = 5s hook
+        // timeout + ~10s scheduling slop; the common case still breaks on
+        // first read of the correct content.
         let mut content = String::new();
-        for _ in 0..40 {
+        for _ in 0..300 {
             if let Ok(c) = std::fs::read_to_string(&marker) {
                 content = c;
                 if content.trim() == "bash,pre-tool-bash" {
@@ -707,7 +726,8 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let plugins_dir = tmp.path().join("plugins");
         let plugin_dir = plugins_dir.join("demo");
-        std::fs::create_dir_all(&plugin_dir).unwrap();
+        let plugin_hooks_dir = plugin_dir.join("hooks");
+        std::fs::create_dir_all(&plugin_hooks_dir).unwrap();
         std::fs::write(
             plugin_dir.join("kirkforge.toml"),
             r#"
@@ -723,6 +743,7 @@ command = "hooks/post-turn.sh"
 "#,
         )
         .unwrap();
+        std::fs::write(plugin_hooks_dir.join("post-turn.sh"), "#!/bin/bash\n").unwrap();
 
         let mut registry = PluginRegistry::new();
         let warnings = registry

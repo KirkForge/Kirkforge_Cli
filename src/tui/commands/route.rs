@@ -36,7 +36,13 @@ fn default_model_for_tier(tier: &str) -> &'static str {
         "simple" => "qwen2.5:3b",
         "medium" => "deepseek-v4-flash:cloud",
         "complex" => "deepseek-v4-pro:cloud",
-        _ => unreachable!("validated tier"),
+        _ => {
+            // Defensive fallback: parse_tier is the gatekeeper, but if the
+            // tier leaks through from a future routing_model_map key, keep
+            // the CLI alive and surface the unknown tier clearly.
+            tracing::warn!(tier = %tier, "unknown tier in default_model_for_tier; falling back to simple");
+            "qwen2.5:3b"
+        }
     }
 }
 
@@ -68,7 +74,7 @@ fn resolve_tier_model(tier: &str, state: &AppState) -> String {
 pub async fn handle_route_command(
     args: &str,
     model_tx: &mpsc::UnboundedSender<String>,
-    event_tx: &mpsc::UnboundedSender<TurnEvent>,
+    event_tx: &mpsc::Sender<TurnEvent>,
     state: &AppState,
 ) -> String {
     let Some(tier) = parse_tier(args) else {
@@ -150,7 +156,7 @@ mod tests {
     #[tokio::test]
     async fn empty_args_returns_usage() {
         let (tx, mut rx) = mpsc::unbounded_channel::<String>();
-        let (_event_tx, _event_rx) = mpsc::unbounded_channel::<TurnEvent>();
+        let (_event_tx, _event_rx) = mpsc::channel::<TurnEvent>(10_000);
         let state = dummy_state();
         let out = handle_route_command("", &tx, &_event_tx, &state).await;
         assert!(out.starts_with("Usage"), "got: {out}");
@@ -160,7 +166,7 @@ mod tests {
     #[tokio::test]
     async fn unknown_tier_returns_usage() {
         let (tx, mut rx) = mpsc::unbounded_channel::<String>();
-        let (_event_tx, _event_rx) = mpsc::unbounded_channel::<TurnEvent>();
+        let (_event_tx, _event_rx) = mpsc::channel::<TurnEvent>(10_000);
         let state = dummy_state();
         let out = handle_route_command("superuser", &tx, &_event_tx, &state).await;
         assert!(out.starts_with("Usage"), "got: {out}");
@@ -170,7 +176,7 @@ mod tests {
     #[tokio::test]
     async fn valid_tier_sends_resolved_model() {
         let (tx, mut rx) = mpsc::unbounded_channel::<String>();
-        let (_event_tx, _event_rx) = mpsc::unbounded_channel::<TurnEvent>();
+        let (_event_tx, _event_rx) = mpsc::channel::<TurnEvent>(10_000);
         let state = dummy_state();
         let out = handle_route_command("simple", &tx, &_event_tx, &state).await;
         assert!(out.contains("simple"), "got: {out}");
@@ -185,7 +191,7 @@ mod tests {
         map.insert("medium".to_string(), "custom-medium".to_string());
         let state = state_with_map(map);
         let (tx, mut rx) = mpsc::unbounded_channel::<String>();
-        let (_event_tx, _event_rx) = mpsc::unbounded_channel::<TurnEvent>();
+        let (_event_tx, _event_rx) = mpsc::channel::<TurnEvent>(10_000);
         let out = handle_route_command("medium", &tx, &_event_tx, &state).await;
         assert!(out.contains("custom-medium"), "got: {out}");
         let received = rx.try_recv().expect("channel should have a value");

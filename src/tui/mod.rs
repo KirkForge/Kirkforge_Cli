@@ -33,6 +33,8 @@ pub mod syntax;
 pub mod transcript;
 pub mod widgets;
 
+mod connection;
+
 use crate::session::carryover::CarryoverProfile;
 use crate::session::conversation::ConversationLog;
 use crate::session::executor::{self, ApprovalRequest};
@@ -41,6 +43,7 @@ use crate::shared::{Config, Message, Role};
 use app::{AppState, ConnectionState, ConversationEntry};
 use commands::{messages_to_entries, notify_completed_jobs, PersonaKind, PersonaResult};
 use components::approval::render_approval_dialog;
+use connection::{connection_probe_task, probe_ollama_connection};
 use crossterm::{
     event::{self, Event},
     execute,
@@ -115,72 +118,6 @@ fn run_session_picker_sync(
     }
 }
 
-/// One-shot probe of the configured Ollama endpoint with a caller-chosen
-/// timeout.
-///
-/// Returns `Connected { model, since: now }` if `${ollama_host}/api/tags`
-/// responds with 2xx within the budget, `Error(msg)` on transport failure or
-/// non-2xx status, and `Disconnected` only if the host string is empty.
-async fn probe_ollama_connection_with_timeout(
-    config: &Config,
-    model: &str,
-    timeout: std::time::Duration,
-) -> ConnectionState {
-    let host = config.ollama_host.trim_end_matches('/');
-    if host.is_empty() {
-        return ConnectionState::Error("empty ollama_host in config".into());
-    }
-    let url = format!("{host}/api/tags");
-    let model = model.to_string();
-    let since = Instant::now();
-
-    let client = match reqwest::Client::builder().timeout(timeout).build() {
-        Ok(c) => c,
-        Err(e) => return ConnectionState::Error(format!("client build failed: {e}")),
-    };
-
-    match client.get(&url).send().await {
-        Ok(resp) if resp.status().is_success() => ConnectionState::Connected { model, since },
-        Ok(resp) => ConnectionState::Error(format!("{}: HTTP {}", url, resp.status().as_u16())),
-        Err(e) => ConnectionState::Error(format!("{url}: {e}")),
-    }
-}
-
-/// Startup probe with a generous 2-second budget.
-async fn probe_ollama_connection(config: &Config, model: &str) -> ConnectionState {
-    probe_ollama_connection_with_timeout(config, model, std::time::Duration::from_secs(2)).await
-}
-
-/// Background task that probes the Ollama endpoint every `interval` and
-/// reports the resulting `ConnectionState` back to the TUI event loop. The
-/// probe uses a short timeout so a flaky/unreachable host does not block
-/// the task for long.
-async fn connection_probe_task(
-    config: crate::shared::SharedConfig,
-    tx: tokio::sync::mpsc::Sender<ConnectionState>,
-    interval: std::time::Duration,
-) {
-    let mut tick = tokio::time::interval(interval);
-    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    loop {
-        tick.tick().await;
-        let cfg = {
-            let guard = crate::shared::read_shared_config(&config);
-            guard.clone()
-        };
-        let state = probe_ollama_connection_with_timeout(
-            &cfg,
-            &cfg.default_model,
-            std::time::Duration::from_secs(1),
-        )
-        .await;
-        if tx.send(state).await.is_err() {
-            // TUI loop has shut down; stop probing.
-            break;
-        }
-    }
-}
-
 /// Run the TUI event loop.
 pub async fn run_tui(
     shared_config: crate::shared::SharedConfig,
@@ -216,6 +153,10 @@ pub async fn run_tui(
         .and_then(|f| f.to_str())
         .map(|s| s.trim_end_matches(".conv").to_string())
         .unwrap_or_else(|| "unknown-session".to_string());
+    state.fork_manager = Some(crate::session::session_fork::ForkManager::new(
+        &state.session_id,
+        &conversation_log_path,
+    ));
     // Hook for sessions that need a connection indicator.
     //
     // Probes Ollama at startup so the status bar reflects reality
@@ -275,7 +216,7 @@ pub async fn run_tui(
     // User input: TUI → Executor
     let (input_tx, input_rx) = mpsc::unbounded_channel::<String>();
     // Stream events: Executor → TUI
-    let (event_tx, mut event_rx) = mpsc::unbounded_channel::<executor::TurnEvent>();
+    let (event_tx, mut event_rx) = mpsc::channel::<executor::TurnEvent>(10_000);
     // Approval requests: Executor → TUI
     let (approval_tx, mut approval_rx) = mpsc::unbounded_channel::<ApprovalRequest>();
     // Cancellation: TUI → Executor (sends () to cancel current turn)
@@ -383,7 +324,7 @@ pub async fn run_tui(
                 let reload_shared_config = shared_config.clone();
                 tokio::spawn(async move {
                     while hup.recv().await.is_some() {
-                        let fresh = crate::session::config::load_config();
+                        let (fresh, _warning) = crate::session::config::load_config();
                         if let Ok(mut cfg) = reload_shared_config.write() {
                             *cfg = fresh.clone();
                         }
@@ -403,6 +344,48 @@ pub async fn run_tui(
         }
     }
 
+    // SIGINT / SIGTERM graceful shutdown.
+    // Drives the same `shutdown` Notify used by the keyboard reader thread
+    // when the pty closes, so Ctrl-C or a termination signal restores the
+    // terminal, saves carryover profile, and flushes the executor instead of
+    // killing the process outright.
+    let shutdown_for_signal = shutdown.clone();
+    tokio::spawn(async move {
+        let ctrl_c = tokio::signal::ctrl_c();
+        #[cfg(unix)]
+        let term_fut = {
+            use tokio::signal::unix::{signal, SignalKind};
+            signal(SignalKind::terminate()).ok()
+        };
+        #[cfg(not(unix))]
+        let term_fut: Option<()> = None;
+
+        tokio::select! {
+            biased;
+            _ = ctrl_c => {
+                tracing::info!("SIGINT received; signalling graceful TUI shutdown");
+                shutdown_for_signal.notify_one();
+            }
+            _ = async {
+                #[cfg(unix)]
+                {
+                    if let Some(mut s) = term_fut {
+                        let _ = s.recv().await;
+                    } else {
+                        std::future::pending::<()>().await;
+                    }
+                }
+                #[cfg(not(unix))]
+                {
+                    std::future::pending::<()>().await;
+                }
+            } => {
+                tracing::info!("SIGTERM received; signalling graceful TUI shutdown");
+                shutdown_for_signal.notify_one();
+            }
+        }
+    });
+
     // Spawn the executor on a background task
     let (conversation_log, open_outcome) = conversation;
     let mut exe = executor::Executor::with_log_and_undo_and_plugins(
@@ -414,6 +397,7 @@ pub async fn run_tui(
         undo_stack,
         Some(plugin_registry),
     );
+    exe.set_session_id(state.session_id.clone());
     // Apply --system override before the executor starts processing
     // input. Without this, --system is silently dropped (was GPT 5.5
     // review finding #2).
@@ -425,7 +409,7 @@ pub async fn run_tui(
     // that need to inject TurnEvent tokens into the TUI event stream.
     let event_tx_for_commands = event_tx.clone();
 
-    let handle = tokio::spawn(async move {
+    let mut handle = tokio::spawn(async move {
         if let Err(e) = exe
             .run(
                 input_rx,
@@ -517,12 +501,16 @@ pub async fn run_tui(
         persona_tx,
         plugin_reload_tx,
     ));
-    // ponytail: 3s timeout so a hung Ollama HTTP call doesn't freeze the terminal
-    if tokio::time::timeout(std::time::Duration::from_secs(3), handle)
+    // ponytail: 3s timeout so a hung Ollama HTTP call doesn't freeze the
+    // terminal. Dropping a tokio JoinHandle detaches the task and lets it
+    // keep running in the background, so explicitly abort and await it.
+    if tokio::time::timeout(std::time::Duration::from_secs(3), &mut handle)
         .await
         .is_err()
     {
-        tracing::warn!("executor task did not shut down within 3 s");
+        tracing::warn!("executor task did not shut down within 3 s; aborting");
+        handle.abort();
+        let _ = handle.await;
     }
 
     // Save carryover profile
@@ -547,7 +535,7 @@ pub async fn run_tui(
 async fn run_event_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     state: &mut AppState,
-    event_rx: &mut mpsc::UnboundedReceiver<executor::TurnEvent>,
+    event_rx: &mut mpsc::Receiver<executor::TurnEvent>,
     approval_rx: &mut mpsc::UnboundedReceiver<ApprovalRequest>,
     persona_rx: &mut mpsc::UnboundedReceiver<PersonaResult>,
     kb_rx: &mut mpsc::UnboundedReceiver<Event>,
@@ -563,7 +551,7 @@ async fn run_event_loop(
     plugin_reload_tx: &mpsc::UnboundedSender<kirkforge_plugin_host::PluginRegistry>,
     slow_tick: &mut tokio::time::Interval,
     conn_probe_rx: &mut mpsc::Receiver<ConnectionState>,
-    event_tx_for_commands: &mpsc::UnboundedSender<executor::TurnEvent>,
+    event_tx_for_commands: &mpsc::Sender<executor::TurnEvent>,
     // One-shot shutdown signal. Fired by:
     //   - the SIGHUP handler (Unix, pty-close)
     //   - the kb-reader thread (crossterm `event::read()` Err)
@@ -572,6 +560,20 @@ async fn run_event_loop(
     // restored, executor dropped, carryover profile saved).
     shutdown: &Arc<Notify>,
 ) -> anyhow::Result<()> {
+    let key_ctx = keys::HandleInputContext {
+        input_tx,
+        cancel_tx,
+        resume_tx,
+        compact_tx,
+        model_tx,
+        undo_tx,
+        config_tx,
+        plan_tx,
+        persona_tx,
+        event_tx: event_tx_for_commands,
+        plugin_reload_tx,
+    };
+
     loop {
         // Check for exit signal
         if state.should_exit {
@@ -615,12 +617,12 @@ async fn run_event_loop(
         let mut new_connection_state: Option<ConnectionState> = None;
 
         tokio::select! {
-            // Bias the select! slightly toward real events so we
-            // don't drop a kb event when the slow-tick happens to
-            // fire at the same instant. `tokio::select!` polls
-            // branches top-to-bottom; the slow-tick is the lowest
-            // priority, so it'll only fire when nothing else is
-            // ready.
+            biased;
+            // Bias the select! toward real events so we don't drop a
+            // kb event when the slow-tick happens to fire at the same
+            // instant. `biased;` makes `tokio::select!` poll branches
+            // top-to-bottom; the slow-tick is the lowest priority, so
+            // it'll only fire when nothing else is ready.
             ev = kb_rx.recv() => {
                 kb_event = ev;
             }
@@ -719,22 +721,7 @@ async fn run_event_loop(
                     } else if state.pending_approval.is_some() {
                         approval_keys::handle_approval_key(key, state);
                     } else {
-                        keys::handle_input_key(
-                            key,
-                            state,
-                            input_tx,
-                            cancel_tx,
-                            resume_tx,
-                            compact_tx,
-                            model_tx,
-                            undo_tx,
-                            config_tx,
-                            plan_tx,
-                            persona_tx,
-                            event_tx_for_commands,
-                            plugin_reload_tx,
-                        )
-                        .await?;
+                        keys::handle_input_key(key, state, &key_ctx).await?;
                     }
                 }
                 Event::Resize(_w, _h) => {
@@ -760,22 +747,7 @@ async fn run_event_loop(
                     } else if state.pending_approval.is_some() {
                         approval_keys::handle_approval_key(key, state);
                     } else {
-                        keys::handle_input_key(
-                            key,
-                            state,
-                            input_tx,
-                            cancel_tx,
-                            resume_tx,
-                            compact_tx,
-                            model_tx,
-                            undo_tx,
-                            config_tx,
-                            plan_tx,
-                            persona_tx,
-                            event_tx_for_commands,
-                            plugin_reload_tx,
-                        )
-                        .await?;
+                        keys::handle_input_key(key, state, &key_ctx).await?;
                     }
                 }
                 Event::Resize(_w, _h) => state.mark_dirty(),

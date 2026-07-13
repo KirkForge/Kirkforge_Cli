@@ -7,93 +7,17 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use tracing;
 
-// ── Deny List ────────────────────────────────────────────────────────
-
-/// Patterns always blocked for tool access.
-///
-/// Deny-list checks are the outermost gate — they fire before any
-/// sandbox, approval, or guard check. A denied path is *always* rejected.
-#[derive(Debug, Clone)]
-pub struct DenyList {
-    /// Compiled glob matchers for denied path patterns.
-    path_matchers: Vec<globset::GlobMatcher>,
-    /// Raw patterns (for display/debug).
-    pub path_patterns: Vec<String>,
-    /// URL prefix patterns (blocked if the target URL starts with any).
-    pub url_patterns: Vec<String>,
-}
-
-impl DenyList {
-    /// Build from raw pattern strings; invalid globs are logged and skipped.
-    pub fn new(path_patterns: Vec<String>, url_patterns: Vec<String>) -> Self {
-        let mut path_matchers = Vec::new();
-        for p in &path_patterns {
-            match globset::Glob::new(p) {
-                Ok(g) => path_matchers.push(g.compile_matcher()),
-                Err(e) => {
-                    tracing::warn!(pattern = %p, error = %e, "invalid deny-list glob; skipping");
-                }
-            }
-        }
-        Self {
-            path_matchers,
-            path_patterns,
-            url_patterns,
-        }
-    }
-
-    /// Returns true if `path` matches any deny pattern.
-    pub fn is_path_denied(&self, path: &Path) -> bool {
-        let as_str = path.to_string_lossy();
-        self.path_matchers
-            .iter()
-            .any(|m| m.is_match(as_str.as_ref()))
-    }
-
-    /// Returns true if `url` starts with any blocked prefix.
-    pub fn is_url_denied(&self, url: &str) -> bool {
-        url_is_denied(url, &self.url_patterns)
-    }
-}
-
-/// Returns true if `url` starts with any blocked prefix in `patterns`.
-pub fn url_is_denied(url: &str, patterns: &[String]) -> bool {
-    patterns.iter().any(|p| !p.is_empty() && url.starts_with(p))
-}
-
-impl Default for DenyList {
-    fn default() -> Self {
-        Self::new(
-            vec![
-                "**/.ssh/**".into(),
-                "**/.gnupg/**".into(),
-                "**/.aws/**".into(),
-                "**/.git/**".into(),
-                "**/__pycache__/**".into(),
-                "**/.env*".into(),
-                "**/*.pem".into(),
-                "**/*.key".into(),
-                "**/*.crt".into(),
-                "**/*.cert".into(),
-                "/etc/shadow".into(),
-                "/etc/sudoers".into(),
-                "/etc/passwd".into(),
-                "/etc/kubernetes/**".into(),
-            ],
-            vec![
-                // Cloud metadata endpoints — never let the model probe these
-                "http://169.254.169.254".into(),
-                "http://metadata.google.internal".into(),
-                "http://100.100.100.200".into(),
-            ],
-        )
-    }
-}
+mod deny_list;
+pub use deny_list::{url_is_denied, DenyList};
 
 // ── Path Guard ───────────────────────────────────────────────────────
 
 /// Outcome of a path guard check.
+///
+/// A verdict must be inspected before proceeding; ignoring it would
+/// bypass the safety checks the guard exists to enforce.
 #[derive(Debug, Clone, PartialEq)]
+#[must_use]
 pub enum GuardVerdict {
     /// The operation is allowed. Contains the resolved path.
     Allowed(PathBuf),
@@ -151,18 +75,28 @@ impl PathGuard {
         let workdir = self
             .sandbox_dir
             .as_deref()
-            .unwrap_or_else(|| Path::new("."));
-        let output = match std::process::Command::new("git")
-            .arg("check-ignore")
-            .arg("--quiet")
-            .arg(path)
-            .current_dir(workdir)
-            .output()
-        {
-            Ok(o) => o,
-            Err(_) => return false,
-        };
-        output.status.success()
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf();
+        let path = path.to_path_buf();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let output = match std::process::Command::new("git")
+                .arg("check-ignore")
+                .arg("--quiet")
+                .arg(&path)
+                .current_dir(workdir)
+                .output()
+            {
+                Ok(o) => o,
+                Err(_) => {
+                    let _ = tx.send(false);
+                    return;
+                }
+            };
+            let _ = tx.send(output.status.success());
+        });
+        rx.recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap_or(false)
     }
 
     /// Check whether `path` may be traversed (listed or read).

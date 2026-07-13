@@ -159,7 +159,7 @@ async fn run_persona_task(
     );
     let tools = tools_for_persona(kind, undo_stack.clone(), supports_images, &config);
 
-    let conversation = match ConversationLog::open(fork_path.clone()) {
+    let conversation = match ConversationLog::open_async(fork_path.clone()).await {
         Ok((c, _outcome)) => c,
         Err(e) => {
             return PersonaResult {
@@ -289,7 +289,7 @@ pub async fn start_persona(
         None => return "No session log path. Cannot fork for persona.".into(),
     };
 
-    let parent_log = match ConversationLog::open(parent_log_path.clone()) {
+    let parent_log = match ConversationLog::open_async(parent_log_path.clone()).await {
         Ok((l, _outcome)) => l,
         Err(e) => return format!("Cannot open session log: {e}"),
     };

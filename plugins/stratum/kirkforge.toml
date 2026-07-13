@@ -11,15 +11,15 @@ trust = "shell"
 [[capabilities]]
 type = "tool"
 name = "stratum_run"
-description = "Run the stratum compression pipeline on stdin. Useful for compacting large context (logs, search results, diffs) before feeding it to the model."
-schema = { type = "object", properties = { mode = { type = "string", enum = ["off", "lite", "full", "ultra"], description = "Pipeline mode override (off/lite/full/ultra)" }, token_budget = { type = "integer", description = "Token budget for the bloat heuristic" }, json = { type = "boolean", description = "Emit JSON output", default = false }, dry_run = { type = "boolean", description = "Preview transforms without emitting output", default = false }, max_input_size = { type = "integer", description = "Maximum input size in bytes" } } }
+description = "Run the stratum compression pipeline on a string of text. Useful for compacting inline context (logs, search results, diffs) before feeding it to the model. Pass the text as the `input` field, or use stratum_apply for files."
+schema = { type = "object", properties = { input = { type = "string", description = "Text to compress" }, mode = { type = "string", enum = ["off", "lite", "full", "ultra"], description = "Pipeline mode override (off/lite/full/ultra)" }, token_budget = { type = "integer", description = "Token budget for the bloat heuristic" }, json = { type = "boolean", description = "Emit JSON output", default = false }, dry_run = { type = "boolean", description = "Preview transforms without emitting output", default = false }, max_input_size = { type = "integer", description = "Maximum input size in bytes" } }, required = ["input"] }
 command = "tools/run.sh"
 
 [[capabilities]]
 type = "tool"
 name = "stratum_apply"
-description = "Apply the stratum pipeline to a file or stdin with optional content-type override."
-schema = { type = "object", properties = { file = { type = "string", description = "Path to input file; omit to read stdin" }, content_type = { type = "string", enum = ["json_array", "json_object", "source_code", "search_results", "build_output", "git_diff", "html", "plain_text"], description = "Force content-type detection" }, mode = { type = "string", enum = ["off", "lite", "full", "ultra"], description = "Pipeline mode override" }, token_budget = { type = "integer", description = "Token budget for the bloat heuristic" }, json = { type = "boolean", description = "Emit JSON output", default = false }, dry_run = { type = "boolean", description = "Preview transforms without emitting output", default = false } } }
+description = "Apply the stratum pipeline to a file with optional content-type override."
+schema = { type = "object", properties = { file = { type = "string", description = "Path to input file" }, content_type = { type = "string", enum = ["json_array", "json_object", "source_code", "search_results", "build_output", "git_diff", "html", "plain_text"], description = "Force content-type detection" }, mode = { type = "string", enum = ["off", "lite", "full", "ultra"], description = "Pipeline mode override" }, token_budget = { type = "integer", description = "Token budget for the bloat heuristic" }, json = { type = "boolean", description = "Emit JSON output", default = false }, dry_run = { type = "boolean", description = "Preview transforms without emitting output", default = false } }, required = ["file"] }
 command = "tools/apply.sh"
 
 [[capabilities]]
@@ -54,7 +54,7 @@ You are a Stratum pipeline assistant for KirkForge-Cli.
 Stratum is a compression and rules pipeline for agent context. It takes large payloads (logs, search results, diffs, JSON) and emits compacted context suitable for feeding to an LLM.
 
 Available plugin tools:
-- stratum_run: run the pipeline on stdin (useful for compacting context before passing it to the model).
+- stratum_run: run the pipeline on inline text using the `input` field (useful for compacting context before passing it to the model).
 - stratum_apply: apply the pipeline to a specific file.
 - stratum_rules: show the canonical ruleset for a mode.
 - stratum_mode: show or set the active mode.
@@ -66,8 +66,8 @@ When the user asks for Stratum help:
 3. Summarise the rules and suggest the best tool for the user's request.
 
 When the user wants to compress context:
-1. Prefer stratum_run if they have text to pipe in (the KirkForge runtime will supply stdin).
-2. Prefer stratum_apply if they want to process a file.
+1. Prefer stratum_run with an `input` field if they have inline text to compact.
+2. Prefer stratum_apply with a `file` field if they want to process a file.
 3. Mention the mode/token_budget options only if the user wants fine-grained control.
 
 User request: {{args}}

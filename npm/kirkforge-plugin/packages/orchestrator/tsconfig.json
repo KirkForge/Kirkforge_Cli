@@ -58,6 +58,9 @@
       "path": "../tool-lint-ts"
     },
     {
+      "path": "../tool-lint-imports"
+    },
+    {
       "path": "../tool-lint-py"
     },
     {

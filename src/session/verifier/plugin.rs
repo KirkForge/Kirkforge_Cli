@@ -282,7 +282,8 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let plugins_dir = tmp.path().join("plugins");
         let plugin_dir = plugins_dir.join("demo");
-        std::fs::create_dir_all(&plugin_dir).unwrap();
+        let plugin_bin_dir = plugin_dir.join("bin");
+        std::fs::create_dir_all(&plugin_bin_dir).unwrap();
         std::fs::write(
             plugin_dir.join("kirkforge.toml"),
             r#"
@@ -299,6 +300,7 @@ command = "bin/check.sh"
 "#,
         )
         .unwrap();
+        std::fs::write(plugin_bin_dir.join("check.sh"), "#!/bin/bash\n").unwrap();
 
         let mut registry = PluginRegistry::new();
         let warnings = registry

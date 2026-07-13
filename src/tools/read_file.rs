@@ -1,8 +1,17 @@
+use crate::session::access::PathGuard;
 use crate::shared::{ToolDef, ToolError, ToolOutcome};
 use crate::tools::{Tool, ToolContext};
 use std::path::PathBuf;
 
-pub struct ReadFile;
+pub struct ReadFile {
+    path_guard: PathGuard,
+}
+
+impl ReadFile {
+    pub fn new(path_guard: PathGuard) -> Self {
+        Self { path_guard }
+    }
+}
 
 #[async_trait::async_trait]
 impl Tool for ReadFile {
@@ -45,6 +54,12 @@ impl Tool for ReadFile {
                 return ToolOutcome::Failure(ToolError::invalid_args("Missing 'path' argument"));
             }
         };
+
+        if let crate::session::access::GuardVerdict::Denied(reason) =
+            self.path_guard.check_read(&path)
+        {
+            return ToolOutcome::Failure(ToolError::AccessDenied { message: reason });
+        }
 
         let offset = args.get("offset").and_then(|o| o.as_u64()).unwrap_or(0) as usize;
         let limit = args.get("limit").and_then(|l| l.as_u64()).unwrap_or(200) as usize;

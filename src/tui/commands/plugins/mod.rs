@@ -14,6 +14,11 @@ use kirkforge_plugin_host::{PluginRegistry, TrustPolicy};
 use std::path::PathBuf;
 use tokio::sync::mpsc;
 
+mod sources;
+#[cfg(test)]
+use sources::resolve_source_path;
+use sources::{add_source, list_sources, remove_source, setup_plugin_sources};
+
 /// Operation requested by `/plugins ...`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum PluginsOp {
@@ -195,10 +200,13 @@ async fn enable_plugin(
     let dir = plugin_dir(name);
     let policy = TrustPolicy::up_to(cfg.max_plugin_trust);
 
-    let loaded_name = match state.plugin_registry.load_one(&dir, policy) {
-        Ok(n) => n,
+    let (loaded_name, load_warnings) = match state.plugin_registry.load_one(&dir, policy) {
+        Ok(r) => r,
         Err(e) => return format!("❌ Failed to enable plugin '{name}': {e}"),
     };
+    for w in load_warnings {
+        tracing::warn!(warning = %w, "plugin load warning");
+    }
 
     // Replace any stale skills from a previous load of the same plugin.
     state.skill_registry.remove_plugin(&loaded_name);
@@ -314,10 +322,13 @@ async fn trust_plugin(
     let dir = plugin_dir(name);
     let policy = TrustPolicy::up_to(tier);
 
-    let loaded_name = match state.plugin_registry.load_one(&dir, policy) {
-        Ok(n) => n,
+    let (loaded_name, load_warnings) = match state.plugin_registry.load_one(&dir, policy) {
+        Ok(r) => r,
         Err(e) => return format!("❌ Failed to set trust tier for '{name}': {e}"),
     };
+    for w in load_warnings {
+        tracing::warn!(warning = %w, "plugin load warning");
+    }
 
     let skills_added =
         if let Some((manifest, plugin)) = state.plugin_registry.find_active_by_name(&loaded_name) {
@@ -486,141 +497,6 @@ async fn toggle_plugin(
     reload_plugins(state, plugin_reload_tx).await
 }
 
-/// `setup` — show a quick-start message for workspace plugin sources.
-async fn setup_plugin_sources(
-    state: &AppState,
-    _plugin_reload_tx: &mpsc::UnboundedSender<PluginRegistry>,
-) -> String {
-    let cfg = read_shared_config(&state.config);
-    let mut lines = vec![
-        "Workspace plugin source setup:".to_string(),
-        "  /plugins add <name> <path>   — register a plugin directory".to_string(),
-        "  /plugins remove <name>       — unregister a source".to_string(),
-        "  /plugins toggle <name>        — enable or disable a source (persists)".to_string(),
-        "  /plugins sources             — list configured sources".to_string(),
-        "  /plugins reload              — rescan and apply current config".to_string(),
-        String::new(),
-    ];
-    if cfg.plugin_sources.is_empty() {
-        lines.push("No workspace sources configured yet.".to_string());
-    } else {
-        lines.push(format!(
-            "Configured sources ({}):",
-            cfg.plugin_sources.len()
-        ));
-        for (name, path) in &cfg.plugin_sources {
-            let enabled = if cfg.enabled_plugins.iter().any(|n| n == name) {
-                "on"
-            } else {
-                "off"
-            };
-            lines.push(format!("  - {name} -> {} [{enabled}]", path.display()));
-        }
-    }
-    lines.join("\n")
-}
-
-/// `sources` — list configured workspace plugin sources and their enabled state.
-fn list_sources(state: &AppState) -> String {
-    let cfg = read_shared_config(&state.config);
-    if cfg.plugin_sources.is_empty() {
-        return "No workspace plugin sources configured. Use /plugins add <name> <path>."
-            .to_string();
-    }
-
-    let active = active_plugin_names(&state.plugin_registry);
-    let mut lines = Vec::new();
-    lines.push(format!(
-        "Workspace plugin sources ({}):",
-        cfg.plugin_sources.len()
-    ));
-    for (name, path) in &cfg.plugin_sources {
-        let enabled = cfg.enabled_plugins.iter().any(|n| n == name);
-        let status = match (enabled, active.contains(name)) {
-            (true, true) => "enabled, active",
-            (true, false) => "enabled, inactive",
-            (false, _) => "disabled",
-        };
-        lines.push(format!("  - {name} -> {} [{status}]", path.display()));
-    }
-    lines.join("\n")
-}
-
-/// `add <name> <path>` — register a workspace plugin source.
-async fn add_source(
-    name: &str,
-    path: &str,
-    state: &mut AppState,
-    plugin_reload_tx: &mpsc::UnboundedSender<PluginRegistry>,
-) -> String {
-    let resolved = resolve_source_path(path);
-    if !resolved.exists() {
-        return format!(
-            "❌ Plugin source path does not exist: {resolved}",
-            resolved = resolved.display()
-        );
-    }
-    if !resolved.is_dir() {
-        return format!(
-            "❌ Plugin source path is not a directory: {resolved}",
-            resolved = resolved.display()
-        );
-    }
-
-    {
-        let mut cfg = write_shared_config(&state.config);
-        cfg.plugin_sources
-            .insert(name.to_string(), resolved.clone());
-        if let Err(e) = crate::session::config::save_config(&cfg) {
-            return format!("❌ Failed to save config while adding source '{name}': {e}");
-        }
-    }
-
-    reload_plugins(state, plugin_reload_tx).await
-}
-
-/// `remove <name>` — unregister a workspace plugin source.
-fn remove_source(
-    name: &str,
-    state: &mut AppState,
-    plugin_reload_tx: &mpsc::UnboundedSender<PluginRegistry>,
-) -> String {
-    {
-        let mut cfg = write_shared_config(&state.config);
-        if cfg.plugin_sources.remove(name).is_none() {
-            return format!("❌ No workspace plugin source named '{name}'.");
-        }
-        cfg.enabled_plugins.retain(|n| n != name);
-        if let Err(e) = crate::session::config::save_config(&cfg) {
-            return format!("❌ Failed to save config while removing source '{name}': {e}");
-        }
-    }
-
-    // Unload the plugin if it is currently active; the registry will not be
-    // re-loaded from this source on the next /plugins reload either.
-    state.skill_registry.remove_plugin(name);
-    state.plugin_registry.remove(name);
-    state.plugin_status = plugin_status_summary(&state.plugin_registry, &blocked_warnings(state));
-    crate::send_or_warn!(
-        plugin_reload_tx.send(state.plugin_registry.clone()),
-        "plugin registry receiver dropped; executor may have exited"
-    );
-
-    format!("🔌 Removed workspace plugin source '{name}'.")
-}
-
-/// Resolve a workspace source path relative to the current directory.
-fn resolve_source_path(path: &str) -> PathBuf {
-    let p = PathBuf::from(path);
-    if p.is_absolute() {
-        p
-    } else if let Ok(cwd) = std::env::current_dir() {
-        cwd.join(p)
-    } else {
-        p
-    }
-}
-
 /// Mutable access to shared config, recovering from lock poisoning.
 fn write_shared_config(
     cfg: &SharedConfig,
@@ -632,17 +508,11 @@ fn write_shared_config(
 mod tests {
     use super::*;
     use crate::shared::Config;
-    use std::sync::{Arc, OnceLock};
-    use tokio::sync::Mutex as TokioMutex;
-
-    /// Serialize tests that mutate the process-wide `KIRKFORGE_DATA_DIR` env var.
-    static ENV_LOCK: OnceLock<TokioMutex<()>> = OnceLock::new();
-
-    fn env_lock() -> &'static TokioMutex<()> {
-        ENV_LOCK.get_or_init(|| TokioMutex::new(()))
-    }
+    use std::sync::Arc;
 
     /// Sets `KIRKFORGE_DATA_DIR` to `dir` for the lifetime of the guard.
+    /// Uses the crate-wide `test_data_dir_lock()` so every test that mutates
+    /// the data directory is serialized against every other such test.
     struct TempDataDir {
         prev: Option<std::ffi::OsString>,
         _guard: tokio::sync::MutexGuard<'static, ()>,
@@ -650,7 +520,7 @@ mod tests {
 
     impl TempDataDir {
         async fn new(dir: &std::path::Path) -> Self {
-            let guard = env_lock().lock().await;
+            let guard = crate::session::test_data_dir_lock().lock().await;
             let prev = std::env::var_os("KIRKFORGE_DATA_DIR");
             std::env::set_var("KIRKFORGE_DATA_DIR", dir.as_os_str());
             Self {

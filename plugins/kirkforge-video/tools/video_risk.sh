@@ -19,5 +19,6 @@ else
     if [[ -z "$kinds" ]]; then
         die_json "provide project or kinds array"
     fi
-    "$VIDEO_BIN" risk $kinds --duration-s "$duration_s"
+    IFS=' ' read -ra kind_args <<<"$kinds"
+    "$VIDEO_BIN" risk "${kind_args[@]+"${kind_args[@]}"}" --duration-s "$duration_s"
 fi

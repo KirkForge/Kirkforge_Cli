@@ -67,7 +67,7 @@ pub enum ModelValidation {
 pub async fn handle_model_command(
     args: &str,
     model_tx: &mpsc::UnboundedSender<String>,
-    event_tx: &mpsc::UnboundedSender<TurnEvent>,
+    event_tx: &mpsc::Sender<TurnEvent>,
     state: &AppState,
 ) -> String {
     let name = args.trim();
@@ -331,7 +331,7 @@ fn format_pull_line(model: &str, line: &PullLine) -> String {
 pub async fn run_ollama_pull(
     ollama_host: &str,
     model: &str,
-    event_tx: &mpsc::UnboundedSender<TurnEvent>,
+    event_tx: &mpsc::Sender<TurnEvent>,
     switch_tx: &mpsc::UnboundedSender<String>,
 ) {
     let url = format!("{}/api/pull", ollama_host.trim_end_matches('/'));
@@ -342,9 +342,11 @@ pub async fn run_ollama_pull(
         Ok(c) => c,
         Err(e) => {
             crate::send_or_warn!(
-                event_tx.send(TurnEvent::Token(format!(
-                    "❌ Could not start pull for {model}: {e}"
-                ))),
+                event_tx
+                    .send(TurnEvent::Token(format!(
+                        "❌ Could not start pull for {model}: {e}"
+                    )))
+                    .await,
                 "TUI dropped pull-error event"
             );
             return;
@@ -356,9 +358,11 @@ pub async fn run_ollama_pull(
         Ok(resp) => resp,
         Err(e) => {
             crate::send_or_warn!(
-                event_tx.send(TurnEvent::Token(format!(
-                    "❌ Pull request for {model} failed: {e}"
-                ))),
+                event_tx
+                    .send(TurnEvent::Token(format!(
+                        "❌ Pull request for {model} failed: {e}"
+                    )))
+                    .await,
                 "TUI dropped pull-request error event"
             );
             return;
@@ -368,10 +372,12 @@ pub async fn run_ollama_pull(
     let status = response.status();
     if !status.is_success() {
         crate::send_or_warn!(
-            event_tx.send(TurnEvent::Token(format!(
-                "❌ Pull request for {model} returned HTTP {}",
-                status.as_u16()
-            ))),
+            event_tx
+                .send(TurnEvent::Token(format!(
+                    "❌ Pull request for {model} returned HTTP {}",
+                    status.as_u16()
+                )))
+                .await,
             "TUI dropped pull-status error event"
         );
         return;
@@ -385,9 +391,11 @@ pub async fn run_ollama_pull(
             Ok(c) => c,
             Err(e) => {
                 crate::send_or_warn!(
-                    event_tx.send(TurnEvent::Token(format!(
-                        "⚠️ Pull stream for {model} interrupted: {e}"
-                    ))),
+                    event_tx
+                        .send(TurnEvent::Token(format!(
+                            "⚠️ Pull stream for {model} interrupted: {e}"
+                        )))
+                        .await,
                     "TUI dropped pull-stream interruption event"
                 );
                 continue;
@@ -413,9 +421,11 @@ pub async fn run_ollama_pull(
                 // any status containing "success" as done.
                 if parsed.status.to_ascii_lowercase().contains("success") {
                     crate::send_or_warn!(
-                        event_tx.send(TurnEvent::Token(format!(
-                            "✅ Pull for {model} complete. Switching now…"
-                        ))),
+                        event_tx
+                            .send(TurnEvent::Token(format!(
+                                "✅ Pull for {model} complete. Switching now…"
+                            )))
+                            .await,
                         "TUI dropped pull-complete event"
                     );
                     crate::send_or_warn!(
@@ -427,7 +437,7 @@ pub async fn run_ollama_pull(
 
                 let msg = format_pull_line(model, &parsed);
                 crate::send_or_warn!(
-                    event_tx.send(TurnEvent::Token(msg + "\n")),
+                    event_tx.send(TurnEvent::Token(msg + "\n")).await,
                     "TUI dropped pull-progress event"
                 );
             }
@@ -438,9 +448,11 @@ pub async fn run_ollama_pull(
     // have completed. Try to switch anyway and let the executor surface
     // any remaining problem on the next turn.
     crate::send_or_warn!(
-        event_tx.send(TurnEvent::Token(format!(
-            "✅ Pull stream for {model} ended. Switching now…"
-        ))),
+        event_tx
+            .send(TurnEvent::Token(format!(
+                "✅ Pull stream for {model} ended. Switching now…"
+            )))
+            .await,
         "TUI dropped pull-stream-ended event"
     );
     crate::send_or_warn!(
@@ -512,7 +524,7 @@ mod tests {
     #[tokio::test]
     async fn test_empty_args_returns_usage() {
         let (tx, mut rx) = mpsc::unbounded_channel::<String>();
-        let (_event_tx, _event_rx) = mpsc::unbounded_channel::<TurnEvent>();
+        let (_event_tx, _event_rx) = mpsc::channel::<TurnEvent>(10_000);
         let state = dummy_state();
         let out = handle_model_command("", &tx, &_event_tx, &state).await;
         assert!(out.starts_with("Usage"), "got: {out}");
@@ -525,7 +537,7 @@ mod tests {
     #[tokio::test]
     async fn test_whitespace_args_returns_usage() {
         let (tx, mut rx) = mpsc::unbounded_channel::<String>();
-        let (_event_tx, _event_rx) = mpsc::unbounded_channel::<TurnEvent>();
+        let (_event_tx, _event_rx) = mpsc::channel::<TurnEvent>(10_000);
         let state = dummy_state();
         let out = handle_model_command("   \t  ", &tx, &_event_tx, &state).await;
         assert!(out.starts_with("Usage"), "got: {out}");
@@ -537,7 +549,7 @@ mod tests {
     #[tokio::test]
     async fn test_named_args_sends_to_channel() {
         let (tx, mut rx) = mpsc::unbounded_channel::<String>();
-        let (_event_tx, _event_rx) = mpsc::unbounded_channel::<TurnEvent>();
+        let (_event_tx, _event_rx) = mpsc::channel::<TurnEvent>(10_000);
         let state = dummy_state();
         let out = handle_model_command("qwen2.5:3b", &tx, &_event_tx, &state).await;
         assert_eq!(out, "Switching to qwen2.5:3b…");
@@ -551,7 +563,7 @@ mod tests {
     #[tokio::test]
     async fn test_named_args_preserves_case() {
         let (tx, mut rx) = mpsc::unbounded_channel::<String>();
-        let (_event_tx, _event_rx) = mpsc::unbounded_channel::<TurnEvent>();
+        let (_event_tx, _event_rx) = mpsc::channel::<TurnEvent>(10_000);
         let state = dummy_state();
         let out = handle_model_command("GPT-OSS-120B", &tx, &_event_tx, &state).await;
         assert!(out.contains("GPT-OSS-120B"), "got: {out}");
@@ -565,7 +577,7 @@ mod tests {
     async fn test_closed_channel_returns_graceful_error() {
         let (tx, rx) = mpsc::unbounded_channel::<String>();
         drop(rx);
-        let (_event_tx, _event_rx) = mpsc::unbounded_channel::<TurnEvent>();
+        let (_event_tx, _event_rx) = mpsc::channel::<TurnEvent>(10_000);
         let state = dummy_state();
         let out = handle_model_command("qwen2.5:3b", &tx, &_event_tx, &state).await;
         assert!(out.contains("Executor"), "got: {out}");

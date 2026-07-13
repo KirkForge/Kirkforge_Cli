@@ -59,13 +59,13 @@ Plugins are filesystem folders containing a `kirkforge.toml` manifest plus any t
 
 This repo ships with five satellite plugins under `plugins/<name>/`. Each plugin’s source code also lives in this repo so everything builds together:
 
-- `plugins/kirkforge-draw/` / `crates/kirkforge-draw*` — terminal diagram editor (`/draw`, `draw_render`, `draw_edit`).
+- `plugins/kirkforge-draw/` / `crates/kirkforge-draw*` — terminal diagram editor (`/draw`, `draw_render`).
 - `plugins/kirkforge-video/` / `crates/kirkforge-video` — FFmpeg-native video pipeline (`/video`, `video_pipeline`, `video_render`, …).
 - `plugins/stratum/` / `crates/kirkstratum*` — context compression pipeline (`/stratum`, `stratum_run`, …).
 - `plugins/kirkforge-plugin3/` / `crates/plugin3*` — token-budget assistant (`/budget`, `plugin3_budget_*`, …).
 - `plugins/kirkforge-plugin/` / `npm/kirkforge-plugin` — KirkForge-Plugin SDK verification CLI (`/kirkforge`, `plugin_verify`, …).
 
-They are registered as workspace plugin sources by default but left **disabled** until you toggle them on. The plugin tool scripts prefer binaries built by this workspace (`target/release/<bin>` or `target/debug/<bin>`) and fall back to `PATH` for the Node SDK or any externally installed build.
+They are registered as workspace plugin sources and **enabled by default** (when their directories exist). Use `/plugins toggle <name>` to disable a bundled plugin persistently. The plugin tool scripts prefer binaries built by this workspace (`target/release/<bin>` or `target/debug/<bin>`) and fall back to `PATH` for the Node SDK or any externally installed build.
 
 ### Runtime commands
 
@@ -90,7 +90,7 @@ default_model = "qwen2.5:3b"
 ollama_host = "http://localhost:11434"
 auto_approve = false
 bang_requires_approval = true
-sandbox_dir = ""  # empty = current directory
+sandbox_dir = "."  # "." = current directory; "" = unsandboxed (escape hatch)
 ```
 
 ## Development

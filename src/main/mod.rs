@@ -7,6 +7,8 @@
 // handling or explicit expect() with a justification.
 #![cfg_attr(not(test), deny(clippy::unwrap_used))]
 
+mod turn_events;
+
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::Shell;
 use kirkforge::{adapters, daemon, line_mode, session, shared, tools, tui};
@@ -14,6 +16,7 @@ use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
 use tokio::sync::mpsc;
 use tracing_subscriber::prelude::*;
+use turn_events::{emit_turn_events, resolve_continue_path};
 
 /// Initialize tracing so logs go to a file instead of corrupting the TUI.
 ///
@@ -22,7 +25,7 @@ use tracing_subscriber::prelude::*;
 /// write logs to `<data_dir>/kirkforge.log` and additionally mirror them
 /// to stderr when `KIRKFORGE_LOG_STDERR=1` is set (useful for daemon or
 /// non-interactive debugging).
-fn init_tracing(log_level: &str) {
+fn init_tracing(log_level: &str) -> anyhow::Result<()> {
     // Writer enum so that a failure to open the log file falls back to
     // a null sink instead of panicking on `/dev/null`.
     enum LogWriter {
@@ -45,8 +48,11 @@ fn init_tracing(log_level: &str) {
             }
         }
     }
-    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(log_level));
+    let env_filter = match tracing_subscriber::EnvFilter::try_from_default_env() {
+        Ok(f) => f,
+        Err(_) => tracing_subscriber::EnvFilter::try_new(log_level)
+            .map_err(|e| anyhow::anyhow!("invalid log level '{log_level}': {e}"))?,
+    };
 
     let log_file = session::data_dir()
         .map(|d| d.join("kirkforge.log"))
@@ -95,6 +101,7 @@ fn init_tracing(log_level: &str) {
     } else {
         registry.init();
     }
+    Ok(())
 }
 
 /// Map an anyhow error to a structured exit code.
@@ -233,7 +240,7 @@ enum Command {
         #[arg(long, short)]
         output: Option<PathBuf>,
 
-        /// Search sessions by id, date, or message count.
+        /// Search sessions by id, date, message count, or message content.
         #[arg(long, value_name = "QUERY", conflicts_with = "export")]
         search: Option<String>,
     },
@@ -252,7 +259,10 @@ enum Command {
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
-    init_tracing(&cli.log_level);
+    if let Err(e) = init_tracing(&cli.log_level) {
+        eprintln!("{e:#}");
+        std::process::exit(2);
+    }
 
     let result = match cli.command {
         Command::Run {
@@ -309,7 +319,19 @@ async fn main() {
             output,
             search,
         } => handle_sessions_command(id, export, output, search),
-        Command::Daemon { foreground, stop } => daemon::server::run_daemon(foreground, stop).await,
+        Command::Daemon { foreground, stop } => {
+            #[cfg(unix)]
+            {
+                daemon::server::run_daemon(foreground, stop).await
+            }
+            #[cfg(windows)]
+            {
+                let _ = (foreground, stop);
+                Err(anyhow::anyhow!(
+                    "session daemon is not supported on Windows"
+                ))
+            }
+        }
     };
 
     if let Err(e) = result {
@@ -460,9 +482,15 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
         config.dry_run = true;
     }
 
-    if let Err(e) = session::config::save_config(&config) {
-        tracing::warn!(error = %e, "failed to persist updated config");
-    }
+    // CLI flags are transient runtime overrides; do not persist them to
+    // config.toml. `load_or_create_config` already wrote a default file on
+    // first run, and explicit in-session config changes are saved by their
+    // respective handlers (e.g. /reload). Persisting here made a single
+    // scripted invocation permanently flip `auto_approve` or `dry_run`.
+    //
+    // We keep the loaded/merged config object for the rest of the session.
+    //
+    // Previously: `session::config::save_config(&config)` was called here.
 
     // Honor `NO_COLOR` / `TERM=dumb` consistently across all user-facing
     // output, including the session-restoration message printed before the
@@ -640,6 +668,10 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     let cfg_for_mcp = kirkforge::shared::read_shared_config(&shared_config).clone();
     if !cfg_for_mcp.mcp_servers.is_empty() {
         let mcp_mgr = session::mcp_client::McpClientManager::new(&cfg_for_mcp.mcp_servers).await;
+        for warning in mcp_mgr.warnings() {
+            eprintln!("MCP warning: {warning}");
+            tracing::warn!(warning = %warning, "MCP startup warning");
+        }
         let mcp_tool_count = mcp_mgr.tool_count();
         if mcp_tool_count > 0 {
             let mcp_mgr = std::sync::Arc::new(mcp_mgr);
@@ -654,10 +686,13 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     // ── Plugin tools ──
     let cfg_for_plugins = kirkforge::shared::read_shared_config(&shared_config).clone();
     let (plugin_registry, plugin_warnings) =
-        session::plugin_tools::load_plugin_registry(&cfg_for_plugins).unwrap_or_else(|e| {
-            tracing::warn!(error = %e, "failed to load plugin registry");
-            (kirkforge_plugin_host::PluginRegistry::new(), vec![])
-        });
+        match session::plugin_tools::load_plugin_registry(&cfg_for_plugins) {
+            Ok(rw) => rw,
+            Err(e) => {
+                eprintln!("Warning: failed to load plugin registry: {e:#}");
+                (kirkforge_plugin_host::PluginRegistry::new(), vec![])
+            }
+        };
     let plugin_tools =
         session::plugin_tools::all_plugin_tools(&plugin_registry, shared_config.clone());
     if !plugin_tools.is_empty() {
@@ -671,6 +706,7 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
         );
     }
     for w in plugin_warnings {
+        eprintln!("Plugin warning: {w}");
         tracing::warn!(warning = %w, "plugin load warning");
     }
 
@@ -709,6 +745,7 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
             non_interactive,
             no_color,
             &plugin_registry,
+            session_id.to_string(),
         )
         .await
     }
@@ -753,6 +790,7 @@ async fn run_line_mode(
     non_interactive: bool,
     no_color: bool,
     plugin_registry: &kirkforge_plugin_host::PluginRegistry,
+    session_id: String,
 ) -> anyhow::Result<()> {
     // If running in non-interactive mode (scripted), deny all approvals.
     // If running in line-mode interactive (no TUI), prompt on stderr and
@@ -769,6 +807,7 @@ async fn run_line_mode(
         None,
         Some(plugin_registry),
     );
+    executor.set_session_id(session_id);
     if let session::conversation::OpenOutcome::Restored(messages) = open_outcome {
         executor.set_recovered_messages(messages);
     }
@@ -945,12 +984,59 @@ async fn run_line_mode(
     Ok(())
 }
 
+/// Read a single line approval answer from the terminal.
+///
+/// On Unix, reads from the controlling terminal (`/dev/tty`) so it does
+/// not compete with stdin prompt reading. On Windows there is no
+/// equivalent device, so we read from stdin; the line-mode main loop is
+/// not reading stdin while a tool call is awaiting approval.
+#[cfg(unix)]
+fn read_approval_answer(_tool_name: &str) -> bool {
+    let mut answer = String::new();
+    match std::fs::OpenOptions::new().read(true).open("/dev/tty") {
+        Ok(mut tty) => {
+            use std::io::BufRead;
+            let mut reader = std::io::BufReader::new(&mut tty);
+            if let Err(e) = reader.read_line(&mut answer) {
+                tracing::warn!(error = %e, "failed to read approval answer from /dev/tty");
+            }
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "line-mode approval: no /dev/tty available; denying");
+            return false;
+        }
+    }
+    let trimmed = answer.trim().to_ascii_lowercase();
+    trimmed == "y" || trimmed == "yes"
+}
+
+#[cfg(windows)]
+fn read_approval_answer(_tool_name: &str) -> bool {
+    use std::io::BufRead;
+    let mut answer = String::new();
+    let stdin = std::io::stdin();
+    let mut reader = std::io::BufReader::new(stdin.lock());
+    if let Err(e) = reader.read_line(&mut answer) {
+        tracing::warn!(error = %e, "failed to read approval answer from stdin");
+        return false;
+    }
+    let trimmed = answer.trim().to_ascii_lowercase();
+    trimmed == "y" || trimmed == "yes"
+}
+
+#[cfg(not(any(unix, windows)))]
+fn read_approval_answer(_tool_name: &str) -> bool {
+    tracing::warn!("line-mode approval is not supported on this platform");
+    false
+}
+
 /// Spawn an approval responder for interactive line mode.
 ///
 /// When the TUI is disabled, destructive tool calls still need a human
 /// decision. This handler prints the request to stderr and reads a line
-/// from `/dev/tty` (the controlling terminal) so it does not compete
-/// with stdin prompt reading. `y`/`yes` approves; anything else denies.
+/// from the controlling terminal when available, or stdin on Windows, so
+/// it does not compete with prompt reading. `y`/`yes` approves; anything
+/// else denies.
 ///
 /// The read is performed on a detached OS thread with a timeout so the
 /// process can still exit cleanly when stdin reaches EOF or the user
@@ -979,28 +1065,9 @@ fn spawn_line_mode_approval_handler(
             let tool_name = req.tool_name.clone();
             let (answer_tx, answer_rx) = tokio::sync::oneshot::channel::<bool>();
 
-            // Detached thread: reads /dev/tty and sends the answer back.
+            // Detached thread: reads the terminal and sends the answer back.
             std::thread::spawn(move || {
-                let mut answer = String::new();
-                let approved = match std::fs::OpenOptions::new().read(true).open("/dev/tty") {
-                    Ok(mut tty) => {
-                        use std::io::BufRead;
-                        let mut reader = std::io::BufReader::new(&mut tty);
-                        if let Err(e) = reader.read_line(&mut answer) {
-                            tracing::warn!(error = %e, "failed to read approval answer from /dev/tty");
-                        }
-                        let trimmed = answer.trim().to_ascii_lowercase();
-                        trimmed == "y" || trimmed == "yes"
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            tool = %tool_name,
-                            error = %e,
-                            "line-mode approval: no /dev/tty available; denying"
-                        );
-                        false
-                    }
-                };
+                let approved = read_approval_answer(&tool_name);
                 // If the tokio side already timed out, this send is
                 // harmless; the leftover thread will exit once the user
                 // finally provides input or the process terminates.
@@ -1029,225 +1096,6 @@ fn spawn_line_mode_approval_handler(
             );
         }
     });
-}
-
-/// Serialize a JSON value and emit it as one stream-json line.
-///
-/// `serde_json::to_string` can fail only for non-finite floats; if that
-/// somehow happens (e.g. a corrupted cost value), we log a warning and
-/// skip the line rather than panicking in the headless output path.
-fn print_json_line(value: &serde_json::Value) {
-    match serde_json::to_string(value) {
-        Ok(line) => println!("{line}"),
-        Err(e) => tracing::warn!("failed to serialize stream-json event: {}", e),
-    }
-}
-
-/// Per-turn event emission, extracted from the pre-M4 single-turn
-/// loop so the multi-turn driver can call it once per turn without
-/// duplicating the 165-line match. Mutates the running totals in
-/// place; the caller reads `final_error` directly for the JSON summary.
-#[allow(clippy::too_many_arguments)]
-fn emit_turn_events(
-    events: &[session::executor::TurnEvent],
-    output: kirkforge::shared::OutputFormat,
-    total_prompt_tokens: &mut usize,
-    total_completion_tokens: &mut usize,
-    cumulative_cost: &mut f64,
-    tool_records: &mut Vec<kirkforge::shared::ToolCallRecord>,
-    final_error: &mut Option<String>,
-) {
-    // Per-tool timing + structured records for the JSON summary.
-    // `ToolStart` arms the timer; the matching `ToolResult` reads
-    // it and pushes a `ToolCallRecord` into `tool_records`. Tools
-    // are dispatched sequentially by the executor, so a single
-    // `Option` for the in-flight call is sufficient — we don't
-    // need to key by id. The previous implementation emitted
-    // `tool_calls: vec![]` regardless of reality (GPT 5.5 #13);
-    // this fixes it.
-    let mut in_flight: Option<(String, serde_json::Value, std::time::Instant)> = None;
-
-    for event in events {
-        match event {
-            session::executor::TurnEvent::Token(t) => {
-                if output == kirkforge::shared::OutputFormat::Text {
-                    print!("{t}");
-                    if let Err(e) = std::io::stdout().flush() {
-                        tracing::debug!(error = %e, "failed to flush stdout token");
-                    }
-                } else if output == kirkforge::shared::OutputFormat::StreamJson {
-                    let line = serde_json::json!({"type": "token", "content": t});
-                    print_json_line(&line);
-                }
-            }
-            session::executor::TurnEvent::Thinking(t) => {
-                if output == kirkforge::shared::OutputFormat::Text {
-                    eprintln!("\n[thinking] {t}");
-                } else if output == kirkforge::shared::OutputFormat::StreamJson {
-                    let line = serde_json::json!({"type": "thinking", "content": t});
-                    print_json_line(&line);
-                }
-            }
-            session::executor::TurnEvent::ToolStart { name, args } => {
-                if output == kirkforge::shared::OutputFormat::StreamJson {
-                    let line = serde_json::json!({"type": "tool_start", "name": name});
-                    print_json_line(&line);
-                }
-                // Arm the in-flight timer for the matching ToolResult.
-                // If we somehow see a second ToolStart without an
-                // intervening ToolResult (shouldn't happen given the
-                // executor's dispatch order, but defensive), the older
-                // record is dropped — better than accumulating stale
-                // timers.
-                in_flight = Some((name.clone(), args.clone(), std::time::Instant::now()));
-            }
-            session::executor::TurnEvent::ToolResult {
-                name,
-                output: result,
-                success,
-            } => {
-                if output == kirkforge::shared::OutputFormat::StreamJson {
-                    let line = serde_json::json!({
-                        "type": "tool_result",
-                        "name": name,
-                        "content": result,
-                    });
-                    print_json_line(&line);
-                } else if output == kirkforge::shared::OutputFormat::Text {
-                    // Keep non-interactive output compact: one line per tool,
-                    // and only the body if it failed. Successful tool churn is
-                    // the main source of terminal spam.
-                    let status = if *success { "ok" } else { "FAIL" };
-                    eprintln!("[tool {name} -> {status}]");
-                    if !success {
-                        eprintln!("{result}");
-                    }
-                }
-                // If we have a matching in-flight record, fold it
-                // into a ToolCallRecord and push. Name mismatch
-                // (shouldn't happen but be defensive) falls back to
-                // empty args + zero duration.
-                if let Some((start_name, start_args, start_time)) = in_flight.take() {
-                    let duration_ms = start_time.elapsed().as_millis() as u64;
-                    let record = kirkforge::shared::ToolCallRecord {
-                        name: start_name,
-                        arguments: start_args,
-                        result: result.clone(),
-                        success: *success,
-                        duration_ms,
-                    };
-                    tool_records.push(record);
-                    // If the name in the result doesn't match the
-                    // start (paranoia), prefer the start name. We
-                    // already used `start_name`; nothing to do.
-                }
-            }
-            session::executor::TurnEvent::Verification { message, success } => {
-                if output == kirkforge::shared::OutputFormat::StreamJson {
-                    let line = serde_json::json!({
-                        "type": "verification",
-                        "message": message,
-                        "success": success,
-                    });
-                    print_json_line(&line);
-                }
-            }
-            session::executor::TurnEvent::Error(e) => {
-                *final_error = Some(e.clone());
-                if output == kirkforge::shared::OutputFormat::Text {
-                    eprintln!("\n[error] {e}");
-                } else if output == kirkforge::shared::OutputFormat::StreamJson {
-                    let line = serde_json::json!({"type": "error", "content": e});
-                    print_json_line(&line);
-                }
-            }
-            session::executor::TurnEvent::CostStats {
-                prompt_tokens,
-                completion_tokens,
-                turn_cost,
-                cumulative_cost: cum_cost,
-            } => {
-                *total_prompt_tokens += prompt_tokens;
-                *total_completion_tokens += completion_tokens;
-                *cumulative_cost = *cum_cost;
-
-                if output == kirkforge::shared::OutputFormat::StreamJson {
-                    let line = serde_json::json!({
-                        "type": "cost",
-                        "prompt_tokens": prompt_tokens,
-                        "completion_tokens": completion_tokens,
-                        "turn_cost": turn_cost,
-                        "cumulative_cost": *cum_cost,
-                    });
-                    print_json_line(&line);
-                }
-            }
-            session::executor::TurnEvent::PlanComplete => {
-                // Non-interactive mode does not enter plan mode, so this
-                // event should not arrive. If it does, ignore it.
-            }
-            session::executor::TurnEvent::Recovered { messages } => {
-                if output == kirkforge::shared::OutputFormat::Text {
-                    eprintln!("\n[recovered] restored {messages} message(s) from checkpoint");
-                } else if output == kirkforge::shared::OutputFormat::StreamJson {
-                    let line = serde_json::json!({"type": "recovered", "messages": messages});
-                    print_json_line(&line);
-                }
-            }
-            session::executor::TurnEvent::CompactionReport {
-                dropped_tool_results,
-                condensed_assistant_turns,
-                original_count,
-                compacted_count,
-                tokens_before,
-                tokens_after,
-                new_messages: _,
-            } => {
-                if output == kirkforge::shared::OutputFormat::Text {
-                    eprintln!(
-                        "\n[compaction] {original_count} → {compacted_count} messages ({tokens_before} → {tokens_after} tokens), dropped {dropped_tool_results} tool result(s), condensed {condensed_assistant_turns} assistant turn(s).",
-                    );
-                } else if output == kirkforge::shared::OutputFormat::StreamJson {
-                    let line = serde_json::json!({
-                        "type": "compaction",
-                        "original_count": original_count,
-                        "compacted_count": compacted_count,
-                        "dropped_tool_results": dropped_tool_results,
-                        "condensed_assistant_turns": condensed_assistant_turns,
-                        "tokens_before": tokens_before,
-                        "tokens_after": tokens_after,
-                    });
-                    print_json_line(&line);
-                }
-            }
-            session::executor::TurnEvent::PullProgress { .. } => {
-                // Non-interactive mode has no place to show a live
-                // progress bar; swallow the event silently.
-            }
-        }
-    }
-}
-
-/// Resolve a `--continue-session` value to a log path.
-///
-/// Pure: takes the raw CLI string and returns either a `PathBuf`
-/// (for path-style values) or an error. For id-prefix values, the
-/// call to `session_index::resolve_session_id` is what actually
-/// hits the filesystem — that side effect is documented at the
-/// call site (`run_session`) so callers know what they're invoking.
-fn resolve_continue_path(value: &str) -> anyhow::Result<std::path::PathBuf> {
-    if value.contains('/') || value.ends_with(".conv.ndjson") {
-        return Ok(std::path::PathBuf::from(value));
-    }
-    match session::session_index::resolve_session_id(value) {
-        Ok(Some(p)) => Ok(p),
-        Ok(None) => Err(anyhow::anyhow!(
-            "No saved session found matching '{value}'. Run `kirkforge run --non-interactive` once to create one, or use `/sessions` in the TUI to list."
-        )),
-        Err(e) => Err(anyhow::anyhow!(
-            "Error resolving session id '{value}': {e}"
-        )),
-    }
 }
 
 /// Parse the next prompt from a `BufRead` source, applying the

@@ -12,6 +12,13 @@ categories = ["command-line-utilities", "development-tools"]
 members = ["crates/*"]
 resolver = "2"
 
+# Binary root lives at `src/main/mod.rs` (split into submodules for the
+# event-emission / path-resolution seam). Cargo auto-detects `src/main.rs`
+# but not the dir form, so point the `kirkforge` bin at it explicitly.
+[[bin]]
+name = "kirkforge"
+path = "src/main/mod.rs"
+
 [[bench]]
 name = "startup"
 harness = false

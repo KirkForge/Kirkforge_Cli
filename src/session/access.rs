@@ -93,7 +93,11 @@ impl Default for DenyList {
 // ── Path Guard ───────────────────────────────────────────────────────
 
 /// Outcome of a path guard check.
+///
+/// A verdict must be inspected before proceeding; ignoring it would
+/// bypass the safety checks the guard exists to enforce.
 #[derive(Debug, Clone, PartialEq)]
+#[must_use]
 pub enum GuardVerdict {
     /// The operation is allowed. Contains the resolved path.
     Allowed(PathBuf),

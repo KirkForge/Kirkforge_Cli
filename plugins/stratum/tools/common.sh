@@ -11,13 +11,14 @@ set -euo pipefail
 find_stratum() {
     local script_dir
     script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    local target_dir="${CARGO_TARGET_DIR:-${script_dir}/../../../target}"
     local candidates=(
         "${script_dir}/stratum"
         "${script_dir}/stratum.exe"
-        "${script_dir}/../../../target/release/stratum"
-        "${script_dir}/../../../target/release/stratum.exe"
-        "${script_dir}/../../../target/debug/stratum"
-        "${script_dir}/../../../target/debug/stratum.exe"
+        "${target_dir}/release/stratum"
+        "${target_dir}/release/stratum.exe"
+        "${target_dir}/debug/stratum"
+        "${target_dir}/debug/stratum.exe"
         "$(command -v stratum 2>/dev/null || true)"
     )
     for c in "${candidates[@]}"; do
@@ -71,12 +72,10 @@ else:
         return 0
     fi
 
-    # Naive fallback: only safe for flat string values without escaped quotes.
-    if [[ "$json" =~ \"${key}\":[[:space:]]*\"([^\"]+)\" ]]; then
-        printf '%s' "${BASH_REMATCH[1]}"
-        return 0
-    fi
-    printf '%s' "$default"
+    # Fallback removed: jq or python3 is required to safely extract JSON
+    # string values. This avoids silent wrong answers for keys that appear
+    # as substrings or values containing escaped quotes.
+    die "json_get_string: jq or python3 is required to parse tool arguments"
 }
 
 # Extract a top-level integer value. Preserves an explicitly empty default
@@ -129,6 +128,6 @@ sys.exit(0 if os.environ["KEY"] in d else 1)
         return
     fi
 
-    # Naive fallback: key present as a quoted member name.
-    [[ "$json" =~ \"${key}\"[[:space:]]*: ]]
+    # Fallback removed: jq or python3 is required to safely detect keys.
+    die "json_has_key: jq or python3 is required to parse tool arguments"
 }

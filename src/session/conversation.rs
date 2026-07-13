@@ -618,4 +618,80 @@ mod tests {
             .collect();
         assert_eq!(checkpoints.len(), 5, "oldest checkpoints should be pruned");
     }
+
+    /// Edge case: if the most recent checkpoint is corrupt, recovery should
+    /// fall back to the next older intact checkpoint.
+    #[test]
+    fn test_open_falls_back_to_older_checkpoint_when_latest_corrupt() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("session.conv.ndjson");
+
+        let (mut log, _outcome) = ConversationLog::open(path.clone()).unwrap();
+        log.append(Message {
+            role: crate::shared::Role::User,
+            content: "first".into(),
+            ..Default::default()
+        })
+        .unwrap();
+        let first_checkpoint = log.checkpoint().unwrap();
+
+        log.append(Message {
+            role: crate::shared::Role::User,
+            content: "second".into(),
+            ..Default::default()
+        })
+        .unwrap();
+        let second_checkpoint = log.checkpoint().unwrap();
+
+        // Corrupt the main log and the newest checkpoint.
+        std::fs::write(&path, "not json").unwrap();
+        std::fs::write(&second_checkpoint, "not json").unwrap();
+
+        let (restored, outcome) = ConversationLog::open(path).unwrap();
+        assert_eq!(outcome, OpenOutcome::Restored(1));
+        assert_eq!(restored.len(), 1);
+        assert_eq!(restored.last().unwrap().content, "first");
+        assert!(first_checkpoint.exists());
+    }
+
+    /// Edge case: a partially truncated final NDJSON line is treated as
+    /// corrupt, falling back to checkpoint recovery instead of silently
+    /// dropping the trailing fragment.
+    #[test]
+    fn test_open_handles_truncated_final_line() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("session.conv.ndjson");
+
+        let (mut log, _outcome) = ConversationLog::open(path.clone()).unwrap();
+        log.append(Message {
+            role: crate::shared::Role::User,
+            content: "first".into(),
+            ..Default::default()
+        })
+        .unwrap();
+        log.checkpoint().unwrap();
+
+        // Append a valid line, then truncate mid-way through the next object.
+        let partial = r#"{"role":"user","content":""#;
+        let first_json = serde_json::to_string(log.last().unwrap()).unwrap();
+        std::fs::write(&path, format!("{first_json}\n{partial}")).unwrap();
+
+        let (restored, outcome) = ConversationLog::open(path).unwrap();
+        assert_eq!(outcome, OpenOutcome::Restored(1));
+        assert_eq!(restored.len(), 1);
+        assert_eq!(restored.last().unwrap().content, "first");
+    }
+
+    /// Edge case: a log file containing only whitespace is treated as empty
+    /// rather than corrupt.
+    #[test]
+    fn test_open_whitespace_only_log_is_empty() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("session.conv.ndjson");
+        std::fs::write(&path, "   \n\n\t\n").unwrap();
+
+        let (log, outcome) = ConversationLog::open(path).unwrap();
+        assert_eq!(outcome, OpenOutcome::Loaded);
+        assert!(log.is_empty());
+    }
 }

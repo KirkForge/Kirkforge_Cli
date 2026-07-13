@@ -192,6 +192,10 @@ pub async fn resume_conversation_log(
     // branch still record their provenance.
     state.session_id = format!("{new_id} (resumed)");
     state.log_path = Some(new_log_path.clone());
+    state.fork_manager = Some(crate::session::session_fork::ForkManager::new(
+        &state.session_id,
+        &new_log_path,
+    ));
 
     // Touch the daemon so this resumed session is now the most recent.
     // `try_touch` logs its own errors; no additional handling needed here.
@@ -209,5 +213,49 @@ async fn load_recent_sessions_for_picker(
     match crate::daemon::client::try_list_recent().await? {
         Some(sessions) => Ok(sessions),
         None => Ok(Vec::new()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::shared::Config;
+    use crate::tui::app::AppState;
+    use std::sync::Arc;
+
+    fn test_state_with_log(log_path: std::path::PathBuf) -> AppState {
+        let mut state = AppState::new(Arc::new(std::sync::RwLock::new(Config::default())));
+        state.log_path = Some(log_path.clone());
+        state.session_id = "test-session".to_string();
+        state.fork_manager = Some(crate::session::session_fork::ForkManager::new(
+            "test-session",
+            &log_path,
+        ));
+        state
+    }
+
+    #[tokio::test]
+    async fn resume_conversation_log_updates_fork_manager() {
+        let tmp = tempfile::tempdir().unwrap();
+        let old_log_path = tmp.path().join("old-session.conv.ndjson");
+        let new_log_path = tmp.path().join("new-session.conv.ndjson");
+
+        // Create old and new conversation logs.
+        let _ = ConversationLog::open(old_log_path.clone()).unwrap();
+        let (new_log, _) = ConversationLog::open(new_log_path.clone()).unwrap();
+
+        let (tx, mut rx) = mpsc::unbounded_channel::<ConversationLog>();
+        let mut state = test_state_with_log(old_log_path);
+
+        let msg = resume_conversation_log(new_log, &mut state, &tx).await;
+        assert!(msg.contains("Resumed session"));
+        assert!(rx.try_recv().is_ok());
+
+        // The fork manager must now point at the resumed session.
+        assert!(state.fork_manager.is_some());
+        let fm = state.fork_manager.as_ref().unwrap();
+        assert_eq!(fm.len(), 0); // new session has no forks yet
+        assert_eq!(state.log_path, Some(new_log_path));
+        assert!(state.session_id.contains("new-session"));
     }
 }

@@ -16,7 +16,7 @@
 use anyhow::{Context, Result};
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
-use std::io::Stdout;
+use std::io::{IsTerminal, Stdout};
 
 /// Owns the terminal while the TUI is running. Drops back to cooked
 /// mode and shows the cursor when it goes out of scope.
@@ -29,6 +29,11 @@ impl TerminalGuard {
     /// title hidden (we set it ourselves via the UI). Returns the
     /// guard; dropping it restores the terminal.
     pub fn new() -> Result<Self> {
+        if !std::io::stdout().is_terminal() {
+            anyhow::bail!(
+                "interactive mode requires a terminal; use --render for non-interactive output"
+            );
+        }
         crossterm::terminal::enable_raw_mode().context("enable raw mode")?;
         let mut stdout = std::io::stdout();
         crossterm::execute!(

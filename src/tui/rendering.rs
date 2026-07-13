@@ -1242,4 +1242,77 @@ mod tests {
             .iter()
             .any(|s| s.content == "y" && matches!(s.style.bg, Some(Color::Yellow)))));
     }
+
+    /// Edge case: entirely empty input should not panic.
+    #[test]
+    fn test_markdown_empty_input() {
+        let lines = render_markdown_lines_with_query("", "", 80);
+        assert!(lines.is_empty() || (lines.len() == 1 && lines[0].spans.is_empty()));
+    }
+
+    /// Edge case: nested lists render correct indentation and numbering,
+    /// including a blank separator line before the next top-level item.
+    #[test]
+    fn test_markdown_nested_ordered_list() {
+        let lines = render_markdown_lines_with_query(
+            "1. outer\n   1. inner a\n   2. inner b\n2. next",
+            "",
+            80,
+        );
+        assert_eq!(lines.len(), 5);
+        assert_eq!(lines[0].spans[0].content, "1. ");
+        assert_eq!(lines[0].spans[1].content, "outer");
+        assert_eq!(lines[1].spans[0].content, "  1. ");
+        assert_eq!(lines[1].spans[1].content, "inner a");
+        assert_eq!(lines[2].spans[0].content, "  2. ");
+        assert_eq!(lines[2].spans[1].content, "inner b");
+        assert!(lines[3].spans.is_empty());
+        assert_eq!(lines[4].spans[0].content, "2. ");
+        assert_eq!(lines[4].spans[1].content, "next");
+    }
+
+    /// Edge case: bold + italic inline combination is rendered as a
+    /// single span with both modifiers.
+    #[test]
+    fn test_markdown_bold_italic_combined() {
+        let lines = render_markdown_lines_with_query("***bold italic*** plain", "", 80);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].spans.len(), 2);
+        assert_eq!(
+            lines[0].spans[0],
+            Span::styled(
+                "bold italic",
+                Style::default()
+                    .add_modifier(Modifier::BOLD)
+                    .add_modifier(Modifier::ITALIC)
+            )
+        );
+        assert_eq!(lines[0].spans[1].content, " plain");
+    }
+
+    /// Edge case: long inline code should not be truncated or split into
+    /// multiple lines unless wrapping is implemented; here we just verify
+    /// the whole content survives in one line.
+    #[test]
+    fn test_markdown_long_inline_code_survives() {
+        let long = "a".repeat(200);
+        let lines = render_markdown_lines_with_query(&format!("`{long}`"), "", 80);
+        assert_eq!(lines.len(), 1);
+        let text: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(text, long);
+    }
+
+    /// Edge case: search highlight should still split inside a bold span.
+    #[test]
+    fn test_markdown_search_highlight_inside_bold() {
+        let lines = render_markdown_lines_with_query("**hello world**", "world", 80);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].spans.len(), 2);
+        assert_eq!(lines[0].spans[0].content, "hello ");
+        assert_eq!(lines[0].spans[1].content, "world");
+        assert!(
+            lines[0].spans[1].style.bg == Some(Color::Yellow),
+            "search match should have yellow background"
+        );
+    }
 }

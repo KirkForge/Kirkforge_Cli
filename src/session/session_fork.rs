@@ -7,11 +7,11 @@
 /// Forks are stored on disk as separate NDJSON files alongside the
 /// parent session, and can be resumed independently.
 use crate::session::conversation::ConversationLog;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 /// Metadata about a session fork.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Fork {
     /// Fork identifier (e.g. "fork-01").
     pub id: String,
@@ -41,11 +41,51 @@ impl ForkManager {
     /// `log_path` — path to the session's NDJSON log file
     pub fn new(session_id: &str, log_path: &Path) -> Self {
         let forks_dir = log_path.parent().unwrap_or(Path::new(".")).join("forks");
+        let forks = Self::load_existing_forks(&forks_dir);
         Self {
             session_id: session_id.to_string(),
             base_path: forks_dir,
-            forks: Vec::new(),
+            forks,
         }
+    }
+
+    /// Scan the forks directory and load fork metadata persisted by
+    /// previous runs. This makes forks survive process restarts and prevents
+    /// `create_fork` from reusing an existing fork id / corrupting an
+    /// existing fork log.
+    fn load_existing_forks(forks_dir: &Path) -> Vec<Fork> {
+        let mut forks = Vec::new();
+        let entries = match std::fs::read_dir(forks_dir) {
+            Ok(entries) => entries,
+            Err(_) => return forks,
+        };
+        for entry in entries.flatten() {
+            let meta_path = entry.path().join("fork.json");
+            if !meta_path.is_file() {
+                continue;
+            }
+            match std::fs::read_to_string(&meta_path) {
+                Ok(json) => match serde_json::from_str::<Fork>(&json) {
+                    Ok(fork) => forks.push(fork),
+                    Err(e) => {
+                        tracing::warn!(
+                            path = %meta_path.display(),
+                            error = %e,
+                            "failed to parse fork metadata; skipping"
+                        );
+                    }
+                },
+                Err(e) => {
+                    tracing::warn!(
+                        path = %meta_path.display(),
+                        error = %e,
+                        "failed to read fork metadata; skipping"
+                    );
+                }
+            }
+        }
+        forks.sort_by(|a, b| a.id.cmp(&b.id));
+        forks
     }
 
     /// Create a fork at the current state of the conversation.
@@ -59,12 +99,24 @@ impl ForkManager {
         parent_conversation: &ConversationLog,
         fork_point: i64,
     ) -> anyhow::Result<Fork> {
-        let fork_num = self.forks.len() + 1;
-        let fork_id = format!("fork-{fork_num:02}");
+        // Pick the next fork id that does not collide with an already-loaded
+        // fork or a stale directory left on disk.
+        let mut fork_num = self.forks.len() + 1;
+        let mut fork_id = format!("fork-{fork_num:02}");
+        while self.base_path.join(&fork_id).exists() {
+            fork_num += 1;
+            fork_id = format!("fork-{fork_num:02}");
+        }
         let fork_dir = self.base_path.join(&fork_id);
         std::fs::create_dir_all(&fork_dir)?;
 
         let fork_path = fork_dir.join("conversation.ndjson");
+        // Defensive: if a stale conversation.ndjson somehow exists, remove
+        // it so the fork is written from scratch. We never want to append
+        // duplicate messages to an existing fork log.
+        if fork_path.exists() {
+            std::fs::remove_file(&fork_path)?;
+        }
         let mut fork_log = ConversationLog::open(fork_path.clone())?.0;
 
         // Copy messages up to the fork point
@@ -228,6 +280,67 @@ mod tests {
         assert_eq!(mgr.len(), 1);
         assert!(mgr.delete_fork(&fork.id).is_ok());
         assert_eq!(mgr.len(), 0);
+
+        remove_test_dir(&dir);
+    }
+
+    #[test]
+    fn test_fork_manager_loads_existing_forks() {
+        let dir = std::env::temp_dir().join("kirkforge_fork_load_test");
+        remove_test_dir(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let log_path = dir.join("session.conv.ndjson");
+        let mut log = ConversationLog::open(log_path.clone()).unwrap().0;
+        use crate::shared::{Message, Role};
+        log.append(Message {
+            role: Role::User,
+            content: "hello".into(),
+            ..Default::default()
+        })
+        .unwrap();
+
+        // Create a fork in one manager instance.
+        let mut mgr = ForkManager::new("test", &log_path);
+        let fork = mgr.create_fork("persisted", &log, -1).unwrap();
+        assert_eq!(fork.id, "fork-01");
+        drop(mgr);
+
+        // A fresh manager must see the fork created above.
+        let mgr2 = ForkManager::new("test", &log_path);
+        assert_eq!(mgr2.len(), 1);
+        assert!(mgr2.get("fork-01").is_some());
+
+        remove_test_dir(&dir);
+    }
+
+    #[test]
+    fn test_create_fork_does_not_reuse_id_or_corrupt_existing() {
+        let dir = std::env::temp_dir().join("kirkforge_fork_reuse_test");
+        remove_test_dir(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let log_path = dir.join("session.conv.ndjson");
+        let mut log = ConversationLog::open(log_path.clone()).unwrap().0;
+        use crate::shared::{Message, Role};
+        log.append(Message {
+            role: Role::User,
+            content: "hello".into(),
+            ..Default::default()
+        })
+        .unwrap();
+
+        let mut mgr = ForkManager::new("test", &log_path);
+        let first = mgr.create_fork("first", &log, -1).unwrap();
+        assert_eq!(first.id, "fork-01");
+
+        let second = mgr.create_fork("second", &log, -1).unwrap();
+        assert_eq!(second.id, "fork-02");
+        assert_ne!(first.path, second.path);
+
+        // Re-opening should still see both forks and not add a third on its own.
+        let mgr2 = ForkManager::new("test", &log_path);
+        assert_eq!(mgr2.len(), 2);
 
         remove_test_dir(&dir);
     }

@@ -3,8 +3,9 @@
 //! This is the regular (non-approval) key handling path. It lives in its own
 //! module so `tui/mod.rs` can stay focused on the event-loop orchestration.
 //!
-//! Function signature is the same as the inline version it was extracted from:
-//! `async fn handle_input_key(key, state, input_tx, cancel_tx, resume_tx, compact_tx) -> anyhow::Result<()>`.
+//! The handler takes a single `HandleInputContext` instead of a long parameter
+//! list so the orchestrator can pass all channels in one struct.  The
+//! signature is `async fn handle_input_key(key, state, ctx) -> anyhow::Result<()>`.
 //! The orchestrator calls us only when `state.pending_approval.is_none()`.
 
 use crate::session::conversation::ConversationLog;
@@ -17,35 +18,40 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use kirkforge_plugin_host::PluginRegistry;
 use tokio::sync::mpsc;
 
-/// Split a `!` command's formatted output into a one-line summary and the
+/// All channel endpoints the input-mode key handler needs.
+///
+/// Bundling the senders removes the 13-argument signature flagged in
+/// review.md and makes it impossible to swap two similar-looking channels at
+/// the call site.
+pub(crate) struct HandleInputContext<'a> {
+    pub input_tx: &'a mpsc::UnboundedSender<String>,
+    pub cancel_tx: &'a mpsc::UnboundedSender<()>,
+    pub resume_tx: &'a mpsc::UnboundedSender<ConversationLog>,
+    pub compact_tx: &'a mpsc::UnboundedSender<CompactRequest>,
+    pub model_tx: &'a mpsc::UnboundedSender<String>,
+    pub undo_tx: &'a mpsc::UnboundedSender<()>,
+    pub config_tx: &'a mpsc::UnboundedSender<Config>,
+    pub plan_tx: &'a mpsc::UnboundedSender<bool>,
+    pub persona_tx: &'a mpsc::UnboundedSender<PersonaResult>,
+    pub event_tx: &'a mpsc::Sender<TurnEvent>,
+    pub plugin_reload_tx: &'a mpsc::UnboundedSender<PluginRegistry>,
+}
+
+/// Split a `!` command's formatted output into a two-line summary and the
 /// full output, for use with `ConversationEntry::tool(summary, full)`.
 ///
-/// The summary is the first two lines of the formatted output (the
-/// `$ <cmd>` header and the `✅/❌/⏰` banner) — enough for the user to
-/// see what they ran and whether it worked without expanding. The full
-/// output is the entire formatted string. This mirrors the
+/// The summary is always the first two lines of the formatted output (the
+/// `$ <cmd>` header and the `✅/❌/⏰` banner). If the command produced no
+/// output, the second line is empty and the summary is just the header.
+/// The full output is the entire formatted string. This mirrors the
 /// `tool_should_collapse` / `expanded_tools` pattern: the chat panel
 /// shows only the summary by default; Enter or Tab on empty input
 /// expands it.
-///
-/// Pin: the splitter has to be `pub(crate)` for unit tests if we add
-/// any, but for now it's file-private and exercised end-to-end via
-/// the `!` passthrough integration tests in `commands.rs`.
-fn split_bang_summary(formatted: &str) -> (String, String) {
+pub(crate) fn split_bang_summary(formatted: &str) -> (String, String) {
     let mut lines = formatted.splitn(3, '\n');
-    let first = lines.next().unwrap_or("");
-    let second = lines.next().unwrap_or("");
-    let rest = lines.next().unwrap_or("");
-
-    let summary = if rest.is_empty() {
-        // Two-line output (no stdout/stderr) — just show both lines.
-        format!("{first}\n{second}")
-    } else {
-        // Multi-line output — summary is the first two lines, full
-        // output is everything.
-        format!("{first}\n{second}")
-    };
-
+    let first = lines.next().unwrap_or("").to_string();
+    let second = lines.next().unwrap_or("").to_string();
+    let summary = format!("{first}\n{second}");
     (summary, formatted.to_string())
 }
 
@@ -173,21 +179,10 @@ fn search_nav_direction(key: &KeyEvent) -> Option<SearchDirection> {
 /// (e.g. terminal draw failure bubbling up from the event loop — in
 /// practice this function itself does no I/O, so `Ok(())` is the only
 /// realistic outcome, but we keep `Result` for symmetry with the caller).
-#[allow(clippy::too_many_arguments)]
-pub async fn handle_input_key(
+pub(crate) async fn handle_input_key(
     key: KeyEvent,
     state: &mut AppState,
-    input_tx: &mpsc::UnboundedSender<String>,
-    cancel_tx: &mpsc::UnboundedSender<()>,
-    resume_tx: &mpsc::UnboundedSender<ConversationLog>,
-    compact_tx: &mpsc::UnboundedSender<CompactRequest>,
-    model_tx: &mpsc::UnboundedSender<String>,
-    undo_tx: &mpsc::UnboundedSender<()>,
-    config_tx: &mpsc::UnboundedSender<Config>,
-    plan_tx: &mpsc::UnboundedSender<bool>,
-    persona_tx: &mpsc::UnboundedSender<PersonaResult>,
-    event_tx: &mpsc::Sender<TurnEvent>,
-    plugin_reload_tx: &mpsc::UnboundedSender<PluginRegistry>,
+    ctx: &HandleInputContext<'_>,
 ) -> anyhow::Result<()> {
     // ── Session picker interceptor ─────────────────────────
     // When the recent-session picker overlay is active, all keys route
@@ -203,9 +198,12 @@ pub async fn handle_input_key(
             if let Some(path) = picker.selected_path() {
                 match crate::session::conversation::ConversationLog::open_async(path).await {
                     Ok((log, _outcome)) => {
-                        let msg =
-                            crate::tui::commands::resume_conversation_log(log, state, resume_tx)
-                                .await;
+                        let msg = crate::tui::commands::resume_conversation_log(
+                            log,
+                            state,
+                            ctx.resume_tx,
+                        )
+                        .await;
                         state.messages.push(ConversationEntry::new("system", msg));
                     }
                     Err(e) => {
@@ -441,7 +439,7 @@ pub async fn handle_input_key(
                             return Ok(());
                         }
                         if state.is_generating {
-                            if cancel_tx.send(()).is_err() {
+                            if ctx.cancel_tx.send(()).is_err() {
                                 // The executor driver is gone — the
                                 // session is ending or the TUI is
                                 // shutting down. Treat the key as a
@@ -703,7 +701,7 @@ pub async fn handle_input_key(
                         }
                         "/exit" | "/quit" => {
                             crate::send_or_warn!(
-                                cancel_tx.send(()),
+                                ctx.cancel_tx.send(()),
                                 "cancel channel receiver dropped"
                             );
                             state.should_exit = true;
@@ -724,7 +722,7 @@ pub async fn handle_input_key(
   /reload skills   Re-scan project SKILL.md files and refresh built-in skills.
   /sessions List/search saved sessions, prune old ones, or delete one by id.
   /carryover Show or clear cross-session carryover profile.
-  /test     Run cargo test --no-fail-fast; surface a parsed pass/fail summary with file:line locations. Optional: /test <timeout-secs>.\n\nBash passthrough:\n  !<command>  Run a shell command directly — no model round trip, no approval. Output is shown as a collapsible tool entry. 30-second timeout; for long jobs use `!<cmd> &` and check /jobs.\n\n@-mentions (inline file context):\n  @<path>          Inline the file's contents into the prompt (minified by default). The TUI shows a status row per mention.\n  @<path>:raw      Inline the file verbatim, no minification.\n  @<path>:A-B      Inline lines A–B (1-indexed, inclusive on both ends).\n  @<path>:A-B:raw  Range + verbatim, combined.\n  @~/...           Tilde expansion supported (e.g. @~/notes.md).\n  Multiple @<path> tokens in one input are all expanded. Each mention is capped at 50 KB (head + tail + marker) and respects the same path-safety rules as the model's read_file tool. Failures (missing, denied, I/O) are shown in the TUI as ✗ rows and as quoted placeholders in the prompt, so the model can react.\n\nKeybindings:\n  Ctrl+T   Toggle tool output collapse (default ON)\n  Ctrl+F   Search the conversation (Enter to commit and jump, n / Shift+N to cycle, Esc to cancel)\n  Enter    Expand/collapse the most recent message (when input is empty)\n  Tab      Same as Enter (alternative expand gesture)\n  Ctrl+C   Cancel generation + clear input
+  /test     Run cargo test --no-fail-fast; surface a parsed pass/fail summary with file:line locations. Optional: /test <timeout-secs>.\n\nBash passthrough:\n  !<command>  Run a shell command directly — no model round trip. Approval is configurable via `bang_requires_approval`. Output is shown as a collapsible tool entry. 30-second timeout; for long jobs use `!<cmd> &` and check /jobs.\n\n@-mentions (inline file context):\n  @<path>          Inline the file's contents into the prompt (minified by default). The TUI shows a status row per mention.\n  @<path>:raw      Inline the file verbatim, no minification.\n  @<path>:A-B      Inline lines A–B (1-indexed, inclusive on both ends).\n  @<path>:A-B:raw  Range + verbatim, combined.\n  @~/...           Tilde expansion supported (e.g. @~/notes.md).\n  Multiple @<path> tokens in one input are all expanded. Each mention is capped at 50 KB (head + tail + marker) and respects the same path-safety rules as the model's read_file tool. Failures (missing, denied, I/O) are shown in the TUI as ✗ rows and as quoted placeholders in the prompt, so the model can react.\n\nKeybindings:\n  Ctrl+T   Toggle tool output collapse (default ON)\n  Ctrl+F   Search the conversation (Enter to commit and jump, n / Shift+N to cycle, Esc to cancel)\n  Enter    Expand/collapse the most recent message (when input is empty)\n  Tab      Same as Enter (alternative expand gesture)\n  Ctrl+C   Cancel generation + clear input
   Ctrl+Shift+C  Copy last assistant message to clipboard\n  Ctrl+Shift+B  Copy a code block from the most recent assistant message (repeat to cycle blocks)\n  Ctrl+W   Delete word backward\n  Ctrl+U   Clear input line\n  Esc      Toggle thinking panel (or cancel search if Ctrl+F is active)\n\nStatus bar:\n  The bottom bar shows session model, time, cumulative cost, and a colour-coded budget indicator. Green (< 50%) = comfortable, yellow (50–80%) = consider /compact, red (> 80%) = compact now. The same data is available on demand via /status.\n".to_string();
                             let skills = state.skill_registry.all();
                             if !skills.is_empty() {
@@ -754,9 +752,12 @@ pub async fn handle_input_key(
                             return Ok(());
                         }
                         "/resume" => {
-                            let msg =
-                                crate::tui::commands::handle_resume_command(args, state, resume_tx)
-                                    .await;
+                            let msg = crate::tui::commands::handle_resume_command(
+                                args,
+                                state,
+                                ctx.resume_tx,
+                            )
+                            .await;
                             state.messages.push(ConversationEntry::new("system", msg));
                             return Ok(());
                         }
@@ -776,7 +777,7 @@ pub async fn handle_input_key(
                             let msg = match args {
                                 "plugins" => {
                                     crate::tui::commands::handle_reload_plugins_command(
-                                        plugin_reload_tx,
+                                        ctx.plugin_reload_tx,
                                         state,
                                     )
                                     .await
@@ -785,8 +786,11 @@ pub async fn handle_input_key(
                                     crate::tui::commands::handle_reload_skills_command(state)
                                 }
                                 _ => {
-                                    crate::tui::commands::handle_reload_command(config_tx, state)
-                                        .await
+                                    crate::tui::commands::handle_reload_command(
+                                        ctx.config_tx,
+                                        state,
+                                    )
+                                    .await
                                 }
                             };
                             state.messages.push(ConversationEntry::new("system", msg));
@@ -802,7 +806,10 @@ pub async fn handle_input_key(
                             // confirmation so the user gets instant
                             // feedback.
                             let msg = crate::tui::commands::handle_model_command(
-                                args, model_tx, event_tx, state,
+                                args,
+                                ctx.model_tx,
+                                ctx.event_tx,
+                                state,
                             )
                             .await;
                             state.messages.push(ConversationEntry::new("system", msg));
@@ -810,14 +817,17 @@ pub async fn handle_input_key(
                         }
                         "/compact" => {
                             let msg =
-                                crate::tui::commands::handle_compact_command(args, compact_tx)
+                                crate::tui::commands::handle_compact_command(args, ctx.compact_tx)
                                     .await;
                             state.messages.push(ConversationEntry::new("system", msg));
                             return Ok(());
                         }
                         "/route" => {
                             let msg = crate::tui::commands::handle_route_command(
-                                args, model_tx, event_tx, state,
+                                args,
+                                ctx.model_tx,
+                                ctx.event_tx,
+                                state,
                             )
                             .await;
                             state.messages.push(ConversationEntry::new("system", msg));
@@ -848,7 +858,7 @@ pub async fn handle_input_key(
                             // pops the stack and emits the result
                             // as a system token.
                             let msg =
-                                crate::tui::commands::handle_undo_command(args, undo_tx, state);
+                                crate::tui::commands::handle_undo_command(args, ctx.undo_tx, state);
                             state.messages.push(ConversationEntry::new("system", msg));
                             return Ok(());
                         }
@@ -863,7 +873,7 @@ pub async fn handle_input_key(
                                 PersonaKind::Plan,
                                 args,
                                 state,
-                                persona_tx.clone(),
+                                ctx.persona_tx.clone(),
                             )
                             .await;
                             state.messages.push(ConversationEntry::new("system", msg));
@@ -874,7 +884,7 @@ pub async fn handle_input_key(
                                 PersonaKind::Explore,
                                 args,
                                 state,
-                                persona_tx.clone(),
+                                ctx.persona_tx.clone(),
                             )
                             .await;
                             state.messages.push(ConversationEntry::new("system", msg));
@@ -885,7 +895,7 @@ pub async fn handle_input_key(
                                 PersonaKind::Coder,
                                 args,
                                 state,
-                                persona_tx.clone(),
+                                ctx.persona_tx.clone(),
                             )
                             .await;
                             state.messages.push(ConversationEntry::new("system", msg));
@@ -897,7 +907,7 @@ pub async fn handle_input_key(
                             // system message telling the model it may
                             // proceed; we echo a local confirmation too.
                             crate::send_or_warn!(
-                                plan_tx.send(false),
+                                ctx.plan_tx.send(false),
                                 "plan-mode channel receiver dropped"
                             );
                             state.messages.push(ConversationEntry::new(
@@ -957,7 +967,7 @@ pub async fn handle_input_key(
                             let msg = crate::tui::commands::handle_plugins_command(
                                 args,
                                 state,
-                                plugin_reload_tx,
+                                ctx.plugin_reload_tx,
                             )
                             .await;
                             state.messages.push(ConversationEntry::new("system", msg));
@@ -984,7 +994,7 @@ pub async fn handle_input_key(
                         ));
                         // Send the skill prompt to the model via executor
                         state.is_generating = true;
-                        if input_tx.send(rendered).is_err() {
+                        if ctx.input_tx.send(rendered).is_err() {
                             // Executor driver gone — same situation
                             // as the Ctrl+C branch above. Don't
                             // leave the UI claiming it's
@@ -1027,7 +1037,7 @@ pub async fn handle_input_key(
                     } else {
                         format!("{cleaned}{rendered_block}")
                     };
-                    if input_tx.send(prompt).is_err() {
+                    if ctx.input_tx.send(prompt).is_err() {
                         // Same pattern as the skill branch — the
                         // executor is gone, so the spinner we'd
                         // otherwise be stuck on would never get
@@ -1150,7 +1160,7 @@ mod tests {
         check(input, cursor_byte, "héllo", 5);
     }
 
-    use super::{char_index_for_line_col, handle_input_key};
+    use super::{char_index_for_line_col, handle_input_key, HandleInputContext};
     use crate::session::conversation::ConversationLog;
     use crate::session::executor::TurnEvent;
     use crate::shared::Config;
@@ -1226,20 +1236,23 @@ mod tests {
         let (plugin_reload_tx, _plugin_reload_rx) =
             mpsc::unbounded_channel::<kirkforge_plugin_host::PluginRegistry>();
 
+        let ctx = HandleInputContext {
+            input_tx: &input_tx,
+            cancel_tx: &cancel_tx,
+            resume_tx: &resume_tx,
+            compact_tx: &compact_tx,
+            model_tx: &model_tx,
+            undo_tx: &undo_tx,
+            config_tx: &config_tx,
+            plan_tx: &plan_tx,
+            persona_tx: &persona_tx,
+            event_tx: &event_tx,
+            plugin_reload_tx: &plugin_reload_tx,
+        };
         let result = handle_input_key(
             KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT),
             &mut state,
-            &input_tx,
-            &cancel_tx,
-            &resume_tx,
-            &compact_tx,
-            &model_tx,
-            &undo_tx,
-            &config_tx,
-            &plan_tx,
-            &persona_tx,
-            &event_tx,
-            &plugin_reload_tx,
+            &ctx,
         )
         .await;
         assert!(result.is_ok());
@@ -1269,55 +1282,28 @@ mod tests {
         let (plugin_reload_tx, _plugin_reload_rx) =
             mpsc::unbounded_channel::<kirkforge_plugin_host::PluginRegistry>();
 
-        #[allow(clippy::too_many_arguments)]
-        async fn send(
-            state: &mut AppState,
-            key: KeyEvent,
-            input_tx: &mpsc::UnboundedSender<String>,
-            cancel_tx: &mpsc::UnboundedSender<()>,
-            resume_tx: &mpsc::UnboundedSender<ConversationLog>,
-            compact_tx: &mpsc::UnboundedSender<CompactRequest>,
-            model_tx: &mpsc::UnboundedSender<String>,
-            undo_tx: &mpsc::UnboundedSender<()>,
-            config_tx: &mpsc::UnboundedSender<Config>,
-            plan_tx: &mpsc::UnboundedSender<bool>,
-            persona_tx: &mpsc::UnboundedSender<PersonaResult>,
-            event_tx: &mpsc::Sender<TurnEvent>,
-            plugin_reload_tx: &mpsc::UnboundedSender<kirkforge_plugin_host::PluginRegistry>,
-        ) {
-            handle_input_key(
-                key,
-                state,
-                input_tx,
-                cancel_tx,
-                resume_tx,
-                compact_tx,
-                model_tx,
-                undo_tx,
-                config_tx,
-                plan_tx,
-                persona_tx,
-                event_tx,
-                plugin_reload_tx,
-            )
-            .await
-            .unwrap();
+        let ctx = HandleInputContext {
+            input_tx: &input_tx,
+            cancel_tx: &cancel_tx,
+            resume_tx: &resume_tx,
+            compact_tx: &compact_tx,
+            model_tx: &model_tx,
+            undo_tx: &undo_tx,
+            config_tx: &config_tx,
+            plan_tx: &plan_tx,
+            persona_tx: &persona_tx,
+            event_tx: &event_tx,
+            plugin_reload_tx: &plugin_reload_tx,
+        };
+
+        async fn send(state: &mut AppState, key: KeyEvent, ctx: &HandleInputContext<'_>) {
+            handle_input_key(key, state, ctx).await.unwrap();
         }
 
         send(
             &mut state,
             KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
-            &input_tx,
-            &cancel_tx,
-            &resume_tx,
-            &compact_tx,
-            &model_tx,
-            &undo_tx,
-            &config_tx,
-            &plan_tx,
-            &persona_tx,
-            &event_tx,
-            &plugin_reload_tx,
+            &ctx,
         )
         .await;
         assert_eq!(state.cursor_position, 1); // col 1 on line 0 (clamped from 2)
@@ -1325,17 +1311,7 @@ mod tests {
         send(
             &mut state,
             KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
-            &input_tx,
-            &cancel_tx,
-            &resume_tx,
-            &compact_tx,
-            &model_tx,
-            &undo_tx,
-            &config_tx,
-            &plan_tx,
-            &persona_tx,
-            &event_tx,
-            &plugin_reload_tx,
+            &ctx,
         )
         .await;
         assert_eq!(state.cursor_position, 4); // back to end of line 1
@@ -1343,17 +1319,7 @@ mod tests {
         send(
             &mut state,
             KeyEvent::new(KeyCode::Home, KeyModifiers::NONE),
-            &input_tx,
-            &cancel_tx,
-            &resume_tx,
-            &compact_tx,
-            &model_tx,
-            &undo_tx,
-            &config_tx,
-            &plan_tx,
-            &persona_tx,
-            &event_tx,
-            &plugin_reload_tx,
+            &ctx,
         )
         .await;
         assert_eq!(state.cursor_position, 3); // start of line 1
@@ -1361,17 +1327,7 @@ mod tests {
         send(
             &mut state,
             KeyEvent::new(KeyCode::Left, KeyModifiers::NONE),
-            &input_tx,
-            &cancel_tx,
-            &resume_tx,
-            &compact_tx,
-            &model_tx,
-            &undo_tx,
-            &config_tx,
-            &plan_tx,
-            &persona_tx,
-            &event_tx,
-            &plugin_reload_tx,
+            &ctx,
         )
         .await;
         assert_eq!(state.cursor_position, 2); // end of line 0
@@ -1395,22 +1351,20 @@ mod tests {
         let (plugin_reload_tx, _plugin_reload_rx) =
             mpsc::unbounded_channel::<kirkforge_plugin_host::PluginRegistry>();
 
-        let result = handle_input_key(
-            KeyEvent::from(KeyCode::Enter),
-            &mut state,
-            &input_tx,
-            &cancel_tx,
-            &resume_tx,
-            &compact_tx,
-            &model_tx,
-            &undo_tx,
-            &config_tx,
-            &plan_tx,
-            &persona_tx,
-            &event_tx,
-            &plugin_reload_tx,
-        )
-        .await;
+        let ctx = HandleInputContext {
+            input_tx: &input_tx,
+            cancel_tx: &cancel_tx,
+            resume_tx: &resume_tx,
+            compact_tx: &compact_tx,
+            model_tx: &model_tx,
+            undo_tx: &undo_tx,
+            config_tx: &config_tx,
+            plan_tx: &plan_tx,
+            persona_tx: &persona_tx,
+            event_tx: &event_tx,
+            plugin_reload_tx: &plugin_reload_tx,
+        };
+        let result = handle_input_key(KeyEvent::from(KeyCode::Enter), &mut state, &ctx).await;
         assert!(result.is_ok(), "{result:?}");
         assert_eq!(state.messages.len(), 1);
         assert_eq!(state.messages[0].role, "system");

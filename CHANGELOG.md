@@ -7,6 +7,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed (deep audit — eighth pass)
 - Restored accidentally deleted `npm/kirkforge-plugin/packages/tool-gitnexus` files (still a production dependency of the orchestrator) and fixed the compile error in `src/index.ts` where the git-repo branch referenced an undefined `paths` shorthand
+- `src/tui/keys.rs` `/help` no longer claims `!<command>` bypasses approval when `bang_requires_approval` is enabled; `split_bang_summary` is now a shared `pub(crate)` helper used by both the direct and approval-gated `!` paths
 - `npm/kirkforge-plugin/apps/cli/src/bootstrap.ts` now supports `allowMissingModel`; the `verify` and `health` commands use it so deterministic verification and health checks work without requiring `OLLAMA_BASE_URL` or provider API keys
 - `npm/kirkforge-plugin/packages/tool-pyright/package.json` now declares `pyright` as a runtime dependency so the verifier ships a guaranteed binary instead of relying on a global install
 - `plugins/kirkforge-plugin/tools/common.sh` `find_cli()` now resolves the JS entry point via `$KIRKFORGE_CLI_JS`, the source-layout sibling, or a global npm install of `@kirkforge/cli`; the unsafe PATH-installed `kirkforge` fallback is removed, and resolved paths are validated to end in `.js`/`.cjs`/`.mjs` before being passed to `node`
@@ -51,6 +52,18 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `src/session/session_index.rs` `search_sessions` now searches message content in addition to id/date/count, so `kirkforge sessions --search <text>` finds conversations by what was actually said; added unit test `test_search_sessions_matches_content`; updated help text in `src/tui/commands/sessions.rs` and `src/main.rs`
 - `src/session/config.rs` `apply_env_overrides` now honors `KIRKFORGE_BANG_REQUIRES_APPROVAL`, `KIRKFORGE_JSON_MODE`, `KIRKFORGE_BASH_SANDBOX_WORKDIR`, `KIRKFORGE_BLOCK_GITIGNORED_DOTFILES`, `KIRKFORGE_MAX_OVERWRITE_SIZE`, `KIRKFORGE_SUMMARIZE_MODEL`, `KIRKFORGE_ROUTING_ENABLED`, `KIRKFORGE_ROUTER_MODEL`, `KIRKFORGE_COMMIT_MAX_FILE_SIZE`, `KIRKFORGE_PRESERVE_RECENT_MESSAGES`, `KIRKFORGE_MAX_TOOL_CALLS_PER_TURN`, `KIRKFORGE_MAX_PERSONA_TURNS`, `KIRKFORGE_TOOL_TIMEOUT_SECS`, `KIRKFORGE_AUDIT_LOG_PATH`, and `KIRKFORGE_HOOKS_DIR`; `merge_toml_into_config` partial-recovery path now covers the same fields plus `routing_model_map`; added tests for all new overrides
 - `config.toml.example` now documents the missing security/observability knobs `block_gitignored_dotfiles`, `max_overwrite_size`, `preserve_recent_messages`, `max_tool_calls_per_turn`, `tool_timeout_secs`, `audit_log_path`, and `hooks_dir`
+- `src/tui/mod.rs` now initializes `state.fork_manager` when a TUI session starts; `src/tui/commands/fork.rs` `resume_conversation_log` now rebuilds the fork manager for the resumed session, so `/fork`, `/resume <fork-id>`, and persona commands actually work instead of returning "No fork manager available"
+- `src/session/session_fork.rs` `ForkManager::new` now loads existing forks from `forks/*/fork.json` metadata so forks survive restarts; `create_fork` now skips already-used ids and removes stale `conversation.ndjson` files so it never appends duplicate messages to an existing fork
+- `kirkforge-draw` skill prompts now tell the model to run `kfd --load <path> --render --fenced` and to create `./out/` before saving, so the `/draw` skill no longer launches the TUI in the null-stdin plugin host
+- `kirkforge-draw` `kfd` now requires `--render` for `--output`, `--fenced`, `--plain`, and `--ansi`, and requires `--validate` for `--json`; previously these flags were silently ignored and could launch the TUI unexpectedly
+- `kirkforge-draw` `kfd` now surfaces unknown-object validation warnings on the non-interactive render path and exits with a clear error when run without a TTY instead of a raw-mode OS error
+- `kirkforge-draw` `render.sh` no longer passes the mutually exclusive `--plain` flag alongside `--fenced`
+- `kirkforge-draw` event handling now treats Ctrl-Shift-Z (uppercase `Z`) as redo, matching terminal conventions
+- `plugins/stratum/tools/common.sh`, `plugins/kirkforge-video/tools/video_common.sh`, and `plugins/kirkforge-plugin3/tools/plugin3_common.sh` now consult `CARGO_TARGET_DIR` when locating their Rust binaries, so custom target directories resolve correctly
+- `plugins/stratum/tools/common.sh`, `plugins/kirkforge-video/tools/video_common.sh`, and `plugins/kirkforge-plugin3/tools/plugin3_common.sh` no longer use naive bash regex fallbacks to parse `KIRKFORGE_TOOL_ARGS_JSON`; jq or python3 is now required, preventing silent wrong answers for escaped quotes or substring key matches
+- `plugins/kirkforge-video/tools/video_doctor.sh` now passes `--json` explicitly and safely instead of relying on an unquoted expansion that could split
+- `plugins/kirkforge-video/tools/video_risk.sh` now guards the empty `kind_args` array expansion so `set -u` does not fail when `kinds` is empty
+- `review.md` updated to reflect that session forks persist across restarts and that fork/persona commands now work inside resumed TUI sessions
 
 ### Fixed (deep audit — seventh pass)
 - `src/session/mcp_client.rs` `McpClientManager` now collects startup warnings (failed MCP server connections, zero discovered tools) and exposes them via `warnings()`

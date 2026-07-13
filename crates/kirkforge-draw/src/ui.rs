@@ -46,7 +46,7 @@ pub fn draw(app: &mut App, frame: &mut Frame) {
 
     // Header — formatting pinned in `title_text` below.
     let title = title_text(app.state.is_dirty(), app.source_path.as_deref());
-    let header = Paragraph::new(Line::from(title.clone()))
+    let header = Paragraph::new(Line::from(""))
         .block(Block::default().borders(Borders::BOTTOM).title(title))
         .style(Style::default().add_modifier(Modifier::BOLD));
     frame.render_widget(header, chunks[0]);

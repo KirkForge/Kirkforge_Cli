@@ -18,12 +18,20 @@ fi
 case "$check" in
     ffmpeg)
         ffmpeg_path="$(json_get_string "$args" "ffmpeg_path" "ffmpeg")"
-        "$VIDEO_BIN" doctor ffmpeg --ffmpeg-path "$ffmpeg_path" ${json_flag:+"$json_flag"}
+        if [[ -n "$json_flag" ]]; then
+            "$VIDEO_BIN" doctor ffmpeg --ffmpeg-path "$ffmpeg_path" --json
+        else
+            "$VIDEO_BIN" doctor ffmpeg --ffmpeg-path "$ffmpeg_path"
+        fi
         ;;
     project)
         project="$(json_get_string "$args" "project" "projects/default")"
         project="$(resolve_path "$project")"
-        "$VIDEO_BIN" doctor project --project "$project" ${json_flag:+"$json_flag"}
+        if [[ -n "$json_flag" ]]; then
+            "$VIDEO_BIN" doctor project --project "$project" --json
+        else
+            "$VIDEO_BIN" doctor project --project "$project"
+        fi
         ;;
     *)
         die_json "unknown doctor check: $check (use ffmpeg|project)"

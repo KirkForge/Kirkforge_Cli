@@ -17,6 +17,10 @@ use std::collections::HashSet;
 pub struct Highlighter {
     state: State,
     language: Language,
+    /// Cached keyword set for the active language so we don't rebuild
+    /// a `HashSet` from the static keyword slice on every highlighted
+    /// line (review.md performance finding).
+    keywords: HashSet<&'static str>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -359,7 +363,7 @@ pub fn highlight_line(
         return vec![Span::styled(line.to_string(), base_style)];
     }
 
-    let keywords = highlighter.language.keyword_set();
+    let keywords = &highlighter.keywords;
     let quotes = highlighter.language.string_quotes();
     let line_comment = highlighter.language.line_comment();
     let block_comment = highlighter.language.block_comment();
@@ -498,9 +502,12 @@ pub fn highlight_line(
 
 /// Create a highlighter for a given language tag (e.g. `"rust"`, `"python"`).
 pub fn highlighter_for(lang: Option<&str>) -> Highlighter {
+    let language = lang.map(Language::from_str).unwrap_or(Language::Unknown);
+    let keywords = language.keyword_set();
     Highlighter {
-        language: lang.map(Language::from_str).unwrap_or(Language::Unknown),
+        language,
         state: State::Normal,
+        keywords,
     }
 }
 

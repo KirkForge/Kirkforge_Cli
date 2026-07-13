@@ -216,6 +216,10 @@ pub async fn run_tui(
         .and_then(|f| f.to_str())
         .map(|s| s.trim_end_matches(".conv").to_string())
         .unwrap_or_else(|| "unknown-session".to_string());
+    state.fork_manager = Some(crate::session::session_fork::ForkManager::new(
+        &state.session_id,
+        &conversation_log_path,
+    ));
     // Hook for sessions that need a connection indicator.
     //
     // Probes Ollama at startup so the status bar reflects reality
@@ -619,6 +623,20 @@ async fn run_event_loop(
     // restored, executor dropped, carryover profile saved).
     shutdown: &Arc<Notify>,
 ) -> anyhow::Result<()> {
+    let key_ctx = keys::HandleInputContext {
+        input_tx,
+        cancel_tx,
+        resume_tx,
+        compact_tx,
+        model_tx,
+        undo_tx,
+        config_tx,
+        plan_tx,
+        persona_tx,
+        event_tx: event_tx_for_commands,
+        plugin_reload_tx,
+    };
+
     loop {
         // Check for exit signal
         if state.should_exit {
@@ -766,22 +784,7 @@ async fn run_event_loop(
                     } else if state.pending_approval.is_some() {
                         approval_keys::handle_approval_key(key, state);
                     } else {
-                        keys::handle_input_key(
-                            key,
-                            state,
-                            input_tx,
-                            cancel_tx,
-                            resume_tx,
-                            compact_tx,
-                            model_tx,
-                            undo_tx,
-                            config_tx,
-                            plan_tx,
-                            persona_tx,
-                            event_tx_for_commands,
-                            plugin_reload_tx,
-                        )
-                        .await?;
+                        keys::handle_input_key(key, state, &key_ctx).await?;
                     }
                 }
                 Event::Resize(_w, _h) => {
@@ -807,22 +810,7 @@ async fn run_event_loop(
                     } else if state.pending_approval.is_some() {
                         approval_keys::handle_approval_key(key, state);
                     } else {
-                        keys::handle_input_key(
-                            key,
-                            state,
-                            input_tx,
-                            cancel_tx,
-                            resume_tx,
-                            compact_tx,
-                            model_tx,
-                            undo_tx,
-                            config_tx,
-                            plan_tx,
-                            persona_tx,
-                            event_tx_for_commands,
-                            plugin_reload_tx,
-                        )
-                        .await?;
+                        keys::handle_input_key(key, state, &key_ctx).await?;
                     }
                 }
                 Event::Resize(_w, _h) => state.mark_dirty(),

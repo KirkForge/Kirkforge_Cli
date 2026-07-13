@@ -96,19 +96,11 @@ pub async fn handle_bang_approval_key(key: KeyEvent, state: &mut AppState) {
         let cmd = bang.cmd;
         let config = crate::shared::read_shared_config(&state.config).clone();
         let result = crate::tui::commands::handle_bang_command(&cmd, &config).await;
-        // Split into summary / full for the collapse UX. Mirrors
-        // the split rule in `keys.rs::split_bang_summary` — first
-        // two lines are the summary, the whole thing is the full
-        // output. Kept inline rather than re-exported to keep the
-        // approval module self-contained.
-        let mut lines = result.splitn(3, '\n');
-        let first = lines.next().unwrap_or("").to_string();
-        let second = lines.next().unwrap_or("").to_string();
-        let _rest = lines.next();
-        let summary = format!("{first}\n{second}");
-        state
-            .messages
-            .push(ConversationEntry::tool(summary, result));
+        // Split into summary / full for the collapse UX, using the
+        // same helper as the direct (non-approval) `!` path so the
+        // collapse behaviour is identical.
+        let (summary, full) = crate::tui::keys::split_bang_summary(&result);
+        state.messages.push(ConversationEntry::tool(summary, full));
     } else {
         state.messages.push(ConversationEntry::new(
             "system",

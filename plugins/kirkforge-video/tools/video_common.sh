@@ -24,16 +24,17 @@ tool_args() {
 find_video_bin() {
     local script_dir
     script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    local target_dir="${CARGO_TARGET_DIR:-${script_dir}/../../../target}"
     # When run from the source repo, plugin/tools/ is two levels below the workspace root.
     # When installed to ~/.local/share/kirkforge/plugins/kirkforge-video/, the binary must be
     # on PATH or next to the script (copied by the user).
     local candidates=(
         "$script_dir/kirkforge-video"
         "$script_dir/kirkforge-video.exe"
-        "$script_dir/../../../target/release/kirkforge-video"
-        "$script_dir/../../../target/release/kirkforge-video.exe"
-        "$script_dir/../../../target/debug/kirkforge-video"
-        "$script_dir/../../../target/debug/kirkforge-video.exe"
+        "$target_dir/release/kirkforge-video"
+        "$target_dir/release/kirkforge-video.exe"
+        "$target_dir/debug/kirkforge-video"
+        "$target_dir/debug/kirkforge-video.exe"
         "$(command -v kirkforge-video 2>/dev/null || true)"
     )
     for c in "${candidates[@]}"; do
@@ -90,16 +91,10 @@ json_get_string() {
         return 0
     fi
 
-    # Pure-bash fallback: naive, works for flat values without escaped quotes.
-    if [[ "$json" =~ \"${key}\":[[:space:]]*\"([^\"]+)\" ]]; then
-        printf '%s' "${BASH_REMATCH[1]}"
-        return 0
-    fi
-    if [[ "$json" =~ \"${key}\":[[:space:]]*(true|false|[0-9]+\.?[0-9]*) ]]; then
-        printf '%s' "${BASH_REMATCH[1]}"
-        return 0
-    fi
-    printf '%s' "$default"
+    # Pure-bash fallback removed: jq or python3 is required to safely
+    # extract JSON values. This avoids silent wrong answers for keys that
+    # appear as substrings or values containing escaped quotes.
+    die_json "json_get_string: jq or python3 is required to parse tool arguments"
 }
 
 # Extract a top-level boolean value as "true"/"false".
@@ -129,13 +124,6 @@ json_get_string_array() {
         return 0
     fi
 
-    # Fallback: extract quoted strings between [ and ].
-    if [[ "$json" =~ \"${key}\":[[:space:]]*\[([^\]]*)\] ]]; then
-        local inner="${BASH_REMATCH[1]}"
-        # Remove quotes and commas, keep spaces between values.
-        inner="${inner//\"/}"
-        inner="${inner//,/ }"
-        printf '%s' "$inner"
-        return 0
-    fi
+    # Fallback removed: jq or python3 is required to safely parse arrays.
+    die_json "json_get_string_array: jq or python3 is required to parse tool arguments"
 }

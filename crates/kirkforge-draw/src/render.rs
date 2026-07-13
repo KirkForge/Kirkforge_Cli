@@ -23,7 +23,10 @@ use kirkforge_draw_core::{build_scene, load_document, render_plain, validate_doc
 pub fn load_doc(path: &str) -> Result<kirkforge_draw_core::DrawDocument> {
     crate::event::validate_path_arg(path)?;
     let json = fs::read_to_string(path).with_context(|| format!("read {path}"))?;
-    let (doc, _report) = load_document(&json).with_context(|| format!("parse {path}"))?;
+    let (doc, report) = load_document(&json).with_context(|| format!("parse {path}"))?;
+    for w in &report.unknown_object_warnings {
+        eprintln!("kfd: warning: {w}");
+    }
     Ok(doc)
 }
 

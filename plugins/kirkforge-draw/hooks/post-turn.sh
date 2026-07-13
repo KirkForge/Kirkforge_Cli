@@ -22,14 +22,16 @@ if [[ ${#hits[@]} -eq 0 ]]; then
 fi
 
 # One-line notice; the model decides whether to render.
-names=$(printf '%s\n' "${hits[@]}" | sort -u | head -5 | paste -sd, -)
+sorted=$(printf '%s\n' "${hits[@]}" | sort -u)
+count=$(printf '%s\n' "$sorted" | wc -l)
+names=$(printf '%s\n' "$sorted" | head -5 | paste -sd, -)
+if [[ "$count" -gt 5 ]]; then
+  names="${names}, ..."
+fi
 if command -v jq > /dev/null 2>&1; then
-  jq -n --arg names "$names" '{"verdict":"allow","message":"Found new .td.json: \($names). Render with kfd --load <path> --fenced if useful."}'
+  jq -n --arg names "$names" '{"verdict":"allow","message":"Found new .td.json: \($names). Render with kfd --load <path> --render --fenced if useful."}'
 elif command -v python3 > /dev/null 2>&1; then
-  python3 -c 'import json,sys; print(json.dumps({"verdict":"allow","message":f"Found new .td.json: {sys.argv[1]}. Render with kfd --load <path> --fenced if useful."}))' "$names"
+  python3 -c 'import json,sys; print(json.dumps({"verdict":"allow","message":f"Found new .td.json: {sys.argv[1]}. Render with kfd --load <path> --render --fenced if useful."}))' "$names"
 else
-  # Minimal escaping fallback.
-  names="${names//\\/\\\\}"
-  names="${names//\"/\\\"}"
-  printf '{"verdict":"allow","message":"Found new .td.json: %s. Render with kfd --load <path> --fenced if useful."}\n' "$names"
+  die "post-turn: jq or python3 is required to encode the hook verdict"
 fi

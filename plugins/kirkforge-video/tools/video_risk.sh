@@ -20,5 +20,5 @@ else
         die_json "provide project or kinds array"
     fi
     IFS=' ' read -ra kind_args <<<"$kinds"
-    "$VIDEO_BIN" risk "${kind_args[@]}" --duration-s "$duration_s"
+    "$VIDEO_BIN" risk "${kind_args[@]+"${kind_args[@]}"}" --duration-s "$duration_s"
 fi

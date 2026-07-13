@@ -11,13 +11,14 @@ set -euo pipefail
 find_kfd() {
     local script_dir
     script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    local target_dir="${CARGO_TARGET_DIR:-${script_dir}/../../../target}"
     local candidates=(
         "${script_dir}/kfd"
         "${script_dir}/kfd.exe"
-        "${script_dir}/../../../target/release/kfd"
-        "${script_dir}/../../../target/release/kfd.exe"
-        "${script_dir}/../../../target/debug/kfd"
-        "${script_dir}/../../../target/debug/kfd.exe"
+        "${target_dir}/release/kfd"
+        "${target_dir}/release/kfd.exe"
+        "${target_dir}/debug/kfd"
+        "${target_dir}/debug/kfd.exe"
         "$(command -v kfd 2>/dev/null || true)"
     )
     for c in "${candidates[@]}"; do
@@ -53,10 +54,8 @@ json_get_string() {
         return 0
     fi
 
-    # Pure-bash fallback: naive, works for flat values without escaped quotes.
-    if [[ "$json" =~ \"${key}\":[[:space:]]*\"([^\"]+)\" ]]; then
-        printf '%s' "${BASH_REMATCH[1]}"
-        return 0
-    fi
-    printf '%s' "$default"
+    # Pure-bash fallback removed: jq or python3 is required to safely
+    # extract JSON string values. This avoids silent wrong answers for
+    # keys that appear as substrings or values containing escaped quotes.
+    die "json_get_string: jq or python3 is required to parse tool arguments"
 }

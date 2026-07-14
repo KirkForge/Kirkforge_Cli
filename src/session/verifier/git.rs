@@ -23,8 +23,9 @@ pub async fn verify_git(event: &BusEvent) -> Verdict {
             workdir,
             ..
         }) => {
-            // Only react to bash commands that look like git commands
-            if command.trim_start().starts_with("git ") {
+            // Only react to bash commands that invoke git anywhere in the
+            // chain (e.g. `cd /repo && git merge`, `sudo git …`).
+            if command_invokes_git(command) {
                 verify_git_bash(command, *exit_code, workdir.as_deref()).await
             } else {
                 Verdict::Skipped("not a git command".into())
@@ -60,26 +61,68 @@ async fn verify_git_operation(args: &[String], _output: &str, success: bool) -> 
     }
 }
 
+/// Best-effort scan for `git` as a command word anywhere in a shell chain.
+///
+/// Splits on `&&`/`||`/`;`/`|`/newlines, then for each segment skips leading
+/// env assignments (`VAR=value`) and the common prefixes `sudo`/`env`/`nice`/
+/// `nohup`/`time`/`exec` before the command word. Returns the lowercased git
+/// subcommand (the token after `git`) for each git-invoking segment.
+///
+/// ponytail: ceiling — command substitution `$(git …)`, `git` inside quoted
+/// strings, and `sudo -E git` (a flag between sudo and git) are not parsed.
+/// This is a post-condition verifier, not a shell parser; under-detection
+/// only skips a best-effort `git status`, and over-detection only runs an
+/// extra one, so the trade-off is safe.
+fn git_subcommands_in(command: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for segment in command.split(['&', '|', ';', '\n']) {
+        let mut tokens = segment.split_whitespace();
+        let mut cmd = tokens.next();
+        while let Some(t) = cmd {
+            if t.contains('=') && !t.starts_with('=') {
+                cmd = tokens.next();
+                continue;
+            }
+            if matches!(t, "sudo" | "env" | "nice" | "nohup" | "time" | "exec") {
+                cmd = tokens.next();
+                continue;
+            }
+            break;
+        }
+        if cmd.map(|c| c.eq_ignore_ascii_case("git")).unwrap_or(false) {
+            out.push(tokens.next().unwrap_or("").to_lowercase());
+        }
+    }
+    out
+}
+
+/// True if the command chain invokes `git` somewhere — not just when it
+/// starts literally with `git `. Catches `cd /repo && git merge`, `sudo
+/// git …`, `GIT_DIR=… git …`, `a && b || git …`.
+fn command_invokes_git(command: &str) -> bool {
+    !git_subcommands_in(command).is_empty()
+}
+
 /// Commands that, on success, may leave the worktree dirty.
 #[inline]
 fn is_git_modifying_command(command: &str) -> bool {
-    let lowered = command.to_lowercase();
-    [
-        "git add",
-        "git rm",
-        "git mv",
-        "git commit",
-        "git merge",
-        "git rebase",
-        "git cherry-pick",
-        "git pull",
-        "git checkout",
-        "git reset",
-        "git restore",
-        "git revert",
-    ]
-    .iter()
-    .any(|prefix| lowered.starts_with(prefix))
+    const MODS: &[&str] = &[
+        "add",
+        "rm",
+        "mv",
+        "commit",
+        "merge",
+        "rebase",
+        "cherry-pick",
+        "pull",
+        "checkout",
+        "reset",
+        "restore",
+        "revert",
+    ];
+    git_subcommands_in(command)
+        .iter()
+        .any(|sub| MODS.iter().any(|m| sub.starts_with(m)))
 }
 
 /// Commands whose failure may leave merge conflicts behind.
@@ -356,5 +399,38 @@ mod tests {
         }
 
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_command_invokes_git_detects_chained_and_prefixed() {
+        // S6: the old `starts_with("git ")` gate skipped all of these.
+        assert!(command_invokes_git("git merge"));
+        assert!(command_invokes_git("  git status"));
+        assert!(command_invokes_git("cd /repo && git merge main"));
+        assert!(command_invokes_git("sudo git pull"));
+        assert!(command_invokes_git("GIT_DIR=/x git status"));
+        assert!(command_invokes_git("env GIT_DIR=/x git merge"));
+        assert!(command_invokes_git("a && b || git rebase"));
+        assert!(command_invokes_git("git log | grep HEAD"));
+        // Non-git commands are not flagged.
+        assert!(!command_invokes_git("ls -la"));
+        assert!(!command_invokes_git("echo git merge"));
+        assert!(!command_invokes_git("cat git-status.txt"));
+        assert!(!command_invokes_git("gitter status"));
+        assert!(!command_invokes_git(""));
+    }
+
+    #[test]
+    fn test_is_git_modifying_command_chained() {
+        assert!(is_git_modifying_command("git add ."));
+        assert!(is_git_modifying_command("cd /repo && git add ."));
+        assert!(is_git_modifying_command("sudo git commit -m x"));
+        assert!(is_git_modifying_command("GIT_DIR=/x git merge main"));
+        // Non-modifying git subcommands stay clean.
+        assert!(!is_git_modifying_command("git status"));
+        assert!(!is_git_modifying_command("cd /repo && git log"));
+        // Non-git commands and git-as-an-argument are not modifying.
+        assert!(!is_git_modifying_command("rm -rf /tmp/x"));
+        assert!(!is_git_modifying_command("echo git commit"));
     }
 }

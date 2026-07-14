@@ -241,6 +241,15 @@ pub fn clear_carryover() {
     }
 }
 
+/// Write `content` to `path` atomically using a same-directory temp file
+/// followed by a rename. The temp file is left behind only on error, so a
+/// crash during the write cannot leave the target truncated.
+fn atomic_write(path: &std::path::Path, content: &[u8]) -> std::io::Result<()> {
+    let tmp = path.with_extension("tmp");
+    std::fs::write(&tmp, content)?;
+    std::fs::rename(&tmp, path)
+}
+
 /// Save the carryover profile to disk, pruning to top-5 tools first.
 pub fn save_carryover(profile: &CarryoverProfile) {
     let mut pruned = profile.clone();
@@ -268,7 +277,7 @@ pub fn save_carryover(profile: &CarryoverProfile) {
     }
     match serde_json::to_string(&pruned) {
         Ok(content) => {
-            if let Err(e) = std::fs::write(&path, content) {
+            if let Err(e) = atomic_write(&path, content.as_bytes()) {
                 tracing::warn!(error = %e, path = %path.display(), "failed to write carryover profile");
             }
         }
@@ -351,6 +360,26 @@ mod tests {
 
         remove_test_file(&temp);
         let _ = backup_path;
+    }
+
+    #[test]
+    fn test_atomic_write_replaces_target_without_leaving_tmp() {
+        let dir = std::env::temp_dir().join("kirkforge_atomic_write_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let target = dir.join("carryover.json");
+        let tmp = dir.join("carryover.tmp");
+
+        atomic_write(&target, b"hello").unwrap();
+        assert!(target.exists());
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "hello");
+        assert!(!tmp.exists(), "temp file must be removed after rename");
+
+        atomic_write(&target, b"world").unwrap();
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "world");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

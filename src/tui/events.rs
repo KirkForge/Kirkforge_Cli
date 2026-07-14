@@ -55,6 +55,7 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
             if let Some(last) = state.messages.last_mut() {
                 if last.role == role_str {
                     last.content.push_str(&t);
+                    last.bump_version();
                 } else {
                     state.messages.push(ConversationEntry::new("assistant", t));
                 }

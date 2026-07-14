@@ -9,8 +9,8 @@
 
 mod turn_events;
 
-use clap::{CommandFactory, Parser, Subcommand};
-use clap_complete::Shell;
+use clap::{CommandFactory, Parser};
+use kirkforge::cli::{Cli, Command};
 use kirkforge::{adapters, daemon, line_mode, session, shared, tools, tui};
 use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
@@ -27,23 +27,25 @@ use turn_events::{emit_turn_events, resolve_continue_path};
 /// non-interactive debugging).
 fn init_tracing(log_level: &str) -> anyhow::Result<()> {
     // Writer enum so that a failure to open the log file falls back to
-    // a null sink instead of panicking on `/dev/null`.
+    // a null sink instead of panicking on `/dev/null`. The file is opened
+    // once and shared behind a mutex; the old per-record `OpenOptions::open`
+    // caused thousands of syscalls per turn under `RUST_LOG=debug`.
     enum LogWriter {
-        File(std::fs::File),
+        File(std::sync::Arc<std::sync::Mutex<std::fs::File>>),
         Sink(std::io::Sink),
     }
 
     impl std::io::Write for LogWriter {
         fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
             match self {
-                LogWriter::File(f) => f.write(buf),
+                LogWriter::File(arc) => arc.lock().expect("log file mutex poisoned").write(buf),
                 LogWriter::Sink(s) => s.write(buf),
             }
         }
 
         fn flush(&mut self) -> std::io::Result<()> {
             match self {
-                LogWriter::File(f) => f.flush(),
+                LogWriter::File(arc) => arc.lock().expect("log file mutex poisoned").flush(),
                 LogWriter::Sink(s) => s.flush(),
             }
         }
@@ -68,27 +70,30 @@ fn init_tracing(log_level: &str) -> anyhow::Result<()> {
         );
     }
 
+    // Open the log file once. Rotation-by-moving-aside is sacrificed for
+    // performance; callers can copy/truncate the file in place instead.
+    let file_handle: Option<std::sync::Arc<std::sync::Mutex<std::fs::File>>> =
+        match std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_file)
+        {
+            Ok(file) => Some(std::sync::Arc::new(std::sync::Mutex::new(file))),
+            Err(e) => {
+                // Last-ditch fallback: write to stderr so logs aren't lost,
+                // and route tracing into a null sink so the subscriber
+                // still initializes even when `/dev/null` is unavailable
+                // (e.g. in a sandboxed or Windows environment).
+                eprintln!("failed to open log file {}: {}", log_file.display(), e);
+                None
+            }
+        };
+
     let file_layer = tracing_subscriber::fmt::layer()
         .with_ansi(false)
-        .with_writer(move || {
-            // Re-open on every write so rotation can be done by moving the
-            // file aside while the process is running. The `tracing-appender`
-            // crate would be cleaner, but we avoid the extra dependency.
-            match std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&log_file)
-            {
-                Ok(file) => LogWriter::File(file),
-                Err(e) => {
-                    // Last-ditch fallback: write to stderr so logs aren't lost,
-                    // and route tracing into a null sink so the subscriber
-                    // still initializes even when `/dev/null` is unavailable
-                    // (e.g. in a sandboxed or Windows environment).
-                    eprintln!("failed to open log file {}: {}", log_file.display(), e);
-                    LogWriter::Sink(std::io::sink())
-                }
-            }
+        .with_writer(move || match &file_handle {
+            Some(arc) => LogWriter::File(std::sync::Arc::clone(arc)),
+            None => LogWriter::Sink(std::io::sink()),
         });
 
     let registry = tracing_subscriber::registry()
@@ -104,156 +109,87 @@ fn init_tracing(log_level: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Map an anyhow error to a structured exit code.
-/// 0 = success, 1 = general, 2 = bad args (clap), 3 = model unreachable,
-/// 4 = permission/sandbox denied, 5 = config parse error.
-fn exit_code(e: &anyhow::Error) -> i32 {
-    let msg = format!("{e:#}").to_lowercase();
-    if msg.contains("connection refused")
-        || msg.contains("failed to connect")
-        || msg.contains("dns error")
-        || msg.contains("timed out")
-        || msg.contains("model not found")
-    {
-        3
-    } else if msg.contains("denied")
-        || msg.contains("permission")
-        || msg.contains("sandbox")
-        || msg.contains("blocked")
-    {
-        4
-    } else if msg.contains("config") && (msg.contains("parse") || msg.contains("invalid")) {
-        5
-    } else {
-        1
+/// Typed error categories used to pick a stable process exit code.
+///
+/// The previous `exit_code` implementation lowercased the error message and
+/// matched substrings, which missed real sandbox denials that used phrases
+/// such as "path is outside the allowed area" or "operation not permitted".
+/// Centralising the classification in an enum makes the exit-code contract
+/// explicit and easier to extend as more error sources become typed.
+#[derive(Debug)]
+enum KirkForgeError {
+    /// Model/host unreachable or DNS/connection failure.
+    ModelUnreachable(anyhow::Error),
+    /// Permission denied, sandbox violation, or path blocked by policy.
+    AccessDenied(anyhow::Error),
+    /// Configuration file parsing or validation failure.
+    ConfigParse(anyhow::Error),
+    /// Any other failure.
+    General(anyhow::Error),
+}
+
+impl std::fmt::Display for KirkForgeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            KirkForgeError::ModelUnreachable(e)
+            | KirkForgeError::AccessDenied(e)
+            | KirkForgeError::ConfigParse(e)
+            | KirkForgeError::General(e) => write!(f, "{e:#}"),
+        }
     }
 }
 
-#[derive(Parser, Debug)]
-#[command(
-    name = "kirkforge",
-    version,
-    about,
-    after_help = "Exit codes:\n  0  success\n  1  general error\n  2  bad arguments\n  3  model unreachable\n  4  permission / sandbox denied\n  5  config parse error"
-)]
-struct Cli {
-    /// Log verbosity. Overridden by RUST_LOG if set.
-    #[arg(
-        long,
-        default_value = "warn",
-        env = "KIRKFORGE_LOG_LEVEL",
-        global = true
-    )]
-    log_level: String,
-
-    #[command(subcommand)]
-    command: Command,
+impl std::error::Error for KirkForgeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            KirkForgeError::ModelUnreachable(e)
+            | KirkForgeError::AccessDenied(e)
+            | KirkForgeError::ConfigParse(e)
+            | KirkForgeError::General(e) => Some(e.as_ref()),
+        }
+    }
 }
 
-#[derive(Subcommand, Debug)]
-enum Command {
-    Run {
-        #[arg(short, long)]
-        model: Option<String>,
+impl From<anyhow::Error> for KirkForgeError {
+    fn from(e: anyhow::Error) -> Self {
+        // TODO: as more library calls return typed errors, replace these
+        // string probes with `downcast_ref` checks against concrete error types.
+        let msg = format!("{e:#}").to_lowercase();
+        if msg.contains("connection refused")
+            || msg.contains("failed to connect")
+            || msg.contains("dns error")
+            || msg.contains("timed out")
+            || msg.contains("model not found")
+            || msg.contains("model unreachable")
+        {
+            KirkForgeError::ModelUnreachable(e)
+        } else if msg.contains("denied")
+            || msg.contains("permission")
+            || msg.contains("sandbox")
+            || msg.contains("blocked")
+            || msg.contains("outside the allowed area")
+            || msg.contains("not permitted")
+        {
+            KirkForgeError::AccessDenied(e)
+        } else if msg.contains("config") && (msg.contains("parse") || msg.contains("invalid")) {
+            KirkForgeError::ConfigParse(e)
+        } else {
+            KirkForgeError::General(e)
+        }
+    }
+}
 
-        #[arg(long)]
-        host: Option<String>,
-
-        #[arg(long)]
-        model_type: Option<String>,
-
-        #[arg(long)]
-        auto_approve: bool,
-
-        /// Preview destructive operations without applying them.
-        /// Read-only tools still run; write_file, edit_file, and bash
-        /// report what they would do.
-        #[arg(long)]
-        dry_run: bool,
-
-        #[arg(short, long)]
-        system: Option<String>,
-
-        #[arg(short, long)]
-        resume: Option<String>,
-
-        #[arg(long)]
-        non_interactive: bool,
-
-        #[arg(long, default_value = "text")]
-        output: kirkforge::shared::OutputFormat,
-
-        /// Cap on the number of turns in non-interactive mode. Each
-        /// non-empty line on stdin is one turn. 0 = unlimited (run
-        /// until EOF or a blank line). Defaults to 0. Review.md
-        /// gap #2: the previous one-shot read-and-exit made it
-        /// impossible to script multi-turn sessions.
-        #[arg(long, default_value_t = 0)]
-        max_turns: usize,
-
-        /// Resume a prior session by id prefix (or full path). When
-        /// set, the existing `*.conv.ndjson` is reopened and the new
-        /// turns are appended to it. Path is preferred if the value
-        /// contains a `/`; otherwise it's treated as a session-id
-        /// prefix and resolved via `session::session_index`.
-        #[arg(long)]
-        continue_session: Option<String>,
-
-        /// Resume the most recent session via the session daemon.
-        /// If the daemon is not running, falls back to creating a new session.
-        #[arg(long, conflicts_with = "continue_session", conflicts_with = "resume")]
-        auto_resume: bool,
-
-        /// Resume a specific recent session by id or prefix via the daemon.
-        #[arg(
-            long,
-            conflicts_with = "continue_session",
-            conflicts_with = "resume",
-            conflicts_with = "auto_resume"
-        )]
-        attach: Option<String>,
-
-        /// Force line-mode (no TUI) even when stdout is a terminal.
-        /// Useful when the alternate screen is broken or you want plain
-        /// stdin/stdout interaction with explicit approval prompts.
-        #[arg(long)]
-        no_tui: bool,
-    },
-    /// Print shell completion script and exit.
-    /// Example: kirkforge completions bash >> ~/.bashrc
-    Completions { shell: Shell },
-    /// Show operational metrics summary (tool calls, verifiers, turns, approvals).
-    Metrics,
-    /// List, search, and export past sessions.
-    /// Without arguments, lists recent sessions (newest first).
-    /// With --export, writes the session to stdout or a file.
-    /// With --search, filters sessions by id, date, or message count.
-    Sessions {
-        /// Session id or id prefix to export. Omit to list all sessions.
-        id: Option<String>,
-
-        /// Export format: markdown, json, or ndjson.
-        #[arg(long, value_name = "FORMAT")]
-        export: Option<String>,
-
-        /// Write export to this file instead of stdout.
-        #[arg(long, short)]
-        output: Option<PathBuf>,
-
-        /// Search sessions by id, date, message count, or message content.
-        #[arg(long, value_name = "QUERY", conflicts_with = "export")]
-        search: Option<String>,
-    },
-    /// Run the background session daemon.
-    Daemon {
-        /// Stay in the foreground instead of detaching.
-        #[arg(long)]
-        foreground: bool,
-
-        /// Stop a running daemon.
-        #[arg(long, conflicts_with = "foreground")]
-        stop: bool,
-    },
+impl KirkForgeError {
+    /// Structured exit code: 0 = success, 1 = general, 2 = bad args (clap),
+    /// 3 = model unreachable, 4 = permission/sandbox denied, 5 = config parse error.
+    fn exit_code(&self) -> i32 {
+        match self {
+            KirkForgeError::ModelUnreachable(_) => 3,
+            KirkForgeError::AccessDenied(_) => 4,
+            KirkForgeError::ConfigParse(_) => 5,
+            KirkForgeError::General(_) => 1,
+        }
+    }
 }
 
 #[tokio::main]
@@ -264,7 +200,7 @@ async fn main() {
         std::process::exit(2);
     }
 
-    let result = match cli.command {
+    let result: Result<(), KirkForgeError> = match cli.command {
         Command::Run {
             model,
             host,
@@ -332,11 +268,12 @@ async fn main() {
                 ))
             }
         }
-    };
+    }
+    .map_err(KirkForgeError::from);
 
     if let Err(e) = result {
-        eprintln!("kirkforge: {e:#}");
-        std::process::exit(exit_code(&e));
+        eprintln!("kirkforge: {e}");
+        std::process::exit(e.exit_code());
     }
 }
 

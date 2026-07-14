@@ -7,6 +7,7 @@
 //! - `2` → deny (meaningful for pre-tool hooks)
 //! - any other non-zero / timeout / crash → allow, but log a warning
 
+use crate::env::curated_env;
 use kirkforge_plugin::Capability;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -64,7 +65,8 @@ impl PluginHook {
         let mut attempts = 0;
         let status = loop {
             match Command::new(&cmd_path)
-                .envs(env)
+                .env_clear()
+                .envs(curated_env(env))
                 .current_dir(&self.plugin_root)
                 .status()
             {

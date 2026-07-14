@@ -33,6 +33,7 @@
 use crate::session::conversation::ConversationLog;
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
+use std::io::BufRead;
 use std::path::PathBuf;
 
 /// One row in the sessions listing. Display-only — the `id` is the
@@ -308,16 +309,22 @@ fn summarize_file(path: &std::path::Path) -> Option<SessionEntry> {
     };
     let size_bytes = metadata.len();
 
-    // Count non-empty lines. Cheap, no JSON parse needed for the
-    // count.
-    let content = match std::fs::read_to_string(path) {
-        Ok(c) => c,
+    // Count non-empty lines by streaming the file. For multi-GB logs this
+    // avoids materializing the whole file in memory.
+    let file = match std::fs::File::open(path) {
+        Ok(f) => f,
         Err(e) => {
-            tracing::warn!(path = %path.display(), error = %e, "failed to read session file");
+            tracing::warn!(path = %path.display(), error = %e, "failed to open session file");
             return None;
         }
     };
-    let message_count = content.lines().filter(|l| !l.trim().is_empty()).count();
+    let reader = std::io::BufReader::new(file);
+    let mut message_count = 0usize;
+    for line in reader.lines().map_while(Result::ok) {
+        if !line.trim().is_empty() {
+            message_count += 1;
+        }
+    }
 
     // started_at: file mtime in rfc3339 form. If the mtime is
     // unparseable (very rare — epoch on some FSes) we use the

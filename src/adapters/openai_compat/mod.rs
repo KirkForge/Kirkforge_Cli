@@ -51,6 +51,27 @@ async fn send_done_once(
 /// terminator would otherwise grow the buffer without bound.
 const MAX_SSE_BUFFER_BYTES: usize = 8 * 1024 * 1024;
 
+/// Find the first occurrence of `needle` in `haystack`.
+fn find_subseq(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
+}
+
+/// Trim ASCII whitespace from both ends of a byte slice.
+fn trim_ascii_whitespace(bytes: &[u8]) -> &[u8] {
+    let start = bytes
+        .iter()
+        .position(|&b| !b.is_ascii_whitespace())
+        .unwrap_or(bytes.len());
+    let end = bytes
+        .iter()
+        .rposition(|&b| !b.is_ascii_whitespace())
+        .map(|i| i + 1)
+        .unwrap_or(bytes.len());
+    &bytes[start..end]
+}
+
 pub(crate) async fn parse_openai_compat_stream<B, E, S>(
     tx: tokio::sync::mpsc::Sender<StreamEvent>,
     mut stream: S,
@@ -59,14 +80,14 @@ pub(crate) async fn parse_openai_compat_stream<B, E, S>(
     E: std::fmt::Display,
     S: tokio_stream::Stream<Item = Result<B, E>> + Unpin,
 {
-    let mut buffer = String::new();
+    let mut buffer: Vec<u8> = Vec::new();
     let mut pending_tool_calls = ToolCallAccumulator::new();
     let mut done_emitted = false;
 
     while let Some(chunk_result) = stream.next().await {
         match chunk_result {
             Ok(bytes) => {
-                buffer.push_str(&String::from_utf8_lossy(bytes.as_ref()));
+                buffer.extend_from_slice(bytes.as_ref());
                 if buffer.len() > MAX_SSE_BUFFER_BYTES {
                     let _ = tx
                         .send(StreamEvent::Error(format!(
@@ -79,51 +100,38 @@ pub(crate) async fn parse_openai_compat_stream<B, E, S>(
 
                 // SSE: data: {...}\n\n
                 //
-                // We accumulate bytes into `buffer` until we
-                // see a complete `data: ...\n\n` frame, then
-                // slice the payload out. We only **drain**
-                // consumed bytes after a successful JSON
-                // parse — if the parse fails, the model has
-                // streamed an event whose JSON body is
-                // incomplete (a `tool_calls.arguments`
-                // fragment with an unterminated string, in
-                // practice), and we need the next chunk to
-                // complete it. The outer stream loop will
-                // re-read more bytes into the same buffer
-                // and we'll retry from this position.
-                while let Some(start) = buffer.find("data: ") {
-                    let after_data = &buffer[start + 6..];
-                    // If the frame isn't complete yet (no
-                    // terminating blank line and not at the
-                    // end of the buffer), wait for more bytes.
-                    //
-                    // SSE frames end at a blank line, and the HTML5
-                    // spec allows LF (`\n\n`), CRLF (`\r\n\r\n`), and
-                    // CR (`\r\r`) line endings. A reverse proxy or
-                    // OpenAI-compatible server using CRLF would never
-                    // satisfy a `\n\n`-only search, so the frame would
-                    // look incomplete forever and the buffer would
-                    // grow to the cap and abort the stream. Take the
-                    // earliest terminator present.
-                    let sep = ["\n\n", "\r\n\r\n", "\r\r"]
-                        .into_iter()
-                        .filter_map(|t| after_data.find(t).map(|i| (i, t.len())))
-                        .min_by_key(|(i, _)| *i);
+                // We accumulate raw bytes until we see a complete
+                // `data: ...\n\n` frame. Only the frame payload is
+                // decoded as UTF-8, so a chunk boundary that falls
+                // inside a multibyte character cannot produce
+                // replacement characters and corrupt the JSON.
+                // This mirrors the NDJSON parser's byte-buffer
+                // approach in `ollama_ndjson.rs`.
+                while let Some(start) = find_subseq(&buffer, b"data: ") {
+                    let after_start = start + 6;
+                    let after = &buffer[after_start..];
+                    let sep = [
+                        b"\n\n".as_slice(),
+                        b"\r\n\r\n".as_slice(),
+                        b"\r\r".as_slice(),
+                    ]
+                    .iter()
+                    .filter_map(|t| find_subseq(after, t).map(|i| (i, t.len())))
+                    .min_by_key(|(i, _)| *i);
                     let Some((sep_idx, term_len)) = sep else {
                         // Incomplete frame. Bail out of the
                         // inner loop; the outer stream
                         // loop will read more.
                         break;
                     };
-                    let line: String = after_data[..sep_idx].trim().to_string();
-                    // Drain only on the happy path — on
-                    // parse error we leave the frame in
-                    // place for the next read.
-                    let drain_to = start + 6 + sep_idx + term_len;
+                    let payload_end = after_start + sep_idx;
+                    let drain_to = payload_end + term_len;
+                    let payload = trim_ascii_whitespace(&buffer[after_start..payload_end]).to_vec();
 
-                    if line.is_empty() || line == "[DONE]" {
-                        buffer.drain(..drain_to);
-                        if line == "[DONE]" {
+                    buffer.drain(..drain_to);
+
+                    if payload.is_empty() || payload == b"[DONE]" {
+                        if payload == b"[DONE]" {
                             // Some proxies send [DONE] after the
                             // model has emitted tool_calls deltas
                             // but before a finish_reason. Flush any
@@ -157,9 +165,24 @@ pub(crate) async fn parse_openai_compat_stream<B, E, S>(
                         continue;
                     }
 
-                    match serde_json::from_str::<serde_json::Value>(&line) {
+                    let line = match std::str::from_utf8(&payload) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            if !super::ollama_ndjson::send_or_bail(
+                                &tx,
+                                StreamEvent::Error(format!("SSE frame is not valid UTF-8: {e}")),
+                                "OpenAI-compat UTF-8 decode error",
+                            )
+                            .await
+                            {
+                                return;
+                            }
+                            continue;
+                        }
+                    };
+
+                    match serde_json::from_str::<serde_json::Value>(line) {
                         Ok(json) => {
-                            buffer.drain(..drain_to);
                             if let Some(err) = json.get("error") {
                                 if !super::ollama_ndjson::send_or_bail(
                                     &tx,
@@ -258,16 +281,6 @@ pub(crate) async fn parse_openai_compat_stream<B, E, S>(
                                 };
 
                                 let usage = json.get("usage").map(|u| TokenUsage {
-                                    // Try OpenAI-style fields first, then
-                                    // Ollama-native names. Some
-                                    // OpenAI-compat proxies through
-                                    // Ollama emit the native names
-                                    // (prompt_eval_count / eval_count)
-                                    // even though the rest of the
-                                    // framing is OpenAI-compat. See
-                                    // `parse_token_usage` in
-                                    // ollama_ndjson.rs for the
-                                    // corresponding fix there.
                                     prompt_tokens: u
                                         .get("prompt_tokens")
                                         .and_then(|v| v.as_u64())
@@ -280,18 +293,6 @@ pub(crate) async fn parse_openai_compat_stream<B, E, S>(
                                         .and_then(|v| v.as_u64())
                                         .or_else(|| u.get("eval_count").and_then(|v| v.as_u64()))
                                         .map(|v| v as usize),
-                                    // Cache hit count. OpenAI's
-                                    // chat-completions endpoint
-                                    // surfaces it under
-                                    // `prompt_tokens_details.cached_tokens`;
-                                    // Anthropic-style responses
-                                    // (routed through some
-                                    // OpenAI-compat proxies) use
-                                    // the top-level
-                                    // `cache_read_input_tokens`.
-                                    // Either name is fine — we
-                                    // just look up both and
-                                    // tolerate absence.
                                     cached_tokens: u
                                         .get("cache_read_input_tokens")
                                         .and_then(|v| v.as_u64())
@@ -319,24 +320,21 @@ pub(crate) async fn parse_openai_compat_stream<B, E, S>(
                             }
                         }
                         Err(e) => {
-                            // The frame was complete (had
-                            // its `\n\n`) but its JSON body
-                            // is invalid. This is the
-                            // model streaming an event with
-                            // an unterminated string (a
-                            // `tool_calls.arguments`
-                            // fragment). Don't drain — the
-                            // next chunk will append the
-                            // continuation and we'll retry.
-                            // Don't notify the consumer —
-                            // it's a transient streaming
-                            // artefact, not an error.
-                            tracing::debug!(
-                                error = %e,
-                                line_bytes = line.len(),
-                                "openai_compat: incomplete JSON in event, waiting for more bytes"
-                            );
-                            break;
+                            // A complete SSE frame with invalid JSON is a
+                            // server-side error, not a transient streaming
+                            // artefact. Report it and discard the frame so
+                            // the parser cannot buffer the same invalid bytes
+                            // forever (review.md C5).
+                            if !super::ollama_ndjson::send_or_bail(
+                                &tx,
+                                StreamEvent::Error(format!("SSE frame contains invalid JSON: {e}")),
+                                "OpenAI-compat invalid JSON frame",
+                            )
+                            .await
+                            {
+                                return;
+                            }
+                            continue;
                         }
                     }
                 }
@@ -623,18 +621,71 @@ mod tests {
     #[test]
     fn sse_drain_math_is_exclusive() {
         // Simulate the case from the panic: buffer ends exactly
-        // at the payload boundary, no `\n\n` yet. Old code:
-        //   drain(..=start + 6 + end) — equal to drain(..=L) — panic.
-        // New code: drain(..start + 6 + end + 0) — exclusive, in range.
-        let mut buffer = String::from("data: {\"x\":1}");
-        let start = buffer.find("data: ").unwrap();
+        // at the payload boundary, no `\n\n` yet. The drain range is
+        // exclusive and only consumes the terminator when present.
+        let mut buffer = b"data: {\"x\":1}".to_vec();
+        let start = find_subseq(&buffer, b"data: ").unwrap();
         let after_data = &buffer[start + 6..];
-        let end = after_data.find("\n\n").unwrap_or(after_data.len());
-        let drain_to = start + 6 + end + if after_data.contains("\n\n") { 2 } else { 0 };
+        let end = find_subseq(after_data, b"\n\n").unwrap_or(after_data.len());
+        let drain_to = start
+            + 6
+            + end
+            + if find_subseq(after_data, b"\n\n").is_some() {
+                2
+            } else {
+                0
+            };
         buffer.drain(..drain_to);
         // Buffer is now empty — we correctly drained everything
         // we'd consumed, and the (absent) `\n\n` was NOT drained.
         assert!(buffer.is_empty(), "expected empty buffer, got {buffer:?}");
+    }
+
+    /// A multibyte UTF-8 character split across chunk boundaries must
+    /// not be corrupted. We keep raw bytes until the SSE frame is
+    /// complete, then decode the payload as UTF-8 in one go.
+    #[tokio::test]
+    async fn sse_multibyte_char_split_across_chunks() {
+        let json = r#"{"choices":[{"delta":{"content":"日本語"},"finish_reason":"stop"}]}"#;
+        let frame = format!("data: {json}\n\n").into_bytes();
+        // Split inside the three-byte UTF-8 sequence for 日.
+        let split = frame.len() / 2;
+        let events = run_sse(vec![frame[..split].to_vec(), frame[split..].to_vec()]).await;
+
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, StreamEvent::Text(s) if s == "日本語")),
+            "expected Japanese text after split chunk, got {events:?}"
+        );
+        assert!(
+            matches!(events.last(), Some(StreamEvent::Done { .. })),
+            "expected Done after split frame, got {:?}",
+            events.last()
+        );
+    }
+
+    /// A complete SSE frame that contains invalid JSON must be
+    /// discarded and reported, not buffered forever waiting for more
+    /// bytes (review.md C5). A subsequent valid frame should still be
+    /// parsed.
+    #[tokio::test]
+    async fn sse_invalid_json_frame_is_reported_and_discarded() {
+        let bad = b"data: this is not json\n\n".to_vec();
+        let good =
+            sse_data(json!({"choices": [{"delta": {"content": "ok"}, "finish_reason": "stop"}]}));
+        let events = run_sse(vec![bad, good]).await;
+
+        assert!(
+            events.iter().any(|e| matches!(e, StreamEvent::Error(_))),
+            "expected error for invalid JSON frame, got {events:?}"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, StreamEvent::Text(s) if s == "ok")),
+            "expected valid frame after invalid one, got {events:?}"
+        );
     }
 
     /// Regression: `[DONE]` sentinel and a later `finish_reason` can

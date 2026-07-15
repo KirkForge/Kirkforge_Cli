@@ -6,7 +6,7 @@ use anyhow::Context;
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufStream};
+use tokio::io::{AsyncWriteExt, BufStream};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{Mutex, Semaphore};
 
@@ -241,7 +241,7 @@ async fn handle_client(
 
     loop {
         line.clear();
-        match stream.read_line(&mut line).await {
+        match crate::daemon::read_line_limited(&mut stream, &mut line).await {
             Ok(0) => break,
             Ok(_) => {}
             Err(e) => {
@@ -354,6 +354,47 @@ mod tests {
     use super::*;
     use crate::daemon::client::DaemonClient;
     use tokio::time::{sleep, Duration};
+
+    #[tokio::test]
+    async fn read_line_limited_reads_normal_line() {
+        let (mut client, server) = UnixStream::pair().unwrap();
+        let mut reader = BufStream::new(server);
+        let mut line = String::new();
+
+        let write_handle = tokio::spawn(async move {
+            client.write_all(b"{\"status\":\"ok\"}\n").await.unwrap();
+            client.shutdown().await.unwrap();
+        });
+
+        let n = crate::daemon::read_line_limited(&mut reader, &mut line)
+            .await
+            .expect("normal line should read successfully");
+        assert_eq!(n, "{\"status\":\"ok\"}\n".len());
+        assert_eq!(line.trim(), "{\"status\":\"ok\"}");
+
+        write_handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn read_line_limited_rejects_oversized_frame() {
+        let (mut client, server) = UnixStream::pair().unwrap();
+        let mut reader = BufStream::new(server);
+        let mut line = String::new();
+
+        let oversized = vec![b'x'; crate::daemon::MAX_FRAME_SIZE + 1];
+        let write_handle = tokio::spawn(async move {
+            client.write_all(&oversized).await.unwrap();
+            client.shutdown().await.unwrap();
+        });
+
+        let result = crate::daemon::read_line_limited(&mut reader, &mut line).await;
+        assert!(
+            result.is_err(),
+            "expected oversized frame to be rejected, got {result:?}"
+        );
+
+        write_handle.await.unwrap();
+    }
 
     #[tokio::test]
     async fn client_server_round_trip() {

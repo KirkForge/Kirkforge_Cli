@@ -17,6 +17,50 @@ use crate::session::session_index::SessionEntry;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 
+/// Maximum size (in bytes) for a single daemon request/response frame.
+///
+/// The daemon protocol is line-delimited JSON; a missing newline from a
+/// corrupted peer would otherwise let `read_line` grow without bound.
+/// One megabyte is far larger than any legitimate request or response.
+pub const MAX_FRAME_SIZE: usize = 1024 * 1024;
+
+/// Read one LF-delimited line from `reader` into `buf`, capping the total
+/// frame size at [`MAX_FRAME_SIZE`].
+///
+/// Returns the length of the line in bytes. Errors with `InvalidData` if
+/// the frame exceeds the cap before a newline is seen.
+pub async fn read_line_limited<R>(reader: &mut R, buf: &mut String) -> std::io::Result<usize>
+where
+    R: tokio::io::AsyncBufReadExt + Unpin,
+{
+    buf.clear();
+    let mut raw = Vec::new();
+    loop {
+        let available = reader.fill_buf().await?;
+        if available.is_empty() {
+            *buf = String::from_utf8_lossy(&raw).into_owned();
+            return Ok(buf.len());
+        }
+        let remaining = MAX_FRAME_SIZE.saturating_sub(raw.len());
+        if remaining == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("daemon frame exceeds {MAX_FRAME_SIZE} byte limit"),
+            ));
+        }
+        let to_take = std::cmp::min(available.len(), remaining);
+        let chunk = &available[..to_take];
+        if let Some(pos) = chunk.iter().position(|&b| b == b'\n') {
+            raw.extend_from_slice(&chunk[..=pos]);
+            reader.consume(pos + 1);
+            *buf = String::from_utf8_lossy(&raw).into_owned();
+            return Ok(buf.len());
+        }
+        raw.extend_from_slice(chunk);
+        reader.consume(to_take);
+    }
+}
+
 /// Maximum number of recent sessions the daemon remembers.
 pub const RECENT_SESSIONS_LIMIT: usize = 5;
 

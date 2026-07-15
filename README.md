@@ -1,6 +1,6 @@
 > `kirkforge` — native Ollama coding agent CLI
 
-A terminal coding assistant that runs locally against Ollama (or any OpenAI-compatible endpoint). It edits files, runs commands, keeps a conversation log, and stays inside a sandbox.
+A terminal coding assistant that routes model requests through Ollama (or any OpenAI-compatible endpoint) to a chosen frontier model. It edits files, runs commands, keeps a conversation log, and stays inside a sandbox.
 
 ## Quick start
 
@@ -86,11 +86,14 @@ Use the TUI slash commands to manage plugins without restarting:
 Config lives at `~/.local/share/kirkforge/config.toml`. See [`config.toml.example`](config.toml.example) for a fully documented sample, including permission rules and MCP servers.
 
 ```toml
-default_model = "qwen2.5:3b"
-ollama_host = "http://localhost:11434"
+# Set these to the Ollama gateway that routes your chosen frontier model.
+# Leaving them empty requires every invocation to pick a model with -m/--model.
+default_model = ""
+ollama_host = ""
 auto_approve = false
 bang_requires_approval = true
 sandbox_dir = "."  # "." = current directory; "" = unsandboxed (escape hatch)
+# routing_model_map = { complex = "kimi-2.7k-coder:cloud", medium = "glm-5.2:cloud", simple = "qwen3:32b:cloud" }
 ```
 
 ## Development

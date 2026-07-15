@@ -3,6 +3,7 @@ pub mod caching;
 pub mod deepseek;
 pub mod gemini;
 pub mod glm;
+pub mod kimi;
 pub mod ollama_ndjson;
 pub mod openai_compat;
 pub mod tool_call_markup;
@@ -32,11 +33,11 @@ const MODEL_MAX_RETRIES: u32 = 3;
 
 /// Decide whether an HTTP status code warrants a retry.
 ///
-/// Retry on 429 (rate limit), 503 (service unavailable), and the whole 5xx
-/// range. Fail fast on any other 4xx — the request is malformed or
-/// unauthorized and repeating it will not help.
+/// Retry on 429 (rate limit) and the whole 5xx range. Fail fast on any
+/// other 4xx — the request is malformed or unauthorized and repeating it
+/// will not help.
 pub(crate) fn should_retry_status(status: u16) -> bool {
-    status == 429 || status == 503 || (500..600).contains(&status)
+    status == 429 || (500..600).contains(&status)
 }
 
 /// Compute the backoff for retry `attempt` (1-indexed).
@@ -57,16 +58,13 @@ pub(crate) fn retry_backoff(attempt: u32) -> std::time::Duration {
 /// Retries up to `MODEL_MAX_RETRIES` times on:
 /// - connect errors
 /// - timeout errors
-/// - HTTP 429 / 503 / 5xx
+/// - HTTP 429 / 5xx
 ///
 /// Uses exponential backoff with capped deterministic jitter. Returns the
 /// response on the first success, or the final error otherwise. This
 /// consolidates the retry logic that was duplicated across `openai_compat`,
 /// `deepseek`, `gemini`, and was missing from `glm`.
-pub async fn send_with_retry<F, Fut>(
-    _client: &reqwest::Client,
-    build_request: F,
-) -> anyhow::Result<reqwest::Response>
+pub async fn send_with_retry<F, Fut>(build_request: F) -> anyhow::Result<reqwest::Response>
 where
     F: Fn() -> Fut,
     Fut: Future<Output = reqwest::Result<reqwest::Response>>,
@@ -148,7 +146,7 @@ pub enum AdapterKind {
 pub fn adapter_kind_for(model_name: &str, model_type_override: Option<&str>) -> AdapterKind {
     if let Some(override_type) = model_type_override {
         return match override_type {
-            "glm" | "deepseek" | "gemini" => AdapterKind::Ollama,
+            "glm" | "deepseek" | "gemini" | "kimi" | "moonshot" => AdapterKind::Ollama,
             _ => AdapterKind::OpenAiCompat,
         };
     }
@@ -158,6 +156,8 @@ pub fn adapter_kind_for(model_name: &str, model_type_override: Option<&str>) -> 
         || lower.contains("chatglm")
         || lower.starts_with("deepseek")
         || lower.starts_with("gemini")
+        || lower.starts_with("kimi")
+        || lower.starts_with("moonshot")
     {
         AdapterKind::Ollama
     } else {
@@ -221,6 +221,16 @@ pub fn adapter_for(
                 ))
             } else if override_lower.as_deref() == Some("gemini") || lower.starts_with("gemini") {
                 Box::new(gemini::GeminiAdapter::new(
+                    ollama_host,
+                    model_name,
+                    timeout_secs,
+                ))
+            } else if override_lower.as_deref() == Some("kimi")
+                || override_lower.as_deref() == Some("moonshot")
+                || lower.starts_with("kimi")
+                || lower.starts_with("moonshot")
+            {
+                Box::new(kimi::KimiAdapter::new(
                     ollama_host,
                     model_name,
                     timeout_secs,
@@ -533,6 +543,14 @@ mod tests {
         assert_eq!(adapter_kind_for("chatglm3", None), AdapterKind::Ollama);
         assert_eq!(adapter_kind_for("deepseek-v4", None), AdapterKind::Ollama);
         assert_eq!(adapter_kind_for("gemini-3", None), AdapterKind::Ollama);
+        assert_eq!(
+            adapter_kind_for("kimi-2.7k-coder:cloud", None),
+            AdapterKind::Ollama
+        );
+        assert_eq!(
+            adapter_kind_for("moonshot-v1-8k", None),
+            AdapterKind::Ollama
+        );
     }
 
     #[test]
@@ -545,11 +563,15 @@ mod tests {
             adapter_kind_for("my-model", Some("openai")),
             AdapterKind::OpenAiCompat
         );
+        assert_eq!(
+            adapter_kind_for("my-model", Some("kimi")),
+            AdapterKind::Ollama
+        );
     }
 
     #[test]
     fn adapter_for_selects_glm() {
-        let adapter = adapter_for("glm-5", "http://localhost:11434", None, 30);
+        let adapter = adapter_for("glm-5", "http://gateway.example.com", None, 30);
         let info = adapter.model_info();
         assert_eq!(info.name, "glm-5");
         assert!(info.supports_thinking);
@@ -557,7 +579,7 @@ mod tests {
 
     #[test]
     fn adapter_for_selects_deepseek() {
-        let adapter = adapter_for("deepseek-v4", "http://localhost:11434/", None, 30);
+        let adapter = adapter_for("deepseek-v4", "http://gateway.example.com/", None, 30);
         let info = adapter.model_info();
         assert_eq!(info.name, "deepseek-v4");
         assert!(info.supports_thinking);
@@ -578,9 +600,22 @@ mod tests {
     }
 
     #[test]
+    fn adapter_for_selects_kimi() {
+        let adapter = adapter_for("kimi-2.7k-coder:cloud", "http://host/", None, 30);
+        let info = adapter.model_info();
+        assert_eq!(info.name, "kimi-2.7k-coder:cloud");
+        assert!(info.supports_thinking);
+        assert!(!info.supports_images);
+    }
+
+    #[test]
     fn adapter_for_override_selects_concrete_adapter() {
         // A non-GLM name with override "glm" should still route to GLM.
         let adapter = adapter_for("my-glm", "http://host/", Some("glm"), 30);
+        assert!(adapter.model_info().supports_thinking);
+
+        // A non-Kimi name with override "kimi" should route to Kimi.
+        let adapter = adapter_for("my-kimi", "http://host/", Some("kimi"), 30);
         assert!(adapter.model_info().supports_thinking);
     }
 }

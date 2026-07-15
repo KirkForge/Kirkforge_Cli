@@ -243,8 +243,8 @@ pub struct Config {
     pub carryover_enabled: bool,
 
     /// Model to use for semantic context summarization (fast/cheap).
-    /// When set, `/compact` will use this model to summarise old turns
-    /// instead of naive truncation. Defaults to "qwen2.5:3b".
+    /// When empty, `/compact` falls back to naive truncation. Set an
+    /// explicit model name to enable LLM summarisation.
     #[serde(default = "default_summarize_model")]
     pub summarize_model: String,
 
@@ -267,8 +267,9 @@ pub struct Config {
 
     /// Optional per-tier model overrides for smart routing.
     /// Keys are "simple", "medium", "complex"; values are model names.
-    /// When a tier has no entry, built-in defaults are used
-    /// (qwen2.5:3b / deepseek-v4-flash:cloud / deepseek-v4-pro:cloud).
+    /// When a tier has no entry (or the map is empty), routing falls back
+    /// to `default_model`. You must populate this explicitly to use a
+    /// cheaper model for simple tasks.
     #[serde(default)]
     pub routing_model_map: HashMap<String, String>,
 
@@ -403,8 +404,9 @@ pub struct Config {
     #[serde(default)]
     pub hooks_dir: Option<PathBuf>,
 
-    /// HTTP request timeout in seconds for model API calls. Increase for
-    /// slow local models (e.g. 600 for a 3B quant on CPU).
+    /// HTTP request timeout in seconds for model API calls. The default is
+    /// tuned for cloud frontier models; raise it explicitly when routing to
+    /// slow local quants.
     #[serde(default = "default_request_timeout_secs")]
     pub request_timeout_secs: u64,
 
@@ -453,7 +455,7 @@ pub struct McpServerConfig {
 }
 
 fn default_summarize_model() -> String {
-    "qwen2.5:3b".into()
+    String::new()
 }
 
 fn default_carryover_enabled() -> bool {
@@ -547,7 +549,7 @@ fn default_tool_timeout_secs() -> Option<u64> {
 }
 
 fn default_request_timeout_secs() -> u64 {
-    600
+    120
 }
 
 fn default_memory_enabled() -> bool {
@@ -590,8 +592,8 @@ impl Default for Config {
         // `KIRKFORGE_SANDBOX_DIR=""` (both are checked in
         // `access_from_config` and resolve to `sandbox_dir = None`).
         Self {
-            default_model: "qwen2.5:7b".into(),
-            ollama_host: "http://localhost:11434".into(),
+            default_model: String::new(),
+            ollama_host: String::new(),
             auto_approve: false,
             permission_rules: vec![],
             truncation_strategy: TruncationStrategy::KeepToolOnly,
@@ -609,7 +611,7 @@ impl Default for Config {
             block_binary_reads: false,
             bash_sandbox_workdir: true,
             carryover_enabled: true,
-            summarize_model: "qwen2.5:3b".into(),
+            summarize_model: String::new(),
             summarize_enabled: false,
             routing_enabled: false,
             router_model: String::new(),

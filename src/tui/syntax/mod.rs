@@ -2,10 +2,9 @@
 //!
 //! This is intentionally dependency-free. A full `syntect` integration
 //! would give more accurate colouring, but it also adds several MB of
-//! syntax/theme dumps to the binary — a poor fit for the project's
-//! "potato hardware" / small-static-binary goal. Instead we use a
-//! simple state-machine highlighter that covers comments, strings,
-//! numbers, and a curated keyword set for the most common languages.
+//! syntax/theme dumps to the binary. We therefore use a simple
+//! state-machine highlighter that covers comments, strings, numbers, and
+//! a curated keyword set for the most common languages.
 
 use ratatui::style::{Color, Style};
 use ratatui::text::Span;

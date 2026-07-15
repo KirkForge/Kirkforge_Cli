@@ -43,6 +43,11 @@ impl OllamaNdjsonConfig {
     pub const DEEPSEEK: Self = Self {
         thinking_field: Some("reasoning_content"),
     };
+    /// Kimi/Moonshot — observed to use the same `reasoning_content` shape
+    /// as DeepSeek when routed through an Ollama gateway.
+    pub const KIMI: Self = Self {
+        thinking_field: Some("reasoning_content"),
+    };
     /// Gemini 3.0 Flash 1M — no thinking field through Ollama.
     pub const GEMINI: Self = Self {
         thinking_field: None,
@@ -327,7 +332,10 @@ pub async fn parse_ollama_ndjson_stream<B, E, S>(
     // `response` is no longer needed; the bytes stream is the only thing
     // we actually drive. (The arg was removed in commit 2 — see git log.)
 }
-/// message and bail-semantics consistent across both adapters.
+
+/// Send a stream event and return whether the receiver is still alive.
+///
+/// Keeps send/bail-semantics consistent across all Ollama-style adapters.
 pub(crate) async fn send_or_bail(
     tx: &tokio::sync::mpsc::Sender<StreamEvent>,
     ev: StreamEvent,
@@ -729,6 +737,35 @@ mod tests {
             .iter()
             .any(|e| matches!(e, StreamEvent::Text(s) if s == "answer")));
         assert!(matches!(events.last(), Some(StreamEvent::Done { .. })));
+    }
+
+    /// Kimi/Moonshot uses the same `reasoning_content` shape as DeepSeek
+    /// when routed through an Ollama gateway.
+    #[tokio::test]
+    async fn kimi_reasoning_content_is_emitted() {
+        let events = run_config(
+            &[
+                r#"{"message":{"reasoning_content":"reasoning...","content":""},"done":false}"#,
+                r#"{"message":{"reasoning_content":"","content":"final"},"done":true,"done_reason":"stop"}"#,
+            ],
+            OllamaNdjsonConfig::KIMI,
+        )
+        .await;
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, StreamEvent::Thinking(s) if s == "reasoning...")));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, StreamEvent::Text(s) if s == "final")));
+        assert!(matches!(events.last(), Some(StreamEvent::Done { .. })));
+    }
+
+    #[test]
+    fn kimi_config_has_reasoning_field() {
+        assert_eq!(
+            OllamaNdjsonConfig::KIMI.thinking_field,
+            Some("reasoning_content")
+        );
     }
 
     /// Empty thinking/reasoning strings must not produce Thinking events.

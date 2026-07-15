@@ -1,19 +1,17 @@
 //! `/route simple|medium|complex` slash command — switch to the model
 //! configured for a complexity tier.
 //!
-//! The user can pre-define per-tier models in `KirkForge.toml` under
+//! The user pre-defines per-tier models in `config.toml` under
 //! `[routing_model_map]` (keys: `simple`, `medium`, `complex`). Missing
-//! entries fall back to built-in defaults:
-//!
-//! - simple → `qwen2.5:3b`
-//! - medium → `deepseek-v4-flash:cloud`
-//! - complex → `deepseek-v4-pro:cloud`
+//! entries fall back to `default_model`. If neither is configured, the
+//! command tells the user how to fix it instead of guessing a model.
 //!
 //! The resolved model name is forwarded through the same `model_tx`
 //! channel used by `/model`, so the executor performs the actual swap
 //! and emits the same "🔀 Switched to …" confirmation token.
 
 use crate::session::executor::TurnEvent;
+use crate::session::router::resolve_tier_model;
 use crate::shared::read_shared_config;
 use crate::tui::app::AppState;
 use tokio::sync::mpsc;
@@ -21,30 +19,23 @@ use tokio::sync::mpsc;
 const USAGE: &str = r#"Usage: /route simple|medium|complex
 
 Switches to the model configured for the requested complexity tier.
-Tier-to-model mappings live in `routing_model_map` in KirkForge.toml;
-missing tiers fall back to built-in defaults.
+Tier-to-model mappings live in `routing_model_map` in config.toml;
+missing tiers fall back to `default_model`.
 
 Examples:
   /route simple
   /route medium
   /route complex"#;
 
-/// Built-in tier defaults when the user has not overridden them in
-/// `routing_model_map`.
-fn default_model_for_tier(tier: &str) -> &'static str {
-    match tier {
-        "simple" => "qwen2.5:3b",
-        "medium" => "deepseek-v4-flash:cloud",
-        "complex" => "deepseek-v4-pro:cloud",
-        _ => {
-            // Defensive fallback: parse_tier is the gatekeeper, but if the
-            // tier leaks through from a future routing_model_map key, keep
-            // the CLI alive and surface the unknown tier clearly.
-            tracing::warn!(tier = %tier, "unknown tier in default_model_for_tier; falling back to simple");
-            "qwen2.5:3b"
-        }
-    }
-}
+const NO_MODEL: &str = r#"No model configured for that tier.
+
+Set `routing_model_map.<tier>` or `default_model` in config.toml, e.g.:
+
+[routing_model_map]
+simple = "qwen3:32b:cloud"
+medium = "glm-5.2:cloud"
+complex = "kimi-2.7k-coder:cloud"
+"#;
 
 /// Parse and normalise a tier argument.
 fn parse_tier(args: &str) -> Option<&'static str> {
@@ -56,21 +47,11 @@ fn parse_tier(args: &str) -> Option<&'static str> {
     }
 }
 
-/// Resolve a tier to a concrete model name using `Config::routing_model_map`
-/// and the built-in defaults.
-fn resolve_tier_model(tier: &str, state: &AppState) -> String {
-    let cfg = read_shared_config(&state.config);
-    cfg.routing_model_map
-        .get(tier)
-        .cloned()
-        .unwrap_or_else(|| default_model_for_tier(tier).to_string())
-}
-
 /// Handle `/route <tier>`.
 ///
 /// Validates the tier, resolves it to a model name, then reuses the
-/// `/model` switch path so local Ollama validation and background pull
-/// behaviour are identical.
+/// `/model` switch path so the same validation and background pull
+/// behaviour apply.
 pub async fn handle_route_command(
     args: &str,
     model_tx: &mpsc::UnboundedSender<String>,
@@ -81,7 +62,14 @@ pub async fn handle_route_command(
         return USAGE.to_string();
     };
 
-    let model = resolve_tier_model(tier, state);
+    let model = {
+        let cfg = read_shared_config(&state.config);
+        resolve_tier_model(&cfg, tier)
+    };
+    let Some(model) = model else {
+        return NO_MODEL.to_string();
+    };
+
     let base = crate::tui::commands::handle_model_command(&model, model_tx, event_tx, state).await;
     format!("Routing to {tier} tier ({model}).\n{base}")
 }
@@ -97,10 +85,14 @@ mod tests {
         )))
     }
 
-    fn state_with_map(map: std::collections::HashMap<String, String>) -> AppState {
+    fn state_with_map(
+        default_model: impl Into<String>,
+        map: std::collections::HashMap<String, String>,
+    ) -> AppState {
         let cfg = Config {
+            default_model: default_model.into(),
             routing_model_map: map,
-            ..Default::default()
+            ..Config::default()
         };
         AppState::new(std::sync::Arc::new(std::sync::RwLock::new(cfg)))
     }
@@ -127,15 +119,10 @@ mod tests {
 
     #[test]
     fn resolve_tier_model_uses_defaults() {
-        let state = dummy_state();
-        assert_eq!(resolve_tier_model("simple", &state), "qwen2.5:3b");
+        let state = state_with_map("kimi-2.7k-coder:cloud", std::collections::HashMap::new());
         assert_eq!(
-            resolve_tier_model("medium", &state),
-            "deepseek-v4-flash:cloud"
-        );
-        assert_eq!(
-            resolve_tier_model("complex", &state),
-            "deepseek-v4-pro:cloud"
+            resolve_tier_model(&read_shared_config(&state.config), "simple"),
+            Some("kimi-2.7k-coder:cloud".to_string())
         );
     }
 
@@ -144,13 +131,19 @@ mod tests {
         let mut map = std::collections::HashMap::new();
         map.insert("simple".to_string(), "my-simple-model".to_string());
         map.insert("complex".to_string(), "my-big-model".to_string());
-        let state = state_with_map(map);
-        assert_eq!(resolve_tier_model("simple", &state), "my-simple-model");
+        let state = state_with_map("kimi-2.7k-coder:cloud", map);
         assert_eq!(
-            resolve_tier_model("medium", &state),
-            "deepseek-v4-flash:cloud"
+            resolve_tier_model(&read_shared_config(&state.config), "simple"),
+            Some("my-simple-model".to_string())
         );
-        assert_eq!(resolve_tier_model("complex", &state), "my-big-model");
+        assert_eq!(
+            resolve_tier_model(&read_shared_config(&state.config), "medium"),
+            Some("kimi-2.7k-coder:cloud".to_string())
+        );
+        assert_eq!(
+            resolve_tier_model(&read_shared_config(&state.config), "complex"),
+            Some("my-big-model".to_string())
+        );
     }
 
     #[tokio::test]
@@ -177,24 +170,33 @@ mod tests {
     async fn valid_tier_sends_resolved_model() {
         let (tx, mut rx) = mpsc::unbounded_channel::<String>();
         let (_event_tx, _event_rx) = mpsc::channel::<TurnEvent>(10_000);
-        let state = dummy_state();
-        let out = handle_route_command("simple", &tx, &_event_tx, &state).await;
-        assert!(out.contains("simple"), "got: {out}");
-        assert!(out.contains("qwen2.5:3b"), "got: {out}");
+        let state = state_with_map("kimi-2.7k-coder:cloud", std::collections::HashMap::new());
+        let out = handle_route_command("complex", &tx, &_event_tx, &state).await;
+        assert!(out.contains("complex"), "got: {out}");
+        assert!(out.contains("kimi-2.7k-coder:cloud"), "got: {out}");
         let received = rx.try_recv().expect("channel should have a value");
-        assert_eq!(received, "qwen2.5:3b");
+        assert_eq!(received, "kimi-2.7k-coder:cloud");
     }
 
     #[tokio::test]
     async fn valid_tier_sends_config_override() {
         let mut map = std::collections::HashMap::new();
         map.insert("medium".to_string(), "custom-medium".to_string());
-        let state = state_with_map(map);
+        let state = state_with_map("kimi-2.7k-coder:cloud", map);
         let (tx, mut rx) = mpsc::unbounded_channel::<String>();
         let (_event_tx, _event_rx) = mpsc::channel::<TurnEvent>(10_000);
         let out = handle_route_command("medium", &tx, &_event_tx, &state).await;
         assert!(out.contains("custom-medium"), "got: {out}");
         let received = rx.try_recv().expect("channel should have a value");
         assert_eq!(received, "custom-medium");
+    }
+
+    #[tokio::test]
+    async fn unconfigured_tier_returns_help() {
+        let (tx, _rx) = mpsc::unbounded_channel::<String>();
+        let (_event_tx, _event_rx) = mpsc::channel::<TurnEvent>(10_000);
+        let state = dummy_state();
+        let out = handle_route_command("simple", &tx, &_event_tx, &state).await;
+        assert!(out.contains("No model configured"), "got: {out}");
     }
 }

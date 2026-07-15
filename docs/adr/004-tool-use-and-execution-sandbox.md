@@ -13,7 +13,7 @@ Accepted
 The agent needs tools: read_file, write_file, edit_file, bash, grep, glob. These are the primitives that let it understand, modify, and verify code. ADR 003 defined how tool calls arrive as `StreamEvent::ToolCall` from any model. But arrival is not execution — we need to decide:
 
 1. **Who interprets tool calls?** The model emits JSON tool call blocks. The client needs to parse them, validate them against a schema, execute them, and return results.
-2. **Who approves execution?** Bash and write_file are destructive. Running them without oversight on the C-50 where the user might be looking away is bad. But requiring approval for every read_file is annoying.
+2. **Who approves execution?** Bash and write_file are destructive. Running them without oversight while the user is looking away is bad. But requiring approval for every read_file is annoying.
 3. **How do results flow back?** Synchronously (block the stream until the tool finishes) or asynchronously (insert results as they arrive)?
 
 ## Decision
@@ -95,7 +95,7 @@ The stream from the model is paused during tool execution. The model doesn't rec
 - Working directory (defaults to project root)
 - No PTY — captures stdout/stderr as strings
 - Kill on timeout, return partial output + timeout error
-- `SHELL` env blocked; uses `/bin/sh` always (no bashisms that break on the P30's BusyBox)
+- `SHELL` env blocked; uses `/bin/sh` always (portable baseline shell)
 
 ### File editing
 

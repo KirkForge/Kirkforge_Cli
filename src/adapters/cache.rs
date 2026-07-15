@@ -176,7 +176,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let cache = ResponseCache::new(true, Some(dir.path().into()));
         let result = cache.get(
-            "qwen2.5:3b",
+            "test-model",
             &[message(crate::shared::Role::User, "hello")],
             &[],
             false,
@@ -201,7 +201,7 @@ mod tests {
         ];
 
         cache.put(
-            "qwen2.5:3b",
+            "test-model",
             &[message(crate::shared::Role::User, "hi")],
             &[],
             false,
@@ -210,7 +210,7 @@ mod tests {
 
         let got = cache
             .get(
-                "qwen2.5:3b",
+                "test-model",
                 &[message(crate::shared::Role::User, "hi")],
                 &[],
                 false,
@@ -224,7 +224,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let cache = ResponseCache::new(false, Some(dir.path().into()));
         cache.put(
-            "qwen2.5:3b",
+            "test-model",
             &[message(crate::shared::Role::User, "hi")],
             &[],
             false,

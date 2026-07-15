@@ -12,7 +12,7 @@ Accepted
 
 The conversation between user and model is the core data structure. It must be:
 
-- **Persistent** — survive crashes, restarts, deliberate pauses. The C-50 might lose power. The P30 might get a call. The 2012 laptop might freeze for 30 seconds swapping. None of those should lose the conversation.
+- **Persistent** — survive crashes, restarts, deliberate pauses. Network hiccups, cloud API rate limits, and host sleep/wake cycles should not lose the conversation.
 - **Resumable** — reconnect to a different model mid-conversation if one model is unavailable. Switch from GLM to DeepSeek without losing context.
 - **Token-aware** — the user runs three models with different context windows. Prompt construction must budget tokens per model and trim strategically when the window fills.
 - **Replayable** — for debugging, reproducing bugs, and auditing what the agent was told.
@@ -55,16 +55,20 @@ Sessions live in ~/.local/share/ollama-cli/sessions/
 `config.toml` (minimal):
 
 ```toml
-default_model = "glm-5.1:cloud"
-ollama_host = "http://localhost:11434"
+# Defaults are empty. Set these to the Ollama gateway that routes your
+# chosen frontier model, e.g. a cloud provider endpoint.
+default_model = ""
+ollama_host = ""
 auto_approve = false
 truncation_strategy = "drop_oldest"  # drop_oldest | summarize_middle | keep_tools_only
 max_tool_result_chars = 4000
+# Map per-tier models to full provider names:
+# routing_model_map = { complex = "kimi-2.7k-coder:cloud", medium = "glm-5.2:cloud", simple = "qwen3:32b:cloud" }
 ```
 
 ### Prompt construction
 
-Each model has a different context window. GLM-5.1 claims 128K, DeepSeek-v4-Pro claims 64K, Gemini 3.0 Flash 1M claims 1M. The prompt builder takes the full conversation log and produces the message array sent to the model:
+Each model has a different context window. GLM-5.2 claims 128K, DeepSeek-v4-Pro claims 64K, Gemini 3.0 Flash 1M claims 1M, Kimi-2.7k-Coder:Cloud claims 256K. The prompt builder takes the full conversation log and produces the message array sent to the model:
 
 ```
 1. Start with system prompt (always included, counted against budget)

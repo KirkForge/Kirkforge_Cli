@@ -590,7 +590,10 @@ mod tests {
     fn test_env_overrides_model() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
-        assert_eq!(cfg.default_model, "qwen2.5:7b");
+        assert!(
+            cfg.default_model.is_empty(),
+            "default_model is empty by default; configure it explicitly"
+        );
 
         set_env("KIRKFORGE_MODEL", Some("deepseek-v4:cloud"));
         apply_env_overrides(&mut cfg);
@@ -713,8 +716,11 @@ mod tests {
 
         assert_eq!(cfg.default_model, "custom-model");
         assert_eq!(cfg.max_file_read_size, 512);
-        // Unset fields keep defaults
-        assert_eq!(cfg.ollama_host, "http://localhost:11434");
+        // Unset fields keep defaults (now empty placeholders)
+        assert!(
+            cfg.ollama_host.is_empty(),
+            "ollama_host is empty by default; configure it explicitly"
+        );
         assert!(!cfg.auto_approve);
     }
 
@@ -836,7 +842,7 @@ mod tests {
             summarize_model = "my-summarize-model"
             routing_enabled = true
             router_model = "my-router-model"
-            routing_model_map = { simple = "qwen2.5:3b" }
+            routing_model_map = { simple = "glm-5.2:cloud" }
             commit_max_file_size = 1048576
             preserve_recent_messages = 5
             max_tool_calls_per_turn = 25
@@ -859,7 +865,7 @@ mod tests {
         assert_eq!(cfg.router_model, "my-router-model");
         assert_eq!(
             cfg.routing_model_map.get("simple"),
-            Some(&"qwen2.5:3b".to_string())
+            Some(&"glm-5.2:cloud".to_string())
         );
         assert_eq!(cfg.commit_max_file_size, 1_048_576);
         assert_eq!(cfg.preserve_recent_messages, 5);
@@ -945,21 +951,21 @@ mod tests {
     fn test_config_diff_summary_model_change() {
         let a = Config::default();
         let b = Config {
-            default_model: "qwen2.5:3b".into(),
+            default_model: "kimi-2.7k-coder:cloud".into(),
             ..Config::default()
         };
         let s = config_diff_summary(&a, &b);
         assert!(s.contains("default_model"), "got: {s}");
-        assert!(s.contains("→ qwen2.5:3b"), "got: {s}");
+        assert!(s.contains("→ kimi-2.7k-coder:cloud"), "got: {s}");
     }
 
     #[test]
     fn test_config_diff_summary_multiple_fields() {
         let a = Config::default();
         let b = Config {
-            default_model: "qwen2.5:3b".into(),
+            default_model: "kimi-2.7k-coder:cloud".into(),
             auto_approve: true,
-            ollama_host: "http://example.com:11434".into(),
+            ollama_host: "https://gateway.example.com".into(),
             ..Config::default()
         };
         let s = config_diff_summary(&a, &b);

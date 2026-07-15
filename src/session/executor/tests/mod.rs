@@ -131,7 +131,7 @@ fn make_info() -> ModelInfo {
 fn make_config(auto_approve: bool) -> Config {
     Config {
         default_model: "test".into(),
-        ollama_host: "http://localhost:11434".into(),
+        ollama_host: "https://gateway.example.com".into(),
         auto_approve,
         truncation_strategy: crate::shared::TruncationStrategy::KeepToolOnly,
         max_tool_result_chars: 4000,

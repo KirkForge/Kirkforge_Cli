@@ -12,7 +12,7 @@ Accepted
 
 KirkForge sessions are persisted as `*.conv.ndjson` files under `~/.local/share/kirkforge/sessions/`. Every session has a stable id like `2026-06-22-session-01` derived from its filename. The conversation log survives terminal death, but before this ADR there was no fast way to discover or resume the most recent sessions: the user had to remember the id, the full path, or run `/sessions` inside the TUI.
 
-A full tmux-style detach/reattach would require moving the executor, TUI event loop, and LLM streaming state into a background server and rebuilding the frontend as a thin client. That is a large architectural change with many unknowns and would introduce significant complexity around state synchronisation and concurrent access to the same conversation log.
+A full tmux-style detach/reattach would require moving the executor, TUI event loop, and LLM streaming state into a background server and rebuilding the frontend as a remote view of that server. That is a large architectural change with many unknowns and would introduce significant complexity around state synchronisation and concurrent access to the same conversation log.
 
 ## Decision
 

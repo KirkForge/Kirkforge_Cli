@@ -24,7 +24,7 @@ pub enum OutputFormat {
 #[command(
     name = "kirkforge",
     version,
-    about = "Native Ollama CLI coding agent — static binary, TUI, potato hardware",
+    about = "Native Ollama CLI coding agent — static binary, TUI, cloud-routed models",
     after_help = "Exit codes:\n  0  success\n  1  general error\n  2  bad arguments\n  3  model unreachable\n  4  permission / sandbox denied\n  5  config parse error"
 )]
 pub struct Cli {

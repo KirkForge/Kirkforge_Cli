@@ -10,11 +10,12 @@ Accepted
 
 ## Context
 
-We run three models with different response formats through Ollama:
+We route several frontier models through Ollama, each with its own response format:
 
 - **GLM-5.1:Cloud** — emits a `thinking` field alongside `content` in `/api/chat` responses. Thinking tokens arrive in `delta.thinking` or `message.thinking` depending on Ollama version. They are not instructions — they are the model's internal chain-of-thought, useful to show but never fed back as input.
 - **DeepSeek-v4-Pro** — structured tool calls arrive as a complete block rather than streaming tokens. The model can issue multiple tool calls in one response. Tool call format through Ollama's OpenAI-compat layer differs slightly from its native `/api/chat` representation.
 - **Gemini 3.0 Flash 1M** — streams token by token with no thinking field, no native tool calls (uses OpenAI-compatible function calling through Ollama's translation layer). Different chunk boundaries than the other two.
+- **Kimi-2.7k-Coder:Cloud** — streams NDJSON over `/api/chat`, emits chain-of-thought in a `reasoning_content` field, and uses native tool calls.
 
 ADR 001 decided to speak Ollama's APIs directly. But "Ollama's APIs" is two endpoints (`/api/chat` and `/v1/chat/completions`) that each return model-specific payloads. Writing one parser that handles all three is a race condition waiting to happen.
 
@@ -101,12 +102,13 @@ The UI uses `ModelInfo` to decide: show a thinking panel, render tool calls as J
 
 Automatic at connect time. Ollama's `/api/tags` returns model names. We pattern-match:
 
-- `"glm*"` → `GLMAdapter`
+- `"glm*"` / `"chatglm*"` → `GLMAdapter`
 - `"deepseek*"` → `DeepSeekAdapter`
 - `"gemini*"` → `GeminiAdapter`
+- `"kimi*"` / `"moonshot*"` → `KimiAdapter`
 - Everything else → `OpenAiCompatAdapter` (falls back to `/v1/chat/completions`)
 
-Override with `--model-type glm|deepseek|gemini|openai` flag.
+Override with `--model-type glm|deepseek|gemini|kimi|openai` flag.
 
 ## Consequences
 
@@ -117,7 +119,7 @@ Override with `--model-type glm|deepseek|gemini|openai` flag.
 - Testable in isolation — each adapter can be unit tested against recorded Ollama responses. No real model needed.
 
 **Negative:**
-- The adapter layer is one extra allocation hop. On the C-50, that's measurable. Mitigation: each adapter processes chunks on a single thread and sends `StreamEvent` over a bounded channel — no heap cloning of large strings, just index ranges where possible.
+- The adapter layer is one extra allocation hop. On a constrained host, that's measurable. Mitigation: each adapter processes chunks on a single thread and sends `StreamEvent` over a bounded channel — no heap cloning of large strings, just index ranges where possible.
 - Pattern-matching model names is fragile. GLM might change its model ID format. Mitigation: the `--model-type` override exists for exactly this case, and the OpenAiCompatAdapter catches anything unrecognized.
 
 ## Open Questions

@@ -18,13 +18,13 @@
 //!    sends the user message to a small/fast model for classification.
 //!    Falls back to local on error or timeout.
 //!
-//! # Hard-coded fallback models
+//! # Per-tier model configuration
 //!
-//! The local heuristic and LLM-fallback paths return fixed model names
-//! (`qwen2.5:3b`, `deepseek-v4-flash:cloud`, `deepseek-v4-pro:cloud`).
-//! These are convenience defaults for the current release. A future
-//! iteration should make them config-driven so operators can route to
-//! models they actually have available.
+//! The classifier only decides the complexity tier (`simple`, `medium`,
+//! `complex`). The actual model used for each tier is read from
+//! `Config::routing_model_map`. If a tier has no entry there, the
+//! session falls back to `Config::default_model`. No model names are
+//! hard-coded; routing is opt-in and requires explicit configuration.
 
 use serde::{Deserialize, Serialize};
 
@@ -86,7 +86,9 @@ pub enum RouteMethod {
 /// Classify a user message using local keyword heuristics.
 ///
 /// Fast, free, deterministic. Returns lower confidence than LLM-based
-/// classification (~0.6 vs ~0.85).
+/// classification (~0.6 vs ~0.85). The returned `suggested_model` is
+/// the tier name (`simple`/`medium`/`complex`) — actual model selection
+/// happens in the adapter swap layer via `routing_model_map`.
 pub fn classify_local(message: &str) -> RouteResult {
     let lower = message.to_lowercase();
     let mut score: i32 = 0;
@@ -159,18 +161,15 @@ pub fn classify_local(message: &str) -> RouteResult {
         tier,
         confidence,
         method: RouteMethod::Local,
-        suggested_model: match tier {
-            ComplexityTier::Simple => "qwen2.5:3b".into(),
-            ComplexityTier::Medium => "deepseek-v4-flash:cloud".into(),
-            ComplexityTier::Complex => "deepseek-v4-pro:cloud".into(),
-        },
+        suggested_model: tier.to_string(),
     }
 }
 
 /// Classify a user message using an LLM router model.
 ///
-/// Sends the message to a small/fast model via Ollama for classification.
-/// Falls back to local heuristics on error or timeout.
+/// Sends the message to the configured router model for classification.
+/// Falls back to local heuristics on error or timeout. The returned
+/// `suggested_model` is the tier name (`simple`/`medium`/`complex`).
 pub async fn classify_with_llm(
     message: &str,
     router_model: &str,
@@ -220,11 +219,7 @@ pub async fn classify_with_llm(
                     tier,
                     confidence: 0.85,
                     method: RouteMethod::Llm,
-                    suggested_model: match tier {
-                        ComplexityTier::Simple => "qwen2.5:3b".into(),
-                        ComplexityTier::Medium => "deepseek-v4-flash:cloud".into(),
-                        ComplexityTier::Complex => "deepseek-v4-pro:cloud".into(),
-                    },
+                    suggested_model: tier.to_string(),
                 };
             }
             Err(e) => {
@@ -236,10 +231,33 @@ pub async fn classify_with_llm(
         }
     }
 
-    // Fallback: use local heuristics
+    // Fallback: use local heuristics. The local result already carries
+    // the tier name as the suggested model.
     let mut result = classify_local(message);
     result.confidence *= 0.7; // downgrade confidence since LLM failed
     result
+}
+
+/// Resolve a tier name to a concrete model using the configured map.
+///
+/// Returns `None` when neither `routing_model_map` nor
+/// `default_model` can supply a model, so callers can no-op instead of
+/// trying to build an adapter for an empty name.
+pub fn resolve_tier_model(config: &crate::shared::Config, tier: &str) -> Option<String> {
+    let tier_lower = tier.to_lowercase();
+    let from_map = config
+        .routing_model_map
+        .get(&tier_lower)
+        .cloned()
+        .filter(|m| !m.is_empty());
+    if from_map.is_some() {
+        return from_map;
+    }
+    if config.default_model.is_empty() {
+        None
+    } else {
+        Some(config.default_model.clone())
+    }
 }
 
 /// Convenience: classify with LLM if router_model is set, otherwise local.
@@ -307,5 +325,43 @@ mod tests {
         assert_eq!(json, "\"simple\"");
         let parsed: ComplexityTier = serde_json::from_str("\"complex\"").unwrap();
         assert_eq!(parsed, ComplexityTier::Complex);
+    }
+
+    #[test]
+    fn test_classify_local_suggested_model_is_tier_name() {
+        let simple = classify_local("what is rust?");
+        assert_eq!(simple.suggested_model, "simple");
+
+        let complex = classify_local(
+            "refactor the entire authentication system to use OAuth2 with comprehensive audit logging across all modules",
+        );
+        assert_eq!(complex.suggested_model, "complex");
+    }
+
+    #[test]
+    fn test_resolve_tier_model_prefers_map_then_default() {
+        let mut config = crate::shared::Config::default();
+        // Empty map + empty default_model → no resolution.
+        assert_eq!(resolve_tier_model(&config, "simple"), None);
+
+        config.default_model = "fallback-model".into();
+        assert_eq!(
+            resolve_tier_model(&config, "simple"),
+            Some("fallback-model".into())
+        );
+
+        config
+            .routing_model_map
+            .insert("simple".into(), "cheap-model".into());
+        assert_eq!(
+            resolve_tier_model(&config, "simple"),
+            Some("cheap-model".into())
+        );
+
+        // Unknown tier falls back to default_model.
+        assert_eq!(
+            resolve_tier_model(&config, "unknown"),
+            Some("fallback-model".into())
+        );
     }
 }

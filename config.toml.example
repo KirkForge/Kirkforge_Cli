@@ -9,14 +9,15 @@
 # ---------------------------------------------------------------------------
 
 # Default model used when `kirkforge run` is invoked without `--model`.
-# Examples: "qwen2.5:3b", "llama3.2:latest", "deepseek-v4-flash:cloud",
-# or any model name your Ollama / OpenAI-compatible server knows.
-# default_model = "qwen2.5:3b"
+# Examples: "kimi-2.7k-coder:cloud", "glm-5.2:cloud", "qwen3:32b:cloud",
+# or any model name your Ollama / OpenAI-compatible gateway knows.
+# Default: "" (empty — you must pick a model with -m/--model).
+# default_model = ""
 
-# URL of the Ollama server. For OpenAI-compatible endpoints the same host is
-# used; set model_type via `--model-type openai` or `model_type` once it is
-# exposed in config.
-# ollama_host = "http://localhost:11434"
+# URL of the Ollama or OpenAI-compatible gateway. This is where requests are
+# routed; it can be a local Ollama install or a cloud provider endpoint.
+# Default: "" (empty).
+# ollama_host = ""
 
 # ---------------------------------------------------------------------------
 # Safety / approval
@@ -120,8 +121,9 @@
 # of naive truncation. Falls back to truncation if summarization fails.
 # summarize_enabled = false
 
-# Fast/cheap model used for summarization.
-# summarize_model = "qwen2.5:3b"
+# Fast/cheap model used for summarization. Empty means summarization is
+# disabled by default.
+# summarize_model = ""
 
 # ---------------------------------------------------------------------------
 # Smart routing (experimental)
@@ -136,9 +138,9 @@
 
 # Per-tier model overrides. Valid keys: "simple", "medium", "complex".
 # [routing_model_map]
-# simple = "qwen2.5:3b"
-# medium = "deepseek-v4-flash:cloud"
-# complex = "deepseek-v4-pro:cloud"
+# simple = "qwen3:32b:cloud"
+# medium = "glm-5.2:cloud"
+# complex = "kimi-2.7k-coder:cloud"
 
 # ---------------------------------------------------------------------------
 # MCP servers (optional external tools)

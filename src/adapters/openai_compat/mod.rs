@@ -431,7 +431,7 @@ impl ModelAdapter for OpenAiCompatAdapter {
         );
         let url = format!("{}/v1/chat/completions", self.api_base);
 
-        let response = super::send_with_retry(&self.client, || async {
+        let response = super::send_with_retry(|| async {
             self.client
                 .post(&url)
                 .json(&body)

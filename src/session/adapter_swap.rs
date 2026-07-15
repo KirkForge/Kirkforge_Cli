@@ -52,7 +52,8 @@ impl AdapterSwap {
     /// differs. Returns `Some(new_model_name)` if a swap occurred, or `None`
     /// if the current model was kept.
     ///
-    /// No-op when `config.routing_enabled` is false.
+    /// No-op when `config.routing_enabled` is false, or when no concrete
+    /// model can be resolved for the tier.
     pub fn maybe_swap(
         &mut self,
         config: &Config,
@@ -64,7 +65,7 @@ impl AdapterSwap {
         }
 
         let route = router::classify_local(user_input);
-        let suggested = self.resolve_model(config, &route.suggested_model);
+        let suggested = router::resolve_tier_model(config, &route.suggested_model)?;
 
         if suggested == self.current_model_name {
             return None;
@@ -128,28 +129,6 @@ impl AdapterSwap {
             adapter
         }
     }
-
-    /// Resolve the final model name: consult the user's configured
-    /// per-tier mapping first, then fall back to the router's built-in
-    /// suggestion.
-    fn resolve_model(&self, config: &Config, default: &str) -> String {
-        if config.routing_model_map.is_empty() {
-            return default.to_string();
-        }
-        // The map keys are tier names: "simple", "medium", "complex".
-        // If the suggested default model matches a known tier, look it up.
-        // Otherwise fall through to the default.
-        for (tier, model) in &config.routing_model_map {
-            let tier_lower = tier.to_lowercase();
-            if (tier_lower == "simple" && default.contains("qwen"))
-                || (tier_lower == "medium" && default.contains("flash"))
-                || (tier_lower == "complex" && default.contains("pro"))
-            {
-                return model.clone();
-            }
-        }
-        default.to_string()
-    }
 }
 
 #[cfg(test)]
@@ -166,10 +145,10 @@ mod tests {
     #[test]
     fn test_no_swap_when_routing_disabled() {
         let mut swap = AdapterSwap::new(
-            "deepseek-v4-pro:cloud".into(),
-            "http://localhost:11434".into(),
+            "kimi-2.7k-coder:cloud".into(),
+            "http://ollama.example".into(),
             None,
-            300,
+            120,
         );
         let config = make_config(false);
 
@@ -186,14 +165,17 @@ mod tests {
     #[test]
     fn test_no_swap_when_same_model_suggested() {
         let mut swap = AdapterSwap::new(
-            "deepseek-v4-pro:cloud".into(),
-            "http://localhost:11434".into(),
+            "kimi-2.7k-coder:cloud".into(),
+            "http://ollama.example".into(),
             None,
-            300,
+            120,
         );
-        let config = make_config(true);
+        let mut config = make_config(true);
+        config
+            .routing_model_map
+            .insert("complex".into(), "kimi-2.7k-coder:cloud".into());
 
-        // Complex query → suggests deepseek-v4-pro:cloud (same as current)
+        // Complex query → resolves to the same model already in use.
         let result = swap.maybe_swap(
             &config,
             &mut make_dummy_adapter(),
@@ -205,31 +187,37 @@ mod tests {
     #[test]
     fn test_swap_on_simple_input_with_pro_model() {
         let mut swap = AdapterSwap::new(
-            "deepseek-v4-pro:cloud".into(),
-            "http://localhost:11434".into(),
+            "kimi-2.7k-coder:cloud".into(),
+            "http://ollama.example".into(),
             None,
-            300,
+            120,
         );
-        let config = make_config(true);
+        let mut config = make_config(true);
+        config
+            .routing_model_map
+            .insert("simple".into(), "qwen3:32b".into());
 
-        // Simple query → suggests qwen2.5:3b (different from current pro)
+        // Simple query → resolves to the configured simple-tier model.
         let result = swap.maybe_swap(&config, &mut make_dummy_adapter(), "what is rust?");
         assert!(result.is_some());
-        assert_eq!(result.unwrap(), "qwen2.5:3b");
-        assert_eq!(swap.current_model_name, "qwen2.5:3b");
+        assert_eq!(result.unwrap(), "qwen3:32b");
+        assert_eq!(swap.current_model_name, "qwen3:32b");
     }
 
     #[test]
     fn test_swap_medium_to_complex() {
         let mut swap = AdapterSwap::new(
-            "deepseek-v4-flash:cloud".into(),
-            "http://localhost:11434".into(),
+            "glm-5.1:cloud".into(),
+            "http://ollama.example".into(),
             None,
-            300,
+            120,
         );
-        let config = make_config(true);
+        let mut config = make_config(true);
+        config
+            .routing_model_map
+            .insert("complex".into(), "deepseek-v4-pro:cloud".into());
 
-        // Complex query → suggests deepseek-v4-pro:cloud
+        // Complex query → resolves to the configured complex-tier model.
         let result = swap.maybe_swap(
             &config,
             &mut make_dummy_adapter(),
@@ -241,38 +229,19 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_model_with_empty_map() {
-        let swap = AdapterSwap::new(
-            "deepseek-v4-flash:cloud".into(),
-            "http://localhost:11434".into(),
+    fn test_no_swap_when_no_model_resolved() {
+        let mut swap = AdapterSwap::new(
+            "kimi-2.7k-coder:cloud".into(),
+            "http://ollama.example".into(),
             None,
-            300,
+            120,
         );
-        let config = Config::default();
-        // Map is empty — should return the default
-        assert_eq!(
-            swap.resolve_model(&config, "deepseek-v4-pro:cloud"),
-            "deepseek-v4-pro:cloud"
-        );
-    }
+        let config = make_config(true); // empty map + empty default_model
 
-    #[test]
-    fn test_resolve_model_with_custom_map() {
-        let swap = AdapterSwap::new(
-            "deepseek-v4-flash:cloud".into(),
-            "http://localhost:11434".into(),
-            None,
-            300,
-        );
-        let mut config = Config::default();
-        config
-            .routing_model_map
-            .insert("complex".into(), "my-custom-model:latest".into());
-        // The default is "deepseek-v4-pro:cloud" which matches the "complex"
-        // tier heuristic (contains "pro")
-        assert_eq!(
-            swap.resolve_model(&config, "deepseek-v4-pro:cloud"),
-            "my-custom-model:latest"
+        let result = swap.maybe_swap(&config, &mut make_dummy_adapter(), "what is rust?");
+        assert!(
+            result.is_none(),
+            "should no-op when no tier model is configured"
         );
     }
 
@@ -283,33 +252,32 @@ mod tests {
     #[test]
     fn test_force_swap_replaces_current_model() {
         let mut swap = AdapterSwap::new(
-            "deepseek-v4-pro:cloud".into(),
-            "http://localhost:11434".into(),
+            "kimi-2.7k-coder:cloud".into(),
+            "http://ollama.example".into(),
             None,
-            300,
+            120,
         );
         let cfg = Config::default();
-        let new = swap.force_swap("qwen2.5:3b", &mut make_dummy_adapter(), &cfg);
-        assert_eq!(new, "qwen2.5:3b");
-        assert_eq!(swap.current_model_name, "qwen2.5:3b");
+        let new = swap.force_swap("glm-5.1:cloud", &mut make_dummy_adapter(), &cfg);
+        assert_eq!(new, "glm-5.1:cloud");
+        assert_eq!(swap.current_model_name, "glm-5.1:cloud");
     }
 
-    /// `force_swap` with the same name is a no-op (it still returns
-    /// the name and updates the field, but the visible effect is
-    /// null). The executor treats this as a benign "user re-confirmed
-    /// the same model" gesture.
+    /// `force_swap` with the same name is a no-op in effect (it still returns
+    /// the name and updates the field). The executor treats this as a benign
+    /// "user re-confirmed the same model" gesture.
     #[test]
     fn test_force_swap_same_model_is_noop_in_effect() {
         let mut swap = AdapterSwap::new(
-            "qwen2.5:3b".into(),
-            "http://localhost:11434".into(),
+            "glm-5.1:cloud".into(),
+            "http://ollama.example".into(),
             None,
-            300,
+            120,
         );
         let cfg = Config::default();
-        let new = swap.force_swap("qwen2.5:3b", &mut make_dummy_adapter(), &cfg);
-        assert_eq!(new, "qwen2.5:3b");
-        assert_eq!(swap.current_model_name, "qwen2.5:3b");
+        let new = swap.force_swap("glm-5.1:cloud", &mut make_dummy_adapter(), &cfg);
+        assert_eq!(new, "glm-5.1:cloud");
+        assert_eq!(swap.current_model_name, "glm-5.1:cloud");
     }
 
     // --- helpers ---
@@ -318,9 +286,9 @@ mod tests {
     fn make_dummy_adapter() -> Box<dyn ModelAdapter> {
         use crate::adapters::openai_compat::OpenAiCompatAdapter;
         Box::new(OpenAiCompatAdapter::new(
-            "http://localhost:11434",
-            "deepseek-v4-pro:cloud",
-            300,
+            "http://ollama.example",
+            "kimi-2.7k-coder:cloud",
+            120,
         ))
     }
 }

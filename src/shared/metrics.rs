@@ -348,7 +348,7 @@ mod tests {
                 verdict: "fixable".into(),
             });
             record(MetricEvent::Turn {
-                model: "qwen2.5:3b".into(),
+                model: "kimi-2.7k-coder:cloud".into(),
                 duration_ms: 2500,
                 tool_calls: 1,
                 finish_reason: "stop".into(),

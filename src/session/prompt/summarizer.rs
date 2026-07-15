@@ -42,7 +42,7 @@ use serde::{Deserialize, Serialize};
 /// Configuration for the semantic summarizer.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SummarizerConfig {
-    /// Model name for the summarization API call (e.g., "qwen2.5:3b").
+    /// Model name for the summarization API call (e.g., "qwen3:32b:cloud").
     pub model: String,
     /// Maximum tokens for the summary output.
     pub max_summary_tokens: usize,
@@ -57,7 +57,7 @@ pub struct SummarizerConfig {
 impl Default for SummarizerConfig {
     fn default() -> Self {
         Self {
-            model: "qwen2.5:3b".into(),
+            model: String::new(),
             max_summary_tokens: 500,
             min_turns_for_summary: 6,
             min_compression_ratio: 0.5,
@@ -428,7 +428,7 @@ mod tests {
     #[test]
     fn test_summarizer_config_defaults() {
         let config = SummarizerConfig::default();
-        assert_eq!(config.model, "qwen2.5:3b");
+        assert!(config.model.is_empty());
         assert_eq!(config.max_summary_tokens, 500);
         assert_eq!(config.min_turns_for_summary, 6);
     }

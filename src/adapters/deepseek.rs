@@ -68,7 +68,7 @@ impl ModelAdapter for DeepSeekAdapter {
         );
         let url = format!("{}/api/chat", self.api_base);
 
-        let response = super::send_with_retry(&self.client, || async {
+        let response = super::send_with_retry(|| async {
             self.client
                 .post(&url)
                 .json(&body)

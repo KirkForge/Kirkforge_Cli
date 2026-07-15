@@ -1,19 +1,20 @@
-//! GLM-5.1:Cloud adapter.
+//! Kimi/Moonshot adapter.
 //!
-//! GLM emits a `thinking` field alongside `content` in `/api/chat` responses.
-//! This adapter splits them into separate StreamEvent variants so the TUI
-//! can show thinking in a collapsible panel and the session never feeds it
-//! back as input.
+//! Kimi-2.7k-Coder and related Moonshot models, when routed through an
+//! Ollama gateway, stream NDJSON over `/api/chat` and emit chain-of-thought
+//! in a `reasoning_content` field (the same shape DeepSeek uses). This
+//! adapter separates thinking from content and normalizes tool calls into
+//! `StreamEvent` values, just like the GLM/DeepSeek adapters.
 //!
 //! All NDJSON framing logic lives in [`super::ollama_ndjson`]; this file
-//! is just the HTTP glue and the per-adapter config selection.
+//! is only the HTTP glue and per-adapter metadata.
 
 use crate::shared::{Message, ModelInfo, StreamEvent, ToolCallStyle};
 
 use super::ollama_ndjson::{self, OllamaNdjsonConfig};
 use super::ModelAdapter;
 
-pub struct GlmAdapter {
+pub struct KimiAdapter {
     model: String,
     api_base: String,
     client: reqwest::Client,
@@ -24,7 +25,7 @@ pub struct GlmAdapter {
     timeout_secs: u64,
 }
 
-impl GlmAdapter {
+impl KimiAdapter {
     pub fn new(ollama_host: &str, model: &str, timeout_secs: u64) -> Self {
         Self {
             model: model.to_string(),
@@ -37,16 +38,16 @@ impl GlmAdapter {
 }
 
 #[async_trait::async_trait]
-impl ModelAdapter for GlmAdapter {
+impl ModelAdapter for KimiAdapter {
     fn model_info(&self) -> ModelInfo {
         ModelInfo {
             name: self.model.clone(),
             supports_thinking: true,
             tool_call_format: ToolCallStyle::Native,
-            max_context_tokens: 128_000,
-            recommended_temperature: 0.7,
-            supports_images: false, // GLM 5.1 cloud has no vision variant
-            supports_cache: false,  // Ollama's /api/chat has no cache_control
+            max_context_tokens: 256_000,
+            recommended_temperature: 0.6,
+            supports_images: false,
+            supports_cache: false,
         }
     }
 
@@ -85,9 +86,26 @@ impl ModelAdapter for GlmAdapter {
 
         tokio::spawn(async move {
             let stream = response.bytes_stream();
-            ollama_ndjson::parse_ollama_ndjson_stream(tx, OllamaNdjsonConfig::GLM, stream).await;
+            ollama_ndjson::parse_ollama_ndjson_stream(tx, OllamaNdjsonConfig::KIMI, stream).await;
         });
 
         Ok(rx)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn model_info_reports_thinking_and_native_tools() {
+        let adapter = KimiAdapter::new("http://ollama.example", "kimi-2.7k-coder:cloud", 120);
+        let info = adapter.model_info();
+        assert_eq!(info.name, "kimi-2.7k-coder:cloud");
+        assert!(info.supports_thinking);
+        assert_eq!(info.tool_call_format, ToolCallStyle::Native);
+        assert_eq!(info.max_context_tokens, 256_000);
+        assert!(!info.supports_images);
+        assert!(!info.supports_cache);
     }
 }

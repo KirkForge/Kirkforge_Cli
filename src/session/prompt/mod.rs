@@ -383,7 +383,13 @@ impl PromptBuilder {
                 continue; // too short to bother
             }
 
-            let path = PathBuf::from(format!("message-{i}.txt"));
+            // The path is synthetic; the extension drives language-aware
+            // minification. Using `.txt` for everything hit the catch-all arm
+            // and made this step a no-op, so pick an extension from any
+            // markdown code-fence language tag (or a Rust fallback for
+            // un-fenced source blocks).
+            let ext = synthetic_extension_for(&msg.content);
+            let path = PathBuf::from(format!("message-{i}.{ext}"));
             let minified = crate::shared::minify::minify_source_safe(&path, &msg.content);
             if minified.len() < msg.content.len() {
                 let savings = msg.content.len() - minified.len();
@@ -441,6 +447,41 @@ impl Default for PromptBuilder {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Pick a synthetic file extension for [`PromptBuilder::minify_old_messages`]
+/// so the language-aware minifier actually runs on code blocks instead of
+/// hitting the `.txt` catch-all.
+fn synthetic_extension_for(content: &str) -> &'static str {
+    for (idx, _) in content.match_indices("```") {
+        let after = &content[idx + 3..];
+        let tag = after.lines().next().unwrap_or("").trim().to_lowercase();
+        let ext = match tag.as_str() {
+            "rs" | "rust" => "rs",
+            "py" | "python" => "py",
+            "js" | "javascript" => "js",
+            "ts" | "typescript" => "ts",
+            "jsx" => "jsx",
+            "tsx" => "tsx",
+            "go" => "go",
+            "c" => "c",
+            "cpp" | "c++" => "cpp",
+            "java" => "java",
+            "rb" | "ruby" => "rb",
+            "sh" | "bash" | "zsh" => "sh",
+            "md" | "markdown" => "md",
+            "json" => "json",
+            "yaml" | "yml" => "yaml",
+            "toml" => "toml",
+            _ => continue,
+        };
+        return ext;
+    }
+    // No recognized fence; if the block looks like Rust source, treat it as such.
+    if content.contains("fn ") && content.contains('{') {
+        return "rs";
+    }
+    "txt"
 }
 
 #[cfg(test)]
@@ -503,6 +544,66 @@ mod tests {
         assert!(
             msg.content.contains(".gitignore"),
             "system prompt should forbid .gitignore edits"
+        );
+    }
+
+    #[test]
+    fn test_minify_old_messages_reduces_code_tokens() {
+        // Build a budget-busting history that contains a Rust code block.
+        // The `.txt` catch-all used to skip minification; the fix picks the
+        // extension from the code-fence language tag so comments/blank lines
+        // are stripped and the token count drops.
+        let mut builder = PromptBuilder::new();
+        builder.set_system_override(Some("sys".to_string()));
+
+        let block = "```rs\nfn main() {\n    // this comment adds tokens\n    let x = 1;\n\n    println!(\"hello\");\n}\n```\n";
+        let long_code = block.repeat(10);
+        let original_len = long_code.len();
+
+        let history = vec![Message {
+            role: Role::Assistant,
+            content: long_code,
+            content_parts: None,
+            thinking: None,
+            tool_calls: None,
+            tool_call_id: None,
+            tool_name: None,
+            token_count: None,
+        }];
+
+        let messages = builder.build_messages(
+            Message {
+                role: Role::System,
+                content: "sys".to_string(),
+                content_parts: None,
+                thinking: None,
+                tool_calls: None,
+                tool_call_id: None,
+                tool_name: None,
+                token_count: None,
+            },
+            &history,
+            50,
+            &[],
+        );
+
+        let assistant_content = messages
+            .iter()
+            .find(|m| matches!(m.role, Role::Assistant))
+            .map(|m| m.content.clone())
+            .unwrap_or_default();
+
+        assert!(
+            assistant_content.len() < original_len,
+            "minify_old_messages should reduce the assistant code block"
+        );
+        assert!(
+            assistant_content.contains("fn main"),
+            "minified code should still contain executable content"
+        );
+        assert!(
+            !assistant_content.contains("this comment adds tokens"),
+            "minified code should strip comments"
         );
     }
 

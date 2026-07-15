@@ -4,6 +4,7 @@
 //! the event being verified. A zero exit code means the check passed; any
 //! non-zero exit code fails, with stderr as the failure message.
 
+use crate::env::curated_env;
 use kirkforge_plugin::Capability;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -62,7 +63,8 @@ impl PluginVerifier {
         let mut attempts = 0;
         let output = loop {
             match Command::new(&cmd_path)
-                .envs(env)
+                .env_clear()
+                .envs(curated_env(env))
                 .current_dir(&self.plugin_root)
                 .output()
             {

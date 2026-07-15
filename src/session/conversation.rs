@@ -45,31 +45,47 @@ impl ConversationLog {
         }
 
         let (messages, outcome) = if path.exists() {
-            match load_messages(&path) {
-                Ok(messages) => (messages, OpenOutcome::Loaded),
+            let (loaded, corrupt) = match load_messages(&path) {
+                Ok(pair) => pair,
                 Err(e) => {
-                    tracing::warn!(path = %path.display(), error = %e, "conversation log corrupt, attempting checkpoint restore");
-                    let mut log = Self {
-                        path: path.clone(),
-                        messages: Vec::new(),
-                        checkpoint_interval: 0,
-                        messages_since_checkpoint: 0,
-                    };
-                    match log.restore_from_checkpoint() {
-                        Ok(true) => {
-                            tracing::info!(path = %path.display(), "restored conversation from checkpoint");
-                            (log.messages.clone(), OpenOutcome::Restored(log.len()))
-                        }
-                        Ok(false) => {
-                            tracing::warn!(path = %path.display(), "no checkpoint available; starting empty");
-                            (Vec::new(), OpenOutcome::StartedEmpty)
-                        }
-                        Err(restore_err) => {
-                            tracing::error!(path = %path.display(), error = %restore_err, "checkpoint restore failed; starting empty");
-                            (Vec::new(), OpenOutcome::StartedEmpty)
-                        }
+                    tracing::warn!(path = %path.display(), error = %e, "failed to read conversation log; attempting checkpoint restore");
+                    (Vec::new(), true)
+                }
+            };
+
+            if !loaded.is_empty() {
+                if corrupt {
+                    tracing::warn!(
+                        path = %path.display(),
+                        "conversation log contained corrupt lines; keeping valid messages"
+                    );
+                }
+                (loaded, OpenOutcome::Loaded)
+            } else if corrupt {
+                tracing::warn!(path = %path.display(), "conversation log corrupt, attempting checkpoint restore");
+                let mut log = Self {
+                    path: path.clone(),
+                    messages: Vec::new(),
+                    checkpoint_interval: 0,
+                    messages_since_checkpoint: 0,
+                };
+                match log.restore_from_checkpoint() {
+                    Ok(true) => {
+                        tracing::info!(path = %path.display(), "restored conversation from checkpoint");
+                        (log.messages.clone(), OpenOutcome::Restored(log.len()))
+                    }
+                    Ok(false) => {
+                        tracing::warn!(path = %path.display(), "no checkpoint available; starting empty");
+                        (Vec::new(), OpenOutcome::StartedEmpty)
+                    }
+                    Err(restore_err) => {
+                        tracing::error!(path = %path.display(), error = %restore_err, "checkpoint restore failed; starting empty");
+                        (Vec::new(), OpenOutcome::StartedEmpty)
                     }
                 }
+            } else {
+                // File exists but is empty/whitespace only.
+                (Vec::new(), OpenOutcome::Loaded)
             }
         } else {
             (Vec::new(), OpenOutcome::Created)
@@ -301,10 +317,13 @@ impl ConversationLog {
 
         for checkpoint in &checkpoints {
             match load_messages(checkpoint) {
-                Ok(messages) => {
+                Ok((messages, _)) if !messages.is_empty() => {
                     self.write_atomic(&self.path, &messages)?;
                     self.messages = messages;
                     return Ok(true);
+                }
+                Ok(_) => {
+                    tracing::warn!(checkpoint = %checkpoint.display(), "checkpoint contained no valid messages, trying older");
                 }
                 Err(e) => {
                     tracing::warn!(checkpoint = %checkpoint.display(), error = %e, "checkpoint corrupt, trying older");
@@ -410,23 +429,32 @@ impl ConversationLog {
 
 /// Load messages from an NDJSON file.
 ///
-/// Valid JSON lines are parsed and returned. A file that contains at
-/// least one non-empty line but zero parseable messages is treated as
-/// corrupt so that callers can fall back to checkpoint recovery. A file
-/// that is empty or contains only whitespace is treated as an empty log.
-fn load_messages(path: &std::path::Path) -> anyhow::Result<Vec<Message>> {
+/// Valid JSON lines are parsed and returned; corrupt lines are skipped so
+/// later valid lines are not lost. The returned bool is `true` when any
+/// line could not be parsed. A file that contains at least one non-empty
+/// line but zero parseable messages is treated as corrupt so callers can
+/// fall back to checkpoint recovery. A file that is empty or contains only
+/// whitespace is treated as an empty log.
+fn load_messages(path: &std::path::Path) -> anyhow::Result<(Vec<Message>, bool)> {
     let content = std::fs::read_to_string(path)
         .with_context(|| format!("read conversation log {}", path.display()))?;
     let mut messages = Vec::new();
+    let mut corrupt = false;
     for line in content.lines().filter(|l| !l.trim().is_empty()) {
         match serde_json::from_str::<Message>(line) {
             Ok(m) => messages.push(m),
             Err(e) => {
-                anyhow::bail!("corrupt conversation log line in {}: {e}", path.display());
+                corrupt = true;
+                tracing::warn!(
+                    path = %path.display(),
+                    line = %line,
+                    error = %e,
+                    "skipping corrupt conversation log line"
+                );
             }
         }
     }
-    Ok(messages)
+    Ok((messages, corrupt))
 }
 
 /// Checkpoint filename prefix for a given conversation log path.
@@ -445,7 +473,7 @@ mod tests {
     use crate::shared::Message;
 
     #[test]
-    fn test_open_fails_on_corrupt_line_and_starts_empty() {
+    fn test_open_keeps_valid_lines_after_corrupt_line() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("test.ndjson");
         let lines = [
@@ -456,10 +484,12 @@ mod tests {
         std::fs::write(&path, lines.join("\n")).unwrap();
 
         let (log, outcome) = ConversationLog::open(path).unwrap();
-        // No checkpoint exists, so a corrupt log starts empty rather than
-        // silently truncating.
-        assert_eq!(outcome, OpenOutcome::StartedEmpty);
-        assert!(log.is_empty());
+        // Valid lines before and after the corrupt line must be preserved;
+        // only the corrupt line is dropped.
+        assert_eq!(outcome, OpenOutcome::Loaded);
+        assert_eq!(log.len(), 2);
+        assert_eq!(log.messages[0].content, "hello");
+        assert_eq!(log.messages[1].content, "hi");
     }
 
     #[test]
@@ -677,7 +707,8 @@ mod tests {
         std::fs::write(&path, format!("{first_json}\n{partial}")).unwrap();
 
         let (restored, outcome) = ConversationLog::open(path).unwrap();
-        assert_eq!(outcome, OpenOutcome::Restored(1));
+        // The valid first line is kept; the truncated partial line is dropped.
+        assert_eq!(outcome, OpenOutcome::Loaded);
         assert_eq!(restored.len(), 1);
         assert_eq!(restored.last().unwrap().content, "first");
     }

@@ -6,6 +6,7 @@
 //! result from stdout. A non-zero exit code becomes an error using stderr as the
 //! message.
 
+use crate::env::curated_env;
 use kirkforge_plugin::Capability;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -70,6 +71,8 @@ impl PluginTool {
         let mut attempts = 0;
         let output = loop {
             match Command::new(&cmd_path)
+                .env_clear()
+                .envs(curated_env(&std::collections::HashMap::new()))
                 .env(KIRKFORGE_TOOL_ARGS, args.to_string())
                 .env(KIRKFORGE_TOOL_ARGS_JSON, args.to_string())
                 .current_dir(&self.plugin_root)

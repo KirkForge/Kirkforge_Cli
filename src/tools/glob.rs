@@ -31,6 +31,11 @@ impl Tool for Glob {
                         "type": "string",
                         "description": "Base directory (default: current directory)",
                         "default": "."
+                    },
+                    "max_matches": {
+                        "type": "integer",
+                        "description": "Maximum number of files to return (default: 1000)",
+                        "default": 1000
                     }
                 },
                 "required": ["pattern"]
@@ -47,6 +52,10 @@ impl Tool for Glob {
         };
 
         let base_dir = args.get("base_dir").and_then(|b| b.as_str()).unwrap_or(".");
+        let max_matches = args
+            .get("max_matches")
+            .and_then(|m| m.as_u64())
+            .unwrap_or(1000) as usize;
 
         let base_path = PathBuf::from(shellexpand::tilde(base_dir).as_ref());
 
@@ -101,6 +110,9 @@ impl Tool for Glob {
         }
 
         matches.sort();
+        let total = matches.len();
+        let truncated = matches.len() > max_matches;
+        matches.truncate(max_matches);
 
         if matches.is_empty() {
             return ToolOutcome::Success {
@@ -109,13 +121,83 @@ impl Tool for Glob {
         }
 
         let output = matches.join("\n");
+        let header = if truncated {
+            format!("Found {total} files matching '{pattern}'; showing first {max_matches}:")
+        } else {
+            format!("Found {total} files matching '{pattern}':")
+        };
         ToolOutcome::Success {
-            content: format!(
-                "Found {} files matching '{}':\n{}",
-                matches.len(),
-                pattern,
-                output
-            ),
+            content: format!("{header}\n{output}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tools::ToolContext;
+
+    #[tokio::test]
+    async fn glob_respects_max_matches_and_reports_total() {
+        let dir = std::env::temp_dir().join("kirkforge_glob_cap_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for i in 0..5 {
+            std::fs::write(dir.join(format!("file{i}.txt")), "x").unwrap();
+        }
+
+        let glob = Glob::new(PathGuard::default());
+        let args = serde_json::json!({
+            "pattern": "*.txt",
+            "base_dir": dir.to_string_lossy(),
+            "max_matches": 2
+        });
+        let outcome = glob.run(&ToolContext::default(), args).await;
+        match outcome {
+            ToolOutcome::Success { content } => {
+                assert!(
+                    content.contains("Found 5 files matching '*.txt'; showing first 2:"),
+                    "expected truncation header, got: {content}"
+                );
+                // Two filenames should appear, not all five.
+                let lines: Vec<_> = content.lines().skip(1).collect();
+                assert_eq!(
+                    lines.len(),
+                    2,
+                    "output should contain exactly max_matches files"
+                );
+            }
+            other => panic!("expected Success, got {other:?}"),
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn glob_no_truncation_when_under_cap() {
+        let dir = std::env::temp_dir().join("kirkforge_glob_under_cap_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.txt"), "x").unwrap();
+
+        let glob = Glob::new(PathGuard::default());
+        let args = serde_json::json!({
+            "pattern": "*.txt",
+            "base_dir": dir.to_string_lossy(),
+            "max_matches": 10
+        });
+        let outcome = glob.run(&ToolContext::default(), args).await;
+        match outcome {
+            ToolOutcome::Success { content } => {
+                assert!(
+                    content.contains("Found 1 files matching '*.txt':"),
+                    "expected non-truncation header, got: {content}"
+                );
+                assert!(!content.contains("showing first"));
+            }
+            other => panic!("expected Success, got {other:?}"),
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

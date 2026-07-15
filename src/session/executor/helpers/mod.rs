@@ -276,6 +276,15 @@ pub(crate) fn check_search_path(path_guard: &PathGuard, path: &std::path::Path) 
         }
     };
 
+    // 3b. Re-check the resolved path against the deny list. A glob/pattern
+    //     may resolve to a denied directory, or a symlink may point to one.
+    if path_guard.deny_list.is_path_denied(&check) {
+        return GuardVerdict::Denied(format!(
+            "Resolved path denied by deny list: {}",
+            check.display()
+        ));
+    }
+
     // 3. Sandbox containment on the resolved ancestor.
     if let Some(ref sandbox) = path_guard.sandbox_dir {
         let sb = match sandbox.canonicalize() {
@@ -506,6 +515,32 @@ mod tests {
         assert!(
             matches!(result, GuardVerdict::Denied(ref msg) if msg.contains("Cannot resolve search path")),
             "expected fail-closed denial, got {result:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_check_search_path_rechecks_deny_list_on_canonical_target() {
+        let dir = std::env::temp_dir().join("kirkforge_search_deny_symlink_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir(&dir).unwrap();
+
+        let target = dir.join("secret.pem");
+        let link = dir.join("safe_link");
+        std::fs::write(&target, "secret").unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        let guard = crate::session::access::PathGuard {
+            sandbox_dir: Some(dir.clone()),
+            ..Default::default()
+        };
+
+        // The symlink name is not denied, but its canonical target is *.pem.
+        let result = check_search_path(&guard, &link);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            matches!(result, GuardVerdict::Denied(ref msg) if msg.contains("secret.pem")),
+            "expected search-path denial of symlink target, got {result:?}"
         );
     }
 

@@ -222,6 +222,54 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn plugin_verifier_does_not_leak_session_env() {
+        // A ReadOnly plugin verifier must not inherit sensitive session
+        // variables such as API keys. The host crate now env_clear()s before
+        // overlaying the curated allowlist + event-specific variables.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_path_buf();
+        let script = root.join("envleak.sh");
+        #[cfg(unix)]
+        {
+            std::fs::write(&script, "#!/bin/sh\necho \"$OPENAI_API_KEY\" >&2\nexit 1\n").unwrap();
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&script).unwrap().permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&script, perms).unwrap();
+        }
+        #[cfg(not(unix))]
+        {
+            std::fs::write(&script, "echo %OPENAI_API_KEY%\nexit 1\n").unwrap();
+        }
+
+        std::env::set_var("OPENAI_API_KEY", "sk-leaked-secret");
+        let pv = PluginVerifier {
+            name: "envleak".into(),
+            command: PathBuf::from("envleak.sh"),
+            plugin_root: root,
+        };
+        let adapter = PluginVerifierAdapter::new(pv, 1);
+        let event = BusEvent::FileRead(FileReadEvent {
+            path: PathBuf::from("src/lib.rs"),
+            size_bytes: 100,
+            truncated: false,
+        });
+        let verdict = adapter.verify(&event).await;
+        std::env::remove_var("OPENAI_API_KEY");
+
+        match verdict {
+            Verdict::Unfixable(err) => {
+                assert!(
+                    !err.details.contains("sk-leaked-secret"),
+                    "session env leaked into plugin verifier stderr: {}",
+                    err.details
+                );
+            }
+            other => panic!("expected Unfixable, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn failing_plugin_verifier_includes_env_vars_in_stderr() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().to_path_buf();

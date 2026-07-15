@@ -941,14 +941,7 @@ impl CostTracking {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, clap::ValueEnum)]
-pub enum OutputFormat {
-    Text,
-
-    Json,
-
-    StreamJson,
-}
+pub use crate::cli::OutputFormat;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionSummary {

@@ -164,11 +164,18 @@ fn redact_args(tool: &str, args: &serde_json::Value) -> serde_json::Value {
 }
 
 fn truncate_string(s: &str, max: usize) -> String {
-    if s.len() > max {
-        format!("{}...[truncated]", &s[..max])
-    } else {
-        s.to_string()
+    if s.len() <= max {
+        return s.to_string();
     }
+    // Slice only at a character boundary; a naive byte slice can split a
+    // multi-byte UTF-8 sequence and panic.
+    let idx = s
+        .char_indices()
+        .take_while(|(i, _)| *i <= max)
+        .last()
+        .map(|(i, _)| i)
+        .unwrap_or(0);
+    format!("{}...[truncated]", &s[..idx])
 }
 
 #[cfg(test)]
@@ -240,5 +247,23 @@ mod tests {
         assert!(logged_cmd.ends_with("...[truncated]"));
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_truncate_string_respects_utf8_boundaries() {
+        // Use a 2-byte UTF-8 character so the 1024-byte boundary falls in the
+        // middle of a character. The old byte-slice implementation would panic.
+        let two_byte = "é";
+        let long_cmd = two_byte.repeat(600);
+        let truncated = truncate_string(&long_cmd, 1024);
+        assert!(truncated.ends_with("...[truncated]"));
+        assert!(
+            truncated.len() <= 1024 + "...[truncated]".len(),
+            "truncated command should not exceed max plus marker: {truncated}"
+        );
+        assert!(
+            truncated.is_char_boundary(truncated.len() - "...[truncated]".len()),
+            "truncate point must be on a character boundary"
+        );
     }
 }

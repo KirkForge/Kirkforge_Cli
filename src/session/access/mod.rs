@@ -145,6 +145,17 @@ impl PathGuard {
                 ));
             }
         };
+
+        // 3b. When we follow symlinks, the original deny-list check may not
+        //     have caught the canonical target. Re-check the resolved path so
+        //     a symlink inside the sandbox cannot point to a denied file.
+        if self.follow_symlinks && self.deny_list.is_path_denied(&canonical) {
+            return GuardVerdict::Denied(format!(
+                "Resolved path denied by deny list: {}",
+                canonical.display()
+            ));
+        }
+
         if let Some(ref sandbox) = self.sandbox_dir {
             let sb = match sandbox.canonicalize() {
                 Ok(s) => s,
@@ -171,16 +182,6 @@ impl PathGuard {
             GuardVerdict::Allowed(c) => c,
             GuardVerdict::Denied(msg) => return GuardVerdict::Denied(msg),
         };
-
-        // 3b. When we followed a symlink, the original deny-list check may not
-        //     have caught the canonical target. Re-check the resolved path so
-        //     a symlink inside the sandbox cannot point to a denied file.
-        if self.follow_symlinks && self.deny_list.is_path_denied(&canonical) {
-            return GuardVerdict::Denied(format!(
-                "Path denied by deny list: {}",
-                canonical.display()
-            ));
-        }
 
         // 4. Size limit
         // Use the canonical path's metadata, not the original path's. When
@@ -1101,6 +1102,32 @@ mod tests {
         assert!(
             matches!(result, GuardVerdict::Denied(ref msg) if msg.contains("secret.pem")),
             "expected denial of symlink target, got {result:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_check_traversal_rechecks_deny_list_on_canonical_target() {
+        let dir = std::env::temp_dir().join("kirkforge_traversal_deny_symlink_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir(&dir).unwrap();
+
+        let target = dir.join("secret.pem");
+        let link = dir.join("safe_link");
+        std::fs::write(&target, "secret").unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        let guard = PathGuard {
+            sandbox_dir: Some(dir.clone()),
+            follow_symlinks: true,
+            ..Default::default()
+        };
+
+        let result = guard.check_traversal(&link);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            matches!(result, GuardVerdict::Denied(ref msg) if msg.contains("secret.pem")),
+            "expected traversal denial of symlink target, got {result:?}"
         );
     }
 }

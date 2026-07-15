@@ -97,24 +97,29 @@ pub(super) fn emit_turn_events(
                         eprintln!("{result}");
                     }
                 }
-                // If we have a matching in-flight record, fold it
-                // into a ToolCallRecord and push. Name mismatch
-                // (shouldn't happen but be defensive) falls back to
-                // empty args + zero duration.
-                if let Some((start_name, start_args, start_time)) = in_flight.take() {
-                    let duration_ms = start_time.elapsed().as_millis() as u64;
-                    let record = kirkforge::shared::ToolCallRecord {
-                        name: start_name,
-                        arguments: start_args,
-                        result: result.clone(),
-                        success: *success,
-                        duration_ms,
+                // Fold the result into a ToolCallRecord. If we have a
+                // matching in-flight timer, use its name/args/duration;
+                // otherwise synthesise an empty-args, zero-duration record
+                // so orphaned ToolResult events still appear in the JSON
+                // summary instead of disappearing.
+                let (record_name, record_args, duration_ms) =
+                    if let Some((start_name, start_args, start_time)) = in_flight.take() {
+                        (
+                            start_name,
+                            start_args,
+                            start_time.elapsed().as_millis() as u64,
+                        )
+                    } else {
+                        (name.clone(), serde_json::json!({}), 0)
                     };
-                    tool_records.push(record);
-                    // If the name in the result doesn't match the
-                    // start (paranoia), prefer the start name. We
-                    // already used `start_name`; nothing to do.
-                }
+                let record = kirkforge::shared::ToolCallRecord {
+                    name: record_name,
+                    arguments: record_args,
+                    result: result.clone(),
+                    success: *success,
+                    duration_ms,
+                };
+                tool_records.push(record);
             }
             session::executor::TurnEvent::Verification { message, success } => {
                 if output == kirkforge::shared::OutputFormat::StreamJson {
@@ -139,11 +144,16 @@ pub(super) fn emit_turn_events(
                 prompt_tokens,
                 completion_tokens,
                 turn_cost,
-                cumulative_cost: cum_cost,
+                cumulative_cost: _cum_cost,
             } => {
+                // Accumulate the per-turn cost locally. The event's
+                // `cumulative_cost` field is authoritative inside the
+                // executor, but in headless output we build our own running
+                // total so a cached or zero-cost turn cannot accidentally
+                // reset the session cost to 0.0 in the JSON summary.
                 *total_prompt_tokens += prompt_tokens;
                 *total_completion_tokens += completion_tokens;
-                *cumulative_cost = *cum_cost;
+                *cumulative_cost += *turn_cost;
 
                 if output == kirkforge::shared::OutputFormat::StreamJson {
                     let line = serde_json::json!({
@@ -151,7 +161,7 @@ pub(super) fn emit_turn_events(
                         "prompt_tokens": prompt_tokens,
                         "completion_tokens": completion_tokens,
                         "turn_cost": turn_cost,
-                        "cumulative_cost": *cum_cost,
+                        "cumulative_cost": *cumulative_cost,
                     });
                     print_json_line(&line);
                 }
@@ -221,5 +231,118 @@ pub(super) fn resolve_continue_path(value: &str) -> anyhow::Result<std::path::Pa
         Err(e) => Err(anyhow::anyhow!(
             "Error resolving session id '{value}': {e}"
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::emit_turn_events;
+    use kirkforge::session::executor::TurnEvent;
+    use kirkforge::shared::{OutputFormat, ToolCallRecord};
+
+    /// C20 regression: a cached or zero-cost turn must not reset the
+    /// running session cost to 0.0 while token counters keep growing.
+    #[test]
+    fn zero_cost_turn_does_not_wipe_cumulative_cost() {
+        let mut total_prompt = 0usize;
+        let mut total_completion = 0usize;
+        let mut cumulative_cost = 0.0f64;
+        let mut tool_records = Vec::<ToolCallRecord>::new();
+        let mut final_error = None;
+
+        emit_turn_events(
+            &[
+                TurnEvent::CostStats {
+                    prompt_tokens: 100,
+                    completion_tokens: 50,
+                    turn_cost: 0.001,
+                    cumulative_cost: 0.001,
+                },
+                TurnEvent::CostStats {
+                    prompt_tokens: 200,
+                    completion_tokens: 80,
+                    turn_cost: 0.0,
+                    cumulative_cost: 0.0,
+                },
+            ],
+            OutputFormat::Json,
+            &mut total_prompt,
+            &mut total_completion,
+            &mut cumulative_cost,
+            &mut tool_records,
+            &mut final_error,
+        );
+
+        assert_eq!(total_prompt, 300);
+        assert_eq!(total_completion, 130);
+        assert!(
+            (cumulative_cost - 0.001).abs() < f64::EPSILON,
+            "cumulative_cost should accumulate turn_cost, expected 0.001, got {cumulative_cost}"
+        );
+    }
+
+    /// C21 regression: a ToolResult without a preceding ToolStart must
+    /// still appear in the JSON tool_calls summary.
+    #[test]
+    fn tool_result_without_start_is_recorded() {
+        let mut tool_records = Vec::<ToolCallRecord>::new();
+        let mut final_error = None;
+
+        emit_turn_events(
+            &[TurnEvent::ToolResult {
+                name: "bash".into(),
+                output: "hello".into(),
+                success: true,
+            }],
+            OutputFormat::Json,
+            &mut 0,
+            &mut 0,
+            &mut 0.0,
+            &mut tool_records,
+            &mut final_error,
+        );
+
+        assert_eq!(tool_records.len(), 1);
+        assert_eq!(tool_records[0].name, "bash");
+        assert_eq!(tool_records[0].result, "hello");
+        assert!(tool_records[0].success);
+        assert_eq!(tool_records[0].duration_ms, 0);
+        assert_eq!(tool_records[0].arguments, serde_json::json!({}));
+    }
+
+    /// Matched ToolStart/ToolResult still keeps the original args and
+    /// result.
+    #[test]
+    fn matched_tool_record_keeps_start_data() {
+        let mut tool_records = Vec::<ToolCallRecord>::new();
+        let mut final_error = None;
+
+        emit_turn_events(
+            &[
+                TurnEvent::ToolStart {
+                    name: "grep".into(),
+                    args: serde_json::json!({"pattern": "foo"}),
+                },
+                TurnEvent::ToolResult {
+                    name: "grep".into(),
+                    output: "1 hit".into(),
+                    success: true,
+                },
+            ],
+            OutputFormat::Json,
+            &mut 0,
+            &mut 0,
+            &mut 0.0,
+            &mut tool_records,
+            &mut final_error,
+        );
+
+        assert_eq!(tool_records.len(), 1);
+        assert_eq!(tool_records[0].name, "grep");
+        assert_eq!(
+            tool_records[0].arguments,
+            serde_json::json!({"pattern": "foo"})
+        );
+        assert_eq!(tool_records[0].result, "1 hit");
     }
 }

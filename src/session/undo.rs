@@ -257,32 +257,6 @@ impl UndoStack {
     ) -> Result<u64> {
         let new_bytes = prev_bytes.len() as u64;
 
-        // FIFO-trim the oldest entry if we're at the cap.
-        while self.ops.len() >= MAX_ENTRIES {
-            if let Some(oldest) = self.ops.pop_front() {
-                self.total_snapshot_bytes = self
-                    .total_snapshot_bytes
-                    .saturating_sub(oldest.snapshot_size);
-                self.remove_snapshot(oldest.seq);
-            }
-        }
-
-        // Trim oldest entries until the new snapshot fits under the total
-        // byte budget. A single snapshot bigger than the cap is still allowed
-        // — the user needs at least one undo — but everything older is evicted.
-        while !self.ops.is_empty()
-            && self.total_snapshot_bytes.saturating_add(new_bytes) > MAX_TOTAL_SNAPSHOT_BYTES
-        {
-            if let Some(oldest) = self.ops.pop_front() {
-                self.total_snapshot_bytes = self
-                    .total_snapshot_bytes
-                    .saturating_sub(oldest.snapshot_size);
-                self.remove_snapshot(oldest.seq);
-            } else {
-                break;
-            }
-        }
-
         let seq = self.next_seq.fetch_add(1, Ordering::SeqCst);
         let snap_path = self.snapshot_path(seq);
         let meta_path = self.meta_path(seq);
@@ -310,6 +284,9 @@ impl UndoStack {
         std::fs::write(&meta_path, meta_json)
             .with_context(|| format!("write undo metadata {}", meta_path.display()))?;
 
+        // Record the operation in memory only after the new snapshot is
+        // safely on disk. If the writes above failed, the old stack is
+        // untouched.
         self.total_snapshot_bytes += new_bytes;
         self.ops.push_back(UndoOp {
             seq,
@@ -319,6 +296,32 @@ impl UndoStack {
             snapshot_size: new_bytes,
             timestamp: meta.timestamp,
         });
+
+        // FIFO-trim the oldest entries only after the new snapshot is
+        // durable. A write failure must never cost us the previously
+        // saved snapshots.
+        while self.ops.len() > MAX_ENTRIES {
+            if let Some(oldest) = self.ops.pop_front() {
+                self.total_snapshot_bytes = self
+                    .total_snapshot_bytes
+                    .saturating_sub(oldest.snapshot_size);
+                self.remove_snapshot(oldest.seq);
+            }
+        }
+
+        // Trim oldest entries until the total byte budget is respected.
+        // A single snapshot bigger than the cap is still allowed — the user
+        // needs at least one undo — but everything older is evicted.
+        while !self.ops.is_empty() && self.total_snapshot_bytes > MAX_TOTAL_SNAPSHOT_BYTES {
+            if let Some(oldest) = self.ops.pop_front() {
+                self.total_snapshot_bytes = self
+                    .total_snapshot_bytes
+                    .saturating_sub(oldest.snapshot_size);
+                self.remove_snapshot(oldest.seq);
+            } else {
+                break;
+            }
+        }
 
         Ok(seq)
     }
@@ -614,6 +617,63 @@ mod tests {
         assert!(
             stack.list()[0].snapshot_size >= 1024 * 1024,
             "remaining entry should be the large one"
+        );
+    }
+
+    /// Write failure during a push must not evict previously saved
+    /// snapshots. The new snapshot is written first, then the trim
+    /// runs; if the write fails, the old stack and its files must
+    /// remain intact.
+    #[cfg(unix)]
+    #[test]
+    fn test_push_write_failure_preserves_old_snapshots() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (mut stack, _guard) = fresh_stack();
+        let target = env::temp_dir().join("kirkforge_undo_fail.txt");
+        std::fs::write(&target, b"first").unwrap();
+        let prev = std::fs::read(&target).unwrap();
+        stack.push(UndoKind::Edit, &target, true, &prev).unwrap();
+
+        let old_seq = stack.list()[0].seq;
+        let old_total = stack.total_snapshot_bytes;
+        let old_snap = stack.snapshot_path(old_seq);
+        let old_meta = stack.meta_path(old_seq);
+        assert!(old_snap.exists());
+        assert!(old_meta.exists());
+
+        // Make the undo directory read-only so the next write fails.
+        std::fs::set_permissions(&stack.dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+
+        // Fill the stack to the count cap so the old implementation would
+        // have trimmed before writing; the new implementation must keep the
+        // old entry when the write fails.
+        for i in 0..MAX_ENTRIES {
+            std::fs::write(&target, format!("v{i}")).unwrap();
+            let prev = std::fs::read(&target).unwrap();
+            if i == 0 {
+                // First push after the read-only chmod should fail.
+                let result = stack.push(UndoKind::Edit, &target, true, &prev);
+                assert!(result.is_err(), "write should fail on read-only dir");
+                break;
+            }
+        }
+
+        // Restore write permission so the test guard can clean up.
+        std::fs::set_permissions(&stack.dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        assert_eq!(stack.len(), 1, "old snapshot should still be in memory");
+        assert_eq!(
+            stack.total_snapshot_bytes, old_total,
+            "total bytes should not change on failed push"
+        );
+        assert!(
+            old_snap.exists(),
+            "old snapshot file should not have been removed"
+        );
+        assert!(
+            old_meta.exists(),
+            "old metadata file should not have been removed"
         );
     }
 

@@ -84,9 +84,6 @@ impl Tool for Grep {
                 .build();
 
             for entry in walker.flatten() {
-                if results.len() >= max_matches {
-                    break;
-                }
                 if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
                     continue;
                 }
@@ -244,6 +241,7 @@ fn is_binary_content(path: &std::path::Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tools::ToolContext;
     use std::path::Path;
 
     /// Matching the last line must not panic when building context_after.
@@ -254,5 +252,31 @@ mod tests {
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].line_number, 3);
         assert!(matches[0].context_after.is_empty());
+    }
+
+    #[tokio::test]
+    async fn grep_total_counts_all_matches_not_just_collected() {
+        let dir = std::env::temp_dir().join("kirkforge_grep_total_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.txt"), "needle\nneedle\nneedle\n").unwrap();
+        std::fs::write(dir.join("b.txt"), "needle\nneedle\n").unwrap();
+
+        let grep = Grep::new(PathGuard::default());
+        let args = serde_json::json!({
+            "pattern": "needle",
+            "path": dir.to_string_lossy(),
+            "max_matches": 2
+        });
+        let outcome = grep.run(&ToolContext::default(), args).await;
+        match outcome {
+            ToolOutcome::GrepMatches { matches, total, .. } => {
+                assert_eq!(matches.len(), 2, "results should be capped at max_matches");
+                assert_eq!(total, 5, "total should count all matches across files");
+            }
+            other => panic!("expected GrepMatches, got {other:?}"),
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

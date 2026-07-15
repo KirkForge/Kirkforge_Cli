@@ -63,10 +63,16 @@ impl MetricEvent {
     }
 }
 
-/// Test-time override for the metrics path. Serialised by `TEST_LOCK` so
-/// parallel tests cannot cross-contaminate each other's log files.
+// ponytail: thread-local test override for the metrics path. Thread-local
+// (not a global Mutex) so an incidental `record()` from another test's
+// thread (verifier/executor/approval) can't land in this test's override
+// path. `#[cfg(test)]`-only; production builds compile the whole override
+// block out, so this never affects real `metrics_path()` resolution.
 #[cfg(test)]
-static PATH_OVERRIDE: Mutex<Option<PathBuf>> = Mutex::new(None);
+thread_local! {
+    static PATH_OVERRIDE: std::cell::RefCell<Option<PathBuf>> =
+        const { std::cell::RefCell::new(None) };
+}
 
 #[cfg(test)]
 static TEST_LOCK: Mutex<()> = Mutex::new(());
@@ -82,9 +88,8 @@ static TEST_DIR_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::Atomi
 pub fn metrics_path() -> Option<PathBuf> {
     #[cfg(test)]
     {
-        let guard = PATH_OVERRIDE.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(path) = guard.as_ref() {
-            return Some(path.clone());
+        if let Some(path) = PATH_OVERRIDE.with(|o| o.borrow().clone()) {
+            return Some(path);
         }
     }
     let dirs = directories::ProjectDirs::from("", "KirkForge", "kirkforge")?;
@@ -298,15 +303,9 @@ where
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("metrics.ndjson");
-    {
-        let mut guard = PATH_OVERRIDE.lock().unwrap_or_else(|e| e.into_inner());
-        *guard = Some(path.clone());
-    }
+    PATH_OVERRIDE.with(|o| *o.borrow_mut() = Some(path.clone()));
     let result = f(dir.clone(), lock);
-    {
-        let mut guard = PATH_OVERRIDE.lock().unwrap_or_else(|e| e.into_inner());
-        *guard = None;
-    }
+    PATH_OVERRIDE.with(|o| *o.borrow_mut() = None);
     let _ = std::fs::remove_dir_all(&dir);
     result
 }

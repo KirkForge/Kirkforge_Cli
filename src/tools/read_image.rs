@@ -33,11 +33,20 @@
 //! so `Config::max_file_read_size` and the binary-read guard are both
 //! enforced at the dispatch layer. The tool itself reads the raw bytes
 //! once the guard has approved the path and size.
+use crate::session::access::PathGuard;
 use crate::shared::{ToolDef, ToolError, ToolOutcome};
 use crate::tools::{Tool, ToolContext};
 use std::path::PathBuf;
 
-pub struct ReadImage;
+pub struct ReadImage {
+    path_guard: PathGuard,
+}
+
+impl ReadImage {
+    pub fn new(path_guard: PathGuard) -> Self {
+        Self { path_guard }
+    }
+}
 
 /// Detect an image MIME type from the leading magic bytes of `bytes`.
 ///
@@ -110,6 +119,12 @@ impl Tool for ReadImage {
             }
         };
 
+        if let crate::session::access::GuardVerdict::Denied(reason) =
+            self.path_guard.check_read(&path)
+        {
+            return ToolOutcome::Failure(ToolError::AccessDenied { message: reason });
+        }
+
         let bytes = match std::fs::read(&path) {
             Ok(b) => b,
             Err(e) => {
@@ -146,6 +161,7 @@ impl Tool for ReadImage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::session::access::PathGuard;
     use crate::tools::{Tool, ToolContext};
 
     const PNG_MAGIC: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
@@ -164,7 +180,7 @@ mod tests {
         let p = dir.path().join("shot.png");
         std::fs::write(&p, PNG_MAGIC).unwrap();
 
-        let out = ReadImage
+        let out = ReadImage::new(PathGuard::default())
             .run(&ctx(), make_args(&p.display().to_string()))
             .await;
         match out {
@@ -189,7 +205,7 @@ mod tests {
         // SOI marker for JPEG
         std::fs::write(&p, [0xFF, 0xD8, 0xFF]).unwrap();
 
-        let out = ReadImage
+        let out = ReadImage::new(PathGuard::default())
             .run(&ctx(), make_args(&p.display().to_string()))
             .await;
         assert!(matches!(out, ToolOutcome::Image { ref mime, .. } if mime == "image/jpeg"));
@@ -201,7 +217,7 @@ mod tests {
         let p = dir.path().join("mystery.xyz");
         std::fs::write(&p, b"some bytes").unwrap();
 
-        let out = ReadImage
+        let out = ReadImage::new(PathGuard::default())
             .run(&ctx(), make_args(&p.display().to_string()))
             .await;
         assert!(matches!(
@@ -217,7 +233,7 @@ mod tests {
         let p = dir.path().join("actually_jpeg.png");
         std::fs::write(&p, [0xFF, 0xD8, 0xFF, 0xE0]).unwrap();
 
-        let out = ReadImage
+        let out = ReadImage::new(PathGuard::default())
             .run(&ctx(), make_args(&p.display().to_string()))
             .await;
         assert!(matches!(out, ToolOutcome::Image { ref mime, .. } if mime == "image/jpeg"));
@@ -229,7 +245,7 @@ mod tests {
         let p = dir.path().join("anim.gif");
         std::fs::write(&p, b"GIF89a\x01\x00").unwrap();
 
-        let out = ReadImage
+        let out = ReadImage::new(PathGuard::default())
             .run(&ctx(), make_args(&p.display().to_string()))
             .await;
         assert!(matches!(out, ToolOutcome::Image { ref mime, .. } if mime == "image/gif"));
@@ -248,7 +264,7 @@ mod tests {
             .collect();
         std::fs::write(&p, bytes).unwrap();
 
-        let out = ReadImage
+        let out = ReadImage::new(PathGuard::default())
             .run(&ctx(), make_args(&p.display().to_string()))
             .await;
         assert!(matches!(out, ToolOutcome::Image { ref mime, .. } if mime == "image/webp"));
@@ -260,7 +276,7 @@ mod tests {
         let p = dir.path().join("shot.bmp");
         std::fs::write(&p, b"BM\x00\x00\x00\x00").unwrap();
 
-        let out = ReadImage
+        let out = ReadImage::new(PathGuard::default())
             .run(&ctx(), make_args(&p.display().to_string()))
             .await;
         assert!(matches!(out, ToolOutcome::Image { ref mime, .. } if mime == "image/bmp"));
@@ -272,7 +288,7 @@ mod tests {
         let p = dir.path().join("icon.svg");
         std::fs::write(&p, b"<?xml version=\"1.0\"?><svg></svg>").unwrap();
 
-        let out = ReadImage
+        let out = ReadImage::new(PathGuard::default())
             .run(&ctx(), make_args(&p.display().to_string()))
             .await;
         assert!(matches!(out, ToolOutcome::Image { ref mime, .. } if mime == "image/svg+xml"));
@@ -289,7 +305,7 @@ mod tests {
             .collect();
         std::fs::write(&p, bytes).unwrap();
 
-        let out = ReadImage
+        let out = ReadImage::new(PathGuard::default())
             .run(&ctx(), make_args(&p.display().to_string()))
             .await;
         assert!(matches!(out, ToolOutcome::Image { ref mime, .. } if mime == "image/svg+xml"));
@@ -306,7 +322,7 @@ mod tests {
             .collect();
         std::fs::write(&p, bytes).unwrap();
 
-        let out = ReadImage
+        let out = ReadImage::new(PathGuard::default())
             .run(&ctx(), make_args(&p.display().to_string()))
             .await;
         assert!(matches!(out, ToolOutcome::Image { ref mime, .. } if mime == "image/png"));
@@ -323,7 +339,7 @@ mod tests {
             .collect();
         std::fs::write(&p, bytes).unwrap();
 
-        let out = ReadImage
+        let out = ReadImage::new(PathGuard::default())
             .run(&ctx(), make_args(&p.display().to_string()))
             .await;
         assert!(matches!(out, ToolOutcome::Image { ref mime, .. } if mime == "image/jpeg"));
@@ -341,7 +357,7 @@ mod tests {
             .collect();
         std::fs::write(&p, bytes).unwrap();
 
-        let out = ReadImage
+        let out = ReadImage::new(PathGuard::default())
             .run(&ctx(), make_args(&p.display().to_string()))
             .await;
         assert!(matches!(out, ToolOutcome::Image { ref mime, .. } if mime == "image/gif"));
@@ -349,7 +365,9 @@ mod tests {
 
     #[tokio::test]
     async fn read_image_missing_path_returns_error() {
-        let out = ReadImage.run(&ctx(), serde_json::json!({})).await;
+        let out = ReadImage::new(PathGuard::default())
+            .run(&ctx(), serde_json::json!({}))
+            .await;
         assert!(matches!(
             out,
             ToolOutcome::Failure(ToolError::InvalidArgs { .. })
@@ -358,12 +376,28 @@ mod tests {
 
     #[tokio::test]
     async fn read_image_nonexistent_file_returns_error() {
-        let out = ReadImage
+        let out = ReadImage::new(PathGuard::default())
             .run(&ctx(), make_args("/nonexistent/path/to/file.png"))
             .await;
+        // The self-guard rejects the path before attempting to read it.
         assert!(matches!(
             out,
-            ToolOutcome::Failure(ToolError::Internal { .. })
+            ToolOutcome::Failure(ToolError::AccessDenied { .. })
         ));
+    }
+
+    #[tokio::test]
+    async fn read_image_self_guard_blocks_denied_extension() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("secret.pem");
+        std::fs::write(&p, [0xFF, 0xD8, 0xFF]).unwrap();
+
+        let out = ReadImage::new(PathGuard::default())
+            .run(&ctx(), make_args(&p.display().to_string()))
+            .await;
+        assert!(
+            matches!(out, ToolOutcome::Failure(ToolError::AccessDenied { .. })),
+            "default deny-list extensions should be blocked by the self-guard, got: {out:?}"
+        );
     }
 }

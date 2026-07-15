@@ -305,32 +305,32 @@ impl Executor {
                 .unwrap_or("");
             let path = std::path::Path::new(path_str);
 
-            let verdict = match tc.name.as_str() {
-                "read_file" | "read_image" => self.path_guard.check_read(path),
-                "write_file" | "edit_file" => self.path_guard.check_write(path),
-                _ => {
-                    let denied = format!("🔒 Access denied: unsupported file tool '{}'", tc.name);
-                    crate::send_or_warn!(
-                        event_tx
-                            .send(TurnEvent::ToolResult {
-                                name: tc.name.clone(),
-                                output: denied.clone(),
-                                success: false,
-                            })
-                            .await,
-                        "TurnEvent receiver dropped; discarding event"
-                    );
-                    self.conversation
-                        .append_async(Message {
-                            role: Role::Tool,
-                            content: denied,
-                            tool_call_id: Some(tc.id.clone()),
-                            tool_name: Some(tc.name.clone()),
-                            ..Default::default()
+            let verdict = if tc.name == "read_file" || tc.name == "read_image" {
+                self.path_guard.check_read(path)
+            } else if tc.name == "write_file" || tc.name == "edit_file" {
+                self.path_guard.check_write(path).await
+            } else {
+                let denied = format!("🔒 Access denied: unsupported file tool '{}'", tc.name);
+                crate::send_or_warn!(
+                    event_tx
+                        .send(TurnEvent::ToolResult {
+                            name: tc.name.clone(),
+                            output: denied.clone(),
+                            success: false,
                         })
-                        .await?;
-                    return Ok(());
-                }
+                        .await,
+                    "TurnEvent receiver dropped; discarding event"
+                );
+                self.conversation
+                    .append_async(Message {
+                        role: Role::Tool,
+                        content: denied,
+                        tool_call_id: Some(tc.id.clone()),
+                        tool_name: Some(tc.name.clone()),
+                        ..Default::default()
+                    })
+                    .await?;
+                return Ok(());
             };
 
             match verdict {

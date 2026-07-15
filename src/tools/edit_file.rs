@@ -65,7 +65,7 @@ impl Tool for EditFile {
         // deny_extensions, block_dotfiles, allowed_write_dirs, and sandbox
         // containment from a single source of truth in access.rs.
         if let crate::session::access::GuardVerdict::Denied(msg) =
-            self.path_guard.check_write(&path)
+            self.path_guard.check_write(&path).await
         {
             return ToolOutcome::Failure(ToolError::AccessDenied { message: msg });
         }

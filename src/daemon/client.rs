@@ -6,11 +6,11 @@
 
 #[cfg(unix)]
 mod unix_imp {
-    use crate::daemon::{paths, Request, Response};
+    use crate::daemon::{paths, read_line_limited, Request, Response};
     use crate::session::session_index::SessionEntry;
     use anyhow::Context;
     use std::path::PathBuf;
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufStream};
+    use tokio::io::{AsyncWriteExt, BufStream};
     use tokio::net::UnixStream;
 
     /// Client handle to the session daemon.
@@ -48,9 +48,7 @@ mod unix_imp {
             self.stream.flush().await.context("flush daemon request")?;
 
             let mut line = String::new();
-            let n = self
-                .stream
-                .read_line(&mut line)
+            let n = read_line_limited(&mut self.stream, &mut line)
                 .await
                 .context("read daemon response")?;
             if n == 0 {

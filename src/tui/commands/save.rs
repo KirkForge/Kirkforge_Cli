@@ -15,15 +15,21 @@ use std::path::PathBuf;
 /// - `args` is a path → write to that path.
 ///
 /// Returns a user-visible status string.
-pub fn handle_save_command(args: &str, state: &AppState) -> String {
+///
+/// This is async so the path-guard write check (which may probe git) does
+/// not block the TUI event loop.
+pub async fn handle_save_command(args: &str, state: &AppState) -> String {
     let path = resolve_save_path(args, state);
 
     // Apply the same PathGuard write check that write_file/edit_file go
     // through. `/save` writes user data to disk, so it must respect the
     // sandbox and deny list.
-    let cfg = crate::shared::read_shared_config(&state.config);
-    let (_deny_list, path_guard, _read_gate) = access_from_config(&cfg);
-    if let GuardVerdict::Denied(msg) = path_guard.check_write(&path) {
+    let path_guard = {
+        let cfg = crate::shared::read_shared_config(&state.config);
+        let (_deny_list, path_guard, _read_gate) = access_from_config(&cfg);
+        path_guard
+    };
+    if let GuardVerdict::Denied(msg) = path_guard.check_write(&path).await {
         return format!("🔒 Access denied: {msg}");
     }
 
@@ -93,12 +99,12 @@ mod tests {
         state
     }
 
-    #[test]
-    fn save_writes_file_next_to_log() {
+    #[tokio::test]
+    async fn save_writes_file_next_to_log() {
         let tmp = tempfile::tempdir().unwrap();
         let log = tmp.path().join("2026-06-22-session-01.conv.ndjson");
         let state = test_state_with_log(log);
-        let msg = handle_save_command("", &state);
+        let msg = handle_save_command("", &state).await;
         assert!(msg.starts_with("💾 Saved transcript"));
         let expected = tmp.path().join("2026-06-22-session-01.md");
         assert!(
@@ -110,18 +116,18 @@ mod tests {
         assert!(content.contains("# KirkForge transcript"));
     }
 
-    #[test]
-    fn save_writes_file_to_explicit_path() {
+    #[tokio::test]
+    async fn save_writes_file_to_explicit_path() {
         let tmp = tempfile::tempdir().unwrap();
         let target = tmp.path().join("my-chat.md");
         let state = AppState::new(Arc::new(std::sync::RwLock::new(Config::default())));
-        let msg = handle_save_command(target.to_str().unwrap(), &state);
+        let msg = handle_save_command(target.to_str().unwrap(), &state).await;
         assert!(msg.starts_with("💾 Saved transcript"));
         assert!(target.exists());
     }
 
-    #[test]
-    fn save_includes_messages() {
+    #[tokio::test]
+    async fn save_includes_messages() {
         let tmp = tempfile::tempdir().unwrap();
         let log = tmp.path().join("s.conv.ndjson");
         let mut state = test_state_with_log(log);
@@ -132,7 +138,7 @@ mod tests {
             "assistant",
             "hello",
         ));
-        let _msg = handle_save_command("", &state);
+        let _msg = handle_save_command("", &state).await;
         let expected = tmp.path().join("s.md");
         let content = std::fs::read_to_string(&expected).unwrap();
         assert!(content.contains("hi"));

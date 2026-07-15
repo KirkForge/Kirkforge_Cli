@@ -733,7 +733,7 @@ pub(crate) async fn handle_input_key(
                             return Ok(());
                         }
                         "/save" => {
-                            let msg = crate::tui::commands::handle_save_command(args, state);
+                            let msg = crate::tui::commands::handle_save_command(args, state).await;
                             state.messages.push(ConversationEntry::new("system", msg));
                             return Ok(());
                         }

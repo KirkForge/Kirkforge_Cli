@@ -61,7 +61,7 @@ impl Tool for WriteFile {
         // Enforce deny_paths, deny_extensions, block_dotfiles,
         // allowed_write_dirs, and sandbox containment before any write.
         if let crate::session::access::GuardVerdict::Denied(msg) =
-            self.path_guard.check_write(&path)
+            self.path_guard.check_write(&path).await
         {
             return ToolOutcome::Failure(ToolError::AccessDenied { message: msg });
         }

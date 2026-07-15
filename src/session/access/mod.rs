@@ -71,32 +71,32 @@ impl PathGuard {
     /// directory is not a repo, or the path is not ignored, returns `false`.
     /// This is intentionally fail-open: the block happens only when we can
     /// positively confirm the dotfile is git-ignored.
-    fn is_gitignored(&self, path: &Path) -> bool {
+    ///
+    /// This is an async method so the subprocess does not block the Tokio
+    /// runtime while `git` starts up or while the working directory is on a
+    /// slow filesystem.
+    async fn is_gitignored(&self, path: &Path) -> bool {
         let workdir = self
             .sandbox_dir
             .as_deref()
             .unwrap_or_else(|| Path::new("."))
             .to_path_buf();
         let path = path.to_path_buf();
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let output = match std::process::Command::new("git")
+        let result = tokio::time::timeout(std::time::Duration::from_secs(2), async move {
+            match tokio::process::Command::new("git")
                 .arg("check-ignore")
                 .arg("--quiet")
                 .arg(&path)
                 .current_dir(workdir)
-                .output()
+                .status()
+                .await
             {
-                Ok(o) => o,
-                Err(_) => {
-                    let _ = tx.send(false);
-                    return;
-                }
-            };
-            let _ = tx.send(output.status.success());
-        });
-        rx.recv_timeout(std::time::Duration::from_secs(2))
-            .unwrap_or(false)
+                Ok(status) => status.success(),
+                Err(_) => false,
+            }
+        })
+        .await;
+        result.unwrap_or(false)
     }
 
     /// Check whether `path` may be traversed (listed or read).
@@ -234,7 +234,10 @@ impl PathGuard {
     ///
     /// Handles non-existent paths by checking the parent directory
     /// for sandbox containment.
-    pub fn check_write(&self, path: &Path) -> GuardVerdict {
+    ///
+    /// This is async because the git-ignore probe needs to spawn a subprocess
+    /// without blocking the Tokio runtime.
+    pub async fn check_write(&self, path: &Path) -> GuardVerdict {
         // 1. Deny list
         if self.deny_list.is_path_denied(path) {
             return GuardVerdict::Denied(format!("Path denied by deny list: {}", path.display()));
@@ -311,7 +314,7 @@ impl PathGuard {
         //     unavailable so we do not accidentally block writes in a non-repo.
         if self.block_gitignored_dotfiles {
             if let Some(name) = path.file_name() {
-                if name.to_string_lossy().starts_with('.') && self.is_gitignored(path) {
+                if name.to_string_lossy().starts_with('.') && self.is_gitignored(path).await {
                     return GuardVerdict::Denied(format!(
                         "Git-ignored dotfile write blocked: {}. \
                          Add an explicit permission rule if you really need this file.",
@@ -656,29 +659,29 @@ mod tests {
         assert!(matches!(result, GuardVerdict::Denied(_)));
     }
 
-    #[test]
-    fn test_path_guard_blocks_denied_extensions() {
+    #[tokio::test]
+    async fn test_path_guard_blocks_denied_extensions() {
         let guard = PathGuard {
             deny_extensions: vec![".bad".into(), ".evil".into()],
             deny_list: DenyList::new(vec![], vec![]), // no default deny list (which includes .pem/.key)
             ..Default::default()
         };
-        let result = guard.check_write(Path::new("script.bad"));
+        let result = guard.check_write(Path::new("script.bad")).await;
         assert!(matches!(result, GuardVerdict::Denied(msg) if msg.contains("Extension")));
-        let result2 = guard.check_write(Path::new("file.evil"));
+        let result2 = guard.check_write(Path::new("file.evil")).await;
         assert!(matches!(result2, GuardVerdict::Denied(msg) if msg.contains("Extension")));
         // Normal extension should pass
-        let result3 = guard.check_write(Path::new("normal.txt"));
+        let result3 = guard.check_write(Path::new("normal.txt")).await;
         assert!(!matches!(result3, GuardVerdict::Denied(_)));
     }
 
-    #[test]
-    fn test_path_guard_blocks_dotfiles() {
+    #[tokio::test]
+    async fn test_path_guard_blocks_dotfiles() {
         let guard = PathGuard {
             block_dotfiles: true,
             ..Default::default()
         };
-        let result = guard.check_write(Path::new(".hidden"));
+        let result = guard.check_write(Path::new(".hidden")).await;
         assert!(matches!(result, GuardVerdict::Denied(msg) if msg.contains("Dotfiles")));
     }
 
@@ -735,13 +738,13 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_path_guard_write_for_nonexistent_path() {
+    #[tokio::test]
+    async fn test_path_guard_write_for_nonexistent_path() {
         let guard = PathGuard::default();
         let tmp = std::env::temp_dir().join("kirkforge_new_file_test.txt");
         // Should not exist for this test
         remove_test_file(&tmp);
-        let result = guard.check_write(&tmp);
+        let result = guard.check_write(&tmp).await;
         // Allowed since it's in tmp (no sandbox, no allow list restrictions)
         assert!(matches!(result, GuardVerdict::Allowed(_)));
         // Cleanup
@@ -850,8 +853,8 @@ mod tests {
     /// **Do not change `Default` to fail-closed** without coordinating with
     /// the existing call sites — see `test_path_guard_default_is_fail_open`
     /// below for the cases that depend on this.
-    #[test]
-    fn test_path_guard_default_is_fail_open() {
+    #[tokio::test]
+    async fn test_path_guard_default_is_fail_open() {
         let guard = PathGuard::default();
         assert!(
             !guard.is_sandboxed(),
@@ -860,7 +863,7 @@ mod tests {
         // Writes to /tmp are allowed (no sandbox, no allowlist blocking it).
         let tmp = std::env::temp_dir().join("kirkforge_default_failopen.txt");
         remove_test_file(&tmp);
-        let result = guard.check_write(&tmp);
+        let result = guard.check_write(&tmp).await;
         remove_test_file(&tmp);
         assert!(
             matches!(result, GuardVerdict::Allowed(_)),
@@ -871,7 +874,7 @@ mod tests {
         // But the deny list and deny extensions still apply — even
         // unsandboxed, .ssh and .pem are blocked.
         let ssh_like = std::env::temp_dir().join("kirkforge.pem");
-        let result = guard.check_write(&ssh_like);
+        let result = guard.check_write(&ssh_like).await;
         assert!(
             matches!(result, GuardVerdict::Denied(_)),
             "default PathGuard still applies the deny-extension list: .pem must be blocked"
@@ -1026,8 +1029,8 @@ mod tests {
         dir
     }
 
-    #[test]
-    fn test_path_guard_blocks_gitignored_dotfiles() {
+    #[tokio::test]
+    async fn test_path_guard_blocks_gitignored_dotfiles() {
         let dir = setup_gitignored_dotfile_repo("blocked");
         let guard = PathGuard {
             sandbox_dir: Some(dir.clone()),
@@ -1035,7 +1038,7 @@ mod tests {
             ..Default::default()
         };
 
-        let result = guard.check_write(&dir.join(".ignored_local"));
+        let result = guard.check_write(&dir.join(".ignored_local")).await;
         let _ = std::fs::remove_dir_all(&dir);
         assert!(
             matches!(result, GuardVerdict::Denied(ref msg) if msg.contains("Git-ignored dotfile")),
@@ -1043,8 +1046,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_path_guard_allows_non_gitignored_dotfiles() {
+    #[tokio::test]
+    async fn test_path_guard_allows_non_gitignored_dotfiles() {
         let dir = setup_gitignored_dotfile_repo("nonignored");
         let guard = PathGuard {
             sandbox_dir: Some(dir.clone()),
@@ -1053,7 +1056,7 @@ mod tests {
         };
 
         // `.tracked` is a dotfile but is not git-ignored.
-        let result = guard.check_write(&dir.join(".tracked"));
+        let result = guard.check_write(&dir.join(".tracked")).await;
         let _ = std::fs::remove_dir_all(&dir);
         assert!(
             matches!(result, GuardVerdict::Allowed(_)),
@@ -1061,8 +1064,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_path_guard_allows_gitignored_dotfiles_when_disabled() {
+    #[tokio::test]
+    async fn test_path_guard_allows_gitignored_dotfiles_when_disabled() {
         let dir = setup_gitignored_dotfile_repo("disabled");
         let guard = PathGuard {
             sandbox_dir: Some(dir.clone()),
@@ -1070,7 +1073,7 @@ mod tests {
             ..Default::default()
         };
 
-        let result = guard.check_write(&dir.join(".ignored_local"));
+        let result = guard.check_write(&dir.join(".ignored_local")).await;
         let _ = std::fs::remove_dir_all(&dir);
         assert!(
             matches!(result, GuardVerdict::Allowed(_)),

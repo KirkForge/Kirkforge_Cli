@@ -389,11 +389,40 @@ impl PluginRegistry {
     }
 }
 
+/// Locate the `minisign` binary in `PATH`.
+///
+/// Returns an absolute path so that the verifier does not spawn an
+/// unqualified command that could be hijacked by a malicious current
+/// directory. The search mirrors how `Command` resolves names, minus the
+/// current-directory fallback.
+fn minisign_binary(path_env: Option<&std::ffi::OsStr>) -> Result<std::path::PathBuf, String> {
+    let path_env = path_env.ok_or_else(|| "PATH not set; cannot locate minisign".to_string())?;
+    for dir in std::env::split_paths(path_env) {
+        let candidate = {
+            #[allow(unused_mut)]
+            let mut c = dir.join("minisign");
+            #[cfg(windows)]
+            {
+                c.set_extension("exe");
+            }
+            c
+        };
+        if candidate.is_file() {
+            return Ok(candidate);
+        }
+    }
+    Err("minisign binary not found in PATH; install minisign to verify plugin signatures".into())
+}
+
 /// Verify a plugin's detached minisign signature.
 ///
 /// The signature file must be named `.kirkforge.sig` inside the plugin
 /// directory and must sign the manifest file `kirkforge.toml`. The
 /// configured public key is passed to `minisign -V`.
+///
+/// Before spawning `minisign` we confirm the binary exists in `PATH` and
+/// canonicalize the manifest path so relative roots and symlinks cannot
+/// cause the signature to be checked against an unintended file.
 fn verify_plugin_signature(
     plugin_root: &std::path::Path,
     key_path: Option<&std::path::Path>,
@@ -407,8 +436,14 @@ fn verify_plugin_signature(
         "signature verification enabled but no plugin_public_key_path configured".to_string()
     })?;
 
-    let manifest_path = plugin_root.join("kirkforge.toml");
-    let output = std::process::Command::new("minisign")
+    let minisign = minisign_binary(std::env::var_os("PATH").as_deref())?;
+
+    let manifest_path = plugin_root
+        .join("kirkforge.toml")
+        .canonicalize()
+        .map_err(|e| format!("failed to canonicalize manifest path: {e}"))?;
+
+    let output = std::process::Command::new(&minisign)
         .arg("-V")
         .arg("-m")
         .arg(&manifest_path)
@@ -417,7 +452,7 @@ fn verify_plugin_signature(
         .arg("-p")
         .arg(key_path)
         .output()
-        .map_err(|e| format!("failed to run minisign: {e}"))?;
+        .map_err(|e| format!("failed to run minisign ({}): {e}", minisign.display()))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -926,5 +961,130 @@ command = "tools/escape.sh"
             .unwrap();
         assert_eq!(reg.active_count(), 1);
         assert!(reg.skill_by_trigger("/hello").is_some());
+    }
+
+    #[cfg(unix)]
+    mod signature_tests {
+        use super::*;
+        use std::ffi::OsStr;
+        use std::os::unix::fs::PermissionsExt;
+        use std::sync::Mutex;
+
+        static PATH_LOCK: Mutex<()> = Mutex::new(());
+
+        struct PathEnvGuard {
+            previous: Option<std::ffi::OsString>,
+        }
+
+        impl PathEnvGuard {
+            fn new(value: std::ffi::OsString) -> Self {
+                let previous = std::env::var_os("PATH");
+                std::env::set_var("PATH", value);
+                Self { previous }
+            }
+        }
+
+        impl Drop for PathEnvGuard {
+            fn drop(&mut self) {
+                if let Some(ref p) = self.previous {
+                    std::env::set_var("PATH", p);
+                } else {
+                    std::env::remove_var("PATH");
+                }
+            }
+        }
+
+        fn make_fake_minisign(bin_dir: &Path) -> std::path::PathBuf {
+            let fake = bin_dir.join("minisign");
+            // Records the command-line arguments to the path supplied by the
+            // test via `MINISIGN_RECORD_ARGS`, then exits successfully.
+            let script = b"#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$MINISIGN_RECORD_ARGS\"\nexit 0\n";
+            std::fs::write(&fake, script).unwrap();
+            let mut perms = std::fs::metadata(&fake).unwrap().permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&fake, perms).unwrap();
+            fake
+        }
+
+        #[test]
+        fn minisign_binary_resolves_in_path() {
+            let _lock = PATH_LOCK.lock().unwrap();
+            let tmp = tempfile::tempdir().unwrap();
+            let bin_dir = tmp.path().join("bin");
+            std::fs::create_dir(&bin_dir).unwrap();
+            let fake = bin_dir.join("minisign");
+            std::fs::write(&fake, "").unwrap();
+
+            let found = minisign_binary(Some(bin_dir.as_os_str())).unwrap();
+            assert_eq!(found, fake);
+        }
+
+        #[test]
+        fn minisign_binary_not_found_returns_clear_error() {
+            let err = minisign_binary(Some(OsStr::new("")))
+                .unwrap_err()
+                .to_lowercase();
+            assert!(err.contains("minisign binary not found"), "{err}");
+        }
+
+        #[test]
+        fn verify_plugin_signature_canonicalizes_manifest_path() {
+            let _lock = PATH_LOCK.lock().unwrap();
+            let tmp = tempfile::tempdir().unwrap();
+
+            // Real plugin directory containing the manifest and signature.
+            let real_root = tmp.path().join("real");
+            std::fs::create_dir(&real_root).unwrap();
+            std::fs::write(real_root.join("kirkforge.toml"), "name = \"test\"\n").unwrap();
+            std::fs::write(real_root.join(".kirkforge.sig"), "sig").unwrap();
+
+            // A symlink pointing at the real directory; the verifier must
+            // canonicalize the manifest path so it resolves the real file.
+            let link_root = tmp.path().join("link");
+            std::os::unix::fs::symlink(&real_root, &link_root).unwrap();
+
+            let key_path = tmp.path().join("key.pub");
+            std::fs::write(&key_path, "key").unwrap();
+
+            let bin_dir = tmp.path().join("bin");
+            std::fs::create_dir(&bin_dir).unwrap();
+            let args_file = tmp.path().join("args.txt");
+            make_fake_minisign(&bin_dir);
+
+            let _guard = PathEnvGuard::new(bin_dir.into_os_string());
+            std::env::set_var("MINISIGN_RECORD_ARGS", &args_file);
+
+            verify_plugin_signature(&link_root, Some(&key_path)).unwrap();
+
+            let args = std::fs::read_to_string(&args_file).unwrap();
+            let manifest_arg = real_root.join("kirkforge.toml").canonicalize().unwrap();
+            assert!(
+                args.lines()
+                    .any(|line| line == manifest_arg.to_str().unwrap()),
+                "expected canonical manifest path {manifest_arg:?} in args:\n{args}"
+            );
+        }
+
+        #[test]
+        fn verify_plugin_signature_reports_missing_minisign() {
+            let _lock = PATH_LOCK.lock().unwrap();
+            let tmp = tempfile::tempdir().unwrap();
+            let plugin_dir = tmp.path().join("plugin");
+            std::fs::create_dir(&plugin_dir).unwrap();
+            std::fs::write(plugin_dir.join("kirkforge.toml"), "name = \"test\"\n").unwrap();
+            std::fs::write(plugin_dir.join(".kirkforge.sig"), "sig").unwrap();
+            let key_path = tmp.path().join("key.pub");
+            std::fs::write(&key_path, "key").unwrap();
+
+            // PATH points at an empty directory, so minisign cannot be found.
+            let empty_path = tmp.path().join("empty");
+            std::fs::create_dir(&empty_path).unwrap();
+            let _guard = PathEnvGuard::new(empty_path.into_os_string());
+
+            let err = verify_plugin_signature(&plugin_dir, Some(&key_path))
+                .unwrap_err()
+                .to_lowercase();
+            assert!(err.contains("minisign binary not found"), "{err}");
+        }
     }
 }

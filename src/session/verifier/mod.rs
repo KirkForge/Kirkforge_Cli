@@ -483,7 +483,7 @@ async fn apply_text_fix(
     let path = &fix.file;
 
     // Sandbox / deny-list gate. Treat the fix like a write operation.
-    match path_guard.check_write(path) {
+    match path_guard.check_write(path).await {
         crate::session::access::GuardVerdict::Allowed(_) => {}
         crate::session::access::GuardVerdict::Denied(msg) => {
             tracing::warn!(
@@ -526,7 +526,7 @@ async fn apply_command_fix(
     path_guard: &crate::session::access::PathGuard,
 ) -> bool {
     // Sandbox / deny-list gate.
-    match path_guard.check_write(path) {
+    match path_guard.check_write(path).await {
         crate::session::access::GuardVerdict::Allowed(_) => {}
         crate::session::access::GuardVerdict::Denied(msg) => {
             tracing::warn!(

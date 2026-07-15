@@ -11,6 +11,7 @@
 
 use std::io::{BufRead, IsTerminal};
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 const HISTORY_CAP: usize = 100;
 const PROMPT: &str = "> ";
@@ -30,8 +31,11 @@ pub fn symbol(no_color: bool, symbol: &'static str) -> &'static str {
 /// Input source for the line-mode turn loop.
 pub enum LineReader {
     /// Full readline editor with history and arrow-key navigation.
+    /// The editor lives behind a mutex so a cancelled `next_line` future
+    /// cannot lose it: the blocking task that owns the editor always puts
+    /// it back before exiting.
     Interactive {
-        editor: Option<Box<rustyline::DefaultEditor>>,
+        editor: Arc<Mutex<Option<Box<rustyline::DefaultEditor>>>>,
         history_path: PathBuf,
     },
     /// Plain `stdin` reader for pipes and non-interactive runs.
@@ -61,7 +65,7 @@ impl LineReader {
             let _ = editor.load_history(&history_path);
 
             return Ok(Self::Interactive {
-                editor: Some(Box::new(editor)),
+                editor: Arc::new(Mutex::new(Some(Box::new(editor)))),
                 history_path,
             });
         }
@@ -80,23 +84,24 @@ impl LineReader {
                 editor,
                 history_path,
             } => {
-                let mut editor = *editor.take().ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "interactive editor is already in use (concurrent next_line call)"
-                    )
-                })?;
+                let editor = editor.clone();
                 let history_path = history_path.clone();
-                let (editor_back, result) = tokio::task::spawn_blocking(move || {
-                    let result = editor.readline(PROMPT);
-                    (editor, result)
+                let result = tokio::task::spawn_blocking(move || {
+                    let mut guard = editor.lock().expect("line-mode editor mutex poisoned");
+                    let mut ed = guard.take().ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "interactive editor is already in use (concurrent next_line call)"
+                        )
+                    })?;
+                    // Keep the mutex held for the whole readline call. This
+                    // prevents concurrent `next_line` calls and, crucially,
+                    // ensures the editor is restored even if the outer async
+                    // future is cancelled while awaiting this task.
+                    let result = ed.readline(PROMPT);
+                    *guard = Some(ed);
+                    Ok::<_, anyhow::Error>(result)
                 })
-                .await?;
-
-                // Store the editor back regardless of the result so the next
-                // turn can use it.
-                if let Self::Interactive { editor, .. } = self {
-                    *editor = Some(Box::new(editor_back));
-                }
+                .await??;
 
                 match result {
                     Ok(line) => {
@@ -105,13 +110,13 @@ impl LineReader {
                             // The in-memory history is already capped by
                             // the configured max_history_size. Rewrite the
                             // file so the cap is also persisted.
-                            if let Self::Interactive {
-                                editor: Some(ref mut ed),
-                                ..
-                            } = self
-                            {
-                                let _ = ed.add_history_entry(trimmed);
-                                let _ = ed.save_history(&history_path);
+                            if let Self::Interactive { editor, .. } = self {
+                                if let Ok(mut ed) = editor.lock() {
+                                    if let Some(ref mut ed) = ed.as_mut() {
+                                        let _ = ed.add_history_entry(trimmed);
+                                        let _ = ed.save_history(&history_path);
+                                    }
+                                }
                             }
                         }
                         Ok(Some(line))

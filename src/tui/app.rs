@@ -32,7 +32,7 @@ pub enum ConnectionState {
 /// Cached rendered lines for the chat panel.
 ///
 /// `entries` stores one entry per message in `AppState::messages`. Each entry
-/// records a stable hash of the message content at the time it was rendered
+/// records the message's render-generation version at the time it was rendered
 /// and the resulting `Line`s (header + body, not the trailing blank
 /// separator). The cache is invalidated when rendering parameters change:
 /// terminal width, search query, or tool-collapse state.
@@ -43,7 +43,10 @@ pub struct ChatRenderCache {
     pub tool_collapsed: bool,
     pub expanded_tools: HashSet<usize>,
     pub collapsed_messages: HashSet<usize>,
-    pub entries: Vec<(u64, Vec<Line<'static>>)>,
+    /// Per-message render cache: for each message, `Some((version, rendered_lines))`
+    /// if the entry has been rendered at least once; `None` otherwise. `version` is
+    /// the value of [`ConversationEntry::version`] when the entry was rendered.
+    pub entries: Vec<Option<(u64, Vec<Line<'static>>)>>,
 }
 
 impl ChatRenderCache {
@@ -513,6 +516,10 @@ pub struct ConversationEntry {
     /// When `Some`, the UI may render `content` as a summary and expand
     /// via the stored `tool_output` on user request.
     pub tool_output: Option<String>,
+    /// Render-generation counter. Bumped whenever `content` or `tool_output`
+    /// changes so the chat render cache can validate with an O(1) integer
+    /// comparison instead of hashing every byte of every message each frame.
+    pub version: u64,
 }
 
 impl ConversationEntry {
@@ -523,6 +530,7 @@ impl ConversationEntry {
             content: content.into(),
             timestamp: chrono::Local::now(),
             tool_output: None,
+            version: 0,
         }
     }
 
@@ -535,7 +543,14 @@ impl ConversationEntry {
             content: summary.into(),
             timestamp: chrono::Local::now(),
             tool_output: Some(full.into()),
+            version: 0,
         }
+    }
+
+    /// Bump the render-generation counter after mutating content.
+    #[inline]
+    pub fn bump_version(&mut self) {
+        self.version = self.version.wrapping_add(1);
     }
 }
 

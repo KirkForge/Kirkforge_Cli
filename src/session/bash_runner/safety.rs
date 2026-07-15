@@ -146,6 +146,17 @@ fn normalize_for_safety(cmd: &str) -> String {
     out.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// True if the command uses shell parameter expansions that can inject
+/// whitespace or other characters to evade the literal deny-list.
+///
+/// Examples caught here: `${IFS}`, `${IFS:- }`, `$IFS`, and ANSI-C quoting
+/// `$'...'`. Bash expands `${IFS}` to a space (or the current field separator),
+/// so `rm${IFS:- }-rf${IFS:- }/` becomes `rm -rf /` at execution time even
+/// though the raw string never contains that literal.
+fn contains_shell_expansion_evasion(cmd: &str) -> bool {
+    cmd.contains("${IFS") || cmd.contains("$IFS") || cmd.contains("$'")
+}
+
 /// True if `b` is a shell token separator for redirection-target scanning.
 fn is_shell_token_separator(b: u8) -> bool {
     matches!(
@@ -330,7 +341,15 @@ pub fn check_bash_command_str(
 
     let normalized = normalize_for_safety(cmd);
 
-    // 4. Built-in dangerous shell patterns and hard-coded system paths.
+    // 4. Shell expansion evasions that inject whitespace or other characters
+    //    to dodge the literal deny-list (e.g. `${IFS:- }`, `$IFS`, `$'...'`).
+    //    Detect these before the pattern scan so a ReadOnly allow rule that
+    //    skips approval cannot be bypassed.
+    if contains_shell_expansion_evasion(cmd) || contains_shell_expansion_evasion(&normalized) {
+        return Some("🔒 Command blocked: shell parameter expansion evasion detected".into());
+    }
+
+    // 5. Built-in dangerous shell patterns and hard-coded system paths.
     //    Check both the raw command and a normalized copy (quotes stripped,
     //    whitespace collapsed, comments removed, lowercased) so trivial
     //    quoting/whitespace evasions do not bypass the gate.
@@ -368,7 +387,7 @@ pub fn check_bash_command_str(
         }
     }
 
-    // 5. Privilege escalation, password prompts, and dangerous redirections.
+    // 6. Privilege escalation, password prompts, and dangerous redirections.
     for pat in PRIVILEGE_ESCALATION_COMMANDS {
         let pat_lower = pat.to_ascii_lowercase();
         if word_boundary_match(cmd, pat) || word_boundary_match(&normalized, &pat_lower) {
@@ -404,7 +423,7 @@ pub fn check_bash_command_str(
         ));
     }
 
-    // 6. User-configured path deny list. Tokenize the command and check
+    // 7. User-configured path deny list. Tokenize the command and check
     //    each token as a path, using normalized tokens so quoted paths are
     //    still evaluated.
     for token in normalized.split_whitespace() {

@@ -7,9 +7,6 @@ use ratatui::{
     Frame,
 };
 
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
-
 use crate::tui::app::{AppState, ConnectionState, ConversationEntry};
 
 mod lines;
@@ -159,16 +156,11 @@ pub fn render_chat(f: &mut Frame, area: Rect, state: &mut AppState) {
     state
         .chat_render_cache
         .entries
-        .resize_with(state.messages.len(), || (0, Vec::new()));
+        .resize_with(state.messages.len(), || None);
 
     let mut prev_entry: Option<&ConversationEntry> = None;
 
     for (idx, entry) in state.messages.iter().enumerate() {
-        let content_hash = {
-            let mut hasher = DefaultHasher::new();
-            (&entry.content, &entry.tool_output).hash(&mut hasher);
-            hasher.finish()
-        };
         let is_streaming_last = idx == last_idx && state.is_generating && entry.role == "assistant";
         let collapsed = if is_streaming_last {
             // The message currently being streamed must stay expanded
@@ -187,7 +179,8 @@ pub fn render_chat(f: &mut Frame, area: Rect, state: &mut AppState) {
                 .chat_render_cache
                 .entries
                 .get(idx)
-                .filter(|(len, _)| *len == content_hash)
+                .and_then(|opt| opt.as_ref())
+                .filter(|(ver, _)| *ver == entry.version)
                 .map(|(_, lines)| lines.clone())
         };
 
@@ -203,7 +196,7 @@ pub fn render_chat(f: &mut Frame, area: Rect, state: &mut AppState) {
                 collapsed,
             );
             if let Some(slot) = state.chat_render_cache.entries.get_mut(idx) {
-                *slot = (content_hash, lines.clone());
+                *slot = Some((entry.version, lines.clone()));
             }
             lines
         };
@@ -640,7 +633,9 @@ mod tests {
         );
 
         // Simulate a streaming token appended to the last assistant message.
-        state.messages.last_mut().unwrap().content.push_str("llo");
+        let entry = state.messages.last_mut().unwrap();
+        entry.content.push_str("llo");
+        entry.bump_version();
 
         let buffer_after = render_state(&mut state, 40, 10);
         let assistant_after = buffer_cell_text(&buffer_after, 5);

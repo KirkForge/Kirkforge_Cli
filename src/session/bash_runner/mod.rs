@@ -926,6 +926,90 @@ mod tests {
     }
 
     #[test]
+    fn test_check_bash_command_str_blocks_ifs_expansion_evasion() {
+        // `${IFS:- }` expands to a space, so the destructive command only
+        // materializes at execution time. The literal deny-list must reject it.
+        for cmd in [
+            "rm${IFS:- }-rf${IFS:- }/",
+            "rm${IFS}-rf${IFS}/",
+            "rm$IFS-rf$IFS/",
+        ] {
+            let result = check_bash_command_str(
+                cmd,
+                None,
+                &DenyList::default(),
+                &PathGuard::default(),
+                false,
+            );
+            assert!(
+                result
+                    .as_ref()
+                    .is_some_and(|m| m.contains("parameter expansion")),
+                "{cmd} should be blocked, got: {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_check_bash_command_str_blocks_ansi_c_quoting_evasion() {
+        // `$' '` expands to a space; `$'\t'` expands to a tab. These ANSI-C
+        // quoting tricks can rebuild forbidden tokens without writing them.
+        for cmd in ["rm$' '-rf$' '/", "echo$'\t'/etc/shadow"] {
+            let result = check_bash_command_str(
+                cmd,
+                None,
+                &DenyList::default(),
+                &PathGuard::default(),
+                false,
+            );
+            assert!(
+                result
+                    .as_ref()
+                    .is_some_and(|m| m.contains("parameter expansion")),
+                "{cmd} should be blocked, got: {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_check_bash_command_str_blocks_eval_content_bypass() {
+        // `eval` executes a string at runtime; if that string is visible in the
+        // command it must still pass through the safety gate.
+        let result = check_bash_command_str(
+            "eval 'rm -rf /'",
+            None,
+            &DenyList::default(),
+            &PathGuard::default(),
+            false,
+        );
+        assert!(
+            result
+                .as_ref()
+                .is_some_and(|m| m.contains("dangerous pattern")),
+            "eval with literal destructive content should be blocked, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_check_bash_command_str_blocks_source_content_bypass() {
+        // `source` / process substitution can pull destructive content into
+        // the shell. The literal content must still be caught.
+        let result = check_bash_command_str(
+            "source <(echo 'rm -rf /')",
+            None,
+            &DenyList::default(),
+            &PathGuard::default(),
+            false,
+        );
+        assert!(
+            result
+                .as_ref()
+                .is_some_and(|m| m.contains("dangerous pattern")),
+            "source with literal destructive content should be blocked, got: {result:?}"
+        );
+    }
+
+    #[test]
     fn test_check_bash_command_str_blocks_denied_url() {
         let mut deny_list = DenyList::default();
         deny_list

@@ -315,6 +315,15 @@ pub async fn parse_ollama_ndjson_stream<B, E, S>(
         }
     }
 
+    // If the stream ended without a `done: true` marker, any tool calls
+    // that were buffered mid-stream would otherwise be dropped. Flush them
+    // so the executor can still act on the partial turn.
+    for tc in tool_calls_buffer.drain(..) {
+        if !send_or_bail(&tx, StreamEvent::ToolCall(tc), "buffered tool call at EOF").await {
+            return;
+        }
+    }
+
     // `response` is no longer needed; the bytes stream is the only thing
     // we actually drive. (The arg was removed in commit 2 — see git log.)
 }
@@ -509,6 +518,28 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[tokio::test]
+    async fn tool_calls_flushed_at_eof_without_done() {
+        // A truncated stream that never emits `done: true` must still
+        // deliver buffered tool calls rather than dropping them.
+        let events = run(&[
+            r#"{"message":{"content":"calling tool","tool_calls":[{"function":{"name":"read_file","arguments":{"path":"/etc/hosts"}}}]},"done":false}"#,
+        ])
+        .await;
+        let tool_names: Vec<&str> = events
+            .iter()
+            .filter_map(|e| match e {
+                StreamEvent::ToolCall(tc) => Some(tc.name.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(tool_names, vec!["read_file"]);
+        assert!(
+            !events.iter().any(|e| matches!(e, StreamEvent::Done { .. })),
+            "EOF without done marker should not synthesize a Done event"
+        );
     }
 
     /// Regression: a chunk boundary that falls inside a multi-byte UTF-8

@@ -108,7 +108,21 @@ pub fn render_status(f: &mut Frame, area: Rect, state: &AppState) {
     // Compute the spacer width from the actual rendered span widths.
     // `Span::content` is the unstyled text length; we use that for
     // layout math and rebuild with the styled spans for display.
+    let collapse_span = Span::styled(
+        format!(
+            " [Ctrl+T: tool collapse {}] ",
+            if state.tool_collapsed { "ON" } else { "OFF" }
+        ),
+        Style::default()
+            .fg(if state.tool_collapsed {
+                Color::Green
+            } else {
+                Color::DarkGray
+            })
+            .bg(Color::Black),
+    );
     let right_visible_len: usize = [
+        collapse_span.content.chars().count(),
         sandbox_span.content.chars().count(),
         tool_calls_span.content.chars().count(),
         skills_span.content.chars().count(),
@@ -133,18 +147,7 @@ pub fn render_status(f: &mut Frame, area: Rect, state: &AppState) {
 
     let line = Line::from(vec![
         left_info,
-        Span::styled(
-            " [Ctrl+T: tool collapse ".to_string()
-                + if state.tool_collapsed { "ON" } else { "OFF" }
-                + "] ",
-            Style::default()
-                .fg(if state.tool_collapsed {
-                    Color::Green
-                } else {
-                    Color::DarkGray
-                })
-                .bg(Color::Black),
-        ),
+        collapse_span,
         Span::styled(spacing, Style::default()),
         sandbox_span,
         tool_calls_span,
@@ -159,4 +162,57 @@ pub fn render_status(f: &mut Frame, area: Rect, state: &AppState) {
 
     let paragraph = Paragraph::new(line).style(Style::default().bg(Color::Black).fg(Color::White));
     f.render_widget(paragraph, area);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+    use std::time::{Duration, Instant};
+
+    fn make_state() -> AppState {
+        use std::sync::Arc;
+        let config = Arc::new(std::sync::RwLock::new(crate::shared::Config::default()));
+        let mut state = AppState::new(config);
+        state.connection = ConnectionState::Connected {
+            model: "test".into(),
+            since: Instant::now(),
+        };
+        state.session_started = Instant::now() - Duration::from_secs(1);
+        state.cumulative_cost = 0.01;
+        state
+    }
+
+    fn status_row(state: &mut AppState, width: u16) -> String {
+        let backend = TestBackend::new(width, 1);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| render_status(f, f.area(), state))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let mut s = String::new();
+        for x in 0..buffer.area.width {
+            if let Some(cell) = buffer.cell((x, 0)) {
+                s.push_str(cell.symbol());
+            }
+        }
+        s
+    }
+
+    /// Regression: the right-side spacer used to omit the Ctrl+T span,
+    /// pushing cost/elapsed off-screen on an 80-column terminal.
+    #[test]
+    fn status_bar_includes_cost_and_elapsed_on_80_cols() {
+        let mut state = make_state();
+        let row = status_row(&mut state, 80);
+        assert!(
+            row.contains("1.0s"),
+            "elapsed time should be visible on 80-col status bar, got: {row:?}"
+        );
+        assert!(
+            row.contains("$0.0100"),
+            "cost should be visible on 80-col status bar, got: {row:?}"
+        );
+    }
 }

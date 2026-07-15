@@ -768,10 +768,18 @@ async fn run_event_loop(
             state.mark_dirty();
         }
 
-        // ── Slow-tick: drive the spinner + any other clock-driven UI ──
+        // ── Slow-tick: drive the spinner only when it is actually visible ──
+        // The status-bar elapsed time is updated on every render, so the only
+        // clock-driven UI that needs a periodic dirty mark is the generating
+        // spinner. Gating on `is_generating && spinner_visible` keeps idle CPU
+        // near zero instead of waking the render path at 4 Hz.
         if dirty_from_tick {
-            state.spinner_tick = state.spinner_tick.wrapping_add(1);
-            state.mark_dirty();
+            let spinner_visible = state.is_generating
+                && state.messages.last().map(|m| m.role.as_str()) != Some("assistant");
+            if spinner_visible {
+                state.spinner_tick = state.spinner_tick.wrapping_add(1);
+                state.mark_dirty();
+            }
         }
 
         // ── Render (only if dirty) ──────────────────────────────

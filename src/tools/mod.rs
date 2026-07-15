@@ -110,10 +110,10 @@ pub fn all_tools(
         Arc::new(bash_status::BashStatus),
         Arc::new(bash_cancel::BashCancel),
         Arc::new(grep::Grep::new(path_guard.clone())),
-        Arc::new(glob::Glob::new(path_guard)),
+        Arc::new(glob::Glob::new(path_guard.clone())),
     ];
     if supports_images {
-        tools.push(Arc::new(read_image::ReadImage));
+        tools.push(Arc::new(read_image::ReadImage::new(path_guard.clone())));
     }
     tools
 }

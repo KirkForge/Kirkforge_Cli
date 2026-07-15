@@ -231,7 +231,7 @@ pub async fn verify_security(event: &BusEvent) -> Verdict {
 
     // Only scan if content is reasonable (under 1MB)
     if content_length > 1_000_000 {
-        return Verdict::Clean;
+        return Verdict::Skipped(format!("file exceeds 1MB scan limit: {}", path.display()));
     }
 
     // Read the file content
@@ -265,21 +265,14 @@ pub async fn verify_security(event: &BusEvent) -> Verdict {
         return verdict;
     }
 
-    // 4. Check for dangerous shell patterns (in .sh, .bash, or any executable script)
-    let is_shell_script = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|e| matches!(e, "sh" | "bash" | "zsh"));
-    if is_shell_script {
-        for pattern in DANGEROUS_SHELL_PATTERNS {
-            if content.contains(pattern) {
-                return Verdict::Unfixable(VerificationError {
-                    description: format!("Dangerous shell command: {pattern}"),
-                    file: Some(path.clone()),
-                    details: "This command is blocked by security policy. Remove it to proceed."
-                        .into(),
-                });
-            }
+    // 4. Check for dangerous shell patterns in any file content.
+    for pattern in DANGEROUS_SHELL_PATTERNS {
+        if content.contains(pattern) {
+            return Verdict::Unfixable(VerificationError {
+                description: format!("Dangerous shell command: {pattern}"),
+                file: Some(path.clone()),
+                details: "This command is blocked by security policy. Remove it to proceed.".into(),
+            });
         }
     }
 
@@ -400,6 +393,42 @@ mod tests {
         });
         let v = verify_security(&event).await;
         assert!(matches!(v, Verdict::Unfixable(_)));
+        remove_test_file(&path);
+    }
+
+    #[tokio::test]
+    async fn test_detects_shell_danger_in_non_shell_file() {
+        let dir = std::env::temp_dir();
+        let path = dir.join("kirkforge_sec_danger.txt");
+        std::fs::write(&path, "rm -rf /").unwrap();
+
+        let event = BusEvent::FileWrite(FileWriteEvent {
+            path: path.clone(),
+            content_length: 10,
+        });
+        let v = verify_security(&event).await;
+        assert!(
+            matches!(v, Verdict::Unfixable(_)),
+            "dangerous shell content should be flagged regardless of extension"
+        );
+        remove_test_file(&path);
+    }
+
+    #[tokio::test]
+    async fn test_large_file_is_skipped_not_clean() {
+        let dir = std::env::temp_dir();
+        let path = dir.join("kirkforge_sec_large.txt");
+        std::fs::write(&path, "tiny content").unwrap();
+
+        let event = BusEvent::FileWrite(FileWriteEvent {
+            path: path.clone(),
+            content_length: 1_000_001,
+        });
+        let v = verify_security(&event).await;
+        assert!(
+            matches!(v, Verdict::Skipped(_)),
+            "files over 1MB should be skipped, not reported as clean"
+        );
         remove_test_file(&path);
     }
 

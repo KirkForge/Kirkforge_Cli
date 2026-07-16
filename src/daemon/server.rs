@@ -3,7 +3,6 @@
 use crate::daemon::paths;
 use crate::daemon::{DaemonState, Request, Response};
 use anyhow::Context;
-use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::io::{AsyncWriteExt, BufStream};
@@ -24,7 +23,7 @@ pub async fn run_daemon(foreground: bool, stop: bool) -> anyhow::Result<()> {
     }
 
     if !foreground {
-        daemonize()?;
+        crate::daemon::daemonize(["daemon", "--foreground"])?;
     }
 
     run_daemon_at(socket_path, pid_path).await
@@ -200,37 +199,6 @@ async fn stop_daemon(socket_path: &PathBuf, pid_path: &PathBuf) -> anyhow::Resul
     Ok(())
 }
 
-/// Detach the process into the background (Unix-only).
-#[cfg(unix)]
-fn daemonize() -> anyhow::Result<()> {
-    let current_exe = std::env::current_exe().context("get current exe")?;
-    let mut cmd = std::process::Command::new(current_exe);
-    cmd.arg("daemon").arg("--foreground");
-    if let Ok(v) = std::env::var("KIRKFORGE_DATA_DIR") {
-        cmd.env("KIRKFORGE_DATA_DIR", v);
-    }
-    // Create a new session so the daemon survives the closing of the
-    // terminal/session that spawned it. Without setsid the daemon
-    // remains in the parent's process group and gets SIGHUP (which we
-    // treat as shutdown) when the user logs out or the parent exits.
-    unsafe {
-        cmd.pre_exec(|| {
-            if libc::setsid() == -1 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
-    cmd.spawn().context("spawn daemon foreground process")?;
-    std::process::exit(0);
-}
-
-#[cfg(not(unix))]
-fn daemonize() -> anyhow::Result<()> {
-    anyhow::bail!("background daemon mode is only supported on Unix; use --foreground")
-}
-
-/// Serve a single client connection until it closes.
 async fn handle_client(
     stream: UnixStream,
     state: Arc<Mutex<DaemonState>>,

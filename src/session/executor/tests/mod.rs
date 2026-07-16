@@ -145,6 +145,8 @@ fn make_config(auto_approve: bool) -> Config {
         max_file_read_size: 1024 * 1024,
         max_overwrite_size: 1024 * 1024,
         minify_write_side: false,
+        scheduled_bash_auto_approve: false,
+        max_concurrent_scheduled_jobs: 4,
         follow_symlinks: false,
         block_binary_reads: false,
         bash_sandbox_workdir: false,

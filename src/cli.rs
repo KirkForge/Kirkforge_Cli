@@ -137,4 +137,14 @@ pub enum Command {
         #[arg(long, conflicts_with = "foreground")]
         stop: bool,
     },
+    /// Run the background scheduled-job daemon.
+    Jobd {
+        /// Stay in the foreground instead of detaching.
+        #[arg(long)]
+        foreground: bool,
+
+        /// Stop a running daemon.
+        #[arg(long, conflicts_with = "foreground")]
+        stop: bool,
+    },
 }

@@ -80,7 +80,13 @@ pub fn messages_to_entries(
 mod tests {
     use super::*;
     use crate::session::bash_jobs::{BashJob, JobStatus};
-    use crate::shared::{Message, Role};
+    use crate::shared::{Config, Message, Role};
+    use crate::tui::app::AppState;
+    use std::sync::{Arc, RwLock};
+
+    fn test_state() -> AppState {
+        AppState::new(Arc::new(RwLock::new(Config::default())))
+    }
 
     fn user_msg(content: &str) -> Message {
         Message {
@@ -276,7 +282,7 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
 
-        let out = handle_jobs_command("").await;
+        let out = handle_jobs_command("", &mut test_state()).await;
         assert!(out.starts_with("Background jobs:"), "got: {out}");
         assert!(out.contains(&unique), "unique cmd missing: {out}");
         assert!(out.contains(&format!("#{id}")), "job id missing: {out}");
@@ -306,7 +312,7 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
 
-        let out = handle_jobs_command(&id.to_string()).await;
+        let out = handle_jobs_command(&id.to_string(), &mut test_state()).await;
         assert!(out.contains(&format!("#{id}")), "got: {out}");
         assert!(out.contains("Command:"), "got: {out}");
         assert!(out.contains("Started:"), "got: {out}");
@@ -317,13 +323,13 @@ mod tests {
 
     #[tokio::test]
     async fn handle_jobs_command_detail_unknown_id_says_not_found() {
-        let out = handle_jobs_command("999999").await;
+        let out = handle_jobs_command("999999", &mut test_state()).await;
         assert!(out.contains("not found"), "got: {out}");
     }
 
     #[tokio::test]
     async fn handle_jobs_command_unknown_subcommand_returns_usage() {
-        let out = handle_jobs_command("foo").await;
+        let out = handle_jobs_command("foo", &mut test_state()).await;
         assert!(out.contains("Usage"), "got: {out}");
         assert!(out.contains("/jobs foo"), "got: {out}");
     }
@@ -331,7 +337,7 @@ mod tests {
     #[tokio::test]
     async fn handle_jobs_command_clean_is_idempotent() {
         let _guard = test_registry_lock().lock().await;
-        let out = handle_jobs_command("clean").await;
+        let out = handle_jobs_command("clean", &mut test_state()).await;
         assert!(
             out.contains("Cleaned") || out.contains("No completed jobs"),
             "got: {out}"
@@ -358,7 +364,7 @@ mod tests {
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-        let out = handle_jobs_command(&format!("{id} cancel")).await;
+        let out = handle_jobs_command(&format!("{id} cancel"), &mut test_state()).await;
         assert!(out.contains("Cancel"), "got: {out}");
         assert!(out.contains(&format!("#{id}")), "got: {out}");
 
@@ -397,32 +403,32 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
 
-        let out = handle_jobs_command(&format!("{id} cancel")).await;
+        let out = handle_jobs_command(&format!("{id} cancel"), &mut test_state()).await;
         assert!(out.contains("not running"), "got: {out}");
     }
 
     #[tokio::test]
     async fn handle_jobs_command_cancel_unknown_id_returns_not_found() {
-        let out = handle_jobs_command("999999 cancel").await;
+        let out = handle_jobs_command("999999 cancel", &mut test_state()).await;
         assert!(out.contains("not found"), "got: {out}");
     }
 
     #[tokio::test]
     async fn handle_jobs_command_cancel_without_id_returns_usage() {
-        let out = handle_jobs_command("cancel").await;
+        let out = handle_jobs_command("cancel", &mut test_state()).await;
         assert!(out.contains("Usage"), "got: {out}");
     }
 
     #[tokio::test]
     async fn handle_jobs_command_cancel_unknown_subcommand_returns_usage() {
-        let out = handle_jobs_command("5 foo").await;
+        let out = handle_jobs_command("5 foo", &mut test_state()).await;
         assert!(out.contains("Usage"), "got: {out}");
         assert!(out.contains("foo"), "got: {out}");
     }
 
     #[tokio::test]
     async fn handle_jobs_command_cancel_extra_token_returns_usage() {
-        let out = handle_jobs_command("5 cancel now").await;
+        let out = handle_jobs_command("5 cancel now", &mut test_state()).await;
         assert!(out.contains("Usage"), "got: {out}");
     }
 

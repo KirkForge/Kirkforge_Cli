@@ -181,6 +181,7 @@ pub async fn resume_conversation_log(
     state.pending_approval = None;
     state.expanded_tools.clear();
     state.notified_jobs.clear();
+    state.notified_scheduled_runs.clear();
     state.last_turn_prompt_tokens = 0;
     state.tokens_sent = 0;
     state.tokens_received = 0;

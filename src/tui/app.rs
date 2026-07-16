@@ -178,6 +178,11 @@ pub struct AppState {
     /// Used to avoid repeated notifications for the same job.
     pub notified_jobs: std::collections::HashSet<u64>,
 
+    /// Set of scheduled-job run IDs that have already been notified as
+    /// completed. Each scheduled job overwrites its `last_run`, so this tracks
+    /// run IDs (not job IDs) so every run is announced exactly once.
+    pub notified_scheduled_runs: std::collections::HashSet<String>,
+
     // ── Tool output collapse (v1.1) ───────────────────────────────
     /// When true, long tool entries are collapsed to a one-line summary.
     /// Toggled with Ctrl+T. Default true so the chat view is never flooded
@@ -387,6 +392,7 @@ impl AppState {
             persona_cancel: None,
             spinner_tick: 0,
             notified_jobs: std::collections::HashSet::new(),
+            notified_scheduled_runs: std::collections::HashSet::new(),
             tool_collapsed: true,
             expanded_tools: std::collections::HashSet::new(),
             collapsed_messages: HashSet::new(),

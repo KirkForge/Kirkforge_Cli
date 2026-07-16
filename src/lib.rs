@@ -7,6 +7,7 @@
 pub mod adapters;
 pub mod cli;
 pub mod daemon;
+pub mod jobs;
 pub mod line_mode;
 pub mod session;
 pub mod shared;

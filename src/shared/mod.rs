@@ -231,6 +231,17 @@ pub struct Config {
     #[serde(default = "default_minify_write_side")]
     pub minify_write_side: bool,
 
+    /// When `true`, scheduled bash jobs are allowed to run commands that would
+    /// normally require interactive approval. Default `false`; only enable when
+    /// you fully trust the scheduled commands.
+    #[serde(default = "default_scheduled_bash_auto_approve")]
+    pub scheduled_bash_auto_approve: bool,
+
+    /// Maximum number of scheduled jobs the daemon may run concurrently.
+    /// Additional due jobs are queued until a slot frees up.
+    #[serde(default = "default_max_concurrent_scheduled_jobs")]
+    pub max_concurrent_scheduled_jobs: usize,
+
     #[serde(default)]
     pub follow_symlinks: bool,
 
@@ -490,6 +501,14 @@ fn default_minify_write_side() -> bool {
     false
 }
 
+fn default_scheduled_bash_auto_approve() -> bool {
+    false
+}
+
+fn default_max_concurrent_scheduled_jobs() -> usize {
+    4
+}
+
 fn default_preserve_recent_messages() -> usize {
     2
 }
@@ -620,6 +639,8 @@ impl Default for Config {
             max_file_read_size: 1024 * 1024,
             max_overwrite_size: 1024 * 1024,
             minify_write_side: false,
+            scheduled_bash_auto_approve: false,
+            max_concurrent_scheduled_jobs: 4,
             follow_symlinks: false,
             block_binary_reads: false,
             bash_sandbox_workdir: true,

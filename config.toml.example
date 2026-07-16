@@ -39,6 +39,19 @@
 # bang_requires_approval = false
 
 # ---------------------------------------------------------------------------
+# Scheduled jobs
+# ---------------------------------------------------------------------------
+
+# When true, scheduled bash jobs are allowed to run commands that would
+# normally require interactive approval. Default: false. Only enable if you
+# fully trust the scheduled commands.
+# scheduled_bash_auto_approve = false
+
+# Maximum number of scheduled jobs the daemon may run concurrently.
+# Additional due jobs are queued until a slot frees up. Default: 4.
+# max_concurrent_scheduled_jobs = 4
+
+# ---------------------------------------------------------------------------
 # Sandbox and filesystem access
 # ---------------------------------------------------------------------------
 

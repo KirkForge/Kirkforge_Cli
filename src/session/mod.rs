@@ -72,6 +72,12 @@ pub fn data_dir() -> anyhow::Result<PathBuf> {
     Ok(dir)
 }
 
+pub fn jobs_dir() -> anyhow::Result<PathBuf> {
+    let dir = data_dir()?.join("jobs");
+    ensure_private_data_dir(&dir);
+    Ok(dir)
+}
+
 pub fn config_path() -> PathBuf {
     let mut path = data_dir().unwrap_or_else(|e| {
         tracing::warn!(

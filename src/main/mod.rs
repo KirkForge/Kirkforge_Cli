@@ -268,6 +268,19 @@ async fn main() {
                 ))
             }
         }
+        Command::Jobd { foreground, stop } => {
+            #[cfg(unix)]
+            {
+                kirkforge::jobs::run_job_daemon(foreground, stop).await
+            }
+            #[cfg(windows)]
+            {
+                let _ = (foreground, stop);
+                Err(anyhow::anyhow!(
+                    "scheduled-job daemon is not supported on Windows"
+                ))
+            }
+        }
     }
     .map_err(KirkForgeError::from);
 

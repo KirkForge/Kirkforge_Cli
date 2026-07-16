@@ -88,6 +88,9 @@ shellexpand = "3"
 # Date/time for session IDs
 chrono = { version = "0.4", features = ["serde"] }
 
+# Cron expression parsing for scheduled jobs
+cron = "0.15"
+
 # Text wrapping for chat display
 textwrap = "0.16"
 

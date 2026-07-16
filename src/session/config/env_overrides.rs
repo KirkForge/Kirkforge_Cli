@@ -290,6 +290,20 @@ pub(super) fn apply_env_overrides(cfg: &mut Config) {
         }
     }
 
+    // KIRKFORGE_SCHEDULED_BASH_AUTO_APPROVE
+    if let Ok(val) = std::env::var("KIRKFORGE_SCHEDULED_BASH_AUTO_APPROVE") {
+        if let Some(v) = parse_bool_env(&val) {
+            cfg.scheduled_bash_auto_approve = v;
+        }
+    }
+
+    // KIRKFORGE_MAX_CONCURRENT_SCHEDULED_JOBS
+    if let Ok(val) = std::env::var("KIRKFORGE_MAX_CONCURRENT_SCHEDULED_JOBS") {
+        if let Ok(n) = val.parse::<usize>() {
+            cfg.max_concurrent_scheduled_jobs = n.max(1);
+        }
+    }
+
     // Clamp after all layers so a config file or env override cannot set an
     // unusable zero-second timeout.
     cfg.request_timeout_secs = cfg.request_timeout_secs.max(1);

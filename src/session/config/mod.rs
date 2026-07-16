@@ -19,6 +19,8 @@
 /// - `KIRKFORGE_FOLLOW_SYMLINKS` — "true" to allow following symlinks
 /// - `KIRKFORGE_BLOCK_BINARY` — "true" to block binary file reads
 /// - `KIRKFORGE_MINIFY_WRITE_SIDE` — "true" to enable minified-envelope write-side expansion
+/// - `KIRKFORGE_SCHEDULED_BASH_AUTO_APPROVE` — "true" to let scheduled bash jobs skip interactive approval
+/// - `KIRKFORGE_MAX_CONCURRENT_SCHEDULED_JOBS` — max concurrent scheduled jobs (clamped to ≥1)
 /// - `KIRKFORGE_BASH_SANDBOX_WORKDIR` — "true"/"false" to force bash cwd into the sandbox
 /// - `KIRKFORGE_BANG_REQUIRES_APPROVAL` — "true" to route `!` passthrough through approval gate
 /// - `KIRKFORGE_JSON_MODE` — "true" to request JSON-formatted model responses
@@ -284,6 +286,12 @@ fn merge_toml_into_config(cfg: &mut Config, table: toml::Table) {
     }
     if let Some(Value::Boolean(v)) = table.get("minify_write_side") {
         cfg.minify_write_side = *v;
+    }
+    if let Some(Value::Boolean(v)) = table.get("scheduled_bash_auto_approve") {
+        cfg.scheduled_bash_auto_approve = *v;
+    }
+    if let Some(Value::Integer(v)) = table.get("max_concurrent_scheduled_jobs") {
+        cfg.max_concurrent_scheduled_jobs = (*v as usize).max(1);
     }
     if let Some(Value::Boolean(v)) = table.get("carryover_enabled") {
         cfg.carryover_enabled = *v;
@@ -1208,6 +1216,46 @@ mod tests {
         .unwrap();
         merge_toml_into_config(&mut cfg, table);
         assert!(cfg.minify_write_side);
+    }
+
+    #[test]
+    fn test_env_scheduled_bash_auto_approve() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut cfg = Config::default();
+        assert!(!cfg.scheduled_bash_auto_approve);
+        set_env("KIRKFORGE_SCHEDULED_BASH_AUTO_APPROVE", Some("true"));
+        apply_env_overrides(&mut cfg);
+        assert!(cfg.scheduled_bash_auto_approve);
+        set_env("KIRKFORGE_SCHEDULED_BASH_AUTO_APPROVE", None);
+    }
+
+    #[test]
+    fn test_env_max_concurrent_scheduled_jobs_is_clamped() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut cfg = Config::default();
+        set_env("KIRKFORGE_MAX_CONCURRENT_SCHEDULED_JOBS", Some("0"));
+        apply_env_overrides(&mut cfg);
+        assert_eq!(cfg.max_concurrent_scheduled_jobs, 1);
+        set_env("KIRKFORGE_MAX_CONCURRENT_SCHEDULED_JOBS", Some("8"));
+        apply_env_overrides(&mut cfg);
+        assert_eq!(cfg.max_concurrent_scheduled_jobs, 8);
+        set_env("KIRKFORGE_MAX_CONCURRENT_SCHEDULED_JOBS", None);
+    }
+
+    #[test]
+    fn test_merge_toml_scheduled_job_knobs() {
+        let mut cfg = Config::default();
+        assert!(!cfg.scheduled_bash_auto_approve);
+        assert_eq!(cfg.max_concurrent_scheduled_jobs, 4);
+        let table: toml::Table = r#"
+            scheduled_bash_auto_approve = true
+            max_concurrent_scheduled_jobs = 0
+        "#
+        .parse()
+        .unwrap();
+        merge_toml_into_config(&mut cfg, table);
+        assert!(cfg.scheduled_bash_auto_approve);
+        assert_eq!(cfg.max_concurrent_scheduled_jobs, 1);
     }
 
     #[test]

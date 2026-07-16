@@ -31,6 +31,7 @@ output-control respectively.
 | [0015](./0015-cli-design.md) | CLI design | Accepted |
 | [0016](./0016-test-strategy.md) | Test strategy | Accepted |
 | [0017](./0017-build-features.md) | Build profile and feature gating | Accepted |
+| [0018](./0018-scheduled-jobs.md) | Cron / scheduled jobs | Accepted |
 
 ## Cross-references
 

@@ -16,6 +16,57 @@ pub mod server;
 use crate::session::session_index::SessionEntry;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
+use std::ffi::OsStr;
+
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
+
+#[cfg(unix)]
+use anyhow::Context;
+
+/// Detach the current process into the background by re-executing the same
+/// binary with `args` in a new session.
+///
+/// The caller should pass the subcommand and flags that will run the target
+/// daemon in the foreground (e.g. `["daemon", "--foreground"]`). After spawning
+/// the detached child, the parent exits with status 0 so the terminal session
+/// is released.
+#[cfg(unix)]
+pub fn daemonize<I, S>(args: I) -> anyhow::Result<()>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let current_exe = std::env::current_exe().context("get current exe")?;
+    let mut cmd = std::process::Command::new(current_exe);
+    cmd.args(args);
+    if let Ok(v) = std::env::var("KIRKFORGE_DATA_DIR") {
+        cmd.env("KIRKFORGE_DATA_DIR", v);
+    }
+    // Create a new session so the daemon survives the closing of the
+    // terminal/session that spawned it. Without setsid the daemon remains in
+    // the parent's process group and gets SIGHUP when the user logs out or the
+    // parent exits.
+    unsafe {
+        cmd.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    cmd.spawn().context("spawn daemon foreground process")?;
+    std::process::exit(0);
+}
+
+#[cfg(not(unix))]
+pub fn daemonize<I, S>(_args: I) -> anyhow::Result<()>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    anyhow::bail!("background daemon mode is only supported on Unix; use --foreground")
+}
 
 /// Maximum size (in bytes) for a single daemon request/response frame.
 ///

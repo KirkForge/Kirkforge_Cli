@@ -41,7 +41,10 @@ use crate::session::executor::{self, ApprovalRequest};
 use crate::session::prompt::CompactRequest;
 use crate::shared::{Config, Message, Role};
 use app::{AppState, ConnectionState, ConversationEntry};
-use commands::{messages_to_entries, notify_completed_jobs, PersonaKind, PersonaResult};
+use commands::{
+    messages_to_entries, notify_completed_jobs, notify_completed_scheduled_jobs, PersonaKind,
+    PersonaResult,
+};
 use components::approval::render_approval_dialog;
 use connection::{connection_probe_task, probe_ollama_connection};
 use crossterm::{
@@ -699,6 +702,9 @@ async fn run_event_loop(
         // we use that to set the dirty flag (so a no-op
         // notification pass doesn't schedule an unnecessary redraw).
         if notify_completed_jobs(state).await {
+            state.mark_dirty();
+        }
+        if notify_completed_scheduled_jobs(state).await {
             state.mark_dirty();
         }
 

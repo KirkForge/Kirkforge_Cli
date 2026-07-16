@@ -598,7 +598,7 @@ pub(crate) async fn handle_input_key(
                         }
                         "/help" | "/h" | "/?" => {
                             let mut help_text =
-                                "Built-in commands:\n  /clear    Clear conversation\n  /exit     Quit\n  /fork     Fork session: /fork list | <label> [count]\n  /resume   Resume a fork: /resume <fork-id>\n  /jobs     Background bash jobs: /jobs | <id> | clean\n  /status   Show model, cost, tokens, and context pressure (one-shot)\n  /model    Hot-swap the active model: /model <name> (bypasses smart routing)\n  /route    Switch to the model configured for a tier: /route simple|medium|complex\n  /compact  Compact conversation history: drop old tool results, condense old assistant turns. Destructive — see TUI for stats.
+                                "Built-in commands:\n  /clear    Clear conversation\n  /exit     Quit\n  /fork     Fork session: /fork list | <label> [count]\n  /resume   Resume a fork: /resume <fork-id>\n  /jobs     Background bash jobs: /jobs | <id> | clean\n           Scheduled jobs: /jobs schedule <spec> bash <cmd>, /jobs scheduled list, /jobs run-now <id>, /jobs logs <id>\n  /status   Show model, cost, tokens, and context pressure (one-shot)\n  /model    Hot-swap the active model: /model <name> (bypasses smart routing)\n  /route    Switch to the model configured for a tier: /route simple|medium|complex\n  /compact  Compact conversation history: drop old tool results, condense old assistant turns. Destructive — see TUI for stats.
   /save     Save conversation transcript to markdown: /save [path]. Default: next to session log.
   /explore  Fork-isolated research: read-only tools, returns a summary.
   /plan     Fork-isolated plan mode: no shell, returns a step-by-step plan; type /implement to start coding.
@@ -651,7 +651,7 @@ pub(crate) async fn handle_input_key(
                             return Ok(());
                         }
                         "/jobs" => {
-                            let msg = crate::tui::commands::handle_jobs_command(args).await;
+                            let msg = crate::tui::commands::handle_jobs_command(args, state).await;
                             state.messages.push(ConversationEntry::new("system", msg));
                             return Ok(());
                         }

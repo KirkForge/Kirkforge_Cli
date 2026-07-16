@@ -1,7 +1,13 @@
 // Partial prompt-compression implementation; unused symbols are wired up in Phase 10.
 #![allow(dead_code)]
 
+mod expand;
 mod lang;
+
+pub use expand::{
+    expand_minified, extract_minified_envelope, has_minified_envelope, lang_name_for_ext,
+    wrap_minified_envelope,
+};
 
 /// Language-aware source minification for prompt compression.
 ///

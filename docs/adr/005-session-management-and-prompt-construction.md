@@ -144,6 +144,30 @@ This is NOT a full parser-based minifier — that would add tree-sitter as a dep
 
 This is applied at prompt-build time, not at file-read time. The file on disk is never modified. The TUI shows the original file. Only the model sees the compressed version.
 
+### Write-side minified envelope
+
+The same minification idea is also available on the write path. When the
+`minify_write_side` config flag is `true`, the model may return code inside a
+machine-readable envelope:
+
+```xml
+<minified lang="rust">
+fn main(){println!("hi");}
+</minified>
+```
+
+`read_file` may wrap whole-file or partial output in this envelope so the model
+receives a compressed token space. `write_file` and `edit_file` detect the
+envelope, strip it, and run the inner code through a language-aware formatter
+(`rustfmt`, `black`, `prettier`, `deno fmt`, `gofmt`, etc.) before the bytes reach
+disk. If no formatter is installed, a lightweight language-aware fallback expands
+whitespace and punctuation to readable but conservative source.
+
+This is gated by `minify_write_side` (default `false`) so users opt in
+explicitly. The envelope is never written to disk: expansion happens inside the
+tool before `atomic_write` is called, and the on-disk file remains canonical and
+formatted.
+
 ## Consequences
 
 **Positive:**

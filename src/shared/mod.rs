@@ -223,6 +223,14 @@ pub struct Config {
     #[serde(default = "default_max_overwrite_size")]
     pub max_overwrite_size: usize,
 
+    /// When `true`, the read_file tool wraps minified source code in a
+    /// `<minified lang="...">` envelope and the write_file/edit_file tools
+    /// expand code from that envelope back to readable source before writing.
+    /// Default `false` for this session (will be flipped to `true` after a
+    /// shake-out period).
+    #[serde(default = "default_minify_write_side")]
+    pub minify_write_side: bool,
+
     #[serde(default)]
     pub follow_symlinks: bool,
 
@@ -478,6 +486,10 @@ fn default_max_overwrite_size() -> usize {
     1024 * 1024
 }
 
+fn default_minify_write_side() -> bool {
+    false
+}
+
 fn default_preserve_recent_messages() -> usize {
     2
 }
@@ -607,6 +619,7 @@ impl Default for Config {
             block_gitignored_dotfiles: default_block_gitignored_dotfiles(),
             max_file_read_size: 1024 * 1024,
             max_overwrite_size: 1024 * 1024,
+            minify_write_side: false,
             follow_symlinks: false,
             block_binary_reads: false,
             bash_sandbox_workdir: true,

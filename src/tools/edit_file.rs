@@ -18,11 +18,16 @@ use std::path::PathBuf;
 pub struct EditFile {
     undo: Option<UndoStackRef>,
     path_guard: PathGuard,
+    minify_write_side: bool,
 }
 
 impl EditFile {
-    pub fn new(undo: Option<UndoStackRef>, path_guard: PathGuard) -> Self {
-        Self { undo, path_guard }
+    pub fn new(undo: Option<UndoStackRef>, path_guard: PathGuard, minify_write_side: bool) -> Self {
+        Self {
+            undo,
+            path_guard,
+            minify_write_side,
+        }
     }
 }
 
@@ -113,18 +118,49 @@ impl Tool for EditFile {
             Vec::new()
         };
 
-        if ctx.dry_run {
-            let content = match String::from_utf8(prev_bytes.clone()) {
-                Ok(c) => c,
-                Err(_) => {
-                    return ToolOutcome::Failure(ToolError::Internal {
-                        message: format!(
-                            "{} is not valid UTF-8; cannot edit_file (use bash for binary content)",
-                            path.display()
-                        ),
-                    });
-                }
+        // When write-side minification is enabled, expand any minified
+        // envelopes so that the edit happens in readable source space. The
+        // result is written expanded; this keeps the on-disk file canonical
+        // and lets formatters enforce project style.
+        let mut any_expanded = false;
+        let content = match String::from_utf8(prev_bytes.clone()) {
+            Ok(c) => c,
+            Err(_) => {
+                return ToolOutcome::Failure(ToolError::Internal {
+                    message: format!(
+                        "{} is not valid UTF-8; cannot edit_file (use bash for binary content)",
+                        path.display()
+                    ),
+                });
+            }
+        };
+        let (content, expanded_file) =
+            if self.minify_write_side && crate::shared::minify::has_minified_envelope(&content) {
+                any_expanded = true;
+                (
+                    crate::shared::minify::expand_minified(&path, &content),
+                    true,
+                )
+            } else {
+                (content, false)
             };
+        let (old, old_expanded) =
+            if self.minify_write_side && crate::shared::minify::has_minified_envelope(&old) {
+                any_expanded = true;
+                (crate::shared::minify::expand_minified(&path, &old), true)
+            } else {
+                (old, false)
+            };
+        let (new, new_expanded) =
+            if self.minify_write_side && crate::shared::minify::has_minified_envelope(&new) {
+                any_expanded = true;
+                (crate::shared::minify::expand_minified(&path, &new), true)
+            } else {
+                (new, false)
+            };
+        let _ = (expanded_file, old_expanded, new_expanded); // used for future diagnostics
+
+        if ctx.dry_run {
             if !content.contains(&old) {
                 return ToolOutcome::Failure(ToolError::Execution {
                     message: format!("Dry run: string not found in {}", path.display()),
@@ -146,22 +182,15 @@ impl Tool for EditFile {
             }
             let new_content = content.replacen(&old, &new, 1);
             let diff = render_diff(&content, &new_content);
+            let note = if any_expanded {
+                " (expanded from minified envelope)"
+            } else {
+                ""
+            };
             return ToolOutcome::Success {
-                content: format!("Dry run: would edit {}:\n{}", path.display(), diff),
+                content: format!("Dry run{}: would edit {}:\n{}", note, path.display(), diff),
             };
         }
-
-        let content = match String::from_utf8(prev_bytes.clone()) {
-            Ok(c) => c,
-            Err(_) => {
-                return ToolOutcome::Failure(ToolError::Internal {
-                    message: format!(
-                        "{} is not valid UTF-8; cannot edit_file (use bash for binary content)",
-                        path.display()
-                    ),
-                });
-            }
-        };
 
         if !content.contains(&old) {
             // Try fuzzy match: strip trailing whitespace per line, re-check
@@ -400,7 +429,7 @@ mod tests {
         let path = dir.join("kirkforge_edit_fuzzy.txt");
         std::fs::write(&path, content).unwrap();
 
-        let tool = EditFile::new(None, crate::session::access::PathGuard::default());
+        let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false);
         let ctx = ToolContext::new();
         let args = serde_json::json!({
             "path": path.to_string_lossy(),
@@ -437,7 +466,7 @@ mod tests {
         let path = dir.join("kirkforge_edit_fuzzy_crlf.txt");
         std::fs::write(&path, content).unwrap();
 
-        let tool = EditFile::new(None, crate::session::access::PathGuard::default());
+        let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false);
         let ctx = ToolContext::new();
         let args = serde_json::json!({
             "path": path.to_string_lossy(),
@@ -497,6 +526,7 @@ mod tests {
         let tool = EditFile::new(
             Some(stack.clone()),
             crate::session::access::PathGuard::default(),
+            false,
         );
         let ctx = ToolContext::new();
         let args = serde_json::json!({
@@ -528,7 +558,7 @@ mod tests {
         let path = dir.join("kirkforge_edit_ambiguous.txt");
         std::fs::write(&path, "fn foo() {}\nfn bar() {}\nfn foo() {}\n").unwrap();
 
-        let tool = EditFile::new(None, crate::session::access::PathGuard::default());
+        let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false);
         let ctx = ToolContext::new();
         let args = serde_json::json!({
             "path": path.to_string_lossy(),
@@ -553,7 +583,7 @@ mod tests {
         // once after normalization.
         std::fs::write(&path, "fn main() {\n\n}\n").unwrap();
 
-        let tool = EditFile::new(None, crate::session::access::PathGuard::default());
+        let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false);
         let ctx = ToolContext::new();
         let args = serde_json::json!({
             "path": path.to_string_lossy(),
@@ -576,7 +606,7 @@ mod tests {
         // Same line twice with differing trailing whitespace.
         std::fs::write(&path, "let x = 1;    \nlet y = 2;\nlet x = 1;\n").unwrap();
 
-        let tool = EditFile::new(None, crate::session::access::PathGuard::default());
+        let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false);
         let ctx = ToolContext::new();
         let args = serde_json::json!({
             "path": path.to_string_lossy(),
@@ -597,7 +627,7 @@ mod tests {
         let path = dir.path().join("dry_run_edit.txt");
         std::fs::write(&path, "fn old() {}\n").unwrap();
 
-        let tool = EditFile::new(None, crate::session::access::PathGuard::default());
+        let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false);
         let ctx = ToolContext::with_dry_run(true);
         let args = serde_json::json!({
             "path": path.to_string_lossy(),
@@ -612,6 +642,116 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "fn old() {}\n");
     }
 
+    /// With minify_write_side enabled, a file wrapped in a minified envelope
+    /// is expanded before matching, the edit is applied in readable source
+    /// space, and the result is written expanded.
+    #[tokio::test]
+    async fn test_edit_file_expands_minified_envelope_when_enabled() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("main.rs");
+
+        let original_minified =
+            crate::shared::minify::wrap_minified_envelope("rust", "fn main(){println!(\"hi\");}");
+        let replacement_minified =
+            crate::shared::minify::wrap_minified_envelope("rust", "fn main(){println!(\"bye\");}");
+
+        std::fs::write(&path, &original_minified).unwrap();
+
+        let tool = EditFile::new(None, crate::session::access::PathGuard::default(), true);
+        let ctx = ToolContext::new();
+        let args = serde_json::json!({
+            "path": path.to_string_lossy(),
+            "old_string": original_minified,
+            "new_string": replacement_minified,
+        });
+        let result = tool.run(&ctx, args).await;
+        assert!(
+            matches!(result, ToolOutcome::FileEdit { .. }),
+            "expected FileEdit, got {result:?}"
+        );
+
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            !written.contains("<minified"),
+            "result must be expanded, got: {written}"
+        );
+        assert!(
+            written.contains("println!(\"bye\")"),
+            "expanded result should contain new code, got: {written}"
+        );
+        assert!(
+            !written.contains("println!(\"hi\")"),
+            "old code should be gone, got: {written}"
+        );
+    }
+
+    /// With minify_write_side disabled, minified envelopes are treated as
+    /// literal text and written verbatim.
+    #[tokio::test]
+    async fn test_edit_file_preserves_envelope_when_disabled() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("main.rs");
+
+        let original_minified =
+            crate::shared::minify::wrap_minified_envelope("rust", "fn main(){println!(\"hi\");}");
+        let replacement_minified =
+            crate::shared::minify::wrap_minified_envelope("rust", "fn main(){println!(\"bye\");}");
+
+        std::fs::write(&path, &original_minified).unwrap();
+
+        let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false);
+        let ctx = ToolContext::new();
+        let args = serde_json::json!({
+            "path": path.to_string_lossy(),
+            "old_string": original_minified,
+            "new_string": replacement_minified,
+        });
+        let result = tool.run(&ctx, args).await;
+        assert!(
+            matches!(result, ToolOutcome::FileEdit { .. }),
+            "expected FileEdit, got {result:?}"
+        );
+
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            written.contains("<minified"),
+            "envelope should be preserved verbatim, got: {written}"
+        );
+    }
+
+    /// Dry run with minify_write_side enabled should report that the edit
+    /// happens after expanding the minified envelope.
+    #[tokio::test]
+    async fn test_edit_file_dry_run_reports_expanded_envelope() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("main.rs");
+
+        let original_minified =
+            crate::shared::minify::wrap_minified_envelope("rust", "fn main(){println!(\"hi\");}");
+        let replacement_minified =
+            crate::shared::minify::wrap_minified_envelope("rust", "fn main(){println!(\"bye\");}");
+
+        std::fs::write(&path, &original_minified).unwrap();
+
+        let tool = EditFile::new(None, crate::session::access::PathGuard::default(), true);
+        let ctx = ToolContext::with_dry_run(true);
+        let args = serde_json::json!({
+            "path": path.to_string_lossy(),
+            "old_string": original_minified,
+            "new_string": replacement_minified,
+        });
+        let result = tool.run(&ctx, args).await;
+        assert!(
+            matches!(result, ToolOutcome::Success { ref content } if content.contains("expanded from minified")),
+            "expected dry-run expansion note, got {result:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            original_minified,
+            "dry run must not modify file"
+        );
+    }
+
     /// `edit_file` must reject paths blocked by the PathGuard, e.g. dotfiles
     /// when `block_dotfiles` is enabled.
     #[tokio::test]
@@ -624,7 +764,7 @@ mod tests {
             block_dotfiles: true,
             ..Default::default()
         };
-        let tool = EditFile::new(None, guard);
+        let tool = EditFile::new(None, guard, false);
         let ctx = ToolContext::new();
         let args = serde_json::json!({
             "path": path.to_string_lossy(),
@@ -654,7 +794,7 @@ mod tests {
             max_overwrite_size: 1024,
             ..Default::default()
         };
-        let tool = EditFile::new(None, guard);
+        let tool = EditFile::new(None, guard, false);
         let ctx = ToolContext::new();
         let args = serde_json::json!({
             "path": path.to_string_lossy(),
@@ -688,7 +828,7 @@ mod tests {
         perms.set_readonly(true);
         std::fs::set_permissions(path.parent().unwrap(), perms.clone()).unwrap();
 
-        let tool = EditFile::new(None, crate::session::access::PathGuard::default());
+        let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false);
         let ctx = ToolContext::new();
         let args = serde_json::json!({
             "path": path.to_string_lossy(),
@@ -737,7 +877,7 @@ mod tests {
                 let path = dir.path().join("edit.txt");
                 std::fs::write(&path, content.as_bytes()).unwrap();
 
-                let tool = EditFile::new(None, crate::session::access::PathGuard::default());
+                let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false);
                 let ctx = ToolContext::new();
                 let args = serde_json::json!({
                     "path": path.to_string_lossy(),
@@ -774,7 +914,7 @@ mod tests {
                 let path = dir.path().join("edit.txt");
                 std::fs::write(&path, content.as_bytes()).unwrap();
 
-                let tool = EditFile::new(None, crate::session::access::PathGuard::default());
+                let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false);
                 let ctx = ToolContext::new();
                 let args = serde_json::json!({
                     "path": path.to_string_lossy(),
@@ -820,7 +960,7 @@ mod tests {
                 let path = dir.path().join("edit.txt");
                 std::fs::write(&path, content.as_bytes()).unwrap();
 
-                let tool = EditFile::new(None, crate::session::access::PathGuard::default());
+                let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false);
                 let ctx = ToolContext::new();
                 let args = serde_json::json!({
                     "path": path.to_string_lossy(),

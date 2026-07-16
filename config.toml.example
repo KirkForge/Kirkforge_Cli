@@ -64,6 +64,11 @@
 # base64. Default: false.
 # block_binary_reads = false
 
+# When true, read_file wraps minified source in a `<minified lang="...">`
+# envelope and write_file/edit_file expand that envelope back to readable
+# source before writing. Default: false (will flip to true after shake-out).
+# minify_write_side = false
+
 # Maximum bytes the read_file tool returns. Default: 1048576 (1 MiB).
 # max_file_read_size = 1048576
 

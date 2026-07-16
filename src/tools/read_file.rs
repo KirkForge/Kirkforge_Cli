@@ -5,11 +5,15 @@ use std::path::PathBuf;
 
 pub struct ReadFile {
     path_guard: PathGuard,
+    minify_write_side: bool,
 }
 
 impl ReadFile {
-    pub fn new(path_guard: PathGuard) -> Self {
-        Self { path_guard }
+    pub fn new(path_guard: PathGuard, minify_write_side: bool) -> Self {
+        Self {
+            path_guard,
+            minify_write_side,
+        }
     }
 }
 
@@ -18,7 +22,7 @@ impl Tool for ReadFile {
     fn def(&self) -> ToolDef {
         ToolDef {
             name: "read_file",
-            description: "Read the contents of a file. Use offset and limit to read specific sections. Set minify=true to strip comments and collapse whitespace (saves ~30-50% tokens for source files).",
+            description: "Read the contents of a file. Use offset and limit to read specific sections. Set minify=true to strip comments and collapse whitespace (saves ~30-50% tokens for source files). When config.minify_write_side is true, minified reads are wrapped in <minified lang='...'> envelopes; edit_file/write_file will expand them back to readable source.",
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -108,12 +112,20 @@ impl Tool for ReadFile {
         let display = if offset == 0 && end >= raw_total {
             if minify {
                 let full_minified = crate::shared::minify::minify_source(&path, &raw_content);
+                let body = if self.minify_write_side {
+                    let lang = crate::shared::minify::lang_name_for_ext(
+                        path.extension().and_then(|e| e.to_str()).unwrap_or("txt"),
+                    );
+                    crate::shared::minify::wrap_minified_envelope(&lang, &full_minified)
+                } else {
+                    full_minified.clone()
+                };
                 format!(
                     "{} (minified, was {} bytes → now {} bytes)\n{}",
                     path.display(),
                     raw_content.len(),
                     full_minified.len(),
-                    full_minified,
+                    body,
                 )
             } else {
                 raw_content
@@ -126,10 +138,15 @@ impl Tool for ReadFile {
                 end,
                 raw_total
             );
-            format!(
-                "{header}\n{sep}\n{selected}",
-                sep = "-".repeat(header.len())
-            )
+            let body = if minify && self.minify_write_side {
+                let lang = crate::shared::minify::lang_name_for_ext(
+                    path.extension().and_then(|e| e.to_str()).unwrap_or("txt"),
+                );
+                crate::shared::minify::wrap_minified_envelope(&lang, &selected)
+            } else {
+                selected
+            };
+            format!("{header}\n{sep}\n{body}", sep = "-".repeat(header.len()))
         };
 
         ToolOutcome::FileContent {

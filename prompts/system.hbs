@@ -35,5 +35,7 @@ Guidelines:
 - Use glob to discover files, grep to find relevant code, read_file to
   understand context.
 - If you're unsure about the current state of a file, re-read it.
-- Always think about the user's constraints: potato hardware, static
-  binaries, no AVX, minimal memory use.
+- When the host enables write-side minification, code sent to
+  `read_file`, `write_file`, and `edit_file` may use a `<minified
+  lang="...">...</minified>` envelope. The host expands it back to
+  readable, formatted source before any change reaches disk.

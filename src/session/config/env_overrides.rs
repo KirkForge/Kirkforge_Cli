@@ -68,6 +68,13 @@ pub(super) fn apply_env_overrides(cfg: &mut Config) {
         }
     }
 
+    // KIRKFORGE_MINIFY_WRITE_SIDE
+    if let Ok(val) = std::env::var("KIRKFORGE_MINIFY_WRITE_SIDE") {
+        if let Some(v) = parse_bool_env(&val) {
+            cfg.minify_write_side = v;
+        }
+    }
+
     // KIRKFORGE_CARRYOVER_ENABLED
     if let Ok(val) = std::env::var("KIRKFORGE_CARRYOVER_ENABLED") {
         if let Some(v) = parse_bool_env(&val) {

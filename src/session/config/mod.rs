@@ -18,6 +18,7 @@
 /// - `KIRKFORGE_MAX_OVERWRITE_SIZE` — max existing file size that write tools may overwrite
 /// - `KIRKFORGE_FOLLOW_SYMLINKS` — "true" to allow following symlinks
 /// - `KIRKFORGE_BLOCK_BINARY` — "true" to block binary file reads
+/// - `KIRKFORGE_MINIFY_WRITE_SIDE` — "true" to enable minified-envelope write-side expansion
 /// - `KIRKFORGE_BASH_SANDBOX_WORKDIR` — "true"/"false" to force bash cwd into the sandbox
 /// - `KIRKFORGE_BANG_REQUIRES_APPROVAL` — "true" to route `!` passthrough through approval gate
 /// - `KIRKFORGE_JSON_MODE` — "true" to request JSON-formatted model responses
@@ -280,6 +281,9 @@ fn merge_toml_into_config(cfg: &mut Config, table: toml::Table) {
     }
     if let Some(Value::Boolean(v)) = table.get("block_binary_reads") {
         cfg.block_binary_reads = *v;
+    }
+    if let Some(Value::Boolean(v)) = table.get("minify_write_side") {
+        cfg.minify_write_side = *v;
     }
     if let Some(Value::Boolean(v)) = table.get("carryover_enabled") {
         cfg.carryover_enabled = *v;
@@ -681,6 +685,17 @@ mod tests {
         apply_env_overrides(&mut cfg);
         assert!(cfg.block_binary_reads);
         set_env("KIRKFORGE_BLOCK_BINARY", None);
+    }
+
+    #[test]
+    fn test_env_minify_write_side() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut cfg = Config::default();
+        assert!(!cfg.minify_write_side);
+        set_env("KIRKFORGE_MINIFY_WRITE_SIDE", Some("true"));
+        apply_env_overrides(&mut cfg);
+        assert!(cfg.minify_write_side);
+        set_env("KIRKFORGE_MINIFY_WRITE_SIDE", None);
     }
 
     #[test]
@@ -1180,6 +1195,19 @@ mod tests {
         assert_eq!(parse_bool_env("no"), Some(false));
         assert_eq!(parse_bool_env("maybe"), None);
         assert_eq!(parse_bool_env(""), None);
+    }
+
+    #[test]
+    fn test_merge_toml_minify_write_side() {
+        let mut cfg = Config::default();
+        assert!(!cfg.minify_write_side);
+        let table: toml::Table = r#"
+            minify_write_side = true
+        "#
+        .parse()
+        .unwrap();
+        merge_toml_into_config(&mut cfg, table);
+        assert!(cfg.minify_write_side);
     }
 
     #[test]

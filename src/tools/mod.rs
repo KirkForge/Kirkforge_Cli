@@ -94,14 +94,23 @@ pub fn all_tools(
     deny_list: crate::session::access::DenyList,
     path_guard: crate::session::access::PathGuard,
     bash_sandbox_workdir: bool,
+    minify_write_side: bool,
 ) -> Vec<Arc<dyn Tool>> {
     let mut tools: Vec<Arc<dyn Tool>> = vec![
-        Arc::new(read_file::ReadFile::new(path_guard.clone())),
+        Arc::new(read_file::ReadFile::new(
+            path_guard.clone(),
+            minify_write_side,
+        )),
         Arc::new(write_file::WriteFile::new(
             undo_stack.clone(),
             path_guard.clone(),
+            minify_write_side,
         )),
-        Arc::new(edit_file::EditFile::new(undo_stack, path_guard.clone())),
+        Arc::new(edit_file::EditFile::new(
+            undo_stack,
+            path_guard.clone(),
+            minify_write_side,
+        )),
         Arc::new(bash::Bash::new(
             deny_list.clone(),
             path_guard.clone(),

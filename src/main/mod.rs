@@ -578,6 +578,7 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     let (builtin_deny_list, builtin_path_guard, _builtin_read_gate) =
         session::access::access_from_config(&config);
     let bash_sandbox_workdir = config.bash_sandbox_workdir;
+    let minify_write_side = config.minify_write_side;
 
     // ── Toolset assembly (Phase 2.2) ──
     // Compose built-in, MCP, and plugin tools into a single source-aware
@@ -593,6 +594,7 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
             builtin_deny_list,
             builtin_path_guard,
             bash_sandbox_workdir,
+            minify_write_side,
         ),
     )));
 

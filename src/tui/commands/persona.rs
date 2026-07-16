@@ -109,6 +109,7 @@ fn tools_for_persona(
         deny_list,
         path_guard,
         config.bash_sandbox_workdir,
+        config.minify_write_side,
     );
     match kind {
         PersonaKind::Explore => all

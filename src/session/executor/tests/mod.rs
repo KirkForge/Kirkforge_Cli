@@ -144,6 +144,7 @@ fn make_config(auto_approve: bool) -> Config {
         block_gitignored_dotfiles: false,
         max_file_read_size: 1024 * 1024,
         max_overwrite_size: 1024 * 1024,
+        minify_write_side: false,
         follow_symlinks: false,
         block_binary_reads: false,
         bash_sandbox_workdir: false,

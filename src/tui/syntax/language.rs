@@ -5,6 +5,7 @@
 //! and per-language keyword sets. Pure data, no highlighter state.
 
 use std::collections::HashSet;
+use std::sync::OnceLock;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(super) enum Language {
@@ -314,7 +315,43 @@ impl Language {
         }
     }
 
-    pub(super) fn keyword_set(&self) -> HashSet<&'static str> {
-        self.keywords().iter().copied().collect()
+    fn cache_index(&self) -> usize {
+        match self {
+            Language::Unknown => 0,
+            Language::Rust => 1,
+            Language::Python => 2,
+            Language::JavaScript => 3,
+            Language::TypeScript => 4,
+            Language::Go => 5,
+            Language::C => 6,
+            Language::Cpp => 7,
+            Language::Java => 8,
+            Language::Shell => 9,
+            Language::Json => 10,
+            Language::Yaml => 11,
+            Language::Toml => 12,
+            Language::Markdown => 13,
+        }
+    }
+
+    pub(super) fn keyword_set(&self) -> &'static HashSet<&'static str> {
+        static KEYWORD_CACHE: [OnceLock<HashSet<&'static str>>; 14] = [
+            OnceLock::new(),
+            OnceLock::new(),
+            OnceLock::new(),
+            OnceLock::new(),
+            OnceLock::new(),
+            OnceLock::new(),
+            OnceLock::new(),
+            OnceLock::new(),
+            OnceLock::new(),
+            OnceLock::new(),
+            OnceLock::new(),
+            OnceLock::new(),
+            OnceLock::new(),
+            OnceLock::new(),
+        ];
+        let idx = self.cache_index();
+        KEYWORD_CACHE[idx].get_or_init(|| self.keywords().iter().copied().collect())
     }
 }

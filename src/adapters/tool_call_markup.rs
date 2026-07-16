@@ -134,16 +134,37 @@ fn find_invoke_close(content: &str, from: usize) -> Option<InvokeTag> {
 }
 
 /// Parse `name="..."` from an opening tag.
+///
+/// Supports double- and single-quoted values. Inside double-quoted values
+/// `\"` and `\\` are unescaped so escaped quotes do not terminate parsing
+/// early.
 fn parse_name_attr(tag: &str) -> Option<String> {
     let idx = tag.find("name=")?;
     let rest = &tag[idx + "name=".len()..];
     // The value should be quoted. Support both " and ' for robustness.
     let quote = rest.chars().next()?;
-    let end = match quote {
-        '"' | '\'' => rest[1..].find(quote)?,
-        _ => return None,
-    };
-    Some(rest[1..=end].to_string())
+    if quote != '"' && quote != '\'' {
+        return None;
+    }
+
+    let mut value = String::new();
+    let mut escaped = false;
+    for ch in rest[1..].chars() {
+        if escaped {
+            value.push(ch);
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' && quote == '"' {
+            escaped = true;
+            continue;
+        }
+        if ch == quote {
+            return Some(value);
+        }
+        value.push(ch);
+    }
+    None
 }
 
 /// Parse `<｜DSML｜parameter name="...">value</｜DSML｜parameter>` blocks.
@@ -351,5 +372,25 @@ mod tests {
         let (_cleaned, calls) = extract_dsml_tool_calls(content);
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].arguments, json!({"command": "{not json}"}));
+    }
+
+    /// Regression for C17: escaped quotes inside a double-quoted name
+    /// attribute used to terminate parsing early.
+    #[test]
+    fn escaped_quote_in_name_attr() {
+        let content = r#"<｜DSML｜invoke name="bash\"_tool"><｜DSML｜parameter name="command">ls</｜DSML｜parameter></｜DSML｜invoke>"#;
+        let (_cleaned, calls) = extract_dsml_tool_calls(content);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "bash\"_tool");
+    }
+
+    /// Single-quoted name attributes should also parse correctly.
+    #[test]
+    fn single_quoted_name_attr() {
+        let content = r#"<｜DSML｜invoke name='bash'><｜DSML｜parameter name='command'>ls</｜DSML｜parameter></｜DSML｜invoke>"#;
+        let (_cleaned, calls) = extract_dsml_tool_calls(content);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "bash");
+        assert_eq!(calls[0].arguments, json!({"command": "ls"}));
     }
 }

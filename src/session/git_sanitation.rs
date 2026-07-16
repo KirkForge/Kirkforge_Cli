@@ -154,7 +154,7 @@ pub fn check_worktree(
         let lower = content.to_lowercase();
 
         for pattern in SECRET_PATTERNS {
-            if lower.contains(&pattern.to_lowercase()) {
+            if contains_secret_pattern(&lower, pattern) {
                 report.blockers.push(format!(
                     "Possible secret/credential pattern '{}' in {}",
                     pattern,
@@ -219,10 +219,44 @@ fn read_limited(path: &Path, limit: u64) -> Option<String> {
 /// True if `text` contains a conflict-marker line.
 fn has_conflict_marker(text: &str) -> bool {
     text.lines().any(|line| {
-        CONFLICT_MARKERS
-            .iter()
-            .any(|marker| line.starts_with(marker))
+        // `=======` must appear alone on a line; a run of eight or more
+        // equals (e.g. a Markdown horizontal rule) must not match.
+        line == "=======" || line.starts_with("<<<<<<< ") || line.starts_with(">>>>>>> ")
     })
+}
+
+/// Case-insensitive check for a secret pattern, with special handling for
+/// `.env` so it matches a standalone filename/token (e.g. `.env`) but not
+/// a path-like extension (e.g. `.env.local`) or a larger word
+/// (e.g. `.environment`).
+fn contains_secret_pattern(lower_text: &str, pattern: &str) -> bool {
+    let pat = pattern.to_lowercase();
+    if pat == ".env" {
+        let mut start = 0;
+        while let Some(pos) = lower_text[start..].find(&pat) {
+            let abs = start + pos;
+            let after_idx = abs + pat.len();
+
+            let prev_ok = abs == 0
+                || !lower_text
+                    .chars()
+                    .nth(abs - 1)
+                    .is_some_and(|c| c.is_alphanumeric() || c == '_');
+            let next_ok = after_idx >= lower_text.len()
+                || !lower_text[after_idx..]
+                    .chars()
+                    .next()
+                    .is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '.');
+
+            if prev_ok && next_ok {
+                return true;
+            }
+            start = after_idx;
+        }
+        false
+    } else {
+        lower_text.contains(&pat)
+    }
 }
 
 /// Render a byte count as human-readable `N KB`, `N MB`, etc.
@@ -482,6 +516,38 @@ mod tests {
         let report = check_worktree(tmp.path(), &status, None).unwrap();
         assert!(!report.is_clean());
         assert!(report.blockers.iter().any(|b| b.contains("conflict")));
+    }
+
+    #[test]
+    fn has_conflict_marker_rejects_overlong_equals_rule() {
+        // Regression for C25: `========` used to match `=======`.
+        assert!(!has_conflict_marker("======== horizontal rule"));
+        assert!(has_conflict_marker("\n=======\n"));
+    }
+
+    #[test]
+    fn check_worktree_env_extension_not_flagged() {
+        // Regression for C25: `.env` substring matched `.env.local`.
+        let tmp = tempfile::tempdir().unwrap();
+        let f = tmp.path().join("script.sh");
+        std::fs::write(&f, "source .env.local\n").unwrap();
+        let status = format!("?? {}", f.display());
+        let report = check_worktree(tmp.path(), &status, None).unwrap();
+        assert!(
+            report.blockers.iter().all(|b| !b.contains(".env")),
+            "expected no .env false positive, got: {:?}",
+            report.blockers
+        );
+    }
+
+    #[test]
+    fn check_worktree_standalone_env_still_flagged() {
+        let tmp = tempfile::tempdir().unwrap();
+        let f = tmp.path().join("script.sh");
+        std::fs::write(&f, "cat .env\n").unwrap();
+        let status = format!("?? {}", f.display());
+        let report = check_worktree(tmp.path(), &status, None).unwrap();
+        assert!(report.blockers.iter().any(|b| b.contains(".env")));
     }
 
     #[test]

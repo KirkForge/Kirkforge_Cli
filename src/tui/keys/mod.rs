@@ -93,10 +93,12 @@ pub(crate) async fn handle_input_key(
                             ctx.resume_tx,
                         )
                         .await;
-                        state.messages.push(ConversationEntry::new("system", msg));
+                        state
+                            .messages
+                            .push_back(ConversationEntry::new("system", msg));
                     }
                     Err(e) => {
-                        state.messages.push(ConversationEntry::new(
+                        state.messages.push_back(ConversationEntry::new(
                             "system",
                             format!("Error resuming session: {e}"),
                         ));
@@ -147,8 +149,10 @@ pub(crate) async fn handle_input_key(
                 // search mode (so `n` / `N` can cycle) and jump to
                 // the first one, expanding any collapsed tool card
                 // that contains the match.
-                let matches =
-                    crate::tui::search::compute_matches(&state.messages, &state.search_query);
+                let matches = crate::tui::search::compute_matches(
+                    state.messages.make_contiguous(),
+                    &state.search_query,
+                );
                 state.search_matches = matches;
                 state.search_match_idx = 0;
                 if !state.search_matches.is_empty() {
@@ -255,7 +259,9 @@ pub(crate) async fn handle_input_key(
                     }
                     Some(_) | None => "📋 No assistant message to copy".to_string(),
                 };
-                state.messages.push(ConversationEntry::new("system", line));
+                state
+                    .messages
+                    .push_back(ConversationEntry::new("system", line));
                 return Ok(());
             }
             // Ctrl+Shift+B: copy a code block from the most recent
@@ -295,7 +301,9 @@ pub(crate) async fn handle_input_key(
                         Err(e) => format!("📋 Clipboard error: {e}"),
                     }
                 };
-                state.messages.push(ConversationEntry::new("system", line));
+                state
+                    .messages
+                    .push_back(ConversationEntry::new("system", line));
                 return Ok(());
             }
             if key.modifiers.contains(KeyModifiers::CONTROL) {
@@ -319,7 +327,7 @@ pub(crate) async fn handle_input_key(
                             cancel.store(true, std::sync::atomic::Ordering::SeqCst);
                             state.persona_in_progress = None;
                             state.is_generating = false;
-                            state.messages.push(ConversationEntry::new(
+                            state.messages.push_back(ConversationEntry::new(
                                 "system",
                                 "⛔ Persona cancelled.".to_string(),
                             ));
@@ -505,7 +513,7 @@ pub(crate) async fn handle_input_key(
                 let config = crate::shared::read_shared_config(&state.config).clone();
                 match crate::tui::commands::bang_permission_action(&rest, &config) {
                     crate::shared::permission::PermissionAction::Deny => {
-                        state.messages.push(crate::tui::app::ConversationEntry::new(
+                        state.messages.push_back(crate::tui::app::ConversationEntry::new(
                             "system",
                             format!("🚫 Permission rule denied `!{rest}` — the command matches a deny rule."),
                         ));
@@ -530,7 +538,7 @@ pub(crate) async fn handle_input_key(
                         let (summary, full) = split_bang_summary(&out);
                         state
                             .messages
-                            .push(crate::tui::app::ConversationEntry::tool(summary, full));
+                            .push_back(crate::tui::app::ConversationEntry::tool(summary, full));
                         return Ok(());
                     }
                 }
@@ -632,12 +640,14 @@ pub(crate) async fn handle_input_key(
                             }
                             state
                                 .messages
-                                .push(ConversationEntry::new("system", help_text));
+                                .push_back(ConversationEntry::new("system", help_text));
                             return Ok(());
                         }
                         "/fork" => {
                             let msg = crate::tui::commands::handle_fork_command(args, state).await;
-                            state.messages.push(ConversationEntry::new("system", msg));
+                            state
+                                .messages
+                                .push_back(ConversationEntry::new("system", msg));
                             return Ok(());
                         }
                         "/resume" => {
@@ -647,18 +657,24 @@ pub(crate) async fn handle_input_key(
                                 ctx.resume_tx,
                             )
                             .await;
-                            state.messages.push(ConversationEntry::new("system", msg));
+                            state
+                                .messages
+                                .push_back(ConversationEntry::new("system", msg));
                             return Ok(());
                         }
                         "/jobs" => {
                             let msg = crate::tui::commands::handle_jobs_command(args, state).await;
-                            state.messages.push(ConversationEntry::new("system", msg));
+                            state
+                                .messages
+                                .push_back(ConversationEntry::new("system", msg));
                             return Ok(());
                         }
                         "/status" => {
                             let msg =
                                 crate::tui::commands::handle_status_command(args, state).await;
-                            state.messages.push(ConversationEntry::new("system", msg));
+                            state
+                                .messages
+                                .push_back(ConversationEntry::new("system", msg));
                             return Ok(());
                         }
                         "/reload" => {
@@ -682,7 +698,9 @@ pub(crate) async fn handle_input_key(
                                     .await
                                 }
                             };
-                            state.messages.push(ConversationEntry::new("system", msg));
+                            state
+                                .messages
+                                .push_back(ConversationEntry::new("system", msg));
                             return Ok(());
                         }
                         "/model" => {
@@ -701,14 +719,18 @@ pub(crate) async fn handle_input_key(
                                 state,
                             )
                             .await;
-                            state.messages.push(ConversationEntry::new("system", msg));
+                            state
+                                .messages
+                                .push_back(ConversationEntry::new("system", msg));
                             return Ok(());
                         }
                         "/compact" => {
                             let msg =
                                 crate::tui::commands::handle_compact_command(args, ctx.compact_tx)
                                     .await;
-                            state.messages.push(ConversationEntry::new("system", msg));
+                            state
+                                .messages
+                                .push_back(ConversationEntry::new("system", msg));
                             return Ok(());
                         }
                         "/route" => {
@@ -719,22 +741,30 @@ pub(crate) async fn handle_input_key(
                                 state,
                             )
                             .await;
-                            state.messages.push(ConversationEntry::new("system", msg));
+                            state
+                                .messages
+                                .push_back(ConversationEntry::new("system", msg));
                             return Ok(());
                         }
                         "/memory" => {
                             let msg = crate::tui::commands::handle_memory_command(args);
-                            state.messages.push(ConversationEntry::new("system", msg));
+                            state
+                                .messages
+                                .push_back(ConversationEntry::new("system", msg));
                             return Ok(());
                         }
                         "/metrics" => {
                             let msg = crate::tui::commands::handle_metrics_command();
-                            state.messages.push(ConversationEntry::new("system", msg));
+                            state
+                                .messages
+                                .push_back(ConversationEntry::new("system", msg));
                             return Ok(());
                         }
                         "/save" => {
                             let msg = crate::tui::commands::handle_save_command(args, state).await;
-                            state.messages.push(ConversationEntry::new("system", msg));
+                            state
+                                .messages
+                                .push_back(ConversationEntry::new("system", msg));
                             return Ok(());
                         }
                         "/undo" => {
@@ -748,7 +778,9 @@ pub(crate) async fn handle_input_key(
                             // as a system token.
                             let msg =
                                 crate::tui::commands::handle_undo_command(args, ctx.undo_tx, state);
-                            state.messages.push(ConversationEntry::new("system", msg));
+                            state
+                                .messages
+                                .push_back(ConversationEntry::new("system", msg));
                             return Ok(());
                         }
                         "/plan" => {
@@ -765,7 +797,9 @@ pub(crate) async fn handle_input_key(
                                 ctx.persona_tx.clone(),
                             )
                             .await;
-                            state.messages.push(ConversationEntry::new("system", msg));
+                            state
+                                .messages
+                                .push_back(ConversationEntry::new("system", msg));
                             return Ok(());
                         }
                         "/explore" => {
@@ -776,7 +810,9 @@ pub(crate) async fn handle_input_key(
                                 ctx.persona_tx.clone(),
                             )
                             .await;
-                            state.messages.push(ConversationEntry::new("system", msg));
+                            state
+                                .messages
+                                .push_back(ConversationEntry::new("system", msg));
                             return Ok(());
                         }
                         "/coder" => {
@@ -787,7 +823,9 @@ pub(crate) async fn handle_input_key(
                                 ctx.persona_tx.clone(),
                             )
                             .await;
-                            state.messages.push(ConversationEntry::new("system", msg));
+                            state
+                                .messages
+                                .push_back(ConversationEntry::new("system", msg));
                             return Ok(());
                         }
                         "/implement" => {
@@ -799,7 +837,7 @@ pub(crate) async fn handle_input_key(
                                 ctx.plan_tx.send(false),
                                 "plan-mode channel receiver dropped"
                             );
-                            state.messages.push(ConversationEntry::new(
+                            state.messages.push_back(ConversationEntry::new(
                                 "system",
                                 "✅ Plan mode disabled — implementation may begin.".to_string(),
                             ));
@@ -807,14 +845,18 @@ pub(crate) async fn handle_input_key(
                         }
                         "/gh" => {
                             let msg = crate::tui::commands::handle_gh_command(args);
-                            state.messages.push(ConversationEntry::new("system", msg));
+                            state
+                                .messages
+                                .push_back(ConversationEntry::new("system", msg));
                             return Ok(());
                         }
                         "/init" => {
                             let cwd = std::env::current_dir()
                                 .unwrap_or_else(|_| std::path::PathBuf::from("."));
                             let msg = crate::tui::commands::handle_init_command(args, &cwd);
-                            state.messages.push(ConversationEntry::new("system", msg));
+                            state
+                                .messages
+                                .push_back(ConversationEntry::new("system", msg));
                             return Ok(());
                         }
                         "/commit" => {
@@ -823,17 +865,23 @@ pub(crate) async fn handle_input_key(
                             let cfg = crate::shared::read_shared_config(&state.config).clone();
                             let msg =
                                 crate::tui::commands::handle_commit_command(args, &cwd, &cfg).await;
-                            state.messages.push(ConversationEntry::new("system", msg));
+                            state
+                                .messages
+                                .push_back(ConversationEntry::new("system", msg));
                             return Ok(());
                         }
                         "/sessions" => {
                             let msg = crate::tui::commands::handle_sessions_command(args, state);
-                            state.messages.push(ConversationEntry::new("system", msg));
+                            state
+                                .messages
+                                .push_back(ConversationEntry::new("system", msg));
                             return Ok(());
                         }
                         "/carryover" => {
                             let msg = crate::tui::commands::handle_carryover_command(args, state);
-                            state.messages.push(ConversationEntry::new("system", msg));
+                            state
+                                .messages
+                                .push_back(ConversationEntry::new("system", msg));
                             return Ok(());
                         }
                         "/test" => {
@@ -849,7 +897,9 @@ pub(crate) async fn handle_input_key(
                             // already inside `async fn
                             // handle_input_key`.
                             let msg = crate::tui::commands::handle_test_command(args, state).await;
-                            state.messages.push(ConversationEntry::new("system", msg));
+                            state
+                                .messages
+                                .push_back(ConversationEntry::new("system", msg));
                             return Ok(());
                         }
                         "/plugins" => {
@@ -859,7 +909,9 @@ pub(crate) async fn handle_input_key(
                                 ctx.plugin_reload_tx,
                             )
                             .await;
-                            state.messages.push(ConversationEntry::new("system", msg));
+                            state
+                                .messages
+                                .push_back(ConversationEntry::new("system", msg));
                             return Ok(());
                         }
                         _ => {}
@@ -867,14 +919,14 @@ pub(crate) async fn handle_input_key(
 
                     if let Some(skill) = state.skill_registry.get_by_trigger(cmd) {
                         if let Err(e) = crate::session::skills::Skill::tokenize_args(args) {
-                            state.messages.push(ConversationEntry::new(
+                            state.messages.push_back(ConversationEntry::new(
                                 "system",
                                 format!("❌ Invalid arguments for {cmd}: {e}"),
                             ));
                             return Ok(());
                         }
                         let rendered = skill.render_prompt(args);
-                        state.messages.push(ConversationEntry::new(
+                        state.messages.push_back(ConversationEntry::new(
                             "system",
                             format!(
                                 "🔧 Running skill: {} — {}",
@@ -893,7 +945,7 @@ pub(crate) async fn handle_input_key(
                             return Ok(());
                         }
                     } else {
-                        state.messages.push(ConversationEntry::new(
+                        state.messages.push_back(ConversationEntry::new(
                             "system",
                             format!("Unknown command: {cmd}\nType /help for available commands."),
                         ));
@@ -914,11 +966,11 @@ pub(crate) async fn handle_input_key(
 
                     state
                         .messages
-                        .push(ConversationEntry::new("user", cleaned.clone()));
+                        .push_back(ConversationEntry::new("user", cleaned.clone()));
                     if !status_msg.is_empty() {
                         state
                             .messages
-                            .push(ConversationEntry::new("system", status_msg));
+                            .push_back(ConversationEntry::new("system", status_msg));
                     }
                     state.is_generating = true;
                     let prompt = if rendered_block.is_empty() {

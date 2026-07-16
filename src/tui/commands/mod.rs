@@ -43,6 +43,8 @@ pub use status::*;
 pub use test::*;
 pub use undo::*;
 
+use std::collections::VecDeque;
+
 /// Map persisted [`Message`]s into TUI [`ConversationEntry`]s.
 ///
 /// Used when reloading a conversation from disk (`/resume`, `/fork`,
@@ -52,7 +54,7 @@ pub use undo::*;
 /// from a live session.
 pub fn messages_to_entries(
     msgs: &[crate::shared::Message],
-) -> Vec<crate::tui::app::ConversationEntry> {
+) -> VecDeque<crate::tui::app::ConversationEntry> {
     msgs.iter()
         .map(|m| {
             if m.role == crate::shared::Role::Tool {
@@ -73,7 +75,7 @@ pub fn messages_to_entries(
                 crate::tui::app::ConversationEntry::new(role, m.content.clone())
             }
         })
-        .collect()
+        .collect::<VecDeque<_>>()
 }
 
 #[cfg(test)]

@@ -67,6 +67,19 @@ fn escape_drawtext_expr(s: &str) -> String {
         .replace(' ', "\\ ")
 }
 
+/// Escape a value placed inside a single-quoted FFmpeg filter option such
+/// as `flite=text='...'`. Escapes backslash, colon, comma, right-bracket,
+/// percent, and single-quote so they are not interpreted as filter-graph
+/// metacharacters.
+pub fn ffmpeg_escape(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace(':', "\\:")
+        .replace(',', "\\,")
+        .replace(']', "\\]")
+        .replace('%', "\\%")
+        .replace('\'', "\\x27")
+}
+
 fn shell_quote(s: String) -> String {
     if s.contains(' ') || s.contains('\'') {
         format!("'{}'", s.replace('\'', "'\\''"))
@@ -2300,5 +2313,14 @@ mod tests {
         // total: 2.6
         let dur = scene_duration_s(&scene);
         assert!((dur - 2.6).abs() < 0.001, "expected 2.6 (steps), got {dur}");
+    }
+
+    #[test]
+    fn ffmpeg_escape_handles_filter_metacharacters() {
+        // Regression for C23: flite narration text containing filter-graph
+        // metacharacters must be escaped before being placed inside
+        // `flite=text='...'`.
+        let escaped = ffmpeg_escape("a:b\\c]d,e'f");
+        assert_eq!(escaped, r"a\:b\\c\]d\,e\x27f");
     }
 }

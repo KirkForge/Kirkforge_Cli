@@ -85,7 +85,7 @@ pub(super) fn word_boundary_match(cmd: &str, pattern: &str) -> bool {
     let chars: Vec<char> = cmd.chars().collect();
     let mut i = 0;
     while i + p.len() <= chars.len() {
-        if chars[i..i + p.len()].iter().collect::<String>() == *pattern {
+        if chars[i..i + p.len()] == p {
             let start_ok = i == 0 || boundaries.contains(&chars[i - 1]);
             let end_ok = i + p.len() >= chars.len() || boundaries.contains(&chars[i + p.len()]);
             if start_ok && end_ok {

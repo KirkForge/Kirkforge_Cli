@@ -228,6 +228,18 @@ pub async fn summarize_conversation(
 
                 if let Some(ref s) = summary {
                     let tokens_after = s.len() / 4;
+                    if tokens_before == 0 {
+                        return SummarizeResult {
+                            summary: None,
+                            summarised_messages: msg_count,
+                            tokens_before,
+                            tokens_after,
+                            fell_back: true,
+                            error: Some(
+                                "Cannot compute compression ratio: no tokens before summary".into(),
+                            ),
+                        };
+                    }
                     let compression = 1.0 - (tokens_after as f64 / tokens_before as f64);
 
                     if compression < config.min_compression_ratio {
@@ -431,5 +443,58 @@ mod tests {
         assert!(config.model.is_empty());
         assert_eq!(config.max_summary_tokens, 500);
         assert_eq!(config.min_turns_for_summary, 6);
+    }
+
+    #[tokio::test]
+    async fn test_zero_tokens_before_avoids_divide_by_zero() {
+        // Regression for C12: summarizer used to divide by tokens_before,
+        // panicking when the conversation estimated to zero tokens.
+        use wiremock::{
+            matchers::{method, path},
+            Mock, MockServer, ResponseTemplate,
+        };
+
+        let server = MockServer::start().await;
+        let response = ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "message": { "content": "short summary" }
+        }));
+        Mock::given(method("POST"))
+            .and(path("/api/chat"))
+            .respond_with(response)
+            .mount(&server)
+            .await;
+
+        // Two one-character messages estimate to zero tokens (len / 4 == 0).
+        let messages = vec![
+            Message {
+                role: Role::User,
+                content: "a".into(),
+                ..Default::default()
+            },
+            Message {
+                role: Role::Assistant,
+                content: "b".into(),
+                ..Default::default()
+            },
+        ];
+        assert_eq!(estimate_token_count(&messages), 0);
+
+        let config = SummarizerConfig {
+            model: "test".into(),
+            min_turns_for_summary: 1,
+            ..Default::default()
+        };
+        let result = summarize_conversation(&config, &messages, &server.uri()).await;
+        assert!(result.fell_back);
+        assert_eq!(result.tokens_before, 0);
+        assert!(
+            result
+                .error
+                .as_ref()
+                .expect("error set")
+                .contains("Cannot compute compression ratio"),
+            "got {:?}",
+            result.error
+        );
     }
 }

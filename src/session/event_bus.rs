@@ -14,7 +14,7 @@
 /// Verifiers register as handlers on specific event kinds. A lint verifier
 /// registers on `LintRun` and `FileEdit`, a security verifier on `BashExec`
 /// and `FileWrite`. See [`crate::session::verifier`].
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -276,6 +276,10 @@ struct BusInner {
     ///
     /// Key format: "{handler_id}:{kind_label}:{idem_key}"
     idem_cache: HashSet<(String, EventKind, u64)>,
+    /// Insertion order of idempotency-cache entries. Kept in sync with
+    /// `idem_cache` so trimming is deterministic (oldest-first) rather
+    /// than relying on HashSet iteration order.
+    idem_order: VecDeque<(String, EventKind, u64)>,
     /// Max idempotency-cache entries. When exceeded the oldest entries are
     /// dropped. The cache is bounded to prevent unbounded growth during long
     /// sessions that produce huge numbers of unique events.
@@ -290,7 +294,7 @@ struct BusInner {
 #[derive(Debug, Clone)]
 pub struct StoredEvent {
     pub kind: EventKind,
-    pub event: BusEvent,
+    pub event: Arc<BusEvent>,
     pub timestamp: Instant,
     pub idem_key: u64,
     pub handled_by: Vec<String>,
@@ -315,6 +319,7 @@ impl EventBus {
             inner: Arc::new(Mutex::new(BusInner {
                 handlers: HashMap::new(),
                 idem_cache: HashSet::new(),
+                idem_order: VecDeque::new(),
                 max_idem_cache: Self::DEFAULT_MAX_IDEM_CACHE,
                 history: Vec::new(),
                 max_history: 100,
@@ -329,7 +334,23 @@ impl EventBus {
             inner: Arc::new(Mutex::new(BusInner {
                 handlers: HashMap::new(),
                 idem_cache: HashSet::new(),
+                idem_order: VecDeque::new(),
                 max_idem_cache: Self::DEFAULT_MAX_IDEM_CACHE,
+                history: Vec::new(),
+                max_history,
+            })),
+            in_flight: Arc::new(Mutex::new(HashSet::new())),
+        }
+    }
+
+    #[cfg(test)]
+    fn with_limits(max_idem_cache: usize, max_history: usize) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(BusInner {
+                handlers: HashMap::new(),
+                idem_cache: HashSet::new(),
+                idem_order: VecDeque::new(),
+                max_idem_cache,
                 history: Vec::new(),
                 max_history,
             })),
@@ -359,6 +380,7 @@ impl EventBus {
         if existed {
             // Remove all idem-cache entries for this handler
             inner.idem_cache.retain(|(hid, _, _)| hid != handler_id);
+            inner.idem_order.retain(|(hid, _, _)| hid != handler_id);
         }
         existed
     }
@@ -390,7 +412,9 @@ impl EventBus {
             }
         }
 
-        let result = self.dispatch_inner(event, kind, idem_key).await;
+        let result = self
+            .dispatch_inner(Arc::new(event.clone()), kind, idem_key)
+            .await;
 
         // Release in-flight guard
         {
@@ -404,7 +428,7 @@ impl EventBus {
     /// Inner dispatch (holds in-flight guard already).
     async fn dispatch_inner(
         &self,
-        event: &BusEvent,
+        event: Arc<BusEvent>,
         kind: EventKind,
         idem_key: u64,
     ) -> Vec<HandlerResult> {
@@ -430,7 +454,7 @@ impl EventBus {
         let mut handled_by = Vec::new();
 
         for handler in &matching {
-            let result = handler.handle(event).await;
+            let result = handler.handle(&event).await;
             let handler_id = handler.id().to_string();
             handled_by.push(handler_id.clone());
             results.push(result);
@@ -439,23 +463,26 @@ impl EventBus {
         // Re-acquire to update idem cache and history
         let mut inner = self.inner.lock().await;
         for handler_id in &handled_by {
-            inner
-                .idem_cache
-                .insert((handler_id.clone(), kind, idem_key));
+            let key = (handler_id.clone(), kind, idem_key);
+            if inner.idem_cache.insert(key.clone()) {
+                inner.idem_order.push_back(key);
+            }
         }
-        // Trim idempotency cache if it has grown beyond its bound. HashSet
-        // is unordered, so we rebuild it keeping the most recent entries
-        // by construction order (the insertion order above plus any newer
-        // ones added after this event). In practice the cache is large
-        // enough that churn is infrequent.
-        if inner.idem_cache.len() > inner.max_idem_cache {
-            let mut retained: Vec<_> = inner.idem_cache.drain().collect();
-            let excess = retained.len().saturating_sub(inner.max_idem_cache);
-            retained.drain(..excess);
-            inner.idem_cache.extend(retained);
+        // Trim idempotency cache if it has grown beyond its bound. The
+        // companion `idem_order` queue records insertion order, so we drop
+        // the oldest entries deterministically instead of relying on
+        // HashSet iteration order.
+        while inner.idem_cache.len() > inner.max_idem_cache {
+            if let Some(key) = inner.idem_order.pop_front() {
+                inner.idem_cache.remove(&key);
+            } else {
+                break;
+            }
         }
 
-        // Trim history and store
+        // Trim history and store. Keep the event behind an `Arc` so the
+        // in-memory history does not clone large owned payloads on every
+        // `recent_events` call (P8).
         inner.history.push(StoredEvent {
             kind,
             event: event.clone(),
@@ -493,6 +520,7 @@ impl EventBus {
         let mut inner = self.inner.lock().await;
         inner.handlers.clear();
         inner.idem_cache.clear();
+        inner.idem_order.clear();
         inner.history.clear();
     }
 
@@ -500,6 +528,7 @@ impl EventBus {
     pub async fn clear_idem_cache(&self) {
         let mut inner = self.inner.lock().await;
         inner.idem_cache.clear();
+        inner.idem_order.clear();
     }
 
     /// Return registered handler IDs.
@@ -826,5 +855,50 @@ mod tests {
         bus.clear_idem_cache().await;
         let _ = bus.dispatch(&event).await;
         assert_eq!(handler.call_count.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn test_idem_cache_trims_oldest_entries_first() {
+        // Regression for C11: HashSet iteration order made eviction random.
+        // With the ordered queue, the oldest entries are evicted first.
+        let bus = EventBus::with_limits(2, 10);
+        let handler = Arc::new(CountingHandler::new("trim-test", vec![EventKind::FileRead]));
+        bus.register(handler.clone()).await.unwrap();
+
+        // Dispatch three distinct events. Cache size is 2, so the first one
+        // is the oldest and must be evicted.
+        let e1 = BusEvent::FileRead(FileReadEvent {
+            path: PathBuf::from("/tmp/e1.rs"),
+            size_bytes: 100,
+            truncated: false,
+        });
+        let e2 = BusEvent::FileRead(FileReadEvent {
+            path: PathBuf::from("/tmp/e2.rs"),
+            size_bytes: 200,
+            truncated: false,
+        });
+        let e3 = BusEvent::FileRead(FileReadEvent {
+            path: PathBuf::from("/tmp/e3.rs"),
+            size_bytes: 300,
+            truncated: false,
+        });
+
+        let _ = bus.dispatch(&e1).await;
+        let _ = bus.dispatch(&e2).await;
+        let _ = bus.dispatch(&e3).await;
+        assert_eq!(handler.call_count.load(Ordering::SeqCst), 3);
+
+        // e1 is the oldest entry and should have been evicted when e3 was
+        // inserted, so re-dispatching e1 calls the handler again.
+        let _ = bus.dispatch(&e1).await;
+        assert_eq!(handler.call_count.load(Ordering::SeqCst), 4);
+
+        // Re-dispatching the just-reinserted e1 is idempotent.
+        let _ = bus.dispatch(&e1).await;
+        assert_eq!(handler.call_count.load(Ordering::SeqCst), 4);
+
+        // e3 was newer than e1 and should still be retained, so it is skipped.
+        let _ = bus.dispatch(&e3).await;
+        assert_eq!(handler.call_count.load(Ordering::SeqCst), 4);
     }
 }

@@ -327,19 +327,44 @@ impl MemoryStore {
 /// Returns `(frontmatter_map, body_text)` or `None` if no valid frontmatter
 /// is found. Handles the subset of YAML used by memory files (simple
 /// key: value pairs and one level of nested `metadata:` block).
+///
+/// The closing `---` is only recognized when it appears on its own line, so
+/// URLs or prose containing `---` inside a value do not prematurely end the
+/// frontmatter.
 pub fn parse_frontmatter(
     content: &str,
 ) -> Option<(std::collections::HashMap<String, String>, String)> {
-    let content = content.trim();
-    if !content.starts_with("---") {
+    let trimmed = content.trim();
+    let mut lines = trimmed.lines();
+
+    // Opening delimiter must be the first non-empty line.
+    let first = lines.by_ref().find(|l| !l.trim().is_empty())?;
+    if first.trim() != "---" {
         return None;
     }
 
-    let rest = &content[3..];
-    let end = rest.find("---")?;
+    let mut frontmatter_lines: Vec<&str> = Vec::new();
+    let mut body_lines: Vec<&str> = Vec::new();
+    let mut in_body = false;
 
-    let frontmatter_text = &rest[..end].trim();
-    let body = &rest[end + 3..];
+    for line in lines {
+        if !in_body && line.trim() == "---" {
+            in_body = true;
+            continue;
+        }
+        if in_body {
+            body_lines.push(line);
+        } else {
+            frontmatter_lines.push(line);
+        }
+    }
+
+    if !in_body {
+        return None;
+    }
+
+    let frontmatter_text = frontmatter_lines.join("\n");
+    let body = body_lines.join("\n").trim().to_string();
 
     let mut map = std::collections::HashMap::new();
     let mut in_metadata = false;
@@ -355,15 +380,13 @@ pub fn parse_frontmatter(
         if in_metadata {
             if let Some(indented) = line.strip_prefix("  ").or_else(|| line.strip_prefix('\t')) {
                 let trimmed = indented.trim();
-                if let Some((k, v)) = trimmed.split_once(':') {
-                    metadata_lines.push(format!("{}: {}", k.trim(), v.trim()));
+                if let Some((k, v)) = split_key_value(trimmed) {
+                    metadata_lines.push(format!("{k}: {v}"));
                 }
             } else {
                 in_metadata = false;
                 // Fall through: this line is a new top-level key
-                if let Some((key, value)) = line.trim().split_once(':') {
-                    let key = key.trim().to_string();
-                    let value = value.trim().to_string();
+                if let Some((key, value)) = split_key_value(line.trim()) {
                     if key == "metadata" && value.is_empty() {
                         in_metadata = true;
                         continue;
@@ -375,9 +398,7 @@ pub fn parse_frontmatter(
         }
 
         let trimmed = line.trim();
-        if let Some((key, value)) = trimmed.split_once(':') {
-            let key = key.trim().to_string();
-            let value = value.trim().to_string();
+        if let Some((key, value)) = split_key_value(trimmed) {
             if key == "metadata" && value.is_empty() {
                 in_metadata = true;
                 continue;
@@ -390,7 +411,25 @@ pub fn parse_frontmatter(
         map.insert("metadata".into(), metadata_lines.join("\n"));
     }
 
-    Some((map, body.trim().to_string()))
+    Some((map, body))
+}
+
+/// Split a simple `key: value` line at the first colon that is not part of
+/// a `://` URL scheme separator. This prevents values such as
+/// `https://example.com:8080/foo` from being truncated.
+fn split_key_value(line: &str) -> Option<(String, String)> {
+    for (i, _) in line.match_indices(':') {
+        if line[i + 1..].starts_with("//") {
+            continue;
+        }
+        let key = line[..i].trim().to_string();
+        let value = line[i + 1..].trim().to_string();
+        if key.is_empty() {
+            return None;
+        }
+        return Some((key, value));
+    }
+    None
 }
 
 /// Tokenise free text into lowercase, alphanumeric terms.
@@ -774,5 +813,26 @@ mod tests {
         let block = store.to_prompt_block_for_facts(&facts[..1]);
         assert!(block.contains("a"));
         assert!(!block.contains("b"));
+    }
+
+    #[test]
+    fn parse_frontmatter_ignores_delimiter_inside_url() {
+        // Regression for C27: the old parser used rest.find("---"), so a URL
+        // containing three dashes truncated the frontmatter.
+        let content = "---\nname: foo\ndescription: https://example.com/a---b\n---\n\nbody";
+        let (map, body) = parse_frontmatter(content).unwrap();
+        assert_eq!(map.get("name").unwrap(), "foo");
+        assert_eq!(map.get("description").unwrap(), "https://example.com/a---b");
+        assert_eq!(body, "body");
+    }
+
+    #[test]
+    fn parse_frontmatter_preserves_url_with_port() {
+        // Regression for C27: split_once(':') used to truncate URLs that
+        // contain a port number.
+        let content = "---\nlink: https://example.com:8080/path\n---\n\nbody";
+        let (map, body) = parse_frontmatter(content).unwrap();
+        assert_eq!(map.get("link").unwrap(), "https://example.com:8080/path");
+        assert_eq!(body, "body");
     }
 }

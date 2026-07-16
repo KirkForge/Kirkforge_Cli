@@ -632,10 +632,12 @@ pub async fn notify_completed_jobs(state: &mut AppState) -> bool {
                 }
                 _ => continue,
             };
-            state.messages.push(crate::tui::app::ConversationEntry::new(
-                "system",
-                format!("{} — `{}`", status_icon, job.command),
-            ));
+            state
+                .messages
+                .push_back(crate::tui::app::ConversationEntry::new(
+                    "system",
+                    format!("{} — `{}`", status_icon, job.command),
+                ));
             any = true;
         }
     }
@@ -673,17 +675,19 @@ pub async fn notify_completed_scheduled_jobs(state: &mut AppState) -> bool {
                     RunStatus::Failure => "❌",
                     RunStatus::Cancelled => "🚫",
                 };
-                state.messages.push(crate::tui::app::ConversationEntry::new(
-                    "system",
-                    format!(
-                        "{} Scheduled job {} finished: {} — {} (exit {:?})",
-                        icon,
-                        job.id,
-                        run.status.label(),
-                        run.summary,
-                        run.exit_code
-                    ),
-                ));
+                state
+                    .messages
+                    .push_back(crate::tui::app::ConversationEntry::new(
+                        "system",
+                        format!(
+                            "{} Scheduled job {} finished: {} — {} (exit {:?})",
+                            icon,
+                            job.id,
+                            run.status.label(),
+                            run.summary,
+                            run.exit_code
+                        ),
+                    ));
                 any = true;
             }
         }
@@ -838,7 +842,7 @@ mod tests {
         );
 
         assert!(notify_completed_scheduled_jobs(&mut state).await);
-        let msg = state.messages.last().unwrap().content.clone();
+        let msg = state.messages.back().unwrap().content.clone();
         assert!(msg.contains(&id), "notification missing id: {msg}");
         assert!(
             msg.contains("success"),

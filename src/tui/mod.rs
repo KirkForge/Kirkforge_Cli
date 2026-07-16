@@ -184,7 +184,7 @@ pub async fn run_tui(
         state.unsandboxed = !path_guard.is_sandboxed();
     }
     if state.unsandboxed {
-        state.messages.push(crate::tui::app::ConversationEntry::new(
+        state.messages.push_back(crate::tui::app::ConversationEntry::new(
             "system",
             "⚠️  PathGuard is unsandboxed: no `sandbox_dir` or `allowed_write_dirs` configured. \
              Model-driven writes are not restricted to a directory tree. Set `sandbox_dir` in config.toml or via KIRKFORGE_SANDBOX_DIR, or list `allowed_write_dirs`.",
@@ -781,7 +781,7 @@ async fn run_event_loop(
         // near zero instead of waking the render path at 4 Hz.
         if dirty_from_tick {
             let spinner_visible = state.is_generating
-                && state.messages.last().map(|m| m.role.as_str()) != Some("assistant");
+                && state.messages.back().map(|m| m.role.as_str()) != Some("assistant");
             if spinner_visible {
                 state.spinner_tick = state.spinner_tick.wrapping_add(1);
                 state.mark_dirty();
@@ -892,7 +892,7 @@ async fn handle_persona_complete(
     state.persona_cancel = None;
 
     if !result.success {
-        state.messages.push(ConversationEntry::new(
+        state.messages.push_back(ConversationEntry::new(
             "system",
             format!(
                 "{} persona failed: {}",
@@ -906,7 +906,7 @@ async fn handle_persona_complete(
     let parent_path = match state.log_path.clone() {
         Some(p) => p,
         None => {
-            state.messages.push(ConversationEntry::new(
+            state.messages.push_back(ConversationEntry::new(
                 "system",
                 "Cannot merge persona result: no session log path.".to_string(),
             ));
@@ -917,7 +917,7 @@ async fn handle_persona_complete(
     let mut parent_log = match ConversationLog::open(parent_path.clone()) {
         Ok((l, _outcome)) => l,
         Err(e) => {
-            state.messages.push(ConversationEntry::new(
+            state.messages.push_back(ConversationEntry::new(
                 "system",
                 format!("Cannot open session log: {e}"),
             ));
@@ -934,7 +934,7 @@ async fn handle_persona_complete(
         content: marker,
         ..Default::default()
     }) {
-        state.messages.push(ConversationEntry::new(
+        state.messages.push_back(ConversationEntry::new(
             "system",
             format!("Failed to merge persona: {e}"),
         ));
@@ -944,7 +944,7 @@ async fn handle_persona_complete(
     state.messages = messages_to_entries(parent_log.all());
 
     if resume_tx.send(parent_log).is_err() {
-        state.messages.push(ConversationEntry::new(
+        state.messages.push_back(ConversationEntry::new(
             "system",
             "Executor gone; persona result saved to log only.".to_string(),
         ));
@@ -953,7 +953,7 @@ async fn handle_persona_complete(
 
     if result.kind == PersonaKind::Plan {
         crate::send_or_warn!(plan_tx.send(true), "plan-mode channel receiver dropped");
-        state.messages.push(ConversationEntry::new(
+        state.messages.push_back(ConversationEntry::new(
             "system",
             "📐 Plan complete. Type /implement to allow edits and continue.".to_string(),
         ));
@@ -1169,7 +1169,7 @@ mod tests {
         // UI shows the error, not a merged summary.
         assert!(state
             .messages
-            .last()
+            .back()
             .unwrap()
             .content
             .contains("coder persona failed"));

@@ -111,20 +111,19 @@ impl Tool for ReadFile {
 
         let display = if offset == 0 && end >= raw_total {
             if minify {
-                let full_minified = crate::shared::minify::minify_source(&path, &raw_content);
                 let body = if self.minify_write_side {
                     let lang = crate::shared::minify::lang_name_for_ext(
                         path.extension().and_then(|e| e.to_str()).unwrap_or("txt"),
                     );
-                    crate::shared::minify::wrap_minified_envelope(&lang, &full_minified)
+                    crate::shared::minify::wrap_minified_envelope(&lang, &selected)
                 } else {
-                    full_minified.clone()
+                    selected.clone()
                 };
                 format!(
                     "{} (minified, was {} bytes → now {} bytes)\n{}",
                     path.display(),
                     raw_content.len(),
-                    full_minified.len(),
+                    selected.len(),
                     body,
                 )
             } else {
@@ -154,5 +153,59 @@ impl Tool for ReadFile {
             content: display,
             truncated,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tools::Tool;
+    use serde_json::json;
+    use std::io::Write;
+
+    #[tokio::test]
+    async fn whole_file_minify_computes_once_and_includes_byte_stats() {
+        // Regression for C16: whole-file minified reads used to call
+        // minify_source twice (once for the selected slice and again for
+        // the full-file stats/body). The output must report the actual
+        // minified size and include the minified body.
+        let tmp = std::env::temp_dir().join(format!(
+            "kirkforge_read_file_minify_test_{}.rs",
+            std::process::id()
+        ));
+        let source = "// header\npub fn add(a: i32, b: i32) -> i32 { a + b }\n";
+        {
+            let mut f = std::fs::File::create(&tmp).unwrap();
+            f.write_all(source.as_bytes()).unwrap();
+        }
+
+        let tool = ReadFile::new(PathGuard::default(), false);
+        let outcome = tool
+            .run(
+                &ToolContext::new(),
+                json!({
+                    "path": tmp.to_string_lossy(),
+                    "minify": true,
+                }),
+            )
+            .await;
+
+        std::fs::remove_file(&tmp).ok();
+
+        let ToolOutcome::FileContent { content, .. } = outcome else {
+            panic!("expected FileContent, got {outcome:?}");
+        };
+        assert!(
+            content.contains("(minified, was"),
+            "missing minification header: {content}"
+        );
+        assert!(
+            content.contains("pub fn add"),
+            "minified body missing source content: {content}"
+        );
+        assert!(
+            !content.contains("// header"),
+            "comment should have been stripped: {content}"
+        );
     }
 }

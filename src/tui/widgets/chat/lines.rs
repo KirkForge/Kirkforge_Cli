@@ -344,7 +344,7 @@ pub(super) fn build_chat_lines(
     }
 
     // Loading indicator.
-    if state.is_generating && state.messages.last().map(|m| m.role.as_str()) != Some("assistant") {
+    if state.is_generating && state.messages.back().map(|m| m.role.as_str()) != Some("assistant") {
         lines.push(Line::from(vec![Span::styled(
             format!(" ⏳ {} ", state.spinner_char()),
             Style::default()

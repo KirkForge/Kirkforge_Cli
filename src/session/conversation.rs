@@ -435,19 +435,36 @@ impl ConversationLog {
 /// line but zero parseable messages is treated as corrupt so callers can
 /// fall back to checkpoint recovery. A file that is empty or contains only
 /// whitespace is treated as an empty log.
+///
+/// Parses line-by-line from a buffered reader instead of slurping the whole
+/// file into a single `String`, so opening a very large log does not allocate
+/// more than one line at a time (P9).
 fn load_messages(path: &std::path::Path) -> anyhow::Result<(Vec<Message>, bool)> {
-    let content = std::fs::read_to_string(path)
-        .with_context(|| format!("read conversation log {}", path.display()))?;
+    use std::io::{BufRead, BufReader};
+    let file = std::fs::File::open(path)
+        .with_context(|| format!("open conversation log {}", path.display()))?;
+    let mut reader = BufReader::new(file);
     let mut messages = Vec::new();
     let mut corrupt = false;
-    for line in content.lines().filter(|l| !l.trim().is_empty()) {
-        match serde_json::from_str::<Message>(line) {
+    let mut line = String::new();
+    loop {
+        line.clear();
+        let n = reader
+            .read_line(&mut line)
+            .with_context(|| format!("read conversation log {}", path.display()))?;
+        if n == 0 {
+            break;
+        }
+        if line.trim().is_empty() {
+            continue;
+        }
+        match serde_json::from_str::<Message>(&line) {
             Ok(m) => messages.push(m),
             Err(e) => {
                 corrupt = true;
                 tracing::warn!(
                     path = %path.display(),
-                    line = %line,
+                    line = %line.trim(),
                     error = %e,
                     "skipping corrupt conversation log line"
                 );

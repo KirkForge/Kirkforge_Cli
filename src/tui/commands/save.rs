@@ -18,7 +18,7 @@ use std::path::PathBuf;
 ///
 /// This is async so the path-guard write check (which may probe git) does
 /// not block the TUI event loop.
-pub async fn handle_save_command(args: &str, state: &AppState) -> String {
+pub async fn handle_save_command(args: &str, state: &mut AppState) -> String {
     let path = resolve_save_path(args, state);
 
     // Apply the same PathGuard write check that write_file/edit_file go
@@ -33,7 +33,10 @@ pub async fn handle_save_command(args: &str, state: &AppState) -> String {
         return format!("🔒 Access denied: {msg}");
     }
 
-    let transcript = crate::tui::transcript::format_transcript(&state.session_id, &state.messages);
+    let transcript = crate::tui::transcript::format_transcript(
+        &state.session_id,
+        state.messages.make_contiguous(),
+    );
 
     if let Err(e) = ensure_parent_dir(&path) {
         return format!(
@@ -103,8 +106,8 @@ mod tests {
     async fn save_writes_file_next_to_log() {
         let tmp = tempfile::tempdir().unwrap();
         let log = tmp.path().join("2026-06-22-session-01.conv.ndjson");
-        let state = test_state_with_log(log);
-        let msg = handle_save_command("", &state).await;
+        let mut state = test_state_with_log(log);
+        let msg = handle_save_command("", &mut state).await;
         assert!(msg.starts_with("💾 Saved transcript"));
         let expected = tmp.path().join("2026-06-22-session-01.md");
         assert!(
@@ -120,8 +123,8 @@ mod tests {
     async fn save_writes_file_to_explicit_path() {
         let tmp = tempfile::tempdir().unwrap();
         let target = tmp.path().join("my-chat.md");
-        let state = AppState::new(Arc::new(std::sync::RwLock::new(Config::default())));
-        let msg = handle_save_command(target.to_str().unwrap(), &state).await;
+        let mut state = AppState::new(Arc::new(std::sync::RwLock::new(Config::default())));
+        let msg = handle_save_command(target.to_str().unwrap(), &mut state).await;
         assert!(msg.starts_with("💾 Saved transcript"));
         assert!(target.exists());
     }
@@ -133,12 +136,14 @@ mod tests {
         let mut state = test_state_with_log(log);
         state
             .messages
-            .push(crate::tui::app::ConversationEntry::new("user", "hi"));
-        state.messages.push(crate::tui::app::ConversationEntry::new(
-            "assistant",
-            "hello",
-        ));
-        let _msg = handle_save_command("", &state).await;
+            .push_back(crate::tui::app::ConversationEntry::new("user", "hi"));
+        state
+            .messages
+            .push_back(crate::tui::app::ConversationEntry::new(
+                "assistant",
+                "hello",
+            ));
+        let _msg = handle_save_command("", &mut state).await;
         let expected = tmp.path().join("s.md");
         let content = std::fs::read_to_string(&expected).unwrap();
         assert!(content.contains("hi"));

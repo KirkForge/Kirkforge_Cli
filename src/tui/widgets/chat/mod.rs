@@ -112,7 +112,7 @@ pub fn render_chat(f: &mut Frame, area: Rect, state: &mut AppState) {
     }
 
     // Loading indicator: show a dim spinner when waiting for first token
-    if state.is_generating && state.messages.last().map(|m| m.role.as_str()) != Some("assistant") {
+    if state.is_generating && state.messages.back().map(|m| m.role.as_str()) != Some("assistant") {
         lines.push(Line::from(vec![Span::styled(
             format!(" ⏳ {} ", state.spinner_char()),
             Style::default()
@@ -500,12 +500,13 @@ mod tests {
         state.last_content_width = 80;
         state
             .messages
-            .push(entry_at("assistant", "check the tool output", 9, 14));
+            .push_back(entry_at("assistant", "check the tool output", 9, 14));
         state
             .messages
-            .push(tool_entry("tool summary", "hidden needle value", 9, 14));
+            .push_back(tool_entry("tool summary", "hidden needle value", 9, 14));
         state.search_query = "needle".into();
-        state.search_matches = crate::tui::search::compute_matches(&state.messages, "needle");
+        state.search_matches =
+            crate::tui::search::compute_matches(state.messages.make_contiguous(), "needle");
         state.search_match_idx = 0;
 
         let offset = scroll_offset_for_search_match(&mut state, 80).expect("match exists");
@@ -533,9 +534,10 @@ mod tests {
         state.last_content_width = 80;
         state
             .messages
-            .push(tool_entry("needle summary", "hidden body", 9, 14));
+            .push_back(tool_entry("needle summary", "hidden body", 9, 14));
         state.search_query = "needle".into();
-        state.search_matches = crate::tui::search::compute_matches(&state.messages, "needle");
+        state.search_matches =
+            crate::tui::search::compute_matches(state.messages.make_contiguous(), "needle");
         state.search_match_idx = 0;
 
         let offset = scroll_offset_for_search_match(&mut state, 80).expect("match exists");
@@ -565,7 +567,9 @@ mod tests {
             model: "test".into(),
             since: std::time::Instant::now(),
         });
-        state.messages.push(entry_at("assistant", "hello", 9, 14));
+        state
+            .messages
+            .push_back(entry_at("assistant", "hello", 9, 14));
 
         let buffer = render_state(&mut state, 40, 10);
         let content_row = buffer_cell_text(&buffer, 1);
@@ -582,7 +586,9 @@ mod tests {
     #[test]
     fn disconnected_state_shows_banner() {
         let mut state = make_state(ConnectionState::Disconnected);
-        state.messages.push(entry_at("assistant", "hello", 9, 14));
+        state
+            .messages
+            .push_back(entry_at("assistant", "hello", 9, 14));
 
         let buffer = render_state(&mut state, 40, 10);
         let content_row = buffer_cell_text(&buffer, 1);
@@ -614,8 +620,8 @@ mod tests {
             model: "test".into(),
             since: std::time::Instant::now(),
         });
-        state.messages.push(entry_at("user", "hi", 9, 14));
-        state.messages.push(entry_at("assistant", "he", 9, 14));
+        state.messages.push_back(entry_at("user", "hi", 9, 14));
+        state.messages.push_back(entry_at("assistant", "he", 9, 14));
         state.is_generating = true;
 
         // First render — primes the cache for the completed user message.
@@ -633,7 +639,7 @@ mod tests {
         );
 
         // Simulate a streaming token appended to the last assistant message.
-        let entry = state.messages.last_mut().unwrap();
+        let entry = state.messages.back_mut().unwrap();
         entry.content.push_str("llo");
         entry.bump_version();
 
@@ -653,8 +659,8 @@ mod tests {
         });
         state
             .messages
-            .push(entry_at("user", "word ".repeat(20).trim(), 9, 14));
-        state.messages.push(entry_at("assistant", "ok", 9, 14));
+            .push_back(entry_at("user", "word ".repeat(20).trim(), 9, 14));
+        state.messages.push_back(entry_at("assistant", "ok", 9, 14));
 
         // Count rows between the user header and the assistant header
         // that contain the repeated "word" content.
@@ -762,8 +768,8 @@ mod tests {
         });
         state
             .messages
-            .push(entry_at("user", "needle in haystack", 9, 14));
-        state.messages.push(entry_at("assistant", "ok", 9, 14));
+            .push_back(entry_at("user", "needle in haystack", 9, 14));
+        state.messages.push_back(entry_at("assistant", "ok", 9, 14));
 
         // Render without query first.
         render_state(&mut state, 80, 10);
@@ -794,7 +800,7 @@ mod tests {
         });
         state
             .messages
-            .push(ConversationEntry::tool("git status", "line1\nline2"));
+            .push_back(ConversationEntry::tool("git status", "line1\nline2"));
 
         // Default: tool_collapsed is true, so the entry renders as one line.
         let buffer_collapsed = render_state(&mut state, 40, 10);
@@ -834,7 +840,7 @@ mod tests {
         });
         state
             .messages
-            .push(entry_at("assistant", "this is a long reply", 9, 14));
+            .push_back(entry_at("assistant", "this is a long reply", 9, 14));
         state.collapsed_messages.insert(0);
 
         let buffer = render_state(&mut state, 40, 10);
@@ -865,7 +871,7 @@ mod tests {
         });
         state
             .messages
-            .push(entry_at("user", "a very long user question", 9, 14));
+            .push_back(entry_at("user", "a very long user question", 9, 14));
         state.collapsed_messages.insert(0);
 
         let buffer = render_state(&mut state, 40, 10);
@@ -891,8 +897,10 @@ mod tests {
             model: "test".into(),
             since: std::time::Instant::now(),
         });
-        state.messages.push(entry_at("user", "hi", 9, 14));
-        state.messages.push(entry_at("assistant", "typing", 9, 14));
+        state.messages.push_back(entry_at("user", "hi", 9, 14));
+        state
+            .messages
+            .push_back(entry_at("assistant", "typing", 9, 14));
         state.is_generating = true;
         // Even if the user collapsed the last assistant message while it
         // is streaming, it must stay expanded so tokens remain visible.
@@ -918,7 +926,7 @@ mod tests {
             model: "test".into(),
             since: std::time::Instant::now(),
         });
-        state.messages.push(entry_at("assistant", "hi", 9, 14));
+        state.messages.push_back(entry_at("assistant", "hi", 9, 14));
         state.thinking_buffer.push("step 1".to_string());
         // thinking_panel_visible defaults to false.
 
@@ -938,7 +946,7 @@ mod tests {
             model: "test".into(),
             since: std::time::Instant::now(),
         });
-        state.messages.push(entry_at("assistant", "hi", 9, 14));
+        state.messages.push_back(entry_at("assistant", "hi", 9, 14));
         state.thinking_buffer.push("step 1".to_string());
         state.thinking_panel_visible = true;
 
@@ -964,8 +972,8 @@ mod tests {
             model: "test".into(),
             since: std::time::Instant::now(),
         });
-        state.messages.push(entry_at("user", "hello", 9, 14));
-        state.messages.push(entry_at("assistant", "hi", 9, 14));
+        state.messages.push_back(entry_at("user", "hello", 9, 14));
+        state.messages.push_back(entry_at("assistant", "hi", 9, 14));
         state.thinking_buffer.push("step 1".to_string());
         state.thinking_panel_visible = true;
 

@@ -100,9 +100,11 @@ pub async fn handle_bang_approval_key(key: KeyEvent, state: &mut AppState) {
         // same helper as the direct (non-approval) `!` path so the
         // collapse behaviour is identical.
         let (summary, full) = crate::tui::keys::split_bang_summary(&result);
-        state.messages.push(ConversationEntry::tool(summary, full));
+        state
+            .messages
+            .push_back(ConversationEntry::tool(summary, full));
     } else {
-        state.messages.push(ConversationEntry::new(
+        state.messages.push_back(ConversationEntry::new(
             "system",
             format!("🚫 Cancelled: !{}", bang.cmd),
         ));

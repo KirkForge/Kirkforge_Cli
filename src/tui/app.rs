@@ -4,7 +4,7 @@ use crate::session::skills::SkillRegistry;
 use crate::shared::{ModelInfo, SharedConfig};
 use kirkforge_plugin_host::PluginRegistry;
 use ratatui::text::Line;
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -91,7 +91,7 @@ impl ChatRenderCache {
 /// Application state — single source of truth for the TUI.
 pub struct AppState {
     /// Conversation messages
-    pub messages: Vec<ConversationEntry>,
+    pub messages: VecDeque<ConversationEntry>,
 
     /// Current user input buffer
     pub input: String,
@@ -364,7 +364,7 @@ pub struct PullProgress {
 impl AppState {
     pub fn new(config: SharedConfig) -> Self {
         Self {
-            messages: Vec::new(),
+            messages: VecDeque::new(),
             input: String::new(),
             cursor_position: 0,
             connection: ConnectionState::Disconnected,

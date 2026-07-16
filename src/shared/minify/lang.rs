@@ -72,6 +72,7 @@ fn strip_test_blocks(source: &str) -> String {
 
     for line in source.lines() {
         let trimmed = line.trim();
+        let mut suppress_line = in_test_block;
 
         // Detect #[cfg(test)] or #[test] attributes — only enter once
         if !in_test_block
@@ -100,13 +101,14 @@ fn strip_test_blocks(source: &str) -> String {
                     if in_test_block && test_started && brace_depth < test_depth {
                         in_test_block = false;
                         test_started = false;
+                        suppress_line = true;
                     }
                 }
                 _ => {}
             }
         }
 
-        if in_test_block {
+        if suppress_line {
             continue;
         }
 
@@ -503,4 +505,62 @@ fn minify_markdown(source: &str) -> String {
         out.push('\n');
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_strip_test_blocks_swallows_closing_brace() {
+        // Regression for C13: the line containing the matching closing
+        // brace of a stripped test block used to leak into the minified
+        // output.
+        let source = r#"pub fn add(a: i32, b: i32) -> i32 { a + b }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_add() {
+        assert_eq!(add(1, 2), 3);
+    }
+}
+
+pub fn sub(a: i32, b: i32) -> i32 { a - b }
+"#;
+        let out = strip_test_blocks(source);
+        assert!(!out.contains("mod tests"));
+        assert!(!out.contains("assert_eq"));
+        assert!(
+            !out.lines().any(|l| l.trim() == "}"),
+            "standalone closing brace leaked: {out}"
+        );
+        assert!(out.contains("pub fn add"));
+        assert!(out.contains("pub fn sub"));
+    }
+
+    #[test]
+    fn test_strip_test_blocks_nested_braces() {
+        let source = r#"#[cfg(test)]
+mod tests {
+    fn helper(x: i32) {
+        if x > 0 {
+            println!("ok");
+        }
+    }
+
+    #[test]
+    fn demo() {
+        helper(1);
+    }
+}
+
+pub const X: i32 = 1;
+"#;
+        let out = strip_test_blocks(source);
+        assert!(!out.contains("mod tests"));
+        assert!(!out.contains("helper"));
+        assert!(!out.contains("demo"));
+        assert!(out.contains("pub const X"));
+    }
 }

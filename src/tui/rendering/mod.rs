@@ -460,7 +460,8 @@ pub fn render_markdown_lines_with_query(
             }
             Event::Rule => {
                 flush_current_with_prefix(&mut lines, &mut current_line, blockquote_depth);
-                lines.push(Line::from("─".repeat(40)));
+                let rule_width = content_width.max(1);
+                lines.push(Line::from("─".repeat(rule_width)));
                 push_blank_with_depth(&mut lines, blockquote_depth);
             }
             Event::Html(h) => {
@@ -1089,5 +1090,17 @@ mod tests {
             lines[0].spans[1].style.bg == Some(Color::Yellow),
             "search match should have yellow background"
         );
+    }
+
+    /// Horizontal rules should span the available content width, not a
+    /// hard-coded 40 columns (P6).
+    #[test]
+    fn test_markdown_rule_scales_with_content_width() {
+        let lines = render_markdown_lines_with_query("before\n\n---\n\nafter", "", 30);
+        let rule_line = lines
+            .iter()
+            .find(|l| l.spans.len() == 1 && l.spans[0].content.starts_with('─'))
+            .expect("rule line present");
+        assert_eq!(rule_line.spans[0].content.chars().count(), 30);
     }
 }

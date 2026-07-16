@@ -20,6 +20,28 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Write-side minification / VFS envelope for file tools. New config flag `minify_write_side` (default `false`, env `KIRKFORGE_MINIFY_WRITE_SIDE`, TOML `minify_write_side`). When enabled, `read_file` can wrap output in `<minified lang="...">...</minified>`, and `write_file`/`edit_file` expand that envelope back to readable, formatted source via external formatters (`rustfmt`, `black`, `prettier`, `deno fmt`, `gofmt`, etc.) before writing. A language-aware fallback is used when no formatter is available.
 - `src/shared/minify/expand.rs` with envelope parsing, wrapping, language mapping, and expansion helpers.
 
+### Fixed (deep audit — Session 4: correctness C11–C27 + performance P4–P9)
+- Correctness:
+  - `src/session/event_bus.rs` idempotency set now preserves insertion order and trims from the front deterministically, so duplicate-event suppression no longer depends on `HashSet` iteration order.
+  - `src/session/prompt/summarizer.rs` no longer divides by zero when `tokens_before == 0`; it reports a fallback instead of a panic.
+  - `src/shared/minify/lang.rs` `strip_test_blocks` now tracks brace depth and swallows the matching closing `}`, so the test module's trailing `}` no longer leaks into minified output.
+  - `src/session/bash_jobs.rs` background bash jobs now expand `~` in `workdir` the same way foreground bash commands do.
+  - `src/tools/read_file.rs` no longer double-minifies whole-file output or poisons its line-cache; raw file content is cached and minification happens once at the prompt layer when enabled.
+  - `src/adapters/tool_call_markup.rs` `parse_name_attr` now handles `\"` escapes and single-quoted DSML attributes.
+  - `crates/kirkforge-video/src/pipelines/animated_explainer.rs` `flite` filter graph arguments are escaped via `ffmpeg_escape`, so `:`, `\\`, `]`, and `,` in text are passed through correctly.
+  - `src/daemon/server.rs` now binds the Unix socket before writing the PID file, so a failed bind never leaves a stale PID file behind.
+  - `src/session/git_sanitation.rs` forbidden-substring checks now use word-boundary/line-anchored matching; `.env` no longer flags `.env.local`, and `=======` no longer matches `========`.
+  - `src/session/memory/mod.rs` `parse_frontmatter` now parses YAML/TOML-like frontmatter with a small state machine and only treats `---` at line start as a delimiter, so URLs and colons in values are no longer truncated.
+- Performance:
+  - `src/tui/events.rs` and TUI message buffers now use `VecDeque<ConversationEntry>` instead of `Vec`, making front-of-buffer pruning O(1) and preserving FIFO semantics.
+  - `src/tui/syntax/language.rs` caches each language's keyword `HashSet` in a static `OnceLock`, so every code block no longer rebuilds the set.
+  - `src/tui/rendering/mod.rs` markdown horizontal rule now scales to the available content width instead of a hard-coded 40 characters.
+  - `src/session/bash_runner/safety.rs` `word_boundary_match` compares char slices directly instead of allocating a `String` per check.
+  - `src/session/event_bus.rs` stores `Arc<BusEvent>` in history and hands out cheap `Arc` clones from `recent_events()` instead of deep-copying large payloads.
+  - `src/session/conversation.rs` `load_messages` parses the NDJSON conversation log line-by-line from a `BufReader` instead of slurping the whole file into a `String`.
+- Test gap:
+  - `src/tools/edit_file.rs` added `test_fuzzy_fallback_crlf_via_whitespace_normalization`, a regression test where `old_string` only matches after fuzzy normalization on CRLF content, exercising the byte-offset mapping fix.
+
 ### Fixed (deep audit — eighth pass)
 - Restored accidentally deleted `npm/kirkforge-plugin/packages/tool-gitnexus` files (still a production dependency of the orchestrator) and fixed the compile error in `src/index.ts` where the git-repo branch referenced an undefined `paths` shorthand
 - `src/tui/keys.rs` `/help` no longer claims `!<command>` bypasses approval when `bang_requires_approval` is enabled; `split_bang_summary` is now a shared `pub(crate)` helper used by both the direct and approval-gated `!` paths

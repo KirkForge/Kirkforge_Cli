@@ -162,7 +162,7 @@ impl BashJobRegistry {
             .stderr(std::process::Stdio::piped());
         setup_process_group(&mut proc);
         if let Some(ref wd) = workdir {
-            proc.current_dir(wd);
+            proc.current_dir(shellexpand::tilde(wd).as_ref());
         }
 
         let child = proc.spawn()?;
@@ -658,5 +658,33 @@ mod tests {
         );
         assert_eq!(job.stdout.trim(), "partial");
         assert!(job.finished_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_spawn_expands_tilde_workdir() {
+        // Regression for C14: background bash workdir was passed raw to
+        // current_dir, so `~` was not expanded to the user's home directory.
+        let reg = BashJobRegistry::new();
+        let home = std::env::var("HOME").expect("HOME must be set");
+        let id = reg
+            .spawn(
+                "pwd",
+                Some("~"),
+                None,
+                &DenyList::default(),
+                &PathGuard::default(),
+                false,
+            )
+            .await
+            .unwrap();
+
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        let job = reg.get(id).await.unwrap();
+        assert_eq!(job.status, JobStatus::Completed(0));
+        assert_eq!(
+            std::path::PathBuf::from(job.stdout.trim()),
+            std::path::PathBuf::from(home),
+            "tilde workdir was not expanded"
+        );
     }
 }

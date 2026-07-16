@@ -16,14 +16,14 @@ use language::Language;
 
 /// A code highlighter keeps per-line state (e.g. mid-string or
 /// mid-block-comment) so multi-line constructs render correctly.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct Highlighter {
     state: State,
     language: Language,
     /// Cached keyword set for the active language so we don't rebuild
     /// a `HashSet` from the static keyword slice on every highlighted
     /// line (review.md performance finding).
-    keywords: HashSet<&'static str>,
+    keywords: &'static HashSet<&'static str>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -198,6 +198,17 @@ pub fn highlighter_for(lang: Option<&str>) -> Highlighter {
         language,
         state: State::Normal,
         keywords,
+    }
+}
+
+impl Default for Highlighter {
+    fn default() -> Self {
+        let language = Language::Unknown;
+        Self {
+            state: State::Normal,
+            language,
+            keywords: language.keyword_set(),
+        }
     }
 }
 

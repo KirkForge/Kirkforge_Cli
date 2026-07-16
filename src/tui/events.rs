@@ -27,6 +27,7 @@
 use crate::session::executor::{ApprovalRequest, ApprovalResponse, TurnEvent};
 use crate::shared::Role;
 use crate::tui::app::{AppState, ConversationEntry, PendingApproval};
+use std::collections::VecDeque;
 use tokio::sync::mpsc;
 
 /// Apply a single executor event to the TUI state.
@@ -51,16 +52,20 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
         TurnEvent::Token(t) => {
             state.is_generating = true; // got first token — turn off spinner
                                         // Accumulate into the last assistant entry, or create one
-            let role_str = "assistant".to_string();
-            if let Some(last) = state.messages.last_mut() {
-                if last.role == role_str {
+            const ASSISTANT: &str = "assistant";
+            if let Some(last) = state.messages.back_mut() {
+                if last.role == ASSISTANT {
                     last.content.push_str(&t);
                     last.bump_version();
                 } else {
-                    state.messages.push(ConversationEntry::new("assistant", t));
+                    state
+                        .messages
+                        .push_back(ConversationEntry::new(ASSISTANT, t));
                 }
             } else {
-                state.messages.push(ConversationEntry::new("assistant", t));
+                state
+                    .messages
+                    .push_back(ConversationEntry::new(ASSISTANT, t));
             }
         }
         TurnEvent::Thinking(t) => {
@@ -71,7 +76,7 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
             state.turn_tool_calls += 1;
             state
                 .messages
-                .push(ConversationEntry::new("tool", format!("🔧 {name} ...")));
+                .push_back(ConversationEntry::new("tool", format!("🔧 {name} ...")));
         }
         TurnEvent::ToolResult { name, output, .. } => {
             // Tool outputs are stored FULL in a sidecar and shown
@@ -82,18 +87,18 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
                 format!("🔧 {name} (done) — {lines} lines, {bytes} bytes [Enter or Tab to expand]");
             // Avoid two entries per tool call: if the most recent message
             // is the matching "🔧 name ..." placeholder, replace it.
-            if let Some(last) = state.messages.last() {
+            if let Some(last) = state.messages.back() {
                 if last.role == "tool" && last.content == format!("🔧 {name} ...") {
-                    state.messages.pop();
+                    state.messages.pop_back();
                 }
             }
             state
                 .messages
-                .push(ConversationEntry::tool(summary, output));
+                .push_back(ConversationEntry::tool(summary, output));
         }
         TurnEvent::Verification { message, success } => {
             let prefix = if success { "🔍" } else { "⚠️" };
-            state.messages.push(ConversationEntry::new(
+            state.messages.push_back(ConversationEntry::new(
                 "system",
                 format!("{prefix} {message}"),
             ));
@@ -102,7 +107,7 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
             state.is_generating = false;
             state
                 .messages
-                .push(ConversationEntry::new("system", format!("Error: {e}")));
+                .push_back(ConversationEntry::new("system", format!("Error: {e}")));
         }
         TurnEvent::CostStats {
             prompt_tokens,
@@ -129,13 +134,13 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
         }
         TurnEvent::PlanComplete => {
             state.is_generating = false;
-            state.messages.push(ConversationEntry::new(
+            state.messages.push_back(ConversationEntry::new(
                 "system",
                 "📐 Plan complete. The model has finished exploring and designed an implementation plan. Type /implement to allow edits and continue.".to_string(),
             ));
         }
         TurnEvent::Recovered { messages } => {
-            state.messages.push(ConversationEntry::new(
+            state.messages.push_back(ConversationEntry::new(
                 "system",
                 format!("🛟 Restored {messages} message(s) from checkpoint after a corrupt session log was detected."),
             ));
@@ -180,7 +185,8 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
             // message list has been re-indexed), so we clear
             // the set. The user can re-expand any entry they
             // care about with Enter / Tab.
-            let mut rebuilt: Vec<ConversationEntry> = Vec::with_capacity(new_messages.len() + 1);
+            let mut rebuilt: VecDeque<ConversationEntry> =
+                VecDeque::with_capacity(new_messages.len() + 1);
             for msg in &new_messages {
                 let role_str = match msg.role {
                     Role::User => "user",
@@ -201,10 +207,10 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
                 } else {
                     msg.content.clone()
                 };
-                rebuilt.push(ConversationEntry::new(role_str, content));
+                rebuilt.push_back(ConversationEntry::new(role_str, content));
             }
             // Append a status message describing what happened
-            rebuilt.push(ConversationEntry::new(
+            rebuilt.push_back(ConversationEntry::new(
                 "system",
                 format!(
                     "🧹 Compacted: {original_count} → {compacted_count} messages ({tokens_before} → {tokens_after} tokens), dropped {dropped_tool_results} tool result(s), condensed {condensed_assistant_turns} assistant turn(s)."
@@ -313,8 +319,7 @@ fn prune_display_messages(state: &mut AppState) {
     let n_drop = state.messages.len() - KEEP_DISPLAY_MESSAGES;
     state.messages.drain(0..n_drop);
     // Insert a sentinel so the user knows old entries were trimmed.
-    state.messages.insert(
-        0,
+    state.messages.push_front(
         ConversationEntry::new(
             "system",
             format!("[{n_drop} older messages pruned from display — use /save to preserve the full session]"),
@@ -539,8 +544,8 @@ mod tests {
         assert!(s.is_generating);
         dispatch_turn_event(&mut s, TurnEvent::Error("timeout".into()));
         assert!(!s.is_generating);
-        assert_eq!(s.messages.last().unwrap().role, "system");
-        assert!(s.messages.last().unwrap().content.contains("timeout"));
+        assert_eq!(s.messages.back().unwrap().role, "system");
+        assert!(s.messages.back().unwrap().content.contains("timeout"));
     }
 
     /// `CostStats` accumulates the **cumulative** token counters

@@ -826,7 +826,7 @@ async fn build_narration(dir: &Path, arts: &Path) -> Result<String> {
         // a compact, seekable voice track.
         let flite = format!(
             "flite=text='{}':voice={}",
-            narration.replace('\'', "\\'"),
+            crate::compose::filter_graph::ffmpeg_escape(&narration),
             voice
         );
         let status = std::process::Command::new("ffmpeg")

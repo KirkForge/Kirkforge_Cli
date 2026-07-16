@@ -501,6 +501,50 @@ mod tests {
         remove_test_file(&path);
     }
 
+    /// The fuzzy fallback must work when old_string only matches after
+    /// whitespace normalization and the file uses CRLF line endings.
+    /// This specifically exercises the byte-offset mapping fix: if the
+    /// code uses `str::lines()` (which strips `\r`) to compute offsets,
+    /// the replacement lands one byte early on every CRLF line.
+    #[tokio::test]
+    async fn test_fuzzy_fallback_crlf_via_whitespace_normalization() {
+        // File has CRLF endings and the line to match ends with trailing
+        // spaces. The old_string is supplied *without* trailing spaces, so
+        // the only way to match is through fuzzy normalization.
+        let content = "fn main() {\r\n    let x = 1;    \r\n    println!(\"hello\");\r\n}\r\n";
+        let dir = std::env::temp_dir();
+        let path = dir.join("kirkforge_edit_fuzzy_crlf_norm.txt");
+        std::fs::write(&path, content).unwrap();
+
+        let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false);
+        let ctx = ToolContext::new();
+        let args = serde_json::json!({
+            "path": path.to_string_lossy(),
+            // No trailing spaces => exact match fails => fuzzy path.
+            "old_string": "let x = 1;",
+            "new_string": "let y = 2;",
+        });
+
+        let result = tool.run(&ctx, args).await;
+        match result {
+            ToolOutcome::FileEdit { path: _, diff: _ } => {
+                let result_content = std::fs::read_to_string(&path).unwrap();
+                assert!(
+                    result_content.contains("    let y = 2;    \r\n"),
+                    "Replacement should land at the normalized line boundary with CRLF and trailing spaces preserved, got: {result_content:?}"
+                );
+                assert_eq!(
+                    content.matches("\r\n").count(),
+                    result_content.matches("\r\n").count(),
+                    "CRLF count must be preserved"
+                );
+            }
+            other => panic!("Expected FileEdit, got {other:?}"),
+        }
+
+        remove_test_file(&path);
+    }
+
     /// When the tool is constructed with an `UndoStackRef`, every
     /// successful edit must snapshot the pre-edit bytes so `/undo`
     /// can revert.

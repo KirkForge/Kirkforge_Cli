@@ -46,14 +46,15 @@ pub async fn run_daemon_at(socket_path: PathBuf, pid_path: PathBuf) -> anyhow::R
         }
     }
 
-    // Write PID file.
+    let listener = UnixListener::bind(&socket_path)
+        .with_context(|| format!("bind daemon socket at {}", socket_path.display()))?;
+
+    // Write PID file only after the socket is bound. If bind fails, no
+    // stale PID is left behind for a daemon that never started.
     let pid = std::process::id();
     if let Err(e) = std::fs::write(&pid_path, format!("{pid}\n")) {
         tracing::warn!(error = %e, path = %pid_path.display(), "Failed to write daemon PID file");
     }
-
-    let listener = UnixListener::bind(&socket_path)
-        .with_context(|| format!("bind daemon socket at {}", socket_path.display()))?;
 
     let state = Arc::new(Mutex::new(DaemonState::new()));
     let shutdown = Arc::new(tokio::sync::Notify::new());
@@ -423,5 +424,38 @@ mod tests {
             Some(v) => std::env::set_var("KIRKFORGE_DATA_DIR", v),
             None => std::env::remove_var("KIRKFORGE_DATA_DIR"),
         }
+    }
+
+    #[tokio::test]
+    async fn pid_file_not_written_when_bind_fails() {
+        // Regression for C24: the PID file used to be written before the
+        // Unix socket was bound, leaving a stale PID if bind failed.
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("daemon.sock");
+        let pid = dir.path().join("daemon.pid");
+
+        // Make the directory read-only so bind cannot create the socket file.
+        let mut perms = std::fs::metadata(dir.path()).unwrap().permissions();
+        let original_readonly = perms.readonly();
+        perms.set_readonly(true);
+        std::fs::set_permissions(dir.path(), perms).unwrap();
+
+        let result = run_daemon_at(socket, pid.clone()).await;
+
+        // Restore write permissions so the temp dir can be cleaned up.
+        let mut perms = std::fs::metadata(dir.path()).unwrap().permissions();
+        perms.set_readonly(original_readonly);
+        std::fs::set_permissions(dir.path(), perms).unwrap();
+
+        // If we could not actually prevent bind (e.g. running as root), the
+        // test is inconclusive for this environment.
+        if result.is_ok() {
+            return;
+        }
+
+        assert!(
+            !pid.exists(),
+            "PID file must not be written when socket bind fails"
+        );
     }
 }

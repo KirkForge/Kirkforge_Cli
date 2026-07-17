@@ -8,13 +8,35 @@ import { createSqlLintEngine } from "@kirkforge/tool-lint-sql";
 import { createImportLintEngine } from "@kirkforge/tool-lint-imports";
 import { TscEmitter } from "@kirkforge/tool-tsc";
 import { PyrightEmitter } from "@kirkforge/tool-pyright";
-import { GitnexusEmitter } from "@kirkforge/tool-gitnexus";
-import { GraphifyEmitter } from "@kirkforge/tool-graphify";
 import type { EventBus } from "@kirkforge/core-events";
 import type { TaskLanguage } from "./task-profile.js";
+import { GraphEmitter } from "./graph-emitter.js";
+import { SecurityEmitter } from "./security-emitter.js";
 
 function hasJsTs(files?: string[]): boolean {
   return (files ?? []).some((file) => /\.(?:[cm]?js|jsx|ts|tsx)$/.test(file));
+}
+
+// ponytail: stub emitters. @kirkforge/tool-gitnexus and @kirkforge/tool-graphify were
+// removed (the external gitnexus/graphify tools they were named after were broken and
+// token-heavy). The `changes` slot reports files from `writtenFiles` (real diff
+// verification is a future upgrade). The `graph` slot is implemented in
+// `graph-emitter.ts` (regex import-edge extraction → cycles/brokenEdges/newEdges);
+// `security` is implemented in `security-emitter.ts` (obfuscated dangerous-call scan).
+class ChangesEmitter {
+  constructor(private opts: { eventBus: EventBus; writtenFiles?: string[] }) {}
+  async emit(taskId: string) {
+    const paths = this.opts.writtenFiles ?? [];
+    await this.opts.eventBus.emit({
+      kind: "state.changes",
+      schemaVersion: "v3",
+      sequence: 0,
+      streamId: taskId,
+      taskId,
+      value: { filesChanged: paths.length, paths, insertions: 0, deletions: 0, durationMs: 0 },
+      timestamp: new Date().toISOString(),
+    });
+  }
 }
 
 export function createVerificationEmitters(
@@ -43,8 +65,10 @@ export function createVerificationEmitters(
 
   const resolvedLint =
     language && lintByLang[language] ? lintByLang[language]! : pythonOnly ? pyLint : tsLint;
-  // Security is now handled by the lint engine itself (emits verify.security for safety-category rules)
-  const resolvedSecurity = resolvedLint;
+  // Real security emitter: obfuscated dangerous-call scan (bracket-keyed eval/exec,
+  // string-concat shell exec, vm.*, py eval/os.system/subprocess shell=True/pickle).
+  // The lint safety rules still run in the `lint` slot and catch the literal forms.
+  const security = new SecurityEmitter({ cwd, eventBus, files });
 
   // Imports verifier: runs on both Python and TypeScript workspaces. Emits
   // verify.imports as an advisory slot by default — the reducer treats it
@@ -56,9 +80,9 @@ export function createVerificationEmitters(
     types: pythonOnly
       ? new PyrightEmitter({ cwd, eventBus, files })
       : new TscEmitter({ cwd, eventBus, files }),
-    security: resolvedSecurity,
-    changes: new GitnexusEmitter({ cwd, eventBus, writtenFiles }),
-    graph: new GraphifyEmitter({ cwd, eventBus, files }),
+    security,
+    changes: new ChangesEmitter({ eventBus, writtenFiles }),
+    graph: new GraphEmitter({ eventBus, files, writtenFiles }),
     imports,
   };
 }

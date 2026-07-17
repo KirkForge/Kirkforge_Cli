@@ -40,12 +40,6 @@
       "path": "../prompt-core"
     },
     {
-      "path": "../tool-gitnexus"
-    },
-    {
-      "path": "../tool-graphify"
-    },
-    {
       "path": "../tool-pyright"
     },
     {

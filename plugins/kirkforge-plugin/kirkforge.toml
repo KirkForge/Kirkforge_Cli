@@ -34,7 +34,7 @@ command = "tools/audit-verify.sh"
 [[capabilities]]
 type = "tool"
 name = "plugin_doctor"
-description = "Probe local verification tools (ESLint, TypeScript, Ruff, Pyright, Bandit, GitNexus, Graphify) and report capabilities."
+description = "Probe local verification tools (ESLint, TypeScript, Ruff, Pyright, Bandit) and report capabilities."
 schema = { type = "object", properties = { pretty = { type = "boolean", description = "Human-readable output instead of JSON", default = false } } }
 command = "tools/doctor.sh"
 

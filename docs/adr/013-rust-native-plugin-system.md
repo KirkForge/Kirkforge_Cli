@@ -19,8 +19,13 @@ adds a new capability.
 
 ## Decision
 
-Introduce a Rust-native plugin system in a separate repository,
-`KirkForge-Plugin`, consumed by `KirkForge-Cli` as path dependencies.
+Introduce a Rust-native plugin system, **vendored in-repo** since Phase-6
+under `crates/plugin3-*` (`plugin3-core`, `plugin3-hosts`, `plugin3-cli`),
+not a separate repository consumed as path dependencies. The npm-side
+orchestrator and tool packages live under `npm/kirkforge-plugin/` in the
+same repo. A prior framing — "a separate repository `KirkForge-Plugin`
+consumed by `KirkForge-Cli` as path dependencies" — is superseded; both
+halves now ship from this single repository.
 
 A plugin is a directory containing:
 
@@ -47,7 +52,7 @@ The host (`kirkforge-plugin-host`) provides:
 - Compatibility loader — existing `.claude/skills/<name>/SKILL.md` directories
   are treated as read-only plugins with a single skill capability.
 
-A standalone CLI, `kirkforge-plugin`, ships in `KirkForge-Plugin/apps/plugin-cli`:
+A standalone CLI, `kirkforge-plugin`, ships in-repo at `crates/plugin3-cli`:
 
 - `kirkforge-plugin init <name>` — scaffold a new plugin directory.
 - `kirkforge-plugin check <dir>` — validate a plugin manifest.
@@ -59,10 +64,12 @@ A standalone CLI, `kirkforge-plugin`, ships in `KirkForge-Plugin/apps/plugin-cli
   without installing the full `KirkForge-Cli`.
 - `KirkForge-Cli` keeps the skill compatibility loader, so existing
   `.claude/skills/` directories continue to work.
-- The trust model is centralized in `KirkForge-Plugin`; both repos share
-  the same `TrustTier` ordering and policy semantics.
-- Path dependencies require both repos to be checked out side-by-side.
-  For release we can switch to published crates or git submodules.
+- The trust model is centralized in the plugin3 crates; the CLI and the
+  plugin system share the same `TrustTier` ordering and policy semantics.
+- Because the plugin crates are vendored in-repo, no side-by-side checkout
+  is required and a single `cargo build` / `npm install` builds everything.
+  A future split into published crates or git submodules is still possible
+  but is no longer the operating assumption.
 
 ## Workspace Plugin Sources
 

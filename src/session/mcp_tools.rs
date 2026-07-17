@@ -3,8 +3,9 @@
 //! Each MCP tool is wrapped in `McpToolWrapper`, which implements the
 //! `Tool` trait. Tool names are prefixed with `mcp/<server>/` to avoid
 //! collisions with built-in tools. Because `ToolDef` requires `&'static str`
-//! for names, the wrapper structs leak the tool metadata — safe because
-//! they are created once at session startup and live until the process exits.
+//! for names, the wrapper structs intern the tool metadata via
+//! `shared::intern_static_str` — leaking at most once per distinct name so
+//! that rebuilding wrappers (e.g. on `/reload plugins`) does not accumulate.
 //!
 //! # Usage
 //!
@@ -13,7 +14,7 @@
 //! in `main.rs`.
 
 use crate::session::mcp_client::McpClientManager;
-use crate::shared::{ToolDef, ToolError, ToolOutcome};
+use crate::shared::{intern_static_str, ToolDef, ToolError, ToolOutcome};
 use crate::tools::{Tool, ToolContext};
 use std::sync::Arc;
 use std::time::Duration;
@@ -41,9 +42,10 @@ impl McpToolWrapper {
         parameters: serde_json::Value,
         manager: Arc<McpClientManager>,
     ) -> Self {
-        // Leak the strings to make them 'static (safe: session-lifetime objects)
-        let name: &'static str = Box::leak(full_name.clone().into_boxed_str());
-        let desc: &'static str = Box::leak(description.into_boxed_str());
+        // Intern (not leak-per-call) so /reload plugins rebuilding these wrappers
+        // does not accumulate fresh allocations. See `intern_static_str`.
+        let name: &'static str = intern_static_str(&full_name);
+        let desc: &'static str = intern_static_str(&description);
         Self {
             full_name,
             def: ToolDef {

@@ -943,23 +943,108 @@ async fn run_line_mode(
 /// equivalent device, so we read from stdin; the line-mode main loop is
 /// not reading stdin while a tool call is awaiting approval.
 #[cfg(unix)]
-fn read_approval_answer(_tool_name: &str) -> bool {
-    let mut answer = String::new();
-    match std::fs::OpenOptions::new().read(true).open("/dev/tty") {
-        Ok(mut tty) => {
-            use std::io::BufRead;
-            let mut reader = std::io::BufReader::new(&mut tty);
-            if let Err(e) = reader.read_line(&mut answer) {
-                tracing::warn!(error = %e, "failed to read approval answer from /dev/tty");
-            }
-        }
+fn read_approval_answer_pollable(
+    _tool_name: &str,
+    shutdown: &std::sync::atomic::AtomicBool,
+) -> Option<bool> {
+    use std::os::fd::AsRawFd;
+    let tty = match std::fs::OpenOptions::new().read(true).open("/dev/tty") {
+        Ok(f) => f,
         Err(e) => {
             tracing::warn!(error = %e, "line-mode approval: no /dev/tty available; denying");
-            return false;
+            // Some(false) = a real decision (deny); None = shutdown interrupted.
+            return Some(false);
         }
+    };
+    // Keep `tty` alive for the fd lifetime; poll the raw fd with a short timeout
+    // so `shutdown` is re-checked between polls and the thread is joinable.
+    let line = poll_read_line(tty.as_raw_fd(), shutdown)?;
+    let trimmed = line.trim().to_ascii_lowercase();
+    Some(trimmed == "y" || trimmed == "yes")
+}
+
+/// Poll `fd` for readability with a 200 ms timeout, accumulating bytes until a
+/// newline arrives. Returns `Some(line)` on a complete line (or EOF), or `None`
+/// the moment `shutdown` is set. This is the testable seam that makes the
+/// approval-reader thread joinable on shutdown instead of detached forever.
+///
+/// # Safety / blocking
+/// `fd` must remain valid and open for the duration of the call. The poll
+/// interval bounds the worst-case join latency to ~200 ms.
+#[cfg(unix)]
+fn poll_read_line(
+    fd: std::os::fd::RawFd,
+    shutdown: &std::sync::atomic::AtomicBool,
+) -> Option<String> {
+    use std::sync::atomic::Ordering;
+    let mut buf = [0u8; 256];
+    let mut acc = String::new();
+    loop {
+        if shutdown.load(Ordering::Acquire) {
+            return None;
+        }
+        let mut pfd = libc::pollfd {
+            fd,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: `pfd` references `fd`, which the caller keeps open for the
+        // call. Single-threaded access (one reader thread per request).
+        let n = unsafe { libc::poll(&mut pfd as *mut libc::pollfd, 1, 200) };
+        if n < 0 {
+            let e = std::io::Error::last_os_error();
+            if e.kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            tracing::warn!(error = %e, "poll(/dev/tty) failed; denying");
+            return Some(acc);
+        }
+        if pfd.revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0 {
+            return Some(acc);
+        }
+        if pfd.revents & libc::POLLIN != 0 {
+            // SAFETY: reading from `fd` which is open and readable per poll.
+            let r = unsafe { libc::read(fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len()) };
+            if r > 0 {
+                let bytes = &buf[..r as usize];
+                if let Ok(s) = std::str::from_utf8(bytes) {
+                    acc.push_str(s);
+                }
+                if acc.contains('\n') {
+                    return Some(acc);
+                }
+                // partial line (no newline yet) — keep polling for the rest
+            } else if r == 0 {
+                return Some(acc); // EOF
+            } else {
+                let e = std::io::Error::last_os_error();
+                if e.kind() == std::io::ErrorKind::WouldBlock {
+                    continue;
+                }
+                return Some(acc);
+            }
+        }
+        // n == 0 (timeout) → loop and re-check shutdown
     }
-    let trimmed = answer.trim().to_ascii_lowercase();
-    trimmed == "y" || trimmed == "yes"
+}
+
+#[cfg(windows)]
+fn read_approval_answer_pollable(
+    _tool_name: &str,
+    _shutdown: &std::sync::atomic::AtomicBool,
+) -> Option<bool> {
+    // Windows has no /dev/tty; fall back to a blocking stdin read. The blocking
+    // read is not interruptible, so the reader thread is not joinable mid-read
+    // on this platform (the unix path is the joinable one the gate tests).
+    Some(read_approval_answer(_tool_name))
+}
+
+#[cfg(not(any(unix, windows)))]
+fn read_approval_answer_pollable(
+    _tool_name: &str,
+    _shutdown: &std::sync::atomic::AtomicBool,
+) -> Option<bool> {
+    Some(read_approval_answer(_tool_name))
 }
 
 #[cfg(windows)]
@@ -990,10 +1075,11 @@ fn read_approval_answer(_tool_name: &str) -> bool {
 /// it does not compete with prompt reading. `y`/`yes` approves; anything
 /// else denies.
 ///
-/// The read is performed on a detached OS thread with a timeout so the
-/// process can still exit cleanly when stdin reaches EOF or the user
-/// types `/exit`/`Ctrl+D`: a tokio `spawn_blocking` thread would keep
-/// the runtime alive while it waits forever on a quiet terminal.
+/// The read runs on its own OS thread (a tokio `spawn_blocking` task would
+/// keep the runtime alive while it waits forever on a quiet terminal). On Unix
+/// the thread polls `/dev/tty` with a short interval and is joined on shutdown
+/// (answer or timeout), so it does not detach and linger. On Windows the read
+/// is blocking and not interruptible, so that path remains detached.
 fn spawn_line_mode_approval_handler(
     mut approval_rx: mpsc::UnboundedReceiver<session::executor::ApprovalRequest>,
     no_color: bool,
@@ -1017,25 +1103,42 @@ fn spawn_line_mode_approval_handler(
             let tool_name = req.tool_name.clone();
             let (answer_tx, answer_rx) = tokio::sync::oneshot::channel::<bool>();
 
-            // Detached thread: reads the terminal and sends the answer back.
-            std::thread::spawn(move || {
-                let approved = read_approval_answer(&tool_name);
-                // If the tokio side already timed out, this send is
-                // harmless; the leftover thread will exit once the user
-                // finally provides input or the process terminates.
+            // Reader thread: reads the terminal and sends the answer back. On
+            // Unix it polls /dev/tty with a 200 ms interval so the `shutdown`
+            // flag interrupts it; the JoinHandle is joined below (on timeout via
+            // shutdown, on answer because the thread already exited) so no
+            // reader thread is left detached at the end of the iteration.
+            let shutdown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let shutdown_reader = shutdown.clone();
+            let reader_handle: std::thread::JoinHandle<()> = std::thread::spawn(move || {
+                let approved = read_approval_answer_pollable(&tool_name, &shutdown_reader)
+                    .unwrap_or(false);
+                // If the tokio side already timed out, `answer_rx` was dropped
+                // and this send is harmless.
                 kirkforge::send_or_warn!(
                     answer_tx.send(approved),
                     "line-mode answer channel receiver dropped"
                 );
             });
 
-            let approved = tokio::time::timeout(std::time::Duration::from_secs(120), answer_rx)
-                .await
-                .map(|r| r.unwrap_or(false))
-                .unwrap_or_else(|_| {
-                    eprintln!("\nApproval prompt timed out after 120 s; denying.");
-                    false
-                });
+            let result = tokio::time::timeout(std::time::Duration::from_secs(120), answer_rx).await;
+            if result.is_err() {
+                // Signal the poll loop to exit, then join so the thread is
+                // reclaimed rather than lingering until the next input.
+                shutdown.store(true, std::sync::atomic::Ordering::Release);
+                eprintln!("\nApproval prompt timed out after 120 s; denying.");
+            }
+            // Always join: on the answer path the thread has already exited
+            // (instant); on the timeout path it exits within one poll interval.
+            // ponytail: cfg gate the join to unix — the windows reader uses a
+            // blocking stdin read that cannot be interrupted, so joining on
+            // timeout would block forever there.
+            #[cfg(unix)]
+            let _ = reader_handle.join();
+            #[cfg(not(unix))]
+            drop(reader_handle);
+
+            let approved = result.map(|r| r.unwrap_or(false)).unwrap_or(false);
 
             let resp = if approved {
                 session::executor::ApprovalResponse::Approved
@@ -1235,5 +1338,58 @@ mod tests {
             ),
             "expected a reasoned denial, got {resp:?}"
         );
+    }
+
+    /// Gate (Task 8 sub-task 5): the Unix approval-reader thread must JOIN on
+    /// shutdown rather than detach and linger. `poll_read_line` is the seam —
+    /// given a fd that is never readable and never reaches EOF (a UnixStream
+    /// read half whose write half is held open), it must return `None` promptly
+    /// once `shutdown` is set, so the spawned reader thread joins within ~one
+    /// poll interval. A blocking `read_line` would hang here forever.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn approval_reader_thread_joins_on_shutdown() {
+        use std::os::fd::AsRawFd;
+        use std::os::unix::net::UnixStream;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+
+        // A connected socket pair: we hold the write end open and never write,
+        // so the read end is never readable and never EOF — the reader's poll
+        // loop must rely on `shutdown` to exit.
+        let (read_end, write_end) = UnixStream::pair().expect("UnixStream::pair");
+        read_end.set_nonblocking(true).expect("set_nonblocking");
+        let fd = read_end.as_raw_fd();
+        // Keep both ends alive for the thread's lifetime.
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let shutdown_reader = shutdown.clone();
+        let handle = std::thread::spawn(move || {
+            let _ = write_end; // keep write end open so read never sees EOF
+            poll_read_line(fd, &shutdown_reader)
+        });
+
+        // Let the thread enter its poll loop.
+        tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+        assert!(
+            !handle.is_finished(),
+            "reader should be blocked in poll, not finished"
+        );
+
+        shutdown.store(true, Ordering::Release);
+
+        // Join must complete within one poll interval plus slack (no /dev/tty
+        // involved — the fd is the socket). A detached/blocking reader would
+        // never join here.
+        let joined = tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            tokio::task::spawn_blocking(move || handle.join()),
+        )
+        .await;
+        assert!(joined.is_ok(), "reader thread did not join within 3s");
+        let join_inner = joined.expect("spawn_blocking timed out");
+        assert!(join_inner.is_ok(), "join returned an error: {join_inner:?}");
+        // And it returned Ok(None) (shutdown interrupted), not Ok(Some(line)).
+        let inner = join_inner.unwrap();
+        assert!(matches!(inner, Ok(None)), "expected Ok(None) on shutdown, got {inner:?}");
     }
 }

@@ -8,7 +8,9 @@
 
 use crate::session::bash_runner::{cap_to_string, drain_capped, MAX_BASH_OUTPUT_BYTES};
 use crate::session::process_group::{kill_process_group, reap_child, setup_process_group};
-use crate::shared::{read_shared_config, Config, SharedConfig, ToolDef, ToolError, ToolOutcome};
+use crate::shared::{
+    intern_static_str, read_shared_config, Config, SharedConfig, ToolDef, ToolError, ToolOutcome,
+};
 use crate::tools::{Tool, ToolContext};
 use kirkforge_plugin::{Capability, Plugin};
 use kirkforge_plugin_host::{PluginRegistry, TrustPolicy, KIRKFORGE_TOOL_ARGS};
@@ -89,9 +91,10 @@ impl PluginToolWrapper {
         command: PathBuf,
         shared_config: SharedConfig,
     ) -> Self {
-        // ToolDef requires 'static strings; leak session-lifetime metadata.
-        let name: &'static str = Box::leak(name.into_boxed_str());
-        let desc: &'static str = Box::leak(description.into_boxed_str());
+        // ToolDef requires 'static strings; intern so /reload plugins (which
+        // rebuilds every wrapper) does not leak a fresh allocation each time.
+        let name: &'static str = intern_static_str(&name);
+        let desc: &'static str = intern_static_str(&description);
         Self {
             def: ToolDef {
                 name,

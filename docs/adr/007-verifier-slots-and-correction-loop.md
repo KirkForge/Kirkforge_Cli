@@ -25,7 +25,13 @@ A verifier-slot system with priority-based truth model and an auto-correction lo
 
 ### Verifier slots
 
-Four fixed slots (lint, type-check, git, security). Each slot holds one verifier implementation. Slots are registered in priority order; lower priority number = runs first.
+Five slots (`lint`, `types`, `security`, `graph`, `imports`), matching
+`SLOT_TO_SIGNAL` in `npm/kirkforge-plugin/packages/orchestrator/src/reducer.ts`
+and `VerifierSlot` in `packages/correction-core/src/types.ts`. The original
+design had four slots (`lint`, `type-check`, `git`, `security`); `git` was
+dropped (dirty-worktree checks moved out of the verifier loop) and `graph` +
+`imports` were added. Each slot holds one verifier implementation. Slots are
+registered in priority order; lower priority number = runs first.
 
 ```rust
 pub trait Verifier: Send + Sync {
@@ -46,10 +52,22 @@ pub enum Verdict {
 
 Verifiers run in priority order. The first non-`Clean`, non-`Skipped` verdict wins immediately. This means:
 
-- **Security (priority 1)** — a hardcoded API key blocks everything; no point linting a file that shouldn't exist
-- **Lint (priority 2)** — fixable warnings are caught before git operations
-- **Git (priority 3)** — dirty worktree or merge conflicts are flagged after modifications
-- **Type-check (priority 4)** — reserved for future use (e.g., `cargo check`)
+- **Security (priority 1)** — a hardcoded API key or dangerous call (`eval`,
+  shell injection) blocks everything; no point linting a file that shouldn't
+  exist. Backed by a dedicated security emitter (token-based dangerous-call
+  scan), not an alias of the lint rules.
+- **Lint (priority 2)** — fixable warnings are caught before type/structural checks.
+- **Types (priority 3)** — `tsc` (JS/TS) or `pyright` (Python).
+- **Graph (priority 4)** — structural: import-edge extraction reports
+  `newEdges`/`brokenEdges`/`cycles` in `state.graph`. A referenced symbol that
+  no longer exists surfaces as a broken edge; an import cycle surfaces as
+  `cycles ≥ 1`.
+- **Imports (priority 5)** — advisory import-hygiene warnings (unused/banned
+  imports); a warning source, not fail-closed.
+
+The dropped `git` slot (dirty worktree / merge-conflict checks) was removed from
+the verifier loop; those checks, where still relevant, live outside the slot
+system.
 
 ### Event bus integration
 
@@ -105,6 +123,6 @@ The loop returns `CorrectionResult` entries that are appended to the conversatio
 
 ## Implementation
 
-- Files: `src/session/verifier/mod.rs` (~430 lines), `lint.rs` (~120 lines), `security.rs` (~185 lines), `git.rs` (~140 lines)
+- Files: `src/session/verifier/mod.rs` (~430 lines), `lint.rs` (~120 lines), `security.rs` (~185 lines); the `graph` and `imports` slots are implemented in the npm Orchestrator (`npm/kirkforge-plugin/packages/orchestrator/src/emitter-factory.ts`), not the Rust verifier module.
 - 24 unit tests across all verifiers and the correction loop
-- `VerifierSlots` with configurable max (default 4)
+- `VerifierSlots` with configurable max (default 5)

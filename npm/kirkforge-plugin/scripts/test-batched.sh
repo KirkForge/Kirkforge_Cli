@@ -74,9 +74,7 @@ run_batch "lint-tools" \
   packages/tool-lint-imports/tests/typescript-renames.test.ts \
   packages/tool-lint-imports/tests/clean-pass.test.ts \
   packages/tool-pyright/tests/index.test.ts \
-  packages/tool-tsc/tests/index.test.ts \
-  packages/tool-gitnexus/tests/index.test.ts \
-  packages/tool-graphify/tests/index.test.ts
+  packages/tool-tsc/tests/index.test.ts
 
 run_batch "memory+model" \
   packages/memory-palace/tests/index.test.ts \

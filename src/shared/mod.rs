@@ -26,7 +26,7 @@ use kirkforge_plugin::TrustTier;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 /// Thread-safe shared configuration. Used by both the TUI and the executor
 /// so that config hot-reload affects live behavior without restarting.
@@ -691,6 +691,37 @@ pub struct ToolDef {
     pub name: &'static str,
     pub description: &'static str,
     pub parameters: serde_json::Value,
+}
+
+// ponytail: deduplicating string interner for runtime-discovered tool metadata.
+// `ToolDef` requires `&'static str`, so tool names/descriptions read from MCP
+// servers or plugin manifests at runtime must be made 'static. The previous code
+// `Box::leak`ed a fresh allocation on every construction — and `/reload plugins`
+// (executor::reload_plugins) rebuilds every plugin wrapper each invocation, so
+// repeated reloads leaked unboundedly. Interning leaks at most once per unique
+// string and reuses it on every reload, bounding growth to the set of distinct
+// tool names ever seen (stable across reloads in practice).
+//
+// Ceiling: one `Box<str>` per unique name is held for the process lifetime (never
+// freed even if the tool is removed). Upgrade path: change `ToolDef` to own
+// `Arc<str>` so dropped ToolDefs free their strings — but `Arc<str> == &str` is
+// not in std, so that is a ~90-site change (every `def().name == "x"` comparison,
+// `assert_eq!`, `matches!`, and `Vec<&str>` collect) and is not justified by the
+// reload-growth defect this interner already fixes.
+static INTERNED_STRS: OnceLock<Mutex<HashMap<String, &'static str>>> = OnceLock::new();
+
+/// Intern a runtime string as `&'static str`, leaking at most one allocation per
+/// distinct value. Use for `ToolDef` name/description built from dynamic sources
+/// (MCP tool names, plugin manifests) so repeated rebuilds do not accumulate.
+pub fn intern_static_str(s: &str) -> &'static str {
+    let map = INTERNED_STRS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut guard = map.lock().expect("static-str interner mutex poisoned");
+    if let Some(existing) = guard.get(s).copied() {
+        return existing;
+    }
+    let leaked: &'static str = Box::leak(s.to_string().into_boxed_str());
+    guard.insert(s.to_string(), leaked);
+    leaked
 }
 
 #[derive(Debug, Clone)]

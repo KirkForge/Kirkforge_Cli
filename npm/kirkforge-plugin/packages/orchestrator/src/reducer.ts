@@ -9,6 +9,7 @@ import type {
   ArtifactUnterminatedEvent,
   ArtifactTruncatedEvent,
   ArtifactEmittedEvent,
+  VerifierStatus,
 } from "@kirkforge/core-types";
 import { ok } from "@kirkforge/core-types";
 import type { EventBus } from "@kirkforge/core-events";
@@ -111,6 +112,26 @@ export class StateReducer {
     const lintS = get<VerifyLintEvent>("verify.lint");
     const typesS = get<VerifyTypesEvent>("verify.types");
     const secS = get<VerifySecurityEvent>("verify.security");
+    // ponytail: merge ALL verify.security events for this task. Two emitters fire
+    // concurrently — the lint engine (literal safety rules) and the SecurityEmitter
+    // (obfuscated dangerous-call scan). Last-wins `get` would let one overwrite the
+    // other and drop findings; summing the array keeps both. Single-event tasks
+    // (the existing tests) aggregate to the same value.
+    const secAll = (map.get("verify.security") as VerifySecurityEvent[] | undefined) ?? [];
+    const secAgg = secAll.reduce(
+      (acc, e) => {
+        acc.findings += e.value.findings ?? 0;
+        acc.critical += e.value.critical ?? 0;
+        acc.high += e.value.high ?? 0;
+        if (e.value.error && !acc.error) acc.error = e.value.error;
+        if (e.value.status === "error") acc.status = "error";
+        else if (e.value.status === "fail" && acc.status !== "error") acc.status = "fail";
+        else if (acc.status === "pass" && (e.value.status === "skipped" || !e.value.status))
+          acc.status = e.value.status ?? acc.status;
+        return acc;
+      },
+      { findings: 0, critical: 0, high: 0, error: undefined as string | undefined, status: "pass" as VerifierStatus },
+    );
     const importsS = get<VerifyImportsEvent>("verify.imports");
     const changesS = get<StateChangesEvent>("state.changes");
     const graphS = get<StateGraphEvent>("state.graph");
@@ -144,7 +165,7 @@ export class StateReducer {
 
     const lintStatus = lintS?.value?.status ?? (lintNAC ? "skipped" : "error");
     const typesStatus = typesS?.value?.status ?? (typesNAC ? "skipped" : "error");
-    const secStatus = secS?.value?.status ?? (secNAC ? "skipped" : "error");
+    const secStatus = secAll.length > 0 ? secAgg.status : (secNAC ? "skipped" : "error");
     const graphStatus = graphS?.value?.status ?? (graphNAC ? "skipped" : "error");
     const lint = {
       errors: lintS?.value?.errors ?? (lintNAC ? 0 : 1),
@@ -159,11 +180,11 @@ export class StateReducer {
       error: typesS?.value?.error,
     };
     const sec = {
-      findings: secS?.value?.findings ?? (secNAC ? 0 : 1),
-      critical: secS?.value?.critical ?? 0,
-      high: secS?.value?.high ?? (secNAC ? 0 : 1),
+      findings: secAll.length > 0 ? secAgg.findings : (secNAC ? 0 : 1),
+      critical: secAll.length > 0 ? secAgg.critical : 0,
+      high: secAll.length > 0 ? secAgg.high : (secNAC ? 0 : 1),
       status: secStatus,
-      error: secS?.value?.error,
+      error: secAll.length > 0 ? secAgg.error : secS?.value?.error,
     };
     const imports = {
       findings: importsS?.value?.findings ?? 0,

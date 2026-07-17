@@ -37,8 +37,6 @@
     "@kirkforge/prompt-core": "*",
     "@kirkforge/tool-tsc": "*",
     "@kirkforge/tool-pyright": "*",
-    "@kirkforge/tool-gitnexus": "*",
-    "@kirkforge/tool-graphify": "*",
     "@kirkforge/memory-palace": "*",
     "@kirkforge/correction-core": "*",
     "zod": "^4.4.3",

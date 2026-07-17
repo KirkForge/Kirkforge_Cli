@@ -24,8 +24,8 @@ output-control respectively.
 | [0008](./0008-compaction-strategy.md) | Conversation-length compaction | Accepted |
 | [0009](./0009-hooks-model.md) | Hook surface — PostToolUse, UserPromptSubmit, PreCompact | Accepted |
 | [0010](./0010-cost-reporting.md) | Cost reporting — usage.jsonl + report subcommand | Accepted |
-| [0011](./0011-persistent-knowledge.md) | Persistent knowledge (deferred) | Deferred |
-| [0012](./0012-speculative-priming.md) | Speculative priming (deferred) | Deferred |
+| [0011](./0011-persistent-knowledge.md) | Persistent knowledge (rejected — no implementation) | Rejected |
+| [0012](./0012-speculative-priming.md) | Speculative priming (rejected — no implementation) | Rejected |
 | [0013](./0013-output-shim.md) | Per-host output shim | Accepted |
 | [0014](./0014-state-management.md) | State management — XDG dirs, flag file | Accepted |
 | [0015](./0015-cli-design.md) | CLI design | Accepted |

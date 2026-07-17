@@ -136,6 +136,5 @@ The session daemon is started on demand, but you can also run it under your init
 
 ## Documentation
 
-- [`review.md`](review.md) — current capabilities and known gaps.
 - [`docs/adr/`](docs/adr/) — architecture decision records covering the daemon, session model, hot-reload, and more.
 - [`docs/ideas/`](docs/ideas/) — roadmap and design notes.

@@ -92,12 +92,6 @@
       "path": "packages/prompt-core"
     },
     {
-      "path": "packages/tool-gitnexus"
-    },
-    {
-      "path": "packages/tool-graphify"
-    },
-    {
       "path": "packages/tool-lint-c"
     },
     {

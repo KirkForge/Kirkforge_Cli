@@ -20,7 +20,8 @@ review.md
 AGENTS.md
 CLAUDE.md
 
-# Knowledge-graph outputs (graphify + gitnexus indexes)
+# Banned-tool output dirs — kept ignored to block recurrence (gitnexus/graphify
+# are uninstalled & banned; these patterns ensure the dirs can't sneak back in).
 graphify-out/
 .gitnexus/
 .gitnexus.bak/

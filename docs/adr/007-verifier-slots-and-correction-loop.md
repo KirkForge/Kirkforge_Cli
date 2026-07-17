@@ -99,11 +99,15 @@ The loop returns `CorrectionResult` entries that are appended to the conversatio
 
 ### Verifier implementations
 
-| Verifier | Priority | Events | Checks |
-|----------|----------|--------|--------|
-| Security | 1 | FileWrite | API keys, private keys, tokens, dangerous shell commands, path traversal |
-| Lint | 2 | Edit, FileWrite | `cargo clippy` for Rust files; extensible to Python, JavaScript |
-| Git | 3 | GitOperation, BashExec | Dirty worktree, merge conflicts, failed operations |
+| Verifier | Priority | Event | Emitter | Checks |
+|----------|----------|-------|---------|--------|
+| Security | 1 | `verify.security` | `SecurityEmitter` | API keys, private keys, tokens, dangerous calls (`eval`, shell injection, path traversal) |
+| Lint | 2 | `verify.lint` | language-specific lint engine (TS/Py/Sh/C/Rs/Go/SQL) | Fixable warnings, style/safety rules |
+| Types | 3 | `verify.types` | `TscEmitter` (JS/TS) / `PyrightEmitter` (Python) | Type errors |
+| Graph | 4 | `state.graph` | `GraphEmitter` | Import-edge extraction: `newEdges`/`brokenEdges`/`cycles` |
+| Imports | 5 | `verify.imports` | `ImportLintEngine` | Unused/banned imports (advisory, not fail-closed) |
+
+The `git` slot from the original four-slot design was dropped (dirty-worktree checks moved out of the verifier loop). `state.changes` is emitted separately by `ChangesEmitter` from `writtenFiles`; it is not a verifier slot.
 
 ## Consequences
 

@@ -1111,8 +1111,8 @@ fn spawn_line_mode_approval_handler(
             let shutdown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
             let shutdown_reader = shutdown.clone();
             let reader_handle: std::thread::JoinHandle<()> = std::thread::spawn(move || {
-                let approved = read_approval_answer_pollable(&tool_name, &shutdown_reader)
-                    .unwrap_or(false);
+                let approved =
+                    read_approval_answer_pollable(&tool_name, &shutdown_reader).unwrap_or(false);
                 // If the tokio side already timed out, `answer_rx` was dropped
                 // and this send is harmless.
                 kirkforge::send_or_warn!(
@@ -1390,6 +1390,9 @@ mod tests {
         assert!(join_inner.is_ok(), "join returned an error: {join_inner:?}");
         // And it returned Ok(None) (shutdown interrupted), not Ok(Some(line)).
         let inner = join_inner.unwrap();
-        assert!(matches!(inner, Ok(None)), "expected Ok(None) on shutdown, got {inner:?}");
+        assert!(
+            matches!(inner, Ok(None)),
+            "expected Ok(None) on shutdown, got {inner:?}"
+        );
     }
 }

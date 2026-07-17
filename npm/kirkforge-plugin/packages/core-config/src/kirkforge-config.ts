@@ -16,8 +16,6 @@ export const OrchestratorConfigSchema = z.object({
 export const ToolConfigSchema = z.object({
   eslint: z.object({ enabled: z.boolean(), configFile: z.string().optional() }).optional(),
   secdev: z.object({ enabled: z.boolean() }).optional(),
-  gitnexus: z.object({ enabled: z.boolean() }).optional(),
-  graphify: z.object({ enabled: z.boolean(), queryBudget: z.number().optional() }).optional(),
 });
 
 export const LoggingConfigSchema = z.object({
@@ -41,8 +39,6 @@ export const KirkForgeConfigSchema = z.object({
   tools: ToolConfigSchema.default({
     eslint: { enabled: true },
     secdev: { enabled: true },
-    gitnexus: { enabled: true },
-    graphify: { enabled: false },
   }),
   logging: LoggingConfigSchema.default({
     level: "info",

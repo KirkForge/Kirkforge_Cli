@@ -24,7 +24,7 @@ use std::time::Duration;
 /// Stores an `Arc<McpClientManager>` and the full tool name. The `run()`
 /// method calls `manager.call_tool()` with the server-side name.
 pub struct McpToolWrapper {
-    /// The full tool name (e.g., "mcp/gitnexus/context").
+    /// The full tool name (e.g., "mcp/context-server/context").
     full_name: String,
     /// The tool definition (with leaked static strings).
     def: ToolDef,

@@ -17,9 +17,5 @@ export function registerTools(program: Command): void {
       console.log("Type Checkers (external, required on PATH):");
       console.log("  JS/TS:  tsc");
       console.log("  Python: pyright");
-      console.log("");
-      console.log("Shared Tools:");
-      console.log("  gitnexus (git diff change tracking)");
-      console.log("  graphify (import graph analysis, TS only)");
     });
 }

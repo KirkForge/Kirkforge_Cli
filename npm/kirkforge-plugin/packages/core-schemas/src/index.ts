@@ -21,19 +21,10 @@ export const KirkForgeConfigSchema = z.object({
         .object({ enabled: z.boolean().default(true), configFile: z.string().optional() })
         .default({ enabled: true }),
       secdev: z.object({ enabled: z.boolean().default(true) }).default({ enabled: true }),
-      gitnexus: z.object({ enabled: z.boolean().default(true) }).default({ enabled: true }),
-      graphify: z
-        .object({
-          enabled: z.boolean().default(false),
-          queryBudget: z.number().int().positive().optional(),
-        })
-        .default({ enabled: false }),
     })
     .default({
       eslint: { enabled: true },
       secdev: { enabled: true },
-      gitnexus: { enabled: true },
-      graphify: { enabled: false },
     }),
   logging: z
     .object({

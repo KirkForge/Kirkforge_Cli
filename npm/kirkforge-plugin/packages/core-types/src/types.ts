@@ -4,7 +4,7 @@ export const SCHEMA_VERSION: SchemaVersion = "v3";
 export type AgentStatus = "working" | "blocked" | "done" | "failed" | "needs_review";
 export type Severity = "none" | "low" | "medium" | "high" | "critical";
 export type ToolSeverity = "info" | "low" | "medium" | "high" | "critical";
-export type ToolSource = "secdev" | "gitnexus" | "eslint" | "graphify";
+export type ToolSource = "secdev" | "eslint";
 
 export interface ToolFinding {
   source: ToolSource;
@@ -40,8 +40,6 @@ export interface KirkForgeConfig {
   tools: {
     eslint: { enabled: boolean; configFile?: string };
     secdev: { enabled: boolean };
-    gitnexus: { enabled: boolean };
-    graphify: { enabled: boolean; queryBudget?: number };
   };
   logging: {
     level: "trace" | "debug" | "info" | "warn" | "error";

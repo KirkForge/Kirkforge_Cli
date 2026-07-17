@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Lightweight impact-analysis fallback used when GitNexus indexing is
-# unavailable (e.g. worker crash-loop, fresh clone, or git clean).
+# Lightweight impact-analysis fallback used when no code-intel index is
+# available (e.g. fresh clone, or git clean).
 #
 # This is NOT a call-graph analysis. It is a regression smoke-net:
 # it lists changed Rust files, runs a full check/test/clippy matrix,
@@ -64,5 +64,5 @@ run_step "Clippy" cargo clippy --all-targets -- -D warnings
 echo
 echo -e "${GREEN}Impact fallback passed.${NC}"
 echo "Reminder: this checks for regressions; it does not replace a full"
-echo "GitNexus call-graph impact analysis. Review the diff manually before"
+echo "call-graph impact analysis. Review the diff manually before"
 echo "committing large refactors."

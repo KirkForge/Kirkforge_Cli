@@ -49,8 +49,6 @@ describe("doctor()", () => {
       "pyright",
       "bandit",
       "secdev",
-      "gitnexus",
-      "graphify",
     ] as const;
     for (const key of toolKeys) {
       expect(report).toHaveProperty(key);
@@ -75,10 +73,6 @@ describe("doctor()", () => {
     const report = await doctor();
     expect(report.secdev.available).toBe(true);
     expect(report.secdev.source).toBe("internal");
-    expect(report.gitnexus.available).toBe(true);
-    expect(report.gitnexus.source).toBe("internal");
-    expect(report.graphify.available).toBe(true);
-    expect(report.graphify.source).toBe("internal");
   }, 30000);
 
   it("external tools have source external", async () => {
@@ -99,8 +93,6 @@ describe("doctor()", () => {
       report.pyright,
       report.bandit,
       report.secdev,
-      report.gitnexus,
-      report.graphify,
     ];
     for (const entry of toolEntries) {
       expect(entry.source).toBeDefined();

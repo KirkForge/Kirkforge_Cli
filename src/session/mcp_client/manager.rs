@@ -141,7 +141,7 @@ impl McpClientManager {
             .collect()
     }
 
-    /// Call an MCP tool by its full name (e.g., "mcp/gitnexus/context").
+    /// Call an MCP tool by its full name (e.g., "mcp/context-server/context").
     pub async fn call_tool(&self, full_name: &str, args: serde_json::Value) -> ToolOutcome {
         let (client_idx, server_name) = match self.tools.get(full_name) {
             Some(pair) => pair,

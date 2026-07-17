@@ -538,8 +538,8 @@ mod tests {
             "system prompt should instruct the agent to validate edits"
         );
         assert!(
-            msg.content.contains("graphify-out/"),
-            "system prompt should forbid graphify-out/ artifact injection"
+            msg.content.contains("tool-output artifact"),
+            "system prompt should forbid tool-output artifact directories"
         );
         assert!(
             msg.content.contains(".gitignore"),

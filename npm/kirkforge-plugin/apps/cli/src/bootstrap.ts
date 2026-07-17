@@ -156,8 +156,6 @@ export async function createBootstrap(opts: BootstrapOpts): Promise<BootstrapRes
         tools: {
           eslint: { enabled: true },
           secdev: { enabled: true },
-          gitnexus: { enabled: true },
-          graphify: { enabled: false },
         },
         logging: { level: "info", format: "json" },
         memory: { path: ".kirkforge/memory", retentionDays: 30 },

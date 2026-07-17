@@ -32,7 +32,7 @@ After restarting KirkForge-Cli, the plugin's tools and skill become available.
 | `plugin_verify` | `verify` | Run deterministic verification emitters without calling a model. Reports lint, type, security, graph, and overall status. |
 | `plugin_verify_workspace` | `verify-workspace` | Run deterministic verification on a workspace directory and emit a `ReducedStatePacket`. |
 | `plugin_audit_verify` | `audit-verify` | Verify the integrity of a KirkForge audit JSONL chain. |
-| `plugin_doctor` | `doctor` | Probe local verification tools (ESLint, tsc, Ruff, Pyright, Bandit, GitNexus, Graphify) and report capabilities. |
+| `plugin_doctor` | `doctor` | Probe local verification tools (ESLint, tsc, Ruff, Pyright, Bandit, SecDev) and report capabilities. |
 | `plugin_health` | `health` | Show orchestrator health and SLO status. |
 | `plugin_tools` | `tools` | List registered verification tools and lint engines. |
 

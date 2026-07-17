@@ -86,8 +86,6 @@ export interface ToolCapabilityReport {
   pyright: ToolCapability;
   bandit: ToolCapability;
   secdev: ToolCapability;
-  gitnexus: ToolCapability;
-  graphify: ToolCapability;
   languages: string[];
 }
 
@@ -257,7 +255,7 @@ export async function recallRoutingBias(
   return ok(recommendation.routingBias ?? null);
 }
 
-const INTERNAL_TOOLS = new Set(["secdev", "gitnexus", "graphify"]);
+const INTERNAL_TOOLS = new Set(["secdev"]);
 
 async function probeTool(name: string, args: string[] = ["--version"]): Promise<ToolCapability> {
   const source: "external" | "internal" = INTERNAL_TOOLS.has(name) ? "internal" : "external";
@@ -273,13 +271,12 @@ async function probeTool(name: string, args: string[] = ["--version"]): Promise<
 }
 
 export async function doctor(): Promise<ToolCapabilityReport> {
-  const [eslint, tsc, ruff, pyright, bandit, git] = await Promise.all([
+  const [eslint, tsc, ruff, pyright, bandit] = await Promise.all([
     probeTool("eslint", ["--version"]),
     probeTool("tsc", ["--version"]),
     probeTool("ruff", ["--version"]),
     probeTool("pyright", ["--version"]),
     probeTool("bandit", ["--version"]),
-    probeTool("git", ["--version"]),
   ]);
 
   const secdev: ToolCapability = {
@@ -287,22 +284,9 @@ export async function doctor(): Promise<ToolCapabilityReport> {
     source: "internal",
     note: "Regex-based security scanner (not a substitute for shellcheck/pylint/bandit on non-JS/TS). Advisory for C/C++/Go/Rust/SQL.",
   };
-  const gitnexus: ToolCapability = {
-    available: git.available,
-    source: "internal",
-    note: git.available
-      ? "Uses git for change tracking"
-      : "git not found — change tracking unavailable without git repo",
-  };
-  const graphify: ToolCapability = {
-    available: true,
-    source: "internal",
-    note: "Static import graph for TS/JS only; advisory/absent for other languages",
-  };
 
   const hasTsTool = eslint.available || tsc.available;
   const hasPyTool = ruff.available || pyright.available;
-  const _hasGit = git.available;
   const languages: string[] = [];
   if (hasTsTool) languages.push("typescript", "javascript");
   if (hasPyTool) languages.push("python");
@@ -316,7 +300,7 @@ export async function doctor(): Promise<ToolCapabilityReport> {
   );
   if (languages.length === 0) languages.push("unknown");
 
-  return { eslint, tsc, ruff, pyright, bandit, secdev, gitnexus, graphify, languages };
+  return { eslint, tsc, ruff, pyright, bandit, secdev, languages };
 }
 
 export function createPluginCore(config?: PluginCoreConfig) {

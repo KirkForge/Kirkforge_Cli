@@ -11,13 +11,13 @@
 //!
 //! ```toml
 //! [[mcp_servers]]
-//! name = "gitnexus"
+//! name = "context-server"
 //! command = "npx"
-//! args = ["gitnexus", "mcp"]
+//! args = ["context-server", "mcp"]
 //! ```
 //!
 //! Each server's tools are prefixed with `mcp/<server>/<tool>`, e.g.
-//! `mcp/gitnexus/context`. This avoids name collisions with built-in tools.
+//! `mcp/context-server/context`. This avoids name collisions with built-in tools.
 //!
 //! # Architecture
 //!

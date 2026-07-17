@@ -17,10 +17,9 @@ function hasJsTs(files?: string[]): boolean {
   return (files ?? []).some((file) => /\.(?:[cm]?js|jsx|ts|tsx)$/.test(file));
 }
 
-// ponytail: stub emitters. @kirkforge/tool-gitnexus and @kirkforge/tool-graphify were
-// removed (the external gitnexus/graphify tools they were named after were broken and
-// token-heavy). The `changes` slot reports files from `writtenFiles` (real diff
-// verification is a future upgrade). The `graph` slot is implemented in
+// ponytail: the changes/graph/security verifier slots are emitted by in-repo
+// emitters, not external tools. `ChangesEmitter` reports files from `writtenFiles`
+// (real diff verification is a future upgrade). `graph` is implemented in
 // `graph-emitter.ts` (regex import-edge extraction → cycles/brokenEdges/newEdges);
 // `security` is implemented in `security-emitter.ts` (obfuscated dangerous-call scan).
 class ChangesEmitter {

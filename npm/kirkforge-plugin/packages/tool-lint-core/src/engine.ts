@@ -13,7 +13,6 @@ const MAX_LINES = 200;
 // Generated / dependency directories that should never be linted by default.
 const DEFAULT_IGNORE_PATTERNS = [
   ".git/",
-  ".gitnexus/",
   "node_modules/",
   "target/",
   "dist/",

@@ -21,8 +21,6 @@ export function registerDoctor(program: Command): void {
           ["Pyright", report.pyright],
           ["Bandit", report.bandit],
           ["SecDev", report.secdev],
-          ["GitNexus", report.gitnexus],
-          ["Graphify", report.graphify],
         ];
         for (const [name, cap] of tools) {
           const src = cap.source === "internal" ? " [internal]" : "";

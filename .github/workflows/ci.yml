@@ -205,19 +205,3 @@ jobs:
       - name: Run Node SDK tests
         run: npm test
         working-directory: npm/kirkforge-plugin
-
-  # Surface the health of the GitNexus code-intelligence index in every
-  # build log. This does not fail CI (the index is optional), but it
-  # makes it obvious when impact analysis is unavailable.
-  gitnexus-status:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Check GitNexus index health
-        run: |
-          if [ -f .gitnexus/run.cjs ]; then
-            node .gitnexus/run.cjs status || true
-          else
-            echo "GitNexus runner not present; index unavailable"
-          fi

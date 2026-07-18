@@ -657,7 +657,7 @@ mod tests {
     #[test]
     fn test_otel_init_returns_none_without_endpoint() {
         // Ensure no endpoint is set for this test.
-        let _guard = std::env::remove_var("OTEL_EXPORTER_OTLP_ENDPOINT");
+        std::env::remove_var("OTEL_EXPORTER_OTLP_ENDPOINT");
         assert!(init_telemetry().is_none());
     }
 }

@@ -171,7 +171,7 @@ mod tests {
     #[tokio::test]
     async fn missing_api_key_returns_configuration_error() {
         // Ensure no key is present for this test.
-        let _guard = std::env::remove_var("BRAVE_SEARCH_API_KEY");
+        std::env::remove_var("BRAVE_SEARCH_API_KEY");
         let tool = WebSearch::new();
         let outcome = tool
             .run(&ToolContext::new(), serde_json::json!({"query": "rust"}))

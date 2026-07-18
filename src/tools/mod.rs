@@ -8,6 +8,7 @@ pub mod glob;
 pub mod grep;
 pub mod read_file;
 pub mod read_image;
+pub mod task;
 pub mod web_search;
 pub mod write_file;
 
@@ -21,7 +22,7 @@ use tokio_util::sync::CancellationToken;
 /// per-call deadlines, dry-run mode, and request-scoped metadata. Tools
 /// should respect `token` by selecting on it (or on a derived child
 /// token) so a user cancel or turn timeout stops work promptly.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ToolContext {
     /// Cancellation signal from the executor. When this token is
     /// cancelled, the tool should abort its work as soon as possible.
@@ -30,6 +31,20 @@ pub struct ToolContext {
     /// validation is still allowed; destructive operations should
     /// synthesize a descriptive success message instead.
     pub dry_run: bool,
+    /// Optional spawner for isolated subagent tasks. The `task` tool uses
+    /// this to run prompts in a separate executor context. When `None`,
+    /// the tool reports that task spawning is unavailable.
+    pub task_spawner: Option<Arc<dyn task::TaskSpawner>>,
+}
+
+impl std::fmt::Debug for ToolContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ToolContext")
+            .field("token", &self.token)
+            .field("dry_run", &self.dry_run)
+            .field("task_spawner", &self.task_spawner.is_some())
+            .finish()
+    }
 }
 
 impl ToolContext {
@@ -39,6 +54,7 @@ impl ToolContext {
         Self {
             token: CancellationToken::new(),
             dry_run: false,
+            task_spawner: None,
         }
     }
 
@@ -49,6 +65,16 @@ impl ToolContext {
         Self {
             token: CancellationToken::new(),
             dry_run,
+            task_spawner: None,
+        }
+    }
+
+    #[cfg(test)]
+    pub fn with_spawner(spawner: Arc<dyn task::TaskSpawner>) -> Self {
+        Self {
+            token: CancellationToken::new(),
+            dry_run: false,
+            task_spawner: Some(spawner),
         }
     }
 }
@@ -97,6 +123,7 @@ pub fn all_tools(
     bash_sandbox_workdir: bool,
     minify_write_side: bool,
 ) -> Vec<Arc<dyn Tool>> {
+    let task_manager = Arc::new(Mutex::new(task::TaskManager::new()));
     let mut tools: Vec<Arc<dyn Tool>> = vec![
         Arc::new(read_file::ReadFile::new(
             path_guard.clone(),
@@ -108,7 +135,7 @@ pub fn all_tools(
             minify_write_side,
         )),
         Arc::new(edit_file::EditFile::new(
-            undo_stack,
+            undo_stack.clone(),
             path_guard.clone(),
             minify_write_side,
         )),
@@ -122,6 +149,8 @@ pub fn all_tools(
         Arc::new(grep::Grep::new(path_guard.clone())),
         Arc::new(glob::Glob::new(path_guard.clone())),
         Arc::new(web_search::WebSearch::new()),
+        Arc::new(task::Task::with_manager(task_manager.clone())),
+        Arc::new(task::TaskOutput::new(task_manager)),
     ];
     if supports_images {
         tools.push(Arc::new(read_image::ReadImage::new(path_guard.clone())));

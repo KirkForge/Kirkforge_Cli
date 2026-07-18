@@ -127,6 +127,65 @@ struct StdioMcpClient {
     stderr_drain: Option<tokio::task::JoinHandle<()>>,
 }
 
+/// Convert MCP content blocks into a `ToolOutcome::Success` string.
+///
+/// Text blocks are joined. Non-text blocks (`image`, `audio`, `resource`,
+/// and any future kind) are surfaced as descriptive placeholders so the
+/// model knows they exist even if this runtime cannot render them. If no
+/// block can be summarized, falls back to pretty-printing `raw_result`.
+fn tool_result_from_content_blocks(
+    content_blocks: &[serde_json::Value],
+    raw_result: &serde_json::Value,
+) -> ToolOutcome {
+    let mut text_parts: Vec<String> = Vec::new();
+    let mut non_text_mentioned = false;
+    for block in content_blocks {
+        if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
+            text_parts.push(text.to_string());
+            continue;
+        }
+        if let Some(kind) = block.get("type").and_then(|t| t.as_str()) {
+            non_text_mentioned = true;
+            match kind {
+                "image" => {
+                    let mime = block
+                        .get("mimeType")
+                        .and_then(|m| m.as_str())
+                        .unwrap_or("image/*");
+                    text_parts.push(format!("[image: mime={mime}]"));
+                }
+                "audio" => {
+                    text_parts.push("[audio block]".to_string());
+                }
+                "resource" => {
+                    let resource = block.get("resource").unwrap_or(&serde_json::Value::Null);
+                    let uri = resource
+                        .get("uri")
+                        .and_then(|u| u.as_str())
+                        .unwrap_or("");
+                    let mime = resource
+                        .get("mimeType")
+                        .and_then(|m| m.as_str())
+                        .unwrap_or("*/*");
+                    text_parts.push(format!("[resource: {uri} mime={mime}]"));
+                }
+                _ => {
+                    text_parts.push(format!("[{kind} content block]"));
+                }
+            }
+        }
+    }
+    if text_parts.is_empty() && !non_text_mentioned {
+        ToolOutcome::Success {
+            content: serde_json::to_string_pretty(raw_result).unwrap_or_default(),
+        }
+    } else {
+        ToolOutcome::Success {
+            content: text_parts.join(""),
+        }
+    }
+}
+
 impl McpClient {
     /// Spawn the server process and perform the MCP handshake.
     ///
@@ -610,7 +669,17 @@ impl StdioMcpClient {
                         ),
                     });
                 };
-                Self::tool_result_from_content(result, tool_name)
+                // MCP spec: result.content is an array of content blocks.
+                // Surface text blocks as joined text; surface image/resource
+                // blocks as `[image: ...]`/`[resource: ...]` placeholders so the
+                // model is informed even when the adapter cannot render them.
+                if let Some(content_blocks) = result.get("content").and_then(|c| c.as_array()) {
+                    tool_result_from_content_blocks(content_blocks, result)
+                } else {
+                    ToolOutcome::Success {
+                        content: serde_json::to_string_pretty(result).unwrap_or_default(),
+                    }
+                }
             }
             Err(e) => match e {
                 McpError::Timeout => ToolOutcome::Failure(ToolError::Timeout {
@@ -620,33 +689,6 @@ impl StdioMcpClient {
                     message: format!("MCP tool '{tool_name}' failed: {e}"),
                 }),
             },
-        }
-    }
-
-    fn tool_result_from_content(result: &serde_json::Value, _tool_name: &str) -> ToolOutcome {
-        if let Some(content_blocks) = result.get("content").and_then(|c| c.as_array()) {
-            let text_parts: Vec<String> = content_blocks
-                .iter()
-                .filter_map(|block| {
-                    block
-                        .get("text")
-                        .and_then(|t| t.as_str())
-                        .map(|s| s.to_string())
-                })
-                .collect();
-            if text_parts.is_empty() {
-                ToolOutcome::Success {
-                    content: serde_json::to_string_pretty(result).unwrap_or_default(),
-                }
-            } else {
-                ToolOutcome::Success {
-                    content: text_parts.join(""),
-                }
-            }
-        } else {
-            ToolOutcome::Success {
-                content: serde_json::to_string_pretty(result).unwrap_or_default(),
-            }
         }
     }
 
@@ -901,6 +943,53 @@ mod tests {
         assert!(
             matches!(outcome, ToolOutcome::Failure(_)),
             "expected failure after disconnect, got {outcome:?}"
+        );
+    }
+
+    #[test]
+    fn test_content_blocks_surface_text() {
+        let result = serde_json::json!({
+            "content": [
+                { "type": "text", "text": "Hello, " },
+                { "type": "text", "text": "world!" }
+            ]
+        });
+        let blocks = result.get("content").unwrap().as_array().unwrap();
+        let outcome = tool_result_from_content_blocks(blocks, &result);
+        assert!(
+            matches!(outcome, ToolOutcome::Success { ref content } if content == "Hello, world!"),
+            "got {outcome:?}"
+        );
+    }
+
+    #[test]
+    fn test_content_blocks_surface_image_and_resource_placeholders() {
+        let result = serde_json::json!({
+            "content": [
+                { "type": "text", "text": "Here is the diagram:" },
+                { "type": "image", "mimeType": "image/png" },
+                { "type": "resource", "resource": { "uri": "file:///tmp/x.csv", "mimeType": "text/csv" } }
+            ]
+        });
+        let blocks = result.get("content").unwrap().as_array().unwrap();
+        let outcome = tool_result_from_content_blocks(blocks, &result);
+        let content = match outcome {
+            ToolOutcome::Success { content } => content,
+            other => panic!("expected success, got {other:?}"),
+        };
+        assert!(content.contains("Here is the diagram:"), "{content}");
+        assert!(content.contains("[image: mime=image/png]"), "{content}");
+        assert!(content.contains("[resource: file:///tmp/x.csv mime=text/csv]"), "{content}");
+    }
+
+    #[test]
+    fn test_content_blocks_empty_fallback_to_raw_result() {
+        let result = serde_json::json!({ "content": [] });
+        let blocks = result.get("content").unwrap().as_array().unwrap();
+        let outcome = tool_result_from_content_blocks(blocks, &result);
+        assert!(
+            matches!(outcome, ToolOutcome::Success { ref content } if content.contains("content")),
+            "got {outcome:?}"
         );
     }
 

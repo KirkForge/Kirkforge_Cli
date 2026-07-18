@@ -125,8 +125,33 @@ The `git` slot from the original four-slot design was dropped (dirty-worktree ch
 - Auto-fix is naive string replacement — may fix the wrong occurrence or mangle formatting
 - Correction loop at 3 iterations could still loop if the fix introduces a new issue
 
+## Seam: Rust verifier bus vs. TS plugin verifier bus
+
+The repo currently ships **two independent verifier buses** rather than one
+unified bus. They overlap but do not unify:
+
+- **Rust runtime bus** (`src/session/event_bus.rs:28` `EventKind`) has 9 event
+  kinds (`FileRead`, `FileWrite`, `Edit`, `BashExec`, `GitOperation`,
+  `LintRun`, `TypeCheck`, `SecurityScan`, `ToolError`). The Rust verifiers in
+  `src/session/verifier/` (`lint`, `security`, `git`, `rustfmt`) subscribe to
+  these and emit `Verification` verdicts consumed by the correction loop in
+  `src/session/verifier/mod.rs`.
+- **TS plugin orchestrator bus** (`npm/kirkforge-plugin/packages/orchestrator/`)
+  has 5 verifier slots (`lint`, `types`, `security`, `graph`, `imports`) driven
+  by `reducer.ts:38` `SLOT_TO_SIGNAL`. These emit events like
+  `verify.security`, `verify.lint`, `state.graph`, etc., and are reduced to a
+  single `state.verification` result; the Rust side consumes that reduced
+  outcome, not the individual slot events.
+
+This is a deliberate seam, not a bug: the Rust side handles runtime/tool
+verification, while the TS plugin handles static workspace verification
+(lint/types/graph/imports). Unification would require a shared event schema and
+a single correction loop; that is future work. Until then, the seam is
+documented honestly here.
+
 ## Implementation
 
 - Files: `src/session/verifier/mod.rs` (~430 lines), `lint.rs` (~120 lines), `security.rs` (~185 lines); the `graph` and `imports` slots are implemented in the npm Orchestrator (`npm/kirkforge-plugin/packages/orchestrator/src/emitter-factory.ts`), not the Rust verifier module.
+- `state.changes` is emitted by `ChangesEmitter` in the same file; it now computes real `insertions`/`deletions` via `git diff --numstat -- <paths>` and falls back to file count when git is unavailable.
 - 24 unit tests across all verifiers and the correction loop
 - `VerifierSlots` with configurable max (default 5)

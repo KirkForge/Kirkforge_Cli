@@ -139,7 +139,10 @@ impl Tool for WebFetch {
         }
 
         if !status.is_success() {
-            let preview = String::from_utf8_lossy(&body_bytes).chars().take(200).collect::<String>();
+            let preview = String::from_utf8_lossy(&body_bytes)
+                .chars()
+                .take(200)
+                .collect::<String>();
             return ToolOutcome::Failure(ToolError::Execution {
                 message: format!("HTTP {status} from {trimmed}"),
                 exit_code: Some(status.as_u16() as i32),
@@ -154,15 +157,15 @@ impl Tool for WebFetch {
             raw
         };
 
-            let content = if output.len() > DEFAULT_MAX_TOOL_RESULT_CHARS {
-                format!(
-                    "{}\n\n[truncated {} characters]",
-                    &output[..DEFAULT_MAX_TOOL_RESULT_CHARS],
-                    output.len().saturating_sub(DEFAULT_MAX_TOOL_RESULT_CHARS)
-                )
-            } else {
-                output
-            };
+        let content = if output.len() > DEFAULT_MAX_TOOL_RESULT_CHARS {
+            format!(
+                "{}\n\n[truncated {} characters]",
+                &output[..DEFAULT_MAX_TOOL_RESULT_CHARS],
+                output.len().saturating_sub(DEFAULT_MAX_TOOL_RESULT_CHARS)
+            )
+        } else {
+            output
+        };
 
         ToolOutcome::Success { content }
     }
@@ -186,10 +189,7 @@ fn host_is_literal_internal_ip(url: &str) -> bool {
 fn is_internal_addr(addr: &std::net::IpAddr) -> bool {
     match addr {
         std::net::IpAddr::V4(v4) => {
-            v4.is_loopback()
-                || v4.is_unspecified()
-                || v4.is_private()
-                || is_link_local_v4(v4)
+            v4.is_loopback() || v4.is_unspecified() || v4.is_private() || is_link_local_v4(v4)
         }
         std::net::IpAddr::V6(v6) => {
             // loopback ::1; unique local fc00::/7; link-local fe80::/10
@@ -236,7 +236,10 @@ fn extract_host(url: &str) -> Option<String> {
     } else {
         after_userinfo.to_string()
     };
-    let host = host.trim_start_matches('[').trim_end_matches(']').to_string();
+    let host = host
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .to_string();
     if host.is_empty() {
         return None;
     }
@@ -263,10 +266,10 @@ fn html_to_text(html: &str) -> String {
     static TAG_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     static WS_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
 
-    let script_re = SCRIPT_RE
-        .get_or_init(|| regex::Regex::new(r"(?is)<script[^>]*>.*?</script>").unwrap());
-    let style_re = STYLE_RE
-        .get_or_init(|| regex::Regex::new(r"(?is)<style[^>]*>.*?</style>").unwrap());
+    let script_re =
+        SCRIPT_RE.get_or_init(|| regex::Regex::new(r"(?is)<script[^>]*>.*?</script>").unwrap());
+    let style_re =
+        STYLE_RE.get_or_init(|| regex::Regex::new(r"(?is)<style[^>]*>.*?</style>").unwrap());
     let tag_re = TAG_RE.get_or_init(|| regex::Regex::new(r"<[^>]+>").unwrap());
     let ws_re = WS_RE.get_or_init(|| regex::Regex::new(r"[ \t]+").unwrap());
 
@@ -357,10 +360,16 @@ mod tests {
     async fn rejects_metadata_endpoint() {
         let tool = WebFetch::new(DenyList::default());
         let outcome = tool
-            .run(&ToolContext::new(), json!({"url": "http://169.254.169.254/latest/meta-data/"}))
+            .run(
+                &ToolContext::new(),
+                json!({"url": "http://169.254.169.254/latest/meta-data/"}),
+            )
             .await;
         assert!(
-            matches!(outcome, ToolOutcome::Failure(ToolError::AccessDenied { .. })),
+            matches!(
+                outcome,
+                ToolOutcome::Failure(ToolError::AccessDenied { .. })
+            ),
             "expected denied metadata endpoint, got {outcome:?}"
         );
     }
@@ -369,10 +378,16 @@ mod tests {
     async fn rejects_literal_internal_ip() {
         let tool = WebFetch::new(DenyList::default());
         let outcome = tool
-            .run(&ToolContext::new(), json!({"url": "http://127.0.0.1:8080/secret"}))
+            .run(
+                &ToolContext::new(),
+                json!({"url": "http://127.0.0.1:8080/secret"}),
+            )
             .await;
         assert!(
-            matches!(outcome, ToolOutcome::Failure(ToolError::AccessDenied { .. })),
+            matches!(
+                outcome,
+                ToolOutcome::Failure(ToolError::AccessDenied { .. })
+            ),
             "expected denied internal IP, got {outcome:?}"
         );
     }
@@ -396,9 +411,11 @@ mod tests {
         let body = r#"{"hello": "world"}"#;
         let server = wiremock::MockServer::start().await;
         wiremock::Mock::given(wiremock::matchers::method("GET"))
-            .respond_with(wiremock::ResponseTemplate::new(200)
-                .set_body_string(body)
-                .insert_header("content-type", "application/json"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200)
+                    .set_body_string(body)
+                    .insert_header("content-type", "application/json"),
+            )
             .mount(&server)
             .await;
 
@@ -418,15 +435,20 @@ mod tests {
         let html = r#"<!DOCTYPE html><html><head><title>Hi</title><script>alert(1)</script></head><body><h1>  Hello  </h1><p>World &amp; more.</p></body></html>"#;
         let server = wiremock::MockServer::start().await;
         wiremock::Mock::given(wiremock::matchers::method("GET"))
-            .respond_with(wiremock::ResponseTemplate::new(200)
-                .set_body_string(html)
-                .insert_header("content-type", "text/html"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200)
+                    .set_body_string(html)
+                    .insert_header("content-type", "text/html"),
+            )
             .mount(&server)
             .await;
 
         let tool = test_tool_for(&server);
         let outcome = tool
-            .run(&ToolContext::new(), json!({"url": "http://test.local/page"}))
+            .run(
+                &ToolContext::new(),
+                json!({"url": "http://test.local/page"}),
+            )
             .await;
         let ToolOutcome::Success { content } = outcome else {
             panic!("expected Success, got {outcome:?}");

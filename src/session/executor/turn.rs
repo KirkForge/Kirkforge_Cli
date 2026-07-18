@@ -218,12 +218,7 @@ impl Executor {
                     // input order so the conversation messages are appended in
                     // the same order the model requested them.
                     let cancelled_idx = self
-                        .dispatch_tool_call_batch(
-                            &mut tcs,
-                            approval_sender,
-                            cancelled,
-                            event_tx,
-                        )
+                        .dispatch_tool_call_batch(&mut tcs, approval_sender, cancelled, event_tx)
                         .await?;
 
                     // Cancellation may have left requested tool calls without

@@ -178,8 +178,7 @@ fn parse_todos(args: &serde_json::Value) -> Result<Vec<TodoItem>, String> {
         .ok_or_else(|| "todo_write requires a 'todos' array (use [] to clear)".to_string())?;
 
     let value: serde_json::Value = if let serde_json::Value::String(s) = raw {
-        serde_json::from_str(s)
-            .map_err(|e| format!("failed to parse todos string as JSON: {e}"))?
+        serde_json::from_str(s).map_err(|e| format!("failed to parse todos string as JSON: {e}"))?
     } else {
         raw.clone()
     };
@@ -371,14 +370,21 @@ fn format_todo_list(items: &[TodoItem]) -> String {
         .map(|it| it.id.as_str())
         .collect();
 
-    let mut out = format!("TODO list ({} item{}):\n", items.len(), if items.len() == 1 { "" } else { "s" });
+    let mut out = format!(
+        "TODO list ({} item{}):\n",
+        items.len(),
+        if items.len() == 1 { "" } else { "s" }
+    );
     for (i, it) in items.iter().enumerate() {
         let marker = it.status.marker();
         out.push_str(&format!("  {marker} {}. {}", i + 1, it.content));
         if !it.depends_on.is_empty() {
             out.push_str(&format!("  (depends on: {})", it.depends_on.join(", ")));
             if it.status != TodoStatus::Completed {
-                let blocked = it.depends_on.iter().any(|d| !completed.contains(d.as_str()));
+                let blocked = it
+                    .depends_on
+                    .iter()
+                    .any(|d| !completed.contains(d.as_str()));
                 if blocked {
                     out.push_str(" [blocked]");
                 }
@@ -415,7 +421,8 @@ mod tests {
     }
 
     async fn run_read(tool: &TodoRead) -> ToolOutcome {
-        tool.run(&ToolContext::default(), serde_json::json!({})).await
+        tool.run(&ToolContext::default(), serde_json::json!({}))
+            .await
     }
 
     #[tokio::test]
@@ -528,10 +535,21 @@ mod tests {
         let w = TodoWrite::new(s.clone());
         let r = TodoRead::new(s);
 
-        run_write(&w, &[item("a", "first", "pending"), item("b", "second", "pending")]).await;
+        run_write(
+            &w,
+            &[
+                item("a", "first", "pending"),
+                item("b", "second", "pending"),
+            ],
+        )
+        .await;
         let out = run_read(&r).await;
         match out {
-            ToolOutcome::Success { content } => assert!(content.contains("2 items") && content.contains("first") && content.contains("second")),
+            ToolOutcome::Success { content } => assert!(
+                content.contains("2 items")
+                    && content.contains("first")
+                    && content.contains("second")
+            ),
             other => panic!("expected Success, got {other:?}"),
         }
 
@@ -577,14 +595,11 @@ mod tests {
 
     #[test]
     fn blocked_tag_shown_for_unmet_dependency() {
-        let items = vec![
-            item("a", "blocker", "pending"),
-            {
-                let mut b = item("b", "after", "pending");
-                b.depends_on = vec!["a".to_string()];
-                b
-            },
-        ];
+        let items = vec![item("a", "blocker", "pending"), {
+            let mut b = item("b", "after", "pending");
+            b.depends_on = vec!["a".to_string()];
+            b
+        }];
         let rendered = format_todo_list(&items);
         assert!(rendered.contains("(depends on: a) [blocked]"));
     }

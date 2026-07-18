@@ -133,7 +133,9 @@ impl McpClient {
     /// Returns `None` if the server cannot be spawned or the handshake fails.
     async fn connect(config: &McpServerConfig) -> Option<Self> {
         if config.transport == "http" {
-            return http::McpHttpTransport::connect(config).await.map(Self::Http);
+            return http::McpHttpTransport::connect(config)
+                .await
+                .map(Self::Http);
         }
         let mut cmd = Command::new(&config.command);
         cmd.args(&config.args);
@@ -207,18 +209,18 @@ impl McpClient {
         });
 
         let wrapper = McpClient::Stdio(client);
-        let resp = match tokio::time::timeout(STARTUP_TIMEOUT, wrapper.send_request(&init_req)).await
-        {
-            Ok(Ok(r)) => r,
-            Ok(Err(e)) => {
-                tracing::warn!(server = %config.name, error = %e, "MCP initialize failed");
-                return None;
-            }
-            Err(_) => {
-                tracing::warn!(server = %config.name, "MCP initialize timed out");
-                return None;
-            }
-        };
+        let resp =
+            match tokio::time::timeout(STARTUP_TIMEOUT, wrapper.send_request(&init_req)).await {
+                Ok(Ok(r)) => r,
+                Ok(Err(e)) => {
+                    tracing::warn!(server = %config.name, error = %e, "MCP initialize failed");
+                    return None;
+                }
+                Err(_) => {
+                    tracing::warn!(server = %config.name, "MCP initialize timed out");
+                    return None;
+                }
+            };
         // Verify it's a valid response to initialize
         if resp.get("result").is_none() {
             tracing::warn!(server = %config.name, response = %resp, "MCP initialize response missing result");

@@ -72,7 +72,8 @@ impl McpHttpTransport {
             });
 
         let alive = Arc::new(AtomicBool::new(true));
-        let pending: PendingMap = Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
+        let pending: PendingMap =
+            Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
         let next_id = Arc::new(tokio::sync::Mutex::new(1_u64));
 
         let sse_url = format!("{base_url}/sse");
@@ -101,13 +102,8 @@ impl McpHttpTransport {
         let pending_for_poster = pending.clone();
         let poster_task = tokio::spawn(async move {
             while let Some(envelope) = request_rx.recv().await {
-                let resp = post_request(
-                    &client_for_poster,
-                    &post_url,
-                    &envelope.body,
-                    &envelope.id,
-                )
-                .await;
+                let resp =
+                    post_request(&client_for_poster, &post_url, &envelope.body, &envelope.id).await;
                 // The SSE reader will route the real response; the POST
                 // response itself is only a transport acknowledgment. We
                 // still surface POST-level errors immediately so callers
@@ -149,18 +145,20 @@ impl McpHttpTransport {
             }
         });
 
-        let resp = match tokio::time::timeout(super::STARTUP_TIMEOUT, transport.send_request(&init_req)).await
-        {
-            Ok(Ok(r)) => r,
-            Ok(Err(e)) => {
-                tracing::warn!(server = %config.name, error = %e, "MCP HTTP initialize failed");
-                return None;
-            }
-            Err(_) => {
-                tracing::warn!(server = %config.name, "MCP HTTP initialize timed out");
-                return None;
-            }
-        };
+        let resp =
+            match tokio::time::timeout(super::STARTUP_TIMEOUT, transport.send_request(&init_req))
+                .await
+            {
+                Ok(Ok(r)) => r,
+                Ok(Err(e)) => {
+                    tracing::warn!(server = %config.name, error = %e, "MCP HTTP initialize failed");
+                    return None;
+                }
+                Err(_) => {
+                    tracing::warn!(server = %config.name, "MCP HTTP initialize timed out");
+                    return None;
+                }
+            };
         if resp.get("result").is_none() {
             tracing::warn!(server = %config.name, response = %resp, "MCP HTTP initialize response missing result");
             return None;
@@ -239,9 +237,7 @@ impl McpHttpTransport {
         }
     }
 
-    pub(super) async fn send_notification(&self,
-        notification: &serde_json::Value,
-    ) {
+    pub(super) async fn send_notification(&self, notification: &serde_json::Value) {
         if !self.is_alive() {
             return;
         }
@@ -315,7 +311,9 @@ impl McpHttpTransport {
             Ok(resp) => {
                 let Some(result) = resp.get("result") else {
                     return ToolOutcome::Failure(ToolError::Internal {
-                        message: format!("MCP tool '{tool_name}' returned a response without a result"),
+                        message: format!(
+                            "MCP tool '{tool_name}' returned a response without a result"
+                        ),
                     });
                 };
                 Self::tool_result_from_content(result, tool_name)
@@ -398,7 +396,7 @@ async fn post_request(
     // is expected to route by the open SSE connection.
     let resp = match tokio::time::timeout(REQUEST_TIMEOUT, request.send()).await {
         Ok(Ok(r)) => r,
-                Ok(Err(e)) => return Err(McpError::Io(reqwest_to_io(e))),
+        Ok(Err(e)) => return Err(McpError::Io(reqwest_to_io(e))),
         Err(_) => {
             tracing::warn!(id = %id, "MCP HTTP POST timed out");
             return Err(McpError::Timeout);
@@ -425,11 +423,7 @@ async fn run_sse_reader(
     shutdown: &mut oneshot::Receiver<()>,
 ) {
     let mut buffer: Vec<u8> = Vec::new();
-    let stream = match open_sse_stream(&client,
-        &url,
-    )
-    .await
-    {
+    let stream = match open_sse_stream(&client, &url).await {
         Ok(s) => s,
         Err(e) => {
             tracing::warn!(url = %url, error = %e, "failed to open MCP SSE stream");
@@ -471,10 +465,14 @@ async fn run_sse_reader(
         while let Some(start) = find_subseq(&buffer, b"data: ") {
             let after_start = start + 6;
             let after = &buffer[after_start..];
-            let sep = [b"\n\n".as_slice(), b"\r\n\r\n".as_slice(), b"\r\r".as_slice()]
-                .iter()
-                .filter_map(|t| find_subseq(after, t).map(|i| (i, t.len())))
-                .min_by_key(|(i, _)| *i);
+            let sep = [
+                b"\n\n".as_slice(),
+                b"\r\n\r\n".as_slice(),
+                b"\r\r".as_slice(),
+            ]
+            .iter()
+            .filter_map(|t| find_subseq(after, t).map(|i| (i, t.len())))
+            .min_by_key(|(i, _)| *i);
             let Some((sep_idx, term_len)) = sep else {
                 break;
             };
@@ -523,10 +521,7 @@ async fn run_sse_reader(
 
 type SseStream = Box<dyn tokio_stream::Stream<Item = Result<Vec<u8>, McpError>> + Unpin + Send>;
 
-async fn open_sse_stream(
-    client: &reqwest::Client,
-    url: &str,
-) -> Result<SseStream, McpError> {
+async fn open_sse_stream(client: &reqwest::Client, url: &str) -> Result<SseStream, McpError> {
     let resp = client
         .get(url)
         .header("accept", "text/event-stream")
@@ -583,7 +578,9 @@ mod tests {
             ]
         });
         let outcome = McpHttpTransport::tool_result_from_content(&result, "test");
-        assert!(matches!(outcome, crate::shared::ToolOutcome::Success { content } if content == "Hello world"));
+        assert!(
+            matches!(outcome, crate::shared::ToolOutcome::Success { content } if content == "Hello world")
+        );
     }
 
     #[test]

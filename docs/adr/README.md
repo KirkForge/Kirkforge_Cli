@@ -10,6 +10,9 @@ compresses input. Plugin3 slices output and enforces a token
 budget. The three cover input-routing, input-compression, and
 output-control respectively.
 
+**Series note:** files `001`–`017` are the native KirkForge-Cli ADRs;
+files `0001`–`0018` (indexed below) are the vendored Plugin3 ADRs.
+
 ## Index
 
 | ADR | Title | Status |

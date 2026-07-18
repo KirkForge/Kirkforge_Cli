@@ -110,11 +110,7 @@ struct BraveResult {
     description: String,
 }
 
-async fn search_brave(
-    api_key: &str,
-    query: &str,
-    count: u32,
-) -> anyhow::Result<Vec<BraveResult>> {
+async fn search_brave(api_key: &str, query: &str, count: u32) -> anyhow::Result<Vec<BraveResult>> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .build()?;
@@ -190,7 +186,10 @@ mod tests {
             .run(&ToolContext::new(), serde_json::json!({"query": "  "}))
             .await;
         assert!(
-            matches!(outcome, ToolOutcome::Failure(crate::shared::ToolError::InvalidArgs { .. })),
+            matches!(
+                outcome,
+                ToolOutcome::Failure(crate::shared::ToolError::InvalidArgs { .. })
+            ),
             "got {outcome:?}"
         );
     }

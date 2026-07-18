@@ -149,9 +149,10 @@ impl MetricEvent {
     /// Convert the event into an OpenTelemetry span name and attribute set.
     #[cfg(feature = "otel")]
     fn to_otel_attrs(&self) -> (String, Vec<opentelemetry::KeyValue>) {
-        let mut attrs = vec![
-            opentelemetry::KeyValue::new("event.category", self.category()),
-        ];
+        let mut attrs = vec![opentelemetry::KeyValue::new(
+            "event.category",
+            self.category(),
+        )];
         let name = match self {
             MetricEvent::ToolCall {
                 name,
@@ -172,7 +173,10 @@ impl MetricEvent {
             }
             MetricEvent::Verifier { name, verdict } => {
                 attrs.push(opentelemetry::KeyValue::new("verifier.name", name.clone()));
-                attrs.push(opentelemetry::KeyValue::new("verifier.verdict", verdict.clone()));
+                attrs.push(opentelemetry::KeyValue::new(
+                    "verifier.verdict",
+                    verdict.clone(),
+                ));
                 "verifier.run".to_string()
             }
             MetricEvent::Turn {
@@ -197,7 +201,10 @@ impl MetricEvent {
                 "turn.complete".to_string()
             }
             MetricEvent::Approval { action } => {
-                attrs.push(opentelemetry::KeyValue::new("approval.action", action.clone()));
+                attrs.push(opentelemetry::KeyValue::new(
+                    "approval.action",
+                    action.clone(),
+                ));
                 "approval.decision".to_string()
             }
         };

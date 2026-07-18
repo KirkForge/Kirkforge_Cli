@@ -159,10 +159,7 @@ fn tool_result_from_content_blocks(
                 }
                 "resource" => {
                     let resource = block.get("resource").unwrap_or(&serde_json::Value::Null);
-                    let uri = resource
-                        .get("uri")
-                        .and_then(|u| u.as_str())
-                        .unwrap_or("");
+                    let uri = resource.get("uri").and_then(|u| u.as_str()).unwrap_or("");
                     let mime = resource
                         .get("mimeType")
                         .and_then(|m| m.as_str())
@@ -979,7 +976,10 @@ mod tests {
         };
         assert!(content.contains("Here is the diagram:"), "{content}");
         assert!(content.contains("[image: mime=image/png]"), "{content}");
-        assert!(content.contains("[resource: file:///tmp/x.csv mime=text/csv]"), "{content}");
+        assert!(
+            content.contains("[resource: file:///tmp/x.csv mime=text/csv]"),
+            "{content}"
+        );
     }
 
     #[test]

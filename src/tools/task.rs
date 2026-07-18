@@ -3,8 +3,8 @@ use crate::session::conversation::ConversationLog;
 use crate::session::executor::{ApprovalRequest, ApprovalResponse, Executor};
 use crate::session::toolset::{CompositeToolset, VecToolset};
 use crate::shared::{Config, Role, SharedConfig};
-use crate::tools::{Tool, ToolContext, UndoStackRef};
 use crate::shared::{ToolDef, ToolError, ToolOutcome};
+use crate::tools::{Tool, ToolContext, UndoStackRef};
 use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
@@ -78,7 +78,9 @@ impl Task {
     }
 
     pub fn with_manager(manager: Arc<Mutex<TaskManager>>) -> Self {
-        Self { task_manager: manager }
+        Self {
+            task_manager: manager,
+        }
     }
 }
 
@@ -133,7 +135,10 @@ impl Tool for Task {
             .and_then(|p| p.as_str())
             .unwrap_or("coder")
             .to_lowercase();
-        let background = args.get("background").and_then(|b| b.as_bool()).unwrap_or(false);
+        let background = args
+            .get("background")
+            .and_then(|b| b.as_bool())
+            .unwrap_or(false);
 
         let spawner = match &ctx.task_spawner {
             Some(s) => s.clone(),
@@ -152,7 +157,10 @@ impl Tool for Task {
             };
             let id = {
                 let mut guard = manager.lock().unwrap_or_else(|e| e.into_inner());
-                guard.insert(TaskHandle { result: None, error: None })
+                guard.insert(TaskHandle {
+                    result: None,
+                    error: None,
+                })
             };
             let id_for_spawn = id.clone();
             tokio::spawn(async move {
@@ -166,7 +174,9 @@ impl Tool for Task {
                 }
             });
             ToolOutcome::Success {
-                content: format!("Started background task {id}. Use task_output to retrieve the result."),
+                content: format!(
+                    "Started background task {id}. Use task_output to retrieve the result."
+                ),
             }
         } else {
             let request = TaskRequest { prompt, persona };
@@ -293,13 +303,25 @@ impl TaskSpawner for InProcessTaskSpawner {
                 .filter(|t| {
                     matches!(
                         t.def().name,
-                        "read_file" | "read_image" | "grep" | "glob" | "bash" | "bash_status" | "bash_cancel" | "task"
+                        "read_file"
+                            | "read_image"
+                            | "grep"
+                            | "glob"
+                            | "bash"
+                            | "bash_status"
+                            | "bash_cancel"
+                            | "task"
                     )
                 })
                 .collect(),
             "plan" => all
                 .into_iter()
-                .filter(|t| matches!(t.def().name, "read_file" | "read_image" | "grep" | "glob" | "task"))
+                .filter(|t| {
+                    matches!(
+                        t.def().name,
+                        "read_file" | "read_image" | "grep" | "glob" | "task"
+                    )
+                })
                 .collect(),
             _ => all,
         };
@@ -312,7 +334,8 @@ impl TaskSpawner for InProcessTaskSpawner {
                 .map(|d| d.as_millis())
                 .unwrap_or(0)
         ));
-        std::fs::create_dir_all(&temp_dir).map_err(|e| format!("failed to create task temp dir: {e}"))?;
+        std::fs::create_dir_all(&temp_dir)
+            .map_err(|e| format!("failed to create task temp dir: {e}"))?;
         let log_path = temp_dir.join("conversation.ndjson");
 
         let conversation = ConversationLog::open_async(log_path.clone())
@@ -411,8 +434,14 @@ mod tests {
     #[test]
     fn task_manager_generates_unique_ids() {
         let mut mgr = TaskManager::new();
-        let id1 = mgr.insert(TaskHandle { result: None, error: None });
-        let id2 = mgr.insert(TaskHandle { result: None, error: None });
+        let id1 = mgr.insert(TaskHandle {
+            result: None,
+            error: None,
+        });
+        let id2 = mgr.insert(TaskHandle {
+            result: None,
+            error: None,
+        });
         assert_ne!(id1, id2);
         assert!(mgr.get(&id1).is_some());
     }

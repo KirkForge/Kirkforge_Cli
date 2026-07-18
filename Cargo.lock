@@ -1739,6 +1739,7 @@ dependencies = [
  "proptest",
  "pulldown-cmark",
  "ratatui",
+ "regex",
  "reqwest",
  "rustyline",
  "serde",

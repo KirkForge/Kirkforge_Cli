@@ -1,3 +1,4 @@
+pub mod anthropic;
 pub mod cache;
 pub mod caching;
 pub mod deepseek;
@@ -138,6 +139,9 @@ pub enum AdapterKind {
     Ollama,
     /// OpenAI-compatible `/v1/chat/completions` protocol.
     OpenAiCompat,
+    /// Anthropic Messages API (`/v1/messages`) with native `tool_use`
+    /// blocks, prompt caching, and extended thinking.
+    Anthropic,
 }
 
 /// Classify a model name (and optional type override) into an
@@ -147,12 +151,15 @@ pub fn adapter_kind_for(model_name: &str, model_type_override: Option<&str>) -> 
     if let Some(override_type) = model_type_override {
         return match override_type {
             "glm" | "deepseek" | "gemini" | "kimi" | "moonshot" => AdapterKind::Ollama,
+            "anthropic" => AdapterKind::Anthropic,
             _ => AdapterKind::OpenAiCompat,
         };
     }
 
     let lower = model_name.to_lowercase();
-    if lower.starts_with("glm")
+    if lower.starts_with("claude-") || lower.starts_with("claude_") || lower.starts_with("claude") {
+        AdapterKind::Anthropic
+    } else if lower.starts_with("glm")
         || lower.contains("chatglm")
         || lower.starts_with("deepseek")
         || lower.starts_with("gemini")
@@ -247,6 +254,11 @@ pub fn adapter_for(
             }
         }
         AdapterKind::OpenAiCompat => Box::new(openai_compat::OpenAiCompatAdapter::new(
+            ollama_host,
+            model_name,
+            timeout_secs,
+        )),
+        AdapterKind::Anthropic => Box::new(anthropic::AnthropicAdapter::new(
             ollama_host,
             model_name,
             timeout_secs,

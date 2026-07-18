@@ -177,6 +177,8 @@ pub struct ModelInfo {
 pub enum ToolCallStyle {
     Native,
     OpenAiCompat,
+    /// Anthropic Messages API native `tool_use` / `tool_result` blocks.
+    Anthropic,
     None,
 }
 
@@ -463,7 +465,13 @@ pub struct Config {
 pub struct McpServerConfig {
     /// Human-readable name for this server (used in tool prefix).
     pub name: String,
-    /// Command to spawn (e.g., "npx", "python3").
+    /// Transport kind. `stdio` spawns `command` with `args`. `http` connects
+    /// to `url` via streamable-HTTP (GET for SSE, POST for messages).
+    /// Default is `stdio` for backward compatibility.
+    #[serde(default = "default_mcp_transport")]
+    pub transport: String,
+    /// Command to spawn (e.g., "npx", "python3"). Used only for stdio.
+    #[serde(default)]
     pub command: String,
     /// Arguments passed to the command.
     #[serde(default)]
@@ -471,6 +479,18 @@ pub struct McpServerConfig {
     /// Additional environment variables for the subprocess.
     #[serde(default)]
     pub env_vars: HashMap<String, String>,
+    /// Base URL for streamable-HTTP transport (e.g. `http://localhost:8080/mcp`).
+    /// Used only for `transport = "http"`.
+    #[serde(default)]
+    pub url: String,
+    /// Optional bearer token for HTTP transport. If present, sent as
+    /// `Authorization: Bearer <token>`.
+    #[serde(default)]
+    pub bearer_token: String,
+}
+
+fn default_mcp_transport() -> String {
+    "stdio".to_string()
 }
 
 fn default_summarize_model() -> String {

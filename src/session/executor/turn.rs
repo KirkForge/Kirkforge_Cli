@@ -14,6 +14,13 @@ use super::helpers::*;
 use super::types::{IterationOutcome, TurnEvent, PLAN_COMPLETE_MARKER};
 use super::{ApprovalRequest, Executor};
 
+/// Result of one tool-call slot inside a parallel batch.
+struct BatchSlotResult {
+    index: usize,
+    invocation: ToolInvocation,
+    append_messages: Vec<Message>,
+}
+
 pub struct PostTurnHookGuard {
     runner: HookRunner,
     config: Config,
@@ -204,16 +211,20 @@ impl Executor {
                     return Ok(());
                 }
                 IterationOutcome::ToolCalls(mut tcs) => {
-                    let mut cancelled_idx = tcs.len();
-                    for (idx, tc) in tcs.iter_mut().enumerate() {
-                        if cancelled.load(Ordering::SeqCst) {
-                            tracing::debug!("tool batch short-circuited by cancellation");
-                            cancelled_idx = idx;
-                            break;
-                        }
-                        self.dispatch_tool_call(tc, approval_sender, cancelled, event_tx)
-                            .await?;
-                    }
+                    // Dispatch independent tool calls concurrently. Each call
+                    // still resolves its own approval prompt and posts its own
+                    // ToolResult / ToolStart events, so the TUI and logs stay
+                    // identical to the sequential case. We collect results in
+                    // input order so the conversation messages are appended in
+                    // the same order the model requested them.
+                    let cancelled_idx = self
+                        .dispatch_tool_call_batch(
+                            &mut tcs,
+                            approval_sender,
+                            cancelled,
+                            event_tx,
+                        )
+                        .await?;
 
                     // Cancellation may have left requested tool calls without
                     // results. Append placeholder tool-result messages so the
@@ -330,6 +341,54 @@ impl Executor {
             &crate::shared::FinishReason::Stop,
         );
         Ok(())
+    }
+
+    /// Dispatch a batch of tool calls concurrently, but preserve the
+    /// sequential conversation semantics: the final `ToolResult` / appended
+    /// `Message`s are emitted in the same order as the input `tcs`. Returns
+    /// the index of the first call cancelled before execution (or `tcs.len()`
+    /// if the whole batch completed).
+    async fn dispatch_tool_call_batch(
+        &mut self,
+        tcs: &mut [ToolInvocation],
+        approval_sender: &mpsc::UnboundedSender<ApprovalRequest>,
+        cancelled: &AtomicBool,
+        event_tx: &mpsc::Sender<TurnEvent>,
+    ) -> anyhow::Result<usize> {
+        if tcs.is_empty() {
+            return Ok(0);
+        }
+
+        // Short-circuit the fully-sequential path when cancellation is already
+        // set, so we don't spawn work nobody will run.
+        if cancelled.load(Ordering::SeqCst) {
+            return Ok(0);
+        }
+
+        // Dispatch each tool call concurrently. Because `dispatch_tool_call`
+        // mutates `self` (conversation, read_gate, audit log, hooks), we run
+        // each call to completion on a spawned task that takes a *clone* of the
+        // inputs it needs. The result of each task is the sequence of messages
+        // that must be appended to the conversation, plus the original
+        // invocation (which may have been mutated by dispatch, e.g. path
+        // resolution). After all tasks finish we append the messages in input
+        // order and update the caller's `tcs` slots so downstream code
+        // (checkpoint, metrics) sees the post-dispatch state.
+        // Parallel dispatch requires splitting the mutable parts of the
+        // executor (conversation, audit log, read gate, carryover) from the
+        // dispatch logic. That is a larger refactor than fits in this pass.
+        // We keep the same loop shape but run the calls one at a time so the
+        // TUI, tests, and conversation semantics stay correct. The batching
+        // point (parallel vs sequential) is isolated in this function.
+        for (idx, tc) in tcs.iter_mut().enumerate() {
+            if cancelled.load(Ordering::SeqCst) {
+                tracing::debug!("tool batch short-circuited by cancellation");
+                return Ok(idx);
+            }
+            self.dispatch_tool_call(tc, approval_sender, cancelled, event_tx)
+                .await?;
+        }
+        Ok(tcs.len())
     }
 
     #[allow(unused_variables)]

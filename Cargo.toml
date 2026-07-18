@@ -81,6 +81,10 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Glob pattern matching
 globset = "0.4"
 
+# Regex for lightweight HTML-to-text stripping in web_fetch (kept small;
+# the full html5ever/scraper path is intentionally deferred per ADR-0001).
+regex = "1"
+
 # File system helpers
 ignore = "0.4"
 shellexpand = "3"

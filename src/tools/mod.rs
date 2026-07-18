@@ -8,6 +8,7 @@ pub mod glob;
 pub mod grep;
 pub mod read_file;
 pub mod read_image;
+pub mod web_fetch;
 pub mod write_file;
 
 use crate::shared::{ToolDef, ToolOutcome};
@@ -120,6 +121,7 @@ pub fn all_tools(
         Arc::new(bash_cancel::BashCancel),
         Arc::new(grep::Grep::new(path_guard.clone())),
         Arc::new(glob::Glob::new(path_guard.clone())),
+        Arc::new(web_fetch::WebFetch::new(deny_list.clone())),
     ];
     if supports_images {
         tools.push(Arc::new(read_image::ReadImage::new(path_guard.clone())));

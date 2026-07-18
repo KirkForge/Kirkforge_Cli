@@ -76,9 +76,9 @@ pub async fn handle_model_command(
     }
 
     match adapter_kind_for_model(name) {
-        AdapterKind::OpenAiCompat => {
-            // OpenAI-compatible endpoints may be remote/cloud APIs;
-            // a local `/api/tags` check would be meaningless here.
+        AdapterKind::OpenAiCompat | AdapterKind::Anthropic => {
+            // OpenAI-compatible and Anthropic endpoints may be remote/cloud
+            // APIs; a local `/api/tags` check would be meaningless here.
             let _validation = ModelValidation::SkippedOpenAiCompat;
             match model_tx.send(name.to_string()) {
                 Ok(()) => format!("Switching to {name}…"),

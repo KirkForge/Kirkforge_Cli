@@ -1,9 +1,13 @@
-//! Operational metrics — append-only NDJSON event log.
+//! Operational metrics — append-only NDJSON event log + optional OTel export.
 //!
 //! Records lightweight, structured events for tool calls, verifier
 //! verdicts, turn outcomes, and approval decisions. The log lives at
 //! `~/.local/share/kirkforge/metrics.ndjson` and is designed to be
 //! human-readable and trivial to query with standard shell tools.
+//!
+//! When the `otel` feature is enabled and `OTEL_EXPORTER_OTLP_ENDPOINT` is
+//! set, each `MetricEvent` is also emitted as an OpenTelemetry span so the
+//! runtime integrates with the existing TS `core-telemetry` pipeline.
 
 use serde::{Deserialize, Serialize};
 use std::fs::{File, OpenOptions};
@@ -12,6 +16,86 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 #[cfg(test)]
 use std::sync::MutexGuard;
+
+#[cfg(feature = "otel")]
+mod otel {
+    use opentelemetry::trace::{Span, SpanKind, Tracer, TracerProvider};
+    use opentelemetry::KeyValue;
+    use opentelemetry_otlp::{MetricExporter, SpanExporter, WithExportConfig};
+    use opentelemetry_sdk::metrics::{MeterProviderBuilder, PeriodicReader, SdkMeterProvider};
+    use opentelemetry_sdk::trace::{Sampler, SdkTracerProvider};
+    use opentelemetry_sdk::Resource;
+    use std::sync::OnceLock;
+
+    static TRACER_PROVIDER: OnceLock<SdkTracerProvider> = OnceLock::new();
+    static METER_PROVIDER: OnceLock<SdkMeterProvider> = OnceLock::new();
+
+    fn otlp_endpoint() -> Option<String> {
+        std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT")
+            .ok()
+            .filter(|s| !s.is_empty())
+    }
+
+    pub fn init_telemetry() -> Option<String> {
+        let endpoint = otlp_endpoint()?;
+        let resource = Resource::builder()
+            .with_attribute(KeyValue::new("service.name", "kirkforge"))
+            .with_attribute(KeyValue::new("service.version", env!("CARGO_PKG_VERSION")))
+            .build();
+
+        let span_exporter = SpanExporter::builder()
+            .with_tonic()
+            .with_endpoint(endpoint.clone())
+            .build()
+            .ok()?;
+        let tracer_provider = SdkTracerProvider::builder()
+            .with_resource(resource.clone())
+            .with_batch_exporter(span_exporter)
+            .with_sampler(Sampler::AlwaysOn)
+            .build();
+        let _ = TRACER_PROVIDER.set(tracer_provider.clone());
+        opentelemetry::global::set_text_map_propagator(
+            opentelemetry_sdk::propagation::TraceContextPropagator::new(),
+        );
+
+        let metric_exporter = MetricExporter::builder()
+            .with_tonic()
+            .with_endpoint(endpoint.clone())
+            .build()
+            .ok()?;
+        let reader = PeriodicReader::builder(metric_exporter).build();
+        let meter_provider = MeterProviderBuilder::default()
+            .with_reader(reader)
+            .with_resource(resource)
+            .build();
+        let _ = METER_PROVIDER.set(meter_provider.clone());
+
+        opentelemetry::global::set_tracer_provider(tracer_provider.clone());
+        opentelemetry::global::set_meter_provider(meter_provider);
+
+        Some(endpoint)
+    }
+
+    pub fn emit_event_span(event_name: &str, attributes: &[KeyValue]) {
+        if let Some(provider) = TRACER_PROVIDER.get() {
+            let tracer = provider.tracer("kirkforge");
+            let mut builder = tracer.span_builder(event_name.to_string());
+            builder.span_kind = Some(SpanKind::Internal);
+            let mut span = tracer.build(builder);
+            span.set_attributes(attributes.iter().cloned());
+            span.end();
+        }
+    }
+
+    pub fn shutdown() {
+        if let Some(p) = TRACER_PROVIDER.get() {
+            let _ = p.shutdown();
+        }
+        if let Some(p) = METER_PROVIDER.get() {
+            let _ = p.shutdown();
+        }
+    }
+}
 
 /// Maximum size of the active metrics log before rotation. Older logs are
 /// moved to `metrics.ndjson.1`; earlier rotations are overwritten.
@@ -60,6 +144,64 @@ impl MetricEvent {
             MetricEvent::Turn { .. } => "turn",
             MetricEvent::Approval { .. } => "approval",
         }
+    }
+
+    /// Convert the event into an OpenTelemetry span name and attribute set.
+    #[cfg(feature = "otel")]
+    fn to_otel_attrs(&self) -> (String, Vec<opentelemetry::KeyValue>) {
+        let mut attrs = vec![
+            opentelemetry::KeyValue::new("event.category", self.category()),
+        ];
+        let name = match self {
+            MetricEvent::ToolCall {
+                name,
+                success,
+                duration_ms,
+                error_kind,
+            } => {
+                attrs.push(opentelemetry::KeyValue::new("tool.name", name.clone()));
+                attrs.push(opentelemetry::KeyValue::new("tool.success", *success));
+                attrs.push(opentelemetry::KeyValue::new(
+                    "tool.duration_ms",
+                    *duration_ms as i64,
+                ));
+                if let Some(ek) = error_kind {
+                    attrs.push(opentelemetry::KeyValue::new("tool.error_kind", ek.clone()));
+                }
+                "tool.call".to_string()
+            }
+            MetricEvent::Verifier { name, verdict } => {
+                attrs.push(opentelemetry::KeyValue::new("verifier.name", name.clone()));
+                attrs.push(opentelemetry::KeyValue::new("verifier.verdict", verdict.clone()));
+                "verifier.run".to_string()
+            }
+            MetricEvent::Turn {
+                model,
+                duration_ms,
+                tool_calls,
+                finish_reason,
+            } => {
+                attrs.push(opentelemetry::KeyValue::new("turn.model", model.clone()));
+                attrs.push(opentelemetry::KeyValue::new(
+                    "turn.duration_ms",
+                    *duration_ms as i64,
+                ));
+                attrs.push(opentelemetry::KeyValue::new(
+                    "turn.tool_calls",
+                    *tool_calls as i64,
+                ));
+                attrs.push(opentelemetry::KeyValue::new(
+                    "turn.finish_reason",
+                    finish_reason.clone(),
+                ));
+                "turn.complete".to_string()
+            }
+            MetricEvent::Approval { action } => {
+                attrs.push(opentelemetry::KeyValue::new("approval.action", action.clone()));
+                "approval.decision".to_string()
+            }
+        };
+        (name, attrs)
     }
 }
 
@@ -150,12 +292,20 @@ fn write_event(path: &PathBuf, event: &MetricEvent) {
 ///
 /// Events are appended synchronously; failures are logged via `tracing`
 /// but never propagated, so a metrics write error cannot break a turn.
+/// When the `otel` feature is enabled and `OTEL_EXPORTER_OTLP_ENDPOINT` is
+/// set, a matching span is also exported.
 pub fn record(event: MetricEvent) {
     let Some(path) = metrics_path() else {
         tracing::debug!("no metrics path available; dropping event");
         return;
     };
     write_event(&path, &event);
+
+    #[cfg(feature = "otel")]
+    {
+        let (name, attrs) = event.to_otel_attrs();
+        otel::emit_event_span(&name, &attrs);
+    }
 }
 
 /// Summary statistics computed from the metrics log.
@@ -259,6 +409,28 @@ pub fn summarize() -> MetricsSummary {
         }
     }
     summary
+}
+
+/// Initialize OpenTelemetry export when the `otel` feature is enabled and
+/// `OTEL_EXPORTER_OTLP_ENDPOINT` is configured. Returns the endpoint on
+/// success, `None` when disabled or not configured.
+pub fn init_telemetry() -> Option<String> {
+    #[cfg(feature = "otel")]
+    {
+        otel::init_telemetry()
+    }
+    #[cfg(not(feature = "otel"))]
+    {
+        None
+    }
+}
+
+/// Gracefully shut down OpenTelemetry exporters.
+pub fn shutdown_telemetry() {
+    #[cfg(feature = "otel")]
+    {
+        otel::shutdown();
+    }
 }
 
 /// Format a summary as user-facing text.
@@ -462,5 +634,30 @@ mod tests {
         assert!(text.contains("turns:          10"));
         assert!(text.contains("tool calls:     20"));
         assert!(text.contains("avg turn time:  500 ms"));
+    }
+
+    #[cfg(feature = "otel")]
+    #[test]
+    fn test_otel_attrs_from_tool_call() {
+        let event = MetricEvent::ToolCall {
+            name: "read_file".into(),
+            success: true,
+            duration_ms: 12,
+            error_kind: None,
+        };
+        let (name, attrs) = event.to_otel_attrs();
+        assert_eq!(name, "tool.call");
+        assert!(attrs.iter().any(|kv| {
+            kv.key.as_str() == "tool.name" && kv.value.as_str().as_ref() == "read_file"
+        }));
+        assert!(attrs.iter().any(|kv| kv.key.as_str() == "tool.success"));
+    }
+
+    #[cfg(feature = "otel")]
+    #[test]
+    fn test_otel_init_returns_none_without_endpoint() {
+        // Ensure no endpoint is set for this test.
+        let _guard = std::env::remove_var("OTEL_EXPORTER_OTLP_ENDPOINT");
+        assert!(init_telemetry().is_none());
     }
 }

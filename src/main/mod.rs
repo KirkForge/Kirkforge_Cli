@@ -200,6 +200,10 @@ async fn main() {
         std::process::exit(2);
     }
 
+    if let Some(endpoint) = kirkforge::shared::metrics::init_telemetry() {
+        tracing::info!(otel_endpoint = %endpoint, "OpenTelemetry export enabled");
+    }
+
     let result: Result<(), KirkForgeError> = match cli.command {
         Command::Run {
             model,
@@ -283,6 +287,8 @@ async fn main() {
         }
     }
     .map_err(KirkForgeError::from);
+
+    kirkforge::shared::metrics::shutdown_telemetry();
 
     if let Err(e) = result {
         eprintln!("kirkforge: {e}");

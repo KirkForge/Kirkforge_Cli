@@ -119,6 +119,34 @@ criterion = { version = "0.5", features = ["async_tokio"] }
 # HTTP mock server for Ollama adapter integration tests without a live model.
 wiremock = "0.6"
 
+[features]
+default = []
+# Enable OpenTelemetry span/metric export from the Rust runtime.
+otel = [
+    "dep:opentelemetry",
+    "dep:opentelemetry-otlp",
+    "dep:opentelemetry_sdk",
+    "dep:tracing-opentelemetry",
+]
+
+[dependencies.opentelemetry]
+version = "0.29"
+optional = true
+
+[dependencies.opentelemetry-otlp]
+version = "0.29"
+optional = true
+features = ["trace", "metrics", "grpc-tonic"]
+
+[dependencies.opentelemetry_sdk]
+version = "0.29"
+optional = true
+features = ["trace", "metrics", "rt-tokio"]
+
+[dependencies.tracing-opentelemetry]
+version = "0.30"
+optional = true
+
 [build-dependencies]
 clap_mangen = "0.2"
 clap = { version = "4", features = ["derive", "env"] }

@@ -158,6 +158,7 @@ fn make_config(auto_approve: bool) -> Config {
         router_model: String::new(),
         routing_model_map: std::collections::HashMap::new(),
         mcp_servers: vec![],
+        lsp_servers: vec![],
         bang_requires_approval: false,
         json_mode: false,
         preserve_recent_messages: 2,

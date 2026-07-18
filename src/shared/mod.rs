@@ -307,6 +307,14 @@ pub struct Config {
     #[serde(default)]
     pub mcp_servers: Vec<McpServerConfig>,
 
+    /// LSP (Language Server Protocol) servers to launch at session start.
+    /// Each entry maps a language name + file extensions to an LSP server
+    /// command. The `lsp_query` tool exposes go_to_definition /
+    /// find_references / hover / document_symbols / find_implementations /
+    /// workspace_symbols / diagnostics for configured languages.
+    #[serde(default)]
+    pub lsp_servers: Vec<LspServerEntry>,
+
     /// When `true`, the `!` bash passthrough routes through the same
     /// approval gate that the bash tool uses. The escape-hatch UX is
     /// preserved (still no model round trip), but the user must
@@ -493,6 +501,28 @@ fn default_mcp_transport() -> String {
     "stdio".to_string()
 }
 
+/// Configuration for a single LSP server entry. Mirrors `[[mcp_servers]]`
+/// but for language servers — each entry launches a subprocess speaking
+/// LSP over stdio and serves files with the listed extensions.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LspServerEntry {
+    /// Language name (e.g. "rust", "typescript", "python"). Used as the
+    /// key in the LSP pool and in `lsp_query` error messages.
+    pub language: String,
+    /// File extensions this server handles (e.g. [".rs"]). Extensions are
+    /// matched case-insensitively and may be given with or without the
+    /// leading dot.
+    pub extensions: Vec<String>,
+    /// Command to spawn (e.g. "rust-analyzer", "typescript-language-server").
+    pub command: String,
+    /// Arguments passed to the command (e.g. ["--stdio"]).
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// Additional environment variables for the subprocess.
+    #[serde(default)]
+    pub env_vars: HashMap<String, String>,
+}
+
 fn default_summarize_model() -> String {
     String::new()
 }
@@ -671,6 +701,7 @@ impl Default for Config {
             router_model: String::new(),
             routing_model_map: HashMap::new(),
             mcp_servers: vec![],
+            lsp_servers: vec![],
             bang_requires_approval: false,
             json_mode: false,
             preserve_recent_messages: default_preserve_recent_messages(),

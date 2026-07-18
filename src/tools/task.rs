@@ -296,6 +296,7 @@ impl TaskSpawner for InProcessTaskSpawner {
             path_guard,
             self.config.bash_sandbox_workdir,
             self.config.minify_write_side,
+            None,
         );
         let tools: Vec<Arc<dyn Tool>> = match request.persona.as_str() {
             "explore" => all

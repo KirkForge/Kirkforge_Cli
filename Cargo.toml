@@ -30,6 +30,7 @@ harness = false
 [workspace.dependencies]
 kirkforge-plugin = { path = "crates/kirkforge-plugin" }
 kirkforge-plugin-host = { path = "crates/kirkforge-plugin-host" }
+kirkforge-lsp = { path = "crates/kirkforge-lsp" }
 
 [dependencies]
 # TUI
@@ -110,6 +111,8 @@ arboard = "3"
 # Rust-native plugin SDK (vendored workspace members)
 kirkforge-plugin = { workspace = true }
 kirkforge-plugin-host = { workspace = true }
+# LSP client pool (vendored workspace member) — symbol-aware code nav.
+kirkforge-lsp = { workspace = true }
 # Cache serialization uses serde_json (already a dependency) instead of
 # the unmaintained bincode crate.
 

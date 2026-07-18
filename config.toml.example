@@ -175,6 +175,24 @@
 # LOG_LEVEL = "warn"
 
 # ---------------------------------------------------------------------------
+# LSP servers (optional — gives the model symbol-aware code navigation)
+# ---------------------------------------------------------------------------
+#
+# Each entry launches a language server subprocess. The `lsp_query` tool
+# exposes go_to_definition / find_references / hover / document_symbols /
+# find_implementations / workspace_symbols / diagnostics for that language.
+
+# [[lsp_servers]]
+# language = "rust"
+# extensions = [".rs"]
+# command = "rust-analyzer"
+# [[lsp_servers]]
+# language = "typescript"
+# extensions = [".ts", ".tsx", ".js", ".jsx"]
+# command = "typescript-language-server"
+# args = ["--stdio"]
+
+# ---------------------------------------------------------------------------
 # Output / model behavior
 # ---------------------------------------------------------------------------
 

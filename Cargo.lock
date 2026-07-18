@@ -1768,6 +1768,7 @@ dependencies = [
  "globset",
  "handlebars",
  "ignore",
+ "kirkforge-lsp",
  "kirkforge-plugin",
  "kirkforge-plugin-host",
  "libc",
@@ -1820,6 +1821,18 @@ dependencies = [
  "thiserror 1.0.69",
  "unicode-segmentation",
  "unicode-width 0.2.0",
+]
+
+[[package]]
+name = "kirkforge-lsp"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

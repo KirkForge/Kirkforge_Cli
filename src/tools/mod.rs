@@ -6,6 +6,7 @@ pub mod bash_status;
 pub mod edit_file;
 pub mod glob;
 pub mod grep;
+pub mod lsp_query;
 pub mod read_file;
 pub mod read_image;
 pub mod task;
@@ -124,6 +125,7 @@ pub fn all_tools(
     path_guard: crate::session::access::PathGuard,
     bash_sandbox_workdir: bool,
     minify_write_side: bool,
+    lsp_pool: Option<std::sync::Arc<kirkforge_lsp::LspPool>>,
 ) -> Vec<Arc<dyn Tool>> {
     let task_manager = Arc::new(Mutex::new(task::TaskManager::new()));
     let mut tools: Vec<Arc<dyn Tool>> = vec![
@@ -163,6 +165,9 @@ pub fn all_tools(
     tools.push(Arc::new(todo::TodoRead::new(todo_state)));
     if supports_images {
         tools.push(Arc::new(read_image::ReadImage::new(path_guard.clone())));
+    }
+    if let Some(pool) = lsp_pool {
+        tools.push(Arc::new(lsp_query::LspQuery::new(pool, path_guard)));
     }
     tools
 }

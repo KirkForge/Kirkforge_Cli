@@ -599,6 +599,35 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     let bash_sandbox_workdir = config.bash_sandbox_workdir;
     let minify_write_side = config.minify_write_side;
 
+    // ── LSP pool (lazy-started, fail-cooled) ──
+    // Build the pool from `[[lsp_servers]]` config. Servers are spawned
+    // lazily on the first `lsp_query` call for that language, so this is
+    // cheap when no LSP-aware tool runs. The pool is wrapped in `Arc` and
+    // shared with the `lsp_query` tool below.
+    let lsp_pool: Option<std::sync::Arc<kirkforge_lsp::LspPool>> = if config.lsp_servers.is_empty()
+    {
+        None
+    } else {
+        let language_configs: Vec<kirkforge_lsp::LanguageConfig> = config
+            .lsp_servers
+            .iter()
+            .map(|e| kirkforge_lsp::LanguageConfig {
+                name: e.language.clone(),
+                extensions: e.extensions.clone(),
+                lsp: Some(kirkforge_lsp::LspServerConfig {
+                    command: e.command.clone(),
+                    args: e.args.clone(),
+                }),
+            })
+            .collect();
+        Some(std::sync::Arc::new(kirkforge_lsp::LspPool::new(
+            std::env::current_dir()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|_| ".".to_string()),
+            language_configs,
+        )))
+    };
+
     // ── Toolset assembly (Phase 2.2) ──
     // Compose built-in, MCP, and plugin tools into a single source-aware
     // collection. The executor receives the flattened vector, but order and
@@ -614,6 +643,7 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
             builtin_path_guard,
             bash_sandbox_workdir,
             minify_write_side,
+            lsp_pool.clone(),
         ),
     )));
 

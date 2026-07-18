@@ -8,6 +8,7 @@ pub mod glob;
 pub mod grep;
 pub mod read_file;
 pub mod read_image;
+pub mod todo;
 pub mod web_fetch;
 pub mod write_file;
 
@@ -123,6 +124,12 @@ pub fn all_tools(
         Arc::new(glob::Glob::new(path_guard.clone())),
         Arc::new(web_fetch::WebFetch::new(deny_list.clone())),
     ];
+
+    // Session-scoped TODO list shared between `todo_write` and `todo_read`
+    // so a read always reflects the last write. One Arc per toolset.
+    let todo_state: todo::TodoState = Arc::new(Mutex::new(Vec::new()));
+    tools.push(Arc::new(todo::TodoWrite::new(todo_state.clone())));
+    tools.push(Arc::new(todo::TodoRead::new(todo_state)));
     if supports_images {
         tools.push(Arc::new(read_image::ReadImage::new(path_guard.clone())));
     }

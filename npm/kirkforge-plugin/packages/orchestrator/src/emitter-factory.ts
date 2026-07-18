@@ -12,27 +12,86 @@ import type { EventBus } from "@kirkforge/core-events";
 import type { TaskLanguage } from "./task-profile.js";
 import { GraphEmitter } from "./graph-emitter.js";
 import { SecurityEmitter } from "./security-emitter.js";
+import { spawn } from "child_process";
 
 function hasJsTs(files?: string[]): boolean {
   return (files ?? []).some((file) => /\.(?:[cm]?js|jsx|ts|tsx)$/.test(file));
 }
 
 // ponytail: the changes/graph/security verifier slots are emitted by in-repo
-// emitters, not external tools. `ChangesEmitter` reports files from `writtenFiles`
-// (real diff verification is a future upgrade). `graph` is implemented in
-// `graph-emitter.ts` (regex import-edge extraction → cycles/brokenEdges/newEdges);
-// `security` is implemented in `security-emitter.ts` (obfuscated dangerous-call scan).
+// emitters, not external tools. `ChangesEmitter` computes real insertions/deletions
+// with `git diff --numstat -- <paths>` when git is available; it falls back to
+// counting the number of written files with zero insertions/deletions if the
+// working tree is not a git repo. `graph` is implemented in `graph-emitter.ts`
+// (regex import-edge extraction → cycles/brokenEdges/newEdges); `security` is
+// implemented in `security-emitter.ts` (obfuscated dangerous-call scan).
 class ChangesEmitter {
-  constructor(private opts: { eventBus: EventBus; writtenFiles?: string[] }) {}
+  constructor(private opts: { eventBus: EventBus; writtenFiles?: string[]; cwd?: string }) {}
+
+  private _gitDiffNumstat(paths: string[]): Promise<{ insertions: number; deletions: number; filesChanged: number }> {
+    return new Promise((resolve) => {
+      if (paths.length === 0) {
+        resolve({ insertions: 0, deletions: 0, filesChanged: 0 });
+        return;
+      }
+      const args = ["diff", "--numstat", "--"].concat(paths);
+      const child = spawn("git", args, {
+        stdio: ["ignore", "pipe", "ignore"],
+        cwd: this.opts.cwd,
+      });
+      let stdout = "";
+      child.stdout?.on("data", (chunk: Buffer) => {
+        stdout += chunk.toString("utf8");
+      });
+      child.on("error", () => {
+        resolve({ insertions: 0, deletions: 0, filesChanged: paths.length });
+      });
+        child.on("close", (code) => {
+        if (code !== 0) {
+          resolve({ insertions: 0, deletions: 0, filesChanged: paths.length });
+          return;
+        }
+        const lines = stdout.trim().split("\n").filter((line) => line.length > 0);
+        let insertions = 0;
+        let deletions = 0;
+        let filesChanged = 0;
+        for (const line of lines) {
+          const parts = line.split("\t");
+          if (parts.length < 3) continue;
+          const ins = parseInt(parts[0]!, 10);
+          const dels = parseInt(parts[1]!, 10);
+          if (!Number.isNaN(ins)) insertions += ins;
+          if (!Number.isNaN(dels)) deletions += dels;
+          filesChanged += 1;
+        }
+        // If git exits 0 but produces no stats (e.g. file not tracked), fall
+        // back to counting the requested paths so the caller still sees the
+        // files the tool reported writing.
+        if (filesChanged === 0) {
+          filesChanged = paths.length;
+        }
+        resolve({ insertions, deletions, filesChanged });
+      });
+    });
+  }
+
   async emit(taskId: string) {
     const paths = this.opts.writtenFiles ?? [];
+    const start = Date.now();
+    const { insertions, deletions, filesChanged } = await this._gitDiffNumstat(paths);
     await this.opts.eventBus.emit({
       kind: "state.changes",
       schemaVersion: "v3",
       sequence: 0,
       streamId: taskId,
       taskId,
-      value: { filesChanged: paths.length, paths, insertions: 0, deletions: 0, durationMs: 0 },
+      value: {
+        filesChanged,
+        paths,
+        insertions,
+        deletions,
+        durationMs: Date.now() - start,
+      },
       timestamp: new Date().toISOString(),
     });
   }
@@ -80,7 +139,7 @@ export function createVerificationEmitters(
       ? new PyrightEmitter({ cwd, eventBus, files })
       : new TscEmitter({ cwd, eventBus, files }),
     security,
-    changes: new ChangesEmitter({ eventBus, writtenFiles }),
+    changes: new ChangesEmitter({ eventBus, writtenFiles, cwd }),
     graph: new GraphEmitter({ eventBus, files, writtenFiles }),
     imports,
   };

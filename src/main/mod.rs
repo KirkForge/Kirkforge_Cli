@@ -1218,6 +1218,8 @@ fn read_approval_answer_pollable(
         let mut interval = tokio::time::interval(std::time::Duration::from_millis(200));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
+        let abort = reader.abort_handle();
+
         tokio::select! {
             biased;
             a = reader => Some(a.unwrap_or(false)),
@@ -1229,7 +1231,7 @@ fn read_approval_answer_pollable(
                     }
                 }
             } => {
-                reader.abort();
+                abort.abort();
                 None
             }
         }

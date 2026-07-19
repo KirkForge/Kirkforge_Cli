@@ -304,6 +304,77 @@ pub(super) fn apply_env_overrides(cfg: &mut Config) {
         }
     }
 
+    // Anthropic cloud-provider routing
+    if let Ok(val) = std::env::var("KIRKFORGE_ANTHROPIC_PROVIDER") {
+        if !val.is_empty() {
+            cfg.anthropic_provider = val;
+        }
+    }
+    if let Ok(val) = std::env::var("KIRKFORGE_AWS_REGION") {
+        if !val.is_empty() {
+            cfg.aws_region = val;
+        }
+    }
+    if let Ok(val) = std::env::var("KIRKFORGE_AWS_PROFILE") {
+        cfg.aws_profile = val;
+    }
+    if let Ok(val) = std::env::var("KIRKFORGE_GCP_PROJECT_ID") {
+        if !val.is_empty() {
+            cfg.gcp_project_id = val;
+        }
+    }
+    if let Ok(val) = std::env::var("KIRKFORGE_GCP_REGION") {
+        if !val.is_empty() {
+            cfg.gcp_region = val;
+        }
+    }
+    if let Ok(val) = std::env::var("KIRKFORGE_GCP_SERVICE_ACCOUNT_PATH") {
+        cfg.gcp_service_account_path = if val.is_empty() {
+            None
+        } else {
+            Some(PathBuf::from(expand_tilde_str(&val)))
+        };
+    }
+
+    // Computer-use tool config
+    if let Ok(val) = std::env::var("KIRKFORGE_COMPUTER_USE_ENABLED") {
+        if let Some(v) = parse_bool_env(&val) {
+            cfg.computer_use.enabled = v;
+        }
+    }
+    if let Ok(val) = std::env::var("KIRKFORGE_COMPUTER_USE_CHROME_PATH") {
+        cfg.computer_use.chrome_path = if val.is_empty() {
+            None
+        } else {
+            Some(PathBuf::from(expand_tilde_str(&val)))
+        };
+    }
+    if let Ok(val) = std::env::var("KIRKFORGE_COMPUTER_USE_HEADFUL") {
+        if let Some(v) = parse_bool_env(&val) {
+            cfg.computer_use.headful = v;
+        }
+    }
+    if let Ok(val) = std::env::var("KIRKFORGE_COMPUTER_USE_WIDTH") {
+        if let Ok(n) = val.parse::<u32>() {
+            cfg.computer_use.width = n.max(1);
+        }
+    }
+    if let Ok(val) = std::env::var("KIRKFORGE_COMPUTER_USE_HEIGHT") {
+        if let Ok(n) = val.parse::<u32>() {
+            cfg.computer_use.height = n.max(1);
+        }
+    }
+    if let Ok(val) = std::env::var("KIRKFORGE_COMPUTER_USE_STARTUP_TIMEOUT") {
+        if let Ok(n) = val.parse::<u64>() {
+            cfg.computer_use.startup_timeout_secs = n.max(1);
+        }
+    }
+    if let Ok(val) = std::env::var("KIRKFORGE_COMPUTER_USE_WAIT_TIMEOUT") {
+        if let Ok(n) = val.parse::<u64>() {
+            cfg.computer_use.wait_timeout_secs = n.max(1);
+        }
+    }
+
     // Clamp after all layers so a config file or env override cannot set an
     // unusable zero-second timeout.
     cfg.request_timeout_secs = cfg.request_timeout_secs.max(1);

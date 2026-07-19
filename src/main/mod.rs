@@ -7,6 +7,7 @@
 // handling or explicit expect() with a justification.
 #![cfg_attr(not(test), deny(clippy::unwrap_used))]
 
+mod chrome_launcher;
 mod turn_events;
 
 use clap::{CommandFactory, Parser};
@@ -558,10 +559,11 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     }
 
     let adapter = adapters::caching::maybe_wrap_cached(
-        adapters::adapter_for(
+        adapters::adapter_for_with_provider(
             &model,
             ollama_host,
             model_type.as_deref(),
+            &config.anthropic_provider,
             config.request_timeout_secs,
         ),
         &config,
@@ -598,6 +600,8 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
         session::access::access_from_config(&config);
     let bash_sandbox_workdir = config.bash_sandbox_workdir;
     let minify_write_side = config.minify_write_side;
+    let computer_use_cfg = config.computer_use.clone();
+    let computer_use_enabled = computer_use_cfg.enabled;
 
     // ── LSP pool (lazy-started, fail-cooled) ──
     // Build the pool from `[[lsp_servers]]` config. Servers are spawned
@@ -628,6 +632,24 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
         )))
     };
 
+    // ── Chrome tab for computer_use ──
+    // Try to launch Chrome only when the tool is enabled. If the launch fails,
+    // fall back to a placeholder tab that fails gracefully at runtime. This
+    // keeps the toolset construction cheap and avoids hard-failing startup
+    // when Chrome is not installed.
+    let chrome_tab: std::sync::Arc<dyn crate::tools::computer_use::ChromeTab> =
+        if computer_use_enabled {
+            match chrome_launcher::launch_chrome_tab(&config.computer_use).await {
+                Ok(tab) => tab,
+                Err(e) => {
+                    tracing::warn!(error = %e, "computer_use enabled but Chrome launch failed; tool will fail gracefully");
+                    std::sync::Arc::new(crate::tools::computer_use::PlaceholderTab)
+                }
+            }
+        } else {
+            std::sync::Arc::new(crate::tools::computer_use::PlaceholderTab)
+        };
+
     // ── Toolset assembly (Phase 2.2) ──
     // Compose built-in, MCP, and plugin tools into a single source-aware
     // collection. The executor receives the flattened vector, but order and
@@ -644,6 +666,8 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
             bash_sandbox_workdir,
             minify_write_side,
             lsp_pool.clone(),
+            Some((computer_use_enabled, computer_use_cfg.clone())),
+            Some(chrome_tab),
         ),
     )));
 

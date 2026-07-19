@@ -3,6 +3,7 @@ pub mod bash;
 pub mod bash_cancel;
 pub mod bash_minify;
 pub mod bash_status;
+pub mod computer_use;
 pub mod edit_file;
 pub mod glob;
 pub mod grep;
@@ -118,6 +119,7 @@ pub type UndoStackRef = Arc<Mutex<crate::session::undo::UndoStack>>;
 /// hand-crafted `<tool_call>` invocation in the prompt is the user's
 /// problem rather than a server-side 400. The default is `false`
 /// (conservative — most Ollama-local models aren't vision-capable).
+#[allow(clippy::too_many_arguments)]
 pub fn all_tools(
     undo_stack: Option<UndoStackRef>,
     supports_images: bool,
@@ -126,6 +128,8 @@ pub fn all_tools(
     bash_sandbox_workdir: bool,
     minify_write_side: bool,
     lsp_pool: Option<std::sync::Arc<kirkforge_lsp::LspPool>>,
+    computer_use: Option<(bool, crate::shared::ComputerUseConfig)>,
+    chrome_tab: Option<std::sync::Arc<dyn crate::tools::computer_use::ChromeTab>>,
 ) -> Vec<Arc<dyn Tool>> {
     let task_manager = Arc::new(Mutex::new(task::TaskManager::new()));
     let mut tools: Vec<Arc<dyn Tool>> = vec![
@@ -168,6 +172,14 @@ pub fn all_tools(
     }
     if let Some(pool) = lsp_pool {
         tools.push(Arc::new(lsp_query::LspQuery::new(pool, path_guard)));
+    }
+    if let Some((enabled, config)) = computer_use {
+        if enabled && supports_images {
+            let tab = chrome_tab.unwrap_or_else(|| Arc::new(computer_use::PlaceholderTab));
+            tools.push(Arc::new(computer_use::ComputerUse::new(
+                deny_list, config, tab,
+            )));
+        }
     }
     tools
 }

@@ -97,7 +97,10 @@ impl ModelAdapter for AnthropicAdapter {
 /// does not allow `role: "system"` inside `messages`). The last two prefix
 /// messages receive `cache_control: {type: "ephemeral"}` to enable prompt
 /// caching; the trailing user message is excluded.
-fn build_anthropic_body(
+///
+/// This function is `pub(crate)` so the Bedrock and Vertex adapters can reuse
+/// the same body construction without duplicating message translation.
+pub(crate) fn build_anthropic_body(
     model: &str,
     messages: &[Message],
     tools: &[crate::shared::ToolDef],

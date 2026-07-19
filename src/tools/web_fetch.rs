@@ -176,7 +176,7 @@ impl Tool for WebFetch {
 /// DNS resolution, but it stops the model from passing `http://127.0.0.1/...`
 /// directly. DNS-rebinding at lookup time remains a hard problem for a client
 /// tool; a future iteration should pin the resolved IP and re-check it.
-fn host_is_literal_internal_ip(url: &str) -> bool {
+pub(crate) fn host_is_literal_internal_ip(url: &str) -> bool {
     let Some(host) = extract_host(url) else {
         return true; // malformed URL -> fail closed
     };

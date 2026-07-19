@@ -278,10 +278,11 @@ impl InProcessTaskSpawner {
 impl TaskSpawner for InProcessTaskSpawner {
     async fn run_task(&self, request: TaskRequest) -> Result<String, String> {
         let adapter = adapters::caching::maybe_wrap_cached(
-            adapters::adapter_for(
+            adapters::adapter_for_with_provider(
                 &self.model_name,
                 &self.ollama_host,
                 None,
+                &self.config.anthropic_provider,
                 self.config.request_timeout_secs,
             ),
             &self.config,
@@ -296,6 +297,11 @@ impl TaskSpawner for InProcessTaskSpawner {
             path_guard,
             self.config.bash_sandbox_workdir,
             self.config.minify_write_side,
+            None,
+            Some((
+                self.config.computer_use.enabled,
+                self.config.computer_use.clone(),
+            )),
             None,
         );
         let tools: Vec<Arc<dyn Tool>> = match request.persona.as_str() {

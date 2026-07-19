@@ -11,7 +11,7 @@ budget. The three cover input-routing, input-compression, and
 output-control respectively.
 
 **Series note:** files `001`–`017` are the native KirkForge-Cli ADRs;
-files `0001`–`0018` (indexed below) are the vendored Plugin3 ADRs.
+files `0001`–`0018` and `0021`–`0022` (indexed below) are the vendored Plugin3 ADRs.
 
 ## Index
 
@@ -36,6 +36,8 @@ files `0001`–`0018` (indexed below) are the vendored Plugin3 ADRs.
 | [0017](./0017-build-features.md) | Build profile and feature gating | Accepted |
 | [0019](./0019-parallel-tool-dispatch.md) | Parallel tool dispatch | Accepted |
 | [0018](./0018-scheduled-jobs.md) | Cron / scheduled jobs | Accepted |
+| [0021](./0021-computer-use-tool.md) | `computer_use` tool via headless Chrome CDP | Accepted |
+| [0022](./0022-anthropic-cloud-routing.md) | Anthropic cloud routing — Bedrock and Vertex | Accepted |
 
 ## Native KirkForge-Cli ADRs
 

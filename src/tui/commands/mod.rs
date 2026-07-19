@@ -20,6 +20,7 @@ pub mod status;
 pub mod test;
 pub mod test_parse;
 pub mod undo;
+pub mod workflow;
 
 pub use bang::*;
 pub use carryover::*;
@@ -42,6 +43,7 @@ pub use sessions::*;
 pub use status::*;
 pub use test::*;
 pub use undo::*;
+pub use workflow::*;
 
 use std::collections::VecDeque;
 

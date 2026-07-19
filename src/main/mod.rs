@@ -894,6 +894,96 @@ async fn run_line_mode(
             continue;
         }
 
+        if trimmed.starts_with("/workflow ") || trimmed == "/workflow" {
+            let args = trimmed.strip_prefix("/workflow").unwrap_or("").trim();
+            let (sub, rest) = args.split_once(' ').unwrap_or((args, ""));
+            let sub = sub.trim();
+            let rest = rest.trim();
+            match sub {
+                "run" => {
+                    if rest.is_empty() {
+                        if output == kirkforge::shared::OutputFormat::Text {
+                            println!("Usage: /workflow run <name>");
+                        }
+                    } else {
+                        let path = match kirkforge_workflow::find_workflow_file(rest) {
+                            Some(p) => p,
+                            None => {
+                                if output == kirkforge::shared::OutputFormat::Text {
+                                    println!("Workflow '{rest}' not found.");
+                                }
+                                continue;
+                            }
+                        };
+                        match kirkforge_workflow::Workflow::from_file(&path) {
+                            Ok(workflow) => {
+                                let cfg = kirkforge::shared::read_shared_config(&config).clone();
+                                let ollama_host = cfg.ollama_host.clone();
+                                let supports_images = cfg.ollama_host.contains("localhost")
+                                    || cfg.ollama_host.contains("127.0.0.1")
+                                    || cfg.ollama_host.contains("[::1]");
+                                let cancel =
+                                    std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+                                let workflow_name = workflow.name.clone();
+                                let step_count = workflow.steps.len();
+                                if output == kirkforge::shared::OutputFormat::Text {
+                                    println!("🚀 Started workflow '{workflow_name}' ({step_count} steps).");
+                                }
+                                let runner = kirkforge::tui::commands::workflow::LineStepRunner {
+                                    model_name: model_name.clone(),
+                                    ollama_host,
+                                    config: cfg,
+                                    supports_images,
+                                    undo_stack: None,
+                                };
+                                let result = kirkforge_workflow::WorkflowExecutor::new(workflow)
+                                    .run(&runner, Some(&cancel))
+                                    .await;
+                                match result {
+                                    Ok(summary) => {
+                                        if output == kirkforge::shared::OutputFormat::Text {
+                                            let s =
+                                                kirkforge::tui::commands::workflow::format_summary(
+                                                    &workflow_name,
+                                                    &summary,
+                                                );
+                                            println!("{s}");
+                                        }
+                                    }
+                                    Err(e) => {
+                                        if output == kirkforge::shared::OutputFormat::Text {
+                                            println!("Workflow failed: {e}");
+                                        }
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                if output == kirkforge::shared::OutputFormat::Text {
+                                    println!("Failed to load workflow '{rest}': {e}");
+                                }
+                            }
+                        }
+                    }
+                }
+                "status" => {
+                    if output == kirkforge::shared::OutputFormat::Text {
+                        println!("No workflow is currently running. Use /workflow run <name>.");
+                    }
+                }
+                "cancel" => {
+                    if output == kirkforge::shared::OutputFormat::Text {
+                        println!("⛔ Workflow cancelled.");
+                    }
+                }
+                _ => {
+                    if output == kirkforge::shared::OutputFormat::Text {
+                        println!("Usage: /workflow run <name> | status | cancel");
+                    }
+                }
+            }
+            continue;
+        }
+
         if trimmed == "/reload skills" {
             // Line mode has no AppState skill registry; just report that the
             // interactive skill reload is a TUI-only feature.

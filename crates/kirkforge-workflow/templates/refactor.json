@@ -1,0 +1,9 @@
+{
+  "name": "refactor",
+  "steps": [
+    {"name": "map", "prompt": "Map the code to be refactored. Identify all call sites, tests, and contracts that must be preserved. Do not edit files.", "persona": "explore"},
+    {"name": "plan", "prompt": "Design a safe, incremental refactor plan. Identify risks, preserve existing tests, and end with: \"## Plan Complete\".", "persona": "plan", "depends_on": ["map"]},
+    {"name": "execute", "prompt": "Execute the refactor plan. Make mechanical changes first, then update tests. Summarize what moved or changed.", "persona": "coder", "depends_on": ["plan"]},
+    {"name": "verify", "prompt": "Run the verifier bus and the full test suite to confirm behavior is preserved. Report pass/fail and any corrections made.", "persona": "coder", "depends_on": ["execute"]}
+  ]
+}

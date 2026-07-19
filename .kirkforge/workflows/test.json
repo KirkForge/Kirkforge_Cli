@@ -1,8 +1,0 @@
-{
-  "name": "test",
-  "steps": [
-    {"name": "step1", "prompt": "List the files in the current directory with bash and return the output as a concise summary.", "persona": "explore"},
-    {"name": "step2", "prompt": "Based on the file listing from step1, identify the top-level Rust crate names (directories under crates/ or src/) and summarize them briefly.", "persona": "plan", "depends_on": ["step1"]},
-    {"name": "step3", "prompt": "Confirm the workflow completed successfully by stating the number of top-level crates identified and the first crate name.", "persona": "coder", "depends_on": ["step2"]}
-  ]
-}

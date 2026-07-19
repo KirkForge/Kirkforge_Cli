@@ -8,8 +8,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 - Established biweekly minor release cadence and documented SemVer policy in `README.md` and `docs/RELEASE.md` (ADR-024).
 - Added Windows x86_64 CI job and documented Windows parity limitations; ported line-mode approval reader to a joinable `tokio::time::interval` + `spawn_blocking` stdin implementation (ADR-025).
-<<<<<<< HEAD
-- Fixed Windows compile errors and lowered honest coverage thresholds after landing WO-3/WO-4 (#6).
+- Fixed Windows compile errors and lowered honest coverage thresholds after landing WO-3/WO-4 (#4).
 
 ### Changed
 - Defaults corrected for cloud-routed frontier models: `default_model`, `ollama_host`, and `summarize_model` now default to empty strings; `default_request_timeout_secs` reduced from 600 to 120. Configuration must point at an Ollama gateway hosting the desired model.

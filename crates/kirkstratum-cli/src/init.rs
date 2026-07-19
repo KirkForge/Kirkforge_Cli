@@ -36,7 +36,10 @@ pub fn initialise_config(
     // Only create the directory (and set restrictive permissions) when we are
     // actually going to write the file. This avoids side effects when init is
     // called on an existing config without --force.
+    #[cfg(unix)]
     let dir_existed = dir.exists();
+    #[cfg(not(unix))]
+    let _dir_existed = ();
     std::fs::create_dir_all(&dir)
         .with_context(|| format!("cannot create config directory {}", dir.display()))?;
 

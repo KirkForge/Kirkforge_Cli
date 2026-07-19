@@ -35,6 +35,7 @@ files `0001`–`0018` (indexed below) are the vendored Plugin3 ADRs.
 | [0016](./0016-test-strategy.md) | Test strategy | Accepted |
 | [0017](./0017-build-features.md) | Build profile and feature gating | Accepted |
 | [0018](./0018-scheduled-jobs.md) | Cron / scheduled jobs | Accepted |
+| [0023](./0023-workflow-engine.md) | Programmable JSON workflow engine | Accepted |
 
 ## Cross-references
 

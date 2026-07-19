@@ -1,0 +1,9 @@
+{
+  "name": "bugfix",
+  "steps": [
+    {"name": "reproduce", "prompt": "Create a minimal reproduction of the reported bug. Confirm the failure and capture exact error output. Do not fix anything yet.", "persona": "explore"},
+    {"name": "trace", "prompt": "Trace the bug to its root cause using read-only tools. Identify the file(s) and function(s) responsible. Summarize the cause.", "persona": "explore", "depends_on": ["reproduce"]},
+    {"name": "fix", "prompt": "Implement the smallest correct fix for the root cause identified above. Add or update tests to cover the bug. Summarize the change.", "persona": "coder", "depends_on": ["trace"]},
+    {"name": "verify", "prompt": "Run the reproduction and relevant tests to confirm the bug is fixed and nothing else is broken. Report results.", "persona": "coder", "depends_on": ["fix"]}
+  ]
+}

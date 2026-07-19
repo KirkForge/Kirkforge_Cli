@@ -1771,6 +1771,7 @@ dependencies = [
  "kirkforge-lsp",
  "kirkforge-plugin",
  "kirkforge-plugin-host",
+ "kirkforge-workflow",
  "libc",
  "opentelemetry",
  "opentelemetry-otlp",
@@ -1879,6 +1880,20 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "which",
+]
+
+[[package]]
+name = "kirkforge-workflow"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "directories",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

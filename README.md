@@ -117,7 +117,38 @@ This produces `apps/cli/dist/index.js`, which the `plugins/kirkforge-plugin/` to
 
 ## Releases
 
-Release binaries for Linux (x86_64) and macOS (x86_64, Apple Silicon) are built automatically when a `v*.*.*` tag is pushed. See the [releases page](https://github.com/KirkForge/Kirkforge_Cli/releases) or use the install script above.
+KirkForge-Cli follows a two-week minor-release cadence while in the `v0.x` series
+(`v0.2.0`, `v0.3.0`, …) with patch releases as needed. Breaking changes and new
+features bump the minor version; fixes bump the patch version. The project stays
+on `v0.x` until a separate decision is made to move to `v1.0.0`.
+
+Release binaries are built automatically when a `v*.*.*` tag is pushed:
+
+- Linux: `x86_64-unknown-linux-gnu`, `x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`
+- macOS: `x86_64-apple-darwin`, `aarch64-apple-darwin`
+- Windows: `x86_64-pc-windows-msvc`
+
+See the [releases page](https://github.com/KirkForge/Kirkforge_Cli/releases) or use the install script above. See [`docs/RELEASE.md`](docs/RELEASE.md) for the maintainer runbook.
+
+## Platform notes
+
+The core `kirkforge run` workflow works on Linux, macOS, and Windows. A few
+Unix-only features have platform-specific behavior:
+
+- **Session daemon (`kirkforge daemon`, `--auto-resume`, `--attach`, TUI
+  startup picker):** supported on Unix. On Windows the daemon is unsupported;
+  session discovery falls back to the file index, so resume/attach commands
+  cannot find recent sessions via the daemon. Use explicit paths with
+  `--continue-session` or `--resume` on Windows.
+- **Scheduled-job daemon (`kirkforge jobd`):** supported on Unix only. Windows
+  returns a clear unsupported-platform error.
+- **Config hot-reload:** use `/reload` everywhere. On Unix you can also send
+  `SIGHUP`; Windows has no `SIGHUP` equivalent.
+- **Bash tool:** on Windows the tool targets `bash` (Git for Windows / WSL) so
+  the same safety gate applies. `cmd.exe` is not used.
+- **Subprocess cleanup:** on Unix the full process group is killed, preventing
+  grandchildren from outliving the parent. On Windows only the immediate child
+  is killed, so a spawned sub-subprocess may survive.
 
 ## Daemon supervision
 

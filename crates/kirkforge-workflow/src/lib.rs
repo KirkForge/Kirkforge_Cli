@@ -196,12 +196,34 @@ pub struct StepOutput {
     pub critique: Option<String>,
 }
 
-/// Trait abstracting how the workflow executor runs a single step.
+/// Trait abstracting how the workflow executor runs steps.
 /// The binary crate implements this with `tools::task::InProcessTaskSpawner`.
 #[async_trait::async_trait]
 pub trait StepRunner: Send + Sync {
     /// Run one step prompt under the given persona and return the summary.
     async fn run_step(&self, name: &str, prompt: &str, persona: &str) -> Result<String>;
+
+    /// Run a batch of independent steps and return their summaries in input order.
+    ///
+    /// The default implementation runs sequentially; hosts that can dispatch
+    /// subagents in parallel should override this.
+    async fn run_batch(&self, steps: Vec<StepRequest>) -> Result<Vec<(String, String)>> {
+        let mut out = Vec::with_capacity(steps.len());
+        for req in steps {
+            let summary = self.run_step(&req.name, &req.prompt, &req.persona).await?;
+            out.push((req.name, summary));
+        }
+        Ok(out)
+    }
+}
+
+/// Input for one step in a batch.
+#[derive(Debug, Clone)]
+pub struct StepRequest {
+    pub name: String,
+    pub prompt: String,
+    pub persona: String,
+    pub with_critique: bool,
 }
 
 /// Executes a workflow in dependency order.
@@ -279,9 +301,20 @@ impl WorkflowExecutor {
 
             // Run the batch. The runner decides whether to parallelise.
             let mut batch_outputs: HashMap<String, StepOutput> = HashMap::new();
-            for (name, prompt, persona, with_critique) in tasks {
-                let summary = runner.run_step(&name, &prompt, &persona).await?;
-                let critique = if with_critique {
+            let batch: Vec<StepRequest> = tasks
+                .iter()
+                .map(|(name, prompt, persona, with_critique)| StepRequest {
+                    name: name.clone(),
+                    prompt: prompt.clone(),
+                    persona: persona.clone(),
+                    with_critique: *with_critique,
+                })
+                .collect();
+            let results = runner.run_batch(batch).await?;
+            for ((name, _prompt, persona, with_critique), (_, summary)) in
+                tasks.iter().zip(results.iter())
+            {
+                let critique = if *with_critique {
                     let critique_prompt = format!(
                         "You are a critical reviewer. Evaluate the following output for risks, gaps, and correctness. Keep it concise.\n\nOutput to critique:\n{summary}"
                     );
@@ -297,8 +330,8 @@ impl WorkflowExecutor {
                     name.clone(),
                     StepOutput {
                         name: name.clone(),
-                        persona,
-                        summary,
+                        persona: persona.clone(),
+                        summary: summary.clone(),
                         critique,
                     },
                 );
@@ -567,5 +600,120 @@ mod tests {
         assert_eq!(calls.len(), 2);
         assert_eq!(calls[1].0, "plan-critique");
         assert_eq!(calls[1].1, "plan");
+    }
+
+    /// A runner that sleeps for a fixed duration per step and records
+    /// per-step start/end times. Its `run_batch` spawns each step concurrently.
+    struct SleepingBatchRunner {
+        sleep_ms: u64,
+        starts: Arc<Mutex<Vec<(String, std::time::Instant)>>>,
+        ends: Arc<Mutex<Vec<(String, std::time::Instant)>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl StepRunner for SleepingBatchRunner {
+        async fn run_step(&self, name: &str, _prompt: &str, _persona: &str) -> Result<String> {
+            let start = std::time::Instant::now();
+            self.starts.lock().unwrap().push((name.to_string(), start));
+            tokio::time::sleep(tokio::time::Duration::from_millis(self.sleep_ms)).await;
+            let end = std::time::Instant::now();
+            self.ends.lock().unwrap().push((name.to_string(), end));
+            Ok(format!("{name}:done"))
+        }
+
+        async fn run_batch(&self, steps: Vec<StepRequest>) -> Result<Vec<(String, String)>> {
+            let mut handles = Vec::with_capacity(steps.len());
+            for req in steps {
+                let this = self.clone();
+                handles.push(tokio::spawn(async move {
+                    let summary = this.run_step(&req.name, &req.prompt, &req.persona).await?;
+                    Ok::<(String, String), anyhow::Error>((req.name, summary))
+                }));
+            }
+            let mut out = Vec::with_capacity(handles.len());
+            for h in handles {
+                out.push(h.await.map_err(|e| anyhow!("batch task panicked: {e}"))??);
+            }
+            Ok(out)
+        }
+    }
+
+    impl Clone for SleepingBatchRunner {
+        fn clone(&self) -> Self {
+            Self {
+                sleep_ms: self.sleep_ms,
+                starts: self.starts.clone(),
+                ends: self.ends.clone(),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn independent_steps_run_concurrently() {
+        let wf = Workflow {
+            name: "parallel".into(),
+            steps: vec![
+                Step {
+                    name: "a".into(),
+                    prompt: "a".into(),
+                    persona: "explore".into(),
+                    depends_on: vec![],
+                    critique: None,
+                },
+                Step {
+                    name: "b".into(),
+                    prompt: "b".into(),
+                    persona: "explore".into(),
+                    depends_on: vec![],
+                    critique: None,
+                },
+                Step {
+                    name: "c".into(),
+                    prompt: "c".into(),
+                    persona: "coder".into(),
+                    depends_on: vec!["a".into(), "b".into()],
+                    critique: None,
+                },
+            ],
+        };
+        let runner = SleepingBatchRunner {
+            sleep_ms: 1000,
+            starts: Arc::new(Mutex::new(Vec::new())),
+            ends: Arc::new(Mutex::new(Vec::new())),
+        };
+        let starts = runner.starts.clone();
+        let ends = runner.ends.clone();
+        let exe = WorkflowExecutor::new(wf);
+        let start = std::time::Instant::now();
+        let summary = exe.run(&runner, None).await.unwrap();
+        let elapsed = start.elapsed().as_secs_f64();
+
+        assert_eq!(summary.outputs.len(), 3);
+        // a and b should start in the first batch and overlap; c waits.
+        let first_starts: Vec<_> = starts
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(n, _)| n == "a" || n == "b")
+            .map(|(_, t)| *t)
+            .collect();
+        let first_ends: Vec<_> = ends
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(n, _)| n == "a" || n == "b")
+            .map(|(_, t)| *t)
+            .collect();
+        let latest_start = *first_starts.iter().max().unwrap();
+        let earliest_end = *first_ends.iter().min().unwrap();
+        let overlap = earliest_end.duration_since(latest_start).as_secs_f64();
+        assert!(
+            overlap >= 0.5,
+            "a and b should overlap by at least 0.5s; got {overlap:.2}s"
+        );
+        assert!(
+            elapsed < 3.5,
+            "three 1s steps (two parallel + one dependent) should finish in ~2s; got {elapsed:.2}s"
+        );
     }
 }

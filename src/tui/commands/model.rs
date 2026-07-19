@@ -76,7 +76,10 @@ pub async fn handle_model_command(
     }
 
     match adapter_kind_for_model(name) {
-        AdapterKind::OpenAiCompat | AdapterKind::Anthropic => {
+        AdapterKind::OpenAiCompat
+        | AdapterKind::Anthropic
+        | AdapterKind::AnthropicBedrock
+        | AdapterKind::AnthropicVertex => {
             // OpenAI-compatible and Anthropic endpoints may be remote/cloud
             // APIs; a local `/api/tags` check would be meaningless here.
             let _validation = ModelValidation::SkippedOpenAiCompat;
@@ -227,7 +230,7 @@ pub fn validate_model_against_list(name: &str, available: &[String]) -> ModelVal
 
 /// Classify a model name into an `AdapterKind` (no override).
 pub fn adapter_kind_for_model(name: &str) -> AdapterKind {
-    adapters::adapter_kind_for(name, None)
+    adapters::adapter_kind_for(name, None, "anthropic")
 }
 
 /// Fetch the local model list from an Ollama host.

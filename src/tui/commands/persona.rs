@@ -111,6 +111,8 @@ fn tools_for_persona(
         config.bash_sandbox_workdir,
         config.minify_write_side,
         None,
+        Some((config.computer_use.enabled, config.computer_use.clone())),
+        None,
     );
     match kind {
         PersonaKind::Explore => all

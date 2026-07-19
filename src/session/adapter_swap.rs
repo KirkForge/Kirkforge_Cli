@@ -73,10 +73,11 @@ impl AdapterSwap {
 
         let new_adapter = Self::wrap_cached(
             config,
-            adapters::adapter_for(
+            adapters::adapter_for_with_provider(
                 &suggested,
                 &self.ollama_host,
                 self.model_type_override.as_deref(),
+                &config.anthropic_provider,
                 self.timeout_secs,
             ),
         );
@@ -106,10 +107,11 @@ impl AdapterSwap {
     ) -> String {
         let new_adapter = Self::wrap_cached(
             config,
-            adapters::adapter_for(
+            adapters::adapter_for_with_provider(
                 model_name,
                 &self.ollama_host,
                 self.model_type_override.as_deref(),
+                &config.anthropic_provider,
                 self.timeout_secs,
             ),
         );

@@ -2910,3 +2910,147 @@ async fn test_cancelled_tool_batch_appends_placeholders() {
     );
     assert!(tool_results[1].content.contains("cancelled"));
 }
+
+/// Two independent non-file tool calls must run concurrently, not sequentially.
+/// Two 1s sleeps finishing in < 1.8s proves parallel dispatch.
+#[tokio::test]
+async fn test_parallel_tool_batch_runs_concurrently() {
+    let tool_one = SleepingTool {
+        def: ToolDef {
+            name: "sleep",
+            description: "sleep",
+            parameters: serde_json::json!({"type": "object", "properties": {}}),
+        },
+        sleep_ms: 1000,
+        call_count: Arc::new(Mutex::new(0)),
+        start_tx: Arc::new(std::sync::Mutex::new(None)),
+    };
+    let tool_two = SleepingTool {
+        def: tool_one.def.clone(),
+        sleep_ms: 1000,
+        call_count: Arc::new(Mutex::new(0)),
+        start_tx: Arc::new(std::sync::Mutex::new(None)),
+    };
+
+    let adapter = MockAdapter::new(
+        vec![
+            StreamEvent::ToolCall(ToolInvocation {
+                id: "call-1".into(),
+                name: "sleep".into(),
+                arguments: serde_json::json!({}),
+            }),
+            StreamEvent::ToolCall(ToolInvocation {
+                id: "call-2".into(),
+                name: "sleep".into(),
+                arguments: serde_json::json!({}),
+            }),
+            StreamEvent::Done {
+                finish_reason: FinishReason::ToolCalls,
+                usage: None,
+            },
+        ],
+        make_info(),
+    );
+
+    let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
+    let mut exe = make_executor(
+        Box::new(adapter),
+        vec![Arc::new(tool_one), Arc::new(tool_two)],
+        make_config(true),
+    );
+
+    let start = tokio::time::Instant::now();
+    let events = exe
+        .run_turn_collecting("run two sleeps", &approval_tx, never_cancelled())
+        .await
+        .unwrap();
+    let elapsed = start.elapsed().as_secs_f64();
+
+    assert!(
+        elapsed < 1.8,
+        "two 1s tool calls should run in parallel (elapsed {elapsed:.2}s)"
+    );
+
+    let results: Vec<_> = events
+        .iter()
+        .filter_map(|e| match e {
+            TurnEvent::ToolResult { name, output, .. } => Some((name.as_str(), output.as_str())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(results.len(), 2, "both sleep calls should produce results");
+    assert!(results.iter().all(|(_, o)| *o == "done"));
+}
+
+/// A `[read_file(X), write_file(X)]` batch in input order must pass the
+/// read-before-edit gate because the read is recorded before the write is
+/// checked. Uses real files and the real read_file/write_file tool bodies.
+#[tokio::test]
+async fn test_read_then_write_in_same_batch_passes_read_gate() {
+    let tmp = std::env::temp_dir().join(format!(
+        "kirkforge_read_then_write_{}.txt",
+        std::process::id()
+    ));
+    std::fs::write(&tmp, "original").expect("seed existing file");
+    let _cleanup = CleanupFile(tmp.clone());
+
+    use crate::tools::{read_file::ReadFile, write_file::WriteFile};
+
+    let read_tool: Arc<dyn Tool> = Arc::new(ReadFile::new(
+        crate::session::access::PathGuard::default(),
+        false,
+    ));
+    let write_tool: Arc<dyn Tool> = Arc::new(WriteFile::new(
+        None,
+        crate::session::access::PathGuard::default(),
+        false,
+    ));
+
+    let adapter = MockAdapter::new(
+        vec![
+            StreamEvent::ToolCall(ToolInvocation {
+                id: "call-read".into(),
+                name: "read_file".into(),
+                arguments: serde_json::json!({"path": tmp.to_string_lossy()}),
+            }),
+            StreamEvent::ToolCall(ToolInvocation {
+                id: "call-write".into(),
+                name: "write_file".into(),
+                arguments: serde_json::json!({
+                    "path": tmp.to_string_lossy(),
+                    "content": "updated"
+                }),
+            }),
+            StreamEvent::Done {
+                finish_reason: FinishReason::ToolCalls,
+                usage: None,
+            },
+        ],
+        make_info(),
+    );
+
+    let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
+    let mut exe = make_executor(
+        Box::new(adapter),
+        vec![read_tool, write_tool],
+        make_config(true),
+    );
+
+    let events = exe
+        .run_turn_collecting("read then write", &approval_tx, never_cancelled())
+        .await
+        .unwrap();
+
+    let write_success = events.iter().any(|e| {
+        matches!(
+            e,
+            TurnEvent::ToolResult { name, success, .. } if name == "write_file" && *success
+        )
+    });
+    assert!(
+        write_success,
+        "write_file in same batch should succeed after read_file; got events: {events:?}"
+    );
+    let content = std::fs::read_to_string(&tmp).unwrap();
+    assert_eq!(content, "updated", "file should have been overwritten");
+}

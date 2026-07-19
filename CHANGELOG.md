@@ -5,13 +5,27 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-19
+
 ### Added
+- Version 0.2.0 release (#9).
 - Executor batch concurrency coverage (#7): non-file tool calls run in parallel; file tool calls remain sequential with the read-before-edit gate enforced before write/edit bodies run, while `[read_file(X), write_file(X)]` in the same batch now correctly passes the gate because reads are marked immediately after the read body completes.
+- Real parallel tool dispatch (WO-2) with three-phase `dispatch_tool_call_batch`: prepare/run/record. Non-file tools spawn concurrently via `tokio::spawn`; file tools run sequentially so the read-before-edit gate observes reads before edits in the same batch.
+- VS Code PTY wrapper extension (WO-1) under `editors/vscode/` — `extension.ts` spawns `kirkforge run` in the integrated terminal.
+- `computer_use` tool (WO-3) via headless Chrome CDP for screenshot/click/type/scroll, SSRF-guarded via `DenyList`.
+- Anthropic Bedrock and Vertex adapters (WO-3) with SigV4 signing and Google OAuth2 respectively; both reuse the existing `parse_anthropic_stream` SSE parser.
+- Programmable JSON workflow engine (WO-4) in `crates/kirkforge-workflow/` with step dependency resolution, cycle detection, output propagation, and 3 built-in templates (`feature.json`, `bugfix.json`, `refactor.json`) plus `/workflow run`/`status`/`cancel` TUI commands.
+- Native Kimi/Moonshot adapter (`src/adapters/kimi.rs`) supporting 256K context, native tool calls, and the `reasoning_content` thinking field.
+- Persistent cron-style scheduled jobs (`kirkforge jobd`) with Unix socket control, signal handling, bounded concurrency, and storage under `~/.local/share/kirkforge/jobs/<id>/`.
+- Write-side minification / VFS envelope for file tools (`minify_write_side`).
+- `lsp_query` tool backed by `crates/kirkforge-lsp` for workspace symbol/type/diagnostic queries.
+- Plugin host path-validation module (`crates/kirkforge-plugin-host/src/paths.rs`) that drops capabilities whose command path is absolute, climbs out of the plugin root, or resolves outside it.
 
 ### Changed
 - Established biweekly minor release cadence and documented SemVer policy in `README.md` and `docs/RELEASE.md` (ADR-024).
 - Added Windows x86_64 CI job and documented Windows parity limitations; ported line-mode approval reader to a joinable `tokio::time::interval` + `spawn_blocking` stdin implementation (ADR-025).
 - Fixed Windows compile errors and lowered honest coverage thresholds after landing WO-3/WO-4 (#4).
+- Fixed ADR numbering collision: vendored parallel-tool-dispatch ADR moved from `0019` to `0020` (#8).
 
 ### Changed
 - Defaults corrected for cloud-routed frontier models: `default_model`, `ollama_host`, and `summarize_model` now default to empty strings; `default_request_timeout_secs` reduced from 600 to 120. Configuration must point at an Ollama gateway hosting the desired model.

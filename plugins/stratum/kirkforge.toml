@@ -2,7 +2,7 @@
 # The stratum binary builds from crates/kirkstratum-cli in this workspace.
 
 name = "stratum"
-version = "0.1.0"
+version = "0.2.0"
 description = "Compression and rules pipeline for agent context via the stratum CLI"
 trust = "shell"
 

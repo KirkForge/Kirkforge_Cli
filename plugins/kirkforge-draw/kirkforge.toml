@@ -2,7 +2,7 @@
 # The kfd binary builds from crates/kirkforge-draw in this workspace.
 
 name = "kirkforge-draw"
-version = "0.1.0"
+version = "0.2.0"
 description = "Terminal diagram editor and planner"
 trust = "shell"
 

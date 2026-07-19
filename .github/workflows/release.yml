@@ -175,7 +175,7 @@ jobs:
           cp -R -P npm/kirkforge-plugin dist/npm/kirkforge-plugin
           archive="kirkforge-${{ matrix.target }}.${{ matrix.archive_ext }}"
           if [ "${{ matrix.archive_ext }}" = "zip" ]; then
-            powershell -Command "Compress-Archive -Path 'dist\kirkforge.exe','dist\kfd.exe','dist\plugin3.exe','dist\stratum.exe','dist\kirkforge-video.exe','dist\plugins','dist\npm' -DestinationPath 'dist\${archive}'"
+            powershell -Command "Compress-Archive -Path 'dist\kirkforge.exe','dist\kfd.exe','dist\plugin3.exe','dist\stratum.exe','dist\kirkforge-video.exe','dist\plugins','dist\npm' -DestinationPath 'dist\\$archive'"
           else
             tar -czf "dist/${archive}" -C dist $(for b in "${bins[@]}"; do echo "${b}${ext}"; done) plugins npm
           fi

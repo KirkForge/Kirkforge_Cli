@@ -36,6 +36,17 @@ files `0001`–`0018` (indexed below) are the vendored Plugin3 ADRs.
 | [0017](./0017-build-features.md) | Build profile and feature gating | Accepted |
 | [0018](./0018-scheduled-jobs.md) | Cron / scheduled jobs | Accepted |
 
+## Native KirkForge-Cli ADRs
+
+The same directory also holds native CLI ADRs that use the 3-digit
+numbering scheme (`001`–`017`). Recent additions:
+
+- [ADR-024: Release cadence and semantic versioning](./024-release-cadence.md)
+- [ADR-025: Windows parity approach](./025-windows-parity.md)
+
+These are **not** part of the Plugin3 series and are therefore not
+included in the 4-digit index table above.
+
 ## Cross-references
 
 ADRs that reuse a Stratum design cite the Stratum ADR by number

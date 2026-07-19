@@ -28,9 +28,41 @@ jobs:
       - name: Check formatting
         run: cargo fmt --check
 
+  changelog:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Enforce changelog entry or label
+        run: |
+          # Every behavior-changing PR must either add a changelog: label or
+          # add a line referencing the PR number to CHANGELOG.md.
+          labels='${{ toJson(github.event.pull_request.labels.*.name) }}'
+          if echo "$labels" | grep -q '"changelog:'; then
+            echo "Found changelog: label; skipping CHANGELOG.md check."
+            exit 0
+          fi
+          pr_num='${{ github.event.pull_request.number }}'
+          if git diff --name-only origin/${{ github.base_ref }}...HEAD | grep -qx 'CHANGELOG.md'; then
+            if git diff origin/${{ github.base_ref }}...HEAD -- CHANGELOG.md | grep -E "^\+.*#${pr_num}($|[^0-9])" >/dev/null; then
+              echo "CHANGELOG.md contains PR #${pr_num} entry."
+              exit 0
+            fi
+          fi
+          echo "Missing changelog entry or changelog: label."
+          echo "Add a line under ## [Unreleased] in CHANGELOG.md that references #${pr_num},"
+          echo "or add a changelog: label to the PR."
+          exit 1
+
   quality:
     runs-on: ubuntu-latest
-    needs: fmt
+    needs: [fmt, changelog]
+    # Changelog check is only defined for pull requests; on push the job's
+    # dependency is treated as satisfied because the push workflow has no PR.
+    if: always() && (needs.changelog.result == 'success' || needs.changelog.result == 'skipped')
     steps:
       - uses: actions/checkout@v4
 
@@ -46,13 +78,35 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y ffmpeg flite
 
       - name: Run unit tests
-        run: cargo test --locked --workspace
+        run: cargo test --locked --workspace --no-fail-fast
 
       - name: Run Clippy
         run: cargo clippy --all-targets -- -D warnings
 
       - name: Build release binary
         run: cargo build --release --locked
+
+  windows:
+    runs-on: windows-latest
+    needs: fmt
+    env:
+      RUSTFLAGS: -Dwarnings
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: x86_64-pc-windows-msvc
+
+      - name: Run tests on Windows
+        shell: bash
+        run: cargo test --locked --workspace --no-fail-fast
 
   integration:
     runs-on: ubuntu-latest

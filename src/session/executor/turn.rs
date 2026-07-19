@@ -983,10 +983,11 @@ impl Executor {
             }
         }
 
-        // Phase 2.5 — Run file tools sequentially in input order so the
-        // read-before-edit gate and read-gate mark_read work on the mutable
-        // Executor state in a deterministic order. Cancellation is checked
-        // before each call.
+        // Phase 2.5 — Run file tools sequentially in input order. Cancellation
+        // is checked before each call. The read-before-edit gate is checked
+        // before running a write/edit body so unread existing files are never
+        // touched; reads earlier in the same batch have already been marked at
+        // the end of their body, so `[read_file(X), write_file(X)]` passes.
         for prep in deferred_file_calls {
             if cancelled.load(Ordering::SeqCst) {
                 // The remaining deferred file calls won't be recorded;
@@ -994,35 +995,27 @@ impl Executor {
                 break;
             }
             let idx = prep.idx;
-            let invocation = prep.invocation.clone();
-            let name = invocation.name.clone();
+            let name = prep.invocation.name.clone();
             let path = prep
                 .resolved_path
                 .as_ref()
                 .expect("file call has resolved path")
                 .clone();
 
-            // Read-before-edit gate for write_file/edit_file. This must run
-            // before the tool body so the tool cannot mutate a file that has
-            // not been read. Reads earlier in the same batch have already
-            // been recorded via `mark_read` when they reached Phase 3.
+            let path_arg = prep
+                .invocation
+                .arguments
+                .get("path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             let needs_read_gate = name == "edit_file" || (name == "write_file" && path.exists());
             if needs_read_gate {
-                if let GuardVerdict::Denied(_msg) = self.read_gate.check_edit(
-                    std::path::Path::new(
-                        invocation
-                            .arguments
-                            .get("path")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or(""),
-                    ),
-                    &path,
-                ) {
-                    // Leave no result for this index; Phase 3 will record the
-                    // placeholder / denial from the skipped list? We don't
-                    // have a skip message here. Better to insert a failure
-                    // outcome and let Phase 3 record it.
-                    let denied = "🔒 Access denied: Read-before-edit".to_string();
+                if let GuardVerdict::Denied(msg) = self
+                    .read_gate
+                    .check_edit(std::path::Path::new(path_arg), &path)
+                {
+                    let denied = format!("🔒 Access denied: {msg}");
+                    let invocation = prep.invocation.clone();
                     results.insert(
                         idx,
                         (
@@ -1036,9 +1029,15 @@ impl Executor {
                 }
             }
 
+            let invocation = prep.invocation.clone();
             let outcome = run_prepared_call(prep).await.map(|(_, o)| o);
-            if let Some(o) = outcome {
-                results.insert(idx, (invocation, o));
+            if let Some(ref o) = outcome {
+                // Mark reads immediately so later writes in the same batch
+                // see them when their read-before-edit gate runs.
+                if name == "read_file" || name == "read_image" {
+                    self.read_gate.mark_read(&path);
+                }
+                results.insert(idx, (invocation, o.clone()));
             }
         }
 

@@ -10,6 +10,9 @@ compresses input. Plugin3 slices output and enforces a token
 budget. The three cover input-routing, input-compression, and
 output-control respectively.
 
+**Series note:** files `001`–`017` are the native KirkForge-Cli ADRs;
+files `0001`–`0018` and `0021`–`0022` (indexed below) are the vendored Plugin3 ADRs.
+
 ## Index
 
 | ADR | Title | Status |
@@ -31,7 +34,23 @@ output-control respectively.
 | [0015](./0015-cli-design.md) | CLI design | Accepted |
 | [0016](./0016-test-strategy.md) | Test strategy | Accepted |
 | [0017](./0017-build-features.md) | Build profile and feature gating | Accepted |
+| [0019](./0019-parallel-tool-dispatch.md) | Parallel tool dispatch | Accepted |
 | [0018](./0018-scheduled-jobs.md) | Cron / scheduled jobs | Accepted |
+| [0021](./0021-computer-use-tool.md) | `computer_use` tool via headless Chrome CDP | Accepted |
+| [0022](./0022-anthropic-cloud-routing.md) | Anthropic cloud routing — Bedrock and Vertex | Accepted |
+| [0023](./0023-workflow-engine.md) | Programmable JSON workflow engine | Accepted |
+
+## Native KirkForge-Cli ADRs
+
+The same directory also holds native CLI ADRs that use the 3-digit
+numbering scheme (`001`–`017`). Recent additions:
+
+- [ADR-019: VS Code extension (Option A PTY wrapper)](./019-vscode-extension.md)
+- [ADR-024: Release cadence and semantic versioning](./024-release-cadence.md)
+- [ADR-025: Windows parity approach](./025-windows-parity.md)
+
+These are **not** part of the Plugin3 series and are therefore not
+included in the 4-digit index table above.
 
 ## Cross-references
 

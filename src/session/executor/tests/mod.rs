@@ -158,6 +158,7 @@ fn make_config(auto_approve: bool) -> Config {
         router_model: String::new(),
         routing_model_map: std::collections::HashMap::new(),
         mcp_servers: vec![],
+        lsp_servers: vec![],
         bang_requires_approval: false,
         json_mode: false,
         preserve_recent_messages: 2,
@@ -182,6 +183,13 @@ fn make_config(auto_approve: bool) -> Config {
         checkpoint_interval_messages: 0,
         plugin_sources: std::collections::HashMap::new(),
         enabled_plugins: vec![],
+        anthropic_provider: "anthropic".into(),
+        aws_region: "us-east-1".into(),
+        aws_profile: String::new(),
+        gcp_service_account_path: None,
+        gcp_project_id: String::new(),
+        gcp_region: "us-central1".into(),
+        computer_use: crate::shared::ComputerUseConfig::default(),
     }
 }
 

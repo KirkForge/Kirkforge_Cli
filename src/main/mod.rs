@@ -7,6 +7,7 @@
 // handling or explicit expect() with a justification.
 #![cfg_attr(not(test), deny(clippy::unwrap_used))]
 
+mod chrome_launcher;
 mod turn_events;
 
 use clap::{CommandFactory, Parser};
@@ -200,6 +201,10 @@ async fn main() {
         std::process::exit(2);
     }
 
+    if let Some(endpoint) = kirkforge::shared::metrics::init_telemetry() {
+        tracing::info!(otel_endpoint = %endpoint, "OpenTelemetry export enabled");
+    }
+
     let result: Result<(), KirkForgeError> = match cli.command {
         Command::Run {
             model,
@@ -283,6 +288,8 @@ async fn main() {
         }
     }
     .map_err(KirkForgeError::from);
+
+    kirkforge::shared::metrics::shutdown_telemetry();
 
     if let Err(e) = result {
         eprintln!("kirkforge: {e}");
@@ -552,10 +559,11 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     }
 
     let adapter = adapters::caching::maybe_wrap_cached(
-        adapters::adapter_for(
+        adapters::adapter_for_with_provider(
             &model,
             ollama_host,
             model_type.as_deref(),
+            &config.anthropic_provider,
             config.request_timeout_secs,
         ),
         &config,
@@ -592,6 +600,55 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
         session::access::access_from_config(&config);
     let bash_sandbox_workdir = config.bash_sandbox_workdir;
     let minify_write_side = config.minify_write_side;
+    let computer_use_cfg = config.computer_use.clone();
+    let computer_use_enabled = computer_use_cfg.enabled;
+
+    // ── LSP pool (lazy-started, fail-cooled) ──
+    // Build the pool from `[[lsp_servers]]` config. Servers are spawned
+    // lazily on the first `lsp_query` call for that language, so this is
+    // cheap when no LSP-aware tool runs. The pool is wrapped in `Arc` and
+    // shared with the `lsp_query` tool below.
+    let lsp_pool: Option<std::sync::Arc<kirkforge_lsp::LspPool>> = if config.lsp_servers.is_empty()
+    {
+        None
+    } else {
+        let language_configs: Vec<kirkforge_lsp::LanguageConfig> = config
+            .lsp_servers
+            .iter()
+            .map(|e| kirkforge_lsp::LanguageConfig {
+                name: e.language.clone(),
+                extensions: e.extensions.clone(),
+                lsp: Some(kirkforge_lsp::LspServerConfig {
+                    command: e.command.clone(),
+                    args: e.args.clone(),
+                }),
+            })
+            .collect();
+        Some(std::sync::Arc::new(kirkforge_lsp::LspPool::new(
+            std::env::current_dir()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|_| ".".to_string()),
+            language_configs,
+        )))
+    };
+
+    // ── Chrome tab for computer_use ──
+    // Try to launch Chrome only when the tool is enabled. If the launch fails,
+    // fall back to a placeholder tab that fails gracefully at runtime. This
+    // keeps the toolset construction cheap and avoids hard-failing startup
+    // when Chrome is not installed.
+    let chrome_tab: std::sync::Arc<dyn crate::tools::computer_use::ChromeTab> =
+        if computer_use_enabled {
+            match chrome_launcher::launch_chrome_tab(&config.computer_use).await {
+                Ok(tab) => tab,
+                Err(e) => {
+                    tracing::warn!(error = %e, "computer_use enabled but Chrome launch failed; tool will fail gracefully");
+                    std::sync::Arc::new(crate::tools::computer_use::PlaceholderTab)
+                }
+            }
+        } else {
+            std::sync::Arc::new(crate::tools::computer_use::PlaceholderTab)
+        };
 
     // ── Toolset assembly (Phase 2.2) ──
     // Compose built-in, MCP, and plugin tools into a single source-aware
@@ -608,6 +665,9 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
             builtin_path_guard,
             bash_sandbox_workdir,
             minify_write_side,
+            lsp_pool.clone(),
+            Some((computer_use_enabled, computer_use_cfg.clone())),
+            Some(chrome_tab),
         ),
     )));
 
@@ -834,6 +894,96 @@ async fn run_line_mode(
             continue;
         }
 
+        if trimmed.starts_with("/workflow ") || trimmed == "/workflow" {
+            let args = trimmed.strip_prefix("/workflow").unwrap_or("").trim();
+            let (sub, rest) = args.split_once(' ').unwrap_or((args, ""));
+            let sub = sub.trim();
+            let rest = rest.trim();
+            match sub {
+                "run" => {
+                    if rest.is_empty() {
+                        if output == kirkforge::shared::OutputFormat::Text {
+                            println!("Usage: /workflow run <name>");
+                        }
+                    } else {
+                        let path = match kirkforge_workflow::find_workflow_file(rest) {
+                            Some(p) => p,
+                            None => {
+                                if output == kirkforge::shared::OutputFormat::Text {
+                                    println!("Workflow '{rest}' not found.");
+                                }
+                                continue;
+                            }
+                        };
+                        match kirkforge_workflow::Workflow::from_file(&path) {
+                            Ok(workflow) => {
+                                let cfg = kirkforge::shared::read_shared_config(&config).clone();
+                                let ollama_host = cfg.ollama_host.clone();
+                                let supports_images = cfg.ollama_host.contains("localhost")
+                                    || cfg.ollama_host.contains("127.0.0.1")
+                                    || cfg.ollama_host.contains("[::1]");
+                                let cancel =
+                                    std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+                                let workflow_name = workflow.name.clone();
+                                let step_count = workflow.steps.len();
+                                if output == kirkforge::shared::OutputFormat::Text {
+                                    println!("🚀 Started workflow '{workflow_name}' ({step_count} steps).");
+                                }
+                                let runner = kirkforge::tui::commands::workflow::LineStepRunner {
+                                    model_name: model_name.clone(),
+                                    ollama_host,
+                                    config: cfg,
+                                    supports_images,
+                                    undo_stack: None,
+                                };
+                                let result = kirkforge_workflow::WorkflowExecutor::new(workflow)
+                                    .run(&runner, Some(&cancel))
+                                    .await;
+                                match result {
+                                    Ok(summary) => {
+                                        if output == kirkforge::shared::OutputFormat::Text {
+                                            let s =
+                                                kirkforge::tui::commands::workflow::format_summary(
+                                                    &workflow_name,
+                                                    &summary,
+                                                );
+                                            println!("{s}");
+                                        }
+                                    }
+                                    Err(e) => {
+                                        if output == kirkforge::shared::OutputFormat::Text {
+                                            println!("Workflow failed: {e}");
+                                        }
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                if output == kirkforge::shared::OutputFormat::Text {
+                                    println!("Failed to load workflow '{rest}': {e}");
+                                }
+                            }
+                        }
+                    }
+                }
+                "status" => {
+                    if output == kirkforge::shared::OutputFormat::Text {
+                        println!("No workflow is currently running. Use /workflow run <name>.");
+                    }
+                }
+                "cancel" => {
+                    if output == kirkforge::shared::OutputFormat::Text {
+                        println!("⛔ Workflow cancelled.");
+                    }
+                }
+                _ => {
+                    if output == kirkforge::shared::OutputFormat::Text {
+                        println!("Usage: /workflow run <name> | status | cancel");
+                    }
+                }
+            }
+            continue;
+        }
+
         if trimmed == "/reload skills" {
             // Line mode has no AppState skill registry; just report that the
             // interactive skill reload is a TUI-only feature.
@@ -1031,12 +1181,61 @@ fn poll_read_line(
 #[cfg(windows)]
 fn read_approval_answer_pollable(
     _tool_name: &str,
-    _shutdown: &std::sync::atomic::AtomicBool,
+    shutdown: &std::sync::atomic::AtomicBool,
 ) -> Option<bool> {
-    // Windows has no /dev/tty; fall back to a blocking stdin read. The blocking
-    // read is not interruptible, so the reader thread is not joinable mid-read
-    // on this platform (the unix path is the joinable one the gate tests).
-    Some(read_approval_answer(_tool_name))
+    // Windows has no /dev/tty. We race a blocking stdin reader against a
+    // periodic poll of the shutdown flag. The reader is a tokio
+    // `spawn_blocking` task, so the outer async caller can abort it on
+    // shutdown/timeout without waiting for a line to arrive. We return `None`
+    // when shutdown is observed so the caller can distinguish "interrupted"
+    // from "denied". The line-mode main loop is not reading stdin while a tool
+    // awaits approval, so holding the stdin lock here is safe.
+    use std::sync::atomic::Ordering;
+
+    if shutdown.load(Ordering::Acquire) {
+        return None;
+    }
+
+    tokio::runtime::Handle::current().block_on(async {
+        let reader = tokio::task::spawn_blocking(|| {
+            use std::io::BufRead;
+            let mut answer = String::new();
+            let stdin = std::io::stdin();
+            let mut reader = std::io::BufReader::new(stdin.lock());
+            match reader.read_line(&mut answer) {
+                Ok(0) => false,
+                Ok(_) => {
+                    let trimmed = answer.trim().to_ascii_lowercase();
+                    trimmed == "y" || trimmed == "yes"
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "failed to read approval answer from stdin");
+                    false
+                }
+            }
+        });
+
+        let mut interval = tokio::time::interval(std::time::Duration::from_millis(200));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+        let abort = reader.abort_handle();
+
+        tokio::select! {
+            biased;
+            a = reader => Some(a.unwrap_or(false)),
+            _ = async {
+                loop {
+                    interval.tick().await;
+                    if shutdown.load(Ordering::Acquire) {
+                        break;
+                    }
+                }
+            } => {
+                abort.abort();
+                None
+            }
+        }
+    })
 }
 
 #[cfg(not(any(unix, windows)))]
@@ -1044,27 +1243,8 @@ fn read_approval_answer_pollable(
     _tool_name: &str,
     _shutdown: &std::sync::atomic::AtomicBool,
 ) -> Option<bool> {
-    Some(read_approval_answer(_tool_name))
-}
-
-#[cfg(windows)]
-fn read_approval_answer(_tool_name: &str) -> bool {
-    use std::io::BufRead;
-    let mut answer = String::new();
-    let stdin = std::io::stdin();
-    let mut reader = std::io::BufReader::new(stdin.lock());
-    if let Err(e) = reader.read_line(&mut answer) {
-        tracing::warn!(error = %e, "failed to read approval answer from stdin");
-        return false;
-    }
-    let trimmed = answer.trim().to_ascii_lowercase();
-    trimmed == "y" || trimmed == "yes"
-}
-
-#[cfg(not(any(unix, windows)))]
-fn read_approval_answer(_tool_name: &str) -> bool {
     tracing::warn!("line-mode approval is not supported on this platform");
-    false
+    Some(false)
 }
 
 /// Spawn an approval responder for interactive line mode.
@@ -1108,6 +1288,9 @@ fn spawn_line_mode_approval_handler(
             // flag interrupts it; the JoinHandle is joined below (on timeout via
             // shutdown, on answer because the thread already exited) so no
             // reader thread is left detached at the end of the iteration.
+            // On Windows the same pollable abstraction races a blocking stdin
+            // reader against the shutdown flag and returns `None` when
+            // interrupted, so the same timeout/gate logic applies.
             let shutdown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
             let shutdown_reader = shutdown.clone();
             let reader_handle: std::thread::JoinHandle<()> = std::thread::spawn(move || {
@@ -1130,13 +1313,7 @@ fn spawn_line_mode_approval_handler(
             }
             // Always join: on the answer path the thread has already exited
             // (instant); on the timeout path it exits within one poll interval.
-            // ponytail: cfg gate the join to unix — the windows reader uses a
-            // blocking stdin read that cannot be interrupted, so joining on
-            // timeout would block forever there.
-            #[cfg(unix)]
             let _ = reader_handle.join();
-            #[cfg(not(unix))]
-            drop(reader_handle);
 
             let approved = result.map(|r| r.unwrap_or(false)).unwrap_or(false);
 

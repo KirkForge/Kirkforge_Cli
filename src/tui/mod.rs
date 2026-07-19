@@ -355,13 +355,18 @@ pub async fn run_tui(
     let shutdown_for_signal = shutdown.clone();
     tokio::spawn(async move {
         let ctrl_c = tokio::signal::ctrl_c();
+
         #[cfg(unix)]
-        let term_fut = {
+        let term = async {
             use tokio::signal::unix::{signal, SignalKind};
-            signal(SignalKind::terminate()).ok()
+            if let Ok(mut s) = signal(SignalKind::terminate()) {
+                let _ = s.recv().await;
+            } else {
+                std::future::pending::<()>().await;
+            }
         };
         #[cfg(not(unix))]
-        let term_fut: Option<()> = None;
+        let term = std::future::pending::<()>();
 
         tokio::select! {
             biased;
@@ -369,20 +374,7 @@ pub async fn run_tui(
                 tracing::info!("SIGINT received; signalling graceful TUI shutdown");
                 shutdown_for_signal.notify_one();
             }
-            _ = async {
-                #[cfg(unix)]
-                {
-                    if let Some(mut s) = term_fut {
-                        let _ = s.recv().await;
-                    } else {
-                        std::future::pending::<()>().await;
-                    }
-                }
-                #[cfg(not(unix))]
-                {
-                    std::future::pending::<()>().await;
-                }
-            } => {
+            _ = term => {
                 tracing::info!("SIGTERM received; signalling graceful TUI shutdown");
                 shutdown_for_signal.notify_one();
             }
@@ -890,6 +882,20 @@ async fn handle_persona_complete(
     state.is_generating = false;
     state.persona_in_progress = None;
     state.persona_cancel = None;
+
+    if result.task.starts_with("workflow ") {
+        state.workflow_in_progress = None;
+        state.workflow_cancel = None;
+        let msg = if result.success {
+            result.summary
+        } else {
+            format!("Workflow failed: {}", result.error.unwrap_or_default())
+        };
+        state
+            .messages
+            .push_back(ConversationEntry::new("system", msg));
+        return;
+    }
 
     if !result.success {
         state.messages.push_back(ConversationEntry::new(

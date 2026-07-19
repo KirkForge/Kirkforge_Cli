@@ -1,0 +1,10 @@
+{
+  "name": "feature",
+  "steps": [
+    {"name": "explore", "prompt": "Map the codebase areas relevant to the requested feature. Identify files, modules, tests, and conventions to follow. Do not edit files.", "persona": "explore"},
+    {"name": "plan", "prompt": "Design a step-by-step implementation plan for the feature, based on the exploration summary. End with: \"## Plan Complete\".", "persona": "plan", "depends_on": ["explore"]},
+    {"name": "critique", "prompt": "Critique the implementation plan for risks, missing tests, and edge cases. Be concise but thorough.", "persona": "plan", "depends_on": ["plan"]},
+    {"name": "execute", "prompt": "Implement the feature according to the critiqued plan. Use the full toolset including edits and tests. Summarize what changed.", "persona": "coder", "depends_on": ["critique"]},
+    {"name": "refine", "prompt": "Review the implementation against the plan. Fix gaps, add missing tests, and summarize the final state.", "persona": "coder", "depends_on": ["execute"]}
+  ]
+}

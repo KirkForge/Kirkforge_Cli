@@ -15,8 +15,42 @@ env:
   RUST_TOOLCHAIN: "1.88.0"
 
 jobs:
+  # Do not build release artifacts unless the commit on main that this tag
+  # points to has a green CI run. Tags are created by scripts/bump-version.sh
+  # after main is already green, but this gate prevents accidental or rebased
+  # tags from publishing from a broken commit.
+  check-main-ci:
+    name: Verify main CI is green
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check latest main CI conclusion
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Tag ref: ${GITHUB_REF_NAME}"
+          echo "Commit: ${GITHUB_SHA}"
+          # Wait up to ~15 minutes for the CI run on this commit to complete.
+          for i in {1..30}; do
+            status=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs" \
+              --jq '.check_runs[] | select(.name == "CI" or (.name | startswith("CI /"))) | .conclusion' \
+              2>/dev/null | sort -u | paste -sd ',' -)
+            echo "Attempt $i: CI statuses = $status"
+            if echo "$status" | grep -qE 'failure|cancelled|timed_out|action_required'; then
+              echo "Main CI failed for this commit; refusing to release."
+              exit 1
+            fi
+            if echo "$status" | grep -q 'success' && ! echo "$status" | grep -qE 'pending|neutral|skipped'; then
+              echo "Main CI is green."
+              exit 0
+            fi
+            sleep 30
+          done
+          echo "Timed out waiting for main CI to go green."
+          exit 1
+
   build:
     name: Build release binaries
+    needs: check-main-ci
     strategy:
       fail-fast: false
       matrix:

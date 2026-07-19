@@ -75,6 +75,9 @@ pub struct Executor {
     /// Unique identifier for this session, forwarded to lifecycle hooks as
     /// `KF_SESSION_ID`. Populated by the caller after construction.
     session_id: String,
+    /// Optional spawner for the `task` tool. Built lazily from executor
+    /// state so subagents inherit the same model, config, and sandboxing.
+    task_spawner: Option<Arc<dyn crate::tools::task::TaskSpawner>>,
 }
 
 impl Executor {
@@ -199,8 +202,10 @@ impl Executor {
             plan_mode: false,
             recovered_messages: None,
             session_id: String::new(),
+            task_spawner: None,
         };
         this.init_default_verifiers(plugin_registry);
+        this.build_task_spawner();
         this
     }
 
@@ -238,7 +243,25 @@ impl Executor {
         ToolContext {
             token: tool_cancel_token(cancelled),
             dry_run,
+            task_spawner: self.task_spawner.clone(),
         }
+    }
+
+    /// Construct the in-process task spawner from the executor's model,
+    /// config, and sandboxing state. Called once at construction.
+    fn build_task_spawner(&mut self) {
+        let cfg = read_shared_config(&self.config).clone();
+        let model_name = self.model_name.clone();
+        let ollama_host = cfg.ollama_host.clone();
+        let undo_stack = self.undo_stack.clone();
+        let supports_images = self.adapter.model_info().supports_images;
+        self.task_spawner = Some(Arc::new(crate::tools::task::InProcessTaskSpawner::new(
+            cfg,
+            model_name,
+            ollama_host,
+            undo_stack,
+            supports_images,
+        )));
     }
 
     /// Replace the shared config with `new` and rebuild access-control

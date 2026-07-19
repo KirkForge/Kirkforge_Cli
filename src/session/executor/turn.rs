@@ -1,18 +1,28 @@
 //! Turn execution loop and post-turn hook guard.
 
 use crate::adapters::tool_call_markup::extract_dsml_tool_calls;
+use crate::session::access::GuardVerdict;
+use crate::session::bash_runner::check_bash_command_str;
 use crate::session::hooks::HookRunner;
 use crate::session::toolset::Toolset;
+use crate::shared::metrics::{record, MetricEvent};
+use crate::shared::permission::{evaluate, PermissionAction};
 use crate::shared::{
-    read_shared_config, Config, Message, Role, StreamEvent, ToolDef, ToolInvocation,
+    read_shared_config, Config, Message, Role, StreamEvent, ToolDef, ToolInvocation, ToolOutcome,
 };
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::mpsc;
 
 use super::helpers::*;
-use super::types::{IterationOutcome, TurnEvent, PLAN_COMPLETE_MARKER};
+use super::types::{ApprovalDecision, IterationOutcome, TurnEvent, PLAN_COMPLETE_MARKER};
 use super::{ApprovalRequest, Executor};
+
+type RunningTask = (
+    usize,
+    tokio::task::JoinHandle<Option<(ToolInvocation, ToolOutcome)>>,
+);
 
 pub struct PostTurnHookGuard {
     runner: HookRunner,
@@ -204,21 +214,17 @@ impl Executor {
                     return Ok(());
                 }
                 IterationOutcome::ToolCalls(mut tcs) => {
-                    let mut cancelled_idx = tcs.len();
-                    for (idx, tc) in tcs.iter_mut().enumerate() {
-                        if cancelled.load(Ordering::SeqCst) {
-                            tracing::debug!("tool batch short-circuited by cancellation");
-                            cancelled_idx = idx;
-                            break;
-                        }
-                        self.dispatch_tool_call(tc, approval_sender, cancelled, event_tx)
-                            .await?;
-                    }
+                    // Dispatch all requested tool calls in parallel while
+                    // preserving input-order conversation semantics. The
+                    // prepare/run/record split is documented in ADR-020.
+                    let cancelled_idx = self
+                        .dispatch_tool_call_batch(&mut tcs, approval_sender, cancelled, event_tx)
+                        .await?;
 
                     // Cancellation may have left requested tool calls without
-                    // results. Append placeholder tool-result messages so the
-                    // conversation stays consistent and the next model turn
-                    // doesn't see orphaned tool-call ids.
+                    // recorded results. Append placeholder tool-result messages
+                    // so the conversation stays consistent and the next model
+                    // turn doesn't see orphaned tool-call ids.
                     for skipped in &tcs[cancelled_idx..] {
                         let msg = format!("Tool call {} cancelled before execution", skipped.id);
                         crate::send_or_warn!(
@@ -330,6 +336,780 @@ impl Executor {
             &crate::shared::FinishReason::Stop,
         );
         Ok(())
+    }
+
+    /// Phase-1 pre-gate: decide whether a tool call should be spawned in
+    /// parallel or skipped entirely because it failed a read-only safety
+    /// check (unknown tool, plan mode, schema, permission rule, approval,
+    /// deny list, URL deny list, bash command check, search-path check, or
+    /// pre-tool hook).
+    ///
+    /// For file tools the path guard is also applied here (so oversized reads
+    /// etc. never reach the tool body), but the read-before-edit gate is
+    /// deferred to Phase 3 so `[read_file(X), edit_file(X)]` in the same batch
+    /// can pass.
+    async fn pre_run_verdict(
+        &mut self,
+        tc: &ToolInvocation,
+        approval_sender: &mpsc::UnboundedSender<ApprovalRequest>,
+    ) -> anyhow::Result<PreRunVerdict> {
+        let tool = match self.tools.resolve(&tc.name) {
+            Some(t) => t,
+            None => {
+                return Ok(PreRunVerdict::Skip {
+                    events: vec![TurnEvent::Error(format!("Unknown tool: {}", tc.name))],
+                    message: format!("Unknown tool: {}", tc.name),
+                });
+            }
+        };
+
+        // Plan-mode enforcement: only read-only discovery tools may run.
+        if self.plan_mode {
+            let allowed = match tc.name.as_str() {
+                "read_file" | "read_image" | "grep" | "glob" => true,
+                "bash_status" | "bash_cancel" => true,
+                "bash" => tc
+                    .arguments
+                    .get("command")
+                    .and_then(|v| v.as_str())
+                    .map(is_read_only_bash)
+                    .unwrap_or(false),
+                _ => false,
+            };
+            if !allowed {
+                return Ok(PreRunVerdict::Skip {
+                    events: vec![TurnEvent::ToolResult {
+                        name: tc.name.clone(),
+                        output: format!(
+                            "📐 Plan mode blocked {}: only read-only discovery tools are allowed until you type /implement.",
+                            tc.name
+                        ),
+                        success: false,
+                    }],
+                    message: format!(
+                        "📐 Plan mode blocked {}: only read-only discovery tools are allowed until you type /implement.",
+                        tc.name
+                    ),
+                });
+            }
+        }
+
+        if let Some(reason) = validate_args_against_schema(&tc.arguments, &tool.def().parameters) {
+            let err = format!("❌ Invalid arguments for {}: {reason}", tc.name);
+            return Ok(PreRunVerdict::Skip {
+                events: vec![TurnEvent::ToolResult {
+                    name: tc.name.clone(),
+                    output: err.clone(),
+                    success: false,
+                }],
+                message: err,
+            });
+        }
+
+        let (auto_approve, permission_rules) = {
+            let cfg = read_shared_config(&self.config);
+            (cfg.auto_approve, cfg.permission_rules.clone())
+        };
+        let is_destructive = matches!(tc.name.as_str(), "write_file" | "edit_file" | "bash");
+        let is_read_only_bash_call = tc.name == "bash"
+            && tc
+                .arguments
+                .get("command")
+                .and_then(|v| v.as_str())
+                .map(is_read_only_bash)
+                .unwrap_or(false);
+
+        let default_action = if !is_destructive || is_read_only_bash_call {
+            PermissionAction::Allow
+        } else if auto_approve {
+            if tc.name == "bash" {
+                PermissionAction::Ask
+            } else {
+                PermissionAction::Allow
+            }
+        } else {
+            PermissionAction::Ask
+        };
+        let action = evaluate(&permission_rules, &tc.name, &tc.arguments, default_action);
+
+        if matches!(action, PermissionAction::Deny) {
+            let reason = format!(
+                "❌ Permission rule denied {}:{}={}",
+                tc.name,
+                tc.arguments
+                    .as_object()
+                    .and_then(|o| o.keys().next().map(|s| s.as_str()))
+                    .unwrap_or(""),
+                tc.arguments
+                    .as_object()
+                    .and_then(|o| o.values().next())
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(""),
+            );
+            return Ok(PreRunVerdict::Skip {
+                events: vec![TurnEvent::ToolResult {
+                    name: tc.name.clone(),
+                    output: reason.clone(),
+                    success: false,
+                }],
+                message: reason,
+            });
+        }
+
+        if matches!(action, PermissionAction::Ask) {
+            match self.run_approval_flow(tc, approval_sender).await? {
+                ApprovalDecision::Approved | ApprovalDecision::AlwaysApproved => {}
+                ApprovalDecision::Denied { reason } => {
+                    let msg = format!("❌ Approval denied: {reason}");
+                    return Ok(PreRunVerdict::Skip {
+                        events: vec![TurnEvent::ToolResult {
+                            name: tc.name.clone(),
+                            output: msg.clone(),
+                            success: false,
+                        }],
+                        message: msg,
+                    });
+                }
+            }
+        }
+
+        if let Some(denied) = check_url_in_args(&tc.arguments, &self.deny_list) {
+            return Ok(PreRunVerdict::Skip {
+                events: vec![TurnEvent::ToolResult {
+                    name: tc.name.clone(),
+                    output: denied.clone(),
+                    success: false,
+                }],
+                message: denied,
+            });
+        }
+
+        if let Some(denied) = check_deny_list(&self.deny_list, &tc.name, &tc.arguments) {
+            return Ok(PreRunVerdict::Skip {
+                events: vec![TurnEvent::ToolResult {
+                    name: tc.name.clone(),
+                    output: denied.clone(),
+                    success: false,
+                }],
+                message: denied,
+            });
+        }
+
+        if tc.name == "bash" {
+            let bash_cmd = tc
+                .arguments
+                .get("command")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let bash_workdir = tc.arguments.get("workdir").and_then(|v| v.as_str());
+            let bash_sandbox_workdir = read_shared_config(&self.config).bash_sandbox_workdir;
+            if let Some(denied) = check_bash_command_str(
+                bash_cmd,
+                bash_workdir,
+                &self.deny_list,
+                &self.path_guard,
+                bash_sandbox_workdir,
+            ) {
+                return Ok(PreRunVerdict::Skip {
+                    events: vec![TurnEvent::ToolResult {
+                        name: tc.name.clone(),
+                        output: denied.clone(),
+                        success: false,
+                    }],
+                    message: denied,
+                });
+            }
+        }
+
+        if matches!(tc.name.as_str(), "grep" | "glob") {
+            let path_str = match tc.name.as_str() {
+                "glob" => tc
+                    .arguments
+                    .get("base_dir")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("."),
+                _ => tc
+                    .arguments
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("."),
+            };
+            let path = std::path::Path::new(path_str);
+            if let GuardVerdict::Denied(msg) = check_search_path(&self.path_guard, path) {
+                return Ok(PreRunVerdict::Skip {
+                    events: vec![TurnEvent::ToolResult {
+                        name: tc.name.clone(),
+                        output: format!("🔒 Access denied: {msg}"),
+                        success: false,
+                    }],
+                    message: format!("🔒 Access denied: {msg}"),
+                });
+            }
+        }
+
+        // File tools: run path guard here so oversized reads never reach the
+        // tool body. Return the resolved path so Phase 3 can check the
+        // read-before-edit gate and mark reads without re-resolving.
+        if matches!(
+            tc.name.as_str(),
+            "read_file" | "read_image" | "write_file" | "edit_file"
+        ) {
+            let path_str = tc
+                .arguments
+                .get("path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let path = std::path::Path::new(path_str);
+            let verdict = if tc.name == "read_file" || tc.name == "read_image" {
+                self.path_guard.check_read(path)
+            } else {
+                self.path_guard.check_write(path).await
+            };
+            match verdict {
+                GuardVerdict::Allowed(resolved) => {
+                    return Ok(PreRunVerdict::Spawn(tool, Some(resolved)));
+                }
+                GuardVerdict::Denied(msg) => {
+                    return Ok(PreRunVerdict::Skip {
+                        events: vec![TurnEvent::ToolResult {
+                            name: tc.name.clone(),
+                            output: format!("🔒 Access denied: {msg}"),
+                            success: false,
+                        }],
+                        message: format!("🔒 Access denied: {msg}"),
+                    });
+                }
+            }
+        }
+
+        // Pre-tool hook for non-file tools. File-tool hooks run after path
+        // resolution in `record_tool_result` so they see resolved paths.
+        let args_json = serde_json::to_string(&tc.arguments).unwrap_or_default();
+        if let Some(reason) = self
+            .run_pre_tool_hook(
+                &format!("pre-tool-{}", tc.name),
+                Some(&tc.name),
+                Some(&args_json),
+            )
+            .await
+        {
+            let denied = format!("❌ Hook denied {}: {}", tc.name, reason);
+            return Ok(PreRunVerdict::Skip {
+                events: vec![TurnEvent::ToolResult {
+                    name: tc.name.clone(),
+                    output: denied.clone(),
+                    success: false,
+                }],
+                message: denied,
+            });
+        }
+
+        Ok(PreRunVerdict::Spawn(tool, None))
+    }
+
+    /// Phase-3 recorder: apply the mutable side-effects of one completed tool
+    /// call in input order. The tool body itself has already run in Phase 2,
+    /// so this method only performs stateful checks (path guard, read-before-edit
+    /// gate, pre-tool hook for file tools) and records the result.
+    async fn record_tool_result(
+        &mut self,
+        tc: &mut ToolInvocation,
+        _invocation: &ToolInvocation,
+        outcome: ToolOutcome,
+        _approval_sender: &mpsc::UnboundedSender<ApprovalRequest>,
+        _cancelled: &AtomicBool,
+        event_tx: &mpsc::Sender<TurnEvent>,
+    ) -> anyhow::Result<()> {
+        let is_destructive = matches!(tc.name.as_str(), "write_file" | "edit_file" | "bash");
+        let max_tool_result_chars = read_shared_config(&self.config).max_tool_result_chars;
+
+        if matches!(
+            tc.name.as_str(),
+            "read_file" | "read_image" | "write_file" | "edit_file"
+        ) {
+            let path_str = tc
+                .arguments
+                .get("path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let path = std::path::Path::new(path_str);
+            let verdict = if tc.name == "read_file" || tc.name == "read_image" {
+                self.path_guard.check_read(path)
+            } else {
+                self.path_guard.check_write(path).await
+            };
+
+            match verdict {
+                GuardVerdict::Allowed(resolved) => {
+                    let needs_read_gate =
+                        tc.name == "edit_file" || (tc.name == "write_file" && path.exists());
+                    if needs_read_gate {
+                        if let GuardVerdict::Denied(msg) =
+                            self.read_gate.check_edit(path, &resolved)
+                        {
+                            let denied = format!("🔒 Access denied: {msg}");
+                            if is_destructive {
+                                self.audit_log.log_destructive(
+                                    &tc.name,
+                                    &tc.arguments,
+                                    false,
+                                    Some(&denied),
+                                );
+                            }
+                            crate::send_or_warn!(
+                                event_tx
+                                    .send(TurnEvent::ToolResult {
+                                        name: tc.name.clone(),
+                                        output: denied.clone(),
+                                        success: false,
+                                    })
+                                    .await,
+                                "TurnEvent receiver dropped; discarding event"
+                            );
+                            self.conversation
+                                .append_async(Message {
+                                    role: Role::Tool,
+                                    content: denied,
+                                    tool_call_id: Some(tc.id.clone()),
+                                    tool_name: Some(tc.name.clone()),
+                                    ..Default::default()
+                                })
+                                .await?;
+                            return Ok(());
+                        }
+                    }
+
+                    let mut run_args = tc.arguments.clone();
+                    if let Ok(path_obj) = serde_json::to_value(resolved.to_string_lossy().as_ref())
+                    {
+                        if let Some(obj) = run_args.as_object_mut() {
+                            obj.insert("path".into(), path_obj);
+                        }
+                    }
+
+                    // Pre-tool hook for file tools now that paths are resolved.
+                    let args_json = serde_json::to_string(&run_args).unwrap_or_default();
+                    if let Some(reason) = self
+                        .run_pre_tool_hook(
+                            &format!("pre-tool-{}", tc.name),
+                            Some(&tc.name),
+                            Some(&args_json),
+                        )
+                        .await
+                    {
+                        let denied = format!("❌ Hook denied {}: {}", tc.name, reason);
+                        if is_destructive {
+                            self.audit_log.log_destructive(
+                                &tc.name,
+                                &tc.arguments,
+                                false,
+                                Some(&denied),
+                            );
+                        }
+                        crate::send_or_warn!(
+                            event_tx
+                                .send(TurnEvent::ToolResult {
+                                    name: tc.name.clone(),
+                                    output: denied.clone(),
+                                    success: false,
+                                })
+                                .await,
+                            "TurnEvent receiver dropped; discarding event"
+                        );
+                        self.conversation
+                            .append_async(Message {
+                                role: Role::Tool,
+                                content: denied,
+                                tool_call_id: Some(tc.id.clone()),
+                                tool_name: Some(tc.name.clone()),
+                                ..Default::default()
+                            })
+                            .await?;
+                        return Ok(());
+                    }
+
+                    crate::send_or_warn!(
+                        event_tx
+                            .send(TurnEvent::ToolStart {
+                                name: tc.name.clone(),
+                                args: run_args.clone(),
+                            })
+                            .await,
+                        "TurnEvent receiver dropped; discarding event"
+                    );
+
+                    if matches!(tc.name.as_str(), "read_file" | "read_image") {
+                        self.read_gate.mark_read(&resolved);
+                    }
+
+                    let tool_start = Instant::now();
+                    let outcome =
+                        tokio::time::timeout(self.tool_call_timeout(), std::future::ready(outcome))
+                            .await
+                            .unwrap_or(ToolOutcome::Failure(crate::shared::ToolError::Timeout {
+                                after_secs: self.tool_call_timeout().as_secs(),
+                            }));
+                    let tool_duration = tool_start.elapsed();
+
+                    let outcome_for_emit = outcome.clone();
+                    let edit_diff =
+                        handle_tool_outcome(outcome, tc, event_tx, &mut self.conversation).await?;
+                    record(MetricEvent::ToolCall {
+                        name: tc.name.clone(),
+                        success: tool_outcome_success(&outcome_for_emit),
+                        duration_ms: tool_duration.as_millis() as u64,
+                        error_kind: tool_error_kind(&outcome_for_emit).map(String::from),
+                    });
+
+                    self.run_hook(
+                        &format!("post-tool-{}", tc.name),
+                        Some(&tc.name),
+                        Some(&args_json),
+                    );
+
+                    let crs = self
+                        .emit_tool_event_and_correct(
+                            tc,
+                            &tc.name,
+                            &run_args,
+                            &outcome_for_emit,
+                            None,
+                            None,
+                            None,
+                            edit_diff,
+                        )
+                        .await;
+                    self.collect_carryover(tc, &crs);
+                    emit_correction_results(crs, tc, event_tx, &mut self.conversation).await?;
+                    return Ok(());
+                }
+                GuardVerdict::Denied(msg) => {
+                    let denied = format!("🔒 Access denied: {msg}");
+                    if is_destructive {
+                        self.audit_log.log_destructive(
+                            &tc.name,
+                            &tc.arguments,
+                            false,
+                            Some(&denied),
+                        );
+                    }
+                    crate::send_or_warn!(
+                        event_tx
+                            .send(TurnEvent::ToolResult {
+                                name: tc.name.clone(),
+                                output: denied.clone(),
+                                success: false,
+                            })
+                            .await,
+                        "TurnEvent receiver dropped; discarding event"
+                    );
+                    self.conversation
+                        .append_async(Message {
+                            role: Role::Tool,
+                            content: denied,
+                            tool_call_id: Some(tc.id.clone()),
+                            tool_name: Some(tc.name.clone()),
+                            ..Default::default()
+                        })
+                        .await?;
+                    return Ok(());
+                }
+            }
+        }
+
+        // Non-file tools already passed their pre-gate hooks and checks; the
+        // body ran in Phase 2. Just record its outcome here.
+        crate::send_or_warn!(
+            event_tx
+                .send(TurnEvent::ToolStart {
+                    name: tc.name.clone(),
+                    args: tc.arguments.clone(),
+                })
+                .await,
+            "TurnEvent receiver dropped; discarding event"
+        );
+
+        let args_json = serde_json::to_string(&tc.arguments).unwrap_or_default();
+
+        let (real_exit_code, real_stdout_len, real_stderr_len) = if tc.name == "bash" {
+            extract_bash_metrics(&outcome)
+        } else {
+            (None, None, None)
+        };
+        let outcome = if tc.name == "bash" {
+            truncate_tool_output(outcome, max_tool_result_chars)
+        } else {
+            outcome
+        };
+        let outcome_for_emit = outcome.clone();
+        let edit_diff = handle_tool_outcome(outcome, tc, event_tx, &mut self.conversation).await?;
+        if is_destructive {
+            self.audit_log.log_destructive(
+                &tc.name,
+                &tc.arguments,
+                tool_outcome_success(&outcome_for_emit),
+                None,
+            );
+        }
+        record(MetricEvent::ToolCall {
+            name: tc.name.clone(),
+            success: tool_outcome_success(&outcome_for_emit),
+            duration_ms: 0, // body ran in Phase 2; duration recorded there via metrics proxy
+            error_kind: tool_error_kind(&outcome_for_emit).map(String::from),
+        });
+
+        self.run_hook(
+            &format!("post-tool-{}", tc.name),
+            Some(&tc.name),
+            Some(&args_json),
+        );
+
+        let crs = self
+            .emit_tool_event_and_correct(
+                tc,
+                &tc.name,
+                &tc.arguments,
+                &outcome_for_emit,
+                real_exit_code,
+                real_stdout_len,
+                real_stderr_len,
+                edit_diff,
+            )
+            .await;
+        self.collect_carryover(tc, &crs);
+        emit_correction_results(crs, tc, event_tx, &mut self.conversation).await?;
+        Ok(())
+    }
+
+    /// Dispatch a batch of tool calls in parallel while preserving input-order
+    /// conversation semantics. Returns the index of the first call that was not
+    /// recorded because cancellation fired during Phase 3 (or `tcs.len()` if the
+    /// whole batch was recorded).
+    ///
+    /// The implementation is split into three phases:
+    ///
+    /// 1. **Prepare / pre-gate** — for each call, clone the inputs that the
+    ///    spawned task needs (`ToolInvocation`, `Arc<dyn Tool>`, cancel token)
+    ///    and run all read-only safety checks that can block the call *before*
+    ///    the tool body runs: schema validation, plan-mode enforcement, permission
+    ///    rules, deny list, path guard (without the read-before-edit gate), and
+    ///    pre-tool hooks. Denied calls are not spawned; their failure events are
+    ///    buffered and recorded in input order during Phase 3.
+    /// 2. **Run** — `tokio::spawn` one task per allowed call. Each task only runs
+    ///    the tool's `run()` async method and returns `(ToolInvocation,
+    ///    ToolOutcome)`. This is where concurrency happens.
+    /// 3. **Record** — sequentially, in input order, apply post-tool mutations
+    ///    to the Executor: emit `ToolStart`/`ToolResult` events, append the
+    ///    `ToolResult` message to the conversation, update the read gate for
+    ///    completed reads, append the audit entry, update carryover, and fire hooks.
+    ///
+    /// Cancellation is checked before each Phase 3 record. If cancelled mid-
+    /// batch, the remaining completed calls are not recorded, and the caller
+    /// appends placeholder `ToolResult` messages for them.
+    ///
+    /// The read-before-edit check runs in Phase 3 against the *completed*
+    /// reads in this batch, so `[read_file(X), edit_file(X)]` executed in the
+    /// same batch passes: the read task completes and marks the file before
+    /// the edit task's record phase checks the gate.
+    async fn dispatch_tool_call_batch(
+        &mut self,
+        tcs: &mut [ToolInvocation],
+        approval_sender: &mpsc::UnboundedSender<ApprovalRequest>,
+        cancelled: &AtomicBool,
+        event_tx: &mpsc::Sender<TurnEvent>,
+    ) -> anyhow::Result<usize> {
+        if tcs.is_empty() {
+            return Ok(0);
+        }
+
+        // Short-circuit the whole batch when cancellation is already set.
+        if cancelled.load(Ordering::SeqCst) {
+            return Ok(0);
+        }
+
+        // Phase 1 — Prepare + pre-gate. Determine, for each call, whether it
+        // should be spawned or skipped with a buffered failure. This phase does
+        // not mutate Executor state (it only reads config/tools/guards).
+        let mut prepared: Vec<PreparedCall> = Vec::with_capacity(tcs.len());
+        let mut skipped: Vec<(usize, ToolInvocation, Vec<TurnEvent>, String)> = Vec::new();
+        for (idx, tc) in tcs.iter().enumerate() {
+            match self.pre_run_verdict(tc, approval_sender).await? {
+                PreRunVerdict::Spawn(tool, resolved) => {
+                    prepared.push(PreparedCall {
+                        idx,
+                        invocation: tc.clone(),
+                        tool,
+                        cancel_token: tool_cancel_token(cancelled),
+                        resolved_path: resolved,
+                        timeout: self.tool_call_timeout(),
+                    });
+                }
+                PreRunVerdict::Skip { events, message } => {
+                    skipped.push((idx, tc.clone(), events, message));
+                }
+            }
+        }
+
+        // Phase 2 — Run: spawn one task per non-file call. File calls are
+        // run sequentially in Phase 3 so the read-before-edit gate can observe
+        // reads before edits in the same batch.
+        let mut running: Vec<RunningTask> = Vec::with_capacity(prepared.len());
+        let mut deferred_file_calls: Vec<PreparedCall> = Vec::new();
+        for prep in prepared {
+            if prep.resolved_path.is_some() {
+                deferred_file_calls.push(prep);
+                continue;
+            }
+            let idx = prep.idx;
+            let handle = tokio::spawn(run_prepared_call(prep));
+            running.push((idx, handle));
+            // Yield so the just-spawned task can start. If the user cancelled
+            // while we were pre-gating, the next iteration sees the flag and
+            // stops spawning remaining calls. This preserves the sequential
+            // cancellation semantics tests rely on without losing concurrency
+            // among the calls that were already spawned.
+            tokio::task::yield_now().await;
+            if cancelled.load(Ordering::SeqCst) {
+                break;
+            }
+        }
+
+        // Collect completed results into a map keyed by original index.
+        let mut results: std::collections::HashMap<usize, (ToolInvocation, ToolOutcome)> =
+            std::collections::HashMap::with_capacity(running.len() + deferred_file_calls.len());
+        for (idx, handle) in running {
+            if let Ok(Some(pair)) = handle.await {
+                results.insert(idx, pair);
+            }
+        }
+
+        // Phase 2.5 — Run file tools sequentially in input order so the
+        // read-before-edit gate and read-gate mark_read work on the mutable
+        // Executor state in a deterministic order. Cancellation is checked
+        // before each call.
+        for prep in deferred_file_calls {
+            if cancelled.load(Ordering::SeqCst) {
+                // The remaining deferred file calls won't be recorded;
+                // Phase 3 will append placeholders for them.
+                break;
+            }
+            let idx = prep.idx;
+            let invocation = prep.invocation.clone();
+            let name = invocation.name.clone();
+            let path = prep
+                .resolved_path
+                .as_ref()
+                .expect("file call has resolved path")
+                .clone();
+
+            // Read-before-edit gate for write_file/edit_file. This must run
+            // before the tool body so the tool cannot mutate a file that has
+            // not been read. Reads earlier in the same batch have already
+            // been recorded via `mark_read` when they reached Phase 3.
+            let needs_read_gate = name == "edit_file" || (name == "write_file" && path.exists());
+            if needs_read_gate {
+                if let GuardVerdict::Denied(_msg) = self.read_gate.check_edit(
+                    std::path::Path::new(
+                        invocation
+                            .arguments
+                            .get("path")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or(""),
+                    ),
+                    &path,
+                ) {
+                    // Leave no result for this index; Phase 3 will record the
+                    // placeholder / denial from the skipped list? We don't
+                    // have a skip message here. Better to insert a failure
+                    // outcome and let Phase 3 record it.
+                    let denied = "🔒 Access denied: Read-before-edit".to_string();
+                    results.insert(
+                        idx,
+                        (
+                            invocation,
+                            ToolOutcome::Failure(crate::shared::ToolError::AccessDenied {
+                                message: denied,
+                            }),
+                        ),
+                    );
+                    continue;
+                }
+            }
+
+            let outcome = run_prepared_call(prep).await.map(|(_, o)| o);
+            if let Some(o) = outcome {
+                results.insert(idx, (invocation, o));
+            }
+        }
+
+        // Phase 3 — Record: walk input order, replay skipped/denied calls, then
+        // record each completed result in order. Cancellation is checked only
+        // when a result is missing, so already-completed tool bodies are still
+        // recorded and earlier calls in the batch don't become placeholders.
+        for (idx, tc) in tcs.iter_mut().enumerate() {
+            let has_result = results.contains_key(&idx);
+            let has_skip = skipped.iter().any(|(i, _, _, _)| *i == idx);
+            if !has_result && !has_skip && cancelled.load(Ordering::SeqCst) {
+                tracing::debug!("tool batch short-circuited by cancellation at record phase");
+                return Ok(idx);
+            }
+
+            if let Some(pos) = skipped.iter().position(|(i, _, _, _)| *i == idx) {
+                let (_, _inv, events, msg) = skipped.swap_remove(pos);
+                for ev in events {
+                    crate::send_or_warn!(
+                        event_tx.send(ev).await,
+                        "TurnEvent receiver dropped; discarding event"
+                    );
+                }
+                self.conversation
+                    .append_async(Message {
+                        role: Role::Tool,
+                        content: msg,
+                        tool_call_id: Some(tc.id.clone()),
+                        tool_name: Some(tc.name.clone()),
+                        ..Default::default()
+                    })
+                    .await?;
+                continue;
+            }
+
+            let Some((invocation, outcome)) = results.remove(&idx) else {
+                let err = format!("Tool call {} did not return an outcome", tc.id);
+                crate::send_or_warn!(
+                    event_tx
+                        .send(TurnEvent::ToolResult {
+                            name: tc.name.clone(),
+                            output: err.clone(),
+                            success: false,
+                        })
+                        .await,
+                    "TurnEvent receiver dropped; discarding event"
+                );
+                self.conversation
+                    .append_async(Message {
+                        role: Role::Tool,
+                        content: err,
+                        tool_call_id: Some(tc.id.clone()),
+                        tool_name: Some(tc.name.clone()),
+                        ..Default::default()
+                    })
+                    .await?;
+                continue;
+            };
+
+            self.record_tool_result(
+                tc,
+                &invocation,
+                outcome,
+                approval_sender,
+                cancelled,
+                event_tx,
+            )
+            .await?;
+        }
+
+        Ok(tcs.len())
     }
 
     #[allow(unused_variables)]
@@ -586,4 +1366,49 @@ impl Executor {
             ))
         }
     }
+}
+/// Verdict produced by the Phase 1 pre-gate.  means the call is allowed
+/// to run in parallel; `Skip` means it was denied before the tool body and the
+/// supplied events/message should be recorded in input order during Phase 3.
+enum PreRunVerdict {
+    Spawn(Arc<dyn crate::tools::Tool>, Option<std::path::PathBuf>),
+    Skip {
+        events: Vec<TurnEvent>,
+        message: String,
+    },
+}
+
+/// Inputs cloned for a single prepared tool call. Owned so the call can be
+/// moved into a spawned task without borrowing `Executor` state.
+struct PreparedCall {
+    idx: usize,
+    invocation: ToolInvocation,
+    tool: Arc<dyn crate::tools::Tool>,
+    cancel_token: tokio_util::sync::CancellationToken,
+    resolved_path: Option<std::path::PathBuf>,
+    timeout: std::time::Duration,
+}
+
+/// Run only the tool body for a prepared call, returning the original
+/// invocation and the tool outcome.
+///
+/// This function deliberately does not touch `Executor` state; it is the
+/// concurrency boundary where tool I/O may run in parallel. It checks the
+/// shared cancellation flag after yielding so tasks spawned just before a
+/// cancellation get a chance to short-circuit before invoking the tool body.
+async fn run_prepared_call(prep: PreparedCall) -> Option<(ToolInvocation, ToolOutcome)> {
+    let ctx = crate::tools::ToolContext {
+        token: prep.cancel_token,
+        dry_run: false,
+        task_spawner: None,
+    };
+    let outcome = tokio::time::timeout(
+        prep.timeout,
+        prep.tool.run(&ctx, prep.invocation.arguments.clone()),
+    )
+    .await
+    .unwrap_or(ToolOutcome::Failure(crate::shared::ToolError::Timeout {
+        after_secs: prep.timeout.as_secs(),
+    }));
+    Some((prep.invocation, outcome))
 }

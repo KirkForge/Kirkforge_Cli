@@ -30,6 +30,8 @@ harness = false
 [workspace.dependencies]
 kirkforge-plugin = { path = "crates/kirkforge-plugin" }
 kirkforge-plugin-host = { path = "crates/kirkforge-plugin-host" }
+kirkforge-lsp = { path = "crates/kirkforge-lsp" }
+kirkforge-workflow = { path = "crates/kirkforge-workflow" }
 
 [dependencies]
 # TUI
@@ -40,6 +42,7 @@ crossterm = { version = "0.28", features = ["event-stream"] }
 tokio = { version = "1", features = ["full"] }
 tokio-stream = "0.1"
 tokio-util = "0.7"
+futures = "0.3"
 
 # Unix process control (setsid for background daemon detachment)
 libc = "0.2"
@@ -81,6 +84,10 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Glob pattern matching
 globset = "0.4"
 
+# Regex for lightweight HTML-to-text stripping in web_fetch (kept small;
+# the full html5ever/scraper path is intentionally deferred per ADR-0001).
+regex = "1"
+
 # File system helpers
 ignore = "0.4"
 shellexpand = "3"
@@ -106,6 +113,25 @@ arboard = "3"
 # Rust-native plugin SDK (vendored workspace members)
 kirkforge-plugin = { workspace = true }
 kirkforge-plugin-host = { workspace = true }
+# LSP client pool (vendored workspace member) — symbol-aware code nav.
+kirkforge-lsp = { workspace = true }
+# Workflow engine (vendored workspace member) — programmable JSON workflows.
+kirkforge-workflow = { workspace = true }
+# Headless Chrome CDP driver for the computer_use tool.
+headless_chrome = { version = "1", default-features = false }
+# SigV4 signing for Anthropic-on-Bedrock requests.
+aws-sigv4 = { version = "1", default-features = false, features = ["sign-http"] }
+aws-credential-types = { version = "1.2", default-features = false }
+aws-smithy-runtime-api = { version = "1.7.3", default-features = false }
+futures-util = "0.3"
+# SHA-256 hashing required by the custom SigV4 payload hash.
+sha2 = "0.10"
+hex = "0.4"
+# Google OAuth2 / service-account access tokens for Anthropic-on-Vertex.
+yup-oauth2 = { version = "12", default-features = false, features = ["hyper-rustls", "ring", "service-account"] }
+# Re-exported by reqwest but also used directly for SigV4 request signing.
+http = "1"
+url = "2"
 # Cache serialization uses serde_json (already a dependency) instead of
 # the unmaintained bincode crate.
 
@@ -118,6 +144,34 @@ proptest = "1.6"
 criterion = { version = "0.5", features = ["async_tokio"] }
 # HTTP mock server for Ollama adapter integration tests without a live model.
 wiremock = "0.6"
+
+[features]
+default = []
+# Enable OpenTelemetry span/metric export from the Rust runtime.
+otel = [
+    "dep:opentelemetry",
+    "dep:opentelemetry-otlp",
+    "dep:opentelemetry_sdk",
+    "dep:tracing-opentelemetry",
+]
+
+[dependencies.opentelemetry]
+version = "0.29"
+optional = true
+
+[dependencies.opentelemetry-otlp]
+version = "0.29"
+optional = true
+features = ["trace", "metrics", "grpc-tonic"]
+
+[dependencies.opentelemetry_sdk]
+version = "0.29"
+optional = true
+features = ["trace", "metrics", "rt-tokio"]
+
+[dependencies.tracing-opentelemetry]
+version = "0.30"
+optional = true
 
 [build-dependencies]
 clap_mangen = "0.2"

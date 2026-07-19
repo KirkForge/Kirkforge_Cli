@@ -420,6 +420,59 @@ fn merge_toml_into_config(cfg: &mut Config, table: toml::Table) {
             .collect();
     }
 
+    // Anthropic cloud-provider routing
+    if let Some(Value::String(v)) = table.get("anthropic_provider") {
+        cfg.anthropic_provider = v.clone();
+    }
+    if let Some(Value::String(v)) = table.get("aws_region") {
+        cfg.aws_region = v.clone();
+    }
+    if let Some(Value::String(v)) = table.get("aws_profile") {
+        cfg.aws_profile = v.clone();
+    }
+    if let Some(Value::String(v)) = table.get("gcp_project_id") {
+        cfg.gcp_project_id = v.clone();
+    }
+    if let Some(Value::String(v)) = table.get("gcp_region") {
+        cfg.gcp_region = v.clone();
+    }
+    if let Some(Value::String(v)) = table.get("gcp_service_account_path") {
+        cfg.gcp_service_account_path = if v.is_empty() {
+            None
+        } else {
+            Some(PathBuf::from(expand_tilde_str(v)))
+        };
+    }
+
+    // Computer-use tool config
+    if let Some(Value::Table(v)) = table.get("computer_use") {
+        if let Some(Value::Boolean(b)) = v.get("enabled") {
+            cfg.computer_use.enabled = *b;
+        }
+        if let Some(Value::String(s)) = v.get("chrome_path") {
+            cfg.computer_use.chrome_path = if s.is_empty() {
+                None
+            } else {
+                Some(PathBuf::from(expand_tilde_str(s)))
+            };
+        }
+        if let Some(Value::Boolean(b)) = v.get("headful") {
+            cfg.computer_use.headful = *b;
+        }
+        if let Some(Value::Integer(n)) = v.get("width") {
+            cfg.computer_use.width = (*n).max(1) as u32;
+        }
+        if let Some(Value::Integer(n)) = v.get("height") {
+            cfg.computer_use.height = (*n).max(1) as u32;
+        }
+        if let Some(Value::Integer(n)) = v.get("startup_timeout_secs") {
+            cfg.computer_use.startup_timeout_secs = (*n).max(1) as u64;
+        }
+        if let Some(Value::Integer(n)) = v.get("wait_timeout_secs") {
+            cfg.computer_use.wait_timeout_secs = (*n).max(1) as u64;
+        }
+    }
+
     // Arrays
     if let Some(Value::Array(v)) = table.get("deny_paths") {
         cfg.deny_paths = v
@@ -549,6 +602,18 @@ pub fn config_diff_summary(before: &Config, after: &Config) -> String {
         diffs.push(format!(
             "enabled_plugins: {:?} → {:?}",
             before.enabled_plugins, after.enabled_plugins
+        ));
+    }
+    if before.anthropic_provider != after.anthropic_provider {
+        diffs.push(format!(
+            "anthropic_provider: {} → {}",
+            before.anthropic_provider, after.anthropic_provider
+        ));
+    }
+    if before.computer_use.enabled != after.computer_use.enabled {
+        diffs.push(format!(
+            "computer_use.enabled: {} → {}",
+            before.computer_use.enabled, after.computer_use.enabled
         ));
     }
     diffs.join(", ")
@@ -1216,6 +1281,113 @@ mod tests {
         .unwrap();
         merge_toml_into_config(&mut cfg, table);
         assert!(cfg.minify_write_side);
+    }
+
+    #[test]
+    fn test_merge_toml_anthropic_cloud_and_computer_use() {
+        let mut cfg = Config::default();
+        let table: toml::Table = r#"
+            anthropic_provider = "bedrock"
+            aws_region = "us-west-2"
+            aws_profile = "dev"
+            gcp_project_id = "my-project"
+            gcp_region = "us-east4"
+            gcp_service_account_path = "/tmp/sa.json"
+            [computer_use]
+            enabled = true
+            chrome_path = "/usr/bin/chromium"
+            headful = true
+            width = 1920
+            height = 1080
+            startup_timeout_secs = 45
+            wait_timeout_secs = 15
+        "#
+        .parse()
+        .unwrap();
+        merge_toml_into_config(&mut cfg, table);
+
+        assert_eq!(cfg.anthropic_provider, "bedrock");
+        assert_eq!(cfg.aws_region, "us-west-2");
+        assert_eq!(cfg.aws_profile, "dev");
+        assert_eq!(cfg.gcp_project_id, "my-project");
+        assert_eq!(cfg.gcp_region, "us-east4");
+        assert_eq!(
+            cfg.gcp_service_account_path,
+            Some(PathBuf::from("/tmp/sa.json"))
+        );
+        assert!(cfg.computer_use.enabled);
+        assert_eq!(
+            cfg.computer_use.chrome_path,
+            Some(PathBuf::from("/usr/bin/chromium"))
+        );
+        assert!(cfg.computer_use.headful);
+        assert_eq!(cfg.computer_use.width, 1920);
+        assert_eq!(cfg.computer_use.height, 1080);
+        assert_eq!(cfg.computer_use.startup_timeout_secs, 45);
+        assert_eq!(cfg.computer_use.wait_timeout_secs, 15);
+    }
+
+    #[test]
+    fn test_env_anthropic_cloud_and_computer_use() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut cfg = Config::default();
+
+        set_env("KIRKFORGE_ANTHROPIC_PROVIDER", Some("vertex"));
+        set_env("KIRKFORGE_AWS_REGION", Some("eu-west-1"));
+        set_env("KIRKFORGE_AWS_PROFILE", Some("prod"));
+        set_env("KIRKFORGE_GCP_PROJECT_ID", Some("p2"));
+        set_env("KIRKFORGE_GCP_REGION", Some("europe-west1"));
+        set_env("KIRKFORGE_GCP_SERVICE_ACCOUNT_PATH", Some("/tmp/p2.json"));
+        set_env("KIRKFORGE_COMPUTER_USE_ENABLED", Some("true"));
+        set_env("KIRKFORGE_COMPUTER_USE_WIDTH", Some("1366"));
+        set_env("KIRKFORGE_COMPUTER_USE_HEIGHT", Some("768"));
+        set_env("KIRKFORGE_COMPUTER_USE_STARTUP_TIMEOUT", Some("60"));
+        set_env("KIRKFORGE_COMPUTER_USE_WAIT_TIMEOUT", Some("20"));
+
+        apply_env_overrides(&mut cfg);
+
+        assert_eq!(cfg.anthropic_provider, "vertex");
+        assert_eq!(cfg.aws_region, "eu-west-1");
+        assert_eq!(cfg.aws_profile, "prod");
+        assert_eq!(cfg.gcp_project_id, "p2");
+        assert_eq!(cfg.gcp_region, "europe-west1");
+        assert_eq!(
+            cfg.gcp_service_account_path,
+            Some(PathBuf::from("/tmp/p2.json"))
+        );
+        assert!(cfg.computer_use.enabled);
+        assert_eq!(cfg.computer_use.width, 1366);
+        assert_eq!(cfg.computer_use.height, 768);
+        assert_eq!(cfg.computer_use.startup_timeout_secs, 60);
+        assert_eq!(cfg.computer_use.wait_timeout_secs, 20);
+
+        set_env("KIRKFORGE_ANTHROPIC_PROVIDER", None);
+        set_env("KIRKFORGE_AWS_REGION", None);
+        set_env("KIRKFORGE_AWS_PROFILE", None);
+        set_env("KIRKFORGE_GCP_PROJECT_ID", None);
+        set_env("KIRKFORGE_GCP_REGION", None);
+        set_env("KIRKFORGE_GCP_SERVICE_ACCOUNT_PATH", None);
+        set_env("KIRKFORGE_COMPUTER_USE_ENABLED", None);
+        set_env("KIRKFORGE_COMPUTER_USE_WIDTH", None);
+        set_env("KIRKFORGE_COMPUTER_USE_HEIGHT", None);
+        set_env("KIRKFORGE_COMPUTER_USE_STARTUP_TIMEOUT", None);
+        set_env("KIRKFORGE_COMPUTER_USE_WAIT_TIMEOUT", None);
+    }
+
+    #[test]
+    fn test_config_diff_summary_anthropic_cloud_and_computer_use() {
+        let a = Config::default();
+        let b = Config {
+            anthropic_provider: "bedrock".into(),
+            computer_use: crate::shared::ComputerUseConfig {
+                enabled: true,
+                ..Config::default().computer_use
+            },
+            ..Config::default()
+        };
+        let s = config_diff_summary(&a, &b);
+        assert!(s.contains("anthropic_provider"), "got: {s}");
+        assert!(s.contains("computer_use.enabled"), "got: {s}");
     }
 
     #[test]

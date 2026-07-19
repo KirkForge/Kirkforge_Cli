@@ -75,15 +75,15 @@ A standalone CLI, `kirkforge-plugin`, ships in-repo at `crates/plugin3-cli`:
 
 In addition to plugins installed under `data_dir/plugins`, operators can
 register **workspace plugin sources**: plugin directories that live outside
-the data directory (for example, sibling repositories such as
-`KirkForge-Plugin`, `KirkForge-Draw`, or `KirkForge-Video`).
+the data directory (for example, in-repo directories under `plugins/<name>/`
+such as `plugins/demo` or `plugins/draw`).
 
 Configuration is stored in `config.toml`:
 
 ```toml
 [plugin_sources]
-demo = "/home/user/src/KirkForge-Plugin/plugin"
-draw = "/home/user/src/KirkForge-Draw/plugin"
+demo = "plugins/demo"
+draw = "plugins/draw"
 
 enabled_plugins = ["demo"]
 ```

@@ -1067,12 +1067,59 @@ fn poll_read_line(
 #[cfg(windows)]
 fn read_approval_answer_pollable(
     _tool_name: &str,
-    _shutdown: &std::sync::atomic::AtomicBool,
+    shutdown: &std::sync::atomic::AtomicBool,
 ) -> Option<bool> {
-    // Windows has no /dev/tty; fall back to a blocking stdin read. The blocking
-    // read is not interruptible, so the reader thread is not joinable mid-read
-    // on this platform (the unix path is the joinable one the gate tests).
-    Some(read_approval_answer(_tool_name))
+    // Windows has no /dev/tty. We race a blocking stdin reader against a
+    // periodic poll of the shutdown flag. The reader is a tokio
+    // `spawn_blocking` task, so the outer async caller can abort it on
+    // shutdown/timeout without waiting for a line to arrive. We return `None`
+    // when shutdown is observed so the caller can distinguish "interrupted"
+    // from "denied". The line-mode main loop is not reading stdin while a tool
+    // awaits approval, so holding the stdin lock here is safe.
+    use std::sync::atomic::Ordering;
+
+    if shutdown.load(Ordering::Acquire) {
+        return None;
+    }
+
+    tokio::runtime::Handle::current().block_on(async {
+        let reader = tokio::task::spawn_blocking(|| {
+            use std::io::BufRead;
+            let mut answer = String::new();
+            let stdin = std::io::stdin();
+            let mut reader = std::io::BufReader::new(stdin.lock());
+            match reader.read_line(&mut answer) {
+                Ok(0) => false,
+                Ok(_) => {
+                    let trimmed = answer.trim().to_ascii_lowercase();
+                    trimmed == "y" || trimmed == "yes"
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "failed to read approval answer from stdin");
+                    false
+                }
+            }
+        });
+
+        let mut interval = tokio::time::interval(std::time::Duration::from_millis(200));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+        tokio::select! {
+            biased;
+            a = reader => Some(a.unwrap_or(false)),
+            _ = async {
+                loop {
+                    interval.tick().await;
+                    if shutdown.load(Ordering::Acquire) {
+                        break;
+                    }
+                }
+            } => {
+                reader.abort();
+                None
+            }
+        }
+    })
 }
 
 #[cfg(not(any(unix, windows)))]
@@ -1080,27 +1127,8 @@ fn read_approval_answer_pollable(
     _tool_name: &str,
     _shutdown: &std::sync::atomic::AtomicBool,
 ) -> Option<bool> {
-    Some(read_approval_answer(_tool_name))
-}
-
-#[cfg(windows)]
-fn read_approval_answer(_tool_name: &str) -> bool {
-    use std::io::BufRead;
-    let mut answer = String::new();
-    let stdin = std::io::stdin();
-    let mut reader = std::io::BufReader::new(stdin.lock());
-    if let Err(e) = reader.read_line(&mut answer) {
-        tracing::warn!(error = %e, "failed to read approval answer from stdin");
-        return false;
-    }
-    let trimmed = answer.trim().to_ascii_lowercase();
-    trimmed == "y" || trimmed == "yes"
-}
-
-#[cfg(not(any(unix, windows)))]
-fn read_approval_answer(_tool_name: &str) -> bool {
     tracing::warn!("line-mode approval is not supported on this platform");
-    false
+    Some(false)
 }
 
 /// Spawn an approval responder for interactive line mode.
@@ -1144,6 +1172,9 @@ fn spawn_line_mode_approval_handler(
             // flag interrupts it; the JoinHandle is joined below (on timeout via
             // shutdown, on answer because the thread already exited) so no
             // reader thread is left detached at the end of the iteration.
+            // On Windows the same pollable abstraction races a blocking stdin
+            // reader against the shutdown flag and returns `None` when
+            // interrupted, so the same timeout/gate logic applies.
             let shutdown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
             let shutdown_reader = shutdown.clone();
             let reader_handle: std::thread::JoinHandle<()> = std::thread::spawn(move || {
@@ -1166,13 +1197,7 @@ fn spawn_line_mode_approval_handler(
             }
             // Always join: on the answer path the thread has already exited
             // (instant); on the timeout path it exits within one poll interval.
-            // ponytail: cfg gate the join to unix — the windows reader uses a
-            // blocking stdin read that cannot be interrupted, so joining on
-            // timeout would block forever there.
-            #[cfg(unix)]
             let _ = reader_handle.join();
-            #[cfg(not(unix))]
-            drop(reader_handle);
 
             let approved = result.map(|r| r.unwrap_or(false)).unwrap_or(false);
 

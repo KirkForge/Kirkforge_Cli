@@ -34,6 +34,7 @@ files `0001`–`0018` (indexed below) are the vendored Plugin3 ADRs.
 | [0015](./0015-cli-design.md) | CLI design | Accepted |
 | [0016](./0016-test-strategy.md) | Test strategy | Accepted |
 | [0017](./0017-build-features.md) | Build profile and feature gating | Accepted |
+| [0019](./0019-parallel-tool-dispatch.md) | Parallel tool dispatch | Accepted |
 | [0018](./0018-scheduled-jobs.md) | Cron / scheduled jobs | Accepted |
 
 ## Native KirkForge-Cli ADRs

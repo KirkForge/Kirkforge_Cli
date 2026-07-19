@@ -36,8 +36,8 @@ jobs:
             jobs=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs" \
               --jq '[.check_runs[] | select(.name != "Verify main CI is green" and .name != "Build release binaries" and .name != "Create GitHub release") | {name, status, conclusion}]' \
               2>/dev/null)
-            pending=$(echo "$jobs" | jq -r 'map(select(.status != "completed")) | length')
-            failed=$(echo "$jobs" | jq -r 'map(select(.conclusion != "success" and .conclusion != "skipped")) | length')
+            pending=$(echo "$jobs" | jq -r 'map(select(.status != "completed" or .conclusion == null)) | length')
+            failed=$(echo "$jobs" | jq -r 'map(select(.conclusion != null and .conclusion != "success" and .conclusion != "skipped")) | length')
             total=$(echo "$jobs" | jq -r 'length')
             echo "Attempt $i: total=${total} pending=${pending} failed=${failed}"
             if [ "$failed" -gt 0 ]; then

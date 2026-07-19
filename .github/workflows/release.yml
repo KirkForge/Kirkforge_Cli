@@ -29,17 +29,23 @@ jobs:
         run: |
           echo "Tag ref: ${GITHUB_REF_NAME}"
           echo "Commit: ${GITHUB_SHA}"
-          # Wait up to ~15 minutes for the CI run on this commit to complete.
+          # The CI workflow creates check-runs named after individual jobs
+          # (fmt, audit, integration, ...), not a single "CI" run. Wait up to
+          # ~15 minutes for all required jobs to complete on this commit.
           for i in {1..30}; do
-            status=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs" \
-              --jq '.check_runs[] | select(.name == "CI" or (.name | startswith("CI /"))) | .conclusion' \
-              2>/dev/null | sort -u | paste -sd ',' -)
-            echo "Attempt $i: CI statuses = $status"
-            if echo "$status" | grep -qE 'failure|cancelled|timed_out|action_required'; then
+            jobs=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs" \
+              --jq '[.check_runs[] | select(.name != "Verify main CI is green" and .name != "Build release binaries" and .name != "Create GitHub release") | {name, status, conclusion}]' \
+              2>/dev/null)
+            pending=$(echo "$jobs" | jq -r 'map(select(.status != "completed")) | length')
+            failed=$(echo "$jobs" | jq -r 'map(select(.conclusion != "success" and .conclusion != "skipped")) | length')
+            total=$(echo "$jobs" | jq -r 'length')
+            echo "Attempt $i: total=${total} pending=${pending} failed=${failed}"
+            if [ "$failed" -gt 0 ]; then
               echo "Main CI failed for this commit; refusing to release."
+              echo "$jobs" | jq .
               exit 1
             fi
-            if echo "$status" | grep -q 'success' && ! echo "$status" | grep -qE 'pending|neutral|skipped'; then
+            if [ "$total" -gt 0 ] && [ "$pending" -eq 0 ]; then
               echo "Main CI is green."
               exit 0
             fi

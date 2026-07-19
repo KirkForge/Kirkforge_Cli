@@ -1,6 +1,6 @@
 [package]
 name = "kirkforge-lsp"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "LSP client pool for KirkForge — symbol-aware code navigation for the model."
 

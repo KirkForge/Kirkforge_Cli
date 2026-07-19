@@ -1,6 +1,6 @@
 [package]
 name = "kirkforge"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Native Ollama CLI coding agent — static binary, TUI, potato hardware"
 repository = "https://github.com/KirkForge/KirkForge-Cli"

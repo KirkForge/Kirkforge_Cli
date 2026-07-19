@@ -713,7 +713,7 @@ impl Executor {
     }
 
     #[allow(clippy::too_many_arguments)]
-    async fn emit_tool_event_and_correct(
+    pub(crate) async fn emit_tool_event_and_correct(
         &self,
         _tc: &ToolInvocation,
         tool_name: &str,

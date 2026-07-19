@@ -1765,6 +1765,7 @@ dependencies = [
  "cron",
  "crossterm 0.28.1",
  "directories",
+ "futures",
  "globset",
  "handlebars",
  "ignore",

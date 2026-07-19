@@ -34,7 +34,7 @@ files `0001`–`0018` and `0021`–`0022` (indexed below) are the vendored Plugi
 | [0015](./0015-cli-design.md) | CLI design | Accepted |
 | [0016](./0016-test-strategy.md) | Test strategy | Accepted |
 | [0017](./0017-build-features.md) | Build profile and feature gating | Accepted |
-| [0019](./0019-parallel-tool-dispatch.md) | Parallel tool dispatch | Accepted |
+| [0020](./0020-parallel-tool-dispatch.md) | Parallel tool dispatch | Accepted |
 | [0018](./0018-scheduled-jobs.md) | Cron / scheduled jobs | Accepted |
 | [0021](./0021-computer-use-tool.md) | `computer_use` tool via headless Chrome CDP | Accepted |
 | [0022](./0022-anthropic-cloud-routing.md) | Anthropic cloud routing — Bedrock and Vertex | Accepted |

@@ -243,3 +243,5 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Block-comment closer split across a line boundary no longer breaks syntax highlighting
 - Model HTTP calls retry up to 3× on connect/timeout errors and 429/503 responses (exponential backoff: 1 s, 2 s, 4 s)
 - Default deny list extended with `**/.gnupg/**` and `**/.aws/**`
+### Fixed
+- ADR numbering collision: vendored 4-digit parallel-tool-dispatch ADR moved from 0019 to 0020 (#8).

@@ -1,4 +1,4 @@
-# ADR-019: Parallel Tool Dispatch
+# ADR-020: Parallel Tool Dispatch
 
 - **Status:** Accepted
 - **Date:** 2026-07-19

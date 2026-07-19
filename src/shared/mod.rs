@@ -466,6 +466,78 @@ pub struct Config {
     /// Names from `plugin_sources` that should be loaded at startup.
     #[serde(default = "default_enabled_plugins")]
     pub enabled_plugins: Vec<String>,
+
+    /// Provider selection for Anthropic-compatible models.
+    /// Values: "anthropic" (default, direct API), "bedrock", "vertex".
+    /// Used by `adapter_for` when the model name or override requests
+    /// Anthropic routing; `bedrock`/`vertex` trigger AWS SigV4 / GCP
+    /// service-account signing instead of a plain API key.
+    #[serde(default = "default_anthropic_provider")]
+    pub anthropic_provider: String,
+
+    /// AWS region for Anthropic-on-Bedrock requests.
+    /// Default "us-east-1".
+    #[serde(default = "default_aws_region")]
+    pub aws_region: String,
+
+    /// AWS profile for Anthropic-on-Bedrock credentials.
+    /// When empty, the standard AWS SDK credential chain falls through
+    /// to env vars / instance metadata.
+    #[serde(default)]
+    pub aws_profile: String,
+
+    /// Path to a GCP service-account JSON key for Anthropic-on-Vertex.
+    /// When empty, `GOOGLE_APPLICATION_CREDENTIALS` is tried.
+    #[serde(default)]
+    pub gcp_service_account_path: Option<PathBuf>,
+
+    /// GCP project id for Anthropic-on-Vertex.
+    #[serde(default)]
+    pub gcp_project_id: String,
+
+    /// GCP region for Anthropic-on-Vertex.
+    /// Default "us-central1".
+    #[serde(default = "default_gcp_region")]
+    pub gcp_region: String,
+
+    /// Headless-Chrome / computer-use tool configuration.
+    #[serde(default)]
+    pub computer_use: ComputerUseConfig,
+}
+
+/// Headless Chrome configuration for the `computer_use` tool.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ComputerUseConfig {
+    /// Enable the `computer_use` tool. Default false.
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Explicit path to the Chrome / Chromium binary. When empty the
+    /// tool uses headless_chrome's automatic lookup.
+    #[serde(default)]
+    pub chrome_path: Option<PathBuf>,
+
+    /// When true, launch Chrome in a visible window instead of headless.
+    /// Useful for local debugging; default false.
+    #[serde(default)]
+    pub headful: bool,
+
+    /// Default viewport width. Default 1280.
+    #[serde(default = "default_computer_use_width")]
+    pub width: u32,
+
+    /// Default viewport height. Default 800.
+    #[serde(default = "default_computer_use_height")]
+    pub height: u32,
+
+    /// Seconds to wait for Chrome startup before failing. Default 30.
+    #[serde(default = "default_computer_use_startup_timeout")]
+    pub startup_timeout_secs: u64,
+
+    /// Seconds to wait for page navigation / element selectors.
+    /// Default 10.
+    #[serde(default = "default_computer_use_wait_timeout")]
+    pub wait_timeout_secs: u64,
 }
 
 /// Configuration for a single MCP server connection.
@@ -557,6 +629,34 @@ fn default_scheduled_bash_auto_approve() -> bool {
 
 fn default_max_concurrent_scheduled_jobs() -> usize {
     4
+}
+
+fn default_anthropic_provider() -> String {
+    "anthropic".to_string()
+}
+
+fn default_aws_region() -> String {
+    "us-east-1".to_string()
+}
+
+fn default_gcp_region() -> String {
+    "us-central1".to_string()
+}
+
+fn default_computer_use_width() -> u32 {
+    1280
+}
+
+fn default_computer_use_height() -> u32 {
+    800
+}
+
+fn default_computer_use_startup_timeout() -> u64 {
+    30
+}
+
+fn default_computer_use_wait_timeout() -> u64 {
+    10
 }
 
 fn default_preserve_recent_messages() -> usize {
@@ -726,6 +826,13 @@ impl Default for Config {
             audit_log_path: None,
             plugin_sources: default_plugin_sources(),
             enabled_plugins: default_enabled_plugins(),
+            anthropic_provider: default_anthropic_provider(),
+            aws_region: default_aws_region(),
+            aws_profile: String::new(),
+            gcp_service_account_path: None,
+            gcp_project_id: String::new(),
+            gcp_region: default_gcp_region(),
+            computer_use: ComputerUseConfig::default(),
         }
     }
 }

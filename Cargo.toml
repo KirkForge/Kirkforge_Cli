@@ -113,6 +113,21 @@ kirkforge-plugin = { workspace = true }
 kirkforge-plugin-host = { workspace = true }
 # LSP client pool (vendored workspace member) — symbol-aware code nav.
 kirkforge-lsp = { workspace = true }
+# Headless Chrome CDP driver for the computer_use tool.
+headless_chrome = { version = "1", default-features = false }
+# SigV4 signing for Anthropic-on-Bedrock requests.
+aws-sigv4 = { version = "1", default-features = false, features = ["sign-http"] }
+aws-credential-types = { version = "1.2", default-features = false }
+aws-smithy-runtime-api = { version = "1.7.3", default-features = false }
+futures-util = "0.3"
+# SHA-256 hashing required by the custom SigV4 payload hash.
+sha2 = "0.10"
+hex = "0.4"
+# Google OAuth2 / service-account access tokens for Anthropic-on-Vertex.
+yup-oauth2 = { version = "12", default-features = false, features = ["hyper-rustls", "ring", "service-account"] }
+# Re-exported by reqwest but also used directly for SigV4 request signing.
+http = "1"
+url = "2"
 # Cache serialization uses serde_json (already a dependency) instead of
 # the unmaintained bincode crate.
 

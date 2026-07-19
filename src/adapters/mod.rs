@@ -1,4 +1,7 @@
 pub mod anthropic;
+pub mod anthropic_bedrock;
+pub mod anthropic_vertex;
+pub mod bedrock_signing;
 pub mod cache;
 pub mod caching;
 pub mod deepseek;
@@ -8,6 +11,7 @@ pub mod kimi;
 pub mod ollama_ndjson;
 pub mod openai_compat;
 pub mod tool_call_markup;
+pub mod vertex_auth;
 
 use crate::shared::{ContentPart, ModelInfo, Role, StreamEvent};
 use std::future::Future;
@@ -142,23 +146,39 @@ pub enum AdapterKind {
     /// Anthropic Messages API (`/v1/messages`) with native `tool_use`
     /// blocks, prompt caching, and extended thinking.
     Anthropic,
+    /// Anthropic Messages API via AWS Bedrock, signed with SigV4.
+    AnthropicBedrock,
+    /// Anthropic Messages API via Google Cloud Vertex AI, using a
+    /// service-account access token.
+    AnthropicVertex,
 }
 
 /// Classify a model name (and optional type override) into an
 /// [`AdapterKind`]. This is the routing decision before we build the
 /// concrete adapter.
-pub fn adapter_kind_for(model_name: &str, model_type_override: Option<&str>) -> AdapterKind {
+pub fn adapter_kind_for(
+    model_name: &str,
+    model_type_override: Option<&str>,
+    provider: &str,
+) -> AdapterKind {
     if let Some(override_type) = model_type_override {
         return match override_type {
             "glm" | "deepseek" | "gemini" | "kimi" | "moonshot" => AdapterKind::Ollama,
             "anthropic" => AdapterKind::Anthropic,
+            "anthropic-bedrock" | "bedrock" => AdapterKind::AnthropicBedrock,
+            "anthropic-vertex" | "vertex" => AdapterKind::AnthropicVertex,
             _ => AdapterKind::OpenAiCompat,
         };
     }
 
+    let provider_lower = provider.to_lowercase();
     let lower = model_name.to_lowercase();
     if lower.starts_with("claude-") || lower.starts_with("claude_") || lower.starts_with("claude") {
-        AdapterKind::Anthropic
+        match provider_lower.as_str() {
+            "bedrock" => AdapterKind::AnthropicBedrock,
+            "vertex" => AdapterKind::AnthropicVertex,
+            _ => AdapterKind::Anthropic,
+        }
     } else if lower.starts_with("glm")
         || lower.contains("chatglm")
         || lower.starts_with("deepseek")
@@ -167,6 +187,12 @@ pub fn adapter_kind_for(model_name: &str, model_type_override: Option<&str>) -> 
         || lower.starts_with("moonshot")
     {
         AdapterKind::Ollama
+    } else if lower.starts_with("anthropic.claude-") || lower.starts_with("claude-3") {
+        match provider_lower.as_str() {
+            "bedrock" => AdapterKind::AnthropicBedrock,
+            "vertex" => AdapterKind::AnthropicVertex,
+            _ => AdapterKind::Anthropic,
+        }
     } else {
         AdapterKind::OpenAiCompat
     }
@@ -206,8 +232,26 @@ pub fn adapter_for(
     model_type_override: Option<&str>,
     timeout_secs: u64,
 ) -> Box<dyn ModelAdapter> {
+    adapter_for_with_provider(
+        model_name,
+        ollama_host,
+        model_type_override,
+        "anthropic",
+        timeout_secs,
+    )
+}
+
+/// Build the right adapter from a model name string, taking the Anthropic
+/// cloud provider hint into account.
+pub fn adapter_for_with_provider(
+    model_name: &str,
+    ollama_host: &str,
+    model_type_override: Option<&str>,
+    anthropic_provider: &str,
+    timeout_secs: u64,
+) -> Box<dyn ModelAdapter> {
     let override_lower = model_type_override.map(|s| s.to_lowercase());
-    match adapter_kind_for(model_name, model_type_override) {
+    match adapter_kind_for(model_name, model_type_override, anthropic_provider) {
         AdapterKind::Ollama => {
             let lower = model_name.to_lowercase();
             // Respect the model_type_override when selecting the concrete
@@ -263,6 +307,25 @@ pub fn adapter_for(
             model_name,
             timeout_secs,
         )),
+        AdapterKind::AnthropicBedrock => {
+            // Bedrock credentials come from env at request time, not here.
+            Box::new(anthropic_bedrock::AnthropicBedrockAdapter::new(
+                model_name,
+                "us-east-1",
+                "",
+                timeout_secs,
+            ))
+        }
+        AdapterKind::AnthropicVertex => {
+            // Vertex project/region/credentials are also resolved from config at request time.
+            Box::new(anthropic_vertex::AnthropicVertexAdapter::new(
+                model_name,
+                "",
+                "us-central1",
+                None,
+                timeout_secs,
+            ))
+        }
     }
 }
 
@@ -548,19 +611,31 @@ mod tests {
     #[test]
     fn adapter_kind_for_classifies_models() {
         assert_eq!(
-            adapter_kind_for("qwen2.5:7b", None),
+            adapter_kind_for("qwen2.5:7b", None, "anthropic"),
             AdapterKind::OpenAiCompat
         );
-        assert_eq!(adapter_kind_for("glm-5", None), AdapterKind::Ollama);
-        assert_eq!(adapter_kind_for("chatglm3", None), AdapterKind::Ollama);
-        assert_eq!(adapter_kind_for("deepseek-v4", None), AdapterKind::Ollama);
-        assert_eq!(adapter_kind_for("gemini-3", None), AdapterKind::Ollama);
         assert_eq!(
-            adapter_kind_for("kimi-2.7k-coder:cloud", None),
+            adapter_kind_for("glm-5", None, "anthropic"),
             AdapterKind::Ollama
         );
         assert_eq!(
-            adapter_kind_for("moonshot-v1-8k", None),
+            adapter_kind_for("chatglm3", None, "anthropic"),
+            AdapterKind::Ollama
+        );
+        assert_eq!(
+            adapter_kind_for("deepseek-v4", None, "anthropic"),
+            AdapterKind::Ollama
+        );
+        assert_eq!(
+            adapter_kind_for("gemini-3", None, "anthropic"),
+            AdapterKind::Ollama
+        );
+        assert_eq!(
+            adapter_kind_for("kimi-2.7k-coder:cloud", None, "anthropic"),
+            AdapterKind::Ollama
+        );
+        assert_eq!(
+            adapter_kind_for("moonshot-v1-8k", None, "anthropic"),
             AdapterKind::Ollama
         );
     }
@@ -568,16 +643,52 @@ mod tests {
     #[test]
     fn adapter_kind_for_override_wins() {
         assert_eq!(
-            adapter_kind_for("my-model", Some("glm")),
+            adapter_kind_for("my-model", Some("glm"), "anthropic"),
             AdapterKind::Ollama
         );
         assert_eq!(
-            adapter_kind_for("my-model", Some("openai")),
+            adapter_kind_for("my-model", Some("openai"), "anthropic"),
             AdapterKind::OpenAiCompat
         );
         assert_eq!(
-            adapter_kind_for("my-model", Some("kimi")),
+            adapter_kind_for("my-model", Some("kimi"), "anthropic"),
             AdapterKind::Ollama
+        );
+    }
+
+    #[test]
+    fn adapter_kind_for_cloud_anthropic_overrides() {
+        assert_eq!(
+            adapter_kind_for("my-model", Some("anthropic-bedrock"), "anthropic"),
+            AdapterKind::AnthropicBedrock
+        );
+        assert_eq!(
+            adapter_kind_for("my-model", Some("bedrock"), "anthropic"),
+            AdapterKind::AnthropicBedrock
+        );
+        assert_eq!(
+            adapter_kind_for("my-model", Some("anthropic-vertex"), "anthropic"),
+            AdapterKind::AnthropicVertex
+        );
+        assert_eq!(
+            adapter_kind_for("my-model", Some("vertex"), "anthropic"),
+            AdapterKind::AnthropicVertex
+        );
+    }
+
+    #[test]
+    fn provider_selects_cloud_adapter_for_claude() {
+        assert_eq!(
+            adapter_kind_for("claude-3-5-sonnet", None, "bedrock"),
+            AdapterKind::AnthropicBedrock
+        );
+        assert_eq!(
+            adapter_kind_for("claude-3-5-sonnet", None, "vertex"),
+            AdapterKind::AnthropicVertex
+        );
+        assert_eq!(
+            adapter_kind_for("claude-3-5-sonnet", None, "anthropic"),
+            AdapterKind::Anthropic
         );
     }
 
@@ -629,5 +740,18 @@ mod tests {
         // A non-Kimi name with override "kimi" should route to Kimi.
         let adapter = adapter_for("my-kimi", "http://host/", Some("kimi"), 30);
         assert!(adapter.model_info().supports_thinking);
+    }
+
+    #[test]
+    fn adapter_for_with_provider_selects_bedrock() {
+        let adapter = adapter_for_with_provider(
+            "anthropic.claude-3-5-sonnet",
+            "",
+            Some("anthropic-bedrock"),
+            "bedrock",
+            30,
+        );
+        assert_eq!(adapter.model_info().name, "anthropic.claude-3-5-sonnet");
+        assert!(adapter.model_info().tool_call_format == crate::shared::ToolCallStyle::Anthropic);
     }
 }

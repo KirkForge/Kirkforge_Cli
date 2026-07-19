@@ -52,6 +52,52 @@
 # max_concurrent_scheduled_jobs = 4
 
 # ---------------------------------------------------------------------------
+# Computer-use browser tool
+# ---------------------------------------------------------------------------
+
+# When true, the `computer_use` tool is available to vision-capable models.
+# It launches a headless Chrome tab and lets the model navigate, click,
+# type, and take screenshots. Default: false.
+# computer_use_enabled = false
+
+# Path to a Chrome/Chromium binary. If empty the CLI tries a small set of
+# common binary names. Default: "".
+# chrome_path = ""
+
+# Extra command-line flags passed to Chrome on launch. Default: [] (none).
+# chrome_extra_flags = []
+
+# Width of the emulated browser viewport in pixels. Default: 1280.
+# chrome_viewport_width = 1280
+
+# Height of the emulated browser viewport in pixels. Default: 800.
+# chrome_viewport_height = 800
+
+# ---------------------------------------------------------------------------
+# Anthropic cloud routing
+# ---------------------------------------------------------------------------
+
+# Which Anthropic-compatible provider to use for Claude model names.
+# Options: "anthropic" (default), "bedrock", "vertex".
+# anthropic_provider = "anthropic"
+
+# AWS region for Bedrock inference. Default: "us-east-1".
+# aws_region = "us-east-1"
+
+# AWS profile name. Not yet implemented; set via env for now. Default: "".
+# aws_profile = ""
+
+# GCP project id for Vertex AI. Required when anthropic_provider = "vertex".
+# gcp_project_id = ""
+
+# GCP region for Vertex AI. Default: "us-central1".
+# gcp_region = "us-central1"
+
+# Path to a GCP service-account JSON key for Vertex AI. Falls back to
+# GOOGLE_APPLICATION_CREDENTIALS. Default: "".
+# gcp_service_account_path = ""
+
+# ---------------------------------------------------------------------------
 # Sandbox and filesystem access
 # ---------------------------------------------------------------------------
 

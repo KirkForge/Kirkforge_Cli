@@ -10,6 +10,8 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Instant;
 
+pub use crate::tui::commands::{handle_workflow_command, WorkflowHandle};
+
 #[cfg(test)]
 use crate::shared::Config;
 
@@ -351,6 +353,12 @@ pub struct AppState {
     /// the renderer to draw a progress bar in the chat panel. `None`
     /// when no pull is in progress.
     pub pull_progress: Option<PullProgress>,
+
+    // ── Programmable workflows (WO-4) ─────────────────────────────
+    /// Handle to the workflow currently running in the background.
+    pub workflow_in_progress: Option<crate::tui::commands::WorkflowHandle>,
+    /// Cancel flag for the running workflow, checked between steps.
+    pub workflow_cancel: Option<Arc<AtomicBool>>,
 }
 
 /// Snapshot of an in-progress Ollama model pull.
@@ -419,6 +427,8 @@ impl AppState {
             // zero state mutations).
             dirty: true,
             pull_progress: None,
+            workflow_in_progress: None,
+            workflow_cancel: None,
         }
     }
 

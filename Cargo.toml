@@ -31,6 +31,7 @@ harness = false
 kirkforge-plugin = { path = "crates/kirkforge-plugin" }
 kirkforge-plugin-host = { path = "crates/kirkforge-plugin-host" }
 kirkforge-lsp = { path = "crates/kirkforge-lsp" }
+kirkforge-workflow = { path = "crates/kirkforge-workflow" }
 
 [dependencies]
 # TUI
@@ -114,6 +115,8 @@ kirkforge-plugin = { workspace = true }
 kirkforge-plugin-host = { workspace = true }
 # LSP client pool (vendored workspace member) — symbol-aware code nav.
 kirkforge-lsp = { workspace = true }
+# Workflow engine (vendored workspace member) — programmable JSON workflows.
+kirkforge-workflow = { workspace = true }
 # Headless Chrome CDP driver for the computer_use tool.
 headless_chrome = { version = "1", default-features = false }
 # SigV4 signing for Anthropic-on-Bedrock requests.

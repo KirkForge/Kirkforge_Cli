@@ -891,6 +891,20 @@ async fn handle_persona_complete(
     state.persona_in_progress = None;
     state.persona_cancel = None;
 
+    if result.task.starts_with("workflow ") {
+        state.workflow_in_progress = None;
+        state.workflow_cancel = None;
+        let msg = if result.success {
+            result.summary
+        } else {
+            format!("Workflow failed: {}", result.error.unwrap_or_default())
+        };
+        state
+            .messages
+            .push_back(ConversationEntry::new("system", msg));
+        return;
+    }
+
     if !result.success {
         state.messages.push_back(ConversationEntry::new(
             "system",

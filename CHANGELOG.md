@@ -8,6 +8,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 - Workflow engine now dispatches independent ready steps concurrently via `tokio::spawn` through a new `StepRunner::run_batch` trait method; hosts may override for parallel subagent execution (#14).
 - New `notebook_edit` tool edits a single cell in a Jupyter notebook (.ipynb) by zero-based index, with support for undo snapshots and dry-run mode (#15).
+- VS Code extension NDJSON bridge scaffold: chat panel, TODO panel, inline diff opener, and LSP bridge, with ADR-026 documenting the v1 NDJSON contract (#16; CLI still needs to emit NDJSON events for full functionality).
 
 ### Fixed
 - Release workflow now verifies CI by waiting for each individual job check-run to succeed, instead of looking for a non-existent single `CI` check-run (#10, #11).

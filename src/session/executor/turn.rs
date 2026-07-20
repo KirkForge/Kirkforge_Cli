@@ -1106,6 +1106,18 @@ impl Executor {
                 event_tx,
             )
             .await?;
+
+            // Persist after each recorded result so a crash before the next
+            // tool starts does not lose in-flight progress.
+            if let Err(e) = self.conversation.checkpoint_async().await {
+                tracing::warn!(error = %e, "mid-batch checkpoint failed after tool {}", tc.id);
+                crate::send_or_warn!(
+                    event_tx
+                        .send(TurnEvent::Error(format!("Checkpoint failed: {e}")))
+                        .await,
+                    "TurnEvent receiver dropped; discarding event"
+                );
+            }
         }
 
         Ok(tcs.len())

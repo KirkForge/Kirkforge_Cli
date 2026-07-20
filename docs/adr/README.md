@@ -41,6 +41,7 @@ files `0001`–`0018` and `0021`–`0022` (indexed below) are the vendored Plugi
 | [0021](./0021-computer-use-tool.md) | `computer_use` tool via headless Chrome CDP | Accepted |
 | [0022](./0022-anthropic-cloud-routing.md) | Anthropic cloud routing — Bedrock and Vertex | Accepted |
 | [0023](./0023-workflow-engine.md) | Programmable JSON workflow engine | Accepted |
+| [0033](./0033-mid-batch-checkpoint.md) | Mid-batch tool-result checkpointing | Accepted |
 
 ## Native KirkForge-Cli ADRs
 
@@ -53,6 +54,7 @@ numbering scheme (`001`–`017`). Recent additions:
 - [ADR-026: VS Code NDJSON bridge](./026-vscode-ndjson-bridge.md)
 - [ADR-027: Context management depth](./0027-context-management-depth.md)
 - [ADR-028: Unify Rust and TS verifier buses](./0028-verifier-bus-unification.md)
+- [ADR-033: Mid-batch tool-result checkpointing](./0033-mid-batch-checkpoint.md)
 
 These are **not** part of the Plugin3 series and are therefore not
 included in the 4-digit index table above.

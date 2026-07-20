@@ -37,6 +37,7 @@ files `0001`–`0018` and `0021`–`0022` (indexed below) are the vendored Plugi
 | [0020](./0020-parallel-tool-dispatch.md) | Parallel tool dispatch | Accepted |
 | [0018](./0018-scheduled-jobs.md) | Cron / scheduled jobs | Accepted |
 | [0027](./0027-context-management-depth.md) | Context management depth | Accepted |
+| [0028](./0028-verifier-bus-unification.md) | Unify Rust and TS verifier buses | Accepted |
 | [0021](./0021-computer-use-tool.md) | `computer_use` tool via headless Chrome CDP | Accepted |
 | [0022](./0022-anthropic-cloud-routing.md) | Anthropic cloud routing — Bedrock and Vertex | Accepted |
 | [0023](./0023-workflow-engine.md) | Programmable JSON workflow engine | Accepted |
@@ -51,6 +52,7 @@ numbering scheme (`001`–`017`). Recent additions:
 - [ADR-025: Windows parity approach](./025-windows-parity.md)
 - [ADR-026: VS Code NDJSON bridge](./026-vscode-ndjson-bridge.md)
 - [ADR-027: Context management depth](./0027-context-management-depth.md)
+- [ADR-028: Unify Rust and TS verifier buses](./0028-verifier-bus-unification.md)
 
 These are **not** part of the Plugin3 series and are therefore not
 included in the 4-digit index table above.

@@ -3069,12 +3069,6 @@ async fn test_mid_batch_checkpoint_persists_partial_results() {
     let (started_tx, started_rx) = tokio::sync::oneshot::channel::<()>();
     let started_tx = Arc::new(std::sync::Mutex::new(Some(started_tx)));
 
-    let tool_def = ToolDef {
-        name: "sleep",
-        description: "sleep briefly",
-        parameters: serde_json::json!({"type": "object", "properties": {}}),
-    };
-
     struct GatedSleepTool {
         def: ToolDef,
         sleep_ms: u64,
@@ -3100,12 +3094,26 @@ async fn test_mid_batch_checkpoint_persists_partial_results() {
         }
     }
 
-    // Two fast tools and two slow tools. Cancellation after the first fast tool
-    // is recorded prevents the remaining tools from being recorded.
+    // Two fast tools and two slow tools. Each tool gets a distinct name so the
+    // toolset resolves each call to the intended instance (VecToolset returns
+    // the first tool whose name matches, so duplicate names would all resolve
+    // to the first/fast tool and defeat the 2-fast-2-slow design). Cancellation
+    // after the first two fast tools are recorded leaves the slow tools
+    // in-flight; the aborted turn drops the blocked collect loop so the slow
+    // results are never recorded.
     let tools: Vec<Arc<dyn Tool>> = (0..4)
         .map(|i| {
             Arc::new(GatedSleepTool {
-                def: tool_def.clone(),
+                def: ToolDef {
+                    name: match i {
+                        0 => "sleep-0",
+                        1 => "sleep-1",
+                        2 => "sleep-2",
+                        _ => "sleep-3",
+                    },
+                    description: "sleep briefly",
+                    parameters: serde_json::json!({"type": "object", "properties": {}}),
+                },
                 sleep_ms: if i < 2 { 100 } else { 3000 },
                 gate_tx: started_tx.clone(),
             }) as Arc<dyn Tool>
@@ -3116,22 +3124,22 @@ async fn test_mid_batch_checkpoint_persists_partial_results() {
         vec![
             StreamEvent::ToolCall(ToolInvocation {
                 id: "call-1".into(),
-                name: "sleep".into(),
+                name: "sleep-0".into(),
                 arguments: serde_json::json!({}),
             }),
             StreamEvent::ToolCall(ToolInvocation {
                 id: "call-2".into(),
-                name: "sleep".into(),
+                name: "sleep-1".into(),
                 arguments: serde_json::json!({}),
             }),
             StreamEvent::ToolCall(ToolInvocation {
                 id: "call-3".into(),
-                name: "sleep".into(),
+                name: "sleep-2".into(),
                 arguments: serde_json::json!({}),
             }),
             StreamEvent::ToolCall(ToolInvocation {
                 id: "call-4".into(),
-                name: "sleep".into(),
+                name: "sleep-3".into(),
                 arguments: serde_json::json!({}),
             }),
             StreamEvent::Done {

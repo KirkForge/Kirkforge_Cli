@@ -8,6 +8,7 @@ pub mod edit_file;
 pub mod glob;
 pub mod grep;
 pub mod lsp_query;
+pub mod notebook_edit;
 pub mod read_file;
 pub mod read_image;
 pub mod task;
@@ -146,6 +147,10 @@ pub fn all_tools(
             undo_stack.clone(),
             path_guard.clone(),
             minify_write_side,
+        )),
+        Arc::new(notebook_edit::NotebookEdit::new(
+            undo_stack.clone(),
+            path_guard.clone(),
         )),
         Arc::new(bash::Bash::new(
             deny_list.clone(),

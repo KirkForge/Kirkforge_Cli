@@ -5,6 +5,7 @@ use super::turn::PostTurnHookGuard;
 use super::types::PLAN_COMPLETE_MARKER;
 use super::*;
 use crate::adapters::ModelAdapter;
+use crate::shared::metrics::{read_events, MetricEvent, PlanDecisionKind};
 use crate::shared::permission::PermissionAction;
 use crate::shared::test_util::{remove_test_dir, remove_test_file};
 use crate::shared::{
@@ -3053,4 +3054,62 @@ async fn test_read_then_write_in_same_batch_passes_read_gate() {
     );
     let content = std::fs::read_to_string(&tmp).unwrap();
     assert_eq!(content, "updated", "file should have been overwritten");
+}
+
+#[tokio::test]
+async fn test_plan_reason_emitted_after_tool_call() {
+    let captured = Arc::new(Mutex::new(None));
+    let tool = MockTool {
+        def: ToolDef {
+            name: "echo",
+            description: "echo a value",
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {"val": {"type": "string"}}
+            }),
+        },
+        captured_args: captured.clone(),
+        outcome: ToolOutcome::Success {
+            content: "echoed!".into(),
+        },
+    };
+
+    let adapter = MockAdapter::new(
+        vec![
+            StreamEvent::Thinking("I need to echo a value.".to_string()),
+            StreamEvent::ToolCall(ToolInvocation {
+                id: "call-1".into(),
+                name: "echo".into(),
+                arguments: serde_json::json!({"val": "test"}),
+            }),
+            StreamEvent::Done {
+                finish_reason: FinishReason::ToolCalls,
+                usage: None,
+            },
+        ],
+        make_info(),
+    );
+
+    let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
+    let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(true));
+    exe.run_turn_collecting("use echo", &approval_tx, never_cancelled())
+        .await
+        .unwrap();
+
+    let events = read_events();
+    let found = events.iter().any(|e| {
+        matches!(
+            e,
+            MetricEvent::PlanReason {
+                decision_kind: PlanDecisionKind::ToolSelect,
+                ref reason,
+                related_id: Some(ref id),
+                confidence,
+            } if reason == "I need to echo a value." && id == "call-1" && *confidence == 1.0
+        )
+    });
+    assert!(
+        found,
+        "expected PlanReason ToolSelect after tool call; got: {events:?}"
+    );
 }

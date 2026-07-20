@@ -5,7 +5,7 @@ use crate::session::access::GuardVerdict;
 use crate::session::bash_runner::check_bash_command_str;
 use crate::session::hooks::HookRunner;
 use crate::session::toolset::Toolset;
-use crate::shared::metrics::{record, MetricEvent};
+use crate::shared::metrics::{record, MetricEvent, PlanDecisionKind};
 use crate::shared::permission::{evaluate, PermissionAction};
 use crate::shared::{
     read_shared_config, Config, Message, Role, StreamEvent, ToolDef, ToolInvocation, ToolOutcome,
@@ -1368,6 +1368,19 @@ impl Executor {
                     }
 
                     if !tool_calls_out.is_empty() {
+                        for tc in tool_calls_out.iter() {
+                            let reason = if assistant_thinking.is_empty() {
+                                "model-emitted tool call".to_string()
+                            } else {
+                                assistant_thinking.clone()
+                            };
+                            record(MetricEvent::PlanReason {
+                                decision_kind: PlanDecisionKind::ToolSelect,
+                                reason,
+                                related_id: Some(tc.id.clone()),
+                                confidence: 1.0,
+                            });
+                        }
                         return Ok(IterationOutcome::ToolCalls(tool_calls_out.clone()));
                     }
 

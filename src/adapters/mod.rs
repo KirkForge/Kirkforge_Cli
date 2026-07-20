@@ -13,6 +13,7 @@ pub mod openai_compat;
 pub mod tool_call_markup;
 pub mod vertex_auth;
 
+use crate::shared::metrics::{record, MetricEvent, PlanDecisionKind};
 use crate::shared::{ContentPart, ModelInfo, Role, StreamEvent};
 use std::future::Future;
 
@@ -79,6 +80,13 @@ where
         attempt += 1;
         match build_request().await {
             Err(e) if attempt < MODEL_MAX_RETRIES && (e.is_connect() || e.is_timeout()) => {
+                let err_kind = if e.is_connect() { "connect" } else { "timeout" };
+                record(MetricEvent::PlanReason {
+                    decision_kind: PlanDecisionKind::PromptFailure,
+                    reason: format!("{err_kind} error on attempt {attempt}"),
+                    related_id: None,
+                    confidence: 1.0,
+                });
                 tracing::warn!(attempt, error = %e, "model request failed, retrying");
                 tokio::time::sleep(retry_backoff(attempt)).await;
             }
@@ -86,6 +94,12 @@ where
             Ok(r) => {
                 let s = r.status().as_u16();
                 if attempt < MODEL_MAX_RETRIES && should_retry_status(s) {
+                    record(MetricEvent::PlanReason {
+                        decision_kind: PlanDecisionKind::PromptFailure,
+                        reason: format!("HTTP {s} transient error on attempt {attempt}"),
+                        related_id: None,
+                        confidence: 1.0,
+                    });
                     tracing::warn!(
                         attempt,
                         status = s,

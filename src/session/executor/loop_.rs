@@ -2,6 +2,7 @@
 
 use crate::session::conversation::ConversationLog;
 use crate::session::prompt::CompactRequest;
+use crate::shared::metrics::{record, MetricEvent, PlanDecisionKind};
 use crate::shared::{read_shared_config, Config, Message, Role};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -201,6 +202,15 @@ impl Executor {
                             strategy: "pending",
                         },
                     );
+
+                    // Record the decision that triggered compaction.
+                    let budget_threshold = self.adapter.model_info().max_context_tokens * 9 / 10;
+                    record(MetricEvent::PlanReason {
+                        decision_kind: PlanDecisionKind::CompactionTrigger,
+                        reason: format!("budget exceeded at {original_tokens} tokens (threshold {budget_threshold})"),
+                        related_id: None,
+                        confidence: 1.0,
+                    });
 
                     let mut did_summarize = false;
                     let mut compact_stats = None;

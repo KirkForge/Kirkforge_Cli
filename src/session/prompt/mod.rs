@@ -2,6 +2,7 @@ pub(crate) mod compaction;
 pub(crate) mod microcompaction;
 pub mod summarizer;
 
+use crate::shared::metrics::{record, MetricEvent, PlanDecisionKind};
 use crate::shared::{Message, Role};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -182,6 +183,15 @@ impl PromptBuilder {
                     if let Some(ctx) = memory_context.filter(|s| !s.is_empty()) {
                         let selected =
                             store.select_for_context(ctx, memory_max_tokens, memory_top_n);
+                        for fact in &selected {
+                            let reason = format!("query='{}' matched memory '{}'", ctx, fact.name);
+                            record(MetricEvent::PlanReason {
+                                decision_kind: PlanDecisionKind::MemoryRetrieve,
+                                reason,
+                                related_id: Some(fact.name.clone()),
+                                confidence: 1.0,
+                            });
+                        }
                         store.to_prompt_block_for_facts(&selected)
                     } else {
                         store.to_prompt_block()

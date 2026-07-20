@@ -3,6 +3,7 @@
 use crate::adapters::tool_call_markup::extract_dsml_tool_calls;
 use crate::session::access::GuardVerdict;
 use crate::session::bash_runner::check_bash_command_str;
+use crate::session::error_recovery::RetryTracker;
 use crate::session::hooks::HookRunner;
 use crate::session::toolset::Toolset;
 use crate::shared::metrics::{record, MetricEvent};
@@ -174,6 +175,7 @@ impl Executor {
 
         let mut tool_calls: Vec<ToolInvocation> = Vec::new();
         let mut already_retried_parse = false;
+        let mut retry_tracker = RetryTracker::new();
         let turn_start = Instant::now();
 
         let max_iterations = read_shared_config(&self.config)
@@ -276,6 +278,9 @@ impl Executor {
                 IterationOutcome::ParseError => {
                     if !already_retried_parse {
                         already_retried_parse = true;
+
+                        retry_tracker.wait_before_retry().await;
+                        retry_tracker.record_retry();
 
                         let retry_msg = "Your previous response contained a tool call with malformed JSON arguments. Re-emit ONLY the tool call with the corrected JSON — no additional text, no explanation.";
                         self.conversation

@@ -11,6 +11,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - VS Code extension NDJSON bridge scaffold: chat panel, TODO panel, inline diff opener, and LSP bridge, with ADR-026 documenting the v1 NDJSON contract (#16; CLI still needs to emit NDJSON events for full functionality).
 - Context management depth: prompt-cache-stem memoisation with KV-cache hit verification via `TurnEvent::CacheStats`; automatic per-turn microcompaction in `PromptBuilder::build_messages`; `max_tool_result_chars` now applies to all tools; repeated identical tool results collapse to an `[unchanged]` marker after the second occurrence. Documented in ADR-027 (#17).
 - Design-first ADR-028 documents the unified Rust/TypeScript verifier bus contract: shared event schema, verifier slot registry, truth model, correction contract, and staged bridge architecture (#18).
+- Exponential backoff on tool-call retries: `RetryTracker::wait_before_retry()` now sleeps using the shared `retry_backoff` helper before each parse-error retry, matching the existing model-request retry policy (1 s, 2 s, 4 s) with deterministic jitter. Documented in ADR-032 (#21).
 
 ### Fixed
 - Release workflow now verifies CI by waiting for each individual job check-run to succeed, instead of looking for a non-existent single `CI` check-run (#10, #11).

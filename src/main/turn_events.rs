@@ -208,6 +208,21 @@ pub(super) fn emit_turn_events(
                 // Non-interactive mode has no place to show a live
                 // progress bar; swallow the event silently.
             }
+            session::executor::TurnEvent::CacheStats {
+                cached_tokens,
+                prompt_tokens,
+                stem_tokens,
+            } => {
+                if output == kirkforge::shared::OutputFormat::StreamJson {
+                    let line = serde_json::json!({
+                        "type": "cache_stats",
+                        "cached_tokens": cached_tokens,
+                        "prompt_tokens": prompt_tokens,
+                        "stem_tokens": stem_tokens,
+                    });
+                    print_json_line(&line);
+                }
+            }
         }
     }
 }

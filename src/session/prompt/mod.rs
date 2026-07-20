@@ -1,12 +1,19 @@
 pub(crate) mod compaction;
+pub(crate) mod microcompaction;
 pub mod summarizer;
-
-pub use compaction::CompactRequest;
-pub(crate) use compaction::{compact_to_budget, estimate_tokens};
 
 use crate::shared::{Message, Role};
 use std::collections::HashMap;
 use std::path::PathBuf;
+
+pub use compaction::CompactRequest;
+pub(crate) use compaction::{compact_to_budget, estimate_tokens};
+
+/// Number of trailing messages kept verbatim by automatic microcompaction.
+/// Mirrors `Config::preserve_recent_messages` semantics: the live user turn
+/// and the most recent assistant turn stay intact so the model does not lose
+/// the immediate thread.
+const DEFAULT_MICROCOMPACT_KEEP_TAIL: usize = 5;
 
 pub struct PromptBuilder {
     template: String,
@@ -20,6 +27,66 @@ pub struct PromptBuilder {
     /// dropped on the floor; this field is where the value actually
     /// lives now.
     system_override: Option<String>,
+    /// Cached system-prompt message produced by `build()` on the first call
+    /// and reused when the caller opts into prompt-cache-stem mode and the
+    /// inputs that affect the system prompt (model name, tool list, carryover,
+    /// memory) have not changed. This is the kernel of the P3-6 prompt-cache-
+    /// stem reuse path: the same `Message` object (and therefore the same
+    /// content hash) is passed to the adapter across turns so the provider can
+    /// hit its KV-cache for the stable prefix.
+    cached_system: Option<(SystemStemKey, Message)>,
+}
+
+/// Hashable key for the memoised system prompt stem.
+///
+/// Any field that can change the system-prompt text must be reflected here,
+/// otherwise two turns with different carryover / memory / tools could reuse
+/// the wrong cached system message and poison the prompt cache or the
+/// conversation semantics.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct SystemStemKey {
+    model_name: String,
+    model_supports_thinking: bool,
+    tool_names: Vec<String>,
+    carryover_block: Option<String>,
+    memory_context: Option<String>,
+    memory_enabled: bool,
+    memory_max_tokens: usize,
+    memory_top_n: usize,
+    system_override_hash: Option<u64>,
+}
+
+impl SystemStemKey {
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        model_name: &str,
+        model_supports_thinking: bool,
+        tool_names: &[&str],
+        carryover_block: Option<&str>,
+        memory_context: Option<&str>,
+        memory_enabled: bool,
+        memory_max_tokens: usize,
+        memory_top_n: usize,
+        system_override: Option<&str>,
+    ) -> Self {
+        Self {
+            model_name: model_name.to_string(),
+            model_supports_thinking,
+            tool_names: tool_names.iter().map(|s| s.to_string()).collect(),
+            carryover_block: carryover_block.map(|s| s.to_string()),
+            memory_context: memory_context.map(|s| s.to_string()),
+            memory_enabled,
+            memory_max_tokens,
+            memory_top_n,
+            system_override_hash: system_override.map(|s| {
+                use std::collections::hash_map::DefaultHasher;
+                use std::hash::{Hash, Hasher};
+                let mut hasher = DefaultHasher::new();
+                s.hash(&mut hasher);
+                hasher.finish()
+            }),
+        }
+    }
 }
 
 impl PromptBuilder {
@@ -29,6 +96,7 @@ impl PromptBuilder {
             template: template.to_string(),
             cache: HashMap::new(),
             system_override: None,
+            cached_system: None,
         }
     }
 
@@ -58,6 +126,23 @@ impl PromptBuilder {
         memory_max_tokens: usize,
         memory_top_n: usize,
     ) -> Message {
+        let key = SystemStemKey::new(
+            model_name,
+            model_supports_thinking,
+            tool_names,
+            carryover_block,
+            memory_context,
+            memory_enabled,
+            memory_max_tokens,
+            memory_top_n,
+            self.system_override.as_deref(),
+        );
+        if let Some((ref cached_key, ref cached_msg)) = self.cached_system {
+            if cached_key == &key {
+                return cached_msg.clone();
+            }
+        }
+
         // Full override: the operator passed --system "..." or set
         // `system_override` directly. We still append the carryover
         // block and the memory block so context the operator didn't
@@ -114,7 +199,7 @@ impl PromptBuilder {
             }
         }
 
-        Message {
+        let msg = Message {
             role: Role::System,
             content,
             content_parts: None,
@@ -123,7 +208,33 @@ impl PromptBuilder {
             tool_call_id: None,
             tool_name: None,
             token_count: None,
-        }
+        };
+        self.cached_system = Some((key, msg.clone()));
+        msg
+    }
+
+    /// Estimate the token size of the stable prompt-cache stem.
+    ///
+    /// The stem is the system prompt *without* the dynamic carryover and
+    /// memory blocks, because those can change across turns. Providers
+    /// cache the exact bytes sent; a changing carryover block would
+    /// invalidate the cache. The returned value is a heuristic used for
+    /// status-bar telemetry and cache-hit verification.
+    pub fn estimate_stem_tokens(
+        &self,
+        model_name: &str,
+        model_supports_thinking: bool,
+        tool_names: &[&str],
+    ) -> usize {
+        let stem = self.build_stem(model_name, model_supports_thinking);
+        let tool_json = serde_json::to_string(
+            &tool_names
+                .iter()
+                .map(|n| serde_json::json!({"name": n}))
+                .collect::<Vec<_>>(),
+        )
+        .unwrap_or_default();
+        (stem.len() + tool_json.len()) / 4
     }
 
     pub fn build_stem(&self, model_name: &str, model_supports_thinking: bool) -> String {
@@ -182,6 +293,23 @@ impl PromptBuilder {
         }
 
         let mut adjusted = messages.clone();
+
+        // Microcompaction: before more aggressive truncation, summarize
+        // the oldest non-anchor messages into a single compact system
+        // message while preserving the last few turns verbatim. This is
+        // P3-6's middle-compression strategy — distinct from the `/compact`
+        // log rewrite because it happens on the fly at request-build time.
+        if let Some(result) =
+            microcompaction::maybe_microcompact(&messages, budget, DEFAULT_MICROCOMPACT_KEEP_TAIL)
+        {
+            if result.tokens_after <= budget {
+                return result.messages;
+            }
+            // Even if not under budget, continue with the compacted form
+            // so the later fallback truncation has less to chew through.
+            adjusted = result.messages;
+        }
+
         if Self::minify_old_messages(&messages, &mut adjusted)
             && Self::estimated_tokens(&adjusted) <= budget
         {
@@ -333,19 +461,31 @@ impl PromptBuilder {
     fn dedup_adjacent_tool_results(messages: &mut [Message]) {
         const TOOL_RESULT_DEDUP_MARKER: &str =
             "[duplicate tool result omitted — see previous identical result]";
-        let mut prev_tool_content: Option<String> = None;
+        const TOOL_RESULT_UNCHANGED_MARKER: &str =
+            "[unchanged from previous identical tool result]";
+        let mut prev_tool_content: Option<(String, usize)> = None;
         for msg in messages.iter_mut() {
             if !matches!(msg.role, Role::Tool) {
                 prev_tool_content = None;
                 continue;
             }
-            if let Some(prev) = &prev_tool_content {
+            if let Some((prev, seen)) = prev_tool_content.as_ref() {
                 if prev == &msg.content {
-                    msg.content = TOOL_RESULT_DEDUP_MARKER.to_string();
+                    // Third and subsequent identical tool results in a row
+                    // are collapsed to an "unchanged" marker. The first is
+                    // kept full, the second is deduplicated to the existing
+                    // marker, and from the third on we emit a compact
+                    // unchanged note.
+                    msg.content = if *seen >= 2 {
+                        TOOL_RESULT_UNCHANGED_MARKER.to_string()
+                    } else {
+                        TOOL_RESULT_DEDUP_MARKER.to_string()
+                    };
+                    prev_tool_content = Some((prev.clone(), *seen + 1));
                     continue;
                 }
             }
-            prev_tool_content = Some(msg.content.clone());
+            prev_tool_content = Some((msg.content.clone(), 1));
         }
     }
 
@@ -1001,12 +1141,18 @@ mod tests {
             .collect();
         assert_eq!(tool_msgs.len(), 4);
         assert_eq!(tool_msgs[0].content, "same");
-        for m in &tool_msgs[1..] {
-            assert!(
-                m.content.contains("duplicate"),
-                "entries 2..4 should be deduped"
-            );
-        }
+        assert!(
+            tool_msgs[1].content.contains("duplicate"),
+            "entry 1 should be deduped"
+        );
+        assert!(
+            tool_msgs[2].content.contains("unchanged"),
+            "entry 2 should be unchanged marker"
+        );
+        assert!(
+            tool_msgs[3].content.contains("unchanged"),
+            "entry 3 should be unchanged marker"
+        );
     }
 
     #[test]

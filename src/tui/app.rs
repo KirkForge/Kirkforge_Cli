@@ -253,6 +253,19 @@ pub struct AppState {
     /// "no signal yet" and falls back to the plain `↑N` display.
     pub last_turn_prompt_tokens: usize,
 
+    // ── Prompt-cache indicator (P3-6) ─────────────────────────────
+    /// Cumulative cache-read tokens reported by the adapter across the
+    /// session. Mirrors the adapter's `cached_tokens` usage field and is
+    /// surfaced in the status bar so the operator can verify KV-cache
+    /// reuse for the prompt-cache stem.
+    pub cached_tokens: usize,
+    /// Estimated size of the stable prompt-cache stem (system prompt +
+    /// tool definitions) in tokens. Updated each turn by `TurnEvent::CacheStats`.
+    pub stem_tokens: usize,
+    /// Latest per-turn cache-hit ratio (`cached_tokens / prompt_tokens`).
+    /// Surfaced in the status bar as a percentage.
+    pub cache_hit_ratio: f64,
+
     // ── Bang approval gate (review.md arch concern #1) ─────────────
     /// When `Some`, the user has typed `!` with `bang_requires_approval`
     /// enabled, and is being shown the approval dialog for the local
@@ -410,6 +423,9 @@ impl AppState {
             approval_max_scroll: 0,
             approval_diff_side_by_side: false,
             last_turn_prompt_tokens: 0,
+            cached_tokens: 0,
+            stem_tokens: 0,
+            cache_hit_ratio: 0.0,
             pending_bang: None,
             search_mode: false,
             search_query: String::new(),

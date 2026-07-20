@@ -5,6 +5,6 @@ exclude-files = ["tests/integration_test.rs", "src/main.rs"]
 # Exclude the build script from coverage targets.
 exclude = ["build_script_build"]
 # Give slow tests enough time to finish.
-timeout = "120"
+timeout = "120s"
 # LLVM engine avoids segfaults when tracing tests that spawn subprocesses.
 engine = "Llvm"

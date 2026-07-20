@@ -66,6 +66,18 @@ pub enum TurnEvent {
         cumulative_cost: f64,
     },
 
+    /// Prompt-cache performance for the turn. Emitted when the adapter
+    /// reports cache-read tokens so the TUI/status bar can surface KV-cache
+    /// hit counts and verify that the prompt cache stem is actually being
+    /// reused by the provider.
+    CacheStats {
+        cached_tokens: usize,
+        prompt_tokens: usize,
+        /// Estimated size of the stable prompt-cache stem (system prompt +
+        /// tool definitions) in tokens. Useful for tuning cache-hit rates.
+        stem_tokens: usize,
+    },
+
     CompactionReport {
         new_messages: Vec<crate::shared::Message>,
         dropped_tool_results: usize,

@@ -836,7 +836,7 @@ impl Executor {
         } else {
             (None, None, None)
         };
-        let outcome = if tc.name == "bash" {
+        let outcome = if tc.name == "bash" || max_tool_result_chars > 0 {
             truncate_tool_output(outcome, max_tool_result_chars)
         } else {
             outcome
@@ -1183,6 +1183,14 @@ impl Executor {
             &tool_results,
         );
 
+        // Snapshot the stable prompt-cache stem size for this turn so we
+        // can verify KV-cache reuse against the adapter usage stats.
+        let stem_tokens = self.prompt_builder.estimate_stem_tokens(
+            &model_info.name,
+            model_info.supports_thinking,
+            &tool_names,
+        );
+
         let mut rx = self.adapter.stream(&messages, &tool_defs).await?;
 
         let mut assistant_content = String::new();
@@ -1329,6 +1337,7 @@ impl Executor {
                     if let Some(ref u) = usage {
                         let prompt = u.prompt_tokens.unwrap_or(0);
                         let completion = u.completion_tokens.unwrap_or(0);
+                        let cached = u.cached_tokens.unwrap_or(0);
                         let cost = crate::shared::calculate_cost(&self.model_name, u);
                         self.cost_tracking.record_turn(prompt, completion, cost);
                         crate::send_or_warn!(
@@ -1338,6 +1347,20 @@ impl Executor {
                                     completion_tokens: completion,
                                     turn_cost: cost,
                                     cumulative_cost: self.cost_tracking.cumulative_cost,
+                                })
+                                .await,
+                            "TurnEvent receiver dropped; discarding event"
+                        );
+                        // Emit cache stats whenever the provider reports
+                        // cache-read tokens. The stem size is the stable
+                        // prefix the adapter should be reusing; a positive
+                        // cached count is the KV-cache hit verification.
+                        crate::send_or_warn!(
+                            event_tx
+                                .send(TurnEvent::CacheStats {
+                                    cached_tokens: cached,
+                                    prompt_tokens: prompt,
+                                    stem_tokens,
                                 })
                                 .await,
                             "TurnEvent receiver dropped; discarding event"

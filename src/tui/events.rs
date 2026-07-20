@@ -125,12 +125,28 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
             // AppState so the status bar can compute the
             // budget-pressure percentage against
             // `model_info.max_context_tokens`. This is the
-            // per-turn value (the API reports prompt_tokens
-            // per response), not a running sum — the model
-            // sees the whole conversation on every turn, so
-            // the most recent prompt size is the right
-            // "current context pressure" signal.
+            // per-turn value (the API reports prompt_tokens per
+            // response), not a running sum — the model sees the
+            // whole conversation on every turn, so the most recent
+            // prompt size is the right "current context pressure"
+            // signal.
             state.last_turn_prompt_tokens = prompt_tokens;
+        }
+        TurnEvent::CacheStats {
+            cached_tokens,
+            prompt_tokens,
+            stem_tokens,
+        } => {
+            state.cached_tokens = state.cached_tokens.wrapping_add(cached_tokens);
+            state.stem_tokens = stem_tokens;
+            // Mirror the latest cache ratio for the status bar. If the
+            // provider reports no prompt tokens, treat the turn as zero
+            // cache hit to avoid division by zero.
+            state.cache_hit_ratio = if prompt_tokens > 0 {
+                cached_tokens as f64 / prompt_tokens as f64
+            } else {
+                0.0
+            };
         }
         TurnEvent::PlanComplete => {
             state.is_generating = false;

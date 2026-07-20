@@ -666,7 +666,7 @@ impl Executor {
             (None, None, None)
         };
         let max_tool_result_chars = read_shared_config(&self.config).max_tool_result_chars;
-        let outcome = if tc.name == "bash" {
+        let outcome = if tc.name == "bash" || max_tool_result_chars > 0 {
             truncate_tool_output(outcome, max_tool_result_chars)
         } else {
             outcome

@@ -5,7 +5,7 @@ use crate::session::bash_runner::check_bash_command_str;
 use crate::session::event_bus::BusEvent;
 use crate::session::toolset::Toolset;
 use crate::session::verifier::CorrectionResult;
-use crate::shared::metrics::{record, MetricEvent};
+use crate::shared::metrics::{record, MetricEvent, PlanDecisionKind};
 use crate::shared::permission::{evaluate, PermissionAction};
 use crate::shared::{read_shared_config, Message, Role, ToolInvocation, ToolOutcome};
 use std::time::Instant;
@@ -427,6 +427,8 @@ impl Executor {
 
                     let ctx = self.tool_context_for_call(cancelled);
                     let timeout = self.tool_call_timeout();
+                    let max_tool_result_chars =
+                        read_shared_config(&self.config).max_tool_result_chars;
                     let tool_start = Instant::now();
                     let outcome = tokio::time::timeout(timeout, tool.run(&ctx, run_args.clone()))
                         .await
@@ -434,9 +436,28 @@ impl Executor {
                             after_secs: timeout.as_secs(),
                         }));
                     let tool_duration = tool_start.elapsed();
-                    let outcome_for_emit = outcome.clone();
-                    let edit_diff =
-                        handle_tool_outcome(outcome, tc, event_tx, &mut self.conversation).await?;
+                    let outcome_for_emit = if tc.name == "bash" || max_tool_result_chars > 0 {
+                        truncate_tool_output(outcome, max_tool_result_chars)
+                    } else {
+                        outcome
+                    };
+                    if max_tool_result_chars > 0
+                        && matches!(outcome_for_emit, ToolOutcome::Success { ref content } if content.contains("[output truncated to"))
+                    {
+                        record(MetricEvent::PlanReason {
+                            decision_kind: PlanDecisionKind::ContextTruncate,
+                            reason: format!("max_tool_result_chars={max_tool_result_chars} hit"),
+                            related_id: Some(tc.id.clone()),
+                            confidence: 1.0,
+                        });
+                    }
+                    let edit_diff = handle_tool_outcome(
+                        outcome_for_emit.clone(),
+                        tc,
+                        event_tx,
+                        &mut self.conversation,
+                    )
+                    .await?;
                     record(MetricEvent::ToolCall {
                         name: tc.name.clone(),
                         success: tool_outcome_success(&outcome_for_emit),
@@ -666,13 +687,28 @@ impl Executor {
             (None, None, None)
         };
         let max_tool_result_chars = read_shared_config(&self.config).max_tool_result_chars;
-        let outcome = if tc.name == "bash" || max_tool_result_chars > 0 {
+        let outcome_for_emit = if tc.name == "bash" || max_tool_result_chars > 0 {
             truncate_tool_output(outcome, max_tool_result_chars)
         } else {
             outcome
         };
-        let outcome_for_emit = outcome.clone();
-        let edit_diff = handle_tool_outcome(outcome, tc, event_tx, &mut self.conversation).await?;
+        if max_tool_result_chars > 0
+            && matches!(outcome_for_emit, ToolOutcome::Success { ref content } if content.contains("[output truncated to"))
+        {
+            record(MetricEvent::PlanReason {
+                decision_kind: PlanDecisionKind::ContextTruncate,
+                reason: format!("max_tool_result_chars={max_tool_result_chars} hit"),
+                related_id: Some(tc.id.clone()),
+                confidence: 1.0,
+            });
+        }
+        let edit_diff = handle_tool_outcome(
+            outcome_for_emit.clone(),
+            tc,
+            event_tx,
+            &mut self.conversation,
+        )
+        .await?;
         if is_destructive {
             self.audit_log.log_destructive(
                 &tc.name,

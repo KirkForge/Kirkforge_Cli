@@ -110,6 +110,24 @@ const MAX_LOG_BYTES: u64 = 5 * 1024 * 1024;
 /// keeps each event's full write atomic relative to other events.
 static RECORD_LOCK: Mutex<()> = Mutex::new(());
 
+/// Kind of planning decision that produced a [`MetricEvent::PlanReason`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanDecisionKind {
+    /// The model selected a tool to call.
+    ToolSelect,
+    /// A tool result was truncated to fit the context window.
+    ContextTruncate,
+    /// A persisted memory fact was retrieved for prompt injection.
+    MemoryRetrieve,
+    /// A model prompt failed and is being retried.
+    PromptFailure,
+    /// Context compaction was triggered.
+    CompactionTrigger,
+    /// The router or user selected a model for the turn.
+    ModelSelect,
+}
+
 /// A metric event. Serialized as one NDJSON line.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
@@ -133,6 +151,12 @@ pub enum MetricEvent {
     Approval {
         action: String,
     },
+    PlanReason {
+        decision_kind: PlanDecisionKind,
+        reason: String,
+        related_id: Option<String>,
+        confidence: f64,
+    },
 }
 
 impl MetricEvent {
@@ -143,6 +167,7 @@ impl MetricEvent {
             MetricEvent::Verifier { .. } => "verifier",
             MetricEvent::Turn { .. } => "turn",
             MetricEvent::Approval { .. } => "approval",
+            MetricEvent::PlanReason { .. } => "plan",
         }
     }
 
@@ -206,6 +231,23 @@ impl MetricEvent {
                     action.clone(),
                 ));
                 "approval.decision".to_string()
+            }
+            MetricEvent::PlanReason {
+                decision_kind,
+                reason,
+                related_id,
+                confidence,
+            } => {
+                attrs.push(opentelemetry::KeyValue::new(
+                    "plan.decision_kind",
+                    format!("{decision_kind:?}"),
+                ));
+                attrs.push(opentelemetry::KeyValue::new("plan.reason", reason.clone()));
+                attrs.push(opentelemetry::KeyValue::new("plan.confidence", *confidence));
+                if let Some(id) = related_id {
+                    attrs.push(opentelemetry::KeyValue::new("plan.related_id", id.clone()));
+                }
+                "plan.reason".to_string()
             }
         };
         (name, attrs)
@@ -413,6 +455,10 @@ pub fn summarize() -> MetricsSummary {
                 "always_approved" => summary.approvals_always += 1,
                 _ => {}
             },
+            MetricEvent::PlanReason { .. } => {
+                // Planning decisions are traced for observability but do not
+                // participate in the high-level counts shown by `kirkforge metrics`.
+            }
         }
     }
     summary
@@ -666,5 +712,58 @@ mod tests {
         // Ensure no endpoint is set for this test.
         std::env::remove_var("OTEL_EXPORTER_OTLP_ENDPOINT");
         assert!(init_telemetry().is_none());
+    }
+
+    #[test]
+    fn test_plan_reason_round_trip() {
+        with_test_path(|_dir, _lock| {
+            record(MetricEvent::PlanReason {
+                decision_kind: PlanDecisionKind::ToolSelect,
+                reason: "model-emitted tool call".into(),
+                related_id: Some("call-1".into()),
+                confidence: 1.0,
+            });
+
+            let events = read_events();
+            assert_eq!(events.len(), 1);
+            assert!(
+                matches!(
+                    events[0],
+                    MetricEvent::PlanReason {
+                        decision_kind: PlanDecisionKind::ToolSelect,
+                        ref reason,
+                        related_id: Some(ref id),
+                        confidence,
+                    } if reason == "model-emitted tool call" && id == "call-1" && confidence == 1.0
+                ),
+                "got {:?}",
+                events[0]
+            );
+        });
+    }
+
+    #[cfg(feature = "otel")]
+    #[test]
+    fn test_otel_attrs_from_plan_reason() {
+        let event = MetricEvent::PlanReason {
+            decision_kind: PlanDecisionKind::ContextTruncate,
+            reason: "max_tool_result_chars=4000 hit".into(),
+            related_id: Some("call-42".into()),
+            confidence: 1.0,
+        };
+        let (name, attrs) = event.to_otel_attrs();
+        assert_eq!(name, "plan.reason");
+        assert!(attrs.iter().any(|kv| {
+            kv.key.as_str() == "plan.decision_kind"
+                && kv.value.as_str().as_ref() == "ContextTruncate"
+        }));
+        assert!(attrs.iter().any(|kv| {
+            kv.key.as_str() == "plan.reason"
+                && kv.value.as_str().as_ref() == "max_tool_result_chars=4000 hit"
+        }));
+        assert!(attrs.iter().any(|kv| kv.key.as_str() == "plan.confidence"));
+        assert!(attrs.iter().any(|kv| {
+            kv.key.as_str() == "plan.related_id" && kv.value.as_str().as_ref() == "call-42"
+        }));
     }
 }

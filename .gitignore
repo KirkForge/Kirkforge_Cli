@@ -12,13 +12,15 @@ dist/
 *~
 .DS_Store
 
-# LLM/agent session state and per-machine instructions
-# These are internal to the operator/session and should never be tracked.
-state.md
+# LLM/agent per-machine instructions (internal to the operator/session).
+# NOTE: AGENTS.md, state.md are TRACKED (worker contract + repo state). Do not ignore them.
 review.md
 .claude/
-AGENTS.md
 CLAUDE.md
+
+# Agent work files (per-session, not tracked — per AGENTS.md worker contract)
+workplan.md
+lessons.md
 
 # Banned-tool output dirs — kept ignored to block recurrence (gitnexus/graphify
 # are uninstalled & banned; these patterns ensure the dirs can't sneak back in).

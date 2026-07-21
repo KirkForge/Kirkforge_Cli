@@ -18,9 +18,8 @@
 //! NOTE: These tests were copied verbatim from the original Plugin3
 //! repo (P0 restoration). They check the original Plugin3 repo's
 //! README format (a "State" table with a "Tests | N passing" row).
-//! The CLI workspace's README does not have this table. Both tests
-//! are marked #[ignore] because they test the original Plugin3
-//! repo's README format, not the CLI workspace's.
+//! Adapted for the CLI workspace: reads crates/plugin3-core/README.md
+//! instead of the workspace root README.md.
 
 use std::path::{Path, PathBuf};
 
@@ -83,6 +82,11 @@ fn count_test_attrs(files: &[PathBuf]) -> usize {
     total
 }
 
+fn readme_path() -> PathBuf {
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    manifest.join("README.md")
+}
+
 fn parse_readme_test_count(readme: &str) -> Option<usize> {
     // ponytail: README row format is `| Tests     | <N> passing ... |`.
     // Match the leading `| Tests` cell, then read the next pipe-
@@ -108,18 +112,24 @@ fn parse_readme_test_count(readme: &str) -> Option<usize> {
     None
 }
 
-#[ignore = "original Plugin3 README format, not CLI workspace"]
 #[test]
 fn readme_test_count_matches_test_attributes() {
-    let root = repo_root();
-    let readme_path = root.join("README.md");
-    let readme =
-        std::fs::read_to_string(&readme_path).unwrap_or_else(|e| panic!("read README.md: {e}"));
+    let readme_path = readme_path();
+    let readme = std::fs::read_to_string(&readme_path)
+        .unwrap_or_else(|e| panic!("read {}: {e}", readme_path.display()));
 
     let claimed = parse_readme_test_count(&readme)
         .unwrap_or_else(|| panic!("README 'Tests | N passing' row missing or unparseable"));
 
     let mut files = Vec::new();
+    let root = readme_path
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf();
     walk_rs(&root.join("crates"), &mut files);
     let actual = count_test_attrs(&files);
 
@@ -143,17 +153,13 @@ fn readme_test_count_matches_test_attributes() {
     );
 }
 
-#[ignore = "original Plugin3 README format, not CLI workspace"]
 #[test]
 fn readme_test_count_row_present() {
-    // ponytail: a contributor who deletes the row silently breaks
-    // the drift test above with a panic rather than a stale-pass.
-    // This test pins the row's *presence* so the panic message is
-    // actionable.
-    let root = repo_root();
-    let readme = std::fs::read_to_string(root.join("README.md")).expect("README.md readable");
+    let readme_path = readme_path();
+    let readme = std::fs::read_to_string(&readme_path).expect("README.md readable");
     assert!(
         readme.lines().any(|l| l.trim().starts_with("| Tests")),
-        "README.md State table is missing the '| Tests | N passing' row",
+        "{} is missing the '| Tests | N passing' row",
+        readme_path.display(),
     );
 }

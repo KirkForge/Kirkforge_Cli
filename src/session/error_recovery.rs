@@ -11,6 +11,7 @@
 //! - Each retry includes the specific error message and a targeted hint
 //! - The retry count is tracked per-turn, not per-tool
 
+use crate::shared::backoff::retry_backoff;
 use crate::shared::{Message, Role};
 
 /// A recovery hint: what went wrong and how to fix it.
@@ -179,6 +180,15 @@ impl RetryTracker {
         self.retry_count < self.max_retries
     }
 
+    /// Sleep before the next retry using exponential backoff.
+    ///
+    /// The first retry waits ~1 s, the second ~2 s, the third ~4 s, etc.
+    /// `record_retry()` should be called *after* this returns.
+    pub async fn wait_before_retry(&self) {
+        let attempt = self.retry_count as u32 + 1;
+        tokio::time::sleep(retry_backoff(attempt)).await;
+    }
+
     /// Record a retry attempt.
     pub fn record_retry(&mut self) {
         self.retry_count += 1;
@@ -187,6 +197,32 @@ impl RetryTracker {
     /// Reset for a new turn.
     pub fn reset(&mut self) {
         self.retry_count = 0;
+    }
+}
+
+#[cfg(test)]
+mod retry_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_two_retries_wait_at_least_one_and_a_half_seconds() {
+        let tracker = RetryTracker {
+            retry_count: 0,
+            max_retries: 2,
+        };
+        let start = std::time::Instant::now();
+
+        tracker.wait_before_retry().await;
+        assert!(
+            start.elapsed() >= std::time::Duration::from_secs(1),
+            "first retry should wait at least 1 s"
+        );
+
+        tracker.wait_before_retry().await;
+        assert!(
+            start.elapsed() >= std::time::Duration::from_millis(1500),
+            "two retries should wait at least ~1.5 s total after the first sleep"
+        );
     }
 }
 

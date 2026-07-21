@@ -15,6 +15,7 @@ macro_rules! send_or_warn {
 }
 
 pub mod audit;
+pub mod backoff;
 pub mod metrics;
 pub mod minify;
 pub mod permission;

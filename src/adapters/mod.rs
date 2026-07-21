@@ -46,18 +46,7 @@ pub(crate) fn should_retry_status(status: u16) -> bool {
     status == 429 || (500..600).contains(&status)
 }
 
-/// Compute the backoff for retry `attempt` (1-indexed).
-///
-/// Uses exponential backoff starting at 1 s with a small deterministic
-/// jitter (up to 250 ms per attempt, capped at 1 s). The jitter is
-/// computed from the attempt number rather than a random source so tests
-/// are stable and no new dependency is required.
-pub(crate) fn retry_backoff(attempt: u32) -> std::time::Duration {
-    let shift = (attempt - 1).min(63);
-    let base_s = 1u64 << shift;
-    let jitter_ms = (attempt as u64).saturating_mul(250).min(1000);
-    std::time::Duration::from_millis(base_s.saturating_mul(1000).saturating_add(jitter_ms))
-}
+pub use crate::shared::backoff::retry_backoff;
 
 /// Send a model request with retries for transient failures.
 ///

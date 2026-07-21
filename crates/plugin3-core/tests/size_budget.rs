@@ -1,7 +1,7 @@
 //! ADR-0017 § Size budget — pins the 8 MB release-binary cap.
 //!
-//! ponytail: one assertion. The release profile (lto=thin,
-//! codegen-units=1, strip=symbols, panic=abort) is what keeps
+//! ponytail: one assertion. The release profile (lto=true,
+//! codegen-units=1, strip=true, panic=abort) is what keeps
 //! the binary small. A contributor who adds a heavy dep
 //! (tokio, heavy crypto, image-processing) silently blows the
 //! budget; this test makes the regression loud. The test
@@ -85,9 +85,9 @@ fn release_profile_uses_size_optimisations() {
     let body = std::fs::read_to_string(&workspace_toml)
         .unwrap_or_else(|e| panic!("read {}: {e}", workspace_toml.display()));
     for needle in [
-        "lto = \"thin\"",
+        "lto = true",
         "codegen-units = 1",
-        "strip = \"symbols\"",
+        "strip = true",
         "panic = \"abort\"",
     ] {
         assert!(

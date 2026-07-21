@@ -123,6 +123,9 @@
     },
     {
       "path": "packages/tool-tsc"
+    },
+    {
+      "path": "packages/tool-graphify"
     }
   ]
 }

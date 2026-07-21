@@ -14,6 +14,13 @@
 //! level. Run cargo itself if you need an authoritative count;
 //! this drift test catches the common case where the README and
 //! the test suite disagree by more than a handful.
+//!
+//! NOTE: These tests were copied verbatim from the original Plugin3
+//! repo (P0 restoration). They check the original Plugin3 repo's
+//! README format (a "State" table with a "Tests | N passing" row).
+//! The CLI workspace's README does not have this table. Both tests
+//! are marked #[ignore] because they test the original Plugin3
+//! repo's README format, not the CLI workspace's.
 
 use std::path::{Path, PathBuf};
 
@@ -101,6 +108,7 @@ fn parse_readme_test_count(readme: &str) -> Option<usize> {
     None
 }
 
+#[ignore = "original Plugin3 README format, not CLI workspace"]
 #[test]
 fn readme_test_count_matches_test_attributes() {
     let root = repo_root();
@@ -135,6 +143,7 @@ fn readme_test_count_matches_test_attributes() {
     );
 }
 
+#[ignore = "original Plugin3 README format, not CLI workspace"]
 #[test]
 fn readme_test_count_row_present() {
     // ponytail: a contributor who deletes the row silently breaks

@@ -51,7 +51,8 @@
     "@kirkforge/tool-lint-py": "*",
     "@kirkforge/tool-lint-imports": "*",
     "@kirkforge/core-policy": "*",
-    "@kirkforge/core-rbac": "*"
+    "@kirkforge/core-rbac": "*",
+    "@kirkforge/tool-graphify": "*"
   },
   "devDependencies": {},
   "files": [

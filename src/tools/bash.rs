@@ -98,10 +98,26 @@ impl Bash {
             status = child.wait() => status.map_err(|e| ShellError::Spawn(format!("docker wait: {e}")))?,
             _ = tokio::time::sleep(std::time::Duration::from_secs(timeout_secs)) => {
                 let _ = child.kill().await;
+                // Drain orphaned reader tasks with a short timeout so they
+                // don't linger as zombie tasks after the timeout path returns.
+                let _: Result<_, _> = tokio::time::timeout(
+                    std::time::Duration::from_secs(1),
+                    async {
+                        let _ = out_handle.await;
+                        let _ = err_handle.await;
+                    },
+                ).await;
                 return Err(ShellError::Cancelled);
             }
             _ = token.cancelled() => {
                 let _ = child.kill().await;
+                let _: Result<_, _> = tokio::time::timeout(
+                    std::time::Duration::from_secs(1),
+                    async {
+                        let _ = out_handle.await;
+                        let _ = err_handle.await;
+                    },
+                ).await;
                 return Err(ShellError::Cancelled);
             }
         };
@@ -504,5 +520,38 @@ mod tests {
             content.contains("timeout: 42s"),
             "dry-run output should include timeout: {content}"
         );
+    }
+
+    #[ignore = "requires Docker installed and running"]
+    #[tokio::test]
+    async fn bash_docker_executes_command_in_container() {
+        let docker_cfg = DockerConfig {
+            enabled: true,
+            image: "alpine:latest".into(),
+            memory: "512m".into(),
+            cpus: "1".into(),
+        };
+        let tool = Bash::new(
+            DenyList::default(),
+            PathGuard::default(),
+            false,
+            Some(docker_cfg),
+        );
+        let ctx = crate::tools::ToolContext::new();
+        let args = serde_json::json!({
+            "command": "echo hello",
+            "timeout": 30,
+        });
+
+        let outcome = tool.run(&ctx, args).await;
+        match outcome {
+            crate::shared::ToolOutcome::Success { content } => {
+                assert!(
+                    content.contains("hello"),
+                    "docker echo should output 'hello', got: {content}"
+                );
+            }
+            other => panic!("expected Success, got {other:?}"),
+        }
     }
 }

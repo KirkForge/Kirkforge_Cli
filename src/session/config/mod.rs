@@ -695,6 +695,7 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config {
             auto_approve: true,
+            seed: None,
             ..Default::default()
         };
 
@@ -721,6 +722,7 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config {
             dry_run: true,
+            seed: None,
             ..Default::default()
         };
 
@@ -1007,6 +1009,7 @@ mod tests {
     fn test_freeze_launch_sandbox_does_not_overwrite_explicit_empty() {
         let mut cfg = Config {
             sandbox_dir: Some(String::new()),
+            seed: None,
             ..Config::default()
         };
         let resolved = freeze_launch_sandbox(&mut cfg);
@@ -1021,6 +1024,7 @@ mod tests {
     fn test_freeze_launch_sandbox_does_not_overwrite_explicit_path() {
         let mut cfg = Config {
             sandbox_dir: Some("/srv/project".to_string()),
+            seed: None,
             ..Config::default()
         };
         let resolved = freeze_launch_sandbox(&mut cfg);
@@ -1040,6 +1044,7 @@ mod tests {
         let a = Config::default();
         let b = Config {
             default_model: "kimi-2.7k-coder:cloud".into(),
+            seed: None,
             ..Config::default()
         };
         let s = config_diff_summary(&a, &b);
@@ -1054,6 +1059,7 @@ mod tests {
             default_model: "kimi-2.7k-coder:cloud".into(),
             auto_approve: true,
             ollama_host: "https://gateway.example.com".into(),
+            seed: None,
             ..Config::default()
         };
         let s = config_diff_summary(&a, &b);
@@ -1068,6 +1074,7 @@ mod tests {
         let b = Config {
             deny_paths: vec!["/secret".into()],
             allowed_write_dirs: vec!["/tmp".into()],
+            seed: None,
             ..Config::default()
         };
         let s = config_diff_summary(&a, &b);
@@ -1200,6 +1207,7 @@ mod tests {
             memory_enabled: false,
             memory_max_tokens: 250,
             memory_top_n: 5,
+            seed: None,
             ..Config::default()
         };
         let s = config_diff_summary(&a, &b);
@@ -1235,6 +1243,7 @@ mod tests {
         let a = Config::default();
         let b = Config {
             checkpoint_interval_messages: 12,
+            seed: None,
             ..Config::default()
         };
         let s = config_diff_summary(&a, &b);
@@ -1248,6 +1257,7 @@ mod tests {
             reject_on_excess_plugin_trust: false,
             plugin_signature_validation: true,
             plugin_public_key_path: Some("/tmp/key.pub".into()),
+            seed: None,
             ..Config::default()
         };
         let s = config_diff_summary(&a, &b);
@@ -1383,6 +1393,7 @@ mod tests {
                 enabled: true,
                 ..Config::default().computer_use
             },
+            seed: None,
             ..Config::default()
         };
         let s = config_diff_summary(&a, &b);

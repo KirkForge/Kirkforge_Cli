@@ -17,6 +17,7 @@ pub struct GeminiAdapter {
     api_base: String,
     client: reqwest::Client,
     json_mode: bool,
+    seed: Option<u64>,
     timeout_secs: u64,
 }
 
@@ -27,6 +28,7 @@ impl GeminiAdapter {
             api_base: ollama_host.trim_end_matches('/').to_string(),
             client: super::build_reqwest_client(),
             json_mode: false,
+            seed: None,
             timeout_secs,
         }
     }
@@ -50,6 +52,10 @@ impl ModelAdapter for GeminiAdapter {
         self.json_mode = json_mode;
     }
 
+    fn set_seed(&mut self, seed: Option<u64>) {
+        self.seed = seed;
+    }
+
     async fn stream(
         &self,
         messages: &[Message],
@@ -62,6 +68,7 @@ impl ModelAdapter for GeminiAdapter {
             tools,
             true,
             self.json_mode,
+            self.seed,
         );
         let url = format!("{}/api/chat", self.api_base);
 

@@ -27,6 +27,7 @@ pub struct AnthropicVertexAdapter {
     service_account_path: Option<std::path::PathBuf>,
     client: reqwest::Client,
     json_mode: bool,
+    seed: Option<u64>,
     timeout_secs: u64,
 }
 
@@ -45,6 +46,7 @@ impl AnthropicVertexAdapter {
             service_account_path,
             client: super::build_reqwest_client(),
             json_mode: false,
+            seed: None,
             timeout_secs,
         }
     }
@@ -86,12 +88,22 @@ impl ModelAdapter for AnthropicVertexAdapter {
         self.json_mode = json_mode;
     }
 
+    fn set_seed(&mut self, seed: Option<u64>) {
+        self.seed = seed;
+    }
+
     async fn stream(
         &self,
         messages: &[Message],
         tools: &[crate::shared::ToolDef],
     ) -> anyhow::Result<tokio::sync::mpsc::Receiver<StreamEvent>> {
-        let body = anthropic::build_anthropic_body(&self.model_id, messages, tools, self.json_mode);
+        let body = anthropic::build_anthropic_body(
+            &self.model_id,
+            messages,
+            tools,
+            self.json_mode,
+            self.seed,
+        );
         let url = self.endpoint();
         let token = self.access_token().await?;
 

@@ -190,6 +190,7 @@ fn make_config(auto_approve: bool) -> Config {
         gcp_project_id: String::new(),
         gcp_region: "us-central1".into(),
         computer_use: crate::shared::ComputerUseConfig::default(),
+        seed: None,
     }
 }
 
@@ -2980,6 +2981,109 @@ async fn test_parallel_tool_batch_runs_concurrently() {
         .collect();
     assert_eq!(results.len(), 2, "both sleep calls should produce results");
     assert!(results.iter().all(|(_, o)| *o == "done"));
+}
+
+/// Deterministic mode (--seed) must produce the same tool-call sequence
+/// when run twice with the same seed. The model's *content* may still
+/// vary by provider, but the tool-call *sequence* must be reproducible.
+#[tokio::test]
+async fn test_deterministic_mode_produces_same_tool_sequence() {
+    let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
+
+    // Build config with seed=42
+    let mut cfg = make_config(true);
+    cfg.seed = Some(42);
+
+    // Helper to build a pair of sleeping tools
+    let make_tools = || -> Vec<Arc<dyn Tool>> {
+        vec![
+            Arc::new(SleepingTool {
+                def: ToolDef {
+                    name: "sleep",
+                    description: "sleep",
+                    parameters: serde_json::json!({"type": "object", "properties": {}}),
+                },
+                sleep_ms: 10,
+                call_count: Arc::new(Mutex::new(0)),
+                start_tx: Arc::new(std::sync::Mutex::new(None)),
+            }),
+            Arc::new(SleepingTool {
+                def: ToolDef {
+                    name: "sleep",
+                    description: "sleep",
+                    parameters: serde_json::json!({"type": "object", "properties": {}}),
+                },
+                sleep_ms: 10,
+                call_count: Arc::new(Mutex::new(0)),
+                start_tx: Arc::new(std::sync::Mutex::new(None)),
+            }),
+        ]
+    };
+
+    let events = vec![
+        StreamEvent::ToolCall(ToolInvocation {
+            id: "call-1".into(),
+            name: "sleep".into(),
+            arguments: serde_json::json!({}),
+        }),
+        StreamEvent::ToolCall(ToolInvocation {
+            id: "call-2".into(),
+            name: "sleep".into(),
+            arguments: serde_json::json!({}),
+        }),
+        StreamEvent::Done {
+            finish_reason: FinishReason::ToolCalls,
+            usage: None,
+        },
+    ];
+
+    // Run twice with the same seed — each run gets its own adapter
+    // so call_count is not shared.
+    let mut exe1 = make_executor(
+        Box::new(MockAdapter::new(events.clone(), make_info())),
+        make_tools(),
+        cfg.clone(),
+    );
+    let events1 = exe1
+        .run_turn_collecting("run with seed 42", &approval_tx, never_cancelled())
+        .await
+        .unwrap();
+
+    let mut exe2 = make_executor(
+        Box::new(MockAdapter::new(events, make_info())),
+        make_tools(),
+        cfg,
+    );
+    let events2 = exe2
+        .run_turn_collecting("run with seed 42 again", &approval_tx, never_cancelled())
+        .await
+        .unwrap();
+
+    // Extract tool-call sequences: (name, success) pairs
+    let seq1: Vec<(&str, bool)> = events1
+        .iter()
+        .filter_map(|e| match e {
+            TurnEvent::ToolResult { name, success, .. } => Some((name.as_str(), *success)),
+            _ => None,
+        })
+        .collect();
+    let seq2: Vec<(&str, bool)> = events2
+        .iter()
+        .filter_map(|e| match e {
+            TurnEvent::ToolResult { name, success, .. } => Some((name.as_str(), *success)),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(
+        seq1, seq2,
+        "deterministic mode must produce the same tool-call sequence on repeated runs"
+    );
+    assert_eq!(seq1.len(), 2, "both sleep calls should produce results");
+    assert!(
+        seq1.iter().all(|(_, s)| *s),
+        "all tool calls should succeed"
+    );
 }
 
 /// A `[read_file(X), write_file(X)]` batch in input order must pass the

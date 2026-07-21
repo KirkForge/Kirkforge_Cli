@@ -280,6 +280,7 @@ mod tests {
     fn test_config_with_rules(rules: Vec<PermissionRule>) -> crate::shared::Config {
         crate::shared::Config {
             permission_rules: rules,
+            seed: None,
             ..crate::shared::Config::default()
         }
     }

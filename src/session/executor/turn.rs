@@ -953,16 +953,32 @@ impl Executor {
         // Phase 2 — Run: spawn one task per non-file call. File calls are
         // run sequentially in Phase 3 so the read-before-edit gate can observe
         // reads before edits in the same batch.
+        //
+        // When deterministic mode is active (--seed), skip tokio::spawn and
+        // run all calls sequentially to eliminate nondeterminism from task
+        // scheduling. The tool-call *sequence* is what matters for regression
+        // testing; the model's output content may still vary by provider.
         let mut running: Vec<RunningTask> = Vec::with_capacity(prepared.len());
         let mut deferred_file_calls: Vec<PreparedCall> = Vec::new();
+        let mut results: std::collections::HashMap<usize, (ToolInvocation, ToolOutcome)> =
+            std::collections::HashMap::with_capacity(prepared.len());
+        let deterministic = self.is_deterministic();
         for prep in prepared {
             if prep.resolved_path.is_some() {
                 deferred_file_calls.push(prep);
                 continue;
             }
             let idx = prep.idx;
-            let handle = tokio::spawn(run_prepared_call(prep));
-            running.push((idx, handle));
+            if deterministic {
+                // Run sequentially — no tokio::spawn, no concurrency.
+                let outcome = run_prepared_call(prep).await;
+                if let Some((invocation, result)) = outcome {
+                    results.insert(idx, (invocation, result));
+                }
+            } else {
+                let handle = tokio::spawn(run_prepared_call(prep));
+                running.push((idx, handle));
+            }
             // Yield so the just-spawned task can start. If the user cancelled
             // while we were pre-gating, the next iteration sees the flag and
             // stops spawning remaining calls. This preserves the sequential
@@ -974,9 +990,7 @@ impl Executor {
             }
         }
 
-        // Collect completed results into a map keyed by original index.
-        let mut results: std::collections::HashMap<usize, (ToolInvocation, ToolOutcome)> =
-            std::collections::HashMap::with_capacity(running.len() + deferred_file_calls.len());
+        // Collect completed results from spawned tasks into the map.
         for (idx, handle) in running {
             if let Ok(Some(pair)) = handle.await {
                 results.insert(idx, pair);

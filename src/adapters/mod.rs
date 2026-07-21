@@ -215,6 +215,13 @@ pub trait ModelAdapter: Send + Sync {
     /// session.
     fn set_json_mode(&mut self, _json_mode: bool) {}
 
+    /// Configure deterministic-mode seed. Default no-op; adapters
+    /// that support a `seed` field in the request body override this.
+    /// When set, the adapter should pin temperature=0 and pass the
+    /// seed to the provider. Called once at construction by the
+    /// executor with `config.seed`.
+    fn set_seed(&mut self, _seed: Option<u64>) {}
+
     async fn stream(
         &self,
         messages: &[crate::shared::Message],
@@ -343,6 +350,7 @@ fn build_ollama_chat_body(
     tools: &[crate::shared::ToolDef],
     stream: bool,
     json_mode: bool,
+    seed: Option<u64>,
 ) -> serde_json::Value {
     let ollama_messages: Vec<serde_json::Value> = messages
         .iter()
@@ -436,6 +444,14 @@ fn build_ollama_chat_body(
         body["format"] = serde_json::Value::String("json".into());
     }
 
+    // Deterministic mode: pin temperature=0 and set seed via options.
+    if let Some(s) = seed {
+        body["options"] = serde_json::json!({
+            "temperature": 0,
+            "seed": s,
+        });
+    }
+
     body
 }
 
@@ -457,6 +473,7 @@ fn build_openai_compat_body(
     messages: &[crate::shared::Message],
     tools: &[crate::shared::ToolDef],
     json_mode: bool,
+    seed: Option<u64>,
 ) -> serde_json::Value {
     // Pre-compute the indices of the prefix messages that get the
     // cache_control marker. The "prefix" is everything except the
@@ -562,6 +579,13 @@ fn build_openai_compat_body(
         if !tools.is_empty() {
             body["tool_choice"] = serde_json::Value::String("auto".into());
         }
+    }
+
+    // Deterministic mode: pin temperature=0 and set seed.
+    // OpenAI-compat servers accept `seed` at the top level.
+    if let Some(s) = seed {
+        body["temperature"] = serde_json::json!(0.0);
+        body["seed"] = serde_json::json!(s);
     }
 
     body

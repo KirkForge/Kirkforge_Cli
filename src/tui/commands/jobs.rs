@@ -723,6 +723,7 @@ mod tests {
     fn state_auto_approve() -> AppState {
         state_with_config(Config {
             scheduled_bash_auto_approve: true,
+            seed: None,
             ..Default::default()
         })
     }

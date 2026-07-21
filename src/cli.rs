@@ -101,6 +101,14 @@ pub enum Command {
         /// Force line-mode (no TUI) even when stdout is a terminal.
         #[arg(long)]
         no_tui: bool,
+
+        /// Deterministic mode: pin temperature=0 and set model seed for
+        /// reproducible planning. Best-effort — model providers don't
+        /// guarantee identical outputs even with the same seed, but the
+        /// tool-call *sequence* is reproducible enough for regression
+        /// testing. Also forces sequential tool dispatch (no tokio::spawn).
+        #[arg(long)]
+        seed: Option<u64>,
     },
     /// Print shell completion script and exit.
     /// Example: kirkforge completions bash >> ~/.bashrc

@@ -155,6 +155,9 @@ impl Executor {
         // mocks) silently ignore the flag.
         adapter.set_json_mode(cfg.json_mode);
 
+        // Push the deterministic-mode seed down to the active adapter.
+        adapter.set_seed(cfg.seed);
+
         let adapter_swap = AdapterSwap::new(
             model_name.clone(),
             cfg.ollama_host.clone(),
@@ -245,6 +248,13 @@ impl Executor {
             dry_run,
             task_spawner: self.task_spawner.clone(),
         }
+    }
+
+    /// Whether deterministic mode is active. When true, the parallel
+    /// tool batch runs sequentially (no `tokio::spawn`) to eliminate
+    /// nondeterminism from task scheduling.
+    fn is_deterministic(&self) -> bool {
+        read_shared_config(&self.config).seed.is_some()
     }
 
     /// Construct the in-process task spawner from the executor's model,

@@ -503,6 +503,13 @@ pub struct Config {
     /// Headless-Chrome / computer-use tool configuration.
     #[serde(default)]
     pub computer_use: ComputerUseConfig,
+
+    /// Deterministic mode seed. When set, temperature is pinned to 0 and
+    /// the model seed is passed in the request body (for providers that
+    /// support it). Also forces sequential tool dispatch. Best-effort
+    /// determinism — model providers don't guarantee identical outputs.
+    #[serde(default, skip_serializing)]
+    pub seed: Option<u64>,
 }
 
 /// Headless Chrome configuration for the `computer_use` tool.
@@ -833,6 +840,7 @@ impl Default for Config {
             gcp_project_id: String::new(),
             gcp_region: default_gcp_region(),
             computer_use: ComputerUseConfig::default(),
+            seed: None,
         }
     }
 }

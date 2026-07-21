@@ -290,6 +290,7 @@ prompt = "hello"
             m
         },
         enabled_plugins: vec!["workspace-demo".to_string()],
+        seed: None,
         ..Config::default()
     };
 
@@ -308,6 +309,7 @@ fn load_workspace_plugins_warns_for_missing_source() {
             m
         },
         enabled_plugins: vec!["missing".to_string()],
+        seed: None,
         ..Config::default()
     };
 
@@ -439,6 +441,7 @@ command = "hello.sh"
             .into_iter()
             .collect(),
         enabled_plugins: vec!["demo".to_string()],
+        seed: None,
         ..Config::default()
     };
 
@@ -696,6 +699,7 @@ fn default_plugin_sources_are_present_and_loadable() {
     let cfg = Config {
         plugin_sources: base.plugin_sources,
         enabled_plugins: expected.iter().map(|s| s.to_string()).collect(),
+        seed: None,
         ..Config::default()
     };
 

@@ -966,6 +966,7 @@ mod tests {
         // The helper must not overwrite it.
         let mut config_unsandboxed = crate::shared::Config {
             sandbox_dir: Some(String::new()),
+            seed: None,
             ..crate::shared::Config::default()
         };
         freeze_launch_sandbox(&mut config_unsandboxed);

@@ -37,6 +37,7 @@ kirkforge-plugin-host = { path = "crates/kirkforge-plugin-host" }
 kirkforge-lsp = { path = "crates/kirkforge-lsp" }
 kirkforge-workflow = { path = "crates/kirkforge-workflow" }
 kirkforge-context-index = { path = "crates/kirkforge-context-index" }
+kirkforge-bench = { path = "crates/kirkforge-bench" }
 
 [dependencies]
 # TUI
@@ -124,6 +125,8 @@ kirkforge-lsp = { workspace = true }
 kirkforge-workflow = { workspace = true }
 # Repo-graph context index (tree-sitter-backed symbol extraction).
 kirkforge-context-index = { workspace = true }
+# Task-benchmark harness (TOML tasks, headless runs, metrics collection).
+kirkforge-bench = { workspace = true }
 # Headless Chrome CDP driver for the computer_use tool.
 headless_chrome = { version = "1", default-features = false }
 # SigV4 signing for Anthropic-on-Bedrock requests.
@@ -141,10 +144,10 @@ http = "1"
 url = "2"
 # Cache serialization uses serde_json (already a dependency) instead of
 # the unmaintained bincode crate.
+# Temp directory creation for benchmark harness.
+tempfile = "3"
 
 [dev-dependencies]
-# Test-only: create real temporary files for @-mention expansion tests
-tempfile = "3"
 # Property-based testing for edit-file diff application and other invariants.
 proptest = "1.6"
 # Statistical benchmarking harness for first-token latency.

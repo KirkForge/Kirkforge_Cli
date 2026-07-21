@@ -1,0 +1,9 @@
+name = "add_adr"
+difficulty = "hard"
+
+prompt = "Write an Architecture Decision Record (ADR) numbered 039 for the task-benchmark harness. Create the file at docs/adr/039-task-benchmark-harness.md following the existing ADR format. The ADR should document: Context (need measured agent capability), Decision (build kirkforge-bench with TOML tasks, BenchRunner, CI integration), Status (Accepted), and Consequences. Also update docs/adr/README.md to include the new ADR."
+
+[verify]
+type = "file_contains"
+path = "docs/adr/039-task-benchmark-harness.md"
+contains = "Status: Accepted"

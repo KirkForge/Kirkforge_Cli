@@ -1,0 +1,8 @@
+name = "add_cli_flag"
+difficulty = "medium"
+
+prompt = "Add a `--verbose` flag to the kirkforge CLI run subcommand that sets the log level to 'debug' when present. Add it to src/cli.rs in the Run variant and wire it through to the session in src/main/mod.rs."
+
+[verify]
+type = "command_exits_zero"
+command = "cargo clippy --all-targets -- -D warnings"

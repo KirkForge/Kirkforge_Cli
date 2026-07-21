@@ -292,6 +292,13 @@ async fn main() {
                 ))
             }
         }
+        Command::Bench {
+            tasks,
+            model,
+            output,
+            summary,
+            timeout,
+        } => handle_bench_command(tasks, model, output, summary, timeout).await,
     }
     .map_err(KirkForgeError::from);
 
@@ -301,6 +308,47 @@ async fn main() {
         eprintln!("kirkforge: {e}");
         std::process::exit(e.exit_code());
     }
+}
+
+async fn handle_bench_command(
+    tasks: std::path::PathBuf,
+    model: Option<String>,
+    output: Option<std::path::PathBuf>,
+    summary: Option<std::path::PathBuf>,
+    timeout: u64,
+) -> anyhow::Result<()> {
+    let config = kirkforge::session::config::load_or_create_config();
+    let model_name = model.unwrap_or_else(|| config.default_model.clone());
+    let bench_tasks = kirkforge_bench::load_tasks(&tasks)?;
+    if bench_tasks.is_empty() {
+        anyhow::bail!("no task files found in {}", tasks.display());
+    }
+    eprintln!(
+        "running {} benchmark tasks with model {}",
+        bench_tasks.len(),
+        model_name
+    );
+    let report =
+        kirkforge::session::bench::run_all(&bench_tasks, &model_name, &config, timeout).await;
+    eprintln!(
+        "{}/{} tasks passed ({:.0}%)",
+        report.summary.tasks_passed,
+        report.summary.tasks_run,
+        report.summary.success_rate * 100.0
+    );
+    let json_path = output.unwrap_or_else(|| {
+        std::path::PathBuf::from(format!(
+            "bench-report-{}.json",
+            chrono::Local::now().format("%Y%m%d-%H%M%S")
+        ))
+    });
+    kirkforge_bench::write_report(&report, &json_path)?;
+    eprintln!("report written to {}", json_path.display());
+    if let Some(md_path) = summary {
+        kirkforge_bench::write_markdown_summary(&report, &md_path)?;
+        eprintln!("summary written to {}", md_path.display());
+    }
+    Ok(())
 }
 
 fn handle_sessions_command(

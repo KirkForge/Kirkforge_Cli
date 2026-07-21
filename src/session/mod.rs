@@ -5,6 +5,7 @@ pub mod access;
 pub mod adapter_swap;
 pub mod bash_jobs;
 pub mod bash_runner;
+pub mod bench;
 pub mod carryover;
 pub mod config;
 pub mod conversation;

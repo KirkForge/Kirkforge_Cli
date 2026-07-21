@@ -1,0 +1,8 @@
+name = "add_test_for_function"
+difficulty = "easy"
+
+prompt = "Add a unit test for the `parse_decl` function in crates/kirkforge-context-index/src/lib.rs that verifies it extracts `foo` from `fn foo() {}`."
+
+[verify]
+type = "test_passes"
+command = "cargo test -p kirkforge-context-index"

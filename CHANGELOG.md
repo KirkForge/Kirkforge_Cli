@@ -18,6 +18,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Release workflow now verifies CI by waiting for each individual job check-run to succeed, instead of looking for a non-existent single `CI` check-run (#10, #11).
 - Release workflow now builds with `--workspace` so all bundled binaries (`kfd`, `plugin3`, `stratum`, `kirkforge-video`) are produced for every target (#12).
 - Release workflow Windows archive step now expands the archive name variable correctly so the zip artifact is produced (#13).
+- Plugin3 `readme_drift.rs` tests adapted to CLI workspace: reads `crates/plugin3-core/README.md` instead of workspace root README. Added State table with test count to `crates/plugin3-core/README.md`.
+- Plugin3 `size_budget.rs` adapted to CLI workspace release profile (`lto = true`, `strip = true` instead of `lto = "thin"`, `strip = "symbols"`).
+- Plugin3 `build_spec_drift.rs` (33 tests) marked `#[ignore]` — tests the original Plugin3 repo's build spec, not the CLI workspace's.
+- Tool-graphify added to root `tsconfig.json`, orchestrator `tsconfig.json`, and orchestrator `package.json` project references so `tsc --build` resolves `@kirkforge/tool-graphify`.
+- Deterministic mode: fixed results being shadowed by a second `results` HashMap in the collect loop when `--seed` forces sequential dispatch.
+- Main branch syntax error from botched P2-4 merge resolved (dangling `})` + `];` in `tests/mod.rs`).
 
 ## [0.2.0] - 2026-07-19
 

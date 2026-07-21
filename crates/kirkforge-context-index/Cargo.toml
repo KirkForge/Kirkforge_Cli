@@ -1,0 +1,11 @@
+[package]
+name = "kirkforge-context-index"
+version = "0.1.0"
+edition = "2021"
+description = "Tree-sitter-backed symbol/import/call-graph index for context retrieval"
+
+[dependencies]
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+tracing = "0.1"
+walkdir = "2"

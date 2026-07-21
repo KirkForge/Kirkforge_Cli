@@ -2036,6 +2036,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "kirkforge-context-index"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "tracing",
+ "walkdir",
+]
+
+[[package]]
 name = "kirkforge-draw"
 version = "0.2.0"
 dependencies = [

@@ -2,9 +2,9 @@
 
 ## Current baseline: v0.3.0 (2026-07-21)
 
-**`dev` at `cd35070`.** P2-6 (git-worktree-per-session + Docker execution) landed. All 7 short-term production items from CLI-workorder.md are now on dev. ADR-035 (git worktree) and ADR-036 (Docker) added.
+**`dev` at `035586f`.** All 7 P2 short-term items shipped + tested. P1-long-1 (repo-graph context retrieval) scaffolded. 55 ADRs.
 
-### What shipped in v0.3.0
+### What shipped
 
 | Item | What |
 |---|---|
@@ -16,13 +16,23 @@
 | P2-5 | `--seed <u64>` deterministic mode. ADR-030. |
 | P2-6a | `--worktree` flag: isolated git worktree per session. ADR-035. |
 | P2-6b | `--docker` flag + `[docker]` config: bash in Docker containers. ADR-036. |
+| P1-long-1 | `crates/kirkforge-context-index/` scaffolded with line-based symbol extraction. ADR-037 (Experimental). |
 
-### Gates (v0.3.0 baseline)
+### 2.9 gaps closed
 
-- `cargo test --lib` = **1297 passed, 0 failed**
+| Gap | Fix |
+|---|---|
+| Worktree untested | `worktree_create_write_file_drop_cleanup` test — creates temp git repo, creates worktree, writes file, drops, verifies cleanup. |
+| Docker untested | `bash_docker_executes_command_in_container` — `#[ignore = "requires Docker"]` test runs `echo hello` in alpine:latest. |
+| run_docker task-orphaning | `out_handle`/`err_handle` awaited with 1s timeout after `child.kill()` on timeout/cancellation paths. |
+
+### Gates
+
+- `cargo test --lib` = **1301 passed, 0 failed, 1 ignored** (+4 new: worktree + 3 context-index)
+- `cargo test -p kirkforge-context-index` = 3 passed, 0 failed
 - `cargo clippy --all-targets -- -D warnings` = clean
 - `cargo fmt --check` = clean
-- 50 ADRs (18 native 3-digit + 18 vendored 4-digit + 14 new: 019-036)
+- 55 ADRs (18 native 3-digit + 18 vendored 4-digit + 19 new: 019-037)
 
 ### Remaining (long-term, path to A agent)
 
@@ -32,7 +42,7 @@
 | Unify two verifier buses | 1-2 weeks | ADR-028 design done |
 | Context management depth | 1-2 weeks | ADR-027 design done |
 | Workflow parallel steps | 2-3 days | Not started |
-| Repo-graph context retrieval | 3-4 weeks | Not started |
+| Repo-graph context retrieval | 3-4 weeks | Phase 1 scaffolded (line-based), Phase 2-3 future |
 | Task-benchmark harness | 2-3 weeks | Not started |
 | Execution replay + time-travel | 2-3 weeks | Not started |
 | Computer-use depth | 2-3 weeks | Not started |

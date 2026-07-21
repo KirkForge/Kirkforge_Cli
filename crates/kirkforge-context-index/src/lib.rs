@@ -159,10 +159,8 @@ mod tests {
 
     #[test]
     fn index_file_extracts_fn_and_struct() {
-        let tmp = std::env::temp_dir().join(format!(
-            "kirkforge-context-test-{}",
-            std::process::id()
-        ));
+        let tmp =
+            std::env::temp_dir().join(format!("kirkforge-context-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&tmp);
         fs::create_dir_all(&tmp).unwrap();
 
@@ -193,19 +191,13 @@ mod tests {
     #[test]
     fn retrieve_returns_matching_symbols() {
         let mut idx = ContextIndex::new();
-        let tmp = std::env::temp_dir().join(format!(
-            "kirkforge-context-retrieve-{}",
-            std::process::id()
-        ));
+        let tmp =
+            std::env::temp_dir().join(format!("kirkforge-context-retrieve-{}", std::process::id()));
         let _ = fs::remove_dir_all(&tmp);
         fs::create_dir_all(&tmp).unwrap();
 
         let src = tmp.join("mod.rs");
-        fs::write(
-            &src,
-            "fn foo_bar() {}\nfn baz() {}\nfn foo_baz() {}\n",
-        )
-        .unwrap();
+        fs::write(&src, "fn foo_bar() {}\nfn baz() {}\nfn foo_baz() {}\n").unwrap();
         idx.index_file(&src, &fs::read_to_string(&src).unwrap())
             .unwrap();
 
@@ -216,10 +208,8 @@ mod tests {
 
     #[test]
     fn index_dir_walks_rs_files() {
-        let tmp = std::env::temp_dir().join(format!(
-            "kirkforge-context-dir-{}",
-            std::process::id()
-        ));
+        let tmp =
+            std::env::temp_dir().join(format!("kirkforge-context-dir-{}", std::process::id()));
         let _ = fs::remove_dir_all(&tmp);
         fs::create_dir_all(&tmp).unwrap();
         fs::create_dir_all(&tmp.join("sub")).unwrap();

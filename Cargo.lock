@@ -2002,6 +2002,7 @@ dependencies = [
  "hex",
  "http 1.4.1",
  "ignore",
+ "kirkforge-bench",
  "kirkforge-context-index",
  "kirkforge-lsp",
  "kirkforge-plugin",
@@ -2034,6 +2035,17 @@ dependencies = [
  "url",
  "wiremock",
  "yup-oauth2",
+]
+
+[[package]]
+name = "kirkforge-bench"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "toml",
 ]
 
 [[package]]

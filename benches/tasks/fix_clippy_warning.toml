@@ -1,0 +1,8 @@
+name = "fix_clippy_warning"
+difficulty = "easy"
+
+prompt = "Fix the clippy warning `new_without_default` on `ContextIndex` in crates/kirkforge-context-index/src/lib.rs by adding a `Default` impl that delegates to `Self::new()`."
+
+[verify]
+type = "command_exits_zero"
+command = "cargo clippy -p kirkforge-context-index -- -D warnings"

@@ -1,0 +1,8 @@
+name = "refactor_extract_function"
+difficulty = "medium"
+
+prompt = "Refactor the duplicate context_index building code in src/main/mod.rs: extract the logic into a helper function `build_context_index(sandbox_dir: Option<&str>) -> Option<ContextIndex>` and call it from both the TUI and line-mode branches instead of duplicating the block."
+
+[verify]
+type = "command_exits_zero"
+command = "cargo clippy --all-targets -- -D warnings"

@@ -167,4 +167,26 @@ pub enum Command {
         #[arg(long, conflicts_with = "foreground")]
         stop: bool,
     },
+    /// Run benchmark tasks and collect metrics.
+    Bench {
+        /// Directory containing TOML task definitions.
+        #[arg(long, default_value = "benches/tasks")]
+        tasks: PathBuf,
+
+        /// Model to benchmark.
+        #[arg(long)]
+        model: Option<String>,
+
+        /// Write JSON report to this file.
+        #[arg(long)]
+        output: Option<PathBuf>,
+
+        /// Write markdown summary to this file.
+        #[arg(long)]
+        summary: Option<PathBuf>,
+
+        /// Timeout per task in seconds.
+        #[arg(long, default_value_t = 300)]
+        timeout: u64,
+    },
 }

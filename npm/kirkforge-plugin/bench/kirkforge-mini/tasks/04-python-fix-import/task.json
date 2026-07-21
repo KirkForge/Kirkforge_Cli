@@ -1,0 +1,10 @@
+{
+  "id": "04-python-fix-import",
+  "description": "The script at parse.py imports a deprecated library. Replace the deprecated import with the modern equivalent and update the call site accordingly. Do not change the function signature of `parse()`. The script should run end-to-end on a sample input file.",
+  "language": "python",
+  "expectedFiles": ["parse.py"],
+  "validatorCommand": "bash validator.sh",
+  "passCondition": "exit 0",
+  "difficulty": "medium",
+  "estimatedTokens": 400
+}

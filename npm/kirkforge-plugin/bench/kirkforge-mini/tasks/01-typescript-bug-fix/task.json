@@ -1,0 +1,10 @@
+{
+  "id": "01-typescript-bug-fix",
+  "description": "Fix the off-by-one bug in the `clamp` function. The function should return `min` when `value < min` and `max` when `value > max`, but currently returns the unmodified `value` at the boundaries. Do not change the function signature.",
+  "language": "typescript",
+  "expectedFiles": ["src/clamp.ts"],
+  "validatorCommand": "bash validator.sh",
+  "passCondition": "exit 0",
+  "difficulty": "easy",
+  "estimatedTokens": 250
+}

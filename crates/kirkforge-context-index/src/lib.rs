@@ -36,6 +36,12 @@ pub struct ContextIndex {
     symbols: Vec<Symbol>,
 }
 
+impl Default for ContextIndex {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ContextIndex {
     pub fn new() -> Self {
         Self {

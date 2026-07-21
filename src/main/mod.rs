@@ -713,6 +713,60 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     // executor can observe live updates from SIGHUP or `/reload`.
     let shared_config = std::sync::Arc::new(std::sync::RwLock::new(config));
 
+    // ── Repo-graph context index (P1-long-1) ──
+    // Build a tree-sitter-backed symbol index from the sandbox directory.
+    // The index is passed to the executor's PromptBuilder so relevant
+    // symbols are injected into the system prompt before every turn.
+    let context_index = {
+        let cfg = kirkforge::shared::read_shared_config(&shared_config);
+        cfg.sandbox_dir.as_ref().and_then(|dir| {
+            let path = std::path::Path::new(dir);
+            if path.is_dir() {
+                let mut idx = kirkforge_context_index::ContextIndex::new();
+                match idx.index_dir(path) {
+                    Ok(()) => {
+                        let count = idx.symbols().len();
+                        tracing::info!(symbol_count = count, sandbox_dir = %dir, "built repo-graph context index");
+                        Some(idx)
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, sandbox_dir = %dir, "failed to build context index");
+                        None
+                    }
+                }
+            } else {
+                None
+            }
+        })
+    };
+
+    // ── Repo-graph context index (P1-long-1) ──
+    // Build a tree-sitter-backed symbol index from the sandbox directory.
+    // The index is passed to the executor's PromptBuilder so relevant
+    // symbols are injected into the system prompt before every turn.
+    let context_index = {
+        let cfg = kirkforge::shared::read_shared_config(&shared_config);
+        cfg.sandbox_dir.as_ref().and_then(|dir| {
+            let path = std::path::Path::new(dir);
+            if path.is_dir() {
+                let mut idx = kirkforge_context_index::ContextIndex::new();
+                match idx.index_dir(path) {
+                    Ok(()) => {
+                        let count = idx.symbols().len();
+                        tracing::info!(symbol_count = count, sandbox_dir = %dir, "built repo-graph context index");
+                        Some(idx)
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, sandbox_dir = %dir, "failed to build context index");
+                        None
+                    }
+                }
+            } else {
+                None
+            }
+        })
+    };
+
     // --- MCP tools ---
     let cfg_for_mcp = kirkforge::shared::read_shared_config(&shared_config).clone();
     if !cfg_for_mcp.mcp_servers.is_empty() {
@@ -780,6 +834,7 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
             system,
             undo_stack,
             &plugin_registry,
+            context_index,
         )
         .await
     } else {
@@ -795,6 +850,7 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
             no_color,
             &plugin_registry,
             session_id.to_string(),
+            context_index,
         )
         .await
     }
@@ -840,6 +896,7 @@ async fn run_line_mode(
     no_color: bool,
     plugin_registry: &kirkforge_plugin_host::PluginRegistry,
     session_id: String,
+    context_index: Option<kirkforge_context_index::ContextIndex>,
 ) -> anyhow::Result<()> {
     // If running in non-interactive mode (scripted), deny all approvals.
     // If running in line-mode interactive (no TUI), prompt on stderr and
@@ -861,6 +918,11 @@ async fn run_line_mode(
         executor.set_recovered_messages(messages);
     }
     executor.set_system_override(system.clone());
+
+    // Attach the repo-graph context index if one was built.
+    if let Some(idx) = context_index {
+        executor.set_context_index(idx);
+    }
 
     let (approval_tx, approval_rx) =
         mpsc::unbounded_channel::<session::executor::ApprovalRequest>();

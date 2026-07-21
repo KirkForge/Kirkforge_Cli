@@ -257,6 +257,14 @@ impl Executor {
         read_shared_config(&self.config).seed.is_some()
     }
 
+    /// Attach a repo-graph context index to the prompt builder.
+    /// Called once at session start after the index is built.
+    pub fn set_context_index(&mut self, idx: kirkforge_context_index::ContextIndex) {
+        let mut pb = crate::session::prompt::PromptBuilder::new();
+        pb = pb.with_context_index(idx);
+        self.prompt_builder = pb;
+    }
+
     /// Construct the in-process task spawner from the executor's model,
     /// config, and sandboxing state. Called once at construction.
     fn build_task_spawner(&mut self) {

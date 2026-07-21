@@ -2,7 +2,7 @@
 
 ## Current baseline: v0.3.0 (2026-07-21)
 
-**`dev` at `035586f`.** All 7 P2 short-term items shipped + tested. P1-long-1 (repo-graph context retrieval) scaffolded. 55 ADRs.
+**`dev` at `96a4cc9`.** All 7 P2 short-term items shipped + tested. P1-long-1 (repo-graph context retrieval) scaffolded. 55 ADRs.
 
 ### What shipped
 

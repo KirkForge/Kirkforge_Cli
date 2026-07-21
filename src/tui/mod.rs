@@ -130,6 +130,7 @@ pub async fn run_tui(
     system: Option<String>,
     undo_stack: Option<crate::tools::UndoStackRef>,
     plugin_registry: &kirkforge_plugin_host::PluginRegistry,
+    context_index: Option<kirkforge_context_index::ContextIndex>,
 ) -> anyhow::Result<()> {
     // ── Terminal setup ──
     enable_raw_mode()?;
@@ -397,6 +398,9 @@ pub async fn run_tui(
     // input. Without this, --system is silently dropped (was GPT 5.5
     // review finding #2).
     exe.set_system_override(system);
+    if let Some(idx) = context_index {
+        exe.set_context_index(idx);
+    }
     if let crate::session::conversation::OpenOutcome::Restored(messages) = open_outcome {
         exe.set_recovered_messages(messages);
     }

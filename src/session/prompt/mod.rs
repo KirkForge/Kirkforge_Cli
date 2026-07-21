@@ -10,6 +10,8 @@ use std::path::PathBuf;
 pub use compaction::CompactRequest;
 pub(crate) use compaction::{compact_to_budget, estimate_tokens};
 
+use kirkforge_context_index::ContextIndex;
+
 /// Number of trailing messages kept verbatim by automatic microcompaction.
 /// Mirrors `Config::preserve_recent_messages` semantics: the live user turn
 /// and the most recent assistant turn stay intact so the model does not lose
@@ -36,6 +38,9 @@ pub struct PromptBuilder {
     /// content hash) is passed to the adapter across turns so the provider can
     /// hit its KV-cache for the stable prefix.
     cached_system: Option<(SystemStemKey, Message)>,
+    /// Optional repo-graph context index for injecting relevant symbols
+    /// into the system prompt before every turn.
+    context_index: Option<ContextIndex>,
 }
 
 /// Hashable key for the memoised system prompt stem.
@@ -98,7 +103,15 @@ impl PromptBuilder {
             cache: HashMap::new(),
             system_override: None,
             cached_system: None,
+            context_index: None,
         }
+    }
+
+    /// Attach a repo-graph context index for injecting relevant symbols
+    /// into the system prompt before every turn.
+    pub fn with_context_index(mut self, idx: ContextIndex) -> Self {
+        self.context_index = Some(idx);
+        self
     }
 
     /// Install a full system-prompt override. The next `build()` call
@@ -296,6 +309,42 @@ impl PromptBuilder {
         Self::truncate_tool_results(&mut messages);
 
         Self::dedup_adjacent_tool_results(&mut messages);
+
+        // Inject relevant symbols from the repo-graph context index
+        // into the system message (first message in the assembled list).
+        if let Some(ref idx) = self.context_index {
+            let query = history
+                .iter()
+                .rev()
+                .find(|m| m.role == Role::User)
+                .map(|m| m.content.as_str())
+                .unwrap_or("");
+            if !query.is_empty() {
+                let relevant = idx.retrieve(query, 10);
+                if !relevant.is_empty() && !messages.is_empty() {
+                    let mut content = messages[0].content.clone();
+                    content.push_str("\n\n<relevant_symbols>\n");
+                    for sym in &relevant {
+                        content.push_str(&format!(
+                            "{} {} at {}:{}\n",
+                            match sym.kind {
+                                kirkforge_context_index::SymbolKind::Function => "fn",
+                                kirkforge_context_index::SymbolKind::Struct => "struct",
+                                kirkforge_context_index::SymbolKind::Enum => "enum",
+                                kirkforge_context_index::SymbolKind::Impl => "impl",
+                                kirkforge_context_index::SymbolKind::Module => "mod",
+                                kirkforge_context_index::SymbolKind::Use => "use",
+                            },
+                            sym.name,
+                            sym.file.display(),
+                            sym.line,
+                        ));
+                    }
+                    content.push_str("</relevant_symbols>");
+                    messages[0].content = content;
+                }
+            }
+        }
 
         let budget = model_max_tokens.saturating_sub(model_max_tokens / 10);
         if Self::estimated_tokens(&messages) <= budget {

@@ -23,13 +23,15 @@ pub struct Symbol {
 
 /// A tree-sitter-backed index of source-code symbols.
 ///
-/// Currently a stub: symbols are extracted via simple line-based heuristics
-/// (not tree-sitter yet). The real implementation will use tree-sitter
-/// grammars for Rust/TS/Python/Go to build symbol, import, and call graphs.
+/// Uses tree-sitter grammars to extract function, struct, enum, impl, module,
+/// and use declarations from Rust source files. The index is built by calling
+/// `index_file` or `index_dir`, then queried via `retrieve`.
 ///
-/// ponytail: line-based heuristic extraction. The upgrade path is
-/// tree-sitter grammar parsing. This stub exists to validate the API
-/// shape and the `retrieve` contract before adding the tree-sitter dep.
+/// ponytail: Rust-only symbol extraction via tree-sitter. The upgrade path is
+/// TS/Python/Go grammars (tree-sitter-{typescript,python,go}).
+///
+/// ponytail: substring-match retrieval. The upgrade path is embeddings or
+/// graph-walk retrieval.
 pub struct ContextIndex {
     symbols: Vec<Symbol>,
 }
@@ -41,63 +43,94 @@ impl ContextIndex {
         }
     }
 
-    /// Index a single file by scanning for declaration keywords.
+    /// Index a single Rust file using tree-sitter parsing.
     pub fn index_file(&mut self, path: &std::path::Path, content: &str) -> anyhow::Result<()> {
-        for (i, line) in content.lines().enumerate() {
-            let trimmed = line.trim();
-            let line_no = (i + 1) as u32;
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_rust::LANGUAGE.into())
+            .map_err(|e| anyhow::anyhow!("failed to set tree-sitter Rust language: {e}"))?;
 
-            if let Some(name) = Self::parse_decl(trimmed, "fn ") {
-                self.symbols.push(Symbol {
-                    name,
-                    kind: SymbolKind::Function,
-                    file: path.to_path_buf(),
-                    line: line_no,
-                    end_line: line_no,
-                });
-            } else if let Some(name) = Self::parse_decl(trimmed, "struct ") {
-                self.symbols.push(Symbol {
-                    name,
-                    kind: SymbolKind::Struct,
-                    file: path.to_path_buf(),
-                    line: line_no,
-                    end_line: line_no,
-                });
-            } else if let Some(name) = Self::parse_decl(trimmed, "enum ") {
-                self.symbols.push(Symbol {
-                    name,
-                    kind: SymbolKind::Enum,
-                    file: path.to_path_buf(),
-                    line: line_no,
-                    end_line: line_no,
-                });
-            } else if let Some(name) = Self::parse_decl(trimmed, "impl ") {
-                self.symbols.push(Symbol {
-                    name,
-                    kind: SymbolKind::Impl,
-                    file: path.to_path_buf(),
-                    line: line_no,
-                    end_line: line_no,
-                });
-            } else if let Some(name) = Self::parse_decl(trimmed, "mod ") {
-                self.symbols.push(Symbol {
-                    name,
-                    kind: SymbolKind::Module,
-                    file: path.to_path_buf(),
-                    line: line_no,
-                    end_line: line_no,
-                });
-            } else if let Some(name) = Self::parse_decl(trimmed, "use ") {
-                self.symbols.push(Symbol {
-                    name,
-                    kind: SymbolKind::Use,
-                    file: path.to_path_buf(),
-                    line: line_no,
-                    end_line: line_no,
-                });
+        let tree = parser
+            .parse(content, None)
+            .ok_or_else(|| anyhow::anyhow!("tree-sitter failed to parse {}", path.display()))?;
+
+        let root = tree.root_node();
+        let mut cursor = root.walk();
+        self.walk_tree(&mut cursor, content, path);
+        Ok(())
+    }
+
+    /// Recursively walk the tree-sitter tree and extract declarations.
+    fn walk_tree(
+        &mut self,
+        cursor: &mut tree_sitter::TreeCursor,
+        source: &str,
+        path: &std::path::Path,
+    ) {
+        loop {
+            let node = cursor.node();
+            let kind = node.kind();
+
+            let (symbol_kind, name_node) = match kind {
+                "function_item" => (SymbolKind::Function, node.child_by_field_name("name")),
+                "struct_item" => (SymbolKind::Struct, node.child_by_field_name("name")),
+                "enum_item" => (SymbolKind::Enum, node.child_by_field_name("name")),
+                "impl_item" => {
+                    // For impl, use the type name as the symbol name
+                    let type_node = node.child_by_field_name("type");
+                    (SymbolKind::Impl, type_node)
+                }
+                "mod_item" => {
+                    // Skip `mod foo;` (file-level module declarations) — only
+                    // capture `mod foo { ... }` blocks.
+                    if node.child_by_field_name("body").is_some() {
+                        (SymbolKind::Module, node.child_by_field_name("name"))
+                    } else {
+                        (SymbolKind::Module, None)
+                    }
+                }
+                "use_declaration" => {
+                    // Extract the full use path as the name
+                    (SymbolKind::Use, Some(node))
+                }
+                _ => (SymbolKind::Function, None),
+            };
+
+            if let Some(name_node) = name_node {
+                if symbol_kind != SymbolKind::Function || kind == "function_item" {
+                    let name = if kind == "use_declaration" {
+                        node.utf8_text(source.as_bytes())
+                            .unwrap_or("")
+                            .to_string()
+                    } else {
+                        name_node
+                            .utf8_text(source.as_bytes())
+                            .unwrap_or("")
+                            .to_string()
+                    };
+                    if !name.is_empty() {
+                        let start_line = node.start_position().row as u32 + 1;
+                        let end_line = node.end_position().row as u32 + 1;
+                        self.symbols.push(Symbol {
+                            name,
+                            kind: symbol_kind,
+                            file: path.to_path_buf(),
+                            line: start_line,
+                            end_line,
+                        });
+                    }
+                }
+            }
+
+            if cursor.goto_first_child() {
+                self.walk_tree(cursor, source, path);
+                cursor.goto_parent();
+            }
+
+            if !cursor.goto_next_sibling() {
+                break;
             }
         }
-        Ok(())
     }
 
     /// Index all `.rs` files under a directory.
@@ -131,24 +164,6 @@ impl ContextIndex {
             .take(k)
             .cloned()
             .collect()
-    }
-
-    /// Parse a declaration like `fn foo(...)` or `struct Bar` from a trimmed line.
-    fn parse_decl(trimmed: &str, keyword: &str) -> Option<String> {
-        if !trimmed.starts_with(keyword) {
-            return None;
-        }
-        let rest = &trimmed[keyword.len()..];
-        // Take up to the first non-identifier character: (, <, {, ;, whitespace, etc.
-        let name: String = rest
-            .chars()
-            .take_while(|c| c.is_alphanumeric() || *c == '_')
-            .collect();
-        if name.is_empty() {
-            None
-        } else {
-            Some(name)
-        }
     }
 }
 
@@ -228,5 +243,57 @@ mod tests {
         assert!(names.contains(&"a"));
         assert!(names.contains(&"A"));
         assert!(names.contains(&"b"));
+    }
+
+    #[test]
+    fn index_file_extracts_inline_struct() {
+        let tmp =
+            std::env::temp_dir().join(format!("kirkforge-context-inline-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+
+        let src = tmp.join("lib.rs");
+        fs::write(&src, "fn foo() { struct Bar; }\n").unwrap();
+
+        let mut idx = ContextIndex::new();
+        idx.index_file(&src, &fs::read_to_string(&src).unwrap())
+            .unwrap();
+
+        let syms = idx.symbols();
+        assert_eq!(syms.len(), 2, "expected 2 symbols (fn + struct), got {syms:?}");
+        assert_eq!(syms[0].name, "foo");
+        assert_eq!(syms[0].kind, SymbolKind::Function);
+        assert_eq!(syms[1].name, "Bar");
+        assert_eq!(syms[1].kind, SymbolKind::Struct);
+    }
+
+    #[test]
+    fn index_file_extracts_end_line() {
+        let tmp =
+            std::env::temp_dir().join(format!("kirkforge-context-endline-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+
+        let src = tmp.join("lib.rs");
+        fs::write(
+            &src,
+            "fn foo() {\n    let x = 1;\n    let y = 2;\n}\n",
+        )
+        .unwrap();
+
+        let mut idx = ContextIndex::new();
+        idx.index_file(&src, &fs::read_to_string(&src).unwrap())
+            .unwrap();
+
+        let syms = idx.symbols();
+        assert_eq!(syms.len(), 1, "expected 1 symbol, got {syms:?}");
+        assert_eq!(syms[0].name, "foo");
+        assert_eq!(syms[0].line, 1);
+        assert!(
+            syms[0].end_line > syms[0].line,
+            "end_line ({}) should be > line ({}) for multi-line function",
+            syms[0].end_line,
+            syms[0].line
+        );
     }
 }

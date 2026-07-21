@@ -9,3 +9,5 @@ anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 tracing = "0.1"
 walkdir = "2"
+tree-sitter = "0.25"
+tree-sitter-rust = "0.24"

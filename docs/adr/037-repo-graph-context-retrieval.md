@@ -1,6 +1,6 @@
-# ADR-037: Repo-Graph Context Retrieval (Prototype)
+# ADR-037: Repo-Graph Context Retrieval
 
-**Status:** Experimental (2026-07-21)
+**Status:** Accepted (2026-07-21)
 
 ## Context
 
@@ -12,29 +12,36 @@ Vix's differentiator is stem-agent cache reuse + tree-sitter virtual filesystem 
 
 Build `crates/kirkforge-context-index/` — a tree-sitter-backed symbol/import/call-graph index with a `retrieve(query, k)` API that the prompt builder calls every turn.
 
-**Phase 1 (this ADR):** Scaffold the crate with line-based heuristic symbol extraction (no tree-sitter dep yet). Validate the API shape. Status: **Experimental** — not a load-bearing decision yet.
+**Phase 1 (scaffold):** Line-based heuristic symbol extraction. Validated the API shape. **Done.**
 
-**Phase 2 (future):** Add tree-sitter grammars for Rust/TS/Python/Go. Add import-graph edges (reuse `tool-graphify`'s extension-resolution logic, ported to Rust). Add call-graph edges (tree-sitter queries for `fn`/`def`/`function` + call sites). Add git-history relevance graph.
+**Phase 2 (tree-sitter):** Tree-sitter parsing for Rust. Extracts `function_item`, `struct_item`, `enum_item`, `impl_item`, `mod_item`, `use_declaration` nodes with accurate line ranges. **In progress (Rust only).** Future: TS/Python/Go grammars.
 
-**Phase 3 (future):** Wire `retrieve()` into the prompt builder (`src/session/prompt/mod.rs`). Cache the index on disk (`.kirkforge/context-index/`). Rebuild on git HEAD change.
+**Phase 3 (wire-in):** `retrieve()` called from the prompt builder before every turn. Injects up to 10 relevant symbols as a "Relevant symbols:" section. **In progress (no disk caching yet).** Future: disk caching (`.kirkforge/context-index/`), rebuild on git HEAD change.
+
+**Phase 4+ (future):** Import-graph edges (reuse `tool-graphify`'s logic). Call-graph edges (tree-sitter queries for call sites). Embeddings or graph-walk retrieval (replace substring match).
 
 ## Implementation
 
 - `crates/kirkforge-context-index/src/lib.rs`: `ContextIndex` struct with `index_file`, `index_dir`, `symbols`, `retrieve`. `Symbol` struct with `name`, `kind`, `file`, `line`, `end_line`. `SymbolKind` enum: `Function, Struct, Enum, Impl, Module, Use`.
-- Line-based heuristic extraction (ponytail: upgrade path is tree-sitter).
+- Tree-sitter parsing for Rust (tree-sitter 0.25, tree-sitter-rust 0.24).
 - Substring-match retrieval (ponytail: upgrade path is embeddings or graph-walk).
+- Wired into `PromptBuilder` via `with_context_index()`. Index built at session start in `run_session()`.
 
 ## Consequences
 
 **Positive:**
-- Validates the API shape before adding the tree-sitter dep (~2MB binary size).
-- Enables the prompt-builder integration in Phase 3.
-- 3 tests pass.
+- Accurate symbol extraction with proper line ranges (not just declaration line).
+- Catches inline declarations that line-based heuristics miss.
+- Model gets relevant symbols injected before every turn.
+- 5 tests pass (3 original + 2 new: inline struct, end_line).
 
 **Negative:**
-- Line-based heuristics miss inline declarations, macros, and non-standard syntax.
-- No import/call-graph edges yet — retrieval is substring-only.
+- Tree-sitter adds ~2MB to the binary size (documented tradeoff).
+- Rust-only — TS/Python/Go grammars are future work.
 - No disk caching — index is rebuilt on every session start.
+- No import/call-graph edges yet — retrieval is substring-only.
 
 **Neutral:**
-- Status is Experimental, not Accepted. The crate may be replaced or removed if tree-sitter integration proves infeasible.
+- Status moved from Experimental to Accepted (tree-sitter integration proved feasible).
+- The `retrieve()` API is stable; only the extraction internals changed.
+

@@ -66,6 +66,7 @@ numbering scheme (`001`–`017`). Recent additions:
 - [ADR-034: Mid-batch tool-result checkpointing](./0034-mid-batch-checkpoint.md)
 - [ADR-035: Git worktree per session](./035-git-worktree-per-session.md)
 - [ADR-036: Docker execution mode](./036-docker-execution-mode.md)
+- [ADR-037: Repo-graph context retrieval (prototype)](./037-repo-graph-context-retrieval.md)
 
 These are **not** part of the Plugin3 series and are therefore not
 included in the 4-digit index table above.

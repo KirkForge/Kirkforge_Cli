@@ -15,8 +15,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Test-doctor prototype (`crates/kirkforge-testdoctor/`) for CI test partitioning: classifies tests by profile (fast/slow/flaky), suggests partition splits, and generates CI config. Documented in ADR-029. (infra)
 - `--worktree` flag creates an isolated git worktree per session: `git worktree add --detach` on start, `git worktree remove --force` on session end. Sandbox redirected to worktree path. Documented in ADR-035. (P2-6)
 - `--docker` flag and `[docker]` config block routes bash tool execution through Docker containers with `--memory`, `--cpus`, and `--network=none` isolation. `DockerConfig` with configurable image/memory/cpus. Documented in ADR-036. (P2-6)
+- `crates/kirkforge-context-index/` scaffolded: `ContextIndex` with line-based symbol extraction (fn/struct/enum/impl/mod/use), `index_file`/`index_dir`/`symbols`/`retrieve` API, 3 tests. ADR-037 (Experimental). (P1-long-1 start)
 
 ### Fixed
+- `run_docker` task-orphaning: `out_handle`/`err_handle` now awaited with 1s timeout after `child.kill()` on timeout/cancellation paths.
 - Release workflow now verifies CI by waiting for each individual job check-run to succeed, instead of looking for a non-existent single `CI` check-run (#10, #11).
 - Release workflow now builds with `--workspace` so all bundled binaries (`kfd`, `plugin3`, `stratum`, `kirkforge-video`) are produced for every target (#12).
 - Release workflow Windows archive step now expands the archive name variable correctly so the zip artifact is produced (#13).

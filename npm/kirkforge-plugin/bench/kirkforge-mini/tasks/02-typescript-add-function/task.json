@@ -1,0 +1,10 @@
+{
+  "id": "02-typescript-add-function",
+  "description": "Add a new exported function `unique<T>(arr: T[]): T[]` to src/array-utils.ts. The function should return a new array containing only the first occurrence of each element, preserving order. Do not use Set; the function must work for any T. Do not modify existing exports.",
+  "language": "typescript",
+  "expectedFiles": ["src/array-utils.ts"],
+  "validatorCommand": "bash validator.sh",
+  "passCondition": "exit 0",
+  "difficulty": "medium",
+  "estimatedTokens": 350
+}

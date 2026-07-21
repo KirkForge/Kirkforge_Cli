@@ -50,11 +50,16 @@ impl Bash {
         let docker_args = vec![
             "run".to_string(),
             "--rm".to_string(),
-            "--network".to_string(), "none".to_string(),
-            "--memory".to_string(), cfg.memory.clone(),
-            "--cpus".to_string(), cfg.cpus.clone(),
-            "-v".to_string(), format!("{workdir_str}:/work"),
-            "-w".to_string(), "/work".to_string(),
+            "--network".to_string(),
+            "none".to_string(),
+            "--memory".to_string(),
+            cfg.memory.clone(),
+            "--cpus".to_string(),
+            cfg.cpus.clone(),
+            "-v".to_string(),
+            format!("{workdir_str}:/work"),
+            "-w".to_string(),
+            "/work".to_string(),
             cfg.image.clone(),
             "/bin/sh".to_string(),
             "-c".to_string(),
@@ -69,9 +74,13 @@ impl Bash {
             .spawn()
             .map_err(|e| ShellError::Spawn(format!("docker spawn failed: {e}")))?;
 
-        let stdout = child.stdout.take()
+        let stdout = child
+            .stdout
+            .take()
             .ok_or_else(|| ShellError::Spawn("no stdout".into()))?;
-        let stderr = child.stderr.take()
+        let stderr = child
+            .stderr
+            .take()
             .ok_or_else(|| ShellError::Spawn("no stderr".into()))?;
 
         let out_handle = tokio::spawn(async move {
@@ -97,8 +106,14 @@ impl Bash {
             }
         };
 
-        let out_bytes = out_handle.await.unwrap_or_else(|_| Ok(Vec::new())).unwrap_or_default();
-        let err_bytes = err_handle.await.unwrap_or_else(|_| Ok(Vec::new())).unwrap_or_default();
+        let out_bytes = out_handle
+            .await
+            .unwrap_or_else(|_| Ok(Vec::new()))
+            .unwrap_or_default();
+        let err_bytes = err_handle
+            .await
+            .unwrap_or_else(|_| Ok(Vec::new()))
+            .unwrap_or_default();
 
         let stdout_str = String::from_utf8_lossy(&out_bytes).to_string();
         let stderr_str = String::from_utf8_lossy(&err_bytes).to_string();
@@ -215,7 +230,10 @@ impl Tool for Bash {
         } else {
             // Normal foreground execution — use Docker if configured.
             let result = if self.docker_config.as_ref().map_or(false, |c| c.enabled) {
-                match self.run_docker(&cmd, &workdir_path, timeout_secs, &ctx.token).await {
+                match self
+                    .run_docker(&cmd, &workdir_path, timeout_secs, &ctx.token)
+                    .await
+                {
                     Ok((code, stdout, stderr)) => {
                         // Synthesize an ExitStatus from the exit code.
                         // On Unix, ExitStatus can be constructed from a raw code
@@ -226,7 +244,7 @@ impl Tool for Bash {
                             #[cfg(unix)]
                             {
                                 use std::os::unix::process::ExitStatusExt;
-                                std::process::ExitStatus::from_raw(code as i32)
+                                std::process::ExitStatus::from_raw(code)
                             }
                             #[cfg(not(unix))]
                             {

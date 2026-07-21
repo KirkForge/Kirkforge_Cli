@@ -109,6 +109,18 @@ pub enum Command {
         /// testing. Also forces sequential tool dispatch (no tokio::spawn).
         #[arg(long)]
         seed: Option<u64>,
+
+        /// Create an isolated git worktree for the session. Edits land in
+        /// the worktree, not the user's working tree. The worktree is
+        /// removed when the session ends.
+        #[arg(long)]
+        worktree: bool,
+
+        /// Execute bash commands in a Docker container with resource limits.
+        /// Requires Docker to be installed and running. When set, the bash
+        /// tool spawns in a container with --memory and --cpus limits.
+        #[arg(long)]
+        docker: bool,
     },
     /// Print shell completion script and exit.
     /// Example: kirkforge completions bash >> ~/.bashrc

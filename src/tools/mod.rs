@@ -131,6 +131,7 @@ pub fn all_tools(
     lsp_pool: Option<std::sync::Arc<kirkforge_lsp::LspPool>>,
     computer_use: Option<(bool, crate::shared::ComputerUseConfig)>,
     chrome_tab: Option<std::sync::Arc<dyn crate::tools::computer_use::ChromeTab>>,
+    docker_config: Option<crate::shared::DockerConfig>,
 ) -> Vec<Arc<dyn Tool>> {
     let task_manager = Arc::new(Mutex::new(task::TaskManager::new()));
     let mut tools: Vec<Arc<dyn Tool>> = vec![
@@ -156,6 +157,7 @@ pub fn all_tools(
             deny_list.clone(),
             path_guard.clone(),
             bash_sandbox_workdir,
+            docker_config,
         )),
         Arc::new(bash_status::BashStatus),
         Arc::new(bash_cancel::BashCancel),

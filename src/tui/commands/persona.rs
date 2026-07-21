@@ -113,6 +113,7 @@ fn tools_for_persona(
         None,
         Some((config.computer_use.enabled, config.computer_use.clone())),
         None,
+        Some(config.docker.clone()),
     );
     match kind {
         PersonaKind::Explore => all

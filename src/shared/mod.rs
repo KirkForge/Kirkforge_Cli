@@ -511,6 +511,15 @@ pub struct Config {
     /// determinism — model providers don't guarantee identical outputs.
     #[serde(default, skip_serializing)]
     pub seed: Option<u64>,
+
+    /// When true, create an isolated git worktree for the session.
+    /// Edits land in the worktree, not the user's working tree.
+    #[serde(default)]
+    pub worktree_enabled: bool,
+
+    /// Docker execution configuration for the bash tool.
+    #[serde(default)]
+    pub docker: DockerConfig,
 }
 
 /// Headless Chrome configuration for the `computer_use` tool.
@@ -546,6 +555,36 @@ pub struct ComputerUseConfig {
     /// Default 10.
     #[serde(default = "default_computer_use_wait_timeout")]
     pub wait_timeout_secs: u64,
+}
+
+/// Docker execution configuration for the bash tool.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DockerConfig {
+    /// Enable Docker execution for bash commands. Default false.
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Docker image to use for command execution.
+    #[serde(default = "default_docker_image")]
+    pub image: String,
+
+    /// Memory limit for the container (e.g. "2g"). Default "2g".
+    #[serde(default = "default_docker_memory")]
+    pub memory: String,
+
+    /// CPU limit for the container. Default "2".
+    #[serde(default = "default_docker_cpus")]
+    pub cpus: String,
+}
+
+fn default_docker_image() -> String {
+    "ubuntu:24.04".into()
+}
+fn default_docker_memory() -> String {
+    "2g".into()
+}
+fn default_docker_cpus() -> String {
+    "2".into()
 }
 
 /// Configuration for a single MCP server connection.
@@ -842,6 +881,8 @@ impl Default for Config {
             gcp_region: default_gcp_region(),
             computer_use: ComputerUseConfig::default(),
             seed: None,
+            worktree_enabled: false,
+            docker: DockerConfig::default(),
         }
     }
 }

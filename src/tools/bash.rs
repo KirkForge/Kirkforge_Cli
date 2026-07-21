@@ -3,10 +3,12 @@ use crate::session::bash_jobs::global_registry;
 use crate::session::bash_runner::{
     check_bash_command_str, is_timeout_marker, run_shell_with_token, ShellError,
 };
-use crate::shared::{ToolDef, ToolOutcome};
+use crate::shared::{DockerConfig, ToolDef, ToolOutcome};
 use crate::tools::bash_minify;
 use crate::tools::{Tool, ToolContext};
 use std::path::PathBuf;
+use std::process::Stdio;
+use tokio::io::AsyncReadExt;
 
 /// Maximum bash timeout in seconds. Clamped to prevent Duration/Instant
 /// overflow when a model passes an enormous value.
@@ -16,15 +18,92 @@ pub struct Bash {
     deny_list: DenyList,
     path_guard: PathGuard,
     bash_sandbox_workdir: bool,
+    docker_config: Option<DockerConfig>,
 }
 
 impl Bash {
-    pub fn new(deny_list: DenyList, path_guard: PathGuard, bash_sandbox_workdir: bool) -> Self {
+    pub fn new(
+        deny_list: DenyList,
+        path_guard: PathGuard,
+        bash_sandbox_workdir: bool,
+        docker_config: Option<DockerConfig>,
+    ) -> Self {
         Self {
             deny_list,
             path_guard,
             bash_sandbox_workdir,
+            docker_config,
         }
+    }
+
+    /// Run a command inside a Docker container instead of directly on the host.
+    async fn run_docker(
+        &self,
+        cmd: &str,
+        workdir: &std::path::Path,
+        timeout_secs: u64,
+        token: &tokio_util::sync::CancellationToken,
+    ) -> Result<(i32, String, String), ShellError> {
+        let cfg = self.docker_config.as_ref().expect("docker_config is Some");
+
+        let workdir_str = workdir.to_string_lossy();
+        let docker_args = vec![
+            "run".to_string(),
+            "--rm".to_string(),
+            "--network".to_string(), "none".to_string(),
+            "--memory".to_string(), cfg.memory.clone(),
+            "--cpus".to_string(), cfg.cpus.clone(),
+            "-v".to_string(), format!("{workdir_str}:/work"),
+            "-w".to_string(), "/work".to_string(),
+            cfg.image.clone(),
+            "/bin/sh".to_string(),
+            "-c".to_string(),
+            cmd.to_string(),
+        ];
+
+        let mut child = tokio::process::Command::new("docker")
+            .args(&docker_args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .map_err(|e| ShellError::Spawn(format!("docker spawn failed: {e}")))?;
+
+        let stdout = child.stdout.take()
+            .ok_or_else(|| ShellError::Spawn("no stdout".into()))?;
+        let stderr = child.stderr.take()
+            .ok_or_else(|| ShellError::Spawn("no stderr".into()))?;
+
+        let out_handle = tokio::spawn(async move {
+            let mut buf = Vec::new();
+            let mut reader = tokio::io::BufReader::new(stdout);
+            reader.read_to_end(&mut buf).await.map(|_| buf)
+        });
+        let err_handle = tokio::spawn(async move {
+            let mut buf = Vec::new();
+            let mut reader = tokio::io::BufReader::new(stderr);
+            reader.read_to_end(&mut buf).await.map(|_| buf)
+        });
+
+        let status = tokio::select! {
+            status = child.wait() => status.map_err(|e| ShellError::Spawn(format!("docker wait: {e}")))?,
+            _ = tokio::time::sleep(std::time::Duration::from_secs(timeout_secs)) => {
+                let _ = child.kill().await;
+                return Err(ShellError::Cancelled);
+            }
+            _ = token.cancelled() => {
+                let _ = child.kill().await;
+                return Err(ShellError::Cancelled);
+            }
+        };
+
+        let out_bytes = out_handle.await.unwrap_or_else(|_| Ok(Vec::new())).unwrap_or_default();
+        let err_bytes = err_handle.await.unwrap_or_else(|_| Ok(Vec::new())).unwrap_or_default();
+
+        let stdout_str = String::from_utf8_lossy(&out_bytes).to_string();
+        let stderr_str = String::from_utf8_lossy(&err_bytes).to_string();
+
+        Ok((status.code().unwrap_or(-1), stdout_str, stderr_str))
     }
 }
 
@@ -134,9 +213,38 @@ impl Tool for Bash {
                 ))),
             }
         } else {
-            // Normal foreground execution
-            let result =
-                run_shell_with_token(&cmd, &workdir_path, timeout_secs, Some(&ctx.token)).await;
+            // Normal foreground execution — use Docker if configured.
+            let result = if self.docker_config.as_ref().map_or(false, |c| c.enabled) {
+                match self.run_docker(&cmd, &workdir_path, timeout_secs, &ctx.token).await {
+                    Ok((code, stdout, stderr)) => {
+                        // Synthesize an ExitStatus from the exit code.
+                        // On Unix, ExitStatus can be constructed from a raw code
+                        // via std::os::unix::process::ExitStatusExt.
+                        let status = if code == 0 {
+                            std::process::ExitStatus::default()
+                        } else {
+                            #[cfg(unix)]
+                            {
+                                use std::os::unix::process::ExitStatusExt;
+                                std::process::ExitStatus::from_raw(code as i32)
+                            }
+                            #[cfg(not(unix))]
+                            {
+                                let _ = code;
+                                std::process::ExitStatus::default()
+                            }
+                        };
+                        Ok(crate::session::bash_runner::ShellOutput {
+                            status,
+                            stdout,
+                            stderr,
+                        })
+                    }
+                    Err(e) => Err(e),
+                }
+            } else {
+                run_shell_with_token(&cmd, &workdir_path, timeout_secs, Some(&ctx.token)).await
+            };
 
             match result {
                 Ok(output) => {
@@ -229,7 +337,7 @@ mod tests {
         let marker_str = marker.to_string_lossy().to_string();
         remove_test_file(&marker);
 
-        let tool = Bash::new(DenyList::default(), PathGuard::default(), false);
+        let tool = Bash::new(DenyList::default(), PathGuard::default(), false, None);
         let ctx = crate::tools::ToolContext::new();
         let args = serde_json::json!({
             "command": format!("sleep 30; touch {marker_str}"),
@@ -265,7 +373,7 @@ mod tests {
     /// `ToolError::Timeout` rather than an opaque string.
     #[tokio::test]
     async fn bash_tool_surfaces_structured_timeout() {
-        let tool = Bash::new(DenyList::default(), PathGuard::default(), false);
+        let tool = Bash::new(DenyList::default(), PathGuard::default(), false, None);
         let ctx = crate::tools::ToolContext::new();
         let args = serde_json::json!({
             "command": "sleep 30",
@@ -286,7 +394,7 @@ mod tests {
 
     #[tokio::test]
     async fn bash_timeout_clamped_to_max() {
-        let bash = Bash::new(DenyList::default(), PathGuard::default(), false);
+        let bash = Bash::new(DenyList::default(), PathGuard::default(), false, None);
         let tmp = std::env::temp_dir();
         let marker = tmp.join(format!(
             "kirkforge_bash_huge_timeout_{}",
@@ -320,7 +428,7 @@ mod tests {
         let marker = tmp.path().join("marker.txt");
         let marker_str = marker.to_string_lossy().to_string();
 
-        let tool = Bash::new(DenyList::default(), PathGuard::default(), false);
+        let tool = Bash::new(DenyList::default(), PathGuard::default(), false, None);
         let ctx = crate::tools::ToolContext::with_dry_run(true);
         let args = serde_json::json!({
             "command": format!("touch {marker_str}"),
@@ -339,7 +447,7 @@ mod tests {
 
     #[tokio::test]
     async fn bash_dry_run_still_blocks_dangerous_command() {
-        let tool = Bash::new(DenyList::default(), PathGuard::default(), false);
+        let tool = Bash::new(DenyList::default(), PathGuard::default(), false, None);
         let ctx = crate::tools::ToolContext::with_dry_run(true);
         let args = serde_json::json!({
             "command": "rm -rf /",
@@ -357,7 +465,7 @@ mod tests {
 
     #[tokio::test]
     async fn bash_dry_run_includes_workdir_and_timeout() {
-        let tool = Bash::new(DenyList::default(), PathGuard::default(), false);
+        let tool = Bash::new(DenyList::default(), PathGuard::default(), false, None);
         let ctx = crate::tools::ToolContext::with_dry_run(true);
         let args = serde_json::json!({
             "command": "echo hello",

@@ -222,6 +222,8 @@ async fn main() {
             attach,
             no_tui,
             seed,
+            worktree,
+            docker,
         } => {
             run_session(RunArgs {
                 model,
@@ -239,6 +241,8 @@ async fn main() {
                 attach,
                 no_tui,
                 seed,
+                worktree,
+                docker,
             })
             .await
         }
@@ -409,6 +413,8 @@ struct RunArgs {
     attach: Option<String>,
     no_tui: bool,
     seed: Option<u64>,
+    worktree: bool,
+    docker: bool,
 }
 
 async fn run_session(args: RunArgs) -> anyhow::Result<()> {
@@ -428,6 +434,8 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
         attach,
         no_tui,
         seed,
+        worktree,
+        docker,
     } = args;
 
     let mut config = session::config::load_or_create_config();
@@ -444,6 +452,12 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     }
     if let Some(seed) = seed {
         config.seed = Some(seed);
+    }
+    if worktree {
+        config.worktree_enabled = true;
+    }
+    if docker {
+        config.docker.enabled = true;
     }
 
     // CLI flags are transient runtime overrides; do not persist them to
@@ -477,6 +491,21 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     std::fs::create_dir_all(&data_dir)?;
 
     let session_id = session::new_session_id();
+
+    // ── Git worktree (--worktree flag) ──
+    // When enabled, create an isolated git worktree for the session.
+    // Edits land in the worktree, not the user's working tree.
+    // The worktree is removed when `_worktree` is dropped.
+    let _worktree: Option<session::worktree::WorktreeSession> = if config.worktree_enabled {
+        let repo_root = std::env::current_dir()?;
+        let wt = session::worktree::WorktreeSession::create(&session_id.to_string(), &repo_root)?;
+        // Redirect sandbox to the worktree path
+        config.sandbox_dir = Some(wt.path().to_string_lossy().to_string());
+        // Also redirect the log path into the worktree
+        Some(wt)
+    } else {
+        None
+    };
 
     // Resolve the log path. Priority order:
     //   1. `--continue-session <value>` — id prefix OR full path
@@ -675,6 +704,7 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
             lsp_pool.clone(),
             Some((computer_use_enabled, computer_use_cfg.clone())),
             Some(chrome_tab),
+            Some(config.docker.clone()),
         ),
     )));
 

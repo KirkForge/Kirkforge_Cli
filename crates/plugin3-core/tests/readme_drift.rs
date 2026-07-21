@@ -23,15 +23,6 @@
 
 use std::path::{Path, PathBuf};
 
-fn repo_root() -> PathBuf {
-    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
-    manifest
-        .parent() // crates/
-        .and_then(Path::parent) // workspace root
-        .expect("workspace root resolvable")
-        .to_path_buf()
-}
-
 /// Walk a directory recursively, returning every regular file's
 /// path. Skips `target/` (compiled artefacts) so a stale build
 /// doesn't pollute the count.

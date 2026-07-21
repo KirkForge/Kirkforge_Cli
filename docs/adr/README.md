@@ -64,6 +64,8 @@ numbering scheme (`001`–`017`). Recent additions:
 - [ADR-032: PlanReason trace events](./0032-plan-reason-events.md)
 - [ADR-033: Exponential backoff on tool-call retries](./0033-tool-retry-backoff.md)
 - [ADR-034: Mid-batch tool-result checkpointing](./0034-mid-batch-checkpoint.md)
+- [ADR-035: Git worktree per session](./035-git-worktree-per-session.md)
+- [ADR-036: Docker execution mode](./036-docker-execution-mode.md)
 
 These are **not** part of the Plugin3 series and are therefore not
 included in the 4-digit index table above.

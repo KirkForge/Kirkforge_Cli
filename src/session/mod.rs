@@ -26,6 +26,7 @@ pub mod skills;
 pub mod toolset;
 pub mod undo;
 pub mod verifier;
+pub mod worktree;
 
 use crate::shared::SessionId;
 use std::path::PathBuf;

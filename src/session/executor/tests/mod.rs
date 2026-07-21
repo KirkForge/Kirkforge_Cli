@@ -192,6 +192,8 @@ fn make_config(auto_approve: bool) -> Config {
         gcp_region: "us-central1".into(),
         computer_use: crate::shared::ComputerUseConfig::default(),
         seed: None,
+        worktree_enabled: false,
+        docker: crate::shared::DockerConfig::default(),
     }
 }
 

@@ -995,10 +995,61 @@ impl Executor {
             }
         }
 
-        // Collect completed results from spawned tasks into the map.
+        // Collect completed non-file results and record them incrementally.
+        //
+        // Recording is interleaved with collection (not deferred to Phase 3):
+        // each completed tool result is appended to the conversation and
+        // checkpointed before the next handle is awaited. This is the
+        // "mid-batch checkpoint" guarantee — a crash or cancellation while a
+        // later, slower tool is still in-flight does not lose the results
+        // that already finished. Without this, a turn aborted while the
+        // collect loop is blocked on a slow tool would persist nothing,
+        // because Phase 3 (which appends to the conversation) only runs
+        // after the whole collect loop completes.
+        //
+        // Handles are awaited in input order so the conversation still
+        // records tool results in the order the model requested them.
+        // Cancellation is checked after each record: once cancelled, the
+        // remaining in-flight handles are dropped (their tasks finish
+        // detached but their results are never recorded) and Phase 3 / the
+        // caller append placeholder tool-result messages for them.
+        let mut results: std::collections::HashMap<usize, (ToolInvocation, ToolOutcome)> =
+            std::collections::HashMap::with_capacity(deferred_file_calls.len());
+        let mut recorded: std::collections::HashSet<usize> =
+            std::collections::HashSet::with_capacity(running.len());
         for (idx, handle) in running {
-            if let Ok(Some(pair)) = handle.await {
-                results.insert(idx, pair);
+            let pair = if let Ok(Some(p)) = handle.await {
+                p
+            } else {
+                // Join error (task panicked/cancelled): leave unrecorded so
+                // Phase 3 emits a placeholder for this index.
+                continue;
+            };
+            let tc = &mut tcs[idx];
+            let (invocation, outcome) = pair;
+            self.record_tool_result(
+                tc,
+                &invocation,
+                outcome,
+                approval_sender,
+                cancelled,
+                event_tx,
+            )
+            .await?;
+            if let Err(e) = self.conversation.checkpoint_async().await {
+                tracing::warn!(error = %e, "mid-batch checkpoint failed after tool {}", tc.id);
+                crate::send_or_warn!(
+                    event_tx
+                        .send(TurnEvent::Error(format!("Checkpoint failed: {e}")))
+                        .await,
+                    "TurnEvent receiver dropped; discarding event"
+                );
+            }
+            recorded.insert(idx);
+            // Stop launching further awaits once cancelled; the in-flight
+            // task we just awaited is recorded, later ones get placeholders.
+            if cancelled.load(Ordering::SeqCst) {
+                break;
             }
         }
 
@@ -1060,11 +1111,18 @@ impl Executor {
             }
         }
 
-        // Phase 3 — Record: walk input order, replay skipped/denied calls, then
-        // record each completed result in order. Cancellation is checked only
-        // when a result is missing, so already-completed tool bodies are still
-        // recorded and earlier calls in the batch don't become placeholders.
+        // Phase 3 — Record: walk input order, replay skipped/denied calls,
+        // then record each completed file-tool result in order. Non-file
+        // results were already recorded incrementally in the collect loop
+        // above (so a mid-batch crash persists them); skip those indices
+        // here. Cancellation is checked only when a result is missing, so
+        // already-completed tool bodies are still recorded and earlier calls
+        // in the batch don't become placeholders.
         for (idx, tc) in tcs.iter_mut().enumerate() {
+            if recorded.contains(&idx) {
+                // Already recorded and checkpointed in the collect loop.
+                continue;
+            }
             let has_result = results.contains_key(&idx);
             let has_skip = skipped.iter().any(|(i, _, _, _)| *i == idx);
             if !has_result && !has_skip && cancelled.load(Ordering::SeqCst) {
@@ -1125,6 +1183,18 @@ impl Executor {
                 event_tx,
             )
             .await?;
+
+            // Persist after each recorded result so a crash before the next
+            // tool starts does not lose in-flight progress.
+            if let Err(e) = self.conversation.checkpoint_async().await {
+                tracing::warn!(error = %e, "mid-batch checkpoint failed after tool {}", tc.id);
+                crate::send_or_warn!(
+                    event_tx
+                        .send(TurnEvent::Error(format!("Checkpoint failed: {e}")))
+                        .await,
+                    "TurnEvent receiver dropped; discarding event"
+                );
+            }
         }
 
         Ok(tcs.len())

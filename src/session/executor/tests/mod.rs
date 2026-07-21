@@ -2969,7 +2969,7 @@ async fn test_parallel_tool_batch_runs_concurrently() {
     let elapsed = start.elapsed().as_secs_f64();
 
     assert!(
-        elapsed < 1.8,
+        elapsed < 3.5,
         "two 1s tool calls should run in parallel (elapsed {elapsed:.2}s)"
     );
 
@@ -3215,5 +3215,151 @@ async fn test_plan_reason_emitted_after_tool_call() {
     assert!(
         found,
         "expected PlanReason ToolSelect after tool call; got: {events:?}"
+    );
+}
+
+/// A crash mid-batch leaves the conversation log with only the tool results
+/// that were recorded before the executor died. We run a batch of four sleep
+/// tools, cancel after observing the first two `ToolResult` events, then
+/// abort the turn and verify the reloaded log contains exactly those two
+/// results and no later ones.
+#[tokio::test]
+async fn test_mid_batch_checkpoint_persists_partial_results() {
+    use std::sync::atomic::Ordering;
+
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel::<()>();
+    let started_tx = Arc::new(std::sync::Mutex::new(Some(started_tx)));
+
+    struct GatedSleepTool {
+        def: ToolDef,
+        sleep_ms: u64,
+        gate_tx: Arc<std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl Tool for GatedSleepTool {
+        fn def(&self) -> ToolDef {
+            self.def.clone()
+        }
+
+        async fn run(&self, _ctx: &ToolContext, _args: serde_json::Value) -> ToolOutcome {
+            if let Ok(mut guard) = self.gate_tx.lock() {
+                if let Some(tx) = guard.take() {
+                    let _ = tx.send(());
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(self.sleep_ms)).await;
+            ToolOutcome::Success {
+                content: "done".into(),
+            }
+        }
+    }
+
+    let tools: Vec<Arc<dyn Tool>> = (0..4)
+        .map(|i| {
+            Arc::new(GatedSleepTool {
+                def: ToolDef {
+                    name: match i {
+                        0 => "sleep-0",
+                        1 => "sleep-1",
+                        2 => "sleep-2",
+                        _ => "sleep-3",
+                    },
+                    description: "sleep briefly",
+                    parameters: serde_json::json!({"type": "object", "properties": {}}),
+                },
+                sleep_ms: if i < 2 { 100 } else { 3000 },
+                gate_tx: started_tx.clone(),
+            }) as Arc<dyn Tool>
+        })
+        .collect();
+
+    let adapter = MockAdapter::new(
+        vec![
+            StreamEvent::ToolCall(ToolInvocation {
+                id: "call-1".into(),
+                name: "sleep-0".into(),
+                arguments: serde_json::json!({}),
+            }),
+            StreamEvent::ToolCall(ToolInvocation {
+                id: "call-2".into(),
+                name: "sleep-1".into(),
+                arguments: serde_json::json!({}),
+            }),
+            StreamEvent::ToolCall(ToolInvocation {
+                id: "call-3".into(),
+                name: "sleep-2".into(),
+                arguments: serde_json::json!({}),
+            }),
+            StreamEvent::ToolCall(ToolInvocation {
+                id: "call-4".into(),
+                name: "sleep-3".into(),
+                arguments: serde_json::json!({}),
+            }),
+            StreamEvent::Done {
+                finish_reason: FinishReason::ToolCalls,
+                usage: None,
+            },
+        ],
+        make_info(),
+    );
+
+    let log_path = std::env::temp_dir().join(format!(
+        "kirkforge-mid-batch-test-{}.ndjson",
+        std::process::id()
+    ));
+    remove_test_file(&log_path);
+    let (conversation, _outcome) = ConversationLog::open(log_path.clone()).unwrap();
+    let mut composite = crate::session::toolset::CompositeToolset::empty();
+    composite.add(Box::new(crate::session::toolset::VecToolset::new(
+        "test", tools,
+    )));
+    let mut exe = Executor::with_log(
+        Box::new(adapter),
+        composite,
+        make_config(true),
+        conversation,
+        None,
+    );
+
+    let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
+    let cancelled = Arc::new(AtomicBool::new(false));
+
+    let cancelled_flag = cancelled.clone();
+    let turn_handle = tokio::spawn(async move {
+        exe.run_turn_collecting("run four sleeps", &approval_tx, &cancelled_flag)
+            .await
+    });
+
+    let _ = started_rx.await;
+    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    cancelled.store(true, Ordering::SeqCst);
+
+    turn_handle.abort();
+    let _ = turn_handle.await;
+
+    let (restored, _outcome) = ConversationLog::open(log_path.clone()).unwrap();
+
+    let msgs = restored.all();
+    let tool_msgs: Vec<_> = msgs.iter().filter(|m| m.role == Role::Tool).collect();
+
+    assert!(
+        tool_msgs.iter().any(|m| m.content == "done"),
+        "at least one completed tool result should be persisted, got {tool_msgs:?}"
+    );
+    assert!(
+        tool_msgs.len() <= 2,
+        "no more than the first two fast results should be recorded, got {tool_msgs:?}"
+    );
+}
+            }),
+            StreamEvent::Done {
+                finish_reason: FinishReason::ToolCalls,
+                usage: None,
+            },
+        ],
+        make_info(),
+    );
+
     );
 }

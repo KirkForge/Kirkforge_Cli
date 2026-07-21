@@ -3352,14 +3352,3 @@ async fn test_mid_batch_checkpoint_persists_partial_results() {
         "no more than the first two fast results should be recorded, got {tool_msgs:?}"
     );
 }
-            }),
-            StreamEvent::Done {
-                finish_reason: FinishReason::ToolCalls,
-                usage: None,
-            },
-        ],
-        make_info(),
-    );
-
-    );
-}

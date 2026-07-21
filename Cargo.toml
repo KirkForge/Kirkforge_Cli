@@ -10,6 +10,10 @@ categories = ["command-line-utilities", "development-tools"]
 
 [workspace]
 members = ["crates/*"]
+# The test-doctor is a standalone prototype (see docs/ideas/test-doctor.md
+# and ADR-0029). It is not part of the workspace build yet — build it
+# explicitly with `cd crates/kirkforge-testdoctor && cargo build`.
+exclude = ["crates/kirkforge-testdoctor"]
 resolver = "2"
 
 # Binary root lives at `src/main/mod.rs` (split into submodules for the

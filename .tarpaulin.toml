@@ -4,7 +4,9 @@
 exclude-files = ["tests/integration_test.rs", "src/main.rs"]
 # Exclude the build script from coverage targets.
 exclude = ["build_script_build"]
-# Give slow tests enough time to finish.
-timeout = "120"
+# Give slow tests enough time to finish. Tarpaulin expects a duration
+# string ("120s"), not a bare number — the bare "120" was silently
+# rejected and replaced with the default 60s timeout.
+timeout = "120s"
 # LLVM engine avoids segfaults when tracing tests that spawn subprocesses.
 engine = "Llvm"

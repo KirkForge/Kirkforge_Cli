@@ -74,11 +74,27 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      - name: Install cargo-nextest
+        # Nextest gives 2-3x speedup via better parallelism and per-test
+        # isolation. Falls back to `cargo test` below if the install fails.
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+
       - name: Install video test dependencies
         run: sudo apt-get update && sudo apt-get install -y ffmpeg flite
 
-      - name: Run unit tests
-        run: cargo test --locked --workspace --no-fail-fast
+      - name: Run tests (fast suite on PR, full suite on push)
+        # Partition the suite per ADR-0029: PRs run the lib-only fast suite
+        # (~45s) so feedback is fast; pushes to main/dev/merge/phase/** run
+        # the full workspace suite to catch integration regressions.
+        # `--locked` keeps the lockfile in sync with the original command.
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            cargo nextest run --locked --lib --no-fail-fast --workspace || cargo test --locked --lib --no-fail-fast
+          else
+            cargo nextest run --locked --workspace --no-fail-fast || cargo test --locked --workspace --no-fail-fast
+          fi
 
       - name: Run Clippy
         run: cargo clippy --all-targets -- -D warnings
@@ -187,7 +203,13 @@ jobs:
           tool: cargo-tarpaulin
 
       - name: Generate coverage report
-        run: cargo tarpaulin --out Xml --locked --workspace --timeout 120
+        # `--lib` instruments unit tests only, skipping the slow
+        # integration tests in `tests/*` that spawn ollama/cargo
+        # subprocesses. Per ADR-0029 this cuts the coverage job from
+        # ~4min to ~2min. The coverage gate below already only enforces
+        # thresholds on `src/session`, `src/tools`, `src/adapters` —
+        # all unit-test-covered code.
+        run: cargo tarpaulin --out Xml --locked --lib --timeout 120
 
       - name: Enforce coverage gate
         run: |

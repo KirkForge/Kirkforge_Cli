@@ -99,9 +99,7 @@ impl ContextIndex {
             if let Some(name_node) = name_node {
                 if symbol_kind != SymbolKind::Function || kind == "function_item" {
                     let name = if kind == "use_declaration" {
-                        node.utf8_text(source.as_bytes())
-                            .unwrap_or("")
-                            .to_string()
+                        node.utf8_text(source.as_bytes()).unwrap_or("").to_string()
                     } else {
                         name_node
                             .utf8_text(source.as_bytes())
@@ -260,7 +258,11 @@ mod tests {
             .unwrap();
 
         let syms = idx.symbols();
-        assert_eq!(syms.len(), 2, "expected 2 symbols (fn + struct), got {syms:?}");
+        assert_eq!(
+            syms.len(),
+            2,
+            "expected 2 symbols (fn + struct), got {syms:?}"
+        );
         assert_eq!(syms[0].name, "foo");
         assert_eq!(syms[0].kind, SymbolKind::Function);
         assert_eq!(syms[1].name, "Bar");
@@ -275,11 +277,7 @@ mod tests {
         fs::create_dir_all(&tmp).unwrap();
 
         let src = tmp.join("lib.rs");
-        fs::write(
-            &src,
-            "fn foo() {\n    let x = 1;\n    let y = 2;\n}\n",
-        )
-        .unwrap();
+        fs::write(&src, "fn foo() {\n    let x = 1;\n    let y = 2;\n}\n").unwrap();
 
         let mut idx = ContextIndex::new();
         idx.index_file(&src, &fs::read_to_string(&src).unwrap())

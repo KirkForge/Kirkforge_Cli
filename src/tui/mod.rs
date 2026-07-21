@@ -122,6 +122,7 @@ fn run_session_picker_sync(
 }
 
 /// Run the TUI event loop.
+#[allow(clippy::too_many_arguments)]
 pub async fn run_tui(
     shared_config: crate::shared::SharedConfig,
     adapter: Box<dyn crate::adapters::ModelAdapter>,

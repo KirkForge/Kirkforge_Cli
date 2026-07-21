@@ -740,33 +740,6 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
         })
     };
 
-    // ── Repo-graph context index (P1-long-1) ──
-    // Build a tree-sitter-backed symbol index from the sandbox directory.
-    // The index is passed to the executor's PromptBuilder so relevant
-    // symbols are injected into the system prompt before every turn.
-    let context_index = {
-        let cfg = kirkforge::shared::read_shared_config(&shared_config);
-        cfg.sandbox_dir.as_ref().and_then(|dir| {
-            let path = std::path::Path::new(dir);
-            if path.is_dir() {
-                let mut idx = kirkforge_context_index::ContextIndex::new();
-                match idx.index_dir(path) {
-                    Ok(()) => {
-                        let count = idx.symbols().len();
-                        tracing::info!(symbol_count = count, sandbox_dir = %dir, "built repo-graph context index");
-                        Some(idx)
-                    }
-                    Err(e) => {
-                        tracing::warn!(error = %e, sandbox_dir = %dir, "failed to build context index");
-                        None
-                    }
-                }
-            } else {
-                None
-            }
-        })
-    };
-
     // --- MCP tools ---
     let cfg_for_mcp = kirkforge::shared::read_shared_config(&shared_config).clone();
     if !cfg_for_mcp.mcp_servers.is_empty() {

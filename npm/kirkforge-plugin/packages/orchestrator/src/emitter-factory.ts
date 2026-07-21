@@ -10,7 +10,7 @@ import { TscEmitter } from "@kirkforge/tool-tsc";
 import { PyrightEmitter } from "@kirkforge/tool-pyright";
 import type { EventBus } from "@kirkforge/core-events";
 import type { TaskLanguage } from "./task-profile.js";
-import { GraphEmitter } from "./graph-emitter.js";
+import { GraphifyEmitter } from "@kirkforge/tool-graphify";
 import { SecurityEmitter } from "./security-emitter.js";
 import { spawn } from "child_process";
 
@@ -140,7 +140,7 @@ export function createVerificationEmitters(
       : new TscEmitter({ cwd, eventBus, files }),
     security,
     changes: new ChangesEmitter({ eventBus, writtenFiles, cwd }),
-    graph: new GraphEmitter({ eventBus, files, writtenFiles }),
+    graph: new GraphifyEmitter({ cwd, eventBus, files }),
     imports,
   };
 }

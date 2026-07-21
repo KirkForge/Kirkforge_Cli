@@ -140,6 +140,7 @@ mod tests {
     fn make_config(routing_enabled: bool) -> Config {
         Config {
             routing_enabled,
+            seed: None,
             ..Default::default()
         }
     }

@@ -92,6 +92,7 @@ mod tests {
         let cfg = Config {
             default_model: default_model.into(),
             routing_model_map: map,
+            seed: None,
             ..Config::default()
         };
         AppState::new(std::sync::Arc::new(std::sync::RwLock::new(cfg)))

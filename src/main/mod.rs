@@ -221,6 +221,7 @@ async fn main() {
             auto_resume,
             attach,
             no_tui,
+            seed,
         } => {
             run_session(RunArgs {
                 model,
@@ -237,6 +238,7 @@ async fn main() {
                 auto_resume,
                 attach,
                 no_tui,
+                seed,
             })
             .await
         }
@@ -406,6 +408,7 @@ struct RunArgs {
     auto_resume: bool,
     attach: Option<String>,
     no_tui: bool,
+    seed: Option<u64>,
 }
 
 async fn run_session(args: RunArgs) -> anyhow::Result<()> {
@@ -424,6 +427,7 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
         auto_resume,
         attach,
         no_tui,
+        seed,
     } = args;
 
     let mut config = session::config::load_or_create_config();
@@ -437,6 +441,9 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     }
     if dry_run {
         config.dry_run = true;
+    }
+    if let Some(seed) = seed {
+        config.seed = Some(seed);
     }
 
     // CLI flags are transient runtime overrides; do not persist them to

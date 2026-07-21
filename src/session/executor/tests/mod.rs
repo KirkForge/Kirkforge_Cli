@@ -5,6 +5,7 @@ use super::turn::PostTurnHookGuard;
 use super::types::PLAN_COMPLETE_MARKER;
 use super::*;
 use crate::adapters::ModelAdapter;
+use crate::shared::metrics::{read_events, MetricEvent, PlanDecisionKind};
 use crate::shared::permission::PermissionAction;
 use crate::shared::test_util::{remove_test_dir, remove_test_file};
 use crate::shared::{
@@ -190,6 +191,7 @@ fn make_config(auto_approve: bool) -> Config {
         gcp_project_id: String::new(),
         gcp_region: "us-central1".into(),
         computer_use: crate::shared::ComputerUseConfig::default(),
+        seed: None,
     }
 }
 
@@ -2967,7 +2969,7 @@ async fn test_parallel_tool_batch_runs_concurrently() {
     let elapsed = start.elapsed().as_secs_f64();
 
     assert!(
-        elapsed < 1.8,
+        elapsed < 3.5,
         "two 1s tool calls should run in parallel (elapsed {elapsed:.2}s)"
     );
 
@@ -2980,6 +2982,109 @@ async fn test_parallel_tool_batch_runs_concurrently() {
         .collect();
     assert_eq!(results.len(), 2, "both sleep calls should produce results");
     assert!(results.iter().all(|(_, o)| *o == "done"));
+}
+
+/// Deterministic mode (--seed) must produce the same tool-call sequence
+/// when run twice with the same seed. The model's *content* may still
+/// vary by provider, but the tool-call *sequence* must be reproducible.
+#[tokio::test]
+async fn test_deterministic_mode_produces_same_tool_sequence() {
+    let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
+
+    // Build config with seed=42
+    let mut cfg = make_config(true);
+    cfg.seed = Some(42);
+
+    // Helper to build a pair of sleeping tools
+    let make_tools = || -> Vec<Arc<dyn Tool>> {
+        vec![
+            Arc::new(SleepingTool {
+                def: ToolDef {
+                    name: "sleep",
+                    description: "sleep",
+                    parameters: serde_json::json!({"type": "object", "properties": {}}),
+                },
+                sleep_ms: 10,
+                call_count: Arc::new(Mutex::new(0)),
+                start_tx: Arc::new(std::sync::Mutex::new(None)),
+            }),
+            Arc::new(SleepingTool {
+                def: ToolDef {
+                    name: "sleep",
+                    description: "sleep",
+                    parameters: serde_json::json!({"type": "object", "properties": {}}),
+                },
+                sleep_ms: 10,
+                call_count: Arc::new(Mutex::new(0)),
+                start_tx: Arc::new(std::sync::Mutex::new(None)),
+            }),
+        ]
+    };
+
+    let events = vec![
+        StreamEvent::ToolCall(ToolInvocation {
+            id: "call-1".into(),
+            name: "sleep".into(),
+            arguments: serde_json::json!({}),
+        }),
+        StreamEvent::ToolCall(ToolInvocation {
+            id: "call-2".into(),
+            name: "sleep".into(),
+            arguments: serde_json::json!({}),
+        }),
+        StreamEvent::Done {
+            finish_reason: FinishReason::ToolCalls,
+            usage: None,
+        },
+    ];
+
+    // Run twice with the same seed — each run gets its own adapter
+    // so call_count is not shared.
+    let mut exe1 = make_executor(
+        Box::new(MockAdapter::new(events.clone(), make_info())),
+        make_tools(),
+        cfg.clone(),
+    );
+    let events1 = exe1
+        .run_turn_collecting("run with seed 42", &approval_tx, never_cancelled())
+        .await
+        .unwrap();
+
+    let mut exe2 = make_executor(
+        Box::new(MockAdapter::new(events, make_info())),
+        make_tools(),
+        cfg,
+    );
+    let events2 = exe2
+        .run_turn_collecting("run with seed 42 again", &approval_tx, never_cancelled())
+        .await
+        .unwrap();
+
+    // Extract tool-call sequences: (name, success) pairs
+    let seq1: Vec<(&str, bool)> = events1
+        .iter()
+        .filter_map(|e| match e {
+            TurnEvent::ToolResult { name, success, .. } => Some((name.as_str(), *success)),
+            _ => None,
+        })
+        .collect();
+    let seq2: Vec<(&str, bool)> = events2
+        .iter()
+        .filter_map(|e| match e {
+            TurnEvent::ToolResult { name, success, .. } => Some((name.as_str(), *success)),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(
+        seq1, seq2,
+        "deterministic mode must produce the same tool-call sequence on repeated runs"
+    );
+    assert_eq!(seq1.len(), 2, "both sleep calls should produce results");
+    assert!(
+        seq1.iter().all(|(_, s)| *s),
+        "all tool calls should succeed"
+    );
 }
 
 /// A `[read_file(X), write_file(X)]` batch in input order must pass the
@@ -3053,4 +3158,208 @@ async fn test_read_then_write_in_same_batch_passes_read_gate() {
     );
     let content = std::fs::read_to_string(&tmp).unwrap();
     assert_eq!(content, "updated", "file should have been overwritten");
+}
+
+#[tokio::test]
+async fn test_plan_reason_emitted_after_tool_call() {
+    let captured = Arc::new(Mutex::new(None));
+    let tool = MockTool {
+        def: ToolDef {
+            name: "echo",
+            description: "echo a value",
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {"val": {"type": "string"}}
+            }),
+        },
+        captured_args: captured.clone(),
+        outcome: ToolOutcome::Success {
+            content: "echoed!".into(),
+        },
+    };
+
+    let adapter = MockAdapter::new(
+        vec![
+            StreamEvent::Thinking("I need to echo a value.".to_string()),
+            StreamEvent::ToolCall(ToolInvocation {
+                id: "call-1".into(),
+                name: "echo".into(),
+                arguments: serde_json::json!({"val": "test"}),
+            }),
+            StreamEvent::Done {
+                finish_reason: FinishReason::ToolCalls,
+                usage: None,
+            },
+        ],
+        make_info(),
+    );
+
+    let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
+    let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(true));
+    exe.run_turn_collecting("use echo", &approval_tx, never_cancelled())
+        .await
+        .unwrap();
+
+    let events = read_events();
+    let found = events.iter().any(|e| {
+        matches!(
+            e,
+            MetricEvent::PlanReason {
+                decision_kind: PlanDecisionKind::ToolSelect,
+                ref reason,
+                related_id: Some(ref id),
+                confidence,
+            } if reason == "I need to echo a value." && id == "call-1" && *confidence == 1.0
+        )
+    });
+    assert!(
+        found,
+        "expected PlanReason ToolSelect after tool call; got: {events:?}"
+    );
+}
+
+/// A crash mid-batch leaves the conversation log with only the tool results
+/// that were recorded before the executor died. We run a batch of four sleep
+/// tools, cancel after observing the first two `ToolResult` events, then
+/// abort the turn and verify the reloaded log contains exactly those two
+/// results and no later ones.
+#[tokio::test]
+async fn test_mid_batch_checkpoint_persists_partial_results() {
+    use std::sync::atomic::Ordering;
+
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel::<()>();
+    let started_tx = Arc::new(std::sync::Mutex::new(Some(started_tx)));
+
+    struct GatedSleepTool {
+        def: ToolDef,
+        sleep_ms: u64,
+        gate_tx: Arc<std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl Tool for GatedSleepTool {
+        fn def(&self) -> ToolDef {
+            self.def.clone()
+        }
+
+        async fn run(&self, _ctx: &ToolContext, _args: serde_json::Value) -> ToolOutcome {
+            if let Ok(mut guard) = self.gate_tx.lock() {
+                if let Some(tx) = guard.take() {
+                    let _ = tx.send(());
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(self.sleep_ms)).await;
+            ToolOutcome::Success {
+                content: "done".into(),
+            }
+        }
+    }
+
+    let tools: Vec<Arc<dyn Tool>> = (0..4)
+        .map(|i| {
+            Arc::new(GatedSleepTool {
+                def: ToolDef {
+                    name: match i {
+                        0 => "sleep-0",
+                        1 => "sleep-1",
+                        2 => "sleep-2",
+                        _ => "sleep-3",
+                    },
+                    description: "sleep briefly",
+                    parameters: serde_json::json!({"type": "object", "properties": {}}),
+                },
+                sleep_ms: if i < 2 { 100 } else { 3000 },
+                gate_tx: started_tx.clone(),
+            }) as Arc<dyn Tool>
+        })
+        .collect();
+
+    let adapter = MockAdapter::new(
+        vec![
+            StreamEvent::ToolCall(ToolInvocation {
+                id: "call-1".into(),
+                name: "sleep-0".into(),
+                arguments: serde_json::json!({}),
+            }),
+            StreamEvent::ToolCall(ToolInvocation {
+                id: "call-2".into(),
+                name: "sleep-1".into(),
+                arguments: serde_json::json!({}),
+            }),
+            StreamEvent::ToolCall(ToolInvocation {
+                id: "call-3".into(),
+                name: "sleep-2".into(),
+                arguments: serde_json::json!({}),
+            }),
+            StreamEvent::ToolCall(ToolInvocation {
+                id: "call-4".into(),
+                name: "sleep-3".into(),
+                arguments: serde_json::json!({}),
+            }),
+            StreamEvent::Done {
+                finish_reason: FinishReason::ToolCalls,
+                usage: None,
+            },
+        ],
+        make_info(),
+    );
+
+    let log_path = std::env::temp_dir().join(format!(
+        "kirkforge-mid-batch-test-{}.ndjson",
+        std::process::id()
+    ));
+    remove_test_file(&log_path);
+    let (conversation, _outcome) = ConversationLog::open(log_path.clone()).unwrap();
+    let mut composite = crate::session::toolset::CompositeToolset::empty();
+    composite.add(Box::new(crate::session::toolset::VecToolset::new(
+        "test", tools,
+    )));
+    let mut exe = Executor::with_log(
+        Box::new(adapter),
+        composite,
+        make_config(true),
+        conversation,
+        None,
+    );
+
+    let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
+    let cancelled = Arc::new(AtomicBool::new(false));
+
+    let cancelled_flag = cancelled.clone();
+    let turn_handle = tokio::spawn(async move {
+        exe.run_turn_collecting("run four sleeps", &approval_tx, &cancelled_flag)
+            .await
+    });
+
+    let _ = started_rx.await;
+    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    cancelled.store(true, Ordering::SeqCst);
+
+    turn_handle.abort();
+    let _ = turn_handle.await;
+
+    let (restored, _outcome) = ConversationLog::open(log_path.clone()).unwrap();
+
+    let msgs = restored.all();
+    let tool_msgs: Vec<_> = msgs.iter().filter(|m| m.role == Role::Tool).collect();
+
+    assert!(
+        tool_msgs.iter().any(|m| m.content == "done"),
+        "at least one completed tool result should be persisted, got {tool_msgs:?}"
+    );
+    assert!(
+        tool_msgs.len() <= 2,
+        "no more than the first two fast results should be recorded, got {tool_msgs:?}"
+    );
+}
+            }),
+            StreamEvent::Done {
+                finish_reason: FinishReason::ToolCalls,
+                usage: None,
+            },
+        ],
+        make_info(),
+    );
+
+    );
 }

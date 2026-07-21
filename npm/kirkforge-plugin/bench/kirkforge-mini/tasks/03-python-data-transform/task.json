@@ -1,0 +1,10 @@
+{
+  "id": "03-python-data-transform",
+  "description": "Refactor `normalize_name(name: str) -> str` in normalize.py. The function should: (1) strip leading/trailing whitespace, (2) lowercase, (3) replace all non-alphanumeric characters with a single underscore, (4) collapse runs of underscores. The current implementation only does step 1.",
+  "language": "python",
+  "expectedFiles": ["normalize.py"],
+  "validatorCommand": "bash validator.sh",
+  "passCondition": "exit 0",
+  "difficulty": "easy",
+  "estimatedTokens": 300
+}

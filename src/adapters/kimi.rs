@@ -22,6 +22,7 @@ pub struct KimiAdapter {
     /// `Config::json_mode`. Default `false`. The body builder reads it
     /// to add `"format": "json"` at the top level of the request.
     json_mode: bool,
+    seed: Option<u64>,
     timeout_secs: u64,
 }
 
@@ -32,6 +33,7 @@ impl KimiAdapter {
             api_base: ollama_host.trim_end_matches('/').to_string(),
             client: super::build_reqwest_client(),
             json_mode: false,
+            seed: None,
             timeout_secs,
         }
     }
@@ -55,6 +57,10 @@ impl ModelAdapter for KimiAdapter {
         self.json_mode = json_mode;
     }
 
+    fn set_seed(&mut self, seed: Option<u64>) {
+        self.seed = seed;
+    }
+
     async fn stream(
         &self,
         messages: &[Message],
@@ -67,6 +73,7 @@ impl ModelAdapter for KimiAdapter {
             tools,
             true,
             self.json_mode,
+            self.seed,
         );
         let url = format!("{}/api/chat", self.api_base);
 

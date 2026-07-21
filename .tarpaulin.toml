@@ -1,10 +1,10 @@
 [tarpaulin]
-# Skip integration tests that require a live Ollama server; unit tests cover
-# the bulk of the logic.
-exclude-files = ["tests/integration_test.rs", "src/main.rs"]
-# Exclude the build script from coverage targets.
-exclude = ["build_script_build"]
-# Give slow tests enough time to finish.
-timeout = "120"
+# `--lib` (set in the CI invocation) already skips `tests/*` integration
+# tests, so exclude-files/exclude are not needed. Both require --workspace
+# which conflicts with the --lib flag, so they must not appear here.
+# Give slow tests enough time to finish. Tarpaulin expects a duration
+# string ("120s"), not a bare number — the bare "120" was silently
+# rejected and replaced with the default 60s timeout.
+timeout = "120s"
 # LLVM engine avoids segfaults when tracing tests that spawn subprocesses.
 engine = "Llvm"

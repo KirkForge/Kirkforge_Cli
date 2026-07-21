@@ -363,6 +363,7 @@ pub struct OpenAiCompatAdapter {
     api_base: String,
     client: reqwest::Client,
     json_mode: bool,
+    seed: Option<u64>,
     timeout_secs: u64,
 }
 
@@ -374,6 +375,7 @@ impl OpenAiCompatAdapter {
             api_base,
             client: super::build_reqwest_client(),
             json_mode: false,
+            seed: None,
             timeout_secs,
         }
     }
@@ -417,6 +419,10 @@ impl ModelAdapter for OpenAiCompatAdapter {
         self.json_mode = json_mode;
     }
 
+    fn set_seed(&mut self, seed: Option<u64>) {
+        self.seed = seed;
+    }
+
     async fn stream(
         &self,
         messages: &[Message],
@@ -428,6 +434,7 @@ impl ModelAdapter for OpenAiCompatAdapter {
             messages,
             tools,
             self.json_mode,
+            self.seed,
         );
         let url = format!("{}/v1/chat/completions", self.api_base);
 

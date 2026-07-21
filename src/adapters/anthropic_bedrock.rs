@@ -26,6 +26,7 @@ pub struct AnthropicBedrockAdapter {
     profile: String,
     client: reqwest::Client,
     json_mode: bool,
+    seed: Option<u64>,
     timeout_secs: u64,
 }
 
@@ -37,6 +38,7 @@ impl AnthropicBedrockAdapter {
             profile: profile.to_string(),
             client: super::build_reqwest_client(),
             json_mode: false,
+            seed: None,
             timeout_secs,
         }
     }
@@ -69,12 +71,22 @@ impl ModelAdapter for AnthropicBedrockAdapter {
         self.json_mode = json_mode;
     }
 
+    fn set_seed(&mut self, seed: Option<u64>) {
+        self.seed = seed;
+    }
+
     async fn stream(
         &self,
         messages: &[Message],
         tools: &[crate::shared::ToolDef],
     ) -> anyhow::Result<tokio::sync::mpsc::Receiver<StreamEvent>> {
-        let body = anthropic::build_anthropic_body(&self.model_id, messages, tools, self.json_mode);
+        let body = anthropic::build_anthropic_body(
+            &self.model_id,
+            messages,
+            tools,
+            self.json_mode,
+            self.seed,
+        );
         let body_bytes = serde_json::to_vec(&body)?;
         let url = self.endpoint();
 

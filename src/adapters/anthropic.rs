@@ -30,6 +30,7 @@ pub struct AnthropicAdapter {
     api_base: String,
     client: reqwest::Client,
     json_mode: bool,
+    seed: Option<u64>,
     timeout_secs: u64,
 }
 
@@ -40,6 +41,7 @@ impl AnthropicAdapter {
             api_base: api_base.trim_end_matches('/').to_string(),
             client: super::build_reqwest_client(),
             json_mode: false,
+            seed: None,
             timeout_secs,
         }
     }
@@ -65,12 +67,16 @@ impl ModelAdapter for AnthropicAdapter {
         self.json_mode = json_mode;
     }
 
+    fn set_seed(&mut self, seed: Option<u64>) {
+        self.seed = seed;
+    }
+
     async fn stream(
         &self,
         messages: &[Message],
         tools: &[crate::shared::ToolDef],
     ) -> anyhow::Result<tokio::sync::mpsc::Receiver<StreamEvent>> {
-        let body = build_anthropic_body(&self.model, messages, tools, self.json_mode);
+        let body = build_anthropic_body(&self.model, messages, tools, self.json_mode, self.seed);
         let url = format!("{}/v1/messages", self.api_base);
 
         let response = super::send_with_retry(|| async {
@@ -105,6 +111,7 @@ pub(crate) fn build_anthropic_body(
     messages: &[Message],
     tools: &[crate::shared::ToolDef],
     json_mode: bool,
+    seed: Option<u64>,
 ) -> serde_json::Value {
     let mut system_blocks: Vec<serde_json::Value> = Vec::new();
     let mut anthropic_messages: Vec<serde_json::Value> = Vec::new();
@@ -219,6 +226,12 @@ pub(crate) fn build_anthropic_body(
         // instructions rather than a response_format field. We do not add an
         // unsupported top-level key; callers are expected to use a system
         // prompt that asks for JSON.
+    }
+
+    // Deterministic mode: pin temperature to 0. Anthropic does not
+    // accept a `seed` field, but temperature=0 is the closest we can get.
+    if seed.is_some() {
+        body["temperature"] = serde_json::json!(0.0);
     }
 
     body
@@ -679,7 +692,7 @@ mod tests {
                 ..Default::default()
             },
         ];
-        let body = build_anthropic_body("claude-sonnet-4", &messages, &[], false);
+        let body = build_anthropic_body("claude-sonnet-4", &messages, &[], false, None);
         assert!(body
             .get("messages")
             .unwrap()
@@ -714,7 +727,7 @@ mod tests {
                 ..Default::default()
             },
         ];
-        let body = build_anthropic_body("claude-sonnet-4", &messages, &[], false);
+        let body = build_anthropic_body("claude-sonnet-4", &messages, &[], false, None);
         let msgs = body["messages"].as_array().unwrap();
         assert!(msgs[0]
             .get("content")

@@ -108,7 +108,7 @@ fn oai_body(msgs: &[Message], json_mode: bool) -> serde_json::Value {
         description: "x",
         parameters: json!({"type": "object", "properties": {}}),
     }];
-    build_openai_compat_body("test-model", &mi, msgs, &tools, json_mode)
+    build_openai_compat_body("test-model", &mi, msgs, &tools, json_mode, None)
 }
 
 #[test]
@@ -186,7 +186,7 @@ fn openai_cache_mode_marks_last_two_prefix_messages() {
         },
         user_text("third (user)"),
     ];
-    let body = build_openai_compat_body("m", &mi, &msgs, &tools, false);
+    let body = build_openai_compat_body("m", &mi, &msgs, &tools, false, None);
     let oai_msgs = body["messages"].as_array().unwrap();
     // System message (idx 0): no marker (only the last 2 of the
     // prefix are marked, and the system is the head of the prefix
@@ -207,7 +207,7 @@ fn openai_cache_mode_off_omits_cache_control() {
     mi.supports_cache = false;
     let tools: Vec<ToolDef> = vec![];
     let msgs = vec![user_text("a"), user_text("b"), user_text("c")];
-    let body = build_openai_compat_body("m", &mi, &msgs, &tools, false);
+    let body = build_openai_compat_body("m", &mi, &msgs, &tools, false, None);
     for m in body["messages"].as_array().unwrap() {
         assert!(m.get("cache_control").is_none());
     }
@@ -218,7 +218,7 @@ fn openai_cache_mode_off_omits_cache_control() {
 fn ollama_body(msgs: &[Message], json_mode: bool) -> serde_json::Value {
     let mi = dummy_model_info();
     let tools: Vec<ToolDef> = vec![];
-    build_ollama_chat_body("test-model", &mi, msgs, &tools, true, json_mode)
+    build_ollama_chat_body("test-model", &mi, msgs, &tools, true, json_mode, None)
 }
 
 #[test]

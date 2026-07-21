@@ -268,6 +268,7 @@ mod tests {
         let mut job = bash_job("echo hello-scheduled");
         let config = Config {
             scheduled_bash_auto_approve: true,
+            seed: None,
             ..Default::default()
         };
         let run = run_job(&mut job, &store, &config).await.unwrap();
@@ -283,6 +284,7 @@ mod tests {
         let mut job = bash_job("rm -rf /");
         let config = Config {
             scheduled_bash_auto_approve: true,
+            seed: None,
             ..Default::default()
         };
         let run = run_job(&mut job, &store, &config).await.unwrap();

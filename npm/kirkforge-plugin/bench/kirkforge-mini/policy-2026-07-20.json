@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "name": "kirkforge-mini-bench-policy-2026-07-20",
+  "tools": {
+    "allowed": [
+      "text",
+      "typescript",
+      "python",
+      "javascript",
+      "json",
+      "shell",
+      "shell_exec",
+      "file_read",
+      "file_write",
+      "file_list",
+      "delegation",
+      "unknown"
+    ],
+    "denied": []
+  },
+  "models": {
+    "allowed": [
+      "qwen2.5:0.5b",
+      "qwen2.5:7b",
+      "kimi-k2.7-code:cloud",
+      "deepseek-v4-flash:cloud"
+    ],
+    "allowedProviders": [
+      "local-ollama"
+    ]
+  },
+  "workspaces": {
+    "allowedRoots": [
+      "/tmp/kirkforge-mini",
+      "/home/kirk/Madlab/Github/kf-worktrees/p0-plugin1"
+    ]
+  },
+  "execution": {
+    "networkAllowed": true,
+    "maxRuntimeSeconds": 600,
+    "shellAllowed": true,
+    "allowedCommands": [
+      "*"
+    ]
+  }
+}

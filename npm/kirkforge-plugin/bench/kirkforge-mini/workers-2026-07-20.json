@@ -1,0 +1,42 @@
+{
+  "$schema": "internal",
+  "comment": "Four locally-available Ollama models used for the 2026-07-20 KirkForge-Cli bench run. The original 9 cloud-model configs are kept in workers.json; this file adapts the harness to the models actually present in this environment.",
+  "workers": [
+    {
+      "id": "qwen2.5-0.5b-local",
+      "provider": "local-ollama",
+      "baseUrl": "http://localhost:11434/v1",
+      "model": "qwen2.5:0.5b",
+      "maxTokens": 2048,
+      "timeoutMs": 120000,
+      "description": "Small local Qwen baseline."
+    },
+    {
+      "id": "qwen2.5-7b-local",
+      "provider": "local-ollama",
+      "baseUrl": "http://localhost:11434/v1",
+      "model": "qwen2.5:7b",
+      "maxTokens": 2048,
+      "timeoutMs": 180000,
+      "description": "Mid-size local Qwen."
+    },
+    {
+      "id": "kimi-k2.7-code-cloud",
+      "provider": "local-ollama",
+      "baseUrl": "http://localhost:11434/v1",
+      "model": "kimi-k2.7-code:cloud",
+      "maxTokens": 2048,
+      "timeoutMs": 180000,
+      "description": "Cloud-routed Kimi coding model."
+    },
+    {
+      "id": "deepseek-v4-flash-cloud",
+      "provider": "local-ollama",
+      "baseUrl": "http://localhost:11434/v1",
+      "model": "deepseek-v4-flash:cloud",
+      "maxTokens": 2048,
+      "timeoutMs": 180000,
+      "description": "Cloud-routed DeepSeek flash model."
+    }
+  ]
+}

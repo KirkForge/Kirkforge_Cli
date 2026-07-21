@@ -3,9 +3,10 @@
 use crate::adapters::tool_call_markup::extract_dsml_tool_calls;
 use crate::session::access::GuardVerdict;
 use crate::session::bash_runner::check_bash_command_str;
+use crate::session::error_recovery::RetryTracker;
 use crate::session::hooks::HookRunner;
 use crate::session::toolset::Toolset;
-use crate::shared::metrics::{record, MetricEvent};
+use crate::shared::metrics::{record, MetricEvent, PlanDecisionKind};
 use crate::shared::permission::{evaluate, PermissionAction};
 use crate::shared::{
     read_shared_config, Config, Message, Role, StreamEvent, ToolDef, ToolInvocation, ToolOutcome,
@@ -174,6 +175,7 @@ impl Executor {
 
         let mut tool_calls: Vec<ToolInvocation> = Vec::new();
         let mut already_retried_parse = false;
+        let mut retry_tracker = RetryTracker::new();
         let turn_start = Instant::now();
 
         let max_iterations = read_shared_config(&self.config)
@@ -276,6 +278,9 @@ impl Executor {
                 IterationOutcome::ParseError => {
                     if !already_retried_parse {
                         already_retried_parse = true;
+
+                        retry_tracker.wait_before_retry().await;
+                        retry_tracker.record_retry();
 
                         let retry_msg = "Your previous response contained a tool call with malformed JSON arguments. Re-emit ONLY the tool call with the corrected JSON — no additional text, no explanation.";
                         self.conversation
@@ -953,16 +958,32 @@ impl Executor {
         // Phase 2 — Run: spawn one task per non-file call. File calls are
         // run sequentially in Phase 3 so the read-before-edit gate can observe
         // reads before edits in the same batch.
+        //
+        // When deterministic mode is active (--seed), skip tokio::spawn and
+        // run all calls sequentially to eliminate nondeterminism from task
+        // scheduling. The tool-call *sequence* is what matters for regression
+        // testing; the model's output content may still vary by provider.
         let mut running: Vec<RunningTask> = Vec::with_capacity(prepared.len());
         let mut deferred_file_calls: Vec<PreparedCall> = Vec::new();
+        let mut results: std::collections::HashMap<usize, (ToolInvocation, ToolOutcome)> =
+            std::collections::HashMap::with_capacity(prepared.len());
+        let deterministic = self.is_deterministic();
         for prep in prepared {
             if prep.resolved_path.is_some() {
                 deferred_file_calls.push(prep);
                 continue;
             }
             let idx = prep.idx;
-            let handle = tokio::spawn(run_prepared_call(prep));
-            running.push((idx, handle));
+            if deterministic {
+                // Run sequentially — no tokio::spawn, no concurrency.
+                let outcome = run_prepared_call(prep).await;
+                if let Some((invocation, result)) = outcome {
+                    results.insert(idx, (invocation, result));
+                }
+            } else {
+                let handle = tokio::spawn(run_prepared_call(prep));
+                running.push((idx, handle));
+            }
             // Yield so the just-spawned task can start. If the user cancelled
             // while we were pre-gating, the next iteration sees the flag and
             // stops spawning remaining calls. This preserves the sequential
@@ -974,12 +995,61 @@ impl Executor {
             }
         }
 
-        // Collect completed results into a map keyed by original index.
+        // Collect completed non-file results and record them incrementally.
+        //
+        // Recording is interleaved with collection (not deferred to Phase 3):
+        // each completed tool result is appended to the conversation and
+        // checkpointed before the next handle is awaited. This is the
+        // "mid-batch checkpoint" guarantee — a crash or cancellation while a
+        // later, slower tool is still in-flight does not lose the results
+        // that already finished. Without this, a turn aborted while the
+        // collect loop is blocked on a slow tool would persist nothing,
+        // because Phase 3 (which appends to the conversation) only runs
+        // after the whole collect loop completes.
+        //
+        // Handles are awaited in input order so the conversation still
+        // records tool results in the order the model requested them.
+        // Cancellation is checked after each record: once cancelled, the
+        // remaining in-flight handles are dropped (their tasks finish
+        // detached but their results are never recorded) and Phase 3 / the
+        // caller append placeholder tool-result messages for them.
         let mut results: std::collections::HashMap<usize, (ToolInvocation, ToolOutcome)> =
-            std::collections::HashMap::with_capacity(running.len() + deferred_file_calls.len());
+            std::collections::HashMap::with_capacity(deferred_file_calls.len());
+        let mut recorded: std::collections::HashSet<usize> =
+            std::collections::HashSet::with_capacity(running.len());
         for (idx, handle) in running {
-            if let Ok(Some(pair)) = handle.await {
-                results.insert(idx, pair);
+            let pair = if let Ok(Some(p)) = handle.await {
+                p
+            } else {
+                // Join error (task panicked/cancelled): leave unrecorded so
+                // Phase 3 emits a placeholder for this index.
+                continue;
+            };
+            let tc = &mut tcs[idx];
+            let (invocation, outcome) = pair;
+            self.record_tool_result(
+                tc,
+                &invocation,
+                outcome,
+                approval_sender,
+                cancelled,
+                event_tx,
+            )
+            .await?;
+            if let Err(e) = self.conversation.checkpoint_async().await {
+                tracing::warn!(error = %e, "mid-batch checkpoint failed after tool {}", tc.id);
+                crate::send_or_warn!(
+                    event_tx
+                        .send(TurnEvent::Error(format!("Checkpoint failed: {e}")))
+                        .await,
+                    "TurnEvent receiver dropped; discarding event"
+                );
+            }
+            recorded.insert(idx);
+            // Stop launching further awaits once cancelled; the in-flight
+            // task we just awaited is recorded, later ones get placeholders.
+            if cancelled.load(Ordering::SeqCst) {
+                break;
             }
         }
 
@@ -1041,11 +1111,18 @@ impl Executor {
             }
         }
 
-        // Phase 3 — Record: walk input order, replay skipped/denied calls, then
-        // record each completed result in order. Cancellation is checked only
-        // when a result is missing, so already-completed tool bodies are still
-        // recorded and earlier calls in the batch don't become placeholders.
+        // Phase 3 — Record: walk input order, replay skipped/denied calls,
+        // then record each completed file-tool result in order. Non-file
+        // results were already recorded incrementally in the collect loop
+        // above (so a mid-batch crash persists them); skip those indices
+        // here. Cancellation is checked only when a result is missing, so
+        // already-completed tool bodies are still recorded and earlier calls
+        // in the batch don't become placeholders.
         for (idx, tc) in tcs.iter_mut().enumerate() {
+            if recorded.contains(&idx) {
+                // Already recorded and checkpointed in the collect loop.
+                continue;
+            }
             let has_result = results.contains_key(&idx);
             let has_skip = skipped.iter().any(|(i, _, _, _)| *i == idx);
             if !has_result && !has_skip && cancelled.load(Ordering::SeqCst) {
@@ -1106,6 +1183,18 @@ impl Executor {
                 event_tx,
             )
             .await?;
+
+            // Persist after each recorded result so a crash before the next
+            // tool starts does not lose in-flight progress.
+            if let Err(e) = self.conversation.checkpoint_async().await {
+                tracing::warn!(error = %e, "mid-batch checkpoint failed after tool {}", tc.id);
+                crate::send_or_warn!(
+                    event_tx
+                        .send(TurnEvent::Error(format!("Checkpoint failed: {e}")))
+                        .await,
+                    "TurnEvent receiver dropped; discarding event"
+                );
+            }
         }
 
         Ok(tcs.len())
@@ -1368,6 +1457,19 @@ impl Executor {
                     }
 
                     if !tool_calls_out.is_empty() {
+                        for tc in tool_calls_out.iter() {
+                            let reason = if assistant_thinking.is_empty() {
+                                "model-emitted tool call".to_string()
+                            } else {
+                                assistant_thinking.clone()
+                            };
+                            record(MetricEvent::PlanReason {
+                                decision_kind: PlanDecisionKind::ToolSelect,
+                                reason,
+                                related_id: Some(tc.id.clone()),
+                                confidence: 1.0,
+                            });
+                        }
                         return Ok(IterationOutcome::ToolCalls(tool_calls_out.clone()));
                     }
 

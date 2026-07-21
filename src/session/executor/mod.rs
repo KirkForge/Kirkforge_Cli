@@ -155,6 +155,9 @@ impl Executor {
         // mocks) silently ignore the flag.
         adapter.set_json_mode(cfg.json_mode);
 
+        // Push the deterministic-mode seed down to the active adapter.
+        adapter.set_seed(cfg.seed);
+
         let adapter_swap = AdapterSwap::new(
             model_name.clone(),
             cfg.ollama_host.clone(),
@@ -247,6 +250,13 @@ impl Executor {
         }
     }
 
+    /// Whether deterministic mode is active. When true, the parallel
+    /// tool batch runs sequentially (no `tokio::spawn`) to eliminate
+    /// nondeterminism from task scheduling.
+    fn is_deterministic(&self) -> bool {
+        read_shared_config(&self.config).seed.is_some()
+    }
+
     /// Construct the in-process task spawner from the executor's model,
     /// config, and sandboxing state. Called once at construction.
     fn build_task_spawner(&mut self) {
@@ -292,9 +302,9 @@ impl Executor {
     ) -> usize {
         use crate::session::verifier::{Verdict, Verifier};
 
-        // Default slots need room for security, lint, git, rustfmt, plus
-        // any plugin verifiers registered below. Use a generous cap so live
-        // plugin reload can add many plugin verifiers without running out.
+        // Default slots need room for security, lint, build, git, rustfmt,
+        // test, plus any plugin verifiers registered below. Use a generous cap
+        // so live plugin reload can add many plugin verifiers without running out.
         let slots = Arc::new(std::sync::RwLock::new(VerifierSlots::with_max_slots(64)));
         let mut count = 0;
 
@@ -338,6 +348,26 @@ impl Executor {
             }
         }
 
+        struct BuildV;
+        #[async_trait::async_trait]
+        impl Verifier for BuildV {
+            fn name(&self) -> &str {
+                "build"
+            }
+            fn priority(&self) -> u8 {
+                3
+            }
+            async fn verify(&self, event: &BusEvent) -> Verdict {
+                crate::session::verifier::build::verify_build(event).await
+            }
+        }
+        {
+            let mut s = slots.write().unwrap_or_else(|e| e.into_inner());
+            if s.register(Arc::new(BuildV)).is_ok() {
+                count += 1;
+            }
+        }
+
         struct GitV;
         #[async_trait::async_trait]
         impl Verifier for GitV {
@@ -374,6 +404,26 @@ impl Executor {
         {
             let mut s = slots.write().unwrap_or_else(|e| e.into_inner());
             if s.register(Arc::new(RustfmtV)).is_ok() {
+                count += 1;
+            }
+        }
+
+        struct TestV;
+        #[async_trait::async_trait]
+        impl Verifier for TestV {
+            fn name(&self) -> &str {
+                "test"
+            }
+            fn priority(&self) -> u8 {
+                5
+            }
+            async fn verify(&self, event: &BusEvent) -> Verdict {
+                crate::session::verifier::test::verify_test(event).await
+            }
+        }
+        {
+            let mut s = slots.write().unwrap_or_else(|e| e.into_inner());
+            if s.register(Arc::new(TestV)).is_ok() {
                 count += 1;
             }
         }
@@ -423,7 +473,7 @@ impl Executor {
         &mut self,
         registry: &kirkforge_plugin_host::PluginRegistry,
     ) -> usize {
-        const BUILTIN_VERIFIERS: &[&str] = &["security", "lint", "git", "rustfmt"];
+        const BUILTIN_VERIFIERS: &[&str] = &["security", "lint", "build", "git", "rustfmt", "test"];
 
         let Some(ref correction_loop) = self.correction_loop else {
             return 0;

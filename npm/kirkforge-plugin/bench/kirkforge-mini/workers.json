@@ -1,0 +1,87 @@
+{
+  "$schema": "internal",
+  "comment": "9 cloud models reachable through the local Ollama cloud router. All were smoke-tested with a one-word prompt before being added here. Skip the 0.5B local (qwen2.5:0.5b) — too small for meaningful coding comparison. These are the 9 models the user explicitly listed as available in the ollama search page.",
+  "workers": [
+    {
+      "id": "minimax-m3-cloud",
+      "provider": "local-ollama",
+      "baseUrl": "http://localhost:11434/v1",
+      "model": "minimax-m3:cloud",
+      "maxTokens": 2048,
+      "timeoutMs": 120000,
+      "description": "Self (the model running this session). Frontier-tier reasoning."
+    },
+    {
+      "id": "minimax-m2.7-cloud",
+      "provider": "local-ollama",
+      "baseUrl": "http://localhost:11434/v1",
+      "model": "minimax-m2.7:cloud",
+      "maxTokens": 2048,
+      "timeoutMs": 120000,
+      "description": "Previous-generation MiniMax. Mid-tier."
+    },
+    {
+      "id": "minimax-m2-cloud",
+      "provider": "local-ollama",
+      "baseUrl": "http://localhost:11434/v1",
+      "model": "minimax-m2:cloud",
+      "maxTokens": 2048,
+      "timeoutMs": 120000,
+      "description": "Older MiniMax. Baseline."
+    },
+    {
+      "id": "gpt-oss-120b-cloud",
+      "provider": "local-ollama",
+      "baseUrl": "http://localhost:11434/v1",
+      "model": "gpt-oss:120b-cloud",
+      "maxTokens": 2048,
+      "timeoutMs": 180000,
+      "description": "GPT-OSS 120B. Open-weight frontier-tier."
+    },
+    {
+      "id": "gemma4-31b-cloud",
+      "provider": "local-ollama",
+      "baseUrl": "http://localhost:11434/v1",
+      "model": "gemma4:31b-cloud",
+      "maxTokens": 2048,
+      "timeoutMs": 120000,
+      "description": "Gemma 4 31B. Mid-tier."
+    },
+    {
+      "id": "kimi-k2.6-cloud",
+      "provider": "local-ollama",
+      "baseUrl": "http://localhost:11434/v1",
+      "model": "kimi-k2.6:cloud",
+      "maxTokens": 2048,
+      "timeoutMs": 180000,
+      "description": "Kimi K2.6. Long-context, strong on code."
+    },
+    {
+      "id": "deepseek-v3.2-cloud",
+      "provider": "local-ollama",
+      "baseUrl": "http://localhost:11434/v1",
+      "model": "deepseek-v3.2:cloud",
+      "maxTokens": 2048,
+      "timeoutMs": 180000,
+      "description": "DeepSeek V3.2. Code-tuned."
+    },
+    {
+      "id": "qwen3-coder-480b-cloud",
+      "provider": "local-ollama",
+      "baseUrl": "http://localhost:11434/v1",
+      "model": "qwen3-coder:480b-cloud",
+      "maxTokens": 2048,
+      "timeoutMs": 240000,
+      "description": "Qwen3 Coder 480B. Largest model in the set; code-specialized."
+    },
+    {
+      "id": "glm-4.6-cloud",
+      "provider": "local-ollama",
+      "baseUrl": "http://localhost:11434/v1",
+      "model": "glm-4.6:cloud",
+      "maxTokens": 2048,
+      "timeoutMs": 120000,
+      "description": "GLM 4.6. Multilingual, mid-tier."
+    }
+  ]
+}

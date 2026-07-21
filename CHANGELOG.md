@@ -3,6 +3,16 @@
 All notable changes to kirkforge are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.1] - 2026-07-22
+
+### Added
+- Task-benchmark harness (`crates/kirkforge-bench/`): TOML task definitions, `BenchRunner` headless execution, metrics collection (success/tokens/time/cost), `kirkforge bench` subcommand, CI bench job. 10 unit tests, 5 task TOML files. Documented in ADR-038. (P1-long-2)
+- `impl Default for ContextIndex` (clippy fix).
+
+### Fixed
+- Removed duplicate `context_index` block in `src/main/mod.rs`.
+- `cargo fmt` fixes in `crates/kirkforge-context-index/src/lib.rs`.
+
 ## [0.3.0] - 2026-07-21
 
 ### Added

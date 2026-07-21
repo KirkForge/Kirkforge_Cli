@@ -1013,8 +1013,10 @@ impl Executor {
         // remaining in-flight handles are dropped (their tasks finish
         // detached but their results are never recorded) and Phase 3 / the
         // caller append placeholder tool-result messages for them.
-        let mut results: std::collections::HashMap<usize, (ToolInvocation, ToolOutcome)> =
-            std::collections::HashMap::with_capacity(deferred_file_calls.len());
+        //
+        // In deterministic mode (--seed), non-file tools ran sequentially
+        // in Phase 2 and their results are already in `results`. The
+        // `running` vec is empty, so this loop is a no-op.
         let mut recorded: std::collections::HashSet<usize> =
             std::collections::HashSet::with_capacity(running.len());
         for (idx, handle) in running {

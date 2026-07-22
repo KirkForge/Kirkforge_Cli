@@ -210,33 +210,56 @@ pub fn render_chat(f: &mut Frame, area: Rect, state: &mut AppState) {
     // The old bottom thinking panel is replaced with this compact,
     // context-attached block so reasoning is visible next to the turn
     // that produced it.
-    if state.thinking_panel_visible && !state.thinking_buffer.is_empty() {
-        let content_width = (area.width as usize).saturating_sub(8);
-        let border_style = Style::default()
-            .fg(Color::Magenta)
-            .add_modifier(Modifier::DIM);
-        let body_style = Style::default()
-            .fg(Color::Magenta)
-            .add_modifier(Modifier::DIM);
+    if !state.thinking_buffer.is_empty() {
+        if state.thinking_panel_visible {
+            let content_width = (area.width as usize).saturating_sub(8);
+            let border_style = Style::default()
+                .fg(Color::Magenta)
+                .add_modifier(Modifier::DIM);
+            let body_style = Style::default()
+                .fg(Color::Magenta)
+                .add_modifier(Modifier::DIM);
 
-        lines.push(Line::from(vec![
-            Span::styled("  ⸱ ", border_style),
-            Span::styled(
-                "THINKING",
-                Style::default()
-                    .fg(Color::Magenta)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled("  · Esc to hide", border_style),
-        ]));
+            lines.push(Line::from(vec![
+                Span::styled("  ⸱ ", border_style),
+                Span::styled(
+                    "THINKING",
+                    Style::default()
+                        .fg(Color::Magenta)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled("  · Esc to hide", border_style),
+            ]));
 
-        for t in &state.thinking_buffer {
-            for line in textwrap::fill(t, content_width).lines() {
-                lines.push(Line::from(vec![
-                    Span::styled("    │ ", border_style),
-                    Span::styled(line.to_string(), body_style),
-                ]));
+            for t in &state.thinking_buffer {
+                for line in textwrap::fill(t, content_width).lines() {
+                    lines.push(Line::from(vec![
+                        Span::styled("    │ ", border_style),
+                        Span::styled(line.to_string(), body_style),
+                    ]));
+                }
             }
+        } else {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    "  ⸱ ",
+                    Style::default()
+                        .fg(Color::Magenta)
+                        .add_modifier(Modifier::DIM),
+                ),
+                Span::styled(
+                    "[thinking hidden]",
+                    Style::default()
+                        .fg(Color::Magenta)
+                        .add_modifier(Modifier::DIM),
+                ),
+                Span::styled(
+                    "  · Esc or /thinking to show",
+                    Style::default()
+                        .fg(Color::Magenta)
+                        .add_modifier(Modifier::DIM),
+                ),
+            ]));
         }
     }
 
@@ -928,16 +951,25 @@ mod tests {
         });
         state.messages.push_back(entry_at("assistant", "hi", 9, 14));
         state.thinking_buffer.push("step 1".to_string());
-        // thinking_panel_visible defaults to false.
+        // thinking_panel_visible defaults to false — should show
+        // [thinking hidden] marker, NOT the full thinking content.
 
         let buffer = render_state(&mut state, 40, 10);
+        let mut found_hidden_marker = false;
         for row in 1..buffer.area.height - 1 {
             let text = buffer_cell_text(&buffer, row);
+            if text.contains("[thinking hidden]") {
+                found_hidden_marker = true;
+            }
             assert!(
-                !text.contains("THINKING") && !text.contains("step 1"),
-                "thinking block should be hidden when panel flag is false, got: {text:?}"
+                !text.contains("step 1"),
+                "thinking body should be hidden when panel flag is false, got: {text:?}"
             );
         }
+        assert!(
+            found_hidden_marker,
+            "should show [thinking hidden] marker when panel is off but buffer is non-empty"
+        );
     }
 
     #[test]
@@ -999,5 +1031,24 @@ mod tests {
             thinking_row.unwrap() > assistant_row.unwrap(),
             "thinking block should appear after the assistant message"
         );
+    }
+
+    #[test]
+    fn thinking_hidden_marker_absent_when_buffer_empty() {
+        let mut state = make_state(ConnectionState::Connected {
+            model: "test".into(),
+            since: std::time::Instant::now(),
+        });
+        state.messages.push_back(entry_at("assistant", "hi", 9, 14));
+        // thinking_buffer is empty (default) — no marker should appear.
+
+        let buffer = render_state(&mut state, 40, 10);
+        for row in 1..buffer.area.height - 1 {
+            let text = buffer_cell_text(&buffer, row);
+            assert!(
+                !text.contains("[thinking hidden]"),
+                "no hidden marker when thinking buffer is empty, got: {text:?}"
+            );
+        }
     }
 }

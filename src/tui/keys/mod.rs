@@ -614,6 +614,7 @@ pub(crate) async fn handle_input_key(
   /implement Exit plan mode and allow the model to implement the approved plan.
   /commit   Commit changes safely: /commit shows status + suggested message; /commit \"message\" stages all and commits after sanitation checks; /commit --push \"message\" also pushes.
   /undo     Undo the most recent edit_file or write_file. /undo list shows the stack; /undo count prints the depth.
+  /thinking Toggle display of reasoning/thinking blocks. /thinking shows or hides thinking content; Esc also toggles.
   /reload   Reload config.toml and environment overrides.
   /reload plugins  Re-scan the plugin directory and refresh plugin tools, hooks, and verifiers.
   /reload skills   Re-scan project SKILL.md files and refresh built-in skills.
@@ -621,7 +622,7 @@ pub(crate) async fn handle_input_key(
   /carryover Show or clear cross-session carryover profile.
   /test     Run cargo test --no-fail-fast; surface a parsed pass/fail summary with file:line locations. Optional: /test <timeout-secs>.
   /workflow Run a programmable JSON workflow: /workflow run <name>, /workflow status, /workflow cancel\n\nBash passthrough:\n  !<command>  Run a shell command directly — no model round trip. Approval is configurable via `bang_requires_approval`. Output is shown as a collapsible tool entry. 30-second timeout; for long jobs use `!<cmd> &` and check /jobs.\n\n@-mentions (inline file context):\n  @<path>          Inline the file's contents into the prompt (minified by default). The TUI shows a status row per mention.\n  @<path>:raw      Inline the file verbatim, no minification.\n  @<path>:A-B      Inline lines A–B (1-indexed, inclusive on both ends).\n  @<path>:A-B:raw  Range + verbatim, combined.\n  @~/...           Tilde expansion supported (e.g. @~/notes.md).\n  Multiple @<path> tokens in one input are all expanded. Each mention is capped at 50 KB (head + tail + marker) and respects the same path-safety rules as the model's read_file tool. Failures (missing, denied, I/O) are shown in the TUI as ✗ rows and as quoted placeholders in the prompt, so the model can react.\n\nKeybindings:\n  Ctrl+T   Toggle tool output collapse (default ON)\n  Ctrl+F   Search the conversation (Enter to commit and jump, n / Shift+N to cycle, Esc to cancel)\n  Enter    Expand/collapse the most recent message (when input is empty)\n  Tab      Same as Enter (alternative expand gesture)\n  Ctrl+C   Cancel generation + clear input
-  Ctrl+Shift+C  Copy last assistant message to clipboard\n  Ctrl+Shift+B  Copy a code block from the most recent assistant message (repeat to cycle blocks)\n  Ctrl+W   Delete word backward\n  Ctrl+U   Clear input line\n  Esc      Toggle thinking panel (or cancel search if Ctrl+F is active)\n\nStatus bar:\n  The bottom bar shows session model, time, cumulative cost, and a colour-coded budget indicator. Green (< 50%) = comfortable, yellow (50–80%) = consider /compact, red (> 80%) = compact now. The same data is available on demand via /status.\n".to_string();
+  Ctrl+Shift+C  Copy last assistant message to clipboard\n  Ctrl+Shift+B  Copy a code block from the most recent assistant message (repeat to cycle blocks)\n  Ctrl+W   Delete word backward\n  Ctrl+U   Clear input line\n  Esc      Toggle thinking panel (or cancel search if Ctrl+F is active; same as /thinking)\n\nStatus bar:\n  The bottom bar shows session model, time, cumulative cost, and a colour-coded budget indicator. Green (< 50%) = comfortable, yellow (50–80%) = consider /compact, red (> 80%) = compact now. The same data is available on demand via /status.\n".to_string();
                             let skills = state.skill_registry.all();
                             if !skills.is_empty() {
                                 help_text.push_str("\nSkills:\n");
@@ -782,6 +783,19 @@ pub(crate) async fn handle_input_key(
                             state
                                 .messages
                                 .push_back(ConversationEntry::new("system", msg));
+                            return Ok(());
+                        }
+                        "/thinking" => {
+                            state.thinking_panel_visible = !state.thinking_panel_visible;
+                            let status = if state.thinking_panel_visible {
+                                "shown"
+                            } else {
+                                "hidden"
+                            };
+                            state.messages.push_back(ConversationEntry::new(
+                                "system",
+                                format!("Thinking blocks are now {status}. Press Esc to toggle."),
+                            ));
                             return Ok(());
                         }
                         "/plan" => {

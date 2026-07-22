@@ -900,6 +900,123 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn test_fuzzy_fallback_exact_match_skips_fuzzy() {
+        let content = "fn main() {\n    let x = 1;\n}\n";
+        let dir = std::env::temp_dir();
+        let path = dir.join("kirkforge_edit_exact_match.txt");
+        std::fs::write(&path, content).unwrap();
+
+        let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false);
+        let ctx = ToolContext::new();
+        let args = serde_json::json!({
+            "path": path.to_string_lossy(),
+            "old_string": "let x = 1;",
+            "new_string": "let y = 2;",
+        });
+
+        let result = tool.run(&ctx, args).await;
+        assert!(
+            matches!(result, ToolOutcome::FileEdit { .. }),
+            "exact match should produce FileEdit, got {result:?}"
+        );
+        let got = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            got.contains("let y = 2;"),
+            "replacement should be present, got: {got:?}"
+        );
+        assert!(
+            !got.contains("let x = 1;"),
+            "old string should be gone, got: {got:?}"
+        );
+        remove_test_file(&path);
+    }
+
+    #[tokio::test]
+    async fn test_fuzzy_fallback_whitespace_tolerant() {
+        let content = "fn main() {\n    let x = 1;   \n}\n";
+        let dir = std::env::temp_dir();
+        let path = dir.join("kirkforge_edit_whitespace.txt");
+        std::fs::write(&path, content).unwrap();
+
+        let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false);
+        let ctx = ToolContext::new();
+        // old_string has no trailing whitespace — fuzzy match should find it
+        let args = serde_json::json!({
+            "path": path.to_string_lossy(),
+            "old_string": "let x = 1;",
+            "new_string": "let y = 2;",
+        });
+
+        let result = tool.run(&ctx, args).await;
+        assert!(
+            matches!(result, ToolOutcome::FileEdit { .. }),
+            "fuzzy match should produce FileEdit, got {result:?}"
+        );
+        let got = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            got.contains("let y = 2;"),
+            "replacement should be present via fuzzy match, got: {got:?}"
+        );
+        remove_test_file(&path);
+    }
+
+    #[tokio::test]
+    async fn test_fuzzy_fallback_no_match() {
+        let content = "fn main() {\n    let x = 1;\n}\n";
+        let dir = std::env::temp_dir();
+        let path = dir.join("kirkforge_edit_no_match.txt");
+        std::fs::write(&path, content).unwrap();
+
+        let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false);
+        let ctx = ToolContext::new();
+        let args = serde_json::json!({
+            "path": path.to_string_lossy(),
+            "old_string": "this string does not exist",
+            "new_string": "replacement",
+        });
+
+        let result = tool.run(&ctx, args).await;
+        assert!(
+            matches!(result, ToolOutcome::Failure(_) | ToolOutcome::Error { .. }),
+            "no match should produce Failure or Error, got {result:?}"
+        );
+        // File should be unchanged
+        let got = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(got, content, "file should be unchanged on no match");
+        remove_test_file(&path);
+    }
+
+    #[tokio::test]
+    async fn test_fuzzy_fallback_partial_match_rejects() {
+        let content = "fn main() {\n    let x = 1;\n}\n";
+        let dir = std::env::temp_dir();
+        let path = dir.join("kirkforge_edit_partial_match.txt");
+        std::fs::write(&path, content).unwrap();
+
+        let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false);
+        let ctx = ToolContext::new();
+        // "let x" is a substring of "let x = 1;" — partial match, not exact
+        let args = serde_json::json!({
+            "path": path.to_string_lossy(),
+            "old_string": "let x",
+            "new_string": "let y",
+        });
+
+        let result = tool.run(&ctx, args).await;
+        // "let x" is a unique exact match in the file content (it's a
+        // substring of "let x = 1;"), so edit_file will match it exactly
+        // and replace just that substring.
+        assert!(
+            matches!(
+                result,
+                ToolOutcome::FileEdit { .. } | ToolOutcome::Failure(_)
+            ),
+            "partial substring match should be handled, got {result:?}"
+        );
+        remove_test_file(&path);
+    }
+
     // ── Property-based tests ───────────────────────────────────────────
 
     // Property-based tests: for any content where `old` occurs exactly

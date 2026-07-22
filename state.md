@@ -1,23 +1,26 @@
 # KirkForge-Cli Production-Readiness State
 
-## Current baseline: v0.3.0+ (2026-07-22)
+## Current baseline: v0.3.3 (2026-07-22)
 
-**`dev` at `8174dd6`, `main` at `7cfb8c7`.** All P2 short-term items shipped. P1-long-1 (repo-graph) shipped. P1-long-2 (benchmark harness) shipped. P2-long-3 (execution replay) shipped. P2-long-4 (VS Code extension) shipped. 58 ADRs.
+**`dev` at `1ca1f56`, `main` at `1ca1f56`.** All P2 short-term items shipped. P1-long-1 (repo-graph) shipped. P1-long-2 (benchmark harness) shipped. P2-long-3 (execution replay) shipped. P2-long-4 (VS Code extension) shipped. Subagent model selection + OpenCode Zen provider shipped. `/thinking` TUI toggle shipped. 60 ADRs.
 
-### What shipped this session (3.3)
+### What shipped this session (3.5)
 
 | Item | What |
 |---|---|
-| Task 1: VS Code extension | Inline diffs (accept/reject/status bar), TODO panel (3-state color-coded), chat panel (input + send + tool call details), LSP bridge (diagnostics on save + debounce), bridge sendPrompt/sendApproval, format.ts pure module. 13 tests. `.vsix` packages. CI vscode job. ADR-040. |
+| Task 1: Subagent model selection + Zen provider | `TaskRequest.model` field, `subagent_allowed_models` allowlist, `AdapterKind::OpenCodeZen`, `opencode/` prefix routing, `opencode_zen_api_key` + `opencode_zen_endpoint` config. ADR-041, ADR-042. 5 new tests. |
+| Task 2: Merge dev→main | Fast-forward merge. `main == dev`. |
+| Task 3: @file references | Already shipped (mentions.rs). Full path/range/raw support, PathGuard safety, tilde expansion. |
+| Task 4: !bash prefix | Already shipped (bang.rs). Permission model, timeout, collapsible output. |
+| Task 5: /thinking toggle | `/thinking` slash command, `[thinking hidden]` marker when collapsed, Esc toggle. 2 new tests. |
 
 ### Gates
 
-- `cargo test --locked --workspace --no-fail-fast` = **2817 passed, 0 failed, 45 ignored**
-- `cd editors/vscode && npm run build && npm test` = **13 passed, 0 failed**
-- `npx vsce package` = produces `kirkforge-vscode-0.2.0.vsix`
+- `cargo test --locked --workspace --no-fail-fast` = **2823 passed, 0 failed**
+- `cargo test -p plugin3-core --test readme_drift` = 2 passed
 - `cargo clippy --all-targets -- -D warnings` = clean
 - `cargo fmt --check` = clean
-- 58 ADRs (18 native 3-digit + 18 vendored 4-digit + 22 new: 019-040)
+- 60 ADRs (041 + 042 new)
 
 ### Remaining (long-term, path to A agent)
 
@@ -31,6 +34,7 @@
 | Task-benchmark harness | 2-3 weeks | **Shipped** (P1-long-2, ADR-038) |
 | Execution replay + time-travel | 2-3 weeks | **Shipped** (P2-long-3, ADR-039) |
 | Computer-use depth | 2-3 weeks | Not started |
+| Doom-loop recovery, session nav, /share, /editor | 1-2 weeks each | Future TUI parity |
 
 ### Open cleanup items
 

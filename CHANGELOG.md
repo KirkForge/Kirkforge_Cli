@@ -3,6 +3,21 @@
 All notable changes to kirkforge are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.3] - 2026-07-22
+
+### Added
+- Subagent model selection: `TaskRequest.model` field allows per-task
+  model override; `subagent_allowed_models` config allowlist enforces
+  cost control. ADR-041.
+- OpenCode Zen provider: `AdapterKind::OpenCodeZen` routes `opencode/*`
+  model names to Zen API gateway; `opencode_zen_api_key` and
+  `opencode_zen_endpoint` config fields. ADR-042.
+- `/thinking` slash command toggles reasoning block visibility; Esc
+  also toggles. Hidden thinking now shows `[thinking hidden]` marker
+  instead of invisible. (TUI parity)
+- `@file` references and `!bash` prefix already shipped in prior
+  sessions; verified present and tested.
+
 ## [0.3.2] - 2026-07-22
 
 ### Added

@@ -131,6 +131,7 @@ pub fn all_tools(
     lsp_pool: Option<std::sync::Arc<kirkforge_lsp::LspPool>>,
     computer_use: Option<(bool, crate::shared::ComputerUseConfig)>,
     chrome_tab: Option<std::sync::Arc<dyn crate::tools::computer_use::ChromeTab>>,
+    session_launcher: Option<crate::tools::computer_use::SessionLauncher>,
     docker_config: Option<crate::shared::DockerConfig>,
 ) -> Vec<Arc<dyn Tool>> {
     let task_manager = Arc::new(Mutex::new(task::TaskManager::new()));
@@ -184,7 +185,10 @@ pub fn all_tools(
         if enabled && supports_images {
             let tab = chrome_tab.unwrap_or_else(|| Arc::new(computer_use::PlaceholderTab));
             tools.push(Arc::new(computer_use::ComputerUse::new(
-                deny_list, config, tab,
+                deny_list,
+                config,
+                tab,
+                session_launcher,
             )));
         }
     }

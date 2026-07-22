@@ -331,6 +331,7 @@ impl TaskSpawner for InProcessTaskSpawner {
                 self.config.computer_use.clone(),
             )),
             None,
+            None,
             Some(self.config.docker.clone()),
         );
         let tools: Vec<Arc<dyn Tool>> = match request.persona.as_str() {

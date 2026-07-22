@@ -8,6 +8,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 - Multi-step browser flows in computer-use tool: BrowserSession with open/close,
   step tracking, and max_steps limit (ADR-044)
+- BrowserSessionOwner keeps the Chrome Browser process alive for the session
+  lifetime, preventing premature Chrome shutdown (P3-long-6 depth)
+- SessionLauncher type for async factory-based browser session creation;
+  `open` action now launches a fresh Chrome instance per session
 
 ### Changed
 - Refactored slash-command dispatch from inline match block to table-driven

@@ -842,6 +842,22 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
             std::sync::Arc::new(crate::tools::computer_use::PlaceholderTab)
         };
 
+    // Session launcher for multi-step browser sessions. When Chrome is
+    // available, each `open` action gets a fresh Browser process that
+    // stays alive until `close` drops it.
+    let session_launcher: Option<crate::tools::computer_use::SessionLauncher> =
+        if computer_use_enabled {
+            let cfg = config.computer_use.clone();
+            Some(std::sync::Arc::new(move || {
+                let cfg = cfg.clone();
+                Box::pin(async move { chrome_launcher::open_browser_session(&cfg).await })
+                    as crate::tools::computer_use::SessionFuture
+            })
+                as crate::tools::computer_use::SessionLauncher)
+        } else {
+            None
+        };
+
     // ── Toolset assembly (Phase 2.2) ──
     // Compose built-in, MCP, and plugin tools into a single source-aware
     // collection. The executor receives the flattened vector, but order and
@@ -860,6 +876,7 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
             lsp_pool.clone(),
             Some((computer_use_enabled, computer_use_cfg.clone())),
             Some(chrome_tab),
+            session_launcher,
             Some(config.docker.clone()),
         ),
     )));

@@ -11,6 +11,7 @@
 | Task 1: P3-long-6 (computer-use depth) | `BrowserSession` with open/close, step tracking, max_steps limit. Multi-step browser flows. 4 new tests. ADR-044. |
 | Task 2: Table-driven command dispatch | Refactored ~360-line inline match to `slash_commands.rs` with `COMMANDS` table + `dispatch_slash_command()`. `/help` text generated from table. 2 new tests. |
 | Task 3: Consolidate workspace dependencies | 12 common deps (serde, serde_json, tokio, anyhow, tracing, clap, async-trait, chrono, thiserror, toml, tempfile, directories) consolidated into `[workspace.dependencies]`. |
+| Task 4: P3-long-6 depth follow-up | `BrowserSessionOwner` keeps Chrome process alive for session lifetime. `SessionLauncher` async factory for per-session browser instances. `RealChromeTab` now owns `Browser`. |
 
 ### Gates
 

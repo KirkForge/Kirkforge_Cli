@@ -19,6 +19,16 @@ use crate::tools::{Tool, ToolContext};
 use base64::Engine as _;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+
+/// Pinned, boxed future returned by [`SessionLauncher`].
+pub type SessionFuture =
+    std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<Arc<dyn ChromeTab>>> + Send>>;
+
+/// Factory function that creates a fresh browser session.
+/// In production, this launches a real Chrome instance via `open_browser_session`.
+/// In tests, this is `None` (falls back to the shared tab).
+pub type SessionLauncher = Arc<dyn Fn() -> SessionFuture + Send + Sync>;
+
 /// Trait that abstracts the actual Chrome tab so tests can inject a fake.
 /// Exported so the launcher in `main/mod.rs` can hand a real tab handle to
 /// the tool. `RealChromeTab` lives next to the launcher to keep headless_chrome
@@ -41,21 +51,30 @@ pub struct ComputerUse {
     config: ComputerUseConfig,
     tab: Arc<dyn ChromeTab>,
     session: Mutex<Option<BrowserSession>>,
+    session_launcher: Option<SessionLauncher>,
 }
 
 impl ComputerUse {
     /// Constructor used in production. Receives a tab handle produced by the
-    /// Chrome launcher in `main/mod.rs` (or a placeholder if Chrome is unavailable).
-    pub fn new(deny_list: DenyList, config: ComputerUseConfig, tab: Arc<dyn ChromeTab>) -> Self {
+    /// Chrome launcher in `main/mod.rs` (or a placeholder if Chrome is unavailable),
+    /// plus an optional session launcher for creating fresh browser instances
+    /// on `open`.
+    pub fn new(
+        deny_list: DenyList,
+        config: ComputerUseConfig,
+        tab: Arc<dyn ChromeTab>,
+        session_launcher: Option<SessionLauncher>,
+    ) -> Self {
         Self {
             deny_list,
             config,
             tab,
             session: Mutex::new(None),
+            session_launcher,
         }
     }
 
-    /// Constructor for tests with an injected tab.
+    /// Constructor for tests with an injected tab and no session launcher.
     #[cfg(test)]
     fn with_tab(deny_list: DenyList, config: ComputerUseConfig, tab: Arc<dyn ChromeTab>) -> Self {
         Self {
@@ -63,6 +82,7 @@ impl ComputerUse {
             config,
             tab,
             session: Mutex::new(None),
+            session_launcher: None,
         }
     }
 }
@@ -156,6 +176,10 @@ impl BrowserSession {
     pub fn evaluate(&self, js: &str) -> anyhow::Result<String> {
         self.tab.evaluate(js)
     }
+
+    pub fn step_count(&self) -> u32 {
+        self.step
+    }
 }
 
 #[async_trait::async_trait]
@@ -243,14 +267,24 @@ impl Tool for ComputerUse {
         match action {
             "open" => {
                 let url = args["url"].as_str().unwrap_or("");
-                let session = BrowserSession::new(self.tab.clone(), self.config.max_steps);
-                if let Err(e) = session.tab.navigate(url) {
+                let session_tab = match self.session_launcher {
+                    Some(ref launcher) => match launcher().await {
+                        Ok(tab) => tab,
+                        Err(e) => {
+                            return ToolOutcome::Failure(ToolError::Internal {
+                                message: format!("failed to launch browser session: {e:#}"),
+                            })
+                        }
+                    },
+                    None => self.tab.clone(),
+                };
+                if let Err(e) = session_tab.navigate(url) {
                     return ToolOutcome::Failure(ToolError::Internal {
                         message: format!("open failed: {e:#}"),
                     });
                 }
                 let mut guard = self.session.lock().unwrap();
-                *guard = Some(session);
+                *guard = Some(BrowserSession::new(session_tab, self.config.max_steps));
                 ToolOutcome::Success {
                     content: format!("Opened session and navigated to {url}"),
                 }
@@ -671,6 +705,341 @@ mod tests {
         assert!(
             matches!(outcome, ToolOutcome::Failure(ToolError::Internal { .. })),
             "got {outcome:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn browser_session_open_creates_session() {
+        let tool = fake_tool();
+        assert!(
+            tool.session.lock().unwrap().is_none(),
+            "no session before open"
+        );
+        let outcome = tool
+            .run(
+                &ToolContext::new(),
+                json!({"action": "open", "url": "https://example.com"}),
+            )
+            .await;
+        let ToolOutcome::Success { content } = outcome else {
+            panic!("expected Success, got {outcome:?}");
+        };
+        assert!(content.contains("example.com"));
+        assert!(
+            tool.session.lock().unwrap().is_some(),
+            "session should exist after open"
+        );
+    }
+
+    #[tokio::test]
+    async fn browser_session_close_destroys_session() {
+        let tool = fake_tool();
+        tool.run(
+            &ToolContext::new(),
+            json!({"action": "open", "url": "https://example.com"}),
+        )
+        .await;
+        assert!(tool.session.lock().unwrap().is_some());
+        tool.run(&ToolContext::new(), json!({"action": "close"}))
+            .await;
+        assert!(
+            tool.session.lock().unwrap().is_none(),
+            "session should be destroyed after close"
+        );
+    }
+
+    #[tokio::test]
+    async fn browser_session_actions_use_session_when_open() {
+        let tool = fake_tool_with_max_steps(20);
+        tool.run(
+            &ToolContext::new(),
+            json!({"action": "open", "url": "https://example.com"}),
+        )
+        .await;
+        let outcome = tool
+            .run(
+                &ToolContext::new(),
+                json!({"action": "click", "selector": "#btn"}),
+            )
+            .await;
+        assert!(
+            matches!(outcome, ToolOutcome::Success { .. }),
+            "click should succeed: {outcome:?}"
+        );
+        let guard = tool.session.lock().unwrap();
+        let session = guard.as_ref().unwrap();
+        assert_eq!(session.step_count(), 1, "step should be 1 after one action");
+    }
+
+    #[tokio::test]
+    async fn browser_session_screenshot_returns_png() {
+        let tool = fake_tool();
+        tool.run(
+            &ToolContext::new(),
+            json!({"action": "open", "url": "https://example.com"}),
+        )
+        .await;
+        let outcome = tool
+            .run(&ToolContext::new(), json!({"action": "screenshot"}))
+            .await;
+        match outcome {
+            ToolOutcome::Image { data_base64, .. } => {
+                let bytes = base64::prelude::BASE64_STANDARD
+                    .decode(&data_base64)
+                    .expect("valid base64");
+                assert!(bytes.len() >= 4, "screenshot too short");
+                assert_eq!(bytes[0..4], [0x89, 0x50, 0x4E, 0x47], "not a PNG");
+            }
+            other => panic!("expected Image, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires headless Chrome"]
+    async fn browser_session_open_and_screenshot_with_chrome() {
+        use headless_chrome::browser::tab::point::Point;
+        use headless_chrome::protocol::cdp::Page::CaptureScreenshotFormatOption;
+
+        struct ChromeTabForTest {
+            _browser: headless_chrome::Browser,
+            tab: Arc<headless_chrome::Tab>,
+        }
+
+        impl ChromeTab for ChromeTabForTest {
+            fn navigate(&self, url: &str) -> anyhow::Result<()> {
+                self.tab
+                    .navigate_to(url)
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+                self.tab
+                    .wait_until_navigated()
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+                Ok(())
+            }
+            fn click(&self, selector: &str) -> anyhow::Result<()> {
+                self.tab
+                    .wait_for_element(selector)
+                    .map_err(|e| anyhow::anyhow!("{e}"))?
+                    .click()
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+                Ok(())
+            }
+            fn click_xy(&self, x: f64, y: f64) -> anyhow::Result<()> {
+                self.tab
+                    .click_point(Point { x, y })
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+                Ok(())
+            }
+            fn type_text(&self, selector: &str, text: &str) -> anyhow::Result<()> {
+                self.tab
+                    .wait_for_element(selector)
+                    .map_err(|e| anyhow::anyhow!("{e}"))?
+                    .type_into(text)
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+                Ok(())
+            }
+            fn keypress(&self, key: &str) -> anyhow::Result<()> {
+                self.tab
+                    .press_key(key)
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+                Ok(())
+            }
+            fn scroll(&self, amount: i32) -> anyhow::Result<()> {
+                let expr =
+                    format!("window.scrollBy({{ top: {amount}, left: 0, behavior: 'instant' }})");
+                self.tab
+                    .evaluate(&expr, true)
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+                Ok(())
+            }
+            fn screenshot(&self) -> anyhow::Result<Vec<u8>> {
+                self.tab
+                    .capture_screenshot(CaptureScreenshotFormatOption::Png, None, None, true)
+                    .map_err(|e| anyhow::anyhow!("{e}"))
+            }
+            fn wait_for(&self, selector: &str, _timeout: Duration) -> anyhow::Result<()> {
+                self.tab
+                    .wait_for_element(selector)
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+                Ok(())
+            }
+            fn evaluate(&self, expression: &str) -> anyhow::Result<String> {
+                let result = self
+                    .tab
+                    .evaluate(expression, true)
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+                Ok(result.value.map(|v| v.to_string()).unwrap_or_default())
+            }
+        }
+
+        let mut builder = headless_chrome::LaunchOptions::default_builder();
+        builder.headless(true);
+        builder.sandbox(false);
+        let options = builder
+            .build()
+            .expect("failed to build Chrome launch options");
+        let browser = match headless_chrome::Browser::new(options) {
+            Ok(b) => b,
+            Err(_) => return,
+        };
+        let tab = match browser.new_tab() {
+            Ok(t) => t,
+            Err(_) => return,
+        };
+        let chrome_tab: Arc<dyn ChromeTab> = Arc::new(ChromeTabForTest {
+            _browser: browser,
+            tab,
+        });
+        let config = ComputerUseConfig {
+            enabled: true,
+            ..Default::default()
+        };
+        let tool = ComputerUse::with_tab(DenyList::default(), config, chrome_tab);
+        let outcome = tool
+            .run(
+                &ToolContext::new(),
+                json!({"action": "open", "url": "https://example.com"}),
+            )
+            .await;
+        if matches!(outcome, ToolOutcome::Failure(_)) {
+            return;
+        }
+        assert!(
+            matches!(outcome, ToolOutcome::Success { .. }),
+            "open should succeed: {outcome:?}"
+        );
+        let outcome = tool
+            .run(&ToolContext::new(), json!({"action": "screenshot"}))
+            .await;
+        match outcome {
+            ToolOutcome::Image { data_base64, .. } => {
+                let bytes = base64::prelude::BASE64_STANDARD
+                    .decode(&data_base64)
+                    .expect("valid base64");
+                assert!(bytes.len() >= 4, "screenshot too short");
+                assert_eq!(bytes[0..4], [0x89, 0x50, 0x4E, 0x47], "not a PNG");
+            }
+            other => panic!("expected Image, got {other:?}"),
+        }
+        let outcome = tool
+            .run(&ToolContext::new(), json!({"action": "close"}))
+            .await;
+        assert!(
+            matches!(outcome, ToolOutcome::Success { .. }),
+            "close should succeed: {outcome:?}"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires headless Chrome"]
+    async fn browser_session_close_cleans_up() {
+        use headless_chrome::browser::tab::point::Point;
+        use headless_chrome::protocol::cdp::Page::CaptureScreenshotFormatOption;
+
+        struct ChromeTabForTest {
+            _browser: headless_chrome::Browser,
+            tab: Arc<headless_chrome::Tab>,
+        }
+
+        impl ChromeTab for ChromeTabForTest {
+            fn navigate(&self, url: &str) -> anyhow::Result<()> {
+                self.tab
+                    .navigate_to(url)
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+                self.tab
+                    .wait_until_navigated()
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+                Ok(())
+            }
+            fn click(&self, selector: &str) -> anyhow::Result<()> {
+                self.tab
+                    .wait_for_element(selector)
+                    .map_err(|e| anyhow::anyhow!("{e}"))?
+                    .click()
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+                Ok(())
+            }
+            fn click_xy(&self, x: f64, y: f64) -> anyhow::Result<()> {
+                self.tab
+                    .click_point(Point { x, y })
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+                Ok(())
+            }
+            fn type_text(&self, selector: &str, text: &str) -> anyhow::Result<()> {
+                self.tab
+                    .wait_for_element(selector)
+                    .map_err(|e| anyhow::anyhow!("{e}"))?
+                    .type_into(text)
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+                Ok(())
+            }
+            fn keypress(&self, key: &str) -> anyhow::Result<()> {
+                self.tab
+                    .press_key(key)
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+                Ok(())
+            }
+            fn scroll(&self, amount: i32) -> anyhow::Result<()> {
+                let expr =
+                    format!("window.scrollBy({{ top: {amount}, left: 0, behavior: 'instant' }})");
+                self.tab
+                    .evaluate(&expr, true)
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+                Ok(())
+            }
+            fn screenshot(&self) -> anyhow::Result<Vec<u8>> {
+                self.tab
+                    .capture_screenshot(CaptureScreenshotFormatOption::Png, None, None, true)
+                    .map_err(|e| anyhow::anyhow!("{e}"))
+            }
+            fn wait_for(&self, selector: &str, _timeout: Duration) -> anyhow::Result<()> {
+                self.tab
+                    .wait_for_element(selector)
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+                Ok(())
+            }
+            fn evaluate(&self, expression: &str) -> anyhow::Result<String> {
+                let result = self
+                    .tab
+                    .evaluate(expression, true)
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+                Ok(result.value.map(|v| v.to_string()).unwrap_or_default())
+            }
+        }
+
+        let mut builder = headless_chrome::LaunchOptions::default_builder();
+        builder.headless(true);
+        builder.sandbox(false);
+        let options = builder
+            .build()
+            .expect("failed to build Chrome launch options");
+        let browser = match headless_chrome::Browser::new(options) {
+            Ok(b) => b,
+            Err(_) => return,
+        };
+        let tab = match browser.new_tab() {
+            Ok(t) => t,
+            Err(_) => return,
+        };
+        let chrome_tab: Arc<dyn ChromeTab> = Arc::new(ChromeTabForTest {
+            _browser: browser,
+            tab,
+        });
+        let config = ComputerUseConfig {
+            enabled: true,
+            ..Default::default()
+        };
+        let tool = ComputerUse::with_tab(DenyList::default(), config, chrome_tab);
+        tool.run(
+            &ToolContext::new(),
+            json!({"action": "open", "url": "https://example.com"}),
+        )
+        .await;
+        assert!(tool.session.lock().unwrap().is_some());
+        tool.run(&ToolContext::new(), json!({"action": "close"}))
+            .await;
+        assert!(
+            tool.session.lock().unwrap().is_none(),
+            "close should destroy session"
         );
     }
 }

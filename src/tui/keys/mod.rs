@@ -13,13 +13,15 @@ use crate::session::executor::TurnEvent;
 use crate::session::prompt::CompactRequest;
 use crate::shared::Config;
 use crate::tui::app::{AppState, ConversationEntry};
-use crate::tui::commands::{PersonaKind, PersonaResult};
+use crate::tui::commands::PersonaResult;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use kirkforge_plugin_host::PluginRegistry;
 use tokio::sync::mpsc;
 
+mod slash_commands;
 mod text;
 
+use slash_commands::{dispatch_slash_command, SlashContext};
 use text::{
     char_index_for_line_col, current_line_bounds, delete_word_backward, search_nav_direction,
     SearchDirection,
@@ -575,407 +577,54 @@ pub(crate) async fn handle_input_key(
 
             if !input.is_empty() {
                 if input.starts_with('/') {
-                    // Command — dispatch via skill registry or built-in
                     let parts: Vec<&str> = input.splitn(2, ' ').collect();
                     let cmd = parts[0];
                     let args = parts.get(1).copied().unwrap_or("");
 
-                    // Built-in commands that don't go through skills
-                    match cmd {
-                        "/clear" => {
-                            state.messages.clear();
-                            state.thinking_buffer.clear();
-                            // A cleared conversation invalidates any
-                            // outstanding search matches — leave
-                            // search_mode and search_query alone
-                            // (so the user can re-type the same
-                            // query against fresh content) but
-                            // drop the cached positions.
-                            state.search_matches.clear();
-                            state.search_match_idx = 0;
-                            state.code_block_copy_index = 0;
-                            return Ok(());
-                        }
-                        "/exit" | "/quit" => {
-                            crate::send_or_warn!(
-                                ctx.cancel_tx.send(()),
-                                "cancel channel receiver dropped"
-                            );
-                            state.should_exit = true;
-                            return Ok(());
-                        }
-                        "/help" | "/h" | "/?" => {
-                            let mut help_text =
-                                "Built-in commands:\n  /clear    Clear conversation\n  /exit     Quit\n  /fork     Fork session: /fork list | <label> [count]\n  /resume   Resume a fork: /resume <fork-id>\n  /jobs     Background bash jobs: /jobs | <id> | clean\n           Scheduled jobs: /jobs schedule <spec> bash <cmd>, /jobs scheduled list, /jobs run-now <id>, /jobs logs <id>\n  /status   Show model, cost, tokens, and context pressure (one-shot)\n  /model    Hot-swap the active model: /model <name> (bypasses smart routing)\n  /route    Switch to the model configured for a tier: /route simple|medium|complex\n  /compact  Compact conversation history: drop old tool results, condense old assistant turns. Destructive — see TUI for stats.
-  /save     Save conversation transcript to markdown: /save [path]. Default: next to session log.
-  /explore  Fork-isolated research: read-only tools, returns a summary.
-  /plan     Fork-isolated plan mode: no shell, returns a step-by-step plan; type /implement to start coding.
-  /coder    Fork-isolated implementation: full toolset, returns a summary of changes.
-  /implement Exit plan mode and allow the model to implement the approved plan.
-  /commit   Commit changes safely: /commit shows status + suggested message; /commit \"message\" stages all and commits after sanitation checks; /commit --push \"message\" also pushes.
-  /undo     Undo the most recent edit_file or write_file. /undo list shows the stack; /undo count prints the depth.
-  /thinking Toggle display of reasoning/thinking blocks. /thinking shows or hides thinking content; Esc also toggles.
-  /reload   Reload config.toml and environment overrides.
-  /reload plugins  Re-scan the plugin directory and refresh plugin tools, hooks, and verifiers.
-  /reload skills   Re-scan project SKILL.md files and refresh built-in skills.
-  /sessions List/search saved sessions, prune old ones, or delete one by id.
-  /carryover Show or clear cross-session carryover profile.
-  /test     Run cargo test --no-fail-fast; surface a parsed pass/fail summary with file:line locations. Optional: /test <timeout-secs>.
-  /workflow Run a programmable JSON workflow: /workflow run <name>, /workflow status, /workflow cancel\n\nBash passthrough:\n  !<command>  Run a shell command directly — no model round trip. Approval is configurable via `bang_requires_approval`. Output is shown as a collapsible tool entry. 30-second timeout; for long jobs use `!<cmd> &` and check /jobs.\n\n@-mentions (inline file context):\n  @<path>          Inline the file's contents into the prompt (minified by default). The TUI shows a status row per mention.\n  @<path>:raw      Inline the file verbatim, no minification.\n  @<path>:A-B      Inline lines A–B (1-indexed, inclusive on both ends).\n  @<path>:A-B:raw  Range + verbatim, combined.\n  @~/...           Tilde expansion supported (e.g. @~/notes.md).\n  Multiple @<path> tokens in one input are all expanded. Each mention is capped at 50 KB (head + tail + marker) and respects the same path-safety rules as the model's read_file tool. Failures (missing, denied, I/O) are shown in the TUI as ✗ rows and as quoted placeholders in the prompt, so the model can react.\n\nKeybindings:\n  Ctrl+T   Toggle tool output collapse (default ON)\n  Ctrl+F   Search the conversation (Enter to commit and jump, n / Shift+N to cycle, Esc to cancel)\n  Enter    Expand/collapse the most recent message (when input is empty)\n  Tab      Same as Enter (alternative expand gesture)\n  Ctrl+C   Cancel generation + clear input
-  Ctrl+Shift+C  Copy last assistant message to clipboard\n  Ctrl+Shift+B  Copy a code block from the most recent assistant message (repeat to cycle blocks)\n  Ctrl+W   Delete word backward\n  Ctrl+U   Clear input line\n  Esc      Toggle thinking panel (or cancel search if Ctrl+F is active; same as /thinking)\n\nStatus bar:\n  The bottom bar shows session model, time, cumulative cost, and a colour-coded budget indicator. Green (< 50%) = comfortable, yellow (50–80%) = consider /compact, red (> 80%) = compact now. The same data is available on demand via /status.\n".to_string();
-                            let skills = state.skill_registry.all();
-                            if !skills.is_empty() {
-                                help_text.push_str("\nSkills:\n");
-                                for skill in skills {
-                                    help_text.push_str(&format!(
-                                        "  {}  — {}{}\n",
-                                        skill.meta.trigger,
-                                        skill.meta.description,
-                                        skill
-                                            .meta
-                                            .model
-                                            .as_ref()
-                                            .map(|m| format!(" [{m}]"))
-                                            .unwrap_or_default(),
-                                    ));
-                                }
+                    let slash_ctx = SlashContext {
+                        cancel_tx: ctx.cancel_tx,
+                        resume_tx: ctx.resume_tx,
+                        compact_tx: ctx.compact_tx,
+                        model_tx: ctx.model_tx,
+                        undo_tx: ctx.undo_tx,
+                        config_tx: ctx.config_tx,
+                        plan_tx: ctx.plan_tx,
+                        persona_tx: ctx.persona_tx,
+                        event_tx: ctx.event_tx,
+                        plugin_reload_tx: ctx.plugin_reload_tx,
+                    };
+                    let handled = dispatch_slash_command(cmd, args, state, &slash_ctx).await?;
+                    if !handled {
+                        if let Some(skill) = state.skill_registry.get_by_trigger(cmd) {
+                            if let Err(e) = crate::session::skills::Skill::tokenize_args(args) {
+                                state.messages.push_back(ConversationEntry::new(
+                                    "system",
+                                    format!("❌ Invalid arguments for {cmd}: {e}"),
+                                ));
+                                return Ok(());
                             }
-                            state
-                                .messages
-                                .push_back(ConversationEntry::new("system", help_text));
-                            return Ok(());
-                        }
-                        "/fork" => {
-                            let msg = crate::tui::commands::handle_fork_command(args, state).await;
-                            state
-                                .messages
-                                .push_back(ConversationEntry::new("system", msg));
-                            return Ok(());
-                        }
-                        "/resume" => {
-                            let msg = crate::tui::commands::handle_resume_command(
-                                args,
-                                state,
-                                ctx.resume_tx,
-                            )
-                            .await;
-                            state
-                                .messages
-                                .push_back(ConversationEntry::new("system", msg));
-                            return Ok(());
-                        }
-                        "/jobs" => {
-                            let msg = crate::tui::commands::handle_jobs_command(args, state).await;
-                            state
-                                .messages
-                                .push_back(ConversationEntry::new("system", msg));
-                            return Ok(());
-                        }
-                        "/status" => {
-                            let msg =
-                                crate::tui::commands::handle_status_command(args, state).await;
-                            state
-                                .messages
-                                .push_back(ConversationEntry::new("system", msg));
-                            return Ok(());
-                        }
-                        "/reload" => {
-                            let args = args.trim();
-                            let msg = match args {
-                                "plugins" => {
-                                    crate::tui::commands::handle_reload_plugins_command(
-                                        ctx.plugin_reload_tx,
-                                        state,
-                                    )
-                                    .await
-                                }
-                                "skills" => {
-                                    crate::tui::commands::handle_reload_skills_command(state)
-                                }
-                                _ => {
-                                    crate::tui::commands::handle_reload_command(
-                                        ctx.config_tx,
-                                        state,
-                                    )
-                                    .await
-                                }
-                            };
-                            state
-                                .messages
-                                .push_back(ConversationEntry::new("system", msg));
-                            return Ok(());
-                        }
-                        "/model" => {
-                            // Review.md gap #5 — hot-swap the active
-                            // model. The handler sends the name to
-                            // the executor; the executor swaps the
-                            // adapter in-place and emits a "🔀
-                            // Switched to …" token. This local
-                            // return is just a "request accepted"
-                            // confirmation so the user gets instant
-                            // feedback.
-                            let msg = crate::tui::commands::handle_model_command(
-                                args,
-                                ctx.model_tx,
-                                ctx.event_tx,
-                                state,
-                            )
-                            .await;
-                            state
-                                .messages
-                                .push_back(ConversationEntry::new("system", msg));
-                            return Ok(());
-                        }
-                        "/compact" => {
-                            let msg =
-                                crate::tui::commands::handle_compact_command(args, ctx.compact_tx)
-                                    .await;
-                            state
-                                .messages
-                                .push_back(ConversationEntry::new("system", msg));
-                            return Ok(());
-                        }
-                        "/route" => {
-                            let msg = crate::tui::commands::handle_route_command(
-                                args,
-                                ctx.model_tx,
-                                ctx.event_tx,
-                                state,
-                            )
-                            .await;
-                            state
-                                .messages
-                                .push_back(ConversationEntry::new("system", msg));
-                            return Ok(());
-                        }
-                        "/memory" => {
-                            let msg = crate::tui::commands::handle_memory_command(args);
-                            state
-                                .messages
-                                .push_back(ConversationEntry::new("system", msg));
-                            return Ok(());
-                        }
-                        "/metrics" => {
-                            let msg = crate::tui::commands::handle_metrics_command();
-                            state
-                                .messages
-                                .push_back(ConversationEntry::new("system", msg));
-                            return Ok(());
-                        }
-                        "/save" => {
-                            let msg = crate::tui::commands::handle_save_command(args, state).await;
-                            state
-                                .messages
-                                .push_back(ConversationEntry::new("system", msg));
-                            return Ok(());
-                        }
-                        "/undo" => {
-                            // Review.md gap #7 — the in-app undo
-                            // for file edits. The undo stack is
-                            // held by the executor (constructed at
-                            // session start) and populated by the
-                            // edit_file / write_file tools. We send
-                            // a signal over `undo_tx`; the executor
-                            // pops the stack and emits the result
-                            // as a system token.
-                            let msg =
-                                crate::tui::commands::handle_undo_command(args, ctx.undo_tx, state);
-                            state
-                                .messages
-                                .push_back(ConversationEntry::new("system", msg));
-                            return Ok(());
-                        }
-                        "/thinking" => {
-                            state.thinking_panel_visible = !state.thinking_panel_visible;
-                            let status = if state.thinking_panel_visible {
-                                "shown"
-                            } else {
-                                "hidden"
-                            };
+                            let rendered = skill.render_prompt(args);
                             state.messages.push_back(ConversationEntry::new(
                                 "system",
-                                format!("Thinking blocks are now {status}. Press Esc to toggle."),
+                                format!(
+                                    "🔧 Running skill: {} — {}",
+                                    skill.meta.name, skill.meta.description
+                                ),
                             ));
-                            return Ok(());
-                        }
-                        "/plan" => {
-                            // Phase 3.3: fork-isolated plan persona. The
-                            // model explores in a restricted fork (no
-                            // shell) and the final plan is merged back.
-                            // The main executor is then placed in plan
-                            // mode so `/implement` remains the approval
-                            // gesture.
-                            let msg = crate::tui::commands::start_persona(
-                                PersonaKind::Plan,
-                                args,
-                                state,
-                                ctx.persona_tx.clone(),
-                            )
-                            .await;
-                            state
-                                .messages
-                                .push_back(ConversationEntry::new("system", msg));
-                            return Ok(());
-                        }
-                        "/explore" => {
-                            let msg = crate::tui::commands::start_persona(
-                                PersonaKind::Explore,
-                                args,
-                                state,
-                                ctx.persona_tx.clone(),
-                            )
-                            .await;
-                            state
-                                .messages
-                                .push_back(ConversationEntry::new("system", msg));
-                            return Ok(());
-                        }
-                        "/coder" => {
-                            let msg = crate::tui::commands::start_persona(
-                                PersonaKind::Coder,
-                                args,
-                                state,
-                                ctx.persona_tx.clone(),
-                            )
-                            .await;
-                            state
-                                .messages
-                                .push_back(ConversationEntry::new("system", msg));
-                            return Ok(());
-                        }
-                        "/implement" => {
-                            // Exit plan mode and let the model implement
-                            // the approved plan. The executor injects a
-                            // system message telling the model it may
-                            // proceed; we echo a local confirmation too.
-                            crate::send_or_warn!(
-                                ctx.plan_tx.send(false),
-                                "plan-mode channel receiver dropped"
-                            );
+                            state.is_generating = true;
+                            if ctx.input_tx.send(rendered).is_err() {
+                                tracing::warn!(skill = %skill.meta.name, "input_tx receiver dropped while dispatching skill prompt");
+                                state.is_generating = false;
+                                return Ok(());
+                            }
+                        } else {
                             state.messages.push_back(ConversationEntry::new(
                                 "system",
-                                "✅ Plan mode disabled — implementation may begin.".to_string(),
+                                format!(
+                                    "Unknown command: {cmd}\nType /help for available commands."
+                                ),
                             ));
-                            return Ok(());
                         }
-                        "/gh" => {
-                            let msg = crate::tui::commands::handle_gh_command(args);
-                            state
-                                .messages
-                                .push_back(ConversationEntry::new("system", msg));
-                            return Ok(());
-                        }
-                        "/init" => {
-                            let cwd = std::env::current_dir()
-                                .unwrap_or_else(|_| std::path::PathBuf::from("."));
-                            let msg = crate::tui::commands::handle_init_command(args, &cwd);
-                            state
-                                .messages
-                                .push_back(ConversationEntry::new("system", msg));
-                            return Ok(());
-                        }
-                        "/commit" => {
-                            let cwd = std::env::current_dir()
-                                .unwrap_or_else(|_| std::path::PathBuf::from("."));
-                            let cfg = crate::shared::read_shared_config(&state.config).clone();
-                            let msg =
-                                crate::tui::commands::handle_commit_command(args, &cwd, &cfg).await;
-                            state
-                                .messages
-                                .push_back(ConversationEntry::new("system", msg));
-                            return Ok(());
-                        }
-                        "/sessions" => {
-                            let msg = crate::tui::commands::handle_sessions_command(args, state);
-                            state
-                                .messages
-                                .push_back(ConversationEntry::new("system", msg));
-                            return Ok(());
-                        }
-                        "/carryover" => {
-                            let msg = crate::tui::commands::handle_carryover_command(args, state);
-                            state
-                                .messages
-                                .push_back(ConversationEntry::new("system", msg));
-                            return Ok(());
-                        }
-                        "/test" => {
-                            // Runs the project's test suite via the
-                            // same `Bash` tool the model uses, then
-                            // parses the output into a structured
-                            // pass/fail summary with copy-pasteable
-                            // file:line:col tokens for each failure.
-                            //
-                            // Closes review.md gap #9. Async because
-                            // the handler awaits the bash call; the
-                            // surrounding `match cmd` block is
-                            // already inside `async fn
-                            // handle_input_key`.
-                            let msg = crate::tui::commands::handle_test_command(args, state).await;
-                            state
-                                .messages
-                                .push_back(ConversationEntry::new("system", msg));
-                            return Ok(());
-                        }
-                        "/plugins" => {
-                            let msg = crate::tui::commands::handle_plugins_command(
-                                args,
-                                state,
-                                ctx.plugin_reload_tx,
-                            )
-                            .await;
-                            state
-                                .messages
-                                .push_back(ConversationEntry::new("system", msg));
-                            return Ok(());
-                        }
-                        "/workflow" => {
-                            let msg = crate::tui::commands::handle_workflow_command(
-                                args,
-                                state,
-                                ctx.persona_tx.clone(),
-                            )
-                            .await;
-                            state
-                                .messages
-                                .push_back(ConversationEntry::new("system", msg));
-                            return Ok(());
-                        }
-                        _ => {}
-                    }
-
-                    if let Some(skill) = state.skill_registry.get_by_trigger(cmd) {
-                        if let Err(e) = crate::session::skills::Skill::tokenize_args(args) {
-                            state.messages.push_back(ConversationEntry::new(
-                                "system",
-                                format!("❌ Invalid arguments for {cmd}: {e}"),
-                            ));
-                            return Ok(());
-                        }
-                        let rendered = skill.render_prompt(args);
-                        state.messages.push_back(ConversationEntry::new(
-                            "system",
-                            format!(
-                                "🔧 Running skill: {} — {}",
-                                skill.meta.name, skill.meta.description
-                            ),
-                        ));
-                        // Send the skill prompt to the model via executor
-                        state.is_generating = true;
-                        if ctx.input_tx.send(rendered).is_err() {
-                            // Executor driver gone — same situation
-                            // as the Ctrl+C branch above. Don't
-                            // leave the UI claiming it's
-                            // "generating" when no one is listening.
-                            tracing::warn!(skill = %skill.meta.name, "input_tx receiver dropped while dispatching skill prompt");
-                            state.is_generating = false;
-                            return Ok(());
-                        }
-                    } else {
-                        state.messages.push_back(ConversationEntry::new(
-                            "system",
-                            format!("Unknown command: {cmd}\nType /help for available commands."),
-                        ));
                     }
                 } else {
                     // Regular message — push to display and send to executor.

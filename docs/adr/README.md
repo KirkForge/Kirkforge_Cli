@@ -72,6 +72,7 @@ numbering scheme (`001`–`017`). Recent additions:
 - [ADR-040: VS Code extension full surface](./040-vscode-extension-full-surface.md)
 - [ADR-041: Subagent model selection](./041-subagent-model-selection.md)
 - [ADR-042: OpenCode Zen provider](./042-opencode-zen-provider.md)
+- [ADR-043: Verifier-bus bridge code](./043-verifier-bus-bridge-code.md)
 
 These are **not** part of the Plugin3 series and are therefore not
 included in the 4-digit index table above.

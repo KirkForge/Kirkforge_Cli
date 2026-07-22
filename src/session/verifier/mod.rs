@@ -1,4 +1,5 @@
 pub mod build;
+pub mod bus;
 pub mod git;
 /// Verifier slots — deterministic post-execution checks and correction loop.
 ///
@@ -35,6 +36,7 @@ pub mod handler;
 pub mod slots;
 pub mod types;
 
+pub use bus::{BusVerifier, Severity, VerdictEntry, VerifierBus, VerifierSource, VerifyContext};
 pub use correction::{CorrectionLoop, CorrectionResult};
 pub use event_kinds::verifier_event_kinds;
 pub use handler::VerifierHandler;

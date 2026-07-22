@@ -12,7 +12,9 @@ use crate::session::event_bus::BusEvent;
 use crate::session::event_bus::EventBus;
 use crate::session::hooks::HookRunner;
 use crate::session::prompt::PromptBuilder;
-use crate::session::verifier::{CorrectionLoop, CorrectionResult, VerifierHandler, VerifierSlots};
+use crate::session::verifier::{
+    CorrectionLoop, CorrectionResult, VerifierBus, VerifierHandler, VerifierSlots,
+};
 use crate::shared::audit::AuditLog;
 use crate::shared::{read_shared_config, Config, Message, Role, SharedConfig, ToolInvocation};
 use crate::tools::{ToolContext, UndoStackRef};
@@ -48,6 +50,10 @@ pub struct Executor {
     event_bus: EventBus,
     audit_log: Arc<AuditLog>,
     correction_loop: Option<CorrectionLoop>,
+
+    /// Unified verifier bus — collects structured VerdictEntrys from all
+    /// registered BusVerifiers after each file-modifying tool call.
+    verifier_bus: Option<std::sync::Mutex<VerifierBus>>,
 
     carryover: CarryoverProfile,
 
@@ -202,6 +208,7 @@ impl Executor {
             event_bus,
             audit_log,
             correction_loop: None,
+            verifier_bus: None,
             carryover,
             carryover_enabled,
             carryover_target,
@@ -472,6 +479,9 @@ impl Executor {
                     }
                 });
                 self.correction_loop = Some(CorrectionLoop::new(handler));
+                self.verifier_bus = Some(std::sync::Mutex::new(
+                    super::verifier::bus::default_verifier_bus(),
+                ));
                 count
             }
             Err(e) => {

@@ -883,6 +883,34 @@ impl Executor {
             }
         }
 
+        // Run the unified verifier bus after file-modifying tool calls.
+        // Collect structured VerdictEntrys and inject error verdicts into
+        // the correction results so the model sees them.
+        let is_file_modification = matches!(tool_name, "write_file" | "edit_file" | "apply_patch");
+        if is_file_modification {
+            if let Some(ref bus_lock) = self.verifier_bus {
+                let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
+                let ctx = crate::session::verifier::bus::VerifyContext {
+                    sandbox_dir: self.path_guard.sandbox_dir.clone().unwrap_or_default(),
+                    changed_files: vec![std::path::PathBuf::from(path)],
+                };
+                if let Ok(mut bus) = bus_lock.lock() {
+                    bus.run(&ctx);
+                    for entry in bus.verdicts() {
+                        if entry.severity == crate::session::verifier::bus::Severity::Error {
+                            corrections.push(CorrectionResult {
+                                verifier: format!("{}", entry.source),
+                                success: false,
+                                message: format!("[{}] {}", entry.source, entry.message),
+                                fix: None,
+                            });
+                        }
+                    }
+                    bus.clear();
+                }
+            }
+        }
+
         corrections
     }
 }

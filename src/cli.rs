@@ -121,6 +121,11 @@ pub enum Command {
         /// tool spawns in a container with --memory and --cpus limits.
         #[arg(long)]
         docker: bool,
+
+        /// Disable turn tracing. By default every turn is recorded to
+        /// `<data-dir>/<session-id>.trace.ndjson` for later replay.
+        #[arg(long)]
+        no_trace: bool,
     },
     /// Print shell completion script and exit.
     /// Example: kirkforge completions bash >> ~/.bashrc
@@ -166,6 +171,28 @@ pub enum Command {
         /// Stop a running daemon.
         #[arg(long, conflicts_with = "foreground")]
         stop: bool,
+    },
+    /// Replay a past session turn-by-turn, showing what the model saw,
+    /// what tools it called, and the outcome of each turn.
+    Replay {
+        /// Session id or id prefix to replay.
+        id: String,
+
+        /// Data directory containing trace files.
+        #[arg(long)]
+        data_dir: Option<PathBuf>,
+
+        /// Show only this specific turn number.
+        #[arg(long)]
+        turn: Option<u32>,
+
+        /// Show turns from this number (inclusive).
+        #[arg(long)]
+        from: Option<u32>,
+
+        /// Show turns up to this number (inclusive).
+        #[arg(long)]
+        to: Option<u32>,
     },
     /// Run benchmark tasks and collect metrics.
     Bench {

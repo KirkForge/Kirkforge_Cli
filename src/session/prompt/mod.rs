@@ -20,7 +20,6 @@ const DEFAULT_MICROCOMPACT_KEEP_TAIL: usize = 5;
 
 pub struct PromptBuilder {
     template: String,
-    cache: HashMap<String, String>, // keyed by model name
     /// When `Some`, replaces the base template entirely. Set from the
     /// `--system` CLI flag (or future config knob). `None` means "use
     /// `prompts/system.hbs`" — the historical behavior.
@@ -100,7 +99,6 @@ impl PromptBuilder {
         let template = include_str!("../../../prompts/system.hbs");
         Self {
             template: template.to_string(),
-            cache: HashMap::new(),
             system_override: None,
             cached_system: None,
             context_index: None,

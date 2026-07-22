@@ -3,7 +3,20 @@
 All notable changes to kirkforge are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [0.3.4] - 2026-07-22
+## [0.3.5] - 2026-07-22
+
+### Added
+- Disk caching for context index (P1-long-1 Phase 4, ADR-037):
+  `CachedIndex` with git-HEAD-based invalidation. Cache at
+  `.kirkforge/context-index/cache.json`. Session startup is instant
+  on subsequent runs when HEAD matches. 5 new tests.
+
+### Changed
+- `edit_file` fuzzy-fallback now has 4 additional tests: exact match,
+  whitespace-tolerant, no-match, and partial-match coverage.
+
+### Removed
+- Dead `PromptBuilder.cache` field (HashMap never read).
 
 ### Fixed
 - `cargo clippy` unnecessary_map_or lint (CI green).

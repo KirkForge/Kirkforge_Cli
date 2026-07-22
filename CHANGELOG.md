@@ -3,6 +3,18 @@
 All notable changes to kirkforge are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.4] - 2026-07-22
+
+### Fixed
+- `cargo clippy` unnecessary_map_or lint (CI green).
+
+### Added
+- Unified verifier bus bridge code (P3-long-5, ADR-043):
+  `VerifierBus`, `BusVerifier` trait, `VerdictEntry`, `VerifyContext`,
+  `VerifierSource`, `Severity`. Executor runs the bus after
+  file-modifying tool calls and injects error verdicts into the
+  conversation. 7 unit tests.
+
 ## [0.3.3] - 2026-07-22
 
 ### Added

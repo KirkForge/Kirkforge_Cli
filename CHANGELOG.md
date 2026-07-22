@@ -12,8 +12,6 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   spawn+AtomicBool+abort race with try_recv check after turn completion).
 
 ### Added
-
-### Added
 - Multi-step browser flows in computer-use tool: BrowserSession with open/close,
   step tracking, and max_steps limit (ADR-044)
 - BrowserSessionOwner keeps the Chrome Browser process alive for the session

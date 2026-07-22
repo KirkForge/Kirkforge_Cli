@@ -2,17 +2,15 @@
 
 ## Current baseline: v0.3.5 (2026-07-22)
 
-**`dev` at `4aa2ae8`, `main` at `327d457`.** All P2 + P1-long-1/2/3/4 + P2-long-3/4 + P3-long-5/6 shipped. 62 ADRs.
+**`dev` at `2992c63`, `main` at `2992c63`.** All P2 + P1-long-1 Phases 1-5 (Rust+TS+Python) + P1-long-2/3/4 + P2-long-3/4 + P3-long-5/6 shipped. 62 ADRs. Flaky tests fixed.
 
-### What shipped this session (3.8 + 3.9)
+### What shipped this session (4.0)
 
 | Item | What |
 |---|---|
-| Task 1: P3-long-6 (computer-use depth) initial | `BrowserSession` with open/close, step tracking, max_steps limit. 4 new tests. ADR-044. |
-| Task 1: P3-long-6 (depth completion) | `BrowserSessionOwner` keeps Chrome alive per session. `SessionLauncher` for async per-session Chrome creation. 6 new session tests + 2 ignored Chrome integration tests. |
-| Task 2: Table-driven command dispatch | Refactored ~360-line inline match to `slash_commands.rs` with `COMMANDS` table + `dispatch_slash_command()`. `/help` text generated from table. 2 new tests. |
-| Task 3: Consolidate workspace dependencies | 12 common deps consolidated into `[workspace.dependencies]`. |
-| Task 4 (3.9): Stale cleanup item removed | "Persist plugin enable/disable state" was already shipped in `4b36211`. Removed from cleanup list. |
+| Task 1: Fix flaky tests | `test_parallel_tool_batch_runs_concurrently` (reduced sleep to 200ms, threshold to 5s) and `test_always_approve_rule_round_trips_to_next_turn` (replaced spawn+AtomicBool+abort race with try_recv check). |
+| Task 2: TypeScript tree-sitter grammar | `Language` enum, `detect_language()`, `SymbolKind::Class/Interface/TypeAlias`, `.ts`/`.tsx` file walking. 5 new tests. ADR-037 Phase 5. |
+| Task 3: Python tree-sitter grammar | `Language::Python`, `.py` detection, `function_definition`/`class_definition`/`import_statement`/`import_from_statement`/`decorated_definition` extraction. 3 new tests. ADR-037 Phase 5. |
 
 ### Already-shipped items found during 3.9
 
@@ -21,11 +19,12 @@
 
 ### Gates
 
-- `cargo test --locked --workspace --no-fail-fast` = **2845+ passed, 0 failed, 9+ ignored**
+- `cargo test --locked --workspace --no-fail-fast` = **2848+ passed, 0 failed, 7+ ignored**
 - `cargo test -p plugin3-core --test readme_drift` = 2 passed
+- `cargo test -p plugin3-core --test adr_xref_drift` = 3 passed
 - `cargo clippy --all-targets -- -D warnings` = clean
 - `cargo fmt --check` = clean
-- 62 ADRs (044 updated with depth status)
+- 62 ADRs (037 updated for Phase 5 TS+Python)
 
 ### Remaining (long-term, path to A agent)
 
@@ -36,7 +35,10 @@
 | Workspace dependencies consolidation | — | **Shipped** |
 | ~~Persist plugin enable/disable state~~ | — | **Already shipped** (commit `4b36211`) |
 | ~~Agent steps limit enforcement~~ | — | **Already shipped** (turn.rs:267-416) |
-| P1-long-1 Phases 5-7 (TS/Python/Go grammars, import/call-graph, embeddings) | 3-4 weeks | Future |
+| ~~Flaky tests~~ | — | **Fixed** (parallel batch threshold + always-approve race fix) |
+| P1-long-1 Phase 5 (Go grammar) | 1 hour | Future |
+| P1-long-1 Phase 6 (import/call-graph edges) | 1-2 weeks | Future |
+| P1-long-1 Phase 7 (embeddings/graph-walk retrieval) | 2-3 weeks | Future |
 | P1-long-2 follow-up (benchmark harness: more tasks, multi-model comparison) | 1-2 weeks | Future |
 
 ### Open cleanup items

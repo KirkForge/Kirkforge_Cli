@@ -10,11 +10,11 @@ keywords = ["compression", "llm", "context", "prompt"]
 categories = ["text-processing", "development-tools"]
 
 [dependencies]
-serde = { version = "1", features = ["derive"] }
-thiserror = "1"
-tracing = "0.1"
+serde.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
 blake3 = "1"
-toml = "0.8"
+toml.workspace = true
 
 [dev-dependencies]
 proptest = "1"

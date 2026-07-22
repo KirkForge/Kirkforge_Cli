@@ -6,10 +6,10 @@ description = "Runtime host for KirkForge plugins — registry, trust policy, an
 
 [dependencies]
 kirkforge-plugin = { path = "../kirkforge-plugin" }
-serde_json = "1"
-anyhow = "1"
-tracing = "0.1"
-thiserror = "1"
+serde_json.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
 
 [dev-dependencies]
-tempfile = "3"
+tempfile.workspace = true

@@ -38,6 +38,18 @@ kirkforge-lsp = { path = "crates/kirkforge-lsp" }
 kirkforge-workflow = { path = "crates/kirkforge-workflow" }
 kirkforge-context-index = { path = "crates/kirkforge-context-index" }
 kirkforge-bench = { path = "crates/kirkforge-bench" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+anyhow = "1"
+tracing = "0.1"
+clap = { version = "4", features = ["derive", "env"] }
+async-trait = "0.1"
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "1"
+toml = "0.8"
+tempfile = "3"
+directories = "6"
 
 [dependencies]
 # TUI
@@ -45,7 +57,7 @@ ratatui = { version = "0.30", features = ["unstable"] }
 crossterm = { version = "0.28", features = ["event-stream"] }
 
 # Async
-tokio = { version = "1", features = ["full"] }
+tokio.workspace = true
 tokio-stream = "0.1"
 tokio-util = "0.7"
 futures = "0.3"
@@ -54,25 +66,25 @@ futures = "0.3"
 libc = "0.2"
 
 # Serialization
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde.workspace = true
+serde_json.workspace = true
 
 # HTTP client (Ollama API)
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
 
 # Error handling
-anyhow = "1"
+anyhow.workspace = true
 
 # CLI args
-clap = { version = "4", features = ["derive", "env"] }
+clap.workspace = true
 clap_complete = "4"
 
 # Async trait support
-async-trait = "0.1"
+async-trait.workspace = true
 
 # Config
-toml = "0.8"
-directories = "6"
+toml.workspace = true
+directories.workspace = true
 
 # System prompt templating
 handlebars = "6"
@@ -84,7 +96,7 @@ rustyline = "14"
 similar = "2"
 
 # Logging
-tracing = "0.1"
+tracing.workspace = true
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Glob pattern matching
@@ -99,7 +111,7 @@ ignore = "0.4"
 shellexpand = "3"
 
 # Date/time for session IDs
-chrono = { version = "0.4", features = ["serde"] }
+chrono.workspace = true
 
 # Cron expression parsing for scheduled jobs
 cron = "0.15"
@@ -145,7 +157,7 @@ url = "2"
 # Cache serialization uses serde_json (already a dependency) instead of
 # the unmaintained bincode crate.
 # Temp directory creation for benchmark harness.
-tempfile = "3"
+tempfile.workspace = true
 
 [dev-dependencies]
 # Property-based testing for edit-file diff application and other invariants.
@@ -185,7 +197,7 @@ optional = true
 
 [build-dependencies]
 clap_mangen = "0.2"
-clap = { version = "4", features = ["derive", "env"] }
+clap.workspace = true
 clap_complete = "4"
 
 [profile.release]

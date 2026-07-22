@@ -16,16 +16,16 @@ path = "src/main.rs"
 [dependencies]
 kirkstratum-core = { path = "../kirkstratum-core" }
 kirkstratum-hosts = { path = "../kirkstratum-hosts" }
-clap = { version = "4", features = ["derive", "env"] }
-anyhow = "1"
-tracing = "0.1"
+clap.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
-toml = "0.8"
-serde_json = "1"
-serde = { version = "1", features = ["derive"] }
+toml.workspace = true
+serde_json.workspace = true
+serde.workspace = true
 clap_complete = "4"
 
 [dev-dependencies]
 assert_cmd = "2"
-tempfile = "3"
+tempfile.workspace = true
 predicates = "3"

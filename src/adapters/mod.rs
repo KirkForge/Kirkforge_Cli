@@ -804,4 +804,32 @@ mod tests {
         assert_eq!(adapter.model_info().name, "anthropic.claude-3-5-sonnet");
         assert!(adapter.model_info().tool_call_format == crate::shared::ToolCallStyle::Anthropic);
     }
+
+    #[test]
+    fn adapter_routes_opencode_prefix_to_zen() {
+        let kind = adapter_kind_for("opencode/big-pickle", None, "anthropic");
+        assert_eq!(kind, AdapterKind::OpenCodeZen);
+    }
+
+    #[test]
+    fn subagent_allowed_models_rejects_unlisted() {
+        let allowed = Some(vec!["qwen2.5:0.5b".to_string()]);
+        let requested = Some("deepseek-v4-flash".to_string());
+        let effective = requested
+            .as_ref()
+            .filter(|m| allowed.as_ref().map_or(true, |a| a.contains(&m.to_string())))
+            .cloned();
+        assert!(effective.is_none(), "unlisted model should be rejected");
+    }
+
+    #[test]
+    fn subagent_allowed_models_accepts_listed() {
+        let allowed = Some(vec!["qwen2.5:0.5b".to_string()]);
+        let requested = Some("qwen2.5:0.5b".to_string());
+        let effective = requested
+            .as_ref()
+            .filter(|m| allowed.as_ref().map_or(true, |a| a.contains(&m.to_string())))
+            .cloned();
+        assert_eq!(effective, Some("qwen2.5:0.5b".to_string()));
+    }
 }

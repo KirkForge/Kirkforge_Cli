@@ -529,4 +529,24 @@ mod tests {
             "got {outcome:?}"
         );
     }
+
+    #[test]
+    fn task_request_with_model() {
+        let req = TaskRequest {
+            prompt: "explore the codebase".to_string(),
+            persona: "explorer".to_string(),
+            model: Some("opencode/big-pickle".to_string()),
+        };
+        assert_eq!(req.model.as_deref(), Some("opencode/big-pickle"));
+    }
+
+    #[test]
+    fn task_request_model_defaults_none() {
+        let req = TaskRequest {
+            prompt: "explore the codebase".to_string(),
+            persona: "explorer".to_string(),
+            model: None,
+        };
+        assert!(req.model.is_none());
+    }
 }

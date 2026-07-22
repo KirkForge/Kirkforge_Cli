@@ -817,7 +817,7 @@ mod tests {
         let requested = Some("deepseek-v4-flash".to_string());
         let effective = requested
             .as_ref()
-            .filter(|m| allowed.as_ref().map_or(true, |a| a.contains(&m.to_string())))
+            .filter(|m| allowed.as_ref().is_none_or(|a| a.contains(&m.to_string())))
             .cloned();
         assert!(effective.is_none(), "unlisted model should be rejected");
     }
@@ -828,7 +828,7 @@ mod tests {
         let requested = Some("qwen2.5:0.5b".to_string());
         let effective = requested
             .as_ref()
-            .filter(|m| allowed.as_ref().map_or(true, |a| a.contains(&m.to_string())))
+            .filter(|m| allowed.as_ref().is_none_or(|a| a.contains(&m.to_string())))
             .cloned();
         assert_eq!(effective, Some("qwen2.5:0.5b".to_string()));
     }

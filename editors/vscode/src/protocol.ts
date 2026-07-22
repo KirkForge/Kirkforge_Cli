@@ -45,7 +45,7 @@ export interface EditEvent extends NdjsonEvent {
 
 export interface TodoUpdateEvent extends NdjsonEvent {
   type: 'todo_update';
-  items: { text: string; done: boolean }[];
+  items: { text: string; done: boolean; in_progress?: boolean }[];
 }
 
 export interface DoneEvent extends NdjsonEvent {
@@ -58,6 +58,12 @@ export interface DoneEvent extends NdjsonEvent {
   };
 }
 
+export interface DiagnosticsEvent extends NdjsonEvent {
+  type: 'diagnostics';
+  uri: string;
+  diagnostics: { message: string; severity: number; range: unknown }[];
+}
+
 export type BridgeEvent =
   | TurnStartEvent
   | MessageEvent
@@ -66,7 +72,8 @@ export type BridgeEvent =
   | ToolResultEvent
   | EditEvent
   | TodoUpdateEvent
-  | DoneEvent;
+  | DoneEvent
+  | DiagnosticsEvent;
 
 export function parseEvent(line: string): BridgeEvent | undefined {
   try {
@@ -74,7 +81,6 @@ export function parseEvent(line: string): BridgeEvent | undefined {
     if (typeof obj.type !== 'string') {
       return undefined;
     }
-    // Minimal validation: return as BridgeEvent if the type is known.
     switch (obj.type) {
       case 'turn_start':
       case 'message':
@@ -84,6 +90,7 @@ export function parseEvent(line: string): BridgeEvent | undefined {
       case 'edit':
       case 'todo_update':
       case 'done':
+      case 'diagnostics':
         return obj as unknown as BridgeEvent;
       default:
         return undefined;

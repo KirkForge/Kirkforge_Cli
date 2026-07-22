@@ -22,7 +22,7 @@ export class KirkForgeBridge extends EventEmitter {
     }
     this.child = spawn(
       this.options.binaryPath,
-      ['run', '--non-interactive', '--output-format', this.options.outputFormat],
+      ['run', '--non-interactive', '--output', this.options.outputFormat],
       { cwd: this.options.cwd, env: process.env }
     );
     this.child.stdout.on('data', (chunk: Buffer) => {
@@ -44,6 +44,14 @@ export class KirkForgeBridge extends EventEmitter {
 
   writeLine(line: string): void {
     this.child?.stdin.write(line + '\n');
+  }
+
+  sendPrompt(text: string): void {
+    this.writeLine(JSON.stringify({ type: 'prompt', text }));
+  }
+
+  sendApproval(toolCallId: string, approved: boolean): void {
+    this.writeLine(JSON.stringify({ type: 'approval', id: toolCallId, approved }));
   }
 
   private flush(): void {

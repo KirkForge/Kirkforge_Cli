@@ -10,8 +10,18 @@ export interface LspQueryResponse {
   results: unknown[];
 }
 
+export interface DiagnosticEntry {
+  file: string;
+  diagnostics: { message: string; severity: number; range: unknown }[];
+}
+
 export class LspBridge {
-  constructor(private readonly workspaceRoot: string) {}
+  private debounceTimer: ReturnType<typeof setTimeout> | undefined;
+
+  constructor(
+    private readonly workspaceRoot: string,
+    private readonly onDiagnostics: (diags: DiagnosticEntry[]) => void
+  ) {}
 
   async query(req: LspQueryRequest): Promise<LspQueryResponse> {
     switch (req.query) {
@@ -29,12 +39,13 @@ export class LspBridge {
           return { results: [] };
         }
         const uri = vscode.Uri.file(this.joinPath(req.file));
-        const definitions = await vscode.commands.executeCommand<vscode.Location[] | vscode.LocationLink[]>(
-          'vscode.executeTypeDefinitionProvider',
-          uri,
-          new vscode.Position(0, 0)
-        ) ?? [];
-        return { results: definitions ?? [] };
+        const definitions =
+          (await vscode.commands.executeCommand(
+            'vscode.executeTypeDefinitionProvider',
+            uri,
+            new vscode.Position(0, 0)
+          )) ?? [];
+        return { results: Array.isArray(definitions) ? definitions : [definitions] };
       }
       case 'diagnostics': {
         const all = vscode.languages.getDiagnostics();
@@ -56,6 +67,29 @@ export class LspBridge {
       default:
         return { results: [] };
     }
+  }
+
+  start(): void {
+    vscode.workspace.onDidSaveTextDocument(() => this.collectAndSend());
+    vscode.workspace.onDidChangeTextDocument(() => {
+      if (this.debounceTimer) {
+        clearTimeout(this.debounceTimer);
+      }
+      this.debounceTimer = setTimeout(() => this.collectAndSend(), 2000);
+    });
+  }
+
+  private collectAndSend(): void {
+    const all = vscode.languages.getDiagnostics();
+    const entries: DiagnosticEntry[] = all.map(([uri, diagnostics]) => ({
+      file: uri.fsPath,
+      diagnostics: diagnostics.map((d) => ({
+        message: d.message,
+        severity: d.severity,
+        range: d.range,
+      })),
+    }));
+    this.onDiagnostics(entries);
   }
 
   private joinPath(relative: string): string {

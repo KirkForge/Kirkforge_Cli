@@ -1,7 +1,7 @@
 {
   "name": "kirkforge-vscode",
   "displayName": "KirkForge",
-  "description": "Open-source coding agent extension for VS Code — chat panel, inline diffs, TODO panel, and LSP bridge",
+  "description": "AI coding agent extension for VS Code — chat panel, inline diffs, TODO panel, and LSP bridge",
   "version": "0.2.0",
   "publisher": "kirkforge",
   "license": "MIT",
@@ -13,8 +13,8 @@
     "vscode": "^1.85.0"
   },
   "categories": [
-    "Other",
     "Machine Learning",
+    "Other",
     "Programming Languages"
   ],
   "keywords": [
@@ -39,6 +39,16 @@
       {
         "command": "kirkforge.startTerminal",
         "title": "Start KirkForge Terminal",
+        "category": "KirkForge"
+      },
+      {
+        "command": "kirkforge.acceptEdit",
+        "title": "Accept KirkForge Edit",
+        "category": "KirkForge"
+      },
+      {
+        "command": "kirkforge.rejectEdit",
+        "title": "Reject KirkForge Edit",
         "category": "KirkForge"
       }
     ],
@@ -65,15 +75,12 @@
   "scripts": {
     "build": "tsc --build",
     "test": "npm run build && node --test 'out/test/**/*.test.js'",
-    "package:vsce": "node node_modules/@vscode/vsce/vsce package",
-    "publish:ovsx": "node node_modules/ovsx/bin/ovsx publish kirkforge-vscode-0.2.0.vsix"
+    "package:vsce": "node node_modules/@vscode/vsce/vsce package --no-yarn"
   },
   "devDependencies": {
-    "@types/mocha": "^10.0.10",
     "@types/node": "^22.20.1",
     "@types/vscode": "1.85.0",
     "@vscode/vsce": "^3.9.2",
-    "ovsx": "^0.10.12",
     "typescript": "^5.9.3"
   }
 }

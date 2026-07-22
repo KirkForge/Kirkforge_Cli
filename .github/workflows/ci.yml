@@ -339,3 +339,35 @@ jobs:
       - name: Run Node SDK tests
         run: npm test
         working-directory: npm/kirkforge-plugin
+
+  # Build and test the VS Code extension. Produces a .vsix artifact on tag pushes.
+  vscode:
+    runs-on: ubuntu-latest
+    needs: fmt
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: editors/vscode/package-lock.json
+
+      - name: Install VS Code extension dependencies
+        run: npm ci
+        working-directory: editors/vscode
+
+      - name: Build and test VS Code extension
+        run: npm test
+        working-directory: editors/vscode
+
+      - name: Package VS Code extension
+        run: npx vsce package --no-yarn
+        working-directory: editors/vscode
+
+      - name: Upload .vsix artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kirkforge-vscode-extension
+          path: editors/vscode/*.vsix

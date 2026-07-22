@@ -5,6 +5,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [0.3.5] - 2026-07-22
 
+### Added
+- Multi-step browser flows in computer-use tool: BrowserSession with open/close,
+  step tracking, and max_steps limit (ADR-044)
+
 ### Changed
 - Refactored slash-command dispatch from inline match block to table-driven
   `COMMANDS` array + `dispatch_slash_command()` in new

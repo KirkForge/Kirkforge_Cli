@@ -569,6 +569,11 @@ pub struct ComputerUseConfig {
     /// Default 10.
     #[serde(default = "default_computer_use_wait_timeout")]
     pub wait_timeout_secs: u64,
+
+    /// Maximum number of steps in a browser session before it is
+    /// forcibly closed. Prevents infinite loops. Default 20.
+    #[serde(default = "default_computer_use_max_steps")]
+    pub max_steps: u32,
 }
 
 /// Docker execution configuration for the bash tool.
@@ -722,6 +727,10 @@ fn default_computer_use_startup_timeout() -> u64 {
 
 fn default_computer_use_wait_timeout() -> u64 {
     10
+}
+
+fn default_computer_use_max_steps() -> u32 {
+    20
 }
 
 fn default_preserve_recent_messages() -> usize {

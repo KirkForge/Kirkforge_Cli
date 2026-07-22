@@ -65,6 +65,13 @@ This repo is a Rust CLI coding agent (`kirkforge`). It uses `tokio`, `ratatui`, 
 - `bincode` is explicitly rejected project-wide (root `Cargo.toml` comment). Use `serde_json` for serialization.
 - When adding serialization to a crate that already depends on `serde`, just add `serde_json` to the crate's `Cargo.toml` — don't introduce new serialization libraries.
 - The `ContextIndex` struct has a private `symbols` field. When creating a cache format, use a separate struct (`CachedIndex`) that includes both the symbols and metadata (like git HEAD). Don't make the internal field public just for serialization.
+- **ADR status is a two-source-of-truth system**: ADR file headers (`Status: ...`) AND the index table in `docs/adr/README.md` must agree. The `adr_xref_drift` test (`plugin3-core`) will catch mismatches. When changing an ADR status, update BOTH the file header and the index table row. If you use a compound status like "Accepted (partially implemented)", it must appear identically in both places.
+- **CI is not optional**: `adr_xref_drift` runs in CI (the `quality` job). A passing local gate (`cargo test`) does NOT mean CI will pass — you must also check that `plugin3-core`'s drift tests pass. Run `cargo test -p plugin3-core --test adr_xref_drift` as part of your gate if you touched any ADR or `docs/adr/README.md`.
+- **Check CI after every push**: `gh run list --limit 3` and `gh run watch <id>` are your friends. Do not declare a task done until CI is green on the commit you just pushed. A local green is necessary but not sufficient.
+- **`headless_chrome::Tab` does NOT hold a strong ref to `Browser`**: The `Tab` handle is a weak reference. If you drop the `Browser`, the `Tab` becomes invalid. Always keep `Browser` alive alongside `Tab` — e.g., store both in an owning struct (`BrowserSessionOwner { _browser: Browser, tab: Tab }`).
+- **Stale cleanup items are a real risk**: Before starting work on a "cleanup" or "missing feature" item from state.md or a workorder, grep the codebase first. Multiple items listed as "open" (persist plugin state, agent steps limit) turned out to be already shipped. Thirty seconds of `grep` saves an hour of duplicate work.
+- **`lessons.md` is gitignored**: If you need it tracked, use `git add -f`. Otherwise, fold permanent lessons into `AGENTS.md` at session close and let `lessons.md` stay scratch-only.
+- **`cargo clippy --all-targets` can be slow** (3-4 min on this repo). Budget time for full gate runs. Consider running just the failing test first to verify the fix, then run the full gate.
 
 ## Task management
 1. **Plan**: write `workplan.md` (gitignored) with files to touch + root cause + gate.

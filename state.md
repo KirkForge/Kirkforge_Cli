@@ -2,7 +2,7 @@
 
 ## Current baseline: v0.3.5 (2026-07-22)
 
-**`dev` at `45a0ad9`, `main` at `b89e56f`.** All P2 + P1-long-1/2/3/4 + P2-long-3/4 + P3-long-5/6 shipped. 62 ADRs.
+**`dev` at `bb67d23`, `main` at `bb67d23`.** All P2 + P1-long-1/2/3/4 + P2-long-3/4 + P3-long-5/6 shipped. 62 ADRs.
 
 ### What shipped this session (3.8)
 

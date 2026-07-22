@@ -46,7 +46,7 @@ files `0001`–`0018` and `0021`–`0022` (indexed below) are the vendored Plugi
 | [0029](./0029-test-partitioning.md) | Test partitioning — fast/full/coverage suites | Accepted |
 | [0033](./0033-tool-retry-backoff.md) | Exponential backoff on tool-call retries | Accepted |
 | [0034](./0034-mid-batch-checkpoint.md) | Mid-batch tool-result checkpointing | Accepted |
-| [0044](./0044-computer-use-depth.md) | Computer-use depth (multi-step browser flows) | Accepted |
+| [0044](./0044-computer-use-depth.md) | Computer-use depth (multi-step browser flows) | Accepted (partially implemented) |
 
 ## Native KirkForge-Cli ADRs
 

@@ -55,6 +55,14 @@ This repo is a Rust CLI coding agent (`kirkforge`). It uses `tokio`, `ratatui`, 
 - Do NOT: add debug logging to committed code. Use `workplan.md` for scratch notes.
 - If you've attempted the same fix 3 times and it's still red, STOP. Write "ESCALATE: <root cause unknown>" in `lessons.md` and return. The brain takes over when the brawn is stuck.
 
+## 7. Codebase patterns
+- The existing `Verifier` trait (`async fn verify(&self, event: &BusEvent) -> Verdict`) and the new `BusVerifier` trait (`fn verify(&self, ctx: &VerifyContext) -> Vec<VerdictEntry>`) coexist. The former is event-driven, the latter is sync and context-based. Don't try to unify them in one pass.
+- `CorrectionResult` is a struct with `{verifier, success, message, fix}` fields — not an enum. There is no `CorrectionResult::Failed`.
+- `tokio::task::block_in_place` panics in single-threaded test runtimes. When wrapping async code in sync adapters, use stubs or find another approach.
+- `.map_or(true, |a| ...)` on `Option` triggers `clippy::unnecessary_map_or`. Use `.is_none_or(|a| ...)` instead (Rust 1.82+).
+- When adding fields to `Config`, update ALL of: `Default` impl, struct definition, test `Config` literals (especially `executor/tests/mod.rs`), `adapter_for_with_provider` call sites, `adapter_for` convenience wrapper, and test calls.
+- The `crates/plugin3-core/README.md` `| Tests | N passing |` row counts `#[test]` attributes under `crates/` only, not the entire workspace.
+
 ## Task management
 1. **Plan**: write `workplan.md` (gitignored) with files to touch + root cause + gate.
 2. **Check before implementation**: read `workplan.md`, `lessons.md`, `state.md`, and this `AGENTS.md`.

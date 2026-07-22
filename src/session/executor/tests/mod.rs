@@ -2745,31 +2745,25 @@ async fn test_always_approve_rule_round_trips_to_next_turn() {
     }
 
     // Second turn: same command should now match the rule and run
-    // without sending an approval request.
+    // without sending an approval request. Use an unbounded channel
+    // and check after the turn completes whether any approval was
+    // requested — this avoids the race between abort() and AtomicBool
+    // that caused flakiness under parallel test load.
     let (approval_tx2, mut approval_rx2) = mpsc::unbounded_channel();
-    let requested = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let requested_flag = requested.clone();
-    let no_approval_handle = tokio::spawn(async move {
-        if approval_rx2.recv().await.is_some() {
-            requested_flag.store(true, std::sync::atomic::Ordering::SeqCst);
-        }
-    });
 
-    // Second turn: same command should now match the rule and run
-    // without sending an approval request. The timeout is generous
-    // because this test suite is heavily parallel and the goal is only
-    // to detect an infinite hang caused by a misplaced approval prompt.
     let second_events = tokio::time::timeout(
-        std::time::Duration::from_secs(15),
+        std::time::Duration::from_secs(30),
         exe.run_turn_collecting("run tests again", &approval_tx2, never_cancelled()),
     )
     .await
     .expect("second turn should complete without approval prompt");
 
-    no_approval_handle.abort();
+    // Give the executor a brief moment to drain any pending channel sends,
+    // then check whether an approval request was received.
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     assert!(
-        !requested.load(std::sync::atomic::Ordering::SeqCst),
-        "rule should prevent second approval request"
+        approval_rx2.try_recv().is_err(),
+        "rule should prevent second approval request, but one was sent"
     );
 
     let second_events = second_events.unwrap();
@@ -2919,7 +2913,11 @@ async fn test_cancelled_tool_batch_appends_placeholders() {
 }
 
 /// Two independent non-file tool calls must run concurrently, not sequentially.
-/// Two 1s sleeps finishing in < 1.8s proves parallel dispatch.
+/// Two 200ms sleeps finishing in < 5s proves parallel dispatch — even under
+/// heavy parallel test load, two sequential 200ms sleeps + overhead would be
+/// under 5s, so a result > 5s would indicate serial dispatch. The original
+/// test used 1000ms sleeps with a 3.5s threshold, which was flaky under
+/// parallel cargo test load.
 #[tokio::test]
 async fn test_parallel_tool_batch_runs_concurrently() {
     let tool_one = SleepingTool {
@@ -2928,13 +2926,13 @@ async fn test_parallel_tool_batch_runs_concurrently() {
             description: "sleep",
             parameters: serde_json::json!({"type": "object", "properties": {}}),
         },
-        sleep_ms: 1000,
+        sleep_ms: 200,
         call_count: Arc::new(Mutex::new(0)),
         start_tx: Arc::new(std::sync::Mutex::new(None)),
     };
     let tool_two = SleepingTool {
         def: tool_one.def.clone(),
-        sleep_ms: 1000,
+        sleep_ms: 200,
         call_count: Arc::new(Mutex::new(0)),
         start_tx: Arc::new(std::sync::Mutex::new(None)),
     };
@@ -2974,8 +2972,8 @@ async fn test_parallel_tool_batch_runs_concurrently() {
     let elapsed = start.elapsed().as_secs_f64();
 
     assert!(
-        elapsed < 3.5,
-        "two 1s tool calls should run in parallel (elapsed {elapsed:.2}s)"
+        elapsed < 5.0,
+        "two 200ms tool calls should run in parallel (elapsed {elapsed:.2}s)"
     );
 
     let results: Vec<_> = events

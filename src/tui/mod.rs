@@ -132,6 +132,7 @@ pub async fn run_tui(
     undo_stack: Option<crate::tools::UndoStackRef>,
     plugin_registry: &kirkforge_plugin_host::PluginRegistry,
     context_index: Option<kirkforge_context_index::ContextIndex>,
+    trace_recorder: Option<crate::session::replay::TraceRecorder>,
 ) -> anyhow::Result<()> {
     // ── Terminal setup ──
     enable_raw_mode()?;
@@ -404,6 +405,9 @@ pub async fn run_tui(
     }
     if let crate::session::conversation::OpenOutcome::Restored(messages) = open_outcome {
         exe.set_recovered_messages(messages);
+    }
+    if let Some(recorder) = trace_recorder {
+        exe.set_trace(recorder);
     }
     // Keep a sender clone for slash-commands (e.g. /model pull progress)
     // that need to inject TurnEvent tokens into the TUI event stream.

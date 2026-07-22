@@ -78,6 +78,10 @@ pub struct Executor {
     /// Optional spawner for the `task` tool. Built lazily from executor
     /// state so subagents inherit the same model, config, and sandboxing.
     task_spawner: Option<Arc<dyn crate::tools::task::TaskSpawner>>,
+
+    /// Optional turn-trace recorder. When present, each completed turn
+    /// is serialized as a `TurnRecord` and appended to the trace file.
+    trace: Option<std::sync::Mutex<crate::session::replay::TraceRecorder>>,
 }
 
 impl Executor {
@@ -206,6 +210,7 @@ impl Executor {
             recovered_messages: None,
             session_id: String::new(),
             task_spawner: None,
+            trace: None,
         };
         this.init_default_verifiers(plugin_registry);
         this.build_task_spawner();
@@ -224,6 +229,12 @@ impl Executor {
     /// `KF_SESSION_ID`.
     pub fn set_session_id(&mut self, id: String) {
         self.session_id = id;
+    }
+
+    /// Set the turn-trace recorder for this session. Each completed turn
+    /// will be serialized and appended to the trace file.
+    pub fn set_trace(&mut self, recorder: crate::session::replay::TraceRecorder) {
+        self.trace = Some(std::sync::Mutex::new(recorder));
     }
 
     /// Build a per-tool-call context linked to the turn's cancellation

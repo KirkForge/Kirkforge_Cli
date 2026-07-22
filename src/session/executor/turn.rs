@@ -106,6 +106,7 @@ impl Executor {
             }
         });
 
+        let turn_start = std::time::Instant::now();
         self.run_turn(user_input, approval_sender, cancelled, &bounded_tx)
             .await?;
         drop(bounded_tx);
@@ -115,6 +116,91 @@ impl Executor {
         while let Ok(ev) = unbounded_rx.try_recv() {
             events.push(ev);
         }
+
+        // ── Trace recording ──
+        // If a trace recorder is attached, serialize the turn's events
+        // into a TurnRecord and append it to the trace file.
+        if let Some(trace) = &self.trace {
+            let mut tokens_in: u64 = 0;
+            let mut tokens_out: u64 = 0;
+            let mut cost_usd: f64 = 0.0;
+            let mut tool_calls: Vec<crate::session::replay::RecordedToolCall> = Vec::new();
+            let mut model_response = String::new();
+
+            for ev in &events {
+                match ev {
+                    TurnEvent::CostStats {
+                        prompt_tokens,
+                        completion_tokens,
+                        turn_cost,
+                        ..
+                    } => {
+                        tokens_in += *prompt_tokens as u64;
+                        tokens_out += *completion_tokens as u64;
+                        cost_usd += turn_cost;
+                    }
+                    TurnEvent::ToolStart { name, args } => {
+                        // We don't have the result or duration yet at
+                        // ToolStart time, so record with placeholder
+                        // values. ToolResult carries the detail.
+                        tool_calls.push(crate::session::replay::RecordedToolCall {
+                            tool: name.clone(),
+                            args: args.clone(),
+                            result: String::new(),
+                            duration_ms: 0,
+                        });
+                    }
+                    TurnEvent::ToolResult {
+                        name,
+                        output,
+                        success: _,
+                    } => {
+                        // Fill in the result of the most recent matching
+                        // tool call. In the common case (one tool call per
+                        // name per turn), this is correct.
+                        if let Some(tc) = tool_calls.iter_mut().rev().find(|tc| tc.tool == *name) {
+                            tc.result = output.clone();
+                        }
+                    }
+                    TurnEvent::Token(s) => {
+                        model_response.push_str(s);
+                    }
+                    _ => {}
+                }
+            }
+
+            let prompt_messages: Vec<crate::session::replay::RecordedMessage> = self
+                .conversation
+                .all()
+                .iter()
+                .map(|m| crate::session::replay::RecordedMessage {
+                    role: format!("{:?}", m.role).to_lowercase(),
+                    content: m.content.clone(),
+                })
+                .collect();
+
+            let outcome = crate::session::replay::TurnOutcome::Success;
+            let duration_ms = turn_start.elapsed().as_millis() as u64;
+
+            let record = crate::session::replay::TurnRecord {
+                turn: 0, // TraceRecorder assigns this
+                timestamp: chrono::Utc::now().to_rfc3339(),
+                prompt_messages,
+                model_response,
+                tool_calls,
+                outcome,
+                tokens_in,
+                tokens_out,
+                duration_ms,
+            };
+
+            if let Ok(mut guard) = trace.lock() {
+                if let Err(e) = guard.record(record) {
+                    tracing::warn!(error = %e, "failed to write trace record");
+                }
+            }
+        }
+
         Ok(events)
     }
 

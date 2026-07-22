@@ -224,6 +224,7 @@ async fn main() {
             seed,
             worktree,
             docker,
+            no_trace,
         } => {
             run_session(RunArgs {
                 model,
@@ -243,6 +244,7 @@ async fn main() {
                 seed,
                 worktree,
                 docker,
+                no_trace,
             })
             .await
         }
@@ -292,6 +294,13 @@ async fn main() {
                 ))
             }
         }
+        Command::Replay {
+            id,
+            data_dir,
+            turn,
+            from,
+            to,
+        } => handle_replay_command(id, data_dir, turn, from, to),
         Command::Bench {
             tasks,
             model,
@@ -348,6 +357,83 @@ async fn handle_bench_command(
         kirkforge_bench::write_markdown_summary(&report, &md_path)?;
         eprintln!("summary written to {}", md_path.display());
     }
+    Ok(())
+}
+
+fn handle_replay_command(
+    id: String,
+    data_dir: Option<std::path::PathBuf>,
+    turn: Option<u32>,
+    from: Option<u32>,
+    to: Option<u32>,
+) -> anyhow::Result<()> {
+    use kirkforge::session::replay::{format_turn, TraceRecorder};
+
+    let data = data_dir.unwrap_or_else(|| {
+        kirkforge::session::data_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+    });
+
+    // Resolve session id to trace file path.
+    let trace_path = if id.ends_with(".trace.ndjson") && std::path::Path::new(&id).exists() {
+        std::path::PathBuf::from(id)
+    } else {
+        // Search sessions directory for matching id prefix.
+        let sessions_dir = data.join("sessions");
+        if sessions_dir.is_dir() {
+            let mut found: Option<std::path::PathBuf> = None;
+            for entry in std::fs::read_dir(&sessions_dir)? {
+                let entry = entry?;
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name.starts_with(&id) && name.ends_with(".trace.ndjson") {
+                    found = Some(entry.path());
+                    break;
+                }
+            }
+            match found {
+                Some(p) => p,
+                None => {
+                    // Try as direct path under data dir.
+                    data.join(format!("{id}.trace.ndjson"))
+                }
+            }
+        } else {
+            data.join(format!("{id}.trace.ndjson"))
+        }
+    };
+
+    if !trace_path.exists() {
+        anyhow::bail!("trace file not found: {}", trace_path.display());
+    }
+
+    let records = TraceRecorder::load(&trace_path)?;
+    if records.is_empty() {
+        println!("No turns recorded in this session.");
+        return Ok(());
+    }
+
+    // Filter by turn number / range.
+    let filtered: Vec<_> = records
+        .into_iter()
+        .filter(|r| {
+            if let Some(t) = turn {
+                r.turn == t
+            } else {
+                let after_from = from.is_none_or(|f| r.turn >= f);
+                let before_to = to.is_none_or(|t_| r.turn <= t_);
+                after_from && before_to
+            }
+        })
+        .collect();
+
+    if filtered.is_empty() {
+        println!("No turns match the specified filter.");
+        return Ok(());
+    }
+
+    for record in &filtered {
+        print!("{}", format_turn(record));
+    }
+
     Ok(())
 }
 
@@ -463,6 +549,7 @@ struct RunArgs {
     seed: Option<u64>,
     worktree: bool,
     docker: bool,
+    no_trace: bool,
 }
 
 async fn run_session(args: RunArgs) -> anyhow::Result<()> {
@@ -484,6 +571,7 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
         seed,
         worktree,
         docker,
+        no_trace,
     } = args;
 
     let mut config = session::config::load_or_create_config();
@@ -507,6 +595,7 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     if docker {
         config.docker.enabled = true;
     }
+    let trace_enabled = !no_trace;
 
     // CLI flags are transient runtime overrides; do not persist them to
     // config.toml. `load_or_create_config` already wrote a default file on
@@ -634,13 +723,30 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     daemon::client::try_touch(&touch_id, log_path.clone()).await;
     kirkforge::session::session_index::touch_session(&touch_id, &log_path);
 
-    let (mut conversation, open_outcome) = session::conversation::ConversationLog::open(log_path)?;
+    let (mut conversation, open_outcome) =
+        session::conversation::ConversationLog::open(log_path.clone())?;
     conversation = conversation.with_checkpoint_interval(config.checkpoint_interval_messages);
     if let session::conversation::OpenOutcome::Restored(messages) = open_outcome {
         let warn_icon = line_mode::symbol(no_color, "⚠️");
         let warn_sep = if warn_icon.is_empty() { "" } else { " " };
         eprintln!("{warn_icon}{warn_sep}Session log was corrupt; restored {messages} message(s) from checkpoint.");
     }
+
+    // ── Turn trace recorder ──
+    // Persists TurnRecords alongside the conversation log for replay.
+    // Disabled by --no-trace; when enabled, records one line per turn.
+    let trace_recorder = if trace_enabled {
+        let trace_path = log_path.with_extension("trace.ndjson");
+        match session::replay::TraceRecorder::open(&trace_path) {
+            Ok(rec) => Some(rec),
+            Err(e) => {
+                tracing::warn!(error = %e, path = %trace_path.display(), "could not open trace file; continuing without tracing");
+                None
+            }
+        }
+    } else {
+        None
+    };
 
     let adapter = adapters::caching::maybe_wrap_cached(
         adapters::adapter_for_with_provider(
@@ -856,6 +962,7 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
             undo_stack,
             &plugin_registry,
             context_index,
+            trace_recorder,
         )
         .await
     } else {
@@ -872,6 +979,7 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
             &plugin_registry,
             session_id.to_string(),
             context_index,
+            trace_recorder,
         )
         .await
     }
@@ -918,6 +1026,7 @@ async fn run_line_mode(
     plugin_registry: &kirkforge_plugin_host::PluginRegistry,
     session_id: String,
     context_index: Option<kirkforge_context_index::ContextIndex>,
+    trace_recorder: Option<session::replay::TraceRecorder>,
 ) -> anyhow::Result<()> {
     // If running in non-interactive mode (scripted), deny all approvals.
     // If running in line-mode interactive (no TUI), prompt on stderr and
@@ -943,6 +1052,11 @@ async fn run_line_mode(
     // Attach the repo-graph context index if one was built.
     if let Some(idx) = context_index {
         executor.set_context_index(idx);
+    }
+
+    // Attach the turn-trace recorder if tracing is enabled.
+    if let Some(recorder) = trace_recorder {
+        executor.set_trace(recorder);
     }
 
     let (approval_tx, approval_rx) =

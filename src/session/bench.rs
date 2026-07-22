@@ -7,6 +7,61 @@ use crate::shared::{Config, SharedConfig};
 use kirkforge_bench::{BenchReport, BenchSummary, BenchTask, TaskResult};
 use std::time::Instant;
 
+/// Collect metrics from a completed turn's events and produce a TaskResult.
+///
+/// This is the pure, testable portion of `run_task` — no adapter, no async,
+/// no timeout. It aggregates token counts, tool call counts, and cost from
+/// the `TurnEvent` stream, then runs verification.
+pub fn collect_turn_metrics(
+    events: &[super::executor::TurnEvent],
+    duration_secs: f64,
+    task: &BenchTask,
+    sandbox_path: &std::path::Path,
+    run_error: Option<String>,
+) -> TaskResult {
+    let mut tokens_in: u64 = 0;
+    let mut tokens_out: u64 = 0;
+    let mut cost_usd: f64 = 0.0;
+    let mut tool_calls: u32 = 0;
+
+    for event in events {
+        match event {
+            super::executor::TurnEvent::CostStats {
+                prompt_tokens,
+                completion_tokens,
+                turn_cost,
+                ..
+            } => {
+                tokens_in += *prompt_tokens as u64;
+                tokens_out += *completion_tokens as u64;
+                cost_usd += turn_cost;
+            }
+            super::executor::TurnEvent::ToolStart { .. } => {
+                tool_calls += 1;
+            }
+            _ => {}
+        }
+    }
+
+    let success = if run_error.is_none() {
+        kirkforge_bench::verify_task(task, sandbox_path).unwrap_or(false)
+    } else {
+        false
+    };
+
+    TaskResult {
+        task_name: task.name.clone(),
+        difficulty: task.difficulty,
+        success,
+        tokens_in,
+        tokens_out,
+        duration_secs,
+        cost_usd,
+        tool_calls,
+        error: run_error,
+    }
+}
+
 /// Run a single benchmark task.
 ///
 /// Creates a temp sandbox dir, applies setup files, starts a headless
@@ -101,59 +156,19 @@ pub async fn run_task(
     let duration = start.elapsed().as_secs_f64();
 
     // Collect metrics from turn events.
-    let mut tokens_in: u64 = 0;
-    let mut tokens_out: u64 = 0;
-    let mut cost_usd: f64 = 0.0;
-    let mut tool_calls: u32 = 0;
-    let mut run_error: Option<String> = None;
-
-    match turn_result {
-        Ok(Ok(events)) => {
-            for event in &events {
-                match event {
-                    super::executor::TurnEvent::CostStats {
-                        prompt_tokens,
-                        completion_tokens,
-                        turn_cost,
-                        ..
-                    } => {
-                        tokens_in += *prompt_tokens as u64;
-                        tokens_out += *completion_tokens as u64;
-                        cost_usd += turn_cost;
-                    }
-                    super::executor::TurnEvent::ToolStart { .. } => {
-                        tool_calls += 1;
-                    }
-                    _ => {}
-                }
-            }
-        }
-        Ok(Err(e)) => {
-            run_error = Some(e.to_string());
-        }
-        Err(_) => {
-            run_error = Some(format!("timeout after {timeout_secs}s"));
-        }
-    }
-
-    // Run verification.
-    let success = if run_error.is_none() {
-        kirkforge_bench::verify_task(task, &sandbox_path).unwrap_or(false)
-    } else {
-        false
+    let (events, run_error) = match turn_result {
+        Ok(Ok(evts)) => (evts, None),
+        Ok(Err(e)) => (vec![], Some(e.to_string())),
+        Err(_) => (vec![], Some(format!("timeout after {timeout_secs}s"))),
     };
 
-    Ok(TaskResult {
-        task_name: task.name.clone(),
-        difficulty: task.difficulty,
-        success,
-        tokens_in,
-        tokens_out,
-        duration_secs: duration,
-        cost_usd,
-        tool_calls,
-        error: run_error,
-    })
+    Ok(collect_turn_metrics(
+        &events,
+        duration,
+        task,
+        &sandbox_path,
+        run_error,
+    ))
 }
 
 /// Run all tasks and collect results.
@@ -187,5 +202,197 @@ pub async fn run_all(
         timestamp: chrono::Utc::now().to_rfc3339(),
         results,
         summary,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kirkforge_bench::{Difficulty, VerifySpec};
+    use std::collections::HashMap;
+
+    fn sample_task(name: &str, verify: VerifySpec) -> BenchTask {
+        BenchTask {
+            name: name.to_string(),
+            difficulty: Difficulty::Easy,
+            prompt: "test prompt".to_string(),
+            setup: HashMap::new(),
+            verify,
+        }
+    }
+
+    #[test]
+    fn bench_collect_metrics_empty_events_verify_success() {
+        let dir = tempfile::tempdir().unwrap();
+        let task = sample_task(
+            "verify-true",
+            VerifySpec::CommandExitsZero {
+                command: "true".to_string(),
+            },
+        );
+        let result = collect_turn_metrics(&[], 1.5, &task, dir.path(), None);
+        assert!(result.success);
+        assert_eq!(result.tokens_in, 0);
+        assert_eq!(result.tokens_out, 0);
+        assert_eq!(result.tool_calls, 0);
+        assert_eq!(result.duration_secs, 1.5);
+        assert!(result.error.is_none());
+    }
+
+    #[test]
+    fn bench_collect_metrics_with_cost_stats() {
+        let dir = tempfile::tempdir().unwrap();
+        let task = sample_task(
+            "cost",
+            VerifySpec::CommandExitsZero {
+                command: "true".to_string(),
+            },
+        );
+        let events = vec![
+            super::super::executor::TurnEvent::CostStats {
+                prompt_tokens: 100,
+                completion_tokens: 50,
+                turn_cost: 0.002,
+                cumulative_cost: 0.002,
+            },
+            super::super::executor::TurnEvent::ToolStart {
+                name: "write_file".to_string(),
+                args: serde_json::json!({}),
+            },
+            super::super::executor::TurnEvent::CostStats {
+                prompt_tokens: 200,
+                completion_tokens: 80,
+                turn_cost: 0.003,
+                cumulative_cost: 0.005,
+            },
+            super::super::executor::TurnEvent::ToolStart {
+                name: "bash".to_string(),
+                args: serde_json::json!({}),
+            },
+        ];
+        let result = collect_turn_metrics(&events, 3.2, &task, dir.path(), None);
+        assert!(result.success);
+        assert_eq!(result.tokens_in, 300);
+        assert_eq!(result.tokens_out, 130);
+        assert!((result.cost_usd - 0.005).abs() < 0.0001);
+        assert_eq!(result.tool_calls, 2);
+    }
+
+    #[test]
+    fn bench_collect_metrics_error_sets_success_false() {
+        let dir = tempfile::tempdir().unwrap();
+        let task = sample_task(
+            "err",
+            VerifySpec::CommandExitsZero {
+                command: "true".to_string(),
+            },
+        );
+        let result =
+            collect_turn_metrics(&[], 5.0, &task, dir.path(), Some("model error".to_string()));
+        assert!(!result.success);
+        assert_eq!(result.error.as_deref(), Some("model error"));
+    }
+
+    #[test]
+    fn bench_collect_metrics_timeout_sets_success_false() {
+        let dir = tempfile::tempdir().unwrap();
+        let task = sample_task(
+            "timeout",
+            VerifySpec::CommandExitsZero {
+                command: "true".to_string(),
+            },
+        );
+        let result = collect_turn_metrics(
+            &[],
+            10.0,
+            &task,
+            dir.path(),
+            Some("timeout after 300s".to_string()),
+        );
+        assert!(!result.success);
+        assert!(result.error.as_ref().unwrap().contains("timeout"));
+    }
+
+    #[test]
+    fn bench_collect_metrics_verify_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let task = sample_task(
+            "verify-fail",
+            VerifySpec::CommandExitsZero {
+                command: "false".to_string(),
+            },
+        );
+        let result = collect_turn_metrics(&[], 2.0, &task, dir.path(), None);
+        assert!(!result.success);
+    }
+
+    #[test]
+    fn bench_collect_metrics_file_contains_verify() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/main.rs"), "fn main() {}").unwrap();
+        let task = BenchTask {
+            name: "file-contains".to_string(),
+            difficulty: Difficulty::Medium,
+            prompt: "add a test".to_string(),
+            setup: HashMap::new(),
+            verify: VerifySpec::FileContains {
+                path: "src/main.rs".to_string(),
+                contains: "fn main".to_string(),
+            },
+        };
+        let result = collect_turn_metrics(&[], 1.0, &task, dir.path(), None);
+        assert!(result.success);
+    }
+
+    #[test]
+    fn bench_collect_metrics_file_contains_missing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let task = BenchTask {
+            name: "file-missing".to_string(),
+            difficulty: Difficulty::Easy,
+            prompt: "create a file".to_string(),
+            setup: HashMap::new(),
+            verify: VerifySpec::FileContains {
+                path: "nonexistent.rs".to_string(),
+                contains: "hello".to_string(),
+            },
+        };
+        let result = collect_turn_metrics(&[], 1.0, &task, dir.path(), None);
+        assert!(!result.success);
+    }
+
+    #[test]
+    fn bench_run_all_collects_error_result() {
+        let results = vec![
+            TaskResult {
+                task_name: "ok".to_string(),
+                difficulty: Difficulty::Easy,
+                success: true,
+                tokens_in: 100,
+                tokens_out: 50,
+                duration_secs: 1.0,
+                cost_usd: 0.01,
+                tool_calls: 2,
+                error: None,
+            },
+            TaskResult {
+                task_name: "fail".to_string(),
+                difficulty: Difficulty::Hard,
+                success: false,
+                tokens_in: 0,
+                tokens_out: 0,
+                duration_secs: 0.0,
+                cost_usd: 0.0,
+                tool_calls: 0,
+                error: Some("model error".to_string()),
+            },
+        ];
+        let summary = BenchSummary::from_results(&results);
+        assert_eq!(summary.tasks_run, 2);
+        assert_eq!(summary.tasks_passed, 1);
+        assert!((summary.success_rate - 0.5).abs() < 0.001);
+        assert_eq!(summary.total_tokens_in, 100);
+        assert_eq!(summary.total_tool_calls, 2);
     }
 }

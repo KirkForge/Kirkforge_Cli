@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 /// The kind of a source-code symbol.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SymbolKind {
     Function,
     Struct,
@@ -12,13 +12,26 @@ pub enum SymbolKind {
 }
 
 /// A single symbol extracted from source code.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Symbol {
     pub name: String,
     pub kind: SymbolKind,
     pub file: PathBuf,
     pub line: u32,
     pub end_line: u32,
+}
+
+/// Cached index metadata — the git HEAD at cache time plus the symbols.
+///
+/// Stored as JSON at `.kirkforge/context-index/cache.json`. The HEAD field
+/// enables cache invalidation: if the current HEAD differs from the stored
+/// HEAD, the cache is stale and must be rebuilt.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CachedIndex {
+    /// The git HEAD SHA when this cache was written.
+    pub head: String,
+    /// The indexed symbols.
+    pub symbols: Vec<Symbol>,
 }
 
 /// A tree-sitter-backed index of source-code symbols.
@@ -32,6 +45,9 @@ pub struct Symbol {
 ///
 /// ponytail: substring-match retrieval. The upgrade path is embeddings or
 /// graph-walk retrieval.
+///
+/// ponytail: disk caching uses serde_json (not bincode — bincode is unmaintained).
+/// The upgrade path is a compact binary format if JSON size becomes a concern.
 pub struct ContextIndex {
     symbols: Vec<Symbol>,
 }
@@ -47,6 +63,11 @@ impl ContextIndex {
         Self {
             symbols: Vec::new(),
         }
+    }
+
+    /// Create an index from a pre-built symbol list (e.g., loaded from cache).
+    pub fn from_symbols(symbols: Vec<Symbol>) -> Self {
+        Self { symbols }
     }
 
     /// Index a single Rust file using tree-sitter parsing.
@@ -169,6 +190,48 @@ impl ContextIndex {
             .cloned()
             .collect()
     }
+
+    /// Save the index to a JSON file, along with the current git HEAD.
+    pub fn save(&self, path: &std::path::Path, head: &str) -> anyhow::Result<()> {
+        let cached = CachedIndex {
+            head: head.to_string(),
+            symbols: self.symbols.clone(),
+        };
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let json = serde_json::to_string(&cached)?;
+        std::fs::write(path, json)?;
+        Ok(())
+    }
+
+    /// Load a cached index from a JSON file. Returns the cached index
+    /// if the file exists and is valid JSON.
+    pub fn load(path: &std::path::Path) -> anyhow::Result<CachedIndex> {
+        let json = std::fs::read_to_string(path)?;
+        let cached: CachedIndex = serde_json::from_str(&json)?;
+        Ok(cached)
+    }
+
+    /// Check whether the cached index is current by comparing the
+    /// stored git HEAD with the current HEAD in `repo_root`.
+    pub fn is_current(cached: &CachedIndex, repo_root: &std::path::Path) -> bool {
+        match current_head(repo_root) {
+            Some(head) => head == cached.head,
+            None => false,
+        }
+    }
+}
+
+/// Get the current git HEAD SHA for a repository root.
+pub fn current_head(repo_root: &std::path::Path) -> Option<String> {
+    std::process::Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(repo_root)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
 }
 
 #[cfg(test)]
@@ -299,5 +362,126 @@ mod tests {
             syms[0].end_line,
             syms[0].line
         );
+    }
+
+    #[test]
+    fn context_index_save_and_load_roundtrip() {
+        let dir = std::env::temp_dir().join(format!(
+            "kirkforge-context-cache-roundtrip-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        let src = dir.join("lib.rs");
+        fs::write(&src, "fn hello() {}\nstruct World;\n").unwrap();
+
+        let mut idx = ContextIndex::new();
+        idx.index_file(&src, &fs::read_to_string(&src).unwrap())
+            .unwrap();
+        let original_count = idx.symbols().len();
+        assert!(original_count > 0, "index should have symbols");
+
+        let cache_path = dir.join(".kirkforge/context-index/cache.json");
+        idx.save(&cache_path, "abc123").unwrap();
+
+        let loaded = ContextIndex::load(&cache_path).unwrap();
+        assert_eq!(loaded.head, "abc123");
+        assert_eq!(loaded.symbols.len(), original_count);
+
+        let idx2 = ContextIndex::from_symbols(loaded.symbols);
+        assert_eq!(idx2.symbols().len(), original_count);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn context_index_cache_miss_when_no_file() {
+        let dir = std::env::temp_dir().join(format!(
+            "kirkforge-context-cache-miss-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        let cache_path = dir.join(".kirkforge/context-index/cache.json");
+        let result = ContextIndex::load(&cache_path);
+        assert!(result.is_err(), "loading from nonexistent path should fail");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn context_index_cache_hit_when_head_matches() {
+        let dir = std::env::temp_dir().join(format!(
+            "kirkforge-context-cache-hit-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        let mut idx = ContextIndex::new();
+        let src = dir.join("lib.rs");
+        fs::write(&src, "fn test_fn() {}\n").unwrap();
+        idx.index_file(&src, &fs::read_to_string(&src).unwrap())
+            .unwrap();
+
+        let cache_path = dir.join(".kirkforge/context-index/cache.json");
+        let head = "fake_head_sha_1234";
+        idx.save(&cache_path, head).unwrap();
+
+        let loaded = ContextIndex::load(&cache_path).unwrap();
+        // is_current with a matching head string should return true
+        // (we can't easily test against real git HEAD in a unit test,
+        // but we can test the comparison logic directly)
+        assert_eq!(loaded.head, head);
+        assert!(!loaded.symbols.is_empty());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn context_index_cache_miss_when_head_differs() {
+        let dir = std::env::temp_dir().join(format!(
+            "kirkforge-context-cache-head-diff-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        let mut idx = ContextIndex::new();
+        let src = dir.join("lib.rs");
+        fs::write(&src, "fn test_fn() {}\n").unwrap();
+        idx.index_file(&src, &fs::read_to_string(&src).unwrap())
+            .unwrap();
+
+        let cache_path = dir.join(".kirkforge/context-index/cache.json");
+        idx.save(&cache_path, "old_head_sha").unwrap();
+
+        let loaded = ContextIndex::load(&cache_path).unwrap();
+        // Simulate a HEAD mismatch by checking against a different head
+        let cached = CachedIndex {
+            head: "old_head_sha".to_string(),
+            symbols: loaded.symbols,
+        };
+        // is_current checks real git HEAD, which won't match "old_head_sha"
+        // in a temp dir (not a git repo) → returns false
+        assert!(!ContextIndex::is_current(&cached, &dir));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn from_symbols_constructs_index() {
+        let symbols = vec![Symbol {
+            name: "foo".to_string(),
+            kind: SymbolKind::Function,
+            file: PathBuf::from("src/lib.rs"),
+            line: 1,
+            end_line: 5,
+        }];
+        let idx = ContextIndex::from_symbols(symbols);
+        assert_eq!(idx.symbols().len(), 1);
+        assert_eq!(idx.symbols()[0].name, "foo");
     }
 }

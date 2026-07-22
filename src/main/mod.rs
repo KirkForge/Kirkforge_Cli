@@ -873,25 +873,47 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     // Build a tree-sitter-backed symbol index from the sandbox directory.
     // The index is passed to the executor's PromptBuilder so relevant
     // symbols are injected into the system prompt before every turn.
+    // ADR-037 Phase 4: disk caching at .kirkforge/context-index/cache.json.
+    // On subsequent runs, if the cached index matches the current git HEAD,
+    // we load from disk instead of rebuilding.
     let context_index = {
         let cfg = kirkforge::shared::read_shared_config(&shared_config);
         cfg.sandbox_dir.as_ref().and_then(|dir| {
             let path = std::path::Path::new(dir);
-            if path.is_dir() {
-                let mut idx = kirkforge_context_index::ContextIndex::new();
-                match idx.index_dir(path) {
-                    Ok(()) => {
-                        let count = idx.symbols().len();
-                        tracing::info!(symbol_count = count, sandbox_dir = %dir, "built repo-graph context index");
-                        Some(idx)
+            if !path.is_dir() {
+                return None;
+            }
+            let cache_path = path.join(".kirkforge/context-index/cache.json");
+            if cache_path.exists() {
+                if let Ok(cached) = kirkforge_context_index::ContextIndex::load(&cache_path) {
+                    if kirkforge_context_index::ContextIndex::is_current(&cached, path) {
+                        let idx = kirkforge_context_index::ContextIndex::from_symbols(cached.symbols);
+                        tracing::info!(
+                            symbol_count = idx.symbols().len(),
+                            "loaded repo-graph context index from cache"
+                        );
+                        return Some(idx);
                     }
-                    Err(e) => {
-                        tracing::warn!(error = %e, sandbox_dir = %dir, "failed to build context index");
-                        None
-                    }
+                    tracing::info!("context index cache is stale (HEAD mismatch), rebuilding");
+                } else {
+                    tracing::info!("context index cache is corrupt, rebuilding");
                 }
-            } else {
-                None
+            }
+            let mut idx = kirkforge_context_index::ContextIndex::new();
+            match idx.index_dir(path) {
+                Ok(()) => {
+                    let count = idx.symbols().len();
+                    tracing::info!(symbol_count = count, sandbox_dir = %dir, "built repo-graph context index");
+                    let head = kirkforge_context_index::current_head(path).unwrap_or_default();
+                    if let Err(e) = idx.save(&cache_path, &head) {
+                        tracing::warn!(error = %e, "failed to save context index cache");
+                    }
+                    Some(idx)
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, sandbox_dir = %dir, "failed to build context index");
+                    None
+                }
             }
         })
     };

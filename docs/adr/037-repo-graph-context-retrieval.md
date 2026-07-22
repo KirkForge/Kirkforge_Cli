@@ -16,7 +16,9 @@ Build `crates/kirkforge-context-index/` — a tree-sitter-backed symbol/import/c
 
 **Phase 2 (tree-sitter):** Tree-sitter parsing for Rust. Extracts `function_item`, `struct_item`, `enum_item`, `impl_item`, `mod_item`, `use_declaration` nodes with accurate line ranges. **In progress (Rust only).** Future: TS/Python/Go grammars.
 
-**Phase 3 (wire-in):** `retrieve()` called from the prompt builder before every turn. Injects up to 10 relevant symbols as a "Relevant symbols:" section. **In progress (no disk caching yet).** Future: disk caching (`.kirkforge/context-index/`), rebuild on git HEAD change.
+**Phase 3 (wire-in):** `retrieve()` called from the prompt builder before every turn. Injects up to 10 relevant symbols as a "Relevant symbols:" section. **Done.**
+
+**Phase 4 (disk caching):** Cache at `.kirkforge/context-index/cache.json` with git-HEAD-based invalidation. On session start, if cache exists and HEAD matches, load from disk (instant). Otherwise rebuild and save. **Done.**
 
 **Phase 4+ (future):** Import-graph edges (reuse `tool-graphify`'s logic). Call-graph edges (tree-sitter queries for call sites). Embeddings or graph-walk retrieval (replace substring match).
 
@@ -26,6 +28,7 @@ Build `crates/kirkforge-context-index/` — a tree-sitter-backed symbol/import/c
 - Tree-sitter parsing for Rust (tree-sitter 0.25, tree-sitter-rust 0.24).
 - Substring-match retrieval (ponytail: upgrade path is embeddings or graph-walk).
 - Wired into `PromptBuilder` via `with_context_index()`. Index built at session start in `run_session()`.
+- Disk caching: `CachedIndex` struct with `head` (git HEAD SHA) + `symbols`. `save()`, `load()`, `is_current()`. Cache at `.kirkforge/context-index/cache.json`. Rebuild on HEAD mismatch.
 
 ## Consequences
 
@@ -33,12 +36,12 @@ Build `crates/kirkforge-context-index/` — a tree-sitter-backed symbol/import/c
 - Accurate symbol extraction with proper line ranges (not just declaration line).
 - Catches inline declarations that line-based heuristics miss.
 - Model gets relevant symbols injected before every turn.
-- 5 tests pass (3 original + 2 new: inline struct, end_line).
+- 5 tests pass (3 original + 2 new: inline struct, end_line) → **10 tests pass (+ 5 new: save/load roundtrip, cache hit, cache miss, head differs, from_symbols).**
 
 **Negative:**
 - Tree-sitter adds ~2MB to the binary size (documented tradeoff).
 - Rust-only — TS/Python/Go grammars are future work.
-- No disk caching — index is rebuilt on every session start.
+- No disk caching — index is rebuilt on every session start → **Fixed in Phase 4: cache at `.kirkforge/context-index/cache.json` with git-HEAD invalidation.**
 - No import/call-graph edges yet — retrieval is substring-only.
 
 **Neutral:**

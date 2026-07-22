@@ -7,6 +7,7 @@ description = "Tree-sitter-backed symbol/import/call-graph index for context ret
 [dependencies]
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 tracing = "0.1"
 walkdir = "2"
 tree-sitter = "0.25"

@@ -46,6 +46,7 @@ files `0001`–`0018` and `0021`–`0022` (indexed below) are the vendored Plugi
 | [0029](./0029-test-partitioning.md) | Test partitioning — fast/full/coverage suites | Accepted |
 | [0033](./0033-tool-retry-backoff.md) | Exponential backoff on tool-call retries | Accepted |
 | [0034](./0034-mid-batch-checkpoint.md) | Mid-batch tool-result checkpointing | Accepted |
+| [0044](./0044-computer-use-depth.md) | Computer-use depth (multi-step browser flows) | Accepted |
 
 ## Native KirkForge-Cli ADRs
 
@@ -73,6 +74,7 @@ numbering scheme (`001`–`017`). Recent additions:
 - [ADR-041: Subagent model selection](./041-subagent-model-selection.md)
 - [ADR-042: OpenCode Zen provider](./042-opencode-zen-provider.md)
 - [ADR-043: Verifier-bus bridge code](./043-verifier-bus-bridge-code.md)
+- [ADR-044: Computer-use depth (multi-step browser flows)](./044-computer-use-depth.md)
 
 These are **not** part of the Plugin3 series and are therefore not
 included in the 4-digit index table above.

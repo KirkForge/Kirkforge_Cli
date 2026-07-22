@@ -6,6 +6,18 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [0.3.5] - 2026-07-22
 
 ### Added
+- Multi-step browser flows in computer-use tool: BrowserSession with open/close,
+  step tracking, and max_steps limit (ADR-044)
+
+### Changed
+- Refactored slash-command dispatch from inline match block to table-driven
+  `COMMANDS` array + `dispatch_slash_command()` in new
+  `src/tui/keys/slash_commands.rs`. The `/help` text is now generated from
+  the table, ensuring new commands stay in sync. 2 new tests:
+  `slash_command_table_covers_all_triggers` and
+  `help_text_includes_every_command_trigger` (P3.8 Task 2).
+
+### Added
 - Disk caching for context index (P1-long-1 Phase 4, ADR-037):
   `CachedIndex` with git-HEAD-based invalidation. Cache at
   `.kirkforge/context-index/cache.json`. Session startup is instant

@@ -17,7 +17,7 @@ use crate::session::access::DenyList;
 use crate::shared::{ComputerUseConfig, ToolDef, ToolError, ToolOutcome};
 use crate::tools::{Tool, ToolContext};
 use base64::Engine as _;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 /// Trait that abstracts the actual Chrome tab so tests can inject a fake.
 /// Exported so the launcher in `main/mod.rs` can hand a real tab handle to
@@ -40,6 +40,7 @@ pub struct ComputerUse {
     deny_list: DenyList,
     config: ComputerUseConfig,
     tab: Arc<dyn ChromeTab>,
+    session: Mutex<Option<BrowserSession>>,
 }
 
 impl ComputerUse {
@@ -50,6 +51,7 @@ impl ComputerUse {
             deny_list,
             config,
             tab,
+            session: Mutex::new(None),
         }
     }
 
@@ -60,6 +62,7 @@ impl ComputerUse {
             deny_list,
             config,
             tab,
+            session: Mutex::new(None),
         }
     }
 }
@@ -99,6 +102,62 @@ impl ChromeTab for PlaceholderTab {
     }
 }
 
+/// A persistent browser session that tracks step count across
+/// multiple tool invocations, enabling multi-step browser automation
+/// with vision-grounded UI reasoning.
+pub struct BrowserSession {
+    tab: Arc<dyn ChromeTab>,
+    step: u32,
+    max_steps: u32,
+}
+
+impl BrowserSession {
+    pub fn new(tab: Arc<dyn ChromeTab>, max_steps: u32) -> Self {
+        let max_steps = if max_steps == 0 { 20 } else { max_steps };
+        Self {
+            tab,
+            step: 0,
+            max_steps,
+        }
+    }
+
+    pub fn step(&mut self) -> anyhow::Result<()> {
+        self.step += 1;
+        if self.step > self.max_steps {
+            Err(anyhow::anyhow!(
+                "browser session exceeded max_steps ({})",
+                self.max_steps
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
+    pub fn screenshot(&self) -> anyhow::Result<Vec<u8>> {
+        self.tab.screenshot()
+    }
+
+    pub fn click(&self, selector: &str) -> anyhow::Result<()> {
+        self.tab.click(selector)
+    }
+
+    pub fn type_text(&self, selector: &str, text: &str) -> anyhow::Result<()> {
+        self.tab.type_text(selector, text)
+    }
+
+    pub fn wait_for(&self, selector: &str, timeout: Duration) -> anyhow::Result<()> {
+        self.tab.wait_for(selector, timeout)
+    }
+
+    pub fn scroll(&self, amount: i32) -> anyhow::Result<()> {
+        self.tab.scroll(amount)
+    }
+
+    pub fn evaluate(&self, js: &str) -> anyhow::Result<String> {
+        self.tab.evaluate(js)
+    }
+}
+
 #[async_trait::async_trait]
 impl Tool for ComputerUse {
     fn def(&self) -> ToolDef {
@@ -110,12 +169,12 @@ impl Tool for ComputerUse {
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["navigate", "click", "click_xy", "type", "keypress", "scroll", "screenshot", "wait_for", "evaluate"],
+                        "enum": ["open", "navigate", "click", "click_xy", "type", "keypress", "scroll", "screenshot", "wait_for", "evaluate", "close"],
                         "description": "The browser action to perform."
                     },
                     "url": {
                         "type": "string",
-                        "description": "URL to navigate to (required for navigate)."
+                        "description": "URL to navigate to (required for open and navigate)."
                     },
                     "selector": {
                         "type": "string",
@@ -157,7 +216,8 @@ impl Tool for ComputerUse {
             None => return ToolOutcome::Failure(ToolError::invalid_args("Missing 'action'")),
         };
 
-        if matches!(action, "navigate") {
+        // URL validation applies to both "open" and "navigate"
+        if matches!(action, "open" | "navigate") {
             let url = match args.get("url").and_then(|v| v.as_str()) {
                 Some(u) => u,
                 None => return ToolOutcome::Failure(ToolError::invalid_args("Missing 'url'")),
@@ -180,7 +240,57 @@ impl Tool for ComputerUse {
             }
         }
 
-        run_on_tab(&*self.tab, action, &args, &self.config).await
+        match action {
+            "open" => {
+                let url = args["url"].as_str().unwrap_or("");
+                let session = BrowserSession::new(self.tab.clone(), self.config.max_steps);
+                if let Err(e) = session.tab.navigate(url) {
+                    return ToolOutcome::Failure(ToolError::Internal {
+                        message: format!("open failed: {e:#}"),
+                    });
+                }
+                let mut guard = self.session.lock().unwrap();
+                *guard = Some(session);
+                ToolOutcome::Success {
+                    content: format!("Opened session and navigated to {url}"),
+                }
+            }
+            "close" => {
+                let mut guard = self.session.lock().unwrap();
+                guard.take();
+                ToolOutcome::Success {
+                    content: "Browser session closed".into(),
+                }
+            }
+            _ => {
+                let has_session = self.session.lock().unwrap().is_some();
+                if has_session {
+                    // Increment step counter, then drop the lock before
+                    // doing any work that might involve an await.
+                    {
+                        let mut guard = self.session.lock().unwrap();
+                        let session = guard.as_mut().unwrap();
+                        if let Err(e) = session.step() {
+                            return ToolOutcome::Failure(ToolError::Internal {
+                                message: format!("{e:#}"),
+                            });
+                        }
+                    }
+                    // All BrowserSession methods are sync, so we do the
+                    // action inside the lock and return. The lock is held
+                    // only for the duration of the sync call.
+                    let mut guard = self.session.lock().unwrap();
+                    let session = guard.as_mut().unwrap();
+                    let outcome = run_on_session_sync(session, action, &args, &self.config);
+                    drop(guard);
+                    outcome
+                } else {
+                    // No active session - fall back to single-shot tab usage
+                    // for backward compatibility with PlaceholderTab.
+                    run_on_tab(&*self.tab, action, &args, &self.config).await
+                }
+            }
+        }
     }
 }
 
@@ -252,6 +362,87 @@ async fn run_on_tab(
     }
 }
 
+/// Synchronous runner for session actions. All BrowserSession methods
+/// are sync, so this avoids holding a MutexGuard across an await.
+fn run_on_session_sync(
+    session: &mut BrowserSession,
+    action: &str,
+    args: &serde_json::Value,
+    config: &ComputerUseConfig,
+) -> ToolOutcome {
+    let wait = Duration::from_secs(config.wait_timeout_secs);
+    let result = match action {
+        "navigate" => {
+            let url = args["url"].as_str().unwrap_or("");
+            session
+                .tab
+                .navigate(url)
+                .map(|_| format!("Navigated to {url}"))
+        }
+        "click" => {
+            let selector = args["selector"].as_str().unwrap_or("");
+            session
+                .click(selector)
+                .map(|_| format!("Clicked {selector}"))
+        }
+        "click_xy" => {
+            let x = args["x"].as_f64().unwrap_or(0.0);
+            let y = args["y"].as_f64().unwrap_or(0.0);
+            session
+                .tab
+                .click_xy(x, y)
+                .map(|_| format!("Clicked at ({x}, {y})"))
+        }
+        "type" => {
+            let selector = args["selector"].as_str().unwrap_or("");
+            let text = args["text"].as_str().unwrap_or("");
+            session
+                .type_text(selector, text)
+                .map(|_| format!("Typed into {selector}"))
+        }
+        "keypress" => {
+            let key = args["key"].as_str().unwrap_or("");
+            session.tab.keypress(key).map(|_| format!("Pressed {key}"))
+        }
+        "scroll" => {
+            let amount = args["amount"].as_i64().unwrap_or(0) as i32;
+            session
+                .scroll(amount)
+                .map(|_| format!("Scrolled {amount} pixels"))
+        }
+        "wait_for" => {
+            let selector = args["selector"].as_str().unwrap_or("");
+            session
+                .wait_for(selector, wait)
+                .map(|_| format!("Element {selector} is present"))
+        }
+        "evaluate" => {
+            let expression = args["expression"].as_str().unwrap_or("");
+            session.evaluate(expression)
+        }
+        "screenshot" => {
+            return match session.screenshot() {
+                Ok(data) => ToolOutcome::Image {
+                    path: std::path::PathBuf::from("screenshot.png"),
+                    mime: "image/png".to_string(),
+                    data_base64: base64::prelude::BASE64_STANDARD.encode(&data),
+                },
+                Err(e) => ToolOutcome::Failure(ToolError::Internal {
+                    message: format!("screenshot failed: {e:#}"),
+                }),
+            }
+        }
+        other => Err(anyhow::anyhow!("unknown action: {other}")),
+    };
+
+    match result {
+        Ok(content) => ToolOutcome::Success { content },
+        Err(e) => ToolOutcome::Failure(ToolError::Internal {
+            message: format!("{action} failed: {e:#}"),
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -299,6 +490,19 @@ mod tests {
         ComputerUse::with_tab(
             DenyList::default(),
             ComputerUseConfig::default(),
+            Arc::new(FakeTab {
+                navigations: AtomicUsize::new(0),
+            }),
+        )
+    }
+
+    fn fake_tool_with_max_steps(max_steps: u32) -> ComputerUse {
+        ComputerUse::with_tab(
+            DenyList::default(),
+            ComputerUseConfig {
+                max_steps,
+                ..Default::default()
+            },
             Arc::new(FakeTab {
                 navigations: AtomicUsize::new(0),
             }),
@@ -379,5 +583,94 @@ mod tests {
             panic!("expected Success, got {outcome:?}");
         };
         assert_eq!(content, "42");
+    }
+
+    #[tokio::test]
+    async fn computer_use_open_action_parsed() {
+        let tool = fake_tool();
+        let outcome = tool
+            .run(
+                &ToolContext::new(),
+                json!({"action": "open", "url": "https://example.com"}),
+            )
+            .await;
+        let ToolOutcome::Success { content } = outcome else {
+            panic!("expected Success, got {outcome:?}");
+        };
+        assert!(content.contains("example.com"));
+    }
+
+    #[tokio::test]
+    async fn computer_use_close_action_parsed() {
+        let tool = fake_tool();
+        // open first so close has a session to close
+        tool.run(
+            &ToolContext::new(),
+            json!({"action": "open", "url": "https://example.com"}),
+        )
+        .await;
+        let outcome = tool
+            .run(&ToolContext::new(), json!({"action": "close"}))
+            .await;
+        let ToolOutcome::Success { content } = outcome else {
+            panic!("expected Success, got {outcome:?}");
+        };
+        assert!(content.contains("closed"));
+    }
+
+    #[tokio::test]
+    async fn computer_use_max_steps_enforced() {
+        let tool = fake_tool_with_max_steps(2);
+        // open creates session (step 0)
+        tool.run(
+            &ToolContext::new(),
+            json!({"action": "open", "url": "https://example.com"}),
+        )
+        .await;
+        // step 1 - ok
+        let outcome = tool
+            .run(
+                &ToolContext::new(),
+                json!({"action": "click", "selector": "a"}),
+            )
+            .await;
+        assert!(
+            matches!(outcome, ToolOutcome::Success { .. }),
+            "step 1 should succeed, got {outcome:?}"
+        );
+        // step 2 - ok (max_steps=2 allows 2 steps)
+        let outcome = tool
+            .run(
+                &ToolContext::new(),
+                json!({"action": "click", "selector": "b"}),
+            )
+            .await;
+        assert!(
+            matches!(outcome, ToolOutcome::Success { .. }),
+            "step 2 should succeed, got {outcome:?}"
+        );
+        // step 3 - exceeds max_steps
+        let outcome = tool
+            .run(
+                &ToolContext::new(),
+                json!({"action": "click", "selector": "c"}),
+            )
+            .await;
+        assert!(
+            matches!(outcome, ToolOutcome::Failure(ToolError::Internal { .. })),
+            "step 3 should fail, got {outcome:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn computer_use_invalid_action_rejected() {
+        let tool = fake_tool();
+        let outcome = tool
+            .run(&ToolContext::new(), json!({"action": "frobnicate"}))
+            .await;
+        assert!(
+            matches!(outcome, ToolOutcome::Failure(ToolError::Internal { .. })),
+            "got {outcome:?}"
+        );
     }
 }

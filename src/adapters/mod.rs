@@ -154,6 +154,9 @@ pub enum AdapterKind {
     /// Anthropic Messages API via Google Cloud Vertex AI, using a
     /// service-account access token.
     AnthropicVertex,
+    /// OpenCode Zen gateway (OpenAI-compatible endpoint at
+    /// opencode.ai/zen/v1/chat/completions).
+    OpenCodeZen,
 }
 
 /// Classify a model name (and optional type override) into an
@@ -176,6 +179,9 @@ pub fn adapter_kind_for(
 
     let provider_lower = provider.to_lowercase();
     let lower = model_name.to_lowercase();
+    if lower.starts_with("opencode/") {
+        return AdapterKind::OpenCodeZen;
+    }
     if lower.starts_with("claude-") || lower.starts_with("claude_") || lower.starts_with("claude") {
         match provider_lower.as_str() {
             "bedrock" => AdapterKind::AnthropicBedrock,
@@ -248,6 +254,8 @@ pub fn adapter_for(
         model_type_override,
         "anthropic",
         timeout_secs,
+        "https://opencode.ai/zen/v1/chat/completions",
+        None,
     )
 }
 
@@ -259,6 +267,8 @@ pub fn adapter_for_with_provider(
     model_type_override: Option<&str>,
     anthropic_provider: &str,
     timeout_secs: u64,
+    opencode_zen_endpoint: &str,
+    opencode_zen_api_key: Option<&str>,
 ) -> Box<dyn ModelAdapter> {
     let override_lower = model_type_override.map(|s| s.to_lowercase());
     match adapter_kind_for(model_name, model_type_override, anthropic_provider) {
@@ -333,6 +343,17 @@ pub fn adapter_for_with_provider(
                 "",
                 "us-central1",
                 None,
+                timeout_secs,
+            ))
+        }
+        AdapterKind::OpenCodeZen => {
+            // Strip the "opencode/" prefix to get the actual model name.
+            let zen_model = model_name.strip_prefix("opencode/").unwrap_or(model_name);
+            let api_key = opencode_zen_api_key.unwrap_or("");
+            Box::new(openai_compat::OpenAiCompatAdapter::with_base_url_and_key(
+                opencode_zen_endpoint,
+                zen_model,
+                api_key,
                 timeout_secs,
             ))
         }
@@ -777,6 +798,8 @@ mod tests {
             Some("anthropic-bedrock"),
             "bedrock",
             30,
+            "https://opencode.ai/zen/v1/chat/completions",
+            None,
         );
         assert_eq!(adapter.model_info().name, "anthropic.claude-3-5-sonnet");
         assert!(adapter.model_info().tool_call_format == crate::shared::ToolCallStyle::Anthropic);

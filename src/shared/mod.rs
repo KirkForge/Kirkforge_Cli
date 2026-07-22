@@ -481,6 +481,20 @@ pub struct Config {
     #[serde(default = "default_aws_region")]
     pub aws_region: String,
 
+    /// Allowed models for subagent tasks. None = allow any model.
+    /// Some = only allow models in this list (cost control).
+    #[serde(default)]
+    pub subagent_allowed_models: Option<Vec<String>>,
+
+    /// OpenCode Zen API key (from https://opencode.ai/auth).
+    /// Empty string = use free models without auth.
+    #[serde(default)]
+    pub opencode_zen_api_key: Option<String>,
+
+    /// OpenCode Zen endpoint.
+    #[serde(default = "default_zen_endpoint")]
+    pub opencode_zen_endpoint: String,
+
     /// AWS profile for Anthropic-on-Bedrock credentials.
     /// When empty, the standard AWS SDK credential chain falls through
     /// to env vars / instance metadata.
@@ -686,6 +700,10 @@ fn default_aws_region() -> String {
     "us-east-1".to_string()
 }
 
+fn default_zen_endpoint() -> String {
+    "https://opencode.ai/zen/v1/chat/completions".to_string()
+}
+
 fn default_gcp_region() -> String {
     "us-central1".to_string()
 }
@@ -879,6 +897,9 @@ impl Default for Config {
             gcp_service_account_path: None,
             gcp_project_id: String::new(),
             gcp_region: default_gcp_region(),
+            subagent_allowed_models: None,
+            opencode_zen_api_key: None,
+            opencode_zen_endpoint: default_zen_endpoint(),
             computer_use: ComputerUseConfig::default(),
             seed: None,
             worktree_enabled: false,

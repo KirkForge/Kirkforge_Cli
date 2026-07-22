@@ -79,6 +79,8 @@ impl AdapterSwap {
                 self.model_type_override.as_deref(),
                 &config.anthropic_provider,
                 self.timeout_secs,
+                &config.opencode_zen_endpoint,
+                config.opencode_zen_api_key.as_deref(),
             ),
         );
 
@@ -113,6 +115,8 @@ impl AdapterSwap {
                 self.model_type_override.as_deref(),
                 &config.anthropic_provider,
                 self.timeout_secs,
+                &config.opencode_zen_endpoint,
+                config.opencode_zen_api_key.as_deref(),
             ),
         );
         let _old = std::mem::replace(adapter, new_adapter);

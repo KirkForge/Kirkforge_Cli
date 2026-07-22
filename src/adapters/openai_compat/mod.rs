@@ -361,6 +361,7 @@ pub(crate) async fn parse_openai_compat_stream<B, E, S>(
 pub struct OpenAiCompatAdapter {
     model: String,
     api_base: String,
+    api_key: String,
     client: reqwest::Client,
     json_mode: bool,
     seed: Option<u64>,
@@ -373,6 +374,27 @@ impl OpenAiCompatAdapter {
         Self {
             model: model.to_string(),
             api_base,
+            api_key: String::new(),
+            client: super::build_reqwest_client(),
+            json_mode: false,
+            seed: None,
+            timeout_secs,
+        }
+    }
+
+    /// Create an adapter with an explicit base URL and API key.
+    /// Used for OpenAI-compatible providers like OpenCode Zen that
+    /// require an Authorization header.
+    pub fn with_base_url_and_key(
+        base_url: &str,
+        model: &str,
+        api_key: &str,
+        timeout_secs: u64,
+    ) -> Self {
+        Self {
+            model: model.to_string(),
+            api_base: base_url.trim_end_matches('/').to_string(),
+            api_key: api_key.to_string(),
             client: super::build_reqwest_client(),
             json_mode: false,
             seed: None,
@@ -439,12 +461,17 @@ impl ModelAdapter for OpenAiCompatAdapter {
         let url = format!("{}/v1/chat/completions", self.api_base);
 
         let response = super::send_with_retry(|| async {
-            self.client
+            let req = self
+                .client
                 .post(&url)
                 .json(&body)
-                .timeout(std::time::Duration::from_secs(self.timeout_secs))
-                .send()
-                .await
+                .timeout(std::time::Duration::from_secs(self.timeout_secs));
+            let req = if self.api_key.is_empty() {
+                req
+            } else {
+                req.header("Authorization", format!("Bearer {}", self.api_key))
+            };
+            req.send().await
         })
         .await?;
 

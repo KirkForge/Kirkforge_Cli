@@ -264,6 +264,7 @@ impl StepRunner for TuiStepRunner {
             .run_task(crate::tools::task::TaskRequest {
                 prompt: prompt.to_string(),
                 persona: persona.to_string(),
+                model: None,
             })
             .await
             .map_err(|e| anyhow::anyhow!("step {name} failed: {e}"))?;
@@ -308,6 +309,7 @@ impl StepRunner for LineStepRunner {
             .run_task(crate::tools::task::TaskRequest {
                 prompt: prompt.to_string(),
                 persona: persona.to_string(),
+                model: None,
             })
             .await
             .map_err(|e| anyhow::anyhow!("step {name} failed: {e}"))

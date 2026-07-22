@@ -16,6 +16,8 @@ pub struct TaskRequest {
     pub prompt: String,
     /// Restrict the subagent toolset: "explore", "plan", or "coder".
     pub persona: String,
+    /// Model override for this subagent. None = use parent session model.
+    pub model: Option<String>,
 }
 
 /// Handle returned for a background task.
@@ -113,6 +115,10 @@ impl Tool for Task {
                         "type": "boolean",
                         "default": false,
                         "description": "Run asynchronously and return a task id"
+                    },
+                    "model": {
+                        "type": "string",
+                        "description": "Model to use for this subagent (optional). If omitted, uses the parent session's model. Example: 'qwen2.5:0.5b' for a cheap read-only exploration, 'opencode/big-pickle' for a free subagent."
                     }
                 },
                 "required": ["prompt"]
@@ -135,6 +141,10 @@ impl Tool for Task {
             .and_then(|p| p.as_str())
             .unwrap_or("coder")
             .to_lowercase();
+        let model = args
+            .get("model")
+            .and_then(|m| m.as_str())
+            .map(|s| s.to_string());
         let background = args
             .get("background")
             .and_then(|b| b.as_bool())
@@ -154,6 +164,7 @@ impl Tool for Task {
             let request = TaskRequest {
                 prompt: prompt.clone(),
                 persona: persona.clone(),
+                model: model.clone(),
             };
             let id = {
                 let mut guard = manager.lock().unwrap_or_else(|e| e.into_inner());
@@ -179,7 +190,11 @@ impl Tool for Task {
                 ),
             }
         } else {
-            let request = TaskRequest { prompt, persona };
+            let request = TaskRequest {
+                prompt,
+                persona,
+                model,
+            };
             match spawner.run_task(request).await {
                 Ok(summary) => ToolOutcome::Success { content: summary },
                 Err(err) => ToolOutcome::Error { message: err },
@@ -277,13 +292,26 @@ impl InProcessTaskSpawner {
 #[async_trait::async_trait]
 impl TaskSpawner for InProcessTaskSpawner {
     async fn run_task(&self, request: TaskRequest) -> Result<String, String> {
+        let effective_model = request.model.as_deref().unwrap_or(&self.model_name);
+
+        // If subagent_allowed_models is set, enforce the allowlist.
+        if let Some(allowed) = &self.config.subagent_allowed_models {
+            if !allowed.is_empty() && !allowed.iter().any(|m| m == effective_model) {
+                return Err(format!(
+                    "model '{effective_model}' not in allowed subagent models list"
+                ));
+            }
+        }
+
         let adapter = adapters::caching::maybe_wrap_cached(
             adapters::adapter_for_with_provider(
-                &self.model_name,
+                effective_model,
                 &self.ollama_host,
                 None,
                 &self.config.anthropic_provider,
                 self.config.request_timeout_secs,
+                &self.config.opencode_zen_endpoint,
+                self.config.opencode_zen_api_key.as_deref(),
             ),
             &self.config,
         );

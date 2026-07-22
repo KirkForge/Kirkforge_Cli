@@ -755,6 +755,8 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
             model_type.as_deref(),
             &config.anthropic_provider,
             config.request_timeout_secs,
+            &config.opencode_zen_endpoint,
+            config.opencode_zen_api_key.as_deref(),
         ),
         &config,
     );

@@ -79,7 +79,8 @@ pub async fn handle_model_command(
         AdapterKind::OpenAiCompat
         | AdapterKind::Anthropic
         | AdapterKind::AnthropicBedrock
-        | AdapterKind::AnthropicVertex => {
+        | AdapterKind::AnthropicVertex
+        | AdapterKind::OpenCodeZen => {
             // OpenAI-compatible and Anthropic endpoints may be remote/cloud
             // APIs; a local `/api/tags` check would be meaningless here.
             let _validation = ModelValidation::SkippedOpenAiCompat;

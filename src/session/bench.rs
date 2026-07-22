@@ -100,6 +100,8 @@ pub async fn run_task(
     let ollama_host = shared_config.read().unwrap().ollama_host.clone();
     let anthropic_provider = shared_config.read().unwrap().anthropic_provider.clone();
     let request_timeout = shared_config.read().unwrap().request_timeout_secs;
+    let zen_endpoint = shared_config.read().unwrap().opencode_zen_endpoint.clone();
+    let zen_api_key = shared_config.read().unwrap().opencode_zen_api_key.clone();
 
     // Create adapter.
     let adapter = crate::adapters::adapter_for_with_provider(
@@ -108,6 +110,8 @@ pub async fn run_task(
         None,
         &anthropic_provider,
         request_timeout,
+        &zen_endpoint,
+        zen_api_key.as_deref(),
     );
 
     // Open conversation log in sandbox.

@@ -17,12 +17,14 @@ pub enum SymbolKind {
 pub enum Language {
     Rust,
     TypeScript,
+    Python,
 }
 
 pub fn detect_language(path: &std::path::Path) -> Option<Language> {
     match path.extension().and_then(|s| s.to_str()) {
         Some("rs") => Some(Language::Rust),
         Some("ts") | Some("tsx") => Some(Language::TypeScript),
+        Some("py") => Some(Language::Python),
         _ => None,
     }
 }
@@ -53,11 +55,12 @@ pub struct CachedIndex {
 /// A tree-sitter-backed index of source-code symbols.
 ///
 /// Uses tree-sitter grammars to extract function, struct, enum, impl, module,
-/// and use declarations from Rust and TypeScript source files. The index is
-/// built by calling `index_file` or `index_dir`, then queried via `retrieve`.
+/// and use declarations from Rust, TypeScript, and Python source files. The
+/// index is built by calling `index_file` or `index_dir`, then queried via
+/// `retrieve`.
 ///
-/// ponytail: Rust + TypeScript symbol extraction via tree-sitter. The upgrade
-/// path is Python/Go grammars.
+/// ponytail: Rust + TypeScript + Python symbol extraction via tree-sitter. The
+/// upgrade path is Go grammars.
 ///
 /// ponytail: substring-match retrieval. The upgrade path is embeddings or
 /// graph-walk retrieval.
@@ -103,6 +106,13 @@ impl ContextIndex {
                     .set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into())
                     .map_err(|e| {
                         anyhow::anyhow!("failed to set tree-sitter TypeScript language: {e}")
+                    })?;
+            }
+            Language::Python => {
+                parser
+                    .set_language(&tree_sitter_python::LANGUAGE.into())
+                    .map_err(|e| {
+                        anyhow::anyhow!("failed to set tree-sitter Python language: {e}")
                     })?;
             }
         }
@@ -163,12 +173,51 @@ impl ContextIndex {
                     "import_statement" => (SymbolKind::Use, Some(node)),
                     _ => (SymbolKind::Function, None),
                 },
+                Language::Python => match kind {
+                    "function_definition" => {
+                        (SymbolKind::Function, node.child_by_field_name("name"))
+                    }
+                    "class_definition" => (SymbolKind::Class, node.child_by_field_name("name")),
+                    "import_statement" => (SymbolKind::Use, Some(node)),
+                    "import_from_statement" => (SymbolKind::Use, Some(node)),
+                    "decorated_definition" => {
+                        let mut child_kind = None;
+                        let mut child_cursor = node.walk();
+                        for ch in child_cursor.node().children(&mut child_cursor) {
+                            match ch.kind() {
+                                "function_definition" => {
+                                    child_kind = Some((
+                                        SymbolKind::Function,
+                                        ch.child_by_field_name("name"),
+                                    ));
+                                    break;
+                                }
+                                "class_definition" => {
+                                    child_kind =
+                                        Some((SymbolKind::Class, ch.child_by_field_name("name")));
+                                    break;
+                                }
+                                _ => {}
+                            }
+                        }
+                        match child_kind {
+                            Some((sk, nn)) => (sk, nn),
+                            None => (SymbolKind::Function, None),
+                        }
+                    }
+                    _ => (SymbolKind::Function, None),
+                },
             };
 
             if let Some(name_node) = name_node {
-                let is_named_function = kind == "function_item" || kind == "function_declaration";
+                let is_named_function = kind == "function_item"
+                    || kind == "function_declaration"
+                    || kind == "function_definition"
+                    || kind == "decorated_definition";
                 if symbol_kind != SymbolKind::Function || is_named_function {
-                    let is_use_like = kind == "use_declaration" || kind == "import_statement";
+                    let is_use_like = kind == "use_declaration"
+                        || kind == "import_statement"
+                        || kind == "import_from_statement";
                     let name = if is_use_like {
                         node.utf8_text(source.as_bytes()).unwrap_or("").to_string()
                     } else {
@@ -191,7 +240,8 @@ impl ContextIndex {
                 }
             }
 
-            if cursor.goto_first_child() {
+            let skip_children = kind == "decorated_definition";
+            if !skip_children && cursor.goto_first_child() {
                 self.walk_tree(cursor, source, path, lang);
                 cursor.goto_parent();
             }
@@ -202,7 +252,7 @@ impl ContextIndex {
         }
     }
 
-    /// Index all `.rs` and `.ts`/`.tsx` files under a directory.
+    /// Index all `.rs`, `.ts`/`.tsx`, and `.py` files under a directory.
     pub fn index_dir(&mut self, root: &std::path::Path) -> anyhow::Result<()> {
         for entry in walkdir::WalkDir::new(root)
             .into_iter()
@@ -210,7 +260,8 @@ impl ContextIndex {
         {
             let path = entry.path();
             let ext = path.extension().and_then(|s| s.to_str());
-            let is_indexable = ext == Some("rs") || ext == Some("ts") || ext == Some("tsx");
+            let is_indexable =
+                ext == Some("rs") || ext == Some("ts") || ext == Some("tsx") || ext == Some("py");
             if is_indexable && path.is_file() {
                 let content = std::fs::read_to_string(path)?;
                 self.index_file(path, &content)?;
@@ -646,7 +697,88 @@ mod tests {
             detect_language(PathBuf::from("foo.tsx").as_path()),
             Some(Language::TypeScript)
         );
-        assert_eq!(detect_language(PathBuf::from("foo.py").as_path()), None);
+        assert_eq!(
+            detect_language(PathBuf::from("foo.py").as_path()),
+            Some(Language::Python)
+        );
         assert_eq!(detect_language(PathBuf::from("foo").as_path()), None);
+    }
+
+    #[test]
+    fn index_file_extracts_python_function() {
+        let tmp =
+            std::env::temp_dir().join(format!("kirkforge-context-py-fn-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+
+        let src = tmp.join("app.py");
+        fs::write(&src, "def foo(a: int) -> str:\n    return \"hi\"").unwrap();
+
+        let mut idx = ContextIndex::new();
+        idx.index_file(&src, &fs::read_to_string(&src).unwrap())
+            .unwrap();
+
+        let syms = idx.symbols();
+        assert!(
+            syms.iter()
+                .any(|s| s.name == "foo" && s.kind == SymbolKind::Function),
+            "expected foo as Function, got {syms:?}"
+        );
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn index_file_extracts_python_class() {
+        let tmp =
+            std::env::temp_dir().join(format!("kirkforge-context-py-class-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+
+        let src = tmp.join("app.py");
+        fs::write(&src, "class Bar:\n    def method(self):\n        pass").unwrap();
+
+        let mut idx = ContextIndex::new();
+        idx.index_file(&src, &fs::read_to_string(&src).unwrap())
+            .unwrap();
+
+        let syms = idx.symbols();
+        assert!(
+            syms.iter()
+                .any(|s| s.name == "Bar" && s.kind == SymbolKind::Class),
+            "expected Bar as Class, got {syms:?}"
+        );
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn index_dir_walks_py_files() {
+        let tmp =
+            std::env::temp_dir().join(format!("kirkforge-context-dir-py-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+
+        fs::write(tmp.join("a.rs"), "fn a() {}\nstruct A;\n").unwrap();
+        fs::write(
+            tmp.join("b.ts"),
+            "function b() {}\ninterface IB { x: number; }\n",
+        )
+        .unwrap();
+        fs::write(tmp.join("c.py"), "def c(): pass\nclass C: pass\n").unwrap();
+
+        let mut idx = ContextIndex::new();
+        idx.index_dir(&tmp).unwrap();
+
+        let syms = idx.symbols();
+        let names: Vec<&str> = syms.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"a"), "expected a, got {names:?}");
+        assert!(names.contains(&"A"), "expected A, got {names:?}");
+        assert!(names.contains(&"b"), "expected b, got {names:?}");
+        assert!(names.contains(&"IB"), "expected IB, got {names:?}");
+        assert!(names.contains(&"c"), "expected c, got {names:?}");
+        assert!(names.contains(&"C"), "expected C, got {names:?}");
+
+        let _ = fs::remove_dir_all(&tmp);
     }
 }

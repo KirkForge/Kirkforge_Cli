@@ -41,6 +41,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `Class`, `Interface`, `TypeAlias`. `index_dir` walks both `.rs` and
   `.ts`/`.tsx` files. 5 new tests.
 
+- Python tree-sitter grammar in context-index (P1-long-1 Phase 5,
+  ADR-037): `detect_language()` dispatches `.py` → Python. Extracts
+  `function_definition`, `class_definition`, `import_statement`,
+  `import_from_statement`, `decorated_definition`. `index_dir` walks
+  `.py` files. 3 new tests.
+
 ### Changed
 - `edit_file` fuzzy-fallback now has 4 additional tests: exact match,
   whitespace-tolerant, no-match, and partial-match coverage.

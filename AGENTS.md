@@ -61,7 +61,10 @@ This repo is a Rust CLI coding agent (`kirkforge`). It uses `tokio`, `ratatui`, 
 - `tokio::task::block_in_place` panics in single-threaded test runtimes. When wrapping async code in sync adapters, use stubs or find another approach.
 - `.map_or(true, |a| ...)` on `Option` triggers `clippy::unnecessary_map_or`. Use `.is_none_or(|a| ...)` instead (Rust 1.82+).
 - When adding fields to `Config`, update ALL of: `Default` impl, struct definition, test `Config` literals (especially `executor/tests/mod.rs`), `adapter_for_with_provider` call sites, `adapter_for` convenience wrapper, and test calls.
-- The `crates/plugin3-core/README.md` `| Tests | N passing |` row counts `#[test]` attributes under `crates/` only, not the entire workspace.
+- The `crates/plugin3-core/README.md` `| Tests | N passing |` row counts `#[test]` attributes under `crates/` only, not the entire workspace. When adding tests to `crates/` sub-crates, bump the count.
+- `bincode` is explicitly rejected project-wide (root `Cargo.toml` comment). Use `serde_json` for serialization.
+- When adding serialization to a crate that already depends on `serde`, just add `serde_json` to the crate's `Cargo.toml` — don't introduce new serialization libraries.
+- The `ContextIndex` struct has a private `symbols` field. When creating a cache format, use a separate struct (`CachedIndex`) that includes both the symbols and metadata (like git HEAD). Don't make the internal field public just for serialization.
 
 ## Task management
 1. **Plan**: write `workplan.md` (gitignored) with files to touch + root cause + gate.

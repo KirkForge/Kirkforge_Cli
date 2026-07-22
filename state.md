@@ -33,5 +33,5 @@
 
 ### Open cleanup items
 
-- Persist plugin enable/disable state
-- More TUI parity (doom_loop recovery, session child/parent nav, scout subagent, agent steps limit, /share, /editor)
+- More TUI parity (doom_loop recovery, session child/parent nav, scout subagent, /share, /editor)
+- ~~Persist plugin enable/disable state~~ — shipped in `4b36211` (toggle persists via save_config)

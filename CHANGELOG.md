@@ -27,6 +27,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `edit_file` fuzzy-fallback now has 4 additional tests: exact match,
   whitespace-tolerant, no-match, and partial-match coverage.
 
+### Changed
+- Consolidated 12 common dependencies into `[workspace.dependencies]`:
+  serde, serde_json, tokio, anyhow, tracing, clap, async-trait, chrono,
+  thiserror, toml, tempfile, directories (P3.3 cleanup).
+
 ### Removed
 - Dead `PromptBuilder.cache` field (HashMap never read).
 

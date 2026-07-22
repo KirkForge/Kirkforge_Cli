@@ -1,6 +1,5 @@
 use std::path::PathBuf;
 
-/// The kind of a source-code symbol.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SymbolKind {
     Function,
@@ -9,6 +8,23 @@ pub enum SymbolKind {
     Impl,
     Module,
     Use,
+    Class,
+    Interface,
+    TypeAlias,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum Language {
+    Rust,
+    TypeScript,
+}
+
+pub fn detect_language(path: &std::path::Path) -> Option<Language> {
+    match path.extension().and_then(|s| s.to_str()) {
+        Some("rs") => Some(Language::Rust),
+        Some("ts") | Some("tsx") => Some(Language::TypeScript),
+        _ => None,
+    }
 }
 
 /// A single symbol extracted from source code.
@@ -37,11 +53,11 @@ pub struct CachedIndex {
 /// A tree-sitter-backed index of source-code symbols.
 ///
 /// Uses tree-sitter grammars to extract function, struct, enum, impl, module,
-/// and use declarations from Rust source files. The index is built by calling
-/// `index_file` or `index_dir`, then queried via `retrieve`.
+/// and use declarations from Rust and TypeScript source files. The index is
+/// built by calling `index_file` or `index_dir`, then queried via `retrieve`.
 ///
-/// ponytail: Rust-only symbol extraction via tree-sitter. The upgrade path is
-/// TS/Python/Go grammars (tree-sitter-{typescript,python,go}).
+/// ponytail: Rust + TypeScript symbol extraction via tree-sitter. The upgrade
+/// path is Python/Go grammars.
 ///
 /// ponytail: substring-match retrieval. The upgrade path is embeddings or
 /// graph-walk retrieval.
@@ -70,12 +86,26 @@ impl ContextIndex {
         Self { symbols }
     }
 
-    /// Index a single Rust file using tree-sitter parsing.
+    /// Index a single source file using tree-sitter parsing.
     pub fn index_file(&mut self, path: &std::path::Path, content: &str) -> anyhow::Result<()> {
+        let lang = detect_language(path)
+            .ok_or_else(|| anyhow::anyhow!("unsupported file type: {}", path.display()))?;
+
         let mut parser = tree_sitter::Parser::new();
-        parser
-            .set_language(&tree_sitter_rust::LANGUAGE.into())
-            .map_err(|e| anyhow::anyhow!("failed to set tree-sitter Rust language: {e}"))?;
+        match lang {
+            Language::Rust => {
+                parser
+                    .set_language(&tree_sitter_rust::LANGUAGE.into())
+                    .map_err(|e| anyhow::anyhow!("failed to set tree-sitter Rust language: {e}"))?;
+            }
+            Language::TypeScript => {
+                parser
+                    .set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into())
+                    .map_err(|e| {
+                        anyhow::anyhow!("failed to set tree-sitter TypeScript language: {e}")
+                    })?;
+            }
+        }
 
         let tree = parser
             .parse(content, None)
@@ -83,7 +113,7 @@ impl ContextIndex {
 
         let root = tree.root_node();
         let mut cursor = root.walk();
-        self.walk_tree(&mut cursor, content, path);
+        self.walk_tree(&mut cursor, content, path, lang);
         Ok(())
     }
 
@@ -93,39 +123,53 @@ impl ContextIndex {
         cursor: &mut tree_sitter::TreeCursor,
         source: &str,
         path: &std::path::Path,
+        lang: Language,
     ) {
         loop {
             let node = cursor.node();
             let kind = node.kind();
 
-            let (symbol_kind, name_node) = match kind {
-                "function_item" => (SymbolKind::Function, node.child_by_field_name("name")),
-                "struct_item" => (SymbolKind::Struct, node.child_by_field_name("name")),
-                "enum_item" => (SymbolKind::Enum, node.child_by_field_name("name")),
-                "impl_item" => {
-                    // For impl, use the type name as the symbol name
-                    let type_node = node.child_by_field_name("type");
-                    (SymbolKind::Impl, type_node)
-                }
-                "mod_item" => {
-                    // Skip `mod foo;` (file-level module declarations) — only
-                    // capture `mod foo { ... }` blocks.
-                    if node.child_by_field_name("body").is_some() {
-                        (SymbolKind::Module, node.child_by_field_name("name"))
-                    } else {
-                        (SymbolKind::Module, None)
+            let (symbol_kind, name_node) = match lang {
+                Language::Rust => match kind {
+                    "function_item" => (SymbolKind::Function, node.child_by_field_name("name")),
+                    "struct_item" => (SymbolKind::Struct, node.child_by_field_name("name")),
+                    "enum_item" => (SymbolKind::Enum, node.child_by_field_name("name")),
+                    "impl_item" => {
+                        let type_node = node.child_by_field_name("type");
+                        (SymbolKind::Impl, type_node)
                     }
-                }
-                "use_declaration" => {
-                    // Extract the full use path as the name
-                    (SymbolKind::Use, Some(node))
-                }
-                _ => (SymbolKind::Function, None),
+                    "mod_item" => {
+                        if node.child_by_field_name("body").is_some() {
+                            (SymbolKind::Module, node.child_by_field_name("name"))
+                        } else {
+                            (SymbolKind::Module, None)
+                        }
+                    }
+                    "use_declaration" => (SymbolKind::Use, Some(node)),
+                    _ => (SymbolKind::Function, None),
+                },
+                Language::TypeScript => match kind {
+                    "function_declaration" => {
+                        (SymbolKind::Function, node.child_by_field_name("name"))
+                    }
+                    "class_declaration" => (SymbolKind::Class, node.child_by_field_name("name")),
+                    "interface_declaration" => {
+                        (SymbolKind::Interface, node.child_by_field_name("name"))
+                    }
+                    "enum_declaration" => (SymbolKind::Enum, node.child_by_field_name("name")),
+                    "type_alias_declaration" => {
+                        (SymbolKind::TypeAlias, node.child_by_field_name("name"))
+                    }
+                    "import_statement" => (SymbolKind::Use, Some(node)),
+                    _ => (SymbolKind::Function, None),
+                },
             };
 
             if let Some(name_node) = name_node {
-                if symbol_kind != SymbolKind::Function || kind == "function_item" {
-                    let name = if kind == "use_declaration" {
+                let is_named_function = kind == "function_item" || kind == "function_declaration";
+                if symbol_kind != SymbolKind::Function || is_named_function {
+                    let is_use_like = kind == "use_declaration" || kind == "import_statement";
+                    let name = if is_use_like {
                         node.utf8_text(source.as_bytes()).unwrap_or("").to_string()
                     } else {
                         name_node
@@ -148,7 +192,7 @@ impl ContextIndex {
             }
 
             if cursor.goto_first_child() {
-                self.walk_tree(cursor, source, path);
+                self.walk_tree(cursor, source, path, lang);
                 cursor.goto_parent();
             }
 
@@ -158,14 +202,16 @@ impl ContextIndex {
         }
     }
 
-    /// Index all `.rs` files under a directory.
+    /// Index all `.rs` and `.ts`/`.tsx` files under a directory.
     pub fn index_dir(&mut self, root: &std::path::Path) -> anyhow::Result<()> {
         for entry in walkdir::WalkDir::new(root)
             .into_iter()
             .filter_map(|e| e.ok())
         {
             let path = entry.path();
-            if path.extension().and_then(|s| s.to_str()) == Some("rs") && path.is_file() {
+            let ext = path.extension().and_then(|s| s.to_str());
+            let is_indexable = ext == Some("rs") || ext == Some("ts") || ext == Some("tsx");
+            if is_indexable && path.is_file() {
                 let content = std::fs::read_to_string(path)?;
                 self.index_file(path, &content)?;
             }
@@ -483,5 +529,124 @@ mod tests {
         let idx = ContextIndex::from_symbols(symbols);
         assert_eq!(idx.symbols().len(), 1);
         assert_eq!(idx.symbols()[0].name, "foo");
+    }
+
+    #[test]
+    fn index_file_extracts_ts_function() {
+        let tmp =
+            std::env::temp_dir().join(format!("kirkforge-context-ts-fn-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+
+        let src = tmp.join("app.ts");
+        fs::write(&src, "function foo(a: number): string { return \"hi\"; }").unwrap();
+
+        let mut idx = ContextIndex::new();
+        idx.index_file(&src, &fs::read_to_string(&src).unwrap())
+            .unwrap();
+
+        let syms = idx.symbols();
+        assert!(
+            syms.iter()
+                .any(|s| s.name == "foo" && s.kind == SymbolKind::Function),
+            "expected foo as Function, got {syms:?}"
+        );
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn index_file_extracts_ts_class() {
+        let tmp =
+            std::env::temp_dir().join(format!("kirkforge-context-ts-class-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+
+        let src = tmp.join("app.ts");
+        fs::write(&src, "class Bar { constructor() {} method() {} }").unwrap();
+
+        let mut idx = ContextIndex::new();
+        idx.index_file(&src, &fs::read_to_string(&src).unwrap())
+            .unwrap();
+
+        let syms = idx.symbols();
+        assert!(
+            syms.iter()
+                .any(|s| s.name == "Bar" && s.kind == SymbolKind::Class),
+            "expected Bar as Class, got {syms:?}"
+        );
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn index_file_extracts_ts_interface() {
+        let tmp =
+            std::env::temp_dir().join(format!("kirkforge-context-ts-iface-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+
+        let src = tmp.join("app.ts");
+        fs::write(&src, "interface Baz { name: string; }").unwrap();
+
+        let mut idx = ContextIndex::new();
+        idx.index_file(&src, &fs::read_to_string(&src).unwrap())
+            .unwrap();
+
+        let syms = idx.symbols();
+        assert!(
+            syms.iter()
+                .any(|s| s.name == "Baz" && s.kind == SymbolKind::Interface),
+            "expected Baz as Interface, got {syms:?}"
+        );
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn index_dir_walks_ts_files() {
+        let tmp =
+            std::env::temp_dir().join(format!("kirkforge-context-dir-ts-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+
+        fs::write(tmp.join("a.rs"), "fn a() {}\nstruct A;\n").unwrap();
+        fs::write(
+            tmp.join("b.ts"),
+            "function b() {}\ninterface IB { x: number; }\n",
+        )
+        .unwrap();
+        // Non-indexable extension should be skipped
+        fs::write(tmp.join("c.txt"), "not code").unwrap();
+
+        let mut idx = ContextIndex::new();
+        idx.index_dir(&tmp).unwrap();
+
+        let syms = idx.symbols();
+        let names: Vec<&str> = syms.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"a"), "expected a, got {names:?}");
+        assert!(names.contains(&"A"), "expected A, got {names:?}");
+        assert!(names.contains(&"b"), "expected b, got {names:?}");
+        assert!(names.contains(&"IB"), "expected IB, got {names:?}");
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn detect_language_by_extension() {
+        assert_eq!(
+            detect_language(PathBuf::from("foo.rs").as_path()),
+            Some(Language::Rust)
+        );
+        assert_eq!(
+            detect_language(PathBuf::from("foo.ts").as_path()),
+            Some(Language::TypeScript)
+        );
+        assert_eq!(
+            detect_language(PathBuf::from("foo.tsx").as_path()),
+            Some(Language::TypeScript)
+        );
+        assert_eq!(detect_language(PathBuf::from("foo.py").as_path()), None);
+        assert_eq!(detect_language(PathBuf::from("foo").as_path()), None);
     }
 }

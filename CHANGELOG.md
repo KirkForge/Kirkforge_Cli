@@ -5,6 +5,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [0.3.5] - 2026-07-22
 
+### Fixed
+- Resolve flaky `test_parallel_tool_batch_runs_concurrently` (reduced sleep
+  from 1s to 200ms, increased threshold to 5s) and
+  `test_always_approve_rule_round_trips_to_next_turn` (replaced
+  spawn+AtomicBool+abort race with try_recv check after turn completion).
+
+### Added
+
 ### Added
 - Multi-step browser flows in computer-use tool: BrowserSession with open/close,
   step tracking, and max_steps limit (ADR-044)
@@ -26,6 +34,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `CachedIndex` with git-HEAD-based invalidation. Cache at
   `.kirkforge/context-index/cache.json`. Session startup is instant
   on subsequent runs when HEAD matches. 5 new tests.
+
+- TypeScript tree-sitter grammar in context-index (P1-long-1 Phase 5,
+  ADR-037): `Language` enum with `detect_language()` dispatches `.rs`
+  → Rust, `.ts`/`.tsx` → TypeScript. `SymbolKind` extended with
+  `Class`, `Interface`, `TypeAlias`. `index_dir` walks both `.rs` and
+  `.ts`/`.tsx` files. 5 new tests.
 
 ### Changed
 - `edit_file` fuzzy-fallback now has 4 additional tests: exact match,

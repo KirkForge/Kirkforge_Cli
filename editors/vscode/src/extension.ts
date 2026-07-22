@@ -2,8 +2,8 @@ import type * as vscode from 'vscode';
 import { ChatPanel } from './panels/chatPanel';
 import { TodoPanel } from './panels/todoPanel';
 import { KirkForgeBridge } from './bridge';
-import { showEditDiff } from './diff';
-import { LspBridge } from './lspBridge';
+import { showEditDiff, acceptEdit, rejectEdit } from './diff';
+import { LspBridge, DiagnosticEntry } from './lspBridge';
 import { BridgeEvent } from './protocol';
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -19,6 +19,7 @@ export function activateWithApi(
   const todoPanel = new TodoPanel(context as vscode.ExtensionContext);
 
   let bridge: KirkForgeBridge | undefined;
+  let lspBridge: LspBridge | undefined;
 
   const startPanel = vscode.commands.registerCommand('kirkforge.startPanel', async () => {
     const config = vscode.workspace.getConfiguration('kirkforge');
@@ -32,6 +33,8 @@ export function activateWithApi(
 
     bridge?.stop();
     bridge = new KirkForgeBridge({ binaryPath, cwd, outputFormat: 'ndjson' });
+    chatPanel.setBridge(bridge);
+
     bridge.on('event', (event: BridgeEvent) => {
       chatPanel.handleEvent(event);
       if (event.type === 'todo_update') {
@@ -42,7 +45,12 @@ export function activateWithApi(
       }
     });
     bridge.on('stderr', (line: string) => {
-      chatPanel.handleEvent({ type: 'tool_result', name: 'stderr', success: true, output: line });
+      chatPanel.handleEvent({
+        type: 'tool_result',
+        name: 'stderr',
+        success: true,
+        output: line,
+      });
     });
     bridge.on('exit', (code: number | null) => {
       chatPanel.handleEvent({
@@ -52,8 +60,27 @@ export function activateWithApi(
         output: `kirkforge exited with code ${code ?? 'unknown'}`,
       });
     });
+    bridge.on('error', (err: Error) => {
+      void vscode.window.showErrorMessage(`KirkForge error: ${err.message}`);
+    });
+
+    lspBridge = new LspBridge(cwd, (diags: DiagnosticEntry[]) => {
+      if (bridge) {
+        for (const entry of diags) {
+          bridge.writeLine(
+            JSON.stringify({
+              type: 'diagnostics',
+              uri: entry.file,
+              diagnostics: entry.diagnostics,
+            })
+          );
+        }
+      }
+    });
+    lspBridge.start();
+
     bridge.start();
-    vscode.window.showInformationMessage('KirkForge panel session started.');
+    void vscode.window.showInformationMessage('KirkForge panel session started.');
   });
 
   const startTerminal = vscode.commands.registerCommand('kirkforge.startTerminal', () => {
@@ -73,9 +100,17 @@ export function activateWithApi(
     terminal.show();
   });
 
-  context.subscriptions.push(startPanel, startTerminal);
+  const acceptEditCmd = vscode.commands.registerCommand('kirkforge.acceptEdit', () => {
+    acceptEdit();
+  });
+
+  const rejectEditCmd = vscode.commands.registerCommand('kirkforge.rejectEdit', () => {
+    rejectEdit();
+  });
+
+  context.subscriptions.push(startPanel, startTerminal, acceptEditCmd, rejectEditCmd);
 }
 
 export function deactivate(): void {
-  // Bridge is disposed via context.subscriptions when the extension deactivates.
+  // Bridge and LspBridge are disposed via context.subscriptions when the extension deactivates.
 }

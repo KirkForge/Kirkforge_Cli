@@ -3,6 +3,17 @@
 All notable changes to kirkforge are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.2] - 2026-07-22
+
+### Added
+- VS Code extension full surface (`editors/vscode/`): inline diffs with
+  accept/reject commands and status bar, TODO panel with
+  completed/in_progress/pending states, chat panel with input field
+  and tool call rendering, LSP bridge collecting diagnostics on save
+  and debounce, bridge sendPrompt/sendApproval NDJSON methods, pure
+  `format.ts` module for testability. 13 tests. `.vsix` packaging
+  (kirkforge-vscode-0.2.0.vsix). CI `vscode` job. ADR-040. (P2-long-4)
+
 ## [0.3.1] - 2026-07-22
 
 ### Added

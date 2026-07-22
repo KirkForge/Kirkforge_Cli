@@ -69,6 +69,7 @@ numbering scheme (`001`–`017`). Recent additions:
 - [ADR-037: Repo-graph context retrieval (prototype)](./037-repo-graph-context-retrieval.md)
 - [ADR-038: Task-benchmark harness](./038-task-benchmark-harness.md)
 - [ADR-039: Execution replay + time-travel](./039-execution-replay.md)
+- [ADR-040: VS Code extension full surface](./040-vscode-extension-full-surface.md)
 
 These are **not** part of the Plugin3 series and are therefore not
 included in the 4-digit index table above.

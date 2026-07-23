@@ -5,13 +5,13 @@
 
 ## Context
 
-`dispatch_tool_call_batch` writes a checkpoint only after the entire tool batch completes (`turn.rs:264`). If the process crashes while a batch is in progress, any tool results that have already finished and been appended to the conversation are held only in memory; on restart the conversation is restored to the state before the batch started and the completed work is lost.
+`dispatch_tool_call_batch` writes a checkpoint only after the entire tool batch completes (`turn.rs:1283`). If the process crashes while a batch is in progress, any tool results that have already finished and been appended to the conversation are held only in memory; on restart the conversation is restored to the state before the batch started and the completed work is lost.
 
 The ChatGPT grade criterion expects recovery to the last completed step rather than the last completed turn: "Step 14 of 18 → power failure → resume automatically." Per-result checkpointing closes that gap for the tool-dispatch phase without changing the existing post-batch checkpoint semantics.
 
 ## Decision
 
-After each tool result is recorded in Phase 3 of `dispatch_tool_call_batch`, call `self.conversation.checkpoint_async().await`. The existing post-batch checkpoint at `turn.rs:264` is preserved as the final durability guarantee.
+After each tool result is recorded in Phase 3 of `dispatch_tool_call_batch`, call `self.conversation.checkpoint_async().await`. The existing post-batch checkpoint at `turn.rs:1283` is preserved as the final durability guarantee.
 
 Key points:
 

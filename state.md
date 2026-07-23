@@ -4,21 +4,21 @@
 
 **`dev` at `d60eb96`, `main` at `6f1e37d`.** Phase 5 complete (4 languages). Phase 6 complete (import + call-graph edges). 10 bench tasks. 62 ADRs.
 
-### What shipped this session (4.2)
+### What shipped this session (4.2 + 5.0 Task 1)
 
 | Item | What |
 |---|---|
 | Task 1: Call-graph edges | `CallEdge` + `CallSite` structs. `extract_call_edges()` walks AST for call expressions. `resolve_call_edges()` resolves callee names to definition files. `retrieve()` returns `called_by` alongside `imported_by`. Prompt builder shows call-chain context. 5 new tests. ADR-037 Phase 6 complete. |
 | Task 2: 5 more bench tasks | `fix_failing_test`, `add_error_handling`, `rename_function`, `add_doc_comment`, `extract_module`. 10 total tasks in `benches/tasks/`. |
+| 5.0 Task 1: Config decomposition | 66-field `Config` god-object split into 5 `#[serde(flatten)]` sub-structs under `src/shared/config/`. ~38 call sites rewritten to nested field access. Gate green: 1337 passed, 0 failed. |
 
 ### Gates
 
-- `cargo test -p kirkforge-context-index --lib` = 32 passed
-- `cargo test -p plugin3-core --test readme_drift` = 2 passed
-- `cargo test -p plugin3-core --test adr_xref_drift` = 3 passed
+- `cargo test --locked --workspace --no-fail-fast` = 1337 passed, 0 failed, 7 ignored (documented plugin3 build-spec tests)
 - `cargo clippy --all-targets -- -D warnings` = clean
 - `cargo fmt --check` = clean
-- 62 ADRs (037 updated for Phase 6 complete)
+- `cargo check --workspace --all-targets` = clean
+- 62 ADRs (037 updated for Phase 6 complete; 0031/0032/0034 cosmetic fixes)
 
 ### Remaining (long-term, path to A agent)
 

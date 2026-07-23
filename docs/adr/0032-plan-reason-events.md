@@ -1,4 +1,4 @@
-# ADR-031: PlanReason trace events
+# ADR-0032: PlanReason trace events
 
 - **Status:** Accepted
 - **Date:** 2026-07-20

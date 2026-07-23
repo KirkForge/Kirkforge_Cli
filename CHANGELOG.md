@@ -3,6 +3,20 @@
 All notable changes to kirkforge are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Changed
+- Decomposed the 66-field `Config` god-object into 5 `#[serde(flatten)]`
+  sub-structs (`ModelConfig`, `SecurityConfig`, `ToolConfig`, `SessionConfig`,
+  `DisplayConfig`) under `src/shared/config/`. Flat TOML keys remain backward
+  compatible. All call sites rewritten to direct nested field access
+  (`cfg.model.default_model`); no `Deref`/`DerefMut`, no accessor methods.
+  Reduces the sites touched per new config field from ~38 to one sub-struct.
+
+### Fixed
+- ADR-0031/0032 H1 title numbers corrected to match filenames (were off-by-one).
+- ADR-0034 stale line reference updated (`turn.rs:264` → `turn.rs:1283`).
+
 ## [0.3.5] - 2026-07-22
 
 ### Fixed

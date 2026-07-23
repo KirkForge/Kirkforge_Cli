@@ -1,4 +1,4 @@
-# ADR 030: Build and Test Verifier Slots
+# ADR-0031: Build and Test Verifier Slots
 
 - **Status:** Accepted
 - **Date:** 2026-07-20

@@ -18,6 +18,7 @@ pub enum Language {
     Rust,
     TypeScript,
     Python,
+    Go,
 }
 
 pub fn detect_language(path: &std::path::Path) -> Option<Language> {
@@ -25,6 +26,7 @@ pub fn detect_language(path: &std::path::Path) -> Option<Language> {
         Some("rs") => Some(Language::Rust),
         Some("ts") | Some("tsx") => Some(Language::TypeScript),
         Some("py") => Some(Language::Python),
+        Some("go") => Some(Language::Go),
         _ => None,
     }
 }
@@ -55,12 +57,12 @@ pub struct CachedIndex {
 /// A tree-sitter-backed index of source-code symbols.
 ///
 /// Uses tree-sitter grammars to extract function, struct, enum, impl, module,
-/// and use declarations from Rust, TypeScript, and Python source files. The
+/// and use declarations from Rust, TypeScript, Python, and Go source files. The
 /// index is built by calling `index_file` or `index_dir`, then queried via
 /// `retrieve`.
 ///
-/// ponytail: Rust + TypeScript + Python symbol extraction via tree-sitter. The
-/// upgrade path is Go grammars.
+/// ponytail: Rust + TypeScript + Python + Go symbol extraction via tree-sitter. Phase 5
+/// complete. The upgrade path is import/call-graph edges (Phase 6).
 ///
 /// ponytail: substring-match retrieval. The upgrade path is embeddings or
 /// graph-walk retrieval.
@@ -114,6 +116,11 @@ impl ContextIndex {
                     .map_err(|e| {
                         anyhow::anyhow!("failed to set tree-sitter Python language: {e}")
                     })?;
+            }
+            Language::Go => {
+                parser
+                    .set_language(&tree_sitter_go::LANGUAGE.into())
+                    .map_err(|e| anyhow::anyhow!("failed to set tree-sitter Go language: {e}"))?;
             }
         }
 
@@ -207,17 +214,51 @@ impl ContextIndex {
                     }
                     _ => (SymbolKind::Function, None),
                 },
+                Language::Go => match kind {
+                    "function_declaration" => {
+                        (SymbolKind::Function, node.child_by_field_name("name"))
+                    }
+                    "method_declaration" => {
+                        (SymbolKind::Function, node.child_by_field_name("name"))
+                    }
+                    "type_declaration" => {
+                        let mut type_spec_kind = None;
+                        let mut child_cursor = node.walk();
+                        for ch in child_cursor.node().children(&mut child_cursor) {
+                            if ch.kind() == "type_spec" {
+                                let name_node = ch.child_by_field_name("name");
+                                let value = ch.child_by_field_name("type");
+                                let value_kind = value.as_ref().map(|v| v.kind());
+                                let sym_kind = match value_kind {
+                                    Some("struct_type") => SymbolKind::Struct,
+                                    Some("interface_type") => SymbolKind::Interface,
+                                    _ => SymbolKind::TypeAlias,
+                                };
+                                type_spec_kind = Some((sym_kind, name_node));
+                                break;
+                            }
+                        }
+                        match type_spec_kind {
+                            Some((sk, nn)) => (sk, nn),
+                            None => (SymbolKind::Struct, None),
+                        }
+                    }
+                    "import_declaration" => (SymbolKind::Use, Some(node)),
+                    _ => (SymbolKind::Function, None),
+                },
             };
 
             if let Some(name_node) = name_node {
                 let is_named_function = kind == "function_item"
                     || kind == "function_declaration"
                     || kind == "function_definition"
-                    || kind == "decorated_definition";
+                    || kind == "decorated_definition"
+                    || kind == "method_declaration";
                 if symbol_kind != SymbolKind::Function || is_named_function {
                     let is_use_like = kind == "use_declaration"
                         || kind == "import_statement"
-                        || kind == "import_from_statement";
+                        || kind == "import_from_statement"
+                        || kind == "import_declaration";
                     let name = if is_use_like {
                         node.utf8_text(source.as_bytes()).unwrap_or("").to_string()
                     } else {
@@ -252,7 +293,7 @@ impl ContextIndex {
         }
     }
 
-    /// Index all `.rs`, `.ts`/`.tsx`, and `.py` files under a directory.
+    /// Index all `.rs`, `.ts`/`.tsx`, `.py`, and `.go` files under a directory.
     pub fn index_dir(&mut self, root: &std::path::Path) -> anyhow::Result<()> {
         for entry in walkdir::WalkDir::new(root)
             .into_iter()
@@ -260,8 +301,11 @@ impl ContextIndex {
         {
             let path = entry.path();
             let ext = path.extension().and_then(|s| s.to_str());
-            let is_indexable =
-                ext == Some("rs") || ext == Some("ts") || ext == Some("tsx") || ext == Some("py");
+            let is_indexable = ext == Some("rs")
+                || ext == Some("ts")
+                || ext == Some("tsx")
+                || ext == Some("py")
+                || ext == Some("go");
             if is_indexable && path.is_file() {
                 let content = std::fs::read_to_string(path)?;
                 self.index_file(path, &content)?;
@@ -701,6 +745,10 @@ mod tests {
             detect_language(PathBuf::from("foo.py").as_path()),
             Some(Language::Python)
         );
+        assert_eq!(
+            detect_language(PathBuf::from("foo.go").as_path()),
+            Some(Language::Go)
+        );
         assert_eq!(detect_language(PathBuf::from("foo").as_path()), None);
     }
 
@@ -778,6 +826,127 @@ mod tests {
         assert!(names.contains(&"IB"), "expected IB, got {names:?}");
         assert!(names.contains(&"c"), "expected c, got {names:?}");
         assert!(names.contains(&"C"), "expected C, got {names:?}");
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn index_file_extracts_go_function() {
+        let tmp =
+            std::env::temp_dir().join(format!("kirkforge-context-go-fn-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+
+        let src = tmp.join("main.go");
+        fs::write(
+            &src,
+            "package main\n\nfunc foo(a int) string {\n\treturn \"hi\"\n}",
+        )
+        .unwrap();
+
+        let mut idx = ContextIndex::new();
+        idx.index_file(&src, &fs::read_to_string(&src).unwrap())
+            .unwrap();
+
+        let syms = idx.symbols();
+        assert!(
+            syms.iter()
+                .any(|s| s.name == "foo" && s.kind == SymbolKind::Function),
+            "expected foo as Function, got {syms:?}"
+        );
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn index_file_extracts_go_struct() {
+        let tmp = std::env::temp_dir().join(format!(
+            "kirkforge-context-go-struct-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+
+        let src = tmp.join("main.go");
+        fs::write(&src, "package main\n\ntype Bar struct {\n\tX int\n}").unwrap();
+
+        let mut idx = ContextIndex::new();
+        idx.index_file(&src, &fs::read_to_string(&src).unwrap())
+            .unwrap();
+
+        let syms = idx.symbols();
+        assert!(
+            syms.iter()
+                .any(|s| s.name == "Bar" && s.kind == SymbolKind::Struct),
+            "expected Bar as Struct, got {syms:?}"
+        );
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn index_file_extracts_go_method() {
+        let tmp = std::env::temp_dir().join(format!(
+            "kirkforge-context-go-method-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+
+        let src = tmp.join("main.go");
+        fs::write(
+            &src,
+            "package main\n\ntype Bar struct { X int }\nfunc (b Bar) method() {}",
+        )
+        .unwrap();
+
+        let mut idx = ContextIndex::new();
+        idx.index_file(&src, &fs::read_to_string(&src).unwrap())
+            .unwrap();
+
+        let syms = idx.symbols();
+        assert!(
+            syms.iter()
+                .any(|s| s.name == "method" && s.kind == SymbolKind::Function),
+            "expected method as Function, got {syms:?}"
+        );
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn index_dir_walks_go_files() {
+        let tmp =
+            std::env::temp_dir().join(format!("kirkforge-context-dir-go-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+
+        fs::write(tmp.join("a.rs"), "fn a() {}\nstruct A;\n").unwrap();
+        fs::write(
+            tmp.join("b.ts"),
+            "function b() {}\ninterface IB { x: number; }\n",
+        )
+        .unwrap();
+        fs::write(tmp.join("c.py"), "def c(): pass\nclass C: pass\n").unwrap();
+        fs::write(
+            tmp.join("d.go"),
+            "package main\n\nfunc d() {}\ntype D struct { x int }",
+        )
+        .unwrap();
+
+        let mut idx = ContextIndex::new();
+        idx.index_dir(&tmp).unwrap();
+
+        let syms = idx.symbols();
+        let names: Vec<&str> = syms.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"a"), "expected a, got {names:?}");
+        assert!(names.contains(&"A"), "expected A, got {names:?}");
+        assert!(names.contains(&"b"), "expected b, got {names:?}");
+        assert!(names.contains(&"IB"), "expected IB, got {names:?}");
+        assert!(names.contains(&"c"), "expected c, got {names:?}");
+        assert!(names.contains(&"C"), "expected C, got {names:?}");
+        assert!(names.contains(&"d"), "expected d, got {names:?}");
+        assert!(names.contains(&"D"), "expected D, got {names:?}");
 
         let _ = fs::remove_dir_all(&tmp);
     }

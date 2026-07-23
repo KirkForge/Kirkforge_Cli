@@ -16,19 +16,19 @@ Build `crates/kirkforge-context-index/` — a tree-sitter-backed symbol/import/c
 
 **Phase 2 (tree-sitter):** Tree-sitter parsing for Rust. Extracts `function_item`, `struct_item`, `enum_item`, `impl_item`, `mod_item`, `use_declaration` nodes with accurate line ranges. **Done (Rust).**
 
-**Phase 5 (multi-language):** TypeScript grammar added. `detect_language()` dispatches `.rs` → Rust, `.ts`/`.tsx` → TypeScript. `SymbolKind` extended with `Class`, `Interface`, `TypeAlias` for TS-specific declarations. `index_dir` walks both `.rs` and `.ts`/`.tsx` files. Python grammar added. `detect_language()` dispatches `.py` → Python. Extracts `function_definition`, `class_definition`, `import_statement`, `import_from_statement`, `decorated_definition`. `index_dir` walks `.py` files. **In progress (Rust + TypeScript + Python).** Future: Go grammar.
+**Phase 5 (multi-language):** TypeScript grammar added. `detect_language()` dispatches `.rs` → Rust, `.ts`/`.tsx` → TypeScript. `SymbolKind` extended with `Class`, `Interface`, `TypeAlias` for TS-specific declarations. `index_dir` walks both `.rs` and `.ts`/`.tsx` files. Python grammar added. `detect_language()` dispatches `.py` → Python. Extracts `function_definition`, `class_definition`, `import_statement`, `import_from_statement`, `decorated_definition`. `index_dir` walks `.py` files. Go grammar added. `detect_language()` dispatches `.go` → Go. Extracts `function_declaration`, `method_declaration`, `type_declaration` (with `type_spec` dispatch for `Struct`/`Interface`/`TypeAlias`), `import_declaration`. `index_dir` walks `.go` files. **Done (Rust + TypeScript + Python + Go).**
 
 **Phase 3 (wire-in):** `retrieve()` called from the prompt builder before every turn. Injects up to 10 relevant symbols as a "Relevant symbols:" section. **Done.**
 
 **Phase 4 (disk caching):** Cache at `.kirkforge/context-index/cache.json` with git-HEAD-based invalidation. On session start, if cache exists and HEAD matches, load from disk (instant). Otherwise rebuild and save. **Done.**
 
-**Phase 4+ (future):** Import-graph edges (reuse `tool-graphify`'s logic). Call-graph edges (tree-sitter queries for call sites). Embeddings or graph-walk retrieval (replace substring match). Go grammar (Phase 5 continuation).
+**Phase 4+ (future):** Import-graph edges (reuse `tool-graphify`'s logic). Call-graph edges (tree-sitter queries for call sites). Embeddings or graph-walk retrieval (replace substring match).
 
 ## Implementation
 
 - `crates/kirkforge-context-index/src/lib.rs`: `ContextIndex` struct with `index_file`, `index_dir`, `symbols`, `retrieve`. `Symbol` struct with `name`, `kind`, `file`, `line`, `end_line`. `SymbolKind` enum: `Function, Struct, Enum, Impl, Module, Use, Class, Interface, TypeAlias`.
-- Tree-sitter parsing for Rust (tree-sitter 0.25, tree-sitter-rust 0.24), TypeScript (tree-sitter-typescript 0.23), and Python (tree-sitter-python 0.23).
-- `Language` enum (`Rust`, `TypeScript`, `Python`) with `detect_language(path)` — dispatches `.rs` → Rust, `.ts`/`.tsx` → TypeScript, `.py` → Python.
+- Tree-sitter parsing for Rust (tree-sitter 0.25, tree-sitter-rust 0.24), TypeScript (tree-sitter-typescript 0.23), Python (tree-sitter-python 0.23), and Go (tree-sitter-go 0.23).
+- `Language` enum (`Rust`, `TypeScript`, `Python`, `Go`) with `detect_language(path)` — dispatches `.rs` → Rust, `.ts`/`.tsx` → TypeScript, `.py` → Python, `.go` → Go.
 - Substring-match retrieval (ponytail: upgrade path is embeddings or graph-walk).
 - Wired into `PromptBuilder` via `with_context_index()`. Index built at session start in `run_session()`.
 - Disk caching: `CachedIndex` struct with `head` (git HEAD SHA) + `symbols`. `save()`, `load()`, `is_current()`. Cache at `.kirkforge/context-index/cache.json`. Rebuild on HEAD mismatch.
@@ -39,11 +39,11 @@ Build `crates/kirkforge-context-index/` — a tree-sitter-backed symbol/import/c
 - Accurate symbol extraction with proper line ranges (not just declaration line).
 - Catches inline declarations that line-based heuristics miss.
 - Model gets relevant symbols injected before every turn.
-- 5 tests pass (3 original + 2 new: inline struct, end_line) → 10 tests pass (+ 5 new: save/load roundtrip, cache hit, cache miss, head differs, from_symbols) → 15 tests pass (+ 5 new: TS function, TS class, TS interface, dir walks TS files, detect_language) → **18 tests pass (+ 3 new: Python function, Python class, dir walks .py files).**
+- 5 tests pass (3 original + 2 new: inline struct, end_line) → 10 tests pass (+ 5 new: save/load roundtrip, cache hit, cache miss, head differs, from_symbols) → 15 tests pass (+ 5 new: TS function, TS class, TS interface, dir walks TS files, detect_language) → 18 tests pass (+ 3 new: Python function, Python class, dir walks .py files) → **22 tests pass (+ 4 new: Go function, Go struct, Go method, dir walks .go files).**
 
 **Negative:**
 - Tree-sitter adds ~2MB to the binary size (documented tradeoff).
-- Rust + TypeScript + Python only — Go grammar is future work.
+- Rust + TypeScript + Python + Go — import/call-graph edges are future work.
 - No disk caching — index is rebuilt on every session start → **Fixed in Phase 4: cache at `.kirkforge/context-index/cache.json` with git-HEAD invalidation.**
 - No import/call-graph edges yet — retrieval is substring-only.
 

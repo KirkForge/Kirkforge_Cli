@@ -5,6 +5,20 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- `ARCHITECTURE.md` — full architecture document tying together the agent core,
+  verification system, context index, context compression (Stratum), token
+  budget (Plugin3), plugin system, specialized runtimes (Draw, Video), workflow
+  engine, and benchmark harness.
+- `docs/workorders/` — planned work: Series 6 (benchmarks + continuous eval,
+  6.1-6.5) and Series 7 (plugin fold-in + consolidation, 6.6-6.9 + 7.0).
+
+### Changed
+- Rewrote `README.md` to frame KirkForge as a provider-agnostic, verification-
+  first coding agent. The previous framing ("native Ollama coding agent CLI")
+  understated the actual capability surface (six providers, tree-sitter context
+  index, verifier bus, budget management, workflow engine, benchmark harness).
+
 ### Changed
 - Decomposed the 66-field `Config` god-object into 5 `#[serde(flatten)]`
   sub-structs (`ModelConfig`, `SecurityConfig`, `ToolConfig`, `SessionConfig`,

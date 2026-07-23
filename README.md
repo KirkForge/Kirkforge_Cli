@@ -1,6 +1,17 @@
-> `kirkforge` — native Ollama coding agent CLI
+# KirkForge
 
-A terminal coding assistant that routes model requests through Ollama (or any OpenAI-compatible endpoint) to a chosen frontier model. It edits files, runs commands, keeps a conversation log, and stays inside a sandbox.
+A provider-agnostic, verification-first coding agent in Rust.
+
+KirkForge routes model requests to any supported provider (Ollama, OpenAI-compatible,
+Anthropic direct/Bedrock/Vertex, OpenCode-Zen), edits files, runs commands, and
+verifies its own work with a build/test/lint/git/security correction loop. A
+tree-sitter context index gives it graph-grounded code understanding. Token-budget
+management and context compression keep costs bounded on long sessions.
+
+Specialized runtimes for diagram rendering and instruction-driven video editing
+ship as satellite binaries, orchestrated through the plugin system.
+
+For the full architecture, see [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Quick start
 
@@ -19,7 +30,7 @@ cargo install --git https://github.com/KirkForge/Kirkforge_Cli
 ### Run
 
 ```bash
-# Requires a running Ollama server
+# Requires a running Ollama server (or set provider config for cloud models)
 kirkforge run
 
 # Resume the most recent session via the daemon
@@ -35,7 +46,32 @@ echo -e "fix the borrow check\n\n" | kirkforge run --non-interactive --max-turns
 kirkforge daemon
 ```
 
-## Main features
+## What makes KirkForge different
+
+**Verification-first.** After every file-modifying tool call, a verifier bus runs
+build, test, clippy, rustfmt, git-state, and security checks. A correction loop
+auto-applies formatter fixes (up to 3 iterations) and feeds unfixable errors back
+to the model as tool results. The agent sees its own mistakes and corrects them
+before you do.
+
+**Provider-agnostic.** One `ModelAdapter` trait, six concrete providers. Route by
+model name (`claude-*` → Anthropic, `glm*`/`deepseek*`/`gemini*`/`kimi*` → Ollama,
+`opencode/` → OpenCode-Zen, else → OpenAI-compat) or override in config. No vendor
+lock-in.
+
+**Semantic code understanding.** A tree-sitter index builds symbol, import, and
+call-graph edges for Rust, TypeScript, Python, and Go. The agent retrieves
+graph-grounded context — who imports a symbol, who calls it — not just text
+matches.
+
+**Cost-aware.** Two complementary systems bound context cost: Stratum compresses
+bloated tool outputs on the input side; Plugin3 tracks token spend against a
+ceiling and slices or compacts oversized results on the output side.
+
+**Deterministic execution.** Enforced plan mode (`/plan` then `/implement`),
+per-result checkpointing mid-batch, execution replay, and conversation logging.
+
+## Features
 
 - **TUI chat** with conversation search, copy-to-clipboard, and model hot-swap (`/model`).
 - **File tools** (`read_file`, `write_file`, `edit_file`) with approval gates, diff previews, and `/undo`.
@@ -43,36 +79,46 @@ kirkforge daemon
 - **Session management** — `/fork`, `/resume`, `/sessions`, `/save`, plus `--continue-session`, `--auto-resume`, and `--attach`.
 - **Session daemon** — background process tracks the last 5 sessions; the TUI shows a startup picker unless you resume explicitly. Example systemd unit and launchd plist are in [`docs/`](docs/).
 - **Config hot-reload** — edit `config.toml` and type `/reload` (or send `SIGHUP`) to update access control live.
-- **Permission rules** — Claude-Code-style allow/ask/deny rules per command/path; `Deny` rules use prefix matching while `Allow`/`Ask` rules stay anchored.
+- **Permission rules** — allow/ask/deny rules per command/path; `Deny` rules use prefix matching while `Allow`/`Ask` rules stay anchored.
 - **Multimodal** — `read_image` for screenshots and images.
 - **MCP tools** — optional external tool servers via `[[mcp_servers]]` in config.
 - **Enforced plan mode** — `/plan` locks the executor to read-only tools until you type `/implement`.
 - **Subagent personas** — `/explore`, `/plan`, and `/coder` run isolated fork sessions with restricted toolsets and merge a summary back.
+- **Programmable workflows** — JSON-defined DAGs of persona-driven steps with built-in `bugfix`, `feature`, and `refactor` templates.
 - **Safe git commit helper** — `/commit` shows status, runs pre-commit sanitation (large files, secrets, conflict markers, unstaged debris) and suggests a conventional-commit message; `/commit "message"` stages all changes and commits after sanitation; `/commit --push "message"` also pushes.
-- **Runtime plugins** — drop a plugin folder into `~/.local/share/kirkforge/plugins/<name>/` or toggle a built-in workspace source without restarting: `/plugins list`, `/plugins enable <name>`, `/plugins disable <name>`, `/plugins toggle <name>`, `/plugins reload`, `/plugins trust <name> <tier>`.
+- **Runtime plugins** — drop a plugin folder into `~/.local/share/kirkforge/plugins/<name>/` or toggle a built-in workspace source without restarting.
+- **Benchmark harness** — 10 coding tasks (easy/medium/hard) with deterministic verification, runnable via `kirkforge bench`.
 
 ## Plugins
 
-Plugins are filesystem folders containing a `kirkforge.toml` manifest plus any tool/hook/verifier scripts it declares. The host loads them at startup and caps each plugin to the `max_plugin_trust` tier in `config.toml` (read-only → shell → network → unsafe).
+Plugins are filesystem folders containing a `kirkforge.toml` manifest plus any
+tool/hook/skill/verifier scripts it declares. The host loads them at startup and
+caps each plugin to the `max_plugin_trust` tier in `config.toml` (read-only then
+shell then network then unsafe). Optional minisign signature verification is
+supported.
 
-### Built-in workspace sources
+### Built-in plugins
 
-This repo ships with five satellite plugins under `plugins/<name>/`. Each plugin’s source code also lives in this repo so everything builds together:
+Five plugins ship in this repo. Each plugin's logic lives in a Rust crate under
+`crates/`; the `plugins/` directory contains thin shell wrappers that invoke the
+compiled binary.
 
-- `plugins/kirkforge-draw/` / `crates/kirkforge-draw*` — terminal diagram editor (`/draw`, `draw_render`).
-- `plugins/kirkforge-video/` / `crates/kirkforge-video` — FFmpeg-native video pipeline (`/video`, `video_pipeline`, `video_render`, …).
-- `plugins/stratum/` / `crates/kirkstratum*` — context compression pipeline (`/stratum`, `stratum_run`, …).
-- `plugins/kirkforge-plugin3/` / `crates/plugin3*` — token-budget assistant (`/budget`, `plugin3_budget_*`, …).
-- `plugins/kirkforge-plugin/` / `npm/kirkforge-plugin` — KirkForge-Plugin SDK verification CLI (`/kirkforge`, `plugin_verify`, …).
+| Plugin | Skill | What it does |
+|---|---|---|
+| **Stratum** | `/stratum` | Context compression — classifies and compacts bloated tool outputs before they enter the context window. 5 tools, 2 hooks. |
+| **Plugin3** | `/budget` | Token budget guard — tracks spend against a ceiling, slices or compacts oversized results. 7 tools, 4 hooks. |
+| **Draw** | `/draw` | Terminal diagram editor — the model produces `.td.json`, `kfd` renders it to fenced markdown. 1 tool, 1 hook. |
+| **Video** | `/video` | Instruction-driven video production — the text LLM directs, FFmpeg renders. 8 tools. |
+| **Plugin SDK** | `/kirkforge` | Verification tooling backed by the Node SDK. 6 tools. |
 
-They are registered as workspace plugin sources and **enabled by default** (when their directories exist). Use `/plugins toggle <name>` to disable a bundled plugin persistently. The plugin tool scripts prefer binaries built by this workspace (`target/release/<bin>` or `target/debug/<bin>`) and fall back to `PATH` for the Node SDK or any externally installed build.
+They are registered as workspace plugin sources and **enabled by default** (when
+their directories exist). Use `/plugins toggle <name>` to disable a bundled
+plugin persistently.
 
 ### Runtime commands
 
-Use the TUI slash commands to manage plugins without restarting:
-
 - `/plugins list` — show active, blocked, available, and workspace plugin sources.
-- `/plugins enable <name>` — load an available plugin directory from `~/.local/share/kirkforge/plugins/`.
+- `/plugins enable <name>` — load an available plugin directory.
 - `/plugins disable <name>` — unload a plugin and remove its tools/skills.
 - `/plugins toggle <name>` — enable or disable a built-in workspace source persistently.
 - `/plugins reload` — full rescan of the plugins directory and workspace sources.
@@ -83,7 +129,9 @@ Use the TUI slash commands to manage plugins without restarting:
 
 ## Config
 
-Config lives at `~/.local/share/kirkforge/config.toml`. See [`config.toml.example`](config.toml.example) for a fully documented sample, including permission rules and MCP servers.
+Config lives at `~/.local/share/kirkforge/config.toml`. See
+[`config.toml.example`](config.toml.example) for a fully documented sample,
+including permission rules, MCP servers, plugin settings, and provider routing.
 
 ```toml
 # Set these to the Ollama gateway that routes your chosen frontier model.
@@ -105,7 +153,9 @@ cargo clippy --all-targets -- -D warnings
 cargo build --release               # ~5.4 MB binary
 ```
 
-The Rust satellites build automatically with the workspace (`cargo build --workspace --release`). The Node SDK under `npm/kirkforge-plugin/` must be built separately:
+The Rust satellites build automatically with the workspace
+(`cargo build --workspace --release`). The Node SDK under
+`npm/kirkforge-plugin/` must be built separately:
 
 ```bash
 cd npm/kirkforge-plugin
@@ -113,46 +163,42 @@ npm install
 npm run build
 ```
 
-This produces `apps/cli/dist/index.js`, which the `plugins/kirkforge-plugin/` tool scripts invoke.
+This produces `apps/cli/dist/index.js`, which the `plugins/kirkforge-plugin/`
+tool scripts invoke.
 
 ## Releases
 
-KirkForge-Cli follows a two-week minor-release cadence while in the `v0.x` series
-(`v0.2.0`, `v0.3.0`, …) with patch releases as needed. Breaking changes and new
-features bump the minor version; fixes bump the patch version. The project stays
-on `v0.x` until a separate decision is made to move to `v1.0.0`.
-
-Release binaries are built automatically when a `v*.*.*` tag is pushed:
+KirkForge-Cli follows a two-week minor-release cadence while in the `v0.x`
+series with patch releases as needed. Release binaries are built automatically
+when a `v*.*.*` tag is pushed:
 
 - Linux: `x86_64-unknown-linux-gnu`, `x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`
 - macOS: `x86_64-apple-darwin`, `aarch64-apple-darwin`
 - Windows: `x86_64-pc-windows-msvc`
 
-See the [releases page](https://github.com/KirkForge/Kirkforge_Cli/releases) or use the install script above. See [`docs/RELEASE.md`](docs/RELEASE.md) for the maintainer runbook.
+See the [releases page](https://github.com/KirkForge/Kirkforge_Cli/releases) or
+use the install script above. See [`docs/RELEASE.md`](docs/RELEASE.md) for the
+maintainer runbook.
 
 ## Platform notes
 
 The core `kirkforge run` workflow works on Linux, macOS, and Windows. A few
 Unix-only features have platform-specific behavior:
 
-- **Session daemon (`kirkforge daemon`, `--auto-resume`, `--attach`, TUI
-  startup picker):** supported on Unix. On Windows the daemon is unsupported;
-  session discovery falls back to the file index, so resume/attach commands
-  cannot find recent sessions via the daemon. Use explicit paths with
-  `--continue-session` or `--resume` on Windows.
-- **Scheduled-job daemon (`kirkforge jobd`):** supported on Unix only. Windows
-  returns a clear unsupported-platform error.
-- **Config hot-reload:** use `/reload` everywhere. On Unix you can also send
+- **Session daemon** — supported on Unix. On Windows the daemon is unsupported;
+  session discovery falls back to the file index.
+- **Scheduled-job daemon (`kirkforge jobd`)** — Unix only.
+- **Config hot-reload** — use `/reload` everywhere. On Unix you can also send
   `SIGHUP`; Windows has no `SIGHUP` equivalent.
-- **Bash tool:** on Windows the tool targets `bash` (Git for Windows / WSL) so
-  the same safety gate applies. `cmd.exe` is not used.
-- **Subprocess cleanup:** on Unix the full process group is killed, preventing
-  grandchildren from outliving the parent. On Windows only the immediate child
-  is killed, so a spawned sub-subprocess may survive.
+- **Bash tool** — on Windows targets `bash` (Git for Windows / WSL). `cmd.exe`
+  is not used.
+- **Subprocess cleanup** — on Unix the full process group is killed. On Windows
+  only the immediate child is killed.
 
 ## Daemon supervision
 
-The session daemon is started on demand, but you can also run it under your init system:
+The session daemon is started on demand, but you can also run it under your init
+system:
 
 - **systemd (Linux):** copy [`docs/kirkforge-daemon.service`](docs/kirkforge-daemon.service) to `~/.config/systemd/user/`, adjust the `ExecStart` path if needed, then:
   ```bash
@@ -167,5 +213,10 @@ The session daemon is started on demand, but you can also run it under your init
 
 ## Documentation
 
-- [`docs/adr/`](docs/adr/) — architecture decision records covering the daemon, session model, hot-reload, and more.
-- [`docs/ideas/`](docs/ideas/) — roadmap and design notes.
+- [ARCHITECTURE.md](ARCHITECTURE.md) — full architecture: how the pieces fit together
+- [`docs/adr/`](docs/adr/) — 62 architecture decision records pinning load-bearing decisions
+- [`docs/workorders/`](docs/workorders/) — planned and in-progress work
+- [`docs/ideas/`](docs/ideas/) — roadmap and design notes
+- [`docs/runbooks/`](docs/runbooks/) — operational runbooks
+- [AGENTS.md](AGENTS.md) — worker contract for AI agents in this repo
+- [`state.md`](state.md) — current production-readiness state

@@ -30,3 +30,6 @@ graphify-out/
 
 # Local workflow scratch files created during smoke tests.
 .kirkforge/workflows/
+
+# Bench baseline reports (per-machine, not tracked)
+benches/baselines/

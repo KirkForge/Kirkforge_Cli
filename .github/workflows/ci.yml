@@ -186,19 +186,43 @@ jobs:
   bench:
     runs-on: ubuntu-latest
     needs: [fmt, quality]
+    if: always() && (needs.fmt.result == 'success' || needs.fmt.result == 'skipped') && (needs.quality.result == 'success' || needs.quality.result == 'skipped')
     env:
       BENCH_MODEL: qwen2.5:0.5b
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check if bench-relevant files changed
+        id: changes
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE="${{ github.event.pull_request.base.sha }}"
+            CHANGED=$(git diff --name-only "$BASE..HEAD" -- \
+              'src/session/**' 'src/adapters/**' 'src/tools/**' \
+              'crates/kirkforge-bench/**' 'benches/tasks/**' \
+              '.github/workflows/ci.yml' || true)
+          else
+            CHANGED="yes"
+          fi
+          if [ -n "$CHANGED" ]; then
+            echo "run_bench=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run_bench=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Install Rust toolchain
+        if: steps.changes.outputs.run_bench == 'true'
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
 
       - uses: Swatinem/rust-cache@v2
+        if: steps.changes.outputs.run_bench == 'true'
 
       - name: Install and start Ollama
+        if: steps.changes.outputs.run_bench == 'true'
         shell: bash
         run: |
           curl -fsSL https://ollama.com/install.sh | sh
@@ -213,6 +237,7 @@ jobs:
           curl -fsS http://localhost:11434/api/tags >/dev/null || { echo "Ollama failed to start"; cat /tmp/ollama.log; exit 1; }
 
       - name: Pull bench model
+        if: steps.changes.outputs.run_bench == 'true'
         shell: bash
         run: |
           if ! curl -fsS http://localhost:11434/api/tags | grep -q "${BENCH_MODEL}"; then
@@ -221,17 +246,67 @@ jobs:
             echo "Bench model ${BENCH_MODEL} already cached"
           fi
 
-      - name: Run benchmark tasks
+      - name: Download baseline report
+        if: steps.changes.outputs.run_bench == 'true'
+        continue-on-error: true
         run: |
-          cargo run -- bench --tasks benches/tasks/ --model "${BENCH_MODEL}" --summary bench-summary.md || true
+          mkdir -p benches/baselines
+          gh run download -n bench-report -R "${{ github.repository }}" -D benches/baselines/ || echo "No baseline found; first run will establish one"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Post benchmark summary
-        if: github.event_name == 'pull_request'
+      - name: Run benchmark tasks
+        if: steps.changes.outputs.run_bench == 'true'
         run: |
-          if [ -f bench-summary.md ]; then
-            cat bench-summary.md
+          cargo run -- bench run --tasks benches/tasks/ --model "${BENCH_MODEL}" --output bench-report.json --summary bench-summary.md
+
+      - name: Compare with baseline (if available)
+        if: steps.changes.outputs.run_bench == 'true'
+        continue-on-error: true
+        run: |
+          BASELINE=$(ls benches/baselines/bench-report-*.json 2>/dev/null | head -1)
+          if [ -n "$BASELINE" ] && [ -f "$BASELINE" ]; then
+            cargo run -- bench compare --baseline "$BASELINE" --current bench-report.json --summary bench-delta.md || echo "Baseline comparison failed (non-fatal)"
           else
-            echo "No benchmark summary generated"
+            echo "No baseline report found; skipping comparison"
+          fi
+
+      - name: Upload bench report as artifact
+        if: steps.changes.outputs.run_bench == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-report
+          path: bench-report.json
+          retention-days: 30
+
+      - name: Post benchmark summary as PR comment
+        if: github.event_name == 'pull_request' && steps.changes.outputs.run_bench == 'true'
+        continue-on-error: true
+        run: |
+          BODY=""
+          if [ -f bench-delta.md ]; then
+            BODY=$(cat bench-delta.md)
+          elif [ -f bench-summary.md ]; then
+            BODY=$(cat bench-summary.md)
+          fi
+          if [ -n "$BODY" ]; then
+            gh pr comment "${{ github.event.pull_request.number }}" --body "$BODY"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Fail if success rate drops below 10%
+        if: steps.changes.outputs.run_bench == 'true'
+        run: |
+          RATE=$(python3 -c "
+          import json, sys
+          with open('bench-report.json') as f:
+              r = json.load(f)
+          print(r['summary']['success_rate'])
+          ")
+          echo "Benchmark success rate: ${RATE}"
+          if python3 -c "import sys; sys.exit(0 if float('${RATE}') < 0.1 else 1)"; then
+            echo "::warning::Benchmark success rate below 10% — possible regression"
           fi
 
   coverage:

@@ -38,4 +38,8 @@ Components:
 - Requires a model endpoint in CI (Ollama with `qwen2.5:0.5b`).
 - Task definitions need maintenance as the codebase evolves.
 
+## Implementation notes
+
+The bench executor (`src/session/bench.rs`) provides a sandboxed toolset constrained to the temp sandbox dir. Available tools: `read_file`, `write_file`, `edit_file`, `bash`, `glob`, `grep`. The toolset uses a `DenyList` with default patterns, a `PathGuard` scoped to the sandbox dir, `bash_sandbox_workdir: true`, no undo stack, no LSP, no computer_use, no docker.
+
 ponytail: TOML task definitions + headless session execution. The upgrade path is a leaderboard, multi-model comparison, and CI benchmark deltas.

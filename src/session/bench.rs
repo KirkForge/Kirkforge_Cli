@@ -3,8 +3,10 @@
 //! Runs a single benchmark task against a kirkforge executor, collects
 //! metrics from turn events, and verifies the result.
 
+use crate::session::access::{DenyList, PathGuard};
 use crate::shared::{Config, SharedConfig};
 use kirkforge_bench::{BenchReport, BenchSummary, BenchTask, TaskResult};
+use std::path::Path;
 use std::time::Instant;
 
 /// Collect metrics from a completed turn's events and produce a TaskResult.
@@ -60,6 +62,35 @@ pub fn collect_turn_metrics(
         tool_calls,
         error: run_error,
     }
+}
+
+/// Build a sandboxed toolset for bench runs.
+///
+/// Provides 6 core tools (read_file, write_file, edit_file, bash, glob, grep)
+/// constrained to the temp sandbox dir. No undo stack, no images, no LSP,
+/// no computer_use, no docker.
+fn build_bench_toolset(sandbox_path: &Path) -> super::toolset::CompositeToolset {
+    let deny_list = DenyList::default();
+    let path_guard = PathGuard {
+        sandbox_dir: Some(sandbox_path.to_path_buf()),
+        deny_extensions: PathGuard::default().deny_extensions,
+        block_dotfiles: false,
+        block_gitignored_dotfiles: false,
+        max_read_size: 1024 * 1024,
+        max_overwrite_size: 1024 * 1024,
+        deny_list: deny_list.clone(),
+        follow_symlinks: false,
+        allowed_write_dirs: vec![],
+        block_binary_reads: false,
+    };
+
+    let tools = crate::tools::all_tools(
+        None, false, deny_list, path_guard, true, false, None, None, None, None, None,
+    );
+
+    let mut toolset = super::toolset::CompositeToolset::empty();
+    toolset.add(Box::new(super::toolset::VecToolset::new("builtin", tools)));
+    toolset
 }
 
 /// Run a single benchmark task.
@@ -136,9 +167,7 @@ pub async fn run_task(
     let log_path = data_dir.join(format!("{session_id}.conv.ndjson"));
     let (conversation, _open_outcome) = super::conversation::ConversationLog::open(log_path)?;
 
-    // Build an empty toolset for bench runs. The model can still make tool
-    // calls but they will be auto-approved (safe for benchmarking).
-    let toolset = super::toolset::CompositeToolset::empty();
+    let toolset = build_bench_toolset(&sandbox_path);
 
     // Construct executor.
     let mut executor = super::executor::Executor::with_log_and_undo(

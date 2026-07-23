@@ -196,6 +196,16 @@ pub enum Command {
     },
     /// Run benchmark tasks and collect metrics.
     Bench {
+        #[command(subcommand)]
+        command: BenchCommand,
+    },
+}
+
+/// Subcommands for the `bench` command.
+#[derive(Subcommand, Debug)]
+pub enum BenchCommand {
+    /// Run all benchmark tasks.
+    Run {
         /// Directory containing TOML task definitions.
         #[arg(long, default_value = "benches/tasks")]
         tasks: PathBuf,
@@ -215,5 +225,35 @@ pub enum Command {
         /// Timeout per task in seconds.
         #[arg(long, default_value_t = 300)]
         timeout: u64,
+    },
+    /// Compare two benchmark reports.
+    Compare {
+        /// Baseline JSON report path.
+        #[arg(long)]
+        baseline: PathBuf,
+
+        /// Current JSON report path.
+        #[arg(long)]
+        current: PathBuf,
+
+        /// Write markdown delta summary to this file.
+        #[arg(long)]
+        summary: Option<PathBuf>,
+    },
+    /// List all benchmark tasks.
+    List {
+        /// Directory containing TOML task definitions.
+        #[arg(long, default_value = "benches/tasks")]
+        tasks: PathBuf,
+    },
+    /// Verify task definitions without running LLM.
+    VerifyOnly {
+        /// Directory containing TOML task definitions.
+        #[arg(long, default_value = "benches/tasks")]
+        tasks: PathBuf,
+
+        /// Verify only this task (by name).
+        #[arg(long)]
+        task: Option<String>,
     },
 }

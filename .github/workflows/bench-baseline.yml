@@ -1,0 +1,67 @@
+name: Bench Baseline
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/session/**'
+      - 'src/adapters/**'
+      - 'src/tools/**'
+      - 'crates/kirkforge-bench/**'
+      - 'benches/tasks/**'
+  schedule:
+    - cron: '0 4 * * *'
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -Dwarnings
+  RUST_TOOLCHAIN: "1.88.0"
+
+jobs:
+  bench-baseline:
+    runs-on: ubuntu-latest
+    env:
+      BENCH_MODEL: qwen2.5:0.5b
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install and start Ollama
+        shell: bash
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          ollama serve >/tmp/ollama.log 2>&1 &
+          for i in {1..30}; do
+            if curl -fsS http://localhost:11434/api/tags >/dev/null 2>&1; then
+              echo "Ollama ready"
+              break
+            fi
+            sleep 1
+          done
+          curl -fsS http://localhost:11434/api/tags >/dev/null || { echo "Ollama failed to start"; cat /tmp/ollama.log; exit 1; }
+
+      - name: Pull bench model
+        shell: bash
+        run: |
+          if ! curl -fsS http://localhost:11434/api/tags | grep -q "${BENCH_MODEL}"; then
+            ollama pull "${BENCH_MODEL}"
+          else
+            echo "Bench model ${BENCH_MODEL} already cached"
+          fi
+
+      - name: Run benchmark tasks
+        run: |
+          cargo run -- bench run --tasks benches/tasks/ --model "${BENCH_MODEL}" --output bench-report.json --summary bench-summary.md
+
+      - name: Upload baseline report
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-baseline
+          path: bench-report.json
+          retention-days: 90

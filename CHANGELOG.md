@@ -6,6 +6,35 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- `bench compare` subcommand: compare two JSON bench reports and emit a delta
+  summary (markdown table of per-task deltas + aggregate success rate / cost /
+  token changes). Usage: `kirkforge bench compare --baseline <json> --current <json> [--summary <md>]`.
+- `bench list` subcommand: list all benchmark tasks in a directory with name,
+  difficulty, and verification type.
+- `bench verify-only` subcommand: run verification only (no LLM) for benchmark
+  tasks, useful for validating task definitions.
+- `TaskDelta`, `DeltaReport`, `TaskInfo` types and `compare_reports`,
+  `write_markdown_delta`, `list_tasks`, `verify_only` functions in
+  `kirkforge-bench`.
+- Unit tests for `compare_reports`: regression (same report → zero deltas),
+  improvement, and new-task scenarios.
+- Unit tests for `list_tasks` and `verify_only`.
+- `benches/baselines/` added to `.gitignore`.
+- Bench harness now provides a sandboxed toolset (read_file, write_file,
+  edit_file, bash, glob, grep) constrained to the temp sandbox dir, instead of
+  an empty toolset. Real-repo bench tasks are now winnable.
+- CI bench job runs even when quality fails (with `if: always()`), has path
+  filters, downloads baseline for delta comparison, posts PR comments, and
+  uploads reports as artifacts.
+- `.github/workflows/bench-baseline.yml` — scheduled workflow that produces
+  nightly baseline bench reports on `main`.
+
+### Changed
+- `bench` CLI restructured from flat args to subcommands: `bench run`, `bench
+  compare`, `bench list`, `bench verify-only`.
+- `add_adr` bench task verify path fixed from `039-` to `062-benchmark-delta-comparison`
+  (ADR-039 already exists, task now creates a new non-conflicting ADR).
+- ADR-038 updated with implementation notes documenting the sandboxed toolset.
 - `ARCHITECTURE.md` — full architecture document tying together the agent core,
   verification system, context index, context compression (Stratum), token
   budget (Plugin3), plugin system, specialized runtimes (Draw, Video), workflow

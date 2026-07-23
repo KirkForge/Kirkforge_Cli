@@ -11,7 +11,7 @@ mod chrome_launcher;
 mod turn_events;
 
 use clap::{CommandFactory, Parser};
-use kirkforge::cli::{Cli, Command};
+use kirkforge::cli::{BenchCommand, Cli, Command};
 use kirkforge::{adapters, daemon, line_mode, session, shared, tools, tui};
 use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
@@ -301,13 +301,7 @@ async fn main() {
             from,
             to,
         } => handle_replay_command(id, data_dir, turn, from, to),
-        Command::Bench {
-            tasks,
-            model,
-            output,
-            summary,
-            timeout,
-        } => handle_bench_command(tasks, model, output, summary, timeout).await,
+        Command::Bench { command } => handle_bench_command(command).await,
     }
     .map_err(KirkForgeError::from);
 
@@ -319,7 +313,26 @@ async fn main() {
     }
 }
 
-async fn handle_bench_command(
+async fn handle_bench_command(command: kirkforge::cli::BenchCommand) -> anyhow::Result<()> {
+    match command {
+        BenchCommand::Run {
+            tasks,
+            model,
+            output,
+            summary,
+            timeout,
+        } => handle_bench_run(tasks, model, output, summary, timeout).await,
+        BenchCommand::Compare {
+            baseline,
+            current,
+            summary,
+        } => handle_bench_compare(baseline, current, summary),
+        BenchCommand::List { tasks } => handle_bench_list(tasks),
+        BenchCommand::VerifyOnly { tasks, task } => handle_bench_verify_only(tasks, task),
+    }
+}
+
+async fn handle_bench_run(
     tasks: std::path::PathBuf,
     model: Option<String>,
     output: Option<std::path::PathBuf>,
@@ -357,6 +370,84 @@ async fn handle_bench_command(
         kirkforge_bench::write_markdown_summary(&report, &md_path)?;
         eprintln!("summary written to {}", md_path.display());
     }
+    Ok(())
+}
+
+fn handle_bench_compare(
+    baseline: std::path::PathBuf,
+    current: std::path::PathBuf,
+    summary: Option<std::path::PathBuf>,
+) -> anyhow::Result<()> {
+    let baseline_json = std::fs::read_to_string(&baseline)?;
+    let current_json = std::fs::read_to_string(&current)?;
+    let baseline_report: kirkforge_bench::BenchReport = serde_json::from_str(&baseline_json)?;
+    let current_report: kirkforge_bench::BenchReport = serde_json::from_str(&current_json)?;
+    let delta = kirkforge_bench::compare_reports(&baseline_report, &current_report);
+    println!("Delta: {} → {}", delta.baseline_model, delta.current_model);
+    println!(
+        "Success rate: {:+.0}% | Δtokens_in: {:+} | Δcost: ${:+.4}",
+        delta.success_rate_delta * 100.0,
+        delta.total_tokens_in_delta,
+        delta.total_cost_delta_usd,
+    );
+    if let Some(md_path) = summary {
+        kirkforge_bench::write_markdown_delta(&delta, &md_path)?;
+        eprintln!("delta summary written to {}", md_path.display());
+    }
+    Ok(())
+}
+
+fn handle_bench_list(tasks: std::path::PathBuf) -> anyhow::Result<()> {
+    let task_infos = kirkforge_bench::list_tasks(&tasks)?;
+    if task_infos.is_empty() {
+        println!("No tasks found in {}", tasks.display());
+        return Ok(());
+    }
+    println!("{:<30} {:<12} Verify", "Name", "Difficulty");
+    println!("{}", "-".repeat(55));
+    for t in &task_infos {
+        let diff_str = match t.difficulty {
+            kirkforge_bench::Difficulty::Easy => "easy",
+            kirkforge_bench::Difficulty::Medium => "medium",
+            kirkforge_bench::Difficulty::Hard => "hard",
+        };
+        println!("{:<30} {:<12} {}", t.name, diff_str, t.verify_type);
+    }
+    println!("\n{} task(s)", task_infos.len());
+    Ok(())
+}
+
+fn handle_bench_verify_only(tasks: std::path::PathBuf, task: Option<String>) -> anyhow::Result<()> {
+    let bench_tasks = kirkforge_bench::load_tasks(&tasks)?;
+    if bench_tasks.is_empty() {
+        anyhow::bail!("no task files found in {}", tasks.display());
+    }
+    let filtered: Vec<_> = match &task {
+        Some(name) => bench_tasks
+            .into_iter()
+            .filter(|t| t.name == *name)
+            .collect(),
+        None => bench_tasks,
+    };
+    if filtered.is_empty() {
+        anyhow::bail!("no matching task found");
+    }
+    let tmp = tempfile::tempdir()?;
+    for bt in &filtered {
+        let result = kirkforge_bench::verify_only(bt, tmp.path());
+        let status = if result.success { "PASS" } else { "FAIL" };
+        println!(
+            "[{}] {} ({})",
+            status,
+            bt.name,
+            result.error.unwrap_or_default()
+        );
+    }
+    let passed = filtered
+        .iter()
+        .filter(|t| kirkforge_bench::verify_only(t, tmp.path()).success)
+        .count();
+    println!("{}/{} tasks verified", passed, filtered.len());
     Ok(())
 }
 

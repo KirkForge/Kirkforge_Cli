@@ -1,0 +1,31 @@
+name = "add_error_handling"
+difficulty = "medium"
+
+prompt = "Change the `divide` function in src/lib.rs to return `Result<i32, String>` instead of `i32`. When `b` is 0, return `Err(\"division by zero\".to_string())`. Update the existing test to work with the new return type using `.unwrap()` or pattern matching."
+
+[setup]
+"Cargo.toml" = """
+[package]
+name = "add_error_handling"
+version = "0.1.0"
+edition = "2021"
+"""
+"src/lib.rs" = """
+pub fn divide(a: i32, b: i32) -> i32 {
+    a / b
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_divide() {
+        assert_eq!(divide(10, 2), 5);
+    }
+}
+"""
+
+[verify]
+type = "command_exits_zero"
+command = "grep -q Result src/lib.rs && cargo test"

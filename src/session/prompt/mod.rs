@@ -351,6 +351,21 @@ impl PromptBuilder {
                             }
                             content.push(')');
                         }
+                        if !result.called_by.is_empty() {
+                            content.push_str(" (called by: ");
+                            for (i, cs) in result.called_by.iter().enumerate() {
+                                if i > 0 {
+                                    content.push_str(", ");
+                                }
+                                content.push_str(&format!(
+                                    "{}() at {}:{}",
+                                    cs.caller_name,
+                                    cs.caller_file.display(),
+                                    cs.line
+                                ));
+                            }
+                            content.push(')');
+                        }
                         content.push('\n');
                     }
                     content.push_str("</relevant_symbols>");

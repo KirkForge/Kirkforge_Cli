@@ -1,0 +1,22 @@
+name = "add_doc_comment"
+difficulty = "easy"
+
+prompt = "Add a `///` doc comment to the public function `greet` in src/lib.rs. The doc comment should describe what the function does."
+
+[setup]
+"Cargo.toml" = """
+[package]
+name = "add_doc_comment"
+version = "0.1.0"
+edition = "2021"
+"""
+"src/lib.rs" = """
+pub fn greet(name: &str) -> String {
+    format!("Hello, {}!", name)
+}
+"""
+
+[verify]
+type = "file_contains"
+path = "src/lib.rs"
+contains = "///"

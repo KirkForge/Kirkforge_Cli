@@ -904,7 +904,7 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
             if cache_path.exists() {
                 if let Ok(cached) = kirkforge_context_index::ContextIndex::load(&cache_path) {
                     if kirkforge_context_index::ContextIndex::is_current(&cached, path) {
-                        let idx = kirkforge_context_index::ContextIndex::from_symbols(cached.symbols);
+                        let idx = kirkforge_context_index::ContextIndex::from_symbols_and_edges_and_calls(cached.symbols, cached.edges, cached.call_edges);
                         tracing::info!(
                             symbol_count = idx.symbols().len(),
                             "loaded repo-graph context index from cache"

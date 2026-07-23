@@ -1,0 +1,31 @@
+name = "fix_failing_test"
+difficulty = "medium"
+
+prompt = "Fix the failing test in src/lib.rs. The assertion `assert_eq!(add(2, 2), 5)` is incorrect — `add(2, 2)` returns 4, not 5. Change the assertion to `assert_eq!(add(2, 2), 4)` so the test passes."
+
+[setup]
+"Cargo.toml" = """
+[package]
+name = "fix_failing_test"
+version = "0.1.0"
+edition = "2021"
+"""
+"src/lib.rs" = """
+pub fn add(a: i32, b: i32) -> i32 {
+    a + b
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_add() {
+        assert_eq!(add(2, 2), 5);
+    }
+}
+"""
+
+[verify]
+type = "test_passes"
+command = "cargo test"

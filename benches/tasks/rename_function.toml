@@ -1,0 +1,40 @@
+name = "rename_function"
+difficulty = "medium"
+
+prompt = "Rename the function `old_name` to `new_name` in src/lib.rs. Update all call sites so the code compiles and tests pass. The function definition and both call sites should use the new name."
+
+[setup]
+"Cargo.toml" = """
+[package]
+name = "rename_function"
+version = "0.1.0"
+edition = "2021"
+"""
+"src/lib.rs" = """
+pub fn old_name(x: i32) -> i32 {
+    x * 2
+}
+
+pub fn caller_one() -> i32 {
+    old_name(5)
+}
+
+pub fn caller_two() -> i32 {
+    old_name(10)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_callers() {
+        assert_eq!(caller_one(), 10);
+        assert_eq!(caller_two(), 20);
+    }
+}
+"""
+
+[verify]
+type = "command_exits_zero"
+command = "! grep -q old_name src/lib.rs && cargo test"

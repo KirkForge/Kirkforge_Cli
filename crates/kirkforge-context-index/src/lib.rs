@@ -54,12 +54,32 @@ pub struct ImportEdge {
     pub line: u32,
 }
 
-/// A retrieval result: a symbol plus the files that import it.
+/// A call-graph edge: caller calls callee.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CallEdge {
+    pub caller_file: PathBuf,
+    pub caller_name: String,
+    pub caller_line: u32,
+    pub callee_name: String,
+    pub callee_file: Option<PathBuf>,
+}
+
+/// A call site: who calls a given function.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CallSite {
+    pub caller_name: String,
+    pub caller_file: PathBuf,
+    pub line: u32,
+}
+
+/// A retrieval result: a symbol plus the files that import it and call sites.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RetrievalResult {
     pub symbol: Symbol,
     /// Files that import the file containing this symbol.
     pub imported_by: Vec<PathBuf>,
+    /// Call sites that invoke this symbol.
+    pub called_by: Vec<CallSite>,
 }
 
 /// Cached index metadata — the git HEAD at cache time plus the symbols and edges.
@@ -75,6 +95,8 @@ pub struct CachedIndex {
     pub symbols: Vec<Symbol>,
     /// The import edges.
     pub edges: Vec<ImportEdge>,
+    /// The call-graph edges.
+    pub call_edges: Vec<CallEdge>,
 }
 
 /// A tree-sitter-backed index of source-code symbols and import edges.
@@ -86,8 +108,8 @@ pub struct CachedIndex {
 /// `retrieve`.
 ///
 /// ponytail: Rust + TypeScript + Python + Go symbol extraction via tree-sitter.
-/// Phase 5 complete. Import edges for Rust/TS/Python/Go. The upgrade path is
-/// call-graph edges.
+/// Phase 6 complete. Import + call-graph edges for Rust/TS/Python/Go. The upgrade
+/// path is embeddings/graph-walk retrieval (Phase 7).
 ///
 /// ponytail: substring-match retrieval. The upgrade path is embeddings or
 /// graph-walk retrieval.
@@ -97,6 +119,7 @@ pub struct CachedIndex {
 pub struct ContextIndex {
     symbols: Vec<Symbol>,
     edges: Vec<ImportEdge>,
+    call_edges: Vec<CallEdge>,
 }
 
 impl Default for ContextIndex {
@@ -110,6 +133,7 @@ impl ContextIndex {
         Self {
             symbols: Vec::new(),
             edges: Vec::new(),
+            call_edges: Vec::new(),
         }
     }
 
@@ -118,12 +142,30 @@ impl ContextIndex {
         Self {
             symbols,
             edges: Vec::new(),
+            call_edges: Vec::new(),
         }
     }
 
     /// Create an index from a pre-built symbol list and edge list.
     pub fn from_symbols_and_edges(symbols: Vec<Symbol>, edges: Vec<ImportEdge>) -> Self {
-        Self { symbols, edges }
+        Self {
+            symbols,
+            edges,
+            call_edges: Vec::new(),
+        }
+    }
+
+    /// Create an index from pre-built symbols, import edges, and call edges.
+    pub fn from_symbols_and_edges_and_calls(
+        symbols: Vec<Symbol>,
+        edges: Vec<ImportEdge>,
+        call_edges: Vec<CallEdge>,
+    ) -> Self {
+        Self {
+            symbols,
+            edges,
+            call_edges,
+        }
     }
 
     /// Index a single source file using tree-sitter parsing.
@@ -167,6 +209,7 @@ impl ContextIndex {
         let mut cursor = root.walk();
         self.walk_tree(&mut cursor, content, path, lang);
         self.extract_import_edges(&root, content, path, lang);
+        self.extract_call_edges(&root, content, path, lang);
         Ok(())
     }
 
@@ -205,6 +248,136 @@ impl ContextIndex {
                 stack.push(ch);
             }
         }
+    }
+
+    /// Extract call-graph edges from the tree-sitter AST.
+    fn extract_call_edges(
+        &mut self,
+        root: &tree_sitter::Node,
+        source: &str,
+        path: &std::path::Path,
+        lang: Language,
+    ) {
+        let call_kinds: &[&str] = match lang {
+            Language::Rust => &["call_expression", "method_call_expression"],
+            Language::TypeScript => &["call_expression"],
+            Language::Python => &["call"],
+            Language::Go => &["call_expression"],
+        };
+
+        let mut stack = vec![*root];
+        while let Some(node) = stack.pop() {
+            if call_kinds.contains(&node.kind()) {
+                let callee_name = Self::extract_callee_name(&node, source, lang);
+                if let Some(callee) = callee_name {
+                    let caller_name = Self::find_enclosing_function(&node, source, lang)
+                        .unwrap_or_else(|| "<top_level>".to_string());
+                    let line = node.start_position().row as u32 + 1;
+                    self.call_edges.push(CallEdge {
+                        caller_file: path.to_path_buf(),
+                        caller_name,
+                        caller_line: line,
+                        callee_name: callee,
+                        callee_file: None,
+                    });
+                }
+            }
+            let mut child_cursor = node.walk();
+            for ch in child_cursor.node().children(&mut child_cursor) {
+                stack.push(ch);
+            }
+        }
+    }
+
+    /// Extract the callee name from a call expression node.
+    fn extract_callee_name(
+        node: &tree_sitter::Node,
+        source: &str,
+        lang: Language,
+    ) -> Option<String> {
+        match lang {
+            Language::Rust => {
+                // Rust: method_call_expression has a "method" field.
+                // call_expression has a "function" field.
+                if node.kind() == "method_call_expression" {
+                    if let Some(method_node) = node.child_by_field_name("method") {
+                        return Some(method_node.utf8_text(source.as_bytes()).ok()?.to_string());
+                    }
+                }
+                // call_expression: "function" field
+                if let Some(func_node) = node.child_by_field_name("function") {
+                    let text = func_node.utf8_text(source.as_bytes()).ok()?.to_string();
+                    return Some(Self::last_identifier(&text));
+                }
+                None
+            }
+            Language::TypeScript => {
+                // call_expression: "function" field may be identifier or member_expression
+                if let Some(func_node) = node.child_by_field_name("function") {
+                    let text = func_node.utf8_text(source.as_bytes()).ok()?.to_string();
+                    return Some(Self::last_identifier(&text));
+                }
+                None
+            }
+            Language::Python => {
+                // call: "function" field may be identifier or attribute
+                if let Some(func_node) = node.child_by_field_name("function") {
+                    let text = func_node.utf8_text(source.as_bytes()).ok()?.to_string();
+                    return Some(Self::last_identifier(&text));
+                }
+                None
+            }
+            Language::Go => {
+                // call_expression: "function" field may be identifier or selector_expression
+                if let Some(func_node) = node.child_by_field_name("function") {
+                    if func_node.kind() == "selector_expression" {
+                        // selector_expression: operand.field — extract the field
+                        if let Some(field_node) = func_node.child_by_field_name("field") {
+                            return Some(field_node.utf8_text(source.as_bytes()).ok()?.to_string());
+                        }
+                    }
+                    let text = func_node.utf8_text(source.as_bytes()).ok()?.to_string();
+                    return Some(Self::last_identifier(&text));
+                }
+                None
+            }
+        }
+    }
+
+    /// Extract the last identifier from a dotted expression like `obj.method`.
+    fn last_identifier(text: &str) -> String {
+        text.rsplit('.').next().unwrap_or(text).to_string()
+    }
+
+    /// Walk up the tree to find the enclosing function/method name.
+    fn find_enclosing_function(
+        node: &tree_sitter::Node,
+        source: &str,
+        lang: Language,
+    ) -> Option<String> {
+        let enclosing_kinds: &[&str] = match lang {
+            Language::Rust => &["function_item"],
+            Language::TypeScript => &[
+                "function_declaration",
+                "method_definition",
+                "arrow_function",
+            ],
+            Language::Python => &["function_definition"],
+            Language::Go => &["function_declaration", "method_declaration"],
+        };
+
+        let mut current = node.parent();
+        while let Some(parent) = current {
+            if enclosing_kinds.contains(&parent.kind()) {
+                if let Some(name_node) = parent.child_by_field_name("name") {
+                    return Some(name_node.utf8_text(source.as_bytes()).ok()?.to_string());
+                }
+                // arrow_function has no name field
+                return Some("<anonymous>".to_string());
+            }
+            current = parent.parent();
+        }
+        None
     }
 
     /// Recursively walk the tree-sitter tree and extract declarations.
@@ -436,9 +609,27 @@ impl ContextIndex {
         }
     }
 
+    /// Resolve call edges: match callee_name to a known symbol's file.
+    pub fn resolve_call_edges(&mut self) {
+        let call_edges = std::mem::take(&mut self.call_edges);
+        for mut edge in call_edges {
+            edge.callee_file = self
+                .symbols
+                .iter()
+                .find(|s| s.name == edge.callee_name)
+                .map(|s| s.file.clone());
+            self.call_edges.push(edge);
+        }
+    }
+
     /// All extracted import edges.
     pub fn edges(&self) -> &[ImportEdge] {
         &self.edges
+    }
+
+    /// All extracted call edges.
+    pub fn call_edges(&self) -> &[CallEdge] {
+        &self.call_edges
     }
 
     /// Index all `.rs`, `.ts`/`.tsx`, `.py`, and `.go` files under a directory.
@@ -459,8 +650,9 @@ impl ContextIndex {
                 self.index_file(path, &content)?;
             }
         }
-        // After indexing all files, resolve import edges to file paths.
+        // After indexing all files, resolve import edges and call edges.
         self.resolve_imports(root);
+        self.resolve_call_edges();
         Ok(())
     }
 
@@ -486,9 +678,20 @@ impl ContextIndex {
                     .filter(|e| e.resolved_file.as_ref().is_none_or(|rf| rf == &sym.file))
                     .map(|e| e.source_file.clone())
                     .collect();
+                let called_by = self
+                    .call_edges
+                    .iter()
+                    .filter(|e| e.callee_name == sym.name)
+                    .map(|e| CallSite {
+                        caller_name: e.caller_name.clone(),
+                        caller_file: e.caller_file.clone(),
+                        line: e.caller_line,
+                    })
+                    .collect();
                 RetrievalResult {
                     symbol: sym.clone(),
                     imported_by,
+                    called_by,
                 }
             })
             .collect()
@@ -511,6 +714,7 @@ impl ContextIndex {
             head: head.to_string(),
             symbols: self.symbols.clone(),
             edges: self.edges.clone(),
+            call_edges: self.call_edges.clone(),
         };
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -903,6 +1107,7 @@ mod tests {
             head: "old_head_sha".to_string(),
             symbols: loaded.symbols,
             edges: loaded.edges,
+            call_edges: loaded.call_edges,
         };
         // is_current checks real git HEAD, which won't match "old_head_sha"
         // in a temp dir (not a git repo) → returns false
@@ -1390,6 +1595,153 @@ mod tests {
         );
         let auth_result = results.iter().find(|r| r.symbol.name == "auth");
         assert!(auth_result.is_some(), "expected 'auth' symbol in results");
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn call_edge_rust_function_call() {
+        let tmp =
+            std::env::temp_dir().join(format!("kirkforge-context-call-rs-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+
+        let src = tmp.join("lib.rs");
+        fs::write(&src, "fn foo() { bar(); }\nfn bar() {}\n").unwrap();
+
+        let mut idx = ContextIndex::new();
+        idx.index_file(&src, &fs::read_to_string(&src).unwrap())
+            .unwrap();
+        idx.resolve_call_edges();
+
+        let call_edges = idx.call_edges();
+        let foo_calls_bar = call_edges
+            .iter()
+            .find(|e| e.caller_name == "foo" && e.callee_name == "bar");
+        assert!(
+            foo_calls_bar.is_some(),
+            "expected CallEdge foo→bar, got {call_edges:?}"
+        );
+        let edge = foo_calls_bar.unwrap();
+        assert!(
+            edge.callee_file.is_some(),
+            "expected callee_file to be resolved for 'bar', got {:?}",
+            edge.callee_file
+        );
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn call_edge_ts_method_call() {
+        let tmp =
+            std::env::temp_dir().join(format!("kirkforge-context-call-ts-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+
+        let src = tmp.join("app.ts");
+        fs::write(&src, "function foo() { obj.bar(); }\n").unwrap();
+
+        let mut idx = ContextIndex::new();
+        idx.index_file(&src, &fs::read_to_string(&src).unwrap())
+            .unwrap();
+
+        let call_edges = idx.call_edges();
+        assert!(
+            call_edges.iter().any(|e| e.callee_name == "bar"),
+            "expected CallEdge with callee=bar, got {call_edges:?}"
+        );
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn call_edge_python_call() {
+        let tmp =
+            std::env::temp_dir().join(format!("kirkforge-context-call-py-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+
+        let src = tmp.join("app.py");
+        fs::write(&src, "def foo():\n    bar()\n").unwrap();
+
+        let mut idx = ContextIndex::new();
+        idx.index_file(&src, &fs::read_to_string(&src).unwrap())
+            .unwrap();
+
+        let call_edges = idx.call_edges();
+        assert!(
+            call_edges
+                .iter()
+                .any(|e| e.callee_name == "bar" && e.caller_name == "foo"),
+            "expected CallEdge foo→bar, got {call_edges:?}"
+        );
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn call_edge_unresolvable_callee() {
+        let tmp = std::env::temp_dir().join(format!(
+            "kirkforge-context-call-unresolvable-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+
+        let src = tmp.join("lib.rs");
+        fs::write(&src, "fn foo() { external_lib(); }\n").unwrap();
+
+        let mut idx = ContextIndex::new();
+        idx.index_file(&src, &fs::read_to_string(&src).unwrap())
+            .unwrap();
+        idx.resolve_call_edges();
+
+        let call_edges = idx.call_edges();
+        let edge = call_edges.iter().find(|e| e.callee_name == "external_lib");
+        assert!(
+            edge.is_some(),
+            "expected CallEdge to external_lib, got {call_edges:?}"
+        );
+        assert!(
+            edge.unwrap().callee_file.is_none(),
+            "expected callee_file=None for unresolvable callee, got {:?}",
+            edge.unwrap().callee_file
+        );
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn retrieve_includes_callers() {
+        let tmp = std::env::temp_dir().join(format!(
+            "kirkforge-context-retrieve-callers-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+
+        let auth = tmp.join("auth.rs");
+        fs::write(&auth, "fn auth() {}\n").unwrap();
+        let main = tmp.join("main.rs");
+        fs::write(&main, "fn login() { auth(); }\n").unwrap();
+
+        let mut idx = ContextIndex::new();
+        idx.index_dir(&tmp).unwrap();
+
+        let results = idx.retrieve("auth", 10);
+        assert!(
+            !results.is_empty(),
+            "expected at least one result for 'auth'"
+        );
+        let auth_result = results.iter().find(|r| r.symbol.name == "auth");
+        assert!(auth_result.is_some(), "expected 'auth' symbol in results");
+
+        let called_by = &auth_result.unwrap().called_by;
+        assert!(
+            called_by.iter().any(|cs| cs.caller_name == "login"),
+            "expected auth to be called by login, got {called_by:?}"
+        );
 
         let _ = fs::remove_dir_all(&tmp);
     }

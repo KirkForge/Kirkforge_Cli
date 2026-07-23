@@ -1,0 +1,35 @@
+name = "extract_module"
+difficulty = "hard"
+
+prompt = "Extract the `format_greeting` helper function from src/lib.rs into a new module file src/greeting.rs. Add the `mod greeting;` declaration in src/lib.rs and update the call site to use `greeting::format_greeting`. The project should still compile and tests should pass."
+
+[setup]
+"Cargo.toml" = """
+[package]
+name = "extract_module"
+version = "0.1.0"
+edition = "2021"
+"""
+"src/lib.rs" = """
+pub fn format_greeting(name: &str) -> String {
+    format!("Hello, {}!", name)
+}
+
+pub fn greet(name: &str) -> String {
+    format_greeting(name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_greet() {
+        assert_eq!(greet("world"), "Hello, world!");
+    }
+}
+"""
+
+[verify]
+type = "command_exits_zero"
+command = "test -f src/greeting.rs && grep -q 'mod greeting' src/lib.rs && cargo test"

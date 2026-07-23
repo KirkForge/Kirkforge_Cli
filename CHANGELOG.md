@@ -60,10 +60,19 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `RetrievalResult` (symbol + `imported_by` files). Prompt builder
   shows "imported by" context. `CachedIndex` includes edges.
   5 new tests.
-  `resolved_file: None`. `retrieve()` now returns
-  `RetrievalResult` (symbol + `imported_by` files). Prompt builder
-  shows "imported by" context. `CachedIndex` includes edges.
-  5 new tests.
+
+- Call-graph edges in context-index (P1-long-1 Phase 6 complete,
+  ADR-037): `CallEdge` struct with `caller_file`, `caller_name`,
+  `caller_line`, `callee_name`, `callee_file`. `CallSite` struct
+  for retrieval results. `extract_call_edges()` walks AST for
+  call expressions per language. `resolve_call_edges()` resolves
+  callee names to definition files. `retrieve()` returns
+  `called_by` alongside `imported_by`. Prompt builder shows
+  "called by" context. 5 new tests.
+
+- 5 new benchmark tasks (P1-long-2): `fix_failing_test`,
+  `add_error_handling`, `rename_function`, `add_doc_comment`,
+  `extract_module`. 10 total tasks in `benches/tasks/`.
 
 ### Changed
 - `edit_file` fuzzy-fallback now has 4 additional tests: exact match,

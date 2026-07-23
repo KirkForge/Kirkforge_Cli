@@ -41,7 +41,28 @@ pub struct Symbol {
     pub end_line: u32,
 }
 
-/// Cached index metadata — the git HEAD at cache time plus the symbols.
+/// An import edge: file A imports symbol/module from file B (or an external package).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ImportEdge {
+    /// The file that contains the import statement.
+    pub source_file: PathBuf,
+    /// The raw import specifier (e.g., `std::collections::HashMap`, `./utils`, `from foo import bar`).
+    pub imported_symbol: String,
+    /// The resolved target file, if we could resolve it. None for external/unresolvable imports.
+    pub resolved_file: Option<PathBuf>,
+    /// Line number of the import statement.
+    pub line: u32,
+}
+
+/// A retrieval result: a symbol plus the files that import it.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RetrievalResult {
+    pub symbol: Symbol,
+    /// Files that import the file containing this symbol.
+    pub imported_by: Vec<PathBuf>,
+}
+
+/// Cached index metadata — the git HEAD at cache time plus the symbols and edges.
 ///
 /// Stored as JSON at `.kirkforge/context-index/cache.json`. The HEAD field
 /// enables cache invalidation: if the current HEAD differs from the stored
@@ -52,17 +73,21 @@ pub struct CachedIndex {
     pub head: String,
     /// The indexed symbols.
     pub symbols: Vec<Symbol>,
+    /// The import edges.
+    pub edges: Vec<ImportEdge>,
 }
 
-/// A tree-sitter-backed index of source-code symbols.
+/// A tree-sitter-backed index of source-code symbols and import edges.
 ///
 /// Uses tree-sitter grammars to extract function, struct, enum, impl, module,
-/// and use declarations from Rust, TypeScript, Python, and Go source files. The
-/// index is built by calling `index_file` or `index_dir`, then queried via
+/// and use declarations from Rust, TypeScript, Python, and Go source files.
+/// Also extracts import edges showing which files import which modules.
+/// The index is built by calling `index_file` or `index_dir`, then queried via
 /// `retrieve`.
 ///
-/// ponytail: Rust + TypeScript + Python + Go symbol extraction via tree-sitter. Phase 5
-/// complete. The upgrade path is import/call-graph edges (Phase 6).
+/// ponytail: Rust + TypeScript + Python + Go symbol extraction via tree-sitter.
+/// Phase 5 complete. Import edges for Rust/TS/Python/Go. The upgrade path is
+/// call-graph edges.
 ///
 /// ponytail: substring-match retrieval. The upgrade path is embeddings or
 /// graph-walk retrieval.
@@ -71,6 +96,7 @@ pub struct CachedIndex {
 /// The upgrade path is a compact binary format if JSON size becomes a concern.
 pub struct ContextIndex {
     symbols: Vec<Symbol>,
+    edges: Vec<ImportEdge>,
 }
 
 impl Default for ContextIndex {
@@ -83,12 +109,21 @@ impl ContextIndex {
     pub fn new() -> Self {
         Self {
             symbols: Vec::new(),
+            edges: Vec::new(),
         }
     }
 
     /// Create an index from a pre-built symbol list (e.g., loaded from cache).
     pub fn from_symbols(symbols: Vec<Symbol>) -> Self {
-        Self { symbols }
+        Self {
+            symbols,
+            edges: Vec::new(),
+        }
+    }
+
+    /// Create an index from a pre-built symbol list and edge list.
+    pub fn from_symbols_and_edges(symbols: Vec<Symbol>, edges: Vec<ImportEdge>) -> Self {
+        Self { symbols, edges }
     }
 
     /// Index a single source file using tree-sitter parsing.
@@ -131,7 +166,45 @@ impl ContextIndex {
         let root = tree.root_node();
         let mut cursor = root.walk();
         self.walk_tree(&mut cursor, content, path, lang);
+        self.extract_import_edges(&root, content, path, lang);
         Ok(())
+    }
+
+    /// Extract import edges from the tree-sitter AST.
+    fn extract_import_edges(
+        &mut self,
+        root: &tree_sitter::Node,
+        source: &str,
+        path: &std::path::Path,
+        lang: Language,
+    ) {
+        let import_kinds: &[&str] = match lang {
+            Language::Rust => &["use_declaration"],
+            Language::TypeScript => &["import_statement"],
+            Language::Python => &["import_statement", "import_from_statement"],
+            Language::Go => &["import_declaration"],
+        };
+
+        let mut stack = vec![*root];
+        while let Some(node) = stack.pop() {
+            if import_kinds.contains(&node.kind()) {
+                let text = node.utf8_text(source.as_bytes()).unwrap_or("");
+                let specifier = Self::extract_import_specifier(text, lang);
+                if !specifier.is_empty() {
+                    let line = node.start_position().row as u32 + 1;
+                    self.edges.push(ImportEdge {
+                        source_file: path.to_path_buf(),
+                        imported_symbol: specifier,
+                        resolved_file: None,
+                        line,
+                    });
+                }
+            }
+            let mut child_cursor = node.walk();
+            for ch in child_cursor.node().children(&mut child_cursor) {
+                stack.push(ch);
+            }
+        }
     }
 
     /// Recursively walk the tree-sitter tree and extract declarations.
@@ -293,6 +366,81 @@ impl ContextIndex {
         }
     }
 
+    /// Extract the import specifier from an import statement's text.
+    /// Returns the module path, not the full statement text.
+    fn extract_import_specifier(text: &str, lang: Language) -> String {
+        match lang {
+            Language::Rust => {
+                // `use crate::foo::bar;` or `use std::collections::HashMap;`
+                let trimmed = text.trim().strip_prefix("use").unwrap_or(text).trim();
+                let trimmed = trimmed.strip_suffix(';').unwrap_or(trimmed).trim();
+                // Remove `{ ... }` grouped imports: `use crate::foo::{bar, baz}` → `crate::foo`
+                if let Some(pos) = trimmed.find("::{") {
+                    trimmed[..pos].to_string()
+                } else {
+                    trimmed.to_string()
+                }
+            }
+            Language::TypeScript => {
+                // `import { foo } from "./utils"` → `./utils`
+                // `import "./utils"` → `./utils`
+                // `import * as foo from "./utils"` → `./utils`
+                // `import type { Foo } from "./utils"` → `./utils`
+                let from_pos = text.rfind("from");
+                if let Some(pos) = from_pos {
+                    let after_from = &text[pos + 4..].trim();
+                    extract_quoted_string(after_from).unwrap_or_else(|| after_from.to_string())
+                } else {
+                    // Side-effect import: `import "./styles.css"`
+                    extract_quoted_string(text).unwrap_or_default()
+                }
+            }
+            Language::Python => {
+                // `import foo.bar` → `foo.bar`
+                // `from foo.bar import baz` → `foo.bar`
+                let trimmed = text.trim();
+                if let Some(rest) = trimmed.strip_prefix("from") {
+                    // `from foo.bar import baz` → `foo.bar`
+                    let rest = rest.trim();
+                    if let Some(pos) = rest.find("import") {
+                        rest[..pos].trim().to_string()
+                    } else {
+                        rest.to_string()
+                    }
+                } else if let Some(rest) = trimmed.strip_prefix("import") {
+                    // `import foo.bar` → `foo.bar`
+                    rest.trim().to_string()
+                } else {
+                    trimmed.to_string()
+                }
+            }
+            Language::Go => {
+                // `import "fmt"` → `fmt`
+                // `import ( "fmt"; "os" )` → first import only (handled per-node by tree-sitter)
+                let trimmed = text.trim();
+                if let Some(s) = extract_quoted_string(trimmed) {
+                    s
+                } else {
+                    trimmed.to_string()
+                }
+            }
+        }
+    }
+
+    /// Try to resolve an import specifier to a file path within the indexed project.
+    pub fn resolve_imports(&mut self, root: &std::path::Path) {
+        let edges = std::mem::take(&mut self.edges);
+        for mut edge in edges {
+            edge.resolved_file = resolve_import(&edge.imported_symbol, &edge.source_file, root);
+            self.edges.push(edge);
+        }
+    }
+
+    /// All extracted import edges.
+    pub fn edges(&self) -> &[ImportEdge] {
+        &self.edges
+    }
+
     /// Index all `.rs`, `.ts`/`.tsx`, `.py`, and `.go` files under a directory.
     pub fn index_dir(&mut self, root: &std::path::Path) -> anyhow::Result<()> {
         for entry in walkdir::WalkDir::new(root)
@@ -311,6 +459,8 @@ impl ContextIndex {
                 self.index_file(path, &content)?;
             }
         }
+        // After indexing all files, resolve import edges to file paths.
+        self.resolve_imports(root);
         Ok(())
     }
 
@@ -319,11 +469,34 @@ impl ContextIndex {
         &self.symbols
     }
 
-    /// Retrieve the first `k` symbols whose name contains `query` as a substring.
+    /// Retrieve the first `k` symbols whose name contains `query` as a substring,
+    /// along with the files that import the matched symbols' files.
     ///
     /// ponytail: substring-match retrieval. The upgrade path is
     /// embeddings or graph-walk retrieval.
-    pub fn retrieve(&self, query: &str, k: usize) -> Vec<Symbol> {
+    pub fn retrieve(&self, query: &str, k: usize) -> Vec<RetrievalResult> {
+        self.symbols
+            .iter()
+            .filter(|s| s.name.contains(query))
+            .take(k)
+            .map(|sym| {
+                let imported_by = self
+                    .edges
+                    .iter()
+                    .filter(|e| e.resolved_file.as_ref().is_none_or(|rf| rf == &sym.file))
+                    .map(|e| e.source_file.clone())
+                    .collect();
+                RetrievalResult {
+                    symbol: sym.clone(),
+                    imported_by,
+                }
+            })
+            .collect()
+    }
+
+    /// Retrieve the first `k` symbols whose name contains `query` as a substring.
+    /// Simplified API that returns just the symbols without import context.
+    pub fn retrieve_symbols(&self, query: &str, k: usize) -> Vec<Symbol> {
         self.symbols
             .iter()
             .filter(|s| s.name.contains(query))
@@ -337,6 +510,7 @@ impl ContextIndex {
         let cached = CachedIndex {
             head: head.to_string(),
             symbols: self.symbols.clone(),
+            edges: self.edges.clone(),
         };
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -373,6 +547,130 @@ pub fn current_head(repo_root: &std::path::Path) -> Option<String> {
         .ok()
         .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+}
+
+/// Extract a quoted string from text, handling both single and double quotes.
+fn extract_quoted_string(text: &str) -> Option<String> {
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'"' || bytes[i] == b'\'' {
+            let quote = bytes[i];
+            let start = i + 1;
+            let end = bytes[start..]
+                .iter()
+                .position(|&b| b == quote)
+                .map(|p| start + p)?;
+            return Some(String::from_utf8_lossy(&bytes[start..end]).to_string());
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Try to resolve an import specifier to a file path within the project root.
+fn resolve_import(
+    specifier: &str,
+    source_file: &std::path::Path,
+    root: &std::path::Path,
+) -> Option<PathBuf> {
+    // Rust: `use crate::foo::bar` → `src/foo/bar.rs` or `src/foo/bar/mod.rs`
+    if specifier.starts_with("crate::") {
+        let module_path = specifier
+            .strip_prefix("crate::")
+            .unwrap()
+            .replace("::", "/");
+        let candidates = [
+            root.join("src").join(format!("{module_path}.rs")),
+            root.join("src").join(&module_path).join("mod.rs"),
+        ];
+        for candidate in candidates {
+            if candidate.exists() {
+                return Some(candidate);
+            }
+        }
+        return None;
+    }
+
+    // Rust: `use std::...` etc — standard library, unresolvable locally
+    if specifier.contains("::") && !specifier.starts_with('.') {
+        // Bare module path like `std::collections`, `serde::Deserialize`
+        return None;
+    }
+
+    // Relative imports (TS/JS): `./utils` → `./utils.ts` etc.
+    if specifier.starts_with('.') {
+        let source_dir = source_file.parent().unwrap_or(std::path::Path::new("."));
+        let base = std::path::Path::new(specifier);
+        let resolved = if base.is_absolute() {
+            root.join(base.strip_prefix("/").unwrap_or(base))
+        } else {
+            source_dir.join(base)
+        };
+
+        let extensions = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".mts"];
+        for ext in extensions {
+            let candidate = resolved.with_extension(ext.trim_start_matches('.'));
+            if candidate.exists() {
+                return Some(candidate);
+            }
+        }
+        // Directory index resolution
+        for index in ["index.ts", "index.tsx", "index.js"] {
+            let candidate = resolved.join(index);
+            if candidate.exists() {
+                return Some(candidate);
+            }
+        }
+        return None;
+    }
+
+    // Python: `from foo.bar import baz` or `import foo.bar`
+    // Try `foo/bar.py` and `foo/bar/__init__.py`
+    if !specifier.starts_with('.') && !specifier.contains('/') && !specifier.contains('\\') {
+        let module_path = specifier.replace('.', std::path::MAIN_SEPARATOR_STR);
+        let candidates = [
+            root.join(format!("{module_path}.py")),
+            root.join(&module_path).join("__init__.py"),
+        ];
+        for candidate in candidates {
+            if candidate.exists() {
+                return Some(candidate);
+            }
+        }
+    }
+
+    // Python relative: `from . import foo` or `from ..bar import baz`
+    if specifier.starts_with('.') {
+        let source_dir = source_file.parent().unwrap_or(std::path::Path::new("."));
+        let mut dir = source_dir.to_path_buf();
+        let stripped = specifier.trim_start_matches('.');
+        let dot_count = specifier.len() - stripped.len();
+        for _ in 0..dot_count.saturating_sub(1) {
+            dir = dir
+                .parent()
+                .unwrap_or(std::path::Path::new("."))
+                .to_path_buf();
+        }
+        if stripped.is_empty() {
+            return None;
+        }
+        let module_path = stripped.replace('.', std::path::MAIN_SEPARATOR_STR);
+        let candidates = [
+            dir.join(format!("{module_path}.py")),
+            dir.join(&module_path).join("__init__.py"),
+        ];
+        for candidate in candidates {
+            if candidate.exists() {
+                return Some(candidate);
+            }
+        }
+        return None;
+    }
+
+    // Go: `"github.com/foo/bar"` — external package, unresolvable locally
+    // Bare specifiers that don't match any of the above patterns
+    None
 }
 
 #[cfg(test)]
@@ -426,7 +724,7 @@ mod tests {
 
         let results = idx.retrieve("foo", 2);
         assert_eq!(results.len(), 2, "expected 2 results, got {results:?}");
-        assert!(results.iter().all(|s| s.name.contains("foo")));
+        assert!(results.iter().all(|s| s.symbol.name.contains("foo")));
     }
 
     #[test]
@@ -604,6 +902,7 @@ mod tests {
         let cached = CachedIndex {
             head: "old_head_sha".to_string(),
             symbols: loaded.symbols,
+            edges: loaded.edges,
         };
         // is_current checks real git HEAD, which won't match "old_head_sha"
         // in a temp dir (not a git repo) → returns false
@@ -947,6 +1246,150 @@ mod tests {
         assert!(names.contains(&"C"), "expected C, got {names:?}");
         assert!(names.contains(&"d"), "expected d, got {names:?}");
         assert!(names.contains(&"D"), "expected D, got {names:?}");
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn import_edge_rust_use_creates_edge() {
+        let tmp = std::env::temp_dir().join(format!(
+            "kirkforge-context-import-rs-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+
+        let src = tmp.join("lib.rs");
+        fs::write(&src, "use std::collections::HashMap;\nfn foo() {}\n").unwrap();
+
+        let mut idx = ContextIndex::new();
+        idx.index_file(&src, &fs::read_to_string(&src).unwrap())
+            .unwrap();
+
+        let edges = idx.edges();
+        assert!(
+            edges
+                .iter()
+                .any(|e| e.imported_symbol.contains("std::collections")),
+            "expected Rust use import edge, got {edges:?}"
+        );
+        assert!(
+            edges.iter().any(
+                |e| e.imported_symbol.contains("std::collections") && e.resolved_file.is_none()
+            ),
+            "external Rust use should have resolved_file=None, got {edges:?}"
+        );
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn import_edge_ts_relative_import() {
+        let tmp = std::env::temp_dir().join(format!(
+            "kirkforge-context-import-ts-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+
+        let src = tmp.join("app.ts");
+        fs::write(
+            &src,
+            "import { foo } from \"./utils\";\nfunction bar() {}\n",
+        )
+        .unwrap();
+        let utils = tmp.join("utils.ts");
+        fs::write(&utils, "function foo() {}\n").unwrap();
+
+        let mut idx = ContextIndex::new();
+        idx.index_dir(&tmp).unwrap();
+
+        let edges = idx.edges();
+        assert!(
+            edges.iter().any(|e| e.imported_symbol == "./utils"),
+            "expected TS import edge with specifier './utils', got {edges:?}"
+        );
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn import_edge_python_from_import() {
+        let tmp = std::env::temp_dir().join(format!(
+            "kirkforge-context-import-py-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+
+        let src = tmp.join("main.py");
+        fs::write(&src, "from foo import bar\n\ndef main(): pass\n").unwrap();
+
+        let mut idx = ContextIndex::new();
+        idx.index_file(&src, &fs::read_to_string(&src).unwrap())
+            .unwrap();
+
+        let edges = idx.edges();
+        assert!(
+            edges.iter().any(|e| e.imported_symbol == "foo"),
+            "expected Python from-import edge with specifier 'foo', got {edges:?}"
+        );
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn import_edge_unresolvable_stored_with_none() {
+        let tmp = std::env::temp_dir().join(format!(
+            "kirkforge-context-import-none-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+
+        let src = tmp.join("main.rs");
+        fs::write(&src, "use serde::Deserialize;\nfn foo() {}\n").unwrap();
+
+        let mut idx = ContextIndex::new();
+        idx.index_file(&src, &fs::read_to_string(&src).unwrap())
+            .unwrap();
+        idx.resolve_imports(&tmp);
+
+        let edges = idx.edges();
+        assert!(
+            edges
+                .iter()
+                .any(|e| e.imported_symbol.contains("serde") && e.resolved_file.is_none()),
+            "expected unresolvable external import with resolved_file=None, got {edges:?}"
+        );
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn retrieve_includes_importers() {
+        let tmp = std::env::temp_dir().join(format!(
+            "kirkforge-context-retrieve-imp-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+
+        let auth = tmp.join("auth.rs");
+        fs::write(&auth, "fn auth() {}\n").unwrap();
+        let main = tmp.join("main.rs");
+        fs::write(&main, "use crate::auth;\nfn run() { auth(); }\n").unwrap();
+
+        let mut idx = ContextIndex::new();
+        idx.index_dir(&tmp).unwrap();
+
+        let results = idx.retrieve("auth", 10);
+        assert!(
+            !results.is_empty(),
+            "expected at least one result for 'auth'"
+        );
+        let auth_result = results.iter().find(|r| r.symbol.name == "auth");
+        assert!(auth_result.is_some(), "expected 'auth' symbol in results");
 
         let _ = fs::remove_dir_all(&tmp);
     }

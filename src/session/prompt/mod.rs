@@ -322,9 +322,10 @@ impl PromptBuilder {
                 if !relevant.is_empty() && !messages.is_empty() {
                     let mut content = messages[0].content.clone();
                     content.push_str("\n\n<relevant_symbols>\n");
-                    for sym in &relevant {
+                    for result in &relevant {
+                        let sym = &result.symbol;
                         content.push_str(&format!(
-                            "{} {} at {}:{}\n",
+                            "{} {} at {}:{}",
                             match sym.kind {
                                 kirkforge_context_index::SymbolKind::Function => "fn",
                                 kirkforge_context_index::SymbolKind::Struct => "struct",
@@ -340,6 +341,17 @@ impl PromptBuilder {
                             sym.file.display(),
                             sym.line,
                         ));
+                        if !result.imported_by.is_empty() {
+                            content.push_str(" (imported by: ");
+                            for (i, imp) in result.imported_by.iter().enumerate() {
+                                if i > 0 {
+                                    content.push_str(", ");
+                                }
+                                content.push_str(&imp.display().to_string());
+                            }
+                            content.push(')');
+                        }
+                        content.push('\n');
                     }
                     content.push_str("</relevant_symbols>");
                     messages[0].content = content;

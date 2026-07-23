@@ -49,7 +49,17 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
    ADR-037): `Language::Go` variant, `detect_language()` dispatches
    `.go` → Go. Extracts `function_declaration`, `method_declaration`,
    `type_declaration` (struct/interface/type alias dispatch),
-   `import_declaration`. `index_dir` walks `.go` files. 4 new tests.
+    `import_declaration`. `index_dir` walks `.go` files. 4 new tests.
+
+- Import-graph edges in context-index (P1-long-1 Phase 6, ADR-037):
+  `ImportEdge` struct with `source_file`, `imported_symbol`,
+  `resolved_file`, `line`. `resolve_imports()` resolves relative
+  imports (TS `./utils` → `./utils.ts`), Rust `crate::` imports,
+  and Python relative imports. External/bare imports stored with
+  `resolved_file: None`. `retrieve()` now returns
+  `RetrievalResult` (symbol + `imported_by` files). Prompt builder
+  shows "imported by" context. `CachedIndex` includes edges.
+  5 new tests.
 
 ### Changed
 - `edit_file` fuzzy-fallback now has 4 additional tests: exact match,

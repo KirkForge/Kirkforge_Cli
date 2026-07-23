@@ -22,16 +22,20 @@ Build `crates/kirkforge-context-index/` — a tree-sitter-backed symbol/import/c
 
 **Phase 4 (disk caching):** Cache at `.kirkforge/context-index/cache.json` with git-HEAD-based invalidation. On session start, if cache exists and HEAD matches, load from disk (instant). Otherwise rebuild and save. **Done.**
 
-**Phase 4+ (future):** Import-graph edges (reuse `tool-graphify`'s logic). Call-graph edges (tree-sitter queries for call sites). Embeddings or graph-walk retrieval (replace substring match).
+**Phase 4+ (future):** Call-graph edges (tree-sitter queries for call sites: `fn`/`def`/`function` calls). Embeddings or graph-walk retrieval (replace substring match).
+
+**Phase 6 (import-graph edges):** `ImportEdge` struct with `source_file`, `imported_symbol`, `resolved_file`, `line`. `resolve_import()` resolves relative imports (TS `./utils` → `./utils.ts`), Rust `crate::` imports, and Python relative imports to file paths. External/bare imports stored with `resolved_file: None`. `retrieve()` returns `RetrievalResult` (symbol + `imported_by` files). `CachedIndex` now includes edges. `index_dir` calls `resolve_imports()` after indexing all files. **Done (import edges for Rust/TS/Python/Go).**
 
 ## Implementation
 
-- `crates/kirkforge-context-index/src/lib.rs`: `ContextIndex` struct with `index_file`, `index_dir`, `symbols`, `retrieve`. `Symbol` struct with `name`, `kind`, `file`, `line`, `end_line`. `SymbolKind` enum: `Function, Struct, Enum, Impl, Module, Use, Class, Interface, TypeAlias`.
+- `crates/kirkforge-context-index/src/lib.rs`: `ContextIndex` struct with `index_file`, `index_dir`, `symbols`, `edges`, `retrieve`. `Symbol` struct with `name`, `kind`, `file`, `line`, `end_line`. `SymbolKind` enum: `Function, Struct, Enum, Impl, Module, Use, Class, Interface, TypeAlias`. `ImportEdge` struct with `source_file`, `imported_symbol`, `resolved_file`, `line`. `RetrievalResult` struct with `symbol`, `imported_by`.
 - Tree-sitter parsing for Rust (tree-sitter 0.25, tree-sitter-rust 0.24), TypeScript (tree-sitter-typescript 0.23), Python (tree-sitter-python 0.23), and Go (tree-sitter-go 0.23).
 - `Language` enum (`Rust`, `TypeScript`, `Python`, `Go`) with `detect_language(path)` — dispatches `.rs` → Rust, `.ts`/`.tsx` → TypeScript, `.py` → Python, `.go` → Go.
+- Import edge extraction: `extract_import_edges()` walks the AST for `use_declaration`/`import_statement`/`import_from_statement`/`import_declaration` nodes and extracts specifiers via `extract_import_specifier()`. `resolve_imports()` resolves specifiers to file paths.
+- `retrieve()` returns `Vec<RetrievalResult>` (symbol + `imported_by` files). `retrieve_symbols()` returns `Vec<Symbol>` for backward compatibility.
 - Substring-match retrieval (ponytail: upgrade path is embeddings or graph-walk).
-- Wired into `PromptBuilder` via `with_context_index()`. Index built at session start in `run_session()`.
-- Disk caching: `CachedIndex` struct with `head` (git HEAD SHA) + `symbols`. `save()`, `load()`, `is_current()`. Cache at `.kirkforge/context-index/cache.json`. Rebuild on HEAD mismatch.
+- Wired into `PromptBuilder` via `with_context_index()`. Index built at session start in `run_session()`. Relevant symbols section now includes "imported by" context.
+- Disk caching: `CachedIndex` struct with `head` (git HEAD SHA) + `symbols` + `edges`. `save()`, `load()`, `is_current()`. Cache at `.kirkforge/context-index/cache.json`. Rebuild on HEAD mismatch.
 
 ## Consequences
 
@@ -39,13 +43,14 @@ Build `crates/kirkforge-context-index/` — a tree-sitter-backed symbol/import/c
 - Accurate symbol extraction with proper line ranges (not just declaration line).
 - Catches inline declarations that line-based heuristics miss.
 - Model gets relevant symbols injected before every turn.
-- 5 tests pass (3 original + 2 new: inline struct, end_line) → 10 tests pass (+ 5 new: save/load roundtrip, cache hit, cache miss, head differs, from_symbols) → 15 tests pass (+ 5 new: TS function, TS class, TS interface, dir walks TS files, detect_language) → 18 tests pass (+ 3 new: Python function, Python class, dir walks .py files) → **22 tests pass (+ 4 new: Go function, Go struct, Go method, dir walks .go files).**
+- 5 tests pass (3 original + 2 new: inline struct, end_line) → 10 tests pass (+ 5 new: save/load roundtrip, cache hit, cache miss, head differs, from_symbols) → 15 tests pass (+ 5 new: TS function, TS class, TS interface, dir walks TS files, detect_language) → 18 tests pass (+ 3 new: Python function, Python class, dir walks .py files) → 22 tests pass (+ 4 new: Go function, Go struct, Go method, dir walks .go files) → **27 tests pass (+ 5 new: import edge Rust use, import edge TS relative, import edge Python from, import edge unresolvable, retrieve includes importers).**
 
 **Negative:**
 - Tree-sitter adds ~2MB to the binary size (documented tradeoff).
-- Rust + TypeScript + Python + Go — import/call-graph edges are future work.
+- Rust + TypeScript + Python + Go — call-graph edges are future work.
+- Import resolution is best-effort: bare specifiers (node_modules, PyPI packages, Go modules) are stored with `resolved_file: None`. Only relative and `crate::` imports are resolved.
 - No disk caching — index is rebuilt on every session start → **Fixed in Phase 4: cache at `.kirkforge/context-index/cache.json` with git-HEAD invalidation.**
-- No import/call-graph edges yet — retrieval is substring-only.
+- Call-graph edges not yet implemented — retrieval is substring + import-graph, not call-graph.
 
 **Neutral:**
 - Status moved from Experimental to Accepted (tree-sitter integration proved feasible).

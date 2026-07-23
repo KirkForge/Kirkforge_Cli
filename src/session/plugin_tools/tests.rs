@@ -69,7 +69,7 @@ async fn sandbox_uses_configured_sandbox_dir() {
     std::fs::create_dir_all(&sandbox).unwrap();
     {
         let mut cfg = cfg.write().unwrap();
-        cfg.sandbox_dir = Some(sandbox.to_string_lossy().to_string());
+        cfg.security.sandbox_dir = Some(sandbox.to_string_lossy().to_string());
     }
 
     // Replace the script with one that prints its cwd.
@@ -117,7 +117,7 @@ async fn sandbox_uses_current_dir_when_sandbox_dir_empty() {
         // Explicit empty string is the "unsandboxed" escape hatch, but
         // plugin tools must still run in the user's cwd, not the plugin
         // installation directory.
-        cfg.sandbox_dir = Some(String::new());
+        cfg.security.sandbox_dir = Some(String::new());
     }
 
     let plugin_dir = reg
@@ -283,16 +283,13 @@ prompt = "hello"
     )
     .unwrap();
 
-    let cfg = Config {
-        plugin_sources: {
-            let mut m = std::collections::HashMap::new();
-            m.insert("workspace-demo".to_string(), source_dir.clone());
-            m
-        },
-        enabled_plugins: vec!["workspace-demo".to_string()],
-        seed: None,
-        ..Config::default()
+    let mut cfg = Config::default();
+    cfg.tools.plugin_sources = {
+        let mut m = std::collections::HashMap::new();
+        m.insert("workspace-demo".to_string(), source_dir.clone());
+        m
     };
+    cfg.tools.enabled_plugins = vec!["workspace-demo".to_string()];
 
     let mut registry = PluginRegistry::new();
     let warnings = load_workspace_plugins(&mut registry, &cfg);
@@ -302,16 +299,13 @@ prompt = "hello"
 
 #[test]
 fn load_workspace_plugins_warns_for_missing_source() {
-    let cfg = Config {
-        plugin_sources: {
-            let mut m = std::collections::HashMap::new();
-            m.insert("missing".to_string(), PathBuf::from("/does/not/exist"));
-            m
-        },
-        enabled_plugins: vec!["missing".to_string()],
-        seed: None,
-        ..Config::default()
+    let mut cfg = Config::default();
+    cfg.tools.plugin_sources = {
+        let mut m = std::collections::HashMap::new();
+        m.insert("missing".to_string(), PathBuf::from("/does/not/exist"));
+        m
     };
+    cfg.tools.enabled_plugins = vec!["missing".to_string()];
 
     let mut registry = PluginRegistry::new();
     let warnings = load_workspace_plugins(&mut registry, &cfg);
@@ -436,14 +430,11 @@ command = "hello.sh"
     }
 
     let _guard = DataDirGuard::set(&tmp.path().to_string_lossy());
-    let cfg = Config {
-        plugin_sources: [("demo".to_string(), PathBuf::from("/nonexistent/demo"))]
-            .into_iter()
-            .collect(),
-        enabled_plugins: vec!["demo".to_string()],
-        seed: None,
-        ..Config::default()
-    };
+    let mut cfg = Config::default();
+    cfg.tools.plugin_sources = [("demo".to_string(), PathBuf::from("/nonexistent/demo"))]
+        .into_iter()
+        .collect();
+    cfg.tools.enabled_plugins = vec!["demo".to_string()];
 
     let mut registry = PluginRegistry::new();
     let warnings = load_workspace_plugins(&mut registry, &cfg);
@@ -691,17 +682,14 @@ fn default_plugin_sources_are_present_and_loadable() {
     let base = Config::default();
     for name in expected {
         assert!(
-            base.plugin_sources.contains_key(name),
+            base.tools.plugin_sources.contains_key(name),
             "built-in plugin source '{name}' is missing from default config"
         );
     }
 
-    let cfg = Config {
-        plugin_sources: base.plugin_sources,
-        enabled_plugins: expected.iter().map(|s| s.to_string()).collect(),
-        seed: None,
-        ..Config::default()
-    };
+    let mut cfg = Config::default();
+    cfg.tools.plugin_sources = base.tools.plugin_sources;
+    cfg.tools.enabled_plugins = expected.iter().map(|s| s.to_string()).collect();
 
     let mut registry = PluginRegistry::new();
     let warnings = load_workspace_plugins(&mut registry, &cfg);

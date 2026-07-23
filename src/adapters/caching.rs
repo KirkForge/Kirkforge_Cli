@@ -17,9 +17,9 @@ use crate::shared::{Config, Message, ModelInfo, StreamEvent, ToolDef};
 /// Returns the adapter unchanged when caching is disabled, so callers don't
 /// have to branch on `Config::cache_enabled`.
 pub fn maybe_wrap_cached(adapter: Box<dyn ModelAdapter>, config: &Config) -> Box<dyn ModelAdapter> {
-    if config.cache_enabled {
-        let cache = ResponseCache::new(true, config.cache_dir.clone());
-        Box::new(CachingAdapter::new(adapter, cache, config.json_mode))
+    if config.model.cache_enabled {
+        let cache = ResponseCache::new(true, config.model.cache_dir.clone());
+        Box::new(CachingAdapter::new(adapter, cache, config.model.json_mode))
     } else {
         adapter
     }

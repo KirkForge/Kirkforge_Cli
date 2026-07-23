@@ -120,7 +120,10 @@ impl Executor {
         // guard across the mutable self borrows below.
         let (auto_approve, permission_rules) = {
             let cfg = read_shared_config(&self.config);
-            (cfg.auto_approve, cfg.permission_rules.clone())
+            (
+                cfg.security.auto_approve,
+                cfg.security.permission_rules.clone(),
+            )
         };
         let is_destructive = matches!(tc.name.as_str(), "write_file" | "edit_file" | "bash");
 
@@ -428,7 +431,7 @@ impl Executor {
                     let ctx = self.tool_context_for_call(cancelled);
                     let timeout = self.tool_call_timeout();
                     let max_tool_result_chars =
-                        read_shared_config(&self.config).max_tool_result_chars;
+                        read_shared_config(&self.config).tools.max_tool_result_chars;
                     let tool_start = Instant::now();
                     let outcome = tokio::time::timeout(timeout, tool.run(&ctx, run_args.clone()))
                         .await
@@ -523,7 +526,9 @@ impl Executor {
             // call (and the pre/post tool hooks) see the override. The
             // check function below rejects an explicit workdir that
             // points outside the sandbox.
-            let bash_sandbox_workdir = read_shared_config(&self.config).bash_sandbox_workdir;
+            let bash_sandbox_workdir = read_shared_config(&self.config)
+                .security
+                .bash_sandbox_workdir;
             if bash_sandbox_workdir
                 && self.path_guard.sandbox_dir.is_some()
                 && tc
@@ -686,7 +691,7 @@ impl Executor {
         } else {
             (None, None, None)
         };
-        let max_tool_result_chars = read_shared_config(&self.config).max_tool_result_chars;
+        let max_tool_result_chars = read_shared_config(&self.config).tools.max_tool_result_chars;
         let outcome_for_emit = if tc.name == "bash" || max_tool_result_chars > 0 {
             truncate_tool_output(outcome, max_tool_result_chars)
         } else {

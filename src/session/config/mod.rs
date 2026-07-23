@@ -199,7 +199,7 @@ pub fn save_config(config: &Config) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Resolve the launch-time cwd and assign it to `config.sandbox_dir` if
+/// Resolve the launch-time cwd and assign it to `config.security.sandbox_dir` if
 /// the operator hasn't already set one explicitly.
 ///
 /// Review.md arch concern #3: `Config::default()` previously called
@@ -215,21 +215,21 @@ pub fn save_config(config: &Config) -> anyhow::Result<()> {
 /// surface the situation to the user.
 ///
 /// Honours the explicit-escape-hatch policy: an empty string in
-/// `config.sandbox_dir` means "intentionally unsandboxed," and we
+/// `config.security.sandbox_dir` means "intentionally unsandboxed," and we
 /// do not overwrite it. Only the `None` case (operator didn't set
 /// the field) is filled in.
 pub fn freeze_launch_sandbox(config: &mut Config) -> Option<String> {
-    if config.sandbox_dir.is_some() {
+    if config.security.sandbox_dir.is_some() {
         // Operator already set it (via config file, env var, or
         // an earlier `KIRKFORGE_SANDBOX_DIR` override). Respect
         // their choice — even if it's an explicit empty string
         // meaning "unsandboxed."
-        return config.sandbox_dir.clone();
+        return config.security.sandbox_dir.clone();
     }
     match std::env::current_dir() {
         Ok(cwd) => {
             let path = cwd.to_string_lossy().to_string();
-            config.sandbox_dir = Some(path.clone());
+            config.security.sandbox_dir = Some(path.clone());
             Some(path)
         }
         Err(_) => {
@@ -254,117 +254,117 @@ fn merge_toml_into_config(cfg: &mut Config, table: toml::Table) {
     use toml::Value;
 
     if let Some(Value::String(v)) = table.get("default_model") {
-        cfg.default_model = v.clone();
+        cfg.model.default_model = v.clone();
     }
     if let Some(Value::String(v)) = table.get("ollama_host") {
-        cfg.ollama_host = v.clone();
+        cfg.model.ollama_host = v.clone();
     }
     if let Some(Value::Boolean(v)) = table.get("auto_approve") {
-        cfg.auto_approve = *v;
+        cfg.security.auto_approve = *v;
     }
     if let Some(Value::String(v)) = table.get("sandbox_dir") {
-        cfg.sandbox_dir = Some(expand_tilde_str(v));
+        cfg.security.sandbox_dir = Some(expand_tilde_str(v));
     }
     if let Some(Value::Boolean(v)) = table.get("block_dotfiles") {
-        cfg.block_dotfiles = *v;
+        cfg.security.block_dotfiles = *v;
     }
     if let Some(Value::Integer(v)) = table.get("max_file_read_size") {
         if let Ok(n) = usize::try_from(*v) {
-            cfg.max_file_read_size = n;
+            cfg.security.max_file_read_size = n;
         }
     }
     if let Some(Value::Integer(v)) = table.get("request_timeout_secs") {
         if let Ok(n) = u64::try_from(*v) {
-            cfg.request_timeout_secs = n.max(1);
+            cfg.model.request_timeout_secs = n.max(1);
         }
     }
     if let Some(Value::Boolean(v)) = table.get("follow_symlinks") {
-        cfg.follow_symlinks = *v;
+        cfg.tools.follow_symlinks = *v;
     }
     if let Some(Value::Boolean(v)) = table.get("block_binary_reads") {
-        cfg.block_binary_reads = *v;
+        cfg.tools.block_binary_reads = *v;
     }
     if let Some(Value::Boolean(v)) = table.get("minify_write_side") {
-        cfg.minify_write_side = *v;
+        cfg.tools.minify_write_side = *v;
     }
     if let Some(Value::Boolean(v)) = table.get("scheduled_bash_auto_approve") {
-        cfg.scheduled_bash_auto_approve = *v;
+        cfg.tools.scheduled_bash_auto_approve = *v;
     }
     if let Some(Value::Integer(v)) = table.get("max_concurrent_scheduled_jobs") {
-        cfg.max_concurrent_scheduled_jobs = (*v as usize).max(1);
+        cfg.tools.max_concurrent_scheduled_jobs = (*v as usize).max(1);
     }
     if let Some(Value::Boolean(v)) = table.get("carryover_enabled") {
-        cfg.carryover_enabled = *v;
+        cfg.session.carryover_enabled = *v;
     }
     if let Some(Value::Boolean(v)) = table.get("dry_run") {
-        cfg.dry_run = *v;
+        cfg.tools.dry_run = *v;
     }
     if let Some(Value::Boolean(v)) = table.get("cache_enabled") {
-        cfg.cache_enabled = *v;
+        cfg.model.cache_enabled = *v;
     }
     if let Some(Value::String(v)) = table.get("cache_dir") {
-        cfg.cache_dir = Some(PathBuf::from(expand_tilde_str(v)));
+        cfg.model.cache_dir = Some(PathBuf::from(expand_tilde_str(v)));
     }
     if let Some(Value::Boolean(v)) = table.get("bang_requires_approval") {
-        cfg.bang_requires_approval = *v;
+        cfg.security.bang_requires_approval = *v;
     }
     if let Some(Value::Boolean(v)) = table.get("json_mode") {
-        cfg.json_mode = *v;
+        cfg.model.json_mode = *v;
     }
     if let Some(Value::Boolean(v)) = table.get("bash_sandbox_workdir") {
-        cfg.bash_sandbox_workdir = *v;
+        cfg.security.bash_sandbox_workdir = *v;
     }
     if let Some(Value::Boolean(v)) = table.get("block_gitignored_dotfiles") {
-        cfg.block_gitignored_dotfiles = *v;
+        cfg.security.block_gitignored_dotfiles = *v;
     }
     if let Some(Value::Integer(v)) = table.get("max_overwrite_size") {
         if let Ok(n) = usize::try_from(*v) {
-            cfg.max_overwrite_size = n;
+            cfg.security.max_overwrite_size = n;
         }
     }
     if let Some(Value::String(v)) = table.get("summarize_model") {
-        cfg.summarize_model = v.clone();
+        cfg.model.summarize_model = v.clone();
     }
     if let Some(Value::Boolean(v)) = table.get("routing_enabled") {
-        cfg.routing_enabled = *v;
+        cfg.model.routing_enabled = *v;
     }
     if let Some(Value::String(v)) = table.get("router_model") {
-        cfg.router_model = v.clone();
+        cfg.model.router_model = v.clone();
     }
     if let Some(Value::Table(v)) = table.get("routing_model_map") {
-        cfg.routing_model_map = v
+        cfg.model.routing_model_map = v
             .iter()
             .filter_map(|(k, val)| val.as_str().map(|s| (k.clone(), s.to_string())))
             .collect();
     }
     if let Some(Value::Integer(v)) = table.get("commit_max_file_size") {
         if let Ok(n) = u64::try_from(*v) {
-            cfg.commit_max_file_size = n;
+            cfg.security.commit_max_file_size = n;
         }
     }
     if let Some(Value::Integer(v)) = table.get("preserve_recent_messages") {
-        cfg.preserve_recent_messages = (*v).max(1) as usize;
+        cfg.session.preserve_recent_messages = (*v).max(1) as usize;
     }
     if let Some(Value::Integer(v)) = table.get("max_tool_calls_per_turn") {
-        cfg.max_tool_calls_per_turn = (*v).max(1) as usize;
+        cfg.tools.max_tool_calls_per_turn = (*v).max(1) as usize;
     }
     if let Some(Value::Integer(v)) = table.get("max_persona_turns") {
-        cfg.max_persona_turns = (*v).max(1) as usize;
+        cfg.tools.max_persona_turns = (*v).max(1) as usize;
     }
     if let Some(Value::Integer(v)) = table.get("tool_timeout_secs") {
         if let Ok(n) = u64::try_from(*v) {
-            cfg.tool_timeout_secs = Some(n.clamp(1, 3600));
+            cfg.tools.tool_timeout_secs = Some(n.clamp(1, 3600));
         }
     }
     if let Some(Value::String(v)) = table.get("audit_log_path") {
-        cfg.audit_log_path = if v.is_empty() {
+        cfg.security.audit_log_path = if v.is_empty() {
             None
         } else {
             Some(PathBuf::from(expand_tilde_str(v)))
         };
     }
     if let Some(Value::String(v)) = table.get("hooks_dir") {
-        cfg.hooks_dir = if v.is_empty() {
+        cfg.tools.hooks_dir = if v.is_empty() {
             None
         } else {
             Some(PathBuf::from(expand_tilde_str(v)))
@@ -373,20 +373,20 @@ fn merge_toml_into_config(cfg: &mut Config, table: toml::Table) {
 
     // Plugin trust / sandbox knobs
     if let Some(Value::Boolean(v)) = table.get("reject_on_excess_plugin_trust") {
-        cfg.reject_on_excess_plugin_trust = *v;
+        cfg.tools.reject_on_excess_plugin_trust = *v;
     }
     if let Some(Value::Boolean(v)) = table.get("plugin_signature_validation") {
-        cfg.plugin_signature_validation = *v;
+        cfg.tools.plugin_signature_validation = *v;
     }
     if let Some(Value::String(v)) = table.get("plugin_public_key_path") {
-        cfg.plugin_public_key_path = if v.is_empty() {
+        cfg.tools.plugin_public_key_path = if v.is_empty() {
             None
         } else {
             Some(expand_tilde_str(v))
         };
     }
     if let Some(Value::Array(v)) = table.get("plugin_allowed_env_vars") {
-        cfg.plugin_allowed_env_vars = v
+        cfg.tools.plugin_allowed_env_vars = v
             .iter()
             .filter_map(|v| v.as_str().map(String::from))
             .collect();
@@ -394,27 +394,27 @@ fn merge_toml_into_config(cfg: &mut Config, table: toml::Table) {
 
     // Memory knobs
     if let Some(Value::Boolean(v)) = table.get("memory_enabled") {
-        cfg.memory_enabled = *v;
+        cfg.display.memory_enabled = *v;
     }
     if let Some(Value::Integer(v)) = table.get("memory_max_tokens") {
-        cfg.memory_max_tokens = (*v).max(1) as usize;
+        cfg.display.memory_max_tokens = (*v).max(1) as usize;
     }
     if let Some(Value::Integer(v)) = table.get("memory_top_n") {
-        cfg.memory_top_n = (*v).max(1) as usize;
+        cfg.display.memory_top_n = (*v).max(1) as usize;
     }
     if let Some(Value::Integer(v)) = table.get("checkpoint_interval_messages") {
-        cfg.checkpoint_interval_messages = (*v).max(0) as usize;
+        cfg.session.checkpoint_interval_messages = (*v).max(0) as usize;
     }
 
     // Workspace plugin sources
     if let Some(Value::Table(v)) = table.get("plugin_sources") {
-        cfg.plugin_sources = v
+        cfg.tools.plugin_sources = v
             .iter()
             .filter_map(|(k, val)| val.as_str().map(|s| (k.clone(), PathBuf::from(s))))
             .collect();
     }
     if let Some(Value::Array(v)) = table.get("enabled_plugins") {
-        cfg.enabled_plugins = v
+        cfg.tools.enabled_plugins = v
             .iter()
             .filter_map(|v| v.as_str().map(String::from))
             .collect();
@@ -422,22 +422,22 @@ fn merge_toml_into_config(cfg: &mut Config, table: toml::Table) {
 
     // Anthropic cloud-provider routing
     if let Some(Value::String(v)) = table.get("anthropic_provider") {
-        cfg.anthropic_provider = v.clone();
+        cfg.model.anthropic_provider = v.clone();
     }
     if let Some(Value::String(v)) = table.get("aws_region") {
-        cfg.aws_region = v.clone();
+        cfg.model.aws_region = v.clone();
     }
     if let Some(Value::String(v)) = table.get("aws_profile") {
-        cfg.aws_profile = v.clone();
+        cfg.model.aws_profile = v.clone();
     }
     if let Some(Value::String(v)) = table.get("gcp_project_id") {
-        cfg.gcp_project_id = v.clone();
+        cfg.model.gcp_project_id = v.clone();
     }
     if let Some(Value::String(v)) = table.get("gcp_region") {
-        cfg.gcp_region = v.clone();
+        cfg.model.gcp_region = v.clone();
     }
     if let Some(Value::String(v)) = table.get("gcp_service_account_path") {
-        cfg.gcp_service_account_path = if v.is_empty() {
+        cfg.model.gcp_service_account_path = if v.is_empty() {
             None
         } else {
             Some(PathBuf::from(expand_tilde_str(v)))
@@ -447,53 +447,53 @@ fn merge_toml_into_config(cfg: &mut Config, table: toml::Table) {
     // Computer-use tool config
     if let Some(Value::Table(v)) = table.get("computer_use") {
         if let Some(Value::Boolean(b)) = v.get("enabled") {
-            cfg.computer_use.enabled = *b;
+            cfg.security.computer_use.enabled = *b;
         }
         if let Some(Value::String(s)) = v.get("chrome_path") {
-            cfg.computer_use.chrome_path = if s.is_empty() {
+            cfg.security.computer_use.chrome_path = if s.is_empty() {
                 None
             } else {
                 Some(PathBuf::from(expand_tilde_str(s)))
             };
         }
         if let Some(Value::Boolean(b)) = v.get("headful") {
-            cfg.computer_use.headful = *b;
+            cfg.security.computer_use.headful = *b;
         }
         if let Some(Value::Integer(n)) = v.get("width") {
-            cfg.computer_use.width = (*n).max(1) as u32;
+            cfg.security.computer_use.width = (*n).max(1) as u32;
         }
         if let Some(Value::Integer(n)) = v.get("height") {
-            cfg.computer_use.height = (*n).max(1) as u32;
+            cfg.security.computer_use.height = (*n).max(1) as u32;
         }
         if let Some(Value::Integer(n)) = v.get("startup_timeout_secs") {
-            cfg.computer_use.startup_timeout_secs = (*n).max(1) as u64;
+            cfg.security.computer_use.startup_timeout_secs = (*n).max(1) as u64;
         }
         if let Some(Value::Integer(n)) = v.get("wait_timeout_secs") {
-            cfg.computer_use.wait_timeout_secs = (*n).max(1) as u64;
+            cfg.security.computer_use.wait_timeout_secs = (*n).max(1) as u64;
         }
     }
 
     // Arrays
     if let Some(Value::Array(v)) = table.get("deny_paths") {
-        cfg.deny_paths = v
+        cfg.security.deny_paths = v
             .iter()
             .filter_map(|v| v.as_str().map(expand_tilde_str))
             .collect();
     }
     if let Some(Value::Array(v)) = table.get("deny_urls") {
-        cfg.deny_urls = v
+        cfg.security.deny_urls = v
             .iter()
             .filter_map(|v| v.as_str().map(String::from))
             .collect();
     }
     if let Some(Value::Array(v)) = table.get("deny_extensions") {
-        cfg.deny_extensions = v
+        cfg.security.deny_extensions = v
             .iter()
             .filter_map(|v| v.as_str().map(String::from))
             .collect();
     }
     if let Some(Value::Array(v)) = table.get("allowed_write_dirs") {
-        cfg.allowed_write_dirs = v
+        cfg.security.allowed_write_dirs = v
             .iter()
             .filter_map(|v| v.as_str().map(expand_tilde_str))
             .collect();
@@ -505,115 +505,118 @@ fn merge_toml_into_config(cfg: &mut Config, table: toml::Table) {
 /// summary is suitable for display in the TUI.
 pub fn config_diff_summary(before: &Config, after: &Config) -> String {
     let mut diffs: Vec<String> = Vec::new();
-    if before.default_model != after.default_model {
+    if before.model.default_model != after.model.default_model {
         diffs.push(format!(
             "default_model: {} → {}",
-            before.default_model, after.default_model
+            before.model.default_model, after.model.default_model
         ));
     }
-    if before.ollama_host != after.ollama_host {
+    if before.model.ollama_host != after.model.ollama_host {
         diffs.push(format!(
             "ollama_host: {} → {}",
-            before.ollama_host, after.ollama_host
+            before.model.ollama_host, after.model.ollama_host
         ));
     }
-    if before.auto_approve != after.auto_approve {
+    if before.security.auto_approve != after.security.auto_approve {
         diffs.push(format!(
             "auto_approve: {} → {}",
-            before.auto_approve, after.auto_approve
+            before.security.auto_approve, after.security.auto_approve
         ));
     }
-    if before.bang_requires_approval != after.bang_requires_approval {
+    if before.security.bang_requires_approval != after.security.bang_requires_approval {
         diffs.push(format!(
             "bang_requires_approval: {} → {}",
-            before.bang_requires_approval, after.bang_requires_approval
+            before.security.bang_requires_approval, after.security.bang_requires_approval
         ));
     }
-    if before.dry_run != after.dry_run {
-        diffs.push(format!("dry_run: {} → {}", before.dry_run, after.dry_run));
+    if before.tools.dry_run != after.tools.dry_run {
+        diffs.push(format!(
+            "dry_run: {} → {}",
+            before.tools.dry_run, after.tools.dry_run
+        ));
     }
-    if before.cache_enabled != after.cache_enabled {
+    if before.model.cache_enabled != after.model.cache_enabled {
         diffs.push(format!(
             "cache_enabled: {} → {}",
-            before.cache_enabled, after.cache_enabled
+            before.model.cache_enabled, after.model.cache_enabled
         ));
     }
-    if before.sandbox_dir != after.sandbox_dir {
+    if before.security.sandbox_dir != after.security.sandbox_dir {
         diffs.push(format!(
             "sandbox_dir: {:?} → {:?}",
-            before.sandbox_dir, after.sandbox_dir
+            before.security.sandbox_dir, after.security.sandbox_dir
         ));
     }
-    if before.routing_enabled != after.routing_enabled {
+    if before.model.routing_enabled != after.model.routing_enabled {
         diffs.push(format!(
             "routing_enabled: {} → {}",
-            before.routing_enabled, after.routing_enabled
+            before.model.routing_enabled, after.model.routing_enabled
         ));
     }
-    if before.summarize_enabled != after.summarize_enabled {
+    if before.model.summarize_enabled != after.model.summarize_enabled {
         diffs.push(format!(
             "summarize_enabled: {} → {}",
-            before.summarize_enabled, after.summarize_enabled
+            before.model.summarize_enabled, after.model.summarize_enabled
         ));
     }
-    if before.reject_on_excess_plugin_trust != after.reject_on_excess_plugin_trust {
+    if before.tools.reject_on_excess_plugin_trust != after.tools.reject_on_excess_plugin_trust {
         diffs.push(format!(
             "reject_on_excess_plugin_trust: {} → {}",
-            before.reject_on_excess_plugin_trust, after.reject_on_excess_plugin_trust
+            before.tools.reject_on_excess_plugin_trust, after.tools.reject_on_excess_plugin_trust
         ));
     }
-    if before.plugin_signature_validation != after.plugin_signature_validation {
+    if before.tools.plugin_signature_validation != after.tools.plugin_signature_validation {
         diffs.push(format!(
             "plugin_signature_validation: {} → {}",
-            before.plugin_signature_validation, after.plugin_signature_validation
+            before.tools.plugin_signature_validation, after.tools.plugin_signature_validation
         ));
     }
-    if before.plugin_public_key_path != after.plugin_public_key_path {
+    if before.tools.plugin_public_key_path != after.tools.plugin_public_key_path {
         diffs.push(format!(
             "plugin_public_key_path: {:?} → {:?}",
-            before.plugin_public_key_path, after.plugin_public_key_path
+            before.tools.plugin_public_key_path, after.tools.plugin_public_key_path
         ));
     }
-    if before.memory_enabled != after.memory_enabled {
+    if before.display.memory_enabled != after.display.memory_enabled {
         diffs.push(format!(
             "memory_enabled: {} → {}",
-            before.memory_enabled, after.memory_enabled
+            before.display.memory_enabled, after.display.memory_enabled
         ));
     }
-    if before.memory_max_tokens != after.memory_max_tokens {
+    if before.display.memory_max_tokens != after.display.memory_max_tokens {
         diffs.push(format!(
             "memory_max_tokens: {} → {}",
-            before.memory_max_tokens, after.memory_max_tokens
+            before.display.memory_max_tokens, after.display.memory_max_tokens
         ));
     }
-    if before.memory_top_n != after.memory_top_n {
+    if before.display.memory_top_n != after.display.memory_top_n {
         diffs.push(format!(
             "memory_top_n: {} → {}",
-            before.memory_top_n, after.memory_top_n
+            before.display.memory_top_n, after.display.memory_top_n
         ));
     }
-    if before.checkpoint_interval_messages != after.checkpoint_interval_messages {
+    if before.session.checkpoint_interval_messages != after.session.checkpoint_interval_messages {
         diffs.push(format!(
             "checkpoint_interval_messages: {} → {}",
-            before.checkpoint_interval_messages, after.checkpoint_interval_messages
+            before.session.checkpoint_interval_messages, after.session.checkpoint_interval_messages
         ));
     }
-    if before.enabled_plugins != after.enabled_plugins {
+    if before.tools.enabled_plugins != after.tools.enabled_plugins {
         diffs.push(format!(
             "enabled_plugins: {:?} → {:?}",
-            before.enabled_plugins, after.enabled_plugins
+            before.tools.enabled_plugins, after.tools.enabled_plugins
         ));
     }
-    if before.anthropic_provider != after.anthropic_provider {
+    if before.model.anthropic_provider != after.model.anthropic_provider {
         diffs.push(format!(
             "anthropic_provider: {} → {}",
-            before.anthropic_provider, after.anthropic_provider
+            before.model.anthropic_provider, after.model.anthropic_provider
         ));
     }
-    if before.computer_use.enabled != after.computer_use.enabled {
+    if before.security.computer_use.enabled != after.security.computer_use.enabled {
         diffs.push(format!(
             "computer_use.enabled: {} → {}",
-            before.computer_use.enabled, after.computer_use.enabled
+            before.security.computer_use.enabled, after.security.computer_use.enabled
         ));
     }
     diffs.join(", ")
@@ -668,13 +671,13 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
         assert!(
-            cfg.default_model.is_empty(),
+            cfg.model.default_model.is_empty(),
             "default_model is empty by default; configure it explicitly"
         );
 
         set_env("KIRKFORGE_MODEL", Some("deepseek-v4:cloud"));
         apply_env_overrides(&mut cfg);
-        assert_eq!(cfg.default_model, "deepseek-v4:cloud");
+        assert_eq!(cfg.model.default_model, "deepseek-v4:cloud");
         set_env("KIRKFORGE_MODEL", None);
     }
 
@@ -682,26 +685,23 @@ mod tests {
     fn test_env_auto_approve_true() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
-        assert!(!cfg.auto_approve);
+        assert!(!cfg.security.auto_approve);
 
         set_env("KIRKFORGE_AUTO_APPROVE", Some("true"));
         apply_env_overrides(&mut cfg);
-        assert!(cfg.auto_approve);
+        assert!(cfg.security.auto_approve);
         set_env("KIRKFORGE_AUTO_APPROVE", None);
     }
 
     #[test]
     fn test_env_auto_approve_false() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let mut cfg = Config {
-            auto_approve: true,
-            seed: None,
-            ..Default::default()
-        };
+        let mut cfg = Config::default();
+        cfg.security.auto_approve = true;
 
         set_env("KIRKFORGE_AUTO_APPROVE", Some("false"));
         apply_env_overrides(&mut cfg);
-        assert!(!cfg.auto_approve);
+        assert!(!cfg.security.auto_approve);
         set_env("KIRKFORGE_AUTO_APPROVE", None);
     }
 
@@ -709,26 +709,23 @@ mod tests {
     fn test_env_dry_run_true() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
-        assert!(!cfg.dry_run);
+        assert!(!cfg.tools.dry_run);
 
         set_env("KIRKFORGE_DRY_RUN", Some("true"));
         apply_env_overrides(&mut cfg);
-        assert!(cfg.dry_run);
+        assert!(cfg.tools.dry_run);
         set_env("KIRKFORGE_DRY_RUN", None);
     }
 
     #[test]
     fn test_env_dry_run_false() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let mut cfg = Config {
-            dry_run: true,
-            seed: None,
-            ..Default::default()
-        };
+        let mut cfg = Config::default();
+        cfg.tools.dry_run = true;
 
         set_env("KIRKFORGE_DRY_RUN", Some("false"));
         apply_env_overrides(&mut cfg);
-        assert!(!cfg.dry_run);
+        assert!(!cfg.tools.dry_run);
         set_env("KIRKFORGE_DRY_RUN", None);
     }
 
@@ -738,7 +735,7 @@ mod tests {
         let mut cfg = Config::default();
         set_env("KIRKFORGE_BLOCK_DOTFILES", Some("true"));
         apply_env_overrides(&mut cfg);
-        assert!(cfg.block_dotfiles);
+        assert!(cfg.security.block_dotfiles);
         set_env("KIRKFORGE_BLOCK_DOTFILES", None);
     }
 
@@ -748,7 +745,7 @@ mod tests {
         let mut cfg = Config::default();
         set_env("KIRKFORGE_FOLLOW_SYMLINKS", Some("true"));
         apply_env_overrides(&mut cfg);
-        assert!(cfg.follow_symlinks);
+        assert!(cfg.tools.follow_symlinks);
         set_env("KIRKFORGE_FOLLOW_SYMLINKS", None);
     }
 
@@ -758,7 +755,7 @@ mod tests {
         let mut cfg = Config::default();
         set_env("KIRKFORGE_BLOCK_BINARY", Some("true"));
         apply_env_overrides(&mut cfg);
-        assert!(cfg.block_binary_reads);
+        assert!(cfg.tools.block_binary_reads);
         set_env("KIRKFORGE_BLOCK_BINARY", None);
     }
 
@@ -766,10 +763,10 @@ mod tests {
     fn test_env_minify_write_side() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
-        assert!(!cfg.minify_write_side);
+        assert!(!cfg.tools.minify_write_side);
         set_env("KIRKFORGE_MINIFY_WRITE_SIDE", Some("true"));
         apply_env_overrides(&mut cfg);
-        assert!(cfg.minify_write_side);
+        assert!(cfg.tools.minify_write_side);
         set_env("KIRKFORGE_MINIFY_WRITE_SIDE", None);
     }
 
@@ -779,7 +776,7 @@ mod tests {
         let mut cfg = Config::default();
         set_env("KIRKFORGE_MAX_READ_SIZE", Some("65536"));
         apply_env_overrides(&mut cfg);
-        assert_eq!(cfg.max_file_read_size, 65536);
+        assert_eq!(cfg.security.max_file_read_size, 65536);
         set_env("KIRKFORGE_MAX_READ_SIZE", None);
     }
 
@@ -789,7 +786,7 @@ mod tests {
         let mut cfg = Config::default();
         set_env("KIRKFORGE_MAX_READ_SIZE", Some("not-a-number"));
         apply_env_overrides(&mut cfg);
-        assert_eq!(cfg.max_file_read_size, 1024 * 1024);
+        assert_eq!(cfg.security.max_file_read_size, 1024 * 1024);
         set_env("KIRKFORGE_MAX_READ_SIZE", None);
     }
 
@@ -804,20 +801,20 @@ mod tests {
         .unwrap();
         merge_toml_into_config(&mut cfg, table);
 
-        assert_eq!(cfg.default_model, "custom-model");
-        assert_eq!(cfg.max_file_read_size, 512);
+        assert_eq!(cfg.model.default_model, "custom-model");
+        assert_eq!(cfg.security.max_file_read_size, 512);
         // Unset fields keep defaults (now empty placeholders)
         assert!(
-            cfg.ollama_host.is_empty(),
+            cfg.model.ollama_host.is_empty(),
             "ollama_host is empty by default; configure it explicitly"
         );
-        assert!(!cfg.auto_approve);
+        assert!(!cfg.security.auto_approve);
     }
 
     #[test]
     fn test_merge_toml_negative_max_read_size_is_ignored() {
         let mut cfg = Config::default();
-        let default_size = cfg.max_file_read_size;
+        let default_size = cfg.security.max_file_read_size;
         let table: toml::Table = r#"
             max_file_read_size = -1
         "#
@@ -826,7 +823,7 @@ mod tests {
         merge_toml_into_config(&mut cfg, table);
 
         assert_eq!(
-            cfg.max_file_read_size, default_size,
+            cfg.security.max_file_read_size, default_size,
             "negative max_file_read_size should be ignored, not wrap to usize::MAX"
         );
     }
@@ -841,8 +838,8 @@ mod tests {
         .unwrap();
         merge_toml_into_config(&mut cfg, table);
 
-        assert_eq!(cfg.deny_paths.len(), 2);
-        assert!(cfg.deny_paths.contains(&"**/.ssh/**".into()));
+        assert_eq!(cfg.security.deny_paths.len(), 2);
+        assert!(cfg.security.deny_paths.contains(&"**/.ssh/**".into()));
     }
 
     #[test]
@@ -868,24 +865,24 @@ mod tests {
 
         apply_env_overrides(&mut cfg);
 
-        assert!(cfg.bang_requires_approval);
-        assert!(cfg.json_mode);
-        assert!(!cfg.bash_sandbox_workdir);
-        assert!(!cfg.block_gitignored_dotfiles);
-        assert_eq!(cfg.max_overwrite_size, 2_097_152);
-        assert_eq!(cfg.summarize_model, "my-summarize-model");
-        assert!(cfg.routing_enabled);
-        assert_eq!(cfg.router_model, "my-router-model");
-        assert_eq!(cfg.commit_max_file_size, 1_048_576);
-        assert_eq!(cfg.preserve_recent_messages, 5);
-        assert_eq!(cfg.max_tool_calls_per_turn, 25);
-        assert_eq!(cfg.max_persona_turns, 3);
-        assert_eq!(cfg.tool_timeout_secs, Some(60));
+        assert!(cfg.security.bang_requires_approval);
+        assert!(cfg.model.json_mode);
+        assert!(!cfg.security.bash_sandbox_workdir);
+        assert!(!cfg.security.block_gitignored_dotfiles);
+        assert_eq!(cfg.security.max_overwrite_size, 2_097_152);
+        assert_eq!(cfg.model.summarize_model, "my-summarize-model");
+        assert!(cfg.model.routing_enabled);
+        assert_eq!(cfg.model.router_model, "my-router-model");
+        assert_eq!(cfg.security.commit_max_file_size, 1_048_576);
+        assert_eq!(cfg.session.preserve_recent_messages, 5);
+        assert_eq!(cfg.tools.max_tool_calls_per_turn, 25);
+        assert_eq!(cfg.tools.max_persona_turns, 3);
+        assert_eq!(cfg.tools.tool_timeout_secs, Some(60));
         assert_eq!(
-            cfg.audit_log_path,
+            cfg.security.audit_log_path,
             Some(PathBuf::from("/tmp/kf-audit.ndjson"))
         );
-        assert_eq!(cfg.hooks_dir, Some(PathBuf::from("/tmp/kf-hooks")));
+        assert_eq!(cfg.tools.hooks_dir, Some(PathBuf::from("/tmp/kf-hooks")));
 
         set_env("KIRKFORGE_BANG_REQUIRES_APPROVAL", None);
         set_env("KIRKFORGE_JSON_MODE", None);
@@ -911,11 +908,11 @@ mod tests {
 
         set_env("KIRKFORGE_TOOL_TIMEOUT_SECS", Some("0"));
         apply_env_overrides(&mut cfg);
-        assert_eq!(cfg.tool_timeout_secs, Some(1));
+        assert_eq!(cfg.tools.tool_timeout_secs, Some(1));
 
         set_env("KIRKFORGE_TOOL_TIMEOUT_SECS", Some("7200"));
         apply_env_overrides(&mut cfg);
-        assert_eq!(cfg.tool_timeout_secs, Some(3600));
+        assert_eq!(cfg.tools.tool_timeout_secs, Some(3600));
 
         set_env("KIRKFORGE_TOOL_TIMEOUT_SECS", None);
     }
@@ -945,28 +942,28 @@ mod tests {
         .unwrap();
         merge_toml_into_config(&mut cfg, table);
 
-        assert!(cfg.bang_requires_approval);
-        assert!(cfg.json_mode);
-        assert!(!cfg.bash_sandbox_workdir);
-        assert!(!cfg.block_gitignored_dotfiles);
-        assert_eq!(cfg.max_overwrite_size, 2_097_152);
-        assert_eq!(cfg.summarize_model, "my-summarize-model");
-        assert!(cfg.routing_enabled);
-        assert_eq!(cfg.router_model, "my-router-model");
+        assert!(cfg.security.bang_requires_approval);
+        assert!(cfg.model.json_mode);
+        assert!(!cfg.security.bash_sandbox_workdir);
+        assert!(!cfg.security.block_gitignored_dotfiles);
+        assert_eq!(cfg.security.max_overwrite_size, 2_097_152);
+        assert_eq!(cfg.model.summarize_model, "my-summarize-model");
+        assert!(cfg.model.routing_enabled);
+        assert_eq!(cfg.model.router_model, "my-router-model");
         assert_eq!(
-            cfg.routing_model_map.get("simple"),
+            cfg.model.routing_model_map.get("simple"),
             Some(&"glm-5.2:cloud".to_string())
         );
-        assert_eq!(cfg.commit_max_file_size, 1_048_576);
-        assert_eq!(cfg.preserve_recent_messages, 5);
-        assert_eq!(cfg.max_tool_calls_per_turn, 25);
-        assert_eq!(cfg.max_persona_turns, 3);
-        assert_eq!(cfg.tool_timeout_secs, Some(60));
+        assert_eq!(cfg.security.commit_max_file_size, 1_048_576);
+        assert_eq!(cfg.session.preserve_recent_messages, 5);
+        assert_eq!(cfg.tools.max_tool_calls_per_turn, 25);
+        assert_eq!(cfg.tools.max_persona_turns, 3);
+        assert_eq!(cfg.tools.tool_timeout_secs, Some(60));
         assert_eq!(
-            cfg.audit_log_path,
+            cfg.security.audit_log_path,
             Some(PathBuf::from("/tmp/kf-audit.ndjson"))
         );
-        assert_eq!(cfg.hooks_dir, Some(PathBuf::from("/tmp/kf-hooks")));
+        assert_eq!(cfg.tools.hooks_dir, Some(PathBuf::from("/tmp/kf-hooks")));
     }
 
     #[test]
@@ -978,7 +975,7 @@ mod tests {
         .parse()
         .unwrap();
         merge_toml_into_config(&mut cfg, table);
-        assert_eq!(cfg.tool_timeout_secs, Some(3600));
+        assert_eq!(cfg.tools.tool_timeout_secs, Some(3600));
     }
 
     /// `freeze_launch_sandbox` is the new launch-time cwd resolution
@@ -993,12 +990,12 @@ mod tests {
     #[test]
     fn test_freeze_launch_sandbox_fills_in_cwd() {
         let mut cfg = Config::default();
-        assert!(cfg.sandbox_dir.is_none());
+        assert!(cfg.security.sandbox_dir.is_none());
         let resolved = freeze_launch_sandbox(&mut cfg);
         // The test runner always has a cwd.
         assert!(resolved.is_some(), "test cwd is always present");
         let resolved = resolved.unwrap();
-        assert_eq!(cfg.sandbox_dir.as_deref(), Some(resolved.as_str()));
+        assert_eq!(cfg.security.sandbox_dir.as_deref(), Some(resolved.as_str()));
     }
 
     /// The explicit-escape-hatch contract: if the operator set
@@ -1007,14 +1004,11 @@ mod tests {
     /// This is the policy that lets operators opt out of sandboxing.
     #[test]
     fn test_freeze_launch_sandbox_does_not_overwrite_explicit_empty() {
-        let mut cfg = Config {
-            sandbox_dir: Some(String::new()),
-            seed: None,
-            ..Config::default()
-        };
+        let mut cfg = Config::default();
+        cfg.security.sandbox_dir = Some(String::new());
         let resolved = freeze_launch_sandbox(&mut cfg);
         assert_eq!(resolved.as_deref(), Some(""));
-        assert_eq!(cfg.sandbox_dir.as_deref(), Some(""));
+        assert_eq!(cfg.security.sandbox_dir.as_deref(), Some(""));
     }
 
     /// If the operator set a real path (e.g. from a config file's
@@ -1022,14 +1016,11 @@ mod tests {
     /// overwrite it with cwd. Operators win over defaults.
     #[test]
     fn test_freeze_launch_sandbox_does_not_overwrite_explicit_path() {
-        let mut cfg = Config {
-            sandbox_dir: Some("/srv/project".to_string()),
-            seed: None,
-            ..Config::default()
-        };
+        let mut cfg = Config::default();
+        cfg.security.sandbox_dir = Some("/srv/project".to_string());
         let resolved = freeze_launch_sandbox(&mut cfg);
         assert_eq!(resolved.as_deref(), Some("/srv/project"));
-        assert_eq!(cfg.sandbox_dir.as_deref(), Some("/srv/project"));
+        assert_eq!(cfg.security.sandbox_dir.as_deref(), Some("/srv/project"));
     }
 
     #[test]
@@ -1042,11 +1033,8 @@ mod tests {
     #[test]
     fn test_config_diff_summary_model_change() {
         let a = Config::default();
-        let b = Config {
-            default_model: "kimi-2.7k-coder:cloud".into(),
-            seed: None,
-            ..Config::default()
-        };
+        let mut b = Config::default();
+        b.model.default_model = "kimi-2.7k-coder:cloud".into();
         let s = config_diff_summary(&a, &b);
         assert!(s.contains("default_model"), "got: {s}");
         assert!(s.contains("→ kimi-2.7k-coder:cloud"), "got: {s}");
@@ -1055,13 +1043,10 @@ mod tests {
     #[test]
     fn test_config_diff_summary_multiple_fields() {
         let a = Config::default();
-        let b = Config {
-            default_model: "kimi-2.7k-coder:cloud".into(),
-            auto_approve: true,
-            ollama_host: "https://gateway.example.com".into(),
-            seed: None,
-            ..Config::default()
-        };
+        let mut b = Config::default();
+        b.model.default_model = "kimi-2.7k-coder:cloud".into();
+        b.security.auto_approve = true;
+        b.model.ollama_host = "https://gateway.example.com".into();
         let s = config_diff_summary(&a, &b);
         assert!(s.contains("default_model"), "got: {s}");
         assert!(s.contains("auto_approve"), "got: {s}");
@@ -1071,12 +1056,9 @@ mod tests {
     #[test]
     fn test_config_diff_summary_ignores_internal_fields() {
         let a = Config::default();
-        let b = Config {
-            deny_paths: vec!["/secret".into()],
-            allowed_write_dirs: vec!["/tmp".into()],
-            seed: None,
-            ..Config::default()
-        };
+        let mut b = Config::default();
+        b.security.deny_paths = vec!["/secret".into()];
+        b.security.allowed_write_dirs = vec!["/tmp".into()];
         let s = config_diff_summary(&a, &b);
         assert!(
             !s.contains("deny_paths") && !s.contains("allowed_write_dirs"),
@@ -1089,11 +1071,11 @@ mod tests {
     fn test_env_reject_on_excess_plugin_trust() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
-        assert!(cfg.reject_on_excess_plugin_trust);
+        assert!(cfg.tools.reject_on_excess_plugin_trust);
 
         set_env("KIRKFORGE_REJECT_ON_EXCESS_PLUGIN_TRUST", Some("false"));
         apply_env_overrides(&mut cfg);
-        assert!(!cfg.reject_on_excess_plugin_trust);
+        assert!(!cfg.tools.reject_on_excess_plugin_trust);
         set_env("KIRKFORGE_REJECT_ON_EXCESS_PLUGIN_TRUST", None);
     }
 
@@ -1101,11 +1083,11 @@ mod tests {
     fn test_env_plugin_signature_validation() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
-        assert!(!cfg.plugin_signature_validation);
+        assert!(!cfg.tools.plugin_signature_validation);
 
         set_env("KIRKFORGE_PLUGIN_SIGNATURE_VALIDATION", Some("true"));
         apply_env_overrides(&mut cfg);
-        assert!(cfg.plugin_signature_validation);
+        assert!(cfg.tools.plugin_signature_validation);
         set_env("KIRKFORGE_PLUGIN_SIGNATURE_VALIDATION", None);
     }
 
@@ -1115,7 +1097,10 @@ mod tests {
         let mut cfg = Config::default();
         set_env("KIRKFORGE_PLUGIN_PUBLIC_KEY_PATH", Some("/tmp/key.pub"));
         apply_env_overrides(&mut cfg);
-        assert_eq!(cfg.plugin_public_key_path.as_deref(), Some("/tmp/key.pub"));
+        assert_eq!(
+            cfg.tools.plugin_public_key_path.as_deref(),
+            Some("/tmp/key.pub")
+        );
         set_env("KIRKFORGE_PLUGIN_PUBLIC_KEY_PATH", None);
     }
 
@@ -1125,7 +1110,7 @@ mod tests {
         let mut cfg = Config::default();
         set_env("KIRKFORGE_PLUGIN_ALLOWED_ENV_VARS", Some("FOO,BAR"));
         apply_env_overrides(&mut cfg);
-        assert_eq!(cfg.plugin_allowed_env_vars, vec!["FOO", "BAR"]);
+        assert_eq!(cfg.tools.plugin_allowed_env_vars, vec!["FOO", "BAR"]);
         set_env("KIRKFORGE_PLUGIN_ALLOWED_ENV_VARS", None);
     }
 
@@ -1142,24 +1127,24 @@ mod tests {
         .unwrap();
         merge_toml_into_config(&mut cfg, table);
 
-        assert!(!cfg.reject_on_excess_plugin_trust);
-        assert!(cfg.plugin_signature_validation);
+        assert!(!cfg.tools.reject_on_excess_plugin_trust);
+        assert!(cfg.tools.plugin_signature_validation);
         assert_eq!(
-            cfg.plugin_public_key_path.as_deref(),
+            cfg.tools.plugin_public_key_path.as_deref(),
             Some("/opt/kirkforge/plugin.pub")
         );
-        assert_eq!(cfg.plugin_allowed_env_vars, vec!["CUSTOM_VAR"]);
+        assert_eq!(cfg.tools.plugin_allowed_env_vars, vec!["CUSTOM_VAR"]);
     }
 
     #[test]
     fn test_env_memory_enabled() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
-        assert!(cfg.memory_enabled);
+        assert!(cfg.display.memory_enabled);
 
         set_env("KIRKFORGE_MEMORY_ENABLED", Some("false"));
         apply_env_overrides(&mut cfg);
-        assert!(!cfg.memory_enabled);
+        assert!(!cfg.display.memory_enabled);
         set_env("KIRKFORGE_MEMORY_ENABLED", None);
     }
 
@@ -1169,7 +1154,7 @@ mod tests {
         let mut cfg = Config::default();
         set_env("KIRKFORGE_MEMORY_MAX_TOKENS", Some("250"));
         apply_env_overrides(&mut cfg);
-        assert_eq!(cfg.memory_max_tokens, 250);
+        assert_eq!(cfg.display.memory_max_tokens, 250);
         set_env("KIRKFORGE_MEMORY_MAX_TOKENS", None);
     }
 
@@ -1179,7 +1164,7 @@ mod tests {
         let mut cfg = Config::default();
         set_env("KIRKFORGE_MEMORY_TOP_N", Some("5"));
         apply_env_overrides(&mut cfg);
-        assert_eq!(cfg.memory_top_n, 5);
+        assert_eq!(cfg.display.memory_top_n, 5);
         set_env("KIRKFORGE_MEMORY_TOP_N", None);
     }
 
@@ -1195,21 +1180,18 @@ mod tests {
         .unwrap();
         merge_toml_into_config(&mut cfg, table);
 
-        assert!(!cfg.memory_enabled);
-        assert_eq!(cfg.memory_max_tokens, 300);
-        assert_eq!(cfg.memory_top_n, 3);
+        assert!(!cfg.display.memory_enabled);
+        assert_eq!(cfg.display.memory_max_tokens, 300);
+        assert_eq!(cfg.display.memory_top_n, 3);
     }
 
     #[test]
     fn test_config_diff_summary_memory_knobs() {
         let a = Config::default();
-        let b = Config {
-            memory_enabled: false,
-            memory_max_tokens: 250,
-            memory_top_n: 5,
-            seed: None,
-            ..Config::default()
-        };
+        let mut b = Config::default();
+        b.display.memory_enabled = false;
+        b.display.memory_max_tokens = 250;
+        b.display.memory_top_n = 5;
         let s = config_diff_summary(&a, &b);
         assert!(s.contains("memory_enabled"), "got: {s}");
         assert!(s.contains("memory_max_tokens"), "got: {s}");
@@ -1222,7 +1204,7 @@ mod tests {
         let mut cfg = Config::default();
         set_env("KIRKFORGE_CHECKPOINT_INTERVAL_MESSAGES", Some("20"));
         apply_env_overrides(&mut cfg);
-        assert_eq!(cfg.checkpoint_interval_messages, 20);
+        assert_eq!(cfg.session.checkpoint_interval_messages, 20);
         set_env("KIRKFORGE_CHECKPOINT_INTERVAL_MESSAGES", None);
     }
 
@@ -1235,17 +1217,14 @@ mod tests {
         .parse()
         .unwrap();
         merge_toml_into_config(&mut cfg, table);
-        assert_eq!(cfg.checkpoint_interval_messages, 15);
+        assert_eq!(cfg.session.checkpoint_interval_messages, 15);
     }
 
     #[test]
     fn test_config_diff_summary_checkpoint_interval_messages() {
         let a = Config::default();
-        let b = Config {
-            checkpoint_interval_messages: 12,
-            seed: None,
-            ..Config::default()
-        };
+        let mut b = Config::default();
+        b.session.checkpoint_interval_messages = 12;
         let s = config_diff_summary(&a, &b);
         assert!(s.contains("checkpoint_interval_messages"), "got: {s}");
     }
@@ -1253,13 +1232,10 @@ mod tests {
     #[test]
     fn test_config_diff_summary_plugin_trust_knobs() {
         let a = Config::default();
-        let b = Config {
-            reject_on_excess_plugin_trust: false,
-            plugin_signature_validation: true,
-            plugin_public_key_path: Some("/tmp/key.pub".into()),
-            seed: None,
-            ..Config::default()
-        };
+        let mut b = Config::default();
+        b.tools.reject_on_excess_plugin_trust = false;
+        b.tools.plugin_signature_validation = true;
+        b.tools.plugin_public_key_path = Some("/tmp/key.pub".into());
         let s = config_diff_summary(&a, &b);
         assert!(s.contains("reject_on_excess_plugin_trust"), "got: {s}");
         assert!(s.contains("plugin_signature_validation"), "got: {s}");
@@ -1283,14 +1259,14 @@ mod tests {
     #[test]
     fn test_merge_toml_minify_write_side() {
         let mut cfg = Config::default();
-        assert!(!cfg.minify_write_side);
+        assert!(!cfg.tools.minify_write_side);
         let table: toml::Table = r#"
             minify_write_side = true
         "#
         .parse()
         .unwrap();
         merge_toml_into_config(&mut cfg, table);
-        assert!(cfg.minify_write_side);
+        assert!(cfg.tools.minify_write_side);
     }
 
     #[test]
@@ -1316,25 +1292,25 @@ mod tests {
         .unwrap();
         merge_toml_into_config(&mut cfg, table);
 
-        assert_eq!(cfg.anthropic_provider, "bedrock");
-        assert_eq!(cfg.aws_region, "us-west-2");
-        assert_eq!(cfg.aws_profile, "dev");
-        assert_eq!(cfg.gcp_project_id, "my-project");
-        assert_eq!(cfg.gcp_region, "us-east4");
+        assert_eq!(cfg.model.anthropic_provider, "bedrock");
+        assert_eq!(cfg.model.aws_region, "us-west-2");
+        assert_eq!(cfg.model.aws_profile, "dev");
+        assert_eq!(cfg.model.gcp_project_id, "my-project");
+        assert_eq!(cfg.model.gcp_region, "us-east4");
         assert_eq!(
-            cfg.gcp_service_account_path,
+            cfg.model.gcp_service_account_path,
             Some(PathBuf::from("/tmp/sa.json"))
         );
-        assert!(cfg.computer_use.enabled);
+        assert!(cfg.security.computer_use.enabled);
         assert_eq!(
-            cfg.computer_use.chrome_path,
+            cfg.security.computer_use.chrome_path,
             Some(PathBuf::from("/usr/bin/chromium"))
         );
-        assert!(cfg.computer_use.headful);
-        assert_eq!(cfg.computer_use.width, 1920);
-        assert_eq!(cfg.computer_use.height, 1080);
-        assert_eq!(cfg.computer_use.startup_timeout_secs, 45);
-        assert_eq!(cfg.computer_use.wait_timeout_secs, 15);
+        assert!(cfg.security.computer_use.headful);
+        assert_eq!(cfg.security.computer_use.width, 1920);
+        assert_eq!(cfg.security.computer_use.height, 1080);
+        assert_eq!(cfg.security.computer_use.startup_timeout_secs, 45);
+        assert_eq!(cfg.security.computer_use.wait_timeout_secs, 15);
     }
 
     #[test]
@@ -1356,20 +1332,20 @@ mod tests {
 
         apply_env_overrides(&mut cfg);
 
-        assert_eq!(cfg.anthropic_provider, "vertex");
-        assert_eq!(cfg.aws_region, "eu-west-1");
-        assert_eq!(cfg.aws_profile, "prod");
-        assert_eq!(cfg.gcp_project_id, "p2");
-        assert_eq!(cfg.gcp_region, "europe-west1");
+        assert_eq!(cfg.model.anthropic_provider, "vertex");
+        assert_eq!(cfg.model.aws_region, "eu-west-1");
+        assert_eq!(cfg.model.aws_profile, "prod");
+        assert_eq!(cfg.model.gcp_project_id, "p2");
+        assert_eq!(cfg.model.gcp_region, "europe-west1");
         assert_eq!(
-            cfg.gcp_service_account_path,
+            cfg.model.gcp_service_account_path,
             Some(PathBuf::from("/tmp/p2.json"))
         );
-        assert!(cfg.computer_use.enabled);
-        assert_eq!(cfg.computer_use.width, 1366);
-        assert_eq!(cfg.computer_use.height, 768);
-        assert_eq!(cfg.computer_use.startup_timeout_secs, 60);
-        assert_eq!(cfg.computer_use.wait_timeout_secs, 20);
+        assert!(cfg.security.computer_use.enabled);
+        assert_eq!(cfg.security.computer_use.width, 1366);
+        assert_eq!(cfg.security.computer_use.height, 768);
+        assert_eq!(cfg.security.computer_use.startup_timeout_secs, 60);
+        assert_eq!(cfg.security.computer_use.wait_timeout_secs, 20);
 
         set_env("KIRKFORGE_ANTHROPIC_PROVIDER", None);
         set_env("KIRKFORGE_AWS_REGION", None);
@@ -1387,15 +1363,9 @@ mod tests {
     #[test]
     fn test_config_diff_summary_anthropic_cloud_and_computer_use() {
         let a = Config::default();
-        let b = Config {
-            anthropic_provider: "bedrock".into(),
-            computer_use: crate::shared::ComputerUseConfig {
-                enabled: true,
-                ..Config::default().computer_use
-            },
-            seed: None,
-            ..Config::default()
-        };
+        let mut b = Config::default();
+        b.model.anthropic_provider = "bedrock".into();
+        b.security.computer_use.enabled = true;
         let s = config_diff_summary(&a, &b);
         assert!(s.contains("anthropic_provider"), "got: {s}");
         assert!(s.contains("computer_use.enabled"), "got: {s}");
@@ -1405,10 +1375,10 @@ mod tests {
     fn test_env_scheduled_bash_auto_approve() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
-        assert!(!cfg.scheduled_bash_auto_approve);
+        assert!(!cfg.tools.scheduled_bash_auto_approve);
         set_env("KIRKFORGE_SCHEDULED_BASH_AUTO_APPROVE", Some("true"));
         apply_env_overrides(&mut cfg);
-        assert!(cfg.scheduled_bash_auto_approve);
+        assert!(cfg.tools.scheduled_bash_auto_approve);
         set_env("KIRKFORGE_SCHEDULED_BASH_AUTO_APPROVE", None);
     }
 
@@ -1418,18 +1388,18 @@ mod tests {
         let mut cfg = Config::default();
         set_env("KIRKFORGE_MAX_CONCURRENT_SCHEDULED_JOBS", Some("0"));
         apply_env_overrides(&mut cfg);
-        assert_eq!(cfg.max_concurrent_scheduled_jobs, 1);
+        assert_eq!(cfg.tools.max_concurrent_scheduled_jobs, 1);
         set_env("KIRKFORGE_MAX_CONCURRENT_SCHEDULED_JOBS", Some("8"));
         apply_env_overrides(&mut cfg);
-        assert_eq!(cfg.max_concurrent_scheduled_jobs, 8);
+        assert_eq!(cfg.tools.max_concurrent_scheduled_jobs, 8);
         set_env("KIRKFORGE_MAX_CONCURRENT_SCHEDULED_JOBS", None);
     }
 
     #[test]
     fn test_merge_toml_scheduled_job_knobs() {
         let mut cfg = Config::default();
-        assert!(!cfg.scheduled_bash_auto_approve);
-        assert_eq!(cfg.max_concurrent_scheduled_jobs, 4);
+        assert!(!cfg.tools.scheduled_bash_auto_approve);
+        assert_eq!(cfg.tools.max_concurrent_scheduled_jobs, 4);
         let table: toml::Table = r#"
             scheduled_bash_auto_approve = true
             max_concurrent_scheduled_jobs = 0
@@ -1437,8 +1407,8 @@ mod tests {
         .parse()
         .unwrap();
         merge_toml_into_config(&mut cfg, table);
-        assert!(cfg.scheduled_bash_auto_approve);
-        assert_eq!(cfg.max_concurrent_scheduled_jobs, 1);
+        assert!(cfg.tools.scheduled_bash_auto_approve);
+        assert_eq!(cfg.tools.max_concurrent_scheduled_jobs, 1);
     }
 
     #[test]
@@ -1451,7 +1421,7 @@ mod tests {
         .unwrap();
         merge_toml_into_config(&mut cfg, table);
         assert_eq!(
-            cfg.request_timeout_secs, 1,
+            cfg.model.request_timeout_secs, 1,
             "zero timeout must be clamped to 1 second"
         );
     }
@@ -1463,13 +1433,13 @@ mod tests {
         set_env("KIRKFORGE_REQUEST_TIMEOUT_SECS", Some("0"));
         apply_env_overrides(&mut cfg);
         assert_eq!(
-            cfg.request_timeout_secs, 1,
+            cfg.model.request_timeout_secs, 1,
             "env zero timeout must be clamped"
         );
 
         set_env("KIRKFORGE_REQUEST_TIMEOUT_SECS", Some("45"));
         apply_env_overrides(&mut cfg);
-        assert_eq!(cfg.request_timeout_secs, 45);
+        assert_eq!(cfg.model.request_timeout_secs, 45);
 
         set_env("KIRKFORGE_REQUEST_TIMEOUT_SECS", None);
     }

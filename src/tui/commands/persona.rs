@@ -108,13 +108,16 @@ fn tools_for_persona(
         supports_images,
         deny_list,
         path_guard,
-        config.bash_sandbox_workdir,
-        config.minify_write_side,
+        config.security.bash_sandbox_workdir,
+        config.tools.minify_write_side,
         None,
-        Some((config.computer_use.enabled, config.computer_use.clone())),
+        Some((
+            config.security.computer_use.enabled,
+            config.security.computer_use.clone(),
+        )),
         None,
         None,
-        Some(config.docker.clone()),
+        Some(config.security.docker.clone()),
     );
     match kind {
         PersonaKind::Explore => all
@@ -160,7 +163,12 @@ async fn run_persona_task(
     cancelled: Arc<AtomicBool>,
 ) -> PersonaResult {
     let adapter = adapters::caching::maybe_wrap_cached(
-        adapters::adapter_for(&model_name, &ollama_host, None, config.request_timeout_secs),
+        adapters::adapter_for(
+            &model_name,
+            &ollama_host,
+            None,
+            config.model.request_timeout_secs,
+        ),
         &config,
     );
     let tools = tools_for_persona(kind, undo_stack.clone(), supports_images, &config);
@@ -315,13 +323,13 @@ pub async fn start_persona(
     let task_owned = task.to_string();
 
     let cfg = read_shared_config(&state.config).clone();
-    let max_turns = cfg.max_persona_turns;
+    let max_turns = cfg.tools.max_persona_turns;
     let model_name = state
         .model_info
         .as_ref()
         .map(|m| m.name.clone())
-        .unwrap_or_else(|| cfg.default_model.clone());
-    let ollama_host = cfg.ollama_host.clone();
+        .unwrap_or_else(|| cfg.model.default_model.clone());
+    let ollama_host = cfg.model.ollama_host.clone();
     let supports_images = state
         .model_info
         .as_ref()

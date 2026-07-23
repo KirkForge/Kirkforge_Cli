@@ -246,6 +246,7 @@ pub async fn classify_with_llm(
 pub fn resolve_tier_model(config: &crate::shared::Config, tier: &str) -> Option<String> {
     let tier_lower = tier.to_lowercase();
     let from_map = config
+        .model
         .routing_model_map
         .get(&tier_lower)
         .cloned()
@@ -253,10 +254,10 @@ pub fn resolve_tier_model(config: &crate::shared::Config, tier: &str) -> Option<
     if from_map.is_some() {
         return from_map;
     }
-    if config.default_model.is_empty() {
+    if config.model.default_model.is_empty() {
         None
     } else {
-        Some(config.default_model.clone())
+        Some(config.model.default_model.clone())
     }
 }
 
@@ -344,13 +345,14 @@ mod tests {
         // Empty map + empty default_model → no resolution.
         assert_eq!(resolve_tier_model(&config, "simple"), None);
 
-        config.default_model = "fallback-model".into();
+        config.model.default_model = "fallback-model".into();
         assert_eq!(
             resolve_tier_model(&config, "simple"),
             Some("fallback-model".into())
         );
 
         config
+            .model
             .routing_model_map
             .insert("simple".into(), "cheap-model".into());
         assert_eq!(

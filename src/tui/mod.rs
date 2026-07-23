@@ -197,7 +197,7 @@ pub async fn run_tui(
     // Skills — load project-local SKILL.md files and plugin directories,
     // then layer the built-in skills on top. (Missing dirs are silently skipped,
     // so an empty project is fine.)
-    let max_trust = cfg_for_startup.max_plugin_trust;
+    let max_trust = cfg_for_startup.tools.max_plugin_trust;
     state.skill_registry.set_max_plugin_trust(max_trust);
     if let Err(e) = state.skill_registry.scan_and_load(&cfg_for_startup) {
         tracing::warn!("Skill scan error: {}", e);
@@ -211,7 +211,7 @@ pub async fn run_tui(
 
     // ── Carryover profile (shared between executor and save) ──
     let carryover_target: Option<Arc<Mutex<CarryoverProfile>>> =
-        if cfg_for_startup.carryover_enabled {
+        if cfg_for_startup.session.carryover_enabled {
             Some(Arc::new(Mutex::new(CarryoverProfile::default())))
         } else {
             None

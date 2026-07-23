@@ -102,7 +102,7 @@ pub async fn run_job_daemon_at(socket_path: PathBuf, pid_path: PathBuf) -> Resul
     loop {
         // Load fresh config each pass so live edits take effect.
         let (config, _warning) = load_config();
-        let max_concurrent = config.max_concurrent_scheduled_jobs.max(1);
+        let max_concurrent = config.tools.max_concurrent_scheduled_jobs.max(1);
         let semaphore = Arc::new(Semaphore::new(max_concurrent));
 
         // Reload jobs from disk (picks up new/cancelled jobs written by the TUI).

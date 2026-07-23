@@ -176,10 +176,10 @@ impl Executor {
                     let (summarize_enabled, summarize_model, ollama_host, preserve_recent) = {
                         let cfg = read_shared_config(&self.config);
                         (
-                            cfg.summarize_enabled,
-                            cfg.summarize_model.clone(),
-                            cfg.ollama_host.clone(),
-                            cfg.preserve_recent_messages,
+                            cfg.model.summarize_enabled,
+                            cfg.model.summarize_model.clone(),
+                            cfg.model.ollama_host.clone(),
+                            cfg.session.preserve_recent_messages,
                         )
                     };
                     let keep = req.keep.unwrap_or(preserve_recent).max(1);

@@ -721,11 +721,9 @@ mod tests {
     }
 
     fn state_auto_approve() -> AppState {
-        state_with_config(Config {
-            scheduled_bash_auto_approve: true,
-            seed: None,
-            ..Default::default()
-        })
+        let mut cfg = Config::default();
+        cfg.tools.scheduled_bash_auto_approve = true;
+        state_with_config(cfg)
     }
 
     fn tmp_jobs_dir() -> (tempfile::TempDir, JobStore) {

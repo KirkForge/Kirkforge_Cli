@@ -217,7 +217,7 @@ pub trait ModelAdapter: Send + Sync {
     /// Configure JSON-mode output. Default no-op; adapters that
     /// support `response_format` / `format: "json"` override this.
     /// Called once at construction by the executor with
-    /// `config.json_mode` — the executor doesn't have a way to push
+    /// `config.model.json_mode` — the executor doesn't have a way to push
     /// the flag through the per-request stream() signature without
     /// breaking the trait, and a per-adapter field is the simplest
     /// place to remember the setting for the lifetime of the
@@ -228,7 +228,7 @@ pub trait ModelAdapter: Send + Sync {
     /// that support a `seed` field in the request body override this.
     /// When set, the adapter should pin temperature=0 and pass the
     /// seed to the provider. Called once at construction by the
-    /// executor with `config.seed`.
+    /// executor with `config.model.seed`.
     fn set_seed(&mut self, _seed: Option<u64>) {}
 
     async fn stream(

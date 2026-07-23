@@ -165,15 +165,16 @@ fn list_plugins(state: &AppState) -> String {
     }
 
     let cfg = read_shared_config(&state.config);
-    if cfg.plugin_sources.is_empty() {
+    if cfg.tools.plugin_sources.is_empty() {
         lines.push("Workspace plugin sources: none (use /plugins add <name> <path>)".to_string());
     } else {
         lines.push(format!(
             "Workspace plugin sources ({}):",
-            cfg.plugin_sources.len()
+            cfg.tools.plugin_sources.len()
         ));
-        let enabled: std::collections::HashSet<&String> = cfg.enabled_plugins.iter().collect();
-        for (name, path) in &cfg.plugin_sources {
+        let enabled: std::collections::HashSet<&String> =
+            cfg.tools.enabled_plugins.iter().collect();
+        for (name, path) in &cfg.tools.plugin_sources {
             let status = if enabled.contains(name) {
                 if active_names.contains(name) {
                     "on ✓"
@@ -198,7 +199,7 @@ async fn enable_plugin(
 ) -> String {
     let cfg = read_shared_config(&state.config).clone();
     let dir = plugin_dir(name);
-    let policy = TrustPolicy::up_to(cfg.max_plugin_trust);
+    let policy = TrustPolicy::up_to(cfg.tools.max_plugin_trust);
 
     let (loaded_name, load_warnings) = match state.plugin_registry.load_one(&dir, policy) {
         Ok(r) => r,
@@ -277,7 +278,7 @@ async fn reload_plugins(
     state.skill_registry.clear();
     state
         .skill_registry
-        .set_max_plugin_trust(cfg.max_plugin_trust);
+        .set_max_plugin_trust(cfg.tools.max_plugin_trust);
     if let Err(e) = state.skill_registry.scan_and_load(&cfg) {
         tracing::warn!(error = %e, "skill rescan during /plugins reload failed");
     }
@@ -480,14 +481,14 @@ async fn toggle_plugin(
 ) -> String {
     {
         let mut cfg = write_shared_config(&state.config);
-        if !cfg.plugin_sources.contains_key(name) {
+        if !cfg.tools.plugin_sources.contains_key(name) {
             return format!("❌ Unknown workspace plugin source '{name}'. Use /plugins sources to see configured sources, or /plugins add {name} <path>.");
         }
-        let was_enabled = cfg.enabled_plugins.iter().any(|n| n == name);
+        let was_enabled = cfg.tools.enabled_plugins.iter().any(|n| n == name);
         if was_enabled {
-            cfg.enabled_plugins.retain(|n| n != name);
+            cfg.tools.enabled_plugins.retain(|n| n != name);
         } else {
-            cfg.enabled_plugins.push(name.to_string());
+            cfg.tools.enabled_plugins.push(name.to_string());
         }
         if let Err(e) = crate::session::config::save_config(&cfg) {
             return format!("❌ Failed to save config while toggling '{name}': {e}");
@@ -724,7 +725,7 @@ prompt = "Demo skill"
         // current session.
         {
             let mut cfg = state.config.write().unwrap();
-            cfg.max_plugin_trust = TrustTier::ReadOnly;
+            cfg.tools.max_plugin_trust = TrustTier::ReadOnly;
         }
         let tx = dummy_reload_tx();
 

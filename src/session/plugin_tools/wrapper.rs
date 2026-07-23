@@ -111,7 +111,8 @@ impl PluginToolWrapper {
     /// not the plugin installation directory. Only if cwd cannot be
     /// determined do we fall back to the plugin root as a last resort.
     fn sandbox_dir(&self, cfg: &Config) -> PathBuf {
-        cfg.sandbox_dir
+        cfg.security
+            .sandbox_dir
             .as_ref()
             .and_then(|s| {
                 let p = Path::new(s);
@@ -162,7 +163,7 @@ impl PluginToolWrapper {
                 env.push(((*key).to_string(), value));
             }
         }
-        for key in &cfg.plugin_allowed_env_vars {
+        for key in &cfg.tools.plugin_allowed_env_vars {
             if let Ok(v) = std::env::var(key) {
                 env.push((key.clone(), v));
             }
@@ -199,7 +200,7 @@ impl Tool for PluginToolWrapper {
         let cfg = read_shared_config(&self.shared_config).clone();
         let cmd_path = self.plugin_root.join(&self.command);
         let cwd = self.sandbox_dir(&cfg);
-        let timeout_secs = cfg.tool_timeout_secs.unwrap_or(30).clamp(1, 3600);
+        let timeout_secs = cfg.tools.tool_timeout_secs.unwrap_or(30).clamp(1, 3600);
         let timeout_at = tokio::time::Instant::now() + Duration::from_secs(timeout_secs);
 
         let mut command = tokio::process::Command::new(&cmd_path);

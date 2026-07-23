@@ -77,7 +77,7 @@ pub async fn handle_commit_command(args: &str, cwd: &Path, config: &Config) -> S
     let status_lines: Vec<String> = status.lines().map(|l| l.to_string()).collect();
 
     // 2. Run sanitation.
-    let report = match check_worktree(cwd, &status, Some(config.commit_max_file_size)) {
+    let report = match check_worktree(cwd, &status, Some(config.security.commit_max_file_size)) {
         Ok(r) => r,
         Err(e) => return format!("❌ Sanitation check failed: {e}"),
     };

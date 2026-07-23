@@ -327,7 +327,7 @@ async fn handle_bench_command(
     timeout: u64,
 ) -> anyhow::Result<()> {
     let config = kirkforge::session::config::load_or_create_config();
-    let model_name = model.unwrap_or_else(|| config.default_model.clone());
+    let model_name = model.unwrap_or_else(|| config.model.default_model.clone());
     let bench_tasks = kirkforge_bench::load_tasks(&tasks)?;
     if bench_tasks.is_empty() {
         anyhow::bail!("no task files found in {}", tasks.display());
@@ -577,23 +577,23 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     let mut config = session::config::load_or_create_config();
 
     if let Some(host) = &host {
-        config.ollama_host = host.clone();
+        config.model.ollama_host = host.clone();
     }
-    let model = model.unwrap_or_else(|| config.default_model.clone());
+    let model = model.unwrap_or_else(|| config.model.default_model.clone());
     if auto_approve {
-        config.auto_approve = true;
+        config.security.auto_approve = true;
     }
     if dry_run {
-        config.dry_run = true;
+        config.tools.dry_run = true;
     }
     if let Some(seed) = seed {
-        config.seed = Some(seed);
+        config.model.seed = Some(seed);
     }
     if worktree {
-        config.worktree_enabled = true;
+        config.session.worktree_enabled = true;
     }
     if docker {
-        config.docker.enabled = true;
+        config.security.docker.enabled = true;
     }
     let trace_enabled = !no_trace;
 
@@ -622,7 +622,7 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     // value, and honors the operator's explicit-escape-hatch policy.
     let _frozen_cwd = session::config::freeze_launch_sandbox(&mut config);
 
-    let ollama_host = &config.ollama_host;
+    let ollama_host = &config.model.ollama_host;
 
     let data_dir = session::data_dir()?;
     std::fs::create_dir_all(&data_dir)?;
@@ -633,11 +633,11 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     // When enabled, create an isolated git worktree for the session.
     // Edits land in the worktree, not the user's working tree.
     // The worktree is removed when `_worktree` is dropped.
-    let _worktree: Option<session::worktree::WorktreeSession> = if config.worktree_enabled {
+    let _worktree: Option<session::worktree::WorktreeSession> = if config.session.worktree_enabled {
         let repo_root = std::env::current_dir()?;
         let wt = session::worktree::WorktreeSession::create(&session_id.to_string(), &repo_root)?;
         // Redirect sandbox to the worktree path
-        config.sandbox_dir = Some(wt.path().to_string_lossy().to_string());
+        config.security.sandbox_dir = Some(wt.path().to_string_lossy().to_string());
         // Also redirect the log path into the worktree
         Some(wt)
     } else {
@@ -725,7 +725,8 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
 
     let (mut conversation, open_outcome) =
         session::conversation::ConversationLog::open(log_path.clone())?;
-    conversation = conversation.with_checkpoint_interval(config.checkpoint_interval_messages);
+    conversation =
+        conversation.with_checkpoint_interval(config.session.checkpoint_interval_messages);
     if let session::conversation::OpenOutcome::Restored(messages) = open_outcome {
         let warn_icon = line_mode::symbol(no_color, "⚠️");
         let warn_sep = if warn_icon.is_empty() { "" } else { " " };
@@ -753,10 +754,10 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
             &model,
             ollama_host,
             model_type.as_deref(),
-            &config.anthropic_provider,
-            config.request_timeout_secs,
-            &config.opencode_zen_endpoint,
-            config.opencode_zen_api_key.as_deref(),
+            &config.model.anthropic_provider,
+            config.model.request_timeout_secs,
+            &config.model.opencode_zen_endpoint,
+            config.model.opencode_zen_api_key.as_deref(),
         ),
         &config,
     );
@@ -790,9 +791,9 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     // launch-time config.
     let (builtin_deny_list, builtin_path_guard, _builtin_read_gate) =
         session::access::access_from_config(&config);
-    let bash_sandbox_workdir = config.bash_sandbox_workdir;
-    let minify_write_side = config.minify_write_side;
-    let computer_use_cfg = config.computer_use.clone();
+    let bash_sandbox_workdir = config.security.bash_sandbox_workdir;
+    let minify_write_side = config.tools.minify_write_side;
+    let computer_use_cfg = config.security.computer_use.clone();
     let computer_use_enabled = computer_use_cfg.enabled;
 
     // ── LSP pool (lazy-started, fail-cooled) ──
@@ -800,29 +801,30 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     // lazily on the first `lsp_query` call for that language, so this is
     // cheap when no LSP-aware tool runs. The pool is wrapped in `Arc` and
     // shared with the `lsp_query` tool below.
-    let lsp_pool: Option<std::sync::Arc<kirkforge_lsp::LspPool>> = if config.lsp_servers.is_empty()
-    {
-        None
-    } else {
-        let language_configs: Vec<kirkforge_lsp::LanguageConfig> = config
-            .lsp_servers
-            .iter()
-            .map(|e| kirkforge_lsp::LanguageConfig {
-                name: e.language.clone(),
-                extensions: e.extensions.clone(),
-                lsp: Some(kirkforge_lsp::LspServerConfig {
-                    command: e.command.clone(),
-                    args: e.args.clone(),
-                }),
-            })
-            .collect();
-        Some(std::sync::Arc::new(kirkforge_lsp::LspPool::new(
-            std::env::current_dir()
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_else(|_| ".".to_string()),
-            language_configs,
-        )))
-    };
+    let lsp_pool: Option<std::sync::Arc<kirkforge_lsp::LspPool>> =
+        if config.tools.lsp_servers.is_empty() {
+            None
+        } else {
+            let language_configs: Vec<kirkforge_lsp::LanguageConfig> = config
+                .tools
+                .lsp_servers
+                .iter()
+                .map(|e| kirkforge_lsp::LanguageConfig {
+                    name: e.language.clone(),
+                    extensions: e.extensions.clone(),
+                    lsp: Some(kirkforge_lsp::LspServerConfig {
+                        command: e.command.clone(),
+                        args: e.args.clone(),
+                    }),
+                })
+                .collect();
+            Some(std::sync::Arc::new(kirkforge_lsp::LspPool::new(
+                std::env::current_dir()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_else(|_| ".".to_string()),
+                language_configs,
+            )))
+        };
 
     // ── Chrome tab for computer_use ──
     // Try to launch Chrome only when the tool is enabled. If the launch fails,
@@ -831,7 +833,7 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     // when Chrome is not installed.
     let chrome_tab: std::sync::Arc<dyn crate::tools::computer_use::ChromeTab> =
         if computer_use_enabled {
-            match chrome_launcher::launch_chrome_tab(&config.computer_use).await {
+            match chrome_launcher::launch_chrome_tab(&config.security.computer_use).await {
                 Ok(tab) => tab,
                 Err(e) => {
                     tracing::warn!(error = %e, "computer_use enabled but Chrome launch failed; tool will fail gracefully");
@@ -847,7 +849,7 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     // stays alive until `close` drops it.
     let session_launcher: Option<crate::tools::computer_use::SessionLauncher> =
         if computer_use_enabled {
-            let cfg = config.computer_use.clone();
+            let cfg = config.security.computer_use.clone();
             Some(std::sync::Arc::new(move || {
                 let cfg = cfg.clone();
                 Box::pin(async move { chrome_launcher::open_browser_session(&cfg).await })
@@ -877,7 +879,7 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
             Some((computer_use_enabled, computer_use_cfg.clone())),
             Some(chrome_tab),
             session_launcher,
-            Some(config.docker.clone()),
+            Some(config.security.docker.clone()),
         ),
     )));
 
@@ -895,7 +897,7 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     // we load from disk instead of rebuilding.
     let context_index = {
         let cfg = kirkforge::shared::read_shared_config(&shared_config);
-        cfg.sandbox_dir.as_ref().and_then(|dir| {
+        cfg.security.sandbox_dir.as_ref().and_then(|dir| {
             let path = std::path::Path::new(dir);
             if !path.is_dir() {
                 return None;
@@ -937,8 +939,9 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
 
     // --- MCP tools ---
     let cfg_for_mcp = kirkforge::shared::read_shared_config(&shared_config).clone();
-    if !cfg_for_mcp.mcp_servers.is_empty() {
-        let mcp_mgr = session::mcp_client::McpClientManager::new(&cfg_for_mcp.mcp_servers).await;
+    if !cfg_for_mcp.tools.mcp_servers.is_empty() {
+        let mcp_mgr =
+            session::mcp_client::McpClientManager::new(&cfg_for_mcp.tools.mcp_servers).await;
         for warning in mcp_mgr.warnings() {
             eprintln!("MCP warning: {warning}");
             tracing::warn!(warning = %warning, "MCP startup warning");
@@ -1193,10 +1196,10 @@ async fn run_line_mode(
                         match kirkforge_workflow::Workflow::from_file(&path) {
                             Ok(workflow) => {
                                 let cfg = kirkforge::shared::read_shared_config(&config).clone();
-                                let ollama_host = cfg.ollama_host.clone();
-                                let supports_images = cfg.ollama_host.contains("localhost")
-                                    || cfg.ollama_host.contains("127.0.0.1")
-                                    || cfg.ollama_host.contains("[::1]");
+                                let ollama_host = cfg.model.ollama_host.clone();
+                                let supports_images = cfg.model.ollama_host.contains("localhost")
+                                    || cfg.model.ollama_host.contains("127.0.0.1")
+                                    || cfg.model.ollama_host.contains("[::1]");
                                 let cancel =
                                     std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
                                 let workflow_name = workflow.name.clone();

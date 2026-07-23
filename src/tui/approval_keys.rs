@@ -203,7 +203,7 @@ pub fn handle_approval_key(key: KeyEvent, state: &mut AppState) {
             // doesn't create duplicate rules.
             let rule = crate::shared::permission::suggest_rule(&approval.tool_name, &approval.args);
             if let Ok(mut cfg) = state.config.write() {
-                push_rule_unique(&mut cfg.permission_rules, rule);
+                push_rule_unique(&mut cfg.security.permission_rules, rule);
             }
             let cfg = crate::shared::read_shared_config(&state.config);
             if let Err(e) = crate::session::config::save_config(&cfg) {
@@ -380,15 +380,15 @@ mod tests {
 
     /// **v1.2-p13 — `[A]lways` builds a permission rule, NOT a
     /// blanket `auto_approve` flip.** This is the regression guard
-    /// for the old `state.config.auto_approve = true;` line.
+    /// for the old `state.config.security.auto_approve = true;` line.
     #[test]
     fn test_always_approves_saves_permission_rule() {
         let mut s = make_state_with_approval(json!({"command": "cargo test --release"}));
         // Start with auto_approve = false and no rules — realistic state.
-        cfg_mut(&mut s).auto_approve = false;
-        cfg_mut(&mut s).permission_rules.clear();
-        assert!(!cfg_mut(&mut s).auto_approve);
-        assert!(cfg_mut(&mut s).permission_rules.is_empty());
+        cfg_mut(&mut s).security.auto_approve = false;
+        cfg_mut(&mut s).security.permission_rules.clear();
+        assert!(!cfg_mut(&mut s).security.auto_approve);
+        assert!(cfg_mut(&mut s).security.permission_rules.is_empty());
 
         // Capture config before [A]lways, because save_config would
         // write to the real config path; the test only checks the
@@ -398,13 +398,13 @@ mod tests {
 
         // **The new rule should be in permission_rules.**
         assert_eq!(
-            cfg_mut(&mut s).permission_rules.len(),
+            cfg_mut(&mut s).security.permission_rules.len(),
             1,
             "[A]lways should have appended exactly one rule"
         );
         {
             let cfg = cfg_mut(&mut s);
-            let r = &cfg.permission_rules[0];
+            let r = &cfg.security.permission_rules[0];
             assert_eq!(r.tool, "bash");
             assert_eq!(r.key, "command");
             assert_eq!(r.pattern, "cargo test --release");
@@ -415,7 +415,7 @@ mod tests {
         // asked for "always this specific command", not "always
         // everything". The new rule is the user's intent.
         assert!(
-            !cfg_mut(&mut s).auto_approve,
+            !cfg_mut(&mut s).security.auto_approve,
             "[A]lways should NOT flip auto_approve — the new rule is the user's intent"
         );
 
@@ -444,14 +444,14 @@ mod tests {
             }),
             responder: None,
         });
-        cfg_mut(&mut s).permission_rules.clear();
+        cfg_mut(&mut s).security.permission_rules.clear();
 
         handle_approval_key(key(KeyCode::Char('A')), &mut s);
 
-        assert_eq!(cfg_mut(&mut s).permission_rules.len(), 1);
+        assert_eq!(cfg_mut(&mut s).security.permission_rules.len(), 1);
         {
             let cfg = cfg_mut(&mut s);
-            let r = &cfg.permission_rules[0];
+            let r = &cfg.security.permission_rules[0];
             assert_eq!(r.tool, "edit_file");
             assert_eq!(
                 r.key, "path",
@@ -466,11 +466,11 @@ mod tests {
     #[test]
     fn test_always_approves_dedups_repeated_calls() {
         let mut s = make_state_with_approval(json!({"command": "ls"}));
-        cfg_mut(&mut s).permission_rules.clear();
+        cfg_mut(&mut s).security.permission_rules.clear();
 
         handle_approval_key(key(KeyCode::Char('a')), &mut s);
         // First push: one rule.
-        assert_eq!(cfg_mut(&mut s).permission_rules.len(), 1);
+        assert_eq!(cfg_mut(&mut s).security.permission_rules.len(), 1);
 
         // Synthesise a second approval with the same args (simulating
         // a second `[A]lways` in a later turn). The real flow would
@@ -483,7 +483,7 @@ mod tests {
         handle_approval_key(key(KeyCode::Char('a')), &mut s);
         // Still one rule — the dedup caught the second push.
         assert_eq!(
-            cfg_mut(&mut s).permission_rules.len(),
+            cfg_mut(&mut s).security.permission_rules.len(),
             1,
             "Second [A]lways on the same call should not duplicate the rule"
         );
@@ -497,8 +497,9 @@ mod tests {
         let mut s = make_state_with_approval(json!({"command": "rm -rf build"}));
         {
             let mut cfg = cfg_mut(&mut s);
-            cfg.permission_rules.clear();
-            cfg.permission_rules
+            cfg.security.permission_rules.clear();
+            cfg.security
+                .permission_rules
                 .push(crate::shared::permission::PermissionRule {
                     tool: "bash".into(),
                     key: "command".into(),
@@ -510,11 +511,11 @@ mod tests {
         handle_approval_key(key(KeyCode::Char('a')), &mut s);
 
         // Still exactly one rule, and it's still Deny.
-        assert_eq!(cfg_mut(&mut s).permission_rules.len(), 1);
+        assert_eq!(cfg_mut(&mut s).security.permission_rules.len(), 1);
         {
             let cfg = cfg_mut(&mut s);
             assert_eq!(
-                cfg.permission_rules[0].action,
+                cfg.security.permission_rules[0].action,
                 crate::shared::permission::PermissionAction::Deny,
                 "Existing Deny should not be overwritten by [A]lways's Allow on the same pattern"
             );

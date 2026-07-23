@@ -91,7 +91,7 @@ pub async fn handle_model_command(
         }
         AdapterKind::Ollama => {
             let client = reqwest::Client::new();
-            let ollama_host = read_shared_config(&state.config).ollama_host.clone();
+            let ollama_host = read_shared_config(&state.config).model.ollama_host.clone();
             let validation = validate_ollama_model(&client, &ollama_host, name).await;
             match validation {
                 ModelValidation::Valid => match model_tx.send(name.to_string()) {

@@ -111,7 +111,7 @@ impl Executor {
             Ok(Ok(ApprovalResponse::AlwaysApprove)) => {
                 let rule = crate::shared::permission::suggest_rule(&tc.name, &tc.arguments);
                 if let Ok(mut cfg) = self.config.write() {
-                    push_rule_unique(&mut cfg.permission_rules, rule);
+                    push_rule_unique(&mut cfg.security.permission_rules, rule);
                 }
                 ApprovalDecision::AlwaysApproved
             }

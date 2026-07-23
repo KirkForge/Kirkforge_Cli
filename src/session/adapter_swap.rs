@@ -52,7 +52,7 @@ impl AdapterSwap {
     /// differs. Returns `Some(new_model_name)` if a swap occurred, or `None`
     /// if the current model was kept.
     ///
-    /// No-op when `config.routing_enabled` is false, or when no concrete
+    /// No-op when `config.model.routing_enabled` is false, or when no concrete
     /// model can be resolved for the tier.
     pub fn maybe_swap(
         &mut self,
@@ -60,7 +60,7 @@ impl AdapterSwap {
         adapter: &mut Box<dyn ModelAdapter>,
         user_input: &str,
     ) -> Option<String> {
-        if !config.routing_enabled {
+        if !config.model.routing_enabled {
             return None;
         }
 
@@ -77,10 +77,10 @@ impl AdapterSwap {
                 &suggested,
                 &self.ollama_host,
                 self.model_type_override.as_deref(),
-                &config.anthropic_provider,
+                &config.model.anthropic_provider,
                 self.timeout_secs,
-                &config.opencode_zen_endpoint,
-                config.opencode_zen_api_key.as_deref(),
+                &config.model.opencode_zen_endpoint,
+                config.model.opencode_zen_api_key.as_deref(),
             ),
         );
 
@@ -113,10 +113,10 @@ impl AdapterSwap {
                 model_name,
                 &self.ollama_host,
                 self.model_type_override.as_deref(),
-                &config.anthropic_provider,
+                &config.model.anthropic_provider,
                 self.timeout_secs,
-                &config.opencode_zen_endpoint,
-                config.opencode_zen_api_key.as_deref(),
+                &config.model.opencode_zen_endpoint,
+                config.model.opencode_zen_api_key.as_deref(),
             ),
         );
         let _old = std::mem::replace(adapter, new_adapter);
@@ -128,9 +128,9 @@ impl AdapterSwap {
     /// Wrap a freshly-constructed adapter in the response cache when
     /// caching is enabled, preserving the config's `json_mode` flag.
     fn wrap_cached(config: &Config, adapter: Box<dyn ModelAdapter>) -> Box<dyn ModelAdapter> {
-        if config.cache_enabled {
-            let cache = ResponseCache::new(true, config.cache_dir.clone());
-            Box::new(CachingAdapter::new(adapter, cache, config.json_mode))
+        if config.model.cache_enabled {
+            let cache = ResponseCache::new(true, config.model.cache_dir.clone());
+            Box::new(CachingAdapter::new(adapter, cache, config.model.json_mode))
         } else {
             adapter
         }
@@ -142,11 +142,9 @@ mod tests {
     use super::*;
 
     fn make_config(routing_enabled: bool) -> Config {
-        Config {
-            routing_enabled,
-            seed: None,
-            ..Default::default()
-        }
+        let mut cfg = Config::default();
+        cfg.model.routing_enabled = routing_enabled;
+        cfg
     }
 
     #[test]
@@ -179,6 +177,7 @@ mod tests {
         );
         let mut config = make_config(true);
         config
+            .model
             .routing_model_map
             .insert("complex".into(), "kimi-2.7k-coder:cloud".into());
 
@@ -201,6 +200,7 @@ mod tests {
         );
         let mut config = make_config(true);
         config
+            .model
             .routing_model_map
             .insert("simple".into(), "qwen3:32b".into());
 
@@ -221,6 +221,7 @@ mod tests {
         );
         let mut config = make_config(true);
         config
+            .model
             .routing_model_map
             .insert("complex".into(), "deepseek-v4-pro:cloud".into());
 

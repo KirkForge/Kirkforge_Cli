@@ -78,7 +78,10 @@ pub async fn handle_test_command(args: &str, state: &mut AppState) -> String {
     );
 
     let current_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let workdir = if crate::shared::read_shared_config(&state.config).bash_sandbox_workdir {
+    let workdir = if crate::shared::read_shared_config(&state.config)
+        .security
+        .bash_sandbox_workdir
+    {
         path_guard
             .sandbox_dir
             .as_deref()
@@ -93,7 +96,9 @@ pub async fn handle_test_command(args: &str, state: &mut AppState) -> String {
         Some(&workdir_str),
         &deny_list,
         &path_guard,
-        crate::shared::read_shared_config(&state.config).bash_sandbox_workdir,
+        crate::shared::read_shared_config(&state.config)
+            .security
+            .bash_sandbox_workdir,
     ) {
         return format!("🔒 /test blocked: {reason}");
     }

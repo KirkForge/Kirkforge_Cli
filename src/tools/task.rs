@@ -295,7 +295,7 @@ impl TaskSpawner for InProcessTaskSpawner {
         let effective_model = request.model.as_deref().unwrap_or(&self.model_name);
 
         // If subagent_allowed_models is set, enforce the allowlist.
-        if let Some(allowed) = &self.config.subagent_allowed_models {
+        if let Some(allowed) = &self.config.model.subagent_allowed_models {
             if !allowed.is_empty() && !allowed.iter().any(|m| m == effective_model) {
                 return Err(format!(
                     "model '{effective_model}' not in allowed subagent models list"
@@ -308,10 +308,10 @@ impl TaskSpawner for InProcessTaskSpawner {
                 effective_model,
                 &self.ollama_host,
                 None,
-                &self.config.anthropic_provider,
-                self.config.request_timeout_secs,
-                &self.config.opencode_zen_endpoint,
-                self.config.opencode_zen_api_key.as_deref(),
+                &self.config.model.anthropic_provider,
+                self.config.model.request_timeout_secs,
+                &self.config.model.opencode_zen_endpoint,
+                self.config.model.opencode_zen_api_key.as_deref(),
             ),
             &self.config,
         );
@@ -323,16 +323,16 @@ impl TaskSpawner for InProcessTaskSpawner {
             self.supports_images,
             deny_list,
             path_guard,
-            self.config.bash_sandbox_workdir,
-            self.config.minify_write_side,
+            self.config.security.bash_sandbox_workdir,
+            self.config.tools.minify_write_side,
             None,
             Some((
-                self.config.computer_use.enabled,
-                self.config.computer_use.clone(),
+                self.config.security.computer_use.enabled,
+                self.config.security.computer_use.clone(),
             )),
             None,
             None,
-            Some(self.config.docker.clone()),
+            Some(self.config.security.docker.clone()),
         );
         let tools: Vec<Arc<dyn Tool>> = match request.persona.as_str() {
             "explore" => all

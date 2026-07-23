@@ -30,15 +30,15 @@ pub(super) async fn setup_plugin_sources(
         "  /plugins reload              — rescan and apply current config".to_string(),
         String::new(),
     ];
-    if cfg.plugin_sources.is_empty() {
+    if cfg.tools.plugin_sources.is_empty() {
         lines.push("No workspace sources configured yet.".to_string());
     } else {
         lines.push(format!(
             "Configured sources ({}):",
-            cfg.plugin_sources.len()
+            cfg.tools.plugin_sources.len()
         ));
-        for (name, path) in &cfg.plugin_sources {
-            let enabled = if cfg.enabled_plugins.iter().any(|n| n == name) {
+        for (name, path) in &cfg.tools.plugin_sources {
+            let enabled = if cfg.tools.enabled_plugins.iter().any(|n| n == name) {
                 "on"
             } else {
                 "off"
@@ -52,7 +52,7 @@ pub(super) async fn setup_plugin_sources(
 /// `sources` — list configured workspace plugin sources and their enabled state.
 pub(super) fn list_sources(state: &AppState) -> String {
     let cfg = read_shared_config(&state.config);
-    if cfg.plugin_sources.is_empty() {
+    if cfg.tools.plugin_sources.is_empty() {
         return "No workspace plugin sources configured. Use /plugins add <name> <path>."
             .to_string();
     }
@@ -61,10 +61,10 @@ pub(super) fn list_sources(state: &AppState) -> String {
     let mut lines = Vec::new();
     lines.push(format!(
         "Workspace plugin sources ({}):",
-        cfg.plugin_sources.len()
+        cfg.tools.plugin_sources.len()
     ));
-    for (name, path) in &cfg.plugin_sources {
-        let enabled = cfg.enabled_plugins.iter().any(|n| n == name);
+    for (name, path) in &cfg.tools.plugin_sources {
+        let enabled = cfg.tools.enabled_plugins.iter().any(|n| n == name);
         let status = match (enabled, active.contains(name)) {
             (true, true) => "enabled, active",
             (true, false) => "enabled, inactive",
@@ -98,7 +98,8 @@ pub(super) async fn add_source(
 
     {
         let mut cfg = write_shared_config(&state.config);
-        cfg.plugin_sources
+        cfg.tools
+            .plugin_sources
             .insert(name.to_string(), resolved.clone());
         if let Err(e) = crate::session::config::save_config(&cfg) {
             return format!("❌ Failed to save config while adding source '{name}': {e}");
@@ -116,10 +117,10 @@ pub(super) fn remove_source(
 ) -> String {
     {
         let mut cfg = write_shared_config(&state.config);
-        if cfg.plugin_sources.remove(name).is_none() {
+        if cfg.tools.plugin_sources.remove(name).is_none() {
             return format!("❌ No workspace plugin source named '{name}'.");
         }
-        cfg.enabled_plugins.retain(|n| n != name);
+        cfg.tools.enabled_plugins.retain(|n| n != name);
         if let Err(e) = crate::session::config::save_config(&cfg) {
             return format!("❌ Failed to save config while removing source '{name}': {e}");
         }

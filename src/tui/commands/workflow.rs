@@ -154,8 +154,8 @@ async fn handle_run(
         .model_info
         .as_ref()
         .map(|m| m.name.clone())
-        .unwrap_or_else(|| cfg.default_model.clone());
-    let ollama_host = cfg.ollama_host.clone();
+        .unwrap_or_else(|| cfg.model.default_model.clone());
+    let ollama_host = cfg.model.ollama_host.clone();
     let supports_images = state
         .model_info
         .as_ref()

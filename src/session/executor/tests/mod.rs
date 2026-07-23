@@ -130,74 +130,21 @@ fn make_info() -> ModelInfo {
 }
 
 fn make_config(auto_approve: bool) -> Config {
-    Config {
-        default_model: "test".into(),
-        ollama_host: "https://gateway.example.com".into(),
-        auto_approve,
-        truncation_strategy: crate::shared::TruncationStrategy::KeepToolOnly,
-        max_tool_result_chars: 4000,
-        deny_paths: vec![],
-        deny_urls: vec![],
-        deny_extensions: vec![],
-        allowed_write_dirs: vec![],
-        sandbox_dir: None,
-        block_dotfiles: false,
-        block_gitignored_dotfiles: false,
-        max_file_read_size: 1024 * 1024,
-        max_overwrite_size: 1024 * 1024,
-        minify_write_side: false,
-        scheduled_bash_auto_approve: false,
-        max_concurrent_scheduled_jobs: 4,
-        follow_symlinks: false,
-        block_binary_reads: false,
-        bash_sandbox_workdir: false,
-        carryover_enabled: false,
-        permission_rules: vec![],
-        summarize_model: String::new(),
-        summarize_enabled: false,
-        routing_enabled: false,
-        router_model: String::new(),
-        routing_model_map: std::collections::HashMap::new(),
-        mcp_servers: vec![],
-        lsp_servers: vec![],
-        bang_requires_approval: false,
-        json_mode: false,
-        preserve_recent_messages: 2,
-        max_plugin_trust: kirkforge_plugin::TrustTier::Shell,
-        reject_on_excess_plugin_trust: true,
-        plugin_signature_validation: false,
-        plugin_public_key_path: None,
-        plugin_allowed_env_vars: vec![],
-        max_tool_calls_per_turn: 10,
-        max_persona_turns: 10,
-        hooks_dir: None,
-        commit_max_file_size: 5 * 1024 * 1024,
-        tool_timeout_secs: Some(30),
-        request_timeout_secs: 300,
-        dry_run: false,
-        cache_enabled: false,
-        cache_dir: None,
-        audit_log_path: None,
-        memory_enabled: false,
-        memory_max_tokens: 0,
-        memory_top_n: 0,
-        checkpoint_interval_messages: 0,
-        plugin_sources: std::collections::HashMap::new(),
-        enabled_plugins: vec![],
-        anthropic_provider: "anthropic".into(),
-        aws_region: "us-east-1".into(),
-        aws_profile: String::new(),
-        gcp_service_account_path: None,
-        gcp_project_id: String::new(),
-        gcp_region: "us-central1".into(),
-        subagent_allowed_models: None,
-        opencode_zen_api_key: None,
-        opencode_zen_endpoint: String::from("https://opencode.ai/zen/v1/chat/completions"),
-        computer_use: crate::shared::ComputerUseConfig::default(),
-        seed: None,
-        worktree_enabled: false,
-        docker: crate::shared::DockerConfig::default(),
-    }
+    let mut cfg = Config::default();
+    cfg.model.default_model = "test".into();
+    cfg.model.ollama_host = "https://gateway.example.com".into();
+    cfg.security.auto_approve = auto_approve;
+    cfg.security.bash_sandbox_workdir = false;
+    cfg.session.carryover_enabled = false;
+    cfg.session.preserve_recent_messages = 2;
+    cfg.tools.max_tool_calls_per_turn = 10;
+    cfg.tools.max_persona_turns = 10;
+    cfg.model.request_timeout_secs = 300;
+    cfg.session.checkpoint_interval_messages = 0;
+    cfg.display.memory_enabled = false;
+    cfg.display.memory_max_tokens = 0;
+    cfg.display.memory_top_n = 0;
+    cfg
 }
 
 fn make_executor(
@@ -532,8 +479,8 @@ async fn test_always_approve_pushes_permission_rule_not_auto_approve() {
     });
 
     let config = make_config(false);
-    assert!(config.permission_rules.is_empty());
-    assert!(!config.auto_approve);
+    assert!(config.security.permission_rules.is_empty());
+    assert!(!config.security.auto_approve);
 
     let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], config);
     let _events = exe
@@ -545,12 +492,12 @@ async fn test_always_approve_pushes_permission_rule_not_auto_approve() {
     {
         let cfg = cfg(&exe);
         assert_eq!(
-            cfg.permission_rules.len(),
+            cfg.security.permission_rules.len(),
             1,
             "AlwaysApprove should have appended exactly one rule, got {:?}",
-            cfg.permission_rules
+            cfg.security.permission_rules
         );
-        let r = &cfg.permission_rules[0];
+        let r = &cfg.security.permission_rules[0];
         assert_eq!(r.tool, "bash");
         assert_eq!(r.key, "command");
         assert_eq!(r.pattern, "cargo test --release");
@@ -558,7 +505,7 @@ async fn test_always_approve_pushes_permission_rule_not_auto_approve() {
     }
 
     assert!(
-        !cfg(&exe).auto_approve,
+        !cfg(&exe).security.auto_approve,
         "AlwaysApprove should NOT flip auto_approve — the new rule is the user's intent"
     );
 }
@@ -605,6 +552,7 @@ async fn test_always_approve_dedups_repeated_calls() {
 
     let mut config = config;
     config
+        .security
         .permission_rules
         .push(crate::shared::permission::PermissionRule {
             tool: "bash".into(),
@@ -612,7 +560,7 @@ async fn test_always_approve_dedups_repeated_calls() {
             pattern: "ls".into(),
             action: PermissionAction::Allow,
         });
-    assert_eq!(config.permission_rules.len(), 1);
+    assert_eq!(config.security.permission_rules.len(), 1);
 
     let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], config);
     let _events = exe
@@ -623,7 +571,7 @@ async fn test_always_approve_dedups_repeated_calls() {
     approval_handle.await.unwrap();
 
     assert_eq!(
-        cfg(&exe).permission_rules.len(),
+        cfg(&exe).security.permission_rules.len(),
         1,
         "AlwaysApprove should dedup against an existing identical rule"
     );
@@ -670,6 +618,7 @@ async fn test_always_approve_does_not_overwrite_existing_deny() {
     let mut config = make_config(false);
 
     config
+        .security
         .permission_rules
         .push(crate::shared::permission::PermissionRule {
             tool: "bash".into(),
@@ -688,9 +637,9 @@ async fn test_always_approve_does_not_overwrite_existing_deny() {
 
     {
         let cfg = cfg(&exe);
-        assert_eq!(cfg.permission_rules.len(), 1);
+        assert_eq!(cfg.security.permission_rules.len(), 1);
         assert_eq!(
-            cfg.permission_rules[0].action,
+            cfg.security.permission_rules[0].action,
             PermissionAction::Deny,
             "Existing Deny should not be overwritten by a new Allow on the same pattern"
         );
@@ -737,6 +686,7 @@ async fn test_deny_rule_blocks_bash_even_with_auto_approve() {
 
     let mut config = make_config(true);
     config
+        .security
         .permission_rules
         .push(crate::shared::permission::PermissionRule {
             tool: "bash".into(),
@@ -804,7 +754,7 @@ async fn test_deny_paths_blocks_write_file_even_with_auto_approve() {
     let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
 
     let mut config = make_config(true);
-    config.deny_paths = vec!["secret/**".into()];
+    config.security.deny_paths = vec!["secret/**".into()];
 
     let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], config);
     let events = exe
@@ -1081,6 +1031,7 @@ async fn test_dangerous_shell_blocked_even_with_allow_all_rule() {
 
     let mut config = make_config(true);
     config
+        .security
         .permission_rules
         .push(crate::shared::permission::PermissionRule {
             tool: "*".into(),
@@ -1276,7 +1227,7 @@ async fn test_tool_call_loop_capped() {
 
     let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
     let mut config = make_config(true);
-    config.max_tool_calls_per_turn = 5;
+    config.tools.max_tool_calls_per_turn = 5;
     let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], config);
     let _events = exe
         .run_turn_collecting("loop", &approval_tx, never_cancelled())
@@ -1334,6 +1285,7 @@ async fn test_explicit_allow_rule_honored_under_auto_approve_bash() {
 
     let mut config = make_config(true);
     config
+        .security
         .permission_rules
         .push(crate::shared::permission::PermissionRule {
             tool: "bash".into(),
@@ -1392,6 +1344,7 @@ async fn test_deny_rule_blocks_read_file() {
 
     let mut config = make_config(false);
     config
+        .security
         .permission_rules
         .push(crate::shared::permission::PermissionRule {
             tool: "read_file".into(),
@@ -1716,9 +1669,9 @@ fn reload_config_rebuilds_and_reports_changes() {
     let mut exe = make_executor(Box::new(adapter), vec![], make_config(false));
 
     let mut new_config = make_config(false);
-    new_config.default_model = "qwen2.5:14b".into();
-    new_config.json_mode = true;
-    new_config.carryover_enabled = true;
+    new_config.model.default_model = "qwen2.5:14b".into();
+    new_config.model.json_mode = true;
+    new_config.session.carryover_enabled = true;
 
     let summary = exe.reload_config(new_config.clone());
 
@@ -1731,9 +1684,9 @@ fn reload_config_rebuilds_and_reports_changes() {
 
     // The shared lock should hold the new values.
     let cfg = cfg(&exe);
-    assert_eq!(cfg.default_model, "qwen2.5:14b");
-    assert!(cfg.json_mode);
-    assert!(cfg.carryover_enabled);
+    assert_eq!(cfg.model.default_model, "qwen2.5:14b");
+    assert!(cfg.model.json_mode);
+    assert!(cfg.session.carryover_enabled);
 }
 
 #[tokio::test]
@@ -2234,7 +2187,7 @@ async fn test_pre_tool_hook_exit_two_blocks_bash() {
     std::fs::write(hooks_dir.join("pre-tool-bash.sh"), "#!/bin/bash\nexit 2").unwrap();
 
     let mut config = make_config(true);
-    config.hooks_dir = Some(hooks_dir);
+    config.tools.hooks_dir = Some(hooks_dir);
     let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], config);
 
     let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
@@ -2300,7 +2253,7 @@ async fn test_pre_tool_hook_exit_one_allows_and_warns() {
     .unwrap();
 
     let mut config = make_config(true);
-    config.hooks_dir = Some(hooks_dir);
+    config.tools.hooks_dir = Some(hooks_dir);
     let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], config);
 
     let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
@@ -2351,7 +2304,7 @@ async fn test_pre_tool_hook_timeout_allows_and_warns() {
     std::fs::write(hooks_dir.join("pre-tool-bash.sh"), "#!/bin/bash\nsleep 10").unwrap();
 
     let mut config = make_config(true);
-    config.hooks_dir = Some(hooks_dir);
+    config.tools.hooks_dir = Some(hooks_dir);
     let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], config);
 
     let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
@@ -2390,7 +2343,7 @@ async fn test_compact_hooks_fire_pre_and_post() {
     .unwrap();
 
     let mut config = make_config(false);
-    config.hooks_dir = Some(hooks_dir);
+    config.tools.hooks_dir = Some(hooks_dir);
     let exe = make_executor(
         Box::new(MockAdapter::new(vec![], make_info())),
         vec![],
@@ -2610,7 +2563,7 @@ async fn test_glob_base_dir_outside_sandbox_denied() {
 
     let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
     let mut config = make_config(false);
-    config.sandbox_dir = Some(sandbox.to_string_lossy().to_string());
+    config.security.sandbox_dir = Some(sandbox.to_string_lossy().to_string());
     let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], config);
     let events = exe
         .run_turn_collecting("list outside sandbox", &approval_tx, never_cancelled())
@@ -2656,7 +2609,7 @@ async fn test_max_tool_calls_per_turn_respected() {
 
     let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
     let mut config = make_config(true);
-    config.max_tool_calls_per_turn = 3;
+    config.tools.max_tool_calls_per_turn = 3;
     let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], config);
     let events = exe
         .run_turn_collecting("loop", &approval_tx, never_cancelled())
@@ -2740,8 +2693,11 @@ async fn test_always_approve_rule_round_trips_to_next_turn() {
 
     {
         let cfg = cfg(&exe);
-        assert_eq!(cfg.permission_rules.len(), 1);
-        assert_eq!(cfg.permission_rules[0].action, PermissionAction::Allow);
+        assert_eq!(cfg.security.permission_rules.len(), 1);
+        assert_eq!(
+            cfg.security.permission_rules[0].action,
+            PermissionAction::Allow
+        );
     }
 
     // Second turn: same command should now match the rule and run
@@ -2996,7 +2952,7 @@ async fn test_deterministic_mode_produces_same_tool_sequence() {
 
     // Build config with seed=42
     let mut cfg = make_config(true);
-    cfg.seed = Some(42);
+    cfg.model.seed = Some(42);
 
     // Helper to build a pair of sleeping tools
     let make_tools = || -> Vec<Arc<dyn Tool>> {

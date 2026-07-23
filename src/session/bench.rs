@@ -89,19 +89,34 @@ pub async fn run_task(
 
     // Build a session config for this task.
     let mut task_config = config.clone();
-    task_config.default_model = model.to_string();
-    task_config.sandbox_dir = Some(sandbox_path.to_string_lossy().to_string());
-    task_config.auto_approve = true;
-    task_config.dry_run = false;
+    task_config.model.default_model = model.to_string();
+    task_config.security.sandbox_dir = Some(sandbox_path.to_string_lossy().to_string());
+    task_config.security.auto_approve = true;
+    task_config.tools.dry_run = false;
     super::config::freeze_launch_sandbox(&mut task_config);
 
     let shared_config: SharedConfig = std::sync::Arc::new(std::sync::RwLock::new(task_config));
 
-    let ollama_host = shared_config.read().unwrap().ollama_host.clone();
-    let anthropic_provider = shared_config.read().unwrap().anthropic_provider.clone();
-    let request_timeout = shared_config.read().unwrap().request_timeout_secs;
-    let zen_endpoint = shared_config.read().unwrap().opencode_zen_endpoint.clone();
-    let zen_api_key = shared_config.read().unwrap().opencode_zen_api_key.clone();
+    let ollama_host = shared_config.read().unwrap().model.ollama_host.clone();
+    let anthropic_provider = shared_config
+        .read()
+        .unwrap()
+        .model
+        .anthropic_provider
+        .clone();
+    let request_timeout = shared_config.read().unwrap().model.request_timeout_secs;
+    let zen_endpoint = shared_config
+        .read()
+        .unwrap()
+        .model
+        .opencode_zen_endpoint
+        .clone();
+    let zen_api_key = shared_config
+        .read()
+        .unwrap()
+        .model
+        .opencode_zen_api_key
+        .clone();
 
     // Create adapter.
     let adapter = crate::adapters::adapter_for_with_provider(

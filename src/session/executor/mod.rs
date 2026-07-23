@@ -149,6 +149,7 @@ impl Executor {
         warn_if_unsandboxed(&path_guard);
 
         let audit_log_path = cfg
+            .security
             .audit_log_path
             .clone()
             .filter(|p| !p.as_os_str().is_empty())
@@ -163,19 +164,19 @@ impl Executor {
         // adapter. The trait method has a default no-op for adapters
         // that don't support it, so unknown models (and the test
         // mocks) silently ignore the flag.
-        adapter.set_json_mode(cfg.json_mode);
+        adapter.set_json_mode(cfg.model.json_mode);
 
         // Push the deterministic-mode seed down to the active adapter.
-        adapter.set_seed(cfg.seed);
+        adapter.set_seed(cfg.model.seed);
 
         let adapter_swap = AdapterSwap::new(
             model_name.clone(),
-            cfg.ollama_host.clone(),
+            cfg.model.ollama_host.clone(),
             None, // model_type_override not available here; set via CLI
-            cfg.request_timeout_secs,
+            cfg.model.request_timeout_secs,
         );
 
-        let mut hook_runner = match &cfg.hooks_dir {
+        let mut hook_runner = match &cfg.tools.hooks_dir {
             Some(dir) => HookRunner::new(dir.clone()),
             None => HookRunner::default(),
         };
@@ -185,7 +186,7 @@ impl Executor {
 
         let event_bus = EventBus::new();
 
-        let carryover_enabled = cfg.carryover_enabled;
+        let carryover_enabled = cfg.session.carryover_enabled;
         let carryover = if carryover_enabled {
             crate::session::carryover::load_carryover()
         } else {
@@ -253,14 +254,14 @@ impl Executor {
     /// [1, 3600] seconds.
     fn tool_call_timeout(&self) -> std::time::Duration {
         let cfg = read_shared_config(&self.config);
-        let secs = cfg.tool_timeout_secs.unwrap_or(30).clamp(1, 3600);
+        let secs = cfg.tools.tool_timeout_secs.unwrap_or(30).clamp(1, 3600);
         std::time::Duration::from_secs(secs)
     }
 
     /// Build a per-tool-call context linked to the turn's cancellation
     /// state and the session's dry-run flag.
     fn tool_context_for_call(&self, cancelled: &std::sync::atomic::AtomicBool) -> ToolContext {
-        let dry_run = read_shared_config(&self.config).dry_run;
+        let dry_run = read_shared_config(&self.config).tools.dry_run;
         ToolContext {
             token: tool_cancel_token(cancelled),
             dry_run,
@@ -272,7 +273,7 @@ impl Executor {
     /// tool batch runs sequentially (no `tokio::spawn`) to eliminate
     /// nondeterminism from task scheduling.
     fn is_deterministic(&self) -> bool {
-        read_shared_config(&self.config).seed.is_some()
+        read_shared_config(&self.config).model.seed.is_some()
     }
 
     /// Attach a repo-graph context index to the prompt builder.
@@ -288,7 +289,7 @@ impl Executor {
     fn build_task_spawner(&mut self) {
         let cfg = read_shared_config(&self.config).clone();
         let model_name = self.model_name.clone();
-        let ollama_host = cfg.ollama_host.clone();
+        let ollama_host = cfg.model.ollama_host.clone();
         let undo_stack = self.undo_stack.clone();
         let supports_images = self.adapter.model_info().supports_images;
         self.task_spawner = Some(Arc::new(crate::tools::task::InProcessTaskSpawner::new(
@@ -318,7 +319,7 @@ impl Executor {
         self.path_guard = path_guard;
         self.read_gate = read_gate;
         // JSON-mode changes are applied to the running adapter too.
-        self.adapter.set_json_mode(fresh.json_mode);
+        self.adapter.set_json_mode(fresh.model.json_mode);
         config_diff_summary(&old, &fresh)
     }
 
@@ -542,7 +543,7 @@ impl Executor {
         self.tools.replace("plugin", plugin_set);
 
         // 2. Rebuild hooks so built-in and plugin hooks are merged fresh.
-        let mut hook_runner = match &cfg.hooks_dir {
+        let mut hook_runner = match &cfg.tools.hooks_dir {
             Some(dir) => HookRunner::new(dir.clone()),
             None => HookRunner::default(),
         };

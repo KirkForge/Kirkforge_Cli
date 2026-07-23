@@ -311,7 +311,7 @@ async fn run_hook_script(
         None,
         &deny_list,
         &path_guard,
-        config.bash_sandbox_workdir,
+        config.security.bash_sandbox_workdir,
     ) {
         return Err(format!("hook script blocked: {reason}"));
     }

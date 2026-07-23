@@ -19,7 +19,7 @@ pub(super) async fn probe_ollama_connection_with_timeout(
     model: &str,
     timeout: std::time::Duration,
 ) -> ConnectionState {
-    let host = config.ollama_host.trim_end_matches('/');
+    let host = config.model.ollama_host.trim_end_matches('/');
     if host.is_empty() {
         return ConnectionState::Error("empty ollama_host in config".into());
     }
@@ -63,7 +63,7 @@ pub(super) async fn connection_probe_task(
         };
         let state = probe_ollama_connection_with_timeout(
             &cfg,
-            &cfg.default_model,
+            &cfg.model.default_model,
             std::time::Duration::from_secs(1),
         )
         .await;

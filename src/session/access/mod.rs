@@ -541,17 +541,20 @@ pub fn warn_if_unsandboxed(path_guard: &PathGuard) {
 pub fn access_from_config(config: &crate::shared::Config) -> (DenyList, PathGuard, ReadGate) {
     // Start with safe defaults, then merge configured patterns on top
     let mut base = DenyList::default();
-    base.path_patterns.extend(config.deny_paths.clone());
-    base.url_patterns.extend(config.deny_urls.clone());
+    base.path_patterns
+        .extend(config.security.deny_paths.clone());
+    base.url_patterns.extend(config.security.deny_urls.clone());
     let deny_list = DenyList::new(base.path_patterns, base.url_patterns);
 
     let sandbox_dir = config
+        .security
         .sandbox_dir
         .as_ref()
         .filter(|s| !s.is_empty())
         .map(PathBuf::from);
 
     let allowed_dirs: Vec<PathBuf> = config
+        .security
         .allowed_write_dirs
         .iter()
         .filter(|s| !s.is_empty())
@@ -560,19 +563,19 @@ pub fn access_from_config(config: &crate::shared::Config) -> (DenyList, PathGuar
 
     // Merge deny extensions with defaults
     let mut deny_extensions: Vec<String> = PathGuard::default().deny_extensions;
-    deny_extensions.extend(config.deny_extensions.clone());
+    deny_extensions.extend(config.security.deny_extensions.clone());
 
     let path_guard = PathGuard {
         sandbox_dir,
         deny_extensions,
-        block_dotfiles: config.block_dotfiles,
-        block_gitignored_dotfiles: config.block_gitignored_dotfiles,
-        max_read_size: config.max_file_read_size,
-        max_overwrite_size: config.max_overwrite_size,
+        block_dotfiles: config.security.block_dotfiles,
+        block_gitignored_dotfiles: config.security.block_gitignored_dotfiles,
+        max_read_size: config.security.max_file_read_size,
+        max_overwrite_size: config.security.max_overwrite_size,
         deny_list: deny_list.clone(),
-        follow_symlinks: config.follow_symlinks,
+        follow_symlinks: config.tools.follow_symlinks,
         allowed_write_dirs: allowed_dirs,
-        block_binary_reads: config.block_binary_reads,
+        block_binary_reads: config.tools.block_binary_reads,
     };
 
     let read_gate = ReadGate::new();
@@ -944,7 +947,7 @@ mod tests {
         // case the user sees.
         let mut config = crate::shared::Config::default();
         assert!(
-            config.sandbox_dir.is_none(),
+            config.security.sandbox_dir.is_none(),
             "Config::default() must NOT pre-resolve cwd — that's the \
              review.md arch concern #3 fix. Resolution happens at \
              launch time in `freeze_launch_sandbox`."
@@ -964,11 +967,8 @@ mod tests {
 
         // Explicit escape hatch: empty string in config = unsandboxed.
         // The helper must not overwrite it.
-        let mut config_unsandboxed = crate::shared::Config {
-            sandbox_dir: Some(String::new()),
-            seed: None,
-            ..crate::shared::Config::default()
-        };
+        let mut config_unsandboxed = crate::shared::Config::default();
+        config_unsandboxed.security.sandbox_dir = Some(String::new());
         freeze_launch_sandbox(&mut config_unsandboxed);
         let (_deny, guard_unsandboxed, _gate) = access_from_config(&config_unsandboxed);
         assert!(
@@ -977,7 +977,7 @@ mod tests {
              escape hatch; freeze_launch_sandbox must not overwrite it"
         );
         assert_eq!(
-            config_unsandboxed.sandbox_dir.as_deref(),
+            config_unsandboxed.security.sandbox_dir.as_deref(),
             Some(""),
             "freeze_launch_sandbox must leave an explicit-empty sandbox_dir alone"
         );
@@ -990,7 +990,7 @@ mod tests {
         // normally have filled it. The user-facing property is
         // that `None` produces an unsandboxed guard.
         freeze_launch_sandbox(&mut config_none);
-        config_none.sandbox_dir = None;
+        config_none.security.sandbox_dir = None;
         let (_deny, guard_none, _gate) = access_from_config(&config_none);
         assert!(
             !guard_none.is_sandboxed(),

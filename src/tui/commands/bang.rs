@@ -48,12 +48,12 @@ use crate::shared::permission::{evaluate, PermissionAction};
 /// either default and force `Allow`, `Ask`, or `Deny`.
 pub fn bang_permission_action(cmd: &str, config: &crate::shared::Config) -> PermissionAction {
     let args = serde_json::json!({ "command": cmd });
-    let default = if config.bang_requires_approval {
+    let default = if config.security.bang_requires_approval {
         PermissionAction::Ask
     } else {
         PermissionAction::Allow
     };
-    evaluate(&config.permission_rules, "bash", &args, default)
+    evaluate(&config.security.permission_rules, "bash", &args, default)
 }
 
 /// What a `!` command actually did. Pure data — the formatting helpers
@@ -90,7 +90,7 @@ impl BangResult {
 /// Unlike the original implementation, this now goes through the same
 /// safety gate as the model's `bash` tool (`check_bash_command_str`) and
 /// uses the same capped, kill-on-drop runner (`run_shell`). Working dir
-/// defaults to the current process dir; if `config.bash_sandbox_workdir`
+/// defaults to the current process dir; if `config.security.bash_sandbox_workdir`
 /// is enabled and a sandbox is configured, the command is confined to
 /// the sandbox.
 ///
@@ -107,7 +107,7 @@ pub async fn run_bang_command(cmd: &str, config: &crate::shared::Config) -> Bang
     // but when sandboxing is enabled we force it inside the sandbox so
     // the same containment check the bash tool uses applies here too.
     let current_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let workdir = if config.bash_sandbox_workdir {
+    let workdir = if config.security.bash_sandbox_workdir {
         path_guard
             .sandbox_dir
             .as_deref()
@@ -123,7 +123,7 @@ pub async fn run_bang_command(cmd: &str, config: &crate::shared::Config) -> Bang
         Some(&workdir_str),
         &deny_list,
         &path_guard,
-        config.bash_sandbox_workdir,
+        config.security.bash_sandbox_workdir,
     ) {
         return BangResult {
             cmd: cmd.to_string(),
@@ -278,11 +278,9 @@ mod tests {
     use crate::shared::permission::{PermissionAction, PermissionRule};
 
     fn test_config_with_rules(rules: Vec<PermissionRule>) -> crate::shared::Config {
-        crate::shared::Config {
-            permission_rules: rules,
-            seed: None,
-            ..crate::shared::Config::default()
-        }
+        let mut cfg = crate::shared::Config::default();
+        cfg.security.permission_rules = rules;
+        cfg
     }
 
     #[test]
@@ -297,7 +295,7 @@ mod tests {
     #[test]
     fn bang_permission_asks_when_gate_enabled() {
         let mut cfg = test_config_with_rules(vec![]);
-        cfg.bang_requires_approval = true;
+        cfg.security.bang_requires_approval = true;
         assert_eq!(
             bang_permission_action("echo hello", &cfg),
             PermissionAction::Ask

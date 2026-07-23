@@ -22,7 +22,7 @@ impl Tool for ReadFile {
     fn def(&self) -> ToolDef {
         ToolDef {
             name: "read_file",
-            description: "Read the contents of a file. Use offset and limit to read specific sections. Set minify=true to strip comments and collapse whitespace (saves ~30-50% tokens for source files). When config.minify_write_side is true, minified reads are wrapped in <minified lang='...'> envelopes; edit_file/write_file will expand them back to readable source.",
+            description: "Read the contents of a file. Use offset and limit to read specific sections. Set minify=true to strip comments and collapse whitespace (saves ~30-50% tokens for source files). When config.tools.minify_write_side is true, minified reads are wrapped in <minified lang='...'> envelopes; edit_file/write_file will expand them back to readable source.",
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {

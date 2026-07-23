@@ -89,12 +89,9 @@ mod tests {
         default_model: impl Into<String>,
         map: std::collections::HashMap<String, String>,
     ) -> AppState {
-        let cfg = Config {
-            default_model: default_model.into(),
-            routing_model_map: map,
-            seed: None,
-            ..Config::default()
-        };
+        let mut cfg = Config::default();
+        cfg.model.default_model = default_model.into();
+        cfg.model.routing_model_map = map;
         AppState::new(std::sync::Arc::new(std::sync::RwLock::new(cfg)))
     }
 

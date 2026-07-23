@@ -59,12 +59,12 @@ async fn run_bash_job(
     // 1. Permission / approval gate.
     let (deny_list, path_guard, _read_gate) = access_from_config(config);
     let args = serde_json::json!({"command": command});
-    let default = if config.scheduled_bash_auto_approve {
+    let default = if config.tools.scheduled_bash_auto_approve {
         PermissionAction::Allow
     } else {
         PermissionAction::Ask
     };
-    match evaluate(&config.permission_rules, "bash", &args, default) {
+    match evaluate(&config.security.permission_rules, "bash", &args, default) {
         PermissionAction::Deny => {
             return record_failure(
                 job,
@@ -92,7 +92,7 @@ async fn run_bash_job(
         None,
         &deny_list,
         &path_guard,
-        config.bash_sandbox_workdir,
+        config.security.bash_sandbox_workdir,
     ) {
         return record_failure(
             job,
@@ -112,7 +112,7 @@ async fn run_bash_job(
             None, // no timeout for scheduled jobs
             &deny_list,
             &path_guard,
-            config.bash_sandbox_workdir,
+            config.security.bash_sandbox_workdir,
         )
         .await
     {
@@ -266,11 +266,8 @@ mod tests {
     async fn bash_job_with_auto_approve_succeeds() {
         let (_tmp, store) = tmp_store();
         let mut job = bash_job("echo hello-scheduled");
-        let config = Config {
-            scheduled_bash_auto_approve: true,
-            seed: None,
-            ..Default::default()
-        };
+        let mut config = Config::default();
+        config.tools.scheduled_bash_auto_approve = true;
         let run = run_job(&mut job, &store, &config).await.unwrap();
         assert_eq!(run.status, RunStatus::Success);
         assert_eq!(run.exit_code, Some(0));
@@ -282,11 +279,8 @@ mod tests {
     async fn dangerous_bash_job_rejected_even_with_auto_approve() {
         let (_tmp, store) = tmp_store();
         let mut job = bash_job("rm -rf /");
-        let config = Config {
-            scheduled_bash_auto_approve: true,
-            seed: None,
-            ..Default::default()
-        };
+        let mut config = Config::default();
+        config.tools.scheduled_bash_auto_approve = true;
         let run = run_job(&mut job, &store, &config).await.unwrap();
         assert_eq!(run.status, RunStatus::Failure);
         assert!(run.summary.contains("Safety gate") || run.summary.contains("dangerous"));

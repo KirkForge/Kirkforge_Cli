@@ -212,7 +212,7 @@ impl Executor {
         event_tx: &mpsc::Sender<TurnEvent>,
     ) -> anyhow::Result<()> {
         // --- adapter hot-swap via smart routing ---
-        let routing_enabled = read_shared_config(&self.config).routing_enabled;
+        let routing_enabled = read_shared_config(&self.config).model.routing_enabled;
         if routing_enabled {
             // Clone the config for the swap check so we don't hold the
             // read guard across the mutable adapter borrow.
@@ -265,6 +265,7 @@ impl Executor {
         let turn_start = Instant::now();
 
         let max_iterations = read_shared_config(&self.config)
+            .tools
             .max_tool_calls_per_turn
             .max(1);
 
@@ -499,7 +500,10 @@ impl Executor {
 
         let (auto_approve, permission_rules) = {
             let cfg = read_shared_config(&self.config);
-            (cfg.auto_approve, cfg.permission_rules.clone())
+            (
+                cfg.security.auto_approve,
+                cfg.security.permission_rules.clone(),
+            )
         };
         let is_destructive = matches!(tc.name.as_str(), "write_file" | "edit_file" | "bash");
         let is_read_only_bash_call = tc.name == "bash"
@@ -593,7 +597,9 @@ impl Executor {
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
             let bash_workdir = tc.arguments.get("workdir").and_then(|v| v.as_str());
-            let bash_sandbox_workdir = read_shared_config(&self.config).bash_sandbox_workdir;
+            let bash_sandbox_workdir = read_shared_config(&self.config)
+                .security
+                .bash_sandbox_workdir;
             if let Some(denied) = check_bash_command_str(
                 bash_cmd,
                 bash_workdir,
@@ -712,7 +718,7 @@ impl Executor {
         event_tx: &mpsc::Sender<TurnEvent>,
     ) -> anyhow::Result<()> {
         let is_destructive = matches!(tc.name.as_str(), "write_file" | "edit_file" | "bash");
-        let max_tool_result_chars = read_shared_config(&self.config).max_tool_result_chars;
+        let max_tool_result_chars = read_shared_config(&self.config).tools.max_tool_result_chars;
 
         if matches!(
             tc.name.as_str(),
@@ -1316,7 +1322,11 @@ impl Executor {
         // the prompt-builder memory lookup.
         let (memory_enabled, memory_max_tokens, memory_top_n) = {
             let cfg = read_shared_config(&self.config);
-            (cfg.memory_enabled, cfg.memory_max_tokens, cfg.memory_top_n)
+            (
+                cfg.display.memory_enabled,
+                cfg.display.memory_max_tokens,
+                cfg.display.memory_top_n,
+            )
         };
 
         // Build a richer memory context from the current user turn plus

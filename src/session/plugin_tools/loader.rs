@@ -23,25 +23,25 @@ pub fn plugins_dir() -> PathBuf {
 /// Build the host trust policy from the current config snapshot.
 pub fn trust_policy_from_config(cfg: &Config) -> TrustPolicy {
     TrustPolicy {
-        max: cfg.max_plugin_trust,
-        reject_on_excess: cfg.reject_on_excess_plugin_trust,
-        verify_signatures: cfg.plugin_signature_validation,
-        signature_key_path: cfg.plugin_public_key_path.as_ref().map(PathBuf::from),
+        max: cfg.tools.max_plugin_trust,
+        reject_on_excess: cfg.tools.reject_on_excess_plugin_trust,
+        verify_signatures: cfg.tools.plugin_signature_validation,
+        signature_key_path: cfg.tools.plugin_public_key_path.as_ref().map(PathBuf::from),
     }
 }
 
 /// Load enabled workspace plugin sources into an existing registry.
 ///
-/// Workspace plugins are declared in `cfg.plugin_sources` and toggled via
-/// `cfg.enabled_plugins`. They load with the same trust policy as data-dir
+/// Workspace plugins are declared in `cfg.tools.plugin_sources` and toggled via
+/// `cfg.tools.enabled_plugins`. They load with the same trust policy as data-dir
 /// plugins. Warnings are returned for missing directories or rejected trust
 /// tiers; the plugin itself is not added to the registry if it fails to load.
 pub fn load_workspace_plugins(registry: &mut PluginRegistry, cfg: &Config) -> Vec<String> {
     let policy = trust_policy_from_config(cfg);
     let mut warnings = Vec::new();
 
-    for name in &cfg.enabled_plugins {
-        let Some(path) = cfg.plugin_sources.get(name) else {
+    for name in &cfg.tools.enabled_plugins {
+        let Some(path) = cfg.tools.plugin_sources.get(name) else {
             warnings.push(format!("{name}: enabled but no plugin_source configured"));
             continue;
         };

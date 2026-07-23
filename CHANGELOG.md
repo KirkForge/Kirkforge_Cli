@@ -39,23 +39,27 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `Class`, `Interface`, `TypeAlias`. `index_dir` walks both `.rs` and
   `.ts`/`.tsx` files. 5 new tests.
 
- - Python tree-sitter grammar in context-index (P1-long-1 Phase 5,
-   ADR-037): `detect_language()` dispatches `.py` → Python. Extracts
-   `function_definition`, `class_definition`, `import_statement`,
-   `import_from_statement`, `decorated_definition`. `index_dir` walks
-   `.py` files. 3 new tests.
+- Python tree-sitter grammar in context-index (P1-long-1 Phase 5,
+  ADR-037): `detect_language()` dispatches `.py` → Python. Extracts
+  `function_definition`, `class_definition`, `import_statement`,
+  `import_from_statement`, `decorated_definition`. `index_dir` walks
+  `.py` files. 3 new tests.
 
- - Go tree-sitter grammar in context-index (P1-long-1 Phase 5,
-   ADR-037): `Language::Go` variant, `detect_language()` dispatches
-   `.go` → Go. Extracts `function_declaration`, `method_declaration`,
-   `type_declaration` (struct/interface/type alias dispatch),
-    `import_declaration`. `index_dir` walks `.go` files. 4 new tests.
+- Go tree-sitter grammar in context-index (P1-long-1 Phase 5 complete,
+  ADR-037): `Language::Go` variant, `detect_language()` dispatches
+  `.go` → Go. Extracts `function_declaration`, `method_declaration`,
+  `type_declaration` (struct/interface/type alias dispatch),
+  `import_declaration`. `index_dir` walks `.go` files. 4 new tests.
 
 - Import-graph edges in context-index (P1-long-1 Phase 6, ADR-037):
   `ImportEdge` struct with `source_file`, `imported_symbol`,
   `resolved_file`, `line`. `resolve_imports()` resolves relative
   imports (TS `./utils` → `./utils.ts`), Rust `crate::` imports,
   and Python relative imports. External/bare imports stored with
+  `resolved_file: None`. `retrieve()` now returns
+  `RetrievalResult` (symbol + `imported_by` files). Prompt builder
+  shows "imported by" context. `CachedIndex` includes edges.
+  5 new tests.
   `resolved_file: None`. `retrieve()` now returns
   `RetrievalResult` (symbol + `imported_by` files). Prompt builder
   shows "imported by" context. `CachedIndex` includes edges.

@@ -64,7 +64,6 @@ crossterm = { version = "0.28", features = ["event-stream"] }
 tokio.workspace = true
 tokio-stream = "0.1"
 tokio-util = "0.7"
-futures = "0.3"
 
 # Unix process control (setsid for background daemon detachment)
 libc = "0.2"

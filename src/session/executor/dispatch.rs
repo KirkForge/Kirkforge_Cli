@@ -891,7 +891,7 @@ impl Executor {
         // Run the unified verifier bus after file-modifying tool calls.
         // Collect structured VerdictEntrys and inject error verdicts into
         // the correction results so the model sees them.
-        let is_file_modification = matches!(tool_name, "write_file" | "edit_file" | "apply_patch");
+        let is_file_modification = matches!(tool_name, "write_file" | "edit_file");
         if is_file_modification {
             if let Some(ref bus_lock) = self.verifier_bus {
                 let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("");

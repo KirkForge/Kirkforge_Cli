@@ -2,7 +2,7 @@
 
 ## Current baseline: v0.3.5 (2026-07-24)
 
-**`dev` at HEAD, `main` at 6f1e37d.** Phase 5 complete (4 languages). Phase 6 complete (import + call-graph edges). 10 bench tasks. 67 ADRs.
+**`dev` at HEAD, `main` at 6f1e37d.** Phase 5 complete (4 languages). Phase 6 complete (import + call-graph edges). 10 bench tasks. 68 ADRs.
 
 ### What shipped this session (6.1–6.9)
 

@@ -61,7 +61,7 @@ kirkforge (root bin)          ← the CLI the user runs
 │   ├── kirkforge-draw/        ← diagram plugin (1 tool, 1 hook)
 │   └── kirkforge-video/       ← video plugin (8 tools)
 ├── benches/tasks/             ← 10 benchmark task definitions (TOML)
-└── docs/adr/                  ← 62 Architecture Decision Records
+└── docs/adr/                  ← 68 Architecture Decision Records
 ```
 
 ### Compiled-in vs satellite
@@ -413,9 +413,25 @@ reporting is planned work (Workorder 6.5).
 
 ## Feature flags
 
-The root `Cargo.toml` has one feature: `otel` (OpenTelemetry export, off by
-default). No plugin is currently feature-gated. The `dep:` optional-dependency
-pattern is established and will be used to gate plugin fold-in (Workorder 7.0).
+The root `Cargo.toml` exposes these features:
+
+- `stratum` (default) — folds the Stratum context-compression plugin in as
+  direct Rust calls (ADR-046).
+- `draw` (default) — folds the Draw diagram plugin in as direct Rust calls
+  (ADR-048).
+- `budget` (default) — folds the Plugin3 token-budget guard in as direct
+  Rust calls with full in-process event context (ADR-047).
+- `video` (non-default) — folds the Video plugin in as direct Rust calls.
+  Off by default because it pulls `serde_yaml`, `strum`, and `which` (new
+  transitive deps); users who want agent-driven video editing opt in via
+  `--features video` (ADR-049).
+- `otel` (non-default) — OpenTelemetry export.
+
+Four plugins are therefore feature-gated compiled-in modules, served as
+direct Rust calls when their feature is on and falling back to the shell
+plugin path when it is off (graceful degradation). ADR-050 pins the
+two-path dispatch consolidation design. The `dep:` optional-dependency
+pattern is what makes per-plugin opt-in possible.
 
 ADR-0017's "no `[features]` section" rule is scoped to `crates/plugin3-core/`,
 not the root binary.
@@ -424,7 +440,7 @@ not the root binary.
 
 ## ADRs
 
-62 Architecture Decision Records live in [docs/adr/](docs/adr/). They pin
+68 Architecture Decision Records live in [docs/adr/](docs/adr/). They pin
 load-bearing decisions: token budget (0005), slicing orchestrator (0007),
 verifier bus (0028, 0043), context index (037), benchmark harness (038),
 execution replay (039), and many more. A drift test (`adr_xref_drift`) enforces

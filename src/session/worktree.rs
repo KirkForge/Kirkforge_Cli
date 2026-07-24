@@ -63,7 +63,7 @@ impl Drop for WorktreeSession {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::fs;

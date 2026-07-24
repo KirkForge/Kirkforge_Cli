@@ -140,7 +140,7 @@ impl Toolset for CompositeToolset {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use crate::{PluginRegistry, TrustPolicy};

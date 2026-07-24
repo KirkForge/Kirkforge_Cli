@@ -6,6 +6,31 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- In-process hooks for the Stratum, Plugin3, and Draw fold-ins. The 7 hooks
+  that were previously shell scripts (or deferred) are now in-process Rust
+  handlers built on shared infrastructure, eliminating the lossy env-var/canned-
+  JSON shim for Plugin3:
+  - **Stratum** (`#[cfg(feature = "stratum")]`, ADR-046): `StratumSessionStartHook`
+    (session-start) emits the active compression ruleset via `tracing::info`;
+    `StratumPreToolBashHook` (pre-tool-bash) validates stratum config, fail-open.
+  - **Plugin3** (`#[cfg(feature = "budget")]`, ADR-047 — the headline win):
+    `SessionStartHook` (session-start) logs budget state; `PostToolBashHook`
+    (post-tool-bash) and `PostToolWriteFileHook` (post-tool-write_file) receive
+    the real tool result content via `HookContext.tool_result`, estimate tokens
+    (len/4), record to the shared `TokenBudget`, and warn if approaching/over;
+    `PreCompactHook` (pre-compact) receives compact stats via
+    `HookContext.compact_stats` and resets `budget.used` to 0 if over/approaching.
+    All 4 share a process-global `TokenBudget` via `OnceLock` with the budget
+    tools. The lossy canned-JSON shim is eliminated.
+  - **Draw** (`#[cfg(feature = "draw")]`, ADR-048): `DrawPostTurnHook` (post-turn)
+    scans `./` and `./out/` for `.td.json` files and logs a suggestion if found.
+  - Shared infrastructure: `InProcessHook` trait, `HookContext` struct (with
+    `tool_result` and `compact_stats` fields), `HookRunner.add_in_process_hook` /
+    `run_with_context` / `run_decision_with_context`, `ToolOutcome.text_content`
+    helper, and `Executor::run_hook_with_result`. Hooks are registered in
+    `src/session/executor/mod.rs` under their respective feature flags.
+  - The Plugin3 hooks observe and report budget usage; slicing/compacting tool
+  results before they enter the conversation remains a follow-up (deferred).
 - Fold `kirkstratum-core` into the main binary as an optional `stratum` feature
   (default on). 5 tools (`run`, `apply`, `mode`, `rules`, `config_validate`)
   are now direct Rust calls, eliminating subprocess overhead. ADR-046.
@@ -16,7 +41,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (default on). 7 tools (`budget_status`, `budget_set`, `budget_compact`,
   `store_get`, `config_validate`, `report`, `self_check`) are now direct
   Rust calls via `plugin3-core`, eliminating the lossy shell-plugin shim.
-  ADR-047. Hooks remain as shell scripts (upgrade path: in-process handlers).
+  ADR-047. The 4 hooks are now in-process handlers with full event context
+  (see the in-process hooks entry above).
 - Fold `kirkforge-video` into the main binary as an optional `video` feature
   (non-default). 8 video tools are direct Rust calls when enabled. ADR-049.
 - ADR-045: Continuous evaluation pipeline (nightly baseline, per-PR delta,

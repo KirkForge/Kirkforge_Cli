@@ -421,6 +421,26 @@ impl ToolOutcome {
             message: message.into(),
         }
     }
+
+    /// Extract the text content of the outcome for hook consumers.
+    ///
+    /// Returns the primary text content (success message, file content, diff,
+    /// grep matches, or error message). Used by in-process hooks (e.g. the
+    /// Plugin3 budget guard) to inspect tool results without parsing the full
+    /// enum at the call site.
+    pub fn text_content(&self) -> String {
+        match self {
+            Self::Success { content } => content.clone(),
+            Self::Error { message } => message.clone(),
+            Self::Failure(e) => e.to_user_message(),
+            Self::FileContent { content, .. } => content.clone(),
+            Self::FileEdit { diff, .. } => diff.clone(),
+            Self::GrepMatches { matches, total, .. } => {
+                format!("{} matches ({} total shown)", matches.len(), total)
+            }
+            Self::Image { .. } => String::from("[image data]"),
+        }
+    }
 }
 
 /// Structured tool failure. Carries enough detail for the executor/TUI

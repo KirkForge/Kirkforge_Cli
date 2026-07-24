@@ -8,14 +8,26 @@
 //!
 //! ADR-047 pins this decision.
 
+use crate::session::hooks::{HookContext, HookDecision, InProcessHook};
 use crate::shared::{ToolDef, ToolOutcome};
 use crate::tools::Tool;
 use crate::tools::ToolContext;
 use plugin3_core::{
-    aggregate_sessions, filter_lines, format_summary_line, ConfigFile, InMemoryOffloadStore,
-    OffloadStore, Paths, TokenBudget,
+    aggregate_sessions, filter_lines, format_summary_line, BudgetState, ConfigFile,
+    InMemoryOffloadStore, OffloadStore, Paths, TokenBudget,
 };
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
+
+type SharedBudget = Arc<Mutex<TokenBudget>>;
+type SharedStore = Arc<dyn OffloadStore>;
+
+static SHARED_BUDGET: OnceLock<SharedBudget> = OnceLock::new();
+
+fn shared_budget() -> SharedBudget {
+    SHARED_BUDGET
+        .get_or_init(|| Arc::new(Mutex::new(TokenBudget::default())))
+        .clone()
+}
 
 fn simple_tool_def(name: &'static str, description: &'static str) -> ToolDef {
     ToolDef {
@@ -24,9 +36,6 @@ fn simple_tool_def(name: &'static str, description: &'static str) -> ToolDef {
         parameters: serde_json::json!({"type": "object", "properties": {}}),
     }
 }
-
-type SharedBudget = Arc<Mutex<TokenBudget>>;
-type SharedStore = Arc<dyn OffloadStore>;
 
 // ---------------------------------------------------------------------------
 // Tool 1: budget_status
@@ -291,6 +300,125 @@ impl Tool for SelfCheck {
 }
 
 // ---------------------------------------------------------------------------
+// In-process hooks — full event context (ADR-047)
+// ---------------------------------------------------------------------------
+
+struct SessionStartHook {
+    budget: SharedBudget,
+}
+
+impl InProcessHook for SessionStartHook {
+    fn event(&self) -> &str {
+        "session-start"
+    }
+
+    fn handle(&self, _ctx: &HookContext) -> HookDecision {
+        let budget = self.budget.lock().expect("budget mutex poisoned");
+        let state = budget.state();
+        let remaining = budget.remaining();
+        tracing::info!(
+            state = ?state,
+            ceiling = budget.ceiling,
+            used = budget.used,
+            remaining,
+            "Budget session-start: token budget initialized"
+        );
+        HookDecision::Allow
+    }
+}
+
+struct PostToolBashHook {
+    budget: SharedBudget,
+}
+
+impl InProcessHook for PostToolBashHook {
+    fn event(&self) -> &str {
+        "post-tool-bash"
+    }
+
+    fn handle(&self, ctx: &HookContext) -> HookDecision {
+        record_tool_usage(&self.budget, ctx, "bash")
+    }
+}
+
+struct PostToolWriteFileHook {
+    budget: SharedBudget,
+}
+
+impl InProcessHook for PostToolWriteFileHook {
+    fn event(&self) -> &str {
+        "post-tool-write_file"
+    }
+
+    fn handle(&self, ctx: &HookContext) -> HookDecision {
+        record_tool_usage(&self.budget, ctx, "write_file")
+    }
+}
+
+struct PreCompactHook {
+    budget: SharedBudget,
+}
+
+impl InProcessHook for PreCompactHook {
+    fn event(&self) -> &str {
+        "pre-compact"
+    }
+
+    fn handle(&self, ctx: &HookContext) -> HookDecision {
+        let mut budget = self.budget.lock().expect("budget mutex poisoned");
+        let state = budget.state();
+        if state == BudgetState::Over || state == BudgetState::Approaching {
+            let stats = ctx.compact_stats.as_ref();
+            tracing::info!(
+                state = ?state,
+                used = budget.used,
+                ceiling = budget.ceiling,
+                message_count = stats.map(|s| s.message_count),
+                strategy = stats.map(|s| s.strategy.as_str()),
+                "Budget pre-compact: compaction triggered while budget {} — \
+                 resetting used counter after compaction",
+                if state == BudgetState::Over { "exceeded" } else { "approaching limit" }
+            );
+            budget.used = 0;
+        }
+        HookDecision::Allow
+    }
+}
+
+fn record_tool_usage(budget: &SharedBudget, ctx: &HookContext, tool_name: &str) -> HookDecision {
+    let Some(ref result) = ctx.tool_result else {
+        return HookDecision::Allow;
+    };
+    let tokens = result.len() / 4;
+    let mut budget = budget.lock().expect("budget mutex poisoned");
+    budget.record(tokens);
+    let state = budget.state();
+    match state {
+        BudgetState::Over => {
+            tracing::warn!(
+                tool = tool_name,
+                tokens,
+                used = budget.used,
+                ceiling = budget.ceiling,
+                "Budget OVER: tool output pushed token usage past ceiling"
+            );
+        }
+        BudgetState::Approaching => {
+            tracing::info!(
+                tool = tool_name,
+                tokens,
+                used = budget.used,
+                ceiling = budget.ceiling,
+                remaining = budget.remaining(),
+                "Budget APPROACHING: token usage nearing ceiling"
+            );
+        }
+        BudgetState::Under => {}
+    }
+    HookDecision::Allow
+}
+
+// ---------------------------------------------------------------------------
 // Public entry point
 // ---------------------------------------------------------------------------
 
@@ -302,14 +430,14 @@ impl Tool for SelfCheck {
 /// upgrade can swap it for `FileOffloadStore` when persistence is
 /// needed.
 pub fn all_budget_tools() -> Vec<Arc<dyn Tool>> {
-    let budget: SharedBudget = Arc::new(Mutex::new(TokenBudget::default()));
+    let budget = shared_budget();
     let store: SharedStore = Arc::new(InMemoryOffloadStore::new());
 
     vec![
         Arc::new(BudgetStatus {
             def: simple_tool_def("budget_status", "Show the current token budget status."),
             budget: budget.clone(),
-        }),
+        }) as Arc<dyn Tool>,
         Arc::new(BudgetSet {
             def: budget_set_def(),
             budget: budget.clone(),
@@ -334,5 +462,23 @@ pub fn all_budget_tools() -> Vec<Arc<dyn Tool>> {
         Arc::new(SelfCheck {
             def: simple_tool_def("self_check", "Run Plugin3 self-check diagnostics."),
         }),
+    ]
+}
+
+/// Build all 4 Plugin3 in-process hooks, sharing the same `TokenBudget`
+/// as the tools via the process-global `SHARED_BUDGET`.
+pub fn all_budget_hooks() -> Vec<Box<dyn InProcessHook>> {
+    let budget = shared_budget();
+    vec![
+        Box::new(SessionStartHook {
+            budget: budget.clone(),
+        }),
+        Box::new(PostToolBashHook {
+            budget: budget.clone(),
+        }),
+        Box::new(PostToolWriteFileHook {
+            budget: budget.clone(),
+        }),
+        Box::new(PreCompactHook { budget }),
     ]
 }

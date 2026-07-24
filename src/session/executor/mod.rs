@@ -183,6 +183,26 @@ impl Executor {
         if let Some(registry) = plugin_registry {
             hook_runner.load_plugin_hooks(registry);
         }
+        #[cfg(feature = "draw")]
+        {
+            hook_runner.add_in_process_hook(Box::new(crate::session::draw::DrawPostTurnHook));
+            tracing::info!("draw post-turn hook registered");
+        }
+        #[cfg(feature = "stratum")]
+        {
+            hook_runner
+                .add_in_process_hook(Box::new(crate::session::stratum::StratumSessionStartHook));
+            hook_runner
+                .add_in_process_hook(Box::new(crate::session::stratum::StratumPreToolBashHook));
+            tracing::info!("stratum session-start and pre-tool-bash hooks registered");
+        }
+        #[cfg(feature = "budget")]
+        {
+            for hook in crate::session::budget::all_budget_hooks() {
+                hook_runner.add_in_process_hook(hook);
+            }
+            tracing::info!("budget session-start, post-tool-bash, post-tool-write_file, pre-compact hooks registered");
+        }
 
         let event_bus = EventBus::new();
 
@@ -548,6 +568,23 @@ impl Executor {
             None => HookRunner::default(),
         };
         hook_runner.load_plugin_hooks(registry);
+        #[cfg(feature = "draw")]
+        {
+            hook_runner.add_in_process_hook(Box::new(crate::session::draw::DrawPostTurnHook));
+        }
+        #[cfg(feature = "stratum")]
+        {
+            hook_runner
+                .add_in_process_hook(Box::new(crate::session::stratum::StratumSessionStartHook));
+            hook_runner
+                .add_in_process_hook(Box::new(crate::session::stratum::StratumPreToolBashHook));
+        }
+        #[cfg(feature = "budget")]
+        {
+            for hook in crate::session::budget::all_budget_hooks() {
+                hook_runner.add_in_process_hook(hook);
+            }
+        }
         self.hook_runner = hook_runner;
 
         // 3. Rebuild plugin verifiers while keeping built-in verifiers.
@@ -624,6 +661,30 @@ impl Executor {
         self.hook_runner.run(event, &env_vars, &cfg);
     }
 
+    /// Run a lifecycle hook with tool result content (fire-and-forget).
+    ///
+    /// This is the in-process variant: folded-plugin hooks receive the tool's
+    /// output via `HookContext.tool_result`, enabling the Plugin3 budget guard
+    /// to inspect bash/write_file results and decide whether to slice/compact.
+    fn run_hook_with_result(
+        &self,
+        event: &str,
+        tool_name: Option<&str>,
+        args_json: Option<&str>,
+        tool_result: Option<&str>,
+    ) {
+        let ctx = crate::session::hooks::HookContext {
+            event: event.to_string(),
+            session_id: self.session_id.clone(),
+            tool_name: tool_name.map(|s| s.to_string()),
+            tool_args_json: args_json.map(|s| s.to_string()),
+            tool_result: tool_result.map(|s| s.to_string()),
+            compact_stats: None,
+        };
+        let cfg = crate::shared::read_shared_config(&self.config);
+        self.hook_runner.run_with_context(event, &ctx, &cfg);
+    }
+
     /// Run a compaction lifecycle hook (`pre-compact` / `post-compact`).
     ///
     /// Exposes compact metadata in `KF_TOOL_ARGS_JSON` as a JSON object:
@@ -647,7 +708,26 @@ impl Executor {
             "strategy": stats.strategy,
         })
         .to_string();
-        self.run_hook(event, None, Some(&args_json));
+
+        let ctx = crate::session::hooks::HookContext {
+            event: event.to_string(),
+            session_id: self.session_id.clone(),
+            tool_name: None,
+            tool_args_json: Some(args_json.clone()),
+            tool_result: None,
+            compact_stats: Some(crate::session::hooks::CompactHookStatsData {
+                message_count: stats.message_count,
+                preserve_recent: stats.preserve_recent,
+                original_count: stats.original_count,
+                result_count: stats.result_count,
+                dropped_tool_results: stats.dropped_tool_results,
+                condensed_assistant_turns: stats.condensed_assistant_turns,
+                summarised_messages: stats.summarised_messages,
+                strategy: stats.strategy.to_string(),
+            }),
+        };
+        let cfg = crate::shared::read_shared_config(&self.config);
+        self.hook_runner.run_with_context(event, &ctx, &cfg);
     }
 
     /// Run a pre-tool hook that is allowed to deny the tool call.

@@ -5,6 +5,7 @@
 //! When the feature is off, the shell-plugin path (`plugins/stratum/tools/*.sh`)
 //! remains as fallback.
 
+use crate::session::hooks::{HookContext, HookDecision, InProcessHook};
 use crate::shared::{ToolDef, ToolOutcome};
 use crate::tools::{Tool, ToolContext};
 use kirkstratum_core::config::PipelineConfig;
@@ -13,6 +14,7 @@ use kirkstratum_core::mode::Mode;
 use kirkstratum_core::pipeline::{CompressionContext, CompressionPipeline};
 use kirkstratum_core::store::InMemoryOffloadStore;
 use serde_json::Value;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 fn json_get_string(args: &Value, key: &str) -> Option<String> {
@@ -365,4 +367,93 @@ pub fn stratum_tools() -> Vec<Arc<dyn Tool>> {
         Arc::new(StratumRules),
         Arc::new(StratumConfigValidate),
     ]
+}
+
+// ── session-start hook ─────────────────────────────────────────────────
+
+/// In-process `session-start` hook: emits the active compression ruleset so
+/// the model knows the compression contract at session start. Mirrors the
+/// shell hook in `plugins/stratum/hooks/session-start.sh`.
+pub struct StratumSessionStartHook;
+
+impl InProcessHook for StratumSessionStartHook {
+    fn event(&self) -> &str {
+        "session-start"
+    }
+
+    fn handle(&self, _ctx: &HookContext) -> HookDecision {
+        let mode = active_mode();
+        let rules = format!(
+            "mode={}\nruns_transforms={}\noffloads_bloat={}\noffload_threshold={}",
+            mode.as_str(),
+            mode.runs_transforms(),
+            mode.offloads_bloat(),
+            mode.offload_threshold()
+                .map_or("none".to_string(), |t| format!("{t:.2}")),
+        );
+        tracing::info!(event = "session-start", %rules, "stratum compression contract");
+        HookDecision::Allow
+    }
+}
+
+// ── pre-tool-bash hook ─────────────────────────────────────────────────
+
+/// In-process `pre-tool-bash` hook: validates the effective stratum config
+/// before any bash tool is invoked so configuration drift is surfaced early.
+/// Mirrors the shell hook in `plugins/stratum/hooks/pre-tool-bash.sh`.
+///
+/// Fail-open: an invalid config logs a warning but does not block the user.
+pub struct StratumPreToolBashHook;
+
+impl InProcessHook for StratumPreToolBashHook {
+    fn event(&self) -> &str {
+        "pre-tool-bash"
+    }
+
+    fn handle(&self, _ctx: &HookContext) -> HookDecision {
+        match load_effective_config() {
+            Ok(_) => HookDecision::Allow,
+            Err(e) => {
+                tracing::warn!(
+                    event = "pre-tool-bash",
+                    error = %e,
+                    "stratum config validation failed (fail-open: allowing)"
+                );
+                HookDecision::Allow
+            }
+        }
+    }
+}
+
+/// Resolve the active mode, honouring the `STRATUM_MODE` env var if set.
+fn active_mode() -> Mode {
+    std::env::var("STRATUM_MODE")
+        .ok()
+        .and_then(|s| s.parse::<Mode>().ok())
+        .unwrap_or(Mode::Full)
+}
+
+/// Load the effective pipeline config, mirroring the CLI precedence:
+/// `STRATUM_CONFIG` env var → XDG default (`$XDG_CONFIG_HOME/stratum/pipeline.toml`
+/// or `$HOME/.config/stratum/pipeline.toml`). Falls back to the embedded
+/// default when no override file is present.
+fn load_effective_config() -> Result<PipelineConfig, String> {
+    if let Some(path) = std::env::var_os("STRATUM_CONFIG").map(PathBuf::from) {
+        return PipelineConfig::from_file(&path).map_err(|e| format!("{e:#}"));
+    }
+    if let Some(path) = xdg_config_path() {
+        if path.exists() {
+            return PipelineConfig::from_file(&path).map_err(|e| format!("{e:#}"));
+        }
+    }
+    Ok(PipelineConfig::default())
+}
+
+/// Return the XDG default config path for the stratum pipeline, if a config
+/// home can be resolved.
+fn xdg_config_path() -> Option<PathBuf> {
+    let base = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))?;
+    Some(base.join("stratum").join("pipeline.toml"))
 }

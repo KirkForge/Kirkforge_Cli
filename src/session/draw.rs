@@ -4,8 +4,10 @@
 //! tool that loads a `.td.json` file and renders it as plain text using
 //! `kirkforge_draw_core` directly, eliminating subprocess overhead.
 
+use crate::session::hooks::{HookContext, HookDecision, InProcessHook};
 use crate::shared::{ToolDef, ToolError, ToolOutcome};
 use crate::tools::{Tool, ToolContext};
+use std::path::Path;
 
 pub struct DrawRenderTool;
 
@@ -94,4 +96,58 @@ impl Tool for DrawRenderTool {
 /// Return the draw tool as a trait object.
 pub fn draw_tools() -> Vec<std::sync::Arc<dyn Tool>> {
     vec![std::sync::Arc::new(DrawRenderTool)]
+}
+
+/// In-process `post-turn` hook: nudges the model to render any new
+/// `.td.json` files in the working directory. Mirrors the shell hook in
+/// `plugins/kirkforge-draw/hooks/post-turn.sh`.
+pub struct DrawPostTurnHook;
+
+impl InProcessHook for DrawPostTurnHook {
+    fn event(&self) -> &str {
+        "post-turn"
+    }
+
+    fn handle(&self, _ctx: &HookContext) -> HookDecision {
+        let mut hits: Vec<String> = Vec::new();
+        collect_td_json(Path::new("."), &mut hits);
+        collect_td_json(Path::new("./out"), &mut hits);
+
+        if hits.is_empty() {
+            return HookDecision::Allow;
+        }
+
+        hits.sort();
+        hits.dedup();
+        let count = hits.len();
+        let display: Vec<String> = hits.iter().take(5).cloned().collect();
+        let mut names = display.join(",");
+        if count > 5 {
+            names.push_str(", ...");
+        }
+        tracing::info!(
+            count,
+            "Found new .td.json: {names}. Render with kfd --load <path> --render --fenced if useful."
+        );
+        HookDecision::Allow
+    }
+}
+
+fn collect_td_json(dir: &Path, out: &mut Vec<String>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if name.ends_with(".td.json") {
+            let display = dir.join(name).to_string_lossy().replace('\\', "/");
+            out.push(display);
+        }
+    }
 }

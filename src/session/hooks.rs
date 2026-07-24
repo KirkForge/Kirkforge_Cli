@@ -35,8 +35,61 @@ use crate::shared::Config;
 use kirkforge_plugin::Plugin;
 use kirkforge_plugin_host::PluginRegistry;
 
+/// Context passed to an in-process hook handler.
+///
+/// Unlike shell hooks (which receive only env vars), in-process hooks get
+/// structured access to the event data, including the tool result content for
+/// post-tool hooks and compact metadata for pre-compact hooks.
+#[derive(Debug, Clone, Default)]
+pub struct HookContext {
+    /// The event name (e.g. "session-start", "post-tool-bash", "pre-compact").
+    pub event: String,
+    /// Session ID.
+    pub session_id: String,
+    /// Tool name (tool events only).
+    pub tool_name: Option<String>,
+    /// Tool arguments as JSON (tool events only).
+    pub tool_args_json: Option<String>,
+    /// Tool result content (post-tool events only).
+    ///
+    /// This is the key field that shell hooks could NOT access — it gives
+    /// in-process hooks like the Plugin3 budget guard real visibility into
+    /// what the tool returned, so it can decide whether to slice/compact.
+    pub tool_result: Option<String>,
+    /// Compact metadata (pre-compact / post-compact events only).
+    pub compact_stats: Option<CompactHookStatsData>,
+}
+
+/// Compact metadata passed to in-process compaction hooks.
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct CompactHookStatsData {
+    pub message_count: usize,
+    pub preserve_recent: usize,
+    pub original_count: usize,
+    pub result_count: usize,
+    pub dropped_tool_results: usize,
+    pub condensed_assistant_turns: usize,
+    pub summarised_messages: usize,
+    pub strategy: String,
+}
+
+/// An in-process Rust hook handler that replaces a shell script.
+///
+/// Folded plugins (Stratum, Plugin3, Draw) implement this trait and register
+/// instances with `HookRunner::add_in_process_hook`. When the feature is
+/// enabled, the in-process handler runs instead of the shell script.
+pub trait InProcessHook: Send + Sync {
+    /// The event name this hook handles (e.g. "session-start", "post-tool-bash").
+    fn event(&self) -> &str;
+
+    /// Run the hook. Returns `Allow` or `Deny(reason)`.
+    ///
+    /// For fire-and-forget hooks (`run`), the return value is logged but
+    /// cannot block. For decision hooks (`run_decision`), `Deny` blocks.
+    fn handle(&self, ctx: &HookContext) -> HookDecision;
+}
+
 /// Discovers and runs lifecycle hook scripts.
-#[derive(Debug, Clone)]
 pub struct HookRunner {
     /// Directory containing hook scripts.
     hooks_dir: PathBuf,
@@ -48,6 +101,30 @@ pub struct HookRunner {
     /// through the same `run_hook_script` pipeline as built-in hooks, so they
     /// get the same 5-second timeout, bash safety gate, and capped output.
     plugin_hooks: Vec<(String, PathBuf)>,
+    /// In-process Rust hook handlers (from folded plugins).
+    in_process_hooks: Vec<Box<dyn InProcessHook>>,
+}
+
+impl std::fmt::Debug for HookRunner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HookRunner")
+            .field("hooks_dir", &self.hooks_dir)
+            .field("available", &self.available)
+            .field("plugin_hooks", &self.plugin_hooks)
+            .field("in_process_hooks", &self.in_process_hooks.len())
+            .finish()
+    }
+}
+
+impl Clone for HookRunner {
+    fn clone(&self) -> Self {
+        Self {
+            hooks_dir: self.hooks_dir.clone(),
+            available: self.available.clone(),
+            plugin_hooks: self.plugin_hooks.clone(),
+            in_process_hooks: Vec::new(),
+        }
+    }
 }
 
 impl HookRunner {
@@ -61,6 +138,7 @@ impl HookRunner {
             hooks_dir,
             available,
             plugin_hooks: Vec::new(),
+            in_process_hooks: Vec::new(),
         }
     }
 
@@ -83,10 +161,22 @@ impl HookRunner {
         }
     }
 
-    /// Check whether any hook (built-in or plugin) exists for `event_name`.
+    /// Register an in-process Rust hook handler.
+    ///
+    /// Folded plugins call this to replace their shell hook scripts with
+    /// direct Rust calls that have full `HookContext` access.
+    pub fn add_in_process_hook(&mut self, hook: Box<dyn InProcessHook>) {
+        self.in_process_hooks.push(hook);
+    }
+
+    /// Check whether any hook (built-in, plugin, or in-process) exists for `event_name`.
     pub fn has(&self, event_name: &str) -> bool {
         self.available.contains(event_name)
             || self.plugin_hooks.iter().any(|(e, _)| e == event_name)
+            || self
+                .in_process_hooks
+                .iter()
+                .any(|h| h.event() == event_name)
     }
 
     /// Return the plugin hook script paths registered for `event_name`.
@@ -169,6 +259,35 @@ impl HookRunner {
         }
     }
 
+    /// Run all hooks for `event_name` with full `HookContext`.
+    ///
+    /// This is the in-process variant: folded-plugin hooks receive structured
+    /// context (including tool result content for post-tool hooks) instead of
+    /// just env vars. Shell hooks still run alongside (fire-and-forget for
+    /// shell, in-process for Rust).
+    pub fn run_with_context(&self, event_name: &str, ctx: &HookContext, config: &Config) {
+        // In-process hooks (run synchronously — they're fast Rust calls).
+        for hook in &self.in_process_hooks {
+            if hook.event() == event_name {
+                match hook.handle(ctx) {
+                    HookDecision::Allow => {}
+                    HookDecision::Deny(reason) => {
+                        tracing::warn!(
+                            event = %event_name,
+                            reason = %reason,
+                            "In-process hook reported deny (fire-and-forget: too late to block)"
+                        );
+                    }
+                }
+            }
+        }
+
+        // Shell hooks (fire-and-forget, same as `run`).
+        let env_vars = ctx_to_env_vars(ctx);
+        let env_refs: Vec<(&str, &str)> = env_vars.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        self.run(event_name, &env_refs, config);
+    }
+
     /// Run all hooks for `event_name` that are allowed to deny an operation.
     ///
     /// Returns [`HookDecision::Allow`] if no hook exists, if all hooks
@@ -183,6 +302,14 @@ impl HookRunner {
     ) -> HookDecision {
         let owned_vars = Self::owned_env_vars(env_vars);
         let mut decisions: Vec<HookDecision> = Vec::new();
+
+        // In-process hooks (synchronous, run first so they can short-circuit).
+        let ctx = env_vars_to_ctx(event_name, env_vars);
+        for hook in &self.in_process_hooks {
+            if hook.event() == event_name {
+                decisions.push(hook.handle(&ctx));
+            }
+        }
 
         // Built-in hook.
         if self.available.contains(event_name) {
@@ -211,6 +338,61 @@ impl HookRunner {
         }
 
         // Any explicit deny wins; otherwise allow.
+        decisions
+            .into_iter()
+            .find(|d| matches!(d, HookDecision::Deny(_)))
+            .unwrap_or(HookDecision::Allow)
+    }
+
+    /// Run decision hooks with full `HookContext` (including tool result).
+    ///
+    /// Used by the executor for post-tool hooks where the in-process handler
+    /// needs to see the tool's output (e.g. Plugin3 budget guard checking
+    /// whether a bash result is oversized).
+    pub async fn run_decision_with_context(
+        &self,
+        event_name: &str,
+        ctx: &HookContext,
+        config: &Config,
+    ) -> HookDecision {
+        let mut decisions: Vec<HookDecision> = Vec::new();
+
+        // In-process hooks.
+        for hook in &self.in_process_hooks {
+            if hook.event() == event_name {
+                decisions.push(hook.handle(ctx));
+            }
+        }
+
+        // Shell hooks (via the standard path).
+        let env_vars = ctx_to_env_vars(ctx);
+        let env_refs: Vec<(&str, &str)> = env_vars.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        let owned_vars = Self::owned_env_vars(&env_refs);
+
+        if self.available.contains(event_name) {
+            let script_path = self.hooks_dir.join(format!("{event_name}.sh"));
+            match run_hook_script(&script_path, &owned_vars, config).await {
+                Ok(decision) => decisions.push(decision),
+                Err(e) => {
+                    tracing::warn!(event = %event_name, error = %e, "Built-in decision hook failed (fail-open)");
+                }
+            }
+        }
+
+        for script_path in self.plugin_hooks_for(event_name) {
+            match run_hook_script(&script_path, &owned_vars, config).await {
+                Ok(decision) => decisions.push(decision),
+                Err(e) => {
+                    tracing::warn!(
+                        event = %event_name,
+                        path = %script_path.display(),
+                        error = %e,
+                        "Plugin decision hook failed (fail-open)"
+                    );
+                }
+            }
+        }
+
         decisions
             .into_iter()
             .find(|d| matches!(d, HookDecision::Deny(_)))
@@ -255,6 +437,39 @@ fn discover_hooks(hooks_dir: &std::path::Path) -> HashSet<String> {
 fn default_hooks_dir() -> anyhow::Result<PathBuf> {
     let base = crate::session::data_dir()?;
     Ok(base.join("hooks"))
+}
+
+/// Convert a `HookContext` into env var pairs for shell hooks.
+fn ctx_to_env_vars(ctx: &HookContext) -> Vec<(&str, String)> {
+    let mut vars: Vec<(&str, String)> = Vec::new();
+    vars.push(("KF_EVENT", ctx.event.clone()));
+    if !ctx.session_id.is_empty() {
+        vars.push(("KF_SESSION_ID", ctx.session_id.clone()));
+    }
+    if let Some(ref name) = ctx.tool_name {
+        vars.push(("KF_TOOL_NAME", name.clone()));
+    }
+    if let Some(ref json) = ctx.tool_args_json {
+        vars.push(("KF_TOOL_ARGS_JSON", json.clone()));
+    }
+    vars
+}
+
+/// Convert env var pairs into a `HookContext` (for `run_decision` compat).
+fn env_vars_to_ctx(event_name: &str, env_vars: &[(&str, &str)]) -> HookContext {
+    let mut ctx = HookContext {
+        event: event_name.to_string(),
+        ..Default::default()
+    };
+    for (k, v) in env_vars {
+        match *k {
+            "KF_SESSION_ID" => ctx.session_id = v.to_string(),
+            "KF_TOOL_NAME" => ctx.tool_name = Some(v.to_string()),
+            "KF_TOOL_ARGS_JSON" => ctx.tool_args_json = Some(v.to_string()),
+            _ => {}
+        }
+    }
+    ctx
 }
 
 /// Decision returned by a hook that is allowed to block execution.

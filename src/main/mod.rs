@@ -433,6 +433,7 @@ fn handle_bench_verify_only(tasks: std::path::PathBuf, task: Option<String>) -> 
         anyhow::bail!("no matching task found");
     }
     let tmp = tempfile::tempdir()?;
+    let mut passed = 0;
     for bt in &filtered {
         let result = kirkforge_bench::verify_only(bt, tmp.path());
         let status = if result.success { "PASS" } else { "FAIL" };
@@ -442,11 +443,10 @@ fn handle_bench_verify_only(tasks: std::path::PathBuf, task: Option<String>) -> 
             bt.name,
             result.error.unwrap_or_default()
         );
+        if result.success {
+            passed += 1;
+        }
     }
-    let passed = filtered
-        .iter()
-        .filter(|t| kirkforge_bench::verify_only(t, tmp.path()).success)
-        .count();
     println!("{}/{} tasks verified", passed, filtered.len());
     Ok(())
 }

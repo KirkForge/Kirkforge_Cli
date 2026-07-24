@@ -39,7 +39,50 @@ pub(crate) fn shell_program() -> &'static str {
 
 #[cfg(windows)]
 pub(crate) fn shell_program() -> &'static str {
-    "bash"
+    // Git-for-Windows bash is not on PATH by default. Probe common
+    // install locations once and cache the result.
+    use std::sync::OnceLock;
+    static BASH: OnceLock<String> = OnceLock::new();
+    BASH.get_or_init(|| {
+        let candidates = [
+            r"C:\Program Files\Git\bin\bash.exe",
+            r"C:\Program Files (x86)\Git\bin\bash.exe",
+            r"%PROGRAMFILES%\Git\bin\bash.exe",
+            r"%PROGRAMFILES(X86)%\Git\bin\bash.exe",
+        ];
+        for raw in candidates {
+            let path = if raw.starts_with('%') {
+                expand_env(raw)
+            } else {
+                raw.to_string()
+            };
+            if std::path::Path::new(&path).exists() {
+                return path;
+            }
+        }
+        "bash".to_string()
+    })
+}
+
+#[cfg(windows)]
+fn expand_env(raw: &str) -> String {
+    let mut result = String::new();
+    let mut chars = raw.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '%' {
+            let name: String = chars.by_ref().take_while(|&ch| ch != '%').collect();
+            if let Ok(val) = std::env::var(&name) {
+                result.push_str(&val);
+            } else {
+                result.push('%');
+                result.push_str(&name);
+                result.push('%');
+            }
+        } else {
+            result.push(c);
+        }
+    }
+    result
 }
 
 #[cfg(not(any(unix, windows)))]
@@ -683,12 +726,20 @@ mod tests {
 
     #[test]
     fn test_check_bash_command_str_sandbox_workdir_rejects_escape() {
+        let outer = tempfile::tempdir().unwrap();
+        let sandbox = outer.path().join("sandbox");
+        std::fs::create_dir_all(&sandbox).unwrap();
         let path_guard = crate::session::access::PathGuard {
-            sandbox_dir: Some(std::env::temp_dir()),
+            sandbox_dir: Some(sandbox),
             ..Default::default()
         };
-        let result =
-            check_bash_command_str("ls", Some("/etc"), &DenyList::default(), &path_guard, true);
+        let result = check_bash_command_str(
+            "ls",
+            Some(outer.path().to_str().unwrap()),
+            &DenyList::default(),
+            &path_guard,
+            true,
+        );
         assert!(
             result
                 .as_ref()

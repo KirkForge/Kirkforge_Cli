@@ -120,8 +120,10 @@ mod tests {
             .output()
             .unwrap();
         let list = String::from_utf8_lossy(&list_output.stdout);
+        let list_norm = list.replace('\\', "/");
+        let wt_path_norm = wt_path.to_string_lossy().replace('\\', "/");
         assert!(
-            list.contains(wt_path.to_str().unwrap()),
+            list_norm.contains(&wt_path_norm),
             "worktree list should contain the new worktree path:\n{list}"
         );
 
@@ -150,8 +152,9 @@ mod tests {
             .output()
             .unwrap();
         let list = String::from_utf8_lossy(&list_output.stdout);
+        let list_norm = list.replace('\\', "/");
         assert!(
-            !list.contains(wt_path.to_str().unwrap()),
+            !list_norm.contains(&wt_path_norm),
             "worktree list should not contain removed worktree:\n{list}"
         );
 

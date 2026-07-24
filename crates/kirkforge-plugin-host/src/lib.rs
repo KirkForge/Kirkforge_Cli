@@ -759,6 +759,7 @@ command = "tools/ok.sh"
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn load_one_warns_when_capability_command_escapes_root() {
         let tmp = tempfile::tempdir().unwrap();

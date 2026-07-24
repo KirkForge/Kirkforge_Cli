@@ -146,6 +146,7 @@ mod tests {
     use crate::{PluginRegistry, TrustPolicy};
     use kirkforge_plugin::TrustTier;
 
+    #[cfg(unix)]
     #[test]
     fn plugin_toolset_lists_and_executes_tool() {
         let tmp = tempfile::tempdir().unwrap();
@@ -175,15 +176,12 @@ printf 'hello %s' "$KIRKFORGE_TOOL_ARGS"
 "#,
         )
         .unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = std::fs::metadata(plugin_dir.join("greet.sh"))
-                .unwrap()
-                .permissions();
-            perms.set_mode(0o755);
-            std::fs::set_permissions(plugin_dir.join("greet.sh"), perms).unwrap();
-        }
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(plugin_dir.join("greet.sh"))
+            .unwrap()
+            .permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(plugin_dir.join("greet.sh"), perms).unwrap();
 
         let mut reg = PluginRegistry::new();
         reg.load_from_dir(&plugins, TrustPolicy::up_to(TrustTier::Shell))

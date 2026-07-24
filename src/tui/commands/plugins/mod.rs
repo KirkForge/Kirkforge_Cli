@@ -822,8 +822,9 @@ prompt = "Demo skill"
 
     #[test]
     fn resolve_source_path_keeps_absolute_paths() {
-        let p = resolve_source_path("/tmp/demo");
-        assert_eq!(p, PathBuf::from("/tmp/demo"));
+        let abs = std::env::temp_dir().join("demo");
+        let p = resolve_source_path(&abs.to_string_lossy());
+        assert_eq!(p, abs);
     }
 
     #[test]

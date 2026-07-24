@@ -859,6 +859,7 @@ mod tests {
     /// On write failure the original file must remain untouched (atomic-write
     /// regression guard). We simulate failure by editing into a read-only
     /// directory so the temp file cannot be created.
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_edit_file_atomic_failure_preserves_original() {
         let dir = tempfile::tempdir().unwrap();
@@ -881,13 +882,10 @@ mod tests {
         });
         let result = tool.run(&ctx, args).await;
         // Restore permissions before assertions so cleanup can run.
-        #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             perms.set_mode(0o755);
         }
-        #[cfg(not(unix))]
-        perms.set_readonly(false);
         let _ = std::fs::set_permissions(path.parent().unwrap(), perms);
         assert!(
             matches!(result, ToolOutcome::Failure(ToolError::Internal { .. })),

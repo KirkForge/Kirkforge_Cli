@@ -891,6 +891,7 @@ mod tests {
         assert_eq!(decision, HookDecision::Allow);
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_run_decision_denies_exit_two() {
         let (_tmp, dir) = temp_hooks_dir();

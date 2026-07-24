@@ -1,0 +1,17 @@
+* text=auto eol=lf
+*.rs text eol=lf
+*.md text eol=lf
+*.toml text eol=lf
+*.txt text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.sh text eol=lf
+*.json text eol=lf
+*.lock text eol=lf
+*.plist text eol=lf
+*.service text eol=lf
+*.svg text eol=lf
+*.td.json text eol=lf
+*.png binary
+*.jpg binary
+*.vsix binary

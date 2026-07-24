@@ -381,6 +381,7 @@ command = "bin/check.sh"
         assert_eq!(verifiers[0].priority(), 7);
     }
 
+    #[cfg(unix)]
     #[test]
     fn register_plugin_verifiers_into_bus_wires_each_capability() {
         use crate::session::verifier::bus::{Severity, VerifierBus, VerifierSource, VerifyContext};
@@ -392,18 +393,11 @@ command = "bin/check.sh"
         std::fs::create_dir_all(&plugin_bin_dir).unwrap();
 
         let check = plugin_bin_dir.join("check.sh");
-        #[cfg(unix)]
-        {
-            std::fs::write(&check, "#!/bin/sh\necho 'nope' >&2\nexit 1\n").unwrap();
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = std::fs::metadata(&check).unwrap().permissions();
-            perms.set_mode(0o755);
-            std::fs::set_permissions(&check, perms).unwrap();
-        }
-        #[cfg(not(unix))]
-        {
-            std::fs::write(&check, "nope\n").unwrap();
-        }
+        std::fs::write(&check, "#!/bin/sh\necho 'nope' >&2\nexit 1\n").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&check).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&check, perms).unwrap();
 
         std::fs::write(
             plugin_dir.join("kirkforge.toml"),

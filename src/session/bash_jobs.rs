@@ -660,6 +660,7 @@ mod tests {
         assert!(job.finished_at.is_some());
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_spawn_expands_tilde_workdir() {
         // Regression for C14: background bash workdir was passed raw to

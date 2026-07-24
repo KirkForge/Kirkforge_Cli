@@ -284,6 +284,7 @@ mod tests {
     /// `write_file` must use atomic temp+rename so a failure leaves the
     /// original file intact. We make the parent read-only to force the temp
     /// write to fail.
+    #[cfg(unix)]
     #[tokio::test]
     async fn write_file_atomic_failure_preserves_original() {
         let dir = tempfile::tempdir().unwrap();
@@ -301,13 +302,10 @@ mod tests {
         let out = tool
             .run(&ctx, args(&path.display().to_string(), "new content"))
             .await;
-        #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             perms.set_mode(0o755);
         }
-        #[cfg(not(unix))]
-        perms.set_readonly(false);
         let _ = std::fs::set_permissions(path.parent().unwrap(), perms);
         assert!(
             matches!(out, ToolOutcome::Failure(ToolError::Internal { .. })),

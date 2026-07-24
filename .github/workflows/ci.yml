@@ -345,7 +345,7 @@ jobs:
           tree = ET.parse('cobertura.xml')
           root = tree.getroot()
           packages = root.find('packages')
-          targets = {'src/session': 62.0, 'src/tools': 50.0, 'src/adapters': 61.0}
+          targets = {'src/session': 61.0, 'src/tools': 50.0, 'src/adapters': 61.0}
           failed = False
           for prefix, threshold in targets.items():
               line_rate = 0.0

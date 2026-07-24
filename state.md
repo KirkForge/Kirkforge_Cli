@@ -17,6 +17,7 @@
 | WO 6.7: Fold Plugin3 | `budget` feature flag (default on). 7 tool wrappers. 4 in-process hooks with full event context (`SessionStartHook`, `PostToolBashHook`, `PostToolWriteFileHook`, `PreCompactHook`); lossy canned-JSON shim eliminated; shared `TokenBudget` via `OnceLock`. ADR-047. Config fields deferred. |
 | WO 6.8: Fold Draw | `draw` feature flag (default on). `draw_render` tool. 1 in-process hook (`DrawPostTurnHook`). ADR-048. |
 | WO 6.9: Fold Video | `video` feature flag (non-default). 8 tool wrappers. ADR-049. Dev build delta ~14.4 MB. |
+| WO 7.0: Plugin system consolidation | Two-path dispatch (compiled-in vs external shell-out) unified behind a single `enabled_plugins` toggle. Folded plugins (Stratum, Plugin3, Draw, Video) with their feature ON are skipped by the shell loader and served compiled-in; with feature OFF they fall back to shell plugins (graceful degradation). Node SDK (`kirkforge-plugin`) stays external. `/plugins list` shows source and feature gate. ADR-050 pinned. |
 
 ### Deferred items (honest deferral)
 

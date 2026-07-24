@@ -3,6 +3,16 @@
 //!
 //! This is the "plugin loader hub" that couples to config, access, the plugin
 //! host crate, and the `PluginToolWrapper` defined in [`super::wrapper`].
+//!
+//! ## Two-path dispatch (ADR-050)
+//!
+//! Folded plugins (Stratum, Plugin3, Draw, Video) can run as either:
+//! - **Compiled-in** (feature on): tools register as direct Rust calls in
+//!   `main/mod.rs`; the shell plugin dir is skipped here.
+//! - **External** (feature off): the shell plugin dir loads here as
+//!   `PluginToolWrapper` shell-outs (graceful degradation).
+//!
+//! The `enabled_plugins` config is the single toggle for both paths.
 
 use crate::shared::{Config, SharedConfig};
 use crate::tools::Tool;
@@ -12,6 +22,46 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use super::wrapper::PluginToolWrapper;
+
+/// Names of plugins that have been folded into core behind feature flags.
+///
+/// When the corresponding feature is enabled, these are served by compiled-in
+/// Rust code and their shell plugin dirs are skipped during filesystem loading.
+/// When the feature is disabled, the shell plugin dir is loaded as fallback.
+const FOLDED_PLUGINS: &[(&str, &str)] = &[
+    ("stratum", "stratum"),
+    ("kirkforge-plugin3", "budget"),
+    ("kirkforge-draw", "draw"),
+    ("kirkforge-video", "video"),
+];
+
+/// Check if a plugin name is folded and whether its feature is compiled in.
+pub fn folded_feature_enabled(name: &str) -> bool {
+    match name {
+        #[cfg(feature = "stratum")]
+        "stratum" => true,
+        #[cfg(feature = "budget")]
+        "kirkforge-plugin3" => true,
+        #[cfg(feature = "draw")]
+        "kirkforge-draw" => true,
+        #[cfg(feature = "video")]
+        "kirkforge-video" => true,
+        _ => false,
+    }
+}
+
+/// Check if a plugin name is one of the folded plugins (regardless of feature).
+pub fn is_folded(name: &str) -> bool {
+    FOLDED_PLUGINS.iter().any(|(n, _)| *n == name)
+}
+
+/// Get the feature name for a folded plugin, if any.
+pub fn folded_feature(name: &str) -> Option<&'static str> {
+    FOLDED_PLUGINS
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map(|(_, f)| *f)
+}
 
 /// Default plugins directory: `~/.local/share/kirkforge/plugins/`.
 pub fn plugins_dir() -> PathBuf {
@@ -41,6 +91,18 @@ pub fn load_workspace_plugins(registry: &mut PluginRegistry, cfg: &Config) -> Ve
     let mut warnings = Vec::new();
 
     for name in &cfg.tools.enabled_plugins {
+        // Folded plugins with feature ON are served by compiled-in Rust code
+        // (registered in main/mod.rs). Skip the shell-plugin dir so the two
+        // paths don't double-register the same tool names. When the feature is
+        // OFF, fall through to the shell-plugin path (graceful degradation).
+        if folded_feature_enabled(name) {
+            tracing::debug!(
+                plugin = %name,
+                "folded plugin feature is on — skipping shell-plugin load (compiled-in)"
+            );
+            continue;
+        }
+
         let Some(path) = cfg.tools.plugin_sources.get(name) else {
             warnings.push(format!("{name}: enabled but no plugin_source configured"));
             continue;

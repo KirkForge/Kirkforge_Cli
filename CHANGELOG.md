@@ -51,6 +51,24 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - ADR-047: Plugin3 fold-in behind `budget` feature flag.
 - ADR-048: Draw fold-in behind `draw` feature flag.
 - ADR-049: Video fold-in behind `video` feature flag (non-default).
+- ADR-050: Plugin system consolidation — two-path dispatch (compiled-in vs
+  external shell-out) unified behind a single `enabled_plugins` toggle.
+  Folded plugins (Stratum, Plugin3, Draw, Video) with their feature ON are
+  skipped by the shell loader and served compiled-in; with feature OFF they
+  fall back to shell plugins (graceful degradation). The Node SDK
+  (`kirkforge-plugin`) stays external. `/plugins list` shows source and
+  feature gate.
+- Plugin system consolidation (Workorder 7.0): the shell-plugin loader
+  (`load_workspace_plugins`) now checks `folded_feature_enabled(name)` for each
+  enabled plugin. When a folded plugin's feature is ON, the shell plugin dir is
+  skipped — the in-process version is the sole provider, eliminating duplicate
+  tool registrations. When OFF, the shell plugin dir loads as fallback
+  (graceful degradation). `FOLDED_PLUGINS` const maps plugin names to feature
+  names; `is_folded()` and `folded_feature()` are public so the TUI and tests
+  can query the fold-in status. `/plugins list` now shows source
+  (`compiled-in` / `external` / `external (feature off)`) and feature gate.
+  3 new tests: `default_plugin_sources_are_present_and_loadable` (updated),
+  `folded_plugin_shell_fallback_when_feature_off`, `folded_plugin_identification`.
 - `bench compare` subcommand: compare two JSON bench reports and emit a delta
   summary (markdown table of per-task deltas + aggregate success rate / cost /
   token changes). Usage: `kirkforge bench compare --baseline <json> --current <json> [--summary <md>]`.

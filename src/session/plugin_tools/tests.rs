@@ -672,21 +672,23 @@ async fn bundled_node_sdk_tool_executes_via_host() {
 
 /// Verify the built-in workspace plugin sources are registered by default,
 /// exist on disk, and can be loaded by the plugin host under the default
-/// trust policy. They remain disabled unless the operator toggles them on.
+/// trust policy. Folded plugins (stratum, plugin3, draw, video) are skipped
+/// by the shell loader when their feature is ON — they're served compiled-in.
+/// The Node SDK plugin (`kirkforge-plugin`) is always shell-loaded.
 #[test]
 fn default_plugin_sources_are_present_and_loadable() {
-    #[allow(unused_mut)]
-    let mut expected = vec![
+    let mut all_expected = vec![
         "kirkforge-draw",
         "stratum",
         "kirkforge-plugin3",
         "kirkforge-plugin",
     ];
     #[cfg(feature = "video")]
-    expected.push("kirkforge-video");
-    expected.sort();
+    all_expected.push("kirkforge-video");
+    all_expected.sort();
+
     let base = Config::default();
-    for name in &expected {
+    for name in &all_expected {
         assert!(
             base.tools.plugin_sources.contains_key(*name),
             "built-in plugin source '{name}' is missing from default config"
@@ -695,16 +697,99 @@ fn default_plugin_sources_are_present_and_loadable() {
 
     let mut cfg = Config::default();
     cfg.tools.plugin_sources = base.tools.plugin_sources;
-    cfg.tools.enabled_plugins = expected.iter().map(|s| s.to_string()).collect();
+    cfg.tools.enabled_plugins = all_expected.iter().map(|s| s.to_string()).collect();
 
     let mut registry = PluginRegistry::new();
     let warnings = load_workspace_plugins(&mut registry, &cfg);
-    // All built-in sources exist and load with the default Shell trust policy.
     assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
-    for name in &expected {
+
+    // Plugins that are always shell-loaded (not folded, or folded but feature off).
+    let mut shell_loaded: Vec<&str> = all_expected
+        .iter()
+        .copied()
+        .filter(|name| !crate::session::plugin_tools::folded_feature_enabled(name))
+        .collect();
+    shell_loaded.sort();
+
+    for name in &shell_loaded {
         assert!(
             registry.find_active_by_name(name).is_some(),
-            "built-in plugin source '{name}' did not load"
+            "shell plugin '{name}' did not load"
         );
     }
+
+    // Folded plugins with feature ON are skipped by the shell loader.
+    let compiled_in: Vec<&str> = all_expected
+        .iter()
+        .copied()
+        .filter(|name| crate::session::plugin_tools::folded_feature_enabled(name))
+        .collect();
+    for name in &compiled_in {
+        assert!(
+            registry.find_active_by_name(name).is_none(),
+            "folded plugin '{name}' was shell-loaded but should be compiled-in only"
+        );
+    }
+}
+
+/// Verify that folded plugins with feature OFF fall back to shell loading.
+#[test]
+fn folded_plugin_shell_fallback_when_feature_off() {
+    let folded_names = [
+        "stratum",
+        "kirkforge-plugin3",
+        "kirkforge-draw",
+        "kirkforge-video",
+    ];
+    let base = Config::default();
+
+    // Only test plugins whose feature is NOT compiled in AND whose source dir
+    // exists in the config (video is cfg-gated out of plugin_sources when off).
+    let off: Vec<&str> = folded_names
+        .iter()
+        .copied()
+        .filter(|n| !crate::session::plugin_tools::folded_feature_enabled(n))
+        .filter(|n| base.tools.plugin_sources.contains_key(*n))
+        .collect();
+    if off.is_empty() {
+        return;
+    }
+
+    let mut cfg = Config::default();
+    cfg.tools.plugin_sources = base.tools.plugin_sources;
+    cfg.tools.enabled_plugins = off.iter().map(|s| s.to_string()).collect();
+
+    let mut registry = PluginRegistry::new();
+    let warnings = load_workspace_plugins(&mut registry, &cfg);
+    assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+    for name in &off {
+        assert!(
+            registry.find_active_by_name(name).is_some(),
+            "folded plugin '{name}' with feature off should shell-load as fallback"
+        );
+    }
+}
+
+/// Verify `is_folded` and `folded_feature` return correct values.
+#[test]
+fn folded_plugin_identification() {
+    assert!(crate::session::plugin_tools::is_folded("stratum"));
+    assert!(crate::session::plugin_tools::is_folded("kirkforge-plugin3"));
+    assert!(crate::session::plugin_tools::is_folded("kirkforge-draw"));
+    assert!(crate::session::plugin_tools::is_folded("kirkforge-video"));
+    assert!(!crate::session::plugin_tools::is_folded("kirkforge-plugin"));
+    assert!(!crate::session::plugin_tools::is_folded("custom-plugin"));
+
+    assert_eq!(
+        crate::session::plugin_tools::folded_feature("stratum"),
+        Some("stratum")
+    );
+    assert_eq!(
+        crate::session::plugin_tools::folded_feature("kirkforge-plugin3"),
+        Some("budget")
+    );
+    assert_eq!(
+        crate::session::plugin_tools::folded_feature("kirkforge-plugin"),
+        None
+    );
 }

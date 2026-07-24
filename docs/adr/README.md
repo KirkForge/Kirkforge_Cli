@@ -81,6 +81,7 @@ numbering scheme (`001`–`017`). Recent additions:
 - [ADR-047: Fold Plugin3 into Core](./0047-plugin3-fold-in.md)
 - [ADR-048: Draw fold-in (in-process .td.json rendering)](./048-draw-fold-in.md)
 - [ADR-049: Video fold-in (non-default feature)](./049-video-fold-in.md)
+- [ADR-050: Plugin system consolidation](./050-plugin-system-consolidation.md)
 
 These are **not** part of the Plugin3 series and are therefore not
 included in the 4-digit index table above.

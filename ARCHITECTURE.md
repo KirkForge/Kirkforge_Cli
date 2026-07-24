@@ -262,8 +262,28 @@ the host passes only env vars, not full event context. Folding plugin3 into core
 
 Plugins are manifest-based and dynamically loaded at runtime from the
 filesystem. The plugin SDK (`kirkforge-plugin`) and host (`kirkforge-plugin-host`)
-are compiled into the binary; plugin *functionality* is provided by shell scripts
-that invoke satellite binaries.
+are compiled into the binary; plugin *functionality* arrives via one of two
+dispatch paths (ADR-050):
+
+1. **Compiled-in** (feature on): tools register as direct Rust calls in
+   `main/mod.rs`; hooks register as `InProcessHook` handlers in the executor.
+   The shell plugin dir is skipped by the loader, so only the in-process
+   version registers — no duplicate tool registrations.
+2. **External** (feature off): the shell plugin dir loads via
+   `PluginToolWrapper` shell-outs. This is graceful degradation — a user who
+   builds without a feature still gets the plugin via the shell plugin if its
+   dir and satellite binary are available, at the cost of subprocess overhead.
+
+The four folded plugins (Stratum, Plugin3, Draw, Video) use this two-path
+dispatch. A single toggle — `enabled_plugins` in `ToolConfig` — controls both
+paths: a folded plugin name enables the compiled-in path (feature on) or the
+shell path (feature off). `plugin_sources` is only needed for external/shell
+plugins. The `kirkforge-plugin` self-plugin (Node SDK) is **not** folded; it
+stays an external shell-out under all configurations because its tools depend
+on the Node ecosystem (ESLint, TypeScript, Ruff, Pyright, Bandit).
+
+`/plugins list` shows the source (`compiled-in` / `external` /
+`external (feature off)`) and feature gate for each workspace plugin source.
 
 ### Manifest format (`kirkforge.toml`)
 
@@ -314,13 +334,13 @@ downgraded. Optional minisign detached-signature verification (`.kirkforge.sig`)
 
 ### The 5 built-in plugins
 
-| Plugin | Trust | Skills | Tools | Hooks | Backed by |
+| Plugin | Trust | Skills | Tools | Hooks | Source |
 |---|---|---|---|---|---|
-| `kirkforge-plugin` | shell | `/kirkforge` | 6 | 0 | Node SDK (`npm/kirkforge-plugin`) |
-| `stratum` | shell | `/stratum` | 5 | 2 | `stratum` binary |
-| `kirkforge-plugin3` | shell | `/budget` | 7 | 4 | `plugin3` binary |
-| `kirkforge-draw` | shell | `/draw` | 1 | 1 | `kfd` binary |
-| `kirkforge-video` | shell | `/video` | 8 | 0 | `kirkforge-video` binary |
+| `kirkforge-plugin` | shell | `/kirkforge` | 6 | 0 | External — Node SDK (`npm/kirkforge-plugin`), not folded |
+| `stratum` | shell | `/stratum` | 5 | 2 | Compiled-in (`stratum` feature) or external (`stratum` binary) |
+| `kirkforge-plugin3` | shell | `/budget` | 7 | 4 | Compiled-in (`budget` feature) or external (`plugin3` binary) |
+| `kirkforge-draw` | shell | `/draw` | 1 | 1 | Compiled-in (`draw` feature) or external (`kfd` binary) |
+| `kirkforge-video` | shell | `/video` | 8 | 0 | Compiled-in (`video` feature) or external (`kirkforge-video` binary) |
 
 Runtime toggles: `enabled_plugins` (Vec) and `plugin_sources` (HashMap) in
 `ToolConfig`. The `/plugins` TUI command set: `list`, `enable`, `disable`,

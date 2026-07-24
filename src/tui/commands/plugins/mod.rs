@@ -175,16 +175,53 @@ fn list_plugins(state: &AppState) -> String {
         let enabled: std::collections::HashSet<&String> =
             cfg.tools.enabled_plugins.iter().collect();
         for (name, path) in &cfg.tools.plugin_sources {
-            let status = if enabled.contains(name) {
-                if active_names.contains(name) {
-                    "on ✓"
+            let enabled = enabled.contains(name);
+            let is_compiled = crate::session::plugin_tools::folded_feature_enabled(name);
+            let is_folded = crate::session::plugin_tools::is_folded(name);
+            let feature_gate = crate::session::plugin_tools::folded_feature(name);
+
+            let source_label = if is_compiled {
+                "compiled-in"
+            } else if is_folded {
+                "external (feature off)"
+            } else {
+                "external"
+            };
+
+            let feature_label = if let Some(feat) = feature_gate {
+                if is_compiled {
+                    format!("[{feat}: on]")
+                } else {
+                    format!("[{feat}: off]")
+                }
+            } else {
+                String::new()
+            };
+
+            let status = if enabled {
+                if is_compiled {
+                    "on (compiled-in)"
+                } else if active_names.contains(name) {
+                    "on"
                 } else {
                     "on (not loaded)"
                 }
             } else {
                 "off"
             };
-            lines.push(format!("  - {name} -> {} [{status}]", path.display()));
+
+            let line = if feature_label.is_empty() {
+                format!(
+                    "  - {name} -> {} [{status}] ({source_label})",
+                    path.display()
+                )
+            } else {
+                format!(
+                    "  - {name} -> {} [{status}] ({source_label}) {feature_label}",
+                    path.display()
+                )
+            };
+            lines.push(line);
         }
     }
 

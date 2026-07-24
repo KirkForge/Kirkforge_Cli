@@ -111,6 +111,13 @@ compiled binary.
 | **Video** | `/video` | Instruction-driven video production — the text LLM directs, FFmpeg renders. 8 tools. |
 | **Plugin SDK** | `/kirkforge` | Verification tooling backed by the Node SDK. 6 tools. |
 
+Stratum, Plugin3, Draw, and Video can run either **compiled-in** (when their
+feature flag is enabled at build time — direct Rust calls, no subprocess
+overhead) or as **external shell plugins** (when the feature is off, falling back
+to the satellite binary via a shell-out). The Plugin SDK stays external in all
+configurations; its tools depend on the Node ecosystem. `/plugins list` shows
+the source and feature gate for each plugin. See ADR-050 for the full rationale.
+
 They are registered as workspace plugin sources and **enabled by default** (when
 their directories exist). Use `/plugins toggle <name>` to disable a bundled
 plugin persistently.

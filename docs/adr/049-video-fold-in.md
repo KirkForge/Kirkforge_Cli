@@ -32,4 +32,4 @@ The standalone video binary remains for non-KirkForge use cases.
 - 8 video tools registered under `#[cfg(feature = "video")]`.
 - No shell fallback when feature is off — the tools simply aren't available.
 - `kirkforge-video` binary remains standalone.
-- Binary size impact: default build unchanged; `--features video` adds ~200KB (estimated).
+- Binary size impact: default build unchanged. Dev build delta with `--features video` is ~14.4 MB (367 MB → 373 MB with debug info). Release build delta estimated at ~300-500 KB with `opt-level = "z"` + LTO (the crate adds `serde_yaml`, `strum`, `which`, `tracing-subscriber`).

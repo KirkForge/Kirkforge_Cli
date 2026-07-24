@@ -186,7 +186,7 @@ jobs:
   bench:
     runs-on: ubuntu-latest
     needs: [fmt, quality]
-    if: always() && (needs.fmt.result == 'success' || needs.fmt.result == 'skipped') && (needs.quality.result == 'success' || needs.quality.result == 'skipped')
+    if: always() && (needs.fmt.result == 'success' || needs.fmt.result == 'skipped')
     env:
       BENCH_MODEL: qwen2.5:0.5b
     steps:
@@ -251,7 +251,7 @@ jobs:
         continue-on-error: true
         run: |
           mkdir -p benches/baselines
-          gh run download -n bench-report -R "${{ github.repository }}" -D benches/baselines/ || echo "No baseline found; first run will establish one"
+          gh run download -n bench-baseline -R "${{ github.repository }}" -D benches/baselines/ || echo "No baseline found; first run will establish one"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

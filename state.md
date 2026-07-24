@@ -8,15 +8,27 @@
 
 | Item | What |
 |---|---|
-| WO 6.1: Bench harness realism | Replaced `CompositeToolset::empty()` with `build_bench_toolset()` providing sandboxed `read_file`, `write_file`, `edit_file`, `bash`, `glob`, `grep`. Fixed `add_adr` task verify path from `039-` to `062-benchmark-delta-comparison`. Updated ADR-038. |
-| WO 6.2: Bench delta comparison | `DeltaReport`, `TaskDelta`, `compare_reports()`, `write_markdown_delta()` in `kirkforge-bench`. `bench compare` CLI subcommand. 3 unit tests. |
-| WO 6.3: Bench CI wiring | CI bench job uses `if: always()`, path filters, baseline download, PR comments via `gh`, artifact uploads. `bench-baseline.yml` scheduled workflow. |
-| WO 6.4: Bench list and verify-only | `bench list` and `bench verify-only` subcommands. `TaskInfo`, `list_tasks()`, `verify_only()`. 3 unit tests. `bench` CLI restructured to subcommands. |
-| WO 6.5: Bench eval ADR | ADR-045 (continuous eval pipeline). ADR-038 updated to reflect shipped pipeline. ADR drift tests pass. |
-| WO 6.6: Fold Stratum | `stratum` feature flag (default on). `src/session/stratum.rs` with 5 tool wrappers (`run`, `apply`, `mode`, `rules`, `config_validate`). ADR-046. |
-| WO 6.7: Fold Plugin3 | `budget` feature flag (default on). `src/session/budget.rs` with 7 tool wrappers. ADR-047. Hooks remain shell scripts (upgrade path: in-process). |
-| WO 6.8: Fold Draw | `draw` feature flag (default on). `src/session/draw.rs` with `draw_render` tool. ADR-048. |
-| WO 6.9: Fold Video | `video` feature flag (non-default). `src/session/video.rs` with 8 tool wrappers. ADR-049. |
+| WO 6.1: Bench harness realism | Replaced `CompositeToolset::empty()` with `build_bench_toolset()`. Fixed `add_adr` verify path. Updated ADR-038. |
+| WO 6.2: Bench delta comparison | `DeltaReport`, `TaskDelta`, `compare_reports()`, `write_markdown_delta()`, `bench compare` CLI. 3 unit tests. |
+| WO 6.3: Bench CI wiring | CI bench job with `if: always()` (runs when quality fails), path filters, baseline download, PR comments, artifact uploads. `bench-baseline.yml` scheduled workflow. **Bug fix**: corrected `if` condition and artifact name mismatch. |
+| WO 6.4: Bench list and verify-only | `bench list` and `bench verify-only` subcommands. `TaskInfo`, `list_tasks()`, `verify_only()`. |
+| WO 6.5: Bench eval ADR | ADR-045 (continuous eval pipeline). ADR-038 updated. |
+| WO 6.6: Fold Stratum | `stratum` feature flag (default on). 5 tool wrappers. ADR-046. Hooks deferred. |
+| WO 6.7: Fold Plugin3 | `budget` feature flag (default on). 7 tool wrappers. ADR-047. Hooks explicitly deferred. |
+| WO 6.8: Fold Draw | `draw` feature flag (default on). `draw_render` tool. ADR-048. Hook deferred. |
+| WO 6.9: Fold Video | `video` feature flag (non-default). 8 tool wrappers. ADR-049. Dev build delta ~14.4 MB. |
+
+### Deferred items (honest deferral)
+
+| Item | Why deferred |
+|---|---|
+| 6.6/6.7/6.8 hooks → in-process | Requires wiring into `turn.rs`/`microcompaction.rs` event loop; out of scope for fold-in MVP. ADRs updated to mark hooks as deferred with upgrade path. |
+| `stratum_mode` config field | `enabled_plugins` toggle sufficient for on/off; mode selection passes through tool arguments. |
+| `budget_ceiling` / `budget_approaching_ratio` config fields | Budget tools accept ceiling as a parameter; no persistent config needed for MVP. |
+
+### Known CI issues
+
+- **Ollama model pull fails intermittently**: The `integration` CI job fails when `ollama pull` encounters a registry redirect. External service issue; re-running typically succeeds.
 
 ### Gates
 
@@ -25,11 +37,7 @@
 - `cargo fmt --check` = clean
 - `cargo check --workspace --all-targets` = clean
 - `cargo test -p plugin3-core --test adr_xref_drift` = 3 passed
-- Feature-gated builds: `--features stratum`, `--features budget`, `--features draw`, `--features video` all compile and pass
-
-### Known CI issues
-
-- **Ollama model pull fails intermittently**: The `integration` CI job fails when `ollama pull` encounters a registry redirect (`realm host "ollama.com" does not match original host "registry.ollama.ai"`). This is an external service issue, not a code problem. Re-running the job typically succeeds.
+- Feature-gated builds compile and pass
 
 ### Remaining (long-term, path to A agent)
 
@@ -37,8 +45,5 @@
 |---|---|---|
 | P1-long-1 Phase 7 — Embeddings/graph-walk retrieval | 2-3 weeks | Future |
 | P1-long-2 follow-up (cont.) — Multi-model leaderboard | 1-2 weeks | Future |
+| Hook fold-in (6.6/6.7/6.8 hooks → in-process) | 1-2 weeks | Deferred |
 | More TUI parity | ongoing | Future |
-
-### Open cleanup items
-
-- More TUI parity (doom_loop recovery, session child/parent nav, scout subagent, /share, /editor)

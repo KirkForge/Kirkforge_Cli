@@ -22,7 +22,7 @@ Components:
 
 4. **`kirkforge bench` subcommand** — loads tasks, runs them headlessly, writes JSON report + markdown summary.
 
-5. **CI integration** — a `bench` job in `.github/workflows/ci.yml` that runs on PRs touching agent code, uses the cheapest model via Ollama, and posts the markdown summary as a PR comment.
+5. **CI integration** — a `bench` job in `.github/workflows/ci.yml` that runs on PRs touching agent code, uses the cheapest model via Ollama, and writes a JSON report + markdown summary. (PR commenting is implemented via `gh pr comment` — see ADR-045 for the full pipeline.)
 
 ## Consequences
 

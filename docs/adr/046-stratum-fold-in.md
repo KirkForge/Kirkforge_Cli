@@ -31,3 +31,5 @@ The standalone `kirkstratum-cli` binary is unaffected.
 - Tools registered in `src/main/mod.rs` under `#[cfg(feature = "stratum")]`.
 - Shell-plugin path (`plugins/stratum/`) remains as fallback when feature is off.
 - The `kirkstratum-cli` binary is unaffected.
+- Hooks (`session-start`, `pre-tool-bash`) remain shell scripts for now. Converting them to in-process handlers is a follow-up that requires wiring into the session lifecycle.
+- Config field `stratum_mode` (off/lite/full/ultra) was proposed in the workorder but deferred — the existing `enabled_plugins` toggle is sufficient for on/off, and mode selection passes through tool arguments.

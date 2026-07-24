@@ -5,6 +5,17 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+- Moved `ARCHITECTURE.md` to `docs/TECHNICAL.md` and fixed stale content
+  (Stratum/Plugin3 now described as compiled-in, not standalone; bench CI
+  described as having delta reporting; fold-in described as done, not planned).
+- Rewrote `README.md` as a clean landing page (was a 229-line tech manual;
+  now 55 lines with links to docs/TECHNICAL.md for detail).
+- Added doc-sync enforcement rule to `AGENTS.md` §9–10: any change altering
+  the architecture, plugin system, feature flags, tool list, hook system,
+  verifier bus, or context index MUST update `docs/TECHNICAL.md` in the same
+  commit. README stays a landing page; tech detail lives in docs/TECHNICAL.md.
+
 ### Added
 - In-process hooks for the Stratum, Plugin3, and Draw fold-ins. The 7 hooks
   that were previously shell scripts (or deferred) are now in-process Rust
@@ -98,10 +109,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `add_adr` bench task verify path fixed from `039-` to `062-benchmark-delta-comparison`
   (ADR-039 already exists, task now creates a new non-conflicting ADR).
 - ADR-038 updated with implementation notes documenting the sandboxed toolset.
-- `ARCHITECTURE.md` — full architecture document tying together the agent core,
+- `docs/TECHNICAL.md` — full technical manual tying together the agent core,
   verification system, context index, context compression (Stratum), token
   budget (Plugin3), plugin system, specialized runtimes (Draw, Video), workflow
-  engine, and benchmark harness.
+  engine, and benchmark harness. (Moved from `ARCHITECTURE.md` at repo root.)
 - `docs/workorders/` — planned work: Series 6 (benchmarks + continuous eval,
   6.1-6.5) and Series 7 (plugin fold-in + consolidation, 6.6-6.9 + 7.0).
 

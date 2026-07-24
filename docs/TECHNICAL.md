@@ -78,9 +78,10 @@ The root `kirkforge` binary directly depends on six crates:
 | `kirkforge-bench` | Benchmark task types, loader, verifier, report writers |
 
 The remaining nine crates are **satellites**: they build as standalone binaries
-(`kfd`, `kirkforge-video`, `stratum`, `plugin3`) or support libraries. The plugin
-system invokes them via shell scripts. Folding them into the core as
-feature-gated compiled-in modules is the planned work in Workorder 7.0.
+(`kfd`, `kirkforge-video`, `stratum`, `plugin3`) or support libraries. When
+their feature flag is enabled, the core crate is linked directly into the
+`kirkforge` binary as a compiled-in module (ADR-046–049). When the feature is
+off, the shell plugin dir loads as a fallback (ADR-050).
 
 ---
 
@@ -97,9 +98,15 @@ The largest module (~30 submodules). It owns:
   trace events (ADR-0032), checkpoints after each tool result (ADR-0034).
 - **Verifiers** (`verifier/`): the verification bus and correction loop (see
   [Verification](#verification)).
-- **Plugin tools** (`plugin_tools/`): loads plugin manifests and wraps plugin
-  tool commands in `PluginToolWrapper` (implements the `Tool` trait, spawns the
-  shell script as a subprocess with a curated env and timeout).
+- **Plugin tools** (`plugin_tools/`): loads plugin manifests. External plugins
+  are wrapped in `PluginToolWrapper` (implements the `Tool` trait, spawns the
+  shell script as a subprocess). Folded plugins (Stratum, Plugin3, Draw, Video)
+  register as direct Rust `Tool` impls when their feature is on (ADR-050).
+- **Hooks** (`hooks.rs`): fires plugin hooks on lifecycle events
+  (`session-start`, `post-turn`, `pre-tool-bash`, `post-tool-bash`,
+  `post-tool-write_file`, `pre-compact`). Folded plugins register
+  `InProcessHook` handlers that run in-process with full `HookContext`
+  (including tool result content). External plugins use shell scripts.
 - **Prompt** (`prompt/`): builds the model prompt from conversation history,
   system instructions, tool definitions, and retrieved context. Includes
   microcompaction (ADR-0027) for stale turns.
@@ -228,10 +235,11 @@ window. Four modes: `off`, `lite`, `full`, `ultra`. The pipeline applies
 content-type-specific transforms with offload storage and query-based relevance
 filtering.
 
-Stratum ships as a standalone `stratum` binary, invoked by the
-`plugins/stratum/` plugin (5 tools, 2 hooks). The `session-start` hook emits the
-active ruleset so the model knows the compression contract; the `pre-tool-bash`
-hook validates config to surface drift early.
+Stratum ships as a compiled-in module (when the `stratum` feature is on,
+ADR-046) or as a standalone `stratum` binary (feature off, shell fallback).
+The `session-start` hook emits the active ruleset so the model knows the
+compression contract; the `pre-tool-bash` hook validates config to surface
+drift early. Both hooks are in-process Rust handlers when compiled in.
 
 ---
 
@@ -249,12 +257,15 @@ approached or exceeded:
 
 The orchestrator (`SlicingOrchestrator`) classifies tool outputs, slices
 oversized ones with head/tail markers, and offloads the full content to a store.
-Cost reporting tracks per-turn usage. Plugin3 ships as a standalone `plugin3`
-binary, invoked by the `plugins/kirkforge-plugin3/` plugin (7 tools, 4 hooks).
+Cost reporting tracks per-turn usage. Plugin3 ships as a compiled-in module
+(when the `budget` feature is on, ADR-047) or as a standalone `plugin3` binary
+(feature off, shell fallback).
 
-**Known limitation**: under KirkForge, plugin3's hooks emit canned JSON because
-the host passes only env vars, not full event context. Folding plugin3 into core
-(Workorder 7.0) eliminates this lossy shim.
+The 4 in-process hooks receive full `HookContext` with real tool result content
+and compact metadata — the lossy canned-JSON shim that existed when Plugin3 ran
+as a shell plugin is eliminated (ADR-047). The hooks observe and report budget
+usage; active slicing of tool results before they enter the conversation is a
+deferred follow-up (Workorder 7.1).
 
 ---
 
@@ -405,9 +416,10 @@ runs the task, then verifies the result deterministically. Reports are written a
 JSON and markdown.
 
 A `bench` CI job runs all tasks on Ollama with `qwen2.5:0.5b` on every push/PR.
-It is currently informational (`|| true`) — it does not gate merges. Wiring it
-into a continuous evaluation pipeline with baseline comparison and delta
-reporting is planned work (Workorder 6.5).
+It posts a delta summary as a PR comment comparing against the `main` baseline
+(ADR-045). The success-rate gate is currently informational — it reports but
+does not block merges. A nightly `bench-baseline` workflow on `main` stores the
+canonical baseline report as a workflow artifact.
 
 ---
 
@@ -454,9 +466,9 @@ document known limitations. Removing these is a regression.
 
 ## Where to go next
 
-- **README.md** — user-facing quick start and feature list
-- **[docs/adr/](docs/adr/)** — pinned decisions and their rationale
-- **[docs/workorders/](docs/workorders/)** — planned and in-progress work
-- **[AGENTS.md](AGENTS.md)** — worker contract for AI agents in this repo
-- **[state.md](state.md)** — current production-readiness state
-- **[CHANGELOG.md](CHANGELOG.md)** — release history
+- **README.md** — user-facing landing page
+- **[docs/adr/](adr/)** — pinned decisions and their rationale
+- **[docs/workorders/](workorders/)** — planned and in-progress work
+- **[AGENTS.md](../AGENTS.md)** — worker contract for AI agents in this repo
+- **[state.md](../state.md)** — current production-readiness state
+- **[CHANGELOG.md](../CHANGELOG.md)** — release history

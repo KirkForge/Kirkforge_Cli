@@ -173,6 +173,7 @@ pub fn register_plugin_verifiers_into_bus(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use crate::session::event_bus::FileReadEvent;
     use kirkforge_plugin_host::{PluginRegistry, TrustPolicy};
     use std::path::PathBuf;

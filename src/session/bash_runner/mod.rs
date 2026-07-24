@@ -478,6 +478,7 @@ mod tests {
     use super::safety::word_boundary_match;
     use super::*;
     use crate::session::access::{DenyList, PathGuard};
+    #[cfg(unix)]
     use crate::shared::test_util::remove_test_file;
 
     /// Small input passes through `cap_to_string` unchanged.

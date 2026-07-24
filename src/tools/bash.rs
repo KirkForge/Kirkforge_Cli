@@ -357,6 +357,7 @@ impl Tool for Bash {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use crate::shared::test_util::remove_test_file;
 
     /// A cancelled foreground `Bash` tool invocation returns a structured

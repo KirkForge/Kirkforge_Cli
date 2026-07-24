@@ -68,6 +68,7 @@ mod tests {
     use super::*;
     use std::fs;
 
+    #[cfg(unix)]
     #[test]
     fn worktree_create_write_file_drop_cleanup() {
         // Create a temp git repo

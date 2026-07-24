@@ -407,6 +407,7 @@ mod tests {
 
     /// The Bash tool surfaces internal timeouts as a structured
     /// `ToolError::Timeout` rather than an opaque string.
+    #[cfg(unix)]
     #[tokio::test]
     async fn bash_tool_surfaces_structured_timeout() {
         let tool = Bash::new(DenyList::default(), PathGuard::default(), false, None);

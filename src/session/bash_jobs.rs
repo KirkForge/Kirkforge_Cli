@@ -630,6 +630,7 @@ mod tests {
 
     /// A job that exceeds its timeout is killed, reaped, and still retains
     /// the partial output it produced before the timeout.
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_timeout_reaps_child_and_preserves_partial_output() {
         let reg = BashJobRegistry::new();

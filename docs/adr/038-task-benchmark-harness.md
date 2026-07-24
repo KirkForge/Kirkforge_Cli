@@ -42,4 +42,9 @@ Components:
 
 The bench executor (`src/session/bench.rs`) provides a sandboxed toolset constrained to the temp sandbox dir. Available tools: `read_file`, `write_file`, `edit_file`, `bash`, `glob`, `grep`. The toolset uses a `DenyList` with default patterns, a `PathGuard` scoped to the sandbox dir, `bash_sandbox_workdir: true`, no undo stack, no LSP, no computer_use, no docker.
 
-ponytail: TOML task definitions + headless session execution. The upgrade path is a leaderboard, multi-model comparison, and CI benchmark deltas.
+- `bench compare` subcommand and `DeltaReport`/`compare_reports()`/`write_markdown_delta()` added in WO 6.2 (`kirkforge-bench` crate).
+- `bench list` and `bench verify-only` subcommands added in WO 6.4. `verify-only` runs task verification without LLM, catching stale task definitions in seconds.
+- The CI bench job now uses `if: always()` (runs even when quality fails, but not when fmt fails), path filters for agent-code directories, baseline artifact download from `main`, and PR comments via `gh pr comment`.
+- The aspirational "posts the markdown summary as a PR comment" language from the original Decision section is now superseded by the actual `gh pr comment` implementation and the full pipeline design in ADR-045.
+
+ponytail: TOML task definitions + headless session execution. The upgrade path is a leaderboard, multi-model comparison, and CI benchmark deltas. Deferred leaderboard and multi-model comparison items are superseded by ADR-045.

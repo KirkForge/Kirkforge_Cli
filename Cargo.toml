@@ -38,6 +38,10 @@ kirkforge-lsp = { path = "crates/kirkforge-lsp" }
 kirkforge-workflow = { path = "crates/kirkforge-workflow" }
 kirkforge-context-index = { path = "crates/kirkforge-context-index" }
 kirkforge-bench = { path = "crates/kirkforge-bench" }
+kirkforge-draw-core = { path = "crates/kirkforge-draw-core" }
+kirkstratum-core = { path = "crates/kirkstratum-core" }
+kirkforge-video = { path = "crates/kirkforge-video" }
+plugin3-core = { path = "crates/plugin3-core" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
@@ -139,6 +143,12 @@ kirkforge-workflow = { workspace = true }
 kirkforge-context-index = { workspace = true }
 # Task-benchmark harness (TOML tasks, headless runs, metrics collection).
 kirkforge-bench = { workspace = true }
+# Terminal diagram rendering (optional, behind `draw` feature flag).
+kirkforge-draw-core = { workspace = true, optional = true }
+# Stratum context compression (optional; default on).
+kirkstratum-core = { workspace = true, optional = true }
+# Video editing tools (optional; off by default).
+kirkforge-video = { workspace = true, optional = true }
 # Headless Chrome CDP driver for the computer_use tool.
 headless_chrome = { version = "1", default-features = false }
 # SigV4 signing for Anthropic-on-Bedrock requests.
@@ -157,6 +167,8 @@ url = "2"
 # Cache serialization uses serde_json (already a dependency) instead of
 # the unmaintained bincode crate.
 # Temp directory creation for benchmark harness.
+# Plugin3 budget guard (optional — feature-gated behind "budget").
+plugin3-core = { workspace = true, optional = true }
 tempfile.workspace = true
 
 [dev-dependencies]
@@ -168,7 +180,11 @@ criterion = { version = "0.5", features = ["async_tokio"] }
 wiremock = "0.6"
 
 [features]
-default = []
+default = ["stratum", "draw", "budget"]
+stratum = ["dep:kirkstratum-core"]
+draw = ["dep:kirkforge-draw-core"]
+budget = ["dep:plugin3-core"]
+video = ["dep:kirkforge-video"]
 # Enable OpenTelemetry span/metric export from the Rust runtime.
 otel = [
     "dep:opentelemetry",

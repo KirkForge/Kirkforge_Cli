@@ -72,6 +72,7 @@ This repo is a Rust CLI coding agent (`kirkforge`). It uses `tokio`, `ratatui`, 
 - **Stale cleanup items are a real risk**: Before starting work on a "cleanup" or "missing feature" item from state.md or a workorder, grep the codebase first. Multiple items listed as "open" (persist plugin state, agent steps limit) turned out to be already shipped. Thirty seconds of `grep` saves an hour of duplicate work.
 - **`lessons.md` is gitignored**: If you need it tracked, use `git add -f`. Otherwise, fold permanent lessons into `AGENTS.md` at session close and let `lessons.md` stay scratch-only.
 - **`cargo clippy --all-targets` can be slow** (3-4 min on this repo). Budget time for full gate runs. Consider running just the failing test first to verify the fix, then run the full gate.
+- **Ollama model pull fails intermittently in CI**: The `integration` job sometimes fails at "Pull test model" with `realm host "ollama.com" does not match original host "registry.ollama.ai"`. This is an external service issue, not a code regression. Re-running the workflow typically succeeds. Do not mark CI as red for this reason alone.
 
 ## Task management
 1. **Plan**: write `workplan.md` (gitignored) with files to touch + root cause + gate.

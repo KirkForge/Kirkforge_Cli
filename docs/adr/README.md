@@ -47,6 +47,7 @@ files `0001`–`0018` and `0021`–`0022` (indexed below) are the vendored Plugi
 | [0033](./0033-tool-retry-backoff.md) | Exponential backoff on tool-call retries | Accepted |
 | [0034](./0034-mid-batch-checkpoint.md) | Mid-batch tool-result checkpointing | Accepted |
 | [0044](./0044-computer-use-depth.md) | Computer-use depth (multi-step browser flows) | Accepted (partially implemented) |
+| [0047](./0047-plugin3-fold-in.md) | Fold Plugin3 into Core | Accepted |
 
 ## Native KirkForge-Cli ADRs
 
@@ -75,6 +76,11 @@ numbering scheme (`001`–`017`). Recent additions:
 - [ADR-042: OpenCode Zen provider](./042-opencode-zen-provider.md)
 - [ADR-043: Verifier-bus bridge code](./043-verifier-bus-bridge-code.md)
 - [ADR-044: Computer-use depth (multi-step browser flows)](./044-computer-use-depth.md)
+- [ADR-045: Continuous evaluation pipeline](./045-continuous-eval-pipeline.md)
+- [ADR-046: Fold Stratum into core](./046-stratum-fold-in.md)
+- [ADR-047: Fold Plugin3 into Core](./0047-plugin3-fold-in.md)
+- [ADR-048: Draw fold-in (in-process .td.json rendering)](./048-draw-fold-in.md)
+- [ADR-049: Video fold-in (non-default feature)](./049-video-fold-in.md)
 
 These are **not** part of the Plugin3 series and are therefore not
 included in the 4-digit index table above.

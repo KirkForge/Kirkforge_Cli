@@ -41,6 +41,7 @@ fn default_plugin_sources() -> HashMap<String, PathBuf> {
     let mut sources = HashMap::new();
     let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     sources.insert("kirkforge-draw".into(), base.join("plugins/kirkforge-draw"));
+    #[cfg(feature = "video")]
     sources.insert(
         "kirkforge-video".into(),
         base.join("plugins/kirkforge-video"),

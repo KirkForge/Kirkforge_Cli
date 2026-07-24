@@ -512,13 +512,16 @@ fn bundled_plugins_load_from_data_dir() {
         .iter()
         .map(|p| p.plugin.manifest().name.clone())
         .collect();
-    for expected in [
+    #[allow(unused_mut)]
+    let mut expected = vec![
         "kirkforge-draw",
-        "kirkforge-video",
         "stratum",
         "kirkforge-plugin3",
         "kirkforge-plugin",
-    ] {
+    ];
+    #[cfg(feature = "video")]
+    expected.push("kirkforge-video");
+    for expected in expected {
         assert!(
             names.contains(&expected.to_string()),
             "expected bundled plugin {expected:?} to load from data dir; got {names:?}"
@@ -672,17 +675,20 @@ async fn bundled_node_sdk_tool_executes_via_host() {
 /// trust policy. They remain disabled unless the operator toggles them on.
 #[test]
 fn default_plugin_sources_are_present_and_loadable() {
-    let expected = [
+    #[allow(unused_mut)]
+    let mut expected = vec![
         "kirkforge-draw",
-        "kirkforge-video",
         "stratum",
         "kirkforge-plugin3",
         "kirkforge-plugin",
     ];
+    #[cfg(feature = "video")]
+    expected.push("kirkforge-video");
+    expected.sort();
     let base = Config::default();
-    for name in expected {
+    for name in &expected {
         assert!(
-            base.tools.plugin_sources.contains_key(name),
+            base.tools.plugin_sources.contains_key(*name),
             "built-in plugin source '{name}' is missing from default config"
         );
     }
@@ -695,7 +701,7 @@ fn default_plugin_sources_are_present_and_loadable() {
     let warnings = load_workspace_plugins(&mut registry, &cfg);
     // All built-in sources exist and load with the default Shell trust policy.
     assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
-    for name in expected {
+    for name in &expected {
         assert!(
             registry.find_active_by_name(name).is_some(),
             "built-in plugin source '{name}' did not load"

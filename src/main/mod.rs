@@ -1075,6 +1075,65 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
         tracing::warn!(warning = %w, "plugin load warning");
     }
 
+    // ── Stratum in-process tools (feature-gated) ──
+    // When the `stratum` feature is enabled, the five core Stratum tools
+    // (run, apply, mode, rules, config_validate) are registered as direct
+    // Rust calls instead of shell-plugin subprocesses.
+    #[cfg(feature = "stratum")]
+    {
+        let stratum_tool_list = session::stratum::stratum_tools();
+        let count = stratum_tool_list.len();
+        toolset.add(Box::new(session::toolset::VecToolset::new(
+            "stratum",
+            stratum_tool_list,
+        )));
+        tracing::info!(count, "stratum in-process tools registered");
+    }
+
+    // ── Draw in-process tool (feature-gated) ──
+    // When the `draw` feature is enabled, the draw_render tool loads and
+    // renders .td.json files using kirkforge_draw_core directly, eliminating
+    // the subprocess overhead of shelling out to the kfd binary.
+    #[cfg(feature = "draw")]
+    {
+        let draw_tool_list = session::draw::draw_tools();
+        let count = draw_tool_list.len();
+        toolset.add(Box::new(session::toolset::VecToolset::new(
+            "draw",
+            draw_tool_list,
+        )));
+        tracing::info!(count, "draw in-process tools registered");
+    }
+
+    // ── Video in-process tools (feature-gated) ──
+    // When the `video` feature is enabled, the eight video tools call
+    // kirkforge_video directly, eliminating subprocess overhead.
+    #[cfg(feature = "video")]
+    {
+        let video_tool_list = session::video::video_tools();
+        let count = video_tool_list.len();
+        toolset.add(Box::new(session::toolset::VecToolset::new(
+            "video",
+            video_tool_list,
+        )));
+        tracing::info!(count, "video in-process tools registered");
+    }
+
+    // ── Budget (Plugin3) in-process tools (feature-gated) ──
+    // When the `budget` feature is enabled, the 7 Plugin3 budget tools
+    // are registered as direct Rust calls instead of shell-plugin
+    // subprocesses. ADR-047 pins this decision.
+    #[cfg(feature = "budget")]
+    {
+        let budget_tool_list = session::budget::all_budget_tools();
+        let count = budget_tool_list.len();
+        toolset.add(Box::new(session::toolset::VecToolset::new(
+            "budget",
+            budget_tool_list,
+        )));
+        tracing::info!(count, "budget in-process tools registered");
+    }
+
     if let Some(sys) = &system {
         // Wired into the executor's PromptBuilder before the first turn
         // (see tui::run_tui and run_non_interactive). Kept as an info

@@ -6,6 +6,25 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- Fold `kirkstratum-core` into the main binary as an optional `stratum` feature
+  (default on). 5 tools (`run`, `apply`, `mode`, `rules`, `config_validate`)
+  are now direct Rust calls, eliminating subprocess overhead. ADR-046.
+- Fold `kirkforge-draw-core` into the main binary as an optional `draw` feature
+  (default on). The `draw_render` tool loads `.td.json` files and renders them
+  in-process. ADR-048.
+- Fold Plugin3 (token-budget guard) into core as an optional `budget` feature
+  (default on). 7 tools (`budget_status`, `budget_set`, `budget_compact`,
+  `store_get`, `config_validate`, `report`, `self_check`) are now direct
+  Rust calls via `plugin3-core`, eliminating the lossy shell-plugin shim.
+  ADR-047. Hooks remain as shell scripts (upgrade path: in-process handlers).
+- Fold `kirkforge-video` into the main binary as an optional `video` feature
+  (non-default). 8 video tools are direct Rust calls when enabled. ADR-049.
+- ADR-045: Continuous evaluation pipeline (nightly baseline, per-PR delta,
+  PR comments, verify-only smoke).
+- ADR-046: Stratum fold-in behind `stratum` feature flag.
+- ADR-047: Plugin3 fold-in behind `budget` feature flag.
+- ADR-048: Draw fold-in behind `draw` feature flag.
+- ADR-049: Video fold-in behind `video` feature flag (non-default).
 - `bench compare` subcommand: compare two JSON bench reports and emit a delta
   summary (markdown table of per-task deltas + aggregate success rate / cost /
   token changes). Usage: `kirkforge bench compare --baseline <json> --current <json> [--summary <md>]`.

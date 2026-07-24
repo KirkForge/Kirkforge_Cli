@@ -1,10 +1,22 @@
 //! Plugin-defined verifier adapter.
 //!
 //! v1 plugin verifiers are shell scripts declared in a plugin manifest's
-//! `[[capabilities]]` section with `type = "verifier"`. The adapter bridges
-//! the plugin-host `PluginVerifier` onto the executor's `Verifier` trait so
-//! plugin verifiers participate in the same priority-based truth model as
-//! built-in verifiers.
+//! `[[capabilities]]` section with `type = "verifier"`. There are two
+//! integration paths:
+//!
+//! - **Bus path (ADR-028 / ADR-043)** — `register_plugin_verifiers_into_bus`
+//!   wires each `Capability::Verifier` into the unified `VerifierBus`. The
+//!   bus runs plugin verifiers via the same env-cleared subprocess path as
+//!   the host `PluginVerifier` and collects structured `VerdictEntry`s. This
+//!   is the preferred path; the executor queries the bus after file-modifying
+//!   tool calls and injects error verdicts into the conversation.
+//!
+//! - **Event-driven path (legacy)** — `PluginVerifierAdapter` bridges the
+//!   plugin-host `PluginVerifier` onto the executor's async `Verifier` trait
+//!   so plugin verifiers participate in the priority-based `VerifierSlots`
+//!   truth model. Retained for backward compatibility with sessions that
+//!   still drive verifiers through the event bus / correction loop. New code
+//!   should register into the `VerifierBus` instead.
 //!
 //! The verifier receives the event being checked as environment variables:
 //!
@@ -131,6 +143,33 @@ fn as_verifier_parts(
     }
 }
 
+/// Register every active plugin's verifier capabilities into the unified
+/// `VerifierBus` (ADR-028 / ADR-043). For each `Capability::Verifier` with a
+/// command, the resolved `plugin_root.join(command)` path is handed to
+/// `bus.add_plugin_verifier`. Returns the number of verifiers registered.
+///
+/// This is the preferred integration path for plugin verifiers; the legacy
+/// `verifiers_from_registry` + `PluginVerifierAdapter` path is retained for
+/// sessions that still drive verifiers through the event bus.
+pub fn register_plugin_verifiers_into_bus(
+    registry: &kirkforge_plugin_host::PluginRegistry,
+    bus: &mut crate::session::verifier::bus::VerifierBus,
+) -> usize {
+    use kirkforge_plugin::Plugin;
+    let mut count = 0;
+    for hosted in registry.active_plugins() {
+        let plugin = &hosted.plugin;
+        let plugin_root = plugin.root().to_path_buf();
+        for cap in plugin.verifiers() {
+            if let Some((name, priority, command)) = as_verifier_parts(&cap) {
+                bus.add_plugin_verifier(name, priority, plugin_root.clone(), command);
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -150,23 +189,17 @@ mod tests {
         assert_eq!(adapter.priority(), 5);
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn passing_plugin_verifier_returns_clean() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().to_path_buf();
         let script = root.join("pass.sh");
-        #[cfg(unix)]
-        {
-            std::fs::write(&script, "#!/bin/sh\nexit 0\n").unwrap();
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = std::fs::metadata(&script).unwrap().permissions();
-            perms.set_mode(0o755);
-            std::fs::set_permissions(&script, perms).unwrap();
-        }
-        #[cfg(not(unix))]
-        {
-            std::fs::write(&script, "exit 0\n").unwrap();
-        }
+        std::fs::write(&script, "#!/bin/sh\nexit 0\n").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&script).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&script, perms).unwrap();
 
         let pv = PluginVerifier {
             name: "pass".into(),
@@ -183,23 +216,17 @@ mod tests {
         assert!(matches!(verdict, Verdict::Clean));
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn failing_plugin_verifier_returns_unfixable_with_stderr() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().to_path_buf();
         let script = root.join("fail.sh");
-        #[cfg(unix)]
-        {
-            std::fs::write(&script, "#!/bin/sh\necho 'bad pattern' >&2\nexit 1\n").unwrap();
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = std::fs::metadata(&script).unwrap().permissions();
-            perms.set_mode(0o755);
-            std::fs::set_permissions(&script, perms).unwrap();
-        }
-        #[cfg(not(unix))]
-        {
-            std::fs::write(&script, "bad pattern\n").unwrap();
-        }
+        std::fs::write(&script, "#!/bin/sh\necho 'bad pattern' >&2\nexit 1\n").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&script).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&script, perms).unwrap();
 
         let pv = PluginVerifier {
             name: "fail".into(),
@@ -221,6 +248,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn plugin_verifier_does_not_leak_session_env() {
         // A ReadOnly plugin verifier must not inherit sensitive session
@@ -229,18 +257,11 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().to_path_buf();
         let script = root.join("envleak.sh");
-        #[cfg(unix)]
-        {
-            std::fs::write(&script, "#!/bin/sh\necho \"$OPENAI_API_KEY\" >&2\nexit 1\n").unwrap();
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = std::fs::metadata(&script).unwrap().permissions();
-            perms.set_mode(0o755);
-            std::fs::set_permissions(&script, perms).unwrap();
-        }
-        #[cfg(not(unix))]
-        {
-            std::fs::write(&script, "echo %OPENAI_API_KEY%\nexit 1\n").unwrap();
-        }
+        std::fs::write(&script, "#!/bin/sh\necho \"$OPENAI_API_KEY\" >&2\nexit 1\n").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&script).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&script, perms).unwrap();
 
         std::env::set_var("OPENAI_API_KEY", "sk-leaked-secret");
         let pv = PluginVerifier {
@@ -269,27 +290,21 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn failing_plugin_verifier_includes_env_vars_in_stderr() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().to_path_buf();
         let script = root.join("env-check.sh");
-        #[cfg(unix)]
-        {
-            std::fs::write(
-                &script,
-                "#!/bin/sh\necho \"$KF_VERIFIER_NAME $KF_EVENT_KIND $(echo \"$KF_EVENT_JSON\" | head -c 200)\" >&2\nexit 1\n",
-            )
-            .unwrap();
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = std::fs::metadata(&script).unwrap().permissions();
-            perms.set_mode(0o755);
-            std::fs::set_permissions(&script, perms).unwrap();
-        }
-        #[cfg(not(unix))]
-        {
-            std::fs::write(&script, "echo %KF_VERIFIER_NAME% %KF_EVENT_KIND%\nexit 1\n").unwrap();
-        }
+        std::fs::write(
+            &script,
+            "#!/bin/sh\necho \"$KF_VERIFIER_NAME $KF_EVENT_KIND $(echo \"$KF_EVENT_JSON\" | head -c 200)\" >&2\nexit 1\n",
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&script).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&script, perms).unwrap();
 
         let pv = PluginVerifier {
             name: "env-check".into(),
@@ -363,5 +378,71 @@ command = "bin/check.sh"
         assert_eq!(verifiers.len(), 1);
         assert_eq!(verifiers[0].name(), "demo-v");
         assert_eq!(verifiers[0].priority(), 7);
+    }
+
+    #[test]
+    fn register_plugin_verifiers_into_bus_wires_each_capability() {
+        use crate::session::verifier::bus::{Severity, VerifierBus, VerifierSource, VerifyContext};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let plugins_dir = tmp.path().join("plugins");
+        let plugin_dir = plugins_dir.join("demo");
+        let plugin_bin_dir = plugin_dir.join("bin");
+        std::fs::create_dir_all(&plugin_bin_dir).unwrap();
+
+        let check = plugin_bin_dir.join("check.sh");
+        #[cfg(unix)]
+        {
+            std::fs::write(&check, "#!/bin/sh\necho 'nope' >&2\nexit 1\n").unwrap();
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&check).unwrap().permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&check, perms).unwrap();
+        }
+        #[cfg(not(unix))]
+        {
+            std::fs::write(&check, "nope\n").unwrap();
+        }
+
+        std::fs::write(
+            plugin_dir.join("kirkforge.toml"),
+            r#"
+name = "demo-verifier"
+version = "0.1.0"
+description = "demo"
+trust = "shell"
+
+[[capabilities]]
+type = "verifier"
+name = "demo-v"
+priority = 7
+command = "bin/check.sh"
+"#,
+        )
+        .unwrap();
+
+        let mut registry = PluginRegistry::new();
+        let warnings = registry
+            .load_from_dir(
+                &plugins_dir,
+                TrustPolicy::up_to(kirkforge_plugin::TrustTier::Shell),
+            )
+            .unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+
+        let mut bus = VerifierBus::new();
+        let n = register_plugin_verifiers_into_bus(&registry, &mut bus);
+        assert_eq!(n, 1, "one plugin verifier should register");
+
+        let ctx = VerifyContext {
+            sandbox_dir: std::path::PathBuf::from("/tmp/test"),
+            changed_files: vec![std::path::PathBuf::from("src/lib.rs")],
+        };
+        bus.run(&ctx);
+        assert_eq!(bus.verdicts().len(), 1);
+        let v = &bus.verdicts()[0];
+        assert_eq!(v.source, VerifierSource::Plugin("demo-v".into()));
+        assert_eq!(v.severity, Severity::Error);
+        assert!(v.message.contains("nope"));
     }
 }

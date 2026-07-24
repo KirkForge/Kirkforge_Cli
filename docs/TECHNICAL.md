@@ -198,6 +198,14 @@ A sync, context-based bus that unifies findings from multiple sources
 single `VerifierBus`. The executor queries the bus after file-modifying tool
 calls and injects error verdicts into the conversation.
 
+ADR-028 (partially implemented, Workorder 7.7): plugin-declared
+`Capability::Verifier` entries register into the same `VerifierBus` via
+`VerifierBus::add_plugin_verifier` / `register_plugin_verifiers_into_bus`.
+Each plugin verifier runs through the host crate's env-cleared
+`PluginVerifier` subprocess (exit 0 = pass, non-zero = fail with stderr) and
+is tagged `VerifierSource::Plugin(name)`. The legacy event-driven
+`PluginVerifierAdapter` path is retained for backward compatibility.
+
 ### Correction loop
 
 After a tool execution event, the correction loop (up to 3 iterations):
@@ -224,6 +232,15 @@ Four languages: Rust, TypeScript (including tsx), Python, Go. The index is
 cached as JSON at `.kirkforge/context-index/cache.json`, keyed on git HEAD for
 invalidation. This gives the agent graph-grounded context instead of relying on
 plain-text search.
+
+Retrieval is hybrid (ADR-037 Phase 7): an exact symbol-name match triggers a
+BFS graph walk over the import + call-graph edges (both directions, deduped by
+`(file, name)` keeping the minimum hop, capped at 2 hops); a free-text query is
+ranked by TF-IDF embedding cosine similarity (pure-Rust sparse vectors over
+name + kind tokens, persisted in `CachedIndex`); a substring query falls back to
+the original `retrieve()`. The prompt builder calls `retrieve_hybrid` every
+turn. Zero new dependencies — the embeddings module is pure Rust over the
+existing `serde` / `tree-sitter` / `walkdir` set.
 
 ---
 

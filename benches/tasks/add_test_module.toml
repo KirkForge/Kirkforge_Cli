@@ -1,0 +1,23 @@
+name = "add_test_module"
+difficulty = "easy"
+
+prompt = "Add a `#[cfg(test)] mod tests { ... }` block to src/lib.rs that imports the `is_even` function via `use super::*;` and contains a test asserting `is_even(4)` returns `true` and `is_even(3)` returns `false`. The file should still compile."
+
+[setup]
+"Cargo.toml" = """[package]
+name = "add_test_module"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+"""
+"src/lib.rs" = """pub fn is_even(n: i32) -> bool {
+    n % 2 == 0
+}
+"""
+
+[verify]
+type = "file_contains"
+path = "src/lib.rs"
+contains = "#[cfg(test)]"

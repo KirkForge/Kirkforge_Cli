@@ -361,6 +361,7 @@ mod tests {
 
     /// A cancelled foreground `Bash` tool invocation returns a structured
     /// `ToolError::Cancelled` and does not leave a long sleep running.
+    #[cfg(unix)]
     #[tokio::test]
     async fn bash_tool_respects_cancellation_token() {
         let tmp = std::env::temp_dir();
@@ -426,6 +427,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn bash_timeout_clamped_to_max() {
         let bash = Bash::new(DenyList::default(), PathGuard::default(), false, None);

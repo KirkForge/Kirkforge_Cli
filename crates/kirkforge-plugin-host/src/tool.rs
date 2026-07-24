@@ -105,6 +105,7 @@ impl PluginTool {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
     fn make_tool(name: &str, body: &str) -> (tempfile::TempDir, PluginTool) {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().to_path_buf();
@@ -130,12 +131,14 @@ mod tests {
         (tmp, tool)
     }
 
+    #[cfg(unix)]
     #[test]
     fn reads_stdout_as_result() {
         let (_tmp, tool) = make_tool("tool.sh", "echo hello");
         assert_eq!(tool.execute(serde_json::Value::Null).unwrap(), "hello");
     }
 
+    #[cfg(unix)]
     #[test]
     fn receives_args_in_env() {
         let (_tmp, tool) = make_tool(
@@ -147,6 +150,7 @@ mod tests {
         assert_eq!(out, format!("{args}{args}"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn non_zero_becomes_error() {
         let (_tmp, tool) = make_tool("fail.sh", "echo boom >&2\nexit 1");

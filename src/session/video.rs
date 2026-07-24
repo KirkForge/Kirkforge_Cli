@@ -795,3 +795,62 @@ pub fn video_tools() -> Vec<Arc<dyn Tool>> {
         Arc::new(VideoDecisionLog),
     ]
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tools::ToolContext;
+
+    #[tokio::test]
+    async fn test_video_demos_returns_output() {
+        let tool = VideoDemos;
+        let ctx = ToolContext::new();
+        let out = tool
+            .run(&ctx, serde_json::json!({"command": "demos"}))
+            .await;
+        match out {
+            ToolOutcome::Success { content } => {
+                assert!(
+                    !content.is_empty(),
+                    "VideoDemos must return a non-empty listing"
+                );
+                assert!(
+                    content.contains("world-in-numbers") || content.contains(" — "),
+                    "VideoDemos output must list a demo, got: {content}"
+                );
+            }
+            other => panic!("VideoDemos must return Success, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_video_validate_returns_output() {
+        let tool = VideoValidate;
+        let ctx = ToolContext::new();
+        let out = tool
+            .run(
+                &ctx,
+                serde_json::json!({"path": "/nonexistent/kirkforge-video-test-scene-plan.json"}),
+            )
+            .await;
+        match out {
+            ToolOutcome::Success { content } => {
+                assert!(
+                    !content.is_empty(),
+                    "VideoValidate Success must be non-empty"
+                );
+            }
+            ToolOutcome::Error { message } => {
+                assert!(
+                    !message.is_empty(),
+                    "VideoValidate Error must carry a message"
+                );
+                assert!(
+                    message.contains("not found") || message.contains("video_validate"),
+                    "VideoValidate error should mention the missing path, got: {message}"
+                );
+            }
+            other => panic!("VideoValidate must return Success or Error, got {other:?}"),
+        }
+    }
+}

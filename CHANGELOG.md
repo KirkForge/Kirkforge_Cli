@@ -17,6 +17,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   commit. README stays a landing page; tech detail lives in docs/TECHNICAL.md.
 
 ### Added
+- Context index Phase 7 (ADR-037): hybrid retrieval — TF-IDF sparse-vector
+  embeddings + graph-walk BFS over import/call edges, dispatched by query
+  shape (exact name → graph walk, free text → embedding cosine, substring →
+  legacy `retrieve`). Pure Rust, zero new deps. `PromptBuilder` now calls
+  `retrieve_hybrid`.
 - In-process hooks for the Stratum, Plugin3, and Draw fold-ins. The 7 hooks
   that were previously shell scripts (or deferred) are now in-process Rust
   handlers built on shared infrastructure, eliminating the lossy env-var/canned-

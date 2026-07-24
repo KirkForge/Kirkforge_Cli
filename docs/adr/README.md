@@ -37,7 +37,7 @@ files `0001`–`0018` and `0021`–`0022` (indexed below) are the vendored Plugi
 | [0020](./0020-parallel-tool-dispatch.md) | Parallel tool dispatch | Accepted |
 | [0018](./0018-scheduled-jobs.md) | Cron / scheduled jobs | Accepted |
 | [0027](./0027-context-management-depth.md) | Context management depth | Accepted |
-| [0028](./0028-verifier-bus-unification.md) | Unify Rust and TS verifier buses | Accepted |
+| [0028](./0028-verifier-bus-unification.md) | Unify Rust and TS verifier buses | Accepted (partially implemented) |
 | [0031](./0031-build-test-verifier-slots.md) | Build and test verifier slots | Accepted |
 | [0032](./0032-plan-reason-events.md) | PlanReason trace events | Accepted |
 | [0021](./0021-computer-use-tool.md) | `computer_use` tool via headless Chrome CDP | Accepted |

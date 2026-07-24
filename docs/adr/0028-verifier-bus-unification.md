@@ -1,6 +1,6 @@
 # ADR-0028: Unify the Rust and TypeScript verifier buses
 
-- **Status:** Accepted
+- **Status:** Accepted (partially implemented)
 - **Date:** 2026-07-20
 
 ## Context
@@ -152,7 +152,23 @@ The wire format is NDJSON lines of KVB events. Both sides must ignore unknown ev
 
 ## ponytail
 
-- This ADR is design-only. No bridge code is implemented yet; the contract must be reviewed and agreed before any bridge work starts.
+- Partially implemented (Workorder 7.7). The Rust-side plugin verifier
+  bridge shipped: plugin-declared `Capability::Verifier` entries now
+  register into the unified `VerifierBus` (ADR-043) via
+  `VerifierBus::add_plugin_verifier` and
+  `register_plugin_verifiers_into_bus`. The bus runs each plugin verifier
+  through the host crate's env-cleared `PluginVerifier` subprocess (exit 0
+  = pass, non-zero = fail with stderr as the message) and tags results
+  `VerifierSource::Plugin(name)`. Error verdicts are injected into the
+  conversation as tool results by the executor, same as built-in bus
+  verifiers. Live plugin reload rebuilds the plugin-verifier set on the
+  bus while keeping built-in verifiers.
+- The cross-language NDJSON bridge (Rust ↔ TS orchestrator over stdio)
+  is NOT shipped. The Node SDK plugin (`kirkforge-plugin`) still runs its
+  TS-based verifiers through the legacy event-driven `Verifier` trait path
+  (`PluginVerifierAdapter`), which is retained for backward compatibility.
+  The TS-side `@kirkforge/verifier-bridge` package and the shared KVB
+  wire format remain design-only.
 - The Rust side currently lacks `types`, `graph`, and `imports` verifiers. The TS side currently lacks an in-process rustfmt/clippy verifier. The unified registry acknowledges these gaps rather than hiding them.
 
 ## ceiling

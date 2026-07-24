@@ -318,7 +318,7 @@ impl PromptBuilder {
                 .map(|m| m.content.as_str())
                 .unwrap_or("");
             if !query.is_empty() {
-                let relevant = idx.retrieve(query, 10);
+                let relevant = idx.retrieve_hybrid(query, 10);
                 if !relevant.is_empty() && !messages.is_empty() {
                     let mut content = messages[0].content.clone();
                     content.push_str("\n\n<relevant_symbols>\n");

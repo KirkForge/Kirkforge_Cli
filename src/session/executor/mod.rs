@@ -190,14 +190,18 @@ impl Executor {
         }
         #[cfg(feature = "stratum")]
         {
-            hook_runner
-                .add_in_process_hook(Box::new(crate::session::stratum::StratumSessionStartHook));
+            hook_runner.add_in_process_hook(Box::new(
+                crate::session::stratum::StratumSessionStartHook {
+                    config: config.clone(),
+                },
+            ));
             hook_runner
                 .add_in_process_hook(Box::new(crate::session::stratum::StratumPreToolBashHook));
             tracing::info!("stratum session-start and pre-tool-bash hooks registered");
         }
         #[cfg(feature = "budget")]
         {
+            crate::session::budget::init_from_config(&cfg);
             for hook in crate::session::budget::all_budget_hooks() {
                 hook_runner.add_in_process_hook(hook);
             }
@@ -500,9 +504,19 @@ impl Executor {
                     }
                 });
                 self.correction_loop = Some(CorrectionLoop::new(handler));
-                self.verifier_bus = Some(std::sync::Mutex::new(
-                    super::verifier::bus::default_verifier_bus(),
-                ));
+                let mut vbus = super::verifier::bus::default_verifier_bus();
+                if let Some(registry) = plugin_registry {
+                    let n = crate::session::verifier::plugin::register_plugin_verifiers_into_bus(
+                        registry, &mut vbus,
+                    );
+                    if n > 0 {
+                        tracing::info!(
+                            plugin_verifiers = n,
+                            "registered plugin verifiers into verifier bus"
+                        );
+                    }
+                }
+                self.verifier_bus = Some(std::sync::Mutex::new(vbus));
                 count
             }
             Err(e) => {
@@ -574,13 +588,17 @@ impl Executor {
         }
         #[cfg(feature = "stratum")]
         {
-            hook_runner
-                .add_in_process_hook(Box::new(crate::session::stratum::StratumSessionStartHook));
+            hook_runner.add_in_process_hook(Box::new(
+                crate::session::stratum::StratumSessionStartHook {
+                    config: self.config.clone(),
+                },
+            ));
             hook_runner
                 .add_in_process_hook(Box::new(crate::session::stratum::StratumPreToolBashHook));
         }
         #[cfg(feature = "budget")]
         {
+            crate::session::budget::init_from_config(&cfg);
             for hook in crate::session::budget::all_budget_hooks() {
                 hook_runner.add_in_process_hook(hook);
             }
@@ -590,12 +608,33 @@ impl Executor {
         // 3. Rebuild plugin verifiers while keeping built-in verifiers.
         let plugin_verifier_count = self.rebuild_plugin_verifiers(registry);
 
+        // 4. Rebuild plugin verifiers on the unified bus (ADR-028): drop
+        // old plugin verifiers, keep built-in stub verifiers, re-add from
+        // the fresh registry.
+        self.rebuild_bus_plugin_verifiers(registry);
+
         format!(
             "Reloaded plugins: {} active plugin(s), {} plugin tool(s), {} plugin verifier(s)",
             registry.active_count(),
             plugin_tool_count,
             plugin_verifier_count
         )
+    }
+
+    /// Re-register plugin verifiers on the `VerifierBus` while keeping the
+    /// built-in bus verifiers (`security`, `git`) intact. Mirrors
+    /// `rebuild_plugin_verifiers` for the event-driven path. ADR-028.
+    fn rebuild_bus_plugin_verifiers(
+        &mut self,
+        registry: &kirkforge_plugin_host::PluginRegistry,
+    ) -> usize {
+        const BUILTIN_BUS_VERIFIERS: &[&str] = &["security", "git"];
+        let Some(ref bus_lock) = self.verifier_bus else {
+            return 0;
+        };
+        let mut bus = bus_lock.lock().unwrap_or_else(|e| e.into_inner());
+        bus.retain_verifiers(|v| BUILTIN_BUS_VERIFIERS.contains(&v));
+        crate::session::verifier::plugin::register_plugin_verifiers_into_bus(registry, &mut bus)
     }
 
     #[allow(clippy::too_many_arguments)]

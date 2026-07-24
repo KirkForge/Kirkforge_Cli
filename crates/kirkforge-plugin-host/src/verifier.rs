@@ -95,6 +95,7 @@ impl PluginVerifier {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
     fn make_verifier(name: &str, body: &str) -> (tempfile::TempDir, PluginVerifier) {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().to_path_buf();
@@ -118,12 +119,14 @@ mod tests {
         (tmp, verifier)
     }
 
+    #[cfg(unix)]
     #[test]
     fn exit_zero_passes() {
         let (_tmp, v) = make_verifier("pass.sh", "exit 0");
         assert_eq!(v.run(&HashMap::new()).unwrap(), VerifierVerdict::Pass);
     }
 
+    #[cfg(unix)]
     #[test]
     fn non_zero_fails_with_stderr() {
         let (_tmp, v) = make_verifier("fail.sh", "echo 'bad' >&2\nexit 1");

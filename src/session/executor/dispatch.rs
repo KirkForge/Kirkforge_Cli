@@ -444,6 +444,7 @@ impl Executor {
                     } else {
                         outcome
                     };
+                    let outcome_for_emit = apply_budget_slice(outcome_for_emit);
                     if max_tool_result_chars > 0
                         && matches!(outcome_for_emit, ToolOutcome::Success { ref content } if content.contains("[output truncated to"))
                     {
@@ -697,6 +698,7 @@ impl Executor {
         } else {
             outcome
         };
+        let outcome_for_emit = apply_budget_slice(outcome_for_emit);
         if max_tool_result_chars > 0
             && matches!(outcome_for_emit, ToolOutcome::Success { ref content } if content.contains("[output truncated to"))
         {

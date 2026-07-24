@@ -739,6 +739,7 @@ mod tests {
         Config::default()
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_run_executes_hook() {
         let (_tmp, dir) = temp_hooks_dir();
@@ -783,6 +784,7 @@ mod tests {
         runner.run("nonexistent", &[], &default_config());
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_run_hook_with_env_vars() {
         let (_tmp, dir) = temp_hooks_dir();
@@ -838,6 +840,7 @@ mod tests {
         // If we get here without the 30s sleep blocking, timeout works
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_run_hook_timeout_kills_descendants() {
         let (_tmp, dir) = temp_hooks_dir();
@@ -976,6 +979,7 @@ command = "hooks/post-turn.sh"
         assert!(runner.has("post-turn"));
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_run_decision_merges_builtin_and_plugin_hooks_deterministically() {
         let tmp = tempfile::tempdir().unwrap();

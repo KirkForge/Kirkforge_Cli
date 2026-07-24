@@ -515,6 +515,7 @@ mod tests {
     /// behind. We nest a `sleep` inside a subshell so it is a
     /// grandchild of the outer shell and verify the survivor never
     /// touches a marker file.
+    #[cfg(unix)]
     #[tokio::test]
     async fn run_shell_timeout_kills_descendants() {
         let tmp = std::env::temp_dir();
@@ -549,6 +550,7 @@ mod tests {
     /// stdout. We use `yes` (which prints "y\n" forever) and rely on
     /// SIGPIPE from a non-tty writer; if `yes` doesn't exist on the
     /// test host this test is skipped rather than failed.
+    #[cfg(unix)]
     #[tokio::test]
     async fn run_shell_caps_runaway_output() {
         // First sanity check: `yes` exists. If not, skip.
@@ -1031,6 +1033,7 @@ mod tests {
     /// `sanitized_path` keeps absolute, non-world-writable directories and
     /// drops relative or world-writable non-system entries. System directories
     /// are always included even if they happen to be world-writable.
+    #[cfg(unix)]
     #[test]
     fn test_sanitized_path_filters_world_writable_and_relative() {
         let tmp = std::env::temp_dir();

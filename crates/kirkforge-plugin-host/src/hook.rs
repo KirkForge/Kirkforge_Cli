@@ -100,6 +100,7 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
 
+    #[cfg(unix)]
     fn make_hook(name: &str, body: &str) -> (tempfile::TempDir, PluginHook) {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().to_path_buf();
@@ -123,18 +124,21 @@ mod tests {
         (tmp, hook)
     }
 
+    #[cfg(unix)]
     #[test]
     fn exit_zero_allows() {
         let (_tmp, hook) = make_hook("allow.sh", "exit 0");
         assert_eq!(hook.run(&HashMap::new()).unwrap(), HookVerdict::Allow);
     }
 
+    #[cfg(unix)]
     #[test]
     fn exit_two_denies() {
         let (_tmp, hook) = make_hook("deny.sh", "exit 2");
         assert_eq!(hook.run(&HashMap::new()).unwrap(), HookVerdict::Deny);
     }
 
+    #[cfg(unix)]
     #[test]
     fn other_exit_allows_with_warning() {
         let (_tmp, hook) = make_hook("warn.sh", "exit 1");

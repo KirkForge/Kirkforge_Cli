@@ -7,6 +7,8 @@
 //! file-modifying tool calls; error verdicts are injected into the
 //! conversation so the model sees them immediately.
 
+use kirkforge_plugin_host::PluginVerifier;
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 /// Which verifier produced this finding.
@@ -100,6 +102,31 @@ impl VerifierBus {
         self.verifiers.push(verifier);
     }
 
+    /// Register a plugin-declared verifier. `plugin_root` is the plugin
+    /// directory and `command` is the verifier command path (resolved
+    /// relative to `plugin_root`, as declared in the manifest). The
+    /// verifier runs via the same env-cleared subprocess path as the host
+    /// `PluginVerifier` (exit 0 = pass, non-zero = fail with stderr as the
+    /// message), with `plugin_root` as the subprocess cwd. Results are
+    /// tagged `VerifierSource::Plugin(name)`.
+    pub fn add_plugin_verifier(
+        &mut self,
+        name: String,
+        priority: u8,
+        plugin_root: PathBuf,
+        command: PathBuf,
+    ) {
+        let verifier = PluginBusVerifier {
+            inner: PluginVerifier {
+                name,
+                command,
+                plugin_root,
+            },
+            priority,
+        };
+        self.verifiers.push(Box::new(verifier));
+    }
+
     /// Run all registered verifiers against the given context.
     /// Collects all verdicts (does not short-circuit on first error).
     pub fn run(&mut self, ctx: &VerifyContext) {
@@ -123,6 +150,21 @@ impl VerifierBus {
     /// Clear all collected verdicts.
     pub fn clear(&mut self) {
         self.verdicts.clear();
+    }
+
+    /// Drop registered verifiers whose `name()` is NOT in `keep`. Used by
+    /// live plugin reload to prune old plugin verifiers while keeping the
+    /// built-in bus verifiers. ADR-028.
+    pub fn retain_verifiers<F>(&mut self, keep: F)
+    where
+        F: Fn(&str) -> bool,
+    {
+        self.verifiers.retain(|v| keep(v.name()));
+    }
+
+    /// Number of registered verifiers (built-in + plugin).
+    pub fn verifier_count(&self) -> usize {
+        self.verifiers.len()
     }
 }
 
@@ -170,6 +212,58 @@ impl BusVerifier for GitBusVerifier {
 
     fn verify(&self, _ctx: &VerifyContext) -> Vec<VerdictEntry> {
         Vec::new()
+    }
+}
+
+/// Adapter: a plugin-declared verifier on the bus.
+///
+/// Wraps the host crate's `PluginVerifier`, which spawns the verifier
+/// command with a curated (env-cleared) environment: exit 0 means pass,
+/// any non-zero exit fails with stderr as the message. This is the same
+/// subprocess convention used by `PluginToolWrapper` for plugin tools.
+/// ADR-028: plugin verifiers register into the unified bus rather than
+/// only the old event-driven `Verifier` trait path.
+pub struct PluginBusVerifier {
+    inner: PluginVerifier,
+    priority: u8,
+}
+
+impl BusVerifier for PluginBusVerifier {
+    fn name(&self) -> &str {
+        &self.inner.name
+    }
+
+    fn verify(&self, ctx: &VerifyContext) -> Vec<VerdictEntry> {
+        let mut env = HashMap::new();
+        env.insert("KF_VERIFIER_NAME".to_string(), self.inner.name.clone());
+        env.insert(
+            "KF_CHANGED_FILES".to_string(),
+            ctx.changed_files
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+        let _ = self.priority;
+        match self.inner.run(&env) {
+            Ok(kirkforge_plugin_host::VerifierVerdict::Pass) => Vec::new(),
+            Ok(kirkforge_plugin_host::VerifierVerdict::Fail { message }) => {
+                vec![VerdictEntry {
+                    source: VerifierSource::Plugin(self.inner.name.clone()),
+                    severity: Severity::Error,
+                    message,
+                    file: ctx.changed_files.first().cloned(),
+                    line: None,
+                }]
+            }
+            Err(e) => vec![VerdictEntry {
+                source: VerifierSource::Plugin(self.inner.name.clone()),
+                severity: Severity::Error,
+                message: format!("plugin verifier execution failed: {e}"),
+                file: None,
+                line: None,
+            }],
+        }
     }
 }
 
@@ -326,5 +420,83 @@ mod tests {
         assert_eq!(Severity::Info.to_string(), "info");
         assert_eq!(Severity::Warning.to_string(), "warning");
         assert_eq!(Severity::Error.to_string(), "error");
+    }
+
+    #[cfg(unix)]
+    fn make_pass_script(dir: &std::path::Path) -> PathBuf {
+        let script = dir.join("pass.sh");
+        std::fs::write(&script, "#!/bin/sh\nexit 0\n").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&script).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&script, perms).unwrap();
+        script
+    }
+
+    #[cfg(unix)]
+    fn make_fail_script(dir: &std::path::Path, body: &str) -> PathBuf {
+        let script = dir.join("fail.sh");
+        std::fs::write(&script, format!("#!/bin/sh\n{body}")).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&script).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&script, perms).unwrap();
+        script
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn add_plugin_verifier_pass_yields_no_verdicts() {
+        let tmp = tempfile::tempdir().unwrap();
+        let _ = make_pass_script(tmp.path());
+        let mut bus = VerifierBus::new();
+        bus.add_plugin_verifier(
+            "pass_v".into(),
+            5,
+            tmp.path().to_path_buf(),
+            PathBuf::from("pass.sh"),
+        );
+        bus.run(&make_ctx());
+        assert!(
+            bus.verdicts().is_empty(),
+            "passing verifier adds no verdicts"
+        );
+        assert!(!bus.has_errors());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn add_plugin_verifier_fail_yields_error_verdict() {
+        let tmp = tempfile::tempdir().unwrap();
+        let _ = make_fail_script(tmp.path(), "echo 'bad pattern' >&2\nexit 1\n");
+        let mut bus = VerifierBus::new();
+        bus.add_plugin_verifier(
+            "fail_v".into(),
+            5,
+            tmp.path().to_path_buf(),
+            PathBuf::from("fail.sh"),
+        );
+        bus.run(&make_ctx());
+        assert_eq!(bus.verdicts().len(), 1);
+        let v = &bus.verdicts()[0];
+        assert_eq!(v.source, VerifierSource::Plugin("fail_v".into()));
+        assert_eq!(v.severity, Severity::Error);
+        assert!(v.message.contains("bad pattern"));
+        assert!(bus.has_errors());
+    }
+
+    #[test]
+    fn add_plugin_verifier_missing_command_yields_error_verdict() {
+        let mut bus = VerifierBus::new();
+        bus.add_plugin_verifier(
+            "ghost".into(),
+            1,
+            PathBuf::from("/nonexistent"),
+            PathBuf::from("does-not-exist.sh"),
+        );
+        bus.run(&make_ctx());
+        assert_eq!(bus.verdicts().len(), 1);
+        assert_eq!(bus.verdicts()[0].severity, Severity::Error);
+        assert!(bus.has_errors());
     }
 }

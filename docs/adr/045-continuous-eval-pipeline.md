@@ -22,7 +22,7 @@ Implement a continuous evaluation pipeline with:
 
 5. **Fast deterministic smoke** — `kirkforge bench verify-only` runs task verification without LLM, catching stale task definitions in seconds.
 
-6. **Non-gating** — the bench job does not fail CI. A lenient 10% success-rate floor warns but does not block. Gating will be added once baselines stabilize.
+6. **Informational (not a gate)** — the bench job does not fail CI. A 10% success-rate floor is reported as a `::warning::` annotation when breached but does not block, because `qwen2.5:0.5b` is a weak, noisy model whose results fluctuate enough to block development if treated as a hard gate. The "Report bench success rate" step runs with `continue-on-error: true` so the job stays green even when the rate is catastrophic. Upgrade path to gating: once baselines stabilize (consistently above 50% on `main`), drop `continue-on-error` and promote the warning to `exit 1` on breach.
 
 ## Consequences
 

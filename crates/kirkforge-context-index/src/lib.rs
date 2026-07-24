@@ -1,6 +1,15 @@
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub mod embeddings;
+pub mod graph_walk;
+
+pub use embeddings::{
+    build_embeddings, build_vocabulary, cosine_similarity, embed_query, embed_symbol, SparseVec,
+    SymbolEmbedding, Vocabulary,
+};
+pub use graph_walk::graph_walk as graph_walk_fn;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SymbolKind {
     Function,
     Struct,
@@ -97,6 +106,11 @@ pub struct CachedIndex {
     pub edges: Vec<ImportEdge>,
     /// The call-graph edges.
     pub call_edges: Vec<CallEdge>,
+    /// Sparse TF-IDF embeddings per symbol (Phase 7). Persisted so
+    /// the index does not recompute IDF on every load. May be empty
+    /// for caches written before Phase 7 (serde default).
+    #[serde(default)]
+    pub embeddings: Vec<SymbolEmbedding>,
 }
 
 /// A tree-sitter-backed index of source-code symbols and import edges.
@@ -708,13 +722,84 @@ impl ContextIndex {
             .collect()
     }
 
+    /// Hybrid retrieval: graph-walk for exact-name queries, embedding
+    /// similarity for free-text queries, substring match as a fallback.
+    ///
+    /// ponytail: three retrieval strategies dispatched by query shape.
+    /// The upgrade path is a unified ranker that fuses graph-walk hops
+    /// with embedding similarity into a single score.
+    pub fn retrieve_hybrid(&self, query: &str, k: usize) -> Vec<RetrievalResult> {
+        if let Some(start) = self.symbols.iter().find(|s| s.name == query) {
+            let walked = graph_walk::graph_walk(start, self, 2);
+            return walked
+                .into_iter()
+                .take(k)
+                .map(|(sym, _hops)| self.to_retrieval_result(&sym))
+                .collect();
+        }
+
+        let vocab = build_vocabulary(&self.symbols, None);
+        if !vocab.is_empty() {
+            let qvec = embed_query(query, &vocab);
+            if !qvec.is_empty() {
+                let mut scored: Vec<(f32, &Symbol)> = self
+                    .symbols
+                    .iter()
+                    .map(|s| {
+                        let v = embed_symbol(s, &vocab, None);
+                        (cosine_similarity(&qvec, &v), s)
+                    })
+                    .collect();
+                scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+                let top: Vec<RetrievalResult> = scored
+                    .into_iter()
+                    .take(k)
+                    .map(|(_, s)| self.to_retrieval_result(s))
+                    .collect();
+                if !top.is_empty() {
+                    return top;
+                }
+            }
+        }
+
+        self.retrieve(query, k)
+    }
+
+    /// Build a `RetrievalResult` for a single symbol (shared by the
+    /// graph-walk and embedding paths).
+    fn to_retrieval_result(&self, sym: &Symbol) -> RetrievalResult {
+        let imported_by = self
+            .edges
+            .iter()
+            .filter(|e| e.resolved_file.as_ref().is_none_or(|rf| rf == &sym.file))
+            .map(|e| e.source_file.clone())
+            .collect();
+        let called_by = self
+            .call_edges
+            .iter()
+            .filter(|e| e.callee_name == sym.name)
+            .map(|e| CallSite {
+                caller_name: e.caller_name.clone(),
+                caller_file: e.caller_file.clone(),
+                line: e.caller_line,
+            })
+            .collect();
+        RetrievalResult {
+            symbol: sym.clone(),
+            imported_by,
+            called_by,
+        }
+    }
+
     /// Save the index to a JSON file, along with the current git HEAD.
     pub fn save(&self, path: &std::path::Path, head: &str) -> anyhow::Result<()> {
+        let embeddings = build_embeddings(self, None);
         let cached = CachedIndex {
             head: head.to_string(),
             symbols: self.symbols.clone(),
             edges: self.edges.clone(),
             call_edges: self.call_edges.clone(),
+            embeddings,
         };
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -740,6 +825,25 @@ impl ContextIndex {
             None => false,
         }
     }
+}
+
+/// Free-function form of hybrid retrieval (Phase 7).
+///
+/// Dispatches by query shape:
+/// - exact symbol-name match → BFS graph walk from that symbol,
+///   ranked by hop distance.
+/// - free text → TF-IDF embedding cosine similarity, top-N.
+/// - substring → falls back to `ContextIndex::retrieve`.
+///
+/// `max_results` caps the returned list. The graph-walk hop cap is
+/// fixed at 2 (the default from ADR-037 Phase 7); callers needing a
+/// deeper walk should call `graph_walk::graph_walk` directly.
+pub fn retrieve_hybrid(
+    query: &str,
+    index: &ContextIndex,
+    max_results: usize,
+) -> Vec<RetrievalResult> {
+    index.retrieve_hybrid(query, max_results)
 }
 
 /// Get the current git HEAD SHA for a repository root.
@@ -1108,6 +1212,7 @@ mod tests {
             symbols: loaded.symbols,
             edges: loaded.edges,
             call_edges: loaded.call_edges,
+            embeddings: loaded.embeddings,
         };
         // is_current checks real git HEAD, which won't match "old_head_sha"
         // in a temp dir (not a git repo) → returns false

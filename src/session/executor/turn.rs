@@ -848,6 +848,7 @@ impl Executor {
                             }));
                     let tool_duration = tool_start.elapsed();
 
+                    let outcome = apply_budget_slice(outcome);
                     let outcome_for_emit = outcome.clone();
                     let edit_diff =
                         handle_tool_outcome(outcome, tc, event_tx, &mut self.conversation).await?;
@@ -940,6 +941,7 @@ impl Executor {
         } else {
             outcome
         };
+        let outcome = apply_budget_slice(outcome);
         let outcome_for_emit = outcome.clone();
         let edit_diff = handle_tool_outcome(outcome, tc, event_tx, &mut self.conversation).await?;
         if is_destructive {

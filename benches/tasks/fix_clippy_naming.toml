@@ -1,0 +1,22 @@
+name = "fix_clippy_naming"
+difficulty = "easy"
+
+prompt = "Fix the clippy `needless_lifetimes` warning on the `first` function in src/lib.rs by removing the explicit lifetime parameters. The function can return `&str` without naming the lifetime. After the fix, `cargo clippy -- -D warnings` must pass with no warnings."
+
+[setup]
+"Cargo.toml" = """[package]
+name = "fix_clippy_naming"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+"""
+"src/lib.rs" = """pub fn first<'a>(input: &'a str) -> &'a str {
+    input
+}
+"""
+
+[verify]
+type = "command_exits_zero"
+command = "cargo clippy -- -D warnings"

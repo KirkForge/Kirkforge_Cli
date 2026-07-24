@@ -374,7 +374,9 @@ pub fn stratum_tools() -> Vec<Arc<dyn Tool>> {
 /// In-process `session-start` hook: emits the active compression ruleset so
 /// the model knows the compression contract at session start. Mirrors the
 /// shell hook in `plugins/stratum/hooks/session-start.sh`.
-pub struct StratumSessionStartHook;
+pub struct StratumSessionStartHook {
+    pub config: crate::shared::SharedConfig,
+}
 
 impl InProcessHook for StratumSessionStartHook {
     fn event(&self) -> &str {
@@ -382,7 +384,7 @@ impl InProcessHook for StratumSessionStartHook {
     }
 
     fn handle(&self, _ctx: &HookContext) -> HookDecision {
-        let mode = active_mode();
+        let mode = active_mode(Some(&self.config));
         let rules = format!(
             "mode={}\nruns_transforms={}\noffloads_bloat={}\noffload_threshold={}",
             mode.as_str(),
@@ -425,12 +427,35 @@ impl InProcessHook for StratumPreToolBashHook {
     }
 }
 
-/// Resolve the active mode, honouring the `STRATUM_MODE` env var if set.
-fn active_mode() -> Mode {
-    std::env::var("STRATUM_MODE")
-        .ok()
-        .and_then(|s| s.parse::<Mode>().ok())
-        .unwrap_or(Mode::Full)
+/// Resolve the active mode, honouring (in priority order):
+/// 1. `tools.stratum_mode` config field (user config)
+/// 2. `STRATUM_MODE` env var (CLI/session override)
+/// 3. `Mode::Full` (Stratum default)
+///
+/// When `config` is `None` only the env var and default are considered.
+fn active_mode(config: Option<&crate::shared::SharedConfig>) -> Mode {
+    let env_mode = std::env::var("STRATUM_MODE").ok();
+    let config_mode = config.and_then(|cfg| {
+        crate::shared::read_shared_config(cfg)
+            .tools
+            .stratum_mode
+            .clone()
+    });
+    resolve_mode(config_mode.as_deref(), env_mode.as_deref())
+}
+
+fn resolve_mode(config_mode: Option<&str>, env_mode: Option<&str>) -> Mode {
+    if let Some(s) = config_mode {
+        if let Ok(m) = s.parse::<Mode>() {
+            return m;
+        }
+    }
+    if let Some(s) = env_mode {
+        if let Ok(m) = s.parse::<Mode>() {
+            return m;
+        }
+    }
+    Mode::Full
 }
 
 /// Load the effective pipeline config, mirroring the CLI precedence:
@@ -456,4 +481,116 @@ fn xdg_config_path() -> Option<PathBuf> {
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))?;
     Some(base.join("stratum").join("pipeline.toml"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::session::hooks::{HookContext, HookDecision};
+    use crate::tools::ToolContext;
+
+    #[tokio::test]
+    async fn test_stratum_rules_returns_output() {
+        let tool = StratumRules;
+        let ctx = ToolContext::new();
+        let out = tool.run(&ctx, serde_json::json!({"mode": "full"})).await;
+        match out {
+            ToolOutcome::Success { content } => {
+                assert!(
+                    content.contains("mode="),
+                    "StratumRules output must include mode, got: {content}"
+                );
+                assert!(
+                    content.contains("runs_transforms="),
+                    "StratumRules output must include runs_transforms, got: {content}"
+                );
+            }
+            other => panic!("StratumRules must return Success, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_stratum_config_validate_returns_output() {
+        let tool = StratumConfigValidate;
+        let ctx = ToolContext::new();
+        let out = tool.run(&ctx, serde_json::json!({})).await;
+        match out {
+            ToolOutcome::Success { content } => {
+                assert!(
+                    content.contains("valid="),
+                    "StratumConfigValidate output must include valid=, got: {content}"
+                );
+                assert!(
+                    content.contains("bloat_threshold="),
+                    "StratumConfigValidate output must include bloat_threshold, got: {content}"
+                );
+            }
+            other => panic!("StratumConfigValidate must return Success, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_session_start_hook_returns_allow() {
+        let config: crate::shared::SharedConfig =
+            Arc::new(std::sync::RwLock::new(crate::shared::Config::default()));
+        let hook = StratumSessionStartHook { config };
+        let ctx = HookContext {
+            event: "session-start".into(),
+            ..Default::default()
+        };
+        assert_eq!(hook.handle(&ctx), HookDecision::Allow);
+    }
+
+    #[test]
+    fn active_mode_defaults_to_full() {
+        let config: crate::shared::SharedConfig =
+            Arc::new(std::sync::RwLock::new(crate::shared::Config::default()));
+        assert_eq!(active_mode(Some(&config)), Mode::Full);
+    }
+
+    #[test]
+    fn active_mode_config_overrides_default() {
+        let mut cfg = crate::shared::Config::default();
+        cfg.tools.stratum_mode = Some("lite".into());
+        let config: crate::shared::SharedConfig = Arc::new(std::sync::RwLock::new(cfg));
+        assert_eq!(active_mode(Some(&config)), Mode::Lite);
+    }
+
+    #[test]
+    fn resolve_mode_config_takes_precedence_over_env() {
+        assert_eq!(
+            resolve_mode(Some("ultra"), Some("off")),
+            Mode::Ultra,
+            "config must win over STRATUM_MODE env var"
+        );
+    }
+
+    #[test]
+    fn resolve_mode_env_used_when_config_absent() {
+        assert_eq!(resolve_mode(None, Some("off")), Mode::Off);
+    }
+
+    #[test]
+    fn resolve_mode_invalid_falls_through_to_env() {
+        assert_eq!(resolve_mode(Some("bogus"), Some("lite")), Mode::Lite);
+    }
+
+    #[test]
+    fn resolve_mode_invalid_both_falls_to_full() {
+        assert_eq!(resolve_mode(Some("bogus"), Some("alsobogus")), Mode::Full);
+    }
+
+    #[test]
+    fn test_pre_tool_bash_hook_returns_allow() {
+        let hook = StratumPreToolBashHook;
+        let ctx = HookContext {
+            event: "pre-tool-bash".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            hook.handle(&ctx),
+            HookDecision::Allow,
+            "StratumPreToolBashHook is fail-open and must always Allow"
+        );
+    }
 }

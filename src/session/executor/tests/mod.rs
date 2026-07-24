@@ -2151,6 +2151,7 @@ fn temp_hooks_dir() -> (tempfile::TempDir, std::path::PathBuf) {
     (tmp, hooks_dir)
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn test_pre_tool_hook_exit_two_blocks_bash() {
     let captured = Arc::new(Mutex::new(None));
@@ -2213,6 +2214,7 @@ async fn test_pre_tool_hook_exit_two_blocks_bash() {
     );
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn test_pre_tool_hook_exit_one_allows_and_warns() {
     let captured = Arc::new(Mutex::new(None));
@@ -2268,6 +2270,7 @@ async fn test_pre_tool_hook_exit_one_allows_and_warns() {
     );
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn test_pre_tool_hook_timeout_allows_and_warns() {
     let captured = Arc::new(Mutex::new(None));
@@ -2319,6 +2322,7 @@ async fn test_pre_tool_hook_timeout_allows_and_warns() {
     );
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn test_compact_hooks_fire_pre_and_post() {
     let (_tmp, hooks_dir) = temp_hooks_dir();

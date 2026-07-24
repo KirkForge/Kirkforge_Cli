@@ -289,3 +289,20 @@
 # kirkforge-plugin = "plugins/kirkforge-plugin"
 #
 enabled_plugins = ["kirkforge-draw", "kirkforge-video", "stratum", "kirkforge-plugin3", "kirkforge-plugin"]
+
+# ---------------------------------------------------------------------------
+# Stratum compression and token budget
+# ---------------------------------------------------------------------------
+#
+# Stratum mode selection (off / lite / full / ultra). When omitted the
+# `STRATUM_MODE` env var is consulted; when that is also unset Stratum
+# defaults to "full". Config takes precedence over the env var.
+# stratum_mode = "full"  # off, lite, full, ultra (default: full)
+
+# Token budget ceiling for the Plugin3 budget guard. Tool output is sliced
+# once usage crosses the approaching ratio. Default: 200000.
+# budget_ceiling = 200000  # token budget ceiling (default: 200000)
+
+# Fraction of the ceiling at which the "approaching" state triggers and
+# slicing begins. Default: 0.8.
+# budget_approaching_ratio = 0.8  # ratio at which "approaching" state triggers (default: 0.8)

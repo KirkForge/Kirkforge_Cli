@@ -1,0 +1,55 @@
+name = "add_error_variant"
+difficulty = "medium"
+
+prompt = "Add a new variant `Timeout` to the `AppError` enum in src/lib.rs and update the `describe` and `parse_status` functions to handle it. `describe` should return `\"operation timed out\"` for `Timeout`. `parse_status` should map status code `408` to `AppError::Timeout`. Update the tests to cover the new variant. `cargo test` must pass."
+
+[setup]
+"Cargo.toml" = """[package]
+name = "add_error_variant"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+"""
+"src/lib.rs" = """pub enum AppError {
+    NotFound,
+    PermissionDenied,
+}
+
+pub fn describe(err: AppError) -> &'static str {
+    match err {
+        AppError::NotFound => "resource was not found",
+        AppError::PermissionDenied => "permission denied",
+    }
+}
+
+pub fn parse_status(code: u32) -> AppError {
+    match code {
+        404 => AppError::NotFound,
+        403 => AppError::PermissionDenied,
+        _ => AppError::NotFound,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_describe() {
+        assert_eq!(describe(AppError::NotFound), "resource was not found");
+        assert_eq!(describe(AppError::PermissionDenied), "permission denied");
+    }
+
+    #[test]
+    fn test_parse_status() {
+        assert!(matches!(parse_status(404), AppError::NotFound));
+        assert!(matches!(parse_status(403), AppError::PermissionDenied));
+    }
+}
+"""
+
+[verify]
+type = "test_passes"
+command = "cargo test"

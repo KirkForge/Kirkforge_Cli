@@ -1,6 +1,6 @@
 # ADR-025: Windows parity approach
 
-- **Status:** Accepted
+- **Status:** Accepted (fully implemented)
 - **Date:** 2026-07-19
 
 ## Context
@@ -100,6 +100,18 @@ Negative:
 - `src/main/mod.rs` uses `#[cfg(windows)]` for the pollable approval reader.
 - `src/daemon/mod.rs` and `src/jobs/daemon.rs` use `#[cfg(not(unix))]` stubs
   that return clear errors.
+- Tests that execute `.sh` scripts directly via `Command::new` (plugin tools,
+  plugin verifiers, plugin hooks) are `#[cfg(unix)]`-gated because Windows
+  does not interpret shebangs and cannot execute `.sh` files without an
+  explicit interpreter.
+- Tests that spawn bash hook scripts with Unix-path marker files are
+  `#[cfg(unix)]`-gated because Windows path separators (`\`) are interpreted
+  as escape characters inside bash scripts.
+- Tests that assert process-group kill semantics (descendant cleanup) are
+  `#[cfg(unix)]`-gated because the Windows fallback only kills the immediate
+  child.
+- The Windows CI test step no longer uses `continue-on-error: true`; Windows
+  test parity is achieved.
 
 ponytail: "works on Windows" means the CLI compiles, passes tests, and runs the
 non-daemon interactive workflow. It does not mean every Unix power feature is

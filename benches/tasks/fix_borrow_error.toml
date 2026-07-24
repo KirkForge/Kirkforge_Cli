@@ -1,0 +1,25 @@
+name = "fix_borrow_error"
+difficulty = "medium"
+
+prompt = "Fix the borrow checker error in `sum_first_and_last` in src/lib.rs. The function borrows `items[0]` immutably and then tries to assign to `items[0]` while the borrow is still live. Rewrite the function so it reads both values into locals before mutating the slice. The function should still return the sum of the original first and last elements. `cargo check` must pass."
+
+[setup]
+"Cargo.toml" = """[package]
+name = "fix_borrow_error"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+"""
+"src/lib.rs" = """pub fn sum_first_and_last(items: &mut [i32]) -> i32 {
+    let first = &items[0];
+    let last = &items[items.len() - 1];
+    items[0] = 0;
+    *first + *last
+}
+"""
+
+[verify]
+type = "command_exits_zero"
+command = "cargo check"

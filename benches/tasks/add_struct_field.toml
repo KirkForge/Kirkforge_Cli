@@ -1,0 +1,53 @@
+name = "add_struct_field"
+difficulty = "medium"
+
+prompt = "Add a new public field `age: u32` to the `User` struct in src/lib.rs. Update every construction site of `User` (both the `new` method and the `make_alice` function) so the code compiles. Set a sensible default value for `age` at each construction site (e.g. 0 in `new` and 30 in `make_alice`). Update the test to also check the new field."
+
+[setup]
+"Cargo.toml" = """[package]
+name = "add_struct_field"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+"""
+"src/lib.rs" = """pub struct User {
+    pub name: String,
+}
+
+impl User {
+    pub fn new(name: &str) -> Self {
+        User {
+            name: name.to_string(),
+        }
+    }
+}
+
+pub fn make_alice() -> User {
+    User {
+        name: "alice".to_string(),
+    }
+}
+
+pub fn make_bob() -> User {
+    User::new("bob")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_users() {
+        let alice = make_alice();
+        let bob = make_bob();
+        assert_eq!(alice.name, "alice");
+        assert_eq!(bob.name, "bob");
+    }
+}
+"""
+
+[verify]
+type = "test_passes"
+command = "cargo test"

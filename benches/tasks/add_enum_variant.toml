@@ -1,0 +1,41 @@
+name = "add_enum_variant"
+difficulty = "easy"
+
+prompt = "Add a new variant `Pending` to the `Status` enum in src/lib.rs and update the `label` function's match so it returns `\"pending\"` for the new variant. Update the test to cover the new variant. `cargo test` must pass."
+
+[setup]
+"Cargo.toml" = """[package]
+name = "add_enum_variant"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+"""
+"src/lib.rs" = """pub enum Status {
+    Active,
+    Inactive,
+}
+
+pub fn label(status: Status) -> &'static str {
+    match status {
+        Status::Active => "active",
+        Status::Inactive => "inactive",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_labels() {
+        assert_eq!(label(Status::Active), "active");
+        assert_eq!(label(Status::Inactive), "inactive");
+    }
+}
+"""
+
+[verify]
+type = "test_passes"
+command = "cargo test"

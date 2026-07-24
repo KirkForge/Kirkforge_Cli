@@ -37,6 +37,14 @@ fn default_reject_on_excess_plugin_trust() -> bool {
     true
 }
 
+fn default_budget_ceiling() -> usize {
+    200_000
+}
+
+fn default_budget_approaching_ratio() -> f64 {
+    0.8
+}
+
 fn default_plugin_sources() -> HashMap<String, PathBuf> {
     let mut sources = HashMap::new();
     let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -108,6 +116,12 @@ pub struct ToolConfig {
     pub plugin_sources: HashMap<String, PathBuf>,
     #[serde(default = "default_enabled_plugins")]
     pub enabled_plugins: Vec<String>,
+    #[serde(default)]
+    pub stratum_mode: Option<String>,
+    #[serde(default = "default_budget_ceiling")]
+    pub budget_ceiling: usize,
+    #[serde(default = "default_budget_approaching_ratio")]
+    pub budget_approaching_ratio: f64,
 }
 
 fn default_max_plugin_trust() -> kirkforge_plugin::TrustTier {
@@ -138,6 +152,44 @@ impl Default for ToolConfig {
             plugin_allowed_env_vars: vec![],
             plugin_sources: default_plugin_sources(),
             enabled_plugins: default_enabled_plugins(),
+            stratum_mode: None,
+            budget_ceiling: default_budget_ceiling(),
+            budget_approaching_ratio: default_budget_approaching_ratio(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tool_config_defaults_match_spec() {
+        let cfg = ToolConfig::default();
+        assert_eq!(cfg.budget_ceiling, 200_000);
+        assert!((cfg.budget_approaching_ratio - 0.8).abs() < f64::EPSILON);
+        assert!(cfg.stratum_mode.is_none());
+    }
+
+    #[test]
+    fn tool_config_toml_overrides_defaults() {
+        let toml = r#"
+stratum_mode = "lite"
+budget_ceiling = 50000
+budget_approaching_ratio = 0.9
+"#;
+        let cfg: ToolConfig = toml::from_str(toml).expect("parse");
+        assert_eq!(cfg.stratum_mode.as_deref(), Some("lite"));
+        assert_eq!(cfg.budget_ceiling, 50_000);
+        assert!((cfg.budget_approaching_ratio - 0.9).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn tool_config_toml_omitted_uses_defaults() {
+        let toml = "";
+        let cfg: ToolConfig = toml::from_str(toml).expect("parse");
+        assert_eq!(cfg.budget_ceiling, 200_000);
+        assert!((cfg.budget_approaching_ratio - 0.8).abs() < f64::EPSILON);
+        assert!(cfg.stratum_mode.is_none());
     }
 }

@@ -151,3 +151,99 @@ fn collect_td_json(dir: &Path, out: &mut Vec<String>) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::session::hooks::{HookContext, HookDecision};
+    use crate::tools::ToolContext;
+
+    const MINIMAL_TD_JSON: &str = r#"{
+  "version": 1,
+  "objects": [
+    {
+      "type": "box",
+      "id": "b1",
+      "z": 1,
+      "parentId": null,
+      "color": "green",
+      "left": 0, "top": 0, "right": 10, "bottom": 2,
+      "style": "light"
+    }
+  ]
+}"#;
+
+    struct CwdGuard {
+        prev: std::path::PathBuf,
+    }
+
+    impl CwdGuard {
+        fn enter(dir: &Path) -> Self {
+            let prev = std::env::current_dir().expect("current_dir");
+            std::env::set_current_dir(dir).expect("set_current_dir");
+            Self { prev }
+        }
+    }
+
+    impl Drop for CwdGuard {
+        fn drop(&mut self) {
+            let _ = std::env::set_current_dir(&self.prev);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_draw_render_loads_and_renders() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file_path = dir.path().join("diag.td.json");
+        std::fs::write(&file_path, MINIMAL_TD_JSON).expect("write td.json");
+
+        let tool = DrawRenderTool;
+        let ctx = ToolContext::new();
+        let args = serde_json::json!({
+            "path": file_path.display().to_string(),
+            "fenced": true,
+        });
+        let out = tool.run(&ctx, args).await;
+        match out {
+            ToolOutcome::Success { content } => {
+                assert!(
+                    content.contains("```"),
+                    "fenced render must contain a code fence, got: {content}"
+                );
+                assert!(!content.is_empty(), "rendered output must be non-empty");
+            }
+            other => panic!("DrawRenderTool must return Success, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_post_turn_hook_finds_td_json() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("a.td.json"), MINIMAL_TD_JSON).expect("write a");
+        std::fs::write(dir.path().join("b.td.json"), MINIMAL_TD_JSON).expect("write b");
+
+        let _guard = CwdGuard::enter(dir.path());
+        let hook = DrawPostTurnHook;
+        let ctx = HookContext {
+            event: "post-turn".into(),
+            ..Default::default()
+        };
+        assert_eq!(hook.handle(&ctx), HookDecision::Allow);
+    }
+
+    #[test]
+    fn test_post_turn_hook_no_files_returns_allow() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _guard = CwdGuard::enter(dir.path());
+        let hook = DrawPostTurnHook;
+        let ctx = HookContext {
+            event: "post-turn".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            hook.handle(&ctx),
+            HookDecision::Allow,
+            "DrawPostTurnHook with no .td.json files must still Allow"
+        );
+    }
+}

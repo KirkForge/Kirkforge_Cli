@@ -21,6 +21,24 @@ pub(crate) fn tool_outcome_success(outcome: &ToolOutcome) -> bool {
     )
 }
 
+/// Apply the Plugin3 budget guard to a tool outcome before it enters
+/// the conversation. When the `budget` feature is enabled and the
+/// shared budget is `Approaching` or `Over`, oversized `Success` and
+/// `FileContent` results are sliced (head + tail + offload marker) and
+/// the full middle is stored in the process-global offload store,
+/// retrievable via `store_get`. When the feature is disabled this is a
+/// no-op pass-through.
+pub(crate) fn apply_budget_slice(outcome: ToolOutcome) -> ToolOutcome {
+    #[cfg(feature = "budget")]
+    {
+        crate::session::budget::apply_budget_slice(outcome)
+    }
+    #[cfg(not(feature = "budget"))]
+    {
+        outcome
+    }
+}
+
 pub(crate) fn tool_error_kind(outcome: &ToolOutcome) -> Option<&'static str> {
     match outcome {
         ToolOutcome::Error { .. } => Some("error"),

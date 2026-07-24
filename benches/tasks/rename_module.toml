@@ -1,0 +1,28 @@
+name = "rename_module"
+difficulty = "hard"
+
+prompt = "Rename the module file `src/old_name.rs` to `src/new_name.rs` and update the `mod old_name;` declaration in src/lib.rs to `mod new_name;`. Update the call site `old_name::value()` to `new_name::value()` so the project still compiles. `cargo test` must pass."
+
+[setup]
+"Cargo.toml" = """[package]
+name = "rename_module"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+"""
+"src/lib.rs" = """mod old_name;
+
+pub fn get_answer() -> i32 {
+    old_name::value()
+}
+"""
+"src/old_name.rs" = """pub fn value() -> i32 {
+    42
+}
+"""
+
+[verify]
+type = "command_exits_zero"
+command = "test -f src/new_name.rs && grep -q 'mod new_name' src/lib.rs && cargo test"

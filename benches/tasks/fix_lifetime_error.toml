@@ -1,0 +1,26 @@
+name = "fix_lifetime_error"
+difficulty = "hard"
+
+prompt = "Fix the lifetime error in `pick_longer` in src/lib.rs. The function returns `&'a str` but the `else` branch returns `second`, which has lifetime `'b` that is unrelated to `'a`. Fix this by adding the bound `'b: 'a` to the function signature so the compiler knows `'b` outlives `'a`. Do not change the return type or the parameter order. `cargo check` must pass."
+
+[setup]
+"Cargo.toml" = """[package]
+name = "fix_lifetime_error"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+"""
+"src/lib.rs" = """pub fn pick_longer<'a, 'b>(first: &'a str, second: &'b str) -> &'a str {
+    if first.len() > second.len() {
+        first
+    } else {
+        second
+    }
+}
+"""
+
+[verify]
+type = "command_exits_zero"
+command = "cargo check"

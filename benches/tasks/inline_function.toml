@@ -1,0 +1,36 @@
+name = "inline_function"
+difficulty = "medium"
+
+prompt = "Inline the `double` helper function in src/lib.rs into its single call site in `process`, then remove the `double` function entirely. After the change `process` should compute `value * 2 + 1` directly without calling another function. The project should still compile and `cargo test` must pass."
+
+[setup]
+"Cargo.toml" = """[package]
+name = "inline_function"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+"""
+"src/lib.rs" = """fn double(x: i32) -> i32 {
+    x * 2
+}
+
+pub fn process(value: i32) -> i32 {
+    double(value) + 1
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_process() {
+        assert_eq!(process(5), 11);
+    }
+}
+"""
+
+[verify]
+type = "command_exits_zero"
+command = "cargo test"

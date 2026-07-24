@@ -41,7 +41,7 @@ Workorders 7.1-7.9 address findings from the honest codebase assessment
 | 7.6 | [Windows test parity](7.6-windows-test-parity.md) | Planned | Medium | — |
 | 7.7 | [KVB verifier bus bridge](7.7-kvb-verifier-bus-bridge.md) | Planned | Medium | 7.0 |
 | 7.8 | [Bench task expansion](7.8-bench-task-expansion.md) | Planned | Medium | — |
-| 7.9 | [Context index Phase 7: embeddings + graph-walk](7.9-context-index-phase7.md) | Planned | High | — |
+| 7.9 | [Context index Phase 7: embeddings + graph-walk](7.9-context-index-phase7.md) | Done | High | — |
 
 ### Priority rationale
 

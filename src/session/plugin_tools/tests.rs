@@ -6,6 +6,7 @@ use kirkforge_plugin_host::{PluginRegistry, TrustPolicy};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+#[cfg(unix)]
 fn make_greet_plugin() -> (tempfile::TempDir, PluginRegistry, SharedConfig) {
     let tmp = tempfile::tempdir().unwrap();
     let plugins = tmp.path().join("plugins");
@@ -46,6 +47,7 @@ command = "greet.sh"
     (tmp, reg, cfg)
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn wrapper_for_plugin_tool() {
     let (_tmp, reg, cfg) = make_greet_plugin();
@@ -62,6 +64,7 @@ async fn wrapper_for_plugin_tool() {
     );
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn sandbox_uses_configured_sandbox_dir() {
     let (tmp, reg, cfg) = make_greet_plugin();
@@ -109,6 +112,7 @@ async fn sandbox_uses_configured_sandbox_dir() {
     );
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn sandbox_uses_current_dir_when_sandbox_dir_empty() {
     let (_tmp, reg, cfg) = make_greet_plugin();
@@ -161,6 +165,7 @@ async fn sandbox_uses_current_dir_when_sandbox_dir_empty() {
     );
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn curated_env_blocks_unlisted_vars() {
     let (_tmp, reg, cfg) = make_greet_plugin();
@@ -203,6 +208,7 @@ async fn curated_env_blocks_unlisted_vars() {
 /// Plugin tool subprocesses receive a sanitized PATH so shell wrappers can
 /// resolve standard utilities even when kirkforge is launched with a minimal
 /// or world-writable PATH.
+#[cfg(unix)]
 #[tokio::test]
 async fn curated_env_sanitizes_path_for_plugin_tools() {
     let (_tmp, reg, cfg) = make_greet_plugin();

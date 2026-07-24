@@ -66,6 +66,11 @@ fn config_validate_json_reports_invalid_config() {
     let mut file = NamedTempFile::new().unwrap();
     writeln!(file, "bloat_threshold = 1.5").unwrap();
 
+    let path_str = file
+        .path()
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
     AssertCommand::cargo_bin("stratum")
         .unwrap()
         .arg("--config")
@@ -79,7 +84,7 @@ fn config_validate_json_reports_invalid_config() {
         .stdout(str::contains("\"valid\": false"))
         .stdout(str::contains("\"error\""))
         .stdout(str::contains("1.5"))
-        .stdout(str::contains(file.path().to_string_lossy().as_ref()));
+        .stdout(str::contains(path_str.as_str()));
 }
 
 #[test]

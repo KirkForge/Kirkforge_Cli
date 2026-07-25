@@ -2,7 +2,7 @@
 
 ## Current baseline: v0.3.6 (2026-07-25)
 
-**`dev` at HEAD, `main` at 98e863a.** Phase 5 complete (4 languages). Phase 6 complete (import + call-graph edges). Phase 7 complete (embeddings + graph-walk retrieval). 24 bench tasks. 69 ADRs. Workorders 7.1–7.9 all Done. Workorders 8.0, 8.2, 8.3, 8.6, 8.7, 8.8 Done.
+**`dev` at HEAD, `main` at 98e863a.** Phase 5 complete (4 languages). Phase 6 complete (import + call-graph edges). Phase 7 complete (embeddings + graph-walk retrieval). 24 bench tasks. 69 ADRs. Workorders 7.1–7.9 all Done. Workorders 8.0–8.9 all Done (8.3 partial — 3 items deferred: `use_workflow_run` task, plugin toolset extension, 11 pre-existing broken verify specs; see WO 8.3 Notes).
 
 ### What shipped (sessions 6.1–7.9)
 

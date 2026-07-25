@@ -65,16 +65,16 @@ plugin validation, and language-specific edge cases.
 
 | # | Workorder | Status | Priority | Depends on |
 |---|---|---|---|---|
-| 8.0 | [Raise coverage threshold](8.0-raise-coverage-threshold.md) | Planned | Medium | 7.2 |
-| 8.1 | [Multi-model benchmark leaderboard](8.1-multi-model-leaderboard.md) | Planned | High | — |
+| 8.0 | [Raise coverage threshold](8.0-raise-coverage-threshold.md) | Done | Medium | 7.2 |
+| 8.1 | [Multi-model benchmark leaderboard](8.1-multi-model-leaderboard.md) | Done | High | — |
 | 8.2 | [TUI parity: doom loop + session nav](8.2-tui-parity-doom-loop.md) | Done | Medium | — |
-| 8.3 | [Bench task realism: self-contained + plugin tools](8.3-bench-task-realism.md) | Planned | Medium | 7.8 |
-| 8.4 | [Embedding quality: evaluate and tune TF-IDF](8.4-embedding-quality.md) | Planned | High | 7.9 |
-| 8.5 | [ADR index table unification](8.5-adr-index-unification.md) | Planned | Low | — |
+| 8.3 | [Bench task realism: self-contained + plugin tools](8.3-bench-task-realism.md) | Done (partial) | Medium | 7.8 |
+| 8.4 | [Embedding quality: evaluate and tune TF-IDF](8.4-embedding-quality.md) | Done | High | 7.9 |
+| 8.5 | [ADR index table unification](8.5-adr-index-unification.md) | Done | Low | — |
 | 8.6 | [Stratum + budget guard coordination](8.6-stratum-budget-coordination.md) | Done | Medium | 7.1, 7.5 |
-| 8.7 | [Error recovery: structured hints](8.7-error-recovery-hints.md) | Planned | Medium | — |
+| 8.7 | [Error recovery: structured hints](8.7-error-recovery-hints.md) | Done | Medium | — |
 | 8.8 | [Plugin manifest schema validation](8.8-plugin-manifest-validation.md) | Done | Medium | — |
-| 8.9 | [Context index: TS/Python/Go edge cases](8.9-context-index-edge-cases.md) | Planned | Medium | — |
+| 8.9 | [Context index: TS/Python/Go edge cases](8.9-context-index-edge-cases.md) | Done | Medium | — |
 
 ### Priority rationale
 
@@ -85,6 +85,43 @@ plugin validation, and language-specific edge cases.
 - **8.0, 8.2, 8.3, 8.6, 8.7, 8.8, 8.9 (Medium)**: Important hardening but not
   capability-blocking.
 - **8.5 (Low)**: Documentation cleanup. No functional impact.
+
+### Series 9.0-9.9 — Gap Closure and Hardening
+
+Workorders 9.0-9.9 address the remaining gaps surfaced by the audit after
+the 8-series shipped. They target broken bench specs, the workflow tool
+wrapper, PR-time bench deltas, version reconciliation, interactive replay,
+prompt-cache stem reuse, verifier bus unification, VFS minification,
+sandbox hardening, and representative bench tasks.
+
+| # | Workorder | Status | Priority | Depends on |
+|---|---|---|---|---|
+| 9.0 | [Fix broken bench verify specs](9.0-fix-broken-bench-verify-specs.md) | Planned | High | 8.3 |
+| 9.1 | [Workflow tool wrapper](9.1-workflow-tool-wrapper.md) | Planned | Medium | — |
+| 9.2 | [Bench PR delta comment](9.2-bench-pr-delta-comment.md) | Planned | Medium | 6.2, 8.1 |
+| 9.3 | [Version reconciliation and v0.3.6 release](9.3-version-reconciliation.md) | Planned | High | 8.0-8.9 |
+| 9.4 | [Replay interactive stepper](9.4-replay-interactive-stepper.md) | Planned | Medium | — |
+| 9.5 | [Prompt cache stem reuse](9.5-prompt-cache-stem-reuse.md) | Planned | High | — |
+| 9.6 | [Verifier bus code unification](9.6-verifier-bus-unification.md) | Planned | Medium | ADR-028 |
+| 9.7 | [Tree-sitter VFS minification](9.7-vfs-minification.md) | Planned | Medium | — |
+| 9.8 | [Seccomp/rlimit sandbox hardening](9.8-seccomp-rlimit-hardening.md) | Planned | Low | — |
+| 9.9 | [Bench task expansion: real-world shapes](9.9-bench-task-expansion-2.md) | Planned | High | 9.0 |
+
+### Priority rationale
+
+- **9.0 (High)**: 11/24 bench tasks have broken verify specs. The bench
+  pass rate is unmeasurable until these are fixed. Blocks 9.9.
+- **9.3 (High)**: state.md claims v0.3.6 but Cargo.toml is 0.3.0 and no tag
+  exists. The 8-series work is unreleased. Pure process failure.
+- **9.5 (High)**: Prompt-cache stem reuse is Vix's biggest token-efficiency
+  differentiator. The cache markers ship but the reuse logic does not.
+- **9.9 (High)**: Single-file tasks don't measure agent skill. The bench
+  harness needs representative multi-file/multi-turn tasks to turn "agent
+  capability B+" into a measured grade.
+- **9.1, 9.2, 9.4, 9.6, 9.7 (Medium)**: Real capability/closure work but not
+  blocking the measurement or release.
+- **9.8 (Low)**: Docker already provides process isolation; seccomp/rlimit
+  is a lighter-weight path for users who don't want Docker overhead.
 
 ## Conventions
 

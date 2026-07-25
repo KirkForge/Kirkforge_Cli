@@ -1,7 +1,44 @@
 name = "add_cli_flag"
 difficulty = "medium"
 
-prompt = "Add a `--verbose` flag to the kirkforge CLI run subcommand that sets the log level to 'debug' when present. Add it to src/cli.rs in the Run variant and wire it through to the session in src/main/mod.rs."
+prompt = "Add a `--verbose` flag to the kirkforge CLI run subcommand that sets the log level to 'debug' when present. Wire it into the Run variant and the run function in src/main.rs."
+
+[setup]
+"Cargo.toml" = """[package]
+name = "add_cli_flag"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "add_cli_flag"
+path = "src/main.rs"
+"""
+"src/main.rs" = """use std::env;
+
+#[derive(Default)]
+struct Config {
+    verbose: bool,
+}
+
+impl Config {
+    fn from_args() -> Self {
+        let verbose = env::args().any(|a| a == "--verbose");
+        Self { verbose }
+    }
+}
+
+fn run(cfg: &Config) {
+    if cfg.verbose {
+        eprintln!("[debug] verbose mode enabled");
+    }
+    println!("running");
+}
+
+fn main() {
+    let cfg = Config::from_args();
+    run(&cfg);
+}
+"""
 
 [verify]
 type = "command_exits_zero"

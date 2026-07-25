@@ -17,6 +17,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   commit. README stays a landing page; tech detail lives in docs/TECHNICAL.md.
 
 ### Added
+- Structured `ErrorHint` for error recovery (Workorder 8.7): new
+  `ErrorHint` enum (`BorrowConflict`, `MissingImport`, `TypeMismatch`,
+  `MissingMethod`) in `src/session/error_recovery.rs`, with regex-based
+  classifiers that pull the relevant identifiers out of rustc/clippy
+  diagnostics and a `render_hint()` helper that turns each variant into a
+  stable "Hint: ..." line. The build and lint verifiers append a hint to
+  `FixSuggestion` descriptions when the classifier matches; the executor's
+  `handle_tool_outcome` injects the same hint into the `Role::Tool` message
+  for `ToolOutcome::Error` / `ToolOutcome::Failure`, so the model sees the
+  raw error and the structured hint side-by-side.
 - Multi-model benchmark leaderboard (Workorder 8.1, ADR-038): `bench run-models
   --models a,b,c --tasks <dir> --summary <md>` runs all bench tasks for each
   model and produces a `write_model_comparison()` markdown table (Model | Tasks

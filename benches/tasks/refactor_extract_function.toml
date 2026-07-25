@@ -1,8 +1,41 @@
 name = "refactor_extract_function"
 difficulty = "medium"
 
-prompt = "Refactor the duplicate context_index building code in src/main/mod.rs: extract the logic into a helper function `build_context_index(sandbox_dir: Option<&str>) -> Option<ContextIndex>` and call it from both the TUI and line-mode branches instead of duplicating the block."
+prompt = "Refactor the duplicate builder code in src/lib.rs: extract the `Vec<i32>` building logic into a helper function `make_vec(first: i32, second: i32, third: i32) -> Vec<i32>` and call it from `build_a` and `build_b` instead of duplicating the literal sequence."
+
+[setup]
+"Cargo.toml" = """[package]
+name = "refactor_extract_function"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+"""
+"src/lib.rs" = """pub fn build_a() -> Vec<i32> {
+    vec![1, 2, 3]
+}
+
+pub fn build_b() -> Vec<i32> {
+    vec![1, 2, 3]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_a_works() {
+        assert_eq!(build_a(), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn build_b_works() {
+        assert_eq!(build_b(), vec![1, 2, 3]);
+    }
+}
+"""
 
 [verify]
-type = "command_exits_zero"
-command = "cargo clippy --all-targets -- -D warnings"
+type = "test_passes"
+command = "cargo test"

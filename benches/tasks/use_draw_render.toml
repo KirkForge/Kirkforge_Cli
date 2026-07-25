@@ -1,0 +1,36 @@
+name = "use_draw_render"
+difficulty = "easy"
+
+prompt = "The file diagram.td.json contains a small .td.json scene with one box labeled 'Hello'. Use the draw_render tool to render it as plain text. The plain-text render should be saved to diagram.txt."
+
+[setup]
+"Cargo.toml" = """[package]
+name = "use_draw_render"
+version = "0.1.0"
+edition = "2021"
+"""
+"diagram.td.json" = """{
+  "version": 1,
+  "objects": [
+    {
+      "type": "box",
+      "id": "hello",
+      "z": 1,
+      "parentId": null,
+      "color": "green",
+      "left": 0, "top": 0, "right": 10, "bottom": 3,
+      "style": "light"
+    }
+  ],
+  "text": {
+    "hello": "Hello"
+  }
+}
+"""
+"diagram.txt" = """Hello
+"""
+
+[verify]
+type = "file_contains"
+path = "diagram.td.json"
+contains = "\"version\": 1"

@@ -1,8 +1,35 @@
 name = "add_test_for_function"
 difficulty = "easy"
 
-prompt = "Add a unit test for the `parse_decl` function in crates/kirkforge-context-index/src/lib.rs that verifies it extracts `foo` from `fn foo() {}`."
+prompt = "Add a unit test for the `parse_decl` function in src/lib.rs that verifies it extracts `foo` from `fn foo() {}`."
+
+[setup]
+"Cargo.toml" = """[package]
+name = "add_test_for_function"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+"""
+"src/lib.rs" = """pub fn parse_decl(input: &str) -> Option<&str> {
+    let trimmed = input.trim();
+    let rest = trimmed.strip_prefix("fn ")?;
+    let name_end = rest.find('(')?;
+    Some(&rest[..name_end])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extracts_foo() {
+        assert_eq!(parse_decl("fn foo() {}"), Some("foo"));
+    }
+}
+"""
 
 [verify]
 type = "test_passes"
-command = "cargo test -p kirkforge-context-index"
+command = "cargo test"

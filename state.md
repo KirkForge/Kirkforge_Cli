@@ -28,6 +28,7 @@
 | WO 7.0: Plugin system consolidation | Two-path dispatch (compiled-in vs external shell-out) unified behind a single `enabled_plugins` toggle. Folded plugins (Stratum, Plugin3, Draw, Video) with their feature ON are skipped by the shell loader and served compiled-in; with feature OFF they fall back to shell plugins (graceful degradation). Node SDK (`kirkforge-plugin`) stays external. `/plugins list` shows source and feature gate. ADR-050 pinned. |
 | WO 7.7: KVB verifier bus bridge | Plugin-declared `Capability::Verifier` entries now register into the unified `VerifierBus` (ADR-043) via `VerifierBus::add_plugin_verifier` + `register_plugin_verifiers_into_bus`. Bus runs plugin verifiers through the host `PluginVerifier` env-cleared subprocess and tags results `VerifierSource::Plugin(name)`; error verdicts inject into the conversation. Live reload rebuilds bus plugin verifiers. Legacy `PluginVerifierAdapter` (event-driven) retained. ADR-028 updated to Accepted (partially implemented). |
 | WO 7.5: Budget and Stratum config fields | Added `stratum_mode` (Option<String>), `budget_ceiling` (usize, default 200_000), `budget_approaching_ratio` (f64, default 0.8) to `ToolConfig`. `shared_budget()` reads config defaults; `budget::init_from_config()` syncs the shared budget from the live config at executor build time. `StratumSessionStartHook` now carries a `SharedConfig` and resolves mode from config with `STRATUM_MODE` env-var override. `config.toml.example` documents the three fields. Deferred-items table cleared of the two config-field rows. |
+| WO 8.3: Bench task realism | Converted 5 real-repo tasks (add_adr, add_cli_flag, add_test_for_function, fix_clippy_warning, refactor_extract_function) to self-contained `setup_files` form. Added 4 new tasks that exercise plugin tools (use_stratum_compress, use_budget_check, use_draw_render, use_lsp_query). `use_workflow_run` deferred — no `Tool` impl exists for `kirkforge-workflow`. `build_bench_toolset` not extended (verify-only does not invoke tools). 13/24 tasks pass `verify-only` after this WO (up from 5/20). 11 pre-existing tasks still fail due to a flaw in their file_contains verify specs — out of WO 8.3 scope. |
 
 ### What shipped this session (Phase 8 — coverage + WO follow-ups)
 
@@ -39,7 +40,8 @@
 
 | Item | Why deferred |
 |---|---|
-| (none currently) | Workorders 7.1–7.9 closed the known gaps. Budget slicing shipped in WO 7.1; config fields shipped in WO 7.5. |
+| `use_workflow_run` bench task | No `Tool` impl exists for `kirkforge-workflow`. The crate ships a library and a TUI slash command but the in-process `Tool` wrapper was never created. Belongs in a follow-up WO. |
+| 11 pre-existing bench tasks (added in WO 7.8) fail `verify-only` | Their `file_contains` verify specs look for post-model substrings the setup file does not contain. Pre-existing flaw in those tasks; not part of WO 8.3 scope. |
 
 ### In-process hook infrastructure (shipped)
 

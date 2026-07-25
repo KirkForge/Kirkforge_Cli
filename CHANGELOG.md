@@ -5,6 +5,36 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- Doom loop detection (Workorder 8.2a): the executor tracks the last 5
+  tool-error observations in a sliding window; when 3 identical
+  `(tool, error)` pairs land in a row it emits a `TurnEvent::DoomLoopDetected`
+  to the TUI and a `MetricEvent::DoomLoop` to the metrics log. The TUI
+  surfaces a centered warning banner with three actions: break (cancel
+  the in-flight generation), plan (switch to `/plan` so mutating tools
+  are denied), and continue (dismiss). A successful tool call resets
+  the tracker so the next failure starts a fresh run. The doom loop
+  detector is pure, sync, and lives in `src/session/executor/loop_.rs`.
+- `/sessions tree` subcommand (Workorder 8.2b): renders the fork tree
+  by reading `<data_dir>/sessions/forks/<id>/fork.json` and grouping
+  forks under their parent session. The text output uses
+  `├─`/`└─`/`│` connectors so the structure is visible in any
+  terminal. Orphan forks (parent not in the session set) are listed
+  as roots so dangling metadata is never silently dropped. The tree
+  builder is `session_index::build_fork_tree`; the renderer is in
+  `src/tui/commands/sessions.rs`. No new dependencies (no
+  `tui-tree-widget`).
+- Scout subagent (Workorder 8.2c): a read-only in-process exploration
+  helper that mirrors `/explore`'s tool surface minus `bash`. The
+  `ScoutSubagent` struct in `src/session/executor/scout.rs` holds the
+  canonical `SCOUT_TOOLS` allow-list and exposes a `filter_tools`
+  helper that drops anything not in the list. `tools_for_scout` in
+  `src/tui/commands/persona.rs` builds the full toolset and runs the
+  scout filter, so the read-only guarantee is enforced at the type
+  level (not a string check at the prompt layer). The scout is the
+  conservative sibling of `/explore`: same read-only tools, but no
+  fork, no model turn, no conversation pollution.
+
 ### Changed
 - Raised the `src/session` tarpaulin coverage threshold in CI from 61.0% to 62.0%
   (Workorder 8.0). Threshold was lowered in commit `0bccae1` as a stopgap for

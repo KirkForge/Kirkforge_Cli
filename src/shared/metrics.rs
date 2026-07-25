@@ -157,6 +157,15 @@ pub enum MetricEvent {
         related_id: Option<String>,
         confidence: f64,
     },
+    /// The executor detected a doom loop — the same tool failing the
+    /// same way N turns in a row. `count` is the number of consecutive
+    /// identical errors so far, `tool` is the name of the tool that
+    /// kept failing, and `last_error` is the (truncated) error text.
+    DoomLoop {
+        count: usize,
+        tool: String,
+        last_error: String,
+    },
 }
 
 impl MetricEvent {
@@ -168,6 +177,7 @@ impl MetricEvent {
             MetricEvent::Turn { .. } => "turn",
             MetricEvent::Approval { .. } => "approval",
             MetricEvent::PlanReason { .. } => "plan",
+            MetricEvent::DoomLoop { .. } => "doom_loop",
         }
     }
 
@@ -248,6 +258,22 @@ impl MetricEvent {
                     attrs.push(opentelemetry::KeyValue::new("plan.related_id", id.clone()));
                 }
                 "plan.reason".to_string()
+            }
+            MetricEvent::DoomLoop {
+                count,
+                tool,
+                last_error,
+            } => {
+                attrs.push(opentelemetry::KeyValue::new(
+                    "doom_loop.count",
+                    *count as i64,
+                ));
+                attrs.push(opentelemetry::KeyValue::new("doom_loop.tool", tool.clone()));
+                attrs.push(opentelemetry::KeyValue::new(
+                    "doom_loop.last_error",
+                    last_error.clone(),
+                ));
+                "doom_loop.detected".to_string()
             }
         };
         (name, attrs)
@@ -458,6 +484,11 @@ pub fn summarize() -> MetricsSummary {
             MetricEvent::PlanReason { .. } => {
                 // Planning decisions are traced for observability but do not
                 // participate in the high-level counts shown by `kirkforge metrics`.
+            }
+            MetricEvent::DoomLoop { .. } => {
+                // Doom loop detections are traced; the high-level counts
+                // surface through the per-tool `tool_failure` total since
+                // the same tool is failing.
             }
         }
     }

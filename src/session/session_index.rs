@@ -476,6 +476,187 @@ pub fn open_resolved(id_or_prefix: &str) -> anyhow::Result<Option<ConversationLo
     }
 }
 
+/// One node in the session fork tree. Children are stored by
+/// `parent_session` so the tree is reconstructable from a flat list
+/// of forks plus the top-level session entries.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionTreeNode {
+    /// Display id of this session or fork (e.g.
+    /// `"2026-06-10-session-01"` or `"fork-01"`).
+    pub id: String,
+    /// Free-form label (forks carry a `label`; top-level sessions
+    /// leave this empty).
+    pub label: String,
+    /// Number of messages in the session log, when known. Forks
+    /// read it from the persisted `fork.json`; top-level sessions
+    /// from the file itself.
+    pub message_count: Option<usize>,
+    /// True for top-level sessions; false for forks (which are
+    /// derived from a parent session and live under
+    /// `<sessions>/forks/<id>/`).
+    pub is_root: bool,
+    /// Children of this node (forks whose `parent_session` matches
+    /// this node's id).
+    pub children: Vec<SessionTreeNode>,
+}
+
+/// Build a fork tree from the on-disk session and fork
+/// directories. Top-level sessions are roots; forks are children of
+/// the session whose `parent_session` field matches their parent.
+///
+/// The result is a flat `Vec<SessionTreeNode>` of roots; each root's
+/// `children` field is the recursive tree under that root. Orphan
+/// forks (parent not in the session set) are listed as roots so the
+/// user still sees them — never silently dropped.
+///
+/// The walk is bounded by the disk: every session file is
+/// summarised once, every `fork.json` is read once. On any read /
+/// parse error the offending entry is skipped (best-effort, like
+/// the rest of this module).
+pub fn build_fork_tree() -> anyhow::Result<Vec<SessionTreeNode>> {
+    let sessions_dir = crate::session::data_dir()?.join("sessions");
+    let entries = list_sessions()?;
+
+    // Build a quick lookup from id -> &SessionEntry for the
+    // root walk below. The tree is built from this map.
+    let entry_by_id: std::collections::HashMap<String, SessionEntry> =
+        entries.iter().map(|e| (e.id.clone(), e.clone())).collect();
+
+    // Collect forks from `<sessions>/forks/<id>/fork.json`. Each
+    // fork file's `parent_session` field is the linkage key.
+    let mut forks: Vec<crate::session::session_fork::Fork> = Vec::new();
+    let forks_dir = sessions_dir.join("forks");
+    if forks_dir.is_dir() {
+        for entry in std::fs::read_dir(&forks_dir)
+            .with_context(|| format!("read forks directory {}", forks_dir.display()))?
+            .flatten()
+        {
+            let meta_path = entry.path().join("fork.json");
+            if !meta_path.is_file() {
+                continue;
+            }
+            match std::fs::read_to_string(&meta_path) {
+                Ok(json) => match serde_json::from_str::<crate::session::session_fork::Fork>(&json)
+                {
+                    Ok(f) => forks.push(f),
+                    Err(e) => {
+                        tracing::warn!(
+                            path = %meta_path.display(),
+                            error = %e,
+                            "fork metadata unreadable; skipping in tree",
+                        );
+                    }
+                },
+                Err(e) => {
+                    tracing::warn!(
+                        path = %meta_path.display(),
+                        error = %e,
+                        "failed to read fork metadata; skipping in tree",
+                    );
+                }
+            }
+        }
+    }
+
+    // Build child index: parent_session -> Vec<&Fork>.
+    let mut by_parent: std::collections::HashMap<String, Vec<&crate::session::session_fork::Fork>> =
+        std::collections::HashMap::new();
+    for f in &forks {
+        by_parent
+            .entry(f.parent_session.clone())
+            .or_default()
+            .push(f);
+    }
+    // Sort each child's forks by id for stable output.
+    for children in by_parent.values_mut() {
+        children.sort_by(|a, b| a.id.cmp(&b.id));
+    }
+
+    // Recursive builder. Returns the node list; children are
+    // sorted by id (see above). The `visited` guard catches
+    // pathological cycles in the fork metadata (a fork whose
+    // parent is itself, or a chain that loops back) so the
+    // recursion terminates.
+    fn build_node(
+        id: &str,
+        label: String,
+        message_count: Option<usize>,
+        is_root: bool,
+        by_parent: &std::collections::HashMap<String, Vec<&crate::session::session_fork::Fork>>,
+        visited: &mut std::collections::HashSet<String>,
+    ) -> SessionTreeNode {
+        let children = if visited.insert(id.to_string()) {
+            by_parent
+                .get(id)
+                .map(|fs| {
+                    fs.iter()
+                        .map(|f| {
+                            build_node(
+                                &f.id,
+                                f.label.clone(),
+                                None, // fork message count is not in fork.json
+                                false,
+                                by_parent,
+                                visited,
+                            )
+                        })
+                        .collect()
+                })
+                .unwrap_or_default()
+        } else {
+            // Cycle: skip children rather than recurse forever.
+            tracing::warn!(id, "cycle detected in fork tree; skipping children");
+            Vec::new()
+        };
+        SessionTreeNode {
+            id: id.to_string(),
+            label,
+            message_count,
+            is_root,
+            children,
+        }
+    }
+
+    // Roots: every top-level session, plus any orphan fork whose
+    // parent isn't in the session set.
+    let mut roots: Vec<SessionTreeNode> = Vec::new();
+    let mut visited = std::collections::HashSet::new();
+    let mut sorted_entries = entries.clone();
+    sorted_entries.sort_by(|a, b| a.id.cmp(&b.id));
+    for entry in &sorted_entries {
+        roots.push(build_node(
+            &entry.id,
+            String::new(),
+            Some(entry.message_count),
+            true,
+            &by_parent,
+            &mut visited,
+        ));
+    }
+    // Orphan forks: present in `forks` but whose parent is not in
+    // the session set. Show them as roots so the user can still
+    // see (and clean up) dangling metadata.
+    let mut orphan_ids: Vec<&str> = forks
+        .iter()
+        .filter(|f| !entry_by_id.contains_key(&f.parent_session))
+        .map(|f| f.id.as_str())
+        .collect();
+    orphan_ids.sort();
+    orphan_ids.dedup();
+    for id in orphan_ids {
+        roots.push(build_node(
+            id,
+            String::new(),
+            None,
+            false,
+            &by_parent,
+            &mut visited,
+        ));
+    }
+
+    Ok(roots)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -644,6 +825,126 @@ mod tests {
 
         let none = search_sessions("notfound").unwrap();
         assert!(none.is_empty());
+
+        match previous {
+            Some(v) => std::env::set_var("KIRKFORGE_DATA_DIR", v),
+            None => std::env::remove_var("KIRKFORGE_DATA_DIR"),
+        }
+    }
+
+    /// `build_fork_tree` on a directory with two top-level
+    /// sessions and one fork off the first should return two roots,
+    /// the first with one child, the second with none.
+    #[test]
+    fn test_build_fork_tree_nests_children() {
+        let _guard = crate::session::test_data_dir_lock().blocking_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let previous = std::env::var("KIRKFORGE_DATA_DIR").ok();
+        std::env::set_var("KIRKFORGE_DATA_DIR", dir.path());
+
+        let sessions_dir = dir.path().join("sessions");
+        std::fs::create_dir_all(&sessions_dir).unwrap();
+        std::fs::write(
+            sessions_dir.join("alpha-session.conv.ndjson"),
+            "{\"role\":\"user\",\"content\":\"hi\"}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            sessions_dir.join("beta-session.conv.ndjson"),
+            "{\"role\":\"user\",\"content\":\"hi\"}\n",
+        )
+        .unwrap();
+
+        // One fork under alpha.
+        let fork_dir = sessions_dir.join("forks").join("fork-01");
+        std::fs::create_dir_all(&fork_dir).unwrap();
+        let fork = crate::session::session_fork::Fork {
+            id: "fork-01".into(),
+            label: "explore-auth".into(),
+            path: fork_dir.join("conversation.ndjson"),
+            fork_point: 0,
+            created_at: "2026-07-25T00:00:00+00:00".into(),
+            parent_session: "alpha-session".into(),
+        };
+        std::fs::write(
+            fork_dir.join("fork.json"),
+            serde_json::to_string_pretty(&fork).unwrap(),
+        )
+        .unwrap();
+
+        let tree = build_fork_tree().expect("build tree");
+        assert_eq!(tree.len(), 2, "two top-level sessions = two roots");
+
+        // Roots are sorted by id: alpha first, then beta.
+        assert_eq!(tree[0].id, "alpha-session");
+        assert!(tree[0].is_root);
+        assert_eq!(tree[0].children.len(), 1, "alpha has one fork");
+        assert_eq!(tree[0].children[0].id, "fork-01");
+        assert_eq!(tree[0].children[0].label, "explore-auth");
+        assert!(!tree[0].children[0].is_root);
+
+        assert_eq!(tree[1].id, "beta-session");
+        assert_eq!(tree[1].children.len(), 0);
+
+        match previous {
+            Some(v) => std::env::set_var("KIRKFORGE_DATA_DIR", v),
+            None => std::env::remove_var("KIRKFORGE_DATA_DIR"),
+        }
+    }
+
+    /// `build_fork_tree` returns orphan forks (parent not in
+    /// the session set) as roots so the user still sees them.
+    #[test]
+    fn test_build_fork_tree_orphan_fork_is_a_root() {
+        let _guard = crate::session::test_data_dir_lock().blocking_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let previous = std::env::var("KIRKFORGE_DATA_DIR").ok();
+        std::env::set_var("KIRKFORGE_DATA_DIR", dir.path());
+
+        let sessions_dir = dir.path().join("sessions");
+        std::fs::create_dir_all(&sessions_dir).unwrap();
+        // No top-level sessions; just an orphan fork.
+        let fork_dir = sessions_dir.join("forks").join("orphan-fork");
+        std::fs::create_dir_all(&fork_dir).unwrap();
+        let fork = crate::session::session_fork::Fork {
+            id: "orphan-fork".into(),
+            label: String::new(),
+            path: fork_dir.join("conversation.ndjson"),
+            fork_point: 0,
+            created_at: "2026-07-25T00:00:00+00:00".into(),
+            parent_session: "missing-parent".into(),
+        };
+        std::fs::write(
+            fork_dir.join("fork.json"),
+            serde_json::to_string_pretty(&fork).unwrap(),
+        )
+        .unwrap();
+
+        let tree = build_fork_tree().expect("build tree");
+        assert_eq!(tree.len(), 1, "orphan fork is shown as a root");
+        assert_eq!(tree[0].id, "orphan-fork");
+        assert!(!tree[0].is_root, "orphan forks are flagged non-root");
+
+        match previous {
+            Some(v) => std::env::set_var("KIRKFORGE_DATA_DIR", v),
+            None => std::env::remove_var("KIRKFORGE_DATA_DIR"),
+        }
+    }
+
+    /// `build_fork_tree` returns an empty tree when no sessions
+    /// and no forks exist.
+    #[test]
+    fn test_build_fork_tree_empty() {
+        let _guard = crate::session::test_data_dir_lock().blocking_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let previous = std::env::var("KIRKFORGE_DATA_DIR").ok();
+        std::env::set_var("KIRKFORGE_DATA_DIR", dir.path());
+
+        let sessions_dir = dir.path().join("sessions");
+        std::fs::create_dir_all(&sessions_dir).unwrap();
+
+        let tree = build_fork_tree().expect("build tree");
+        assert!(tree.is_empty());
 
         match previous {
             Some(v) => std::env::set_var("KIRKFORGE_DATA_DIR", v),

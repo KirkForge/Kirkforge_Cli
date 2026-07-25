@@ -256,6 +256,30 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
             // disagrees with the model for long.
             state.last_turn_prompt_tokens = estimate_messages_tokens(&new_messages);
         }
+        TurnEvent::DoomLoopDetected {
+            count,
+            tool,
+            last_error,
+        } => {
+            // Surface the doom-loop condition in TUI state so the
+            // banner widget can render. The banner is shown when
+            // `count >= 3 && !acknowledged`; acknowledgement is a
+            // user action (break/plan/continue) handled by the
+            // banner's key handler.
+            state.doom_loop = Some(crate::tui::app::DoomLoopState {
+                count,
+                tool: tool.clone(),
+                last_error: last_error.clone(),
+                acknowledged: false,
+            });
+            state.messages.push_back(ConversationEntry::new(
+                "system",
+                format!(
+                    "🔁 Doom loop detected: {tool} has failed {count} times in a row with: {last_error}"
+                ),
+            ));
+            state.mark_dirty();
+        }
     }
 }
 
@@ -860,5 +884,66 @@ mod tests {
         assert_eq!(p.status, "downloading");
         assert_eq!(p.completed, Some(128 * 1024 * 1024));
         assert_eq!(p.total, Some(512 * 1024 * 1024));
+    }
+
+    /// `DoomLoopDetected` sets `state.doom_loop` so the banner
+    /// widget can render, marks the state dirty, and pushes a
+    /// human-readable system message into the conversation.
+    /// The banner itself is a render-time decision keyed on
+    /// `count >= THRESHOLD && !acknowledged`, so we just verify
+    /// the state here.
+    #[test]
+    fn doom_loop_detected_sets_state_and_marks_dirty() {
+        let mut s = make_state();
+        s.dirty = false;
+        assert!(s.doom_loop.is_none());
+        dispatch_turn_event(
+            &mut s,
+            TurnEvent::DoomLoopDetected {
+                count: 3,
+                tool: "bash".into(),
+                last_error: "command not found".into(),
+            },
+        );
+        let dl = s.doom_loop.as_ref().expect("doom_loop set");
+        assert_eq!(dl.count, 3);
+        assert_eq!(dl.tool, "bash");
+        assert_eq!(dl.last_error, "command not found");
+        assert!(!dl.acknowledged, "freshly-set doom loop is unacknowledged");
+        assert!(s.dirty, "doom loop event should mark state dirty");
+
+        // The system message describes the loop for the user.
+        let last = s.messages.back().expect("system message pushed");
+        assert_eq!(last.role, "system");
+        assert!(last.content.contains("bash"));
+        assert!(last.content.contains('3'));
+    }
+
+    /// A second `DoomLoopDetected` event overwrites the previous
+    /// state (the count may have grown). The banner is keyed on
+    /// the latest snapshot, not on the first one we ever saw.
+    #[test]
+    fn doom_loop_detected_overwrites_previous_state() {
+        let mut s = make_state();
+        dispatch_turn_event(
+            &mut s,
+            TurnEvent::DoomLoopDetected {
+                count: 3,
+                tool: "bash".into(),
+                last_error: "boom".into(),
+            },
+        );
+        dispatch_turn_event(
+            &mut s,
+            TurnEvent::DoomLoopDetected {
+                count: 5,
+                tool: "grep".into(),
+                last_error: "still broken".into(),
+            },
+        );
+        let dl = s.doom_loop.as_ref().expect("doom_loop still set");
+        assert_eq!(dl.count, 5);
+        assert_eq!(dl.tool, "grep");
+        assert_eq!(dl.last_error, "still broken");
     }
 }

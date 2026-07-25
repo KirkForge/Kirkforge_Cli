@@ -154,6 +154,34 @@ plugin management, persona switching, session forking/resume, and approval
 gates. Drains three event sources (user input, model stream, approval queue) in
 a single loop.
 
+The TUI also surfaces a **doom-loop warning banner** when the executor detects
+the same tool failing the same way 3 turns in a row (the
+`DoomLoopTracker` in `src/session/executor/loop_.rs`). The banner offers three
+actions — break (cancel the in-flight generation), plan (switch into plan mode
+so mutating tools are denied), and continue (dismiss). A successful tool call
+resets the tracker so the next failure starts a fresh run. The TUI is purely
+reactive: the executor owns the detector and emits a `TurnEvent::DoomLoopDetected`
+that the TUI's `dispatch_turn_event` translates into banner state.
+
+`/sessions tree` renders the fork tree as ASCII (read from
+`<data_dir>/sessions/forks/<id>/fork.json` via
+`session_index::build_fork_tree`). The result is a flat list of roots with
+`children` lists; orphan forks (parent not in the session set) are surfaced as
+roots so dangling metadata is never silently dropped. The TUI side is in
+`src/tui/commands/sessions.rs::tree_sessions_text`.
+
+The **scout subagent** (Workorder 8.2c) is the in-process, fork-free sibling
+of `/explore`. Where `/explore` always spawns a forked executor in a
+background task, the scout runs synchronously in the calling task and never
+touches the conversation log. The `ScoutSubagent` struct in
+`src/session/executor/scout.rs` holds the canonical read-only `SCOUT_TOOLS`
+allow-list (`read_file`, `read_image`, `grep`, `glob`) and exposes a
+`filter_tools` helper that drops anything not in the list. The persona side
+is `tools_for_scout` in `src/tui/commands/persona.rs`. The scout is the
+most conservative subagent surface — same read-only tools as the `/plan`
+persona, but no `bash` (the bash sandbox adds attack surface that has not
+been independently audited).
+
 ### `shared/` — cross-cutting types
 
 `Config` (decomposed into 5 `#[serde(flatten)]` sub-structs: `ModelConfig`,

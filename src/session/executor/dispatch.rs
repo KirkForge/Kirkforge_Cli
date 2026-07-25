@@ -462,6 +462,7 @@ impl Executor {
                         &mut self.conversation,
                     )
                     .await?;
+                    self.observe_tool_outcome(&tc.name, &outcome_for_emit, event_tx);
                     record(MetricEvent::ToolCall {
                         name: tc.name.clone(),
                         success: tool_outcome_success(&outcome_for_emit),
@@ -724,6 +725,7 @@ impl Executor {
                 None,
             );
         }
+        self.observe_tool_outcome(&tc.name, &outcome_for_emit, event_tx);
         record(MetricEvent::ToolCall {
             name: tc.name.clone(),
             success: tool_outcome_success(&outcome_for_emit),

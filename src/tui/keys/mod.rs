@@ -64,6 +64,63 @@ pub(crate) fn split_bang_summary(formatted: &str) -> (String, String) {
     (summary, formatted.to_string())
 }
 
+/// Apply a doom-loop banner action. Always marks the banner
+/// `acknowledged` so it hides; the chosen action also dispatches a
+/// follow-up effect (cancel generation, switch to plan mode, or
+/// just dismiss). Splitting the side effects from the key handler
+/// keeps the key handler readable.
+async fn handle_doom_action(
+    action: crate::tui::widgets::doom_banner::DoomLoopAction,
+    state: &mut AppState,
+    ctx: &HandleInputContext<'_>,
+) {
+    use crate::tui::widgets::doom_banner::DoomLoopAction;
+    if let Some(ref mut dl) = state.doom_loop {
+        dl.acknowledged = true;
+    }
+    state.mark_dirty();
+    match action {
+        DoomLoopAction::Break => {
+            // Cancel the in-flight generation. The cancel channel
+            // is the same one the user hits Ctrl+C for; it's the
+            // standard "stop what you're doing" signal.
+            crate::send_or_warn!(
+                ctx.cancel_tx.send(()),
+                "doom-loop break: cancel channel receiver dropped"
+            );
+            state.messages.push_back(ConversationEntry::new(
+                "system",
+                "⏹ Break: cancelled in-flight generation to escape the doom loop.",
+            ));
+        }
+        DoomLoopAction::Plan => {
+            // Switch into plan mode. Plan mode disables all mutating
+            // tools at the dispatch layer, so even if the model tries
+            // the same broken approach again, it cannot repeat the
+            // destructive side effect.
+            crate::send_or_warn!(
+                ctx.plan_tx.send(true),
+                "doom-loop plan: plan channel receiver dropped"
+            );
+            state.messages.push_back(ConversationEntry::new(
+                "system",
+                "📐 Plan: switched to plan mode to break the doom loop. Type /implement when ready to exit plan mode.",
+            ));
+        }
+        DoomLoopAction::Continue => {
+            // Just dismiss. The executor-side tracker keeps its
+            // window so the next identical error will re-fire the
+            // banner if the model hasn't broken out of the loop
+            // yet. That's the point — we let the user opt out of
+            // the warning without losing it.
+            state.messages.push_back(ConversationEntry::new(
+                "system",
+                "▶️ Continue: dismissed doom-loop warning. The model will keep trying; the banner will re-appear if the loop continues.",
+            ));
+        }
+    }
+}
+
 /// Handle a single key event in the regular input mode.
 ///
 /// Returns `Ok(())` after a single event. Only errors on I/O failure
@@ -75,6 +132,43 @@ pub(crate) async fn handle_input_key(
     state: &mut AppState,
     ctx: &HandleInputContext<'_>,
 ) -> anyhow::Result<()> {
+    // ── Doom-loop banner interceptor ──────────────────────────
+    // When the banner is active (state present, count >= THRESHOLD,
+    // not acknowledged), consume all key events for the banner.
+    // Left/Right move the highlight; Enter commits the selected
+    // action (break / plan / continue) and sets acknowledged = true.
+    if let Some(ref dl) = state.doom_loop {
+        if dl.count >= crate::session::executor::DoomLoopTracker::THRESHOLD && !dl.acknowledged {
+            use crate::tui::widgets::doom_banner::DoomLoopAction;
+            match key.code {
+                KeyCode::Left => {
+                    let cur = state.doom_loop_selection.index;
+                    let len = DoomLoopAction::ALL.len();
+                    state.doom_loop_selection.index = (cur + len - 1) % len;
+                    state.mark_dirty();
+                }
+                KeyCode::Right => {
+                    let cur = state.doom_loop_selection.index;
+                    let len = DoomLoopAction::ALL.len();
+                    state.doom_loop_selection.index = (cur + 1) % len;
+                    state.mark_dirty();
+                }
+                KeyCode::Enter => {
+                    let action = state.doom_loop_selection.selected();
+                    handle_doom_action(action, state, ctx).await;
+                }
+                KeyCode::Esc => {
+                    // Esc is the universal "dismiss" — treat it as
+                    // Continue so the user has a panic-out without
+                    // thinking about left/right.
+                    handle_doom_action(DoomLoopAction::Continue, state, ctx).await;
+                }
+                _ => {} // ignore other keys while the banner is up
+            }
+            return Ok(());
+        }
+    }
+
     // ── Session picker interceptor ─────────────────────────
     // When the recent-session picker overlay is active, all keys route
     // to it. Enter confirms the selection and resumes the session;

@@ -143,6 +143,45 @@ fn tools_for_persona(
     }
 }
 
+/// Build the read-only tool set for the scout subagent. The
+/// scout is a stripped-down, in-process alternative to the
+/// `/explore` persona (which always forks); it uses the same
+/// underlying `all_tools` builder, then filters through
+/// [`ScoutSubagent::filter_tools`] to enforce the read-only
+/// guarantee at the type level.
+///
+/// `undo_stack` and `supports_images` mirror the persona helpers
+/// so the two can be swapped without surprise. The remaining
+/// arguments replicate `tools_for_persona`'s plumbing; passing
+/// them through keeps the read-only tool surface identical to
+/// the per-persona read-only surface except `bash` is excluded
+/// (the scout is more conservative — see [`SCOUT_TOOLS`]).
+#[allow(clippy::too_many_arguments)]
+pub fn tools_for_scout(
+    undo_stack: Option<UndoStackRef>,
+    supports_images: bool,
+    config: &Config,
+) -> Vec<Arc<dyn Tool>> {
+    let (deny_list, path_guard, _read_gate) = crate::session::access::access_from_config(config);
+    let all = crate::tools::all_tools(
+        undo_stack,
+        supports_images,
+        deny_list,
+        path_guard,
+        config.security.bash_sandbox_workdir,
+        config.tools.minify_write_side,
+        None,
+        Some((
+            config.security.computer_use.enabled,
+            config.security.computer_use.clone(),
+        )),
+        None,
+        None,
+        Some(config.security.docker.clone()),
+    );
+    crate::session::executor::ScoutSubagent::new().filter_tools(all)
+}
+
 /// Run a persona in a fork and return the final assistant summary.
 ///
 /// This is executed inside the spawned tokio task; it builds a fresh
@@ -429,5 +468,30 @@ mod tests {
         assert!(names.contains(&"bash"));
         assert!(names.contains(&"edit_file"));
         assert!(names.contains(&"write_file"));
+    }
+
+    /// The scout toolset is a strict subset of the read-only
+    /// tools. Compared to the `/explore` persona, the scout
+    /// excludes `bash` (and its status / cancel variants) so the
+    /// scout is the most conservative subagent surface.
+    #[test]
+    fn test_tools_for_scout_is_readonly_subset() {
+        let config = Config::default();
+        let tools = tools_for_scout(None, false, &config);
+        let names: Vec<&str> = tools.iter().map(|t| t.def().name).collect();
+        // The canonical read-only tools survive.
+        for allowed in ["read_file", "grep", "glob"] {
+            assert!(
+                names.contains(&allowed),
+                "scout must include {allowed}; got {names:?}"
+            );
+        }
+        // The scout explicitly excludes mutating tools and shell.
+        for forbidden in ["edit_file", "write_file", "bash"] {
+            assert!(
+                !names.contains(&forbidden),
+                "scout must not include {forbidden}; got {names:?}"
+            );
+        }
     }
 }

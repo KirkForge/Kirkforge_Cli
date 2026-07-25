@@ -16,22 +16,27 @@ use crate::session::verifier::{
     CorrectionLoop, CorrectionResult, VerifierBus, VerifierHandler, VerifierSlots,
 };
 use crate::shared::audit::AuditLog;
+use crate::shared::metrics::{record, MetricEvent};
 use crate::shared::{read_shared_config, Config, Message, Role, SharedConfig, ToolInvocation};
 use crate::tools::{ToolContext, UndoStackRef};
 use std::sync::Arc;
 
-use helpers::tool_cancel_token;
+use helpers::{tool_cancel_token, tool_outcome_success};
+use tokio::sync::mpsc;
 
 pub(crate) mod approval;
 pub(crate) mod dispatch;
 pub(crate) mod helpers;
 pub(crate) mod loop_;
+pub(crate) mod scout;
 #[cfg(test)]
 pub(crate) mod tests;
 pub(crate) mod turn;
 pub(crate) mod types;
 
 pub use approval::{ApprovalRequest, ApprovalResponder, ApprovalResponse};
+pub use loop_::{DoomHit, DoomLoopTracker};
+pub use scout::{ScoutSubagent, SCOUT_TOOLS};
 pub use types::{CompactHookStats, TurnEvent};
 
 pub struct Executor {
@@ -88,6 +93,13 @@ pub struct Executor {
     /// Optional turn-trace recorder. When present, each completed turn
     /// is serialized as a `TurnRecord` and appended to the trace file.
     trace: Option<std::sync::Mutex<crate::session::replay::TraceRecorder>>,
+
+    /// Sliding-window detector for repeated tool errors (doom loop).
+    /// Updated on every tool outcome; when the threshold is hit, the
+    /// executor emits a `TurnEvent::DoomLoopDetected` and a
+    /// `MetricEvent::DoomLoop` so the TUI can warn the user and the
+    /// metrics log can record the incident.
+    doom_loop_tracker: DoomLoopTracker,
 }
 
 impl Executor {
@@ -243,6 +255,7 @@ impl Executor {
             session_id: String::new(),
             task_spawner: None,
             trace: None,
+            doom_loop_tracker: DoomLoopTracker::new(),
         };
         this.init_default_verifiers(plugin_registry);
         this.build_task_spawner();
@@ -644,6 +657,65 @@ impl Executor {
 
     pub fn replace_conversation(&mut self, new_log: ConversationLog) {
         self.conversation = new_log;
+    }
+
+    /// Feed a tool outcome to the doom-loop detector. If the
+    /// threshold is crossed, also emit a `TurnEvent::DoomLoopDetected`
+    /// on `event_tx` and a `MetricEvent::DoomLoop` to the metrics
+    /// log. Best-effort: a dropped `event_tx` is logged and
+    /// swallowed (the metric still records the hit).
+    pub fn observe_tool_outcome(
+        &mut self,
+        tool: &str,
+        outcome: &crate::shared::ToolOutcome,
+        event_tx: &mpsc::Sender<TurnEvent>,
+    ) {
+        // Only error outcomes count. A successful tool call also
+        // resets the tracker so the next failure starts a fresh run.
+        let is_error = !tool_outcome_success(outcome);
+        let error_text = if is_error {
+            // `ToolOutcome::Error` and `ToolOutcome::Failure` both
+            // have user-readable messages. For successful outcomes we
+            // skip and just reset the tracker.
+            let mut s = String::new();
+            match outcome {
+                crate::shared::ToolOutcome::Error { message } => {
+                    s.push_str(message);
+                }
+                crate::shared::ToolOutcome::Failure(err) => {
+                    s.push_str(&err.to_user_message());
+                }
+                _ => {
+                    // Defensive: a non-error outcome here means
+                    // `is_error` was incorrectly true; reset and
+                    // bail.
+                    self.doom_loop_tracker.reset();
+                    return;
+                }
+            }
+            s
+        } else {
+            self.doom_loop_tracker.reset();
+            return;
+        };
+
+        if let Some(hit) = self.doom_loop_tracker.observe(tool, &error_text) {
+            record(MetricEvent::DoomLoop {
+                count: hit.count,
+                tool: hit.tool.clone(),
+                last_error: hit.last_error.clone(),
+            });
+            // Best-effort TUI notification. The TUI uses this to show
+            // the warning banner; if the receiver is gone the metric
+            // is the source of truth.
+            if let Err(e) = event_tx.try_send(TurnEvent::DoomLoopDetected {
+                count: hit.count,
+                tool: hit.tool,
+                last_error: hit.last_error,
+            }) {
+                tracing::warn!(error = %e, "failed to send DoomLoopDetected to TUI");
+            }
+        }
     }
 
     /// Install a full system-prompt override (e.g. from `--system`).

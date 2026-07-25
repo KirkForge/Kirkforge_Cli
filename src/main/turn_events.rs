@@ -223,6 +223,25 @@ pub(super) fn emit_turn_events(
                     print_json_line(&line);
                 }
             }
+            session::executor::TurnEvent::DoomLoopDetected {
+                count,
+                tool,
+                last_error,
+            } => {
+                if output == kirkforge::shared::OutputFormat::Text {
+                    eprintln!(
+                        "\n[doom-loop] {tool} has failed {count} times in a row: {last_error}"
+                    );
+                } else if output == kirkforge::shared::OutputFormat::StreamJson {
+                    let line = serde_json::json!({
+                        "type": "doom_loop",
+                        "tool": tool,
+                        "count": count,
+                        "last_error": last_error,
+                    });
+                    print_json_line(&line);
+                }
+            }
         }
     }
 }

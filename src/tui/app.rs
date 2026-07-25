@@ -372,6 +372,38 @@ pub struct AppState {
     pub workflow_in_progress: Option<crate::tui::commands::WorkflowHandle>,
     /// Cancel flag for the running workflow, checked between steps.
     pub workflow_cancel: Option<Arc<AtomicBool>>,
+
+    // ── Doom loop detection (WO 8.2) ──────────────────────────────
+    /// Set when the executor reports a doom loop (same tool failing
+    /// the same way N turns in a row). `Some` with `count >= 3 &&
+    /// !acknowledged` triggers the warning banner; user action
+    /// (break/plan/continue) sets `acknowledged = true` so the
+    /// banner hides without clearing the underlying state.
+    pub doom_loop: Option<DoomLoopState>,
+    /// Banner highlight position. Independent of `DoomLoopState`
+    /// so the user can move the highlight before committing an
+    /// action. Lives on AppState (not DoomLoopState) because
+    /// resetting the underlying state on a successful tool call
+    /// shouldn't lose the user's current selection.
+    pub doom_loop_selection: crate::tui::widgets::doom_banner::DoomLoopSelection,
+}
+
+/// Snapshot of a detected doom loop. Held on `AppState` so the
+/// banner widget can render without re-querying the executor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DoomLoopState {
+    /// Number of consecutive identical tool errors so far.
+    pub count: usize,
+    /// Name of the tool that kept failing.
+    pub tool: String,
+    /// Truncated text of the most recent error.
+    pub last_error: String,
+    /// Set by the banner's key handler when the user picks one of
+    /// the three actions (break / plan / continue). The banner
+    /// hides once acknowledged; the count remains visible in
+    /// `doom_loop` until a successful tool call resets the
+    /// executor-side tracker.
+    pub acknowledged: bool,
 }
 
 /// Snapshot of an in-progress Ollama model pull.
@@ -445,6 +477,8 @@ impl AppState {
             pull_progress: None,
             workflow_in_progress: None,
             workflow_cancel: None,
+            doom_loop: None,
+            doom_loop_selection: crate::tui::widgets::doom_banner::DoomLoopSelection::default(),
         }
     }
 

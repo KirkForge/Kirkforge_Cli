@@ -869,6 +869,11 @@ async fn run_event_loop(
                 render_approval_dialog(f, size, &synthetic, state);
             }
             state.pending_approval = pending_taken;
+
+            // Doom-loop warning banner. Renders last so it sits on top
+            // of any other overlay. Skipped when acknowledged or when
+            // the underlying state hasn't crossed the threshold.
+            crate::tui::widgets::doom_banner::render_if_active(f, size, state);
         })?;
     }
 }

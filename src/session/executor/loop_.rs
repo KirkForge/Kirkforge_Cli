@@ -12,6 +12,132 @@ use super::types::CompactHookStats;
 use super::TurnEvent;
 use super::{ApprovalRequest, Executor};
 
+/// Sliding-window detector for repeated tool errors.
+///
+/// A doom loop is "the same tool failing with the same error N turns
+/// in a row" — the symptom of a model that is stuck trying the same
+/// broken approach. Tracking is intentionally narrow: only tool
+/// errors count, and the comparison is on a (tool, error) pair so a
+/// tool that fails for one reason and then for a different reason
+/// is treated as a fresh start.
+///
+/// The detector is pure and synchronous; the caller passes the result
+/// to the event bus and the metrics recorder. The threshold (3 hits
+/// within the last 5 observations) is small enough to catch a real
+/// loop quickly and large enough to ignore one-off retries.
+pub struct DoomLoopTracker {
+    /// Sliding window of (tool, error) pairs. Bounded — old entries
+    /// are evicted as new ones come in. The bound is `WINDOW` so the
+    /// structure is a tiny ring buffer.
+    window: Vec<(String, String)>,
+    /// Consecutive identical (tool, error) pair count at the tail.
+    /// Reset to 0 whenever the latest observation differs from the
+    /// previous one. Used to skip recomputing the count on every push.
+    run: usize,
+    /// Last error text we emitted a doom event for — used to avoid
+    /// re-emitting on every identical error after the threshold is
+    /// crossed.
+    last_emit: Option<String>,
+}
+
+impl DoomLoopTracker {
+    /// Number of recent tool-error observations kept in the sliding
+    /// window. Larger means the threshold scan is slower; 5 is enough
+    /// to span the threshold (3) with two slots of context.
+    pub const WINDOW: usize = 5;
+    /// Number of identical errors in a row required to flag a doom
+    /// loop. Empirically: 1 retry is normal, 2 retries is a sign of
+    /// confusion, 3 retries is a loop.
+    pub const THRESHOLD: usize = 3;
+    /// Truncation length for the persisted `last_error` so a long
+    /// stack trace does not blow up the metrics log.
+    pub const ERROR_TRUNCATE: usize = 200;
+
+    pub fn new() -> Self {
+        Self {
+            window: Vec::with_capacity(Self::WINDOW),
+            run: 0,
+            last_emit: None,
+        }
+    }
+
+    /// Record one tool error observation. Returns `Some(DoomHit)` if
+    /// this observation crosses the threshold (i.e. the count is
+    /// `>= THRESHOLD` and the latest run is different from the last
+    /// one we emitted for, to avoid spamming the same event every
+    /// subsequent identical error).
+    pub fn observe(&mut self, tool: &str, error: &str) -> Option<DoomHit> {
+        let truncated = if error.len() > Self::ERROR_TRUNCATE {
+            let mut t = String::with_capacity(Self::ERROR_TRUNCATE + 1);
+            t.push_str(&error[..Self::ERROR_TRUNCATE]);
+            t.push('…');
+            t
+        } else {
+            error.to_string()
+        };
+
+        // Update the consecutive-run count.
+        match self.window.last() {
+            Some((last_tool, last_err)) if last_tool == tool && last_err == &truncated => {
+                self.run = self.run.saturating_add(1);
+            }
+            _ => {
+                self.run = 1;
+            }
+        }
+
+        // Slide the window.
+        if self.window.len() == Self::WINDOW {
+            self.window.remove(0);
+        }
+        self.window.push((tool.to_string(), truncated.clone()));
+
+        // We only consider the LATEST run length (consecutive identical
+        // errors). A long-ago identical error is not a doom loop — it
+        // could be two completely separate failures that happen to use
+        // the same tool/error text.
+        if self.run >= Self::THRESHOLD {
+            if self.last_emit.as_deref() == Some(truncated.as_str()) {
+                return None;
+            }
+            self.last_emit = Some(truncated.clone());
+            return Some(DoomHit {
+                count: self.run,
+                tool: tool.to_string(),
+                last_error: truncated,
+            });
+        }
+        None
+    }
+
+    /// Reset the tracker (e.g. on a successful tool call, or on
+    /// user-initiated break). Called by the executor when the model
+    /// produces a non-error outcome so the next failure starts
+    /// fresh.
+    pub fn reset(&mut self) {
+        self.window.clear();
+        self.run = 0;
+        self.last_emit = None;
+    }
+}
+
+impl Default for DoomLoopTracker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// A confirmed doom loop crossing. Returned by
+/// [`DoomLoopTracker::observe`] and consumed by the executor (which
+/// emits the `TurnEvent::DoomLoopDetected` event and the
+/// `MetricEvent::DoomLoop` metric).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DoomHit {
+    pub count: usize,
+    pub tool: String,
+    pub last_error: String,
+}
+
 impl Executor {
     #[allow(clippy::too_many_arguments)]
     pub async fn run(
@@ -391,5 +517,115 @@ impl Executor {
         }
         self.flush_carryover();
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Three identical tool errors in a row should fire exactly
+    /// once. The `run` count should climb to 3 and the returned
+    /// `DoomHit` should reflect that.
+    #[test]
+    fn doom_loop_fires_on_three_identical_errors() {
+        let mut t = DoomLoopTracker::new();
+        assert!(t.observe("bash", "boom").is_none());
+        assert!(t.observe("bash", "boom").is_none());
+        let hit = t
+            .observe("bash", "boom")
+            .expect("third identical error should fire");
+        assert_eq!(hit.count, 3);
+        assert_eq!(hit.tool, "bash");
+        assert!(hit.last_error.starts_with("boom"));
+    }
+
+    /// A different error resets the consecutive run, so the next
+    /// identical error starts the count over. A doom loop is about
+    /// repetition, not about the same tool failing for different
+    /// reasons.
+    #[test]
+    fn doom_loop_resets_on_different_error() {
+        let mut t = DoomLoopTracker::new();
+        t.observe("bash", "boom");
+        t.observe("bash", "boom");
+        // Different error text breaks the run — count drops back to 1,
+        // so the threshold is not crossed.
+        assert!(t.observe("bash", "different").is_none());
+        // Two more identical errors in a row DO cross the threshold,
+        // proving the run counter restarted.
+        t.observe("bash", "different");
+        let hit = t.observe("bash", "different").expect("third after reset");
+        assert_eq!(
+            hit.count, 3,
+            "run length restarts at 1 after a different error"
+        );
+    }
+
+    /// A different tool also resets the run.
+    #[test]
+    fn doom_loop_resets_on_different_tool() {
+        let mut t = DoomLoopTracker::new();
+        t.observe("bash", "boom");
+        t.observe("bash", "boom");
+        assert!(t.observe("grep", "boom").is_none());
+        t.observe("grep", "boom");
+        let hit = t.observe("grep", "boom").expect("third after reset");
+        assert_eq!(hit.count, 3);
+    }
+
+    /// A successful tool call (caller invokes `reset()`) clears the
+    /// tracker so the next failure starts fresh.
+    #[test]
+    fn doom_loop_resets_on_success() {
+        let mut t = DoomLoopTracker::new();
+        t.observe("bash", "boom");
+        t.observe("bash", "boom");
+        t.reset();
+        // After reset, the first observation re-starts the run at 1.
+        assert!(t.observe("bash", "boom").is_none());
+        t.observe("bash", "boom");
+        let hit = t.observe("bash", "boom").expect("third after reset");
+        assert_eq!(hit.count, 3);
+    }
+
+    /// After the threshold is crossed, the tracker suppresses
+    /// subsequent identical errors so the TUI / metrics log are
+    /// not spammed. The suppression is keyed on the error text, so
+    /// a new error can re-fire immediately.
+    #[test]
+    fn doom_loop_does_not_respam_same_error() {
+        let mut t = DoomLoopTracker::new();
+        t.observe("bash", "boom");
+        t.observe("bash", "boom");
+        let hit = t
+            .observe("bash", "boom")
+            .expect("third identical error should fire");
+        assert_eq!(hit.count, 3);
+        // Fourth identical error: no new hit, because we already
+        // emitted for this text.
+        assert!(t.observe("bash", "boom").is_none());
+        // A new error text starts a fresh run.
+        assert!(t.observe("bash", "bam").is_none());
+        t.observe("bash", "bam");
+        let hit = t.observe("bash", "bam").expect("third after reset");
+        assert_eq!(hit.count, 3);
+    }
+
+    /// A long error message is truncated to keep the metrics log
+    /// line and the TUI banner readable.
+    #[test]
+    fn doom_loop_truncates_long_error() {
+        let mut t = DoomLoopTracker::new();
+        let long = "x".repeat(500);
+        t.observe("bash", &long);
+        t.observe("bash", &long);
+        let hit = t
+            .observe("bash", &long)
+            .expect("third identical error should fire");
+        // `DoomLoopTracker::ERROR_TRUNCATE + 1` for the trailing `…`.
+        let expected_len = DoomLoopTracker::ERROR_TRUNCATE + "…".len();
+        assert_eq!(hit.last_error.len(), expected_len);
+        assert!(hit.last_error.ends_with('…'));
     }
 }

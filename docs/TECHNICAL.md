@@ -154,6 +154,15 @@ plugin management, persona switching, session forking/resume, and approval
 gates. Drains three event sources (user input, model stream, approval queue) in
 a single loop.
 
+The TUI also surfaces a **doom-loop warning banner** when the executor detects
+the same tool failing the same way 3 turns in a row (the
+`DoomLoopTracker` in `src/session/executor/loop_.rs`). The banner offers three
+actions — break (cancel the in-flight generation), plan (switch into plan mode
+so mutating tools are denied), and continue (dismiss). A successful tool call
+resets the tracker so the next failure starts a fresh run. The TUI is purely
+reactive: the executor owns the detector and emits a `TurnEvent::DoomLoopDetected`
+that the TUI's `dispatch_turn_event` translates into banner state.
+
 ### `shared/` — cross-cutting types
 
 `Config` (decomposed into 5 `#[serde(flatten)]` sub-structs: `ModelConfig`,

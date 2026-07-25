@@ -5,6 +5,17 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- Doom loop detection (Workorder 8.2a): the executor tracks the last 5
+  tool-error observations in a sliding window; when 3 identical
+  `(tool, error)` pairs land in a row it emits a `TurnEvent::DoomLoopDetected`
+  to the TUI and a `MetricEvent::DoomLoop` to the metrics log. The TUI
+  surfaces a centered warning banner with three actions: break (cancel
+  the in-flight generation), plan (switch to `/plan` so mutating tools
+  are denied), and continue (dismiss). A successful tool call resets
+  the tracker so the next failure starts a fresh run. The doom loop
+  detector is pure, sync, and lives in `src/session/executor/loop_.rs`.
+
 ### Changed
 - Moved `ARCHITECTURE.md` to `docs/TECHNICAL.md` and fixed stale content
   (Stratum/Plugin3 now described as compiled-in, not standalone; bench CI

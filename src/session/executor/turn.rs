@@ -852,6 +852,7 @@ impl Executor {
                     let outcome_for_emit = outcome.clone();
                     let edit_diff =
                         handle_tool_outcome(outcome, tc, event_tx, &mut self.conversation).await?;
+                    self.observe_tool_outcome(&tc.name, &outcome_for_emit, event_tx);
                     record(MetricEvent::ToolCall {
                         name: tc.name.clone(),
                         success: tool_outcome_success(&outcome_for_emit),
@@ -952,6 +953,7 @@ impl Executor {
                 None,
             );
         }
+        self.observe_tool_outcome(&tc.name, &outcome_for_emit, event_tx);
         record(MetricEvent::ToolCall {
             name: tc.name.clone(),
             success: tool_outcome_success(&outcome_for_emit),

@@ -115,4 +115,18 @@ pub enum TurnEvent {
         /// Total bytes to download; `None` when the total is unknown.
         total: Option<u64>,
     },
+
+    /// Emitted when the executor's doom-loop detector observes the
+    /// same tool failing with the same error for at least the
+    /// threshold count. The TUI surfaces this as a warning banner
+    /// with break/plan/continue actions so the user can escape the
+    /// loop without killing the session.
+    DoomLoopDetected {
+        /// Number of consecutive identical tool errors so far.
+        count: usize,
+        /// Name of the tool that kept failing.
+        tool: String,
+        /// Truncated text of the most recent error (for display).
+        last_error: String,
+    },
 }

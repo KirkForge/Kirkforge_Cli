@@ -21,6 +21,12 @@
 | WO 7.7: KVB verifier bus bridge | Plugin-declared `Capability::Verifier` entries now register into the unified `VerifierBus` (ADR-043) via `VerifierBus::add_plugin_verifier` + `register_plugin_verifiers_into_bus`. Bus runs plugin verifiers through the host `PluginVerifier` env-cleared subprocess and tags results `VerifierSource::Plugin(name)`; error verdicts inject into the conversation. Live reload rebuilds bus plugin verifiers. Legacy `PluginVerifierAdapter` (event-driven) retained. ADR-028 updated to Accepted (partially implemented). |
 | WO 7.5: Budget and Stratum config fields | Added `stratum_mode` (Option<String>), `budget_ceiling` (usize, default 200_000), `budget_approaching_ratio` (f64, default 0.8) to `ToolConfig`. `shared_budget()` reads config defaults; `budget::init_from_config()` syncs the shared budget from the live config at executor build time. `StratumSessionStartHook` now carries a `SharedConfig` and resolves mode from config with `STRATUM_MODE` env-var override. `config.toml.example` documents the three fields. Deferred-items table cleared of the two config-field rows. |
 
+### What shipped this session (Phase 8 — coverage + WO follow-ups)
+
+| Item | What |
+|---|---|
+| WO 8.0: Raise coverage threshold for `src/session` | Bumped `src/session` tarpaulin threshold in `.github/workflows/ci.yml` from 61.0 to 62.0 after WO 7.2 added 20 real tests to the previously zero-test fold-in modules. Tarpaulin could not run to completion in the local sandbox within the WO's 5-minute budget (cold workspace compile alone exceeds it), so the threshold is set to the WO's documented fallback minimum; CI will catch any future regression below 62% on every push. |
+
 ### Deferred items (honest deferral)
 
 | Item | Why deferred |

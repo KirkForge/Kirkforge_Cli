@@ -91,6 +91,45 @@ verifies the table and the file headers agree.
 | [048](./048-draw-fold-in.md) | Draw Fold-In | Accepted | CLI |
 | [049](./049-video-fold-in.md) | Video Fold-In (Non-Default Feature) | Accepted | CLI |
 | [050](./050-plugin-system-consolidation.md) | Plugin System Consolidation | Accepted | CLI |
+| [051](./051-stratum-budget-coordination.md) | Stratum–Budget Coordination (slicing triggers compression, budget tracks compressed size) | Accepted | CLI |
+
+## Native KirkForge-Cli ADRs
+
+The same directory also holds native CLI ADRs that use the 3-digit
+numbering scheme (`001`–`017`). Recent additions:
+
+- [ADR-019: VS Code extension (Option A PTY wrapper)](./019-vscode-extension.md)
+- [ADR-024: Release cadence and semantic versioning](./024-release-cadence.md)
+- [ADR-025: Windows parity approach](./025-windows-parity.md)
+- [ADR-026: VS Code NDJSON bridge](./026-vscode-ndjson-bridge.md)
+- [ADR-027: Context management depth](./0027-context-management-depth.md)
+- [ADR-028: Unify Rust and TS verifier buses](./0028-verifier-bus-unification.md)
+- [ADR-029: Test partitioning — fast/full/coverage suites](./0029-test-partitioning.md)
+- [ADR-030: `--seed` deterministic mode](./030-deterministic-mode.md)
+- [ADR-031: Build and test verifier slots](./0031-build-test-verifier-slots.md)
+- [ADR-032: PlanReason trace events](./0032-plan-reason-events.md)
+- [ADR-033: Exponential backoff on tool-call retries](./0033-tool-retry-backoff.md)
+- [ADR-034: Mid-batch tool-result checkpointing](./0034-mid-batch-checkpoint.md)
+- [ADR-035: Git worktree per session](./035-git-worktree-per-session.md)
+- [ADR-036: Docker execution mode](./036-docker-execution-mode.md)
+- [ADR-037: Repo-graph context retrieval (prototype)](./037-repo-graph-context-retrieval.md)
+- [ADR-038: Task-benchmark harness](./038-task-benchmark-harness.md)
+- [ADR-039: Execution replay + time-travel](./039-execution-replay.md)
+- [ADR-040: VS Code extension full surface](./040-vscode-extension-full-surface.md)
+- [ADR-041: Subagent model selection](./041-subagent-model-selection.md)
+- [ADR-042: OpenCode Zen provider](./042-opencode-zen-provider.md)
+- [ADR-043: Verifier-bus bridge code](./043-verifier-bus-bridge-code.md)
+- [ADR-044: Computer-use depth (multi-step browser flows)](./044-computer-use-depth.md)
+- [ADR-045: Continuous evaluation pipeline](./045-continuous-eval-pipeline.md)
+- [ADR-046: Fold Stratum into core](./046-stratum-fold-in.md)
+- [ADR-047: Fold Plugin3 into Core](./0047-plugin3-fold-in.md)
+- [ADR-048: Draw fold-in (in-process .td.json rendering)](./048-draw-fold-in.md)
+- [ADR-049: Video fold-in (non-default feature)](./049-video-fold-in.md)
+- [ADR-050: Plugin system consolidation](./050-plugin-system-consolidation.md)
+- [ADR-051: Stratum and budget guard coordination](./051-stratum-budget-coordination.md)
+
+These are **not** part of the Plugin3 series and are therefore not
+included in the 4-digit index table above.
 
 ## Cross-references
 

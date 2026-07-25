@@ -5,6 +5,7 @@
 //! When the feature is off, the shell-plugin path (`plugins/stratum/tools/*.sh`)
 //! remains as fallback.
 
+use crate::session::budget::{BudgetSlicedEvent, BudgetSlicedListener};
 use crate::session::hooks::{HookContext, HookDecision, InProcessHook};
 use crate::shared::{ToolDef, ToolOutcome};
 use crate::tools::{Tool, ToolContext};
@@ -15,7 +16,75 @@ use kirkstratum_core::pipeline::{CompressionContext, CompressionPipeline};
 use kirkstratum_core::store::InMemoryOffloadStore;
 use serde_json::Value;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
+
+// ── Sliced-event coordination (WO 8.6) ─────────────────────────────────
+//
+// The budget guard's `apply_budget_slice` dispatches a
+// `BudgetSlicedEvent` to registered listeners when it slices a tool
+// result. Stratum registers a default listener that compresses the
+// sliced display so the model sees a single coordinated result, and
+// the session-level mode is consulted on slice to auto-escalate
+// `Lite → Full` when the budget is `Approaching`. The mode lives in
+// process-global state (separate from the config-derived
+// `active_mode()`) so the auto-escalation can outlive a single
+// `StratumSessionStartHook` call.
+
+/// Per-session Stratum mode. Distinct from the config-derived
+/// `active_mode()`: `SESSION_MODE` is the *resolved* mode for the
+/// current session and can be mutated by the budget's auto-escalation
+/// path. The config-derived mode is read-only; the session mode wins
+/// when both are consulted.
+static SESSION_MODE: OnceLock<Mutex<Mode>> = OnceLock::new();
+
+fn session_mode() -> &'static Mutex<Mode> {
+    SESSION_MODE.get_or_init(|| Mutex::new(Mode::Full))
+}
+
+/// Read the current per-session Stratum mode.
+pub fn current_session_mode() -> Mode {
+    *session_mode().lock().expect("session mode mutex poisoned")
+}
+
+/// Set the per-session Stratum mode. Intended for the budget's
+/// auto-escalation path. The new mode takes effect for the next
+/// compression call.
+pub fn set_session_mode(mode: Mode) {
+    *session_mode().lock().expect("session mode mutex poisoned") = mode;
+}
+
+/// Compress `content` using the Stratum pipeline at `mode`. Used by
+/// the default budget-sliced listener; also useful for callers that
+/// want to run the pipeline outside the in-process tool path.
+pub fn compress_for_budget(content: &str, mode: Mode) -> String {
+    let pipeline = CompressionPipeline::new();
+    let store = InMemoryOffloadStore::new();
+    let cfg = PipelineConfig::default();
+    let ctx = CompressionContext::default().with_token_budget(4096);
+    pipeline.run(content, ContentType::PlainText, &ctx, &store, &cfg, mode)
+}
+
+/// Default `BudgetSlicedEvent` listener: compresses the sliced
+/// display using the current session mode and returns the
+/// compressed string. No-op when the display already fits or when
+/// the slice marker means the result is already as small as it can
+/// be (the listener still returns `Some` so the budget records the
+/// post-compression size even if compression is identity).
+pub fn default_budget_sliced_listener() -> BudgetSlicedListener {
+    Arc::new(|event: BudgetSlicedEvent| {
+        let mode = current_session_mode();
+        let compressed = compress_for_budget(&event.sliced_display, mode);
+        Some(compressed)
+    })
+}
+
+/// Register the default Stratum compression listener on the budget
+/// guard. Idempotent: repeated calls append another listener. Tests
+/// that want a clean slate should call
+/// `crate::session::budget::clear_sliced_listeners` first.
+pub fn register_default_budget_listener() {
+    crate::session::budget::register_sliced_listener(default_budget_sliced_listener());
+}
 
 fn json_get_string(args: &Value, key: &str) -> Option<String> {
     args.get(key)
@@ -592,5 +661,61 @@ mod tests {
             HookDecision::Allow,
             "StratumPreToolBashHook is fail-open and must always Allow"
         );
+    }
+
+    // ── WO 8.6 coordination tests ──────────────────────────────────────
+
+    #[test]
+    fn session_mode_round_trip() {
+        set_session_mode(Mode::Lite);
+        assert_eq!(current_session_mode(), Mode::Lite);
+        set_session_mode(Mode::Full);
+        assert_eq!(current_session_mode(), Mode::Full);
+        set_session_mode(Mode::Ultra);
+        assert_eq!(current_session_mode(), Mode::Ultra);
+        // Reset to the default for downstream tests.
+        set_session_mode(Mode::Full);
+    }
+
+    #[test]
+    fn compress_for_budget_pipeline_runs() {
+        // The empty pipeline (no transforms registered) is
+        // identity: the input passes through unchanged for any
+        // non-Off mode. This pins that the helper actually
+        // reaches the pipeline and returns a `String`.
+        let input = "abcdefghij";
+        for mode in [Mode::Lite, Mode::Full, Mode::Ultra] {
+            let out = compress_for_budget(input, mode);
+            assert_eq!(out, input, "empty pipeline must be identity for {mode:?}");
+        }
+    }
+
+    #[test]
+    fn default_budget_sliced_listener_returns_some() {
+        set_session_mode(Mode::Full);
+        let listener = default_budget_sliced_listener();
+        let event = BudgetSlicedEvent {
+            original_size: 10_000,
+            sliced_size: 200,
+            key: "abc123".into(),
+            sliced_display: "head\n<<plugin3:slice:abc123>>\ntail".into(),
+        };
+        let replacement = listener(event);
+        assert!(replacement.is_some(), "default listener must return Some");
+    }
+
+    #[test]
+    fn register_default_budget_listener_appends_to_dispatcher() {
+        // The dispatcher lives in the budget module; verify that
+        // calling `register_default_budget_listener()` actually
+        // registers something by counting listeners.
+        crate::session::budget::clear_sliced_listeners();
+        assert_eq!(crate::session::budget::sliced_listener_count(), 0);
+        register_default_budget_listener();
+        assert!(
+            crate::session::budget::sliced_listener_count() >= 1,
+            "register_default_budget_listener must add at least one listener"
+        );
+        crate::session::budget::clear_sliced_listeners();
     }
 }

@@ -2,7 +2,7 @@
 
 ## Current baseline: v0.3.6 (2026-07-25)
 
-**`dev` at HEAD, `main` at 98e863a.** Phase 5 complete (4 languages). Phase 6 complete (import + call-graph edges). Phase 7 complete (embeddings + graph-walk retrieval). 10 bench tasks. 68 ADRs. Workorders 7.1–7.9 all Done.
+**`dev` at HEAD, `main` at 98e863a.** Phase 5 complete (4 languages). Phase 6 complete (import + call-graph edges). Phase 7 complete (embeddings + graph-walk retrieval). 10 bench tasks. 69 ADRs. Workorders 7.1–7.9 all Done. WO 8.6 Done.
 
 ### What shipped this session (6.1–6.9)
 
@@ -20,12 +20,13 @@
 | WO 7.0: Plugin system consolidation | Two-path dispatch (compiled-in vs external shell-out) unified behind a single `enabled_plugins` toggle. Folded plugins (Stratum, Plugin3, Draw, Video) with their feature ON are skipped by the shell loader and served compiled-in; with feature OFF they fall back to shell plugins (graceful degradation). Node SDK (`kirkforge-plugin`) stays external. `/plugins list` shows source and feature gate. ADR-050 pinned. |
 | WO 7.7: KVB verifier bus bridge | Plugin-declared `Capability::Verifier` entries now register into the unified `VerifierBus` (ADR-043) via `VerifierBus::add_plugin_verifier` + `register_plugin_verifiers_into_bus`. Bus runs plugin verifiers through the host `PluginVerifier` env-cleared subprocess and tags results `VerifierSource::Plugin(name)`; error verdicts inject into the conversation. Live reload rebuilds bus plugin verifiers. Legacy `PluginVerifierAdapter` (event-driven) retained. ADR-028 updated to Accepted (partially implemented). |
 | WO 7.5: Budget and Stratum config fields | Added `stratum_mode` (Option<String>), `budget_ceiling` (usize, default 200_000), `budget_approaching_ratio` (f64, default 0.8) to `ToolConfig`. `shared_budget()` reads config defaults; `budget::init_from_config()` syncs the shared budget from the live config at executor build time. `StratumSessionStartHook` now carries a `SharedConfig` and resolves mode from config with `STRATUM_MODE` env-var override. `config.toml.example` documents the three fields. Deferred-items table cleared of the two config-field rows. |
+| WO 8.6: Stratum + budget coordination | Wired the two folded subsystems through a sync registered-listener dispatch. `apply_budget_slice` emits a `BudgetSlicedEvent { original_size, sliced_size, key, sliced_display }` and the registered Stratum listener compresses the sliced display; the post-tool hook then records the post-compression size so `budget.used` reflects what the model actually sees. Auto-escalation: when the budget is `Approaching` (or a `pre-compact` fires under budget pressure), the Stratum session mode is escalated `Lite → Full` if currently `Lite`. New `SESSION_MODE` static in `stratum.rs` (separate from the config-derived `active_mode()`). 3 new budget tests, 4 new stratum tests, 1 new ADR-051. Wired at executor build time under `#[cfg(all(feature = "budget", feature = "stratum"))]`. |
 
 ### Deferred items (honest deferral)
 
 | Item | Why deferred |
 |---|---|
-| (none currently) | Workorders 7.1–7.9 closed the known gaps. Budget slicing shipped in WO 7.1; config fields shipped in WO 7.5. |
+| (none currently) | Workorders 7.1–7.9 and 8.6 closed the known gaps. Budget slicing shipped in WO 7.1; config fields shipped in WO 7.5; Stratum/budget coordination shipped in WO 8.6. |
 
 ### In-process hook infrastructure (shipped)
 

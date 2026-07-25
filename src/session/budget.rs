@@ -25,6 +25,75 @@ type SharedStore = Arc<dyn OffloadStore>;
 static SHARED_BUDGET: OnceLock<SharedBudget> = OnceLock::new();
 static SHARED_STORE: OnceLock<SharedStore> = OnceLock::new();
 
+// ── Sliced-event coordination (WO 8.6) ─────────────────────────────────
+//
+// The budget guard and Stratum (input-side compression) are folded
+// separately (ADR-046 + ADR-047) but are not coordinated. WO 8.6
+// wires them together: when the budget slices a tool result, Stratum
+// is asked to compress the sliced display so the model sees a single
+// post-coordination size, and `budget.used` reflects the post-Stratum
+// size. The dispatch is a sync registered-listener model — not the
+// async `EventBus` in `event_bus.rs` — because the slice path is
+// itself sync and the in-process test runtime is single-threaded (a
+// bus roundtrip would require `block_in_place` and panic per
+// `AGENTS.md` §7).
+
+/// Payload of a `BudgetSliced` notification. Carries the pre- and
+/// post-slice byte sizes, the offload-store key for the original
+/// middle, and the sliced display that entered the conversation.
+///
+/// Listeners (e.g. the Stratum compression hook) receive this and may
+/// return a replacement string. If they do, the budget records the
+/// post-compression size in `used` so the conversation token count
+/// reflects what the model actually sees.
+#[derive(Debug, Clone)]
+pub struct BudgetSlicedEvent {
+    pub original_size: usize,
+    pub sliced_size: usize,
+    pub key: String,
+    pub sliced_display: String,
+}
+
+/// A sync listener registered on the budget's slice path. Receives
+/// the [`BudgetSlicedEvent`] and returns an optional replacement
+/// string. Returning `Some` swaps the sliced display for the
+/// replacement; `None` leaves it unchanged.
+pub type BudgetSlicedListener = Arc<dyn Fn(BudgetSlicedEvent) -> Option<String> + Send + Sync>;
+
+static SLICED_LISTENERS: OnceLock<Mutex<Vec<BudgetSlicedListener>>> = OnceLock::new();
+
+fn sliced_listeners() -> &'static Mutex<Vec<BudgetSlicedListener>> {
+    SLICED_LISTENERS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// Register a listener that fires on every successful slice. Intended
+/// for the Stratum compression hook. The listener is invoked
+/// synchronously from `apply_budget_slice` after the slice decision
+/// is made but before the post-coordination `used` adjustment.
+pub fn register_sliced_listener(listener: BudgetSlicedListener) {
+    let mut guard = sliced_listeners()
+        .lock()
+        .expect("sliced listener mutex poisoned");
+    guard.push(listener);
+}
+
+/// Number of registered sliced listeners — for tests.
+#[cfg(test)]
+pub fn sliced_listener_count() -> usize {
+    let guard = sliced_listeners()
+        .lock()
+        .expect("sliced listener mutex poisoned");
+    guard.len()
+}
+
+#[cfg(test)]
+pub fn clear_sliced_listeners() {
+    let mut guard = sliced_listeners()
+        .lock()
+        .expect("sliced listener mutex poisoned");
+    guard.clear();
+}
+
 fn shared_budget() -> SharedBudget {
     SHARED_BUDGET
         .get_or_init(|| {
@@ -123,7 +192,19 @@ pub fn check_and_slice(
 /// are returned unchanged because slicing them would destroy structure
 /// the model needs. Records the slice via the process-global budget so
 /// the `used` counter reflects the bytes that actually enter the
-/// conversation.
+/// conversation. When sliced, dispatches a `BudgetSlicedEvent` to any
+/// registered listener (e.g. Stratum) and uses the listener's
+/// replacement string if it returns one (WO 8.6).
+///
+/// The post-tool hook (`record_tool_usage` in this module) records
+/// the `result.len() / 4` of whatever content the `ToolOutcome`
+/// carries. When a listener compresses the sliced display, the
+/// returned `ToolOutcome` already carries the compressed content, so
+/// the post-tool hook records the post-compression tokens
+/// automatically — no extra `used` bookkeeping is needed in this
+/// path. When the `stratum` feature is enabled, also calls into
+/// Stratum to auto-escalate `Lite → Full` when the budget is
+/// `Approaching`.
 pub fn apply_budget_slice(outcome: ToolOutcome) -> ToolOutcome {
     let state = {
         let budget = shared_budget();
@@ -133,16 +214,42 @@ pub fn apply_budget_slice(outcome: ToolOutcome) -> ToolOutcome {
     if state != BudgetState::Over && state != BudgetState::Approaching {
         return outcome;
     }
+    if state == BudgetState::Approaching {
+        maybe_escalate_stratum();
+    }
     let budget = shared_budget();
     let guard = budget.lock().expect("budget mutex poisoned");
     let store = shared_store();
     match outcome {
         ToolOutcome::Success { content } => {
-            match check_and_slice(&content, &guard, store.as_ref()) {
+            let original_size = content.len();
+            let action = check_and_slice(&content, &guard, store.as_ref());
+            drop(guard);
+            match action {
                 BudgetAction::Keep(kept) => ToolOutcome::Success { content: kept },
                 BudgetAction::Sliced { display, key } => {
-                    tracing::info!(key = %key, "Budget guard: sliced oversized tool result");
-                    ToolOutcome::Success { content: display }
+                    let replacement = dispatch_sliced(BudgetSlicedEvent {
+                        original_size,
+                        sliced_size: display.len(),
+                        key: key.clone(),
+                        sliced_display: display.clone(),
+                    });
+                    if let Some(new_display) = replacement {
+                        let before = display.len();
+                        let after = new_display.len();
+                        tracing::info!(
+                            key = %key,
+                            before,
+                            after,
+                            "Budget guard: slice compressed by registered listener"
+                        );
+                        ToolOutcome::Success {
+                            content: new_display,
+                        }
+                    } else {
+                        tracing::info!(key = %key, "Budget guard: sliced oversized tool result");
+                        ToolOutcome::Success { content: display }
+                    }
                 }
             }
         }
@@ -150,22 +257,89 @@ pub fn apply_budget_slice(outcome: ToolOutcome) -> ToolOutcome {
             path,
             content,
             truncated,
-        } => match check_and_slice(&content, &guard, store.as_ref()) {
-            BudgetAction::Keep(kept) => ToolOutcome::FileContent {
-                path,
-                content: kept,
-                truncated,
-            },
-            BudgetAction::Sliced { display, key } => {
-                tracing::info!(key = %key, "Budget guard: sliced oversized file content");
-                ToolOutcome::FileContent {
+        } => {
+            let original_size = content.len();
+            let action = check_and_slice(&content, &guard, store.as_ref());
+            drop(guard);
+            match action {
+                BudgetAction::Keep(kept) => ToolOutcome::FileContent {
                     path,
-                    content: display,
-                    truncated: true,
+                    content: kept,
+                    truncated,
+                },
+                BudgetAction::Sliced { display, key } => {
+                    let replacement = dispatch_sliced(BudgetSlicedEvent {
+                        original_size,
+                        sliced_size: display.len(),
+                        key: key.clone(),
+                        sliced_display: display.clone(),
+                    });
+                    if let Some(new_display) = replacement {
+                        let before = display.len();
+                        let after = new_display.len();
+                        tracing::info!(
+                            key = %key,
+                            before,
+                            after,
+                            "Budget guard: file-content slice compressed by registered listener"
+                        );
+                        ToolOutcome::FileContent {
+                            path,
+                            content: new_display,
+                            truncated: true,
+                        }
+                    } else {
+                        tracing::info!(key = %key, "Budget guard: sliced oversized file content");
+                        ToolOutcome::FileContent {
+                            path,
+                            content: display,
+                            truncated: true,
+                        }
+                    }
                 }
             }
-        },
+        }
         other => other,
+    }
+}
+
+/// Dispatch a `BudgetSlicedEvent` to all registered listeners. The
+/// first listener that returns `Some` wins; the rest are skipped for
+/// this event. Returns `None` if no listener returned a replacement.
+fn dispatch_sliced(event: BudgetSlicedEvent) -> Option<String> {
+    let listeners = sliced_listeners()
+        .lock()
+        .expect("sliced listener mutex poisoned");
+    for listener in listeners.iter() {
+        if let Some(replacement) = listener(event.clone()) {
+            return Some(replacement);
+        }
+    }
+    None
+}
+
+/// Auto-escalate Stratum's session mode from `Lite` to `Full` when
+/// the budget is `Approaching`. No-op when the `stratum` feature is
+/// off, when the session mode is already `Full`/`Ultra`/`Off`, or
+/// when the budget is `Over` (which already implies aggressive
+/// intervention via the slicing path itself). WO 8.6.
+fn maybe_escalate_stratum() {
+    #[cfg(feature = "stratum")]
+    {
+        use kirkstratum_core::mode::Mode;
+        let current = crate::session::stratum::current_session_mode();
+        if current == Mode::Lite {
+            crate::session::stratum::set_session_mode(Mode::Full);
+            tracing::info!(
+                from = "lite",
+                to = "full",
+                "Budget Approaching: auto-escalated Stratum mode"
+            );
+        }
+    }
+    #[cfg(not(feature = "stratum"))]
+    {
+        let _ = (); // stratum feature off: no escalation
     }
 }
 
@@ -520,6 +694,13 @@ impl InProcessHook for PreCompactHook {
                 if state == BudgetState::Over { "exceeded" } else { "approaching limit" }
             );
             budget.used = 0;
+            drop(budget);
+            // WO 8.6: pre-compact with budget pressure is the
+            // natural escalation point for Stratum. Future
+            // post-compaction tool outputs will be compressed
+            // more aggressively. Idempotent — already at Full
+            // or Ultra is a no-op.
+            maybe_escalate_stratum();
         }
         HookDecision::Allow
     }
@@ -908,5 +1089,135 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(hook.handle(&ctx), HookDecision::Allow);
+    }
+
+    // ── WO 8.6 coordination tests ──────────────────────────────────────
+
+    /// Listener dispatch: a registered listener that returns
+    /// `Some(replacement)` replaces the sliced display and the
+    /// returned `ToolOutcome` carries the replacement. Verifies
+    /// the `BudgetSlicedEvent` carries the original size, the
+    /// sliced size, the offload key, and the sliced display
+    /// (the listener needs all of them to make a decision).
+    #[test]
+    fn test_apply_budget_slice_dispatches_to_sliced_listener() {
+        let _guard = shared_budget_test_lock().blocking_lock();
+        clear_sliced_listeners();
+        reset_shared_budget(1000, 900);
+        // Register a listener that returns a known short string.
+        // We do NOT exercise Stratum here — the test only verifies
+        // the budget's dispatch surface.
+        let captured: std::sync::Arc<std::sync::Mutex<Option<BudgetSlicedEvent>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(None));
+        let captured_clone = captured.clone();
+        register_sliced_listener(std::sync::Arc::new(move |event: BudgetSlicedEvent| {
+            *captured_clone.lock().unwrap() = Some(event.clone());
+            Some(format!("compressed:{}", event.sliced_size))
+        }));
+        let big = "q".repeat(10_000);
+        let outcome = ToolOutcome::Success { content: big };
+        let sliced = apply_budget_slice(outcome);
+        match sliced {
+            ToolOutcome::Success { content } => {
+                assert!(
+                    content.starts_with("compressed:"),
+                    "sliced Success must carry the listener replacement, got: {content:?}"
+                );
+            }
+            other => panic!("expected sliced Success, got {other:?}"),
+        }
+        let event = captured
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("listener received event");
+        assert_eq!(event.original_size, 10_000);
+        assert!(event.sliced_size > 0 && event.sliced_size < 10_000);
+        assert_eq!(event.key.len(), 24, "key must be the 24-hex content key");
+        assert!(
+            event.sliced_display.contains("<<plugin3:slice:"),
+            "sliced_display must carry the slice marker, got: {:?}",
+            event.sliced_display
+        );
+        clear_sliced_listeners();
+    }
+
+    /// Auto-escalation: when budget is `Approaching` and Stratum
+    /// is in `Lite`, `apply_budget_slice` escalates the session
+    /// mode to `Full`. Gated by the `stratum` feature because the
+    /// escalation target lives in the stratum module.
+    #[cfg(feature = "stratum")]
+    #[test]
+    fn test_apply_budget_slice_auto_escalates_lite_to_full_on_approaching() {
+        use crate::session::stratum::{current_session_mode, set_session_mode};
+        use kirkstratum_core::mode::Mode;
+
+        let _guard = shared_budget_test_lock().blocking_lock();
+        clear_sliced_listeners();
+        reset_shared_budget(1000, 850);
+        // Force Approaching (850/1000 = 0.85 ≥ 0.8) and seed the
+        // session mode as Lite.
+        set_session_mode(Mode::Lite);
+        assert_eq!(current_session_mode(), Mode::Lite);
+        // Run a slice path. The result content doesn't matter
+        // for escalation — it triggers on state == Approaching.
+        let big = "x".repeat(10_000);
+        let _ = apply_budget_slice(ToolOutcome::Success { content: big });
+        assert_eq!(
+            current_session_mode(),
+            Mode::Full,
+            "Approaching budget must auto-escalate Stratum from Lite to Full"
+        );
+        // Reset to default and clean up listeners.
+        set_session_mode(Mode::Full);
+        clear_sliced_listeners();
+    }
+
+    /// `PreCompactHook` with budget pressure must escalate the
+    /// Stratum session mode. Idempotent: re-running when the
+    /// mode is already `Full` is a no-op.
+    #[cfg(feature = "stratum")]
+    #[test]
+    fn test_pre_compact_hook_runs_stratum_compression() {
+        use crate::session::stratum::{current_session_mode, set_session_mode};
+        use kirkstratum_core::mode::Mode;
+
+        let _guard = shared_budget_test_lock().blocking_lock();
+        reset_shared_budget(1000, 850);
+        // Seed session mode as Lite.
+        set_session_mode(Mode::Lite);
+        assert_eq!(current_session_mode(), Mode::Lite);
+
+        let hook = PreCompactHook {
+            budget: shared_budget(),
+        };
+        let ctx = HookContext {
+            event: "pre-compact".into(),
+            compact_stats: Some(crate::session::hooks::CompactHookStatsData {
+                message_count: 10,
+                preserve_recent: 5,
+                original_count: 20,
+                result_count: 12,
+                dropped_tool_results: 0,
+                condensed_assistant_turns: 1,
+                summarised_messages: 0,
+                strategy: "summarize".into(),
+            }),
+            ..Default::default()
+        };
+        assert_eq!(hook.handle(&ctx), HookDecision::Allow);
+        assert_eq!(
+            current_session_mode(),
+            Mode::Full,
+            "PreCompactHook with Approaching budget must escalate Stratum from Lite to Full"
+        );
+        // Idempotent: a second PreCompactHook with budget still
+        // Approaching must remain at Full.
+        assert_eq!(hook.handle(&ctx), HookDecision::Allow);
+        assert_eq!(current_session_mode(), Mode::Full);
+
+        // Reset.
+        set_session_mode(Mode::Full);
+        reset_shared_budget(200_000, 0);
     }
 }

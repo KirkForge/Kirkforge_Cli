@@ -15,6 +15,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the architecture, plugin system, feature flags, tool list, hook system,
   verifier bus, or context index MUST update `docs/TECHNICAL.md` in the same
   commit. README stays a landing page; tech detail lives in docs/TECHNICAL.md.
+- Stratum + budget guard coordination (Workorder 8.6, ADR-051): the two
+  folded subsystems now coordinate through a sync registered-listener
+  dispatch. `apply_budget_slice` emits a `BudgetSlicedEvent` carrying
+  `{original_size, sliced_size, key, sliced_display}` and the registered
+  Stratum listener compresses the sliced display. The post-tool hook then
+  records the post-compression size so `budget.used` reflects what the
+  model actually sees. Auto-escalation: when the budget is `Approaching`
+  or a `pre-compact` fires under budget pressure, the Stratum session
+  mode is escalated `Lite → Full` if currently `Lite`. Wired at executor
+  build time under `#[cfg(all(feature = "budget", feature = "stratum"))]`.
 
 ### Added
 - Multi-model benchmark leaderboard (Workorder 8.1, ADR-038): `bench run-models

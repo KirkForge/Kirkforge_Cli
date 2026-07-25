@@ -562,7 +562,10 @@ pub fn build_fork_tree() -> anyhow::Result<Vec<SessionTreeNode>> {
     let mut by_parent: std::collections::HashMap<String, Vec<&crate::session::session_fork::Fork>> =
         std::collections::HashMap::new();
     for f in &forks {
-        by_parent.entry(f.parent_session.clone()).or_default().push(f);
+        by_parent
+            .entry(f.parent_session.clone())
+            .or_default()
+            .push(f);
     }
     // Sort each child's forks by id for stable output.
     for children in by_parent.values_mut() {
@@ -579,10 +582,7 @@ pub fn build_fork_tree() -> anyhow::Result<Vec<SessionTreeNode>> {
         label: String,
         message_count: Option<usize>,
         is_root: bool,
-        by_parent: &std::collections::HashMap<
-            String,
-            Vec<&crate::session::session_fork::Fork>,
-        >,
+        by_parent: &std::collections::HashMap<String, Vec<&crate::session::session_fork::Fork>>,
         visited: &mut std::collections::HashSet<String>,
     ) -> SessionTreeNode {
         let children = if visited.insert(id.to_string()) {

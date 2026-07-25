@@ -67,7 +67,7 @@ plugin validation, and language-specific edge cases.
 |---|---|---|---|---|
 | 8.0 | [Raise coverage threshold](8.0-raise-coverage-threshold.md) | Planned | Medium | 7.2 |
 | 8.1 | [Multi-model benchmark leaderboard](8.1-multi-model-leaderboard.md) | Planned | High | — |
-| 8.2 | [TUI parity: doom loop + session nav](8.2-tui-parity-doom-loop.md) | Planned | Medium | — |
+| 8.2 | [TUI parity: doom loop + session nav](8.2-tui-parity-doom-loop.md) | Done | Medium | — |
 | 8.3 | [Bench task realism: self-contained + plugin tools](8.3-bench-task-realism.md) | Planned | Medium | 7.8 |
 | 8.4 | [Embedding quality: evaluate and tune TF-IDF](8.4-embedding-quality.md) | Planned | High | 7.9 |
 | 8.5 | [ADR index table unification](8.5-adr-index-unification.md) | Planned | Low | — |

@@ -28,6 +28,7 @@ pub(crate) mod approval;
 pub(crate) mod dispatch;
 pub(crate) mod helpers;
 pub(crate) mod loop_;
+pub(crate) mod scout;
 #[cfg(test)]
 pub(crate) mod tests;
 pub(crate) mod turn;
@@ -35,6 +36,7 @@ pub(crate) mod types;
 
 pub use approval::{ApprovalRequest, ApprovalResponder, ApprovalResponse};
 pub use loop_::{DoomHit, DoomLoopTracker};
+pub use scout::{ScoutSubagent, SCOUT_TOOLS};
 pub use types::{CompactHookStats, TurnEvent};
 
 pub struct Executor {

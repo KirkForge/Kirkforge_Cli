@@ -24,6 +24,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   builder is `session_index::build_fork_tree`; the renderer is in
   `src/tui/commands/sessions.rs`. No new dependencies (no
   `tui-tree-widget`).
+- Scout subagent (Workorder 8.2c): a read-only in-process exploration
+  helper that mirrors `/explore`'s tool surface minus `bash`. The
+  `ScoutSubagent` struct in `src/session/executor/scout.rs` holds the
+  canonical `SCOUT_TOOLS` allow-list and exposes a `filter_tools`
+  helper that drops anything not in the list. `tools_for_scout` in
+  `src/tui/commands/persona.rs` builds the full toolset and runs the
+  scout filter, so the read-only guarantee is enforced at the type
+  level (not a string check at the prompt layer). The scout is the
+  conservative sibling of `/explore`: same read-only tools, but no
+  fork, no model turn, no conversation pollution.
 
 ### Changed
 - Moved `ARCHITECTURE.md` to `docs/TECHNICAL.md` and fixed stale content

@@ -1,3 +1,4 @@
+use crate::session::error_recovery;
 use crate::session::event_bus::{BusEvent, EditEvent, FileWriteEvent};
 /// Build verifier — runs `cargo build` on Rust files and reports compiler errors.
 ///
@@ -49,8 +50,13 @@ fn parse_build_json(line: &str, target_path: &Path, cargo_root: &Path) -> Option
         let line_start = span.get("line_start").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
         let resolved = cargo_root.join(file_name);
         if resolved == target_path {
+            let mut description = format!("{text} at {file_name}:{line_start}");
+            if let Some(hint) = error_recovery::classify_error(&text) {
+                description.push('\n');
+                description.push_str(&error_recovery::render_hint(&hint));
+            }
             return Some(FixSuggestion {
-                description: format!("{text} at {file_name}:{line_start}"),
+                description,
                 file: target_path.to_path_buf(),
                 original: String::new(),
                 replacement: String::new(),
@@ -102,10 +108,16 @@ pub async fn verify_build(event: &BusEvent) -> Verdict {
 
     // Could not extract a concrete finding — report the first few stderr lines.
     let stderr = String::from_utf8_lossy(&output.stderr);
+    let stderr_summary = stderr.lines().take(5).collect::<Vec<_>>().join("\n");
+    let mut details = stderr_summary;
+    if let Some(hint) = error_recovery::classify_error(&stderr) {
+        details.push('\n');
+        details.push_str(&error_recovery::render_hint(&hint));
+    }
     Verdict::Unfixable(VerificationError {
         description: "cargo build failed".into(),
         file: Some(path),
-        details: stderr.lines().take(5).collect::<Vec<_>>().join("\n"),
+        details,
     })
 }
 
@@ -149,6 +161,31 @@ mod tests {
         assert!(suggestion.original.is_empty());
         assert!(suggestion.replacement.is_empty());
         assert!(suggestion.command.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_parse_build_json_attaches_hint_for_missing_import() {
+        let line = r#"{"reason":"compiler-message","package_id":"foo 0.1.0","target":{"kind":["bin"],"name":"foo","src_path":"/tmp/foo/src/main.rs"},"message":{"rendered":"error: cannot find value `frobnicate` in this scope\n  --> src/main.rs:1:1\n\n","level":"error","message":"cannot find value `frobnicate` in this scope","spans":[{"file_name":"src/main.rs","line_start":1,"line_end":1,"column_start":1,"column_end":10}]}}"#;
+        let cargo_root = std::path::PathBuf::from("/tmp/foo");
+        let target = std::path::PathBuf::from("/tmp/foo/src/main.rs");
+        let suggestion = parse_build_json(line, &target, &cargo_root).unwrap();
+        assert!(
+            suggestion.description.contains("Hint:"),
+            "expected Hint line in description, got: {}",
+            suggestion.description,
+        );
+        assert!(suggestion.description.contains("`frobnicate`"));
+    }
+
+    #[tokio::test]
+    async fn test_parse_build_json_no_hint_for_unclassified_message() {
+        // Generic text that doesn't match any classifier — the description
+        // should be the raw error and nothing else.
+        let line = r#"{"reason":"compiler-message","package_id":"foo 0.1.0","target":{"kind":["bin"],"name":"foo","src_path":"/tmp/foo/src/main.rs"},"message":{"rendered":"error: something custom\n","level":"error","message":"something custom happened","spans":[{"file_name":"src/main.rs","line_start":1,"line_end":1,"column_start":1,"column_end":2}]}}"#;
+        let cargo_root = std::path::PathBuf::from("/tmp/foo");
+        let target = std::path::PathBuf::from("/tmp/foo/src/main.rs");
+        let suggestion = parse_build_json(line, &target, &cargo_root).unwrap();
+        assert!(!suggestion.description.contains("Hint:"));
     }
 
     // This test spawns `cargo build` in a temporary project. It cannot run

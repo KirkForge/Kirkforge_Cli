@@ -33,14 +33,14 @@ Workorders 7.1-7.9 address findings from the honest codebase assessment
 
 | # | Workorder | Status | Priority | Depends on |
 |---|---|---|---|---|
-| 7.1 | [Budget slicing action](7.1-budget-slicing-action.md) | Planned | High | 6.7 |
-| 7.2 | [Fold-in unit tests](7.2-fold-in-unit-tests.md) | Planned | High | 6.6-6.9 |
-| 7.3 | [Fix bench CI gate theater](7.3-bench-gate-theater.md) | Planned | Medium | 6.3 |
-| 7.4 | [Remove legacy spec-drift tests](7.4-remove-legacy-spec-drift.md) | Planned | Low | — |
-| 7.5 | [Budget and Stratum config fields](7.5-budget-stratum-config.md) | Planned | Medium | 7.1 |
-| 7.6 | [Windows test parity](7.6-windows-test-parity.md) | Planned | Medium | — |
-| 7.7 | [KVB verifier bus bridge](7.7-kvb-verifier-bus-bridge.md) | Planned | Medium | 7.0 |
-| 7.8 | [Bench task expansion](7.8-bench-task-expansion.md) | Planned | Medium | — |
+| 7.1 | [Budget slicing action](7.1-budget-slicing-action.md) | Done | High | 6.7 |
+| 7.2 | [Fold-in unit tests](7.2-fold-in-unit-tests.md) | Done | High | 6.6-6.9 |
+| 7.3 | [Fix bench CI gate theater](7.3-bench-gate-theater.md) | Done | Medium | 6.3 |
+| 7.4 | [Remove legacy spec-drift tests](7.4-remove-legacy-spec-drift.md) | Done | Low | — |
+| 7.5 | [Budget and Stratum config fields](7.5-budget-stratum-config.md) | Done | Medium | 7.1 |
+| 7.6 | [Windows test parity](7.6-windows-test-parity.md) | Done | Medium | — |
+| 7.7 | [KVB verifier bus bridge](7.7-kvb-verifier-bus-bridge.md) | Done | Medium | 7.0 |
+| 7.8 | [Bench task expansion](7.8-bench-task-expansion.md) | Done | Medium | — |
 | 7.9 | [Context index Phase 7: embeddings + graph-walk](7.9-context-index-phase7.md) | Done | High | — |
 
 ### Priority rationale
@@ -56,6 +56,35 @@ Workorders 7.1-7.9 address findings from the honest codebase assessment
 - **7.3, 7.5, 7.6, 7.7, 7.8 (Medium)**: Important hardening but not
   capability-blocking.
 - **7.4 (Low)**: Dead weight cleanup. No functional impact.
+
+### Series 8.0-8.9 — Production Hardening
+
+Workorders 8.0-8.9 address findings from the second production-readiness
+assessment (A- overall). They target coverage, retrieval quality, TUI parity,
+plugin validation, and language-specific edge cases.
+
+| # | Workorder | Status | Priority | Depends on |
+|---|---|---|---|---|
+| 8.0 | [Raise coverage threshold](8.0-raise-coverage-threshold.md) | Planned | Medium | 7.2 |
+| 8.1 | [Multi-model benchmark leaderboard](8.1-multi-model-leaderboard.md) | Planned | High | — |
+| 8.2 | [TUI parity: doom loop + session nav](8.2-tui-parity-doom-loop.md) | Planned | Medium | — |
+| 8.3 | [Bench task realism: self-contained + plugin tools](8.3-bench-task-realism.md) | Planned | Medium | 7.8 |
+| 8.4 | [Embedding quality: evaluate and tune TF-IDF](8.4-embedding-quality.md) | Planned | High | 7.9 |
+| 8.5 | [ADR index table unification](8.5-adr-index-unification.md) | Planned | Low | — |
+| 8.6 | [Stratum + budget guard coordination](8.6-stratum-budget-coordination.md) | Planned | Medium | 7.1, 7.5 |
+| 8.7 | [Error recovery: structured hints](8.7-error-recovery-hints.md) | Planned | Medium | — |
+| 8.8 | [Plugin manifest schema validation](8.8-plugin-manifest-validation.md) | Planned | Medium | — |
+| 8.9 | [Context index: TS/Python/Go edge cases](8.9-context-index-edge-cases.md) | Planned | Medium | — |
+
+### Priority rationale
+
+- **8.1 (High)**: Multi-model comparison is the headline bench feature. The
+  single-model harness limits the value of the benchmark system.
+- **8.4 (High)**: The TF-IDF embeddings work but quality is unmeasured. Poor
+  retrieval quality undermines the context index's value proposition.
+- **8.0, 8.2, 8.3, 8.6, 8.7, 8.8, 8.9 (Medium)**: Important hardening but not
+  capability-blocking.
+- **8.5 (Low)**: Documentation cleanup. No functional impact.
 
 ## Conventions
 

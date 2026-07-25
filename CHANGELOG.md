@@ -17,11 +17,19 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   commit. README stays a landing page; tech detail lives in docs/TECHNICAL.md.
 
 ### Added
-- Context index Phase 7 (ADR-037): hybrid retrieval — TF-IDF sparse-vector
-  embeddings + graph-walk BFS over import/call edges, dispatched by query
-  shape (exact name → graph walk, free text → embedding cosine, substring →
-  legacy `retrieve`). Pure Rust, zero new deps. `PromptBuilder` now calls
-  `retrieve_hybrid`.
+- Budget slicing action (Workorder 7.1): the Plugin3 budget guard is now an
+  ACTIVE guard, not a passive monitor. `check_and_slice` in `src/session/budget.rs`
+  intercepts oversized tool results before they enter the conversation — when
+  the budget is `Over` or `Approaching`, the result is sliced (head + tail with
+  a slice marker) via `plugin3_core::slicing::HeadTailSlicer` and the full
+  content is stored in the offload store (retrievable via `store_get`). The
+  sliced result enters the conversation. Closes the deferred "Plugin3 hook
+  action" item from `state.md`.
+- Context index Phase 7 (Workorder 7.9, ADR-037): hybrid retrieval — TF-IDF
+  sparse-vector embeddings + graph-walk BFS over import/call edges, dispatched
+  by query shape (exact name → graph walk, free text → embedding cosine,
+  substring → legacy `retrieve`). Pure Rust, zero new deps. `PromptBuilder`
+  now calls `retrieve_hybrid`.
 - In-process hooks for the Stratum, Plugin3, and Draw fold-ins. The 7 hooks
   that were previously shell scripts (or deferred) are now in-process Rust
   handlers built on shared infrastructure, eliminating the lossy env-var/canned-
@@ -138,6 +146,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 - ADR-0031/0032 H1 title numbers corrected to match filenames (were off-by-one).
 - ADR-0034 stale line reference updated (`turn.rs:264` → `turn.rs:1283`).
+- Windows test parity (Workorder 7.6): fixed 123 Windows CI test failures and
+  removed `continue-on-error: true` from the Windows test step so Windows
+  regressions are now blocking. Added `.gitattributes` to normalize line
+  endings, and `shell_program()` bash discovery so Windows resolves `bash`
+  via PATH lookup instead of hard-coding `/bin/bash`. ADR-025 updated to
+  "Accepted (fully implemented)".
 
 ## [0.3.5] - 2026-07-22
 

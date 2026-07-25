@@ -6,9 +6,10 @@
 //!    Index table resolves to an existing file. A contributor who
 //!    renames or removes an ADR without updating the index fails
 //!    CI before a reader hits a dead link.
-//! 2. The total count of `- **Status:** Accepted` (and
-//!    `Deferred`) headers across `docs/adr/*.md` matches the
-//!    per-status entries listed in the Index table.
+//! 2. The total count of Status headers across `docs/adr/*.md` (for
+//!    ADRs indexed in the table) matches the per-status entries
+//!    listed in the Index table. Handles both header formats: the
+//!    bullet form `- **Status:** X` and the heading form `## Status`.
 //!
 //! ponytail: the parser is a handful of `split('|')` lines. A full
 //! markdown AST would let us catch nested references, but the
@@ -81,31 +82,97 @@ fn parse_link_cell(cell: &str) -> Option<(String, String)> {
     Some((num.to_string(), file.to_string()))
 }
 
-/// Walk every ADR file and tally its declared `- **Status:** X` header.
-fn count_statuses(dir: &Path) -> BTreeMap<String, usize> {
-    let mut counts = BTreeMap::new();
+/// Walk every ADR file and collect `(num, file, status)` records.
+///
+/// ponytail: the merged `docs/adr/` dir holds two naming conventions
+/// side by side — 4-digit Plugin3 ADRs (`0047-plugin3-fold-in.md`) and
+/// 3-digit native CLI ADRs (`046-stratum-fold-in.md`). A digit-prefix
+/// filter like `stem[..4].all_ascii_digit()` is blind to the 3-digit
+/// scheme (the 4th char is `-`, not a digit), so it silently drops
+/// recent ADRs from the count. We take the leading digit run instead,
+/// which handles both, and count every non-README `.md` file.
+fn collect_adr_records(dir: &Path) -> Vec<(String, String, String)> {
+    let mut records = Vec::new();
     let entries = std::fs::read_dir(dir).expect("docs/adr/ readable");
     for e in entries.flatten() {
         let p = e.path();
         if p.extension().and_then(|s| s.to_str()) != Some("md") {
             continue;
         }
-        let stem = p.file_name().unwrap().to_string_lossy().to_string();
-        if stem == "README.md" {
+        let file = p.file_name().unwrap().to_string_lossy().to_string();
+        if file == "README.md" {
             continue;
         }
-        // In the merged repo we only validate plugin3's 4-digit ADRs.
-        // CLI-native ADRs use a 3-digit scheme and a different header format.
-        let is_plugin3_adr = stem.len() >= 4 && stem[..4].chars().all(|c| c.is_ascii_digit());
-        if !is_plugin3_adr {
-            continue;
-        }
+        let num = adr_number_from_stem(&file)
+            .unwrap_or_else(|| panic!("ADR {file} has no leading digit run in its filename"));
         let body = std::fs::read_to_string(&p).expect("ADR readable");
-        let status = body
-            .lines()
-            .find_map(|l| l.strip_prefix("- **Status:** ").map(str::trim))
-            .unwrap_or_else(|| panic!("ADR {stem} missing `- **Status:**` header"));
-        *counts.entry(status.to_string()).or_insert(0) += 1;
+        let status = parse_status_header(&body)
+            .unwrap_or_else(|| panic!("ADR {file} missing a parseable Status header"));
+        records.push((num, file, status));
+    }
+    records
+}
+
+/// Pull the leading digit run from an ADR filename stem. Handles both
+/// the 3-digit scheme (`046-stratum-fold-in` → `046`) and the 4-digit
+/// scheme (`0047-plugin3-fold-in` → `0047`).
+fn adr_number_from_stem(stem: &str) -> Option<String> {
+    let digits: String = stem.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if digits.is_empty() {
+        None
+    } else {
+        Some(digits)
+    }
+}
+
+/// Parse the Status header from an ADR body. The merged dir uses three
+/// header formats:
+///
+///   - `- **Status:** X`  (bullet + bold label, value inline)
+///   - `**Status:** X`    (bold label, no bullet, value inline)
+///   - `## Status`        (heading, blank line, then value on its own line)
+///
+/// ponytail: a single `strip_prefix` only catches the first form and
+/// was the original blind spot — ADRs 043/046/048/049 use the heading
+/// form and 030/035/036/037 use the bare-bold form, so they were
+/// silently dropped. We try all three and return the first match.
+fn parse_status_header(body: &str) -> Option<String> {
+    let lines: Vec<&str> = body.lines().collect();
+    for (i, line) in lines.iter().enumerate() {
+        let t = line.trim();
+        if let Some(rest) = t.strip_prefix("- **Status:**") {
+            return Some(rest.trim().to_string());
+        }
+        if let Some(rest) = t.strip_prefix("**Status:**") {
+            return Some(rest.trim().to_string());
+        }
+        if t == "## Status" {
+            // Value sits on the next non-empty line after the heading.
+            for nxt in lines.iter().skip(i + 1) {
+                let nt = nxt.trim();
+                if !nt.is_empty() {
+                    return Some(nt.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Tally statuses for the ADRs whose number appears in the Index table.
+/// The table only indexes the Plugin3 4-digit series; the 3-digit
+/// native CLI ADRs live in a bulleted list and are out of scope for the
+/// table-vs-file count agreement, but `collect_adr_records` still
+/// validates they carry a parseable Status header.
+fn count_statuses_for_table(
+    records: &[(String, String, String)],
+    table_nums: &std::collections::BTreeSet<String>,
+) -> BTreeMap<String, usize> {
+    let mut counts = BTreeMap::new();
+    for (num, _file, status) in records {
+        if table_nums.contains(num) {
+            *counts.entry(status.clone()).or_insert(0) += 1;
+        }
     }
     counts
 }
@@ -149,10 +216,13 @@ fn status_counts_match_index_table_summary() {
     let rows = parse_index_table(&readme);
 
     let mut table_counts: BTreeMap<String, usize> = BTreeMap::new();
-    for (_num, _file, _title, status) in &rows {
+    let mut table_nums = std::collections::BTreeSet::new();
+    for (num, _file, _title, status) in &rows {
         *table_counts.entry(status.clone()).or_insert(0) += 1;
+        table_nums.insert(num.clone());
     }
-    let file_counts = count_statuses(&adr_dir());
+    let records = collect_adr_records(&adr_dir());
+    let file_counts = count_statuses_for_table(&records, &table_nums);
     assert_eq!(
         table_counts, file_counts,
         "ADR Index table summary disagrees with file Status headers:\n\
@@ -174,7 +244,12 @@ fn deferred_adrs_consistent_between_index_and_files() {
         std::fs::read_to_string(adr_dir().join("README.md")).expect("docs/adr/README.md exists");
     let rows = parse_index_table(&readme);
     let deferred: usize = rows.iter().filter(|(_, _, _, s)| s == "Deferred").count();
-    let file_counts = count_statuses(&adr_dir());
+    let mut table_nums = std::collections::BTreeSet::new();
+    for (num, _file, _title, _status) in &rows {
+        table_nums.insert(num.clone());
+    }
+    let records = collect_adr_records(&adr_dir());
+    let file_counts = count_statuses_for_table(&records, &table_nums);
     let file_deferred = file_counts.get("Deferred").copied().unwrap_or(0);
     assert_eq!(
         deferred, file_deferred,

@@ -1,8 +1,8 @@
 # KirkForge-Cli Production-Readiness State
 
-## Current baseline: v0.3.5 (2026-07-24)
+## Current baseline: v0.3.6 (2026-07-25)
 
-**`dev` at HEAD, `main` at 6f1e37d.** Phase 5 complete (4 languages). Phase 6 complete (import + call-graph edges). 10 bench tasks. 68 ADRs.
+**`dev` at HEAD, `main` at 98e863a.** Phase 5 complete (4 languages). Phase 6 complete (import + call-graph edges). Phase 7 complete (embeddings + graph-walk retrieval). 10 bench tasks. 68 ADRs. Workorders 7.1–7.9 all Done.
 
 ### What shipped this session (6.1–6.9)
 
@@ -25,7 +25,7 @@
 
 | Item | Why deferred |
 |---|---|
-| Plugin3 hook action (slicing/compacting tool results in the turn loop) | The 4 hooks are in-process and receive real event context, but they observe and report budget usage only; they do not yet slice/compact tool results before they enter the conversation. |
+| (none currently) | Workorders 7.1–7.9 closed the known gaps. Budget slicing shipped in WO 7.1; config fields shipped in WO 7.5. |
 
 ### In-process hook infrastructure (shipped)
 
@@ -57,5 +57,4 @@ The hooks for WO 6.6/6.7/6.8 are now in-process Rust handlers (no shell scripts)
 |---|---|---|
 | P1-long-1 Phase 7 — Embeddings/graph-walk retrieval | 2-3 weeks | Done (2026-07-24) |
 | P1-long-2 follow-up (cont.) — Multi-model leaderboard | 1-2 weeks | Future |
-| Plugin3 hook action (slice/compact in turn loop) | 1-2 weeks | Deferred |
 | More TUI parity | ongoing | Future |

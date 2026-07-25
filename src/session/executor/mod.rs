@@ -211,6 +211,14 @@ impl Executor {
                 .add_in_process_hook(Box::new(crate::session::stratum::StratumPreToolBashHook));
             tracing::info!("stratum session-start and pre-tool-bash hooks registered");
         }
+        #[cfg(all(feature = "budget", feature = "stratum"))]
+        {
+            // WO 8.6: register Stratum's default compression listener on
+            // the budget's slice path so a slice triggers compression
+            // and the post-tool hook records the post-compression size.
+            crate::session::stratum::register_default_budget_listener();
+            tracing::info!("stratum->budget slice listener registered");
+        }
         #[cfg(feature = "budget")]
         {
             crate::session::budget::init_from_config(&cfg);
@@ -608,6 +616,10 @@ impl Executor {
             ));
             hook_runner
                 .add_in_process_hook(Box::new(crate::session::stratum::StratumPreToolBashHook));
+        }
+        #[cfg(all(feature = "budget", feature = "stratum"))]
+        {
+            crate::session::stratum::register_default_budget_listener();
         }
         #[cfg(feature = "budget")]
         {

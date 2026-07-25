@@ -286,6 +286,14 @@ The `session-start` hook emits the active ruleset so the model knows the
 compression contract; the `pre-tool-bash` hook validates config to surface
 drift early. Both hooks are in-process Rust handlers when compiled in.
 
+Stratum also coordinates with the Plugin3 budget guard (Workorder 8.6,
+ADR-051): when the budget slices a tool result, a registered Stratum listener
+compresses the sliced display so the model sees a single coordinated
+post-compression size, and the Stratum session mode auto-escalates `Lite →
+Full` when the budget is `Approaching`. The coordination is a sync
+registered-listener dispatch (not the async `EventBus`) because the slice path
+is itself sync.
+
 ---
 
 ## Token budget (Plugin3)
@@ -297,7 +305,7 @@ approached or exceeded:
 | State | Action |
 |---|---|
 | `Under` | Allow |
-| `Approaching` (≥80% of ceiling) | Warn |
+| `Approaching` (≥80% of ceiling) | Warn; auto-escalate Stratum `Lite → Full` (Workorder 8.6) |
 | `Over` | Slice the largest recent tool output, or compact if no single slice fits |
 
 The orchestrator (`SlicingOrchestrator`) classifies tool outputs, slices
@@ -309,8 +317,12 @@ Cost reporting tracks per-turn usage. Plugin3 ships as a compiled-in module
 The 4 in-process hooks receive full `HookContext` with real tool result content
 and compact metadata — the lossy canned-JSON shim that existed when Plugin3 ran
 as a shell plugin is eliminated (ADR-047). The hooks observe and report budget
-usage; active slicing of tool results before they enter the conversation is a
-deferred follow-up (Workorder 7.1).
+usage; active slicing of tool results before they enter the conversation shipped
+in Workorder 7.1 (`check_and_slice` in `src/session/budget.rs`).
+
+`PreCompactHook` (in `src/session/budget.rs`) escalates the Stratum session
+mode to `Full` when a `pre-compact` fires under budget pressure, so the next
+tool-result cycle uses more aggressive compression.
 
 ---
 

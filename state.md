@@ -2,15 +2,7 @@
 
 ## Current baseline: v0.3.6 (2026-07-25)
 
-**`dev` at HEAD, `main` at 98e863a.** Phase 5 complete (4 languages). Phase 6 complete (import + call-graph edges). Phase 7 complete (embeddings + graph-walk retrieval). 10 bench tasks. 68 ADRs. Workorders 7.1–7.9 all Done. Workorders 8.1, 8.2, 8.4, 8.5, 8.6 Done.
-
-### What shipped this session (8.2)
-
-| Item | What |
-|---|---|
-| WO 8.2a: Doom loop detection | `DoomLoopTracker` (sliding window of 5 tool errors; fires at 3 identical). `TurnEvent::DoomLoopDetected` to TUI + `MetricEvent::DoomLoop` to metrics. Centered warning banner with break / plan / continue actions. Successful tool call resets the tracker. |
-| WO 8.2b: `/sessions tree` | `session_index::build_fork_tree()` reads `<data_dir>/sessions/forks/<id>/fork.json` and groups forks under their parent. ASCII renderer with `├─` / `└─` / `│` connectors. Orphan forks listed as roots. No new dependencies (no `tui-tree-widget`). |
-| WO 8.2c: Scout subagent | `ScoutSubagent` struct + `SCOUT_TOOLS` allow-list (`read_file`, `read_image`, `grep`, `glob`). `filter_tools()` enforces the read-only guarantee at the type level. `tools_for_scout` in `persona.rs` builds the full toolset and runs the filter. No `bash` — the scout is the most conservative subagent surface. |
+**`dev` at HEAD, `main` at 98e863a.** Phase 5 complete (4 languages). Phase 6 complete (import + call-graph edges). Phase 7 complete (embeddings + graph-walk retrieval). 24 bench tasks. 69 ADRs. Workorders 7.1–7.9 all Done. Workorders 8.0, 8.2, 8.3, 8.6 Done.
 
 ### What shipped this session (6.1–6.9)
 
@@ -29,12 +21,7 @@
 | WO 7.7: KVB verifier bus bridge | Plugin-declared `Capability::Verifier` entries now register into the unified `VerifierBus` (ADR-043) via `VerifierBus::add_plugin_verifier` + `register_plugin_verifiers_into_bus`. Bus runs plugin verifiers through the host `PluginVerifier` env-cleared subprocess and tags results `VerifierSource::Plugin(name)`; error verdicts inject into the conversation. Live reload rebuilds bus plugin verifiers. Legacy `PluginVerifierAdapter` (event-driven) retained. ADR-028 updated to Accepted (partially implemented). |
 | WO 7.5: Budget and Stratum config fields | Added `stratum_mode` (Option<String>), `budget_ceiling` (usize, default 200_000), `budget_approaching_ratio` (f64, default 0.8) to `ToolConfig`. `shared_budget()` reads config defaults; `budget::init_from_config()` syncs the shared budget from the live config at executor build time. `StratumSessionStartHook` now carries a `SharedConfig` and resolves mode from config with `STRATUM_MODE` env-var override. `config.toml.example` documents the three fields. Deferred-items table cleared of the two config-field rows. |
 | WO 8.3: Bench task realism | Converted 5 real-repo tasks (add_adr, add_cli_flag, add_test_for_function, fix_clippy_warning, refactor_extract_function) to self-contained `setup_files` form. Added 4 new tasks that exercise plugin tools (use_stratum_compress, use_budget_check, use_draw_render, use_lsp_query). `use_workflow_run` deferred — no `Tool` impl exists for `kirkforge-workflow`. `build_bench_toolset` not extended (verify-only does not invoke tools). 13/24 tasks pass `verify-only` after this WO (up from 5/20). 11 pre-existing tasks still fail due to a flaw in their file_contains verify specs — out of WO 8.3 scope. |
-
-### What shipped this session (Phase 8 — coverage + WO follow-ups)
-
-| Item | What |
-|---|---|
-| WO 8.0: Raise coverage threshold for `src/session` | Bumped `src/session` tarpaulin threshold in `.github/workflows/ci.yml` from 61.0 to 62.0 after WO 7.2 added 20 real tests to the previously zero-test fold-in modules. Tarpaulin could not run to completion in the local sandbox within the WO's 5-minute budget (cold workspace compile alone exceeds it), so the threshold is set to the WO's documented fallback minimum; CI will catch any future regression below 62% on every push. |
+| WO 8.6: Stratum + budget coordination | Wired the two folded subsystems through a sync registered-listener dispatch. `apply_budget_slice` emits a `BudgetSlicedEvent { original_size, sliced_size, key, sliced_display }` and the registered Stratum listener compresses the sliced display; the post-tool hook then records the post-compression size so `budget.used` reflects what the model actually sees. Auto-escalation: when the budget is `Approaching` (or a `pre-compact` fires under budget pressure), the Stratum session mode is escalated `Lite → Full` if currently `Lite`. New `SESSION_MODE` static in `stratum.rs` (separate from the config-derived `active_mode()`). 3 new budget tests, 4 new stratum tests, 1 new ADR-051. Wired at executor build time under `#[cfg(all(feature = "budget", feature = "stratum"))]`. |
 
 ### Deferred items (honest deferral)
 

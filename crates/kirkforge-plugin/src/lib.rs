@@ -363,7 +363,7 @@ fn check_relative_command_path(path: &Path) -> Result<(), String> {
     if as_str.is_empty() {
         return Err("command path must not be empty".to_string());
     }
-    if path.is_absolute() {
+    if path.is_absolute() || as_str.starts_with('/') {
         return Err(format!(
             "command path '{as_str}' must be relative to the plugin root"
         ));

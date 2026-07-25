@@ -15,6 +15,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   are denied), and continue (dismiss). A successful tool call resets
   the tracker so the next failure starts a fresh run. The doom loop
   detector is pure, sync, and lives in `src/session/executor/loop_.rs`.
+- `/sessions tree` subcommand (Workorder 8.2b): renders the fork tree
+  by reading `<data_dir>/sessions/forks/<id>/fork.json` and grouping
+  forks under their parent session. The text output uses
+  `├─`/`└─`/`│` connectors so the structure is visible in any
+  terminal. Orphan forks (parent not in the session set) are listed
+  as roots so dangling metadata is never silently dropped. The tree
+  builder is `session_index::build_fork_tree`; the renderer is in
+  `src/tui/commands/sessions.rs`. No new dependencies (no
+  `tui-tree-widget`).
 
 ### Changed
 - Moved `ARCHITECTURE.md` to `docs/TECHNICAL.md` and fixed stale content

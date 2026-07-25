@@ -8,6 +8,8 @@
 //! Subcommands:
 //! - `/sessions`              — list all sessions (newest first)
 //! - `/sessions list`         — alias for the bare command
+//! - `/sessions search`       — search by id, date, or content
+//! - `/sessions tree`         — render the fork tree (WO 8.2b)
 //! - `/sessions prune [N]`    — delete the oldest N, keep 10 most recent
 //! - `/sessions prune N keep K` — explicit form
 //! - `/sessions delete <id>`  — delete a single session by id or prefix
@@ -15,7 +17,7 @@
 use crate::session::session_index;
 use crate::tui::app::AppState;
 
-/// Handle `/sessions [list|search|prune|delete]`.
+/// Handle `/sessions [list|search|tree|prune|delete]`.
 pub fn handle_sessions_command(args: &str, _state: &mut AppState) -> String {
     let args = args.trim();
     let mut parts = args.split_whitespace();
@@ -27,6 +29,7 @@ pub fn handle_sessions_command(args: &str, _state: &mut AppState) -> String {
             Some(query) => search_sessions_text(query),
             None => "Usage: /sessions search <query>".to_string(),
         },
+        "tree" => tree_sessions_text(),
         "prune" => {
             // /sessions prune [N] [keep K]
             let n: usize = parts.next().and_then(|s| s.parse().ok()).unwrap_or(5);
@@ -52,6 +55,7 @@ Usage:
   /sessions                  List all sessions (newest first)
   /sessions list             Same as above
   /sessions search <query>  Search by id, date, message count, or message content
+  /sessions tree             Render the fork tree (forks nested under their parent)
   /sessions prune [N] [keep K]
                              Delete the oldest N sessions, keeping
                              the K most recent. Defaults: N=5, K=10.
@@ -62,6 +66,68 @@ Each line in the NDJSON is a JSON message in the conversation.
 
 Tip: combine with /resume <id> to load a prior session into the
 current TUI.";
+
+/// Render the fork tree as an ASCII text tree. This is the
+/// read-only counterpart of `list_sessions_text`: it groups forks
+/// under their parent session so the user can see the structure
+/// `/fork` produced.
+fn tree_sessions_text() -> String {
+    match session_index::build_fork_tree() {
+        Ok(roots) if roots.is_empty() => "No sessions found.".to_string(),
+        Ok(roots) => {
+            let mut out = String::from("Session fork tree:\n");
+            for (i, root) in roots.iter().enumerate() {
+                let is_last_root = i + 1 == roots.len();
+                render_tree_node(&mut out, root, "", is_last_root);
+            }
+            out.push_str(
+                "\nTip: use /sessions delete <id> to remove a session, or /sessions prune to clean up the oldest roots.",
+            );
+            out
+        }
+        Err(e) => format!("Error building fork tree: {e}"),
+    }
+}
+
+/// Recursive helper that prints a single `SessionTreeNode` and
+/// its children. The `prefix` carries the tree-drawing characters
+/// the parent already drew; the child segments get one extra
+/// branch character appended per level.
+fn render_tree_node(
+    out: &mut String,
+    node: &session_index::SessionTreeNode,
+    prefix: &str,
+    is_last: bool,
+) {
+    let connector = if is_last { "└─ " } else { "├─ " };
+    let label = if node.label.is_empty() {
+        String::new()
+    } else {
+        format!(" — {}", node.label)
+    };
+    let counts = match node.message_count {
+        Some(n) => format!(" ({n} msgs)"),
+        None => String::new(),
+    };
+    let kind = if node.is_root { "" } else { " [fork]" };
+    out.push_str(&format!(
+        "{prefix}{connector}{id}{kind}{counts}{label}\n",
+        prefix = prefix,
+        connector = connector,
+        id = node.id,
+        kind = kind,
+        counts = counts,
+        label = label,
+    ));
+    // The next-level prefix extends the current branch line —
+    // either nothing (if the current node was the last child)
+    // or a vertical bar (if there are more siblings below).
+    let next_prefix = format!("{prefix}{}", if is_last { "   " } else { "│  " });
+    for (i, child) in node.children.iter().enumerate() {
+        let child_is_last = i + 1 == node.children.len();
+        render_tree_node(out, child, &next_prefix, child_is_last);
+    }
+}
 
 /// Format the search results as a multi-line table.
 fn search_sessions_text(query: &str) -> String {
@@ -272,5 +338,85 @@ mod tests {
         let out = handle_sessions_command("foo", &mut state);
         assert!(out.contains("Unknown"));
         assert!(out.contains("/sessions"));
+    }
+
+    /// `/sessions tree` returns the header even on an empty
+    /// data dir. We don't reach the real disk here — `tree_sessions_text`
+    /// would, but the no-sessions path is the same as the other
+    /// subcommands' no-sessions path and the real-tree test lives
+    /// in `session_index::build_fork_tree`.
+    #[test]
+    fn test_handle_sessions_tree_runs() {
+        let mut state = AppState::new(std::sync::Arc::new(std::sync::RwLock::new(
+            crate::shared::Config::default(),
+        )));
+        let out = handle_sessions_command("tree", &mut state);
+        // Either "No sessions found" or a tree — both are fine, but
+        // it must not panic and must produce some output.
+        assert!(!out.is_empty());
+    }
+
+    /// `render_tree_node` produces the expected tree-drawing
+    /// characters for a single root with two children, and the
+    /// children are visually nested under the root via the
+    /// vertical bar continuation.
+    #[test]
+    fn test_render_tree_node_nests_children() {
+        use session_index::SessionTreeNode;
+        let mut out = String::new();
+        let root = SessionTreeNode {
+            id: "2026-06-10-session-01".into(),
+            label: String::new(),
+            message_count: Some(7),
+            is_root: true,
+            children: vec![
+                SessionTreeNode {
+                    id: "fork-01".into(),
+                    label: "explore-auth".into(),
+                    message_count: None,
+                    is_root: false,
+                    children: vec![],
+                },
+                SessionTreeNode {
+                    id: "fork-02".into(),
+                    label: "explore-db".into(),
+                    message_count: None,
+                    is_root: false,
+                    children: vec![],
+                },
+            ],
+        };
+        // The root has a next sibling, so the connector is `├─`
+        // and the children prefix keeps a vertical bar.
+        render_tree_node(&mut out, &root, "", false);
+        assert!(out.contains("2026-06-10-session-01"));
+        assert!(out.contains("fork-01"));
+        assert!(out.contains("fork-02"));
+        assert!(out.contains("explore-auth"));
+        assert!(out.contains("(7 msgs)"));
+        assert!(out.contains("[fork]"));
+        // Tree-drawing characters: at least one `├─` and one `│`.
+        assert!(out.contains("├─ "));
+        assert!(out.contains("│"));
+    }
+
+    /// `render_tree_node` for a single last root uses the
+    /// `└─` connector and no continuation bar so the children
+    /// don't carry a dangling `│`.
+    #[test]
+    fn test_render_tree_node_last_root_uses_corner() {
+        use session_index::SessionTreeNode;
+        let mut out = String::new();
+        let root = SessionTreeNode {
+            id: "last".into(),
+            label: String::new(),
+            message_count: None,
+            is_root: true,
+            children: vec![],
+        };
+        render_tree_node(&mut out, &root, "", true);
+        assert!(out.contains("└─ last"));
+        // No children → no vertical bar continuation.
+        assert!(!out.contains("│"));
     }
 }

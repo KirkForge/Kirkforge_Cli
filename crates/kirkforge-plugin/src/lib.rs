@@ -81,9 +81,333 @@ impl PluginManifest {
         }
     }
 
+    /// Validate the manifest's semantic constraints.
+    ///
+    /// Collects every error it finds (does not short-circuit on the first) and
+    /// returns `Err(Vec<ValidationError>)` if any rule fails. Pure: no I/O, no
+    /// filesystem checks — just structural and format validation against the
+    /// rules documented in `docs/workorders/8.8-plugin-manifest-validation.md`.
+    pub fn validate(&self) -> Result<(), Vec<ValidationError>> {
+        let mut errors = Vec::new();
+
+        if self.name.is_empty() {
+            errors.push(ValidationError::new("name", "name must not be empty"));
+        } else if !is_valid_plugin_name(&self.name) {
+            errors.push(ValidationError::new(
+                "name",
+                "name must contain only lowercase alphanumeric segments joined by single hyphens (e.g. 'my-plugin')",
+            ));
+        }
+
+        if !is_valid_semver(&self.version) {
+            errors.push(ValidationError::new(
+                "version",
+                "version must be valid semver (MAJOR.MINOR.PATCH, optional pre-release and build)",
+            ));
+        }
+
+        match self.api_version {
+            ApiVersion::V1 => {}
+        }
+
+        let mut skill_triggers: std::collections::HashMap<&str, usize> =
+            std::collections::HashMap::new();
+        let mut tool_names: std::collections::HashMap<&str, usize> =
+            std::collections::HashMap::new();
+        let mut verifier_names: std::collections::HashMap<&str, usize> =
+            std::collections::HashMap::new();
+
+        for (idx, cap) in self.capabilities.iter().enumerate() {
+            let path = format!("capabilities[{idx}]");
+            match cap {
+                Capability::Skill {
+                    trigger,
+                    skill_file,
+                    prompt,
+                    ..
+                } => {
+                    if !trigger.starts_with('/') {
+                        errors.push(ValidationError::new(
+                            format!("{path}.trigger"),
+                            "skill trigger must start with '/'",
+                        ));
+                    }
+                    if trigger.is_empty() {
+                        errors.push(ValidationError::new(
+                            format!("{path}.trigger"),
+                            "skill trigger must not be empty",
+                        ));
+                    }
+                    if prompt.is_empty() && skill_file.is_none() {
+                        errors.push(ValidationError::new(
+                            path.clone(),
+                            "skill must declare a non-empty 'prompt' or a 'skill-file'",
+                        ));
+                    }
+                    if let Some(prev) = skill_triggers.insert(trigger.as_str(), idx) {
+                        errors.push(ValidationError::new(
+                            format!("{path}.trigger"),
+                            format!("skill trigger '{trigger}' duplicates capabilities[{prev}]"),
+                        ));
+                    }
+                }
+                Capability::Tool {
+                    name,
+                    schema,
+                    command,
+                    ..
+                } => {
+                    if name.is_empty() {
+                        errors.push(ValidationError::new(
+                            format!("{path}.name"),
+                            "tool name must not be empty",
+                        ));
+                    }
+                    if let Some(cmd) = command {
+                        if let Err(e) = check_relative_command_path(cmd) {
+                            errors.push(ValidationError::new(format!("{path}.command"), e));
+                        }
+                    }
+                    if !is_valid_tool_schema(schema) {
+                        errors.push(ValidationError::new(
+                            format!("{path}.schema"),
+                            "tool schema must be a JSON object with a valid optional 'type' field",
+                        ));
+                    }
+                    if !name.is_empty() {
+                        if let Some(prev) = tool_names.insert(name.as_str(), idx) {
+                            errors.push(ValidationError::new(
+                                format!("{path}.name"),
+                                format!("tool name '{name}' duplicates capabilities[{prev}]"),
+                            ));
+                        }
+                    }
+                }
+                Capability::Hook { event, command } => {
+                    if !is_known_event(event) {
+                        errors.push(ValidationError::new(
+                            format!("{path}.event"),
+                            format!(
+                                "hook event '{event}' is not a known event (allowed: {})",
+                                KNOWN_EVENTS.join(", ")
+                            ),
+                        ));
+                    }
+                    if let Err(e) = check_relative_command_path(command) {
+                        errors.push(ValidationError::new(format!("{path}.command"), e));
+                    }
+                }
+                Capability::Verifier { name, .. } => {
+                    if name.is_empty() {
+                        errors.push(ValidationError::new(
+                            format!("{path}.name"),
+                            "verifier name must not be empty",
+                        ));
+                    }
+                    if !name.is_empty() {
+                        if let Some(prev) = verifier_names.insert(name.as_str(), idx) {
+                            errors.push(ValidationError::new(
+                                format!("{path}.name"),
+                                format!("verifier name '{name}' duplicates capabilities[{prev}]"),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+
     /// True if the plugin declares at least one capability of `kind`.
     pub fn has_capability(&self, kind: CapabilityKind) -> bool {
         self.capabilities.iter().any(|c| c.kind() == kind)
+    }
+}
+
+/// A single manifest validation error. `path` is a dotted/indexed locator
+/// (e.g. `capabilities[2].command`) so the host can present it back to the
+/// user. Serialize/Deserialize allow the error to flow across plugin-host
+/// boundaries.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ValidationError {
+    pub path: String,
+    pub message: String,
+}
+
+impl ValidationError {
+    pub fn new(path: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            path: path.into(),
+            message: message.into(),
+        }
+    }
+}
+
+impl std::fmt::Display for ValidationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.path, self.message)
+    }
+}
+
+/// Canonical hook event names emitted by the runtime. Manifests declaring
+/// any other event name will fail validation.
+pub const KNOWN_EVENTS: &[&str] = &[
+    "session-start",
+    "pre-turn",
+    "post-turn",
+    "pre-tool-bash",
+    "post-tool-bash",
+    "pre-compact",
+    "post-compact",
+];
+
+/// True if `event` is one of the canonical hook event names.
+fn is_known_event(event: &str) -> bool {
+    KNOWN_EVENTS.contains(&event)
+}
+
+/// True if `name` is a non-empty, kebab-case identifier: lowercase
+/// alphanumeric segments joined by single hyphens, no leading/trailing
+/// hyphen and no consecutive hyphens.
+fn is_valid_plugin_name(name: &str) -> bool {
+    if name.is_empty() || name.starts_with('-') || name.ends_with('-') {
+        return false;
+    }
+    let mut prev_was_hyphen = false;
+    for ch in name.chars() {
+        if ch == '-' {
+            if prev_was_hyphen {
+                return false;
+            }
+            prev_was_hyphen = true;
+        } else if ch.is_ascii_lowercase() || ch.is_ascii_digit() {
+            prev_was_hyphen = false;
+        } else {
+            return false;
+        }
+    }
+    true
+}
+
+/// Minimal semver `MAJOR.MINOR.PATCH` validator with optional pre-release
+/// (`-…`) and build (`+…`) suffixes. Each numeric component is parsed
+/// without leading zeros (except the literal `"0"`). Pre-release and
+/// build segments may contain `[0-9A-Za-z-]` separated by `.`. This is
+/// not a full semver 2.0.0 implementation — it is a tight subset that
+/// rejects obvious garbage (empty parts, leading zeros on non-zero
+/// numbers, non-ASCII, etc.) and accepts everything a reasonable
+/// plugin author will write.
+fn is_valid_semver(version: &str) -> bool {
+    let mut parts = version.split('+');
+    let core = parts.next().unwrap_or("");
+    let (core, pre) = match core.split_once('-') {
+        Some((c, p)) => (c, Some(p)),
+        None => (core, None),
+    };
+    let Some((major, rest)) = core.split_once('.') else {
+        return false;
+    };
+    let Some((minor, patch)) = rest.split_once('.') else {
+        return false;
+    };
+    if !is_numeric_component(major) || !is_numeric_component(minor) || !is_numeric_component(patch)
+    {
+        return false;
+    }
+    if let Some(pre) = pre {
+        if !is_valid_dot_separated_idents(pre) {
+            return false;
+        }
+    }
+    for build in parts {
+        if !is_valid_dot_separated_idents(build) {
+            return false;
+        }
+    }
+    true
+}
+
+fn is_numeric_component(s: &str) -> bool {
+    if s.is_empty() {
+        return false;
+    }
+    if s.len() > 1 && s.starts_with('0') {
+        return false;
+    }
+    s.chars().all(|c| c.is_ascii_digit())
+}
+
+fn is_valid_dot_separated_idents(s: &str) -> bool {
+    if s.is_empty() {
+        return false;
+    }
+    s.split('.').all(is_valid_ident)
+}
+
+fn is_valid_ident(s: &str) -> bool {
+    if s.is_empty() {
+        return false;
+    }
+    s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+}
+
+/// True if `path` looks like a relative command path that does not
+/// escape the plugin root.
+fn check_relative_command_path(path: &Path) -> Result<(), String> {
+    let as_str = path.to_str().unwrap_or("");
+    if as_str.is_empty() {
+        return Err("command path must not be empty".to_string());
+    }
+    if path.is_absolute() {
+        return Err(format!(
+            "command path '{as_str}' must be relative to the plugin root"
+        ));
+    }
+    if as_str.contains('\\') {
+        return Err(format!(
+            "command path '{as_str}' must use forward slashes, not backslashes"
+        ));
+    }
+    for component in path.components() {
+        if matches!(component, std::path::Component::ParentDir) {
+            return Err(format!(
+                "command path '{as_str}' must not contain '..' segments"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// True if `value` is a JSON Schema object suitable for a tool argument
+/// schema. Accepts `Null` (the empty/default schema) or an object with
+/// at most a `type` field whose value is one of the JSON Schema primitive
+/// types. The full JSON Schema 2020-12 spec is not enforced — the host
+/// validator (in `src/session/executor/helpers.rs`) handles detailed
+/// checks. This is just an upfront structural sanity check.
+fn is_valid_tool_schema(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Null => true,
+        serde_json::Value::Object(map) => {
+            if map.is_empty() {
+                return true;
+            }
+            match map.get("type") {
+                None => true,
+                Some(serde_json::Value::String(s)) => {
+                    matches!(
+                        s.as_str(),
+                        "object" | "string" | "number" | "integer" | "boolean" | "array" | "null"
+                    )
+                }
+                Some(_) => false,
+            }
+        }
+        _ => false,
     }
 }
 
@@ -396,5 +720,255 @@ prompt = "Demo task: {{args}}"
             plugin.skill_prompt("/demo", "hello"),
             Some("Demo task: hello".to_string())
         );
+    }
+
+    mod validate_tests {
+        use super::*;
+
+        fn base_manifest() -> PluginManifest {
+            PluginManifest {
+                name: "demo-plugin".into(),
+                version: "1.2.3".into(),
+                description: "demo".into(),
+                api_version: ApiVersion::V1,
+                trust: TrustTier::ReadOnly,
+                capabilities: Vec::new(),
+                metadata: HashMap::new(),
+            }
+        }
+
+        fn tool_cap(name: &str, command: &str) -> Capability {
+            Capability::Tool {
+                name: name.into(),
+                description: "test".into(),
+                schema: serde_json::json!({"type": "object"}),
+                command: Some(PathBuf::from(command)),
+            }
+        }
+
+        fn hook_cap(event: &str, command: &str) -> Capability {
+            Capability::Hook {
+                event: event.into(),
+                command: PathBuf::from(command),
+            }
+        }
+
+        fn skill_cap(trigger: &str, prompt: &str) -> Capability {
+            Capability::Skill {
+                trigger: trigger.into(),
+                prompt: prompt.into(),
+                skill_file: None,
+                model_hint: None,
+            }
+        }
+
+        fn verifier_cap(name: &str) -> Capability {
+            Capability::Verifier {
+                name: name.into(),
+                priority: 0,
+                command: None,
+            }
+        }
+
+        fn assert_path(errors: &[ValidationError], path: &str) {
+            assert!(
+                errors.iter().any(|e| e.path == path),
+                "expected error at path '{path}', got: {errors:?}"
+            );
+        }
+
+        #[test]
+        fn valid_manifest_passes() {
+            let m = base_manifest();
+            assert!(m.validate().is_ok(), "{:?}", m.validate());
+        }
+
+        #[test]
+        fn name_must_be_non_empty() {
+            let mut m = base_manifest();
+            m.name = String::new();
+            let errs = m.validate().unwrap_err();
+            assert_path(&errs, "name");
+        }
+
+        #[test]
+        fn name_rejects_uppercase_and_special_chars() {
+            for bad in ["Bad", "bad_name", "-leading", "trailing-", "dou--ble"] {
+                let mut m = base_manifest();
+                m.name = bad.into();
+                let errs = m.validate().unwrap_err();
+                assert_path(&errs, "name");
+            }
+        }
+
+        #[test]
+        fn version_rejects_invalid_semver() {
+            for bad in ["1.2", "1.2.3.4", "v1.2.3", "01.2.3", "1.2.3-", ""] {
+                let mut m = base_manifest();
+                m.version = bad.into();
+                let errs = m.validate().unwrap_err();
+                assert_path(&errs, "version");
+            }
+        }
+
+        #[test]
+        fn version_accepts_pre_release_and_build() {
+            for good in [
+                "1.0.0",
+                "0.0.0",
+                "1.2.3-alpha",
+                "1.2.3-alpha.1",
+                "1.2.3-rc.1+build.42",
+                "10.20.30",
+            ] {
+                let mut m = base_manifest();
+                m.version = good.into();
+                assert!(m.validate().is_ok(), "version {good} should be valid");
+            }
+        }
+
+        #[test]
+        fn tool_command_must_be_relative() {
+            let mut m = base_manifest();
+            m.capabilities.push(tool_cap("bad/abs", "/bin/sh"));
+            let errs = m.validate().unwrap_err();
+            assert_path(&errs, "capabilities[0].command");
+        }
+
+        #[test]
+        fn tool_command_must_not_contain_parent_dir() {
+            let mut m = base_manifest();
+            m.capabilities.push(tool_cap("bad/parent", "../evil.sh"));
+            let errs = m.validate().unwrap_err();
+            assert_path(&errs, "capabilities[0].command");
+        }
+
+        #[test]
+        fn tool_schema_with_invalid_type_is_rejected() {
+            let mut m = base_manifest();
+            m.capabilities.push(Capability::Tool {
+                name: "ok".into(),
+                description: String::new(),
+                schema: serde_json::json!({"type": "banana"}),
+                command: Some(PathBuf::from("tools/x.sh")),
+            });
+            let errs = m.validate().unwrap_err();
+            assert_path(&errs, "capabilities[0].schema");
+        }
+
+        #[test]
+        fn tool_schema_null_or_object_is_accepted() {
+            let mut m = base_manifest();
+            m.capabilities.push(Capability::Tool {
+                name: "null-schema".into(),
+                description: String::new(),
+                schema: serde_json::Value::Null,
+                command: Some(PathBuf::from("tools/x.sh")),
+            });
+            m.capabilities.push(Capability::Tool {
+                name: "empty-schema".into(),
+                description: String::new(),
+                schema: serde_json::json!({}),
+                command: Some(PathBuf::from("tools/y.sh")),
+            });
+            assert!(m.validate().is_ok(), "{:?}", m.validate());
+        }
+
+        #[test]
+        fn hook_event_must_be_known() {
+            let mut m = base_manifest();
+            m.capabilities.push(hook_cap("totally-made-up", "h.sh"));
+            let errs = m.validate().unwrap_err();
+            assert_path(&errs, "capabilities[0].event");
+        }
+
+        #[test]
+        fn hook_command_must_be_relative() {
+            let mut m = base_manifest();
+            m.capabilities.push(hook_cap("post-turn", "/abs/h.sh"));
+            let errs = m.validate().unwrap_err();
+            assert_path(&errs, "capabilities[0].command");
+        }
+
+        #[test]
+        fn skill_trigger_must_start_with_slash() {
+            let mut m = base_manifest();
+            m.capabilities.push(skill_cap("bad-trigger", "do thing"));
+            let errs = m.validate().unwrap_err();
+            assert_path(&errs, "capabilities[0].trigger");
+        }
+
+        #[test]
+        fn skill_without_prompt_or_skill_file_fails() {
+            let mut m = base_manifest();
+            m.capabilities.push(skill_cap("/x", ""));
+            let errs = m.validate().unwrap_err();
+            assert_path(&errs, "capabilities[0]");
+        }
+
+        #[test]
+        fn verifier_name_must_be_non_empty() {
+            let mut m = base_manifest();
+            m.capabilities.push(verifier_cap(""));
+            let errs = m.validate().unwrap_err();
+            assert_path(&errs, "capabilities[0].name");
+        }
+
+        #[test]
+        fn duplicate_skill_triggers_are_rejected() {
+            let mut m = base_manifest();
+            m.capabilities.push(skill_cap("/dup", "first"));
+            m.capabilities.push(skill_cap("/dup", "second"));
+            let errs = m.validate().unwrap_err();
+            assert_path(&errs, "capabilities[1].trigger");
+        }
+
+        #[test]
+        fn duplicate_tool_names_are_rejected() {
+            let mut m = base_manifest();
+            m.capabilities.push(tool_cap("dup", "a.sh"));
+            m.capabilities.push(tool_cap("dup", "b.sh"));
+            let errs = m.validate().unwrap_err();
+            assert_path(&errs, "capabilities[1].name");
+        }
+
+        #[test]
+        fn duplicate_verifier_names_are_rejected() {
+            let mut m = base_manifest();
+            m.capabilities.push(verifier_cap("dup"));
+            m.capabilities.push(verifier_cap("dup"));
+            let errs = m.validate().unwrap_err();
+            assert_path(&errs, "capabilities[1].name");
+        }
+
+        #[test]
+        fn multiple_errors_are_collected() {
+            let mut m = base_manifest();
+            m.name = "Bad".into();
+            m.version = "not-semver".into();
+            m.capabilities.push(tool_cap("t", "/abs.sh"));
+            m.capabilities.push(skill_cap("no-slash", ""));
+            let errs = m.validate().unwrap_err();
+            // Four distinct errors expected, no short-circuit.
+            assert!(
+                errs.len() >= 4,
+                "expected at least 4 errors, got {}: {errs:?}",
+                errs.len()
+            );
+            assert_path(&errs, "name");
+            assert_path(&errs, "version");
+            assert_path(&errs, "capabilities[0].command");
+            assert_path(&errs, "capabilities[1].trigger");
+        }
+
+        #[test]
+        fn validation_error_serializes_to_json() {
+            let err = ValidationError::new("capabilities[0].name", "name must not be empty");
+            let json = serde_json::to_string(&err).unwrap();
+            assert!(json.contains("capabilities[0].name"));
+            assert!(json.contains("name must not be empty"));
+            let back: ValidationError = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, err);
+        }
     }
 }

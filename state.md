@@ -2,9 +2,9 @@
 
 ## Current baseline: v0.3.6 (2026-07-25)
 
-**`dev` at HEAD, `main` at 98e863a.** Phase 5 complete (4 languages). Phase 6 complete (import + call-graph edges). Phase 7 complete (embeddings + graph-walk retrieval). 24 bench tasks. 69 ADRs. Workorders 7.1–7.9 all Done. Workorders 8.0, 8.2, 8.3, 8.6 Done.
+**`dev` at HEAD, `main` at 98e863a.** Phase 5 complete (4 languages). Phase 6 complete (import + call-graph edges). Phase 7 complete (embeddings + graph-walk retrieval). 24 bench tasks. 69 ADRs. Workorders 7.1–7.9 all Done. Workorders 8.0, 8.2, 8.3, 8.6, 8.7, 8.8 Done.
 
-### What shipped this session (6.1–6.9)
+### What shipped (sessions 6.1–7.9)
 
 | Item | What |
 |---|---|
@@ -23,6 +23,15 @@
 | WO 8.3: Bench task realism | Converted 5 real-repo tasks (add_adr, add_cli_flag, add_test_for_function, fix_clippy_warning, refactor_extract_function) to self-contained `setup_files` form. Added 4 new tasks that exercise plugin tools (use_stratum_compress, use_budget_check, use_draw_render, use_lsp_query). `use_workflow_run` deferred — no `Tool` impl exists for `kirkforge-workflow`. `build_bench_toolset` not extended (verify-only does not invoke tools). 13/24 tasks pass `verify-only` after this WO (up from 5/20). 11 pre-existing tasks still fail due to a flaw in their file_contains verify specs — out of WO 8.3 scope. |
 | WO 8.6: Stratum + budget coordination | Wired the two folded subsystems through a sync registered-listener dispatch. `apply_budget_slice` emits a `BudgetSlicedEvent { original_size, sliced_size, key, sliced_display }` and the registered Stratum listener compresses the sliced display; the post-tool hook then records the post-compression size so `budget.used` reflects what the model actually sees. Auto-escalation: when the budget is `Approaching` (or a `pre-compact` fires under budget pressure), the Stratum session mode is escalated `Lite → Full` if currently `Lite`. New `SESSION_MODE` static in `stratum.rs` (separate from the config-derived `active_mode()`). 3 new budget tests, 4 new stratum tests, 1 new ADR-051. Wired at executor build time under `#[cfg(all(feature = "budget", feature = "stratum"))]`. |
 | WO 8.7: Error recovery — structured `ErrorHint` | New `ErrorHint` enum (`BorrowConflict`, `MissingImport`, `TypeMismatch`, `MissingMethod`) in `src/session/error_recovery.rs` plus regex-based classifiers (`classify_borrow_conflict`, `classify_missing_import`, `classify_type_mismatch`, `classify_missing_method`) that extract the relevant identifiers from rustc/clippy diagnostics. `render_hint(&ErrorHint) -> String` produces a stable, human-readable note. Build and lint verifiers append a "Hint: ..." line to `FixSuggestion` descriptions when the classifier matches. The executor's `handle_tool_outcome` calls `render_tool_error_with_hint` for `ToolOutcome::Error` and `ToolOutcome::Failure` so the model sees the raw error *and* the structured hint on the same `Role::Tool` message. 4 classifier unit tests, 4 verifier tests, 4 executor tests; 2 ignored end-to-end tests verify classifiers work on real `cargo build` output for a broken file. |
+
+### What shipped (session 8.x)
+
+| Item | What |
+|---|---|
+| WO 8.1: Multi-model bench leaderboard | `bench run-models` and `write_model_comparison` markdown table (Workorder 8.1, ADR-038). |
+| WO 8.4: Embedding quality | TF-IDF tokenizer + graph-walk ranking improvements; quality now measurable. |
+| WO 8.5: ADR index unification | `docs/adr/README.md` index table now covers all 68 ADRs across both series. |
+| WO 8.8: Plugin manifest validation | `PluginManifest::validate()` returns `Result<(), Vec<ValidationError>>` collecting every rule violation (name regex, semver, api_version, trust tier, tool/hook/skill/verifier constraints, no duplicate capability names/triggers). `load_one` runs it before the trust-policy check and surfaces every error as a load warning so the user sees all issues at once. 19 new unit tests in `kirkforge-plugin` + 1 in `kirkforge-plugin-host`. |
 
 ### Deferred items (honest deferral)
 

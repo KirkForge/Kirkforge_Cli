@@ -73,7 +73,7 @@ plugin validation, and language-specific edge cases.
 | 8.5 | [ADR index table unification](8.5-adr-index-unification.md) | Planned | Low | — |
 | 8.6 | [Stratum + budget guard coordination](8.6-stratum-budget-coordination.md) | Done | Medium | 7.1, 7.5 |
 | 8.7 | [Error recovery: structured hints](8.7-error-recovery-hints.md) | Planned | Medium | — |
-| 8.8 | [Plugin manifest schema validation](8.8-plugin-manifest-validation.md) | Planned | Medium | — |
+| 8.8 | [Plugin manifest schema validation](8.8-plugin-manifest-validation.md) | Done | Medium | — |
 | 8.9 | [Context index: TS/Python/Go edge cases](8.9-context-index-edge-cases.md) | Planned | Medium | — |
 
 ### Priority rationale

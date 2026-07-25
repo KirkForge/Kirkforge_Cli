@@ -79,6 +79,22 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `handle_tool_outcome` injects the same hint into the `Role::Tool` message
   for `ToolOutcome::Error` / `ToolOutcome::Failure`, so the model sees the
   raw error and the structured hint side-by-side.
+- Plugin manifest schema validation (Workorder 8.8): `PluginManifest::validate()`
+  in `crates/kirkforge-plugin/src/lib.rs` returns
+  `Result<(), Vec<ValidationError>>` and collects every rule violation —
+  name regex (kebab-case), semver, api_version, trust tier, tool
+  command must be relative, tool schema sanity, hook event must be in
+  the canonical set (`session-start` / `pre-turn` / `post-turn` /
+  `pre-tool-bash` / `post-tool-bash` / `pre-compact` / `post-compact`),
+  hook command must be relative, skill trigger must start with `/` and
+  have a non-empty `prompt` or `skill-file`, verifier name non-empty,
+  no duplicate skill triggers / tool names / verifier names. The host's
+  `load_one` runs `validate()` before the trust-policy check and
+  surfaces every error as a load warning (does not reject the plugin —
+  the user sees all issues at once). `ValidationError` derives
+  `Serialize`/`Deserialize` so the error can flow across the
+  plugin-host boundary as JSON. 19 new unit tests in `kirkforge-plugin`
+  + 1 in `kirkforge-plugin-host`.
 - Multi-model benchmark leaderboard (Workorder 8.1, ADR-038): `bench run-models
   --models a,b,c --tasks <dir> --summary <md>` runs all bench tasks for each
   model and produces a `write_model_comparison()` markdown table (Model | Tasks

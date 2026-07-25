@@ -22,7 +22,9 @@ pub use tool::{PluginTool, ToolError, KIRKFORGE_TOOL_ARGS};
 pub use toolset::{CompositeToolset, PluginToolset, ToolInfo, Toolset};
 pub use verifier::{PluginVerifier, VerifierError, VerifierVerdict};
 
-use kirkforge_plugin::{Capability, LoadedPlugin, Plugin, PluginManifest, TrustTier};
+use kirkforge_plugin::{
+    Capability, LoadedPlugin, Plugin, PluginManifest, TrustTier, ValidationError,
+};
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -286,6 +288,14 @@ impl PluginRegistry {
             .validate_api_version()
             .map_err(|e| anyhow::anyhow!("{}: {}", plugin_dir.display(), e))?;
 
+        // Surface manifest-level validation errors as warnings (do not
+        // reject the plugin — let the user see every issue at once so they
+        // can fix the manifest in one pass instead of playing whack-a-mole).
+        let mut warnings: Vec<String> = match plugin.manifest().validate() {
+            Ok(()) => Vec::new(),
+            Err(errs) => validation_warnings(&plugin, &errs),
+        };
+
         if policy.verify_signatures {
             verify_plugin_signature(plugin_dir, policy.signature_key_path.as_deref()).map_err(
                 |e| {
@@ -306,7 +316,7 @@ impl PluginRegistry {
         let name = hosted.plugin.manifest().name.clone();
         // Remove any existing plugin with the same name before loading the new one.
         self.remove(&name);
-        let mut warnings = policy_warnings;
+        warnings.extend(policy_warnings);
         warnings.extend(self.push_and_index(hosted));
         Ok((name, warnings))
     }
@@ -585,6 +595,17 @@ fn capability_label(cap: &Capability) -> String {
         Capability::Hook { event, .. } => format!("hook '{event}'"),
         Capability::Verifier { name, .. } => format!("verifier '{name}'"),
     }
+}
+
+/// Format manifest-level validation errors as load warnings. Prefixes
+/// each error with the plugin name so a multi-plugin load can attribute
+/// issues to the right plugin.
+fn validation_warnings(plugin: &LoadedPlugin, errors: &[ValidationError]) -> Vec<String> {
+    let name = &plugin.manifest().name;
+    errors
+        .iter()
+        .map(|e| format!("{name}: manifest validation: {e}"))
+        .collect()
 }
 
 #[cfg(test)]
@@ -962,6 +983,62 @@ command = "tools/escape.sh"
             .unwrap();
         assert_eq!(reg.active_count(), 1);
         assert!(reg.skill_by_trigger("/hello").is_some());
+    }
+
+    #[test]
+    fn load_one_surfaces_manifest_validation_errors_as_warnings() {
+        // Manifest with several schema problems: bad name, bad version,
+        // a tool with an absolute command, and a duplicate skill trigger.
+        // The plugin must still load (per WO 8.8: don't reject — show all
+        // issues at once) but every problem must appear in the warnings.
+        let tmp = tempfile::tempdir().unwrap();
+        let plugin_dir = tmp.path().join("bad-valid8");
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        std::fs::write(
+            plugin_dir.join("kirkforge.toml"),
+            r#"
+name = "Bad_Name"
+version = "not-semver"
+description = "intentionally broken"
+trust = "shell"
+
+[[capabilities]]
+type = "tool"
+name = "x"
+command = "/bin/sh"
+
+[[capabilities]]
+type = "skill"
+trigger = "/dup"
+prompt = "first"
+
+[[capabilities]]
+type = "skill"
+trigger = "/dup"
+prompt = "second"
+"#,
+        )
+        .unwrap();
+
+        let mut reg = PluginRegistry::new();
+        let (_name, warnings) = reg
+            .load_one(&plugin_dir, TrustPolicy::up_to(TrustTier::Shell))
+            .unwrap();
+        let joined = warnings.join("\n");
+        assert!(
+            joined.contains("manifest validation"),
+            "expected manifest validation warnings, got: {warnings:?}"
+        );
+        assert!(joined.contains("name"), "warnings: {warnings:?}");
+        assert!(joined.contains("version"), "warnings: {warnings:?}");
+        assert!(
+            joined.contains("capabilities[0].command"),
+            "warnings: {warnings:?}"
+        );
+        assert!(
+            joined.contains("capabilities[2].trigger"),
+            "warnings: {warnings:?}"
+        );
     }
 
     #[cfg(unix)]

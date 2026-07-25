@@ -5,6 +5,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- Bench task realism pass (Workorder 8.3): converted 5 real-repo bench
+  tasks (`add_adr`, `add_cli_flag`, `add_test_for_function`,
+  `fix_clippy_warning`, `refactor_extract_function`) to self-contained
+  `setup_files` form, removing their dependency on the live repo state.
+  Added 4 new tasks that exercise plugin tools
+  (`use_stratum_compress`, `use_budget_check`, `use_draw_render`,
+  `use_lsp_query`). `use_workflow_run` is deferred — no `Tool` impl
+  exists for `kirkforge-workflow` yet. Total bench tasks: 24.
+
 ### Changed
 - Moved `ARCHITECTURE.md` to `docs/TECHNICAL.md` and fixed stale content
   (Stratum/Plugin3 now described as compiled-in, not standalone; bench CI

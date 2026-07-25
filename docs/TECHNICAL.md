@@ -60,7 +60,7 @@ kirkforge (root bin)          ← the CLI the user runs
 │   ├── kirkforge-plugin3/     ← budget plugin (7 tools, 4 hooks)
 │   ├── kirkforge-draw/        ← diagram plugin (1 tool, 1 hook)
 │   └── kirkforge-video/       ← video plugin (8 tools)
-├── benches/tasks/             ← 10 benchmark task definitions (TOML)
+├── benches/tasks/             ← 24 benchmark task definitions (TOML)
 └── docs/adr/                  ← 68 Architecture Decision Records
 ```
 
@@ -422,10 +422,15 @@ subagent personas within a single session.
 
 ## Benchmarks
 
-The benchmark system measures agent capability on 10 coding tasks across three
-difficulty levels (3 easy, 5 medium, 2 hard). Each task is a TOML file with a
-prompt, optional setup files, and a deterministic verify spec
-(`test_passes`, `file_contains`, or `command_exits_zero`).
+The benchmark system measures agent capability on 24 coding tasks across three
+difficulty levels. 20 of those tasks are coding-skills tasks (Rust refactors,
+bug fixes, doc/test additions) and 4 are plugin-tool tasks
+(`use_stratum_compress`, `use_budget_check`, `use_draw_render`,
+`use_lsp_query`) that exercise the Stratum, Plugin3, Draw, and LSP tool
+wrappers respectively. Each task is a TOML file with a prompt, optional setup
+files, and a deterministic verify spec (`test_passes`, `file_contains`, or
+`command_exits_zero`). All tasks use synthetic `setup_files` so they do not
+depend on the live repo state.
 
 The harness (`kirkforge-bench` crate + `src/session/bench.rs`) spins up a
 headless agent session with a real model adapter, auto-approves all tool calls,

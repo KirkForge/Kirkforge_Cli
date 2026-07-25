@@ -11,6 +11,28 @@ use tokio::sync::mpsc;
 
 use crate::session::executor::TurnEvent;
 
+/// Render a tool error as a `Role::Tool` content string, with a structured
+/// `ErrorHint` appended when the classifier recognises the error.
+///
+/// The hint is appended as a single line prefixed with "Hint:". When no
+/// classifier matches, the result is just the original error text (with the
+/// `Error: ` prefix that the caller provided). The function is pure: it
+/// does not touch the conversation log or any event channel.
+fn render_tool_error_with_hint(
+    tool_name: &str,
+    message: &str,
+    args: &serde_json::Value,
+) -> String {
+    let mut out = format!("Error: {message}");
+    if let Some(hint) =
+        crate::session::error_recovery::classify_for_tool(tool_name, message, args)
+    {
+        out.push('\n');
+        out.push_str(&crate::session::error_recovery::render_hint(&hint));
+    }
+    out
+}
+
 pub(crate) async fn handle_tool_outcome(
     outcome: ToolOutcome,
     tc: &ToolInvocation,
@@ -112,11 +134,12 @@ pub(crate) async fn handle_tool_outcome(
                 .await?;
         }
         ToolOutcome::Error { message } => {
+            let output = render_tool_error_with_hint(&tc.name, &message, &tc.arguments);
             crate::send_or_warn!(
                 event_tx
                     .send(TurnEvent::ToolResult {
                         name: tc.name.clone(),
-                        output: format!("Error: {message}"),
+                        output: output.clone(),
                         success: false,
                     })
                     .await,
@@ -125,7 +148,7 @@ pub(crate) async fn handle_tool_outcome(
             conversation
                 .append_async(Message {
                     role: Role::Tool,
-                    content: format!("Error: {message}"),
+                    content: output,
                     tool_call_id: Some(tc.id.clone()),
                     tool_name: Some(tc.name.clone()),
                     ..Default::default()
@@ -142,11 +165,12 @@ pub(crate) async fn handle_tool_outcome(
         }
         ToolOutcome::Failure(err) => {
             let message = err.to_user_message();
+            let output = render_tool_error_with_hint(&tc.name, &message, &tc.arguments);
             crate::send_or_warn!(
                 event_tx
                     .send(TurnEvent::ToolResult {
                         name: tc.name.clone(),
-                        output: format!("Error: {message}"),
+                        output: output.clone(),
                         success: false,
                     })
                     .await,
@@ -155,7 +179,7 @@ pub(crate) async fn handle_tool_outcome(
             conversation
                 .append_async(Message {
                     role: Role::Tool,
-                    content: format!("Error: {message}"),
+                    content: output,
                     tool_call_id: Some(tc.id.clone()),
                     tool_name: Some(tc.name.clone()),
                     ..Default::default()
@@ -254,4 +278,54 @@ pub(crate) async fn emit_correction_results(
         })?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn render_tool_error_with_hint_appends_hint_for_bash_borrow_conflict() {
+        let args = serde_json::json!({"command": "cargo build"});
+        let out = render_tool_error_with_hint(
+            "bash",
+            "error: cannot borrow `x` as mutable because it is also borrowed as `y`",
+            &args,
+        );
+        assert!(out.starts_with("Error: "));
+        assert!(out.contains("Hint:"));
+        assert!(out.contains("borrow conflict"));
+    }
+
+    #[test]
+    fn render_tool_error_with_hint_appends_hint_for_missing_import() {
+        let args = serde_json::json!({"command": "cargo build"});
+        let out = render_tool_error_with_hint(
+            "bash",
+            "error: cannot find value `frobnicate` in this scope",
+            &args,
+        );
+        assert!(out.contains("Hint:"));
+        assert!(out.contains("`frobnicate`"));
+    }
+
+    #[test]
+    fn render_tool_error_with_hint_passthrough_for_unrelated_text() {
+        let args = serde_json::json!({"command": "rm"});
+        let out = render_tool_error_with_hint("bash", "Permission denied: /etc/foo", &args);
+        assert_eq!(out, "Error: Permission denied: /etc/foo");
+    }
+
+    #[test]
+    fn render_tool_error_with_hint_does_not_classify_for_non_shell_tools() {
+        // `classify_for_tool` only runs the classifier for shell-style
+        // tools. Other tools (e.g. read_file) get the raw error only.
+        let args = serde_json::json!({"path": "src/main.rs"});
+        let out = render_tool_error_with_hint(
+            "read_file",
+            "cannot find value `x` in this scope",
+            &args,
+        );
+        assert!(!out.contains("Hint:"));
+    }
 }

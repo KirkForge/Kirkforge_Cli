@@ -226,6 +226,26 @@ pub fn classify_error(error: &str) -> Option<ErrorHint> {
     None
 }
 
+/// Classify the error of a specific tool invocation.
+///
+/// For tools that wrap external commands (`bash`, `clippy`, `cargo`),
+/// classifier output is most useful when applied to the *captured
+/// output* (stdout/stderr of the wrapped process), not the tool's
+/// own user-facing message. The `args` parameter is reserved for
+/// future classifiers that need to peek at, e.g., a file path. The
+/// generic `classify_error` is used as the fallback.
+pub fn classify_for_tool(
+    tool_name: &str,
+    message: &str,
+    _args: &serde_json::Value,
+) -> Option<ErrorHint> {
+    if matches!(tool_name, "bash" | "clippy" | "cargo" | "rustc") {
+        classify_error(message)
+    } else {
+        None
+    }
+}
+
 /// Analyze a tool error and produce a recovery hint.
 ///
 /// Returns `None` if the error is not something we can give a useful hint for.

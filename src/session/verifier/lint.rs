@@ -1,3 +1,4 @@
+use crate::session::error_recovery;
 use crate::session::event_bus::{BusEvent, EditEvent, FileWriteEvent};
 /// Lint verifier — runs `cargo clippy` on Rust files and reports findings.
 ///
@@ -66,8 +67,13 @@ fn parse_clippy_json(line: &str, target_path: &Path, cargo_root: &Path) -> Optio
         let line_start = span.get("line_start").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
         let resolved = cargo_root.join(file_name);
         if resolved == target_path {
+            let mut description = format!("{text} at {file_name}:{line_start}");
+            if let Some(hint) = error_recovery::classify_error(&text) {
+                description.push('\n');
+                description.push_str(&error_recovery::render_hint(&hint));
+            }
             return Some(FixSuggestion {
-                description: format!("{text} at {file_name}:{line_start}"),
+                description,
                 file: target_path.to_path_buf(),
                 original: String::new(),
                 replacement: String::new(),
@@ -125,10 +131,16 @@ pub async fn verify_lint(event: &BusEvent) -> Verdict {
 
     // Could not extract a concrete finding — report the first few stderr lines.
     let stderr = String::from_utf8_lossy(&output.stderr);
+    let stderr_summary = stderr.lines().take(5).collect::<Vec<_>>().join("\n");
+    let mut details = stderr_summary;
+    if let Some(hint) = error_recovery::classify_error(&stderr) {
+        details.push('\n');
+        details.push_str(&error_recovery::render_hint(&hint));
+    }
     Verdict::Unfixable(VerificationError {
         description: "clippy check failed".into(),
         file: Some(path),
-        details: stderr.lines().take(5).collect::<Vec<_>>().join("\n"),
+        details,
     })
 }
 
@@ -172,6 +184,30 @@ mod tests {
         assert!(suggestion.original.is_empty());
         assert!(suggestion.replacement.is_empty());
         assert!(suggestion.command.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_parse_clippy_json_attaches_hint_for_borrow_conflict() {
+        let line = r#"{"reason":"compiler-message","package_id":"foo 0.1.0","target":{"kind":["bin"],"name":"foo","src_path":"/tmp/foo/src/main.rs"},"message":{"rendered":"error: cannot borrow `foo` as immutable because it is also borrowed as `bar`\n","level":"error","message":"cannot borrow `foo` as immutable because it is also borrowed as `bar`","spans":[{"file_name":"src/main.rs","line_start":2,"line_end":2,"column_start":5,"column_end":8}]}}"#;
+        let cargo_root = std::path::PathBuf::from("/tmp/foo");
+        let target = std::path::PathBuf::from("/tmp/foo/src/main.rs");
+        let suggestion = parse_clippy_json(line, &target, &cargo_root).unwrap();
+        assert!(
+            suggestion.description.contains("Hint:"),
+            "expected Hint line in description, got: {}",
+            suggestion.description,
+        );
+        assert!(suggestion.description.contains("`foo`"));
+        assert!(suggestion.description.contains("`bar`"));
+    }
+
+    #[tokio::test]
+    async fn test_parse_clippy_json_no_hint_for_unclassified_message() {
+        let line = r#"{"reason":"compiler-message","package_id":"foo 0.1.0","target":{"kind":["bin"],"name":"foo","src_path":"/tmp/foo/src/main.rs"},"message":{"rendered":"warning: something custom\n","level":"warning","message":"something custom happened","spans":[{"file_name":"src/main.rs","line_start":1,"line_end":1,"column_start":1,"column_end":2}]}}"#;
+        let cargo_root = std::path::PathBuf::from("/tmp/foo");
+        let target = std::path::PathBuf::from("/tmp/foo/src/main.rs");
+        let suggestion = parse_clippy_json(line, &target, &cargo_root).unwrap();
+        assert!(!suggestion.description.contains("Hint:"));
     }
 
     // This test spawns `cargo clippy` in a temporary project. It cannot run

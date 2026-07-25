@@ -17,6 +17,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   commit. README stays a landing page; tech detail lives in docs/TECHNICAL.md.
 
 ### Added
+- Multi-model benchmark leaderboard (Workorder 8.1, ADR-038): `bench run-models
+  --models a,b,c --tasks <dir> --summary <md>` runs all bench tasks for each
+  model and produces a `write_model_comparison()` markdown table (Model | Tasks
+  Passed | Success Rate | Avg Tokens In/Out | Avg Duration | Total Cost), sorted
+  by success rate descending. Per-model JSON reports are written to `--output
+  <dir>` when provided. Closes the deferred "multi-model comparison" item from
+  ADR-038.
 - Budget slicing action (Workorder 7.1): the Plugin3 budget guard is now an
   ACTIVE guard, not a passive monitor. `check_and_slice` in `src/session/budget.rs`
   intercepts oversized tool results before they enter the conversation — when

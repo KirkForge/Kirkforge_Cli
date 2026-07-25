@@ -407,6 +407,68 @@ pub fn verify_only(task: &BenchTask, sandbox_path: &Path) -> TaskResult {
     }
 }
 
+/// Format a token count as a compact human-readable string.
+/// Values below 1000 are shown as-is; >=1000 use a `k` suffix with one decimal.
+fn format_tokens(n: u64) -> String {
+    if n >= 1000 {
+        format!("{:.1}k", n as f64 / 1000.0)
+    } else {
+        n.to_string()
+    }
+}
+
+/// Produce a markdown comparison table across multiple model reports.
+///
+/// Reports are sorted by success rate (descending). An empty slice yields
+/// the literal string `"No reports to compare"`.
+pub fn write_model_comparison(reports: &[BenchReport]) -> String {
+    if reports.is_empty() {
+        return "No reports to compare".to_string();
+    }
+
+    let mut sorted: Vec<&BenchReport> = reports.iter().collect();
+    sorted.sort_by(|a, b| {
+        b.summary
+            .success_rate
+            .partial_cmp(&a.summary.success_rate)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let mut md = String::new();
+    md.push_str("# Model Comparison\n\n");
+    md.push_str("| Model | Tasks Passed | Success Rate | Avg Tokens In | Avg Tokens Out | Avg Duration | Total Cost |\n");
+    md.push_str("|-------|-------------|-------------|---------------|----------------|-------------|------------|\n");
+    for r in &sorted {
+        let avg_in = if r.summary.tasks_run > 0 {
+            r.summary.total_tokens_in / r.summary.tasks_run as u64
+        } else {
+            0
+        };
+        let avg_out = if r.summary.tasks_run > 0 {
+            r.summary.total_tokens_out / r.summary.tasks_run as u64
+        } else {
+            0
+        };
+        let avg_dur = if r.summary.tasks_run > 0 {
+            r.summary.total_duration_secs / r.summary.tasks_run as f64
+        } else {
+            0.0
+        };
+        md.push_str(&format!(
+            "| {} | {}/{} | {:.0}% | {} | {} | {:.1}s | ${:.4} |\n",
+            r.model,
+            r.summary.tasks_passed,
+            r.summary.tasks_run,
+            r.summary.success_rate * 100.0,
+            format_tokens(avg_in),
+            format_tokens(avg_out),
+            avg_dur,
+            r.summary.total_cost_usd,
+        ));
+    }
+    md
+}
+
 /// Write a markdown summary table to disk.
 pub fn write_markdown_summary(report: &BenchReport, path: &Path) -> Result<()> {
     let mut md = String::new();
@@ -591,6 +653,55 @@ mod tests {
         let result = verify_only(&task, dir.path());
         assert!(result.success);
         assert!(result.error.is_none());
+    }
+
+    #[test]
+    fn test_model_comparison_empty() {
+        let out = write_model_comparison(&[]);
+        assert_eq!(out, "No reports to compare");
+    }
+
+    #[test]
+    fn test_model_comparison_single() {
+        let report = sample_report(true, 1200, 3400, 0.001);
+        let out = write_model_comparison(&[report]);
+        assert!(out.contains("# Model Comparison"));
+        assert!(out.contains("| Model | Tasks Passed | Success Rate"));
+        assert!(out.contains("| test-model | 1/1 | 100%"));
+        assert!(out.contains("1.2k"));
+        assert!(out.contains("3.4k"));
+    }
+
+    #[test]
+    fn test_model_comparison_multiple_sorted_by_success_rate_desc() {
+        let mut high = sample_report(true, 1500, 4100, 0.002);
+        high.model = "glm-5.2:cloud".to_string();
+        let mut low = sample_report(false, 1200, 3400, 0.001);
+        low.model = "qwen2.5:0.5b".to_string();
+        low.summary.success_rate = 0.0;
+        low.summary.tasks_passed = 0;
+
+        // Pass them in "wrong" order to verify sort.
+        let out = write_model_comparison(&[low.clone(), high.clone()]);
+        let lines: Vec<&str> = out.lines().collect();
+        let data_rows: Vec<&str> = lines
+            .iter()
+            .filter(|l| l.starts_with("| ") && !l.starts_with("| Model"))
+            .copied()
+            .collect();
+        assert_eq!(data_rows.len(), 2);
+        assert!(
+            data_rows[0].contains("glm-5.2:cloud"),
+            "first row should be the higher-success-rate model, got: {}",
+            data_rows[0]
+        );
+        assert!(
+            data_rows[1].contains("qwen2.5:0.5b"),
+            "second row should be the lower-success-rate model, got: {}",
+            data_rows[1]
+        );
+        assert!(data_rows[0].contains("100%"));
+        assert!(data_rows[1].contains("0%"));
     }
 
     #[test]

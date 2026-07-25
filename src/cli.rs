@@ -256,4 +256,26 @@ pub enum BenchCommand {
         #[arg(long)]
         task: Option<String>,
     },
+    /// Run all bench tasks across multiple models and produce a comparison table.
+    RunModels {
+        /// Directory containing TOML task definitions.
+        #[arg(long, default_value = "benches/tasks")]
+        tasks: PathBuf,
+
+        /// Comma-separated list of model names to benchmark.
+        #[arg(long, value_delimiter = ',')]
+        models: Vec<String>,
+
+        /// Directory to write per-model JSON reports to (one file per model).
+        #[arg(long)]
+        output: Option<PathBuf>,
+
+        /// Write the markdown comparison table to this file.
+        #[arg(long)]
+        summary: Option<PathBuf>,
+
+        /// Timeout per task in seconds.
+        #[arg(long, default_value_t = 300)]
+        timeout: u64,
+    },
 }

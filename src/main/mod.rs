@@ -329,6 +329,13 @@ async fn handle_bench_command(command: kirkforge::cli::BenchCommand) -> anyhow::
         } => handle_bench_compare(baseline, current, summary),
         BenchCommand::List { tasks } => handle_bench_list(tasks),
         BenchCommand::VerifyOnly { tasks, task } => handle_bench_verify_only(tasks, task),
+        BenchCommand::RunModels {
+            tasks,
+            models,
+            output,
+            summary,
+            timeout,
+        } => handle_bench_run_models(tasks, models, output, summary, timeout).await,
     }
 }
 
@@ -369,6 +376,60 @@ async fn handle_bench_run(
     if let Some(md_path) = summary {
         kirkforge_bench::write_markdown_summary(&report, &md_path)?;
         eprintln!("summary written to {}", md_path.display());
+    }
+    Ok(())
+}
+
+async fn handle_bench_run_models(
+    tasks: std::path::PathBuf,
+    models: Vec<String>,
+    output: Option<std::path::PathBuf>,
+    summary: Option<std::path::PathBuf>,
+    timeout: u64,
+) -> anyhow::Result<()> {
+    if models.is_empty() {
+        anyhow::bail!("--models requires at least one model name");
+    }
+    let config = kirkforge::session::config::load_or_create_config();
+    let bench_tasks = kirkforge_bench::load_tasks(&tasks)?;
+    if bench_tasks.is_empty() {
+        anyhow::bail!("no task files found in {}", tasks.display());
+    }
+    eprintln!(
+        "running {} benchmark tasks across {} model(s)",
+        bench_tasks.len(),
+        models.len()
+    );
+
+    let mut reports = Vec::new();
+    for model in &models {
+        eprintln!("→ model: {model}");
+        let report =
+            kirkforge::session::bench::run_all(&bench_tasks, model, &config, timeout).await;
+        eprintln!(
+            "  {}/{} tasks passed ({:.0}%)",
+            report.summary.tasks_passed,
+            report.summary.tasks_run,
+            report.summary.success_rate * 100.0
+        );
+        if let Some(out_dir) = &output {
+            std::fs::create_dir_all(out_dir)?;
+            let safe_name = model.replace([':', '/'], "_");
+            let json_path = out_dir.join(format!("{safe_name}.json"));
+            kirkforge_bench::write_report(&report, &json_path)?;
+            eprintln!("  report written to {}", json_path.display());
+        }
+        reports.push(report);
+    }
+
+    let comparison = kirkforge_bench::write_model_comparison(&reports);
+    println!("{comparison}");
+    if let Some(md_path) = summary {
+        if let Some(parent) = md_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&md_path, &comparison)?;
+        eprintln!("comparison written to {}", md_path.display());
     }
     Ok(())
 }

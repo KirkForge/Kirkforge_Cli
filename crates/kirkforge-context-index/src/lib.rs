@@ -1041,7 +1041,7 @@ mod tests {
             std::env::temp_dir().join(format!("kirkforge-context-dir-{}", std::process::id()));
         let _ = fs::remove_dir_all(&tmp);
         fs::create_dir_all(&tmp).unwrap();
-        fs::create_dir_all(&tmp.join("sub")).unwrap();
+        fs::create_dir_all(tmp.join("sub")).unwrap();
 
         fs::write(tmp.join("a.rs"), "fn a() {}\nstruct A;\n").unwrap();
         fs::write(tmp.join("sub").join("b.rs"), "fn b() {}\n").unwrap();

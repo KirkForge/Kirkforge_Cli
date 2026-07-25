@@ -68,11 +68,17 @@ impl Vocabulary {
 /// - snake_case identifiers are split on `_`.
 /// - camelCase / PascalCase identifiers are split at lowercase→uppercase
 ///   boundaries (`BarBaz` → `bar`, `baz`).
+/// - path qualifiers `std::collections::HashMap` split into `std`,
+///   `collections`, `hashmap`.
+/// - generics `Vec<T>` split into `vec` and `t` (angle brackets stripped).
+/// - lifetimes `foo<'a>` split into `foo` and `a` (the `'` and brackets
+///   stripped — the lifetime name is the semantically meaningful token).
+/// - macro invocations `println!` → `println` (the `!` is stripped).
 /// - the `SymbolKind` is emitted as a single token (`fn`, `struct`, …)
 ///   so two functions with similar names score higher than a function
 ///   and a struct with the same name.
-/// - `doc` is whitespace + punctuation split (the index does not
-///   currently carry doc comments, but the slot exists).
+/// - `doc` tokens are emitted twice (weight 2x) — `///` doc comments are
+///   more semantically meaningful than code identifiers.
 pub fn tokenize_symbol(symbol: &Symbol, doc: Option<&str>) -> Vec<String> {
     let mut tokens = Vec::new();
     for raw in split_identifier(&symbol.name) {
@@ -84,7 +90,9 @@ pub fn tokenize_symbol(symbol: &Symbol, doc: Option<&str>) -> Vec<String> {
     if let Some(d) = doc {
         for t in split_doc(d) {
             if !t.is_empty() {
-                tokens.push(t.to_lowercase());
+                let lower = t.to_lowercase();
+                tokens.push(lower.clone());
+                tokens.push(lower);
             }
         }
     }
@@ -106,13 +114,32 @@ pub fn kind_token(kind: SymbolKind) -> String {
     }
 }
 
-/// Split an identifier on `_`, `::`, `.`, `-`, `/`, and whitespace.
+/// Split an identifier on `_`, `::`, `.`, `-`, `/`, whitespace, and
+/// code-specific punctuation (`<`, `>`, `&`, `*`, `'`, `!`).
+///
 /// Symbol names never contain whitespace, but free-text queries do,
-/// so the same splitter serves both paths.
+/// so the same splitter serves both paths. Stripping `<`/`>`/`&`/`*`/
+/// `'`/`!` as separators means:
+/// - generics `Vec<T>` split into `vec` and `t` (not `<`/`>`).
+/// - lifetimes `foo<'a>` split into `foo` and `a` (not `'`/`<`/`>`).
+/// - macro invocations `println!` split into `println` (not `!`).
+/// - references `&str` / pointers `*const T` split into `str` / `const` /
+///   `t` (not `&`/`*`).
 fn split_identifier(name: &str) -> Vec<String> {
     let mut out = Vec::new();
     for part in name.split(|c: char| {
-        c == '_' || c == ':' || c == '.' || c == '-' || c == '/' || c.is_whitespace()
+        c == '_'
+            || c == ':'
+            || c == '.'
+            || c == '-'
+            || c == '/'
+            || c == '<'
+            || c == '>'
+            || c == '&'
+            || c == '*'
+            || c == '\''
+            || c == '!'
+            || c.is_whitespace()
     }) {
         if part.is_empty() {
             continue;
@@ -406,6 +433,150 @@ mod tests {
         assert!(
             sim_target > sim_other,
             "query 'auth user' should rank authenticate_user above parse_config ({sim_target} vs {sim_other})"
+        );
+    }
+
+    #[test]
+    fn test_tokenizer_handles_generics() {
+        let tokens = split_identifier("Vec<T>");
+        assert!(
+            tokens.iter().any(|t| t == "vec"),
+            "expected 'vec' token, got {tokens:?}"
+        );
+        assert!(
+            tokens.iter().any(|t| t == "t"),
+            "expected 't' token, got {tokens:?}"
+        );
+        assert!(
+            !tokens.iter().any(|t| t == "<" || t == ">"),
+            "angle brackets should be stripped, got {tokens:?}"
+        );
+    }
+
+    #[test]
+    fn test_tokenizer_handles_lifetimes() {
+        let tokens = split_identifier("foo<'a>");
+        assert!(
+            tokens.iter().any(|t| t == "foo"),
+            "expected 'foo' token, got {tokens:?}"
+        );
+        assert!(
+            tokens.iter().any(|t| t == "a"),
+            "expected lifetime 'a' as a token, got {tokens:?}"
+        );
+        assert!(
+            !tokens.iter().any(|t| t == "'" || t == "<" || t == ">"),
+            "lifetime punctuation should be stripped, got {tokens:?}"
+        );
+    }
+
+    #[test]
+    fn test_tokenizer_handles_macros() {
+        let tokens = split_identifier("println!");
+        assert!(
+            tokens.iter().any(|t| t == "println"),
+            "expected 'println' token, got {tokens:?}"
+        );
+        assert!(
+            !tokens.iter().any(|t| t == "!"),
+            "macro bang should be stripped, got {tokens:?}"
+        );
+    }
+
+    #[test]
+    fn test_tokenizer_handles_path_qualifiers() {
+        let tokens = split_identifier("std::collections::HashMap");
+        assert_eq!(tokens, vec!["std", "collections", "hash", "map"]);
+    }
+
+    #[test]
+    fn test_tokenizer_strips_ref_and_pointer_punctuation() {
+        let tokens = split_identifier("&str");
+        assert_eq!(tokens, vec!["str"]);
+        let tokens = split_identifier("*const T");
+        assert!(
+            tokens.iter().any(|t| t == "const"),
+            "expected 'const', got {tokens:?}"
+        );
+        assert!(
+            tokens.iter().any(|t| t == "t"),
+            "expected 't', got {tokens:?}"
+        );
+        assert!(
+            !tokens.iter().any(|t| t == "&" || t == "*"),
+            "ref/pointer punctuation should be stripped, got {tokens:?}"
+        );
+    }
+
+    #[test]
+    fn test_embedding_similarity_identical_symbols() {
+        let a = sym("UserAccount", SymbolKind::Struct);
+        let b = sym("UserAccount", SymbolKind::Struct);
+        let syms = vec![a.clone(), b.clone()];
+        let vocab = build_vocabulary(&syms, None);
+        let va = embed_symbol(&a, &vocab, None);
+        let vb = embed_symbol(&b, &vocab, None);
+        let sim = cosine_similarity(&va, &vb);
+        assert!(
+            sim > 0.8,
+            "identical symbols should have similarity > 0.8, got {sim}"
+        );
+    }
+
+    #[test]
+    fn test_embedding_similarity_unrelated_symbols() {
+        let a = sym("UserAccount", SymbolKind::Struct);
+        let b = sym("Color", SymbolKind::Enum);
+        let filler = (0..20)
+            .map(|i| sym(&format!("filler_{i}"), SymbolKind::Function))
+            .collect::<Vec<_>>();
+        let mut syms = vec![a.clone(), b.clone()];
+        syms.extend(filler);
+        let vocab = build_vocabulary(&syms, None);
+        let va = embed_symbol(&a, &vocab, None);
+        let vb = embed_symbol(&b, &vocab, None);
+        let sim = cosine_similarity(&va, &vb);
+        assert!(
+            sim < 0.3,
+            "unrelated symbols should have similarity < 0.3, got {sim}"
+        );
+    }
+
+    #[test]
+    fn test_retrieve_finds_struct_by_doc_comment() {
+        let profile = Symbol {
+            name: "Profile".to_string(),
+            kind: SymbolKind::Struct,
+            file: PathBuf::from("src/profile.rs"),
+            line: 1,
+            end_line: 10,
+        };
+        let unrelated = sym("parse_config", SymbolKind::Function);
+        let symbols = vec![profile.clone(), unrelated.clone()];
+        let mut docs: std::collections::HashMap<(String, u32), String> =
+            std::collections::HashMap::new();
+        docs.insert(
+            (profile.file.to_string_lossy().to_string(), profile.line),
+            "User profile data".to_string(),
+        );
+        let lookup = |s: &Symbol| {
+            docs.get(&(s.file.to_string_lossy().to_string(), s.line))
+                .cloned()
+        };
+        let doc_lookup: DocLookup<'_> = Some(&lookup);
+        let vocab = build_vocabulary(&symbols, doc_lookup);
+        let q = embed_query("user profile", &vocab);
+        let target = embed_symbol(&profile, &vocab, Some("User profile data"));
+        let other = embed_symbol(&unrelated, &vocab, None);
+        let sim_target = cosine_similarity(&q, &target);
+        let sim_other = cosine_similarity(&q, &other);
+        assert!(
+            sim_target > sim_other,
+            "query 'user profile' should rank Profile (with doc comment) above parse_config ({sim_target} vs {sim_other})"
+        );
+        assert!(
+            sim_target > 0.3,
+            "doc-comment-weighted match should have high similarity, got {sim_target}"
         );
     }
 }

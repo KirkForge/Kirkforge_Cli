@@ -6,24 +6,41 @@
 //!
 //! Returns `(Symbol, hop_distance)` deduplicated by `(file, name)`
 //! with the minimum hop distance kept. Capped at `max_hops` (default 2).
+//! Results are ranked by a score that combines hop distance and edge
+//! weight: call edges (weight 1.0) rank higher than import edges
+//! (weight 0.5), and same-file symbols get a +0.3 bonus.
 //!
-//! ponytail: BFS over import/call edges. The upgrade path is a
-//! weighted walk (call frequency, import distance) but the unweighted
-//! BFS is enough to pull in a symbol's immediate neighbourhood.
+//! ponytail: BFS over import/call edges with edge weighting. The
+//! upgrade path is a weighted walk that fuses hop distance, edge type,
+//! and embedding similarity into a single ranker.
 
 use crate::{CallEdge, ContextIndex, ImportEdge, Symbol};
 use std::collections::{HashMap, HashSet};
+
+/// Edge type weight: how strongly a given edge type ties two symbols.
+/// Call edges (1.0) rank higher than import edges (0.5) — calling is a
+/// stronger relationship than importing.
+const CALL_WEIGHT: f32 = 1.0;
+const IMPORT_WEIGHT: f32 = 0.5;
+/// Same-file bonus added to a symbol's score: symbols in the same file
+/// as the start symbol are more strongly related than cross-file ones.
+const SAME_FILE_BONUS: f32 = 0.3;
 
 /// Walk the import + call graph from `start`, returning visited
 /// symbols with their hop distance from the start.
 ///
 /// `max_hops` caps the traversal; 0 returns only the start symbol.
+/// Results are sorted by score descending: `score = edge_weight / hop`
+/// plus a `+0.3` bonus when the symbol is in the same file as `start`.
+/// Call edges use weight 1.0; import edges use weight 0.5, so callees
+/// rank above importers at the same hop distance.
 pub fn graph_walk(start: &Symbol, index: &ContextIndex, max_hops: usize) -> Vec<(Symbol, usize)> {
     let symbols = index.symbols();
     let edges = index.edges();
     let call_edges = index.call_edges();
 
     let mut best: HashMap<SymbolKey, (usize, usize)> = HashMap::new();
+    let mut best_weight: HashMap<SymbolKey, f32> = HashMap::new();
     let mut visited: HashSet<SymbolKey> = HashSet::new();
     let mut frontier: Vec<(usize, usize)> = Vec::new();
 
@@ -31,16 +48,18 @@ pub fn graph_walk(start: &Symbol, index: &ContextIndex, max_hops: usize) -> Vec<
     if start_idx == usize::MAX {
         return vec![(start.clone(), 0)];
     }
-    best.insert(key_of(&start_idx, symbols), (start_idx, 0));
+    let start_key = key_of(&start_idx, symbols);
+    best.insert(start_key.clone(), (start_idx, 0));
+    best_weight.insert(start_key.clone(), CALL_WEIGHT);
     frontier.push((start_idx, 0));
-    visited.insert(key_of(&start_idx, symbols));
+    visited.insert(start_key);
 
     while let Some((idx, hops)) = frontier.pop() {
         if hops >= max_hops {
             continue;
         }
         let sym = &symbols[idx];
-        for next_idx in neighbors(sym, symbols, edges, call_edges) {
+        for (next_idx, weight) in weighted_neighbors(sym, symbols, edges, call_edges) {
             let k = key_of(&next_idx, symbols);
             let next_hops = hops + 1;
             let is_new = !visited.contains(&k);
@@ -50,17 +69,46 @@ pub fn graph_walk(start: &Symbol, index: &ContextIndex, max_hops: usize) -> Vec<
             if is_new || is_closer {
                 visited.insert(k.clone());
                 best.insert(k.clone(), (next_idx, next_hops));
+                best_weight.insert(k.clone(), weight);
                 frontier.push((next_idx, next_hops));
             }
         }
     }
 
-    let mut out: Vec<(Symbol, usize)> = best
-        .into_values()
-        .map(|(idx, hops)| (symbols[idx].clone(), hops))
+    let start_file = &symbols[start_idx].file;
+    let mut scored: Vec<(f32, Symbol, usize)> = best
+        .into_iter()
+        .map(|(k, (idx, hops))| {
+            let weight = best_weight.get(&k).copied().unwrap_or(CALL_WEIGHT);
+            let score = score_for(hops, weight, &symbols[idx].file, start_file);
+            (score, symbols[idx].clone(), hops)
+        })
         .collect();
-    out.sort_by_key(|(_, h)| *h);
-    out
+    scored.sort_by(|a, b| {
+        b.0.partial_cmp(&a.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.1.name.cmp(&b.1.name))
+    });
+    scored.into_iter().map(|(_, s, h)| (s, h)).collect()
+}
+
+/// Compute the ranking score for a reached symbol. The score is
+/// `edge_weight / hop_distance` plus a same-file bonus so that closer,
+/// stronger, and co-located symbols rank higher. Call edges (weight
+/// 1.0) outrank import edges (weight 0.5) at the same hop.
+fn score_for(
+    hops: usize,
+    weight: f32,
+    file: &std::path::Path,
+    start_file: &std::path::Path,
+) -> f32 {
+    let h = hops.max(1) as f32;
+    let base = weight / h;
+    if file == start_file {
+        base + SAME_FILE_BONUS
+    } else {
+        base
+    }
 }
 
 /// Identifier for deduplication: file path + symbol name. Two symbols
@@ -87,20 +135,29 @@ fn find_symbol_idx(symbols: &[Symbol], target: &Symbol) -> Option<usize> {
 }
 
 /// Collect all neighbor symbol indices for `sym` across both edge
-/// types and both directions. Duplicates across edge types are fine —
-/// the caller deduplicates.
-fn neighbors<'a>(
+/// types and both directions, tagged with the edge weight (call edges
+/// weigh 1.0, import edges weigh 0.5). Duplicates across edge types are
+/// fine — the caller deduplicates and keeps the minimum hop.
+fn weighted_neighbors<'a>(
     sym: &'a Symbol,
     symbols: &'a [Symbol],
     edges: &'a [ImportEdge],
     call_edges: &'a [CallEdge],
-) -> Vec<usize> {
+) -> Vec<(usize, f32)> {
     let mut out = Vec::new();
 
-    out.extend(forward_imports(sym, edges, symbols));
-    out.extend(reverse_imports(sym, edges, symbols));
-    out.extend(forward_calls(sym, call_edges, symbols));
-    out.extend(reverse_calls(sym, call_edges, symbols));
+    for n in forward_imports(sym, edges, symbols) {
+        out.push((n, IMPORT_WEIGHT));
+    }
+    for n in reverse_imports(sym, edges, symbols) {
+        out.push((n, IMPORT_WEIGHT));
+    }
+    for n in forward_calls(sym, call_edges, symbols) {
+        out.push((n, CALL_WEIGHT));
+    }
+    for n in reverse_calls(sym, call_edges, symbols) {
+        out.push((n, CALL_WEIGHT));
+    }
 
     out
 }
@@ -319,5 +376,158 @@ mod tests {
         assert_eq!(walked.len(), 1);
         assert_eq!(walked[0].0.name, "ghost");
         assert_eq!(walked[0].1, 0);
+    }
+
+    #[test]
+    fn test_retrieve_finds_function_by_name() {
+        let foo = sym("foo", "src/lib.rs");
+        let bar = sym("bar", "src/lib.rs");
+        let symbols = vec![foo.clone(), bar];
+        let call_edges = vec![CallEdge {
+            caller_file: PathBuf::from("src/lib.rs"),
+            caller_name: "bar".to_string(),
+            caller_line: 5,
+            callee_name: "foo".to_string(),
+            callee_file: Some(PathBuf::from("src/lib.rs")),
+        }];
+        let index = ContextIndex::from_symbols_and_edges_and_calls(symbols, vec![], call_edges);
+        let results = index.retrieve_hybrid("foo", 10);
+        assert!(
+            results.iter().any(|r| r.symbol.name == "foo"),
+            "exact-name query 'foo' should find foo via graph walk, got {:?}",
+            results
+                .iter()
+                .map(|r| r.symbol.name.as_str())
+                .collect::<Vec<_>>()
+        );
+        let foo_result = results.iter().find(|r| r.symbol.name == "foo").unwrap();
+        assert_eq!(foo_result.symbol.file, PathBuf::from("src/lib.rs"));
+    }
+
+    #[test]
+    fn test_retrieve_ranks_closer_symbols_higher() {
+        let a = sym("a", "src/a.rs");
+        let b = sym("b", "src/b.rs");
+        let c = sym("c", "src/c.rs");
+        let symbols = vec![a.clone(), b.clone(), c.clone()];
+        let call_edges = vec![
+            CallEdge {
+                caller_file: PathBuf::from("src/a.rs"),
+                caller_name: "a".to_string(),
+                caller_line: 2,
+                callee_name: "b".to_string(),
+                callee_file: Some(PathBuf::from("src/b.rs")),
+            },
+            CallEdge {
+                caller_file: PathBuf::from("src/b.rs"),
+                caller_name: "b".to_string(),
+                caller_line: 2,
+                callee_name: "c".to_string(),
+                callee_file: Some(PathBuf::from("src/c.rs")),
+            },
+        ];
+        let index = ContextIndex::from_symbols_and_edges_and_calls(symbols, vec![], call_edges);
+        let start = &a;
+        let walked = graph_walk(start, &index, 2);
+        let names: Vec<(&str, usize)> = walked.iter().map(|(s, h)| (s.name.as_str(), *h)).collect();
+        assert!(
+            names.iter().any(|(n, h)| *n == "a" && *h == 0),
+            "start 'a' should be hop 0, got {names:?}"
+        );
+        assert!(
+            names.iter().any(|(n, h)| *n == "b" && *h == 1),
+            "'b' should be at hop 1, got {names:?}"
+        );
+        assert!(
+            names.iter().any(|(n, h)| *n == "c" && *h == 2),
+            "'c' should be at hop 2, got {names:?}"
+        );
+        let b_pos = walked.iter().position(|(s, _)| s.name == "b").unwrap();
+        let c_pos = walked.iter().position(|(s, _)| s.name == "c").unwrap();
+        assert!(
+            b_pos < c_pos,
+            "b (hop 1) should rank higher than c (hop 2), got order {:?}",
+            walked
+                .iter()
+                .map(|(s, h)| (s.name.as_str(), *h))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn call_edge_ranks_higher_than_import_edge_at_same_hop() {
+        let start = sym("start", "src/main.rs");
+        let callee = sym("callee", "src/lib.rs");
+        let importer = sym("importer", "src/other.rs");
+        let symbols = vec![start.clone(), callee.clone(), importer.clone()];
+        let edges = vec![ImportEdge {
+            source_file: PathBuf::from("src/other.rs"),
+            imported_symbol: "crate::main".to_string(),
+            resolved_file: Some(PathBuf::from("src/main.rs")),
+            line: 1,
+        }];
+        let call_edges = vec![CallEdge {
+            caller_file: PathBuf::from("src/main.rs"),
+            caller_name: "start".to_string(),
+            caller_line: 2,
+            callee_name: "callee".to_string(),
+            callee_file: Some(PathBuf::from("src/lib.rs")),
+        }];
+        let index = ContextIndex::from_symbols_and_edges_and_calls(symbols, edges, call_edges);
+        let walked = graph_walk(&start, &index, 1);
+        let callee_pos = walked.iter().position(|(s, _)| s.name == "callee");
+        let importer_pos = walked.iter().position(|(s, _)| s.name == "importer");
+        assert!(
+            callee_pos.is_some(),
+            "callee should be reached, got {walked:?}"
+        );
+        assert!(
+            importer_pos.is_some(),
+            "importer should be reached, got {walked:?}"
+        );
+        assert!(
+            callee_pos.unwrap() < importer_pos.unwrap(),
+            "call edge (callee) should rank higher than import edge (importer) at same hop, got {:?}",
+            walked.iter().map(|(s, h)| (s.name.as_str(), *h)).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn same_file_symbol_ranks_higher_than_cross_file() {
+        let start = sym("start", "src/main.rs");
+        let same_file = sym("helper", "src/main.rs");
+        let other_file = sym("external", "src/other.rs");
+        let symbols = vec![start.clone(), same_file.clone(), other_file.clone()];
+        let call_edges = vec![
+            CallEdge {
+                caller_file: PathBuf::from("src/main.rs"),
+                caller_name: "start".to_string(),
+                caller_line: 2,
+                callee_name: "helper".to_string(),
+                callee_file: Some(PathBuf::from("src/main.rs")),
+            },
+            CallEdge {
+                caller_file: PathBuf::from("src/main.rs"),
+                caller_name: "start".to_string(),
+                caller_line: 3,
+                callee_name: "external".to_string(),
+                callee_file: Some(PathBuf::from("src/other.rs")),
+            },
+        ];
+        let index = ContextIndex::from_symbols_and_edges_and_calls(symbols, vec![], call_edges);
+        let walked = graph_walk(&start, &index, 1);
+        let same_pos = walked.iter().position(|(s, _)| s.name == "helper").unwrap();
+        let cross_pos = walked
+            .iter()
+            .position(|(s, _)| s.name == "external")
+            .unwrap();
+        assert!(
+            same_pos < cross_pos,
+            "same-file symbol should rank higher than cross-file at same hop, got {:?}",
+            walked
+                .iter()
+                .map(|(s, h)| (s.name.as_str(), *h))
+                .collect::<Vec<_>>()
+        );
     }
 }

@@ -48,10 +48,7 @@ pub enum ErrorHint {
         suggested_module: String,
     },
     /// An expression of one type was used where another was expected.
-    TypeMismatch {
-        expected: String,
-        found: String,
-    },
+    TypeMismatch { expected: String, found: String },
     /// A method was called on a type that does not implement it.
     MissingMethod {
         type_name: String,
@@ -140,8 +137,7 @@ fn classify_borrow_conflict(error: &str) -> Option<ErrorHint> {
 /// "cannot find type `X` in this scope" diagnostics.
 fn classify_missing_import(error: &str) -> Option<ErrorHint> {
     let lower = error.to_lowercase();
-    let is_missing_value =
-        lower.contains("cannot find value") && lower.contains("in this scope");
+    let is_missing_value = lower.contains("cannot find value") && lower.contains("in this scope");
     let is_missing_type = lower.contains("cannot find type") && lower.contains("in this scope");
     if !(is_missing_value || is_missing_type) {
         return None;
@@ -189,8 +185,8 @@ fn classify_missing_method(error: &str) -> Option<ErrorHint> {
     if !lower.contains("no method named") {
         return None;
     }
-    let re = Regex::new(r"no method named `([^`]+)` found for (?:type|struct|enum) `([^`]+)`")
-        .ok()?;
+    let re =
+        Regex::new(r"no method named `([^`]+)` found for (?:type|struct|enum) `([^`]+)`").ok()?;
     let caps = re.captures(error)?;
     let method_name = caps.get(1)?.as_str().to_string();
     let type_name = caps.get(2)?.as_str().to_string();
@@ -582,7 +578,8 @@ mod hint_tests {
         // is still alive and blocks us). So the original_ref is the
         // still-alive one (`bar`) and the conflicting_ref is the new one
         // (`foo`).
-        let err = "error[E0502]: cannot borrow `foo` as immutable because it is also borrowed as `bar`";
+        let err =
+            "error[E0502]: cannot borrow `foo` as immutable because it is also borrowed as `bar`";
         let h = classify_borrow_conflict(err).unwrap();
         assert_eq!(
             h,
@@ -610,7 +607,13 @@ mod hint_tests {
     fn classify_missing_import_type() {
         let err = "error[E0412]: cannot find type `Widget` in this scope";
         let h = classify_missing_import(err).unwrap();
-        assert_eq!(h, ErrorHint::MissingImport { symbol: "Widget".to_string(), suggested_module: "crate".to_string() });
+        assert_eq!(
+            h,
+            ErrorHint::MissingImport {
+                symbol: "Widget".to_string(),
+                suggested_module: "crate".to_string()
+            }
+        );
     }
 
     #[test]
@@ -628,7 +631,8 @@ mod hint_tests {
 
     #[test]
     fn classify_missing_method_picks_type_and_method() {
-        let err = "error[E0599]: no method named `frobnicate` found for type `MyType` in current scope";
+        let err =
+            "error[E0599]: no method named `frobnicate` found for type `MyType` in current scope";
         let h = classify_missing_method(err).unwrap();
         assert_eq!(
             h,

@@ -18,14 +18,9 @@ use crate::session::executor::TurnEvent;
 /// classifier matches, the result is just the original error text (with the
 /// `Error: ` prefix that the caller provided). The function is pure: it
 /// does not touch the conversation log or any event channel.
-fn render_tool_error_with_hint(
-    tool_name: &str,
-    message: &str,
-    args: &serde_json::Value,
-) -> String {
+fn render_tool_error_with_hint(tool_name: &str, message: &str, args: &serde_json::Value) -> String {
     let mut out = format!("Error: {message}");
-    if let Some(hint) =
-        crate::session::error_recovery::classify_for_tool(tool_name, message, args)
+    if let Some(hint) = crate::session::error_recovery::classify_for_tool(tool_name, message, args)
     {
         out.push('\n');
         out.push_str(&crate::session::error_recovery::render_hint(&hint));
@@ -321,11 +316,8 @@ mod tests {
         // `classify_for_tool` only runs the classifier for shell-style
         // tools. Other tools (e.g. read_file) get the raw error only.
         let args = serde_json::json!({"path": "src/main.rs"});
-        let out = render_tool_error_with_hint(
-            "read_file",
-            "cannot find value `x` in this scope",
-            &args,
-        );
+        let out =
+            render_tool_error_with_hint("read_file", "cannot find value `x` in this scope", &args);
         assert!(!out.contains("Hint:"));
     }
 }

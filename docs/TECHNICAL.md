@@ -345,6 +345,19 @@ name = "stratum-config"
 priority = 5
 ```
 
+The host validates every manifest with `PluginManifest::validate()`
+before applying the trust policy. The validator collects every rule
+violation into a `Vec<ValidationError>` and surfaces them as load
+warnings (no rejection — the user sees all issues at once). Rules:
+kebab-case `name`; valid semver `version`; `api_version` is `v1`;
+capability-specific constraints (tool/hook `command` must be a
+relative path, skill `trigger` must start with `/`, hook `event`
+must be in the canonical set `session-start` / `pre-turn` /
+`post-turn` / `pre-tool-bash` / `post-tool-bash` / `pre-compact` /
+`post-compact`, verifier `name` non-empty, tool `schema` is a JSON
+object with a valid optional `type` field); and no duplicate skill
+triggers / tool names / verifier names within a single manifest.
+
 ### Trust tiers
 
 `read-only` < `shell` < `network` < `unsafe`. The host caps plugins at

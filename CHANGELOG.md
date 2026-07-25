@@ -6,6 +6,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Changed
+- Raised the `src/session` tarpaulin coverage threshold in CI from 61.0% to 62.0%
+  (Workorder 8.0). Threshold was lowered in commit `0bccae1` as a stopgap for
+  the zero-test fold-in modules; WO 7.2 added 20 real tests, restoring the
+  previous bar. CI now enforces 62% on every push.
 - Moved `ARCHITECTURE.md` to `docs/TECHNICAL.md` and fixed stale content
   (Stratum/Plugin3 now described as compiled-in, not standalone; bench CI
   described as having delta reporting; fold-in described as done, not planned).

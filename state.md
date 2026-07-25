@@ -2,7 +2,15 @@
 
 ## Current baseline: v0.3.6 (2026-07-25)
 
-**`dev` at HEAD, `main` at 98e863a.** Phase 5 complete (4 languages). Phase 6 complete (import + call-graph edges). Phase 7 complete (embeddings + graph-walk retrieval). 10 bench tasks. 68 ADRs. Workorders 7.1–7.9 all Done.
+**`dev` at HEAD, `main` at 98e863a.** Phase 5 complete (4 languages). Phase 6 complete (import + call-graph edges). Phase 7 complete (embeddings + graph-walk retrieval). 10 bench tasks. 68 ADRs. Workorders 7.1–7.9 all Done. Workorders 8.1, 8.2, 8.4, 8.5, 8.6 Done.
+
+### What shipped this session (8.2)
+
+| Item | What |
+|---|---|
+| WO 8.2a: Doom loop detection | `DoomLoopTracker` (sliding window of 5 tool errors; fires at 3 identical). `TurnEvent::DoomLoopDetected` to TUI + `MetricEvent::DoomLoop` to metrics. Centered warning banner with break / plan / continue actions. Successful tool call resets the tracker. |
+| WO 8.2b: `/sessions tree` | `session_index::build_fork_tree()` reads `<data_dir>/sessions/forks/<id>/fork.json` and groups forks under their parent. ASCII renderer with `├─` / `└─` / `│` connectors. Orphan forks listed as roots. No new dependencies (no `tui-tree-widget`). |
+| WO 8.2c: Scout subagent | `ScoutSubagent` struct + `SCOUT_TOOLS` allow-list (`read_file`, `read_image`, `grep`, `glob`). `filter_tools()` enforces the read-only guarantee at the type level. `tools_for_scout` in `persona.rs` builds the full toolset and runs the filter. No `bash` — the scout is the most conservative subagent surface. |
 
 ### What shipped this session (6.1–6.9)
 

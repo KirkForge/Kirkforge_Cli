@@ -406,137 +406,180 @@ impl ContextIndex {
             let node = cursor.node();
             let kind = node.kind();
 
-            let (symbol_kind, name_node) = match lang {
-                Language::Rust => match kind {
-                    "function_item" => (SymbolKind::Function, node.child_by_field_name("name")),
-                    "struct_item" => (SymbolKind::Struct, node.child_by_field_name("name")),
-                    "enum_item" => (SymbolKind::Enum, node.child_by_field_name("name")),
-                    "impl_item" => {
-                        let type_node = node.child_by_field_name("type");
-                        (SymbolKind::Impl, type_node)
-                    }
-                    "mod_item" => {
-                        if node.child_by_field_name("body").is_some() {
-                            (SymbolKind::Module, node.child_by_field_name("name"))
+            // Pre-pass: handle language-specific patterns whose symbol name
+            // is not the conventional "name" field on the matched node:
+            //   - TS: `export const foo = () => {}` — extract from the
+            //     lexical_declaration's variable_declarator; the LHS
+            //     identifier is the symbol name.
+            //   - Python: `if __name__ == "__main__":` — skip the body.
+            //   - Go: `func (s *Server) Start()` — prefix the receiver
+            //     type to the method name.
+            // Returns Some(symbol) to indicate "this node produced a
+            // symbol, do not also fall through to the default match arm".
+            let pre_extracted: Option<Symbol> = match lang {
+                Language::TypeScript => Self::try_extract_ts_arrow(node, source, path),
+                Language::Python => {
+                    if Self::is_python_dunder_main_guard(node, source) {
+                        // Skip the body of the `if __name__` guard entirely.
+                        // The function/class definitions live at module
+                        // level and are captured when we recurse past the
+                        // if_statement. The body's expression_statements
+                        // (function calls) are not symbols anyway.
+                        if cursor.goto_next_sibling() {
+                            continue;
                         } else {
-                            (SymbolKind::Module, None)
+                            break;
                         }
                     }
-                    "use_declaration" => (SymbolKind::Use, Some(node)),
-                    _ => (SymbolKind::Function, None),
-                },
-                Language::TypeScript => match kind {
-                    "function_declaration" => {
-                        (SymbolKind::Function, node.child_by_field_name("name"))
-                    }
-                    "class_declaration" => (SymbolKind::Class, node.child_by_field_name("name")),
-                    "interface_declaration" => {
-                        (SymbolKind::Interface, node.child_by_field_name("name"))
-                    }
-                    "enum_declaration" => (SymbolKind::Enum, node.child_by_field_name("name")),
-                    "type_alias_declaration" => {
-                        (SymbolKind::TypeAlias, node.child_by_field_name("name"))
-                    }
-                    "import_statement" => (SymbolKind::Use, Some(node)),
-                    _ => (SymbolKind::Function, None),
-                },
-                Language::Python => match kind {
-                    "function_definition" => {
-                        (SymbolKind::Function, node.child_by_field_name("name"))
-                    }
-                    "class_definition" => (SymbolKind::Class, node.child_by_field_name("name")),
-                    "import_statement" => (SymbolKind::Use, Some(node)),
-                    "import_from_statement" => (SymbolKind::Use, Some(node)),
-                    "decorated_definition" => {
-                        let mut child_kind = None;
-                        let mut child_cursor = node.walk();
-                        for ch in child_cursor.node().children(&mut child_cursor) {
-                            match ch.kind() {
-                                "function_definition" => {
-                                    child_kind = Some((
-                                        SymbolKind::Function,
-                                        ch.child_by_field_name("name"),
-                                    ));
-                                    break;
-                                }
-                                "class_definition" => {
-                                    child_kind =
-                                        Some((SymbolKind::Class, ch.child_by_field_name("name")));
-                                    break;
-                                }
-                                _ => {}
-                            }
-                        }
-                        match child_kind {
-                            Some((sk, nn)) => (sk, nn),
-                            None => (SymbolKind::Function, None),
-                        }
-                    }
-                    _ => (SymbolKind::Function, None),
-                },
-                Language::Go => match kind {
-                    "function_declaration" => {
-                        (SymbolKind::Function, node.child_by_field_name("name"))
-                    }
-                    "method_declaration" => {
-                        (SymbolKind::Function, node.child_by_field_name("name"))
-                    }
-                    "type_declaration" => {
-                        let mut type_spec_kind = None;
-                        let mut child_cursor = node.walk();
-                        for ch in child_cursor.node().children(&mut child_cursor) {
-                            if ch.kind() == "type_spec" {
-                                let name_node = ch.child_by_field_name("name");
-                                let value = ch.child_by_field_name("type");
-                                let value_kind = value.as_ref().map(|v| v.kind());
-                                let sym_kind = match value_kind {
-                                    Some("struct_type") => SymbolKind::Struct,
-                                    Some("interface_type") => SymbolKind::Interface,
-                                    _ => SymbolKind::TypeAlias,
-                                };
-                                type_spec_kind = Some((sym_kind, name_node));
-                                break;
-                            }
-                        }
-                        match type_spec_kind {
-                            Some((sk, nn)) => (sk, nn),
-                            None => (SymbolKind::Struct, None),
-                        }
-                    }
-                    "import_declaration" => (SymbolKind::Use, Some(node)),
-                    _ => (SymbolKind::Function, None),
-                },
+                    None
+                }
+                Language::Go => Self::try_extract_go_method(node, source, path),
+                _ => None,
             };
 
-            if let Some(name_node) = name_node {
-                let is_named_function = kind == "function_item"
-                    || kind == "function_declaration"
-                    || kind == "function_definition"
-                    || kind == "decorated_definition"
-                    || kind == "method_declaration";
-                if symbol_kind != SymbolKind::Function || is_named_function {
-                    let is_use_like = kind == "use_declaration"
-                        || kind == "import_statement"
-                        || kind == "import_from_statement"
-                        || kind == "import_declaration";
-                    let name = if is_use_like {
-                        node.utf8_text(source.as_bytes()).unwrap_or("").to_string()
-                    } else {
-                        name_node
-                            .utf8_text(source.as_bytes())
-                            .unwrap_or("")
-                            .to_string()
-                    };
-                    if !name.is_empty() {
-                        let start_line = node.start_position().row as u32 + 1;
-                        let end_line = node.end_position().row as u32 + 1;
-                        self.symbols.push(Symbol {
-                            name,
-                            kind: symbol_kind,
-                            file: path.to_path_buf(),
-                            line: start_line,
-                            end_line,
-                        });
+            if let Some(sym) = pre_extracted {
+                self.symbols.push(sym);
+            } else {
+                let (symbol_kind, name_node) = match lang {
+                    Language::Rust => match kind {
+                        "function_item" => (SymbolKind::Function, node.child_by_field_name("name")),
+                        "struct_item" => (SymbolKind::Struct, node.child_by_field_name("name")),
+                        "enum_item" => (SymbolKind::Enum, node.child_by_field_name("name")),
+                        "impl_item" => {
+                            let type_node = node.child_by_field_name("type");
+                            (SymbolKind::Impl, type_node)
+                        }
+                        "mod_item" => {
+                            if node.child_by_field_name("body").is_some() {
+                                (SymbolKind::Module, node.child_by_field_name("name"))
+                            } else {
+                                (SymbolKind::Module, None)
+                            }
+                        }
+                        "use_declaration" => (SymbolKind::Use, Some(node)),
+                        _ => (SymbolKind::Function, None),
+                    },
+                    Language::TypeScript => match kind {
+                        "function_declaration" => {
+                            (SymbolKind::Function, node.child_by_field_name("name"))
+                        }
+                        "class_declaration" => {
+                            (SymbolKind::Class, node.child_by_field_name("name"))
+                        }
+                        "interface_declaration" => {
+                            (SymbolKind::Interface, node.child_by_field_name("name"))
+                        }
+                        "enum_declaration" => (SymbolKind::Enum, node.child_by_field_name("name")),
+                        "type_alias_declaration" => {
+                            (SymbolKind::TypeAlias, node.child_by_field_name("name"))
+                        }
+                        "import_statement" => (SymbolKind::Use, Some(node)),
+                        _ => (SymbolKind::Function, None),
+                    },
+                    Language::Python => match kind {
+                        "function_definition" => {
+                            (SymbolKind::Function, node.child_by_field_name("name"))
+                        }
+                        "class_definition" => (SymbolKind::Class, node.child_by_field_name("name")),
+                        "import_statement" => (SymbolKind::Use, Some(node)),
+                        "import_from_statement" => (SymbolKind::Use, Some(node)),
+                        "decorated_definition" => {
+                            let mut child_kind = None;
+                            let mut child_cursor = node.walk();
+                            for ch in child_cursor.node().children(&mut child_cursor) {
+                                match ch.kind() {
+                                    "function_definition" => {
+                                        child_kind = Some((
+                                            SymbolKind::Function,
+                                            ch.child_by_field_name("name"),
+                                        ));
+                                        break;
+                                    }
+                                    "class_definition" => {
+                                        child_kind = Some((
+                                            SymbolKind::Class,
+                                            ch.child_by_field_name("name"),
+                                        ));
+                                        break;
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            match child_kind {
+                                Some((sk, nn)) => (sk, nn),
+                                None => (SymbolKind::Function, None),
+                            }
+                        }
+                        _ => (SymbolKind::Function, None),
+                    },
+                    Language::Go => match kind {
+                        "function_declaration" => {
+                            (SymbolKind::Function, node.child_by_field_name("name"))
+                        }
+                        "method_declaration" => {
+                            // The default arm without pre-extract is
+                            // unreachable for method_declaration because
+                            // try_extract_go_method always returns Some
+                            // for that node. Defensive default here.
+                            (SymbolKind::Function, node.child_by_field_name("name"))
+                        }
+                        "type_declaration" => {
+                            let mut type_spec_kind = None;
+                            let mut child_cursor = node.walk();
+                            for ch in child_cursor.node().children(&mut child_cursor) {
+                                if ch.kind() == "type_spec" {
+                                    let name_node = ch.child_by_field_name("name");
+                                    let value = ch.child_by_field_name("type");
+                                    let value_kind = value.as_ref().map(|v| v.kind());
+                                    let sym_kind = match value_kind {
+                                        Some("struct_type") => SymbolKind::Struct,
+                                        Some("interface_type") => SymbolKind::Interface,
+                                        _ => SymbolKind::TypeAlias,
+                                    };
+                                    type_spec_kind = Some((sym_kind, name_node));
+                                    break;
+                                }
+                            }
+                            match type_spec_kind {
+                                Some((sk, nn)) => (sk, nn),
+                                None => (SymbolKind::Struct, None),
+                            }
+                        }
+                        "import_declaration" => (SymbolKind::Use, Some(node)),
+                        _ => (SymbolKind::Function, None),
+                    },
+                };
+
+                if let Some(name_node) = name_node {
+                    let is_named_function = kind == "function_item"
+                        || kind == "function_declaration"
+                        || kind == "function_definition"
+                        || kind == "decorated_definition"
+                        || kind == "method_declaration";
+                    if symbol_kind != SymbolKind::Function || is_named_function {
+                        let is_use_like = kind == "use_declaration"
+                            || kind == "import_statement"
+                            || kind == "import_from_statement"
+                            || kind == "import_declaration";
+                        let name = if is_use_like {
+                            node.utf8_text(source.as_bytes()).unwrap_or("").to_string()
+                        } else {
+                            name_node
+                                .utf8_text(source.as_bytes())
+                                .unwrap_or("")
+                                .to_string()
+                        };
+                        if !name.is_empty() {
+                            let start_line = node.start_position().row as u32 + 1;
+                            let end_line = node.end_position().row as u32 + 1;
+                            self.symbols.push(Symbol {
+                                name,
+                                kind: symbol_kind,
+                                file: path.to_path_buf(),
+                                line: start_line,
+                                end_line,
+                            });
+                        }
                     }
                 }
             }
@@ -551,6 +594,196 @@ impl ContextIndex {
                 break;
             }
         }
+    }
+
+    /// Detect a TypeScript `const foo = () => {}` (or `let` / `var`)
+    /// pattern, optionally wrapped in `export ...`. Returns the LHS
+    /// identifier as a Function symbol name. The TS grammar produces
+    /// `lexical_declaration` for `const`/`let` and `variable_statement`
+    /// for `var`; both contain a `variable_declarator` child.
+    fn try_extract_ts_arrow(
+        node: tree_sitter::Node,
+        source: &str,
+        path: &std::path::Path,
+    ) -> Option<Symbol> {
+        let kind = node.kind();
+        if kind != "lexical_declaration" && kind != "variable_statement" {
+            return None;
+        }
+        let mut decl_name: Option<String> = None;
+        let mut is_arrow = false;
+        let mut child_cursor = node.walk();
+        for ch in child_cursor.node().children(&mut child_cursor) {
+            if ch.kind() == "variable_declarator" {
+                if let Some(name_node) = ch.child_by_field_name("name") {
+                    decl_name = Some(
+                        name_node
+                            .utf8_text(source.as_bytes())
+                            .unwrap_or("")
+                            .to_string(),
+                    );
+                }
+                if let Some(value_node) = ch.child_by_field_name("value") {
+                    let value_kind = value_node.kind();
+                    if value_kind == "arrow_function" || value_kind == "function_expression" {
+                        is_arrow = true;
+                    }
+                }
+            }
+        }
+        if !is_arrow {
+            return None;
+        }
+        let name = decl_name?;
+        if name.is_empty() {
+            return None;
+        }
+        let start_line = node.start_position().row as u32 + 1;
+        let end_line = node.end_position().row as u32 + 1;
+        Some(Symbol {
+            name,
+            kind: SymbolKind::Function,
+            file: path.to_path_buf(),
+            line: start_line,
+            end_line,
+        })
+    }
+
+    /// True if `node` is an `if_statement` whose test is
+    /// `__name__ == "__main__"` (the standard Python entry-point guard).
+    /// When true, the walker's caller skips the body entirely; module-level
+    /// definitions outside the guard are still captured when recursion
+    /// walks past the if_statement.
+    fn is_python_dunder_main_guard(node: tree_sitter::Node, source: &str) -> bool {
+        if node.kind() != "if_statement" {
+            return false;
+        }
+        // `if_statement` → first named child is the test.
+        let Some(test) = node.child_by_field_name("condition") else {
+            return false;
+        };
+        if test.kind() != "comparison_operator" {
+            return false;
+        }
+        // comparison_operator: lhs <op> rhs — we want "__name__" on one
+        // side and a string literal "__main__" on the other.
+        let mut saw_dunder_name = false;
+        let mut saw_main_string = false;
+        let mut c = test.walk();
+        for ch in test.children(&mut c) {
+            if ch.kind() == "identifier" {
+                if let Ok(text) = ch.utf8_text(source.as_bytes()) {
+                    if text == "__name__" {
+                        saw_dunder_name = true;
+                    }
+                }
+            } else if ch.kind() == "string" || ch.kind() == "string_literal" {
+                if let Ok(text) = ch.utf8_text(source.as_bytes()) {
+                    // Strip surrounding quotes from a string literal.
+                    let trimmed = text.trim_matches(|c| c == '"' || c == '\'');
+                    if trimmed == "__main__" {
+                        saw_main_string = true;
+                    }
+                }
+            }
+        }
+        saw_dunder_name && saw_main_string
+    }
+
+    /// Detect a Go `func (s *Server) Start()` (or `func (r Server) Stop()`)
+    /// and produce a `Server.Start` symbol whose name includes the receiver
+    /// type. Pointer and value receivers are normalized to the base type
+    /// (e.g. `*Server` → `Server`).
+    fn try_extract_go_method(
+        node: tree_sitter::Node,
+        source: &str,
+        path: &std::path::Path,
+    ) -> Option<Symbol> {
+        if node.kind() != "method_declaration" {
+            return None;
+        }
+        let name_node = node.child_by_field_name("name")?;
+        let method_name = name_node
+            .utf8_text(source.as_bytes())
+            .unwrap_or("")
+            .to_string();
+        if method_name.is_empty() {
+            return None;
+        }
+        // The first parameter_list in a method_declaration is the receiver.
+        let receiver_type = Self::find_go_receiver_type(&node, source);
+        let final_name = match receiver_type {
+            Some(t) if !t.is_empty() => format!("{t}.{method_name}"),
+            _ => method_name,
+        };
+        let start_line = node.start_position().row as u32 + 1;
+        let end_line = node.end_position().row as u32 + 1;
+        Some(Symbol {
+            name: final_name,
+            kind: SymbolKind::Function,
+            file: path.to_path_buf(),
+            line: start_line,
+            end_line,
+        })
+    }
+
+    /// Extract the receiver type name from a Go method_declaration.
+    /// Returns "Server" for both `func (s *Server) M()` and
+    /// `func (r Server) M()`.
+    fn find_go_receiver_type(node: &tree_sitter::Node, source: &str) -> Option<String> {
+        let mut c = node.walk();
+        for ch in node.children(&mut c) {
+            if ch.kind() == "parameter_list" {
+                // First parameter_declaration inside the receiver's
+                // parameter_list.
+                let mut pc = ch.walk();
+                for param in ch.children(&mut pc) {
+                    if param.kind() == "parameter_declaration" {
+                        // The type may be a type_identifier ("Server")
+                        // or a pointer_type wrapping one ("*Server").
+                        if let Some(type_node) = param.child_by_field_name("type") {
+                            if type_node.kind() == "type_identifier" {
+                                return Some(
+                                    type_node
+                                        .utf8_text(source.as_bytes())
+                                        .unwrap_or("")
+                                        .to_string(),
+                                );
+                            }
+                            if type_node.kind() == "pointer_type" {
+                                let mut pt_c = type_node.walk();
+                                for inner in type_node.children(&mut pt_c) {
+                                    if inner.kind() == "type_identifier" {
+                                        return Some(
+                                            inner
+                                                .utf8_text(source.as_bytes())
+                                                .unwrap_or("")
+                                                .to_string(),
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Remove duplicate `Interface` symbols that share the same
+    /// `(name, file)` key. Used to deduplicate TypeScript interface
+    /// merging, where the same interface name in one file produces
+    /// multiple `interface_declaration` nodes by design.
+    pub fn dedup_interfaces(&mut self) {
+        let mut seen: std::collections::HashSet<(String, PathBuf)> =
+            std::collections::HashSet::new();
+        self.symbols.retain(|s| {
+            if s.kind != SymbolKind::Interface {
+                return true;
+            }
+            seen.insert((s.name.clone(), s.file.clone()))
+        });
     }
 
     /// Extract the import specifier from an import statement's text.
@@ -1514,10 +1747,13 @@ mod tests {
             .unwrap();
 
         let syms = idx.symbols();
+        // WO 8.9: Go method receivers are now included in the symbol
+        // name so the receiver type is preserved. `func (b Bar) method()`
+        // is recorded as "Bar.method" instead of bare "method".
         assert!(
             syms.iter()
-                .any(|s| s.name == "method" && s.kind == SymbolKind::Function),
-            "expected method as Function, got {syms:?}"
+                .any(|s| s.name == "Bar.method" && s.kind == SymbolKind::Function),
+            "expected `Bar.method` (with receiver type) as Function, got {syms:?}"
         );
 
         let _ = fs::remove_dir_all(&tmp);

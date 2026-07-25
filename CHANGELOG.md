@@ -17,6 +17,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   commit. README stays a landing page; tech detail lives in docs/TECHNICAL.md.
 
 ### Added
+- Context index edge-case extraction (Workorder 8.9): the tree-sitter
+  walker in `kirkforge-context-index` now handles (1) TypeScript
+  `export const foo = () => {}` arrow function assignments (extracts
+  `foo` as a Function symbol), (2) TypeScript interface merging via
+  a new `ContextIndex::dedup_interfaces()` pass keyed by `(name, file)`,
+  (3) Python `if __name__ == "__main__":` guards (body is skipped so no
+  spurious module-level symbols are produced), and (4) Go method
+  receivers (both pointer and value, e.g. `func (s *Server) Start()` →
+  `Server.Start`). 7 new tests against 5 fixture files in
+  `crates/kirkforge-context-index/tests/`.
 - Multi-model benchmark leaderboard (Workorder 8.1, ADR-038): `bench run-models
   --models a,b,c --tasks <dir> --summary <md>` runs all bench tasks for each
   model and produces a `write_model_comparison()` markdown table (Model | Tasks

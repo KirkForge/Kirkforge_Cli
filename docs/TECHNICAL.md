@@ -242,6 +242,21 @@ the original `retrieve()`. The prompt builder calls `retrieve_hybrid` every
 turn. Zero new dependencies — the embeddings module is pure Rust over the
 existing `serde` / `tree-sitter` / `walkdir` set.
 
+The walker also handles five non-trivial syntax patterns (WO 8.9):
+
+- **TypeScript** `export const foo = () => {}` — arrow function assignments
+  extract the LHS identifier as a Function symbol name.
+- **TypeScript interface merging** — multiple `interface Foo {}` declarations
+  in the same file dedupe to one entry via `ContextIndex::dedup_interfaces()`,
+  keyed by `(name, file)`.
+- **Python** `if __name__ == "__main__":` — the body of the guard is skipped
+  entirely so no spurious module-level symbols are produced.
+- **Python decorators** — `@decorator\ndef f(): ...` extracts `f` (the
+  decorated child is recursed; the decorator nodes are not).
+- **Go method receivers** — `func (s *Server) Start()` and
+  `func (r Server) Stop()` are both extracted as `Server.Start` / `Server.Stop`
+  (pointer and value receivers are normalized to the base type).
+
 ---
 
 ## Context compression (Stratum)

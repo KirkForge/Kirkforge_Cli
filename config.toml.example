@@ -128,6 +128,13 @@
 # source before writing. Default: false (will flip to true after shake-out).
 # minify_write_side = false
 
+# read_file auto-minifies (strips comments, collapses blank lines) when
+# the file content exceeds this many bytes and the caller did not pass an
+# explicit `minify` argument. Small files are never auto-minified. The
+# model can pass minify=false to opt out per-call. Default: 4096.
+# Env: KIRKFORGE_MINIFY_ABOVE_BYTES.
+# minify_above_bytes = 4096
+
 # Maximum bytes the read_file tool returns. Default: 1048576 (1 MiB).
 # max_file_read_size = 1048576
 

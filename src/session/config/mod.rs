@@ -19,6 +19,7 @@
 /// - `KIRKFORGE_FOLLOW_SYMLINKS` — "true" to allow following symlinks
 /// - `KIRKFORGE_BLOCK_BINARY` — "true" to block binary file reads
 /// - `KIRKFORGE_MINIFY_WRITE_SIDE` — "true" to enable minified-envelope write-side expansion
+/// - `KIRKFORGE_MINIFY_ABOVE_BYTES` — auto-minify `read_file` output above this byte threshold (default 4096)
 /// - `KIRKFORGE_SCHEDULED_BASH_AUTO_APPROVE` — "true" to let scheduled bash jobs skip interactive approval
 /// - `KIRKFORGE_MAX_CONCURRENT_SCHEDULED_JOBS` — max concurrent scheduled jobs (clamped to ≥1)
 /// - `KIRKFORGE_BASH_SANDBOX_WORKDIR` — "true"/"false" to force bash cwd into the sandbox
@@ -286,6 +287,9 @@ fn merge_toml_into_config(cfg: &mut Config, table: toml::Table) {
     }
     if let Some(Value::Boolean(v)) = table.get("minify_write_side") {
         cfg.tools.minify_write_side = *v;
+    }
+    if let Some(Value::Integer(v)) = table.get("minify_above_bytes") {
+        cfg.tools.minify_above_bytes = (*v as usize).max(0);
     }
     if let Some(Value::Boolean(v)) = table.get("scheduled_bash_auto_approve") {
         cfg.tools.scheduled_bash_auto_approve = *v;
@@ -768,6 +772,17 @@ mod tests {
         apply_env_overrides(&mut cfg);
         assert!(cfg.tools.minify_write_side);
         set_env("KIRKFORGE_MINIFY_WRITE_SIDE", None);
+    }
+
+    #[test]
+    fn test_env_minify_above_bytes() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut cfg = Config::default();
+        assert_eq!(cfg.tools.minify_above_bytes, 4096);
+        set_env("KIRKFORGE_MINIFY_ABOVE_BYTES", Some("512"));
+        apply_env_overrides(&mut cfg);
+        assert_eq!(cfg.tools.minify_above_bytes, 512);
+        set_env("KIRKFORGE_MINIFY_ABOVE_BYTES", None);
     }
 
     #[test]
@@ -1267,6 +1282,19 @@ mod tests {
         .unwrap();
         merge_toml_into_config(&mut cfg, table);
         assert!(cfg.tools.minify_write_side);
+    }
+
+    #[test]
+    fn test_merge_toml_minify_above_bytes() {
+        let mut cfg = Config::default();
+        assert_eq!(cfg.tools.minify_above_bytes, 4096);
+        let table: toml::Table = r#"
+            minify_above_bytes = 1024
+        "#
+        .parse()
+        .unwrap();
+        merge_toml_into_config(&mut cfg, table);
+        assert_eq!(cfg.tools.minify_above_bytes, 1024);
     }
 
     #[test]

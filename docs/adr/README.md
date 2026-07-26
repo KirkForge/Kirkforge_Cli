@@ -68,7 +68,7 @@ verifies the table and the file headers agree.
 | [025](./025-windows-parity.md) | Windows parity approach | Accepted (fully implemented) | CLI |
 | [026](./026-vscode-ndjson-bridge.md) | VS Code NDJSON Bridge (Option B) | Accepted | CLI |
 | [0027](./0027-context-management-depth.md) | Context management depth — cache-stem reuse, microcompaction, and tool-result truncation | Accepted | Plugin3 |
-| [0028](./0028-verifier-bus-unification.md) | Unify the Rust and TypeScript verifier buses | Accepted (partially implemented) | Plugin3 |
+| [0028](./0028-verifier-bus-unification.md) | Unify the Rust and TypeScript verifier buses | Accepted | Plugin3 |
 | [0029](./0029-test-partitioning.md) | Test partitioning — fast / full / coverage suites | Accepted | Plugin3 |
 | [030](./030-deterministic-mode.md) | `--seed` deterministic mode | Accepted (2026-07-21) | CLI |
 | [0031](./0031-build-test-verifier-slots.md) | Build and Test Verifier Slots | Accepted | Plugin3 |
@@ -93,6 +93,7 @@ verifies the table and the file headers agree.
 | [050](./050-plugin-system-consolidation.md) | Plugin System Consolidation | Accepted | CLI |
 | [051](./051-stratum-budget-coordination.md) | Stratum–Budget Coordination (slicing triggers compression, budget tracks compressed size) | Accepted | CLI |
 | [052](./052-cache-stem-reuse.md) | Client-side prompt cache stem reuse | Accepted | CLI |
+| [053](./053-vfs-minification.md) | VFS minification for the agent loop `read_file` tool | Accepted | CLI |
 
 ## Native KirkForge-Cli ADRs
 
@@ -129,6 +130,7 @@ numbering scheme (`001`–`017`). Recent additions:
 - [ADR-050: Plugin system consolidation](./050-plugin-system-consolidation.md)
 - [ADR-051: Stratum and budget guard coordination](./051-stratum-budget-coordination.md)
 - [ADR-052: Client-side prompt cache stem reuse](./052-cache-stem-reuse.md)
+- [ADR-053: VFS minification for the agent loop `read_file` tool](./053-vfs-minification.md)
 
 These are **not** part of the Plugin3 series and are therefore not
 included in the 4-digit index table above.

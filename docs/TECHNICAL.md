@@ -61,7 +61,7 @@ kirkforge (root bin)          ← the CLI the user runs
 │   ├── kirkforge-draw/        ← diagram plugin (1 tool, 1 hook)
 │   └── kirkforge-video/       ← video plugin (8 tools)
 ├── benches/tasks/             ← 24 benchmark task definitions (TOML)
-└── docs/adr/                  ← 70 Architecture Decision Records
+└── docs/adr/                  ← 71 Architecture Decision Records
 ```
 
 ### Compiled-in vs satellite
@@ -141,11 +141,14 @@ field selects the Anthropic cloud backend (direct, Bedrock, or Vertex).
 
 ### `tools/` — built-in tools
 
-18 tools implementing the `Tool` trait: `read_file`, `write_file`, `edit_file`,
+19 tools implementing the `Tool` trait: `read_file`, `write_file`, `edit_file`,
 `atomic_write`, `bash`, `bash_cancel`, `bash_minify`, `bash_status`, `glob`,
 `grep`, `lsp_query`, `read_image`, `web_fetch`, `web_search`, `computer_use`,
-`notebook_edit`, `task`, `todo`. Plugin tools are registered alongside these at
-runtime.
+`notebook_edit`, `task`, `todo`, `workflow_run`. The `workflow_run` tool
+(WO 9.1) wraps the `kirkforge-workflow` crate's `WorkflowExecutor` so the
+agent loop and bench harness can invoke workflows via tool calls, reusing
+the same in-process `TaskSpawner` as the `task` tool. Plugin tools are
+registered alongside these at runtime.
 
 ### `tui/` — interactive UI
 
@@ -226,13 +229,17 @@ A sync, context-based bus that unifies findings from multiple sources
 single `VerifierBus`. The executor queries the bus after file-modifying tool
 calls and injects error verdicts into the conversation.
 
-ADR-028 (partially implemented, Workorder 7.7): plugin-declared
+ADR-028 (Accepted, Workorder 7.7 + 9.6): plugin-declared
 `Capability::Verifier` entries register into the same `VerifierBus` via
 `VerifierBus::add_plugin_verifier` / `register_plugin_verifiers_into_bus`.
 Each plugin verifier runs through the host crate's env-cleared
 `PluginVerifier` subprocess (exit 0 = pass, non-zero = fail with stderr) and
-is tagged `VerifierSource::Plugin(name)`. The legacy event-driven
-`PluginVerifierAdapter` path is retained for backward compatibility.
+is tagged `VerifierSource::Plugin(name)`. The executor's
+`emit_tool_event_and_correct` converts each `Severity::Error` verdict into a
+`CorrectionResult`, so a single correction path handles built-in and plugin
+verdicts. The legacy event-driven `PluginVerifierAdapter` path is retained
+for backward compatibility. The cross-language NDJSON wire bridge (Rust ↔ TS
+orchestrator) remains future work.
 
 ### Correction loop
 
@@ -484,7 +491,9 @@ model executes.
 of persona-driven steps (`explore`, `plan`, `coder`) with optional critique
 passes. Three built-in templates ship: `bugfix`, `feature`, `refactor`.
 Workflows reuse the `task` tool's in-process spawner, so they run as orchestrated
-subagent personas within a single session.
+subagent personas within a single session. Workflows are invoked two ways: the
+TUI `/workflow run` slash command, and the `workflow_run` tool (WO 9.1) which
+lets the agent loop and bench harness run a named template via a tool call.
 
 ---
 
@@ -542,11 +551,12 @@ not the root binary.
 
 ## ADRs
 
-68 Architecture Decision Records live in [docs/adr/](docs/adr/). They pin
+71 Architecture Decision Records live in [docs/adr/](docs/adr/). They pin
 load-bearing decisions: token budget (0005), slicing orchestrator (0007),
 verifier bus (0028, 0043), context index (037), benchmark harness (038),
-execution replay (039), and many more. A drift test (`adr_xref_drift`) enforces
-that ADR file headers and the README index table agree.
+execution replay (039), VFS minification (053), and many more. A drift
+test (`adr_xref_drift`) enforces that ADR file headers and the README
+index table agree.
 
 Conventions: `ponytail:` annotations pin spec literals (if a ponytail test
 fails, the spec and impl drifted, not the test). `ceiling:` and `upgrade path:`

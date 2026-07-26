@@ -15,6 +15,7 @@ pub mod task;
 pub mod todo;
 pub mod web_fetch;
 pub mod web_search;
+pub mod workflow;
 pub mod write_file;
 
 use crate::shared::{ToolDef, ToolOutcome};
@@ -128,6 +129,7 @@ pub fn all_tools(
     path_guard: crate::session::access::PathGuard,
     bash_sandbox_workdir: bool,
     minify_write_side: bool,
+    minify_above_bytes: usize,
     lsp_pool: Option<std::sync::Arc<kirkforge_lsp::LspPool>>,
     computer_use: Option<(bool, crate::shared::ComputerUseConfig)>,
     chrome_tab: Option<std::sync::Arc<dyn crate::tools::computer_use::ChromeTab>>,
@@ -139,6 +141,7 @@ pub fn all_tools(
         Arc::new(read_file::ReadFile::new(
             path_guard.clone(),
             minify_write_side,
+            minify_above_bytes,
         )),
         Arc::new(write_file::WriteFile::new(
             undo_stack.clone(),
@@ -168,6 +171,7 @@ pub fn all_tools(
         Arc::new(web_search::WebSearch::new()),
         Arc::new(task::Task::with_manager(task_manager.clone())),
         Arc::new(task::TaskOutput::new(task_manager)),
+        Arc::new(workflow::WorkflowTool::new()),
     ];
 
     // Session-scoped TODO list shared between `todo_write` and `todo_read`

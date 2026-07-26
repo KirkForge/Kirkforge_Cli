@@ -1008,6 +1008,7 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
         session::access::access_from_config(&config);
     let bash_sandbox_workdir = config.security.bash_sandbox_workdir;
     let minify_write_side = config.tools.minify_write_side;
+    let minify_above_bytes = config.tools.minify_above_bytes;
     let computer_use_cfg = config.security.computer_use.clone();
     let computer_use_enabled = computer_use_cfg.enabled;
 
@@ -1090,6 +1091,7 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
             builtin_path_guard,
             bash_sandbox_workdir,
             minify_write_side,
+            minify_above_bytes,
             lsp_pool.clone(),
             Some((computer_use_enabled, computer_use_cfg.clone())),
             Some(chrome_tab),

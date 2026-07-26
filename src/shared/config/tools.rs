@@ -25,6 +25,10 @@ fn default_minify_write_side() -> bool {
     false
 }
 
+fn default_minify_above_bytes() -> usize {
+    4096
+}
+
 fn default_scheduled_bash_auto_approve() -> bool {
     false
 }
@@ -94,6 +98,8 @@ pub struct ToolConfig {
     pub hooks_dir: Option<PathBuf>,
     #[serde(default = "default_minify_write_side")]
     pub minify_write_side: bool,
+    #[serde(default = "default_minify_above_bytes")]
+    pub minify_above_bytes: usize,
     #[serde(default)]
     pub follow_symlinks: bool,
     #[serde(default)]
@@ -141,6 +147,7 @@ impl Default for ToolConfig {
             dry_run: false,
             hooks_dir: None,
             minify_write_side: false,
+            minify_above_bytes: default_minify_above_bytes(),
             follow_symlinks: false,
             block_binary_reads: false,
             scheduled_bash_auto_approve: false,
@@ -169,6 +176,7 @@ mod tests {
         assert_eq!(cfg.budget_ceiling, 200_000);
         assert!((cfg.budget_approaching_ratio - 0.8).abs() < f64::EPSILON);
         assert!(cfg.stratum_mode.is_none());
+        assert_eq!(cfg.minify_above_bytes, 4096);
     }
 
     #[test]
@@ -177,11 +185,13 @@ mod tests {
 stratum_mode = "lite"
 budget_ceiling = 50000
 budget_approaching_ratio = 0.9
+minify_above_bytes = 1024
 "#;
         let cfg: ToolConfig = toml::from_str(toml).expect("parse");
         assert_eq!(cfg.stratum_mode.as_deref(), Some("lite"));
         assert_eq!(cfg.budget_ceiling, 50_000);
         assert!((cfg.budget_approaching_ratio - 0.9).abs() < f64::EPSILON);
+        assert_eq!(cfg.minify_above_bytes, 1024);
     }
 
     #[test]

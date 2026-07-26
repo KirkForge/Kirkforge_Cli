@@ -563,4 +563,59 @@ pub const X: i32 = 1;
         assert!(!out.contains("demo"));
         assert!(out.contains("pub const X"));
     }
+
+    // ── WO 9.7: per-language minification contracts ─────────────────────
+
+    /// Rust: `//` and `///` (doc) line comments and `/* */` block
+    /// comments are stripped; code lines (including `use` imports, which
+    /// the model needs) are kept; consecutive blank lines collapse to one.
+    #[test]
+    fn test_minify_rust_strips_doc_and_block() {
+        let src = "/// Doc comment\n//! module doc\n// plain\nuse std::io;\n\n\nfn main() { /* inline */ io::print() }";
+        let out = minify_content_by_ext(src, "rs", false);
+        assert!(!out.contains("Doc comment"));
+        assert!(!out.contains("module doc"));
+        assert!(!out.contains("plain"));
+        assert!(!out.contains("inline"));
+        assert!(out.contains("use std::io;"), "imports must be preserved");
+        assert!(out.contains("fn main()"));
+        assert!(
+            !out.contains("\n\n\n"),
+            "consecutive blank lines must collapse: {out:?}"
+        );
+    }
+
+    /// TypeScript: `//` and `/* */` comments stripped; code preserved.
+    #[test]
+    fn test_minify_ts_strips_block_comments() {
+        let src = "/* header block */\nimport { foo } from 'bar'; // trailing\nexport const x = 1;";
+        let out = minify_content_by_ext(src, "ts", false);
+        assert!(!out.contains("header block"));
+        assert!(!out.contains("trailing"));
+        assert!(out.contains("import { foo }"));
+        assert!(out.contains("export const x = 1;"));
+    }
+
+    /// Python: `#` comments and triple-quoted docstrings stripped.
+    #[test]
+    fn test_minify_python_strips_docstring_and_hash() {
+        let src = "# module comment\ndef f():\n    \"\"\"Docstring here\"\"\"\n    x = 1  # inline\n    return x";
+        let out = minify_content_by_ext(src, "py", false);
+        assert!(!out.contains("module comment"));
+        assert!(!out.contains("Docstring"));
+        assert!(!out.contains("inline"));
+        assert!(out.contains("def f():"));
+        assert!(out.contains("return x"));
+    }
+
+    /// Go: `//` line and `/* */` block comments stripped; code preserved.
+    #[test]
+    fn test_minify_go_strips_line_and_block() {
+        let src = "/* package doc */\npackage main\n\n// leading comment\nfunc add(a, b int) int { return a + b }";
+        let out = minify_content_by_ext(src, "go", false);
+        assert!(!out.contains("package doc"));
+        assert!(!out.contains("leading comment"));
+        assert!(out.contains("package main"));
+        assert!(out.contains("func add"));
+    }
 }

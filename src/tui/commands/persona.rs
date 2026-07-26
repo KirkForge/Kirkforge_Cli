@@ -110,6 +110,7 @@ fn tools_for_persona(
         path_guard,
         config.security.bash_sandbox_workdir,
         config.tools.minify_write_side,
+        config.tools.minify_above_bytes,
         None,
         Some((
             config.security.computer_use.enabled,
@@ -170,6 +171,7 @@ pub fn tools_for_scout(
         path_guard,
         config.security.bash_sandbox_workdir,
         config.tools.minify_write_side,
+        config.tools.minify_above_bytes,
         None,
         Some((
             config.security.computer_use.enabled,

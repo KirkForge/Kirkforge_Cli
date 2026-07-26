@@ -1,64 +1,94 @@
 # VFS & Tree-Sitter Minification
 
-**Source:** vix (`internal/daemon/vfs.go`, `internal/config/defaults/settings.json` languages section)
-**Goal:** Upgrade from regex-based minifier to tree-sitter AST-aware minification with per-language formatters. The VFS stores minified versions; writes go through a formatter to restore valid source.
+**Status:** Implemented (WO 9.7, ADR-053). The agent loop's `read_file`
+tool now auto-minifies files above `config.tools.minify_above_bytes`
+(default 4096) before sending them to the model. The model can pass
+`minify=false` to see the full raw content.
 
-## Current State
+**Source note:** vix (`internal/daemon/vfs.go`) inspired the "model sees
+minified, writes go through a formatter" split. KirkForge ships the
+read side; the write-side formatter path (`minify_write_side`) was
+already present from the earlier TUI-mentions feature.
 
-`src/shared/minify.rs` — hand-written comment strippers for `.rs`, `.py`, `.js`, `.ts`, `.go`, `.md`. Works but:
-- Fragile: misses edge cases (JSX, docstrings, heredocs)
-- No restore path: minified output is irreversible
-- No per-language configuration (keep_comments, max_line_length)
+## What shipped
 
-## Target State
+`src/shared/minify/lang.rs` performs per-language minification with
+string/char-literal-aware comment stripping (no tree-sitter in the hot
+read path — see ADR-053 for the decision and the dep-size rationale):
 
-```rust
-pub enum MinifyMode {
-    StripComments,
-    CollapseWhitespace,
-    ShortenIdentifiers,  // not safe in all languages
-}
+- **Rust** (`minify_rust_inner`): strips `//`, `///`, `//!` line
+  comments and `/* */` block comments; preserves string/char literals;
+  collapses consecutive blank lines to one; optionally strips
+  `#[cfg(test)]` blocks. `use` imports are kept — the model needs them.
+- **TypeScript / JavaScript / JSX / TSX** (`minify_js_like`): strips
+  `//` and `/* */` comments; preserves `'`, `"`, `` ` `` string
+  literals; collapses blank lines.
+- **Python** (`minify_python`): strips `#` comments and triple-quoted
+  docstrings (`"""..."""` / `'''...'''`); collapses blank lines.
+- **Go** (`minify_go`): same `//` + `/* */` stripping as JS-like.
+- **C / C++ / Java** (`strip_c_style_comments`): string/char-literal
+  aware `//` + `/* */` stripping.
+- **Ruby / Shell / Markdown**: comment-line stripping + blank-line
+  collapse (shell preserves shebang).
+- JSON / YAML / TOML are returned unchanged (they have no comments to
+  strip and the model needs the structure verbatim).
 
-pub struct VfsConfig {
-    pub enabled: bool,
-    pub keep_comments: bool,
-    pub formatter: Option<String>,   // external command, e.g. "rustfmt"
-}
+`src/shared/minify/mod.rs` caches results keyed by `(path, mtime)` so a
+file is not re-minified across turns unless it changes.
 
-// Per-language VFS config (from config.toml)
-"rust" => VfsConfig { enabled: true, keep_comments: false, formatter: Some("rustfmt") },
-"javascript" => VfsConfig { enabled: true, keep_comments: true, formatter: Some("prettier") },
+## Read-side wiring (`src/tools/read_file.rs`)
+
+`read_file` takes a tri-state `minify` argument:
+
+| `minify` value   | Behavior                                             |
+|------------------|------------------------------------------------------|
+| `true`           | Force minify. Output carries the byte header.        |
+| `false`          | Force raw. No minification, no header.               |
+| omitted          | Auto: minify iff `raw_content.len() > minify_above_bytes`. |
+
+When auto-minification triggers, the output appends:
+
+```
+[minified: N lines → M lines, use read_file with minify=false to see full content]
 ```
 
-## Architecture
+so the model learns the opt-out path from the response itself.
 
-```
-┌──────────────┐    ┌──────────────┐    ┌──────────────┐
-│  read_file   │───▶│  VFS Layer   │───▶│  minifier    │───▶ response (minified)
-│  (tool)      │    │  (on read)   │    │  (tree-sitter)│
-└──────────────┘    └──────────────┘    └──────────────┘
+## Write side
 
-┌──────────────┐    ┌──────────────┐    ┌──────────────┐
-│  write_file  │───▶│  VFS Layer   │───▶│  formatter   │───▶ write (restored)
-│  (tool)      │    │  (on write)  │    │  (rustfmt etc)│
-└──────────────┘    └──────────────┘    └──────────────┘
-```
+When `config.tools.minify_write_side` is `true` (default `false`),
+minified reads are wrapped in `<minified lang="...">...</minified>`
+envelopes. `write_file` / `edit_file` strip the envelope and expand the
+compressed source back to readable form via external formatters
+(`rustfmt`, `black`, `prettier`, `gofmt`, ...) with a language-aware
+fallback. This path is unchanged by WO 9.7; only the read-side
+threshold was added.
 
-## Integration Points
+## Config
 
-| File | Change |
-|------|--------|
-| `src/shared/minify.rs` | Replace hand-written parsers with tree-sitter queries |
-| `src/tools/read_file.rs` | Route through VFS when minify=true |
-| `src/tools/write_file.rs` | Optional auto-format on write |
+| Field                       | Type    | Default | Env                          | TOML key             |
+|-----------------------------|---------|---------|------------------------------|----------------------|
+| `minify_write_side`         | bool    | `false` | `KIRKFORGE_MINIFY_WRITE_SIDE`| `minify_write_side`  |
+| `minify_above_bytes`        | usize   | `4096`  | `KIRKFORGE_MINIFY_ABOVE_BYTES`| `minify_above_bytes` |
 
-## Token Savings
+## Token savings
 
-Tree-sitter minification achieves 20-50% token reduction vs raw source. That's 20-50% less context window consumed per file read, which means either cheaper sessions or longer context for the same budget.
+Comment stripping + blank-line collapse yields ~20–50% token reduction
+per source file read, depending on how heavily the file is commented.
+Small files (≤ 4096 bytes) are never minified, so the read path stays
+free for tiny reads.
 
-## Dependencies
+## Why not tree-sitter in the read path?
 
-Replace `syntect` (syntax highlighting) with `tree-sitter` for the VFS path. syntect stays for TUI highlighting — they serve different purposes.
-
-- `tree-sitter = "0.24"` — core parsing
-- `tree-sitter-rust`, `tree-sitter-python`, `tree-sitter-javascript`, `tree-sitter-typescript`, `tree-sitter-go`, `tree-sitter-bash` — language grammars
+Tree-sitter is already a workspace dependency (via
+`kirkforge-context-index`) and is the right tool for *symbol
+extraction* (AST structure matters there). For minification, only
+lexical comment/whitespace removal is needed, and the existing
+string-literal-aware minifier already handles the WO's contract
+correctly across all target languages. Adding tree-sitter to the
+`read_file` hot path would bloat a size-optimized binary
+(`opt-level=z`, `lto=true`, `codegen-units=1`) for no accuracy gain.
+ADR-053 pins this decision. The original "tree-sitter-backed VFS"
+target in this note is therefore **not** how the feature shipped — the
+shipped form is a regex-free, hand-rolled-state-machine minifier that
+is good enough and stays small.

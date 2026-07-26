@@ -3067,6 +3067,7 @@ async fn test_read_then_write_in_same_batch_passes_read_gate() {
     let read_tool: Arc<dyn Tool> = Arc::new(ReadFile::new(
         crate::session::access::PathGuard::default(),
         false,
+        4096,
     ));
     let write_tool: Arc<dyn Tool> = Arc::new(WriteFile::new(
         None,
@@ -3314,4 +3315,144 @@ async fn test_mid_batch_checkpoint_persists_partial_results() {
         tool_msgs.len() <= 2,
         "no more than the first two fast results should be recorded, got {tool_msgs:?}"
     );
+}
+
+// ── WO 9.6: plugin verifier → unified VerifierBus → CorrectionResult ──
+//
+// Proves the code-level unification of the Rust verifier bus and the
+// plugin verifier path (ADR-0028 / ADR-043). A mock plugin declares a
+// `security` verifier; the executor's `emit_tool_event_and_correct`
+// must run it through the unified `VerifierBus` and convert the
+// `Severity::Error` verdict into a `CorrectionResult` — the same struct
+// the correction loop emits — so a single correction path handles
+// built-in and plugin verdicts.
+#[cfg(unix)]
+#[tokio::test]
+async fn plugin_verifier_triggers_correction_result() {
+    use kirkforge_plugin_host::{PluginRegistry, TrustPolicy};
+    use std::os::unix::fs::PermissionsExt;
+
+    // 1. Build a mock plugin whose `security` verifier fails with a
+    //    recognizable message on stderr and exits 1.
+    let tmp = tempfile::tempdir().unwrap();
+    let plugins_dir = tmp.path().join("plugins");
+    let plugin_dir = plugins_dir.join("sec-plugin");
+    let bin_dir = plugin_dir.join("bin");
+    std::fs::create_dir_all(&bin_dir).unwrap();
+
+    let check = bin_dir.join("check.sh");
+    std::fs::write(
+        &check,
+        "#!/bin/sh\necho 'plugin-security: dangerous pattern' >&2\nexit 1\n",
+    )
+    .unwrap();
+    let mut perms = std::fs::metadata(&check).unwrap().permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&check, perms).unwrap();
+
+    std::fs::write(
+        plugin_dir.join("kirkforge.toml"),
+        r#"
+name = "sec-plugin"
+version = "0.1.0"
+description = "mock security verifier"
+trust = "shell"
+
+[[capabilities]]
+type = "verifier"
+name = "security"
+priority = 1
+command = "bin/check.sh"
+"#,
+    )
+    .unwrap();
+
+    let mut registry = PluginRegistry::new();
+    let warnings = registry
+        .load_from_dir(
+            &plugins_dir,
+            TrustPolicy::up_to(kirkforge_plugin::TrustTier::Shell),
+        )
+        .unwrap();
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(registry.active_count(), 1);
+
+    // 2. Construct an Executor with the plugin registry so
+    //    `init_default_verifiers` wires the plugin verifier into the
+    //    unified `VerifierBus` via `register_plugin_verifiers_into_bus`.
+    let adapter = MockAdapter::new(vec![], make_info());
+    let log_path = std::env::temp_dir().join(format!(
+        "kirkforge-plugin-verifier-test-{}.ndjson",
+        std::process::id()
+    ));
+    remove_test_file(&log_path);
+    let (conversation, _outcome) = ConversationLog::open(log_path.clone()).unwrap();
+    let mut composite = crate::session::toolset::CompositeToolset::empty();
+    composite.add(Box::new(crate::session::toolset::VecToolset::new(
+        "test",
+        vec![],
+    )));
+    let exe = Executor::with_log_and_undo_and_plugins(
+        Box::new(adapter),
+        composite,
+        Arc::new(std::sync::RwLock::new(make_config(true))),
+        conversation,
+        None,
+        None,
+        Some(&registry),
+    );
+
+    // Sanity: the bus registered the plugin verifier.
+    {
+        let bus_lock = exe.verifier_bus.as_ref().expect("verifier_bus set");
+        let bus = bus_lock.lock().unwrap();
+        assert!(
+            bus.verifier_count() >= 1,
+            "plugin verifier should be registered on the bus"
+        );
+    }
+
+    // 3. Drive the seam: a `write_file` tool call must run the bus and
+    //    convert any `Severity::Error` verdict into a `CorrectionResult`.
+    let tc = ToolInvocation {
+        id: "call-1".into(),
+        name: "write_file".into(),
+        arguments: serde_json::json!({
+            "path": "src/secret.rs",
+            "content": "fn main() {}",
+        }),
+    };
+    let outcome = ToolOutcome::Success {
+        content: "wrote 1 file".into(),
+    };
+    let corrections = exe
+        .emit_tool_event_and_correct(
+            &tc,
+            "write_file",
+            &tc.arguments,
+            &outcome,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
+
+    // 4. Assert the plugin verifier's verdict surfaced as a
+    //    `CorrectionResult` sourced from `plugin:security`.
+    let plugin_correction = corrections
+        .iter()
+        .find(|c| c.verifier == "plugin:security" && !c.success && c.fix.is_none());
+    assert!(
+        plugin_correction.is_some(),
+        "expected a CorrectionResult from plugin:security, got: {corrections:?}"
+    );
+    let c = plugin_correction.unwrap();
+    assert!(
+        c.message.contains("plugin-security: dangerous pattern"),
+        "CorrectionResult message should carry the plugin verifier's stderr: {}",
+        c.message
+    );
+
+    remove_test_file(&log_path);
 }

@@ -97,13 +97,13 @@ sandbox hardening, and representative bench tasks.
 | # | Workorder | Status | Priority | Depends on |
 |---|---|---|---|---|
 | 9.0 | [Fix broken bench verify specs](9.0-fix-broken-bench-verify-specs.md) | Done | High | 8.3 |
-| 9.1 | [Workflow tool wrapper](9.1-workflow-tool-wrapper.md) | Planned | Medium | — |
+| 9.1 | [Workflow tool wrapper](9.1-workflow-tool-wrapper.md) | Done | Medium | — |
 | 9.2 | [Bench PR delta comment](9.2-bench-pr-delta-comment.md) | Done | Medium | 6.2, 8.1 |
 | 9.3 | [Version reconciliation and v0.3.6 release](9.3-version-reconciliation.md) | Planned | High | 8.0-8.9 |
 | 9.4 | [Replay interactive stepper](9.4-replay-interactive-stepper.md) | Done | Medium | — |
 | 9.5 | [Prompt cache stem reuse](9.5-prompt-cache-stem-reuse.md) | Done | High | — |
-| 9.6 | [Verifier bus code unification](9.6-verifier-bus-unification.md) | Planned | Medium | ADR-028 |
-| 9.7 | [Tree-sitter VFS minification](9.7-vfs-minification.md) | Planned | Medium | — |
+| 9.6 | [Verifier bus code unification](9.6-verifier-bus-unification.md) | Done | Medium | ADR-028 |
+| 9.7 | [Tree-sitter VFS minification](9.7-vfs-minification.md) | Done | Medium | — |
 | 9.8 | [Seccomp/rlimit sandbox hardening](9.8-seccomp-rlimit-hardening.md) | Planned | Low | — |
 | 9.9 | [Bench task expansion: real-world shapes](9.9-bench-task-expansion-2.md) | Planned | High | 9.0 |
 

@@ -75,6 +75,13 @@ pub(super) fn apply_env_overrides(cfg: &mut Config) {
         }
     }
 
+    // KIRKFORGE_MINIFY_ABOVE_BYTES
+    if let Ok(val) = std::env::var("KIRKFORGE_MINIFY_ABOVE_BYTES") {
+        if let Ok(n) = val.parse::<usize>() {
+            cfg.tools.minify_above_bytes = n;
+        }
+    }
+
     // KIRKFORGE_CARRYOVER_ENABLED
     if let Ok(val) = std::env::var("KIRKFORGE_CARRYOVER_ENABLED") {
         if let Some(v) = parse_bool_env(&val) {

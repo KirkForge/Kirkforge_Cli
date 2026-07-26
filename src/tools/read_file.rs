@@ -6,13 +6,16 @@ use std::path::PathBuf;
 pub struct ReadFile {
     path_guard: PathGuard,
     minify_write_side: bool,
+    #[allow(dead_code)]
+    minify_above_bytes: usize,
 }
 
 impl ReadFile {
-    pub fn new(path_guard: PathGuard, minify_write_side: bool) -> Self {
+    pub fn new(path_guard: PathGuard, minify_write_side: bool, minify_above_bytes: usize) -> Self {
         Self {
             path_guard,
             minify_write_side,
+            minify_above_bytes,
         }
     }
 }
@@ -99,10 +102,17 @@ impl Tool for ReadFile {
         // Apply minification to the selected slice only, so offset/limit
         // refer to the original file lines. Whole-file reads still show
         // the byte-saved summary.
-        let minify = args
-            .get("minify")
-            .and_then(|m| m.as_bool())
-            .unwrap_or(false);
+        //
+        // `minify` is tri-state:
+        //   - Some(true)  → force minify (caller asked for it)
+        //   - Some(false) → force raw   (caller opted out)
+        //   - None        → auto: minify when the whole file exceeds
+        //                   `minify_above_bytes`. The note appended
+        //                   below tells the model how to see the full
+        //                   content.
+        let minify_arg = args.get("minify").and_then(|m| m.as_bool());
+        let auto_minified = minify_arg.is_none() && raw_content.len() > self.minify_above_bytes;
+        let minify = minify_arg.unwrap_or(auto_minified);
         let selected = if minify {
             crate::shared::minify::minify_source(&path, &selected_raw)
         } else {
@@ -119,13 +129,23 @@ impl Tool for ReadFile {
                 } else {
                     selected.clone()
                 };
-                format!(
+                let header = format!(
                     "{} (minified, was {} bytes → now {} bytes)\n{}",
                     path.display(),
                     raw_content.len(),
                     selected.len(),
                     body,
-                )
+                );
+                if auto_minified {
+                    let note = format!(
+                        "[minified: {} lines → {} lines, use read_file with minify=false to see full content]",
+                        raw_total,
+                        selected.lines().count(),
+                    );
+                    format!("{header}\n{note}")
+                } else {
+                    header
+                }
             } else {
                 raw_content
             }
@@ -179,7 +199,7 @@ mod tests {
             f.write_all(source.as_bytes()).unwrap();
         }
 
-        let tool = ReadFile::new(PathGuard::default(), false);
+        let tool = ReadFile::new(PathGuard::default(), false, 4096);
         let outcome = tool
             .run(
                 &ToolContext::new(),
@@ -206,6 +226,139 @@ mod tests {
         assert!(
             !content.contains("// header"),
             "comment should have been stripped: {content}"
+        );
+    }
+
+    // ── WO 9.7: VFS minification threshold + override ──────────────────
+
+    /// A small file (under `minify_above_bytes`) with no explicit `minify`
+    /// arg is returned raw — no auto-minification, no note.
+    #[tokio::test]
+    async fn threshold_skip_small_file_not_minified() {
+        let tmp = std::env::temp_dir().join(format!(
+            "kirkforge_read_file_threshold_skip_{}.rs",
+            std::process::id()
+        ));
+        let source = "// tiny comment\nfn add(a: i32, b: i32) -> i32 { a + b }\n";
+        {
+            let mut f = std::fs::File::create(&tmp).unwrap();
+            f.write_all(source.as_bytes()).unwrap();
+        }
+
+        let tool = ReadFile::new(PathGuard::default(), false, 4096);
+        let outcome = tool
+            .run(
+                &ToolContext::new(),
+                json!({ "path": tmp.to_string_lossy() }),
+            )
+            .await;
+        std::fs::remove_file(&tmp).ok();
+
+        let ToolOutcome::FileContent { content, .. } = outcome else {
+            panic!("expected FileContent, got {outcome:?}");
+        };
+        assert!(
+            content.contains("// tiny comment"),
+            "small file should not be auto-minified: {content}"
+        );
+        assert!(
+            !content.contains("[minified:"),
+            "small file should not carry the minified note: {content}"
+        );
+    }
+
+    /// A file larger than `minify_above_bytes` with no explicit `minify`
+    /// arg is auto-minified and the output carries the WO's note.
+    #[tokio::test]
+    async fn auto_minify_large_file_emits_note() {
+        let tmp = std::env::temp_dir().join(format!(
+            "kirkforge_read_file_auto_minify_{}.rs",
+            std::process::id()
+        ));
+        let mut source = String::new();
+        for _ in 0..40 {
+            source.push_str("// filler comment line that should be stripped\n");
+        }
+        source.push_str("pub fn add(a: i32, b: i32) -> i32 { a + b }\n");
+        {
+            let mut f = std::fs::File::create(&tmp).unwrap();
+            f.write_all(source.as_bytes()).unwrap();
+        }
+
+        let tool = ReadFile::new(PathGuard::default(), false, 64);
+        let outcome = tool
+            .run(
+                &ToolContext::new(),
+                json!({ "path": tmp.to_string_lossy() }),
+            )
+            .await;
+        std::fs::remove_file(&tmp).ok();
+
+        let ToolOutcome::FileContent { content, .. } = outcome else {
+            panic!("expected FileContent, got {outcome:?}");
+        };
+        assert!(
+            content.contains("(minified, was"),
+            "auto-minified file should carry the byte header: {content}"
+        );
+        assert!(
+            content.contains("[minified:"),
+            "auto-minified file should carry the lines note: {content}"
+        );
+        assert!(
+            content.contains("use read_file with minify=false"),
+            "note should tell the model how to opt out: {content}"
+        );
+        assert!(
+            content.contains("pub fn add"),
+            "code should survive: {content}"
+        );
+        assert!(
+            !content.contains("filler comment"),
+            "comments should be stripped: {content}"
+        );
+    }
+
+    /// Even a large file is returned raw when the model passes `minify=false`.
+    #[tokio::test]
+    async fn explicit_minify_false_returns_raw() {
+        let tmp = std::env::temp_dir().join(format!(
+            "kirkforge_read_file_explicit_false_{}.rs",
+            std::process::id()
+        ));
+        let mut source = String::new();
+        for _ in 0..40 {
+            source.push_str("// filler comment line that should remain\n");
+        }
+        source.push_str("pub fn add(a: i32, b: i32) -> i32 { a + b }\n");
+        {
+            let mut f = std::fs::File::create(&tmp).unwrap();
+            f.write_all(source.as_bytes()).unwrap();
+        }
+
+        let tool = ReadFile::new(PathGuard::default(), false, 64);
+        let outcome = tool
+            .run(
+                &ToolContext::new(),
+                json!({ "path": tmp.to_string_lossy(), "minify": false }),
+            )
+            .await;
+        std::fs::remove_file(&tmp).ok();
+
+        let ToolOutcome::FileContent { content, .. } = outcome else {
+            panic!("expected FileContent, got {outcome:?}");
+        };
+        assert!(
+            content.contains("filler comment"),
+            "explicit minify=false must return raw content: {content}"
+        );
+        assert!(
+            !content.contains("[minified:"),
+            "raw output must not carry the minified note: {content}"
+        );
+        assert!(
+            !content.contains("(minified, was"),
+            "raw output must not carry the minified header: {content}"
         );
     }
 }

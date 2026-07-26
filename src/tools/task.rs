@@ -325,6 +325,7 @@ impl TaskSpawner for InProcessTaskSpawner {
             path_guard,
             self.config.security.bash_sandbox_workdir,
             self.config.tools.minify_write_side,
+            self.config.tools.minify_above_bytes,
             None,
             Some((
                 self.config.security.computer_use.enabled,

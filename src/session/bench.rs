@@ -85,7 +85,7 @@ fn build_bench_toolset(sandbox_path: &Path) -> super::toolset::CompositeToolset 
     };
 
     let tools = crate::tools::all_tools(
-        None, false, deny_list, path_guard, true, false, None, None, None, None, None,
+        None, false, deny_list, path_guard, true, false, 4096, None, None, None, None, None,
     );
 
     let mut toolset = super::toolset::CompositeToolset::empty();

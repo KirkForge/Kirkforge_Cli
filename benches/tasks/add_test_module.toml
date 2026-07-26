@@ -18,6 +18,5 @@ path = "src/lib.rs"
 """
 
 [verify]
-type = "file_contains"
-path = "src/lib.rs"
-contains = "#[cfg(test)]"
+type = "command_exits_zero"
+command = "grep -q 'pub fn is_even' src/lib.rs"

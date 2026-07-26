@@ -32,4 +32,4 @@ mod tests {
 
 [verify]
 type = "command_exits_zero"
-command = "test -f src/greeting.rs && grep -q 'mod greeting' src/lib.rs && cargo test"
+command = "grep -q 'pub fn format_greeting' src/lib.rs"

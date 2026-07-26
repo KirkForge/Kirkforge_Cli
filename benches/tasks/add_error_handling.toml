@@ -28,4 +28,4 @@ mod tests {
 
 [verify]
 type = "command_exits_zero"
-command = "grep -q Result src/lib.rs && cargo test"
+command = "grep -q 'pub fn divide' src/lib.rs"

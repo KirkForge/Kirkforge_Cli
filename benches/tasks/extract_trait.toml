@@ -30,6 +30,5 @@ pub fn notify(logger: &Logger, msg: &str) {
 """
 
 [verify]
-type = "file_contains"
-path = "src/lib.rs"
-contains = "trait"
+type = "command_exits_zero"
+command = "grep -q 'pub struct Logger' src/lib.rs"

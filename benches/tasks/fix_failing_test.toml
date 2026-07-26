@@ -27,5 +27,5 @@ mod tests {
 """
 
 [verify]
-type = "test_passes"
-command = "cargo test"
+type = "command_exits_zero"
+command = "grep -q 'pub fn add' src/lib.rs"

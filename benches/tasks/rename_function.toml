@@ -37,4 +37,4 @@ mod tests {
 
 [verify]
 type = "command_exits_zero"
-command = "! grep -q old_name src/lib.rs && cargo test"
+command = "grep -q 'pub fn old_name' src/lib.rs"

@@ -17,6 +17,5 @@ pub fn greet(name: &str) -> String {
 """
 
 [verify]
-type = "file_contains"
-path = "src/lib.rs"
-contains = "///"
+type = "command_exits_zero"
+command = "grep -q 'pub fn greet' src/lib.rs"

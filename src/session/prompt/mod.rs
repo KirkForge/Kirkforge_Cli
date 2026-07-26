@@ -1,3 +1,4 @@
+pub mod cache_stem;
 pub(crate) mod compaction;
 pub(crate) mod microcompaction;
 pub mod summarizer;

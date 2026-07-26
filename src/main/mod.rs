@@ -300,7 +300,8 @@ async fn main() {
             turn,
             from,
             to,
-        } => handle_replay_command(id, data_dir, turn, from, to),
+            interactive,
+        } => handle_replay_command(id, data_dir, turn, from, to, interactive),
         Command::Bench { command } => handle_bench_command(command).await,
     }
     .map_err(KirkForgeError::from);
@@ -518,6 +519,7 @@ fn handle_replay_command(
     turn: Option<u32>,
     from: Option<u32>,
     to: Option<u32>,
+    interactive: bool,
 ) -> anyhow::Result<()> {
     use kirkforge::session::replay::{format_turn, TraceRecorder};
 
@@ -582,11 +584,72 @@ fn handle_replay_command(
         return Ok(());
     }
 
+    if interactive {
+        // Interactive TUI stepper. Hand the filtered records to the
+        // replay app and run a minimal ratatui loop.
+        return run_replay_tui(filtered);
+    }
+
     for record in &filtered {
         print!("{}", format_turn(record));
     }
 
     Ok(())
+}
+
+/// Run the interactive replay TUI over a pre-filtered set of records.
+///
+/// This mirrors the standalone session-picker loop in `tui::mod.rs`:
+/// enable raw mode, enter the alternate screen, drive the `ReplayApp`
+/// until it signals quit, then restore terminal state. Errors during
+/// teardown are logged but not propagated (the user has already seen
+/// the replay; a dirty terminal on exit is worse than a lost log line).
+fn run_replay_tui(records: Vec<kirkforge::session::replay::TurnRecord>) -> anyhow::Result<()> {
+    use crossterm::{
+        event::{self, Event},
+        execute,
+        terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    };
+    use kirkforge::session::replay::ReplayStepper;
+    use kirkforge::tui::replay::ReplayApp;
+    use ratatui::{backend::CrosstermBackend, Terminal};
+
+    enable_raw_mode()?;
+    let mut stdout = std::io::stdout();
+    execute!(stdout, EnterAlternateScreen)?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
+
+    let mut app = ReplayApp::new(ReplayStepper::new(records));
+
+    let result = loop {
+        terminal.draw(|f| app.render(f, f.area()))?;
+        match event::read() {
+            Ok(Event::Key(key)) => {
+                app.handle_key(key);
+                if app.should_quit() {
+                    break Ok(());
+                }
+            }
+            Ok(Event::Resize(_, _)) => {
+                // Next draw will pick up the new size.
+            }
+            Ok(_) => {}
+            Err(e) => {
+                break Err(anyhow::anyhow!("terminal read error: {e}"));
+            }
+        }
+    };
+
+    // Teardown — best-effort, mirror the session-picker pattern.
+    if let Err(e) = disable_raw_mode() {
+        tracing::debug!(error = %e, "failed to disable raw mode during replay TUI teardown");
+    }
+    if let Err(e) = execute!(terminal.backend_mut(), LeaveAlternateScreen) {
+        tracing::debug!(error = %e, "failed to leave alternate screen during replay TUI teardown");
+    }
+
+    result
 }
 
 fn handle_sessions_command(

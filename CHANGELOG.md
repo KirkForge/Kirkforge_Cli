@@ -6,6 +6,18 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- Client-side prompt cache stem reuse (Workorder 9.5): new
+  `CacheStemTracker` in `src/session/prompt/cache_stem.rs` records the
+  hash of the prefix messages (system + tools + first N turns) sent in
+  the prior turn and reports `is_stable` when the current prefix
+  matches. Uses `DefaultHasher` over the canonical JSON serialisation
+  of each message — no new deps. New `PlanDecisionKind::CacheStemReuse`
+  metric variant so the executor can emit a `PlanReason` event when the
+  stem is reused (wiring into `Executor::turn` is a follow-up WO). 6
+  unit tests. ADR-052. The adapter `cache_control` markers are
+  unchanged (the Anthropic API needs full content even for cached
+  messages; the useful client-side signal is the metric event, not an
+  adapter log line).
 - Doom loop detection (Workorder 8.2a): the executor tracks the last 5
   tool-error observations in a sliding window; when 3 identical
   `(tool, error)` pairs land in a row it emits a `TurnEvent::DoomLoopDetected`

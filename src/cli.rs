@@ -193,6 +193,13 @@ pub enum Command {
         /// Show turns up to this number (inclusive).
         #[arg(long)]
         to: Option<u32>,
+
+        /// Launch an interactive TUI stepper instead of printing all turns
+        /// at once. j/k (or arrows) step forward/back, g jumps, Enter
+        /// expands/collapses tool-call detail, q quits. Full-fidelity
+        /// render — no 200/300-char truncation.
+        #[arg(long)]
+        interactive: bool,
     },
     /// Run benchmark tasks and collect metrics.
     Bench {

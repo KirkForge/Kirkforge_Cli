@@ -1,30 +1,35 @@
-# Lessons — WO 8.0 session
+# Lessons — WO 9.5 session
 
 ## What I learned
-- Tarpaulin 0.32.0 cannot measure coverage in a per-worktree cold target dir within the
-  WO's 5-minute budget. Cold `cargo build` of the kirkforge workspace + all crates takes
-  ~8 minutes; tarpaulin's instrumented build (the `--cfg=tarpaulin -Cinstrument-coverage`
-  rustc flags in the output) is heavier. On CI this is faster because the action caches
-  `$CARGO_HOME` and the target dir between runs. The WO's documented fallback is the
-  right call: bump to the minimum and let CI enforce on every push.
-- The repo's `kirkforge-cli.testdoctor` crate is `default-members`-excluded; the workspace
-  has ~12 member crates that all get built. Even `--lib` builds them all.
-- `cargo check --workspace --all-targets` took 8m09s on this machine (cold target dir).
-  `cargo clippy --all-targets` took 2m07s incremental. The two `cargo test` runs each
-  took ~10–14 minutes. Total gate time on a fresh worktree is ~35 minutes. Worth knowing
-  for future WO scheduling.
+- `Role` and `ToolInvocation` in `src/shared/mod.rs` do not derive
+  `Hash`. Rather than modify the shared types (scope creep + possible
+  ripple into serde), I hash the canonical JSON serialisation of each
+  `Message` via `serde_json::to_vec`. This is dep-free (`serde_json` is
+  already in the tree) and captures every field that affects the
+  provider's cache key while respecting `skip_serializing_if` for
+  local-only fields like `token_count`.
+- `DefaultHasher` is `SipHash-1-3` today but the std docs say the
+  algorithm may change. Fine for a per-process, turn-to-turn comparison
+  (both turns run in the same process); the tracker's `last_hash` is
+  intentionally in-memory only and must not be persisted.
 
-## What surprised me
-- The CI threshold is enforced by an inline Python XML parser, not a tarpaulin-internal
-  flag. Easy to bump — no tarpaulin version pinning issue.
-- The CHANGELOG.md had 21 lines of "Unreleased / Changed" already in flight from prior
-  WOs. Inserted my entry at the top, not the bottom — convention here is newest-first
-  within a section. Verified by reading the surrounding entries.
+## Scope creep: forced by concurrent-agent contamination
+- `src/tui/replay.rs` (untracked, foreign) had 2 clippy
+  `doc_overindented_list_items` errors in doc-comment continuation
+  lines (lines 13-14). The foreign file is wired into the lib via a
+  foreign `pub mod replay;` line in `src/tui/mod.rs`, so the lib build
+  (and thus the gate) could not compile without it. I fixed the 2
+  doc-indent lines (4-space indent per clippy's suggestion) to unblock
+  the gate. This is a 2-line cosmetic fix to foreign WIP; the foreign
+  agent would need to make the same fix before their own commit. Noted
+  here per AGENTS.md §7.
 
 ## What I would do differently
-- For any future WO that asks "run tarpaulin", pre-warm the worktree's target dir with a
-  plain `cargo check --workspace --all-targets` (or even a no-op `cargo build --tests`)
-  before invoking tarpaulin. The cold-build cost is the bottleneck, not the coverage
-  instrumentation itself.
-- If tarpaulin is critical, dispatch it as a separate task against a pre-warmed target
-  dir, not as part of the WO itself.
+- The WO brief walked back the `src/adapters/anthropic.rs` change
+  mid-paragraph ("the real optimization is: … emit a
+  `PlanReason::CacheStemReuse` metric event"). I did NOT touch the
+  adapter — the `cache_control` markers are idempotent and the API
+  needs full content even for cached messages, so an adapter change
+  would be cosmetic and would add `tracing` to a hot path (AGENTS.md §5
+  forbids debug spam). The useful client-side signal is the metric
+  event, which is what I shipped.

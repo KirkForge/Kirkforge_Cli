@@ -9,6 +9,13 @@ on:
       - 'src/tools/**'
       - 'crates/kirkforge-bench/**'
       - 'benches/tasks/**'
+  pull_request:
+    paths:
+      - 'src/session/**'
+      - 'src/adapters/**'
+      - 'src/tools/**'
+      - 'crates/kirkforge-bench/**'
+      - 'benches/tasks/**'
   schedule:
     - cron: '0 4 * * *'
 
@@ -19,6 +26,7 @@ env:
 
 jobs:
   bench-baseline:
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     env:
       BENCH_MODEL: qwen2.5:0.5b
@@ -65,3 +73,89 @@ jobs:
           name: bench-baseline
           path: bench-report.json
           retention-days: 90
+
+  bench-pr-delta:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    env:
+      BENCH_MODEL: qwen2.5:0.5b
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install and start Ollama
+        shell: bash
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          ollama serve >/tmp/ollama.log 2>&1 &
+          for i in {1..30}; do
+            if curl -fsS http://localhost:11434/api/tags >/dev/null 2>&1; then
+              echo "Ollama ready"
+              break
+            fi
+            sleep 1
+          done
+          curl -fsS http://localhost:11434/api/tags >/dev/null || { echo "Ollama failed to start"; cat /tmp/ollama.log; exit 1; }
+
+      - name: Pull bench model
+        shell: bash
+        run: |
+          if ! curl -fsS http://localhost:11434/api/tags | grep -q "${BENCH_MODEL}"; then
+            ollama pull "${BENCH_MODEL}"
+          else
+            echo "Bench model ${BENCH_MODEL} already cached"
+          fi
+
+      - name: Download latest main-branch baseline
+        id: download_baseline
+        continue-on-error: true
+        run: |
+          mkdir -p benches/baselines
+          gh run download -n bench-baseline -R "${{ github.repository }}" -D benches/baselines/ \
+            || echo "No baseline found; first run will establish one"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run benchmark tasks on PR HEAD
+        id: bench_run
+        continue-on-error: true
+        run: |
+          cargo run -- bench run --tasks benches/tasks/ --model "${BENCH_MODEL}" --output bench-report.json --summary bench-summary.md
+
+      - name: Compute delta vs baseline
+        id: delta
+        if: always() && steps.bench_run.outcome != 'skipped'
+        continue-on-error: true
+        run: |
+          BASELINE=$(ls benches/baselines/bench-report*.json 2>/dev/null | head -1)
+          if [ -n "$BASELINE" ] && [ -f "$BASELINE" ]; then
+            cargo run -- bench compare --baseline "$BASELINE" --current bench-report.json --summary bench-delta.md
+            echo "has_delta=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No baseline report found; posting summary only"
+            echo "has_delta=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Post PR delta comment
+        if: always() && steps.bench_run.outcome != 'skipped'
+        continue-on-error: true
+        run: |
+          BODY=""
+          if [ -f bench-delta.md ]; then
+            BODY=$(cat bench-delta.md)
+          elif [ -f bench-summary.md ]; then
+            BODY=$(cat bench-summary.md)
+          fi
+          if [ -n "$BODY" ]; then
+            gh pr comment "${{ github.event.pull_request.number }}" --body "$BODY"
+          else
+            echo "No bench output to post"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

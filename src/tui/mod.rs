@@ -28,6 +28,7 @@ pub mod components;
 pub mod events;
 pub mod keys;
 pub mod rendering;
+pub mod replay;
 pub mod search;
 pub mod syntax;
 pub mod transcript;

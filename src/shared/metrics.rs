@@ -126,6 +126,13 @@ pub enum PlanDecisionKind {
     CompactionTrigger,
     /// The router or user selected a model for the turn.
     ModelSelect,
+    /// The prompt-cache stem (system + tools + early turns) hashed to
+    /// the same value as the prior turn, so the provider's KV-cache
+    /// should hit for the stable prefix. Emitted by the
+    /// `CacheStemTracker` (ADR-052) so operators can see stem reuse is
+    /// happening; the actual token savings come from the server-side
+    /// `cache_control` markers in the adapter.
+    CacheStemReuse,
 }
 
 /// A metric event. Serialized as one NDJSON line.

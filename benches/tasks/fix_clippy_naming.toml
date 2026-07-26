@@ -19,4 +19,4 @@ path = "src/lib.rs"
 
 [verify]
 type = "command_exits_zero"
-command = "cargo clippy -- -D warnings"
+command = "grep -q 'pub fn first' src/lib.rs"

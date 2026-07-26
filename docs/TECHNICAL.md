@@ -61,7 +61,7 @@ kirkforge (root bin)          ← the CLI the user runs
 │   ├── kirkforge-draw/        ← diagram plugin (1 tool, 1 hook)
 │   └── kirkforge-video/       ← video plugin (8 tools)
 ├── benches/tasks/             ← 24 benchmark task definitions (TOML)
-└── docs/adr/                  ← 68 Architecture Decision Records
+└── docs/adr/                  ← 70 Architecture Decision Records
 ```
 
 ### Compiled-in vs satellite

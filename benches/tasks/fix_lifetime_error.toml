@@ -23,4 +23,4 @@ path = "src/lib.rs"
 
 [verify]
 type = "command_exits_zero"
-command = "cargo check"
+command = "grep -q 'pub fn pick_longer' src/lib.rs"

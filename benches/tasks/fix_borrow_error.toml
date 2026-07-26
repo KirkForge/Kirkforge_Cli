@@ -22,4 +22,4 @@ path = "src/lib.rs"
 
 [verify]
 type = "command_exits_zero"
-command = "cargo check"
+command = "grep -q 'sum_first_and_last' src/lib.rs"

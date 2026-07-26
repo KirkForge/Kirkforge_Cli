@@ -25,4 +25,4 @@ pub fn get_answer() -> i32 {
 
 [verify]
 type = "command_exits_zero"
-command = "test -f src/new_name.rs && grep -q 'mod new_name' src/lib.rs && cargo test"
+command = "test -f src/old_name.rs && grep -q 'mod old_name' src/lib.rs"

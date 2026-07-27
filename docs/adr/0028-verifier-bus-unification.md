@@ -171,13 +171,27 @@ The wire format is NDJSON lines of KVB events. Both sides must ignore unknown ev
   plugin declaring a `security` verifier → `VerifierBus` →
   `CorrectionResult`.
 - The cross-language NDJSON bridge (Rust ↔ TS orchestrator over stdio)
-  is NOT shipped. The Node SDK plugin (`kirkforge-plugin`) still runs its
-  TS-based verifiers through the legacy event-driven `Verifier` trait path
-  (`PluginVerifierAdapter`), which is retained for backward compatibility.
-  The TS-side `@kirkforge/verifier-bridge` package and the shared KVB
-  wire format remain design-only. This is the remaining work to fully
-  realize §5 of this ADR; it is out of scope for WO 9.6, which
-  unified the plugin-verifier path at the code level.
+  shipped in WO 10.8. The Rust `TsOrchestratorBridgeVerifier`
+  (`src/session/verifier/bus.rs`) implements `BusVerifier` by shelling
+  out to the TS orchestrator's bridge emitter
+  (`npm/kirkforge-plugin/packages/orchestrator/src/bridge-emitter.ts`)
+  and parsing NDJSON verdicts from stdout. The wire format is one JSON
+  object per line:
+  `{"verifier":"security","severity":"error","file":"src/foo.ts","line":42,"message":"...","rule":"no-eval"}`.
+  Malformed lines become `Severity::Warning` verdicts (never silently
+  dropped). The bridge is registered on the `VerifierBus` when the TS
+  orchestrator plugin is loaded; error verdicts flow through the same
+  `emit_tool_event_and_correct` → `CorrectionResult` path as built-in
+  and plugin verifiers. The integration test
+  `ts_orchestrator_bridge_verifier` proves the end-to-end path: a mock
+  bridge script emits one `security` error NDJSON line →
+  `VerdictEntry { Severity::Error }` → `has_errors()`. The TS-side
+  bridge emitter test (`bridge-emitter.test.ts`) verifies the
+  event-to-NDJSON translation. The Node SDK plugin
+  (`kirkforge-plugin`) still runs its TS-based verifiers through the
+  legacy event-driven `Verifier` trait path
+  (`PluginVerifierAdapter`), which is retained for backward
+  compatibility.
 - The Rust side currently lacks `types`, `graph`, and `imports` verifiers. The TS side currently lacks an in-process rustfmt/clippy verifier. The unified registry acknowledges these gaps rather than hiding them.
 
 ## ceiling

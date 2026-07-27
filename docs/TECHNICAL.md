@@ -239,7 +239,7 @@ A sync, context-based bus that unifies findings from multiple sources
 single `VerifierBus`. The executor queries the bus after file-modifying tool
 calls and injects error verdicts into the conversation.
 
-ADR-028 (Accepted, Workorder 7.7 + 9.6): plugin-declared
+ADR-028 (Accepted, Workorder 7.7 + 9.6 + 10.8): plugin-declared
 `Capability::Verifier` entries register into the same `VerifierBus` via
 `VerifierBus::add_plugin_verifier` / `register_plugin_verifiers_into_bus`.
 Each plugin verifier runs through the host crate's env-cleared
@@ -249,7 +249,15 @@ is tagged `VerifierSource::Plugin(name)`. The executor's
 `CorrectionResult`, so a single correction path handles built-in and plugin
 verdicts. The legacy event-driven `PluginVerifierAdapter` path is retained
 for backward compatibility. The cross-language NDJSON wire bridge (Rust ↔ TS
-orchestrator) remains future work.
+orchestrator) shipped in WO 10.8: the `TsOrchestratorBridgeVerifier` in
+`bus.rs` shells out to the TS orchestrator's bridge emitter
+(`bridge-emitter.ts`), reads NDJSON verdicts from stdout, and translates
+each line to a `VerdictEntry`. The wire format is one JSON object per line
+(`{"verifier":"security","severity":"error","file":"...","line":N,"message":"...","rule":"..."}`);
+malformed lines become `Severity::Warning` verdicts (never silently dropped).
+The Rust `VerifierBus` is authoritative: built-in verifiers register
+directly, plugin verifiers register via `register_plugin_verifiers_into_bus`,
+and TS orchestrator emitters register via the `TsOrchestratorBridgeVerifier`.
 
 ### Correction loop
 

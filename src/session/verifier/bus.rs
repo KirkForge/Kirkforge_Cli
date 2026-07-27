@@ -10,6 +10,7 @@
 use kirkforge_plugin_host::PluginVerifier;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::process::Command;
 
 /// Which verifier produced this finding.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -275,6 +276,197 @@ pub fn default_verifier_bus() -> VerifierBus {
     bus
 }
 
+// ── WO 10.8: TS orchestrator NDJSON bridge ─────────────────────────────
+//
+// ADR-028 §5: the cross-language NDJSON wire bridge. The
+// `TsOrchestratorBridgeVerifier` implements `BusVerifier` by shelling
+// out to the TS orchestrator's bridge emitter (a Node script that runs
+// the orchestrator's security/lint/types/graph/imports emitters on the
+// changed files and writes one JSON object per line to stdout). Each
+// NDJSON line is parsed into a `VerdictEntry`. Malformed lines become
+// `Severity::Warning` verdicts (never silently dropped).
+
+/// NDJSON wire format: one JSON object per line.
+///
+/// ```jsonc
+/// {"verifier": "security", "severity": "error", "file": "src/foo.rs",
+///  "line": 42, "message": "eval() call detected", "rule": "no-eval"}
+/// ```
+///
+/// The `verifier` field maps to `VerifierSource::Custom(name)`; the
+/// `severity` field is case-insensitive ("error"/"warning"/"info");
+/// `file` and `line` are optional; `rule` is appended to the message
+/// when present. Unknown fields are ignored (forward-compatible).
+#[derive(serde::Deserialize)]
+struct NdjsonVerdict {
+    verifier: String,
+    severity: String,
+    message: String,
+    #[serde(default)]
+    file: Option<String>,
+    #[serde(default)]
+    line: Option<u32>,
+    #[serde(default)]
+    rule: Option<String>,
+}
+
+/// Parse the severity string from the NDJSON verdict. Unknown values
+/// default to `Warning` (the caller should not silently drop a verdict
+/// it cannot classify).
+fn parse_severity(s: &str) -> Severity {
+    match s.to_ascii_lowercase().as_str() {
+        "error" | "critical" | "high" => Severity::Error,
+        "warning" | "medium" => Severity::Warning,
+        "info" | "low" => Severity::Info,
+        _ => Severity::Warning,
+    }
+}
+
+/// A `BusVerifier` that shells out to the TS orchestrator's bridge
+/// emitter and parses NDJSON verdicts from stdout. The bridge command
+/// is a Node script (or any executable) that accepts the changed files
+/// as arguments (or via the `KF_CHANGED_FILES` env var, like
+/// `PluginBusVerifier`) and writes one JSON verdict per line to stdout.
+///
+/// The verifier is registered on the bus only when the TS orchestrator
+/// plugin is loaded (the executor setup gates this). Malformed NDJSON
+/// lines produce `Severity::Warning` verdicts with a descriptive
+/// message; they are never silently dropped (ADR-028 §5).
+pub struct TsOrchestratorBridgeVerifier {
+    /// Display name for the bridge (used in `name()` and
+    /// `VerifierSource::Custom`).
+    name: String,
+    /// The command to run (resolved relative to `plugin_root`).
+    command: PathBuf,
+    /// The plugin root directory (cwd of the subprocess).
+    plugin_root: PathBuf,
+}
+
+impl TsOrchestratorBridgeVerifier {
+    pub fn new(name: String, command: PathBuf, plugin_root: PathBuf) -> Self {
+        Self {
+            name,
+            command,
+            plugin_root,
+        }
+    }
+
+    /// Run the bridge command and capture stdout. The changed files are
+    /// passed via the `KF_CHANGED_FILES` env var (newline-separated,
+    /// matching `PluginBusVerifier`) and as command-line arguments.
+    fn run_bridge(&self, ctx: &VerifyContext) -> Result<String, String> {
+        let cmd_path = self.plugin_root.join(&self.command);
+        if !cmd_path.exists() {
+            return Err(format!("bridge command not found: {}", cmd_path.display()));
+        }
+
+        let mut env = HashMap::new();
+        env.insert("KF_VERIFIER_NAME".to_string(), self.name.clone());
+        env.insert(
+            "KF_CHANGED_FILES".to_string(),
+            ctx.changed_files
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+
+        let mut attempts = 0;
+        let output = loop {
+            let mut cmd = Command::new(&cmd_path);
+            cmd.env_clear();
+            for (k, v) in kirkforge_plugin_host::env::curated_env(&env) {
+                cmd.env(k, v);
+            }
+            cmd.current_dir(&self.plugin_root);
+            // Pass changed files as args too (the bridge script may
+            // prefer argv over env).
+            for f in &ctx.changed_files {
+                cmd.arg(f);
+            }
+            match cmd.output() {
+                Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy && attempts < 3 => {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                    attempts += 1;
+                    continue;
+                }
+                other => break other.map_err(|e| format!("bridge execution failed: {e}"))?,
+            }
+        };
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!(
+                "bridge exited with {:?}: {}",
+                output.status.code(),
+                stderr.trim()
+            ));
+        }
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    }
+
+    /// Parse NDJSON stdout into `VerdictEntry`s. Malformed lines become
+    /// `Severity::Warning` verdicts so the operator sees the bridge is
+    /// producing bad output (never silently dropped).
+    fn parse_ndjson(&self, stdout: &str, ctx: &VerifyContext) -> Vec<VerdictEntry> {
+        let mut entries = Vec::new();
+        for (lineno, line) in stdout.lines().enumerate() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            match serde_json::from_str::<NdjsonVerdict>(line) {
+                Ok(v) => {
+                    let message = if let Some(rule) = &v.rule {
+                        format!("[{rule}] {}", v.message)
+                    } else {
+                        v.message
+                    };
+                    entries.push(VerdictEntry {
+                        source: VerifierSource::Custom(format!("ts:{}", v.verifier)),
+                        severity: parse_severity(&v.severity),
+                        message,
+                        file: v.file.as_ref().map(PathBuf::from),
+                        line: v.line,
+                    });
+                }
+                Err(e) => {
+                    entries.push(VerdictEntry {
+                        source: VerifierSource::Custom(format!("ts:{}", self.name)),
+                        severity: Severity::Warning,
+                        message: format!(
+                            "malformed NDJSON verdict on line {}: {e} — raw: {line}",
+                            lineno + 1
+                        ),
+                        file: ctx.changed_files.first().cloned(),
+                        line: None,
+                    });
+                }
+            }
+        }
+        entries
+    }
+}
+
+impl BusVerifier for TsOrchestratorBridgeVerifier {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn verify(&self, ctx: &VerifyContext) -> Vec<VerdictEntry> {
+        match self.run_bridge(ctx) {
+            Ok(stdout) => self.parse_ndjson(&stdout, ctx),
+            Err(e) => vec![VerdictEntry {
+                source: VerifierSource::Custom(format!("ts:{}", self.name)),
+                severity: Severity::Warning,
+                message: format!("TS orchestrator bridge failed: {e}"),
+                file: None,
+                line: None,
+            }],
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -498,5 +690,174 @@ mod tests {
         assert_eq!(bus.verdicts().len(), 1);
         assert_eq!(bus.verdicts()[0].severity, Severity::Error);
         assert!(bus.has_errors());
+    }
+
+    // ── WO 10.8: TsOrchestratorBridgeVerifier tests ──
+
+    #[cfg(unix)]
+    fn make_bridge_script(dir: &std::path::Path, body: &str) -> PathBuf {
+        let script = dir.join("bridge.sh");
+        std::fs::write(&script, format!("#!/bin/sh\n{body}")).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&script).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&script, perms).unwrap();
+        script
+    }
+
+    /// WO 10.8: a mock TS orchestrator bridge emits one `security`
+    /// error verdict via NDJSON → the bridge verifier produces a
+    /// `VerdictEntry` with `Severity::Error`.
+    #[cfg(unix)]
+    #[test]
+    fn ts_orchestrator_bridge_verifier() {
+        let tmp = tempfile::tempdir().unwrap();
+        let _ = make_bridge_script(
+            tmp.path(),
+            "echo '{\"verifier\":\"security\",\"severity\":\"error\",\"file\":\"src/secret.rs\",\"line\":42,\"message\":\"eval() call detected\",\"rule\":\"no-eval\"}'\nexit 0\n",
+        );
+        let mut bus = VerifierBus::new();
+        bus.register(Box::new(TsOrchestratorBridgeVerifier::new(
+            "ts-bridge".into(),
+            PathBuf::from("bridge.sh"),
+            tmp.path().to_path_buf(),
+        )));
+
+        bus.run(&make_ctx());
+        assert_eq!(bus.verdicts().len(), 1, "one NDJSON line → one verdict");
+        let v = &bus.verdicts()[0];
+        assert_eq!(
+            v.severity,
+            Severity::Error,
+            "severity field 'error' → Severity::Error"
+        );
+        assert!(
+            v.message.contains("eval() call detected"),
+            "message should carry the NDJSON message: {}",
+            v.message
+        );
+        assert!(
+            v.message.contains("[no-eval]"),
+            "rule field should be prefixed to the message: {}",
+            v.message
+        );
+        assert_eq!(
+            v.file,
+            Some(PathBuf::from("src/secret.rs")),
+            "file field should map to VerdictEntry.file"
+        );
+        assert_eq!(
+            v.line,
+            Some(42),
+            "line field should map to VerdictEntry.line"
+        );
+        assert!(
+            matches!(v.source, VerifierSource::Custom(ref s) if s == "ts:security"),
+            "verifier field should map to VerifierSource::Custom(\"ts:security\"): {:?}",
+            v.source
+        );
+        assert!(bus.has_errors(), "an Error verdict → has_errors()");
+    }
+
+    /// WO 10.8: a bridge that emits multiple NDJSON lines produces
+    /// multiple verdicts (one per line). Empty lines are skipped.
+    #[cfg(unix)]
+    #[test]
+    fn ts_orchestrator_bridge_verifier_multiple_lines() {
+        let tmp = tempfile::tempdir().unwrap();
+        let _ = make_bridge_script(
+            tmp.path(),
+            "echo '{\"verifier\":\"lint\",\"severity\":\"warning\",\"message\":\"unused import\"}'\necho ''\necho '{\"verifier\":\"types\",\"severity\":\"error\",\"message\":\"type mismatch\"}'\nexit 0\n",
+        );
+        let mut bus = VerifierBus::new();
+        bus.register(Box::new(TsOrchestratorBridgeVerifier::new(
+            "ts-bridge".into(),
+            PathBuf::from("bridge.sh"),
+            tmp.path().to_path_buf(),
+        )));
+
+        bus.run(&make_ctx());
+        assert_eq!(
+            bus.verdicts().len(),
+            2,
+            "two non-empty NDJSON lines → two verdicts (empty line skipped)"
+        );
+        assert_eq!(bus.verdicts()[0].severity, Severity::Warning);
+        assert_eq!(bus.verdicts()[1].severity, Severity::Error);
+    }
+
+    /// WO 10.8: malformed NDJSON lines become `Severity::Warning`
+    /// verdicts (never silently dropped).
+    #[cfg(unix)]
+    #[test]
+    fn ts_orchestrator_bridge_verifier_malformed_ndjson_becomes_warning() {
+        let tmp = tempfile::tempdir().unwrap();
+        let _ = make_bridge_script(
+            tmp.path(),
+            "echo 'this is not json'\necho '{\"verifier\":\"security\",\"severity\":\"error\",\"message\":\"real finding\"}'\nexit 0\n",
+        );
+        let mut bus = VerifierBus::new();
+        bus.register(Box::new(TsOrchestratorBridgeVerifier::new(
+            "ts-bridge".into(),
+            PathBuf::from("bridge.sh"),
+            tmp.path().to_path_buf(),
+        )));
+
+        bus.run(&make_ctx());
+        assert_eq!(bus.verdicts().len(), 2, "malformed + valid → 2 verdicts");
+        assert_eq!(
+            bus.verdicts()[0].severity,
+            Severity::Warning,
+            "malformed line → Warning verdict"
+        );
+        assert!(
+            bus.verdicts()[0].message.contains("malformed NDJSON"),
+            "malformed verdict message should explain the issue: {}",
+            bus.verdicts()[0].message
+        );
+        assert_eq!(bus.verdicts()[1].severity, Severity::Error);
+    }
+
+    /// WO 10.8: a bridge command that fails (non-zero exit) produces a
+    /// single `Severity::Warning` verdict with the error.
+    #[cfg(unix)]
+    #[test]
+    fn ts_orchestrator_bridge_verifier_command_failure_yields_warning() {
+        let tmp = tempfile::tempdir().unwrap();
+        let _ = make_bridge_script(tmp.path(), "echo 'bridge crashed' >&2\nexit 1\n");
+        let mut bus = VerifierBus::new();
+        bus.register(Box::new(TsOrchestratorBridgeVerifier::new(
+            "ts-bridge".into(),
+            PathBuf::from("bridge.sh"),
+            tmp.path().to_path_buf(),
+        )));
+
+        bus.run(&make_ctx());
+        assert_eq!(bus.verdicts().len(), 1);
+        assert_eq!(bus.verdicts()[0].severity, Severity::Warning);
+        assert!(
+            bus.verdicts()[0].message.contains("bridge crashed"),
+            "failure verdict should carry stderr: {}",
+            bus.verdicts()[0].message
+        );
+        assert!(!bus.has_errors(), "a Warning is not an Error");
+    }
+
+    /// WO 10.8: severity string parsing covers the TS emitter
+    /// severities (critical/high → Error, medium → Warning, low → Info).
+    #[test]
+    fn parse_severity_maps_ts_emitter_levels() {
+        assert_eq!(parse_severity("critical"), Severity::Error);
+        assert_eq!(parse_severity("high"), Severity::Error);
+        assert_eq!(parse_severity("error"), Severity::Error);
+        assert_eq!(parse_severity("medium"), Severity::Warning);
+        assert_eq!(parse_severity("warning"), Severity::Warning);
+        assert_eq!(parse_severity("low"), Severity::Info);
+        assert_eq!(parse_severity("info"), Severity::Info);
+        assert_eq!(
+            parse_severity("unknown"),
+            Severity::Warning,
+            "unknown severity defaults to Warning (not dropped)"
+        );
     }
 }

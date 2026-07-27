@@ -37,6 +37,18 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   servers that do not send a session id or event ids are unaffected.
   ADR-055. 11 new tests (3 URL-parsing, 2 POST-header, 4 SSE-header, 2
   existing tool-result tests retained).
+- Verifier bus TS orchestrator NDJSON bridge (Workorder 10.8): the
+  `TsOrchestratorBridgeVerifier` in `bus.rs` implements `BusVerifier`
+  by shelling out to the TS orchestrator's bridge emitter and parsing
+  NDJSON verdicts from stdout. The wire format is one JSON object per
+  line (`{"verifier":"security","severity":"error","file":"...",
+  "line":N,"message":"...","rule":"..."}`); malformed lines become
+  `Severity::Warning` verdicts (never silently dropped). The TS-side
+  `bridge-emitter.ts` wraps the `SecurityEmitter` and outputs NDJSON.
+  ADR-028 ponytail updated to reflect the cross-language bridge shipped.
+  `docs/TECHNICAL.md` verifier-bus section updated. 5 new Rust tests +
+  2 TS tests. The `kirkforge-plugin-host` `env` module is now `pub`
+  (the bridge reuses `curated_env`).
 
 ### Changed
 - v0.3.6 release re-shipped (Workorder 10.1): the `v0.3.6` tag was

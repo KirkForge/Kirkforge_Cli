@@ -7,7 +7,7 @@
 #![cfg_attr(not(test), deny(clippy::unwrap_used))]
 
 mod compat;
-mod env;
+pub mod env;
 mod hook;
 mod paths;
 mod sandbox;

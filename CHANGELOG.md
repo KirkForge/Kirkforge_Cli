@@ -49,6 +49,19 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `docs/TECHNICAL.md` verifier-bus section updated. 5 new Rust tests +
   2 TS tests. The `kirkforge-plugin-host` `env` module is now `pub`
   (the bridge reuses `curated_env`).
+- Bench leaderboard publish + regression gate (Workorder 10.9):
+  `compare_with_threshold(baseline, current, threshold) -> CompareResult`
+  in `kirkforge-bench` flags a regression when the success rate drops
+  by more than the threshold. `bench compare --fail-on-regression <pct>`
+  CLI flag exits non-zero on regression. The `bench-pr-delta` CI job
+  now fails on regression (10pp threshold) while still posting the
+  delta comment via `if: always()`. A new `bench-leaderboard` scheduled
+  job runs `bench run-models --models qwen2.5:0.5b,llama3.2:1b`, writes
+  `docs/bench/leaderboard.md`, and commits it to `main` with
+  `[skip ci]` (loop avoidance: commit message + `paths-ignore`).
+  `docs/TECHNICAL.md` bench section documents the CI loop. 4 new unit
+  tests for `compare_with_threshold` (no-regression, within-threshold,
+  beyond-threshold, improvement).
 
 ### Changed
 - v0.3.6 release re-shipped (Workorder 10.1): the `v0.3.6` tag was

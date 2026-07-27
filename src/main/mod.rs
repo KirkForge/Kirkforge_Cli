@@ -329,7 +329,8 @@ async fn handle_bench_command(command: kirkforge::cli::BenchCommand) -> anyhow::
             baseline,
             current,
             summary,
-        } => handle_bench_compare(baseline, current, summary),
+            fail_on_regression,
+        } => handle_bench_compare(baseline, current, summary, fail_on_regression),
         BenchCommand::List { tasks } => handle_bench_list(tasks),
         BenchCommand::VerifyOnly { tasks, task } => handle_bench_verify_only(tasks, task),
         BenchCommand::RunModels {
@@ -441,11 +442,50 @@ fn handle_bench_compare(
     baseline: std::path::PathBuf,
     current: std::path::PathBuf,
     summary: Option<std::path::PathBuf>,
+    fail_on_regression: Option<f64>,
 ) -> anyhow::Result<()> {
     let baseline_json = std::fs::read_to_string(&baseline)?;
     let current_json = std::fs::read_to_string(&current)?;
     let baseline_report: kirkforge_bench::BenchReport = serde_json::from_str(&baseline_json)?;
     let current_report: kirkforge_bench::BenchReport = serde_json::from_str(&current_json)?;
+
+    if let Some(threshold_pct) = fail_on_regression {
+        // WO 10.9: regression gate. The CLI flag is a percentage (e.g.
+        // 10 = 10 percentage points); compare_with_threshold takes a
+        // fraction (0.10).
+        let threshold = threshold_pct / 100.0;
+        let result =
+            kirkforge_bench::compare_with_threshold(&baseline_report, &current_report, threshold);
+        let delta = &result.delta;
+        println!("Delta: {} → {}", delta.baseline_model, delta.current_model);
+        println!(
+            "Success rate: {:+.0}% | Δtokens_in: {:+} | Δcost: ${:+.4}",
+            delta.success_rate_delta * 100.0,
+            delta.total_tokens_in_delta,
+            delta.total_cost_delta_usd,
+        );
+        if let Some(md_path) = summary {
+            kirkforge_bench::write_markdown_delta(delta, &md_path)?;
+            eprintln!("delta summary written to {}", md_path.display());
+        }
+        if result.regression_detected {
+            eprintln!(
+                "❌ Bench regression detected: success rate dropped by {:.0} percentage points \
+                 (threshold: {:.0} percentage points).",
+                -delta.success_rate_delta * 100.0,
+                threshold_pct,
+            );
+            std::process::exit(1);
+        }
+        eprintln!(
+            "✓ No bench regression (success rate delta {:+.0}%, threshold {:.0} percentage points).",
+            delta.success_rate_delta * 100.0,
+            threshold_pct,
+        );
+        return Ok(());
+    }
+
+    // Historical path (no --fail-on-regression): always exits 0.
     let delta = kirkforge_bench::compare_reports(&baseline_report, &current_report);
     println!("Delta: {} → {}", delta.baseline_model, delta.current_model);
     println!(

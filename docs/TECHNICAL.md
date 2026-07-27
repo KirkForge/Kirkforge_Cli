@@ -546,9 +546,43 @@ JSON and markdown.
 
 A `bench` CI job runs all tasks on Ollama with `qwen2.5:0.5b` on every push/PR.
 It posts a delta summary as a PR comment comparing against the `main` baseline
-(ADR-045). The success-rate gate is currently informational — it reports but
-does not block merges. A nightly `bench-baseline` workflow on `main` stores the
+(ADR-045). A nightly `bench-baseline` workflow on `main` stores the
 canonical baseline report as a workflow artifact.
+
+### Bench CI loop (WO 10.9)
+
+The bench CI loop has three jobs in `.github/workflows/bench-baseline.yml`:
+
+1. **`bench-baseline`** (push to main): runs `bench run` with
+   `qwen2.5:0.5b`, uploads the report as a 90-day-retention artifact.
+   This is the baseline the PR-delta job compares against.
+2. **`bench-pr-delta`** (pull request): runs `bench run` on the PR
+   HEAD, downloads the latest main-branch baseline, computes the delta
+   with `bench compare --fail-on-regression 10`, posts the delta as a
+   PR comment, and **fails the job** if the success rate dropped by
+   more than 10 percentage points (the regression gate, WO 10.9). The
+   comment still posts via `if: always()` so the operator sees the
+   numbers even when the gate fails.
+3. **`bench-leaderboard`** (scheduled, daily): runs `bench run-models
+   --models qwen2.5:0.5b,llama3.2:1b`, writes
+   `docs/bench/leaderboard.md`, and commits it to `main` via
+   `stefanzweifel/git-auto-commit-action` with `[skip ci]` in the
+   commit message. The push trigger also has `paths-ignore:
+   ['docs/bench/**']` (expressed as `!docs/bench/**` in the paths
+   list) so the leaderboard commit does not re-trigger the bench
+   workflow (belt-and-suspenders loop avoidance).
+
+The `bench compare --fail-on-regression <pct>` CLI flag (WO 10.9) uses
+`compare_with_threshold(baseline, current, threshold)` in the
+`kirkforge-bench` crate. The threshold is a fraction (0.10 = 10
+percentage points); the CLI flag takes a percentage (10). The
+regression is detected when `success_rate_delta < -threshold` (strict
+inequality: a drop of exactly the threshold is not a regression).
+
+The PR-delta job is single-model (`qwen2.5:0.5b` only) because the
+second `ollama pull` adds 2-5 minutes per model and the PR job is
+latency-sensitive. The scheduled leaderboard covers multi-model
+comparison.
 
 ---
 

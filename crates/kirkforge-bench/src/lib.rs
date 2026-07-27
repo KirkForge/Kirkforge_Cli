@@ -311,6 +311,38 @@ pub fn compare_reports(baseline: &BenchReport, current: &BenchReport) -> DeltaRe
     }
 }
 
+/// Result of comparing two reports with a regression threshold (WO 10.9).
+///
+/// `regression_detected` is `true` when the success rate dropped by more
+/// than `threshold` percentage points (e.g. threshold=0.10 means a drop
+/// from 80% to 69% is a regression, but 80%→71% is not). The delta
+/// report is always included so the caller can print the details
+/// regardless of the pass/fail outcome.
+#[derive(Debug, Clone)]
+pub struct CompareResult {
+    pub delta: DeltaReport,
+    pub regression_detected: bool,
+    pub threshold: f64,
+}
+
+/// Compare two bench reports and flag a regression when the success
+/// rate drops by more than `threshold` (a fraction: 0.10 = 10
+/// percentage points). The CI regression gate (WO 10.9) uses this to
+/// fail the `bench-pr-delta` job when a PR drops the bench success rate.
+pub fn compare_with_threshold(
+    baseline: &BenchReport,
+    current: &BenchReport,
+    threshold: f64,
+) -> CompareResult {
+    let delta = compare_reports(baseline, current);
+    let regression_detected = delta.success_rate_delta < -threshold;
+    CompareResult {
+        delta,
+        regression_detected,
+        threshold,
+    }
+}
+
 /// Write a markdown delta table to disk.
 pub fn write_markdown_delta(delta: &DeltaReport, path: &Path) -> Result<()> {
     let baseline_rate = delta.success_rate_delta
@@ -769,5 +801,102 @@ mod tests {
         // verifiable without the model).
         assert!(result.success);
         assert_eq!(result.error.as_deref(), Some("skipped (requires model)"));
+    }
+
+    // ── WO 10.9: compare_with_threshold tests ──
+
+    fn make_report(model: &str, tasks_run: usize, tasks_passed: usize) -> BenchReport {
+        let success_rate = if tasks_run > 0 {
+            tasks_passed as f64 / tasks_run as f64
+        } else {
+            0.0
+        };
+        let mut results = Vec::new();
+        for i in 0..tasks_run {
+            let success = i < tasks_passed;
+            results.push(TaskResult {
+                task_name: format!("task-{i}"),
+                difficulty: Difficulty::Easy,
+                success,
+                tokens_in: 100,
+                tokens_out: 50,
+                duration_secs: 1.0,
+                cost_usd: 0.001,
+                tool_calls: 2,
+                error: if success { None } else { Some("failed".into()) },
+            });
+        }
+        BenchReport {
+            model: model.into(),
+            timestamp: "2026-07-27T00:00:00Z".into(),
+            results,
+            summary: BenchSummary {
+                success_rate,
+                total_tokens_in: 100 * tasks_run as u64,
+                total_tokens_out: 50 * tasks_run as u64,
+                total_cost_usd: 0.001 * tasks_run as f64,
+                total_duration_secs: tasks_run as f64,
+                total_tool_calls: tasks_run as u32 * 2,
+                tasks_run,
+                tasks_passed,
+            },
+        }
+    }
+
+    #[test]
+    fn compare_with_threshold_no_regression() {
+        // Baseline 80% (8/10), current 80% (8/10) → delta 0% → no
+        // regression at any threshold.
+        let baseline = make_report("base", 10, 8);
+        let current = make_report("curr", 10, 8);
+        let result = compare_with_threshold(&baseline, &current, 0.10);
+        assert!(!result.regression_detected, "no change → no regression");
+        assert!((result.delta.success_rate_delta - 0.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn compare_with_threshold_within_threshold() {
+        // Baseline 100% (100/100), current 92% (92/100) → delta -8%.
+        // Threshold 10pp → -8% is within (not beyond) → no regression.
+        let baseline = make_report("base", 100, 100);
+        let current = make_report("curr", 100, 92);
+        let result = compare_with_threshold(&baseline, &current, 0.10);
+        assert!(
+            !result.regression_detected,
+            "8pp drop is within the 10pp threshold (not a regression): delta={:.4}",
+            result.delta.success_rate_delta
+        );
+    }
+
+    #[test]
+    fn compare_with_threshold_beyond_threshold() {
+        // Baseline 80% (8/10), current 60% (6/10) → delta -20% →
+        // regression at threshold 10pp.
+        let baseline = make_report("base", 10, 8);
+        let current = make_report("curr", 10, 6);
+        let result = compare_with_threshold(&baseline, &current, 0.10);
+        assert!(
+            result.regression_detected,
+            "20pp drop exceeds 10pp threshold → regression"
+        );
+        assert!(
+            result.delta.success_rate_delta < -0.10,
+            "delta should be worse than -0.10: {}",
+            result.delta.success_rate_delta
+        );
+    }
+
+    #[test]
+    fn compare_with_threshold_improvement_is_not_regression() {
+        // Baseline 60% (6/10), current 80% (8/10) → delta +20% →
+        // improvement, not regression.
+        let baseline = make_report("base", 10, 6);
+        let current = make_report("curr", 10, 8);
+        let result = compare_with_threshold(&baseline, &current, 0.10);
+        assert!(
+            !result.regression_detected,
+            "improvement is never a regression"
+        );
+        assert!(result.delta.success_rate_delta > 0.0);
     }
 }

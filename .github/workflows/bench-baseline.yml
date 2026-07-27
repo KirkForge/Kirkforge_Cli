@@ -9,6 +9,7 @@ on:
       - 'src/tools/**'
       - 'crates/kirkforge-bench/**'
       - 'benches/tasks/**'
+      - '!docs/bench/**'
   pull_request:
     paths:
       - 'src/session/**'
@@ -135,12 +136,30 @@ jobs:
         run: |
           BASELINE=$(ls benches/baselines/bench-report*.json 2>/dev/null | head -1)
           if [ -n "$BASELINE" ] && [ -f "$BASELINE" ]; then
-            cargo run -- bench compare --baseline "$BASELINE" --current bench-report.json --summary bench-delta.md
+            # WO 10.9: regression gate. --fail-on-regression 10 exits
+            # non-zero when the success rate drops by more than 10
+            # percentage points. The `continue-on-error: true` on this
+            # step means the job does not fail here; the dedicated
+            # `regression-gate` step below checks the exit code and
+            # fails the job so the PR comment (next step) still posts.
+            set +e
+            cargo run -- bench compare --baseline "$BASELINE" --current bench-report.json --summary bench-delta.md --fail-on-regression 10
+            COMPARE_EXIT=$?
+            echo "compare_exit=$COMPARE_EXIT" >> "$GITHUB_OUTPUT"
+            if [ "$COMPARE_EXIT" -ne 0 ]; then
+              echo "regression=true" >> "$GITHUB_OUTPUT"
+            fi
             echo "has_delta=true" >> "$GITHUB_OUTPUT"
           else
             echo "No baseline report found; posting summary only"
             echo "has_delta=false" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Regression gate
+        if: always() && steps.delta.outputs.regression == 'true'
+        run: |
+          echo "::error::Bench regression detected: success rate dropped by more than 10 percentage points vs baseline."
+          exit 1
 
       - name: Post PR delta comment
         if: always() && steps.bench_run.outcome != 'skipped'
@@ -159,3 +178,62 @@ jobs:
           fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # WO 10.9: scheduled leaderboard publish. Runs `bench run-models`
+  # across multiple models, writes docs/bench/leaderboard.md, and
+  # commits it to main with [skip ci] in the commit message so the
+  # commit does not re-trigger this workflow (the push trigger's
+  # paths-ignore also excludes docs/bench/** as a belt-and-suspenders
+  # guard against the workflow loop).
+  bench-leaderboard:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    env:
+      BENCH_MODELS: qwen2.5:0.5b,llama3.2:1b
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install and start Ollama
+        shell: bash
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          ollama serve >/tmp/ollama.log 2>&1 &
+          for i in {1..30}; do
+            if curl -fsS http://localhost:11434/api/tags >/dev/null 2>&1; then
+              echo "Ollama ready"
+              break
+            fi
+            sleep 1
+          done
+          curl -fsS http://localhost:11434/api/tags >/dev/null || { echo "Ollama failed to start"; cat /tmp/ollama.log; exit 1; }
+
+      - name: Pull bench models
+        shell: bash
+        run: |
+          IFS=',' read -ra MODELS <<< "${BENCH_MODELS}"
+          for model in "${MODELS[@]}"; do
+            if ! curl -fsS http://localhost:11434/api/tags | grep -q "$model"; then
+              echo "Pulling $model..."
+              ollama pull "$model"
+            else
+              echo "Model $model already cached"
+            fi
+          done
+
+      - name: Run multi-model benchmark
+        run: |
+          mkdir -p docs/bench
+          cargo run -- bench run-models --tasks benches/tasks/ --models "${BENCH_MODELS}" --output docs/bench/leaderboard.md
+
+      - name: Commit leaderboard to main
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "docs(bench): auto-update leaderboard [skip ci]"
+          file_pattern: "docs/bench/leaderboard.md"

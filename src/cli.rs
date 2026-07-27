@@ -255,6 +255,13 @@ pub enum BenchCommand {
         /// Write markdown delta summary to this file.
         #[arg(long)]
         summary: Option<PathBuf>,
+
+        /// Fail with a non-zero exit code if the success rate dropped by
+        /// more than this many percentage points (WO 10.9). The value is
+        /// a percentage (e.g. `10` = 10 percentage points). When omitted,
+        /// the command always exits 0 (the historical behavior).
+        #[arg(long)]
+        fail_on_regression: Option<f64>,
     },
     /// List all benchmark tasks.
     List {

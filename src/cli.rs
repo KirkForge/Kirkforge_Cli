@@ -215,6 +215,40 @@ pub enum Command {
         #[command(subcommand)]
         command: BenchCommand,
     },
+    /// Manage plugins from the CLI (headless equivalent of `/plugins`).
+    ///
+    /// Mutations persist to the config file; the next `kirkforge run`
+    /// (or a TUI `/plugins reload`) picks them up. There is no live
+    /// registry to reload from the CLI path.
+    Plugin {
+        #[command(subcommand)]
+        command: PluginCommand,
+    },
+}
+
+/// Subcommands for the `plugin` command (WO 11.0, ADR-056).
+#[derive(Subcommand, Debug)]
+pub enum PluginCommand {
+    /// List active, blocked, and available plugins.
+    List,
+    /// Enable a plugin by name (persists to config).
+    Enable { name: String },
+    /// Disable a plugin by name (persists to config).
+    Disable { name: String },
+    /// Toggle a workspace plugin source on/off (persists to config).
+    Toggle { name: String },
+    /// Validate a plugin manifest at <path> (dir or `kirkforge.toml`).
+    Validate { path: PathBuf },
+    /// Reload the plugin registry from disk and report the result.
+    Reload,
+    /// List configured workspace plugin sources.
+    Sources,
+    /// Register a workspace plugin source pointing at <path>.
+    Add { name: String, path: PathBuf },
+    /// Remove a workspace plugin source by name.
+    Remove { name: String },
+    /// Run the plugin health check (probe each enabled plugin's commands).
+    Doctor,
 }
 
 /// Subcommands for the `bench` command.

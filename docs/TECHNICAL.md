@@ -102,6 +102,12 @@ The largest module (~30 submodules). It owns:
   are wrapped in `PluginToolWrapper` (implements the `Tool` trait, spawns the
   shell script as a subprocess). Folded plugins (Stratum, Plugin3, Draw, Video)
   register as direct Rust `Tool` impls when their feature is on (ADR-050).
+- **Plugin ops** (`plugin_ops.rs`): shared plugin-ops layer used by both the
+  TUI `/plugins` slash-command family and the `kirkforge plugin` CLI
+  subcommand (`list`, `enable`, `disable`, `toggle`, `validate`, `reload`,
+  `sources`, `add`, `remove`, `doctor`). Pure functions over `&Config` /
+  `&mut Config`; the TUI keeps its `mpsc` reload plumbing, the CLI mutates
+  the config and prints "restart to apply" (ADR-056, WO 11.0).
 - **Hooks** (`hooks.rs`): fires plugin hooks on lifecycle events
   (`session-start`, `post-turn`, `pre-tool-bash`, `post-tool-bash`,
   `post-tool-write_file`, `pre-compact`). Folded plugins register

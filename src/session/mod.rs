@@ -17,6 +17,7 @@ pub mod hooks;
 pub mod mcp_client;
 pub mod mcp_tools;
 pub mod memory;
+pub mod plugin_ops;
 pub mod plugin_tools;
 pub mod process_group;
 pub mod prompt;

@@ -5,6 +5,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- `kirkforge plugin` CLI subcommand (WO 11.0, ADR-056): `list`, `enable`,
+  `disable`, `toggle`, `validate`, `reload`, `sources`, `add`, `remove`,
+  `doctor`. Backed by a shared `plugin_ops` layer
+  (`src/session/plugin_ops.rs`) that the TUI `/plugins` commands will
+  migrate to. Headless users can now manage plugins without the TUI.
+
 ### Fixed
 - Windows env_guard race (Workorder 10.0): the
   `env_guard_restores_prior_value_some_branch` tests in

@@ -216,6 +216,55 @@ surfacing, authoring scaffolding, and an end-to-end integration test.
 - **11.3, 11.8 (Low)**: Visibility and ergonomics. Trust downgrades
   are silent; plugin authoring is hand-copied. Cleanup, not blockers.
 
+### Series 12.0-12.9 — Test Infrastructure, Coverage Gate, and Diagnostic Tool
+
+Workorders 12.0-12.9 address the final CI gate (tarpaulin flake), the
+coverage-threshold raise from 62/50/61 to 75/75/75, and the promotion
+of the `kirkforge-testdoctor` prototype to a workspace member with
+per-test timings, flaky detection, coverage-gap analysis, and smart
+auto-suggest. The 12-series is the "test infrastructure + coverage"
+series.
+
+| # | Workorder | Status | Priority | Depends on |
+|---|---|---|---|---|
+| 12.0 | [Fix final CI gate (tarpaulin flake)](12.0-fix-tarpaulin-flake.md) | Planned | High | — |
+| 12.1 | [Raise `src/session` coverage threshold 62% → 68%](12.1-raise-session-coverage-68.md) | Planned | High | 12.0 |
+| 12.2 | [Raise `src/tools` coverage threshold 50% → 65%](12.2-raise-tools-coverage-65.md) | Planned | High | 12.0 |
+| 12.3 | [Raise `src/adapters` coverage threshold 61% → 70%](12.3-raise-adapters-coverage-70.md) | Planned | High | 12.0 |
+| 12.4 | [Fold `kirkforge-testdoctor` into workspace + `kirkforge doctor` CLI](12.4-fold-testdoctor-into-workspace.md) | Planned | High | — |
+| 12.5 | [Advanced testdoctor: per-test timings + flaky-test detection](12.5-testdoctor-per-test-flaky.md) | Planned | Medium | 12.4 |
+| 12.6 | [Testdoctor: smart auto-suggest (real heuristics + fix application)](12.6-testdoctor-smart-suggest.md) | Planned | Medium | 12.5 |
+| 12.7 | [Testdoctor: coverage-gap report (uncovered files + suggested targets)](12.7-testdoctor-coverage-gaps.md) | Planned | High | 12.4 |
+| 12.8 | [Final coverage push to 75% on all three target directories](12.8-final-coverage-push-75.md) | Planned | High | 12.0, 12.1-12.3, 12.7 |
+| 12.9 | [Enforce 75% coverage thresholds in CI](12.9-enforce-75-percent-thresholds.md) | Planned | High | 12.8 |
+
+### Priority rationale
+
+- **12.0 (High)**: The `coverage` CI job is the last non-green gate.
+  The tarpaulin flake on `test_build_fork_tree_orphan_fork_is_a_root`
+  blocks all coverage-threshold raises (you can't trust the gate while
+  it's flaky). P0 for the 12-series.
+- **12.1, 12.2, 12.3 (High)**: Intermediate threshold raises
+  (session 62→68, tools 50→65, adapters 61→70). Each is gated on 12.0
+  (the flake must be fixed first). These establish the baseline for
+  the 75% push (12.8).
+- **12.4 (High)**: The testdoctor is a standalone prototype, excluded
+  from the workspace. The 12.5-12.7 advanced features need it to be a
+  workspace member (so the tests run under the CI gate). The
+  `kirkforge doctor` CLI integration makes it discoverable.
+- **12.7 (High)**: The coverage-gap report is the tool that makes
+  12.1-12.3 + 12.8 efficient. Without it, finding uncovered files is
+  manual XML parsing. With it, `kirkforge doctor gaps` tells you exactly
+  where to add tests.
+- **12.8 (High)**: The final coverage push — add tests until all three
+  directories are ≥75%. The biggest WO by test-writing effort.
+- **12.9 (High)**: Raise the CI thresholds to 75% — the final step that
+  makes the gate match the target. Gated on 12.8 (actual coverage must
+  be ≥75% before the threshold is raised).
+- **12.5, 12.6 (Medium)**: Advanced testdoctor features (per-test
+  timings, flaky detection, smart suggest). Developer ergonomics, not
+  blockers for the coverage push.
+
 ## Conventions
 
 - Each workorder is a single markdown file named `<number>-<slug>.md`.

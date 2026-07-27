@@ -1378,6 +1378,36 @@ impl Executor {
             &tool_results,
         );
 
+        // WO 10.2: prompt-cache stem-reuse detection (ADR-052). The
+        // stable prefix is the system message — the one part of the
+        // prompt that is byte-for-byte identical across turns when the
+        // model, tool list, carryover, and memory inputs are unchanged.
+        // The conversation history grows every turn, so it cannot be
+        // part of the stable stem; `prefix_len = 1` (system message
+        // only) is the first-cut policy documented in ADR-052's
+        // Future Work. When the stem is stable, emit a
+        // `PlanReason::CacheStemReuse` metric event so operators can
+        // see the stem is being reused (the server-side KV-cache hit
+        // is reported by the adapter's usage stats; this is the
+        // client-side observability signal). Then advance the recorded
+        // hash for the next turn.
+        //
+        // The Anthropic API requires the full content of every message
+        // on every request (the cache key is computed from the bytes),
+        // so there is no adapter short-circuit to make here — the
+        // `cache_control` markers in `anthropic.rs` are unchanged. This
+        // is the measurement, not a wire-bytes saving (ADR-052).
+        let prefix_len = 1;
+        if self.cache_stem.is_stable(&messages, prefix_len) {
+            record(MetricEvent::PlanReason {
+                decision_kind: PlanDecisionKind::CacheStemReuse,
+                reason: "prompt-cache stem stable across turns".into(),
+                related_id: None,
+                confidence: 1.0,
+            });
+        }
+        self.cache_stem.record_prefix_hash(&messages, prefix_len);
+
         // Snapshot the stable prompt-cache stem size for this turn so we
         // can verify KV-cache reuse against the adapter usage stats.
         let stem_tokens = self.prompt_builder.estimate_stem_tokens(

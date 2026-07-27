@@ -78,6 +78,35 @@ rewrites the prefix). That is a follow-up WO. Shipping the tracker + the
 metric variant + the test + this ADR is what the gate asks for; the
 wiring is a separate, reviewable change.
 
+### What shipped in WO 9.5 vs WO 10.2
+
+WO 9.5 shipped the **measurement**: the `CacheStemTracker` struct, the
+`PlanDecisionKind::CacheStemReuse` metric variant, 6 unit tests, and
+this ADR. The tracker was not called from anywhere outside its own test
+module.
+
+WO 10.2 shipped the **wiring**: a `cache_stem: CacheStemTracker` field
+on `Executor`, and a call site in `stream_iteration` (`turn.rs`) that
+runs after `build_messages` returns. The `prefix_len` policy is
+`prefix_len = 1` (system message only) — the first cut documented in
+the Future Work section below — because the conversation history grows
+every turn and cannot be part of the stable stem. When `is_stable`
+returns `true`, the executor emits a `PlanReason::CacheStemReuse`
+metric event; `record_prefix_hash` then advances the recorded hash for
+the next turn. The integration test `cache_stem_reuse_emitted_on_stable_turn`
+proves the event fires on turns 2-5 of a 5-turn conversation, not on
+turn 1, and that a `set_system_override` change breaks stability on
+turn 6.
+
+The adapter short-circuit (content-omission for cached messages) was
+**not** implemented. The Anthropic API requires the full content of
+every message on every request — the server computes the cache key
+from the bytes sent ("Cache hits require 100% identical prompt
+segments", Anthropic prompt-caching docs) — so there is nothing to
+omit on the wire. The `cache_control` markers in `anthropic.rs` are
+unchanged; the server-side KV-cache still hits. The useful client-side
+signal is the metric event, not a wire-bytes saving.
+
 ## Consequences
 
 Positive:
@@ -96,9 +125,6 @@ Positive:
 
 Negative:
 
-- The tracker is not yet wired into the executor, so no
-  `CacheStemReuse` events are emitted at runtime yet. This ADR ships
-  the mechanism; the wiring is a follow-up WO.
 - `DefaultHasher` is not guaranteed to be stable across Rust versions
   (it is `SipHash-1-3` today but the std docs say "it should not be
   used where DoS resistance is needed" and the algorithm may change).
@@ -127,12 +153,13 @@ Negative:
 
 ## Future work
 
-- Wire `CacheStemTracker` into `Executor::turn` (follow-up WO). The
-  emit point is after `build_messages` returns and before
-  `adapter.stream`; the `prefix_len` policy is "system message only"
-  (prefix_len = 1) for the first cut, extended to "system + first N
-  turns" once microcompaction's prefix-rewrite interaction is
-  characterised.
+- Extend the `prefix_len` policy from "system message only" (prefix_len
+  = 1, shipped in WO 10.2) to "system + first N turns" once
+  microcompaction's prefix-rewrite interaction is characterised. The
+  conversation history grows every turn, so a fixed `prefix_len` past
+  the system message would need to account for microcompaction
+  rewriting older turns (which changes the prefix bytes and breaks the
+  hash even when the semantic content is stable).
 - Surface the stem-reuse status in the TUI status bar alongside the
   existing `CacheStats` event (ADR-0027).
 - Consider a `content_parts`-aware hash if the adapter ever caches

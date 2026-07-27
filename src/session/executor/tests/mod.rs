@@ -3456,3 +3456,112 @@ command = "bin/check.sh"
 
     remove_test_file(&log_path);
 }
+
+/// WO 10.2: the executor's `CacheStemTracker` emits a
+/// `PlanReason::CacheStemReuse` metric event on turns 2-5 (stable stem)
+/// and not on turn 1 (no prior hash). A system-message change breaks
+/// stability. See ADR-052.
+#[tokio::test]
+async fn cache_stem_reuse_emitted_on_stable_turn() {
+    // Isolate the metrics log so we can assert exact event counts
+    // without contamination from other tests' `record()` calls. We
+    // install the thread-local path override manually (instead of
+    // `with_test_path`, which is sync-only) and hold the global
+    // TEST_LOCK for the duration of the async test body. The
+    // `#[tokio::test]` runtime is current-thread, so the override is
+    // visible to `record()` calls inside `stream_iteration`.
+    use std::path::PathBuf;
+
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let dir = std::env::temp_dir().join(format!(
+        "kirkforge_cache_stem_test_{}_{}",
+        std::process::id(),
+        COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path: PathBuf = dir.join("metrics.ndjson");
+    crate::shared::metrics::set_test_path(path.clone());
+    let adapter = MockAdapter::new(
+        vec![
+            StreamEvent::Text("hello".to_string()),
+            StreamEvent::Done {
+                finish_reason: FinishReason::Stop,
+                usage: None,
+            },
+        ],
+        make_info(),
+    );
+
+    let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
+    let mut exe = make_executor(Box::new(adapter), vec![], make_config(true));
+
+    // Run 5 turns with the same model/tools/system prompt. The cache
+    // stem (the system message, prefix_len=1) is stable across all
+    // turns, so CacheStemReuse should fire on turns 2-5 and NOT on
+    // turn 1 (no prior hash recorded).
+    let inputs = [
+        "turn one",
+        "turn two",
+        "turn three",
+        "turn four",
+        "turn five",
+    ];
+    for input in &inputs {
+        exe.run_turn_collecting(input, &approval_tx, never_cancelled())
+            .await
+            .unwrap();
+    }
+
+    let events = read_events();
+    let ours: Vec<&MetricEvent> = events
+        .iter()
+        .filter(|e| {
+            matches!(
+                e,
+                MetricEvent::PlanReason {
+                    decision_kind: PlanDecisionKind::CacheStemReuse,
+                    ref reason,
+                    ..
+                } if reason == "prompt-cache stem stable across turns"
+            )
+        })
+        .collect();
+    assert_eq!(
+        ours.len(),
+        4,
+        "expected 4 CacheStemReuse events (turns 2-5), got {}: {ours:?}",
+        ours.len()
+    );
+
+    // Now change the system prompt: the next turn should NOT emit
+    // CacheStemReuse (the stem hash differs from the prior turn's).
+    exe.set_system_override(Some("DIFFERENT system prompt".to_string()));
+    exe.run_turn_collecting("turn six", &approval_tx, never_cancelled())
+        .await
+        .unwrap();
+
+    let events_after = read_events();
+    let ours_after: Vec<&MetricEvent> = events_after
+        .iter()
+        .filter(|e| {
+            matches!(
+                e,
+                MetricEvent::PlanReason {
+                    decision_kind: PlanDecisionKind::CacheStemReuse,
+                    ref reason,
+                    ..
+                } if reason == "prompt-cache stem stable across turns"
+            )
+        })
+        .collect();
+    assert_eq!(
+        ours_after.len(),
+        ours.len(),
+        "system-message change should break stem stability; expected no new CacheStemReuse event, got {ours_after:?}"
+    );
+
+    // Cleanup: clear the override and remove the temp dir.
+    crate::shared::metrics::clear_test_path();
+    let _ = std::fs::remove_dir_all(&dir);
+}

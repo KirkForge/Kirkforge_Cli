@@ -11,6 +11,7 @@ use crate::session::conversation::ConversationLog;
 use crate::session::event_bus::BusEvent;
 use crate::session::event_bus::EventBus;
 use crate::session::hooks::HookRunner;
+use crate::session::prompt::cache_stem::CacheStemTracker;
 use crate::session::prompt::PromptBuilder;
 use crate::session::verifier::{
     CorrectionLoop, CorrectionResult, VerifierBus, VerifierHandler, VerifierSlots,
@@ -100,6 +101,12 @@ pub struct Executor {
     /// `MetricEvent::DoomLoop` so the TUI can warn the user and the
     /// metrics log can record the incident.
     doom_loop_tracker: DoomLoopTracker,
+
+    /// Client-side prompt-cache stem-reuse tracker (ADR-052). Records
+    /// the hash of the prefix messages each turn and emits a
+    /// `PlanReason::CacheStemReuse` metric event when the stem is
+    /// byte-for-byte stable across turns. Wired in WO 10.2.
+    cache_stem: CacheStemTracker,
 }
 
 impl Executor {
@@ -264,6 +271,7 @@ impl Executor {
             task_spawner: None,
             trace: None,
             doom_loop_tracker: DoomLoopTracker::new(),
+            cache_stem: CacheStemTracker::new(),
         };
         this.init_default_verifiers(plugin_registry);
         this.build_task_spawner();

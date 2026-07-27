@@ -573,6 +573,25 @@ where
     result
 }
 
+/// Install a thread-local metrics-path override for an async test. The
+/// caller must call [`clear_test_path`] when done and remove the temp
+/// dir. This is the async-friendly equivalent of [`with_test_path`]:
+/// `with_test_path` is sync-only (it takes a non-async closure), so
+/// async tests that need to `.await` between `record()` calls use this
+/// pair instead. The caller is responsible for holding `TEST_LOCK` to
+/// prevent cross-test interleaving.
+#[cfg(test)]
+pub(crate) fn set_test_path(path: PathBuf) {
+    PATH_OVERRIDE.with(|o| *o.borrow_mut() = Some(path));
+}
+
+/// Clear the thread-local metrics-path override installed by
+/// [`set_test_path`].
+#[cfg(test)]
+pub(crate) fn clear_test_path() {
+    PATH_OVERRIDE.with(|o| *o.borrow_mut() = None);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -15,6 +15,19 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   not on the racy post-drop env state. Test-only fix; no behavior
   change. Unblocks the v0.3.6 release (the `windows` CI job was red).
 
+### Added
+- Prompt-cache stem-reuse wiring (Workorder 10.2): the
+  `CacheStemTracker` from WO 9.5 is now instantiated on the `Executor`
+  and called from `stream_iteration` (`turn.rs`). When the system
+  message (prefix_len=1) hashes to the same value as the prior turn, a
+  `PlanReason::CacheStemReuse` metric event is emitted. Integration
+  test proves the event fires on turns 2-5 of a 5-turn conversation,
+  not on turn 1, and that a system-message change breaks stability.
+  The adapter short-circuit was not implemented (the Anthropic API
+  requires full content every request; the server-side KV-cache still
+  hits via `cache_control` markers). ADR-052 updated. WO 9.5 status
+  corrected to "Done (partial — adapter wiring in WO 10.2)".
+
 ### Changed
 - v0.3.6 release re-shipped (Workorder 10.1): the `v0.3.6` tag was
   re-pointed at the Windows-fix commit (`4cbcfc3`) and re-pushed; the

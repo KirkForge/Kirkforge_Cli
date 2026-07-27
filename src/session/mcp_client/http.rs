@@ -933,6 +933,15 @@ mod tests {
                 "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nMcp-Session-Id: {sid}\r\n\r\n"
             );
             sock.write_all(response.as_bytes()).await.unwrap();
+            // Hold the socket open briefly so the client can read the
+            // headers before the stream closes. On Windows, dropping
+            // the socket immediately after write_all races the client's
+            // read — the close propagates faster than the headers,
+            // causing a connection-reset error. A short sleep gives
+            // reqwest time to read the response headers. The `sock`
+            // drops at the end of this block, closing the stream.
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            let _ = sock;
         });
 
         url

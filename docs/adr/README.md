@@ -99,6 +99,7 @@ verifies the table and the file headers agree.
 | [056](./056-plugin-cli-subcommand.md) | Shared plugin-ops layer and `kirkforge plugin` CLI subcommand | Accepted | CLI |
 | [057](./057-plugin-signature-rust.md) | In-process plugin signature verification (no minisign shell-out) | Accepted | CLI |
 | [061](./061-plugin-hook-audit-log.md) | Plugin hook fail-open audit log | Accepted | CLI |
+| [064](./064-plugin-system-e2e-test.md) | Plugin system end-to-end integration test suite | Accepted | CLI |
 
 ## Native KirkForge-Cli ADRs
 

@@ -25,6 +25,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `tracing::warn!` live-operator signal is kept; the audit log is the
   persistent record. 3 new audit tests (denial, fail-open, plugin-name
   attribution). `AuditEntry` changed from a struct to a tagged enum.
+- Plugin system e2e integration test (WO 11.9, ADR-064): a single
+  `#[cfg(unix)]` test loads a mock plugin with all 4 capability kinds
+  (skill + tool + hook + verifier), exercises each, and asserts the
+  trust-filtering + audit-log contracts. Catches composition
+  regressions the unit tests miss.
 
 ### Fixed
 - Windows env_guard race (Workorder 10.0): the

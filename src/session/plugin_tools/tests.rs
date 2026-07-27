@@ -799,3 +799,237 @@ fn folded_plugin_identification() {
         None
     );
 }
+
+// ── WO 11.9: plugin system end-to-end integration test ──
+//
+// Loads a mock plugin declaring all 4 capability kinds (skill, tool,
+// hook, verifier) and exercises each through the appropriate path:
+//  - skill: rendered prompt via Plugin::skill_prompt
+//  - tool: PluginToolWrapper.run (subprocess with curated env)
+//  - hook: HookRunner.run_decision (exit 0 → Allow, exit 2 → Deny)
+//  - verifier: PluginVerifier via the host subprocess
+// Asserts the trust-filtering contract: at ReadOnly max, the shell tool
+// and hook are filtered out; the skill and verifier remain.
+
+#[cfg(unix)]
+mod e2e {
+    use super::*;
+    use crate::session::hooks::{HookDecision, HookRunner};
+    use crate::shared::audit::{AuditEntry, AuditLog};
+    use kirkforge_plugin::{Capability, Plugin, TrustTier};
+    use kirkforge_plugin_host::VerifierVerdict;
+    use std::os::unix::fs::PermissionsExt;
+    use std::sync::Arc;
+
+    fn chmod_x(path: &std::path::Path) {
+        let mut perms = std::fs::metadata(path).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(path, perms).unwrap();
+    }
+
+    /// Build a mock plugin dir with all 4 capability kinds.
+    fn make_e2e_plugin(root: &std::path::Path) {
+        let hooks_dir = root.join("hooks");
+        let tools_dir = root.join("tools");
+        let verifier_dir = root.join("verifiers");
+        std::fs::create_dir_all(&hooks_dir).unwrap();
+        std::fs::create_dir_all(&tools_dir).unwrap();
+        std::fs::create_dir_all(&verifier_dir).unwrap();
+
+        std::fs::write(
+            root.join("kirkforge.toml"),
+            r#"
+name = "e2e-plugin"
+version = "0.1.0"
+description = "e2e mock with all 4 capability kinds"
+trust = "shell"
+
+[[capabilities]]
+type = "skill"
+trigger = "/e2e"
+prompt = "E2E skill: {{args}}"
+
+[[capabilities]]
+type = "tool"
+name = "e2e/echo"
+description = "echo its args + curated env"
+command = "tools/echo.sh"
+
+[[capabilities]]
+type = "hook"
+event = "pre-tool-bash"
+command = "hooks/pre-tool-bash.sh"
+
+[[capabilities]]
+type = "verifier"
+name = "e2e-check"
+priority = 1
+command = "verifiers/check.sh"
+"#,
+        )
+        .unwrap();
+
+        // Tool: echoes a sentinel so the test knows it ran, and prints
+        // a non-baseline env var to prove env curation.
+        std::fs::write(
+            tools_dir.join("echo.sh"),
+            "#!/bin/sh\nprintf 'e2e-tool-ran:%s' \"$1\"\n",
+        )
+        .unwrap();
+        chmod_x(&tools_dir.join("echo.sh"));
+
+        // Hook: exit 0 (allow) by default; exit 2 when KF_DENY=1 is set.
+        std::fs::write(
+            hooks_dir.join("pre-tool-bash.sh"),
+            "#!/bin/sh\nif [ \"$KF_DENY\" = 1 ]; then echo 'e2e-deny' >&2; exit 2; fi\nexit 0\n",
+        )
+        .unwrap();
+        chmod_x(&hooks_dir.join("pre-tool-bash.sh"));
+
+        // Verifier: exits 1 (error verdict) with a message on stderr.
+        std::fs::write(
+            verifier_dir.join("check.sh"),
+            "#!/bin/sh\necho 'e2e-verifier: found issue' >&2\nexit 1\n",
+        )
+        .unwrap();
+        chmod_x(&verifier_dir.join("check.sh"));
+    }
+
+    #[tokio::test]
+    async fn e2e_plugin_all_four_capability_kinds() {
+        let tmp = tempfile::tempdir().unwrap();
+        let plugins_dir = tmp.path().join("plugins");
+        let plugin_dir = plugins_dir.join("e2e-plugin");
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        make_e2e_plugin(&plugin_dir);
+
+        // Load at Shell trust (all 4 capabilities should be active).
+        let mut registry = PluginRegistry::new();
+        let warnings = registry
+            .load_from_dir(&plugins_dir, TrustPolicy::up_to(TrustTier::Shell))
+            .unwrap();
+        assert!(warnings.is_empty(), "load warnings: {warnings:?}");
+        assert_eq!(registry.active_count(), 1);
+
+        // ── 1. Skill registered + callable ──
+        assert!(registry.skill_by_trigger("/e2e").is_some());
+        let (_, plugin) = registry.skill_by_trigger("/e2e").unwrap();
+        let prompt = plugin.skill_prompt("/e2e", "hello").unwrap();
+        assert!(prompt.contains("E2E skill: hello"), "prompt: {prompt}");
+
+        // ── 2. Tool registered + callable ──
+        assert!(registry.tool_by_name("e2e/echo").is_some());
+        let cfg = Arc::new(std::sync::RwLock::new(Config::default()));
+        let tools = all_plugin_tools(&registry, cfg);
+        assert_eq!(tools.len(), 1, "expected 1 plugin tool");
+        let outcome = tools[0]
+            .run(&ToolContext::new(), serde_json::json!({"arg": "world"}))
+            .await;
+        match outcome {
+            ToolOutcome::Success { content } => {
+                assert!(
+                    content.contains("e2e-tool-ran"),
+                    "tool output should contain sentinel: {content}"
+                );
+            }
+            other => panic!("expected tool Success, got {other:?}"),
+        }
+
+        // ── 3. Hook fires + verdict correct (Allow and Deny cases) ──
+        assert!(!registry.hooks_for_event("pre-tool-bash").is_empty());
+        let mut hook_runner = HookRunner::new(tmp.path().join("unused-hooks"));
+        hook_runner.load_plugin_hooks(&registry);
+
+        // Allow case (no KF_DENY).
+        let allow = hook_runner
+            .run_decision("pre-tool-bash", &[], &Config::default())
+            .await;
+        assert_eq!(allow, HookDecision::Allow, "allow case");
+
+        // Deny case (KF_DENY=1).
+        let deny = hook_runner
+            .run_decision("pre-tool-bash", &[("KF_DENY", "1")], &Config::default())
+            .await;
+        assert!(
+            matches!(deny, HookDecision::Deny(ref r) if r.contains("e2e-deny")),
+            "deny case: {deny:?}"
+        );
+
+        // ── 4. Verifier registered + produces a verdict ──
+        assert!(registry.verifier_by_name("e2e-check").is_some());
+        let (_, vplugin) = registry.verifier_by_name("e2e-check").unwrap();
+        let vcaps: Vec<Capability> = vplugin.verifiers();
+        let vcap = vcaps
+            .iter()
+            .find(|c| matches!(c, Capability::Verifier { name, .. } if name == "e2e-check"))
+            .unwrap();
+        if let Capability::Verifier {
+            command: Some(_), ..
+        } = vcap
+        {
+            let pv = kirkforge_plugin_host::PluginVerifier::from_capability(vcap, vplugin.root())
+                .expect("verifier should build from capability");
+            let mut env = std::collections::HashMap::new();
+            env.insert("KF_EVENT".to_string(), "post-tool-bash".to_string());
+            env.insert("KF_TOOL_NAME".to_string(), "bash".to_string());
+            let verdict = pv.run(&env).expect("verifier should execute");
+            match verdict {
+                VerifierVerdict::Fail { message } => {
+                    assert!(
+                        message.contains("e2e-verifier"),
+                        "verifier fail message: {message}"
+                    );
+                }
+                VerifierVerdict::Pass => panic!("expected Fail verdict, got Pass"),
+            }
+        } else {
+            panic!("e2e-check verifier should have a command");
+        }
+
+        // ── 5. Trust filtering: at ReadOnly max, tool + hook filtered out ──
+        let mut reg_ro = PluginRegistry::new();
+        let warnings_ro = reg_ro
+            .load_from_dir(
+                &plugins_dir,
+                TrustPolicy::up_to(TrustTier::ReadOnly).with_reject_on_excess(false),
+            )
+            .unwrap();
+        // Plugin is active (skill + verifier are ReadOnly-kind) but tool
+        // and hook (Shell-kind) are filtered.
+        assert_eq!(reg_ro.active_count(), 1, "warnings: {warnings_ro:?}");
+        assert!(reg_ro.skill_by_trigger("/e2e").is_some(), "skill survives");
+        assert!(reg_ro.tool_by_name("e2e/echo").is_none(), "tool filtered");
+        assert!(
+            reg_ro.hooks_for_event("pre-tool-bash").is_empty(),
+            "hook filtered"
+        );
+        assert!(
+            reg_ro.verifier_by_name("e2e-check").is_some(),
+            "verifier survives"
+        );
+
+        // ── 6. Audit log: hook verdict recorded (WO 11.6) ──
+        let audit_path = tmp.path().join("e2e-audit.ndjson");
+        let log = Arc::new(AuditLog::new(Some(audit_path.clone())));
+        let mut audited_runner = HookRunner::new(tmp.path().join("unused-hooks"));
+        audited_runner.set_audit_log(log);
+        audited_runner.load_plugin_hooks(&registry);
+        let _ = audited_runner
+            .run_decision("pre-tool-bash", &[("KF_DENY", "1")], &Config::default())
+            .await;
+        drop(audited_runner);
+        let audit_contents = std::fs::read_to_string(&audit_path).unwrap();
+        assert!(
+            audit_contents.contains("\"kind\":\"hook\""),
+            "audit log should contain a hook entry: {audit_contents}"
+        );
+        assert!(
+            audit_contents.contains("\"verdict\":\"deny\""),
+            "audit log should contain a deny verdict: {audit_contents}"
+        );
+        assert!(
+            audit_contents.contains("e2e-plugin"),
+            "audit log should attribute to e2e-plugin: {audit_contents}"
+        );
+    }
+}

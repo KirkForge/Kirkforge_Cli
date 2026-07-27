@@ -1,5 +1,6 @@
-// Partial prompt-compression implementation; unused symbols are wired up in Phase 10.
-#![allow(dead_code)]
+//! Prompt-time source minification: strip comments, collapse whitespace,
+//! and shorten local identifiers in languages where that is safe. Files on
+//! disk are never modified; minification is applied at prompt-build time.
 
 mod expand;
 mod lang;

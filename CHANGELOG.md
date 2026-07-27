@@ -15,6 +15,22 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   not on the racy post-drop env state. Test-only fix; no behavior
   change. Unblocks the v0.3.6 release (the `windows` CI job was red).
 
+### Changed
+- v0.3.6 release re-shipped (Workorder 10.1): the `v0.3.6` tag was
+  re-pointed at the Windows-fix commit (`4cbcfc3`) and re-pushed; the
+  Release workflow published the 6 platform binaries + `SHA256SUMS.txt`
+  + cosign signature (`.sig` + `.pem`) + systemd/launchd service files.
+  The original tag pointed at `9158bb0` whose `windows` CI job was red,
+  so the release had never shipped.
+- minify module cleanup (Workorder 10.6): removed the stale
+  `#![allow(dead_code)]` from `src/shared/minify/lang.rs` and
+  `src/shared/minify/mod.rs` (the "Phase-10 symbols not yet wired up"
+  comment was stale — WO 9.7 wired the read path). Deleted the dead
+  `minify_rust` wrapper (a thin `minify_rust_inner(.., false)` never
+  called; `minify_content_by_ext` dispatches to `minify_rust_inner`
+  directly). Fixed the mixed `//` + `//!` comment style at the top of
+  `lang.rs` to a single `//!` module doc block.
+
 ## [0.3.6] - 2026-07-27
 
 ### Added

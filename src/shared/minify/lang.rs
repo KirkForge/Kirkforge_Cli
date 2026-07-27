@@ -1,6 +1,5 @@
-// Per-language minification engine — pure, stateless string transforms.
+//! Per-language minification engine — pure, stateless string transforms.
 //! Extracted from the VFS cache + public API in `mod.rs`.
-#![allow(dead_code)] // minify_rust wrapper and Phase-10 symbols not yet wired up.
 
 /// Minify content based on file extension (no disk caching).
 pub(super) fn minify_content_by_ext(content: &str, ext: &str, preserve_tests: bool) -> String {
@@ -139,10 +138,6 @@ pub(super) fn collapse_blank_lines(source: &str) -> String {
 }
 
 // ── Rust ──────────────────────────────────────────────────────────
-
-fn minify_rust(source: &str) -> String {
-    minify_rust_inner(source, false)
-}
 
 fn minify_rust_inner(source: &str, preserve_tests: bool) -> String {
     let mut out = String::with_capacity(source.len());

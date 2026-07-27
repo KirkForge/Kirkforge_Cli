@@ -18,6 +18,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   sig, missing key, malformed sig, wrong key, tampered manifest, full
   registry load). The `minisign` crate is a dev-dependency for test
   keypair generation.
+- Plugin hook audit log (WO 11.6, ADR-061): hook denials (exit 2) and
+  fail-open failures (non-zero / timeout / crash) are now recorded in
+  the audit log as `AuditEntry::Hook` with the event, plugin name,
+  verdict (`deny` / `allow_fail_open`), and reason. The
+  `tracing::warn!` live-operator signal is kept; the audit log is the
+  persistent record. 3 new audit tests (denial, fail-open, plugin-name
+  attribution). `AuditEntry` changed from a struct to a tagged enum.
 
 ### Fixed
 - Windows env_guard race (Workorder 10.0): the

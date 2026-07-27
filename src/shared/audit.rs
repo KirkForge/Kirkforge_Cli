@@ -13,21 +13,74 @@ use std::sync::Mutex;
 
 /// A single audit-log entry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AuditEntry {
-    /// RFC 3339 UTC timestamp.
-    pub timestamp: String,
-    /// Tool name (e.g. `write_file`, `bash`).
-    pub tool: String,
-    /// Redacted tool arguments.
-    pub args: serde_json::Value,
-    /// Whether the tool completed successfully.
-    pub success: bool,
-    /// Reason the call was denied, if applicable.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub denial_reason: Option<String>,
-    /// Optional session identifier.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub session_id: Option<String>,
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum AuditEntry {
+    /// A destructive tool call (write_file, edit_file, bash).
+    Tool {
+        /// RFC 3339 UTC timestamp.
+        timestamp: String,
+        /// Tool name (e.g. `write_file`, `bash`).
+        tool: String,
+        /// Redacted tool arguments.
+        args: serde_json::Value,
+        /// Whether the tool completed successfully.
+        success: bool,
+        /// Reason the call was denied, if applicable.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        denial_reason: Option<String>,
+        /// Optional session identifier.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        session_id: Option<String>,
+    },
+    /// A hook verdict — denial or fail-open failure (WO 11.6, ADR-061).
+    Hook {
+        /// RFC 3339 UTC timestamp.
+        timestamp: String,
+        /// The event name (e.g. `pre-tool-bash`, `post-turn`).
+        event: String,
+        /// The plugin name if it's a plugin hook, else `None` for built-in.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        plugin: Option<String>,
+        /// The verdict: `allow`, `deny`, or `allow_fail_open`.
+        verdict: String,
+        /// For `deny`: the reason. For `allow_fail_open`: the error.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+        /// Optional session identifier.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        session_id: Option<String>,
+    },
+}
+
+impl AuditEntry {
+    /// Construct a `Tool` variant with a redacted args snapshot.
+    pub fn tool(
+        tool: &str,
+        args: &serde_json::Value,
+        success: bool,
+        denial_reason: Option<&str>,
+    ) -> Self {
+        Self::Tool {
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            tool: tool.to_string(),
+            args: redact_args(tool, args),
+            success,
+            denial_reason: denial_reason.map(|s| s.to_string()),
+            session_id: None,
+        }
+    }
+
+    /// Construct a `Hook` variant recording a verdict (WO 11.6).
+    pub fn hook(event: &str, plugin: Option<&str>, verdict: &str, reason: Option<&str>) -> Self {
+        Self::Hook {
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            event: event.to_string(),
+            plugin: plugin.map(|s| s.to_string()),
+            verdict: verdict.to_string(),
+            reason: reason.map(|s| s.to_string()),
+            session_id: None,
+        }
+    }
 }
 
 /// Append-only audit log.
@@ -90,15 +143,21 @@ impl AuditLog {
         success: bool,
         denial_reason: Option<&str>,
     ) {
-        let entry = AuditEntry {
-            timestamp: chrono::Utc::now().to_rfc3339(),
-            tool: tool.to_string(),
-            args: redact_args(tool, args),
-            success,
-            denial_reason: denial_reason.map(|s| s.to_string()),
-            session_id: None,
-        };
-        let line = match serde_json::to_string(&entry) {
+        let entry = AuditEntry::tool(tool, args, success, denial_reason);
+        self.write_entry(&entry);
+    }
+
+    /// Record a hook verdict (denial or fail-open failure). WO 11.6.
+    ///
+    /// Best-effort: I/O failures are logged but never surfaced.
+    pub fn log_hook(&self, event: &str, plugin: Option<&str>, verdict: &str, reason: Option<&str>) {
+        let entry = AuditEntry::hook(event, plugin, verdict, reason);
+        self.write_entry(&entry);
+    }
+
+    /// Serialize and append a single entry line.
+    fn write_entry(&self, entry: &AuditEntry) {
+        let line = match serde_json::to_string(entry) {
             Ok(s) => s,
             Err(e) => {
                 tracing::warn!(error = %e, "failed to serialize audit entry");
@@ -207,13 +266,13 @@ mod tests {
         assert_eq!(lines.len(), 2, "expected two JSON lines, got: {contents}");
         for line in &lines {
             let entry: AuditEntry = serde_json::from_str(line).unwrap();
-            assert_eq!(entry.tool, "write_file");
-            assert!(
-                entry.args.get("content").is_none(),
-                "content must be redacted"
-            );
+            let AuditEntry::Tool { tool, args, .. } = entry else {
+                panic!("expected Tool variant, got {entry:?}");
+            };
+            assert_eq!(tool, "write_file");
+            assert!(args.get("content").is_none(), "content must be redacted");
             assert_eq!(
-                entry.args.get("path").and_then(|v| v.as_str()),
+                args.get("path").and_then(|v| v.as_str()),
                 Some("/tmp/out.txt")
             );
         }
@@ -242,9 +301,74 @@ mod tests {
 
         let contents = std::fs::read_to_string(&path).unwrap();
         let entry: AuditEntry = serde_json::from_str(contents.trim()).unwrap();
-        let logged_cmd = entry.args.get("command").and_then(|v| v.as_str()).unwrap();
+        let AuditEntry::Tool { args, .. } = entry else {
+            panic!("expected Tool variant, got {entry:?}");
+        };
+        let logged_cmd = args.get("command").and_then(|v| v.as_str()).unwrap();
         assert!(logged_cmd.len() <= 1100, "bash command should be truncated");
         assert!(logged_cmd.ends_with("...[truncated]"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_audit_log_records_hook_verdict() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "kirkforge_audit_hook_test_{}_{}",
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::SeqCst)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("audit.ndjson");
+
+        let log = AuditLog::new(Some(path.clone()));
+        log.log_hook("pre-tool-bash", Some("sec-plugin"), "deny", Some("blocked"));
+        log.log_hook(
+            "pre-tool-bash",
+            None,
+            "allow_fail_open",
+            Some("hook timed out"),
+        );
+        drop(log);
+
+        let contents = std::fs::read_to_string(&path).unwrap();
+        let lines: Vec<&str> = contents.trim().split('\n').collect();
+        assert_eq!(lines.len(), 2, "expected two hook entries, got: {contents}");
+        let e0: AuditEntry = serde_json::from_str(lines[0]).unwrap();
+        match e0 {
+            AuditEntry::Hook {
+                event,
+                plugin,
+                verdict,
+                reason,
+                ..
+            } => {
+                assert_eq!(event, "pre-tool-bash");
+                assert_eq!(plugin.as_deref(), Some("sec-plugin"));
+                assert_eq!(verdict, "deny");
+                assert_eq!(reason.as_deref(), Some("blocked"));
+            }
+            other => panic!("expected Hook variant, got {other:?}"),
+        }
+        let e1: AuditEntry = serde_json::from_str(lines[1]).unwrap();
+        match e1 {
+            AuditEntry::Hook {
+                event,
+                plugin,
+                verdict,
+                reason,
+                ..
+            } => {
+                assert_eq!(event, "pre-tool-bash");
+                assert_eq!(plugin, None);
+                assert_eq!(verdict, "allow_fail_open");
+                assert_eq!(reason.as_deref(), Some("hook timed out"));
+            }
+            other => panic!("expected Hook variant, got {other:?}"),
+        }
 
         let _ = std::fs::remove_dir_all(&dir);
     }

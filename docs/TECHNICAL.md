@@ -206,7 +206,10 @@ been independently audited).
 `Config` (decomposed into 5 `#[serde(flatten)]` sub-structs: `ModelConfig`,
 `SecurityConfig`, `ToolConfig`, `SessionConfig`, `DisplayConfig`), `Message`,
 `Role`, `StreamEvent`, `ToolDef`, `ToolOutcome`, `ModelInfo`, `ContentPart`,
-metrics, backoff, permissions, minify, audit.
+metrics, backoff, permissions, minify, audit. The audit log records
+destructive tool calls (`AuditEntry::Tool`) and hook denials / fail-open
+failures (`AuditEntry::Hook`, WO 11.6 / ADR-061) as append-only NDJSON
+with a `"kind"` tag.
 
 ### `daemon/`, `jobs/`, `line_mode/`, `main/`
 

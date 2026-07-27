@@ -199,6 +199,7 @@ impl Executor {
             Some(dir) => HookRunner::new(dir.clone()),
             None => HookRunner::default(),
         };
+        hook_runner.set_audit_log(Arc::clone(&audit_log));
         if let Some(registry) = plugin_registry {
             hook_runner.load_plugin_hooks(registry);
         }

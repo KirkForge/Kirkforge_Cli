@@ -31,9 +31,11 @@ use crate::session::bash_runner::{
     cap_to_string, check_bash_command_str, drain_capped, MAX_BASH_OUTPUT_BYTES,
 };
 use crate::session::process_group::{kill_process_group, reap_child, setup_process_group};
+use crate::shared::audit::AuditLog;
 use crate::shared::Config;
 use kirkforge_plugin::Plugin;
 use kirkforge_plugin_host::PluginRegistry;
+use std::sync::Arc;
 
 /// Context passed to an in-process hook handler.
 ///
@@ -97,12 +99,18 @@ pub struct HookRunner {
     available: HashSet<String>,
     /// Plugin-defined hooks loaded from `PluginRegistry`.
     ///
-    /// Each entry is `(event_name, absolute_script_path)`. Plugin hooks run
-    /// through the same `run_hook_script` pipeline as built-in hooks, so they
-    /// get the same 5-second timeout, bash safety gate, and capped output.
-    plugin_hooks: Vec<(String, PathBuf)>,
+    /// Each entry is `(event_name, absolute_script_path, plugin_name)`.
+    /// Plugin hooks run through the same `run_hook_script` pipeline as
+    /// built-in hooks, so they get the same 5-second timeout, bash safety
+    /// gate, and capped output. The `plugin_name` is surfaced to the
+    /// audit log so a hook denial/failure is attributed to the right
+    /// plugin (WO 11.6).
+    plugin_hooks: Vec<(String, PathBuf, Option<String>)>,
     /// In-process Rust hook handlers (from folded plugins).
     in_process_hooks: Vec<Box<dyn InProcessHook>>,
+    /// Optional audit log handle for recording hook denials + fail-open
+    /// failures (WO 11.6, ADR-061). `None` in tests that don't care.
+    audit_log: Option<Arc<AuditLog>>,
 }
 
 impl std::fmt::Debug for HookRunner {
@@ -112,6 +120,7 @@ impl std::fmt::Debug for HookRunner {
             .field("available", &self.available)
             .field("plugin_hooks", &self.plugin_hooks)
             .field("in_process_hooks", &self.in_process_hooks.len())
+            .field("audit_log", &self.audit_log.is_some())
             .finish()
     }
 }
@@ -123,6 +132,7 @@ impl Clone for HookRunner {
             available: self.available.clone(),
             plugin_hooks: self.plugin_hooks.clone(),
             in_process_hooks: Vec::new(),
+            audit_log: self.audit_log.clone(),
         }
     }
 }
@@ -139,7 +149,21 @@ impl HookRunner {
             available,
             plugin_hooks: Vec::new(),
             in_process_hooks: Vec::new(),
+            audit_log: None,
         }
+    }
+
+    /// Attach an audit log so hook denials + fail-open failures are
+    /// recorded to the tamper-evident audit trail (WO 11.6).
+    pub fn with_audit_log(mut self, log: Arc<AuditLog>) -> Self {
+        self.audit_log = Some(log);
+        self
+    }
+
+    /// Set the audit log handle after construction (used by the executor
+    /// which builds the hook runner before the audit log exists).
+    pub fn set_audit_log(&mut self, log: Arc<AuditLog>) {
+        self.audit_log = Some(log);
     }
 
     /// Load plugin-defined hooks from a `PluginRegistry`.
@@ -151,11 +175,13 @@ impl HookRunner {
     pub fn load_plugin_hooks(&mut self, registry: &PluginRegistry) {
         for hosted in registry.active_plugins() {
             let plugin = &hosted.plugin;
+            let plugin_name = plugin.manifest().name.clone();
             let root = plugin.root();
             for cap in plugin.hooks() {
                 if let kirkforge_plugin::Capability::Hook { event, command } = cap {
                     let script_path = root.join(&command);
-                    self.plugin_hooks.push((event, script_path));
+                    self.plugin_hooks
+                        .push((event, script_path, Some(plugin_name.clone())));
                 }
             }
         }
@@ -172,20 +198,28 @@ impl HookRunner {
     /// Check whether any hook (built-in, plugin, or in-process) exists for `event_name`.
     pub fn has(&self, event_name: &str) -> bool {
         self.available.contains(event_name)
-            || self.plugin_hooks.iter().any(|(e, _)| e == event_name)
+            || self.plugin_hooks.iter().any(|(e, _, _)| e == event_name)
             || self
                 .in_process_hooks
                 .iter()
                 .any(|h| h.event() == event_name)
     }
 
-    /// Return the plugin hook script paths registered for `event_name`.
-    fn plugin_hooks_for(&self, event_name: &str) -> Vec<PathBuf> {
+    /// Return the plugin hook script paths + plugin names registered for
+    /// `event_name`.
+    fn plugin_hooks_for(&self, event_name: &str) -> Vec<(PathBuf, Option<&str>)> {
         self.plugin_hooks
             .iter()
-            .filter(|(e, _)| e == event_name)
-            .map(|(_, path)| path.clone())
+            .filter(|(e, _, _)| e == event_name)
+            .map(|(_, path, name)| (path.clone(), name.as_deref()))
             .collect()
+    }
+
+    /// Record a hook verdict to the audit log if one is attached.
+    fn audit_hook(&self, event: &str, plugin: Option<&str>, verdict: &str, reason: Option<&str>) {
+        if let Some(ref log) = self.audit_log {
+            log.log_hook(event, plugin, verdict, reason);
+        }
     }
 
     /// Convert `&[(&str, &str)]` env vars into owned pairs for async tasks.
@@ -202,26 +236,38 @@ impl HookRunner {
     fn spawn_hook_script(
         &self,
         event_name: &str,
+        plugin_name: Option<&str>,
         script_path: PathBuf,
         env_vars: Vec<(String, String)>,
         config: Config,
     ) {
         let event = event_name.to_string();
+        let audit_log = self.audit_log.clone();
+        let plugin_owned = plugin_name.map(|s| s.to_string());
         let handle = match tokio::runtime::Handle::try_current() {
             Ok(rt) => rt.spawn(async move {
                 match run_hook_script(&script_path, &env_vars, &config).await {
                     Ok(HookDecision::Allow) => {}
                     Ok(HookDecision::Deny(reason)) => {
-                        // Fire-and-forget path: a deny here is too late to
-                        // block, so we log it as a warning.
                         tracing::warn!(
                             event = %event,
                             reason = %reason,
                             "Observational hook reported deny after the fact"
                         );
+                        if let Some(log) = audit_log {
+                            log.log_hook(&event, plugin_owned.as_deref(), "deny", Some(&reason));
+                        }
                     }
                     Err(e) => {
                         tracing::warn!(event = %event, error = %e, "Hook run failed");
+                        if let Some(log) = audit_log {
+                            log.log_hook(
+                                &event,
+                                plugin_owned.as_deref(),
+                                "allow_fail_open",
+                                Some(&e),
+                            );
+                        }
                     }
                 }
             }),
@@ -250,12 +296,24 @@ impl HookRunner {
         // Built-in hook.
         if self.available.contains(event_name) {
             let script_path = self.hooks_dir.join(format!("{event_name}.sh"));
-            self.spawn_hook_script(event_name, script_path, owned_vars.clone(), config.clone());
+            self.spawn_hook_script(
+                event_name,
+                None,
+                script_path,
+                owned_vars.clone(),
+                config.clone(),
+            );
         }
 
         // Plugin hooks.
-        for script_path in self.plugin_hooks_for(event_name) {
-            self.spawn_hook_script(event_name, script_path, owned_vars.clone(), config.clone());
+        for (script_path, plugin_name) in self.plugin_hooks_for(event_name) {
+            self.spawn_hook_script(
+                event_name,
+                plugin_name,
+                script_path,
+                owned_vars.clone(),
+                config.clone(),
+            );
         }
     }
 
@@ -277,6 +335,7 @@ impl HookRunner {
                             reason = %reason,
                             "In-process hook reported deny (fire-and-forget: too late to block)"
                         );
+                        self.audit_hook(event_name, None, "deny", Some(&reason));
                     }
                 }
             }
@@ -307,7 +366,11 @@ impl HookRunner {
         let ctx = env_vars_to_ctx(event_name, env_vars);
         for hook in &self.in_process_hooks {
             if hook.event() == event_name {
-                decisions.push(hook.handle(&ctx));
+                let d = hook.handle(&ctx);
+                if let HookDecision::Deny(ref reason) = d {
+                    self.audit_hook(event_name, None, "deny", Some(reason));
+                }
+                decisions.push(d);
             }
         }
 
@@ -315,17 +378,31 @@ impl HookRunner {
         if self.available.contains(event_name) {
             let script_path = self.hooks_dir.join(format!("{event_name}.sh"));
             match run_hook_script(&script_path, &owned_vars, config).await {
-                Ok(decision) => decisions.push(decision),
+                Ok(HookDecision::Deny(reason)) => {
+                    self.audit_hook(event_name, None, "deny", Some(&reason));
+                    decisions.push(HookDecision::Deny(reason));
+                }
+                Ok(d) => decisions.push(d),
                 Err(e) => {
                     tracing::warn!(event = %event_name, error = %e, "Built-in decision hook failed (fail-open)");
+                    self.audit_hook(event_name, None, "allow_fail_open", Some(&e));
                 }
             }
         }
 
         // Plugin hooks.
-        for script_path in self.plugin_hooks_for(event_name) {
+        for (script_path, plugin_name) in self.plugin_hooks_for(event_name) {
             match run_hook_script(&script_path, &owned_vars, config).await {
-                Ok(decision) => decisions.push(decision),
+                Ok(HookDecision::Deny(reason)) => {
+                    tracing::warn!(
+                        event = %event_name,
+                        path = %script_path.display(),
+                        "Plugin decision hook denied"
+                    );
+                    self.audit_hook(event_name, plugin_name, "deny", Some(&reason));
+                    decisions.push(HookDecision::Deny(reason));
+                }
+                Ok(d) => decisions.push(d),
                 Err(e) => {
                     tracing::warn!(
                         event = %event_name,
@@ -333,6 +410,7 @@ impl HookRunner {
                         error = %e,
                         "Plugin decision hook failed (fail-open)"
                     );
+                    self.audit_hook(event_name, plugin_name, "allow_fail_open", Some(&e));
                 }
             }
         }
@@ -360,7 +438,11 @@ impl HookRunner {
         // In-process hooks.
         for hook in &self.in_process_hooks {
             if hook.event() == event_name {
-                decisions.push(hook.handle(ctx));
+                let d = hook.handle(ctx);
+                if let HookDecision::Deny(ref reason) = d {
+                    self.audit_hook(event_name, None, "deny", Some(reason));
+                }
+                decisions.push(d);
             }
         }
 
@@ -372,16 +454,30 @@ impl HookRunner {
         if self.available.contains(event_name) {
             let script_path = self.hooks_dir.join(format!("{event_name}.sh"));
             match run_hook_script(&script_path, &owned_vars, config).await {
-                Ok(decision) => decisions.push(decision),
+                Ok(HookDecision::Deny(reason)) => {
+                    self.audit_hook(event_name, None, "deny", Some(&reason));
+                    decisions.push(HookDecision::Deny(reason));
+                }
+                Ok(d) => decisions.push(d),
                 Err(e) => {
                     tracing::warn!(event = %event_name, error = %e, "Built-in decision hook failed (fail-open)");
+                    self.audit_hook(event_name, None, "allow_fail_open", Some(&e));
                 }
             }
         }
 
-        for script_path in self.plugin_hooks_for(event_name) {
+        for (script_path, plugin_name) in self.plugin_hooks_for(event_name) {
             match run_hook_script(&script_path, &owned_vars, config).await {
-                Ok(decision) => decisions.push(decision),
+                Ok(HookDecision::Deny(reason)) => {
+                    tracing::warn!(
+                        event = %event_name,
+                        path = %script_path.display(),
+                        "Plugin decision hook denied"
+                    );
+                    self.audit_hook(event_name, plugin_name, "deny", Some(&reason));
+                    decisions.push(HookDecision::Deny(reason));
+                }
+                Ok(d) => decisions.push(d),
                 Err(e) => {
                     tracing::warn!(
                         event = %event_name,
@@ -389,6 +485,7 @@ impl HookRunner {
                         error = %e,
                         "Plugin decision hook failed (fail-open)"
                     );
+                    self.audit_hook(event_name, plugin_name, "allow_fail_open", Some(&e));
                 }
             }
         }
@@ -600,6 +697,19 @@ async fn run_hook_script(
                     stderr_dropped,
                     "Hook exited with non-zero status (fail-open: allowing)"
                 );
+                // Return an Err so the decision path audits the fail-open
+                // (WO 11.6). The caller converts Err → Allow (fail-open).
+                let stderr_info = if stderr_text.is_empty() {
+                    String::from("non-zero exit")
+                } else {
+                    stderr_text.trim().to_string()
+                };
+                return Err(format!(
+                    "hook {} exited with non-zero status {:?}: {}",
+                    script.display(),
+                    status.code(),
+                    stderr_info
+                ));
             } else if stdout_dropped > 0 || stderr_dropped > 0 {
                 tracing::debug!(
                     script = %script.display(),
@@ -1044,5 +1154,166 @@ command = "hooks/post-turn.sh"
 
         // Keep temporaries alive until after the assertions.
         let _ = (tmp, hooks_tmp);
+    }
+
+    /// A pre-tool hook that denies (exit 2) is recorded in the audit log
+    /// with `verdict = deny` + the reason (WO 11.6).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn audit_log_records_hook_denial() {
+        use crate::shared::audit::{AuditEntry, AuditLog};
+        let (_tmp, dir) = temp_hooks_dir();
+        write_hook(
+            &dir,
+            "pre-tool-bash",
+            "#!/bin/bash\necho 'blocked by policy' >&2; exit 2",
+        );
+        let audit_path = _tmp.path().join("audit-hook-deny.ndjson");
+        let log = std::sync::Arc::new(AuditLog::new(Some(audit_path.clone())));
+        let mut runner = HookRunner::new(dir);
+        runner.set_audit_log(log);
+
+        let decision = runner
+            .run_decision(
+                "pre-tool-bash",
+                &[("KF_TOOL_NAME", "bash")],
+                &default_config(),
+            )
+            .await;
+        assert!(matches!(decision, HookDecision::Deny(_)));
+
+        // Drop to flush; then read the audit log back.
+        drop(runner);
+        let contents = std::fs::read_to_string(&audit_path).unwrap();
+        let entry: AuditEntry = serde_json::from_str(contents.trim()).unwrap();
+        match entry {
+            AuditEntry::Hook {
+                event,
+                verdict,
+                reason,
+                ..
+            } => {
+                assert_eq!(event, "pre-tool-bash");
+                assert_eq!(verdict, "deny");
+                assert!(
+                    reason.as_deref().unwrap_or("").contains("blocked"),
+                    "reason: {reason:?}"
+                );
+            }
+            other => panic!("expected Hook variant, got {other:?}"),
+        }
+    }
+
+    /// A hook that crashes (exit 1) is fail-opened (Allow) AND recorded in
+    /// the audit log with `verdict = allow_fail_open` + the error (WO 11.6).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn audit_log_records_hook_fail_open() {
+        use crate::shared::audit::{AuditEntry, AuditLog};
+        let (_tmp, dir) = temp_hooks_dir();
+        write_hook(&dir, "pre-tool-bash", "#!/bin/bash\nexit 1");
+        let audit_path = _tmp.path().join("audit-hook-failopen.ndjson");
+        let log = std::sync::Arc::new(AuditLog::new(Some(audit_path.clone())));
+        let mut runner = HookRunner::new(dir);
+        runner.set_audit_log(log);
+
+        let decision = runner
+            .run_decision(
+                "pre-tool-bash",
+                &[("KF_TOOL_NAME", "bash")],
+                &default_config(),
+            )
+            .await;
+        assert_eq!(decision, HookDecision::Allow, "exit 1 should fail-open");
+
+        drop(runner);
+        let contents = std::fs::read_to_string(&audit_path).unwrap();
+        let entry: AuditEntry = serde_json::from_str(contents.trim()).unwrap();
+        match entry {
+            AuditEntry::Hook {
+                event,
+                verdict,
+                reason,
+                ..
+            } => {
+                assert_eq!(event, "pre-tool-bash");
+                assert_eq!(verdict, "allow_fail_open");
+                assert!(reason.is_some(), "fail-open reason should be present");
+            }
+            other => panic!("expected Hook variant, got {other:?}"),
+        }
+    }
+
+    /// A plugin hook denial is recorded with the plugin name (WO 11.6).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn audit_log_records_plugin_hook_denial_with_name() {
+        use crate::shared::audit::{AuditEntry, AuditLog};
+        let tmp = tempfile::tempdir().unwrap();
+        let plugins_dir = tmp.path().join("plugins");
+        let plugin_dir = plugins_dir.join("sec-plugin");
+        let plugin_hooks_dir = plugin_dir.join("hooks");
+        std::fs::create_dir_all(&plugin_hooks_dir).unwrap();
+        std::fs::write(
+            plugin_dir.join("kirkforge.toml"),
+            r#"
+name = "sec-plugin"
+version = "0.1.0"
+description = "security"
+trust = "shell"
+
+[[capabilities]]
+type = "hook"
+event = "pre-tool-bash"
+command = "hooks/pre-tool-bash.sh"
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            plugin_hooks_dir.join("pre-tool-bash.sh"),
+            "#!/bin/bash\necho 'denied' >&2; exit 2",
+        )
+        .unwrap();
+
+        let mut registry = PluginRegistry::new();
+        registry
+            .load_from_dir(
+                &plugins_dir,
+                TrustPolicy::up_to(kirkforge_plugin::TrustTier::Shell),
+            )
+            .unwrap();
+
+        let (_hooks_tmp, hooks_dir) = temp_hooks_dir();
+        let audit_path = tmp.path().join("audit-plugin-deny.ndjson");
+        let log = std::sync::Arc::new(AuditLog::new(Some(audit_path.clone())));
+        let mut runner = HookRunner::new(hooks_dir);
+        runner.set_audit_log(std::sync::Arc::clone(&log));
+        runner.load_plugin_hooks(&registry);
+
+        let decision = runner
+            .run_decision("pre-tool-bash", &[], &default_config())
+            .await;
+        assert!(matches!(decision, HookDecision::Deny(_)));
+
+        drop(runner);
+        drop(log);
+        let contents = std::fs::read_to_string(&audit_path).unwrap();
+        let entry: AuditEntry = serde_json::from_str(contents.trim()).unwrap();
+        match entry {
+            AuditEntry::Hook {
+                event,
+                plugin,
+                verdict,
+                reason,
+                ..
+            } => {
+                assert_eq!(event, "pre-tool-bash");
+                assert_eq!(plugin.as_deref(), Some("sec-plugin"));
+                assert_eq!(verdict, "deny");
+                assert!(reason.as_deref().unwrap_or("").contains("denied"));
+            }
+            other => panic!("expected Hook variant, got {other:?}"),
+        }
+        let _ = (tmp, _hooks_tmp);
     }
 }

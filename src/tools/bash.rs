@@ -3,7 +3,7 @@ use crate::session::bash_jobs::global_registry;
 use crate::session::bash_runner::{
     check_bash_command_str, is_timeout_marker, run_shell_with_token, ShellError,
 };
-use crate::shared::{DockerConfig, ToolDef, ToolOutcome};
+use crate::shared::{DockerConfig, SandboxConfig, ToolDef, ToolOutcome};
 use crate::tools::bash_minify;
 use crate::tools::{Tool, ToolContext};
 use std::path::PathBuf;
@@ -19,6 +19,7 @@ pub struct Bash {
     path_guard: PathGuard,
     bash_sandbox_workdir: bool,
     docker_config: Option<DockerConfig>,
+    sandbox_config: SandboxConfig,
 }
 
 impl Bash {
@@ -27,12 +28,14 @@ impl Bash {
         path_guard: PathGuard,
         bash_sandbox_workdir: bool,
         docker_config: Option<DockerConfig>,
+        sandbox_config: SandboxConfig,
     ) -> Self {
         Self {
             deny_list,
             path_guard,
             bash_sandbox_workdir,
             docker_config,
+            sandbox_config,
         }
     }
 
@@ -277,7 +280,14 @@ impl Tool for Bash {
                     Err(e) => Err(e),
                 }
             } else {
-                run_shell_with_token(&cmd, &workdir_path, timeout_secs, Some(&ctx.token)).await
+                run_shell_with_token(
+                    &cmd,
+                    &workdir_path,
+                    timeout_secs,
+                    Some(&ctx.token),
+                    Some(&self.sandbox_config),
+                )
+                .await
             };
 
             match result {
@@ -373,7 +383,13 @@ mod tests {
         let marker_str = marker.to_string_lossy().to_string();
         remove_test_file(&marker);
 
-        let tool = Bash::new(DenyList::default(), PathGuard::default(), false, None);
+        let tool = Bash::new(
+            DenyList::default(),
+            PathGuard::default(),
+            false,
+            None,
+            crate::shared::SandboxConfig::default(),
+        );
         let ctx = crate::tools::ToolContext::new();
         let args = serde_json::json!({
             "command": format!("sleep 30; touch {marker_str}"),
@@ -410,7 +426,13 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn bash_tool_surfaces_structured_timeout() {
-        let tool = Bash::new(DenyList::default(), PathGuard::default(), false, None);
+        let tool = Bash::new(
+            DenyList::default(),
+            PathGuard::default(),
+            false,
+            None,
+            crate::shared::SandboxConfig::default(),
+        );
         let ctx = crate::tools::ToolContext::new();
         let args = serde_json::json!({
             "command": "sleep 30",
@@ -432,7 +454,13 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn bash_timeout_clamped_to_max() {
-        let bash = Bash::new(DenyList::default(), PathGuard::default(), false, None);
+        let bash = Bash::new(
+            DenyList::default(),
+            PathGuard::default(),
+            false,
+            None,
+            crate::shared::SandboxConfig::default(),
+        );
         let tmp = std::env::temp_dir();
         let marker = tmp.join(format!(
             "kirkforge_bash_huge_timeout_{}",
@@ -466,7 +494,13 @@ mod tests {
         let marker = tmp.path().join("marker.txt");
         let marker_str = marker.to_string_lossy().to_string();
 
-        let tool = Bash::new(DenyList::default(), PathGuard::default(), false, None);
+        let tool = Bash::new(
+            DenyList::default(),
+            PathGuard::default(),
+            false,
+            None,
+            crate::shared::SandboxConfig::default(),
+        );
         let ctx = crate::tools::ToolContext::with_dry_run(true);
         let args = serde_json::json!({
             "command": format!("touch {marker_str}"),
@@ -485,7 +519,13 @@ mod tests {
 
     #[tokio::test]
     async fn bash_dry_run_still_blocks_dangerous_command() {
-        let tool = Bash::new(DenyList::default(), PathGuard::default(), false, None);
+        let tool = Bash::new(
+            DenyList::default(),
+            PathGuard::default(),
+            false,
+            None,
+            crate::shared::SandboxConfig::default(),
+        );
         let ctx = crate::tools::ToolContext::with_dry_run(true);
         let args = serde_json::json!({
             "command": "rm -rf /",
@@ -503,7 +543,13 @@ mod tests {
 
     #[tokio::test]
     async fn bash_dry_run_includes_workdir_and_timeout() {
-        let tool = Bash::new(DenyList::default(), PathGuard::default(), false, None);
+        let tool = Bash::new(
+            DenyList::default(),
+            PathGuard::default(),
+            false,
+            None,
+            crate::shared::SandboxConfig::default(),
+        );
         let ctx = crate::tools::ToolContext::with_dry_run(true);
         let args = serde_json::json!({
             "command": "echo hello",
@@ -540,6 +586,7 @@ mod tests {
             PathGuard::default(),
             false,
             Some(docker_cfg),
+            crate::shared::SandboxConfig::default(),
         );
         let ctx = crate::tools::ToolContext::new();
         let args = serde_json::json!({
@@ -556,6 +603,83 @@ mod tests {
                 );
             }
             other => panic!("expected Success, got {other:?}"),
+        }
+    }
+
+    /// When `harden` is true and the child exceeds `cpu_limit_secs`, the
+    /// kernel sends SIGXCPU and the bash tool surfaces a non-zero exit.
+    ///
+    /// We set a 1-second CPU limit and run an infinite loop in the
+    /// child shell. The child should be killed by SIGXCPU (which
+    /// escalates to SIGKILL after a one-second grace period) within a
+    /// few seconds of wall-clock time — well under the 30-second
+    /// tool timeout. The test verifies the rlimit fired by checking
+    /// that the child did NOT run for the full 30-second tool timeout
+    /// (which would mean the rlimit was ignored) AND that the outcome
+    /// is a failure.
+    ///
+    /// The test is `#[ignore]` by default because it relies on
+    /// `setrlimit` behaviour that is only meaningful on a real Unix
+    /// host with a sane scheduler. Run with `cargo test -- --ignored`
+    /// to exercise it.
+    #[cfg(unix)]
+    #[ignore = "requires setrlimit and a real CPU burn"]
+    #[tokio::test]
+    async fn bash_harden_kills_cpu_burn_with_sigxcpu() {
+        let sandbox = crate::shared::SandboxConfig {
+            harden: true,
+            cpu_limit_secs: 1,
+            memory_limit_mb: 2048,
+            filesize_limit_mb: 512,
+        };
+        let tool = Bash::new(
+            DenyList::default(),
+            PathGuard::default(),
+            false,
+            None,
+            sandbox,
+        );
+        let ctx = crate::tools::ToolContext::new();
+        // An infinite loop that burns CPU. `:` is a no-op; the tight
+        // `while :; do :; done` loop pegs one core. The child never
+        // exits on its own — the rlimit is the only thing that stops
+        // it.
+        let args = serde_json::json!({
+            "command": "while :; do :; done",
+            "timeout": 30,
+        });
+
+        let start = std::time::Instant::now();
+        let outcome = tool.run(&ctx, args).await;
+        let elapsed = start.elapsed();
+
+        // The rlimit should have fired well before the 30-second tool
+        // timeout. If elapsed >= 30s, the rlimit was ignored and the
+        // test is meaningless.
+        assert!(
+            elapsed < std::time::Duration::from_secs(25),
+            "child ran for {elapsed:?} — rlimit did not fire (expected SIGXCPU within ~2s)"
+        );
+
+        // The outcome must be a failure: the child was signal-killed
+        // before it could complete. The exit code is -1 (signal-killed
+        // processes have no exit code; `unwrap_or(-1)` is the bash
+        // tool's convention). A successful outcome here would mean
+        // the rlimit never fired.
+        match outcome {
+            crate::shared::ToolOutcome::Failure(crate::shared::ToolError::Execution {
+                exit_code,
+                ..
+            }) => {
+                // Signal-killed processes report `None` from
+                // `ExitStatus::code()`, which the bash tool maps to
+                // -1 via `unwrap_or(-1)`.
+                assert!(
+                    exit_code.is_none() || exit_code == Some(-1),
+                    "expected signal-killed (None or -1), got {exit_code:?}"
+                );
+            }
+            other => panic!("expected Failure from SIGXCPU, got {other:?}"),
         }
     }
 }

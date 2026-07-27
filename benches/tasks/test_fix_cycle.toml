@@ -1,0 +1,51 @@
+name = "test_fix_cycle"
+difficulty = "medium"
+requires_model = true
+
+prompt = "Run the tests with `cargo test`. Find the failing test. Read the error message, identify the bug in the source code, fix it, and confirm the tests pass."
+
+[setup]
+"Cargo.toml" = """
+[package]
+name = "test_fix_cycle"
+version = "0.1.0"
+edition = "2021"
+"""
+"src/lib.rs" = """
+pub fn calc_discount(price: i32, pct: i32) -> i32 {
+    price * pct / 100
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_discount() {
+        // 10% discount on 1000 should give discounted price of 900
+        assert_eq!(calc_discount(1000, 10), 900);
+    }
+
+    #[test]
+    fn test_full_discount() {
+        // 100% discount on 500 should give discounted price of 0
+        assert_eq!(calc_discount(500, 100), 0);
+    }
+
+    #[test]
+    fn test_zero_discount() {
+        // 0% discount on 100 should give discounted price of 100
+        assert_eq!(calc_discount(100, 0), 100);
+    }
+}
+"""
+
+[verify]
+type = "test_passes"
+# The setup has a failing test: calc_discount(1000, 10) returns 100
+# (integer division: 1000*10/100=100), but the test expects 900. The
+# model must fix the bug (e.g., compute price - price*pct/100, or use
+# the right arithmetic) so all three tests pass. The setup's `cargo
+# test` fails, so this verify fails on the unedited setup
+# (requires_model = true).
+command = "cargo test --quiet"

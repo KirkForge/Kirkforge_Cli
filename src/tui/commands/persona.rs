@@ -119,6 +119,7 @@ fn tools_for_persona(
         None,
         None,
         Some(config.security.docker.clone()),
+        config.security.sandbox.clone(),
     );
     match kind {
         PersonaKind::Explore => all
@@ -180,6 +181,7 @@ pub fn tools_for_scout(
         None,
         None,
         Some(config.security.docker.clone()),
+        config.security.sandbox.clone(),
     );
     crate::session::executor::ScoutSubagent::new().filter_tools(all)
 }

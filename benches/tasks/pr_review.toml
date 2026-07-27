@@ -1,0 +1,65 @@
+name = "pr_review"
+difficulty = "medium"
+requires_model = true
+
+prompt = "Review the code changes in this repository. The file src/auth.rs was recently modified to add a token validation feature. Read the code and identify the subtle bug: the timing-safe comparison is not actually timing-safe. Suggest a fix."
+
+[setup]
+"Cargo.toml" = """
+[package]
+name = "pr_review"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+"""
+"src/lib.rs" = """
+pub mod auth;
+"""
+"src/auth.rs" = """
+pub fn verify_token(expected: &str, actual: &str) -> bool {
+    // Fast path for equal strings
+    if expected == actual {
+        return true;
+    }
+    if expected.len() != actual.len() {
+        return false;
+    }
+    // Timing-safe comparison to prevent side-channel attacks
+    let mut result = 0u8;
+    for (a, b) in expected.bytes().zip(actual.bytes()) {
+        result |= a ^ b;
+    }
+    result == 0
+}
+"""
+".git/HEAD" = "ref: refs/heads/main\n"
+"PR_DESCRIPTION.md" = """
+# PR: Add timing-safe token verification
+
+## Summary
+Adds a `verify_token` function to `src/auth.rs` that performs a
+constant-time comparison of two tokens to prevent timing side-channel
+attacks.
+
+## Changes
+- New file: `src/auth.rs`
+- Updated: `src/lib.rs` to export the `auth` module
+
+## Security considerations
+The comparison uses XOR accumulation to avoid early-exit timing
+leaks. This is a standard pattern for timing-safe comparisons.
+"""
+
+[verify]
+type = "command_exits_zero"
+# pr_review is a review task: the model produces analysis (identifies
+# that the "timing-safe" comparison has an early-exit fast path that
+# leaks length equality, and a length check that leaks length
+# inequality). There is no code change to verify — the "verify" is the
+# model's review output, which no command can check. requires_model =
+# true so verify_only skips it; bench run still runs the model and a
+# human evaluates the output. cargo build is a weak sanity check that
+# the setup still compiles after any model edits.
+command = "cargo build --quiet"

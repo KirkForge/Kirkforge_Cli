@@ -85,7 +85,19 @@ fn build_bench_toolset(sandbox_path: &Path) -> super::toolset::CompositeToolset 
     };
 
     let tools = crate::tools::all_tools(
-        None, false, deny_list, path_guard, true, false, 4096, None, None, None, None, None,
+        None,
+        false,
+        deny_list,
+        path_guard,
+        true,
+        false,
+        4096,
+        None,
+        None,
+        None,
+        None,
+        None,
+        crate::shared::SandboxConfig::default(),
     );
 
     let mut toolset = super::toolset::CompositeToolset::empty();
@@ -266,6 +278,7 @@ mod tests {
             prompt: "test prompt".to_string(),
             setup: HashMap::new(),
             verify,
+            requires_model: false,
         }
     }
 
@@ -388,6 +401,7 @@ mod tests {
                 path: "src/main.rs".to_string(),
                 contains: "fn main".to_string(),
             },
+            requires_model: false,
         };
         let result = collect_turn_metrics(&[], 1.0, &task, dir.path(), None);
         assert!(result.success);
@@ -405,6 +419,7 @@ mod tests {
                 path: "nonexistent.rs".to_string(),
                 contains: "hello".to_string(),
             },
+            requires_model: false,
         };
         let result = collect_turn_metrics(&[], 1.0, &task, dir.path(), None);
         assert!(!result.success);

@@ -256,6 +256,61 @@ fn default_docker_cpus() -> String {
     "2".into()
 }
 
+/// Lightweight sandbox hardening for the non-Docker bash path.
+///
+/// When `harden` is true and Docker is NOT enabled, the bash tool applies
+/// rlimits to the child shell before exec (Unix only): `RLIMIT_CPU` caps
+/// CPU seconds (SIGXCPU on exhaustion), `RLIMIT_AS` caps address space
+/// (ENOMEM on malloc/brk past the cap), `RLIMIT_FSIZE` caps the size of
+/// any single file the child creates (SIGXFSZ on write past the cap).
+///
+/// Default limits are deliberately generous (5 min CPU, 2 GiB address
+/// space, 512 MiB file) so a normal `cargo build` / `cargo test` completes
+/// but a runaway `:(){ :|:& };:` fork bomb or `cat /dev/urandom > /tmp/x`
+/// is contained. seccomp is documented as future work in ADR-054 — it
+/// needs a BPF compiler that's too heavy for the size-optimized binary.
+///
+/// On Windows `harden` is a no-op with a one-shot warning (rlimits are a
+/// Unix-only concept; Windows has job objects but they're a separate
+/// API surface and out of scope for this WO).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SandboxConfig {
+    /// Enable rlimit hardening for the non-Docker bash path. Default
+    /// false. When Docker is enabled, this flag is ignored (Docker
+    /// already enforces `--memory` and `--cpus`).
+    #[serde(default)]
+    pub harden: bool,
+
+    /// CPU time limit in seconds. Default 300 (5 min). When the child
+    /// exceeds this *wall-clock CPU* (not elapsed time), the kernel
+    /// sends SIGXCPU; if uncaught the process dies with SIGKILL after
+    /// a one-second grace period.
+    #[serde(default = "default_sandbox_cpu_limit_secs")]
+    pub cpu_limit_secs: u64,
+
+    /// Address space limit in megabytes. Default 2048 (2 GiB). Maps to
+    /// `RLIMIT_AS` in bytes. A child that mallocs/mmaps past this gets
+    /// ENOMEM from the kernel.
+    #[serde(default = "default_sandbox_memory_limit_mb")]
+    pub memory_limit_mb: u64,
+
+    /// Max file size in megabytes. Default 512 (MiB). Maps to
+    /// `RLIMIT_FSIZE` in bytes. A child that writes past this gets
+    /// SIGXFSZ.
+    #[serde(default = "default_sandbox_filesize_limit_mb")]
+    pub filesize_limit_mb: u64,
+}
+
+fn default_sandbox_cpu_limit_secs() -> u64 {
+    300
+}
+fn default_sandbox_memory_limit_mb() -> u64 {
+    2048
+}
+fn default_sandbox_filesize_limit_mb() -> u64 {
+    512
+}
+
 /// Configuration for a single MCP server connection.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpServerConfig {

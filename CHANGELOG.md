@@ -6,6 +6,26 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- rlimit sandbox hardening for the non-Docker bash path (Workorder 9.8):
+  new `--harden` CLI flag and `SandboxConfig` in `SecurityConfig`
+  (`harden`, `cpu_limit_secs`, `memory_limit_mb`, `filesize_limit_mb`).
+  When `harden` is true and Docker is NOT enabled, the bash tool applies
+  `RLIMIT_CPU` / `RLIMIT_AS` / `RLIMIT_FSIZE` to the child shell in a
+  `pre_exec` hook (Unix only; Windows no-op with a one-shot warning).
+  Ignored when `--docker` is set. seccomp deferred to future work. 1
+  ignored test (`bash_harden_kills_cpu_burn_with_sigxcpu`). ADR-054. No
+  new deps (`libc` was already a direct dep).
+- Bench task expansion: 5 new multi-file/multi-turn tasks (Workorder
+  9.9): `multi_file_pattern`, `test_fix_cycle`, `pr_review`,
+  `refactor_trait_extraction_multi`, `debug_log_trace`. Total bench
+  tasks: 30 (was 24). New `requires_model: bool` field on `BenchTask`
+  (default false) — when true, `bench verify-only` skips the task and
+  reports `[SKIP] skipped (requires model)`; `bench run` runs it
+  normally. This fixes the WO 9.0 anti-pattern (verify specs that
+  grepped setup content): the 5 new tasks have verify specs that check
+  post-model content (cargo build/test, grep for the new symbol), so
+  they correctly fail on the unedited setup and pass after model edits.
+  `bench verify-only` result: 25 PASS + 5 SKIP = 30.
 - Client-side prompt cache stem reuse (Workorder 9.5): new
   `CacheStemTracker` in `src/session/prompt/cache_stem.rs` records the
   hash of the prefix messages (system + tools + first N turns) sent in

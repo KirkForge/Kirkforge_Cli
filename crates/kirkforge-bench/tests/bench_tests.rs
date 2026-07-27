@@ -96,6 +96,7 @@ fn verify_command_exits_zero() {
         verify: VerifySpec::CommandExitsZero {
             command: "true".into(),
         },
+        requires_model: false,
     };
     assert!(verify_task(&task, dir.path()).unwrap());
 }
@@ -111,6 +112,7 @@ fn verify_command_fails() {
         verify: VerifySpec::CommandExitsZero {
             command: "false".into(),
         },
+        requires_model: false,
     };
     assert!(!verify_task(&task, dir.path()).unwrap());
 }
@@ -128,6 +130,7 @@ fn verify_file_contains() {
             path: "output.txt".into(),
             contains: "hello".into(),
         },
+        requires_model: false,
     };
     assert!(verify_task(&task, dir.path()).unwrap());
 }
@@ -144,6 +147,7 @@ fn verify_file_contains_missing_file() {
             path: "nonexistent.txt".into(),
             contains: "hello".into(),
         },
+        requires_model: false,
     };
     assert!(!verify_task(&task, dir.path()).unwrap());
 }

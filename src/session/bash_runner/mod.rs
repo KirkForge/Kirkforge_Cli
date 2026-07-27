@@ -1,4 +1,5 @@
 use crate::session::process_group::{kill_process_group, reap_child, setup_process_group};
+use crate::shared::SandboxConfig;
 use std::path::Path;
 use std::process::Stdio;
 use std::time::Duration;
@@ -88,6 +89,84 @@ fn expand_env(raw: &str) -> String {
 #[cfg(not(any(unix, windows)))]
 pub(crate) fn shell_program() -> &'static str {
     "sh"
+}
+
+/// Apply rlimits to a child shell before exec (Unix only, ADR-054).
+///
+/// This is the lightweight sandbox hardening for the non-Docker bash
+/// path. When `cfg.harden` is true, three rlimits are installed in a
+/// `pre_exec` hook (post-fork, pre-exec — the only safe place to call
+/// `setrlimit` for the child without affecting the parent):
+///
+/// - `RLIMIT_CPU`  — CPU seconds. SIGXCPU on exhaustion, SIGKILL after
+///   a one-second grace period if uncaught.
+/// - `RLIMIT_AS`  — address space in bytes. ENOMEM from malloc/mmap/brk
+///   past the cap.
+/// - `RLIMIT_FSIZE` — max file size in bytes. SIGXFSZ on write past the
+///   cap.
+///
+/// On Windows this is a no-op: rlimits are a Unix-only concept, and
+/// Windows job objects are a separate API surface (out of scope for
+/// this WO). When `harden` is false, the function returns without
+/// touching the command.
+#[cfg(unix)]
+fn setup_rlimits(cmd: &mut Command, cfg: &SandboxConfig) {
+    if !cfg.harden {
+        return;
+    }
+    use std::os::unix::process::CommandExt;
+
+    let cpu_secs = cfg.cpu_limit_secs;
+    let as_bytes: u64 = cfg.memory_limit_mb.saturating_mul(1024 * 1024);
+    let fsize_bytes: u64 = cfg.filesize_limit_mb.saturating_mul(1024 * 1024);
+
+    unsafe {
+        cmd.as_std_mut().pre_exec(move || {
+            // In a post-fork pre-exec hook we cannot call logging or
+            // allocation; setrlimit is async-signal-safe. Ignore
+            // failures: a failed setrlimit is a degraded sandbox, not a
+            // crash, and exec should still proceed so the user sees a
+            // clear error from the child rather than a silent spawn
+            // failure.
+            #[allow(unused_must_use)]
+            {
+                let cpu = libc::rlimit {
+                    rlim_cur: cpu_secs,
+                    rlim_max: cpu_secs,
+                };
+                libc::setrlimit(libc::RLIMIT_CPU, &cpu);
+
+                let as_lim = libc::rlimit {
+                    rlim_cur: as_bytes,
+                    rlim_max: as_bytes,
+                };
+                libc::setrlimit(libc::RLIMIT_AS, &as_lim);
+
+                let fsize = libc::rlimit {
+                    rlim_cur: fsize_bytes,
+                    rlim_max: fsize_bytes,
+                };
+                libc::setrlimit(libc::RLIMIT_FSIZE, &fsize);
+            }
+            Ok(())
+        });
+    }
+}
+
+#[cfg(not(unix))]
+fn setup_rlimits(_cmd: &mut Command, cfg: &SandboxConfig) {
+    if cfg.harden {
+        // One-shot warning so a user who enables --harden on Windows
+        // knows it's a no-op, not a silent no-op.
+        use std::sync::OnceLock;
+        static WARNED: OnceLock<()> = OnceLock::new();
+        WARNED.get_or_init(|| {
+            eprintln!(
+                "warning: --harden is a Unix-only feature (rlimits); \
+                 ignored on this platform"
+            );
+        });
+    }
 }
 
 /// True if `path` is world-writable (Unix other bit set). On non-Unix
@@ -306,17 +385,23 @@ pub async fn run_shell(
     workdir: &Path,
     timeout_secs: u64,
 ) -> Result<ShellOutput, ShellError> {
-    run_shell_with_token(cmd, workdir, timeout_secs, None).await
+    run_shell_with_token(cmd, workdir, timeout_secs, None, None).await
 }
 
 /// Run a shell command with optional cancellation. The cancellation
 /// token is polled alongside the child so a user cancel stops the shell
 /// as promptly as the timeout path does.
+///
+/// `sandbox` is an optional `SandboxConfig` applied via `setrlimit`
+/// before exec (Unix only). When `Some` and `harden` is true, the child
+/// shell gets `RLIMIT_CPU`, `RLIMIT_AS`, and `RLIMIT_FSIZE` caps. On
+/// Windows the sandbox is a no-op (rlimits are a Unix-only concept).
 pub async fn run_shell_with_token(
     cmd: &str,
     workdir: &Path,
     timeout_secs: u64,
     token: Option<&tokio_util::sync::CancellationToken>,
+    sandbox: Option<&SandboxConfig>,
 ) -> Result<ShellOutput, ShellError> {
     let mut proc = Command::new(shell_program());
     proc.arg("-c")
@@ -328,6 +413,9 @@ pub async fn run_shell_with_token(
         .env("PATH", model_command_path());
 
     setup_process_group(&mut proc);
+    if let Some(cfg) = sandbox {
+        setup_rlimits(&mut proc, cfg);
+    }
 
     let mut child = proc
         .spawn()

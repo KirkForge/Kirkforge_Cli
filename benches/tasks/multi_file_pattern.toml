@@ -1,0 +1,84 @@
+name = "multi_file_pattern"
+difficulty = "medium"
+requires_model = true
+
+prompt = "Read all 3 handler files in src/handlers/ (create.rs, update.rs, delete.rs). Understand the pattern: each handler is a struct implementing the Handler trait with name() and handle() methods. Create a 4th handler file src/handlers/list.rs following the same pattern, with a ListHandler struct. Update src/handlers/mod.rs to declare and export the new module."
+
+[setup]
+"Cargo.toml" = """
+[package]
+name = "multi_file_pattern"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+"""
+"src/lib.rs" = """
+pub mod handlers;
+"""
+"src/handlers/mod.rs" = """
+pub mod create;
+pub mod update;
+pub mod delete;
+
+pub trait Handler {
+    fn name(&self) -> &str;
+    fn handle(&self, input: &str) -> String;
+}
+"""
+"src/handlers/create.rs" = """
+use super::Handler;
+
+pub struct CreateHandler;
+
+impl Handler for CreateHandler {
+    fn name(&self) -> &str {
+        "create"
+    }
+
+    fn handle(&self, input: &str) -> String {
+        format!("created: {input}")
+    }
+}
+"""
+"src/handlers/update.rs" = """
+use super::Handler;
+
+pub struct UpdateHandler;
+
+impl Handler for UpdateHandler {
+    fn name(&self) -> &str {
+        "update"
+    }
+
+    fn handle(&self, input: &str) -> String {
+        format!("updated: {input}")
+    }
+}
+"""
+"src/handlers/delete.rs" = """
+use super::Handler;
+
+pub struct DeleteHandler;
+
+impl Handler for DeleteHandler {
+    fn name(&self) -> &str {
+        "delete"
+    }
+
+    fn handle(&self, input: &str) -> String {
+        format!("deleted: {input}")
+    }
+}
+"""
+
+[verify]
+type = "command_exits_zero"
+# The model must create src/handlers/list.rs with a ListHandler
+# implementing the Handler trait, and update src/handlers/mod.rs to
+# export it. `cargo build` validates the wiring compiles; the grep
+# validates the new file exists with the expected struct. Both must
+# hold — the setup has no list.rs, so this verify fails on the
+# unedited setup (requires_model = true).
+command = "test -f src/handlers/list.rs && grep -q 'struct ListHandler' src/handlers/list.rs && grep -q 'pub mod list' src/handlers/mod.rs && cargo build --quiet"

@@ -94,6 +94,7 @@ verifies the table and the file headers agree.
 | [051](./051-stratum-budget-coordination.md) | Stratum–Budget Coordination (slicing triggers compression, budget tracks compressed size) | Accepted | CLI |
 | [052](./052-cache-stem-reuse.md) | Client-side prompt cache stem reuse | Accepted | CLI |
 | [053](./053-vfs-minification.md) | VFS minification for the agent loop `read_file` tool | Accepted | CLI |
+| [054](./054-rlimit-sandbox-hardening.md) | rlimit sandbox hardening for the non-Docker bash path | Accepted | CLI |
 
 ## Native KirkForge-Cli ADRs
 
@@ -131,6 +132,7 @@ numbering scheme (`001`–`017`). Recent additions:
 - [ADR-051: Stratum and budget guard coordination](./051-stratum-budget-coordination.md)
 - [ADR-052: Client-side prompt cache stem reuse](./052-cache-stem-reuse.md)
 - [ADR-053: VFS minification for the agent loop `read_file` tool](./053-vfs-minification.md)
+- [ADR-054: rlimit sandbox hardening for the non-Docker bash path](./054-rlimit-sandbox-hardening.md)
 
 These are **not** part of the Plugin3 series and are therefore not
 included in the 4-digit index table above.

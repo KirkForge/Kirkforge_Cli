@@ -122,6 +122,15 @@ pub enum Command {
         #[arg(long)]
         docker: bool,
 
+        /// Apply lightweight rlimit sandbox hardening to the non-Docker
+        /// bash path (Unix only). Caps CPU seconds (SIGXCPU), address
+        /// space (ENOMEM), and max file size (SIGXFSZ) on each child
+        /// shell. Ignored when --docker is set (Docker already enforces
+        /// --memory and --cpus). No-op on Windows with a warning.
+        /// See ADR-054.
+        #[arg(long)]
+        harden: bool,
+
         /// Disable turn tracing. By default every turn is recorded to
         /// `<data-dir>/<session-id>.trace.ndjson` for later replay.
         #[arg(long)]

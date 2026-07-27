@@ -1,0 +1,49 @@
+name = "debug_log_trace"
+difficulty = "medium"
+requires_model = true
+
+prompt = "The program crashed with the stack trace in crash.log. Read the stack trace, find the source line that caused the panic, identify the root cause, and fix it in src/main.rs."
+
+[setup]
+"Cargo.toml" = """
+[package]
+name = "debug_log_trace"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "debug_log_trace"
+path = "src/main.rs"
+"""
+"src/main.rs" = """
+fn parse_config(raw: Option<&str>) -> String {
+    let value = raw.unwrap();
+    value.to_string()
+}
+
+fn main() {
+    let config = parse_config(None);
+    println!("config: {config}");
+}
+"""
+"crash.log" = """
+thread 'main' panicked at src/main.rs:2:18:
+called `Option::unwrap()` on a `None` value
+stack backtrace:
+   0: std::panicking::begin_panic
+   1: debug_log_trace::parse_config
+             at src/main.rs:2:18
+   2: debug_log_trace::main
+             at src/main.rs:7:18
+   3: std::sys::backtrace::__rust_begin_short_backtrace
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+"""
+
+[verify]
+type = "command_exits_zero"
+# The model must fix the `unwrap()` panic in parse_config so the
+# program runs without panicking. The setup's `cargo run` panics
+# (calls parse_config(None) which unwraps None), so this verify
+# fails on the unedited setup (requires_model = true). A successful
+# run prints "config: <default>" and exits 0.
+command = "cargo run --quiet"

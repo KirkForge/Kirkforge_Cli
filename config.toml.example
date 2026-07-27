@@ -111,6 +111,17 @@
 # rejects explicit `workdir` args that escape it. Default: true.
 # bash_sandbox_workdir = true
 
+# Lightweight rlimit hardening for the non-Docker bash path (ADR-054).
+# When `harden` is true and Docker is NOT enabled, the bash tool applies
+# RLIMIT_CPU / RLIMIT_AS / RLIMIT_FSIZE to the child shell in a pre_exec
+# hook (Unix only; Windows no-op with a one-shot warning). Ignored when
+# [security.docker] enabled is true. seccomp is future work.
+# [security.sandbox]
+# harden = false
+# cpu_limit_secs = 300       # SIGXCPU after this many CPU seconds
+# memory_limit_mb = 2048     # ENOMEM past this address space
+# filesize_limit_mb = 512   # SIGXFSZ on a write past this file size
+
 # When true, write_file/edit_file reject paths that resolve inside dotfile
 # directories (e.g. ~/.ssh). Default: false.
 # block_dotfiles = false

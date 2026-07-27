@@ -18,7 +18,7 @@ pub mod web_search;
 pub mod workflow;
 pub mod write_file;
 
-use crate::shared::{ToolDef, ToolOutcome};
+use crate::shared::{SandboxConfig, ToolDef, ToolOutcome};
 use std::sync::{Arc, Mutex};
 use tokio_util::sync::CancellationToken;
 
@@ -135,6 +135,7 @@ pub fn all_tools(
     chrome_tab: Option<std::sync::Arc<dyn crate::tools::computer_use::ChromeTab>>,
     session_launcher: Option<crate::tools::computer_use::SessionLauncher>,
     docker_config: Option<crate::shared::DockerConfig>,
+    sandbox_config: SandboxConfig,
 ) -> Vec<Arc<dyn Tool>> {
     let task_manager = Arc::new(Mutex::new(task::TaskManager::new()));
     let mut tools: Vec<Arc<dyn Tool>> = vec![
@@ -162,6 +163,7 @@ pub fn all_tools(
             path_guard.clone(),
             bash_sandbox_workdir,
             docker_config,
+            sandbox_config,
         )),
         Arc::new(bash_status::BashStatus),
         Arc::new(bash_cancel::BashCancel),

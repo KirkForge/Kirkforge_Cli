@@ -60,7 +60,7 @@ kirkforge (root bin)          ← the CLI the user runs
 │   ├── kirkforge-plugin3/     ← budget plugin (7 tools, 4 hooks)
 │   ├── kirkforge-draw/        ← diagram plugin (1 tool, 1 hook)
 │   └── kirkforge-video/       ← video plugin (8 tools)
-├── benches/tasks/             ← 24 benchmark task definitions (TOML)
+├── benches/tasks/             ← 30 benchmark task definitions (TOML)
 └── docs/adr/                  ← 71 Architecture Decision Records
 ```
 
@@ -149,6 +149,16 @@ field selects the Anthropic cloud backend (direct, Bedrock, or Vertex).
 agent loop and bench harness can invoke workflows via tool calls, reusing
 the same in-process `TaskSpawner` as the `task` tool. Plugin tools are
 registered alongside these at runtime.
+
+The `bash` tool has two isolation layers: Docker execution mode
+(`--docker`, ADR-036) for full container isolation, and lightweight
+rlimit hardening (`--harden`, ADR-054) for the non-Docker path. The
+`--harden` flag applies `RLIMIT_CPU` / `RLIMIT_AS` / `RLIMIT_FSIZE` to
+the child shell in a `pre_exec` hook (Unix only; Windows no-op with a
+warning). It is ignored when `--docker` is set (Docker already enforces
+`--memory` and `--cpus`). seccomp is documented as future work in
+ADR-054 — it needs a BPF compiler that's too heavy for the
+size-optimized binary.
 
 ### `tui/` — interactive UI
 
@@ -499,15 +509,27 @@ lets the agent loop and bench harness run a named template via a tool call.
 
 ## Benchmarks
 
-The benchmark system measures agent capability on 24 coding tasks across three
-difficulty levels. 20 of those tasks are coding-skills tasks (Rust refactors,
-bug fixes, doc/test additions) and 4 are plugin-tool tasks
+The benchmark system measures agent capability on 30 coding tasks across three
+difficulty levels. 20 of those tasks are single-file coding-skills tasks
+(Rust refactors, bug fixes, doc/test additions), 4 are plugin-tool tasks
 (`use_stratum_compress`, `use_budget_check`, `use_draw_render`,
 `use_lsp_query`) that exercise the Stratum, Plugin3, Draw, and LSP tool
-wrappers respectively. Each task is a TOML file with a prompt, optional setup
-files, and a deterministic verify spec (`test_passes`, `file_contains`, or
-`command_exits_zero`). All tasks use synthetic `setup_files` so they do not
-depend on the live repo state.
+wrappers respectively, 1 is a workflow-tool task (`use_workflow_run`), and
+5 are multi-file/multi-turn tasks (`multi_file_pattern`, `test_fix_cycle`,
+`pr_review`, `refactor_trait_extraction_multi`, `debug_log_trace`) added in
+WO 9.9 to exercise real agent skills (pattern-following, test-fix cycles,
+PR review, trait extraction, stack-trace debugging). Each task is a TOML
+file with a prompt, optional setup files, and a deterministic verify spec
+(`test_passes`, `file_contains`, or `command_exits_zero`). All tasks use
+synthetic `setup_files` so they do not depend on the live repo state.
+
+The 5 multi-file tasks use `requires_model = true` (a `BenchTask` field
+added in WO 9.9, default false) because their verify specs check
+*post-model* content (cargo build/test, grep for the new symbol the model
+was asked to create). `bench verify-only` skips these and reports
+`[SKIP] skipped (requires model)`; `bench run` runs them normally. This
+fixes the WO 9.0 anti-pattern where verify specs grepped setup content,
+passing `verify-only` trivially without validating the model's work.
 
 The harness (`kirkforge-bench` crate + `src/session/bench.rs`) spins up a
 headless agent session with a real model adapter, auto-approves all tool calls,

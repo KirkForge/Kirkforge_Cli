@@ -1,0 +1,104 @@
+name = "refactor_trait_extraction_multi"
+difficulty = "hard"
+requires_model = true
+
+prompt = "Refactor the code in src/repositories/. The three repository structs (UserRepo, PostRepo, CommentRepo) each have duplicated save() and load() methods with identical signatures. Extract a trait named Repository in src/repositories/mod.rs with save() and load() methods. Implement it for all three structs. Update the call sites in src/lib.rs to use the trait."
+
+[setup]
+"Cargo.toml" = """
+[package]
+name = "refactor_trait_extraction_multi"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+"""
+"src/lib.rs" = """
+pub mod repositories;
+
+use repositories::user_repo::UserRepo;
+use repositories::post_repo::PostRepo;
+use repositories::comment_repo::CommentRepo;
+
+pub fn save_all() {
+    let user = UserRepo::new();
+    let post = PostRepo::new();
+    let comment = CommentRepo::new();
+    user.save();
+    post.save();
+    comment.save();
+}
+"""
+"src/repositories/mod.rs" = """
+pub mod user_repo;
+pub mod post_repo;
+pub mod comment_repo;
+"""
+"src/repositories/user_repo.rs" = """
+pub struct UserRepo {
+    table: String,
+}
+
+impl UserRepo {
+    pub fn new() -> Self {
+        Self { table: "users".to_string() }
+    }
+
+    pub fn save(&self) {
+        println!("saving to {}", self.table);
+    }
+
+    pub fn load(&self, id: u64) {
+        println!("loading {} from {}", id, self.table);
+    }
+}
+"""
+"src/repositories/post_repo.rs" = """
+pub struct PostRepo {
+    table: String,
+}
+
+impl PostRepo {
+    pub fn new() -> Self {
+        Self { table: "posts".to_string() }
+    }
+
+    pub fn save(&self) {
+        println!("saving to {}", self.table);
+    }
+
+    pub fn load(&self, id: u64) {
+        println!("loading {} from {}", id, self.table);
+    }
+}
+"""
+"src/repositories/comment_repo.rs" = """
+pub struct CommentRepo {
+    table: String,
+}
+
+impl CommentRepo {
+    pub fn new() -> Self {
+        Self { table: "comments".to_string() }
+    }
+
+    pub fn save(&self) {
+        println!("saving to {}", self.table);
+    }
+
+    pub fn load(&self, id: u64) {
+        println!("loading {} from {}", id, self.table);
+    }
+}
+"""
+
+[verify]
+type = "command_exits_zero"
+# The model must extract a `Repository` trait in src/repositories/mod.rs
+# with save() and load(), implement it for all three repo structs, and
+# keep call sites working. The setup has no trait, so this verify fails
+# on the unedited setup (requires_model = true). `cargo build` validates
+# the refactor compiles; the grep validates the trait was actually
+# extracted (not just that the code still compiles without it).
+command = "grep -q 'trait Repository' src/repositories/mod.rs && grep -q 'impl Repository for UserRepo' src/repositories/user_repo.rs && grep -q 'impl Repository for PostRepo' src/repositories/post_repo.rs && grep -q 'impl Repository for CommentRepo' src/repositories/comment_repo.rs && cargo build --quiet"

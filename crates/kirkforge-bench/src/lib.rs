@@ -47,6 +47,14 @@ pub struct BenchTask {
     #[serde(default)]
     pub setup: HashMap<String, String>,
     pub verify: VerifySpec,
+    /// When true, the verify spec can only be evaluated *after* the
+    /// model has run (e.g., the setup intentionally has a failing test
+    /// the model must fix, or the "verify" is the model's review
+    /// output which no command can check). `verify_only` skips these
+    /// tasks and reports them as SKIP; `bench run` runs them normally.
+    /// Default false so existing tasks are unaffected. See WO 9.9.
+    #[serde(default)]
+    pub requires_model: bool,
 }
 
 /// Result of running a single benchmark task.
@@ -381,6 +389,23 @@ pub fn list_tasks(dir: &Path) -> Result<Vec<TaskInfo>> {
 
 /// Run verification only (no LLM) for a task. Returns the TaskResult.
 pub fn verify_only(task: &BenchTask, sandbox_path: &Path) -> TaskResult {
+    // A task that requires the model cannot be verified against the
+    // unedited setup — report SKIP so the operator sees it was
+    // intentionally skipped, not silently passed or failed.
+    if task.requires_model {
+        return TaskResult {
+            task_name: task.name.clone(),
+            difficulty: task.difficulty,
+            success: true, // SKIP counts as "not broken", not as "verified"
+            tokens_in: 0,
+            tokens_out: 0,
+            duration_secs: 0.0,
+            cost_usd: 0.0,
+            tool_calls: 0,
+            error: Some("skipped (requires model)".to_string()),
+        };
+    }
+
     for (rel_path, content) in &task.setup {
         let file_path = sandbox_path.join(rel_path);
         if let Some(parent) = file_path.parent() {
@@ -649,6 +674,7 @@ mod tests {
             verify: VerifySpec::CommandExitsZero {
                 command: "true".to_string(),
             },
+            requires_model: false,
         };
         let result = verify_only(&task, dir.path());
         assert!(result.success);
@@ -715,9 +741,33 @@ mod tests {
             verify: VerifySpec::CommandExitsZero {
                 command: "false".to_string(),
             },
+            requires_model: false,
         };
         let result = verify_only(&task, dir.path());
         assert!(!result.success);
         assert_eq!(result.error, Some("verification failed".to_string()));
+    }
+
+    #[test]
+    fn test_verify_only_skips_requires_model() {
+        let dir = tempfile::tempdir().unwrap();
+        let task = BenchTask {
+            name: "requires_model_task".to_string(),
+            difficulty: Difficulty::Medium,
+            prompt: "unused".to_string(),
+            setup: HashMap::new(),
+            // A verify that would fail on the unedited setup (`false`),
+            // but the task is marked requires_model so verify_only must
+            // skip it instead of running the verify and reporting FAIL.
+            verify: VerifySpec::CommandExitsZero {
+                command: "false".to_string(),
+            },
+            requires_model: true,
+        };
+        let result = verify_only(&task, dir.path());
+        // SKIP counts as success (the task is not broken, just not
+        // verifiable without the model).
+        assert!(result.success);
+        assert_eq!(result.error.as_deref(), Some("skipped (requires model)"));
     }
 }

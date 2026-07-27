@@ -224,6 +224,7 @@ async fn main() {
             seed,
             worktree,
             docker,
+            harden,
             no_trace,
         } => {
             run_session(RunArgs {
@@ -244,6 +245,7 @@ async fn main() {
                 seed,
                 worktree,
                 docker,
+                harden,
                 no_trace,
             })
             .await
@@ -496,20 +498,39 @@ fn handle_bench_verify_only(tasks: std::path::PathBuf, task: Option<String>) -> 
     }
     let tmp = tempfile::tempdir()?;
     let mut passed = 0;
+    let mut skipped = 0;
     for bt in &filtered {
         let result = kirkforge_bench::verify_only(bt, tmp.path());
-        let status = if result.success { "PASS" } else { "FAIL" };
+        let is_skip = result
+            .error
+            .as_deref()
+            .map(|e| e.contains("skipped (requires model)"))
+            .unwrap_or(false);
+        let status = if is_skip {
+            "SKIP"
+        } else if result.success {
+            "PASS"
+        } else {
+            "FAIL"
+        };
         println!(
             "[{}] {} ({})",
             status,
             bt.name,
             result.error.unwrap_or_default()
         );
-        if result.success {
+        if is_skip {
+            skipped += 1;
+        } else if result.success {
             passed += 1;
         }
     }
-    println!("{}/{} tasks verified", passed, filtered.len());
+    println!(
+        "{}/{} tasks verified, {} skipped (requires model)",
+        passed,
+        filtered.len(),
+        skipped
+    );
     Ok(())
 }
 
@@ -764,6 +785,7 @@ struct RunArgs {
     seed: Option<u64>,
     worktree: bool,
     docker: bool,
+    harden: bool,
     no_trace: bool,
 }
 
@@ -786,6 +808,7 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
         seed,
         worktree,
         docker,
+        harden,
         no_trace,
     } = args;
 
@@ -809,6 +832,9 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     }
     if docker {
         config.security.docker.enabled = true;
+    }
+    if harden {
+        config.security.sandbox.harden = true;
     }
     let trace_enabled = !no_trace;
 
@@ -1097,6 +1123,7 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
             Some(chrome_tab),
             session_launcher,
             Some(config.security.docker.clone()),
+            config.security.sandbox.clone(),
         ),
     )));
 

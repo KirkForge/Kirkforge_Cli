@@ -104,8 +104,8 @@ sandbox hardening, and representative bench tasks.
 | 9.5 | [Prompt cache stem reuse](9.5-prompt-cache-stem-reuse.md) | Done | High | — |
 | 9.6 | [Verifier bus code unification](9.6-verifier-bus-unification.md) | Done | Medium | ADR-028 |
 | 9.7 | [Tree-sitter VFS minification](9.7-vfs-minification.md) | Done | Medium | — |
-| 9.8 | [Seccomp/rlimit sandbox hardening](9.8-seccomp-rlimit-hardening.md) | Planned | Low | — |
-| 9.9 | [Bench task expansion: real-world shapes](9.9-bench-task-expansion-2.md) | Planned | High | 9.0 |
+| 9.8 | [Seccomp/rlimit sandbox hardening](9.8-seccomp-rlimit-hardening.md) | Done | Low | — |
+| 9.9 | [Bench task expansion: real-world shapes](9.9-bench-task-expansion-2.md) | Done | High | 9.0 |
 
 ### Priority rationale
 

@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use crate::shared::ComputerUseConfig;
 use crate::shared::DockerConfig;
+use crate::shared::SandboxConfig;
 
 fn default_block_gitignored_dotfiles() -> bool {
     true
@@ -58,6 +59,10 @@ pub struct SecurityConfig {
     pub computer_use: ComputerUseConfig,
     #[serde(default)]
     pub docker: DockerConfig,
+    /// Lightweight rlimit hardening for the non-Docker bash path
+    /// (ADR-054). Ignored when `docker.enabled` is true.
+    #[serde(default)]
+    pub sandbox: SandboxConfig,
     #[serde(default)]
     pub audit_log_path: Option<PathBuf>,
 }
@@ -81,6 +86,7 @@ impl Default for SecurityConfig {
             commit_max_file_size: default_commit_max_file_size(),
             computer_use: ComputerUseConfig::default(),
             docker: DockerConfig::default(),
+            sandbox: SandboxConfig::default(),
             audit_log_path: None,
         }
     }

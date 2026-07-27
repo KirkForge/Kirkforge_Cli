@@ -273,7 +273,7 @@ fn default_docker_cpus() -> String {
 /// On Windows `harden` is a no-op with a one-shot warning (rlimits are a
 /// Unix-only concept; Windows has job objects but they're a separate
 /// API surface and out of scope for this WO).
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct SandboxConfig {
     /// Enable rlimit hardening for the non-Docker bash path. Default
     /// false. When Docker is enabled, this flag is ignored (Docker
@@ -299,6 +299,26 @@ pub struct SandboxConfig {
     /// SIGXFSZ.
     #[serde(default = "default_sandbox_filesize_limit_mb")]
     pub filesize_limit_mb: u64,
+}
+
+impl SandboxConfig {
+    /// Produce a per-plugin config by overlaying the manifest's
+    /// `resource_limits` on the global default (WO 11.5, ADR-060).
+    /// Each `Some` field in `limits` overrides the global; `None`
+    /// fields fall back to the global. The `harden` flag is inherited
+    /// from the global (a per-plugin manifest cannot disable
+    /// hardening — only raise limits).
+    pub fn merge_with(&self, limits: Option<&kirkforge_plugin::ResourceLimits>) -> Self {
+        let Some(limits) = limits else {
+            return self.clone();
+        };
+        Self {
+            harden: self.harden,
+            cpu_limit_secs: limits.cpu_secs.unwrap_or(self.cpu_limit_secs),
+            memory_limit_mb: limits.memory_mb.unwrap_or(self.memory_limit_mb),
+            filesize_limit_mb: limits.filesize_mb.unwrap_or(self.filesize_limit_mb),
+        }
+    }
 }
 
 fn default_sandbox_cpu_limit_secs() -> u64 {

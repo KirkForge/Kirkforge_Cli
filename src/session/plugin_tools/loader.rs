@@ -165,8 +165,15 @@ pub fn all_plugin_tools(
 ) -> Vec<Arc<dyn Tool>> {
     let mut tools: Vec<Arc<dyn Tool>> = Vec::new();
 
+    let global_sandbox = {
+        let cfg = crate::shared::read_shared_config(&shared_config);
+        cfg.security.sandbox.clone()
+    };
+
     for hosted in registry.active_plugins() {
         let root = hosted.plugin.root().to_path_buf();
+        let per_plugin_sandbox =
+            global_sandbox.merge_with(hosted.plugin.manifest().resource_limits.as_ref());
         for cap in hosted.plugin.tools() {
             if let Capability::Tool {
                 name,
@@ -182,6 +189,7 @@ pub fn all_plugin_tools(
                     root.clone(),
                     cmd,
                     shared_config.clone(),
+                    per_plugin_sandbox.clone(),
                 );
                 tools.push(Arc::new(wrapper));
             }

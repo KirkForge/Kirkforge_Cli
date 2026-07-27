@@ -4,10 +4,13 @@
 //! Plugin tool scripts are invoked asynchronously with a sandboxed working
 //! directory, curated environment, timeout, and process-group cleanup.
 
-use crate::session::bash_runner::{cap_to_string, drain_capped, MAX_BASH_OUTPUT_BYTES};
+use crate::session::bash_runner::{
+    cap_to_string, drain_capped, setup_rlimits, MAX_BASH_OUTPUT_BYTES,
+};
 use crate::session::process_group::{kill_process_group, reap_child, setup_process_group};
 use crate::shared::{
-    intern_static_str, read_shared_config, Config, SharedConfig, ToolDef, ToolError, ToolOutcome,
+    intern_static_str, read_shared_config, Config, SandboxConfig, SharedConfig, ToolDef, ToolError,
+    ToolOutcome,
 };
 use crate::tools::{Tool, ToolContext};
 use kirkforge_plugin_host::KIRKFORGE_TOOL_ARGS;
@@ -75,6 +78,10 @@ pub struct PluginToolWrapper {
     plugin_root: PathBuf,
     command: PathBuf,
     shared_config: SharedConfig,
+    /// Per-plugin sandbox config (global default merged with the
+    /// manifest's `resource_limits` override, WO 11.5). Applied via
+    /// `setup_rlimits` in the spawn path (Unix only).
+    sandbox: SandboxConfig,
 }
 
 impl PluginToolWrapper {
@@ -86,6 +93,7 @@ impl PluginToolWrapper {
         plugin_root: PathBuf,
         command: PathBuf,
         shared_config: SharedConfig,
+        sandbox: SandboxConfig,
     ) -> Self {
         // ToolDef requires 'static strings; intern so /reload plugins (which
         // rebuilds every wrapper) does not leak a fresh allocation each time.
@@ -100,6 +108,7 @@ impl PluginToolWrapper {
             plugin_root,
             command,
             shared_config,
+            sandbox,
         }
     }
 
@@ -212,6 +221,9 @@ impl Tool for PluginToolWrapper {
             .kill_on_drop(true)
             .env_clear();
         setup_process_group(&mut command);
+        // WO 11.5: apply rlimits when the per-plugin sandbox harden flag
+        // is true (Unix only; Windows no-op with a one-shot warning).
+        setup_rlimits(&mut command, &self.sandbox);
 
         for (k, v) in self.curated_env(&cfg, &args) {
             command.env(k, v);

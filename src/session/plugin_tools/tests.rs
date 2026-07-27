@@ -816,6 +816,7 @@ mod e2e {
     use super::*;
     use crate::session::hooks::{HookDecision, HookRunner};
     use crate::shared::audit::{AuditEntry, AuditLog};
+    use crate::shared::ToolError;
     use kirkforge_plugin::{Capability, Plugin, TrustTier};
     use kirkforge_plugin_host::VerifierVerdict;
     use std::os::unix::fs::PermissionsExt;
@@ -1031,5 +1032,155 @@ command = "verifiers/check.sh"
             audit_contents.contains("e2e-plugin"),
             "audit log should attribute to e2e-plugin: {audit_contents}"
         );
+    }
+}
+
+#[cfg(unix)]
+mod resource_limits_tests {
+    use super::*;
+    use crate::shared::SandboxConfig;
+    use crate::shared::ToolError;
+    use kirkforge_plugin::{Plugin, ResourceLimits, TrustTier};
+    use std::os::unix::fs::PermissionsExt;
+    use std::sync::Arc;
+
+    fn make_cpu_burn_plugin(cpu_secs: u64) -> (tempfile::TempDir, PluginRegistry, SharedConfig) {
+        let tmp = tempfile::tempdir().unwrap();
+        let plugins = tmp.path().join("plugins");
+        let plugin_dir = plugins.join("burn");
+        let tools_dir = plugin_dir.join("tools");
+        std::fs::create_dir_all(&tools_dir).unwrap();
+        std::fs::write(
+            plugin_dir.join("kirkforge.toml"),
+            format!(
+                r#"
+name = "burn"
+version = "0.1.0"
+description = "cpu burn"
+trust = "shell"
+
+[[capabilities]]
+type = "tool"
+name = "burn/spin"
+description = "infinite cpu loop"
+command = "tools/spin.sh"
+
+[resource_limits]
+cpu_secs = {cpu_secs}
+"#,
+            ),
+        )
+        .unwrap();
+        std::fs::write(tools_dir.join("spin.sh"), "#!/bin/sh\nwhile :; do :; done").unwrap();
+        let mut perms = std::fs::metadata(tools_dir.join("spin.sh"))
+            .unwrap()
+            .permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(tools_dir.join("spin.sh"), perms).unwrap();
+
+        let mut reg = PluginRegistry::new();
+        reg.load_from_dir(&plugins, TrustPolicy::up_to(TrustTier::Shell))
+            .unwrap();
+        // Config with harden=true so rlimits apply.
+        let mut cfg = Config::default();
+        cfg.security.sandbox.harden = true;
+        let shared = Arc::new(std::sync::RwLock::new(cfg));
+        (tmp, reg, shared)
+    }
+
+    /// A plugin tool with `resource_limits.cpu_secs = 2` is killed by
+    /// SIGXCPU within ~2s when `harden` is true (WO 11.5).
+    #[cfg(unix)]
+    #[ignore = "requires setrlimit and a real CPU burn"]
+    #[tokio::test]
+    async fn plugin_tool_resource_limit_kills_cpu_burn_with_sigxcpu() {
+        let (_tmp, reg, cfg) = make_cpu_burn_plugin(2);
+        let tools = all_plugin_tools(&reg, cfg);
+        assert_eq!(tools.len(), 1, "expected 1 plugin tool");
+
+        let start = std::time::Instant::now();
+        let outcome = tools[0]
+            .run(&ToolContext::new(), serde_json::Value::Null)
+            .await;
+        let elapsed = start.elapsed();
+
+        // The rlimit should fire well before the 30s tool timeout.
+        assert!(
+            elapsed < std::time::Duration::from_secs(25),
+            "plugin tool ran for {elapsed:?} — rlimit did not fire (expected SIGXCPU within ~2s)"
+        );
+
+        // The outcome must be a failure: the child was signal-killed.
+        match outcome {
+            ToolOutcome::Failure(ToolError::Execution { exit_code, .. }) => {
+                // Signal-killed processes report a negative exit code.
+                assert!(
+                    exit_code.map(|c| c < 0).unwrap_or(false),
+                    "expected signal-killed (negative exit code), got exit_code={exit_code:?}"
+                );
+            }
+            other => panic!("expected Failure from SIGXCPU, got {other:?}"),
+        }
+    }
+
+    /// `SandboxConfig::merge_with` overlays per-plugin limits on the
+    /// global default (WO 11.5).
+    #[test]
+    fn sandbox_merge_with_overlays_per_plugin_limits() {
+        let global = SandboxConfig {
+            harden: true,
+            cpu_limit_secs: 300,
+            memory_limit_mb: 2048,
+            filesize_limit_mb: 512,
+        };
+        let limits = ResourceLimits {
+            cpu_secs: Some(60),
+            memory_mb: None,
+            filesize_mb: Some(128),
+        };
+        let merged = global.merge_with(Some(&limits));
+        assert!(merged.harden, "harden flag inherited from global");
+        assert_eq!(merged.cpu_limit_secs, 60, "cpu overridden");
+        assert_eq!(merged.memory_limit_mb, 2048, "memory falls back to global");
+        assert_eq!(merged.filesize_limit_mb, 128, "filesize overridden");
+    }
+
+    #[test]
+    fn sandbox_merge_with_none_returns_clone() {
+        let global = SandboxConfig {
+            harden: true,
+            cpu_limit_secs: 300,
+            memory_limit_mb: 2048,
+            filesize_limit_mb: 512,
+        };
+        let merged = global.merge_with(None);
+        assert_eq!(merged, global);
+    }
+
+    /// `resource_limits` parses from the manifest TOML.
+    #[test]
+    fn resource_limits_parses_from_manifest() {
+        let tmp = tempfile::tempdir().unwrap();
+        let plugin_dir = tmp.path().join("demo");
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        std::fs::write(
+            plugin_dir.join("kirkforge.toml"),
+            r#"
+name = "demo"
+version = "0.1.0"
+description = "demo"
+trust = "read-only"
+
+[resource_limits]
+cpu_secs = 10
+memory_mb = 256
+"#,
+        )
+        .unwrap();
+        let plugin = kirkforge_plugin::LoadedPlugin::load(&plugin_dir).unwrap();
+        let limits = plugin.manifest.resource_limits.expect("resource_limits");
+        assert_eq!(limits.cpu_secs, Some(10));
+        assert_eq!(limits.memory_mb, Some(256));
+        assert_eq!(limits.filesize_mb, None);
     }
 }

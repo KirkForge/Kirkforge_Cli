@@ -110,7 +110,7 @@ pub(crate) fn shell_program() -> &'static str {
 /// this WO). When `harden` is false, the function returns without
 /// touching the command.
 #[cfg(unix)]
-fn setup_rlimits(cmd: &mut Command, cfg: &SandboxConfig) {
+pub(crate) fn setup_rlimits(cmd: &mut Command, cfg: &SandboxConfig) {
     if !cfg.harden {
         return;
     }
@@ -154,7 +154,7 @@ fn setup_rlimits(cmd: &mut Command, cfg: &SandboxConfig) {
 }
 
 #[cfg(not(unix))]
-fn setup_rlimits(_cmd: &mut Command, cfg: &SandboxConfig) {
+pub(crate) fn setup_rlimits(_cmd: &mut Command, cfg: &SandboxConfig) {
     if cfg.harden {
         // One-shot warning so a user who enables --harden on Windows
         // knows it's a no-op, not a silent no-op.

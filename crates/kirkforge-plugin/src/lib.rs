@@ -65,6 +65,13 @@ pub struct PluginManifest {
     /// parse and load unchanged).
     #[serde(default, rename = "depends_on")]
     pub depends_on: Vec<String>,
+    /// Per-plugin resource limits that override the global
+    /// `SandboxConfig` for this plugin's tools (WO 11.5, ADR-060). When
+    /// `None`, the global default applies. When `Some`, the present
+    /// fields override the global; absent fields fall back to the
+    /// global.
+    #[serde(default, rename = "resource_limits")]
+    pub resource_limits: Option<ResourceLimits>,
 }
 
 impl PluginManifest {
@@ -453,6 +460,7 @@ impl Default for PluginManifest {
             capabilities: Vec::new(),
             metadata: HashMap::new(),
             depends_on: Vec::new(),
+            resource_limits: None,
         }
     }
 }
@@ -501,6 +509,23 @@ impl fmt::Display for TrustTier {
         };
         write!(f, "{s}")
     }
+}
+
+/// Per-plugin resource limits that override the global `SandboxConfig`
+/// (WO 11.5, ADR-060). Each field is optional; when present, it
+/// overrides the global default for that plugin's tools. When absent,
+/// the global default applies.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct ResourceLimits {
+    /// CPU time limit in seconds (maps to `RLIMIT_CPU`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu_secs: Option<u64>,
+    /// Address space limit in megabytes (maps to `RLIMIT_AS`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_mb: Option<u64>,
+    /// Max file size in megabytes (maps to `RLIMIT_FSIZE`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filesize_mb: Option<u64>,
 }
 
 /// Classification of a capability for quick filtering.
@@ -767,6 +792,7 @@ prompt = "Demo task: {{args}}"
                 capabilities: Vec::new(),
                 metadata: HashMap::new(),
                 depends_on: Vec::new(),
+                resource_limits: None,
             }
         }
 

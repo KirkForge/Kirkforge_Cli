@@ -38,6 +38,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   now declares `depends_on = ["stratum"]` (the real WO 8.6 dependency
   made explicit). 11 new tests (7 manifest validation + 4 host
   load-order: empty, missing, cycle, transitive).
+- Per-plugin resource limits (WO 11.5, ADR-060): `PluginToolWrapper`
+  now applies `setup_rlimits` (the WO 9.8 rlimit seam, now `pub(crate)`)
+  when `harden` is true. `PluginManifest` gains an optional
+  `resource_limits: Option<ResourceLimits>` field;
+  `SandboxConfig::merge_with` overlays the per-plugin override on the
+  global default. 4 new tests (merge overlay, merge none, parse,
+  `#[ignore]` SIGXCPU kill).
 
 ### Fixed
 - Windows env_guard race (Workorder 10.0): the

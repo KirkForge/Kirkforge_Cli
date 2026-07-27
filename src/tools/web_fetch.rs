@@ -507,4 +507,355 @@ mod tests {
             "expected oversized failure, got {outcome:?}"
         );
     }
+
+    #[tokio::test]
+    async fn rejects_empty_url() {
+        let tool = WebFetch::new(DenyList::default());
+        let outcome = tool
+            .run(&ToolContext::new(), json!({"url": "   "}))
+            .await;
+        match outcome {
+            ToolOutcome::Failure(ToolError::InvalidArgs { message }) => {
+                assert!(message.contains("URL is empty"), "got {message}");
+            }
+            other => panic!("expected InvalidArgs, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn rejects_missing_url_arg() {
+        let tool = WebFetch::new(DenyList::default());
+        let outcome = tool.run(&ToolContext::new(), json!({})).await;
+        match outcome {
+            ToolOutcome::Failure(ToolError::InvalidArgs { message }) => {
+                assert!(message.contains("Missing 'url'"), "got {message}");
+            }
+            other => panic!("expected InvalidArgs, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn rejects_ftp_scheme() {
+        let tool = WebFetch::new(DenyList::default());
+        let outcome = tool
+            .run(
+                &ToolContext::new(),
+                json!({"url": "ftp://example.com/file"}),
+            )
+            .await;
+        match outcome {
+            ToolOutcome::Failure(ToolError::AccessDenied { message }) => {
+                assert!(message.contains("Only http"), "got {message}");
+            }
+            other => panic!("expected AccessDenied, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn rejects_https_to_metadata_endpoint() {
+        let tool = WebFetch::new(DenyList::default());
+        let outcome = tool
+            .run(
+                &ToolContext::new(),
+                json!({"url": "http://metadata.google.internal/computeMetadata/v1/"}),
+            )
+            .await;
+        assert!(
+            matches!(outcome, ToolOutcome::Failure(ToolError::AccessDenied { .. })),
+            "got {outcome:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn rejects_link_local_v4_literal() {
+        let tool = WebFetch::new(DenyList::default());
+        let outcome = tool
+            .run(&ToolContext::new(), json!({"url": "http://169.254.10.20/"}))
+            .await;
+        assert!(
+            matches!(outcome, ToolOutcome::Failure(ToolError::AccessDenied { .. })),
+            "got {outcome:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn rejects_unspecified_v4_literal() {
+        let tool = WebFetch::new(DenyList::default());
+        let outcome = tool
+            .run(&ToolContext::new(), json!({"url": "http://0.0.0.0/"}))
+            .await;
+        assert!(
+            matches!(outcome, ToolOutcome::Failure(ToolError::AccessDenied { .. })),
+            "got {outcome:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn rejects_private_rfc1918_literal() {
+        let tool = WebFetch::new(DenyList::default());
+        for url in [
+            "http://10.0.0.1/",
+            "http://192.168.1.1/",
+            "http://172.16.0.1/",
+        ] {
+            let outcome = tool
+                .run(&ToolContext::new(), json!({"url": url}))
+                .await;
+            assert!(
+                matches!(outcome, ToolOutcome::Failure(ToolError::AccessDenied { .. })),
+                "{url} should be denied, got {outcome:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn rejects_ipv6_loopback_literal() {
+        let tool = WebFetch::new(DenyList::default());
+        let outcome = tool
+            .run(&ToolContext::new(), json!({"url": "http://[::1]/"}))
+            .await;
+        assert!(
+            matches!(outcome, ToolOutcome::Failure(ToolError::AccessDenied { .. })),
+            "got {outcome:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn rejects_ipv6_link_local_literal() {
+        let tool = WebFetch::new(DenyList::default());
+        let outcome = tool
+            .run(&ToolContext::new(), json!({"url": "http://[fe80::1]/"}))
+            .await;
+        assert!(
+            matches!(outcome, ToolOutcome::Failure(ToolError::AccessDenied { .. })),
+            "got {outcome:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn rejects_ipv6_unique_local_literal() {
+        let tool = WebFetch::new(DenyList::default());
+        let outcome = tool
+            .run(&ToolContext::new(), json!({"url": "http://[fd00::1]/"}))
+            .await;
+        assert!(
+            matches!(outcome, ToolOutcome::Failure(ToolError::AccessDenied { .. })),
+            "got {outcome:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn public_hostname_passes_initial_guards() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_string("ok"),
+            )
+            .mount(&server)
+            .await;
+        let tool = test_tool_for(&server);
+        let outcome = tool
+            .run(&ToolContext::new(), json!({"url": "http://test.local/"}))
+            .await;
+        assert!(matches!(outcome, ToolOutcome::Success { .. }), "got {outcome:?}");
+    }
+
+    #[test]
+    fn host_is_literal_internal_ip_malformed_returns_true() {
+        assert!(host_is_literal_internal_ip(""));
+        assert!(host_is_literal_internal_ip("not a url"));
+        assert!(host_is_literal_internal_ip("://nothing"));
+    }
+
+    #[test]
+    fn host_is_literal_internal_ip_public_hostname_is_false() {
+        assert!(!host_is_literal_internal_ip("http://example.com/path"));
+        assert!(!host_is_literal_internal_ip("https://api.github.com/x"));
+        assert!(!host_is_literal_internal_ip("http://8.8.8.8/"));
+    }
+
+    #[test]
+    fn host_is_literal_internal_ip_internal_v4_is_true() {
+        for url in [
+            "http://127.0.0.1/x",
+            "http://10.0.0.1/x",
+            "http://192.168.1.1/x",
+            "http://172.16.0.1/x",
+            "http://0.0.0.0/x",
+            "http://169.254.1.1/x",
+        ] {
+            assert!(host_is_literal_internal_ip(url), "{url} should be internal");
+        }
+    }
+
+    #[test]
+    fn host_is_literal_internal_ip_internal_v6_is_true() {
+        assert!(host_is_literal_internal_ip("http://[::1]/x"));
+        assert!(host_is_literal_internal_ip("http://[fe80::1]/x"));
+        assert!(host_is_literal_internal_ip("http://[fd00::1]/x"));
+    }
+
+    #[test]
+    fn extract_host_strips_scheme_and_port() {
+        assert_eq!(extract_host("http://example.com:8080/p").as_deref(), Some("example.com"));
+        assert_eq!(extract_host("https://example.com/p").as_deref(), Some("example.com"));
+    }
+
+    #[test]
+    fn extract_host_strips_userinfo() {
+        assert_eq!(
+            extract_host("http://user:pass@example.com/p").as_deref(),
+            Some("example.com")
+        );
+    }
+
+    #[test]
+    fn extract_host_strips_query_and_fragment() {
+        assert_eq!(
+            extract_host("http://example.com/p?x=1#frag").as_deref(),
+            Some("example.com")
+        );
+        assert_eq!(extract_host("http://example.com?x=1").as_deref(), Some("example.com"));
+    }
+
+    #[test]
+    fn extract_host_bracketed_ipv6_includes_port() {
+        let h = extract_host("http://[::1]:8080/x").unwrap();
+        assert_eq!(h, "::1");
+    }
+
+    #[test]
+    fn extract_host_no_scheme_returns_whole_host() {
+        assert_eq!(extract_host("example.com/p").as_deref(), Some("example.com"));
+    }
+
+    #[test]
+    fn extract_host_empty_after_strip_returns_none() {
+        assert_eq!(extract_host("http:///path"), None);
+        assert_eq!(extract_host("://"), None);
+    }
+
+    #[test]
+    fn extract_host_malformed_ipv6_without_brackets_returns_none() {
+        assert!(extract_host("http://::1:8080/x").is_none());
+    }
+
+    #[test]
+    fn looks_like_html_detects_common_tags() {
+        assert!(looks_like_html("<!doctype html><html>"));
+        assert!(looks_like_html("<html><head></head><body>x</body></html>"));
+        assert!(looks_like_html("<body>x</body>"));
+        assert!(looks_like_html("<head><title>x</title></head>"));
+    }
+
+    #[test]
+    fn looks_like_html_rejects_plain_text() {
+        assert!(!looks_like_html("just plain text"));
+        assert!(!looks_like_html("{ \"json\": \"value\" }"));
+        assert!(!looks_like_html(""));
+    }
+
+    #[test]
+    fn html_to_text_strips_script_and_style_blocks() {
+        let html = "<html><head><script>alert(1)</script><style>.x{}</style></head><body>text</body></html>";
+        let out = html_to_text(html);
+        assert!(out.contains("text"), "got: {out}");
+        assert!(!out.contains("alert"), "script content should be gone: {out}");
+        assert!(!out.contains(".x{}"), "style content should be gone: {out}");
+    }
+
+    #[test]
+    fn html_to_text_strips_all_tags() {
+        let html = "<h1>Title</h1><p>Body <b>bold</b></p>";
+        let out = html_to_text(html);
+        assert!(out.contains("Title"));
+        assert!(out.contains("Body"));
+        assert!(out.contains("bold"));
+        assert!(!out.contains("<h1>"));
+        assert!(!out.contains("<p>"));
+        assert!(!out.contains("<b>"));
+    }
+
+    #[test]
+    fn html_to_text_decodes_named_entities() {
+        let html = "<p>a &amp; b &lt; c &gt; d &quot; e &apos; f &nbsp; g</p>";
+        let out = html_to_text(html);
+        assert!(out.contains("a & b"), "got: {out}");
+        assert!(out.contains("< c"), "got: {out}");
+        assert!(out.contains("> d"), "got: {out}");
+        assert!(out.contains("\" e"), "got: {out}");
+        assert!(out.contains("' f"), "got: {out}");
+    }
+
+    #[test]
+    fn html_to_text_decodes_numeric_entities() {
+        let html = "<p>&#65;&#x42;&#x0043;</p>";
+        let out = html_to_text(html);
+        assert!(out.contains("A"), "got: {out}");
+        assert!(out.contains("B"), "got: {out}");
+        assert!(out.contains("C"), "got: {out}");
+    }
+
+    #[test]
+    fn html_to_text_preserves_unknown_entities_verbatim() {
+        let html = "<p>&unknownentity;</p>";
+        let out = html_to_text(html);
+        assert!(out.contains("&unknownentity;"), "got: {out}");
+    }
+
+    #[test]
+    fn html_to_text_handles_unterminated_ampersand() {
+        let html = "<p>foo & bar</p>";
+        let out = html_to_text(html);
+        assert!(out.contains("foo & bar"), "got: {out}");
+    }
+
+    #[test]
+    fn html_to_text_collapses_repeated_inline_whitespace() {
+        let html = "<p>line    with     spaces</p>";
+        let out = html_to_text(html);
+        assert!(out.contains("line with spaces"), "got: {out}");
+        assert!(!out.contains("    "), "got: {out}");
+    }
+
+    #[test]
+    fn html_to_text_drops_empty_lines() {
+        let html = "<p>a</p>\n\n\n<p>b</p>";
+        let out = html_to_text(html);
+        let lines: Vec<&str> = out.lines().collect();
+        assert!(lines.iter().all(|l| !l.trim().is_empty()), "got: {out}");
+        assert!(lines.iter().any(|l| l.contains("a")));
+        assert!(lines.iter().any(|l| l.contains("b")));
+    }
+
+    #[test]
+    fn html_entities_decode_handles_empty_string() {
+        assert_eq!(html_entities::decode(""), "");
+    }
+
+    #[test]
+    fn html_entities_decode_no_entities_returns_input() {
+        assert_eq!(html_entities::decode("plain text"), "plain text");
+    }
+
+    #[test]
+    fn html_entities_decode_decodes_nbsp_and_dashes() {
+        assert_eq!(html_entities::decode("a&nbsp;b"), "a b");
+        assert_eq!(html_entities::decode("&ndash;"), "\u{2013}");
+        assert_eq!(html_entities::decode("&mdash;"), "\u{2014}");
+    }
+
+    #[test]
+    fn def_is_valid_json_schema() {
+        let tool = WebFetch::new(DenyList::default());
+        let def = tool.def();
+        assert_eq!(def.name, "web_fetch");
+        assert!(def.parameters.get("properties").is_some());
+        let required = def
+            .parameters
+            .get("required")
+            .and_then(|r| r.as_array())
+            .expect("required array");
+        assert!(required.iter().any(|v| v.as_str() == Some("url")));
+    }
 }

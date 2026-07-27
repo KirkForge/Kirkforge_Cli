@@ -254,6 +254,18 @@ pub enum PluginCommand {
     Remove { name: String },
     /// Run the plugin health check (probe each enabled plugin's commands).
     Doctor,
+    /// Scaffold a new plugin directory with a valid `kirkforge.toml`
+    /// (WO 11.8, ADR-063). Default path: `plugins/<name>/`. Override
+    /// with `--path <dir>`. The scaffolded manifest uses
+    /// `trust = "read-only"` (safest default) and a placeholder skill.
+    Init {
+        /// Plugin name (kebab-case).
+        name: String,
+        /// Parent directory to scaffold into. Defaults to `plugins/`
+        /// in the current working directory.
+        #[arg(long)]
+        path: Option<PathBuf>,
+    },
 }
 
 /// Subcommands for the `bench` command.

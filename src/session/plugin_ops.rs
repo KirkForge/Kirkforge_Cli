@@ -360,6 +360,135 @@ fn resolve_source_path(path: &str) -> PathBuf {
     }
 }
 
+/// Scaffold a new plugin directory with a valid `kirkforge.toml`
+/// (WO 11.8, ADR-063). The scaffolded manifest uses `trust = "read-only"`
+/// (safest default — a copy-pasted scaffold can't accidentally run
+/// shell commands until the author bumps the trust tier) and a
+/// placeholder skill prompt. Also creates `tools/`, `hooks/`, and a
+/// `README.md`.
+pub fn init(name: &str, path: Option<&Path>) -> anyhow::Result<PathBuf> {
+    // Validate the plugin name (same kebab-case rule as the manifest).
+    if name.is_empty() || name.starts_with('-') || name.ends_with('-') {
+        anyhow::bail!("plugin name must not be empty or start/end with a hyphen");
+    }
+    let mut prev_hyphen = false;
+    for ch in name.chars() {
+        if ch == '-' {
+            if prev_hyphen {
+                anyhow::bail!("plugin name must not contain consecutive hyphens");
+            }
+            prev_hyphen = true;
+        } else if ch.is_ascii_lowercase() || ch.is_ascii_digit() {
+            prev_hyphen = false;
+        } else {
+            anyhow::bail!(
+                "plugin name must be lowercase alphanumeric segments joined by single hyphens (got '{name}')"
+            );
+        }
+    }
+
+    let base = path.map(|p| p.to_path_buf()).unwrap_or_else(|| {
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join("plugins")
+    });
+    let plugin_dir = base.join(name);
+    if plugin_dir.exists() {
+        anyhow::bail!("plugin directory already exists: {}", plugin_dir.display());
+    }
+
+    std::fs::create_dir_all(plugin_dir.join("tools"))?;
+    std::fs::create_dir_all(plugin_dir.join("hooks"))?;
+    // .gitkeep so the empty dirs survive a commit.
+    std::fs::write(plugin_dir.join("tools/.gitkeep"), "")?;
+    std::fs::write(plugin_dir.join("hooks/.gitkeep"), "")?;
+
+    let manifest = format!(
+        r#"# {name} plugin manifest.
+# Scaffolded by `kirkforge plugin init`. Edit this file, then run
+# `kirkforge plugin enable {name}` (or `/plugins enable {name}` in the
+# TUI) to activate.
+
+name = "{name}"
+version = "0.1.0"
+description = "{name} plugin"
+trust = "read-only"
+
+# ── Skill (slash command) ──────────────────────────────────────────────
+# A read-only skill prompt. The user invokes /{name} and the model gets
+# this prompt with {{args}} replaced by the user's input.
+
+[[capabilities]]
+type = "skill"
+trigger = "/{name}"
+prompt = """
+You are the {name} plugin. The user invoked /{name}.
+
+TODO: implement this skill. Replace this prompt with the skill's
+instructions for the model.
+
+User request: {{{{args}}}}
+"""
+model-hint = "default"
+
+# ── Optional: tool, hook, verifier ─────────────────────────────────────
+# To add a tool (shell script), bump `trust` to "shell", add a tool
+# script under tools/, and declare a tool capability:
+#
+# [[capabilities]]
+# type = "tool"
+# name = "{name}/my_tool"
+# description = "does a thing"
+# command = "tools/my_tool.sh"
+#
+# To add a hook (lifecycle script), bump `trust` to "shell", add a
+# script under hooks/, and declare a hook capability:
+#
+# [[capabilities]]
+# type = "hook"
+# event = "post-turn"
+# command = "hooks/post-turn.sh"
+#
+# To add a verifier, declare a verifier capability with a check script:
+#
+# [[capabilities]]
+# type = "verifier"
+# name = "{name}-check"
+# priority = 1
+# command = "verifiers/check.sh"
+"#
+    );
+    std::fs::write(plugin_dir.join("kirkforge.toml"), manifest)?;
+
+    let readme = format!(
+        r#"# {name}
+
+A KirkForge plugin. See `kirkforge.toml` for the manifest schema.
+
+## Getting started
+
+1. Edit `kirkforge.toml` — replace the placeholder prompt, add tools/hooks/verifiers.
+2. Run `kirkforge plugin validate {path}` to check the manifest.
+3. Run `kirkforge plugin enable {name}` (or `/plugins enable {name}` in the TUI).
+4. Run `kirkforge run` to start a session with the plugin active.
+
+## Signing (optional)
+
+If you want signature verification, generate a minisign keypair and sign
+the manifest:
+```
+minisign -S -m kirkforge.toml
+```
+Then configure `plugin_signature_validation = true` and
+`plugin_public_key_path = <path-to-pubkey>` in your kirkforge config.
+"#,
+        path = plugin_dir.display()
+    );
+    std::fs::write(plugin_dir.join("README.md"), readme)?;
+
+    Ok(plugin_dir)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -571,6 +700,42 @@ command = "tools/greet.sh"
         let out = doctor(&cfg);
         assert!(out.contains("Load warnings"), "{out}");
         assert!(out.contains("not accessible"), "{out}");
+    }
+
+    /// WO 11.8: `init` scaffolds a valid plugin, and `validate` passes
+    /// on the scaffolded manifest (round-trip).
+    #[test]
+    fn init_scaffolds_valid_plugin_and_validate_passes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let parent = tmp.path().join("plugins");
+        let plugin_dir = init("my-plugin", Some(&parent)).unwrap();
+        assert!(plugin_dir.join("kirkforge.toml").is_file());
+        assert!(plugin_dir.join("tools").is_dir());
+        assert!(plugin_dir.join("hooks").is_dir());
+        assert!(plugin_dir.join("README.md").is_file());
+
+        // The scaffolded manifest must be valid.
+        let out = validate(&plugin_dir).unwrap();
+        assert!(out.contains("manifest valid"), "{out}");
+        assert!(out.contains("my-plugin"), "{out}");
+    }
+
+    #[test]
+    fn init_rejects_invalid_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let err = init("BadName", Some(tmp.path())).unwrap_err();
+        assert!(err.to_string().contains("lowercase"), "{err}");
+        let err = init("", Some(tmp.path())).unwrap_err();
+        assert!(err.to_string().contains("empty"), "{err}");
+    }
+
+    #[test]
+    fn init_rejects_existing_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let parent = tmp.path().join("plugins");
+        std::fs::create_dir_all(parent.join("demo")).unwrap();
+        let err = init("demo", Some(&parent)).unwrap_err();
+        assert!(err.to_string().contains("already exists"), "{err}");
     }
 
     /// `Config::default()` includes the four in-repo default plugin_sources;

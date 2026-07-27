@@ -400,6 +400,15 @@ fn handle_plugin_command(command: PluginCommand) -> anyhow::Result<()> {
         PluginCommand::Doctor => {
             println!("{}", ops::doctor(&cfg));
         }
+        PluginCommand::Init { name, path } => {
+            let plugin_dir = ops::init(&name, path.as_deref())?;
+            println!(
+                "Plugin scaffolded at {}. Edit `kirkforge.toml`, then run \
+                 `kirkforge plugin enable {name}` (or `/plugins enable {name}` \
+                 in the TUI) to activate.",
+                plugin_dir.display()
+            );
+        }
     }
     Ok(())
 }

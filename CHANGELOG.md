@@ -63,6 +63,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (e.g. "shell (effective: read-only)") and the count of filtered
   capabilities. `HostedPlugin` gains an `original_capability_count`
   field. The non-downgraded case is quiet (no noise). 1 new test.
+- Plugin init scaffolding (WO 11.8, ADR-063): `kirkforge plugin init
+  <name>` scaffolds a new plugin directory with a valid
+  `kirkforge.toml` (default `trust = "read-only"` + placeholder skill),
+  `tools/` + `hooks/` dirs (with `.gitkeep`), and a `README.md`. The
+  scaffolded manifest passes `kirkforge plugin validate` out of the
+  box. 3 new tests (round-trip, invalid name, existing dir).
 
 ### Fixed
 - Windows env_guard race (Workorder 10.0): the

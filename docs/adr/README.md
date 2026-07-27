@@ -103,6 +103,7 @@ verifies the table and the file headers agree.
 | [060](./060-per-plugin-resource-limits.md) | Per-plugin resource limits (extend SandboxConfig to plugin tools) | Accepted | CLI |
 | [061](./061-plugin-hook-audit-log.md) | Plugin hook fail-open audit log | Accepted | CLI |
 | [062](./062-plugin-verifier-ui.md) | Plugin verifier results in `/verify` panel + cost report | Accepted | CLI |
+| [063](./063-plugin-init-scaffolding.md) | Plugin init scaffolding command (`kirkforge plugin init`) | Accepted | CLI |
 | [064](./064-plugin-system-e2e-test.md) | Plugin system end-to-end integration test suite | Accepted | CLI |
 
 ## Native KirkForge-Cli ADRs

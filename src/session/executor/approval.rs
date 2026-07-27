@@ -132,3 +132,60 @@ impl Executor {
         Ok(decision)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn approval_responder_send_delivers_response() {
+        let (tx, rx) = tokio::sync::oneshot::channel::<ApprovalResponse>();
+        let responder = ApprovalResponder::new(tx);
+        responder
+            .send(ApprovalResponse::Approved)
+            .expect("send should succeed");
+        let result = rx.await.expect("should receive");
+        assert_eq!(result, ApprovalResponse::Approved);
+    }
+
+    #[tokio::test]
+    async fn approval_responder_drop_sends_denied_with_reason() {
+        let (tx, rx) = tokio::sync::oneshot::channel::<ApprovalResponse>();
+        {
+            let _responder = ApprovalResponder::new(tx);
+            // Drop without calling send()
+        }
+        let result = rx.await.expect("should receive fallback");
+        match result {
+            ApprovalResponse::DeniedWithReason(reason) => {
+                assert!(reason.contains("dropped without a user decision"));
+            }
+            _ => panic!("expected DeniedWithReason, got {result:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn approval_responder_send_consumes_inner() {
+        let (tx, _rx) = tokio::sync::oneshot::channel::<ApprovalResponse>();
+        let responder = ApprovalResponder::new(tx);
+        // First send succeeds (even if receiver is gone, the send itself
+        // consumes the inner).
+        let _ = responder.send(ApprovalResponse::Approved);
+        // The responder is consumed by send(), so we can't call it again.
+    }
+
+    #[test]
+    fn approval_response_equality() {
+        assert_eq!(ApprovalResponse::Approved, ApprovalResponse::Approved);
+        assert_eq!(ApprovalResponse::Denied, ApprovalResponse::Denied);
+        assert_ne!(ApprovalResponse::Approved, ApprovalResponse::Denied);
+        assert_eq!(
+            ApprovalResponse::DeniedWithReason("test".into()),
+            ApprovalResponse::DeniedWithReason("test".into())
+        );
+        assert_eq!(
+            ApprovalResponse::AlwaysApprove,
+            ApprovalResponse::AlwaysApprove
+        );
+    }
+}

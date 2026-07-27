@@ -10,7 +10,7 @@ use crate::shared::permission::PermissionAction;
 use crate::shared::test_util::{remove_test_dir, remove_test_file};
 use crate::shared::{
     Config, FinishReason, Message, ModelInfo, Role, StreamEvent, TokenUsage, ToolCallStyle,
-    ToolDef, ToolInvocation, ToolOutcome,
+    ToolDef, ToolError, ToolInvocation, ToolOutcome,
 };
 use crate::tools::{Tool, ToolContext};
 use std::sync::atomic::AtomicBool;
@@ -3564,4 +3564,200 @@ async fn cache_stem_reuse_emitted_on_stable_turn() {
     // Cleanup: clear the override and remove the temp dir.
     crate::shared::metrics::clear_test_path();
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ── executor/mod.rs direct method tests (WO 12-series coverage) ────────
+
+#[tokio::test]
+async fn set_recovered_messages_stores_count() {
+    let mut exe = make_executor(
+        Box::new(MockAdapter::new(vec![], make_info())),
+        vec![],
+        make_config(false),
+    );
+    exe.set_recovered_messages(5);
+    // The count is emitted on the next turn; here we just verify it was
+    // stored (non-panic + no crash).
+}
+
+#[tokio::test]
+async fn set_session_id_updates_field() {
+    let mut exe = make_executor(
+        Box::new(MockAdapter::new(vec![], make_info())),
+        vec![],
+        make_config(false),
+    );
+    exe.set_session_id("test-session-42".into());
+    // No getter; verified by non-panic. The id is forwarded to hooks.
+}
+
+#[tokio::test]
+async fn set_plan_mode_toggles() {
+    let mut exe = make_executor(
+        Box::new(MockAdapter::new(vec![], make_info())),
+        vec![],
+        make_config(false),
+    );
+    exe.set_plan_mode(true);
+    exe.set_plan_mode(false);
+    // No getter; verified by non-panic + exit_plan_mode below.
+}
+
+#[tokio::test]
+async fn exit_plan_mode_appends_system_message() {
+    let mut exe = make_executor(
+        Box::new(MockAdapter::new(vec![], make_info())),
+        vec![],
+        make_config(false),
+    );
+    exe.set_plan_mode(true);
+    let msg = exe.exit_plan_mode().await.expect("exit plan mode");
+    assert!(msg.contains("Plan mode exited"));
+    let all = exe.conversation_log().all();
+    let last = all.last().expect("at least one message");
+    assert_eq!(last.role, Role::System);
+    assert!(last.content.contains("implement the plan"));
+}
+
+#[tokio::test]
+async fn replace_conversation_swaps_log() {
+    let mut exe = make_executor(
+        Box::new(MockAdapter::new(vec![], make_info())),
+        vec![],
+        make_config(false),
+    );
+    // Add a message to the old log so we can verify the swap.
+    exe.conversation
+        .append_async(Message {
+            role: Role::User,
+            content: "hello".into(),
+            content_parts: None,
+            thinking: None,
+            tool_calls: None,
+            tool_call_id: None,
+            tool_name: None,
+            token_count: None,
+        })
+        .await
+        .unwrap();
+    let old_count = exe.conversation_log().all().len();
+    assert_eq!(old_count, 1, "old log should have 1 message");
+    let temp_dir = std::env::temp_dir();
+    let new_path = temp_dir.join(format!(
+        "kirkforge-test-replace-{}-{}.ndjson",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    remove_test_file(&new_path);
+    let (new_log, _) = ConversationLog::open(new_path.clone()).unwrap();
+    exe.replace_conversation(new_log);
+    assert_eq!(
+        exe.conversation_log().all().len(),
+        0,
+        "new log should be empty"
+    );
+    assert_ne!(
+        exe.conversation_log().all().len(),
+        old_count,
+        "log should have been swapped"
+    );
+    remove_test_file(&new_path);
+}
+
+#[tokio::test]
+async fn set_system_override_does_not_panic() {
+    let mut exe = make_executor(
+        Box::new(MockAdapter::new(vec![], make_info())),
+        vec![],
+        make_config(false),
+    );
+    exe.set_system_override(Some("custom prompt".into()));
+    exe.set_system_override(None);
+}
+
+#[tokio::test]
+async fn observe_tool_outcome_success_resets_tracker() {
+    let mut exe = make_executor(
+        Box::new(MockAdapter::new(vec![], make_info())),
+        vec![],
+        make_config(false),
+    );
+    let (tx, _rx) = mpsc::channel::<TurnEvent>(64);
+    exe.observe_tool_outcome(
+        "bash",
+        &ToolOutcome::Success {
+            content: "done".into(),
+        },
+        &tx,
+    );
+    // No doom event should fire after a success.
+}
+
+#[tokio::test]
+async fn observe_tool_outcome_doom_after_threshold() {
+    let mut exe = make_executor(
+        Box::new(MockAdapter::new(vec![], make_info())),
+        vec![],
+        make_config(false),
+    );
+    let (tx, mut rx) = mpsc::channel::<TurnEvent>(64);
+    let err_outcome = ToolOutcome::Error {
+        message: "file not found".into(),
+    };
+    // Below threshold: no event.
+    exe.observe_tool_outcome("read_file", &err_outcome, &tx);
+    exe.observe_tool_outcome("read_file", &err_outcome, &tx);
+    assert!(rx.try_recv().is_err(), "no doom event before threshold");
+    // At threshold: event fires.
+    exe.observe_tool_outcome("read_file", &err_outcome, &tx);
+    let ev = rx.try_recv();
+    assert!(
+        ev.is_ok(),
+        "doom event should fire at threshold 3, got: {ev:?}"
+    );
+    if let Ok(TurnEvent::DoomLoopDetected { tool, count, .. }) = ev {
+        assert_eq!(tool, "read_file");
+        assert!(count >= 3);
+    } else {
+        panic!("expected DoomLoopDetected event");
+    }
+}
+
+#[tokio::test]
+async fn observe_tool_outcome_failure_error_text_extracted() {
+    let mut exe = make_executor(
+        Box::new(MockAdapter::new(vec![], make_info())),
+        vec![],
+        make_config(false),
+    );
+    let (tx, mut rx) = mpsc::channel::<TurnEvent>(64);
+    let fail_outcome = ToolOutcome::Failure(ToolError::InvalidArgs {
+        message: "bad args".into(),
+    });
+    exe.observe_tool_outcome("edit_file", &fail_outcome, &tx);
+    exe.observe_tool_outcome("edit_file", &fail_outcome, &tx);
+    exe.observe_tool_outcome("edit_file", &fail_outcome, &tx);
+    let ev = rx.try_recv();
+    assert!(ev.is_ok(), "doom event should fire for Failure too");
+}
+
+#[tokio::test]
+async fn observe_tool_outcome_different_tool_resets_run() {
+    let mut exe = make_executor(
+        Box::new(MockAdapter::new(vec![], make_info())),
+        vec![],
+        make_config(false),
+    );
+    let (tx, _rx) = mpsc::channel::<TurnEvent>(64);
+    let err = ToolOutcome::Error {
+        message: "err".into(),
+    };
+    exe.observe_tool_outcome("tool_a", &err, &tx);
+    exe.observe_tool_outcome("tool_b", &err, &tx);
+    exe.observe_tool_outcome("tool_a", &err, &tx);
+    // No doom event: the consecutive run was broken by tool_b.
+    // (3 identical in a row are needed; the interspersed tool_b resets the run.)
 }

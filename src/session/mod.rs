@@ -144,3 +144,111 @@ pub fn new_session_id() -> SessionId {
         seq: next_seq,
     }
 }
+
+#[cfg(test)]
+mod session_tests {
+    use super::*;
+    use crate::shared::test_util::remove_test_dir;
+
+    #[tokio::test]
+    async fn data_dir_respects_env_override() {
+        let _lock = test_data_dir_lock().lock().await;
+        let temp = std::env::temp_dir().join(format!(
+            "kirkforge-data-dir-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::env::set_var("KIRKFORGE_DATA_DIR", &temp);
+        let dir = data_dir().expect("data_dir should succeed");
+        assert_eq!(dir, temp);
+        std::env::remove_var("KIRKFORGE_DATA_DIR");
+        remove_test_dir(&temp);
+    }
+
+    #[tokio::test]
+    async fn new_session_id_picks_max_seq_plus_one() {
+        let _lock = test_data_dir_lock().lock().await;
+        let temp = std::env::temp_dir().join(format!(
+            "kirkforge-session-id-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let sessions_dir = temp.join("sessions");
+        std::fs::create_dir_all(&sessions_dir).unwrap();
+        let date = chrono::Local::now().format("%Y-%m-%d").to_string();
+        // Create some session files with different seq numbers
+        std::fs::write(sessions_dir.join(format!("{date}-session-1.ndjson")), "").unwrap();
+        std::fs::write(sessions_dir.join(format!("{date}-session-7.ndjson")), "").unwrap();
+        std::fs::write(sessions_dir.join(format!("{date}-session-3.ndjson")), "").unwrap();
+        std::env::set_var("KIRKFORGE_DATA_DIR", &temp);
+        let id = new_session_id();
+        assert_eq!(id.date, date);
+        assert_eq!(id.seq, 8, "should pick max(1,3,7) + 1 = 8");
+        std::env::remove_var("KIRKFORGE_DATA_DIR");
+        remove_test_dir(&temp);
+    }
+
+    #[tokio::test]
+    async fn new_session_id_returns_1_for_empty_dir() {
+        let _lock = test_data_dir_lock().lock().await;
+        let temp = std::env::temp_dir().join(format!(
+            "kirkforge-session-empty-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let sessions_dir = temp.join("sessions");
+        std::fs::create_dir_all(&sessions_dir).unwrap();
+        std::env::set_var("KIRKFORGE_DATA_DIR", &temp);
+        let id = new_session_id();
+        assert_eq!(id.seq, 1, "empty sessions dir should return seq=1");
+        std::env::remove_var("KIRKFORGE_DATA_DIR");
+        remove_test_dir(&temp);
+    }
+
+    #[tokio::test]
+    async fn new_session_id_returns_1_when_no_sessions_dir() {
+        let _lock = test_data_dir_lock().lock().await;
+        let temp = std::env::temp_dir().join(format!(
+            "kirkforge-no-sessions-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&temp).unwrap();
+        // No "sessions" subdirectory
+        std::env::set_var("KIRKFORGE_DATA_DIR", &temp);
+        let id = new_session_id();
+        assert_eq!(id.seq, 1, "no sessions dir should return seq=1");
+        std::env::remove_var("KIRKFORGE_DATA_DIR");
+        remove_test_dir(&temp);
+    }
+
+    #[tokio::test]
+    async fn jobs_dir_respects_env_override() {
+        let _lock = test_data_dir_lock().lock().await;
+        let temp = std::env::temp_dir().join(format!(
+            "kirkforge-jobs-dir-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::env::set_var("KIRKFORGE_DATA_DIR", &temp);
+        let dir = jobs_dir().expect("jobs_dir should succeed");
+        assert!(dir.ends_with("jobs"));
+        std::env::remove_var("KIRKFORGE_DATA_DIR");
+        remove_test_dir(&temp);
+    }
+}

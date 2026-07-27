@@ -452,3 +452,158 @@ async fn test_verifier_handler_event_bus_integration() {
     assert_eq!(verifier_results.len(), 1);
     assert_eq!(verifier_results[0].message, "All verifiers passed");
 }
+
+// ── VerifierHandler tests (WO 12-series coverage) ──────────────────────
+
+use super::handler::VerifierHandler;
+use crate::session::access::PathGuard;
+use crate::session::event_bus::{EventHandler, EventKind};
+use crate::session::verifier::slots::VerifierSlots;
+
+#[tokio::test]
+async fn handler_subscribed_kinds_are_correct() {
+    let slots = Arc::new(std::sync::RwLock::new(VerifierSlots::new()));
+    let guard = PathGuard::default();
+    let handler = VerifierHandler::new(slots, guard);
+    let kinds = handler.subscribed_kinds();
+    assert_eq!(kinds.len(), 5);
+    assert!(kinds.contains(&EventKind::Edit));
+    assert!(kinds.contains(&EventKind::FileWrite));
+    assert!(kinds.contains(&EventKind::BashExec));
+    assert!(kinds.contains(&EventKind::GitOperation));
+    assert!(kinds.contains(&EventKind::ToolError));
+}
+
+#[tokio::test]
+async fn handler_handle_clean_verdict() {
+    let slots = Arc::new(std::sync::RwLock::new(VerifierSlots::new()));
+    let guard = PathGuard::default();
+    let handler = VerifierHandler::new(slots, guard);
+    let event = make_edit_event();
+    let result = handler.handle(&event).await;
+    assert!(result.success);
+    assert_eq!(result.handler_id, "verifier");
+    assert!(result.message.contains("All verifiers passed"));
+}
+
+#[tokio::test]
+async fn handler_handle_fixable_verdict() {
+    let mut s = VerifierSlots::new();
+    let _ = s.register(Arc::new(MockVerifier {
+        name: "fix-verifier".into(),
+        prio: 1,
+        verdict: Verdict::Fixable(FixSuggestion {
+            description: "unused import".into(),
+            file: PathBuf::from("test.rs"),
+            original: "use foo;".into(),
+            replacement: "".into(),
+            severity: "low".into(),
+            command: None,
+        }),
+    }));
+    let slots = Arc::new(std::sync::RwLock::new(s));
+    let guard = PathGuard::default();
+    let handler = VerifierHandler::new(slots, guard);
+    let event = make_edit_event();
+    let result = handler.handle(&event).await;
+    assert!(result.success, "fixable should be success=true");
+    assert!(result.message.contains("Fixable"));
+}
+
+#[tokio::test]
+async fn handler_handle_unfixable_verdict() {
+    let mut s = VerifierSlots::new();
+    let _ = s.register(Arc::new(MockVerifier {
+        name: "strict-verifier".into(),
+        prio: 1,
+        verdict: Verdict::Unfixable(super::VerificationError {
+            description: "syntax error".into(),
+            file: None,
+            details: "missing semicolon".into(),
+        }),
+    }));
+    let slots = Arc::new(std::sync::RwLock::new(s));
+    let guard = PathGuard::default();
+    let handler = VerifierHandler::new(slots, guard);
+    let event = make_edit_event();
+    let result = handler.handle(&event).await;
+    assert!(!result.success, "unfixable should be success=false");
+    assert!(result.message.contains("Unfixable"));
+}
+
+#[tokio::test]
+async fn handler_handle_skipped_verdict() {
+    let mut s = VerifierSlots::new();
+    let _ = s.register(Arc::new(MockVerifier {
+        name: "skip-verifier".into(),
+        prio: 1,
+        verdict: Verdict::Skipped("not applicable".into()),
+    }));
+    let slots = Arc::new(std::sync::RwLock::new(s));
+    let guard = PathGuard::default();
+    let handler = VerifierHandler::new(slots, guard);
+    let event = make_edit_event();
+    let result = handler.handle(&event).await;
+    // Skipped is treated as Clean by the verify_event loop (continue),
+    // so the aggregate verdict is Clean and the message says "All verifiers
+    // passed". The success flag is still true.
+    assert!(result.success, "skipped should be success=true");
+}
+
+#[tokio::test]
+async fn handler_drain_corrections_returns_fixable() {
+    let mut s = VerifierSlots::new();
+    let _ = s.register(Arc::new(MockVerifier {
+        name: "fix-verifier".into(),
+        prio: 1,
+        verdict: Verdict::Fixable(FixSuggestion {
+            description: "unused import".into(),
+            file: PathBuf::from("test.rs"),
+            original: "use foo;".into(),
+            replacement: "".into(),
+            severity: "low".into(),
+            command: None,
+        }),
+    }));
+    let slots = Arc::new(std::sync::RwLock::new(s));
+    let guard = PathGuard::default();
+    let handler = VerifierHandler::new(slots, guard);
+    let event = make_edit_event();
+    let _ = handler.verify_event(&event).await;
+    let corrections = handler.drain_corrections().await;
+    assert_eq!(corrections.len(), 1);
+    assert_eq!(corrections[0].description, "unused import");
+}
+
+#[tokio::test]
+async fn handler_drain_corrections_empty_after_drain() {
+    let mut s = VerifierSlots::new();
+    let _ = s.register(Arc::new(MockVerifier {
+        name: "fix-verifier".into(),
+        prio: 1,
+        verdict: Verdict::Fixable(FixSuggestion {
+            description: "unused import".into(),
+            file: PathBuf::from("test.rs"),
+            original: "use foo;".into(),
+            replacement: "".into(),
+            severity: "low".into(),
+            command: None,
+        }),
+    }));
+    let slots = Arc::new(std::sync::RwLock::new(s));
+    let guard = PathGuard::default();
+    let handler = VerifierHandler::new(slots, guard);
+    let event = make_edit_event();
+    let _ = handler.verify_event(&event).await;
+    let _ = handler.drain_corrections().await;
+    let corrections = handler.drain_corrections().await;
+    assert!(corrections.is_empty(), "second drain should be empty");
+}
+
+#[test]
+fn handler_id_is_verifier() {
+    let slots = Arc::new(std::sync::RwLock::new(VerifierSlots::new()));
+    let guard = PathGuard::default();
+    let handler = VerifierHandler::new(slots, guard);
+    assert_eq!(handler.id(), "verifier");
+}

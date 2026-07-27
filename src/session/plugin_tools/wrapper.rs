@@ -358,3 +358,74 @@ async fn join_plugin_drain(
         ))),
     }
 }
+
+#[cfg(test)]
+mod wrapper_tests {
+    use super::*;
+    use crate::shared::Config;
+    use crate::tools::{Tool, ToolContext};
+    use std::sync::Arc;
+
+    fn make_wrapper() -> PluginToolWrapper {
+        let cfg = Arc::new(std::sync::RwLock::new(Config::default()));
+        PluginToolWrapper::new(
+            "test_tool".into(),
+            "A test tool".into(),
+            serde_json::json!({"type": "object"}),
+            PathBuf::from("/tmp/test-plugin"),
+            PathBuf::from("tool.sh"),
+            cfg,
+            SandboxConfig::default(),
+        )
+    }
+
+    fn make_ctx() -> ToolContext {
+        ToolContext::new()
+    }
+
+    #[tokio::test]
+    async fn run_rejects_args_over_64kb() {
+        let wrapper = make_wrapper();
+        let ctx = make_ctx();
+        // Create args > 64KB
+        let big_string = "x".repeat(70_000);
+        let args = serde_json::json!({"data": big_string});
+        let outcome = wrapper.run(&ctx, args).await;
+        match outcome {
+            ToolOutcome::Failure(ToolError::InvalidArgs { message }) => {
+                assert!(
+                    message.contains("exceed"),
+                    "message should mention size limit, got: {message}"
+                );
+                assert!(message.contains("65536"));
+            }
+            _ => panic!("expected InvalidArgs failure, got {outcome:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn run_accepts_small_args() {
+        let wrapper = make_wrapper();
+        let ctx = make_ctx();
+        let args = serde_json::json!({"x": "small"});
+        let outcome = wrapper.run(&ctx, args).await;
+        // It will fail to spawn (no real script), but it should NOT fail
+        // with InvalidArgs — that guard is before the spawn.
+        if let ToolOutcome::Failure(ToolError::InvalidArgs { .. }) = outcome {
+            panic!("small args should not trigger InvalidArgs guard");
+        }
+    }
+
+    #[test]
+    fn max_env_args_bytes_is_64k() {
+        assert_eq!(PluginToolWrapper::MAX_ENV_ARGS_BYTES, 64 * 1024);
+    }
+
+    #[test]
+    fn def_returns_stored_values() {
+        let wrapper = make_wrapper();
+        let def = wrapper.def();
+        assert_eq!(def.name, "test_tool");
+        assert_eq!(def.description, "A test tool");
+    }
+}

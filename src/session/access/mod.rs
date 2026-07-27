@@ -1134,4 +1134,62 @@ mod tests {
             "expected traversal denial of symlink target, got {result:?}"
         );
     }
+
+    // ── url_is_denied edge cases (WO 12-series coverage) ────────────
+
+    #[test]
+    fn test_url_is_denied_empty_patterns_never_match() {
+        assert!(!url_is_denied("http://example.com", &[]));
+    }
+
+    #[test]
+    fn test_url_is_denied_empty_string_pattern_skipped() {
+        // Empty string pattern should be skipped (not match everything)
+        assert!(!url_is_denied("http://example.com", &["".into()]));
+    }
+
+    #[test]
+    fn test_url_is_denied_exact_prefix_match() {
+        assert!(url_is_denied(
+            "http://169.254.169.254/latest",
+            &["http://169.254.169.254".into()]
+        ));
+    }
+
+    #[test]
+    fn test_url_is_denied_non_prefix_does_not_match() {
+        // "https://..." should not match "http://..." prefix
+        assert!(!url_is_denied(
+            "https://169.254.169.254/latest",
+            &["http://169.254.169.254".into()]
+        ));
+    }
+
+    #[test]
+    fn test_url_is_denied_multiple_patterns() {
+        let patterns = vec![
+            "http://169.254.169.254".into(),
+            "http://metadata.google.internal".into(),
+        ];
+        assert!(url_is_denied("http://169.254.169.254/foo", &patterns));
+        assert!(url_is_denied(
+            "http://metadata.google.internal/bar",
+            &patterns
+        ));
+        assert!(!url_is_denied("http://example.com", &patterns));
+    }
+
+    #[test]
+    fn test_deny_list_blocks_aws_metadata() {
+        let dl = DenyList::default();
+        assert!(
+            dl.is_url_denied("http://169.254.169.254/latest/meta-data/iam/security-credentials/")
+        );
+    }
+
+    #[test]
+    fn test_deny_list_blocks_alibaba_metadata() {
+        let dl = DenyList::default();
+        assert!(dl.is_url_denied("http://100.100.100.200/latest/meta-data/"));
+    }
 }

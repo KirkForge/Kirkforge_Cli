@@ -353,3 +353,451 @@ pub enum BenchCommand {
         timeout: u64,
     },
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn run_minimal_parses() {
+        let cli = Cli::try_parse_from(["kirkforge", "run"]).expect("parse");
+        assert!(matches!(cli.command, Command::Run { .. }));
+    }
+
+    #[test]
+    fn run_defaults_are_correct() {
+        let cli = Cli::try_parse_from(["kirkforge", "run"]).expect("parse");
+        match cli.command {
+            Command::Run {
+                output,
+                max_turns,
+                seed,
+                auto_resume,
+                ..
+            } => {
+                assert_eq!(output, OutputFormat::Text);
+                assert_eq!(max_turns, 0);
+                assert!(seed.is_none());
+                assert!(!auto_resume);
+            }
+            _ => panic!("expected Run"),
+        }
+    }
+
+    #[test]
+    fn log_level_defaults_to_warn() {
+        let cli = Cli::try_parse_from(["kirkforge", "run"]).expect("parse");
+        assert_eq!(cli.log_level, "warn");
+    }
+
+    #[test]
+    fn auto_resume_conflicts_with_continue() {
+        let err = Cli::try_parse_from([
+            "kirkforge",
+            "run",
+            "--auto-resume",
+            "--continue-session",
+            "abc",
+        ])
+        .expect_err("should conflict");
+        assert!(err.kind() == clap::error::ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn auto_resume_conflicts_with_resume() {
+        let err = Cli::try_parse_from(["kirkforge", "run", "--auto-resume", "--resume", "abc"])
+            .expect_err("should conflict");
+        assert!(err.kind() == clap::error::ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn attach_conflicts_with_auto_resume() {
+        let err = Cli::try_parse_from(["kirkforge", "run", "--auto-resume", "--attach", "abc"])
+            .expect_err("should conflict");
+        assert!(err.kind() == clap::error::ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn attach_conflicts_with_continue() {
+        let err = Cli::try_parse_from([
+            "kirkforge",
+            "run",
+            "--continue-session",
+            "abc",
+            "--attach",
+            "def",
+        ])
+        .expect_err("should conflict");
+        assert!(err.kind() == clap::error::ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn daemon_stop_conflicts_with_foreground() {
+        let err = Cli::try_parse_from(["kirkforge", "daemon", "--stop", "--foreground"])
+            .expect_err("should conflict");
+        assert!(err.kind() == clap::error::ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn jobd_stop_conflicts_with_foreground() {
+        let err = Cli::try_parse_from(["kirkforge", "jobd", "--stop", "--foreground"])
+            .expect_err("should conflict");
+        assert!(err.kind() == clap::error::ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn output_format_text_parses() {
+        let cli = Cli::try_parse_from(["kirkforge", "run", "--output", "text"]).expect("parse");
+        match cli.command {
+            Command::Run { output, .. } => assert_eq!(output, OutputFormat::Text),
+            _ => panic!("expected Run"),
+        }
+    }
+
+    #[test]
+    fn output_format_json_parses() {
+        let cli = Cli::try_parse_from(["kirkforge", "run", "--output", "json"]).expect("parse");
+        match cli.command {
+            Command::Run { output, .. } => assert_eq!(output, OutputFormat::Json),
+            _ => panic!("expected Run"),
+        }
+    }
+
+    #[test]
+    fn output_format_stream_json_parses() {
+        let cli =
+            Cli::try_parse_from(["kirkforge", "run", "--output", "stream-json"]).expect("parse");
+        match cli.command {
+            Command::Run { output, .. } => assert_eq!(output, OutputFormat::StreamJson),
+            _ => panic!("expected Run"),
+        }
+    }
+
+    #[test]
+    fn plugin_list_subcommand_parses() {
+        let cli = Cli::try_parse_from(["kirkforge", "plugin", "list"]).expect("parse");
+        assert!(matches!(
+            cli.command,
+            Command::Plugin {
+                command: PluginCommand::List
+            }
+        ));
+    }
+
+    #[test]
+    fn plugin_enable_subcommand_parses() {
+        let cli =
+            Cli::try_parse_from(["kirkforge", "plugin", "enable", "my-plugin"]).expect("parse");
+        assert!(matches!(
+            cli.command,
+            Command::Plugin {
+                command: PluginCommand::Enable { name }
+            } if name == "my-plugin"
+        ));
+    }
+
+    #[test]
+    fn plugin_disable_subcommand_parses() {
+        let cli =
+            Cli::try_parse_from(["kirkforge", "plugin", "disable", "my-plugin"]).expect("parse");
+        assert!(matches!(
+            cli.command,
+            Command::Plugin {
+                command: PluginCommand::Disable { name }
+            } if name == "my-plugin"
+        ));
+    }
+
+    #[test]
+    fn plugin_init_subcommand_parses() {
+        let cli = Cli::try_parse_from(["kirkforge", "plugin", "init", "my-plugin"]).expect("parse");
+        assert!(matches!(
+            cli.command,
+            Command::Plugin {
+                command: PluginCommand::Init { name, path: None }
+            } if name == "my-plugin"
+        ));
+    }
+
+    #[test]
+    fn plugin_init_with_path_parses() {
+        let cli = Cli::try_parse_from([
+            "kirkforge",
+            "plugin",
+            "init",
+            "my-plugin",
+            "--path",
+            "/tmp/plugins",
+        ])
+        .expect("parse");
+        assert!(matches!(
+            cli.command,
+            Command::Plugin {
+                command: PluginCommand::Init { name, path }
+            } if name == "my-plugin" && path == Some(PathBuf::from("/tmp/plugins"))
+        ));
+    }
+
+    #[test]
+    fn bench_run_models_comma_split() {
+        let cli = Cli::try_parse_from(["kirkforge", "bench", "run-models", "--models", "a,b,c"])
+            .expect("parse");
+        match cli.command {
+            Command::Bench {
+                command: BenchCommand::RunModels { models, .. },
+            } => {
+                assert_eq!(models, vec!["a", "b", "c"]);
+            }
+            _ => panic!("expected RunModels"),
+        }
+    }
+
+    #[test]
+    fn bench_run_subcommand_parses() {
+        let cli = Cli::try_parse_from(["kirkforge", "bench", "run"]).expect("parse");
+        assert!(matches!(
+            cli.command,
+            Command::Bench {
+                command: BenchCommand::Run { .. }
+            }
+        ));
+    }
+
+    #[test]
+    fn bench_compare_subcommand_parses() {
+        let cli = Cli::try_parse_from([
+            "kirkforge",
+            "bench",
+            "compare",
+            "--baseline",
+            "a.json",
+            "--current",
+            "b.json",
+        ])
+        .expect("parse");
+        assert!(matches!(
+            cli.command,
+            Command::Bench {
+                command: BenchCommand::Compare { .. }
+            }
+        ));
+    }
+
+    #[test]
+    fn bench_list_subcommand_parses() {
+        let cli = Cli::try_parse_from(["kirkforge", "bench", "list"]).expect("parse");
+        assert!(matches!(
+            cli.command,
+            Command::Bench {
+                command: BenchCommand::List { .. }
+            }
+        ));
+    }
+
+    #[test]
+    fn bench_verify_only_parses() {
+        let cli = Cli::try_parse_from(["kirkforge", "bench", "verify-only"]).expect("parse");
+        assert!(matches!(
+            cli.command,
+            Command::Bench {
+                command: BenchCommand::VerifyOnly { .. }
+            }
+        ));
+    }
+
+    #[test]
+    fn sessions_subcommand_parses() {
+        let cli = Cli::try_parse_from(["kirkforge", "sessions"]).expect("parse");
+        assert!(matches!(cli.command, Command::Sessions { .. }));
+    }
+
+    #[test]
+    fn replay_subcommand_parses() {
+        let cli = Cli::try_parse_from(["kirkforge", "replay", "abc123"]).expect("parse");
+        match cli.command {
+            Command::Replay { id, .. } => assert_eq!(id, "abc123"),
+            _ => panic!("expected Replay"),
+        }
+    }
+
+    #[test]
+    fn metrics_subcommand_parses() {
+        let cli = Cli::try_parse_from(["kirkforge", "metrics"]).expect("parse");
+        assert!(matches!(cli.command, Command::Metrics));
+    }
+
+    #[test]
+    fn verify_subcommand_parses() {
+        let cli = Cli::try_parse_from(["kirkforge", "verify"]).expect("parse");
+        assert!(matches!(cli.command, Command::Verify));
+    }
+
+    #[test]
+    fn completions_subcommand_parses() {
+        let cli = Cli::try_parse_from(["kirkforge", "completions", "bash"]).expect("parse");
+        assert!(matches!(cli.command, Command::Completions { .. }));
+    }
+
+    #[test]
+    fn run_with_seed_parses() {
+        let cli = Cli::try_parse_from(["kirkforge", "run", "--seed", "42"]).expect("parse");
+        match cli.command {
+            Command::Run { seed, .. } => assert_eq!(seed, Some(42)),
+            _ => panic!("expected Run"),
+        }
+    }
+
+    #[test]
+    fn run_with_max_turns_parses() {
+        let cli = Cli::try_parse_from(["kirkforge", "run", "--max-turns", "5"]).expect("parse");
+        match cli.command {
+            Command::Run { max_turns, .. } => assert_eq!(max_turns, 5),
+            _ => panic!("expected Run"),
+        }
+    }
+
+    #[test]
+    fn run_with_model_parses() {
+        let cli = Cli::try_parse_from(["kirkforge", "run", "-m", "qwen2.5:0.5b"]).expect("parse");
+        match cli.command {
+            Command::Run { model, .. } => assert_eq!(model.as_deref(), Some("qwen2.5:0.5b")),
+            _ => panic!("expected Run"),
+        }
+    }
+
+    #[test]
+    fn run_flags_parse() {
+        let cli = Cli::try_parse_from([
+            "kirkforge",
+            "run",
+            "--dry-run",
+            "--no-tui",
+            "--worktree",
+            "--docker",
+            "--harden",
+            "--no-trace",
+            "--non-interactive",
+            "--auto-approve",
+        ])
+        .expect("parse");
+        match cli.command {
+            Command::Run {
+                dry_run,
+                no_tui,
+                worktree,
+                docker,
+                harden,
+                no_trace,
+                non_interactive,
+                auto_approve,
+                ..
+            } => {
+                assert!(dry_run);
+                assert!(no_tui);
+                assert!(worktree);
+                assert!(docker);
+                assert!(harden);
+                assert!(no_trace);
+                assert!(non_interactive);
+                assert!(auto_approve);
+            }
+            _ => panic!("expected Run"),
+        }
+    }
+
+    #[test]
+    fn plugin_doctor_parses() {
+        let cli = Cli::try_parse_from(["kirkforge", "plugin", "doctor"]).expect("parse");
+        assert!(matches!(
+            cli.command,
+            Command::Plugin {
+                command: PluginCommand::Doctor
+            }
+        ));
+    }
+
+    #[test]
+    fn plugin_reload_parses() {
+        let cli = Cli::try_parse_from(["kirkforge", "plugin", "reload"]).expect("parse");
+        assert!(matches!(
+            cli.command,
+            Command::Plugin {
+                command: PluginCommand::Reload
+            }
+        ));
+    }
+
+    #[test]
+    fn plugin_sources_parses() {
+        let cli = Cli::try_parse_from(["kirkforge", "plugin", "sources"]).expect("parse");
+        assert!(matches!(
+            cli.command,
+            Command::Plugin {
+                command: PluginCommand::Sources
+            }
+        ));
+    }
+
+    #[test]
+    fn plugin_validate_parses() {
+        let cli = Cli::try_parse_from(["kirkforge", "plugin", "validate", "/tmp/my-plugin"])
+            .expect("parse");
+        assert!(matches!(
+            cli.command,
+            Command::Plugin {
+                command: PluginCommand::Validate { .. }
+            }
+        ));
+    }
+
+    #[test]
+    fn plugin_add_parses() {
+        let cli =
+            Cli::try_parse_from(["kirkforge", "plugin", "add", "my-plugin", "/tmp/my-plugin"])
+                .expect("parse");
+        assert!(matches!(
+            cli.command,
+            Command::Plugin {
+                command: PluginCommand::Add { .. }
+            }
+        ));
+    }
+
+    #[test]
+    fn plugin_remove_parses() {
+        let cli =
+            Cli::try_parse_from(["kirkforge", "plugin", "remove", "my-plugin"]).expect("parse");
+        assert!(matches!(
+            cli.command,
+            Command::Plugin {
+                command: PluginCommand::Remove { name }
+            } if name == "my-plugin"
+        ));
+    }
+
+    #[test]
+    fn plugin_toggle_parses() {
+        let cli =
+            Cli::try_parse_from(["kirkforge", "plugin", "toggle", "my-plugin"]).expect("parse");
+        assert!(matches!(
+            cli.command,
+            Command::Plugin {
+                command: PluginCommand::Toggle { name }
+            } if name == "my-plugin"
+        ));
+    }
+
+    #[test]
+    fn sessions_with_export_conflicts_with_search() {
+        let err = Cli::try_parse_from([
+            "kirkforge",
+            "sessions",
+            "--export",
+            "json",
+            "--search",
+            "foo",
+        ])
+        .expect_err("should conflict");
+        assert!(err.kind() == clap::error::ErrorKind::ArgumentConflict);
+    }
+}

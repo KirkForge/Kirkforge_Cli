@@ -278,3 +278,65 @@ pub fn spawn_plugin_watcher(
     );
     Some(debouncer)
 }
+
+#[cfg(test)]
+mod loader_tests {
+    use super::*;
+    use crate::shared::Config;
+
+    #[test]
+    fn trust_policy_from_config_defaults() {
+        let cfg = Config::default();
+        let policy = trust_policy_from_config(&cfg);
+        assert!(!policy.verify_signatures, "default should not verify sigs");
+        assert!(policy.signature_key_path.is_none());
+    }
+
+    #[test]
+    fn trust_policy_from_config_maps_all_fields() {
+        let mut cfg = Config::default();
+        cfg.tools.max_plugin_trust = kirkforge_plugin::TrustTier::Network;
+        cfg.tools.reject_on_excess_plugin_trust = true;
+        cfg.tools.plugin_signature_validation = true;
+        cfg.tools.plugin_public_key_path = Some("/keys/pub.key".into());
+        let policy = trust_policy_from_config(&cfg);
+        assert_eq!(policy.max, kirkforge_plugin::TrustTier::Network);
+        assert!(policy.reject_on_excess);
+        assert!(policy.verify_signatures);
+        assert_eq!(
+            policy.signature_key_path,
+            Some(PathBuf::from("/keys/pub.key"))
+        );
+    }
+
+    #[test]
+    fn trust_policy_from_config_no_key_path() {
+        let mut cfg = Config::default();
+        cfg.tools.plugin_signature_validation = true;
+        cfg.tools.plugin_public_key_path = None;
+        let policy = trust_policy_from_config(&cfg);
+        assert!(policy.verify_signatures);
+        assert!(policy.signature_key_path.is_none());
+    }
+
+    #[test]
+    fn folded_feature_enabled_returns_false_for_unknown() {
+        assert!(!folded_feature_enabled("nonexistent-plugin"));
+    }
+
+    #[test]
+    fn is_folded_returns_false_for_unknown() {
+        assert!(!is_folded("nonexistent-plugin"));
+    }
+
+    #[test]
+    fn folded_feature_name_for_known_returns_name() {
+        // "stratum" is always in the FOLDED_PLUGINS list
+        assert_eq!(folded_feature("stratum"), Some("stratum"));
+    }
+
+    #[test]
+    fn folded_feature_name_for_unknown_returns_none() {
+        assert_eq!(folded_feature("nonexistent"), None);
+    }
+}

@@ -183,7 +183,7 @@ surfacing, authoring scaffolding, and an end-to-end integration test.
 | # | Workorder | Status | Priority | Depends on |
 |---|---|---|---|---|
 | 11.0 | [Plugin CLI subcommand (`kirkforge plugin`)](11.0-plugin-cli-subcommand.md) | Done | High | — |
-| 11.1 | [Plugin signature verification in Rust (no minisign shell-out)](11.1-plugin-signature-rust.md) | Planned | High | — |
+| 11.1 | [Plugin signature verification in Rust (no minisign shell-out)](11.1-plugin-signature-rust.md) | Done | High | — |
 | 11.2 | [Plugin manifest `depends_on` (dependency graph)](11.2-plugin-depends-on.md) | Planned | Medium | — |
 | 11.3 | [Surface trust-tier downgrades in `/plugins list`](11.3-surface-trust-downgrades.md) | Planned | Low | — |
 | 11.4 | [Plugin hot-reload via file watcher](11.4-plugin-hot-reload.md) | Planned | Medium | — |

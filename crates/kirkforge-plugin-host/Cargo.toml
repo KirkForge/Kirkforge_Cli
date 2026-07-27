@@ -10,6 +10,8 @@ serde_json.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
 thiserror.workspace = true
+minisign-verify = "0.2"
 
 [dev-dependencies]
 tempfile.workspace = true
+minisign = "0.9"

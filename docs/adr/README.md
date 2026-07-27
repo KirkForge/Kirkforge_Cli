@@ -97,6 +97,7 @@ verifies the table and the file headers agree.
 | [054](./054-rlimit-sandbox-hardening.md) | rlimit sandbox hardening for the non-Docker bash path | Accepted | CLI |
 | [055](./055-http-mcp-session-id.md) | HTTP MCP session-id tracking + resumable streams | Accepted | CLI |
 | [056](./056-plugin-cli-subcommand.md) | Shared plugin-ops layer and `kirkforge plugin` CLI subcommand | Accepted | CLI |
+| [057](./057-plugin-signature-rust.md) | In-process plugin signature verification (no minisign shell-out) | Accepted | CLI |
 
 ## Native KirkForge-Cli ADRs
 

@@ -86,3 +86,11 @@ external dependency.
   to assert folded plugins are NOT shell-loaded when feature is on),
   `folded_plugin_shell_fallback_when_feature_off`, and
   `folded_plugin_identification`.
+
+## Update (WO 11.1, ADR-057)
+
+The signature verification backend changed from a `minisign` binary
+shell-out to an in-process pure-Rust verify via the `minisign-verify`
+crate. The `verify_signatures` / `signature_key_path` config fields and
+the `TrustPolicy::with_verify_signatures` API are unchanged; only the
+backend changed. See ADR-057 for the decision and dep choice.

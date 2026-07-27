@@ -11,6 +11,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `doctor`. Backed by a shared `plugin_ops` layer
   (`src/session/plugin_ops.rs`) that the TUI `/plugins` commands will
   migrate to. Headless users can now manage plugins without the TUI.
+- In-process plugin signature verification (WO 11.1, ADR-057): replaced
+  the `minisign` binary shell-out with the pure-Rust `minisign-verify`
+  crate. The `minisign` binary is no longer required in `PATH`; Windows
+  users get the same verification path. 8 signature tests (valid, missing
+  sig, missing key, malformed sig, wrong key, tampered manifest, full
+  registry load). The `minisign` crate is a dev-dependency for test
+  keypair generation.
 
 ### Fixed
 - Windows env_guard race (Workorder 10.0): the

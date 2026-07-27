@@ -71,7 +71,7 @@ The root `kirkforge` binary directly depends on six crates:
 | Crate | Role |
 |---|---|
 | `kirkforge-plugin` | Plugin manifest types and trust-tier logic |
-| `kirkforge-plugin-host` | Plugin registry, dispatch, signature verification |
+| `kirkforge-plugin-host` | Plugin registry, dispatch, in-process signature verification (ADR-057) |
 | `kirkforge-context-index` | Tree-sitter indexing and graph retrieval |
 | `kirkforge-workflow` | JSON workflow engine (reuses the `task` tool's spawner) |
 | `kirkforge-lsp` | LSP client pool |

@@ -1042,4 +1042,438 @@ mod tests {
             "close should destroy session"
         );
     }
+
+    #[tokio::test]
+    async fn placeholder_tab_navigate_returns_error() {
+        let tab: Arc<dyn ChromeTab> = Arc::new(PlaceholderTab);
+        let err = tab.navigate("https://example.com").unwrap_err();
+        assert!(err.to_string().contains("not initialized"));
+    }
+
+    #[tokio::test]
+    async fn placeholder_tab_click_returns_error() {
+        let tab: Arc<dyn ChromeTab> = Arc::new(PlaceholderTab);
+        assert!(tab.click("#x").is_err());
+    }
+
+    #[tokio::test]
+    async fn placeholder_tab_screenshot_returns_error() {
+        let tab: Arc<dyn ChromeTab> = Arc::new(PlaceholderTab);
+        assert!(tab.screenshot().is_err());
+    }
+
+    #[tokio::test]
+    async fn placeholder_tab_type_returns_error() {
+        let tab: Arc<dyn ChromeTab> = Arc::new(PlaceholderTab);
+        assert!(tab.type_text("#x", "hello").is_err());
+    }
+
+    #[tokio::test]
+    async fn placeholder_tab_keypress_returns_error() {
+        let tab: Arc<dyn ChromeTab> = Arc::new(PlaceholderTab);
+        assert!(tab.keypress("Enter").is_err());
+    }
+
+    #[tokio::test]
+    async fn placeholder_tab_scroll_returns_error() {
+        let tab: Arc<dyn ChromeTab> = Arc::new(PlaceholderTab);
+        assert!(tab.scroll(10).is_err());
+    }
+
+    #[tokio::test]
+    async fn placeholder_tab_wait_for_returns_error() {
+        let tab: Arc<dyn ChromeTab> = Arc::new(PlaceholderTab);
+        assert!(tab.wait_for("#x", Duration::from_secs(1)).is_err());
+    }
+
+    #[tokio::test]
+    async fn placeholder_tab_evaluate_returns_error() {
+        let tab: Arc<dyn ChromeTab> = Arc::new(PlaceholderTab);
+        assert!(tab.evaluate("1+1").is_err());
+    }
+
+    #[test]
+    fn placeholder_tab_implements_all_methods_with_same_error() {
+        let tab = PlaceholderTab;
+        assert!(tab.navigate("x").is_err());
+        assert!(tab.click("x").is_err());
+        assert!(tab.click_xy(1.0, 2.0).is_err());
+        assert!(tab.type_text("x", "y").is_err());
+        assert!(tab.keypress("x").is_err());
+        assert!(tab.scroll(1).is_err());
+        assert!(tab.screenshot().is_err());
+        assert!(tab.wait_for("x", Duration::from_secs(1)).is_err());
+        assert!(tab.evaluate("x").is_err());
+    }
+
+    #[tokio::test]
+    async fn open_rejects_internal_metadata_endpoint() {
+        let tool = fake_tool();
+        let outcome = tool
+            .run(
+                &ToolContext::new(),
+                json!({"action": "open", "url": "http://169.254.169.254/latest"}),
+            )
+            .await;
+        assert!(
+            matches!(outcome, ToolOutcome::Failure(ToolError::AccessDenied { .. })),
+            "got {outcome:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn open_rejects_internal_ip_literal() {
+        let tool = fake_tool();
+        let outcome = tool
+            .run(
+                &ToolContext::new(),
+                json!({"action": "open", "url": "http://10.0.0.1/x"}),
+            )
+            .await;
+        assert!(
+            matches!(outcome, ToolOutcome::Failure(ToolError::AccessDenied { .. })),
+            "got {outcome:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn navigate_rejects_internal_ip_literal() {
+        let tool = fake_tool();
+        let outcome = tool
+            .run(
+                &ToolContext::new(),
+                json!({"action": "navigate", "url": "http://127.0.0.1/"}),
+            )
+            .await;
+        assert!(
+            matches!(outcome, ToolOutcome::Failure(ToolError::AccessDenied { .. })),
+            "got {outcome:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn open_rejects_missing_url() {
+        let tool = fake_tool();
+        let outcome = tool
+            .run(&ToolContext::new(), json!({"action": "open"}))
+            .await;
+        assert!(
+            matches!(outcome, ToolOutcome::Failure(ToolError::InvalidArgs { .. })),
+            "got {outcome:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn missing_action_is_invalid_args() {
+        let tool = fake_tool();
+        let outcome = tool.run(&ToolContext::new(), json!({})).await;
+        assert!(
+            matches!(outcome, ToolOutcome::Failure(ToolError::InvalidArgs { .. })),
+            "got {outcome:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn click_returns_success_message() {
+        let tool = fake_tool();
+        let outcome = tool
+            .run(
+                &ToolContext::new(),
+                json!({"action": "click", "selector": "#btn"}),
+            )
+            .await;
+        match outcome {
+            ToolOutcome::Success { content } => assert!(content.contains("#btn")),
+            other => panic!("expected Success, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn click_xy_returns_success_message() {
+        let tool = fake_tool();
+        let outcome = tool
+            .run(
+                &ToolContext::new(),
+                json!({"action": "click_xy", "x": 12.5, "y": 34.7}),
+            )
+            .await;
+        match outcome {
+            ToolOutcome::Success { content } => {
+                assert!(content.contains("12.5"), "got: {content}");
+                assert!(content.contains("34.7"), "got: {content}");
+            }
+            other => panic!("expected Success, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn type_returns_success_message() {
+        let tool = fake_tool();
+        let outcome = tool
+            .run(
+                &ToolContext::new(),
+                json!({"action": "type", "selector": "#input", "text": "hello"}),
+            )
+            .await;
+        match outcome {
+            ToolOutcome::Success { content } => assert!(content.contains("#input")),
+            other => panic!("expected Success, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn keypress_returns_success_message() {
+        let tool = fake_tool();
+        let outcome = tool
+            .run(
+                &ToolContext::new(),
+                json!({"action": "keypress", "key": "Enter"}),
+            )
+            .await;
+        match outcome {
+            ToolOutcome::Success { content } => assert!(content.contains("Enter")),
+            other => panic!("expected Success, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn scroll_returns_success_message() {
+        let tool = fake_tool();
+        let outcome = tool
+            .run(
+                &ToolContext::new(),
+                json!({"action": "scroll", "amount": 250}),
+            )
+            .await;
+        match outcome {
+            ToolOutcome::Success { content } => assert!(content.contains("250 pixels")),
+            other => panic!("expected Success, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn wait_for_returns_success_message() {
+        let tool = fake_tool();
+        let outcome = tool
+            .run(
+                &ToolContext::new(),
+                json!({"action": "wait_for", "selector": "#foo"}),
+            )
+            .await;
+        match outcome {
+            ToolOutcome::Success { content } => assert!(content.contains("#foo")),
+            other => panic!("expected Success, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn unknown_action_in_session_returns_failure() {
+        let tool = fake_tool();
+        tool.run(
+            &ToolContext::new(),
+            json!({"action": "open", "url": "https://example.com"}),
+        )
+        .await;
+        let outcome = tool
+            .run(&ToolContext::new(), json!({"action": "frobnicate"}))
+            .await;
+        assert!(
+            matches!(outcome, ToolOutcome::Failure(ToolError::Internal { .. })),
+            "got {outcome:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn browser_session_step_count_increments_per_action() {
+        let tool = fake_tool_with_max_steps(20);
+        tool.run(
+            &ToolContext::new(),
+            json!({"action": "open", "url": "https://example.com"}),
+        )
+        .await;
+        tool.run(
+            &ToolContext::new(),
+            json!({"action": "click", "selector": "a"}),
+        )
+        .await;
+        tool.run(
+            &ToolContext::new(),
+            json!({"action": "scroll", "amount": 100}),
+        )
+        .await;
+        let guard = tool.session.lock().unwrap();
+        let session = guard.as_ref().unwrap();
+        assert_eq!(session.step_count(), 3, "after three non-open actions");
+    }
+
+    #[tokio::test]
+    async fn browser_session_zero_max_steps_defaults_to_20() {
+        let tool = fake_tool_with_max_steps(0);
+        tool.run(
+            &ToolContext::new(),
+            json!({"action": "open", "url": "https://example.com"}),
+        )
+        .await;
+        let guard = tool.session.lock().unwrap();
+        let session = guard.as_ref().unwrap();
+        assert_eq!(session.max_steps, 20, "zero should fall back to default");
+    }
+
+    #[tokio::test]
+    async fn click_after_close_falls_back_to_single_shot_tab() {
+        let tool = fake_tool();
+        tool.run(
+            &ToolContext::new(),
+            json!({"action": "open", "url": "https://example.com"}),
+        )
+        .await;
+        tool.run(&ToolContext::new(), json!({"action": "close"}))
+            .await;
+        let outcome = tool
+            .run(
+                &ToolContext::new(),
+                json!({"action": "click", "selector": "a"}),
+            )
+            .await;
+        assert!(
+            matches!(outcome, ToolOutcome::Success { .. }),
+            "click should succeed via shared tab, got {outcome:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn open_failure_returns_internal_error() {
+        struct FailingTab;
+        impl ChromeTab for FailingTab {
+            fn navigate(&self, _url: &str) -> anyhow::Result<()> {
+                Err(anyhow::anyhow!("network down"))
+            }
+            fn click(&self, _: &str) -> anyhow::Result<()> { Ok(()) }
+            fn click_xy(&self, _: f64, _: f64) -> anyhow::Result<()> { Ok(()) }
+            fn type_text(&self, _: &str, _: &str) -> anyhow::Result<()> { Ok(()) }
+            fn keypress(&self, _: &str) -> anyhow::Result<()> { Ok(()) }
+            fn scroll(&self, _: i32) -> anyhow::Result<()> { Ok(()) }
+            fn screenshot(&self) -> anyhow::Result<Vec<u8>> { Ok(vec![]) }
+            fn wait_for(&self, _: &str, _: Duration) -> anyhow::Result<()> { Ok(()) }
+            fn evaluate(&self, _: &str) -> anyhow::Result<String> { Ok(String::new()) }
+        }
+        let tool = ComputerUse::with_tab(
+            DenyList::default(),
+            ComputerUseConfig::default(),
+            Arc::new(FailingTab),
+        );
+        let outcome = tool
+            .run(
+                &ToolContext::new(),
+                json!({"action": "open", "url": "https://example.com"}),
+            )
+            .await;
+        match outcome {
+            ToolOutcome::Failure(ToolError::Internal { message }) => {
+                assert!(message.contains("open failed"), "got {message}");
+                assert!(message.contains("network down"), "got {message}");
+            }
+            other => panic!("expected Internal error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn screenshot_failure_returns_internal_error() {
+        struct NoScreenshotTab;
+        impl ChromeTab for NoScreenshotTab {
+            fn navigate(&self, _: &str) -> anyhow::Result<()> { Ok(()) }
+            fn click(&self, _: &str) -> anyhow::Result<()> { Ok(()) }
+            fn click_xy(&self, _: f64, _: f64) -> anyhow::Result<()> { Ok(()) }
+            fn type_text(&self, _: &str, _: &str) -> anyhow::Result<()> { Ok(()) }
+            fn keypress(&self, _: &str) -> anyhow::Result<()> { Ok(()) }
+            fn scroll(&self, _: i32) -> anyhow::Result<()> { Ok(()) }
+            fn screenshot(&self) -> anyhow::Result<Vec<u8>> {
+                Err(anyhow::anyhow!("capture failed"))
+            }
+            fn wait_for(&self, _: &str, _: Duration) -> anyhow::Result<()> { Ok(()) }
+            fn evaluate(&self, _: &str) -> anyhow::Result<String> { Ok(String::new()) }
+        }
+        let tool = ComputerUse::with_tab(
+            DenyList::default(),
+            ComputerUseConfig::default(),
+            Arc::new(NoScreenshotTab),
+        );
+        let outcome = tool
+            .run(&ToolContext::new(), json!({"action": "screenshot"}))
+            .await;
+        match outcome {
+            ToolOutcome::Failure(ToolError::Internal { message }) => {
+                assert!(message.contains("screenshot failed"), "got {message}");
+                assert!(message.contains("capture failed"), "got {message}");
+            }
+            other => panic!("expected Internal error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn open_with_session_launcher_failure_returns_internal_error() {
+        struct OkTab;
+        impl ChromeTab for OkTab {
+            fn navigate(&self, _: &str) -> anyhow::Result<()> { Ok(()) }
+            fn click(&self, _: &str) -> anyhow::Result<()> { Ok(()) }
+            fn click_xy(&self, _: f64, _: f64) -> anyhow::Result<()> { Ok(()) }
+            fn type_text(&self, _: &str, _: &str) -> anyhow::Result<()> { Ok(()) }
+            fn keypress(&self, _: &str) -> anyhow::Result<()> { Ok(()) }
+            fn scroll(&self, _: i32) -> anyhow::Result<()> { Ok(()) }
+            fn screenshot(&self) -> anyhow::Result<Vec<u8>> { Ok(vec![]) }
+            fn wait_for(&self, _: &str, _: Duration) -> anyhow::Result<()> { Ok(()) }
+            fn evaluate(&self, _: &str) -> anyhow::Result<String> { Ok(String::new()) }
+        }
+        let launcher: SessionLauncher = Arc::new(|| {
+            Box::pin(async { Err(anyhow::anyhow!("chrome binary missing")) })
+        });
+        let tool = ComputerUse::new(
+            DenyList::default(),
+            ComputerUseConfig::default(),
+            Arc::new(OkTab),
+            Some(launcher),
+        );
+        let outcome = tool
+            .run(
+                &ToolContext::new(),
+                json!({"action": "open", "url": "https://example.com"}),
+            )
+            .await;
+        match outcome {
+            ToolOutcome::Failure(ToolError::Internal { message }) => {
+                assert!(message.contains("failed to launch browser session"), "got {message}");
+                assert!(message.contains("chrome binary missing"), "got {message}");
+            }
+            other => panic!("expected Internal error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn def_lists_all_actions_in_enum() {
+        let tool = fake_tool();
+        let def = tool.def();
+        let actions = def
+            .parameters
+            .get("properties")
+            .and_then(|p| p.get("action"))
+            .and_then(|a| a.get("enum"))
+            .and_then(|e| e.as_array())
+            .expect("action enum");
+        let names: Vec<&str> = actions.iter().filter_map(|v| v.as_str()).collect();
+        for expected in [
+            "open",
+            "navigate",
+            "click",
+            "click_xy",
+            "type",
+            "keypress",
+            "scroll",
+            "screenshot",
+            "wait_for",
+            "evaluate",
+            "close",
+        ] {
+            assert!(names.contains(&expected), "missing {expected} in enum: {names:?}");
+        }
+    }
 }

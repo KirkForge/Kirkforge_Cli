@@ -881,4 +881,355 @@ mod tests {
         assert!(short.ends_with("src/lib.rs"));
         assert!(!short.starts_with('/'));
     }
+
+    #[test]
+    fn language_id_for_c_and_cpp() {
+        assert_eq!(language_id_for("c"), "c");
+        assert_eq!(language_id_for("cpp"), "cpp");
+        assert_eq!(language_id_for("c++"), "cpp");
+    }
+
+    #[test]
+    fn language_id_for_javascript_variants() {
+        assert_eq!(language_id_for("javascript"), "javascript");
+        assert_eq!(language_id_for("javascriptreact"), "javascript");
+    }
+
+    #[test]
+    fn language_id_for_typescript_variants() {
+        assert_eq!(language_id_for("typescript"), "typescript");
+        assert_eq!(language_id_for("typescriptreact"), "typescript");
+    }
+
+    #[test]
+    fn language_id_for_other_languages() {
+        assert_eq!(language_id_for("go"), "go");
+        assert_eq!(language_id_for("python"), "python");
+        assert_eq!(language_id_for("java"), "java");
+        assert_eq!(language_id_for("ruby"), "ruby");
+    }
+
+    #[test]
+    fn language_id_for_unknown_language_returns_itself() {
+        assert_eq!(language_id_for("cobol"), "cobol");
+        assert_eq!(language_id_for(""), "");
+    }
+
+    #[test]
+    fn path_to_uri_for_absolute_path_starts_with_file_slash() {
+        let p = Path::new("/home/kirk/x.rs");
+        let uri = path_to_uri(p);
+        assert_eq!(uri, "file:///home/kirk/x.rs");
+    }
+
+    #[test]
+    fn path_to_uri_for_relative_path_uses_three_slashes() {
+        let p = Path::new("src/lib.rs");
+        let uri = path_to_uri(p);
+        assert_eq!(uri, "file:///src/lib.rs");
+    }
+
+    #[test]
+    fn path_to_uri_for_root_path() {
+        let p = Path::new("/");
+        let uri = path_to_uri(p);
+        assert_eq!(uri, "file:///");
+    }
+
+    #[test]
+    fn short_path_returns_full_path_when_not_under_cwd() {
+        let p = "/some/other/place/lib.rs";
+        let short = short_path(p);
+        assert_eq!(short, p);
+    }
+
+    #[test]
+    fn render_document_symbols_flat() {
+        let syms = vec![kirkforge_lsp::DocumentSymbol {
+            name: "foo".into(),
+            kind: 12,
+            range: kirkforge_lsp::Range {
+                start: kirkforge_lsp::Position { line: 0, character: 0 },
+                end: kirkforge_lsp::Position { line: 1, character: 0 },
+            },
+            children: vec![],
+        }];
+        let mut out = Vec::new();
+        render_document_symbols(&syms, 0, &mut out);
+        assert_eq!(out.len(), 1);
+        assert!(out[0].contains("foo"));
+        assert!(out[0].contains("kind=12"));
+        assert!(out[0].contains("1:1"));
+    }
+
+    #[test]
+    fn render_document_symbols_nested_increments_indent() {
+        let syms = vec![kirkforge_lsp::DocumentSymbol {
+            name: "outer".into(),
+            kind: 2,
+            range: kirkforge_lsp::Range {
+                start: kirkforge_lsp::Position { line: 0, character: 0 },
+                end: kirkforge_lsp::Position { line: 10, character: 0 },
+            },
+            children: vec![kirkforge_lsp::DocumentSymbol {
+                name: "inner".into(),
+                kind: 13,
+                range: kirkforge_lsp::Range {
+                    start: kirkforge_lsp::Position { line: 1, character: 0 },
+                    end: kirkforge_lsp::Position { line: 2, character: 0 },
+                },
+                children: vec![],
+            }],
+        }];
+        let mut out = Vec::new();
+        render_document_symbols(&syms, 0, &mut out);
+        assert_eq!(out.len(), 2);
+        assert!(out[0].starts_with("outer"), "got: {out:?}");
+        assert!(out[1].starts_with("  inner"), "expected indent for nested, got: {out:?}");
+    }
+
+    #[tokio::test]
+    async fn references_missing_line_is_invalid_args() {
+        let pool = empty_pool();
+        let tool = LspQuery::new(pool, PathGuard::default());
+        let outcome = tool
+            .run(
+                &ToolContext::new(),
+                serde_json::json!({
+                    "operation": "find_references",
+                    "file": "src/lib.rs",
+                    "character": 1
+                }),
+            )
+            .await;
+        assert!(
+            matches!(outcome, ToolOutcome::Failure(ToolError::InvalidArgs { .. })),
+            "got {outcome:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn references_missing_character_is_invalid_args() {
+        let pool = empty_pool();
+        let tool = LspQuery::new(pool, PathGuard::default());
+        let outcome = tool
+            .run(
+                &ToolContext::new(),
+                serde_json::json!({
+                    "operation": "find_references",
+                    "file": "src/lib.rs",
+                    "line": 1
+                }),
+            )
+            .await;
+        assert!(
+            matches!(outcome, ToolOutcome::Failure(ToolError::InvalidArgs { .. })),
+            "got {outcome:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn hover_missing_line_is_invalid_args() {
+        let pool = empty_pool();
+        let tool = LspQuery::new(pool, PathGuard::default());
+        let outcome = tool
+            .run(
+                &ToolContext::new(),
+                serde_json::json!({
+                    "operation": "hover",
+                    "file": "src/lib.rs",
+                    "character": 1
+                }),
+            )
+            .await;
+        assert!(
+            matches!(outcome, ToolOutcome::Failure(ToolError::InvalidArgs { .. })),
+            "got {outcome:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn hover_missing_character_is_invalid_args() {
+        let pool = empty_pool();
+        let tool = LspQuery::new(pool, PathGuard::default());
+        let outcome = tool
+            .run(
+                &ToolContext::new(),
+                serde_json::json!({
+                    "operation": "hover",
+                    "file": "src/lib.rs",
+                    "line": 1
+                }),
+            )
+            .await;
+        assert!(
+            matches!(outcome, ToolOutcome::Failure(ToolError::InvalidArgs { .. })),
+            "got {outcome:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn implementations_missing_line_is_invalid_args() {
+        let pool = empty_pool();
+        let tool = LspQuery::new(pool, PathGuard::default());
+        let outcome = tool
+            .run(
+                &ToolContext::new(),
+                serde_json::json!({
+                    "operation": "find_implementations",
+                    "file": "src/lib.rs",
+                    "character": 1
+                }),
+            )
+            .await;
+        assert!(
+            matches!(outcome, ToolOutcome::Failure(ToolError::InvalidArgs { .. })),
+            "got {outcome:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn implementations_missing_character_is_invalid_args() {
+        let pool = empty_pool();
+        let tool = LspQuery::new(pool, PathGuard::default());
+        let outcome = tool
+            .run(
+                &ToolContext::new(),
+                serde_json::json!({
+                    "operation": "find_implementations",
+                    "file": "src/lib.rs",
+                    "line": 1
+                }),
+            )
+            .await;
+        assert!(
+            matches!(outcome, ToolOutcome::Failure(ToolError::InvalidArgs { .. })),
+            "got {outcome:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn workspace_symbols_missing_query_is_invalid_args() {
+        let pool = empty_pool();
+        let tool = LspQuery::new(pool, PathGuard::default());
+        let outcome = tool
+            .run(
+                &ToolContext::new(),
+                serde_json::json!({"operation": "workspace_symbols"}),
+            )
+            .await;
+        assert!(
+            matches!(outcome, ToolOutcome::Failure(ToolError::InvalidArgs { .. })),
+            "got {outcome:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn document_symbols_missing_file_is_invalid_args() {
+        let pool = empty_pool();
+        let tool = LspQuery::new(pool, PathGuard::default());
+        let outcome = tool
+            .run(
+                &ToolContext::new(),
+                serde_json::json!({"operation": "document_symbols"}),
+            )
+            .await;
+        assert!(
+            matches!(outcome, ToolOutcome::Failure(ToolError::InvalidArgs { .. })),
+            "got {outcome:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn diagnostics_missing_file_is_invalid_args() {
+        let pool = empty_pool();
+        let tool = LspQuery::new(pool, PathGuard::default());
+        let outcome = tool
+            .run(
+                &ToolContext::new(),
+                serde_json::json!({"operation": "diagnostics"}),
+            )
+            .await;
+        assert!(
+            matches!(outcome, ToolOutcome::Failure(ToolError::InvalidArgs { .. })),
+            "got {outcome:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn file_op_denied_path_returns_access_denied() {
+        let pool = empty_pool();
+        let tool = LspQuery::new(pool, PathGuard::default());
+        let outcome = tool
+            .run(
+                &ToolContext::new(),
+                serde_json::json!({
+                    "operation": "hover",
+                    "file": "/tmp/secret.pem",
+                    "line": 1,
+                    "character": 1
+                }),
+            )
+            .await;
+        assert!(
+            matches!(outcome, ToolOutcome::Failure(ToolError::AccessDenied { .. })),
+            "got {outcome:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn file_op_nonexistent_path_returns_error() {
+        let pool = rust_pool_no_binary();
+        let tool = LspQuery::new(pool, PathGuard::default());
+        let outcome = tool
+            .run(
+                &ToolContext::new(),
+                serde_json::json!({
+                    "operation": "hover",
+                    "file": "/nonexistent/kirkforge/no_such_file.rs",
+                    "line": 1,
+                    "character": 1
+                }),
+            )
+            .await;
+        match outcome {
+            ToolOutcome::Error { message } => {
+                assert!(
+                    message.contains("No LSP server available") || message.contains("cooldown"),
+                    "got {message}"
+                );
+            }
+            other => panic!("expected Error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn cancellation_during_file_op_returns_cancelled() {
+        let pool = rust_pool_no_binary();
+        let tool = LspQuery::new(pool, PathGuard::default());
+        let token = tokio_util::sync::CancellationToken::new();
+        token.cancel();
+        let ctx = ToolContext {
+            token,
+            dry_run: false,
+            task_spawner: None,
+        };
+        let me =
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/tools/lsp_query.rs");
+        let outcome = tool
+            .run(
+                &ctx,
+                serde_json::json!({
+                    "operation": "hover",
+                    "file": me.to_string_lossy(),
+                    "line": 1,
+                    "character": 1
+                }),
+            )
+            .await;
+        assert!(
+            matches!(outcome, ToolOutcome::Failure(ToolError::Cancelled)),
+            "got {outcome:?}"
+        );
+    }
 }

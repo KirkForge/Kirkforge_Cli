@@ -1,89 +1,93 @@
-# Lessons — Series 10 Wiring-Depth (WO 10.2, 10.7, 10.8, 10.9)
-
-Worktree: `/home/kirk/Madlab/Github/kf-10b` off `origin/dev`.
-Branch: `wo/10-series-wiring-depth`.
+# lessons.md — Series 11 (Plugin System Hardening)
 
 ## What I learned
 
-### Metrics test isolation (WO 10.2)
-- The `with_test_path` helper in `metrics.rs` is sync-only (takes a
-  non-async closure). For async executor tests that need to `.await`
-  between `record()` calls, I added `set_test_path` / `clear_test_path`
-  pub(crate) helpers that install/clear the thread-local
-  `PATH_OVERRIDE` without holding a lock.
-- The `#[tokio::test]` runtime is current-thread, so the thread-local
-  override IS visible to `record()` calls inside `stream_iteration`.
-  Do NOT hold `std::sync::MutexGuard` across `.await` — clippy's
-  `await-holding-lock` lint catches it.
-- The existing `test_plan_reason_emitted_after_tool_call` test uses
-  `.iter().any()` to tolerate cross-test contamination (the metrics
-  log is a shared platform file). For exact-count assertions, use
-  `set_test_path` to isolate.
+1. **`Config::default()` includes 4 in-repo plugin_sources.** Tests that
+   assert "empty" plugin state must clear `plugin_sources` AND
+   `enabled_plugins` — the default config points at the real repo `plugins/`
+   dir. This bit me in WO 11.0's `plugin_ops` tests.
 
-### prefix_len policy (WO 10.2)
-- The WO suggested `prefix_len = messages.len() - 1` but that makes
-  the prefix grow every turn (history grows), so `is_stable` never
-  returns true. The correct first-cut policy is `prefix_len = 1`
-  (system message only), which matches ADR-052's Future Work note.
-  The conversation history cannot be part of the stable stem because
-  it grows every turn.
+2. **`#[serde(rename_all = "kebab-case")]` on a struct converts ALL fields.**
+   To keep a snake_case TOML key (`depends_on`, `resource_limits`) under
+   a kebab-case struct, use `#[serde(rename = "depends_on")]` per field.
+   The WO spec used `depends_on` (snake_case); without the per-field
+   rename, the TOML key becomes `depends-on` and manifests break.
 
-### Anthropic API content-omission (WO 10.2)
-- The Anthropic prompt-caching docs confirm: "Cache hits require 100%
-  identical prompt segments" and the cache key is computed from the
-  bytes sent. There is NO content-omission API — you must send the
-  full content every turn. The `cache_control` markers are idempotent.
-  ADR-052 already documented this; I shipped only the metric event
-  wiring (the measurement), not a wire-bytes saving.
+3. **`minisign` crate's `KeyPair::generate_unencrypted_keypair()` works
+   with `minisign-verify`.** The two crates are by the same author; the
+   keybox format is compatible. `allow_legacy = true` in
+   `minisign_verify::PublicKey::verify` accepts both standard and
+   legacy signatures.
 
-### SSE parser rewrite (WO 10.7)
-- The old SSE parser only looked for `data:` lines. To capture
-  `event:` (for the `endpoint` event) and `id:` (for `Last-Event-ID`),
-  I rewrote it as a full `field: value` line parser. The key gotcha:
-  `String::trim_end_matches` returns `&str` (not `String`), and
-  `&str` doesn't have `.as_str()` (that's unstable `str_as_str`).
-  Use the `&str` directly.
+4. **`run_hook_script` returns `Ok(Allow)` for non-zero exits (not 0/2).**
+   To audit fail-open failures (WO 11.6), I had to make it return `Err`
+   for non-zero exits so the `run_decision` Err arm fires the audit +
+   fail-open path. This was a behavior change in the return type, not
+   the semantics (the caller still converts Err → Allow).
 
-### Floating-point in regression thresholds (WO 10.9)
-- `0.7 - 0.8` in f64 is `-0.10000000000000008882`, which IS less than
-  `-0.10` (`-0.10000000000000000555`). So a "10% drop" at small sample
-  sizes can trigger the regression gate due to floating-point. The
-  `compare_with_threshold` test for "within threshold" uses 100/100 →
-  92/100 (delta -8%) to avoid the boundary. The check is strict `<`
-  (not `<=`), so a drop of exactly the threshold is not a regression.
+5. **`HostedPlugin` needed `original_capability_count`.** After
+   `filter_capabilities` mutates the plugin, the manifest's
+   `capabilities` is the *filtered* set, not the original. To show the
+   filtered count in `/plugins list` (WO 11.3), I had to record the
+   original count before filtering.
 
-### TS orchestrator event bus API (WO 10.8)
-- The `EventBus.on()` handler must return
-  `Promise<Result<void, HandlerError>>`, not `void`. The shape is
-  `{ ok: true, value: undefined }` for success.
-- The `SecurityEmitter` puts findings in `value.details` (an array),
-  not `value.findings` (which is a count). Read the emitter source
-  before assuming the event shape.
+6. **`notify-debouncer-mini` 0.7 API:** `new_debouncer` returns
+   `Result<Debouncer<RecommendedWatcher>, Error>`. The channel receives
+   `DebounceEventResult` (= `Result<Vec<DebouncedEvent>, Error>`), not
+   `DebouncedEvent` directly. The `notify::RecursiveMode` is re-exported
+   as `notify_debouncer_mini::notify::RecursiveMode`.
 
-## Scope creep
+7. **`tokio::process::Command` vs `std::process::Command`:**
+   `setup_rlimits` takes `&mut tokio::process::Command` (the bash
+   runner uses tokio's Command). Passing `command.as_std_mut()` was
+   wrong — pass `&mut command` directly.
 
-- `src/shared/metrics.rs`: added `set_test_path` / `clear_test_path`
-  pub(crate) helpers. This is technically outside the WO 10.2 file
-  list, but the WO's integration test needs an async-friendly metrics
-  path override and the existing `with_test_path` is sync-only.
-- `crates/kirkforge-plugin-host/src/lib.rs`: made `mod env` →
-  `pub mod env` for WO 10.8 (the bridge verifier reuses
-  `curated_env`). This is a one-word visibility change, not a behavior
-  change.
+8. **Clippy `uninlined_format_args`:** `format!("{x}")` not
+   `format!("{}", x)` for local variables. The repo enforces this.
 
-## Pre-existing failures (not mine)
+9. **The `readme_drift` test counts `#[test]` attributes under `crates/`
+   only.** Adding tests to `crates/kirkforge-plugin` and
+   `crates/kirkforge-plugin-host` bumped the count from 1555 → 1569; I
+   had to update `crates/plugin3-core/README.md`. The 10-series
+   regression (subagent B forgot this) was a real warning — I checked
+   every time.
 
-- `crates/plugin3-core --test readme_drift` fails on `origin/dev`
-  because the 10.0 commit (other subagent) added 3 tests to
-  `cost.rs`/`paths.rs` without bumping the README test count from 1550
-  to 1553. This is the other subagent's 10.0/10.3 scope. My WOs do not
-  touch `crates/plugin3-core/`.
+## What I tried that didn't work
+
+- **TUI migration in WO 11.0:** I initially planned to rewrite the TUI
+  `handle_plugins_op` to call the shared `plugin_ops` functions. This
+  would risk a regression in the live-reload path (`plugin_reload_tx`).
+  I kept the TUI unchanged and made the shared layer additive. The WO
+  notes this as an explicit decision.
+
+- **Release binary size check for WO 11.1:** A full `cargo build --release`
+  timed out (20+ min on this machine). I documented the size impact as
+  estimated (the `minisign-verify` crate is zero-dependency, ed25519-only,
+  ~50KB). The WO accepts this.
 
 ## What I'd do differently
 
-- For WO 10.2, I'd read ADR-052's Future Work section first — it
-  already says `prefix_len = 1` is the first-cut policy, which would
-  have saved one test-iteration.
-- For WO 10.7, I'd check the `String::trim_end_matches` return type
-  before writing the parser — the `&str` vs `String` borrow issue
-  cost a compile cycle.
+- **Test the `kirkforge plugin` CLI via `assert_cmd`:** I tested the
+  shared `plugin_ops` functions directly (unit tests) and ran
+  `kirkforge plugin list` manually. An `assert_cmd` integration test
+  would prove the CLI end-to-end. I skipped this for time; the unit
+  tests + manual run cover the contract.
+
+- **The `AuditEntry` enum change is backward-incompatible for old NDJSON
+  logs.** Old entries (struct form, no `"kind"` tag) don't deserialize
+  with the new tagged enum. I documented this in ADR-061. A future
+  migration could add a fallback raw-JSON reader.
+
+## Scope creep
+
+- **`enable_plugin` in TUI now honors `reject_on_excess_plugin_trust`.**
+  WO 11.3 required loading a downgraded plugin, which needed this fix.
+  The TUI's `enable_plugin` previously always used
+  `TrustPolicy::up_to()` (which sets `reject_on_excess = true`). I
+  changed it to `with_reject_on_excess(cfg.tools.reject_on_excess_plugin_trust)`.
+  This is a 1-line bug fix that the WO 11.3 test required — not scope
+  creep, but it's a behavior fix outside the WO's "display only" scope.
+
+- No other scope creep. All 10 WOs touched only their named files + the
+  shared doc files (TECHNICAL.md, state.md, CHANGELOG.md, ADR index,
+  workorders README).

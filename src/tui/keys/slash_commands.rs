@@ -150,6 +150,11 @@ pub(crate) const COMMANDS: &[SlashCommand] = &[
         usage: "",
     },
     SlashCommand {
+        triggers: &["/verify"],
+        description: "Show recent verifier verdicts",
+        usage: "",
+    },
+    SlashCommand {
         triggers: &["/gh"],
         description: "GitHub integration commands",
         usage: "",

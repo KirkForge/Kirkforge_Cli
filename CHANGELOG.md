@@ -30,6 +30,17 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   called; `minify_content_by_ext` dispatches to `minify_rust_inner`
   directly). Fixed the mixed `//` + `//!` comment style at the top of
   `lang.rs` to a single `//!` module doc block.
+- replay sync_all batching (Workorder 10.5):
+  `TraceRecorder::record` no longer fsyncs on every turn. Added
+  `turns_since_sync` + `sync_interval` (default 10) fields; `sync_all`
+  runs every `sync_interval` turns, and `impl Drop for TraceRecorder`
+  always flushes the final partial batch so a dropped recorder does not
+  lose un-sync'd turns. New `with_sync_interval(path, n)` constructor
+  for tests (set `n = 1` to restore the old per-turn fsync). Crash-safety
+  weakens slightly (a crash can lose up to `sync_interval - 1` turns);
+  the trace is a debugging aid and the conversation log is the source of
+  truth. 2 new tests (25 turns at sync_interval=10 → exactly 2 syncs
+  during record + final flush in Drop; sync_interval=1 → per-turn sync).
 
 ## [0.3.6] - 2026-07-27
 

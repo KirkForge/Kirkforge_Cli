@@ -57,14 +57,34 @@ pub struct TurnRecord {
 // ── Trace recorder ──
 
 /// Append-only trace recorder. Each `record` call appends one JSON line.
+///
+/// `sync_all` (an `fsync`) is batched: it runs every `sync_interval` turns
+/// rather than on every turn, so a long session does not block the
+/// executor's turn loop with a per-turn fsync. The final partial batch is
+/// flushed by `Drop` so a dropped recorder does not lose un-sync'd turns.
+/// Set `sync_interval = 1` to restore the old per-turn fsync (e.g. for use
+/// cases that need per-turn crash-safety).
 pub struct TraceRecorder {
     file: std::fs::File,
     turn: u32,
+    turns_since_sync: u32,
+    sync_interval: u32,
+    // Counts `sync_all` calls made by `record` (not by `Drop`); test-only
+    // hook so the batching test can assert the call count without a mock.
+    sync_count: u32,
 }
 
 impl TraceRecorder {
-    /// Open (or create) a trace file at the given path.
+    /// Open (or create) a trace file at the given path with the default
+    /// `sync_interval` of 10 turns.
     pub fn open(path: &Path) -> anyhow::Result<Self> {
+        Self::with_sync_interval(path, 10)
+    }
+
+    /// Open (or create) a trace file, fsync-ing every `sync_interval`
+    /// turns. `sync_interval = 1` gives the old per-turn fsync; `0` is
+    /// clamped to 1 to avoid never syncing.
+    pub fn with_sync_interval(path: &Path, sync_interval: u32) -> anyhow::Result<Self> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("create trace directory {}", parent.display()))?;
@@ -74,7 +94,13 @@ impl TraceRecorder {
             .append(true)
             .open(path)
             .with_context(|| format!("open trace file {}", path.display()))?;
-        Ok(Self { file, turn: 0 })
+        Ok(Self {
+            file,
+            turn: 0,
+            turns_since_sync: 0,
+            sync_interval: sync_interval.max(1),
+            sync_count: 0,
+        })
     }
 
     /// Record a turn. Increments the internal turn counter.
@@ -83,7 +109,12 @@ impl TraceRecorder {
         record.turn = self.turn;
         let line = serde_json::to_string(&record)?;
         writeln!(self.file, "{line}").with_context(|| "write trace record")?;
-        self.file.sync_all().with_context(|| "sync trace file")?;
+        self.turns_since_sync += 1;
+        if self.turns_since_sync >= self.sync_interval {
+            self.file.sync_all().with_context(|| "sync trace file")?;
+            self.turns_since_sync = 0;
+            self.sync_count += 1;
+        }
         Ok(())
     }
 
@@ -115,6 +146,23 @@ impl TraceRecorder {
 
     pub fn turn(&self) -> u32 {
         self.turn
+    }
+
+    /// Number of `sync_all` (fsync) calls made by `record` so far. Does
+    /// not count the final flush in `Drop`. Test-only.
+    #[cfg(test)]
+    pub(crate) fn sync_count(&self) -> u32 {
+        self.sync_count
+    }
+}
+
+impl Drop for TraceRecorder {
+    fn drop(&mut self) {
+        // Flush the final partial batch so a dropped recorder does not
+        // lose the last `< sync_interval` turns. The trace is a debugging
+        // aid (the conversation log is the source of truth), but it must
+        // still be recoverable after a crash/drop.
+        let _ = self.file.sync_all();
     }
 }
 
@@ -425,6 +473,60 @@ mod tests {
         let loaded = TraceRecorder::load(&path).unwrap();
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].model_response, "ok");
+    }
+
+    /// WO 10.5: `sync_all` (fsync) is batched every `sync_interval` turns,
+    /// not every turn. With `sync_interval = 10`, 25 turns must call
+    /// `sync_all` exactly twice during `record` (at turn 10 and turn 20).
+    /// The final partial batch (turns 21-25) is flushed by `Drop`, which
+    /// we verify by reading back all 25 records after the recorder drops.
+    #[test]
+    fn trace_recorder_batches_sync_all_every_n_turns() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("batched.trace.ndjson");
+        let mut recorder = TraceRecorder::with_sync_interval(&path, 10).expect("open recorder");
+        for i in 1..=25 {
+            recorder
+                .record(sample_record(i, &format!("turn {i}")))
+                .expect("record turn");
+        }
+        // During the 25 records, sync_all must fire exactly twice (turn
+        // 10 and turn 20). The partial batch (turns 21-25) is NOT synced
+        // yet — it is flushed by Drop.
+        assert_eq!(
+            recorder.sync_count(),
+            2,
+            "sync_all must be called exactly 2 times during record (at turn 10 and 20), \
+             not once per turn; got {}",
+            recorder.sync_count()
+        );
+        assert_eq!(recorder.turn(), 25);
+        // Drop the recorder: the final partial batch (turns 21-25) must
+        // be flushed so all 25 records survive.
+        drop(recorder);
+        let loaded = TraceRecorder::load(&path).expect("load after drop");
+        assert_eq!(loaded.len(), 25, "Drop must flush the final partial batch");
+        assert_eq!(loaded[0].turn, 1);
+        assert_eq!(loaded[24].turn, 25);
+    }
+
+    /// `sync_interval = 1` restores the old per-turn fsync behaviour.
+    #[test]
+    fn trace_recorder_sync_interval_one_syncs_every_turn() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("every-turn.trace.ndjson");
+        let mut recorder = TraceRecorder::with_sync_interval(&path, 1).expect("open recorder");
+        for i in 1..=3 {
+            recorder
+                .record(sample_record(i, &format!("turn {i}")))
+                .expect("record turn");
+        }
+        assert_eq!(
+            recorder.sync_count(),
+            3,
+            "sync_interval=1 must fsync on every turn; got {}",
+            recorder.sync_count()
+        );
     }
 
     #[test]

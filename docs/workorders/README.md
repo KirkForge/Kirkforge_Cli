@@ -168,6 +168,54 @@ regression gate).
 - **10.3, 10.4, 10.5, 10.6 (Low)**: Doc-sync and hygiene cleanup. Can be
   batched into a single "doc + perf + cleanup hygiene" commit.
 
+### Series 11.0-11.9 — Plugin System Hardening and Depth
+
+Workorders 11.0-11.9 address findings from a focused review of the
+plugin system (2026-07-27, post-Series-10). The plugin system shipped
+two-path dispatch (ADR-050), trust tiers, minisign signature
+verification, manifest validation (WO 8.8), folded plugins, and the
+verifier-bus bridge (ADR-028/054). The remaining gaps are: a
+headless management surface (CLI), in-process signature verification,
+plugin dependency declaration, downgrade visibility, hot-reload,
+per-plugin resource limits, hook audit logging, verifier-result
+surfacing, authoring scaffolding, and an end-to-end integration test.
+
+| # | Workorder | Status | Priority | Depends on |
+|---|---|---|---|---|
+| 11.0 | [Plugin CLI subcommand (`kirkforge plugin`)](11.0-plugin-cli-subcommand.md) | Planned | High | — |
+| 11.1 | [Plugin signature verification in Rust (no minisign shell-out)](11.1-plugin-signature-rust.md) | Planned | High | — |
+| 11.2 | [Plugin manifest `depends_on` (dependency graph)](11.2-plugin-depends-on.md) | Planned | Medium | — |
+| 11.3 | [Surface trust-tier downgrades in `/plugins list`](11.3-surface-trust-downgrades.md) | Planned | Low | — |
+| 11.4 | [Plugin hot-reload via file watcher](11.4-plugin-hot-reload.md) | Planned | Medium | — |
+| 11.5 | [Per-plugin resource limits (extend SandboxConfig)](11.5-per-plugin-resource-limits.md) | Planned | Medium | 9.8 |
+| 11.6 | [Plugin hook fail-open audit log](11.6-plugin-hook-audit-log.md) | Planned | High | — |
+| 11.7 | [Plugin verifier results in `/verify` panel + cost report](11.7-plugin-verifier-ui.md) | Planned | Medium | 9.6 |
+| 11.8 | [Plugin init scaffolding command (`kirkforge plugin init`)](11.8-plugin-init-scaffolding.md) | Planned | Low | 11.0 |
+| 11.9 | [Plugin system end-to-end integration test suite](11.9-plugin-system-e2e-test.md) | Planned | High | 11.6 |
+
+### Priority rationale
+
+- **11.0 (High)**: Plugin management is TUI-only. A headless user
+  (CI, cron, NDJSON mode, wrapper script) cannot enable/list/validate
+  plugins. The `/plugins` TUI commands work; the CLI surface is missing.
+- **11.1 (High)**: Signature verification shells out to `minisign` —
+  a hard error if the binary isn't installed. In-process verification
+  (pure-Rust ed25519) removes the external dependency and works
+  everywhere `kirkforge` runs.
+- **11.6 (High)**: Plugin hooks fail-open silently — denials and
+  crashes go to `tracing::warn!`, not the audit log. A security-
+  observability gap: a hook that denies a tool call or fails open on
+  a dangerous one is not in the tamper-evident audit trail.
+- **11.9 (High)**: The plugin system has unit tests for each component
+  but no end-to-end test exercising the full lifecycle (skill + tool +
+  hook + verifier + trust + sandbox + env-curation + audit). A
+  composition regression would not be caught.
+- **11.2, 11.4, 11.5, 11.7 (Medium)**: Real plugin-system depth
+  (dependency graph, hot-reload, per-plugin rlimits, verifier UI).
+  Not blocking but close the ecosystem gaps.
+- **11.3, 11.8 (Low)**: Visibility and ergonomics. Trust downgrades
+  are silent; plugin authoring is hand-copied. Cleanup, not blockers.
+
 ## Conventions
 
 - Each workorder is a single markdown file named `<number>-<slug>.md`.

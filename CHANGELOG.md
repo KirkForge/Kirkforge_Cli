@@ -41,6 +41,17 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the trace is a debugging aid and the conversation log is the source of
   truth. 2 new tests (25 turns at sync_interval=10 → exactly 2 syncs
   during record + final flush in Drop; sync_interval=1 → per-turn sync).
+- state.md doc-sync (Workorder 10.3): `main` SHA corrected from the
+  stale `98e863a` to `30b55ee` (current HEAD); ADR count corrected from
+  72 to 73 (the 9-series added ADR-052/053/054); bench task count
+  reconfirmed at 30. The "Known CI issues" section now records the
+  tarpaulin `test_build_fork_tree_orphan_fork_is_a_root` flake.
+- wo/8.* branch + worktree cleanup (Workorder 10.4): deleted 8 stale
+  local + 8 remote `wo/8.*` branches (all merged to `main`) and removed
+  7 stale worktrees. `wo/8.6-stratum-budget` (pre-rebase original) and
+  `wo/8.6-stratum-budget-rebased` (stale upstream tracking) required
+  `-D`; both verified merged-to-main by content (identical commit
+  messages; the rebased version `5c679db` landed via merge `eb66156`).
 
 ## [0.3.6] - 2026-07-27
 

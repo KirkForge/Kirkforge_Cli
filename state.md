@@ -2,7 +2,7 @@
 
 ## Current baseline: v0.3.6 (2026-07-25)
 
-**`dev` at HEAD, `main` at 98e863a.** Phase 5 complete (4 languages). Phase 6 complete (import + call-graph edges). Phase 7 complete (embeddings + graph-walk retrieval). 30 bench tasks. 72 ADRs. Workorders 7.1–7.9 all Done. Workorders 8.0–8.9 all Done (8.3 partial — 2 items deferred: plugin toolset extension, 11 pre-existing broken verify specs; see WO 8.3 Notes — the `use_workflow_run` task shipped in WO 9.1). Workorders 9.0–9.9 all Done. WO 9.3 shipped: `Cargo.toml` bumped to `0.3.6`, tag `v0.3.6` created (commit 2c46425); pushing the tag triggers `release.yml` for the 6-platform-binary release.
+**`dev` at HEAD, `main` at 30b55ee.** Phase 5 complete (4 languages). Phase 6 complete (import + call-graph edges). Phase 7 complete (embeddings + graph-walk retrieval). 30 bench tasks. 73 ADRs. Workorders 7.1–7.9 all Done. Workorders 8.0–8.9 all Done (8.3 partial — 2 items deferred: plugin toolset extension, 11 pre-existing broken verify specs; see WO 8.3 Notes — the `use_workflow_run` task shipped in WO 9.1). Workorders 9.0–9.9 all Done. WO 9.3 shipped: `Cargo.toml` bumped to `0.3.6`, tag `v0.3.6` created; the v0.3.6 release was re-shipped in WO 10.1 (re-tagged to the Windows-fix commit `4cbcfc3`, release run `30239782875` published 6 platform binaries + SHA256SUMS + cosign sig). Series 10 (this session): WO 10.0 Done (Windows env_guard race fixed, `EnvGuard::prior()` accessor added, windows CI green), WO 10.1 Done (v0.3.6 release artifacts published), WO 10.3 Done (state.md main-SHA + ADR-count sync), WO 10.4 Done (8 stale wo/8.* branches + 7 stale worktrees cleaned up), WO 10.5 Done (replay sync_all batched every N turns + Drop flush), WO 10.6 Done (minify stale allow(dead_code) removed, dead `minify_rust` wrapper deleted, comment style fixed).
 
 ### What shipped (sessions 6.1–7.9)
 
@@ -60,6 +60,7 @@ The hooks for WO 6.6/6.7/6.8 are now in-process Rust handlers (no shell scripts)
 ### Known CI issues
 
 - **Ollama model pull fails intermittently**: The `integration` CI job fails when `ollama pull` encounters a registry redirect. External service issue; re-running typically succeeds.
+- **Coverage (`tarpaulin`) flake on `test_build_fork_tree_orphan_fork_is_a_root`**: Under `cargo tarpaulin --lib`, this test in `src/session/session_index.rs` occasionally panics with "No such file or directory" committing the `.index.ndjson` temp file (a tempdir/rename race exposed by tarpaulin's instrumentation). It passed on the `main` CI run for `30b55ee` but failed 3× on the `dev` run; a fresh full re-run cleared it. Pre-existing; out of WO 10.x scope. Not a code regression (same commit passed on `main`).
 
 ### Gates
 

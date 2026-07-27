@@ -5,6 +5,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.3.6] - 2026-07-27
+
 ### Added
 - rlimit sandbox hardening for the non-Docker bash path (Workorder 9.8):
   new `--harden` CLI flag and `SandboxConfig` in `SecurityConfig`

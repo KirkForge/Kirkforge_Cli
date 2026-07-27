@@ -99,7 +99,7 @@ sandbox hardening, and representative bench tasks.
 | 9.0 | [Fix broken bench verify specs](9.0-fix-broken-bench-verify-specs.md) | Done | High | 8.3 |
 | 9.1 | [Workflow tool wrapper](9.1-workflow-tool-wrapper.md) | Done | Medium | — |
 | 9.2 | [Bench PR delta comment](9.2-bench-pr-delta-comment.md) | Done | Medium | 6.2, 8.1 |
-| 9.3 | [Version reconciliation and v0.3.6 release](9.3-version-reconciliation.md) | Planned | High | 8.0-8.9 |
+| 9.3 | [Version reconciliation and v0.3.6 release](9.3-version-reconciliation.md) | Done | High | 8.0-8.9 |
 | 9.4 | [Replay interactive stepper](9.4-replay-interactive-stepper.md) | Done | Medium | — |
 | 9.5 | [Prompt cache stem reuse](9.5-prompt-cache-stem-reuse.md) | Done | High | — |
 | 9.6 | [Verifier bus code unification](9.6-verifier-bus-unification.md) | Done | Medium | ADR-028 |

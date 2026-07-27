@@ -2,7 +2,7 @@
 
 ## Current baseline: v0.3.6 (2026-07-25)
 
-**`dev` at HEAD, `main` at 98e863a.** Phase 5 complete (4 languages). Phase 6 complete (import + call-graph edges). Phase 7 complete (embeddings + graph-walk retrieval). 30 bench tasks. 72 ADRs. Workorders 7.1–7.9 all Done. Workorders 8.0–8.9 all Done (8.3 partial — 2 items deferred: plugin toolset extension, 11 pre-existing broken verify specs; see WO 8.3 Notes — the `use_workflow_run` task shipped in WO 9.1). Workorders 9.0–9.2, 9.4–9.9 all Done. WO 9.3 (version reconciliation and v0.3.6 release) is the only remaining 9-series task — `Cargo.toml` is still `0.3.0`, no `v0.3.1`–`v0.3.6` tags exist.
+**`dev` at HEAD, `main` at 98e863a.** Phase 5 complete (4 languages). Phase 6 complete (import + call-graph edges). Phase 7 complete (embeddings + graph-walk retrieval). 30 bench tasks. 72 ADRs. Workorders 7.1–7.9 all Done. Workorders 8.0–8.9 all Done (8.3 partial — 2 items deferred: plugin toolset extension, 11 pre-existing broken verify specs; see WO 8.3 Notes — the `use_workflow_run` task shipped in WO 9.1). Workorders 9.0–9.9 all Done. WO 9.3 shipped: `Cargo.toml` bumped to `0.3.6`, tag `v0.3.6` created (commit 2c46425); pushing the tag triggers `release.yml` for the 6-platform-binary release.
 
 ### What shipped (sessions 6.1–7.9)
 

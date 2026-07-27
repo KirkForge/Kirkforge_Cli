@@ -12,7 +12,7 @@ This repo is a Rust CLI coding agent (`kirkforge`). It uses `tokio`, `ratatui`, 
 - Match the existing style: plain comments, `snake_case`, small pure helpers, `anyhow` for errors.
 - Prefer `Edit` over full-file rewrites for small changes.
 - Avoid adding dependencies unless necessary. The release profile is `opt-level = "z"` + `lto = true` + `codegen-units = 1` — binary size matters; a new dep must earn its place.
-- The `kirkforge-testdoctor` crate is excluded from the workspace build (see `Cargo.toml`). Don't add it back without an ADR.
+- The `kirkforge-testdoctor` crate is now a workspace member (WO 12.4). It provides `cargo run -p kirkforge-testdoctor -- diagnose --root .` for self-diagnosis of test coverage gaps.
 - The binary root lives at `src/main/mod.rs` (split form), not `src/main.rs`. The `[[bin]]` path in `Cargo.toml` is explicit — don't "fix" it.
 - Run `scripts/ci-local.sh` (or `scripts/ci-local.sh quick`) before committing to reproduce the full CI matrix locally.
 

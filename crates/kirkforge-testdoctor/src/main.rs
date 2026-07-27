@@ -1,16 +1,20 @@
 //! kirkforge-testdoctor — test-performance doctor for Rust workspaces.
 //!
 //! Profiles the `cargo test` suite, classifies tests as fast/medium/slow,
-//! partitions the suite into fast/full/coverage manifests, and suggests
-//! fixes for slow tests. See `docs/ideas/test-doctor.md` for the design.
+//! partitions the suite into fast/full/coverage manifests, suggests
+//! fixes for slow tests, analyzes coverage gaps, and self-diagnoses
+//! untested code. See `docs/ideas/test-doctor.md` for the design.
 
 mod classify;
+mod diagnose;
+mod gaps;
 mod partition;
 mod profile;
 mod suggest;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(
@@ -41,6 +45,18 @@ enum Cmd {
     Partition,
     /// Print fix suggestions for slow tests.
     Suggest,
+    /// Analyze coverage gaps from a Cobertura XML file.
+    Gaps {
+        /// Path to the tarpaulin Cobertura XML.
+        #[arg(long)]
+        xml: PathBuf,
+    },
+    /// Self-diagnose: scan source files for untested public functions.
+    Diagnose {
+        /// Project root to scan (default: current directory).
+        #[arg(long, default_value = ".")]
+        root: PathBuf,
+    },
 }
 
 fn main() -> Result<()> {
@@ -50,5 +66,15 @@ fn main() -> Result<()> {
         Cmd::Classify => classify::run(&cli.profile),
         Cmd::Partition => partition::run(&cli.profile, &cli.out),
         Cmd::Suggest => suggest::run(&cli.profile),
+        Cmd::Gaps { xml } => {
+            let gaps = gaps::analyze_gaps(&xml)?;
+            gaps::print_report(&gaps);
+            Ok(())
+        }
+        Cmd::Diagnose { root } => {
+            let report = diagnose::diagnose(&root)?;
+            diagnose::print_report(&report);
+            Ok(())
+        }
     }
 }

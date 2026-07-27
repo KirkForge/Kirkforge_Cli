@@ -2060,6 +2060,7 @@ dependencies = [
  "kirkforge-lsp",
  "kirkforge-plugin",
  "kirkforge-plugin-host",
+ "kirkforge-testdoctor",
  "kirkforge-video",
  "kirkforge-workflow",
  "kirkstratum-core",
@@ -2184,6 +2185,16 @@ dependencies = [
  "tempfile",
  "thiserror 1.0.69",
  "tracing",
+]
+
+[[package]]
+name = "kirkforge-testdoctor"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

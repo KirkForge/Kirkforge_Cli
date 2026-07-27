@@ -1,6 +1,6 @@
 # ADR-0029: Test partitioning — fast / full / coverage suites
 
-- **Status:** Accepted
+- **Status:** Accepted (promoted: testdoctor is now a workspace member, WO 12.4)
 - **Date:** 2026-07-21
 - **Related:** [ADR-0016](./0016-test-strategy.md) (test categories),
   [test-doctor idea](../ideas/test-doctor.md)
@@ -83,8 +83,8 @@ runs only `--test integration_test -- --include-ignored` and
 
 ### `kirkforge-testdoctor` prototype
 
-A standalone crate at `crates/kirkforge-testdoctor/` (not a workspace
-member yet — prototype only) provides four subcommands:
+A workspace member crate at `crates/kirkforge-testdoctor/` (promoted from
+prototype in WO 12.4) provides six subcommands:
 
 - `profile` — runs `cargo test --workspace --no-fail-fast` and parses
   the per-binary `test result:` lines into `test-profile.json`.
@@ -114,7 +114,8 @@ Negative first:
   acceptable because the coverage gate never enforced thresholds on
   integration-test code — only on `src/session`, `src/tools`,
   `src/adapters`.
-- **The doctor is a prototype.** It is not a workspace member; CI
+- **The doctor is now a workspace member (WO 12.4).** It runs under CI
+  and is integrated into the main `kirkforge doctor` CLI subcommand.
   does not invoke it. The partition is currently encoded directly in
   the workflow `if`/`else`. Promoting the doctor to a workspace
   member and driving CI from the generated manifests is a follow-up.
@@ -186,7 +187,7 @@ The `.tarpaulin.toml` fix:
 +timeout = "120s"
 ```
 
-The `kirkforge-testdoctor` crate is built standalone
+The `kirkforge-testdoctor` crate is a workspace member (promoted in WO 12.4)
 (`cd crates/kirkforge-testdoctor && cargo build`) and is not listed
 in the root `[workspace] members`. It depends only on `clap`,
 `serde`, `serde_json`, and `anyhow` — all already in the workspace

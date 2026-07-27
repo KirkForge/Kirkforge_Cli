@@ -11,7 +11,7 @@ mod chrome_launcher;
 mod turn_events;
 
 use clap::{CommandFactory, Parser};
-use kirkforge::cli::{BenchCommand, Cli, Command, PluginCommand};
+use kirkforge::cli::{BenchCommand, Cli, Command, DoctorCommand, PluginCommand};
 use kirkforge::{adapters, daemon, line_mode, session, shared, tools, tui};
 use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
@@ -311,6 +311,7 @@ async fn main() {
         } => handle_replay_command(id, data_dir, turn, from, to, interactive),
         Command::Bench { command } => handle_bench_command(command).await,
         Command::Plugin { command } => handle_plugin_command(command),
+        Command::Doctor { command } => handle_doctor_command(command),
     }
     .map_err(KirkForgeError::from);
 
@@ -411,6 +412,28 @@ fn handle_plugin_command(command: PluginCommand) -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+/// Handle `kirkforge doctor <subcommand>` (WO 12.4, ADR-0029).
+/// Dispatches to the kirkforge-testdoctor library.
+fn handle_doctor_command(command: DoctorCommand) -> anyhow::Result<()> {
+    use kirkforge_testdoctor as td;
+    match command {
+        DoctorCommand::Profile => td::profile::run("test-profile.json"),
+        DoctorCommand::Classify => td::classify::run("test-profile.json"),
+        DoctorCommand::Partition => td::partition::run("test-profile.json", "test-suites"),
+        DoctorCommand::Suggest => td::suggest::run("test-profile.json"),
+        DoctorCommand::Gaps { xml } => {
+            let gaps = td::gaps::analyze_gaps(&xml)?;
+            td::gaps::print_report(&gaps);
+            Ok(())
+        }
+        DoctorCommand::Diagnose { root } => {
+            let report = td::diagnose::diagnose(&root)?;
+            td::diagnose::print_report(&report);
+            Ok(())
+        }
+    }
 }
 
 async fn handle_bench_run(

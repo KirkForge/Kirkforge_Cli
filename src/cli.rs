@@ -229,6 +229,37 @@ pub enum Command {
         #[command(subcommand)]
         command: PluginCommand,
     },
+    /// Test doctor: profile, classify, partition, suggest, and diagnose
+    /// test coverage gaps (WO 12.4, ADR-0029).
+    Doctor {
+        #[command(subcommand)]
+        command: DoctorCommand,
+    },
+}
+
+/// Subcommands for the `doctor` command (WO 12.4, ADR-0029).
+#[derive(Subcommand, Debug)]
+pub enum DoctorCommand {
+    /// Run `cargo test --workspace --no-fail-fast` and capture per-binary timings.
+    Profile,
+    /// Read the profile and classify tests as fast/medium/slow/ignored.
+    Classify,
+    /// Generate fast-suite.json, full-suite.json, coverage-suite.json.
+    Partition,
+    /// Print fix suggestions for slow tests.
+    Suggest,
+    /// Analyze coverage gaps from a Cobertura XML file (tarpaulin output).
+    Gaps {
+        /// Path to the tarpaulin Cobertura XML.
+        #[arg(long)]
+        xml: PathBuf,
+    },
+    /// Self-diagnose: scan source files for untested public functions.
+    Diagnose {
+        /// Project root to scan (default: current directory).
+        #[arg(long, default_value = ".")]
+        root: PathBuf,
+    },
 }
 
 /// Subcommands for the `plugin` command (WO 11.0, ADR-056).

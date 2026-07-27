@@ -5,14 +5,18 @@ edition = "2021"
 rust-version = "1.88"
 license = "MIT"
 repository = "https://github.com/KirkForge/KirkForge-Cli"
-description = "Test-performance doctor for Rust workspaces — profiles, classifies, and partitions the test suite for faster CI."
+description = "Test-performance doctor for Rust workspaces — profiles, classifies, partitions, and diagnoses test coverage gaps."
+
+[lib]
+name = "kirkforge_testdoctor"
+path = "src/lib.rs"
 
 [[bin]]
 name = "kirkforge-testdoctor"
 path = "src/main.rs"
 
 [dependencies]
-clap = { version = "4", features = ["derive"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-anyhow = "1"
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }

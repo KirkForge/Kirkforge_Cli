@@ -115,4 +115,26 @@ mod tests {
         assert!(!info.supports_images);
         assert!(!info.supports_cache);
     }
+
+    #[test]
+    fn kimi_constructor_strips_trailing_slash() {
+        let adapter = KimiAdapter::new("http://localhost:11434/", "kimi-k2", 120);
+        assert_eq!(adapter.api_base, "http://localhost:11434");
+    }
+
+    #[test]
+    fn kimi_set_json_mode_toggles() {
+        let mut adapter = KimiAdapter::new("http://localhost:11434", "kimi-k2", 120);
+        assert!(!adapter.json_mode);
+        adapter.set_json_mode(true);
+        assert!(adapter.json_mode);
+    }
+
+    #[test]
+    fn kimi_set_seed_sets_value() {
+        let mut adapter = KimiAdapter::new("http://localhost:11434", "kimi-k2", 120);
+        assert!(adapter.seed.is_none());
+        adapter.set_seed(Some(77));
+        assert_eq!(adapter.seed, Some(77));
+    }
 }

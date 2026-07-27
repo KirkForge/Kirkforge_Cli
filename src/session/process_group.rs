@@ -81,3 +81,63 @@ pub async fn reap_child(child: &mut Child, timeout: Duration) {
         Err(_) => tracing::warn!("timed out waiting for child process to exit"),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn reap_child_returns_on_quick_exit() {
+        let mut child = tokio::process::Command::new("true")
+            .spawn()
+            .expect("spawn true");
+        // Let it exit
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        reap_child(&mut child, std::time::Duration::from_secs(1)).await;
+        // If we get here without hanging, the reaping worked.
+    }
+
+    #[tokio::test]
+    async fn reap_child_times_out_on_slow_process() {
+        let mut child = tokio::process::Command::new("sleep")
+            .arg("10")
+            .spawn()
+            .expect("spawn sleep");
+        // Reap with a short timeout — the child is still sleeping.
+        reap_child(&mut child, std::time::Duration::from_millis(100)).await;
+        // Clean up: kill the child so it doesn't linger.
+        let _ = child.start_kill();
+        let _ = child.wait().await;
+        // If we get here without hanging for 10s, the timeout worked.
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn kill_process_group_kills_child() {
+        let mut cmd = tokio::process::Command::new("sleep");
+        cmd.arg("10");
+        setup_process_group(&mut cmd);
+        let mut child = cmd.spawn().expect("spawn sleep");
+        kill_process_group(&mut child);
+        // The child should be killed; wait should return quickly.
+        let result = tokio::time::timeout(std::time::Duration::from_secs(2), child.wait()).await;
+        assert!(result.is_ok(), "child should have been killed within 2s");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn setup_process_group_does_not_panic() {
+        let mut cmd = tokio::process::Command::new("true");
+        setup_process_group(&mut cmd);
+        // The pre_exec hook is set; we can't test the actual setpgid
+        // without spawning, but the function should not panic.
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn setup_process_group_is_noop_on_non_unix() {
+        let mut cmd = tokio::process::Command::new("cmd");
+        setup_process_group(&mut cmd);
+        // No-op; should not panic.
+    }
+}

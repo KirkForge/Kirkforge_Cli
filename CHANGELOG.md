@@ -5,6 +5,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+- Windows env_guard race (Workorder 10.0): the
+  `env_guard_restores_prior_value_some_branch` tests in
+  `crates/plugin3-core/src/cost.rs` and `paths.rs` read
+  `PLUGIN3_CONFIG_DIR` after `EnvGuard::Drop` released the test mutex,
+  racing other test threads on Windows. Added `EnvGuard::prior()` and
+  assert on the captured prior (the contract: prior=None ⇒ Drop removed),
+  not on the racy post-drop env state. Test-only fix; no behavior
+  change. Unblocks the v0.3.6 release (the `windows` CI job was red).
+
 ## [0.3.6] - 2026-07-27
 
 ### Added

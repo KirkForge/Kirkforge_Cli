@@ -133,6 +133,16 @@ impl EnvGuard {
         unsafe { std::env::set_var(key, value) };
         Self { key, prior, guard }
     }
+
+    /// The value the env var held when this guard was created (`None` if
+    /// it was unset). `Drop` restores exactly this state, so tests can
+    /// pin the `EnvGuard` contract by asserting on `prior()` — the
+    /// captured value `Drop` will use — instead of re-reading the env
+    /// var *after* the lock is released, which races other test threads
+    /// on Windows (see WO 10.0 / the B8 fix note above).
+    pub fn prior(&self) -> Option<&str> {
+        self.prior.as_deref()
+    }
 }
 
 impl Drop for EnvGuard {

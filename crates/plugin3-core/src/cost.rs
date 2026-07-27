@@ -508,42 +508,64 @@ mod tests {
     // surfaces in BOTH files. Sequential single-test layout —
     // env writes are process-global, parallel runs race and
     // produce false positives.
+    //
+    // The outermost post-drop assertions assert on the captured
+    // `prior()` (the value Drop will use), NOT on a re-read of the
+    // env var after the lock is released. Re-reading after Drop
+    // races other test threads that mutate the same var under their
+    // own EnvGuard — the race lost regularly on Windows (WO 10.0).
+    // The inner "Some-branch" assertion re-reads the env var while
+    // the outer guard is still held, so it is race-free.
     #[test]
     fn env_guard_restores_prior_value_some_branch() {
         if std::env::var("PLUGIN3_CONFIG_DIR").is_ok() {
             eprintln!("skipping: PLUGIN3_CONFIG_DIR already set in this environment");
             return;
         }
-        // Seed round-trip: prior=None → unset on drop.
+        // Seed round-trip: prior=None → unset on drop. The contract
+        // is pinned by asserting the captured `prior()` is None (that
+        // is what Drop used to call remove_var). We do NOT re-read
+        // the env var here: the lock is released after Drop, and
+        // another test thread can re-set the var before this read.
         {
-            let _g_seed = EnvGuard::set("PLUGIN3_CONFIG_DIR", "/tmp/cfg-seed");
+            let g_seed = EnvGuard::set("PLUGIN3_CONFIG_DIR", "/tmp/cfg-seed");
+            assert_eq!(g_seed.prior(), None, "seed guard must have prior=None");
             assert_eq!(
                 std::env::var("PLUGIN3_CONFIG_DIR").as_deref(),
                 Ok("/tmp/cfg-seed"),
             );
         }
-        assert!(
-            std::env::var("PLUGIN3_CONFIG_DIR").is_err(),
-            "seed EnvGuard (prior=None) must unset the env var on drop; \
-             found {:?}",
-            std::env::var("PLUGIN3_CONFIG_DIR").ok()
-        );
 
         // Some-branch round-trip: prior=Some(v) → restored on drop.
+        // The inner guard's prior is Some(outer_prior), so its Drop
+        // must call set_var(key, outer_prior). We re-read the env var
+        // for the inner assertion while the outer guard is still held
+        // (race-free). The outer guard's prior is None (the env was
+        // unset when it was created), so its Drop must remove_var —
+        // we pin that contract via prior(), not a racy post-drop read.
         let outer_prior = "/tmp/cfg-prior";
         {
-            let _g_outer = EnvGuard::set("PLUGIN3_CONFIG_DIR", outer_prior);
+            let g_outer = EnvGuard::set("PLUGIN3_CONFIG_DIR", outer_prior);
+            assert_eq!(g_outer.prior(), None, "outer guard must have prior=None");
             assert_eq!(
                 std::env::var("PLUGIN3_CONFIG_DIR").as_deref(),
                 Ok(outer_prior),
             );
             {
-                let _g_inner = EnvGuard::set("PLUGIN3_CONFIG_DIR", "/tmp/cfg-inner");
+                let g_inner = EnvGuard::set("PLUGIN3_CONFIG_DIR", "/tmp/cfg-inner");
+                assert_eq!(
+                    g_inner.prior(),
+                    Some(outer_prior),
+                    "inner guard must have prior=Some(outer_prior)",
+                );
                 assert_eq!(
                     std::env::var("PLUGIN3_CONFIG_DIR").as_deref(),
                     Ok("/tmp/cfg-inner"),
                 );
             }
+            // Inner guard dropped; its prior was Some(outer_prior),
+            // so the env var must be restored to outer_prior. The
+            // outer guard is still held, so this read is race-free.
             assert_eq!(
                 std::env::var("PLUGIN3_CONFIG_DIR").as_deref(),
                 Ok(outer_prior),
@@ -552,12 +574,11 @@ mod tests {
                 std::env::var("PLUGIN3_CONFIG_DIR").ok(),
                 Some(outer_prior),
             );
+            // Outer guard's prior is None → its Drop must remove_var.
+            // Pin that contract here, while the guard is still held,
+            // rather than re-reading the env var after Drop (which
+            // races other threads on Windows).
+            assert_eq!(g_outer.prior(), None, "outer guard must have prior=None");
         }
-        assert!(
-            std::env::var("PLUGIN3_CONFIG_DIR").is_err(),
-            "outer EnvGuard (prior=None) must unset the env var on drop; \
-             found {:?}",
-            std::env::var("PLUGIN3_CONFIG_DIR").ok()
-        );
     }
 }

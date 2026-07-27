@@ -212,4 +212,160 @@ mod tests {
             "expected HTTP-layer error, got {outcome:?}"
         );
     }
+
+    #[test]
+    fn def_lists_query_as_required() {
+        let tool = WebSearch::new();
+        let def = tool.def();
+        let required = def
+            .parameters
+            .get("required")
+            .and_then(|r| r.as_array())
+            .expect("required array");
+        assert!(required.iter().any(|v| v.as_str() == Some("query")));
+    }
+
+    #[test]
+    fn with_key_sets_non_empty_api_key() {
+        let tool = WebSearch::with_key("dummy-key");
+        assert!(tool.api_key.is_some());
+        assert_eq!(tool.api_key.as_deref(), Some("dummy-key"));
+    }
+
+    #[tokio::test]
+    async fn empty_api_key_treated_as_unconfigured() {
+        std::env::remove_var("BRAVE_SEARCH_API_KEY");
+        let tool = WebSearch::with_key("");
+        let outcome = tool
+            .run(&ToolContext::new(), serde_json::json!({"query": "rust"}))
+            .await;
+        match outcome {
+            ToolOutcome::Error { message } => assert!(message.contains("BRAVE_SEARCH_API_KEY"), "{message}"),
+            other => panic!("expected Error for empty key, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn missing_query_arg_is_invalid_args() {
+        let tool = WebSearch::with_key("dummy");
+        let outcome = tool
+            .run(&ToolContext::new(), serde_json::json!({}))
+            .await;
+        assert!(
+            matches!(outcome, ToolOutcome::Failure(crate::shared::ToolError::InvalidArgs { .. })),
+            "got {outcome:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn count_below_minimum_is_clamped_to_one() {
+        let tool = WebSearch::with_key("dummy");
+        let outcome = tool
+            .run(
+                &ToolContext::new(),
+                serde_json::json!({"query": "rust", "count": 0}),
+            )
+            .await;
+        assert!(
+            matches!(outcome, ToolOutcome::Error { .. }),
+            "expected HTTP-layer error (count clamped, request issued), got {outcome:?}"
+        );
+    }
+
+    #[test]
+    fn format_results_empty_returns_no_results_message() {
+        let msg = format_results(&[]);
+        assert_eq!(msg, "No results found.");
+    }
+
+    #[test]
+    fn format_results_single_result_has_index_and_title() {
+        let result = BraveResult {
+            title: "Title One".into(),
+            url: "https://example.com".into(),
+            description: "A description".into(),
+        };
+        let out = format_results(&[result]);
+        assert!(out.contains("Found 1 result(s):"), "got: {out}");
+        assert!(out.contains("1. Title One"));
+        assert!(out.contains("URL: https://example.com"));
+        assert!(out.contains("A description"));
+    }
+
+    #[test]
+    fn format_results_multiple_results_have_increasing_indices() {
+        let results = vec![
+            BraveResult {
+                title: "First".into(),
+                url: "https://a.com".into(),
+                description: "d1".into(),
+            },
+            BraveResult {
+                title: "Second".into(),
+                url: "https://b.com".into(),
+                description: "d2".into(),
+            },
+        ];
+        let out = format_results(&results);
+        assert!(out.contains("Found 2 result(s):"), "got: {out}");
+        assert!(out.contains("1. First"));
+        assert!(out.contains("2. Second"));
+    }
+
+    #[test]
+    fn format_results_with_empty_description_keeps_index_and_url() {
+        let result = BraveResult {
+            title: "T".into(),
+            url: "https://x.com".into(),
+            description: String::new(),
+        };
+        let out = format_results(&[result]);
+        assert!(out.contains("1. T"));
+        assert!(out.contains("URL: https://x.com"));
+    }
+
+    #[test]
+    fn brave_response_default_web_is_empty_results() {
+        let raw = r#"{}"#;
+        let parsed: BraveResponse = serde_json::from_str(raw).unwrap();
+        assert!(parsed.web.results.is_empty());
+    }
+
+    #[test]
+    fn brave_response_parses_results_with_default_description() {
+        let raw = r#"{
+            "web": {
+                "results": [
+                    {"title": "A", "url": "https://a.com"}
+                ]
+            }
+        }"#;
+        let parsed: BraveResponse = serde_json::from_str(raw).unwrap();
+        assert_eq!(parsed.web.results.len(), 1);
+        assert_eq!(parsed.web.results[0].title, "A");
+        assert_eq!(parsed.web.results[0].url, "https://a.com");
+        assert_eq!(parsed.web.results[0].description, "");
+    }
+
+    #[test]
+    fn brave_response_parses_multiple_results() {
+        let raw = r#"{
+            "web": {
+                "results": [
+                    {"title": "A", "url": "https://a.com", "description": "da"},
+                    {"title": "B", "url": "https://b.com", "description": "db"}
+                ]
+            }
+        }"#;
+        let parsed: BraveResponse = serde_json::from_str(raw).unwrap();
+        assert_eq!(parsed.web.results.len(), 2);
+        assert_eq!(parsed.web.results[1].title, "B");
+    }
+
+    #[test]
+    fn brave_result_with_missing_description_defaults_to_empty() {
+        let raw = r#"{"title":"x","url":"https://y.com"}"#;
+        let parsed: BraveResult = serde_json::from_str(raw).unwrap();
+        assert_eq!(parsed.description, "");
+    }
 }

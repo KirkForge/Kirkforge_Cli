@@ -365,9 +365,15 @@ mod tests {
             "cache unexpectedly contains the test path before minify_source"
         );
 
-        // Touch the file to make sure mtime is current and unique
-        // to this test (avoids a stale mtime colliding with a
-        // previous test that used the same temp filename).
+        // Write the final content and minify in one step so the
+        // mtime `minify_source` caches matches the mtime
+        // `cache_contains` reads. The previous version wrote the
+        // file twice (two different mtimes); on Windows the mtime
+        // resolution is fine enough that the two writes produce
+        // different mtime seconds, so the cache entry (keyed on
+        // the first write's mtime) didn't match the lookup (keyed
+        // on the second write's mtime). Writing once + minifying
+        // once removes the race.
         std::fs::write(&tmp, "x = 1 # comment v2").unwrap();
         let _ = minify_source(&tmp, "x = 1 # comment v2");
 

@@ -327,4 +327,256 @@ mod tests {
             "print('hello')\n"
         );
     }
+
+    #[tokio::test]
+    async fn missing_path_arg_is_invalid_args() {
+        let tool = NotebookEdit::new(None, guard());
+        let outcome = tool
+            .run(&ToolContext::default(), serde_json::json!({"index": 0, "source": "x"}))
+            .await;
+        match outcome {
+            ToolOutcome::Failure(ToolError::InvalidArgs { message }) => {
+                assert!(message.contains("Missing 'path'"), "got {message}");
+            }
+            other => panic!("expected InvalidArgs, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn missing_index_arg_is_invalid_args() {
+        let (_dir, path, _nb) = make_notebook();
+        let tool = NotebookEdit::new(None, guard());
+        let outcome = tool
+            .run(
+                &ToolContext::default(),
+                serde_json::json!({ "path": path, "source": "x" }),
+            )
+            .await;
+        match outcome {
+            ToolOutcome::Failure(ToolError::InvalidArgs { message }) => {
+                assert!(message.contains("non-negative integer"), "got {message}");
+            }
+            other => panic!("expected InvalidArgs, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn missing_source_arg_is_invalid_args() {
+        let (_dir, path, _nb) = make_notebook();
+        let tool = NotebookEdit::new(None, guard());
+        let outcome = tool
+            .run(
+                &ToolContext::default(),
+                serde_json::json!({ "path": path, "index": 0 }),
+            )
+            .await;
+        match outcome {
+            ToolOutcome::Failure(ToolError::InvalidArgs { message }) => {
+                assert!(message.contains("'source'"), "got {message}");
+            }
+            other => panic!("expected InvalidArgs, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn source_array_with_non_string_entry_is_invalid_args() {
+        let (_dir, path, _nb) = make_notebook();
+        let tool = NotebookEdit::new(None, guard());
+        let outcome = tool
+            .run(
+                &ToolContext::default(),
+                serde_json::json!({
+                    "path": path,
+                    "index": 0,
+                    "source": ["valid", 123]
+                }),
+            )
+            .await;
+        match outcome {
+            ToolOutcome::Failure(ToolError::InvalidArgs { message }) => {
+                assert!(message.contains("only strings"), "got {message}");
+            }
+            other => panic!("expected InvalidArgs, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn source_with_wrong_type_is_invalid_args() {
+        let (_dir, path, _nb) = make_notebook();
+        let tool = NotebookEdit::new(None, guard());
+        let outcome = tool
+            .run(
+                &ToolContext::default(),
+                serde_json::json!({
+                    "path": path,
+                    "index": 0,
+                    "source": 42
+                }),
+            )
+            .await;
+        match outcome {
+            ToolOutcome::Failure(ToolError::InvalidArgs { message }) => {
+                assert!(message.contains("'source'"), "got {message}");
+            }
+            other => panic!("expected InvalidArgs, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn nonexistent_notebook_returns_internal_error() {
+        let tool = NotebookEdit::new(None, guard());
+        let outcome = tool
+            .run(
+                &ToolContext::default(),
+                serde_json::json!({
+                    "path": "/nonexistent/kirkforge/no_such.ipynb",
+                    "index": 0,
+                    "source": "x"
+                }),
+            )
+            .await;
+        match outcome {
+            ToolOutcome::Failure(ToolError::Internal { message }) => {
+                assert!(message.contains("failed to read notebook"), "got {message}");
+            }
+            other => panic!("expected Internal error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn invalid_json_notebook_returns_internal_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bad.ipynb");
+        std::fs::write(&path, b"this is { not valid json").unwrap();
+        let tool = NotebookEdit::new(None, guard());
+        let outcome = tool
+            .run(
+                &ToolContext::default(),
+                serde_json::json!({
+                    "path": path,
+                    "index": 0,
+                    "source": "x"
+                }),
+            )
+            .await;
+        match outcome {
+            ToolOutcome::Failure(ToolError::Internal { message }) => {
+                assert!(message.contains("not valid JSON"), "got {message}");
+            }
+            other => panic!("expected Internal error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn notebook_without_cells_array_returns_internal_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nocells.ipynb");
+        std::fs::write(
+            &path,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "metadata": {},
+                "nbformat": 4,
+                "nbformat_minor": 5
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let tool = NotebookEdit::new(None, guard());
+        let outcome = tool
+            .run(
+                &ToolContext::default(),
+                serde_json::json!({ "path": path, "index": 0, "source": "x" }),
+            )
+            .await;
+        match outcome {
+            ToolOutcome::Failure(ToolError::Internal { message }) => {
+                assert!(message.contains("'cells' array"), "got {message}");
+            }
+            other => panic!("expected Internal error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn edits_cell_that_has_no_source_field_adds_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nosource.ipynb");
+        let notebook = serde_json::json!({
+            "cells": [
+                { "cell_type": "code", "metadata": {} }
+            ],
+            "metadata": {},
+            "nbformat": 4,
+            "nbformat_minor": 5
+        });
+        std::fs::write(&path, serde_json::to_vec_pretty(&notebook).unwrap()).unwrap();
+
+        let tool = NotebookEdit::new(None, guard());
+        let outcome = tool
+            .run(
+                &ToolContext::default(),
+                serde_json::json!({ "path": path, "index": 0, "source": "new" }),
+            )
+            .await;
+        assert!(matches!(outcome, ToolOutcome::Success { .. }), "got {outcome:?}");
+        let updated: serde_json::Value =
+            serde_json::from_slice(&tokio::fs::read(&path).await.unwrap()).unwrap();
+        let source = updated["cells"][0]["source"].as_array().unwrap();
+        assert_eq!(source.len(), 1);
+        assert_eq!(source[0].as_str().unwrap(), "new");
+    }
+
+    #[tokio::test]
+    async fn dry_run_with_missing_index_still_returns_invalid_args() {
+        let (_dir, path, _nb) = make_notebook();
+        let tool = NotebookEdit::new(None, guard());
+        let outcome = tool
+            .run(
+                &ToolContext::with_dry_run(true),
+                serde_json::json!({ "path": path, "source": "x" }),
+            )
+            .await;
+        assert!(
+            matches!(outcome, ToolOutcome::Failure(ToolError::InvalidArgs { .. })),
+            "dry-run does not skip arg validation, got {outcome:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn dry_run_message_includes_index_and_line_count() {
+        let (_dir, path, _nb) = make_notebook();
+        let tool = NotebookEdit::new(None, guard());
+        let outcome = tool
+            .run(
+                &ToolContext::with_dry_run(true),
+                serde_json::json!({
+                    "path": path,
+                    "index": 1,
+                    "source": ["line one", "line two"]
+                }),
+            )
+            .await;
+        match outcome {
+            ToolOutcome::Success { content } => {
+                assert!(content.contains("Dry run"), "got: {content}");
+                assert!(content.contains("cell 1"), "got: {content}");
+                assert!(content.contains("2 source line(s)"), "got: {content}");
+            }
+            other => panic!("expected Success, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn def_has_correct_name_and_required_args() {
+        let tool = NotebookEdit::new(None, guard());
+        let def = tool.def();
+        assert_eq!(def.name, "notebook_edit");
+        let required = def
+            .parameters
+            .get("required")
+            .and_then(|r| r.as_array())
+            .expect("required array");
+        assert!(required.iter().any(|v| v.as_str() == Some("path")));
+        assert!(required.iter().any(|v| v.as_str() == Some("index")));
+        assert!(required.iter().any(|v| v.as_str() == Some("source")));
+    }
 }

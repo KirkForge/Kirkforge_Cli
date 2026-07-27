@@ -387,4 +387,201 @@ mod tests {
         interpolate_vars(&mut wf, &HashMap::new());
         assert_eq!(wf.steps[0].prompt, "do ${thing}");
     }
+
+    #[test]
+    fn interpolate_vars_replaces_multiple_known_tokens() {
+        let mut wf = Workflow {
+            name: "x".into(),
+            steps: vec![kirkforge_workflow::Step {
+                name: "a".into(),
+                prompt: "do ${thing} then ${other}".into(),
+                persona: "explore".into(),
+                depends_on: vec![],
+                critique: None,
+            }],
+        };
+        let mut vars = HashMap::new();
+        vars.insert("thing".to_string(), "X".to_string());
+        vars.insert("other".to_string(), "Y".to_string());
+        interpolate_vars(&mut wf, &vars);
+        assert_eq!(wf.steps[0].prompt, "do X then Y");
+    }
+
+    #[test]
+    fn interpolate_vars_applies_to_every_step() {
+        let mut wf = Workflow {
+            name: "wf".into(),
+            steps: vec![
+                kirkforge_workflow::Step {
+                    name: "a".into(),
+                    prompt: "step a ${v}".into(),
+                    persona: "explore".into(),
+                    depends_on: vec![],
+                    critique: None,
+                },
+                kirkforge_workflow::Step {
+                    name: "b".into(),
+                    prompt: "step b ${v}".into(),
+                    persona: "plan".into(),
+                    depends_on: vec![],
+                    critique: None,
+                },
+            ],
+        };
+        let mut vars = HashMap::new();
+        vars.insert("v".to_string(), "VALUE".to_string());
+        interpolate_vars(&mut wf, &vars);
+        assert_eq!(wf.steps[0].prompt, "step a VALUE");
+        assert_eq!(wf.steps[1].prompt, "step b VALUE");
+    }
+
+    #[test]
+    fn interpolate_vars_repeated_token_in_same_prompt_is_replaced_each_time() {
+        let mut wf = Workflow {
+            name: "x".into(),
+            steps: vec![kirkforge_workflow::Step {
+                name: "a".into(),
+                prompt: "${x} and ${x} again".into(),
+                persona: "explore".into(),
+                depends_on: vec![],
+                critique: None,
+            }],
+        };
+        let mut vars = HashMap::new();
+        vars.insert("x".to_string(), "V".to_string());
+        interpolate_vars(&mut wf, &vars);
+        assert_eq!(wf.steps[0].prompt, "V and V again");
+    }
+
+    #[test]
+    fn summary_to_json_sorts_step_names_alphabetically() {
+        let mut summary = kirkforge_workflow::WorkflowSummary {
+            workflow_name: "wf".into(),
+            outputs: std::collections::HashMap::new(),
+        };
+        summary.outputs.insert(
+            "zebra".into(),
+            kirkforge_workflow::StepOutput {
+                name: "zebra".into(),
+                persona: "explore".into(),
+                summary: "z summary".into(),
+                critique: None,
+            },
+        );
+        summary.outputs.insert(
+            "apple".into(),
+            kirkforge_workflow::StepOutput {
+                name: "apple".into(),
+                persona: "plan".into(),
+                summary: "a summary".into(),
+                critique: None,
+            },
+        );
+        let json = summary_to_json(&summary);
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["workflow"], "wf");
+        assert_eq!(parsed["steps"][0]["name"], "apple");
+        assert_eq!(parsed["steps"][1]["name"], "zebra");
+    }
+
+    #[test]
+    fn summary_to_json_includes_critique_field_when_present() {
+        let mut summary = kirkforge_workflow::WorkflowSummary {
+            workflow_name: "wf".into(),
+            outputs: std::collections::HashMap::new(),
+        };
+        summary.outputs.insert(
+            "s".into(),
+            kirkforge_workflow::StepOutput {
+                name: "s".into(),
+                persona: "plan".into(),
+                summary: "summary".into(),
+                critique: Some("the critique".into()),
+            },
+        );
+        let json = summary_to_json(&summary);
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["steps"][0]["critique"], "the critique");
+    }
+
+    #[test]
+    fn summary_to_json_critique_is_null_when_absent() {
+        let mut summary = kirkforge_workflow::WorkflowSummary {
+            workflow_name: "wf".into(),
+            outputs: std::collections::HashMap::new(),
+        };
+        summary.outputs.insert(
+            "s".into(),
+            kirkforge_workflow::StepOutput {
+                name: "s".into(),
+                persona: "plan".into(),
+                summary: "summary".into(),
+                critique: None,
+            },
+        );
+        let json = summary_to_json(&summary);
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(parsed["steps"][0]["critique"].is_null(), "got: {parsed}");
+    }
+
+    #[test]
+    fn summary_to_json_empty_outputs_returns_empty_array() {
+        let summary = kirkforge_workflow::WorkflowSummary {
+            workflow_name: "wf".into(),
+            outputs: std::collections::HashMap::new(),
+        };
+        let json = summary_to_json(&summary);
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["workflow"], "wf");
+        assert!(parsed["steps"].as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn empty_template_arg_is_failure() {
+        let t = WorkflowTool::new();
+        let ctx = ToolContext::new();
+        let out = t
+            .run(&ctx, serde_json::json!({"template": "  "}))
+            .await;
+        assert!(
+            matches!(out, ToolOutcome::Failure(ToolError::InvalidArgs { .. })),
+            "got {out:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn missing_template_key_is_failure() {
+        let t = WorkflowTool::new();
+        let ctx = ToolContext::new();
+        let out = t.run(&ctx, serde_json::json!({"vars": {"x": "y"}})).await;
+        assert!(
+            matches!(out, ToolOutcome::Failure(ToolError::InvalidArgs { .. })),
+            "got {out:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn vars_with_non_string_values_are_filtered_out() {
+        let t = WorkflowTool::new();
+        let ctx = ToolContext::new();
+        let out = t
+            .run(
+                &ctx,
+                serde_json::json!({
+                    "template": "demo",
+                    "vars": {"good": "str", "bad": 123, "alsobad": [1, 2]}
+                }),
+            )
+            .await;
+        assert!(
+            matches!(out, ToolOutcome::Error { .. }),
+            "got {out:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn default_impl_produces_workflow_tool() {
+        let tool = WorkflowTool::default();
+        assert_eq!(tool.def().name, "workflow_run");
+    }
 }

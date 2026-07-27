@@ -104,3 +104,42 @@ impl ModelAdapter for DeepSeekAdapter {
         Ok(rx)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deepseek_model_info_is_correct() {
+        let adapter = DeepSeekAdapter::new("http://localhost:11434", "deepseek-v4", 120);
+        let info = adapter.model_info();
+        assert_eq!(info.name, "deepseek-v4");
+        assert!(info.supports_thinking);
+        assert_eq!(info.tool_call_format, ToolCallStyle::Native);
+        assert_eq!(info.max_context_tokens, 64_000);
+        assert!(!info.supports_images);
+        assert!(!info.supports_cache);
+    }
+
+    #[test]
+    fn deepseek_constructor_strips_trailing_slash() {
+        let adapter = DeepSeekAdapter::new("http://localhost:11434/", "deepseek-v4", 120);
+        assert_eq!(adapter.api_base, "http://localhost:11434");
+    }
+
+    #[test]
+    fn deepseek_set_json_mode_toggles() {
+        let mut adapter = DeepSeekAdapter::new("http://localhost:11434", "deepseek-v4", 120);
+        assert!(!adapter.json_mode);
+        adapter.set_json_mode(true);
+        assert!(adapter.json_mode);
+    }
+
+    #[test]
+    fn deepseek_set_seed_sets_value() {
+        let mut adapter = DeepSeekAdapter::new("http://localhost:11434", "deepseek-v4", 120);
+        assert!(adapter.seed.is_none());
+        adapter.set_seed(Some(42));
+        assert_eq!(adapter.seed, Some(42));
+    }
+}

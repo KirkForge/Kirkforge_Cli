@@ -68,3 +68,85 @@ fn unique_timestamp_nanos() -> u128 {
         .map(|d| d.as_nanos())
         .unwrap_or(0)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Read;
+
+    #[test]
+    fn atomic_write_creates_file_with_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("output.txt");
+        atomic_write(&path, "hello world").unwrap();
+        let mut content = String::new();
+        std::fs::File::open(&path)
+            .unwrap()
+            .read_to_string(&mut content)
+            .unwrap();
+        assert_eq!(content, "hello world");
+    }
+
+    #[test]
+    fn atomic_write_overwrites_existing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("output.txt");
+        std::fs::write(&path, "old content").unwrap();
+        atomic_write(&path, "new content").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "new content");
+    }
+
+    #[test]
+    fn atomic_write_handles_empty_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("empty.txt");
+        atomic_write(&path, "").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "");
+    }
+
+    #[test]
+    fn atomic_write_handles_binary_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("binary.dat");
+        let data: Vec<u8> = (0..=255).collect();
+        atomic_write(&path, &data).unwrap();
+        let read_back = std::fs::read(&path).unwrap();
+        assert_eq!(read_back, data);
+    }
+
+    #[test]
+    fn atomic_write_fails_for_nonexistent_parent() {
+        let path = std::path::PathBuf::from("/nonexistent/dir/file.txt");
+        assert!(atomic_write(&path, "content").is_err());
+    }
+
+    #[test]
+    fn atomic_write_leaves_no_temp_file_on_success() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("clean.txt");
+        atomic_write(&path, "content").unwrap();
+        let entries: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .collect();
+        assert_eq!(
+            entries.len(),
+            1,
+            "only the target file should exist, no leftover .tmp files"
+        );
+        assert_eq!(entries[0], path);
+    }
+
+    #[test]
+    fn unique_counter_is_monotonic() {
+        let a = unique_counter();
+        let b = unique_counter();
+        assert!(b > a, "counter must be monotonic: {a} -> {b}");
+    }
+
+    #[test]
+    fn unique_timestamp_nanos_is_nonzero() {
+        let ts = unique_timestamp_nanos();
+        assert!(ts > 0, "timestamp should be nonzero on real hardware");
+    }
+}

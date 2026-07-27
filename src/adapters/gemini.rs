@@ -96,3 +96,32 @@ impl ModelAdapter for GeminiAdapter {
         Ok(rx)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gemini_model_info_is_correct() {
+        let adapter = GeminiAdapter::new("http://localhost:11434", "gemini-3.0-flash", 120);
+        let info = adapter.model_info();
+        assert_eq!(info.name, "gemini-3.0-flash");
+        assert!(!info.supports_thinking);
+        assert!(info.supports_images);
+        assert!(!info.supports_cache);
+    }
+
+    #[test]
+    fn gemini_constructor_strips_trailing_slash() {
+        let adapter = GeminiAdapter::new("http://localhost:11434/", "gemini-3.0-flash", 120);
+        assert_eq!(adapter.api_base, "http://localhost:11434");
+    }
+
+    #[test]
+    fn gemini_set_json_mode_toggles() {
+        let mut adapter = GeminiAdapter::new("http://localhost:11434", "gemini-3.0-flash", 120);
+        assert!(!adapter.json_mode);
+        adapter.set_json_mode(true);
+        assert!(adapter.json_mode);
+    }
+}

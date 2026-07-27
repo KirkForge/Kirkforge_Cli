@@ -98,3 +98,39 @@ impl ModelAdapter for GlmAdapter {
         Ok(rx)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn glm_model_info_is_correct() {
+        let adapter = GlmAdapter::new("http://localhost:11434", "glm-5.1", 120);
+        let info = adapter.model_info();
+        assert_eq!(info.name, "glm-5.1");
+        assert!(info.supports_thinking);
+        assert!(!info.supports_cache);
+    }
+
+    #[test]
+    fn glm_constructor_strips_trailing_slash() {
+        let adapter = GlmAdapter::new("http://localhost:11434/", "glm-5.1", 120);
+        assert_eq!(adapter.api_base, "http://localhost:11434");
+    }
+
+    #[test]
+    fn glm_set_json_mode_toggles() {
+        let mut adapter = GlmAdapter::new("http://localhost:11434", "glm-5.1", 120);
+        assert!(!adapter.json_mode);
+        adapter.set_json_mode(true);
+        assert!(adapter.json_mode);
+    }
+
+    #[test]
+    fn glm_set_seed_sets_value() {
+        let mut adapter = GlmAdapter::new("http://localhost:11434", "glm-5.1", 120);
+        assert!(adapter.seed.is_none());
+        adapter.set_seed(Some(123));
+        assert_eq!(adapter.seed, Some(123));
+    }
+}

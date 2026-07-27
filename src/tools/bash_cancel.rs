@@ -51,3 +51,45 @@ impl Tool for BashCancel {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bash_cancel_def_has_correct_name() {
+        let tool = BashCancel;
+        let def = tool.def();
+        assert_eq!(def.name, "bash_cancel");
+    }
+
+    #[test]
+    fn bash_cancel_def_has_id_parameter() {
+        let tool = BashCancel;
+        let def = tool.def();
+        let params = def.parameters.as_object().unwrap();
+        assert!(params.get("properties").unwrap().get("id").is_some());
+        assert!(params
+            .get("required")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("id")));
+    }
+
+    #[tokio::test]
+    async fn bash_cancel_missing_id_returns_failure() {
+        let tool = BashCancel;
+        let ctx = ToolContext::default();
+        let result = tool.run(&ctx, serde_json::json!({})).await;
+        assert!(matches!(result, ToolOutcome::Failure(_)));
+    }
+
+    #[tokio::test]
+    async fn bash_cancel_nonexistent_job_returns_failure() {
+        let tool = BashCancel;
+        let ctx = ToolContext::default();
+        let result = tool.run(&ctx, serde_json::json!({"id": 99999})).await;
+        assert!(matches!(result, ToolOutcome::Failure(_)));
+    }
+}

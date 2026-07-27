@@ -44,6 +44,17 @@ pub(super) struct McpHttpTransport {
     reader_task: tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
     poster_task: tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
     shutdown_tx: Option<oneshot::Sender<()>>,
+    /// MCP session id (WO 10.7). Parsed from the `endpoint` SSE event's
+    /// URL query param or the initial GET response's `Mcp-Session-Id`
+    /// header (MCP streamable-HTTP spec, 2025-06-18 §Session Management).
+    /// When `Some`, the poster adds `Mcp-Session-Id: <id>` to every POST.
+    /// Backward-compatible: if the server never sends a session id, the
+    /// header is omitted (some servers reject unknown headers).
+    session_id: Arc<tokio::sync::Mutex<Option<String>>>,
+    /// Last SSE event id seen by the reader (WO 10.7). Sent as the
+    /// `Last-Event-ID` header on reconnect so the server can replay
+    /// missed events (SSE spec §resumability).
+    last_event_id: Arc<tokio::sync::Mutex<Option<String>>>,
 }
 
 struct HttpRequestEnvelope {
@@ -82,10 +93,17 @@ impl McpHttpTransport {
         let (request_tx, mut request_rx) = mpsc::unbounded_channel::<HttpRequestEnvelope>();
         let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
 
+        let session_id: Arc<tokio::sync::Mutex<Option<String>>> =
+            Arc::new(tokio::sync::Mutex::new(None));
+        let last_event_id: Arc<tokio::sync::Mutex<Option<String>>> =
+            Arc::new(tokio::sync::Mutex::new(None));
+
         // SSE reader task.
         let alive_for_reader = alive.clone();
         let pending_for_reader = pending.clone();
         let client_for_reader = client.clone();
+        let session_id_for_reader = session_id.clone();
+        let last_event_id_for_reader = last_event_id.clone();
         let reader_task = tokio::spawn(async move {
             let _ = run_sse_reader(
                 client_for_reader,
@@ -93,6 +111,8 @@ impl McpHttpTransport {
                 pending_for_reader,
                 alive_for_reader,
                 &mut shutdown_rx,
+                session_id_for_reader,
+                last_event_id_for_reader,
             )
             .await;
         });
@@ -100,10 +120,18 @@ impl McpHttpTransport {
         // Poster task: consumes outbound request envelopes and POSTs them.
         let client_for_poster = client.clone();
         let pending_for_poster = pending.clone();
+        let session_id_for_poster = session_id.clone();
         let poster_task = tokio::spawn(async move {
             while let Some(envelope) = request_rx.recv().await {
-                let resp =
-                    post_request(&client_for_poster, &post_url, &envelope.body, &envelope.id).await;
+                let session_id_val = session_id_for_poster.lock().await.clone();
+                let resp = post_request(
+                    &client_for_poster,
+                    &post_url,
+                    &envelope.body,
+                    &envelope.id,
+                    session_id_val.as_deref(),
+                )
+                .await;
                 // The SSE reader will route the real response; the POST
                 // response itself is only a transport acknowledgment. We
                 // still surface POST-level errors immediately so callers
@@ -129,6 +157,8 @@ impl McpHttpTransport {
             reader_task: tokio::sync::Mutex::new(Some(reader_task)),
             poster_task: tokio::sync::Mutex::new(Some(poster_task)),
             shutdown_tx: Some(shutdown_tx),
+            session_id,
+            last_event_id,
         };
 
         let init_req = serde_json::json!({
@@ -384,16 +414,21 @@ async fn post_request(
     url: &str,
     body: &str,
     id: &str,
+    session_id: Option<&str>,
 ) -> Result<(), McpError> {
-    let request = client
+    let mut request = client
         .post(url)
         .header("content-type", "application/json")
         .header("accept", "application/json")
         .body(body.to_string());
-    // The SSE endpoint returns the endpoint URL via an `endpoint` event and
-    // the spec recommends sending an `Mcp-Session-Id` header once it is known.
-    // We do not yet track session ids in this minimal implementation; the server
-    // is expected to route by the open SSE connection.
+    // WO 10.7: send Mcp-Session-Id on every POST when the server
+    // provided one (MCP streamable-HTTP spec, 2025-06-18 §Session
+    // Management). Backward-compatible: if the server never sent a
+    // session id, the header is omitted (some servers reject unknown
+    // headers).
+    if let Some(sid) = session_id {
+        request = request.header("mcp-session-id", sid);
+    }
     let resp = match tokio::time::timeout(REQUEST_TIMEOUT, request.send()).await {
         Ok(Ok(r)) => r,
         Ok(Err(e)) => return Err(McpError::Io(reqwest_to_io(e))),
@@ -421,113 +456,239 @@ async fn run_sse_reader(
     pending: PendingMap,
     alive: Arc<AtomicBool>,
     shutdown: &mut oneshot::Receiver<()>,
+    session_id: Arc<tokio::sync::Mutex<Option<String>>>,
+    last_event_id: Arc<tokio::sync::Mutex<Option<String>>>,
 ) {
-    let mut buffer: Vec<u8> = Vec::new();
-    let stream = match open_sse_stream(&client, &url).await {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::warn!(url = %url, error = %e, "failed to open MCP SSE stream");
-            McpClient::fail_all_pending(pending).await;
-            alive.store(false, Ordering::SeqCst);
-            return;
-        }
-    };
-
-    let mut stream = stream;
+    // Reconnect-with-backoff loop (WO 10.7). When the SSE stream drops,
+    // reconnect with the session id + Last-Event-ID header so the server
+    // can resume. Backoff: 1s, 2s, 5s, 10s, 30s, max 5 retries.
+    const BACKOFF_SCHEDULE: &[u64] = &[1, 2, 5, 10, 30];
+    const MAX_RETRIES: usize = 5;
+    let mut attempt: usize = 0;
     loop {
-        let chunk_result = tokio::select! {
-            biased;
-            _ = &mut *shutdown => {
-                tracing::debug!("MCP HTTP reader shutting down");
-                break;
+        let last_eid = last_event_id.lock().await.clone();
+        let (stream, header_session_id) = match open_sse_stream(&client, &url, last_eid.as_deref())
+            .await
+        {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!(url = %url, error = %e, attempt, "failed to open MCP SSE stream");
+                if attempt >= MAX_RETRIES {
+                    McpClient::fail_all_pending(pending.clone()).await;
+                    alive.store(false, Ordering::SeqCst);
+                    return;
+                }
+                let delay = BACKOFF_SCHEDULE[attempt.min(BACKOFF_SCHEDULE.len() - 1)];
+                tokio::select! {
+                    _ = &mut *shutdown => return,
+                    _ = tokio::time::sleep(Duration::from_secs(delay)) => {}
+                }
+                attempt += 1;
+                continue;
             }
-            result = stream.next() => result,
         };
 
-        let bytes = match chunk_result {
-            Some(Ok(b)) => b,
-            Some(Err(e)) => {
-                tracing::warn!(url = %url, error = %e, "MCP SSE stream error");
-                break;
+        // The server MAY send Mcp-Session-Id on the initial GET response
+        // (new streamable-HTTP transport) or via the `endpoint` event
+        // (old HTTP+SSE transport, as a URL query param). Capture the
+        // header-derived id here; the `endpoint` event handler below
+        // overwrites it if the server provides one in the URL.
+        if let Some(hid) = header_session_id {
+            let mut guard = session_id.lock().await;
+            if guard.is_none() {
+                *guard = Some(hid);
             }
-            None => {
-                tracing::debug!(url = %url, "MCP SSE stream closed");
-                break;
-            }
-        };
-
-        buffer.extend_from_slice(&bytes);
-        if buffer.len() > MAX_SSE_BUFFER_BYTES {
-            tracing::warn!("MCP SSE buffer exceeded limit; disconnecting");
-            break;
         }
 
-        while let Some(start) = find_subseq(&buffer, b"data: ") {
-            let after_start = start + 6;
-            let after = &buffer[after_start..];
-            let sep = [
-                b"\n\n".as_slice(),
-                b"\r\n\r\n".as_slice(),
-                b"\r\r".as_slice(),
-            ]
-            .iter()
-            .filter_map(|t| find_subseq(after, t).map(|i| (i, t.len())))
-            .min_by_key(|(i, _)| *i);
-            let Some((sep_idx, term_len)) = sep else {
-                break;
+        attempt = 0; // reset backoff after a successful connect
+        let mut stream = stream;
+        let mut buffer: Vec<u8> = Vec::new();
+        // SSE event fields accumulate across lines until a blank-line
+        // dispatch. The old transport's `endpoint` event carries the
+        // POST URL (and optionally a session_id query param); `id:`
+        // lines carry the SSE event id for resumability.
+        let mut current_event_type: Option<String> = None;
+        let mut current_data: Vec<String> = Vec::new();
+        let mut current_id: Option<String> = None;
+
+        loop {
+            let chunk_result = tokio::select! {
+                biased;
+                _ = &mut *shutdown => {
+                    tracing::debug!("MCP HTTP reader shutting down");
+                    McpClient::fail_all_pending(pending.clone()).await;
+                    alive.store(false, Ordering::SeqCst);
+                    return;
+                }
+                result = stream.next() => result,
             };
-            let payload_end = after_start + sep_idx;
-            let drain_to = payload_end + term_len;
-            let payload = trim_ascii_whitespace(&buffer[after_start..payload_end]).to_vec();
-            buffer.drain(..drain_to);
 
-            if payload.is_empty() {
-                continue;
-            }
-            if payload.len() > MAX_SSE_DATA_LEN {
-                tracing::warn!("MCP SSE data frame exceeded maximum length");
-                continue;
-            }
-
-            let line = match std::str::from_utf8(&payload) {
-                Ok(s) => s,
-                Err(e) => {
-                    tracing::warn!("MCP SSE frame is not valid UTF-8: {e}");
-                    continue;
+            let bytes = match chunk_result {
+                Some(Ok(b)) => b,
+                Some(Err(e)) => {
+                    tracing::warn!(url = %url, error = %e, "MCP SSE stream error");
+                    break;
+                }
+                None => {
+                    tracing::debug!(url = %url, "MCP SSE stream closed");
+                    break;
                 }
             };
 
-            if line == "[DONE]" {
+            buffer.extend_from_slice(&bytes);
+            if buffer.len() > MAX_SSE_BUFFER_BYTES {
+                tracing::warn!("MCP SSE buffer exceeded limit; disconnecting");
                 break;
             }
 
-            let Ok(resp) = serde_json::from_str::<serde_json::Value>(line) else {
-                tracing::debug!(line = %line, "MCP SSE non-JSON data line");
-                continue;
-            };
+            // Parse SSE frames. The SSE spec defines frames as
+            // `field: value\n` lines terminated by a blank line. We
+            // parse line-by-line so we can capture `event:`, `id:`, and
+            // `data:` fields, then dispatch on the blank-line boundary.
+            loop {
+                let Some(nl) = find_subseq(&buffer, b"\n") else {
+                    break; // incomplete line, wait for more bytes
+                };
+                let line_bytes: Vec<u8> = buffer.drain(..nl + 1).collect();
+                let line = String::from_utf8_lossy(&line_bytes).into_owned();
+                let line = line.trim_end_matches('\r');
 
-            let Some(id) = resp.get("id").and_then(json_id_to_string) else {
-                tracing::debug!(response = %resp, "MCP SSE notification without id");
-                continue;
-            };
+                if line.is_empty() {
+                    // Blank line: dispatch the accumulated event.
+                    if !current_data.is_empty() || current_event_type.is_some() {
+                        let data = current_data.join("\n");
+                        current_data.clear();
+                        let ev_type = current_event_type.take();
+                        let ev_id = current_id.take();
 
-            McpClient::dispatch_response(id, resp, &pending, "http").await;
+                        // Track the last event id for resumability.
+                        if let Some(ref id) = ev_id {
+                            *last_event_id.lock().await = Some(id.clone());
+                        }
+
+                        // Handle the `endpoint` event (old transport):
+                        // extract session_id from the URL query param.
+                        if ev_type.as_deref() == Some("endpoint") {
+                            if let Some(sid) = parse_session_id_from_url(&data) {
+                                *session_id.lock().await = Some(sid);
+                            }
+                            // The endpoint URL itself is not needed —
+                            // we POST to the fixed /messages path.
+                            continue;
+                        }
+
+                        if data.is_empty() {
+                            continue;
+                        }
+                        if data.len() > MAX_SSE_DATA_LEN {
+                            tracing::warn!("MCP SSE data frame exceeded maximum length");
+                            continue;
+                        }
+
+                        if data == "[DONE]" {
+                            McpClient::fail_all_pending(pending.clone()).await;
+                            alive.store(false, Ordering::SeqCst);
+                            return;
+                        }
+
+                        let Ok(resp) = serde_json::from_str::<serde_json::Value>(&data) else {
+                            tracing::debug!(line = %data, "MCP SSE non-JSON data line");
+                            continue;
+                        };
+
+                        let Some(id) = resp.get("id").and_then(json_id_to_string) else {
+                            tracing::debug!(response = %resp, "MCP SSE notification without id");
+                            continue;
+                        };
+
+                        McpClient::dispatch_response(id, resp, &pending, "http").await;
+                    }
+                    continue;
+                }
+
+                // Parse `field: value` (SSE spec). A line starting with
+                // `:` is a comment. A line without `:` is a field with
+                // an empty value (ignore).
+                if line.starts_with(':') {
+                    continue;
+                }
+                let (field, value) = if let Some(colon) = line.find(':') {
+                    let f = &line[..colon];
+                    let v = line[colon + 1..]
+                        .strip_prefix(' ')
+                        .unwrap_or(&line[colon + 1..]);
+                    (f, v)
+                } else {
+                    (line, "")
+                };
+
+                match field {
+                    "event" => current_event_type = Some(value.to_string()),
+                    "data" => current_data.push(value.to_string()),
+                    "id" => current_id = Some(value.to_string()),
+                    _ => {} // retry, etc. — ignored
+                }
+            }
+        }
+
+        // The stream dropped. Reconnect if we haven't been shut down and
+        // haven't exhausted retries. The backoff schedule resets to 0 on
+        // a successful connect (above), so a long-lived session that
+        // occasionally drops reconnects quickly.
+        if shutdown.try_recv().is_ok() {
+            McpClient::fail_all_pending(pending.clone()).await;
+            alive.store(false, Ordering::SeqCst);
+            return;
+        }
+        if attempt >= MAX_RETRIES {
+            tracing::warn!(url = %url, attempts = attempt, "MCP SSE reconnect attempts exhausted");
+            McpClient::fail_all_pending(pending.clone()).await;
+            alive.store(false, Ordering::SeqCst);
+            return;
+        }
+        let delay = BACKOFF_SCHEDULE[attempt.min(BACKOFF_SCHEDULE.len() - 1)];
+        tracing::info!(url = %url, attempt, delay_secs = delay, "MCP SSE reconnecting with backoff");
+        tokio::select! {
+            _ = &mut *shutdown => {
+                McpClient::fail_all_pending(pending.clone()).await;
+                alive.store(false, Ordering::SeqCst);
+                return;
+            }
+            _ = tokio::time::sleep(Duration::from_secs(delay)) => {}
+        }
+        attempt += 1;
+    }
+}
+
+/// Extract a `session_id` query param from a URL string (the `endpoint`
+/// SSE event's data payload in the old HTTP+SSE transport). Returns
+/// `None` if the URL has no `session_id` param.
+fn parse_session_id_from_url(url: &str) -> Option<String> {
+    let q = url.split_once('?').map(|(_, q)| q)?;
+    for pair in q.split('&') {
+        let (k, v) = pair.split_once('=')?;
+        if k == "session_id" || k == "sessionId" {
+            return Some(v.to_string());
         }
     }
-
-    McpClient::fail_all_pending(pending).await;
-    alive.store(false, Ordering::SeqCst);
+    None
 }
 
 type SseStream = Box<dyn tokio_stream::Stream<Item = Result<Vec<u8>, McpError>> + Unpin + Send>;
 
-async fn open_sse_stream(client: &reqwest::Client, url: &str) -> Result<SseStream, McpError> {
-    let resp = client
-        .get(url)
-        .header("accept", "text/event-stream")
-        .send()
-        .await
-        .map_err(reqwest_to_io)?;
+async fn open_sse_stream(
+    client: &reqwest::Client,
+    url: &str,
+    last_event_id: Option<&str>,
+) -> Result<(SseStream, Option<String>), McpError> {
+    let mut req = client.get(url).header("accept", "text/event-stream");
+    // WO 10.7: send Last-Event-ID on reconnect so the server can replay
+    // missed events (SSE spec §resumability; MCP streamable-HTTP spec
+    // 2025-06-18 §Resumability and Redelivery).
+    if let Some(eid) = last_event_id {
+        req = req.header("last-event-id", eid);
+    }
+    let resp = req.send().await.map_err(reqwest_to_io)?;
     let status = resp.status();
     if !status.is_success() {
         let body = resp.text().await.unwrap_or_default();
@@ -537,31 +698,26 @@ async fn open_sse_stream(client: &reqwest::Client, url: &str) -> Result<SseStrea
             message: body,
         });
     }
+    // Capture the Mcp-Session-Id header if the server provides one
+    // (new streamable-HTTP transport). The old transport provides it
+    // via the `endpoint` SSE event's URL query param instead.
+    let session_id = resp
+        .headers()
+        .get("mcp-session-id")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
 
     let stream = resp.bytes_stream().map(|res| match res {
         Ok(b) => Ok(b.to_vec()),
         Err(e) => Err(McpError::Io(reqwest_to_io(e))),
     });
-    Ok(Box::new(Box::pin(stream)))
+    Ok((Box::new(Box::pin(stream)), session_id))
 }
 
 fn find_subseq(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack
         .windows(needle.len())
         .position(|window| window == needle)
-}
-
-fn trim_ascii_whitespace(bytes: &[u8]) -> &[u8] {
-    let start = bytes
-        .iter()
-        .position(|&b| !b.is_ascii_whitespace())
-        .unwrap_or(bytes.len());
-    let end = bytes
-        .iter()
-        .rposition(|&b| !b.is_ascii_whitespace())
-        .map(|i| i + 1)
-        .unwrap_or(bytes.len());
-    &bytes[start..end]
 }
 
 #[cfg(test)]
@@ -591,5 +747,214 @@ mod tests {
             matches!(outcome, crate::shared::ToolOutcome::Success { content } if content.contains("image")),
             "expected serialized result for non-text block"
         );
+    }
+
+    // ── WO 10.7: session-id parsing ──
+
+    #[test]
+    fn parse_session_id_from_url_extracts_query_param() {
+        assert_eq!(
+            parse_session_id_from_url("https://example.com/messages?session_id=abc123"),
+            Some("abc123".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_session_id_from_url_extracts_camel_case_param() {
+        assert_eq!(
+            parse_session_id_from_url("https://example.com/messages?sessionId=xyz"),
+            Some("xyz".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_session_id_from_url_returns_none_without_param() {
+        assert_eq!(
+            parse_session_id_from_url("https://example.com/messages"),
+            None
+        );
+        assert_eq!(
+            parse_session_id_from_url("https://example.com/messages?foo=bar"),
+            None
+        );
+    }
+
+    // ── WO 10.7: Mcp-Session-Id header sent on POST ──
+    //
+    // These tests spin up a tiny one-shot HTTP server that captures the
+    // request headers and returns 200, so we can assert the poster adds
+    // the header when a session id is known (and omits it when not).
+
+    /// A minimal HTTP server that accepts one connection, captures the
+    /// `Mcp-Session-Id` header from the POST request, and returns 200.
+    async fn mock_post_server() -> (String, tokio::sync::oneshot::Receiver<Option<String>>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let url = format!("http://{addr}/messages");
+        let (tx, rx) = tokio::sync::oneshot::channel();
+
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 4096];
+            let n = sock.read(&mut buf).await.unwrap();
+            let request = String::from_utf8_lossy(&buf[..n]);
+
+            // Parse the Mcp-Session-Id header from the request.
+            let session_id = request.lines().find_map(|line| {
+                let lower = line.to_ascii_lowercase();
+                if lower.starts_with("mcp-session-id:") {
+                    Some(line["mcp-session-id:".len()..].trim().to_string())
+                } else {
+                    None
+                }
+            });
+
+            let _ = tx.send(session_id);
+
+            let response = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n";
+            sock.write_all(response.as_bytes()).await.unwrap();
+        });
+
+        (url, rx)
+    }
+
+    #[tokio::test]
+    async fn post_request_sends_session_id_header_when_provided() {
+        let (url, rx) = mock_post_server().await;
+        let client = reqwest::Client::new();
+        post_request(&client, &url, "{}", "1", Some("test-session-42"))
+            .await
+            .unwrap();
+        let captured = rx.await.unwrap();
+        assert_eq!(captured, Some("test-session-42".to_string()));
+    }
+
+    #[tokio::test]
+    async fn post_request_omits_session_id_header_when_none() {
+        let (url, rx) = mock_post_server().await;
+        let client = reqwest::Client::new();
+        post_request(&client, &url, "{}", "1", None).await.unwrap();
+        let captured = rx.await.unwrap();
+        assert_eq!(
+            captured, None,
+            "header must be omitted when session id is None"
+        );
+    }
+
+    // ── WO 10.7: Last-Event-ID header sent on reconnect ──
+
+    /// A minimal SSE server that captures the `Last-Event-ID` header
+    /// from the GET request, then closes the stream immediately so the
+    /// reader reconnects.
+    async fn mock_sse_server_last_event_id(
+    ) -> (String, tokio::sync::oneshot::Receiver<Option<String>>) {
+        use tokio::io::AsyncWriteExt;
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let url = format!("http://{addr}/sse");
+        let (tx, rx) = tokio::sync::oneshot::channel();
+
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            use tokio::io::AsyncReadExt;
+            let mut buf = vec![0u8; 4096];
+            let n = sock.read(&mut buf).await.unwrap();
+            let request = String::from_utf8_lossy(&buf[..n]);
+
+            let last_event_id = request.lines().find_map(|line| {
+                let lower = line.to_ascii_lowercase();
+                if lower.starts_with("last-event-id:") {
+                    Some(line["last-event-id:".len()..].trim().to_string())
+                } else {
+                    None
+                }
+            });
+
+            let _ = tx.send(last_event_id);
+
+            // Return a minimal SSE response then close.
+            let response = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n";
+            sock.write_all(response.as_bytes()).await.unwrap();
+            // Drop the socket to close the stream.
+        });
+
+        (url, rx)
+    }
+
+    #[tokio::test]
+    async fn open_sse_stream_sends_last_event_id_header_on_reconnect() {
+        let (url, rx) = mock_sse_server_last_event_id().await;
+        let client = reqwest::Client::new();
+        // Simulate a reconnect: pass a last_event_id.
+        let (_stream, _sid) = open_sse_stream(&client, &url, Some("event-99"))
+            .await
+            .unwrap();
+        let captured = rx.await.unwrap();
+        assert_eq!(
+            captured,
+            Some("event-99".to_string()),
+            "Last-Event-ID header must be sent when reconnecting"
+        );
+    }
+
+    #[tokio::test]
+    async fn open_sse_stream_omits_last_event_id_header_on_first_connect() {
+        let (url, rx) = mock_sse_server_last_event_id().await;
+        let client = reqwest::Client::new();
+        let (_stream, _sid) = open_sse_stream(&client, &url, None).await.unwrap();
+        let captured = rx.await.unwrap();
+        assert_eq!(
+            captured, None,
+            "Last-Event-ID header must be omitted on first connect"
+        );
+    }
+
+    // ── WO 10.7: Mcp-Session-Id captured from GET response header ──
+
+    /// A minimal SSE server that returns an `Mcp-Session-Id` header on
+    /// the initial GET response, then closes the stream.
+    async fn mock_sse_server_with_session_id(session_id: &str) -> String {
+        use tokio::io::AsyncWriteExt;
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let url = format!("http://{addr}/sse");
+        let sid = session_id.to_string();
+
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nMcp-Session-Id: {sid}\r\n\r\n"
+            );
+            sock.write_all(response.as_bytes()).await.unwrap();
+        });
+
+        url
+    }
+
+    #[tokio::test]
+    async fn open_sse_stream_captures_session_id_from_response_header() {
+        let url = mock_sse_server_with_session_id("header-session-7").await;
+        let client = reqwest::Client::new();
+        let (_stream, session_id) = open_sse_stream(&client, &url, None).await.unwrap();
+        assert_eq!(
+            session_id,
+            Some("header-session-7".to_string()),
+            "Mcp-Session-Id header must be captured from the GET response"
+        );
+    }
+
+    #[tokio::test]
+    async fn open_sse_stream_returns_none_session_id_when_absent() {
+        let (url, _rx) = mock_sse_server_last_event_id().await;
+        let client = reqwest::Client::new();
+        let (_stream, session_id) = open_sse_stream(&client, &url, None).await.unwrap();
+        assert_eq!(session_id, None, "no session id when header is absent");
     }
 }

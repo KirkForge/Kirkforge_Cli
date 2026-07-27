@@ -27,6 +27,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   requires full content every request; the server-side KV-cache still
   hits via `cache_control` markers). ADR-052 updated. WO 9.5 status
   corrected to "Done (partial — adapter wiring in WO 10.2)".
+- HTTP MCP session-id tracking + resumable streams (Workorder 10.7):
+  the HTTP/SSE MCP transport now parses the session id from the
+  `endpoint` SSE event's URL query param (old transport) or the
+  `Mcp-Session-Id` GET response header (new streamable-HTTP transport),
+  sends `Mcp-Session-Id` on every POST when known, tracks the last SSE
+  event id and sends `Last-Event-ID` on reconnect, and reconnects with
+  backoff (1s, 2s, 5s, 10s, 30s, max 5 retries). Backward-compatible:
+  servers that do not send a session id or event ids are unaffected.
+  ADR-055. 11 new tests (3 URL-parsing, 2 POST-header, 4 SSE-header, 2
+  existing tool-result tests retained).
 
 ### Changed
 - v0.3.6 release re-shipped (Workorder 10.1): the `v0.3.6` tag was

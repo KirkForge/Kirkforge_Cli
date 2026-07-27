@@ -123,6 +123,51 @@ sandbox hardening, and representative bench tasks.
 - **9.8 (Low)**: Docker already provides process isolation; seccomp/rlimit
   is a lighter-weight path for users who don't want Docker overhead.
 
+### Series 10.0-10.9 — Release Fix, Wiring, and Depth
+
+Workorders 10.0-10.9 address findings from Pass 13 of the rolling review
+(2026-07-27). They target the P0 Windows CI red that blocks the v0.3.6
+release, the WO 9.5 cache-stem-tracker wiring gap, doc-sync and branch-
+hygiene cleanup, and three depth gaps (HTTP MCP session ids, TS
+orchestrator verifier-bus bridge, bench leaderboard publish +
+regression gate).
+
+| # | Workorder | Status | Priority | Depends on |
+|---|---|---|---|---|
+| 10.0 | [Fix Windows env_guard race](10.0-windows-env-guard-race.md) | Done (`4cbcfc3`) | High | — |
+| 10.1 | [Re-ship v0.3.6 release after Windows green](10.1-reship-v0.3.6-release.md) | Done (`v0.3.6` tag → `4cbcfc3`; 6 binaries + sigs published, release run `30239782875` success) | High | 10.0 |
+| 10.2 | [Wire WO 9.5 CacheStemTracker into executor + adapter](10.2-wire-cache-stem-tracker.md) | Done (`3f6e19d`; metric event wired, adapter short-circuit skipped — Anthropic API requires full content) | High | 9.5 |
+| 10.3 | [state.md main-SHA + ADR-count doc sync](10.3-state-md-doc-sync.md) | Done (`378d163`) | Low | — |
+| 10.4 | [Clean up leftover wo/* worktree branches](10.4-cleanup-wo-branches.md) | Done (`378d163`; 8 local + 8 remote `wo/8.*` deleted, 7 stale worktrees removed) | Low | — |
+| 10.5 | [replay.rs sync_all batching](10.5-replay-syncall-batching.md) | Done (`30b55ee`; batch every N turns + Drop flush, 2 new tests) | Low | — |
+| 10.6 | [minify/lang.rs style cleanup + dead-code removal](10.6-minify-lang-cleanup.md) | Done (`38b9c17`; `#![allow(dead_code)]` removed, dead `minify_rust` deleted, comment style fixed) | Low | — |
+| 10.7 | [HTTP MCP: session-id tracking + resumable streams](10.7-http-mcp-session-id.md) | Done (`0b817f9`; `Mcp-Session-Id` + `Last-Event-ID` + reconnect backoff, 11 tests, ADR-055) | Medium | — |
+| 10.8 | [Verifier bus: TS orchestrator → Rust VerifierBus NDJSON bridge](10.8-verifier-bus-ts-bridge.md) | Done (`621d777`; `TsOrchestratorBridgeVerifier` + `bridge-emitter.ts`, integration test, ADR-028 ponytail updated) | Medium | 9.6 |
+| 10.9 | [Bench: leaderboard publish + regression gate + multi-model PR delta](10.9-bench-leaderboard-regression-gate.md) | Done (`bc41e8c`; `--fail-on-regression` flag, `bench-leaderboard` scheduled job with `[skip ci]`) | Medium | 9.2, 8.1 |
+
+### Priority rationale
+
+- **10.0 (High)**: `main` is CI-red on the v0.3.6 release commit. The
+  Windows `env_guard_restores_prior_value_some_branch` test races on
+  the assertion-after-Drop window. A red `main` is a broken product;
+  this blocks 10.1 (the release cannot ship until CI is green).
+- **10.1 (High)**: v0.3.6 is tagged but the Release workflow failed
+  (its `Verify main CI is green` gate failed because the Windows job
+  failed). No release artifacts were published. The WO 9.3 done
+  condition was not checked before marking Done.
+- **10.2 (High)**: WO 9.5 shipped the `CacheStemTracker` struct + 6
+  unit tests + a metric variant, but the tracker is never called from
+  the executor or adapter. The WO 9.5 done condition "adapter skips
+  re-serializing cache-stable stem content" was not met. This WO wires
+  the tracker in and corrects the 9.5 overclaim.
+- **10.7, 10.8, 10.9 (Medium)**: Three depth gaps. HTTP MCP session ids
+  (documented gap at `http.rs:395`); TS orchestrator → Rust
+  VerifierBus NDJSON bridge (the second half of the verifier-bus
+  unification WO 9.6 documented but did not implement); bench
+  leaderboard publish + regression gate (the P1-long-2 follow-up).
+- **10.3, 10.4, 10.5, 10.6 (Low)**: Doc-sync and hygiene cleanup. Can be
+  batched into a single "doc + perf + cleanup hygiene" commit.
+
 ## Conventions
 
 - Each workorder is a single markdown file named `<number>-<slug>.md`.

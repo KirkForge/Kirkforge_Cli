@@ -254,6 +254,334 @@ mod tests {
         assert!(matches[0].context_after.is_empty());
     }
 
+    #[test]
+    fn find_matches_first_line_has_no_context_before() {
+        let content = "needle here\nsecond line\nthird line";
+        let matches = find_matches(content, "needle", Path::new("test.rs"), 2);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].line_number, 1);
+        assert!(matches[0].context_before.is_empty());
+        assert_eq!(matches[0].context_after.len(), 2);
+        assert!(matches[0].context_after[0].starts_with("2:"));
+    }
+
+    #[test]
+    fn find_matches_returns_multiple_for_multiple_occurrences() {
+        let content = "needle\nother\nneedle\nother\nneedle";
+        let matches = find_matches(content, "needle", Path::new("f.txt"), 0);
+        assert_eq!(matches.len(), 3);
+        assert_eq!(matches[0].line_number, 1);
+        assert_eq!(matches[1].line_number, 3);
+        assert_eq!(matches[2].line_number, 5);
+        for m in &matches {
+            assert!(m.context_before.is_empty());
+            assert!(m.context_after.is_empty());
+        }
+    }
+
+    #[test]
+    fn find_matches_zero_context_lines_still_records_match() {
+        let content = "a\nneedle\nb";
+        let matches = find_matches(content, "needle", Path::new("f.txt"), 0);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].line_number, 2);
+        assert!(matches[0].context_before.is_empty());
+        assert!(matches[0].context_after.is_empty());
+    }
+
+    #[test]
+    fn find_matches_empty_pattern_matches_every_line() {
+        let content = "a\nb\nc";
+        let matches = find_matches(content, "", Path::new("f.txt"), 0);
+        assert_eq!(matches.len(), 3, "empty pattern matches every line");
+    }
+
+    #[test]
+    fn find_matches_no_matches_returns_empty() {
+        let matches = find_matches("a\nb\nc", "zzz", Path::new("f.txt"), 2);
+        assert!(matches.is_empty());
+    }
+
+    #[test]
+    fn is_binary_by_ext_recognizes_known_extensions() {
+        for ext in [
+            "png", "jpg", "jpeg", "gif", "zip", "tar", "gz", "pdf", "mp3", "mp4", "exe", "so",
+            "wasm", "pyc", "class",
+        ] {
+            let path = Path::new(format!("file.{ext}").as_str());
+            assert!(is_binary_by_ext(path), "{ext} should be binary");
+        }
+    }
+
+    #[test]
+    fn is_binary_by_ext_allows_text_extensions() {
+        for ext in ["rs", "py", "js", "ts", "go", "txt", "md", "toml", "json"] {
+            let path = Path::new(format!("file.{ext}").as_str());
+            assert!(!is_binary_by_ext(path), "{ext} should not be binary");
+        }
+    }
+
+    #[test]
+    fn is_binary_by_ext_no_extension_is_not_binary() {
+        assert!(!is_binary_by_ext(Path::new("Makefile")));
+        assert!(!is_binary_by_ext(Path::new("file")));
+    }
+
+    #[test]
+    fn is_binary_content_empty_file_is_not_binary() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("empty.txt");
+        std::fs::write(&path, "").unwrap();
+        assert!(!is_binary_content(&path));
+    }
+
+    #[test]
+    fn is_binary_content_text_file_is_not_binary() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("text.txt");
+        std::fs::write(&path, "hello world\nthis is text\n").unwrap();
+        assert!(!is_binary_content(&path));
+    }
+
+    #[test]
+    fn is_binary_content_null_byte_file_is_binary() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bin.dat");
+        std::fs::write(&path, b"abc\x00def").unwrap();
+        assert!(is_binary_content(&path));
+    }
+
+    #[test]
+    fn is_binary_content_missing_file_returns_false() {
+        assert!(!is_binary_content(Path::new("/nonexistent/kirkforge/file")));
+    }
+
+    #[tokio::test]
+    async fn grep_missing_pattern_arg_is_invalid_args() {
+        let grep = Grep::new(PathGuard::default());
+        let outcome = grep.run(&ToolContext::default(), serde_json::json!({})).await;
+        assert!(
+            matches!(outcome, ToolOutcome::Failure(ToolError::InvalidArgs { .. })),
+            "got {outcome:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn grep_nonexistent_path_is_internal_error() {
+        let grep = Grep::new(PathGuard::default());
+        let args = serde_json::json!({
+            "pattern": "needle",
+            "path": "/nonexistent/kirkforge/path/does/not/exist"
+        });
+        let outcome = grep.run(&ToolContext::default(), args).await;
+        assert!(
+            matches!(outcome, ToolOutcome::Failure(ToolError::Internal { ref message }) if message.contains("Path not found")),
+            "expected Path not found, got {outcome:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn grep_no_matches_returns_success_with_message() {
+        let dir = std::env::temp_dir().join("kirkforge_grep_nomatch_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.txt"), "nothing relevant here\n").unwrap();
+
+        let grep = Grep::new(PathGuard::default());
+        let args = serde_json::json!({
+            "pattern": "needle",
+            "path": dir.to_string_lossy(),
+        });
+        let outcome = grep.run(&ToolContext::default(), args).await;
+        match outcome {
+            ToolOutcome::Success { content } => {
+                assert!(content.contains("No matches found"), "got: {content}");
+                assert!(content.contains("needle"));
+            }
+            other => panic!("expected Success, got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn grep_single_file_match_returns_grep_matches() {
+        let dir = std::env::temp_dir().join("kirkforge_grep_singlefile_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("a.txt");
+        std::fs::write(&path, "line one\nneedle line\nline three\n").unwrap();
+
+        let grep = Grep::new(PathGuard::default());
+        let args = serde_json::json!({
+            "pattern": "needle",
+            "path": path.to_string_lossy(),
+        });
+        let outcome = grep.run(&ToolContext::default(), args).await;
+        match outcome {
+            ToolOutcome::GrepMatches { matches, total, .. } => {
+                assert_eq!(total, 1);
+                assert_eq!(matches.len(), 1);
+                assert_eq!(matches[0].line_number, 2);
+                assert!(matches[0].line.contains("needle"));
+            }
+            other => panic!("expected GrepMatches, got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn grep_skips_binary_files_by_extension() {
+        let dir = std::env::temp_dir().join("kirkforge_grep_skipbinext_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.png"), "needle inside a png\n").unwrap();
+        std::fs::write(dir.join("a.txt"), "needle inside txt\n").unwrap();
+
+        let grep = Grep::new(PathGuard::default());
+        let args = serde_json::json!({
+            "pattern": "needle",
+            "path": dir.to_string_lossy(),
+        });
+        let outcome = grep.run(&ToolContext::default(), args).await;
+        match outcome {
+            ToolOutcome::GrepMatches { matches, .. } => {
+                assert_eq!(matches.len(), 1, "only the .txt should match, got: {matches:?}");
+                assert!(matches[0].line.contains("txt"));
+            }
+            other => panic!("expected GrepMatches, got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn grep_skips_files_larger_than_max() {
+        let dir = std::env::temp_dir().join("kirkforge_grep_bigfile_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let big = "x".repeat(11 * 1024 * 1024);
+        std::fs::write(dir.join("big.txt"), &big).unwrap();
+        std::fs::write(dir.join("small.txt"), "needle small\n").unwrap();
+
+        let grep = Grep::new(PathGuard::default());
+        let args = serde_json::json!({
+            "pattern": "needle",
+            "path": dir.to_string_lossy(),
+        });
+        let outcome = grep.run(&ToolContext::default(), args).await;
+        match outcome {
+            ToolOutcome::GrepMatches { matches, .. } => {
+                assert_eq!(matches.len(), 1);
+                assert!(matches[0].line.contains("small"));
+            }
+            other => panic!("expected GrepMatches, got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn grep_skips_binary_files_by_content() {
+        let dir = std::env::temp_dir().join("kirkforge_grep_bincontent_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.dat"), b"needle\x00\x01\x02").unwrap();
+        std::fs::write(dir.join("a.txt"), "needle text\n").unwrap();
+
+        let grep = Grep::new(PathGuard::default());
+        let args = serde_json::json!({
+            "pattern": "needle",
+            "path": dir.to_string_lossy(),
+        });
+        let outcome = grep.run(&ToolContext::default(), args).await;
+        match outcome {
+            ToolOutcome::GrepMatches { matches, .. } => {
+                assert_eq!(matches.len(), 1, "only the text file should match, got {matches:?}");
+                assert!(matches[0].line.contains("text"));
+            }
+            other => panic!("expected GrepMatches, got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn grep_single_binary_file_returns_internal_error() {
+        let dir = std::env::temp_dir().join("kirkforge_grep_singlebin_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("a.dat");
+        std::fs::write(&path, b"abc\x00def").unwrap();
+
+        let grep = Grep::new(PathGuard::default());
+        let args = serde_json::json!({
+            "pattern": "abc",
+            "path": path.to_string_lossy(),
+        });
+        let outcome = grep.run(&ToolContext::default(), args).await;
+        assert!(
+            matches!(outcome, ToolOutcome::Failure(ToolError::Internal { ref message }) if message.contains("binary file")),
+            "expected binary-file rejection, got {outcome:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn grep_single_oversized_file_returns_internal_error() {
+        let dir = std::env::temp_dir().join("kirkforge_grep_singlebig_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("big.txt");
+        let big = "x".repeat(11 * 1024 * 1024);
+        std::fs::write(&path, &big).unwrap();
+
+        let grep = Grep::new(PathGuard::default());
+        let args = serde_json::json!({
+            "pattern": "x",
+            "path": path.to_string_lossy(),
+        });
+        let outcome = grep.run(&ToolContext::default(), args).await;
+        assert!(
+            matches!(outcome, ToolOutcome::Failure(ToolError::Internal { ref message }) if message.contains("File too large")),
+            "expected too-large rejection, got {outcome:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn grep_context_lines_default_is_two() {
+        let dir = std::env::temp_dir().join("kirkforge_grep_ctxdefault_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.txt"), "l1\nl2\nneedle\nl4\nl5\n").unwrap();
+
+        let grep = Grep::new(PathGuard::default());
+        let args = serde_json::json!({
+            "pattern": "needle",
+            "path": dir.to_string_lossy(),
+        });
+        let outcome = grep.run(&ToolContext::default(), args).await;
+        match outcome {
+            ToolOutcome::GrepMatches { matches, .. } => {
+                assert_eq!(matches.len(), 1);
+                assert_eq!(matches[0].context_before.len(), 2, "default context is 2");
+                assert_eq!(matches[0].context_after.len(), 2);
+            }
+            other => panic!("expected GrepMatches, got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn grep_def_has_correct_name_and_required_pattern() {
+        let grep = Grep::new(PathGuard::default());
+        let def = grep.def();
+        assert_eq!(def.name, "grep");
+        let required = def
+            .parameters
+            .get("required")
+            .and_then(|r| r.as_array())
+            .expect("required array");
+        assert!(required.iter().any(|v| v.as_str() == Some("pattern")));
+    }
+
     #[tokio::test]
     async fn grep_total_counts_all_matches_not_just_collected() {
         let dir = std::env::temp_dir().join("kirkforge_grep_total_test");

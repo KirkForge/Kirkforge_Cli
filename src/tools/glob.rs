@@ -200,4 +200,199 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    #[tokio::test]
+    async fn glob_missing_pattern_arg_is_invalid_args() {
+        let glob = Glob::new(PathGuard::default());
+        let outcome = glob.run(&ToolContext::default(), serde_json::json!({})).await;
+        assert!(
+            matches!(outcome, ToolOutcome::Failure(ToolError::InvalidArgs { .. })),
+            "expected InvalidArgs, got {outcome:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn glob_invalid_pattern_is_invalid_args() {
+        let dir = std::env::temp_dir().join("kirkforge_glob_invalid_pattern_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let glob = Glob::new(PathGuard::default());
+        let args = serde_json::json!({
+            "pattern": "[unclosed",
+            "base_dir": dir.to_string_lossy(),
+        });
+        let outcome = glob.run(&ToolContext::default(), args).await;
+        assert!(
+            matches!(outcome, ToolOutcome::Failure(ToolError::InvalidArgs { ref message }) if message.contains("Invalid glob pattern")),
+            "expected InvalidArgs for bad pattern, got {outcome:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn glob_nonexistent_base_dir_is_internal_error() {
+        let glob = Glob::new(PathGuard::default());
+        let args = serde_json::json!({
+            "pattern": "*.txt",
+            "base_dir": "/nonexistent/kirkforge/does/not/exist",
+        });
+        let outcome = glob.run(&ToolContext::default(), args).await;
+        assert!(
+            matches!(outcome, ToolOutcome::Failure(ToolError::Internal { ref message }) if message.contains("Base directory not found")),
+            "expected Internal error for missing base dir, got {outcome:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn glob_no_matches_returns_empty_message() {
+        let dir = std::env::temp_dir().join("kirkforge_glob_empty_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.txt"), "x").unwrap();
+
+        let glob = Glob::new(PathGuard::default());
+        let args = serde_json::json!({
+            "pattern": "*.nonexistent",
+            "base_dir": dir.to_string_lossy(),
+        });
+        let outcome = glob.run(&ToolContext::default(), args).await;
+        match outcome {
+            ToolOutcome::Success { content } => {
+                assert!(
+                    content.contains("No files matching") && content.contains("*.nonexistent"),
+                    "expected no-match message, got: {content}"
+                );
+            }
+            other => panic!("expected Success with empty msg, got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn glob_default_max_matches_is_1000() {
+        let dir = std::env::temp_dir().join("kirkforge_glob_default_cap_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.txt"), "x").unwrap();
+
+        let glob = Glob::new(PathGuard::default());
+        let args = serde_json::json!({
+            "pattern": "*.txt",
+            "base_dir": dir.to_string_lossy(),
+        });
+        let outcome = glob.run(&ToolContext::default(), args).await;
+        assert!(matches!(outcome, ToolOutcome::Success { .. }), "got {outcome:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn glob_matches_recursive_pattern() {
+        let dir = std::env::temp_dir().join("kirkforge_glob_recursive_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        std::fs::write(dir.join("a.txt"), "x").unwrap();
+        std::fs::write(dir.join("sub").join("b.txt"), "x").unwrap();
+
+        let glob = Glob::new(PathGuard::default());
+        let args = serde_json::json!({
+            "pattern": "**/*.txt",
+            "base_dir": dir.to_string_lossy(),
+        });
+        let outcome = glob.run(&ToolContext::default(), args).await;
+        match outcome {
+            ToolOutcome::Success { content } => {
+                assert!(content.contains("a.txt"), "expected a.txt in: {content}");
+                assert!(content.contains("b.txt"), "expected b.txt in: {content}");
+                assert!(content.contains("sub"), "expected sub path in: {content}");
+            }
+            other => panic!("expected Success, got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn glob_results_are_sorted() {
+        let dir = std::env::temp_dir().join("kirkforge_glob_sort_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("zebra.txt"), "x").unwrap();
+        std::fs::write(dir.join("apple.txt"), "x").unwrap();
+        std::fs::write(dir.join("mango.txt"), "x").unwrap();
+
+        let glob = Glob::new(PathGuard::default());
+        let args = serde_json::json!({
+            "pattern": "*.txt",
+            "base_dir": dir.to_string_lossy(),
+        });
+        let outcome = glob.run(&ToolContext::default(), args).await;
+        match outcome {
+            ToolOutcome::Success { content } => {
+                let lines: Vec<&str> = content.lines().skip(1).collect();
+                assert_eq!(lines.len(), 3, "expected 3 lines, got {lines:?}");
+                assert_eq!(lines[0], "apple.txt");
+                assert_eq!(lines[1], "mango.txt");
+                assert_eq!(lines[2], "zebra.txt");
+            }
+            other => panic!("expected Success, got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn glob_skips_directories_in_results() {
+        let dir = std::env::temp_dir().join("kirkforge_glob_skip_dirs_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        std::fs::write(dir.join("a.txt"), "x").unwrap();
+
+        let glob = Glob::new(PathGuard::default());
+        let args = serde_json::json!({
+            "pattern": "*",
+            "base_dir": dir.to_string_lossy(),
+        });
+        let outcome = glob.run(&ToolContext::default(), args).await;
+        match outcome {
+            ToolOutcome::Success { content } => {
+                let lines: Vec<&str> = content.lines().skip(1).collect();
+                assert!(
+                    !lines.iter().any(|l| *l == "sub" || l.contains("/sub") || l.ends_with("sub")),
+                    "directories should not appear, got: {lines:?}"
+                );
+                assert!(lines.iter().any(|l| l.contains("a.txt")), "a.txt should be present: {lines:?}");
+            }
+            other => panic!("expected Success, got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn glob_default_base_dir_is_cwd() {
+        let dir = std::env::temp_dir().join("kirkforge_glob_default_base_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.txt"), "x").unwrap();
+
+        let cwd = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&dir).unwrap();
+        let glob = Glob::new(PathGuard::default());
+        let args = serde_json::json!({ "pattern": "*.txt" });
+        let outcome = glob.run(&ToolContext::default(), args).await;
+        std::env::set_current_dir(cwd).unwrap();
+        assert!(matches!(outcome, ToolOutcome::Success { .. }), "got {outcome:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn glob_def_has_correct_name_and_required_pattern() {
+        let glob = Glob::new(PathGuard::default());
+        let def = glob.def();
+        assert_eq!(def.name, "glob");
+        let required = def
+            .parameters
+            .get("required")
+            .and_then(|r| r.as_array())
+            .expect("required array");
+        assert!(required.iter().any(|v| v.as_str() == Some("pattern")));
+    }
 }

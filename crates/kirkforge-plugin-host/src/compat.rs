@@ -42,6 +42,7 @@ pub fn load_skill_dir(path: &Path) -> anyhow::Result<Option<LoadedPlugin>> {
             model_hint: None,
         }],
         metadata: HashMap::new(),
+        depends_on: Vec::new(),
     };
 
     let mut skill_prompts = HashMap::new();

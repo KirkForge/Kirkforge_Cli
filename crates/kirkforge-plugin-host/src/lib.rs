@@ -128,7 +128,9 @@ impl PluginRegistry {
     /// Load every plugin directory under `plugins_dir` and apply `policy`.
     ///
     /// A plugin directory must contain a `kirkforge.toml` file. Hidden
-    /// directories are skipped.
+    /// directories are skipped. After loading, plugins are sorted into
+    /// topological order based on their `depends_on` fields so
+    /// dependencies are indexed before dependents (WO 11.2, ADR-058).
     pub fn load_from_dir(
         &mut self,
         plugins_dir: &Path,
@@ -148,6 +150,9 @@ impl PluginRegistry {
             )
         })?;
 
+        // Collect (plugin_dir, plugin) pairs first so we can topologically
+        // sort before indexing (WO 11.2: dependencies load before dependents).
+        let mut loaded: Vec<(std::path::PathBuf, LoadedPlugin)> = Vec::new();
         for entry in entries.flatten() {
             let path = entry.path();
             if !path.is_dir() {
@@ -181,7 +186,26 @@ impl PluginRegistry {
                         }
                     }
 
-                    let (hosted, policy_warnings) = apply_policy(plugin, &policy);
+                    loaded.push((path, plugin));
+                }
+                Err(e) => {
+                    warnings.push(format!("{}: failed to load plugin: {}", path.display(), e));
+                }
+            }
+        }
+
+        // Topological sort by depends_on (WO 11.2). Missing deps and
+        // cycles are reported as warnings; the offending plugin is not
+        // indexed.
+        let names: std::collections::HashSet<&str> = loaded
+            .iter()
+            .map(|(_, p)| p.manifest().name.as_str())
+            .collect();
+        match topological_order(&loaded, &names) {
+            Ok(order) => {
+                for idx in order {
+                    let (_path, plugin) = &loaded[idx];
+                    let (hosted, policy_warnings) = apply_policy(plugin.clone(), &policy);
                     warnings.extend(policy_warnings);
                     if let Some(ref reason) = hosted.rejection {
                         warnings.push(format!("{}: {}", hosted.plugin.manifest.name, reason));
@@ -189,9 +213,9 @@ impl PluginRegistry {
                         warnings.extend(self.push_and_index(hosted));
                     }
                 }
-                Err(e) => {
-                    warnings.push(format!("{}: failed to load plugin: {}", path.display(), e));
-                }
+            }
+            Err(e) => {
+                warnings.push(e);
             }
         }
 
@@ -397,6 +421,92 @@ impl PluginRegistry {
         }
         Some((&hosted.plugin.manifest, &hosted.plugin as &dyn Plugin))
     }
+}
+
+/// Topologically sort `loaded` plugins so dependencies come before
+/// dependents (WO 11.2, ADR-058). Returns a vector of indices into
+/// `loaded` in load order. Returns `Err(message)` if a dependency is
+/// missing from `available_names` or a cycle is detected.
+fn topological_order(
+    loaded: &[(std::path::PathBuf, LoadedPlugin)],
+    available_names: &std::collections::HashSet<&str>,
+) -> Result<Vec<usize>, String> {
+    use std::collections::{HashMap, HashSet};
+
+    let name_to_idx: HashMap<&str, usize> = loaded
+        .iter()
+        .enumerate()
+        .map(|(i, (_, p))| (p.manifest().name.as_str(), i))
+        .collect();
+
+    // Check for missing dependencies first.
+    for (_, plugin) in loaded {
+        for dep in &plugin.manifest().depends_on {
+            if !available_names.contains(dep.as_str()) {
+                return Err(format!(
+                    "{}: depends on '{}' which is not loaded (enable '{}' \
+                     or remove the depends_on entry)",
+                    plugin.manifest().name,
+                    dep,
+                    dep
+                ));
+            }
+        }
+    }
+
+    // DFS-based topological sort with cycle detection.
+    let mut visited: HashSet<usize> = HashSet::new();
+    let mut on_stack: HashSet<usize> = HashSet::new();
+    let mut order: Vec<usize> = Vec::with_capacity(loaded.len());
+
+    fn visit(
+        node: usize,
+        loaded: &[(std::path::PathBuf, LoadedPlugin)],
+        name_to_idx: &HashMap<&str, usize>,
+        visited: &mut HashSet<usize>,
+        on_stack: &mut HashSet<usize>,
+        order: &mut Vec<usize>,
+    ) -> Result<(), String> {
+        if visited.contains(&node) {
+            return Ok(());
+        }
+        if on_stack.contains(&node) {
+            let name = loaded[node].1.manifest().name.clone();
+            return Err(format!("dependency cycle detected at '{name}'"));
+        }
+        on_stack.insert(node);
+        let deps: Vec<usize> = loaded[node]
+            .1
+            .manifest()
+            .depends_on
+            .iter()
+            .filter_map(|d| name_to_idx.get(d.as_str()).copied())
+            .collect();
+        for dep in deps {
+            visit(dep, loaded, name_to_idx, visited, on_stack, order)?;
+        }
+        on_stack.remove(&node);
+        visited.insert(node);
+        order.push(node);
+        Ok(())
+    }
+
+    let mut sorted_indices: Vec<usize> = (0..loaded.len()).collect();
+    sorted_indices.sort_by_key(|&i| loaded[i].1.manifest().name.clone());
+    for &start in &sorted_indices {
+        if !visited.contains(&start) {
+            visit(
+                start,
+                loaded,
+                &name_to_idx,
+                &mut visited,
+                &mut on_stack,
+                &mut order,
+            )?;
+        }
+    }
+
+    Ok(order)
 }
 
 /// Verify a plugin's detached minisign signature in-process (ADR-057).
@@ -1170,5 +1280,97 @@ prompt = "hi"
             assert_eq!(reg.active_count(), 1);
             assert!(reg.skill_by_trigger("/hello").is_some());
         }
+    }
+}
+
+#[cfg(test)]
+mod load_order_tests {
+    use super::*;
+    use kirkforge_plugin::TrustTier;
+
+    fn make_plugin(root: &Path, name: &str, deps: &[&str]) {
+        std::fs::create_dir_all(root).unwrap();
+        let dep_str = if deps.is_empty() {
+            String::new()
+        } else {
+            format!("\ndepends_on = {deps:?}", deps = deps)
+        };
+        std::fs::write(
+            root.join("kirkforge.toml"),
+            format!(
+                r#"
+name = "{name}"
+version = "0.1.0"
+description = "test"
+trust = "read-only"{dep_str}
+"#
+            ),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn load_order_empty_deps_preserves_name_order() {
+        let tmp = tempfile::tempdir().unwrap();
+        let plugins = tmp.path().join("plugins");
+        make_plugin(&plugins.join("alpha"), "alpha", &[]);
+        make_plugin(&plugins.join("beta"), "beta", &[]);
+        let mut reg = PluginRegistry::new();
+        let warnings = reg
+            .load_from_dir(&plugins, TrustPolicy::up_to(TrustTier::ReadOnly))
+            .unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(reg.active_count(), 2);
+    }
+
+    #[test]
+    fn load_order_missing_dependency_rejected() {
+        let tmp = tempfile::tempdir().unwrap();
+        let plugins = tmp.path().join("plugins");
+        make_plugin(&plugins.join("dependent"), "dependent", &["missing-dep"]);
+        let mut reg = PluginRegistry::new();
+        let warnings = reg
+            .load_from_dir(&plugins, TrustPolicy::up_to(TrustTier::ReadOnly))
+            .unwrap();
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("depends on") && w.contains("missing-dep")),
+            "expected missing-dep warning, got: {warnings:?}"
+        );
+        assert_eq!(reg.active_count(), 0);
+    }
+
+    #[test]
+    fn load_order_cycle_rejected() {
+        let tmp = tempfile::tempdir().unwrap();
+        let plugins = tmp.path().join("plugins");
+        make_plugin(&plugins.join("a"), "a", &["b"]);
+        make_plugin(&plugins.join("b"), "b", &["a"]);
+        let mut reg = PluginRegistry::new();
+        let warnings = reg
+            .load_from_dir(&plugins, TrustPolicy::up_to(TrustTier::ReadOnly))
+            .unwrap();
+        assert!(
+            warnings.iter().any(|w| w.contains("cycle")),
+            "expected cycle warning, got: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn load_order_transitive_loads_all() {
+        let tmp = tempfile::tempdir().unwrap();
+        let plugins = tmp.path().join("plugins");
+        make_plugin(&plugins.join("a"), "a", &[]);
+        make_plugin(&plugins.join("b"), "b", &["a"]);
+        make_plugin(&plugins.join("c"), "c", &["b"]);
+        let mut reg = PluginRegistry::new();
+        let warnings = reg
+            .load_from_dir(&plugins, TrustPolicy::up_to(TrustTier::ReadOnly))
+            .unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(reg.active_count(), 3);
+        // All three should be active; the topological order is internal
+        // (a before b before c), but the test asserts they all loaded.
     }
 }

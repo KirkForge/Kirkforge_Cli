@@ -5,6 +5,7 @@ name = "kirkforge-plugin3"
 version = "0.2.0"
 description = "Output-side token-budget assistant for KirkForge-Cli"
 trust = "shell"
+depends_on = ["stratum"]
 
 # ── Skill (slash command) ────────────────────────────────────────────────────
 

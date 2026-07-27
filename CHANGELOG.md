@@ -30,6 +30,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (skill + tool + hook + verifier), exercises each, and asserts the
   trust-filtering + audit-log contracts. Catches composition
   regressions the unit tests miss.
+- Plugin manifest `depends_on` (WO 11.2, ADR-058): `PluginManifest`
+  gains a `depends_on: Vec<String>` field (serde `#[serde(rename =
+  "depends_on")]`). The loader applies a DFS-based topological sort so
+  dependencies load before dependents; missing deps + cycles are
+  rejected with clear errors. `plugins/kirkforge-plugin3/kirkforge.toml`
+  now declares `depends_on = ["stratum"]` (the real WO 8.6 dependency
+  made explicit). 11 new tests (7 manifest validation + 4 host
+  load-order: empty, missing, cycle, transitive).
 
 ### Fixed
 - Windows env_guard race (Workorder 10.0): the

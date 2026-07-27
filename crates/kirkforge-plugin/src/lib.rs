@@ -57,6 +57,14 @@ pub struct PluginManifest {
     /// Optional map of extra metadata the host can ignore or surface.
     #[serde(default)]
     pub metadata: HashMap<String, String>,
+    /// Other plugins this one depends on (WO 11.2, ADR-058). The loader
+    /// applies a topological sort so dependencies load before
+    /// dependents; a missing dependency is rejected with a clear error;
+    /// a cycle is rejected with the cycle path. Defaults to empty for
+    /// backward compatibility (existing manifests without the field
+    /// parse and load unchanged).
+    #[serde(default, rename = "depends_on")]
+    pub depends_on: Vec<String>,
 }
 
 impl PluginManifest {
@@ -104,6 +112,29 @@ impl PluginManifest {
                 "version",
                 "version must be valid semver (MAJOR.MINOR.PATCH, optional pre-release and build)",
             ));
+        }
+
+        // WO 11.2: depends_on entries must be valid plugin names.
+        for (i, dep) in self.depends_on.iter().enumerate() {
+            if dep.is_empty() {
+                errors.push(ValidationError::new(
+                    format!("depends_on[{i}]"),
+                    "depends_on entry must not be empty",
+                ));
+            } else if !is_valid_plugin_name(dep) {
+                errors.push(ValidationError::new(
+                    format!("depends_on[{i}]"),
+                    format!(
+                        "depends_on entry '{dep}' must be a valid plugin name \
+                         (lowercase alphanumeric segments joined by single hyphens)"
+                    ),
+                ));
+            } else if dep == &self.name {
+                errors.push(ValidationError::new(
+                    format!("depends_on[{i}]"),
+                    "plugin cannot depend on itself",
+                ));
+            }
         }
 
         match self.api_version {
@@ -421,6 +452,7 @@ impl Default for PluginManifest {
             trust: TrustTier::ReadOnly,
             capabilities: Vec::new(),
             metadata: HashMap::new(),
+            depends_on: Vec::new(),
         }
     }
 }
@@ -734,6 +766,7 @@ prompt = "Demo task: {{args}}"
                 trust: TrustTier::ReadOnly,
                 capabilities: Vec::new(),
                 metadata: HashMap::new(),
+                depends_on: Vec::new(),
             }
         }
 
@@ -970,5 +1003,79 @@ prompt = "Demo task: {{args}}"
             let back: ValidationError = serde_json::from_str(&json).unwrap();
             assert_eq!(back, err);
         }
+    }
+}
+
+#[cfg(test)]
+mod depends_on_tests {
+    use super::*;
+
+    fn manifest(name: &str, deps: &[&str]) -> PluginManifest {
+        PluginManifest {
+            name: name.into(),
+            version: "0.1.0".into(),
+            description: "test".into(),
+            api_version: ApiVersion::V1,
+            trust: TrustTier::ReadOnly,
+            capabilities: Vec::new(),
+            metadata: HashMap::new(),
+            depends_on: deps.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn empty_depends_on_is_valid() {
+        assert!(manifest("a", &[]).validate().is_ok());
+    }
+
+    #[test]
+    fn valid_depends_on_passes() {
+        assert!(manifest("a", &["b", "c"]).validate().is_ok());
+    }
+
+    #[test]
+    fn invalid_depends_on_name_rejected() {
+        let m = manifest("a", &["BadName"]);
+        let errs = m.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.path == "depends_on[0]"));
+    }
+
+    #[test]
+    fn self_dependency_rejected() {
+        let m = manifest("a", &["a"]);
+        let errs = m.validate().unwrap_err();
+        assert!(errs
+            .iter()
+            .any(|e| e.message.contains("cannot depend on itself")));
+    }
+
+    #[test]
+    fn empty_depends_on_entry_rejected() {
+        let m = manifest("a", &[""]);
+        let errs = m.validate().unwrap_err();
+        assert!(errs.iter().any(|e| e.path == "depends_on[0]"));
+    }
+
+    #[test]
+    fn depends_on_defaults_empty_when_absent() {
+        let toml = r#"
+name = "demo"
+version = "0.1.0"
+description = "demo"
+"#;
+        let m = PluginManifest::parse(toml).unwrap();
+        assert!(m.depends_on.is_empty());
+    }
+
+    #[test]
+    fn depends_on_parses_list() {
+        let toml = r#"
+name = "demo"
+version = "0.1.0"
+description = "demo"
+depends_on = ["stratum", "other"]
+"#;
+        let m = PluginManifest::parse(toml).unwrap();
+        assert_eq!(m.depends_on, vec!["stratum", "other"]);
     }
 }

@@ -264,6 +264,11 @@ async fn main() {
             println!("{}", kirkforge::shared::metrics::format_summary(&summary));
             Ok(())
         }
+        Command::Verify => {
+            // WO 11.7: print recent verifier verdicts from the metrics log.
+            println!("{}", kirkforge::shared::metrics::format_verifier_report(20));
+            Ok(())
+        }
         Command::Sessions {
             id,
             export,

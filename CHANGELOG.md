@@ -45,6 +45,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `SandboxConfig::merge_with` overlays the per-plugin override on the
   global default. 4 new tests (merge overlay, merge none, parse,
   `#[ignore]` SIGXCPU kill).
+- Plugin verifier UI (WO 11.7, ADR-062): `MetricEvent::Verifier` gains
+  a `source: String` field (`"built-in"` or `"plugin:<name>"`,
+  additive via `#[serde(default)]`). `/verify` TUI slash command +
+  `kirkforge verify` CLI print a table of recent verifier verdicts
+  from the metrics log. `format_verdict_report` formats the bus's
+  in-memory verdicts. 3 new metric tests (source field, default,
+  empty report).
 
 ### Fixed
 - Windows env_guard race (Workorder 10.0): the

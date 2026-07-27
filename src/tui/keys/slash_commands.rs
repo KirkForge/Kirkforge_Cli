@@ -355,6 +355,14 @@ pub(crate) async fn dispatch_slash_command(
                 .push_back(ConversationEntry::new("system", msg));
             Ok(true)
         }
+        "/verify" => {
+            // WO 11.7: show recent verifier verdicts from the metrics log.
+            let msg = crate::shared::metrics::format_verifier_report(20);
+            state
+                .messages
+                .push_back(ConversationEntry::new("system", msg));
+            Ok(true)
+        }
         "/save" => {
             let msg = crate::tui::commands::handle_save_command(args, state).await;
             state
@@ -534,6 +542,7 @@ mod tests {
             "/test",
             "/memory",
             "/metrics",
+            "/verify",
             "/gh",
             "/init",
             "/plugins",

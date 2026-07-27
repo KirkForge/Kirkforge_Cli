@@ -141,6 +141,11 @@ pub enum Command {
     Completions { shell: Shell },
     /// Show operational metrics summary (tool calls, verifiers, turns, approvals).
     Metrics,
+    /// Show recent verifier verdicts from the metrics log (WO 11.7).
+    /// Renders a table of the last 20 `MetricEvent::Verifier` entries
+    /// with the verifier name, source (`built-in` vs `plugin:<name>`),
+    /// and verdict.
+    Verify,
     /// List, search, and export past sessions.
     /// Without arguments, lists recent sessions (newest first).
     /// With --export, writes the session to stdout or a file.

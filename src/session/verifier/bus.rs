@@ -169,6 +169,56 @@ impl VerifierBus {
     }
 }
 
+/// Format the last run's verdicts as a human-readable table (WO 11.7).
+///
+/// Columns: `Verifier | Source | Verdict | File:Line | Message`.
+/// Grouped by verifier name. Empty verdicts → a "no verdicts" line.
+pub fn format_verdict_report(verdicts: &[VerdictEntry]) -> String {
+    if verdicts.is_empty() {
+        return "No verifier verdicts from the last turn.".to_string();
+    }
+    let mut lines = vec![
+        format!(
+            "{:<15} {:<18} {:<8} {:<24} {}",
+            "Verifier", "Source", "Verdict", "File:Line", "Message"
+        ),
+        "-".repeat(80),
+    ];
+    for v in verdicts {
+        let file_line = match (&v.file, v.line) {
+            (Some(f), Some(l)) => format!("{}:{}", f.display(), l),
+            (Some(f), None) => f.display().to_string(),
+            _ => "—".to_string(),
+        };
+        let file_line_display = if file_line.len() > 24 {
+            format!("{}…", &file_line[..23])
+        } else {
+            file_line
+        };
+        lines.push(format!(
+            "{:<15} {:<18} {:<8} {:<24} {}",
+            v.source,
+            v.source.to_string(),
+            v.severity,
+            file_line_display,
+            v.message.chars().take(60).collect::<String>(),
+        ));
+    }
+    // Summary line.
+    let pass = verdicts
+        .iter()
+        .filter(|v| v.severity != Severity::Error)
+        .count();
+    let fail = verdicts.len() - pass;
+    lines.push(format!(
+        "\n{} verdict(s): {} pass, {} fail",
+        verdicts.len(),
+        pass,
+        fail
+    ));
+    lines.join("\n")
+}
+
 impl Default for VerifierBus {
     fn default() -> Self {
         Self::new()

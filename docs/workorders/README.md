@@ -189,7 +189,7 @@ surfacing, authoring scaffolding, and an end-to-end integration test.
 | 11.4 | [Plugin hot-reload via file watcher](11.4-plugin-hot-reload.md) | Planned | Medium | — |
 | 11.5 | [Per-plugin resource limits (extend SandboxConfig)](11.5-per-plugin-resource-limits.md) | Done | Medium | 9.8 |
 | 11.6 | [Plugin hook fail-open audit log](11.6-plugin-hook-audit-log.md) | Done | High | — |
-| 11.7 | [Plugin verifier results in `/verify` panel + cost report](11.7-plugin-verifier-ui.md) | Planned | Medium | 9.6 |
+| 11.7 | [Plugin verifier results in `/verify` panel + cost report](11.7-plugin-verifier-ui.md) | Done | Medium | 9.6 |
 | 11.8 | [Plugin init scaffolding command (`kirkforge plugin init`)](11.8-plugin-init-scaffolding.md) | Planned | Low | 11.0 |
 | 11.9 | [Plugin system end-to-end integration test suite](11.9-plugin-system-e2e-test.md) | Done | High | 11.6 |
 

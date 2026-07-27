@@ -50,6 +50,7 @@ impl VerifierHandler {
                 record(MetricEvent::Verifier {
                     name: "none".to_string(),
                     verdict: "clean".to_string(),
+                    source: "built-in".to_string(),
                 });
                 return Verdict::Clean;
             }
@@ -83,6 +84,7 @@ impl VerifierHandler {
         record(MetricEvent::Verifier {
             name: decisive_name,
             verdict: verdict_label.to_string(),
+            source: "built-in".to_string(),
         });
 
         // Collect fixable suggestions

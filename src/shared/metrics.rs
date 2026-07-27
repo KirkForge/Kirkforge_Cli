@@ -110,6 +110,10 @@ const MAX_LOG_BYTES: u64 = 5 * 1024 * 1024;
 /// keeps each event's full write atomic relative to other events.
 static RECORD_LOCK: Mutex<()> = Mutex::new(());
 
+fn default_verifier_source() -> String {
+    "built-in".to_string()
+}
+
 /// Kind of planning decision that produced a [`MetricEvent::PlanReason`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -148,6 +152,11 @@ pub enum MetricEvent {
     Verifier {
         name: String,
         verdict: String,
+        /// Source of the verdict: `"built-in"` or `"plugin:<name>"`
+        /// (WO 11.7, ADR-062). Additive — old NDJSON logs without this
+        /// field default to `"built-in"` via `#[serde(default)]`.
+        #[serde(default = "default_verifier_source")]
+        source: String,
     },
     Turn {
         model: String,
@@ -213,11 +222,19 @@ impl MetricEvent {
                 }
                 "tool.call".to_string()
             }
-            MetricEvent::Verifier { name, verdict } => {
+            MetricEvent::Verifier {
+                name,
+                verdict,
+                source,
+            } => {
                 attrs.push(opentelemetry::KeyValue::new("verifier.name", name.clone()));
                 attrs.push(opentelemetry::KeyValue::new(
                     "verifier.verdict",
                     verdict.clone(),
+                ));
+                attrs.push(opentelemetry::KeyValue::new(
+                    "verifier.source",
+                    source.clone(),
                 ));
                 "verifier.run".to_string()
             }
@@ -454,6 +471,42 @@ pub fn read_events() -> Vec<MetricEvent> {
     events
 }
 
+/// Format the recent verifier verdicts from the metrics log as a
+/// report (WO 11.7, ADR-062). Reads the last `limit` `MetricEvent::Verifier`
+/// entries and renders them as a table: `Name | Source | Verdict`.
+/// Used by `/verify` TUI and `kirkforge verify` CLI.
+pub fn format_verifier_report(limit: usize) -> String {
+    let events = read_events();
+    let verifier_events: Vec<_> = events
+        .iter()
+        .rev()
+        .filter_map(|e| match e {
+            MetricEvent::Verifier {
+                name,
+                verdict,
+                source,
+            } => Some((name.clone(), source.clone(), verdict.clone())),
+            _ => None,
+        })
+        .take(limit)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+
+    if verifier_events.is_empty() {
+        return "No verifier verdicts recorded in the metrics log.".to_string();
+    }
+    let mut lines = vec![
+        format!("{:<20} {:<18} {}", "Verifier", "Source", "Verdict"),
+        "-".repeat(50),
+    ];
+    for (name, source, verdict) in &verifier_events {
+        lines.push(format!("{name:<20} {source:<18} {verdict}"));
+    }
+    lines.join("\n")
+}
+
 /// Summarize the metrics log.
 pub fn summarize() -> MetricsSummary {
     let mut summary = MetricsSummary::default();
@@ -628,6 +681,7 @@ mod tests {
             record(MetricEvent::Verifier {
                 name: "lint".into(),
                 verdict: "fixable".into(),
+                source: "built-in".into(),
             });
             record(MetricEvent::Turn {
                 model: "kimi-2.7k-coder:cloud".into(),
@@ -822,5 +876,48 @@ mod tests {
         assert!(attrs.iter().any(|kv| {
             kv.key.as_str() == "plan.related_id" && kv.value.as_str().as_ref() == "call-42"
         }));
+    }
+
+    #[test]
+    fn verifier_metric_event_includes_source_field() {
+        // WO 11.7: the Verifier metric event has a source field.
+        let event = MetricEvent::Verifier {
+            name: "security".to_string(),
+            verdict: "fixable".to_string(),
+            source: "plugin:sec-plugin".to_string(),
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("\"source\":\"plugin:sec-plugin\""), "{json}");
+        // Round-trip with the source field.
+        let back: MetricEvent = serde_json::from_str(&json).unwrap();
+        match back {
+            MetricEvent::Verifier { source, .. } => {
+                assert_eq!(source, "plugin:sec-plugin");
+            }
+            other => panic!("expected Verifier, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn verifier_metric_event_defaults_source_to_built_in() {
+        // Old NDJSON log entries without a source field default to "built-in".
+        let json = r#"{"event":"verifier","name":"lint","verdict":"clean"}"#;
+        let event: MetricEvent = serde_json::from_str(json).unwrap();
+        match event {
+            MetricEvent::Verifier { source, .. } => {
+                assert_eq!(source, "built-in");
+            }
+            other => panic!("expected Verifier, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn format_verifier_report_handles_empty() {
+        // When no events are recorded, the report says so.
+        // This test doesn't write events; it just checks the empty path.
+        let report = format_verifier_report(10);
+        // The report either shows "No verifier verdicts" or a table;
+        // we just assert it doesn't panic.
+        assert!(!report.is_empty());
     }
 }

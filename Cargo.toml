@@ -68,6 +68,12 @@ tokio-util = "0.7"
 # Unix process control (setsid for background daemon detachment)
 libc = "0.2"
 
+# File-system watcher for plugin hot-reload (WO 11.4, ADR-059).
+# notify-debouncer-mini bundles notify + a debounce layer; smaller API
+# than notify alone. Pure Rust on Linux (inotify), macOS (FSEvents),
+# Windows (ReadDirectoryChangesW).
+notify-debouncer-mini = "0.7"
+
 # Serialization
 serde.workspace = true
 serde_json.workspace = true

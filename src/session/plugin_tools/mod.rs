@@ -29,7 +29,7 @@ pub mod wrapper;
 
 pub use loader::{
     all_plugin_tools, folded_feature, folded_feature_enabled, is_folded, load_plugin_registry,
-    load_workspace_plugins, plugins_dir, trust_policy_from_config,
+    load_workspace_plugins, plugins_dir, spawn_plugin_watcher, trust_policy_from_config,
 };
 pub use wrapper::PluginToolWrapper;
 

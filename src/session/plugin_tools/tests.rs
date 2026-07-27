@@ -1184,3 +1184,67 @@ memory_mb = 256
         assert_eq!(limits.filesize_mb, None);
     }
 }
+
+#[cfg(unix)]
+mod hot_reload_tests {
+    use super::*;
+
+    /// The plugin file watcher fires a reload signal within ~2s when a
+    /// `kirkforge.toml` is modified (WO 11.4, ADR-059). Timing-sensitive;
+    /// uses a 3s timeout and is `#[ignore]` to avoid CI flake.
+    #[cfg(unix)]
+    #[ignore = "timing-sensitive file-system watcher test"]
+    #[tokio::test]
+    async fn plugin_watcher_fires_on_manifest_change() {
+        let tmp = tempfile::tempdir().unwrap();
+        let plugins_dir = tmp.path().join("plugins");
+        let plugin_dir = plugins_dir.join("demo");
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        std::fs::write(
+            plugin_dir.join("kirkforge.toml"),
+            r#"
+name = "demo"
+version = "0.1.0"
+description = "demo"
+trust = "read-only"
+
+[[capabilities]]
+type = "skill"
+trigger = "/demo"
+prompt = "hi"
+"#,
+        )
+        .unwrap();
+
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<()>();
+        let _watcher = crate::session::plugin_tools::spawn_plugin_watcher(plugins_dir.clone(), tx);
+        assert!(_watcher.is_some(), "watcher should start");
+
+        // Give the watcher a moment to initialize.
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        // Modify the manifest.
+        std::fs::write(
+            plugin_dir.join("kirkforge.toml"),
+            r#"
+name = "demo"
+version = "0.2.0"
+description = "updated"
+trust = "read-only"
+
+[[capabilities]]
+type = "skill"
+trigger = "/demo"
+prompt = "updated"
+"#,
+        )
+        .unwrap();
+
+        // Wait for the reload signal (500ms debounce + watcher latency).
+        let result = tokio::time::timeout(std::time::Duration::from_secs(3), rx.recv()).await;
+        assert!(
+            result.is_ok(),
+            "plugin watcher did not fire within 3s after manifest change"
+        );
+    }
+}

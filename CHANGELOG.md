@@ -52,6 +52,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   from the metrics log. `format_verdict_report` formats the bus's
   in-memory verdicts. 3 new metric tests (source field, default,
   empty report).
+- Plugin hot-reload via file watcher (WO 11.4, ADR-059): added
+  `notify-debouncer-mini` dep. `spawn_plugin_watcher` watches the
+  plugins dir with 500ms debounce and sends a reload signal on
+  `kirkforge.toml` / tool/hook script changes. The TUI spawns the
+  watcher at startup; the reload uses the same path as `/plugins
+  reload`. 1 `#[ignore]` integration test (timing-sensitive).
 
 ### Fixed
 - Windows env_guard race (Workorder 10.0): the

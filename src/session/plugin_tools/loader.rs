@@ -198,3 +198,83 @@ pub fn all_plugin_tools(
 
     tools
 }
+
+/// Spawn a file-system watcher on the plugins directory that sends a
+/// reload signal on `reload_tx` when a `kirkforge.toml` or tool/hook
+/// script changes (WO 11.4, ADR-059). The watcher debounces events for
+/// 500ms (coalescing editor multi-file saves) before firing.
+///
+/// Returns the watcher handle (must be held alive for the watcher to
+/// keep running). The watcher runs in a background thread; the
+/// reload signal is a `()` on the channel.
+pub fn spawn_plugin_watcher(
+    plugins_dir: PathBuf,
+    reload_tx: tokio::sync::mpsc::UnboundedSender<()>,
+) -> Option<notify_debouncer_mini::Debouncer<notify_debouncer_mini::notify::RecommendedWatcher>> {
+    if !plugins_dir.is_dir() {
+        return None;
+    }
+    use notify_debouncer_mini::{new_debouncer, DebounceEventResult};
+    use std::time::Duration;
+
+    let (tx, rx) = std::sync::mpsc::channel::<DebounceEventResult>();
+    let mut debouncer = new_debouncer(Duration::from_millis(500), tx).ok()?;
+
+    if debouncer
+        .watcher()
+        .watch(
+            &plugins_dir,
+            notify_debouncer_mini::notify::RecursiveMode::Recursive,
+        )
+        .is_err()
+    {
+        tracing::warn!(
+            dir = %plugins_dir.display(),
+            "failed to start plugin directory watcher; hot-reload disabled"
+        );
+        return None;
+    }
+
+    // Spawn a thread that forwards debounced events to the async
+    // reload channel. The thread exits when the watcher is dropped
+    // (the `rx` channel closes).
+    std::thread::spawn(move || {
+        for result in rx {
+            let events = match result {
+                Ok(events) => events,
+                Err(e) => {
+                    tracing::debug!(error = %e, "plugin watcher debounce error");
+                    continue;
+                }
+            };
+            for event in events {
+                let path = &event.path;
+                let relevant = path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .is_some_and(|ext| {
+                        ext == "toml" || ext == "sh" || ext == "js" || ext == "ts" || ext == "py"
+                    })
+                    || path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .is_some_and(|n| n == "kirkforge.toml");
+                if relevant {
+                    tracing::debug!(
+                        path = %path.display(),
+                        "plugin file changed; triggering reload"
+                    );
+                    if reload_tx.send(()).is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+
+    tracing::info!(
+        dir = %plugins_dir.display(),
+        "plugin hot-reload watcher started (500ms debounce)"
+    );
+    Some(debouncer)
+}

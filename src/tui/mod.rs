@@ -256,6 +256,34 @@ pub async fn run_tui(
     // executor to swap the plugin toolset, hooks, and verifiers.
     let (plugin_reload_tx, plugin_reload_rx) =
         mpsc::unbounded_channel::<kirkforge_plugin_host::PluginRegistry>();
+
+    // ── Plugin hot-reload watcher (WO 11.4, ADR-059) ──
+    // Watch the plugins directory for changes; on a debounced event,
+    // reload the registry and forward it to the executor via the same
+    // `plugin_reload_tx` channel that `/plugins reload` uses.
+    let (watch_tx, mut watch_rx) = mpsc::unbounded_channel::<()>();
+    let _watcher = {
+        let plugins_dir = crate::session::plugin_tools::plugins_dir();
+        crate::session::plugin_tools::spawn_plugin_watcher(plugins_dir, watch_tx)
+    };
+    let watch_cfg = shared_config.clone();
+    let watch_reload_tx = plugin_reload_tx.clone();
+    tokio::spawn(async move {
+        while watch_rx.recv().await.is_some() {
+            let cfg = crate::shared::read_shared_config(&watch_cfg).clone();
+            match crate::session::plugin_tools::load_plugin_registry(&cfg) {
+                Ok((registry, warnings)) => {
+                    for w in &warnings {
+                        tracing::warn!(warning = %w, "plugin hot-reload warning");
+                    }
+                    let _ = watch_reload_tx.send(registry);
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "plugin hot-reload failed");
+                }
+            }
+        }
+    });
     // Persona completion: background task → TUI event loop.
     // `/explore`, `/plan`, and `/coder` spawn fork-isolated subagents;
     // the result is merged back into the parent conversation here.

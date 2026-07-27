@@ -95,6 +95,10 @@ pub struct HostedPlugin {
     pub effective_trust: TrustTier,
     /// If `Some`, the plugin was rejected and should not be used.
     pub rejection: Option<String>,
+    /// Original number of capabilities in the manifest before
+    /// trust-tier filtering (WO 11.3). Used by `/plugins list` to
+    /// show how many capabilities were hidden by the downgrade.
+    pub original_capability_count: usize,
 }
 
 impl HostedPlugin {
@@ -564,6 +568,7 @@ fn verify_plugin_signature(
 /// produced while filtering.
 fn apply_policy(plugin: LoadedPlugin, policy: &TrustPolicy) -> (HostedPlugin, Vec<String>) {
     let mut warnings = Vec::new();
+    let original_capability_count = plugin.manifest.capabilities.len();
     if policy.reject_on_excess && !policy.max.permits(plugin.manifest.trust) {
         let hosted = HostedPlugin {
             effective_trust: plugin.manifest.trust,
@@ -572,6 +577,7 @@ fn apply_policy(plugin: LoadedPlugin, policy: &TrustPolicy) -> (HostedPlugin, Ve
                 plugin.manifest.trust, policy.max
             )),
             plugin,
+            original_capability_count,
         };
         return (hosted, warnings);
     }
@@ -588,6 +594,7 @@ fn apply_policy(plugin: LoadedPlugin, policy: &TrustPolicy) -> (HostedPlugin, Ve
         plugin,
         effective_trust: effective,
         rejection: None,
+        original_capability_count,
     };
     (hosted, warnings)
 }

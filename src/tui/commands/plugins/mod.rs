@@ -139,8 +139,26 @@ fn list_plugins(state: &AppState) -> String {
         lines.push(format!("Active plugins ({}):", active.len()));
         for hosted in active {
             let name = &hosted.plugin.manifest.name;
-            let trust = hosted.effective_trust;
-            lines.push(format!("  - {name} ({trust})"));
+            let manifest_trust = hosted.plugin.manifest.trust;
+            let effective = hosted.effective_trust;
+            // WO 11.3: show effective trust when it differs from manifest.
+            let trust_label = if effective != manifest_trust {
+                format!("{manifest_trust} (effective: {effective})",)
+            } else {
+                format!("{effective}")
+            };
+            // WO 11.3: show filtered-capability count when a downgrade
+            // removed capabilities. `original_capability_count` is the
+            // manifest's original count; the current manifest.capabilities
+            // is the surviving set (filter_capabilities mutates it).
+            let surviving = hosted.plugin.manifest.capabilities.len();
+            let filtered = hosted.original_capability_count.saturating_sub(surviving);
+            let filtered_label = if filtered > 0 {
+                format!(" [filtered: {filtered} capabilities hidden by trust tier]")
+            } else {
+                String::new()
+            };
+            lines.push(format!("  - {name} ({trust_label}){filtered_label}"));
         }
     }
 
@@ -236,7 +254,8 @@ async fn enable_plugin(
 ) -> String {
     let cfg = read_shared_config(&state.config).clone();
     let dir = plugin_dir(name);
-    let policy = TrustPolicy::up_to(cfg.tools.max_plugin_trust);
+    let policy = TrustPolicy::up_to(cfg.tools.max_plugin_trust)
+        .with_reject_on_excess(cfg.tools.reject_on_excess_plugin_trust);
 
     let (loaded_name, load_warnings) = match state.plugin_registry.load_one(&dir, policy) {
         Ok(r) => r,
@@ -832,5 +851,76 @@ prompt = "Demo skill"
         let cwd = std::env::current_dir().unwrap();
         let p = resolve_source_path("./demo");
         assert_eq!(p, cwd.join("demo"));
+    }
+
+    #[tokio::test]
+    async fn list_shows_effective_trust_and_filtered_count_on_downgrade() {
+        let temp = tempfile::tempdir().unwrap();
+        let plugins_dir = temp.path().join("plugins");
+        let plugin_dir = plugins_dir.join("downgraded");
+        let tools_dir = plugin_dir.join("tools");
+        let hooks_dir = plugin_dir.join("hooks");
+        std::fs::create_dir_all(&tools_dir).unwrap();
+        std::fs::create_dir_all(&hooks_dir).unwrap();
+        std::fs::write(
+            plugin_dir.join("kirkforge.toml"),
+            r#"
+name = "downgraded"
+version = "0.1.0"
+description = "downgrade test"
+trust = "shell"
+
+[[capabilities]]
+type = "skill"
+trigger = "/demo"
+prompt = "hi"
+
+[[capabilities]]
+type = "tool"
+name = "downgraded/tool"
+description = "shell tool"
+command = "tools/tool.sh"
+
+[[capabilities]]
+type = "hook"
+event = "post-turn"
+command = "hooks/post-turn.sh"
+"#,
+        )
+        .unwrap();
+        std::fs::write(tools_dir.join("tool.sh"), "#!/bin/sh\nprintf ok").unwrap();
+        std::fs::write(hooks_dir.join("post-turn.sh"), "#!/bin/sh\nexit 0").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            for f in [tools_dir.join("tool.sh"), hooks_dir.join("post-turn.sh")] {
+                let mut perms = std::fs::metadata(&f).unwrap().permissions();
+                perms.set_mode(0o755);
+                std::fs::set_permissions(&f, perms).unwrap();
+            }
+        }
+
+        let _env = TempDataDir::new(temp.path()).await;
+        let mut state = test_state();
+        // Clamp host max to ReadOnly + reject_on_excess=false so the shell
+        // plugin is downgraded (not rejected) and its tool+hook filtered.
+        {
+            let mut cfg = state.config.write().unwrap();
+            cfg.tools.max_plugin_trust = TrustTier::ReadOnly;
+            cfg.tools.reject_on_excess_plugin_trust = false;
+        }
+        let tx = dummy_reload_tx();
+        let msg = handle_plugins_command("enable downgraded", &mut state, &tx).await;
+        assert!(msg.contains("Enabled plugin 'downgraded'"), "{msg}");
+
+        let list_msg = handle_plugins_command("list", &mut state, &tx).await;
+        assert!(
+            list_msg.contains("shell (effective: read-only)"),
+            "expected effective trust annotation, got: {list_msg}"
+        );
+        assert!(
+            list_msg.contains("filtered: 2 capabilities hidden by trust tier"),
+            "expected filtered count of 2, got: {list_msg}"
+        );
     }
 }

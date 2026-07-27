@@ -58,6 +58,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `kirkforge.toml` / tool/hook script changes. The TUI spawns the
   watcher at startup; the reload uses the same path as `/plugins
   reload`. 1 `#[ignore]` integration test (timing-sensitive).
+- Surface trust-tier downgrades (WO 11.3): `/plugins list` now shows
+  the effective trust tier when it differs from the manifest trust
+  (e.g. "shell (effective: read-only)") and the count of filtered
+  capabilities. `HostedPlugin` gains an `original_capability_count`
+  field. The non-downgraded case is quiet (no noise). 1 new test.
 
 ### Fixed
 - Windows env_guard race (Workorder 10.0): the

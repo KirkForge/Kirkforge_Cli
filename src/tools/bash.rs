@@ -830,4 +830,81 @@ mod tests {
             other => panic!("expected Failure from SIGXCPU, got {other:?}"),
         }
     }
+
+    #[tokio::test]
+    async fn bash_background_with_denied_command_returns_internal_failure() {
+        let tool = Bash::new(
+            DenyList::default(),
+            PathGuard::default(),
+            false,
+            None,
+            crate::shared::SandboxConfig::default(),
+        );
+        let ctx = crate::tools::ToolContext::new();
+        let args = serde_json::json!({
+            "command": "rm -rf /",
+            "background": true,
+        });
+        let outcome = tool.run(&ctx, args).await;
+        match outcome {
+            crate::shared::ToolOutcome::Failure(crate::shared::ToolError::Internal { message }) => {
+                assert!(
+                    message.contains("Failed to start background job"),
+                    "got {message}"
+                );
+            }
+            other => panic!("expected Internal failure, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn bash_background_with_safe_command_starts_job() {
+        let tool = Bash::new(
+            DenyList::default(),
+            PathGuard::default(),
+            false,
+            None,
+            crate::shared::SandboxConfig::default(),
+        );
+        let ctx = crate::tools::ToolContext::new();
+        let args = serde_json::json!({
+            "command": "echo hello",
+            "background": true,
+        });
+        let outcome = tool.run(&ctx, args).await;
+        let content = match outcome {
+            crate::shared::ToolOutcome::Success { content } => content,
+            other => panic!("expected Success, got {other:?}"),
+        };
+        assert!(
+            content.contains("Background job #") && content.contains("started"),
+            "got {content}"
+        );
+    }
+
+    #[tokio::test]
+    async fn bash_dry_run_with_background_flag_does_not_start_job() {
+        let tool = Bash::new(
+            DenyList::default(),
+            PathGuard::default(),
+            false,
+            None,
+            crate::shared::SandboxConfig::default(),
+        );
+        let ctx = crate::tools::ToolContext::with_dry_run(true);
+        let args = serde_json::json!({
+            "command": "echo hello",
+            "background": true,
+        });
+        let outcome = tool.run(&ctx, args).await;
+        match outcome {
+            crate::shared::ToolOutcome::Success { content } => {
+                assert!(
+                    content.contains("Dry run"),
+                    "dry-run should win over background flag, got {content}"
+                );
+            }
+            other => panic!("expected dry-run Success, got {other:?}"),
+        }
+    }
 }

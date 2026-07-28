@@ -1544,4 +1544,162 @@ mod tests {
             );
         }
     }
+
+    #[tokio::test]
+    async fn session_navigate_uses_session_tab() {
+        let tool = fake_tool_with_max_steps(20);
+        tool.run(
+            &ToolContext::new(),
+            json!({"action": "open", "url": "https://example.com"}),
+        )
+        .await;
+        let outcome = tool
+            .run(
+                &ToolContext::new(),
+                json!({"action": "navigate", "url": "https://example.com"}),
+            )
+            .await;
+        match outcome {
+            ToolOutcome::Success { content } => {
+                assert!(content.contains("Navigated"), "got {content}");
+                assert!(content.contains("example.com"), "got {content}");
+            }
+            other => panic!("expected Success, got {other:?}"),
+        }
+        let guard = tool.session.lock().unwrap();
+        assert_eq!(guard.as_ref().unwrap().step_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn session_type_returns_success_message() {
+        let tool = fake_tool_with_max_steps(20);
+        tool.run(
+            &ToolContext::new(),
+            json!({"action": "open", "url": "https://example.com"}),
+        )
+        .await;
+        let outcome = tool
+            .run(
+                &ToolContext::new(),
+                json!({"action": "type", "selector": "#input", "text": "hello"}),
+            )
+            .await;
+        match outcome {
+            ToolOutcome::Success { content } => {
+                assert!(content.contains("#input"), "got {content}");
+            }
+            other => panic!("expected Success, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn session_scroll_returns_success_message() {
+        let tool = fake_tool_with_max_steps(20);
+        tool.run(
+            &ToolContext::new(),
+            json!({"action": "open", "url": "https://example.com"}),
+        )
+        .await;
+        let outcome = tool
+            .run(
+                &ToolContext::new(),
+                json!({"action": "scroll", "amount": 250}),
+            )
+            .await;
+        match outcome {
+            ToolOutcome::Success { content } => {
+                assert!(content.contains("250 pixels"), "got {content}");
+            }
+            other => panic!("expected Success, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn session_evaluate_returns_result() {
+        let tool = fake_tool_with_max_steps(20);
+        tool.run(
+            &ToolContext::new(),
+            json!({"action": "open", "url": "https://example.com"}),
+        )
+        .await;
+        let outcome = tool
+            .run(
+                &ToolContext::new(),
+                json!({"action": "evaluate", "expression": "1+1"}),
+            )
+            .await;
+        match outcome {
+            ToolOutcome::Success { content } => {
+                assert_eq!(content, "42", "got {content}");
+            }
+            other => panic!("expected Success, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn session_wait_for_returns_success_message() {
+        let tool = fake_tool_with_max_steps(20);
+        tool.run(
+            &ToolContext::new(),
+            json!({"action": "open", "url": "https://example.com"}),
+        )
+        .await;
+        let outcome = tool
+            .run(
+                &ToolContext::new(),
+                json!({"action": "wait_for", "selector": "#foo"}),
+            )
+            .await;
+        match outcome {
+            ToolOutcome::Success { content } => {
+                assert!(content.contains("#foo"), "got {content}");
+            }
+            other => panic!("expected Success, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn session_keypress_returns_success_message() {
+        let tool = fake_tool_with_max_steps(20);
+        tool.run(
+            &ToolContext::new(),
+            json!({"action": "open", "url": "https://example.com"}),
+        )
+        .await;
+        let outcome = tool
+            .run(
+                &ToolContext::new(),
+                json!({"action": "keypress", "key": "Enter"}),
+            )
+            .await;
+        match outcome {
+            ToolOutcome::Success { content } => {
+                assert!(content.contains("Enter"), "got {content}");
+            }
+            other => panic!("expected Success, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn session_click_xy_returns_success_message() {
+        let tool = fake_tool_with_max_steps(20);
+        tool.run(
+            &ToolContext::new(),
+            json!({"action": "open", "url": "https://example.com"}),
+        )
+        .await;
+        let outcome = tool
+            .run(
+                &ToolContext::new(),
+                json!({"action": "click_xy", "x": 12.5, "y": 34.7}),
+            )
+            .await;
+        match outcome {
+            ToolOutcome::Success { content } => {
+                assert!(content.contains("12.5"), "got {content}");
+                assert!(content.contains("34.7"), "got {content}");
+            }
+            other => panic!("expected Success, got {other:?}"),
+        }
+    }
 }

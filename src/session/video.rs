@@ -922,13 +922,15 @@ mod tests {
         let tool = VideoPipeline;
         let ctx = ToolContext::new();
         let out = tool
-            .run(&ctx, serde_json::json!({"kind": "definitely-not-a-pipeline"}))
+            .run(
+                &ctx,
+                serde_json::json!({"kind": "definitely-not-a-pipeline"}),
+            )
             .await;
         match out {
-            ToolOutcome::Error { message } => assert!(
-                message.contains("unknown pipeline kind"),
-                "got: {message}"
-            ),
+            ToolOutcome::Error { message } => {
+                assert!(message.contains("unknown pipeline kind"), "got: {message}")
+            }
             other => panic!("expected Error, got {other:?}"),
         }
     }
@@ -959,7 +961,7 @@ mod tests {
         let arts = project.join("artifacts");
         std::fs::create_dir_all(&arts).unwrap();
         let plan_path = arts.join("scene_plan.json");
-        std::fs::write(&plan_path, "{}").unwrap();
+        std::fs::write(&plan_path, r#"{"scenes": []}"#).unwrap();
         let tool = VideoRender;
         let ctx = ToolContext::new();
         let out = tool
@@ -988,10 +990,9 @@ mod tests {
             )
             .await;
         match out {
-            ToolOutcome::Error { message } => assert!(
-                message.contains("not found"),
-                "got: {message}"
-            ),
+            ToolOutcome::Error { message } => {
+                assert!(message.contains("not found"), "got: {message}")
+            }
             other => panic!("expected Error, got {other:?}"),
         }
     }
@@ -1021,10 +1022,9 @@ mod tests {
             )
             .await;
         match out {
-            ToolOutcome::Error { message } => assert!(
-                message.contains("unknown pipeline kind"),
-                "got: {message}"
-            ),
+            ToolOutcome::Error { message } => {
+                assert!(message.contains("unknown pipeline kind"), "got: {message}")
+            }
             other => panic!("expected Error, got {other:?}"),
         }
     }
@@ -1098,8 +1098,7 @@ mod tests {
             .await;
         match out {
             ToolOutcome::Success { content } => assert!(
-                !content.is_empty()
-                    && (content.contains("average") || content.contains("verdict")),
+                !content.is_empty() && (content.contains("average") || content.contains("verdict")),
                 "got: {content}"
             ),
             other => panic!("expected Success, got {other:?}"),
@@ -1131,10 +1130,9 @@ mod tests {
             )
             .await;
         match out {
-            ToolOutcome::Error { message } => assert!(
-                message.contains("composition.json"),
-                "got: {message}"
-            ),
+            ToolOutcome::Error { message } => {
+                assert!(message.contains("composition.json"), "got: {message}")
+            }
             other => panic!("expected Error, got {other:?}"),
         }
     }
@@ -1150,10 +1148,9 @@ mod tests {
             )
             .await;
         match out {
-            ToolOutcome::Error { message } => assert!(
-                message.contains("not found"),
-                "got: {message}"
-            ),
+            ToolOutcome::Error { message } => {
+                assert!(message.contains("not found"), "got: {message}")
+            }
             other => panic!("expected Error, got {other:?}"),
         }
     }
@@ -1170,10 +1167,9 @@ mod tests {
             .run(&ctx, serde_json::json!({"project": tmp.path()}))
             .await;
         match out {
-            ToolOutcome::Success { content } => assert!(
-                content.contains("no matching entries"),
-                "got: {content}"
-            ),
+            ToolOutcome::Success { content } => {
+                assert!(content.contains("no matching entries"), "got: {content}")
+            }
             other => panic!("expected Success, got {other:?}"),
         }
     }
@@ -1202,10 +1198,9 @@ mod tests {
             .run(&ctx, serde_json::json!({"project": tmp.path()}))
             .await;
         match out {
-            ToolOutcome::Success { content } => assert!(
-                content.contains("test-entry"),
-                "got: {content}"
-            ),
+            ToolOutcome::Success { content } => {
+                assert!(content.contains("test-entry"), "got: {content}")
+            }
             other => panic!("expected Success, got {other:?}"),
         }
     }

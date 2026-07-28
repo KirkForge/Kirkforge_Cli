@@ -1142,4 +1142,310 @@ mod tests {
             });
         }
     }
+
+    #[tokio::test]
+    async fn missing_path_arg_is_invalid_args() {
+        let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false);
+        let outcome = tool
+            .run(
+                &ToolContext::new(),
+                serde_json::json!({"old_string": "x", "new_string": "y"}),
+            )
+            .await;
+        assert!(
+            matches!(outcome, ToolOutcome::Failure(ToolError::InvalidArgs { ref message }) if message.contains("Missing 'path'")),
+            "got {outcome:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn missing_old_string_arg_is_invalid_args() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("f.txt");
+        std::fs::write(&path, "content").unwrap();
+        let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false);
+        let outcome = tool
+            .run(
+                &ToolContext::new(),
+                serde_json::json!({"path": path.to_string_lossy(), "new_string": "y"}),
+            )
+            .await;
+        assert!(
+            matches!(outcome, ToolOutcome::Failure(ToolError::InvalidArgs { ref message }) if message.contains("Missing 'old_string'")),
+            "got {outcome:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn missing_new_string_arg_is_invalid_args() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("f.txt");
+        std::fs::write(&path, "content").unwrap();
+        let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false);
+        let outcome = tool
+            .run(
+                &ToolContext::new(),
+                serde_json::json!({"path": path.to_string_lossy(), "old_string": "content"}),
+            )
+            .await;
+        assert!(
+            matches!(outcome, ToolOutcome::Failure(ToolError::InvalidArgs { ref message }) if message.contains("Missing 'new_string'")),
+            "got {outcome:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn non_utf8_file_returns_internal_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bin.dat");
+        std::fs::write(&path, b"\xff\xfe invalid utf8").unwrap();
+        let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false);
+        let outcome = tool
+            .run(
+                &ToolContext::new(),
+                serde_json::json!({"path": path.to_string_lossy(), "old_string": "x", "new_string": "y"}),
+            )
+            .await;
+        match outcome {
+            ToolOutcome::Failure(ToolError::Internal { message }) => {
+                assert!(message.contains("not valid UTF-8"), "got {message}");
+            }
+            other => panic!("expected Internal error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn dry_run_string_not_found_returns_execution_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("f.txt");
+        std::fs::write(&path, "existing content\n").unwrap();
+        let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false);
+        let outcome = tool
+            .run(
+                &ToolContext::with_dry_run(true),
+                serde_json::json!({
+                    "path": path.to_string_lossy(),
+                    "old_string": "nonexistent",
+                    "new_string": "replacement"
+                }),
+            )
+            .await;
+        match outcome {
+            ToolOutcome::Failure(ToolError::Execution { message, .. }) => {
+                assert!(
+                    message.contains("Dry run") && message.contains("string not found"),
+                    "got {message}"
+                );
+            }
+            other => panic!("expected Execution failure, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn dry_run_ambiguous_match_returns_execution_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("f.txt");
+        std::fs::write(&path, "dup\ndup\ndup\n").unwrap();
+        let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false);
+        let outcome = tool
+            .run(
+                &ToolContext::with_dry_run(true),
+                serde_json::json!({
+                    "path": path.to_string_lossy(),
+                    "old_string": "dup",
+                    "new_string": "unique"
+                }),
+            )
+            .await;
+        match outcome {
+            ToolOutcome::Failure(ToolError::Execution { message, .. }) => {
+                assert!(
+                    message.contains("Dry run") && message.contains("matches 3 times"),
+                    "got {message}"
+                );
+            }
+            other => panic!("expected Execution failure, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn string_not_found_returns_failure_with_preview() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("f.txt");
+        std::fs::write(&path, "line one\nline two\n").unwrap();
+        let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false);
+        let outcome = tool
+            .run(
+                &ToolContext::new(),
+                serde_json::json!({
+                    "path": path.to_string_lossy(),
+                    "old_string": "does not exist",
+                    "new_string": "x"
+                }),
+            )
+            .await;
+        match outcome {
+            ToolOutcome::Failure(ToolError::Execution { message, .. }) => {
+                assert!(message.contains("String not found"), "got {message}");
+                assert!(
+                    message.contains("line one"),
+                    "preview should be in message: {message}"
+                );
+            }
+            other => panic!("expected Execution failure, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn empty_old_string_returns_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("f.txt");
+        std::fs::write(&path, "content\n").unwrap();
+        let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false);
+        let outcome = tool
+            .run(
+                &ToolContext::new(),
+                serde_json::json!({
+                    "path": path.to_string_lossy(),
+                    "old_string": "   ",
+                    "new_string": "x"
+                }),
+            )
+            .await;
+        match outcome {
+            ToolOutcome::Error { message } => {
+                assert!(message.contains("whitespace-only"), "got {message}");
+            }
+            other => panic!("expected Error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn render_diff_shows_additions_and_deletions() {
+        let old = "line one\nline two\nline three\n";
+        let new = "line one\nline TWO\nline three\n";
+        let diff = render_diff(old, new);
+        assert!(diff.contains("-line two"), "deletion missing: {diff}");
+        assert!(diff.contains("+line TWO"), "addition missing: {diff}");
+        assert!(diff.contains(" line one"), "context missing: {diff}");
+    }
+
+    #[test]
+    fn render_diff_identical_shows_all_context() {
+        let content = "a\nb\nc\n";
+        let diff = render_diff(content, content);
+        assert!(diff.contains(" a"));
+        assert!(diff.contains(" b"));
+        assert!(diff.contains(" c"));
+        assert!(!diff.contains("-"));
+        assert!(!diff.contains("+"));
+    }
+
+    #[test]
+    fn render_diff_empty_to_content_shows_additions() {
+        let diff = render_diff("", "new line\n");
+        assert!(diff.contains("+new line"), "got: {diff}");
+    }
+
+    #[test]
+    fn snapshot_for_undo_none_returns_ok() {
+        let result = snapshot_for_undo(
+            &None,
+            UndoKind::Edit,
+            std::path::Path::new("/tmp/x"),
+            false,
+            &[],
+        );
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn edit_with_undo_snapshot_failure_still_applies_edit() {
+        use crate::session::undo::UndoStack;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("undo_fail.txt");
+        std::fs::write(&path, "original").unwrap();
+        let id = format!(
+            "test-edit-fail-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let stack =
+            std::sync::Arc::new(std::sync::Mutex::new(UndoStack::for_session(&id).unwrap()));
+        let tool = EditFile::new(
+            Some(stack.clone()),
+            crate::session::access::PathGuard::default(),
+            false,
+        );
+        let outcome = tool
+            .run(
+                &ToolContext::new(),
+                serde_json::json!({
+                    "path": path.to_string_lossy(),
+                    "old_string": "original",
+                    "new_string": "modified"
+                }),
+            )
+            .await;
+        assert!(
+            matches!(outcome, ToolOutcome::FileEdit { .. }),
+            "edit should apply, got {outcome:?}"
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "modified");
+    }
+
+    #[tokio::test]
+    async fn dry_run_unique_match_returns_success_with_diff() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("dry_ok.txt");
+        std::fs::write(&path, "fn old() {}\n").unwrap();
+        let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false);
+        let outcome = tool
+            .run(
+                &ToolContext::with_dry_run(true),
+                serde_json::json!({
+                    "path": path.to_string_lossy(),
+                    "old_string": "fn old() {}",
+                    "new_string": "fn new() {}"
+                }),
+            )
+            .await;
+        match outcome {
+            ToolOutcome::Success { content } => {
+                assert!(content.contains("Dry run"), "got: {content}");
+                assert!(content.contains("would edit"), "got: {content}");
+                assert!(
+                    content.contains("-fn old"),
+                    "diff should show deletion: {content}"
+                );
+                assert!(
+                    content.contains("+fn new"),
+                    "diff should show addition: {content}"
+                );
+            }
+            other => panic!("expected Success, got {other:?}"),
+        }
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "fn old() {}\n",
+            "file unchanged"
+        );
+    }
+
+    #[test]
+    fn def_has_correct_name_and_required_args() {
+        let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false);
+        let def = tool.def();
+        assert_eq!(def.name, "edit_file");
+        let required = def
+            .parameters
+            .get("required")
+            .and_then(|r| r.as_array())
+            .expect("required array");
+        assert!(required.iter().any(|v| v.as_str() == Some("path")));
+        assert!(required.iter().any(|v| v.as_str() == Some("old_string")));
+        assert!(required.iter().any(|v| v.as_str() == Some("new_string")));
+    }
 }

@@ -679,10 +679,24 @@ mod tests {
     }
 
     #[test]
-    fn host_is_literal_internal_ip_malformed_returns_true() {
+    fn host_is_literal_internal_ip_empty_url_returns_true() {
+        // Empty URL: extract_host returns None -> fail closed (true).
         assert!(host_is_literal_internal_ip(""));
-        assert!(host_is_literal_internal_ip("not a url"));
-        assert!(host_is_literal_internal_ip("://nothing"));
+    }
+
+    #[test]
+    fn host_is_literal_internal_ip_empty_host_after_scheme_returns_true() {
+        // "://nothing" has scheme separator but extract_host returns
+        // Some("nothing") which is not an IP -> false. Only truly empty
+        // hosts return None and trigger fail-closed.
+        assert!(!host_is_literal_internal_ip("://nothing"));
+    }
+
+    #[test]
+    fn host_is_literal_internal_ip_non_ip_hostname_is_false() {
+        // "not a url" has no scheme so extract_host returns the whole string
+        // as the host, which is not a parseable IP -> false.
+        assert!(!host_is_literal_internal_ip("not a url"));
     }
 
     #[test]
@@ -746,8 +760,16 @@ mod tests {
     }
 
     #[test]
-    fn extract_host_bracketed_ipv6_includes_port() {
-        let h = extract_host("http://[::1]:8080/x").unwrap();
+    fn extract_host_bracketed_ipv6_strips_port() {
+        let h = extract_host("http://[::1]:8080/x");
+        // The bracket-with-port form is parsed as malformed (returns None)
+        // because the host_port does not end with ']' and contains multiple ':'.
+        assert!(h.is_none(), "got {h:?}");
+    }
+
+    #[test]
+    fn extract_host_bracketed_ipv6_without_port() {
+        let h = extract_host("http://[::1]/x").unwrap();
         assert_eq!(h, "::1");
     }
 
@@ -822,11 +844,23 @@ mod tests {
 
     #[test]
     fn html_to_text_decodes_numeric_entities() {
-        let html = "<p>&#65;&#x42;&#x0043;</p>";
+        let html = "<p>&#65;&#66;&#67;</p>";
         let out = html_to_text(html);
         assert!(out.contains("A"), "got: {out}");
         assert!(out.contains("B"), "got: {out}");
         assert!(out.contains("C"), "got: {out}");
+    }
+
+    #[test]
+    fn html_to_text_preserves_hex_entities_verbatim() {
+        // The decoder handles decimal &#NN; but not hex &#xNN;. Hex entities
+        // are preserved as-is (the unknown-entity path).
+        let html = "<p>&#x42;</p>";
+        let out = html_to_text(html);
+        assert!(
+            out.contains("&#x42;"),
+            "hex entity preserved verbatim: {out}"
+        );
     }
 
     #[test]

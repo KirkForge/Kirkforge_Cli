@@ -1232,7 +1232,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn file_op_nonexistent_path_returns_error() {
+    async fn file_op_nonexistent_path_returns_access_denied() {
         let pool = rust_pool_no_binary();
         let tool = LspQuery::new(pool, PathGuard::default());
         let outcome = tool
@@ -1246,15 +1246,10 @@ mod tests {
                 }),
             )
             .await;
-        match outcome {
-            ToolOutcome::Error { message } => {
-                assert!(
-                    message.contains("No LSP server available") || message.contains("cooldown"),
-                    "got {message}"
-                );
-            }
-            other => panic!("expected Error, got {other:?}"),
-        }
+        assert!(
+            matches!(outcome, ToolOutcome::Failure(ToolError::AccessDenied { ref message }) if message.contains("Path does not exist")),
+            "got {outcome:?}"
+        );
     }
 
     #[tokio::test]

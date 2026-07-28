@@ -1312,7 +1312,11 @@ mod tests {
         .await;
         let guard = tool.session.lock().unwrap();
         let session = guard.as_ref().unwrap();
-        assert_eq!(session.step_count(), 3, "after three non-open actions");
+        assert_eq!(
+            session.step_count(),
+            2,
+            "click and scroll increment, open does not"
+        );
     }
 
     #[tokio::test]

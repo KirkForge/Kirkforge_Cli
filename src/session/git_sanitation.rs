@@ -637,7 +637,7 @@ mod tests {
     #[test]
     fn check_worktree_no_trackable_changes_warns() {
         let tmp = tempfile::tempdir().unwrap();
-        let report = check_worktree(tmp.path(), "   \n  ", None).unwrap();
+        let report = check_worktree(tmp.path(), "??\n  \n", None).unwrap();
         assert!(report.warnings.iter().any(|w| w.contains("trackable")));
     }
 

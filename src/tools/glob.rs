@@ -204,7 +204,9 @@ mod tests {
     #[tokio::test]
     async fn glob_missing_pattern_arg_is_invalid_args() {
         let glob = Glob::new(PathGuard::default());
-        let outcome = glob.run(&ToolContext::default(), serde_json::json!({})).await;
+        let outcome = glob
+            .run(&ToolContext::default(), serde_json::json!({}))
+            .await;
         assert!(
             matches!(outcome, ToolOutcome::Failure(ToolError::InvalidArgs { .. })),
             "expected InvalidArgs, got {outcome:?}"
@@ -282,7 +284,10 @@ mod tests {
             "base_dir": dir.to_string_lossy(),
         });
         let outcome = glob.run(&ToolContext::default(), args).await;
-        assert!(matches!(outcome, ToolOutcome::Success { .. }), "got {outcome:?}");
+        assert!(
+            matches!(outcome, ToolOutcome::Success { .. }),
+            "got {outcome:?}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -356,10 +361,15 @@ mod tests {
             ToolOutcome::Success { content } => {
                 let lines: Vec<&str> = content.lines().skip(1).collect();
                 assert!(
-                    !lines.iter().any(|l| *l == "sub" || l.contains("/sub") || l.ends_with("sub")),
+                    !lines
+                        .iter()
+                        .any(|l| *l == "sub" || l.contains("/sub") || l.ends_with("sub")),
                     "directories should not appear, got: {lines:?}"
                 );
-                assert!(lines.iter().any(|l| l.contains("a.txt")), "a.txt should be present: {lines:?}");
+                assert!(
+                    lines.iter().any(|l| l.contains("a.txt")),
+                    "a.txt should be present: {lines:?}"
+                );
             }
             other => panic!("expected Success, got {other:?}"),
         }
@@ -379,7 +389,10 @@ mod tests {
         let args = serde_json::json!({ "pattern": "*.txt" });
         let outcome = glob.run(&ToolContext::default(), args).await;
         std::env::set_current_dir(cwd).unwrap();
-        assert!(matches!(outcome, ToolOutcome::Success { .. }), "got {outcome:?}");
+        assert!(
+            matches!(outcome, ToolOutcome::Success { .. }),
+            "got {outcome:?}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -381,11 +381,17 @@ mod tests {
         std::fs::write(&path, "secret").unwrap();
         let tool = ReadFile::new(PathGuard::default(), false, 4096);
         let outcome = tool
-            .run(&ToolContext::new(), json!({ "path": path.to_string_lossy() }))
+            .run(
+                &ToolContext::new(),
+                json!({ "path": path.to_string_lossy() }),
+            )
             .await;
         std::fs::remove_file(&path).ok();
         assert!(
-            matches!(outcome, ToolOutcome::Failure(ToolError::AccessDenied { .. })),
+            matches!(
+                outcome,
+                ToolOutcome::Failure(ToolError::AccessDenied { .. })
+            ),
             "default deny list should block .pem, got {outcome:?}"
         );
     }
@@ -416,12 +422,18 @@ mod tests {
         std::fs::write(&tmp, "").unwrap();
         let tool = ReadFile::new(PathGuard::default(), false, 4096);
         let outcome = tool
-            .run(&ToolContext::new(), json!({ "path": tmp.to_string_lossy() }))
+            .run(
+                &ToolContext::new(),
+                json!({ "path": tmp.to_string_lossy() }),
+            )
             .await;
         std::fs::remove_file(&tmp).ok();
         match outcome {
             ToolOutcome::FileContent { content, .. } => {
-                assert!(content.contains("empty file"), "expected empty marker, got: {content}");
+                assert!(
+                    content.contains("empty file"),
+                    "expected empty marker, got: {content}"
+                );
             }
             other => panic!("expected FileContent, got {other:?}"),
         }
@@ -470,9 +482,14 @@ mod tests {
             .await;
         std::fs::remove_file(&tmp).ok();
         match outcome {
-            ToolOutcome::FileContent { content, truncated, .. } => {
+            ToolOutcome::FileContent {
+                content, truncated, ..
+            } => {
                 assert!(truncated, "expected truncated=true");
-                assert!(content.contains("showing lines 3-5 of 10"), "got: {content}");
+                assert!(
+                    content.contains("showing lines 3-5 of 10"),
+                    "got: {content}"
+                );
                 assert!(content.contains("line 2"));
                 assert!(content.contains("line 4"));
             }
@@ -489,7 +506,10 @@ mod tests {
         std::fs::write(&tmp, "hello\nworld\n").unwrap();
         let tool = ReadFile::new(PathGuard::default(), false, 4096);
         let outcome = tool
-            .run(&ToolContext::new(), json!({ "path": tmp.to_string_lossy() }))
+            .run(
+                &ToolContext::new(),
+                json!({ "path": tmp.to_string_lossy() }),
+            )
             .await;
         std::fs::remove_file(&tmp).ok();
         match outcome {
@@ -545,7 +565,10 @@ mod tests {
             )
             .await;
         std::fs::remove_file(&tmp).ok();
-        let ToolOutcome::FileContent { content, truncated, .. } = outcome else {
+        let ToolOutcome::FileContent {
+            content, truncated, ..
+        } = outcome
+        else {
             panic!("expected FileContent, got {outcome:?}");
         };
         assert!(truncated, "should be truncated");

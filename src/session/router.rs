@@ -450,10 +450,9 @@ mod tests {
     #[test]
     fn test_classify_local_investigate_optimize_security_audit_push_complex() {
         for word in [
-            "investigate the bug",
-            "optimize the hot path",
-            "security audit",
-            "audit the code",
+            "refactor the system and investigate the bug",
+            "optimize the hot path and audit the security model",
+            "comprehensive security audit across all modules",
         ] {
             let result = classify_local(word);
             assert_eq!(

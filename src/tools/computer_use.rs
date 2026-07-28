@@ -1116,7 +1116,10 @@ mod tests {
             )
             .await;
         assert!(
-            matches!(outcome, ToolOutcome::Failure(ToolError::AccessDenied { .. })),
+            matches!(
+                outcome,
+                ToolOutcome::Failure(ToolError::AccessDenied { .. })
+            ),
             "got {outcome:?}"
         );
     }
@@ -1131,7 +1134,10 @@ mod tests {
             )
             .await;
         assert!(
-            matches!(outcome, ToolOutcome::Failure(ToolError::AccessDenied { .. })),
+            matches!(
+                outcome,
+                ToolOutcome::Failure(ToolError::AccessDenied { .. })
+            ),
             "got {outcome:?}"
         );
     }
@@ -1146,7 +1152,10 @@ mod tests {
             )
             .await;
         assert!(
-            matches!(outcome, ToolOutcome::Failure(ToolError::AccessDenied { .. })),
+            matches!(
+                outcome,
+                ToolOutcome::Failure(ToolError::AccessDenied { .. })
+            ),
             "got {outcome:?}"
         );
     }
@@ -1348,14 +1357,30 @@ mod tests {
             fn navigate(&self, _url: &str) -> anyhow::Result<()> {
                 Err(anyhow::anyhow!("network down"))
             }
-            fn click(&self, _: &str) -> anyhow::Result<()> { Ok(()) }
-            fn click_xy(&self, _: f64, _: f64) -> anyhow::Result<()> { Ok(()) }
-            fn type_text(&self, _: &str, _: &str) -> anyhow::Result<()> { Ok(()) }
-            fn keypress(&self, _: &str) -> anyhow::Result<()> { Ok(()) }
-            fn scroll(&self, _: i32) -> anyhow::Result<()> { Ok(()) }
-            fn screenshot(&self) -> anyhow::Result<Vec<u8>> { Ok(vec![]) }
-            fn wait_for(&self, _: &str, _: Duration) -> anyhow::Result<()> { Ok(()) }
-            fn evaluate(&self, _: &str) -> anyhow::Result<String> { Ok(String::new()) }
+            fn click(&self, _: &str) -> anyhow::Result<()> {
+                Ok(())
+            }
+            fn click_xy(&self, _: f64, _: f64) -> anyhow::Result<()> {
+                Ok(())
+            }
+            fn type_text(&self, _: &str, _: &str) -> anyhow::Result<()> {
+                Ok(())
+            }
+            fn keypress(&self, _: &str) -> anyhow::Result<()> {
+                Ok(())
+            }
+            fn scroll(&self, _: i32) -> anyhow::Result<()> {
+                Ok(())
+            }
+            fn screenshot(&self) -> anyhow::Result<Vec<u8>> {
+                Ok(vec![])
+            }
+            fn wait_for(&self, _: &str, _: Duration) -> anyhow::Result<()> {
+                Ok(())
+            }
+            fn evaluate(&self, _: &str) -> anyhow::Result<String> {
+                Ok(String::new())
+            }
         }
         let tool = ComputerUse::with_tab(
             DenyList::default(),
@@ -1381,17 +1406,33 @@ mod tests {
     async fn screenshot_failure_returns_internal_error() {
         struct NoScreenshotTab;
         impl ChromeTab for NoScreenshotTab {
-            fn navigate(&self, _: &str) -> anyhow::Result<()> { Ok(()) }
-            fn click(&self, _: &str) -> anyhow::Result<()> { Ok(()) }
-            fn click_xy(&self, _: f64, _: f64) -> anyhow::Result<()> { Ok(()) }
-            fn type_text(&self, _: &str, _: &str) -> anyhow::Result<()> { Ok(()) }
-            fn keypress(&self, _: &str) -> anyhow::Result<()> { Ok(()) }
-            fn scroll(&self, _: i32) -> anyhow::Result<()> { Ok(()) }
+            fn navigate(&self, _: &str) -> anyhow::Result<()> {
+                Ok(())
+            }
+            fn click(&self, _: &str) -> anyhow::Result<()> {
+                Ok(())
+            }
+            fn click_xy(&self, _: f64, _: f64) -> anyhow::Result<()> {
+                Ok(())
+            }
+            fn type_text(&self, _: &str, _: &str) -> anyhow::Result<()> {
+                Ok(())
+            }
+            fn keypress(&self, _: &str) -> anyhow::Result<()> {
+                Ok(())
+            }
+            fn scroll(&self, _: i32) -> anyhow::Result<()> {
+                Ok(())
+            }
             fn screenshot(&self) -> anyhow::Result<Vec<u8>> {
                 Err(anyhow::anyhow!("capture failed"))
             }
-            fn wait_for(&self, _: &str, _: Duration) -> anyhow::Result<()> { Ok(()) }
-            fn evaluate(&self, _: &str) -> anyhow::Result<String> { Ok(String::new()) }
+            fn wait_for(&self, _: &str, _: Duration) -> anyhow::Result<()> {
+                Ok(())
+            }
+            fn evaluate(&self, _: &str) -> anyhow::Result<String> {
+                Ok(String::new())
+            }
         }
         let tool = ComputerUse::with_tab(
             DenyList::default(),
@@ -1414,19 +1455,36 @@ mod tests {
     async fn open_with_session_launcher_failure_returns_internal_error() {
         struct OkTab;
         impl ChromeTab for OkTab {
-            fn navigate(&self, _: &str) -> anyhow::Result<()> { Ok(()) }
-            fn click(&self, _: &str) -> anyhow::Result<()> { Ok(()) }
-            fn click_xy(&self, _: f64, _: f64) -> anyhow::Result<()> { Ok(()) }
-            fn type_text(&self, _: &str, _: &str) -> anyhow::Result<()> { Ok(()) }
-            fn keypress(&self, _: &str) -> anyhow::Result<()> { Ok(()) }
-            fn scroll(&self, _: i32) -> anyhow::Result<()> { Ok(()) }
-            fn screenshot(&self) -> anyhow::Result<Vec<u8>> { Ok(vec![]) }
-            fn wait_for(&self, _: &str, _: Duration) -> anyhow::Result<()> { Ok(()) }
-            fn evaluate(&self, _: &str) -> anyhow::Result<String> { Ok(String::new()) }
+            fn navigate(&self, _: &str) -> anyhow::Result<()> {
+                Ok(())
+            }
+            fn click(&self, _: &str) -> anyhow::Result<()> {
+                Ok(())
+            }
+            fn click_xy(&self, _: f64, _: f64) -> anyhow::Result<()> {
+                Ok(())
+            }
+            fn type_text(&self, _: &str, _: &str) -> anyhow::Result<()> {
+                Ok(())
+            }
+            fn keypress(&self, _: &str) -> anyhow::Result<()> {
+                Ok(())
+            }
+            fn scroll(&self, _: i32) -> anyhow::Result<()> {
+                Ok(())
+            }
+            fn screenshot(&self) -> anyhow::Result<Vec<u8>> {
+                Ok(vec![])
+            }
+            fn wait_for(&self, _: &str, _: Duration) -> anyhow::Result<()> {
+                Ok(())
+            }
+            fn evaluate(&self, _: &str) -> anyhow::Result<String> {
+                Ok(String::new())
+            }
         }
-        let launcher: SessionLauncher = Arc::new(|| {
-            Box::pin(async { Err(anyhow::anyhow!("chrome binary missing")) })
-        });
+        let launcher: SessionLauncher =
+            Arc::new(|| Box::pin(async { Err(anyhow::anyhow!("chrome binary missing")) }));
         let tool = ComputerUse::new(
             DenyList::default(),
             ComputerUseConfig::default(),
@@ -1441,7 +1499,10 @@ mod tests {
             .await;
         match outcome {
             ToolOutcome::Failure(ToolError::Internal { message }) => {
-                assert!(message.contains("failed to launch browser session"), "got {message}");
+                assert!(
+                    message.contains("failed to launch browser session"),
+                    "got {message}"
+                );
                 assert!(message.contains("chrome binary missing"), "got {message}");
             }
             other => panic!("expected Internal error, got {other:?}"),
@@ -1473,7 +1534,10 @@ mod tests {
             "evaluate",
             "close",
         ] {
-            assert!(names.contains(&expected), "missing {expected} in enum: {names:?}");
+            assert!(
+                names.contains(&expected),
+                "missing {expected} in enum: {names:?}"
+            );
         }
     }
 }

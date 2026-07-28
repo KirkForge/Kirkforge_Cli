@@ -332,7 +332,10 @@ mod tests {
     async fn missing_path_arg_is_invalid_args() {
         let tool = NotebookEdit::new(None, guard());
         let outcome = tool
-            .run(&ToolContext::default(), serde_json::json!({"index": 0, "source": "x"}))
+            .run(
+                &ToolContext::default(),
+                serde_json::json!({"index": 0, "source": "x"}),
+            )
             .await;
         match outcome {
             ToolOutcome::Failure(ToolError::InvalidArgs { message }) => {
@@ -517,7 +520,10 @@ mod tests {
                 serde_json::json!({ "path": path, "index": 0, "source": "new" }),
             )
             .await;
-        assert!(matches!(outcome, ToolOutcome::Success { .. }), "got {outcome:?}");
+        assert!(
+            matches!(outcome, ToolOutcome::Success { .. }),
+            "got {outcome:?}"
+        );
         let updated: serde_json::Value =
             serde_json::from_slice(&tokio::fs::read(&path).await.unwrap()).unwrap();
         let source = updated["cells"][0]["source"].as_array().unwrap();

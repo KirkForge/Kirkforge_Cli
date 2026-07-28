@@ -511,9 +511,7 @@ mod tests {
     #[tokio::test]
     async fn rejects_empty_url() {
         let tool = WebFetch::new(DenyList::default());
-        let outcome = tool
-            .run(&ToolContext::new(), json!({"url": "   "}))
-            .await;
+        let outcome = tool.run(&ToolContext::new(), json!({"url": "   "})).await;
         match outcome {
             ToolOutcome::Failure(ToolError::InvalidArgs { message }) => {
                 assert!(message.contains("URL is empty"), "got {message}");
@@ -561,7 +559,10 @@ mod tests {
             )
             .await;
         assert!(
-            matches!(outcome, ToolOutcome::Failure(ToolError::AccessDenied { .. })),
+            matches!(
+                outcome,
+                ToolOutcome::Failure(ToolError::AccessDenied { .. })
+            ),
             "got {outcome:?}"
         );
     }
@@ -573,7 +574,10 @@ mod tests {
             .run(&ToolContext::new(), json!({"url": "http://169.254.10.20/"}))
             .await;
         assert!(
-            matches!(outcome, ToolOutcome::Failure(ToolError::AccessDenied { .. })),
+            matches!(
+                outcome,
+                ToolOutcome::Failure(ToolError::AccessDenied { .. })
+            ),
             "got {outcome:?}"
         );
     }
@@ -585,7 +589,10 @@ mod tests {
             .run(&ToolContext::new(), json!({"url": "http://0.0.0.0/"}))
             .await;
         assert!(
-            matches!(outcome, ToolOutcome::Failure(ToolError::AccessDenied { .. })),
+            matches!(
+                outcome,
+                ToolOutcome::Failure(ToolError::AccessDenied { .. })
+            ),
             "got {outcome:?}"
         );
     }
@@ -598,11 +605,12 @@ mod tests {
             "http://192.168.1.1/",
             "http://172.16.0.1/",
         ] {
-            let outcome = tool
-                .run(&ToolContext::new(), json!({"url": url}))
-                .await;
+            let outcome = tool.run(&ToolContext::new(), json!({"url": url})).await;
             assert!(
-                matches!(outcome, ToolOutcome::Failure(ToolError::AccessDenied { .. })),
+                matches!(
+                    outcome,
+                    ToolOutcome::Failure(ToolError::AccessDenied { .. })
+                ),
                 "{url} should be denied, got {outcome:?}"
             );
         }
@@ -615,7 +623,10 @@ mod tests {
             .run(&ToolContext::new(), json!({"url": "http://[::1]/"}))
             .await;
         assert!(
-            matches!(outcome, ToolOutcome::Failure(ToolError::AccessDenied { .. })),
+            matches!(
+                outcome,
+                ToolOutcome::Failure(ToolError::AccessDenied { .. })
+            ),
             "got {outcome:?}"
         );
     }
@@ -627,7 +638,10 @@ mod tests {
             .run(&ToolContext::new(), json!({"url": "http://[fe80::1]/"}))
             .await;
         assert!(
-            matches!(outcome, ToolOutcome::Failure(ToolError::AccessDenied { .. })),
+            matches!(
+                outcome,
+                ToolOutcome::Failure(ToolError::AccessDenied { .. })
+            ),
             "got {outcome:?}"
         );
     }
@@ -639,7 +653,10 @@ mod tests {
             .run(&ToolContext::new(), json!({"url": "http://[fd00::1]/"}))
             .await;
         assert!(
-            matches!(outcome, ToolOutcome::Failure(ToolError::AccessDenied { .. })),
+            matches!(
+                outcome,
+                ToolOutcome::Failure(ToolError::AccessDenied { .. })
+            ),
             "got {outcome:?}"
         );
     }
@@ -648,16 +665,17 @@ mod tests {
     async fn public_hostname_passes_initial_guards() {
         let server = wiremock::MockServer::start().await;
         wiremock::Mock::given(wiremock::matchers::method("GET"))
-            .respond_with(
-                wiremock::ResponseTemplate::new(200).set_body_string("ok"),
-            )
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_string("ok"))
             .mount(&server)
             .await;
         let tool = test_tool_for(&server);
         let outcome = tool
             .run(&ToolContext::new(), json!({"url": "http://test.local/"}))
             .await;
-        assert!(matches!(outcome, ToolOutcome::Success { .. }), "got {outcome:?}");
+        assert!(
+            matches!(outcome, ToolOutcome::Success { .. }),
+            "got {outcome:?}"
+        );
     }
 
     #[test]
@@ -697,8 +715,14 @@ mod tests {
 
     #[test]
     fn extract_host_strips_scheme_and_port() {
-        assert_eq!(extract_host("http://example.com:8080/p").as_deref(), Some("example.com"));
-        assert_eq!(extract_host("https://example.com/p").as_deref(), Some("example.com"));
+        assert_eq!(
+            extract_host("http://example.com:8080/p").as_deref(),
+            Some("example.com")
+        );
+        assert_eq!(
+            extract_host("https://example.com/p").as_deref(),
+            Some("example.com")
+        );
     }
 
     #[test]
@@ -715,7 +739,10 @@ mod tests {
             extract_host("http://example.com/p?x=1#frag").as_deref(),
             Some("example.com")
         );
-        assert_eq!(extract_host("http://example.com?x=1").as_deref(), Some("example.com"));
+        assert_eq!(
+            extract_host("http://example.com?x=1").as_deref(),
+            Some("example.com")
+        );
     }
 
     #[test]
@@ -726,7 +753,10 @@ mod tests {
 
     #[test]
     fn extract_host_no_scheme_returns_whole_host() {
-        assert_eq!(extract_host("example.com/p").as_deref(), Some("example.com"));
+        assert_eq!(
+            extract_host("example.com/p").as_deref(),
+            Some("example.com")
+        );
     }
 
     #[test]
@@ -760,7 +790,10 @@ mod tests {
         let html = "<html><head><script>alert(1)</script><style>.x{}</style></head><body>text</body></html>";
         let out = html_to_text(html);
         assert!(out.contains("text"), "got: {out}");
-        assert!(!out.contains("alert"), "script content should be gone: {out}");
+        assert!(
+            !out.contains("alert"),
+            "script content should be gone: {out}"
+        );
         assert!(!out.contains(".x{}"), "style content should be gone: {out}");
     }
 

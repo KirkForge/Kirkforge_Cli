@@ -698,13 +698,23 @@ mod hint_tests {
     }
 
     #[test]
-    fn classify_borrow_conflict_returns_none_when_no_original_ref() {
+    fn classify_borrow_conflict_falls_back_to_conflicting_when_no_original() {
         let err = "cannot borrow `foo` as mutable";
-        let h = classify_borrow_conflict(err);
-        assert!(
-            h.is_none(),
-            "without 'also borrowed as' the regex for original_ref returns None and the whole classifier short-circuits"
+        let h = classify_borrow_conflict(err).expect(
+            "without 'also borrowed as', the regex for original_ref falls back to the conflicting_ref",
         );
+        assert!(
+            matches!(h, ErrorHint::BorrowConflict { .. }),
+            "got {h:?}"
+        );
+        if let ErrorHint::BorrowConflict {
+            original_ref,
+            conflicting_ref,
+        } = h
+        {
+            assert_eq!(original_ref, "foo");
+            assert_eq!(conflicting_ref, "foo");
+        }
     }
 
     #[test]
@@ -753,8 +763,7 @@ mod hint_tests {
     #[test]
     fn analyze_error_access_denied_alias_is_recoverable() {
         let args = serde_json::json!({"path": "/root/.ssh"});
-        let hint =
-            analyze_error("read_file", "access denied for /root/.ssh", &args).unwrap();
+        let hint = analyze_error("read_file", "access denied for /root/.ssh", &args).unwrap();
         assert!(hint.recoverable);
         assert!(hint.error_summary.contains("Permission denied"));
     }
@@ -775,8 +784,7 @@ mod hint_tests {
     #[test]
     fn analyze_error_command_not_recognized_alias() {
         let args = serde_json::json!({});
-        let hint =
-            analyze_error("bash", "bash: foo: not recognized as a command", &args).unwrap();
+        let hint = analyze_error("bash", "bash: foo: not recognized as a command", &args).unwrap();
         assert!(hint.suggestion.contains("installed"));
     }
 
@@ -790,7 +798,7 @@ mod hint_tests {
     #[test]
     fn analyze_error_timeout_is_network_recoverable() {
         let args = serde_json::json!({});
-        let hint = analyze_error("bash", "operation timed out", &args).unwrap();
+        let hint = analyze_error("bash", "operation timeout", &args).unwrap();
         assert!(hint.recoverable);
     }
 
@@ -808,8 +816,7 @@ mod hint_tests {
     #[test]
     fn analyze_error_empty_args_for_file_not_found() {
         let args = serde_json::json!({});
-        let hint =
-            analyze_error("read_file", "no such file or directory", &args).unwrap();
+        let hint = analyze_error("read_file", "no such file or directory", &args).unwrap();
         assert!(hint.error_summary.contains("the file"));
     }
 
@@ -824,7 +831,11 @@ mod hint_tests {
         assert_eq!(msg.role, Role::User);
         assert!(msg.content.contains("explosion"));
         assert!(msg.content.contains("don't explode"));
-        assert!(msg.content.contains("do not repeat"));
+        assert!(
+            msg.content.contains("Do NOT repeat"),
+            "got: {}",
+            msg.content
+        );
     }
 
     #[test]

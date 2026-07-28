@@ -289,10 +289,7 @@ mod tests {
             composite.resolve("b").is_some(),
             "expected replacement to take effect"
         );
-        assert!(
-            composite.resolve("a").is_none(),
-            "old tool should be gone"
-        );
+        assert!(composite.resolve("a").is_none(), "old tool should be gone");
     }
 
     #[test]

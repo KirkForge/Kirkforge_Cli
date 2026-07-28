@@ -240,7 +240,9 @@ mod tests {
             .run(&ToolContext::new(), serde_json::json!({"query": "rust"}))
             .await;
         match outcome {
-            ToolOutcome::Error { message } => assert!(message.contains("BRAVE_SEARCH_API_KEY"), "{message}"),
+            ToolOutcome::Error { message } => {
+                assert!(message.contains("BRAVE_SEARCH_API_KEY"), "{message}")
+            }
             other => panic!("expected Error for empty key, got {other:?}"),
         }
     }
@@ -248,11 +250,12 @@ mod tests {
     #[tokio::test]
     async fn missing_query_arg_is_invalid_args() {
         let tool = WebSearch::with_key("dummy");
-        let outcome = tool
-            .run(&ToolContext::new(), serde_json::json!({}))
-            .await;
+        let outcome = tool.run(&ToolContext::new(), serde_json::json!({})).await;
         assert!(
-            matches!(outcome, ToolOutcome::Failure(crate::shared::ToolError::InvalidArgs { .. })),
+            matches!(
+                outcome,
+                ToolOutcome::Failure(crate::shared::ToolError::InvalidArgs { .. })
+            ),
             "got {outcome:?}"
         );
     }

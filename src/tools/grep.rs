@@ -308,7 +308,8 @@ mod tests {
             "png", "jpg", "jpeg", "gif", "zip", "tar", "gz", "pdf", "mp3", "mp4", "exe", "so",
             "wasm", "pyc", "class",
         ] {
-            let path = Path::new(format!("file.{ext}").as_str());
+            let fname = format!("file.{ext}");
+            let path = Path::new(&fname);
             assert!(is_binary_by_ext(path), "{ext} should be binary");
         }
     }
@@ -316,7 +317,8 @@ mod tests {
     #[test]
     fn is_binary_by_ext_allows_text_extensions() {
         for ext in ["rs", "py", "js", "ts", "go", "txt", "md", "toml", "json"] {
-            let path = Path::new(format!("file.{ext}").as_str());
+            let fname = format!("file.{ext}");
+            let path = Path::new(&fname);
             assert!(!is_binary_by_ext(path), "{ext} should not be binary");
         }
     }

@@ -342,7 +342,6 @@ mod tests {
     #[test]
     fn test_resolve_tier_model_prefers_map_then_default() {
         let mut config = crate::shared::Config::default();
-        // Empty map + empty default_model → no resolution.
         assert_eq!(resolve_tier_model(&config, "simple"), None);
 
         config.model.default_model = "fallback-model".into();
@@ -360,10 +359,193 @@ mod tests {
             Some("cheap-model".into())
         );
 
-        // Unknown tier falls back to default_model.
         assert_eq!(
             resolve_tier_model(&config, "unknown"),
             Some("fallback-model".into())
         );
     }
+
+    #[test]
+    fn test_resolve_tier_model_skips_empty_map_entries() {
+        let mut config = crate::shared::Config::default();
+        config.model.default_model = "default-model".into();
+        config
+            .model
+            .routing_model_map
+            .insert("simple".into(), String::new());
+        assert_eq!(
+            resolve_tier_model(&config, "simple"),
+            Some("default-model".into()),
+            "empty map entry should fall through to default"
+        );
+    }
+
+    #[test]
+    fn test_resolve_tier_model_is_case_insensitive() {
+        let mut config = crate::shared::Config::default();
+        config
+            .model
+            .routing_model_map
+            .insert("simple".into(), "cheap-model".into());
+        assert_eq!(
+            resolve_tier_model(&config, "SIMPLE"),
+            Some("cheap-model".into())
+        );
+        assert_eq!(
+            resolve_tier_model(&config, "Simple"),
+            Some("cheap-model".into())
+        );
+    }
+
+    #[test]
+    fn test_classify_local_long_message_bumps_complexity() {
+        let big = "x".repeat(600);
+        let result = classify_local(&big);
+        assert!(
+            matches!(result.tier, ComplexityTier::Medium | ComplexityTier::Complex),
+            "600-char message should bump score, got {:?}",
+            result.tier
+        );
+        let bigger = "y".repeat(1200);
+        let result2 = classify_local(&bigger);
+        assert!(
+            matches!(result2.tier, ComplexityTier::Medium | ComplexityTier::Complex),
+            "1200-char message should bump score, got {:?}",
+            result2.tier
+        );
+    }
+
+    #[test]
+    fn test_classify_local_add_keyword_is_medium_or_higher() {
+        let result = classify_local("add a feature");
+        assert!(
+            matches!(result.tier, ComplexityTier::Medium | ComplexityTier::Complex),
+            "'add' is a medium indicator, got {:?}",
+            result.tier
+        );
+    }
+
+    #[test]
+    fn test_classify_local_extract_split_keywords_count() {
+        let result = classify_local("extract the helper and split the module");
+        assert!(
+            matches!(result.tier, ComplexityTier::Medium | ComplexityTier::Complex),
+            "extract+split should be at least medium, got {:?}",
+            result.tier
+        );
+    }
+
+    #[test]
+    fn test_classify_local_investigate_optimize_security_audit_push_complex() {
+        for word in [
+            "investigate the bug",
+            "optimize the hot path",
+            "security audit",
+            "audit the code",
+        ] {
+            let result = classify_local(word);
+            assert_eq!(
+                result.tier,
+                ComplexityTier::Complex,
+                "{word:?} should be complex, got {:?}",
+                result.tier
+            );
+        }
+    }
+
+    #[test]
+    fn test_complexity_tier_eq_hash() {
+        assert_eq!(ComplexityTier::Simple, ComplexityTier::Simple);
+        assert_eq!(ComplexityTier::Medium, ComplexityTier::Medium);
+        assert_eq!(ComplexityTier::Complex, ComplexityTier::Complex);
+        assert_ne!(ComplexityTier::Simple, ComplexityTier::Complex);
+    }
+
+    #[test]
+    fn test_router_config_default_is_disabled() {
+        let cfg = RouterConfig::default();
+        assert!(!cfg.enabled);
+        assert!(cfg.router_model.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_classify_disabled_uses_local() {
+        let cfg = RouterConfig {
+            enabled: false,
+            router_model: "ignored".into(),
+        };
+        let result = classify("what is rust?", &cfg, "http://localhost:11434").await;
+        assert_eq!(result.tier, ComplexityTier::Simple);
+        assert!(matches!(result.method, RouteMethod::Local));
+    }
+
+    #[tokio::test]
+    async fn test_classify_enabled_but_no_router_model_uses_local() {
+        let cfg = RouterConfig {
+            enabled: true,
+            router_model: String::new(),
+        };
+        let result = classify("what is rust?", &cfg, "http://localhost:11434").await;
+        assert_eq!(result.tier, ComplexityTier::Simple);
+        assert!(matches!(result.method, RouteMethod::Local));
+    }
+
+    #[tokio::test]
+    async fn test_classify_with_llm_falls_back_on_unreachable_host() {
+        let cfg = RouterConfig {
+            enabled: true,
+            router_model: "test-router-model".into(),
+        };
+        let result = classify("what is rust?", &cfg, "http://127.0.0.1:1/").await;
+        assert!(
+            matches!(result.method, RouteMethod::Local),
+            "unreachable host should fall back to Local, got {:?}",
+            result.method
+        );
+        assert_eq!(result.tier, ComplexityTier::Simple);
+        assert!(
+            result.confidence < 0.6,
+            "fallback path should downgrade confidence, got {}",
+            result.confidence
+        );
+    }
+
+    #[test]
+    fn test_route_method_debug_format() {
+        let local = RouteMethod::Local;
+        let llm = RouteMethod::Llm;
+        let cached = RouteMethod::Cached;
+        let s_local = format!("{local:?}");
+        let s_llm = format!("{llm:?}");
+        let s_cached = format!("{cached:?}");
+        assert!(s_local.contains("Local"));
+        assert!(s_llm.contains("Llm"));
+        assert!(s_cached.contains("Cached"));
+    }
+
+    #[test]
+    fn test_route_result_debug_format() {
+        let result = RouteResult {
+            tier: ComplexityTier::Simple,
+            confidence: 0.6,
+            method: RouteMethod::Local,
+            suggested_model: "simple".into(),
+        };
+        let s = format!("{result:?}");
+        assert!(s.contains("RouteResult"));
+        assert!(s.contains("Simple"));
+    }
+
+    #[test]
+    fn test_router_config_serialization_roundtrip() {
+        let cfg = RouterConfig {
+            enabled: true,
+            router_model: "qwen2.5:0.5b".into(),
+        };
+        let json = serde_json::to_string(&cfg).unwrap();
+        let back: RouterConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.enabled, true);
+        assert_eq!(back.router_model, "qwen2.5:0.5b");
+    }
+}
 }

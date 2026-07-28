@@ -449,3 +449,444 @@ pub fn check_bash_command(
     let workdir = args.get("workdir").and_then(|w| w.as_str());
     check_bash_command_str(cmd, workdir, deny_list, path_guard, bash_sandbox_workdir)
 }
+
+#[cfg(test)]
+mod private_tests {
+    use super::*;
+
+    #[test]
+    fn normalize_strips_single_quotes() {
+        let n = normalize_for_safety("r'm -rf /'");
+        assert!(n.contains("rm -rf /"));
+    }
+
+    #[test]
+    fn normalize_strips_double_quotes() {
+        let n = normalize_for_safety(r#"rm "-rf" /"#);
+        assert!(n.contains("rm -rf /"));
+    }
+
+    #[test]
+    fn normalize_strips_backslash_escape_outside_quotes() {
+        let n = normalize_for_safety(r"rm\ -rf\ /");
+        assert_eq!(n, "rm -rf /");
+    }
+
+    #[test]
+    fn normalize_preserves_escaped_char_inside_double_quotes() {
+        let n = normalize_for_safety("\"r\\\"m -rf /\"");
+        assert!(n.contains("r\"m -rf /"), "got: {n}");
+    }
+
+    #[test]
+    fn normalize_truncates_at_hash_comment() {
+        let n = normalize_for_safety("echo hi # cleanup");
+        assert_eq!(n, "echo hi");
+    }
+
+    #[test]
+    fn normalize_lowercases_alphabetic_chars() {
+        let n = normalize_for_safety("RM -RF /");
+        assert_eq!(n, "rm -rf /");
+    }
+
+    #[test]
+    fn normalize_collapses_repeated_whitespace() {
+        let n = normalize_for_safety("rm    -rf    /");
+        assert_eq!(n, "rm -rf /");
+    }
+
+    #[test]
+    fn normalize_keeps_backticks_intact() {
+        let n = normalize_for_safety("echo `rm -rf /`");
+        assert!(n.contains("`"));
+    }
+
+    #[test]
+    fn normalize_empty_string() {
+        assert_eq!(normalize_for_safety(""), "");
+    }
+
+    #[test]
+    fn normalize_only_whitespace_collapses_to_empty() {
+        assert_eq!(normalize_for_safety("   \t\n  "), "");
+    }
+
+    #[test]
+    fn shell_expansion_evasion_detects_ifs() {
+        assert!(contains_shell_expansion_evasion("${IFS}"));
+        assert!(contains_shell_expansion_evasion("$IFS"));
+        assert!(contains_shell_expansion_evasion("${IFS:- }"));
+    }
+
+    #[test]
+    fn shell_expansion_evasion_detects_ansi_c_quoting() {
+        assert!(contains_shell_expansion_evasion("$' '"));
+    }
+
+    #[test]
+    fn shell_expansion_evasion_rejects_plain_text() {
+        assert!(!contains_shell_expansion_evasion("rm -rf /"));
+        assert!(!contains_shell_expansion_evasion(""));
+    }
+
+    #[test]
+    fn shell_token_separator_classifies_metacharacters() {
+        assert!(is_shell_token_separator(b' '));
+        assert!(is_shell_token_separator(b'\t'));
+        assert!(is_shell_token_separator(b'\n'));
+        assert!(is_shell_token_separator(b'|'));
+        assert!(is_shell_token_separator(b';'));
+        assert!(is_shell_token_separator(b'&'));
+        assert!(is_shell_token_separator(b'('));
+        assert!(is_shell_token_separator(b')'));
+        assert!(is_shell_token_separator(b'<'));
+        assert!(is_shell_token_separator(b'>'));
+        assert!(is_shell_token_separator(b'`'));
+    }
+
+    #[test]
+    fn shell_token_separator_rejects_alphanumerics() {
+        assert!(!is_shell_token_separator(b'a'));
+        assert!(!is_shell_token_separator(b'0'));
+        assert!(!is_shell_token_separator(b'/'));
+        assert!(!is_shell_token_separator(b'.'));
+    }
+
+    #[test]
+    fn redirects_to_dangerous_path_detects_etcs() {
+        assert_eq!(
+            redirects_to_dangerous_path("echo x > /etc/hosts"),
+            Some("/etc/")
+        );
+    }
+
+    #[test]
+    fn redirects_to_dangerous_path_detects_append_to_etcs() {
+        assert_eq!(
+            redirects_to_dangerous_path("echo x >> /etc/passwd"),
+            Some("/etc/")
+        );
+    }
+
+    #[test]
+    fn redirects_to_dangerous_path_detects_clobber_to_ssh() {
+        assert_eq!(
+            redirects_to_dangerous_path("echo x >| ~/.ssh/config"),
+            Some("~/.ssh/")
+        );
+    }
+
+    #[test]
+    fn redirects_to_dangerous_path_detects_fd_prefixed() {
+        assert_eq!(
+            redirects_to_dangerous_path("echo x 2> /etc/hosts"),
+            Some("/etc/")
+        );
+        assert_eq!(
+            redirects_to_dangerous_path("echo x &> /etc/hosts"),
+            Some("/etc/")
+        );
+    }
+
+    #[test]
+    fn redirects_to_dangerous_path_detects_device() {
+        assert_eq!(
+            redirects_to_dangerous_path("dd if=/dev/zero > /dev/sda"),
+            Some("/dev/sda")
+        );
+    }
+
+    #[test]
+    fn redirects_to_dangerous_path_returns_none_for_safe_target() {
+        assert_eq!(redirects_to_dangerous_path("echo x > /tmp/out.txt"), None);
+    }
+
+    #[test]
+    fn redirects_to_dangerous_path_returns_none_for_no_redirect() {
+        assert_eq!(redirects_to_dangerous_path("ls -la"), None);
+    }
+
+    #[test]
+    fn redirects_to_dangerous_path_normalizes_quotes_in_target() {
+        assert_eq!(
+            redirects_to_dangerous_path("echo x > '/etc/hosts'"),
+            Some("/etc/")
+        );
+    }
+
+    #[test]
+    fn tee_to_dangerous_path_detects_tee_etc() {
+        assert_eq!(
+            tee_to_dangerous_path("echo x | tee /etc/hosts"),
+            Some("/etc/")
+        );
+    }
+
+    #[test]
+    fn tee_to_dangerous_path_detects_tee_ssh() {
+        assert_eq!(
+            tee_to_dangerous_path("echo x | tee ~/.ssh/config"),
+            Some("~/.ssh/")
+        );
+    }
+
+    #[test]
+    fn tee_to_dangerous_path_detects_after_semicolon() {
+        assert_eq!(
+            tee_to_dangerous_path("echo y; tee /etc/passwd"),
+            Some("/etc/")
+        );
+    }
+
+    #[test]
+    fn tee_to_dangerous_path_returns_none_for_safe_target() {
+        assert_eq!(tee_to_dangerous_path("echo x | tee /tmp/out.txt"), None);
+    }
+
+    #[test]
+    fn tee_to_dangerous_path_returns_none_for_no_tee() {
+        assert_eq!(tee_to_dangerous_path("ls -la"), None);
+    }
+
+    #[test]
+    fn check_bash_command_str_allows_empty_command() {
+        assert!(check_bash_command_str(
+            "",
+            None,
+            &DenyList::default(),
+            &PathGuard::default(),
+            false
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn check_bash_command_str_blocks_metadata_google() {
+        assert!(check_bash_command_str(
+            "curl http://metadata.google.internal/computeMetadata/",
+            None,
+            &DenyList::default(),
+            &PathGuard::default(),
+            false
+        )
+        .is_some_and(|m| m.contains("metadata")),);
+    }
+
+    #[test]
+    fn check_bash_command_str_blocks_metadata_aws() {
+        assert!(check_bash_command_str(
+            "curl http://metadata.aws.internal/latest/",
+            None,
+            &DenyList::default(),
+            &PathGuard::default(),
+            false
+        )
+        .is_some_and(|m| m.contains("metadata")),);
+    }
+
+    #[test]
+    fn check_bash_command_str_blocks_dangerous_double_quoted() {
+        assert!(check_bash_command_str(
+            r#"rm "-rf" /"#,
+            None,
+            &DenyList::default(),
+            &PathGuard::default(),
+            false
+        )
+        .is_some_and(|m| m.contains("dangerous pattern")),);
+    }
+
+    #[test]
+    fn check_bash_command_str_blocks_dev_sda_redirect() {
+        assert!(check_bash_command_str(
+            "cat /dev/zero > /dev/sda",
+            None,
+            &DenyList::default(),
+            &PathGuard::default(),
+            false
+        )
+        .is_some(),);
+    }
+
+    #[test]
+    fn check_bash_command_str_blocks_chmod_a_rwx() {
+        assert!(check_bash_command_str(
+            "chmod -R a+rwx /",
+            None,
+            &DenyList::default(),
+            &PathGuard::default(),
+            false
+        )
+        .is_some(),);
+    }
+
+    #[test]
+    fn check_bash_command_str_blocks_chown_root() {
+        assert!(check_bash_command_str(
+            "chown root:root /etc/passwd",
+            None,
+            &DenyList::default(),
+            &PathGuard::default(),
+            false
+        )
+        .is_some(),);
+    }
+
+    #[test]
+    fn check_bash_command_str_blocks_dd_random_of() {
+        assert!(check_bash_command_str(
+            "dd if=/dev/random of=/dev/sda",
+            None,
+            &DenyList::default(),
+            &PathGuard::default(),
+            false
+        )
+        .is_some(),);
+    }
+
+    #[test]
+    fn check_bash_command_str_blocks_mkfs() {
+        assert!(check_bash_command_str(
+            "mkfs.ext4 /dev/sda1",
+            None,
+            &DenyList::default(),
+            &PathGuard::default(),
+            false
+        )
+        .is_some(),);
+    }
+
+    #[test]
+    fn check_bash_command_str_blocks_redirect_to_dev_null_from_dev_sda() {
+        assert!(check_bash_command_str(
+            "cat > /dev/null < /dev/sda",
+            None,
+            &DenyList::default(),
+            &PathGuard::default(),
+            false
+        )
+        .is_some(),);
+    }
+
+    #[test]
+    fn check_bash_command_str_blocks_id_rsa_reference() {
+        assert!(check_bash_command_str(
+            "cat ~/.ssh/id_rsa",
+            None,
+            &DenyList::default(),
+            &PathGuard::default(),
+            false
+        )
+        .is_some_and(|m| m.contains("denied path")),);
+    }
+
+    #[test]
+    fn check_bash_command_str_blocks_etc_sudoers_reference() {
+        assert!(check_bash_command_str(
+            "cat /etc/sudoers",
+            None,
+            &DenyList::default(),
+            &PathGuard::default(),
+            false
+        )
+        .is_some_and(|m| m.contains("denied path")),);
+    }
+
+    #[test]
+    fn check_bash_command_str_blocks_privilege_via_env() {
+        assert!(check_bash_command_str(
+            "env sudo ls",
+            None,
+            &DenyList::default(),
+            &PathGuard::default(),
+            false
+        )
+        .is_some_and(|m| m.contains("privilege escalation")),);
+    }
+
+    #[test]
+    fn check_bash_command_str_blocks_denied_path_in_token() {
+        let dl = DenyList::new(vec!["/secret/**".into()], vec![]);
+        assert!(check_bash_command_str(
+            "cat /secret/data",
+            None,
+            &dl,
+            &PathGuard::default(),
+            false
+        )
+        .is_some_and(|m| m.contains("denied path")),);
+    }
+
+    #[test]
+    fn check_bash_command_str_blocks_empty_workdir_with_sandbox() {
+        let guard = PathGuard {
+            sandbox_dir: Some(std::env::temp_dir()),
+            ..Default::default()
+        };
+        let r = check_bash_command_str("ls", Some(""), &DenyList::default(), &guard, true);
+        assert!(r.is_none(), "empty workdir should be skipped, got: {r:?}");
+    }
+
+    #[test]
+    fn check_bash_command_str_blocks_unresolvable_sandbox_dir() {
+        let guard = PathGuard {
+            sandbox_dir: Some("/nonexistent/kirkforge-sandbox-test-dir".into()),
+            ..Default::default()
+        };
+        let r = check_bash_command_str("ls", Some("/tmp"), &DenyList::default(), &guard, true);
+        assert!(
+            r.as_ref()
+                .is_some_and(|m| m.contains("Sandbox directory cannot be resolved")),
+            "unresolvable sandbox dir should error, got: {r:?}"
+        );
+    }
+
+    #[test]
+    fn check_bash_command_returns_none_when_no_command_key() {
+        assert!(check_bash_command(
+            &serde_json::json!({}),
+            &DenyList::default(),
+            &PathGuard::default(),
+            false
+        )
+        .is_none(),);
+    }
+
+    #[test]
+    fn check_bash_command_returns_some_for_dangerous_command() {
+        assert!(check_bash_command(
+            &serde_json::json!({"command": "rm -rf /"}),
+            &DenyList::default(),
+            &PathGuard::default(),
+            false
+        )
+        .is_some(),);
+    }
+
+    #[test]
+    fn check_bash_command_passes_workdir_through() {
+        let outer = tempfile::tempdir().unwrap();
+        let sandbox = outer.path().join("sandbox");
+        std::fs::create_dir_all(&sandbox).unwrap();
+        let guard = PathGuard {
+            sandbox_dir: Some(sandbox),
+            ..Default::default()
+        };
+        let result = check_bash_command(
+            &serde_json::json!({
+                "command": "ls",
+                "workdir": outer.path().to_str().unwrap(),
+            }),
+            &DenyList::default(),
+            &guard,
+            true,
+        );
+        assert!(
+            result
+                .as_ref()
+                .is_some_and(|m| m.contains("outside sandbox")),
+            "workdir outside sandbox should be blocked, got: {result:?}"
+        );
+    }
+}

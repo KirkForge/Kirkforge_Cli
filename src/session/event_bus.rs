@@ -901,4 +901,286 @@ mod tests {
         let _ = bus.dispatch(&e3).await;
         assert_eq!(handler.call_count.load(Ordering::SeqCst), 4);
     }
+
+    #[test]
+    fn test_event_kind_all_contains_all_variants() {
+        let all = EventKind::all();
+        assert_eq!(all.len(), 9);
+        assert!(all.contains(&EventKind::FileRead));
+        assert!(all.contains(&EventKind::FileWrite));
+        assert!(all.contains(&EventKind::Edit));
+        assert!(all.contains(&EventKind::BashExec));
+        assert!(all.contains(&EventKind::GitOperation));
+        assert!(all.contains(&EventKind::LintRun));
+        assert!(all.contains(&EventKind::TypeCheck));
+        assert!(all.contains(&EventKind::SecurityScan));
+        assert!(all.contains(&EventKind::ToolError));
+    }
+
+    #[test]
+    fn test_event_kind_label_matches_each_variant() {
+        assert_eq!(EventKind::FileRead.label(), "file_read");
+        assert_eq!(EventKind::FileWrite.label(), "file_write");
+        assert_eq!(EventKind::Edit.label(), "edit");
+        assert_eq!(EventKind::BashExec.label(), "bash_exec");
+        assert_eq!(EventKind::GitOperation.label(), "git_operation");
+        assert_eq!(EventKind::LintRun.label(), "lint_run");
+        assert_eq!(EventKind::TypeCheck.label(), "type_check");
+        assert_eq!(EventKind::SecurityScan.label(), "security_scan");
+        assert_eq!(EventKind::ToolError.label(), "tool_error");
+    }
+
+    #[test]
+    fn test_event_kind_display_matches_label() {
+        for kind in EventKind::all() {
+            assert_eq!(format!("{kind}"), kind.label());
+        }
+    }
+
+    #[test]
+    fn test_bus_event_kind_returns_correct_discriminant() {
+        assert_eq!(make_event(EventKind::FileRead).kind(), EventKind::FileRead);
+        assert_eq!(
+            make_event(EventKind::FileWrite).kind(),
+            EventKind::FileWrite
+        );
+        assert_eq!(make_event(EventKind::Edit).kind(), EventKind::Edit);
+        assert_eq!(make_event(EventKind::BashExec).kind(), EventKind::BashExec);
+        assert_eq!(
+            make_event(EventKind::GitOperation).kind(),
+            EventKind::GitOperation
+        );
+        assert_eq!(make_event(EventKind::LintRun).kind(), EventKind::LintRun);
+        assert_eq!(
+            make_event(EventKind::TypeCheck).kind(),
+            EventKind::TypeCheck
+        );
+        assert_eq!(
+            make_event(EventKind::SecurityScan).kind(),
+            EventKind::SecurityScan
+        );
+        assert_eq!(
+            make_event(EventKind::ToolError).kind(),
+            EventKind::ToolError
+        );
+    }
+
+    #[test]
+    fn test_bus_event_idem_key_stable_across_calls() {
+        let e = make_event(EventKind::FileRead);
+        let k1 = e.idem_key();
+        let k2 = e.idem_key();
+        assert_eq!(k1, k2, "idem_key must be deterministic for the same event");
+    }
+
+    #[test]
+    fn test_bus_event_idem_key_differs_for_different_content() {
+        let e1 = BusEvent::FileRead(FileReadEvent {
+            path: PathBuf::from("/tmp/a.rs"),
+            size_bytes: 100,
+            truncated: false,
+        });
+        let e2 = BusEvent::FileRead(FileReadEvent {
+            path: PathBuf::from("/tmp/b.rs"),
+            size_bytes: 200,
+            truncated: false,
+        });
+        assert_ne!(e1.idem_key(), e2.idem_key());
+    }
+
+    #[test]
+    fn test_bus_event_idem_key_file_write_uses_path_and_length() {
+        let e1 = BusEvent::FileWrite(FileWriteEvent {
+            path: PathBuf::from("/tmp/a.rs"),
+            content_length: 100,
+        });
+        let e2 = BusEvent::FileWrite(FileWriteEvent {
+            path: PathBuf::from("/tmp/a.rs"),
+            content_length: 200,
+        });
+        assert_ne!(e1.idem_key(), e2.idem_key());
+    }
+
+    #[test]
+    fn test_bus_event_idem_key_edit_uses_path_and_diff() {
+        let e1 = BusEvent::Edit(EditEvent {
+            path: PathBuf::from("/tmp/a.rs"),
+            diff: "diff1".into(),
+        });
+        let e2 = BusEvent::Edit(EditEvent {
+            path: PathBuf::from("/tmp/a.rs"),
+            diff: "diff2".into(),
+        });
+        assert_ne!(e1.idem_key(), e2.idem_key());
+    }
+
+    #[test]
+    fn test_bus_event_idem_key_bash_exec_uses_command() {
+        let e1 = BusEvent::BashExec(BashExecEvent {
+            command: "ls".into(),
+            exit_code: 0,
+            stdout_len: 10,
+            stderr_len: 0,
+            workdir: None,
+        });
+        let e2 = BusEvent::BashExec(BashExecEvent {
+            command: "pwd".into(),
+            exit_code: 0,
+            stdout_len: 10,
+            stderr_len: 0,
+            workdir: None,
+        });
+        assert_ne!(e1.idem_key(), e2.idem_key());
+    }
+
+    #[test]
+    fn test_bus_event_idem_key_tool_error_uses_tool_and_error() {
+        let e1 = BusEvent::ToolError(ToolErrorEvent {
+            tool: "bash".into(),
+            error: "e1".into(),
+        });
+        let e2 = BusEvent::ToolError(ToolErrorEvent {
+            tool: "bash".into(),
+            error: "e2".into(),
+        });
+        assert_ne!(e1.idem_key(), e2.idem_key());
+    }
+
+    #[test]
+    fn test_noop_handler_returns_success() {
+        let handler = NoopHandler::new("noop", vec![EventKind::FileRead]);
+        let event = make_event(EventKind::FileRead);
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt.block_on(handler.handle(&event));
+        assert!(result.success);
+        assert_eq!(result.handler_id, "noop");
+        assert_eq!(result.message, "noop");
+    }
+
+    #[test]
+    fn test_handler_result_fields() {
+        let r = HandlerResult {
+            handler_id: "h1".into(),
+            success: true,
+            message: "ok".into(),
+        };
+        assert_eq!(r.handler_id, "h1");
+        assert!(r.success);
+        assert_eq!(r.message, "ok");
+    }
+
+    #[test]
+    fn test_stored_event_fields() {
+        let event = Arc::new(make_event(EventKind::FileRead));
+        let stored = StoredEvent {
+            kind: EventKind::FileRead,
+            event: event.clone(),
+            timestamp: Instant::now(),
+            idem_key: 42,
+            handled_by: vec!["h1".into()],
+        };
+        assert_eq!(stored.kind, EventKind::FileRead);
+        assert_eq!(stored.idem_key, 42);
+        assert_eq!(stored.handled_by, vec!["h1".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn test_with_history_limit_caps_history() {
+        let bus = EventBus::with_history_limit(2);
+        let handler = Arc::new(NoopHandler::new("hist", EventKind::all().to_vec()));
+        bus.register(handler).await.unwrap();
+        for _ in 0..5 {
+            let _ = bus.dispatch(&make_event(EventKind::BashExec)).await;
+        }
+        let recent = bus.recent_events(100).await;
+        assert_eq!(recent.len(), 2, "history should be capped at 2");
+    }
+
+    #[tokio::test]
+    async fn test_recent_events_returns_last_n() {
+        let bus = EventBus::new();
+        let handler = Arc::new(NoopHandler::new("recent", EventKind::all().to_vec()));
+        bus.register(handler).await.unwrap();
+        let _ = bus.dispatch(&make_event(EventKind::FileRead)).await;
+        let _ = bus.dispatch(&make_event(EventKind::BashExec)).await;
+        let _ = bus.dispatch(&make_event(EventKind::Edit)).await;
+        let recent = bus.recent_events(2).await;
+        assert_eq!(recent.len(), 2);
+        assert_eq!(recent[0].kind, EventKind::BashExec);
+        assert_eq!(recent[1].kind, EventKind::Edit);
+    }
+
+    #[tokio::test]
+    async fn test_recent_events_returns_empty_when_zero_requested() {
+        let bus = EventBus::new();
+        let handler = Arc::new(NoopHandler::new("zero", EventKind::all().to_vec()));
+        bus.register(handler).await.unwrap();
+        let _ = bus.dispatch(&make_event(EventKind::FileRead)).await;
+        let recent = bus.recent_events(0).await;
+        assert!(recent.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_handler_ids_returns_registered_ids() {
+        let bus = EventBus::new();
+        let h1 = Arc::new(NoopHandler::new("a", vec![EventKind::FileRead]));
+        let h2 = Arc::new(NoopHandler::new("b", vec![EventKind::FileRead]));
+        bus.register(h1).await.unwrap();
+        bus.register(h2).await.unwrap();
+        let mut ids = bus.handler_ids().await;
+        ids.sort();
+        assert_eq!(ids, vec!["a".to_string(), "b".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn test_unregister_unknown_returns_false() {
+        let bus = EventBus::new();
+        assert!(!bus.unregister("nope").await);
+    }
+
+    #[tokio::test]
+    async fn test_was_handled_returns_false_for_unknown() {
+        let bus = EventBus::new();
+        assert!(!bus.was_handled("h", EventKind::FileRead, 123).await);
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_and_await_is_alias_for_dispatch() {
+        let bus = EventBus::new();
+        let handler = Arc::new(CountingHandler::new("alias", vec![EventKind::FileRead]));
+        bus.register(handler.clone()).await.unwrap();
+        let event = make_event(EventKind::FileRead);
+        let results = bus.dispatch_and_await(event).await;
+        assert_eq!(results.len(), 1);
+        assert_eq!(handler.call_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_no_handlers_returns_empty() {
+        let bus = EventBus::new();
+        let event = make_event(EventKind::FileRead);
+        let results = bus.dispatch(&event).await;
+        assert!(results.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_handler_subscribes_to_multiple_kinds() {
+        let bus = EventBus::new();
+        let handler = Arc::new(CountingHandler::new(
+            "multi",
+            vec![EventKind::FileRead, EventKind::BashExec, EventKind::Edit],
+        ));
+        bus.register(handler.clone()).await.unwrap();
+        let _ = bus.dispatch(&make_event(EventKind::FileRead)).await;
+        let _ = bus.dispatch(&make_event(EventKind::BashExec)).await;
+        let _ = bus.dispatch(&make_event(EventKind::Edit)).await;
+        let _ = bus.dispatch(&make_event(EventKind::GitOperation)).await;
+        assert_eq!(handler.call_count.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn test_default_is_new_bus() {
+        let bus = EventBus::default();
+        assert_eq!(bus.handler_count().await, 0);
+    }
 }

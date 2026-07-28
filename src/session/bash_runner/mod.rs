@@ -1226,4 +1226,271 @@ mod tests {
             assert!(result.contains("/bin"), "got: {result}");
         }
     }
+
+    #[test]
+    fn test_sanitized_path_drops_empty_entries() {
+        let sep = if cfg!(windows) { ';' } else { ':' };
+        let input = format!("/usr/bin{sep}{sep}/bin{sep}");
+        let result = sanitized_path(&input);
+        let count = result.split(sep).filter(|s| s.is_empty()).count();
+        assert_eq!(count, 0, "empty entries must be dropped, got: {result}");
+    }
+
+    #[test]
+    fn test_sanitized_path_drops_relative_entries() {
+        let sep = if cfg!(windows) { ';' } else { ':' };
+        let input = format!(".{sep}/usr/bin{sep}relative/dir");
+        let result = sanitized_path(&input);
+        let parts: Vec<&str> = result.split(sep).collect();
+        assert!(
+            !parts.contains(&"."),
+            "relative '.' must be dropped, got: {result}"
+        );
+        assert!(
+            !parts.iter().any(|p| p == &"relative/dir"),
+            "relative 'relative/dir' must be dropped, got: {result}"
+        );
+    }
+
+    #[test]
+    fn test_sanitized_path_dedupes_entries() {
+        let sep = if cfg!(windows) { ';' } else { ':' };
+        let input = format!("/usr/bin{sep}/usr/bin{sep}/bin");
+        let result = sanitized_path(&input);
+        let parts: Vec<&str> = result.split(sep).collect();
+        let usr_count = parts.iter().filter(|p| **p == "/usr/bin").count();
+        assert_eq!(usr_count, 1, "duplicates must be deduped, got: {result}");
+    }
+
+    #[test]
+    fn test_shell_program_returns_nonempty() {
+        let prog = shell_program();
+        assert!(!prog.is_empty(), "shell program must be non-empty");
+    }
+
+    #[test]
+    fn test_is_timeout_marker_true_when_prefix_matches() {
+        let status = std::process::Command::new("false").status().unwrap();
+        let out = ShellOutput {
+            status,
+            stdout: "[timed out after 5 seconds]\nrest".into(),
+            stderr: String::new(),
+        };
+        assert!(is_timeout_marker(&out, 5));
+    }
+
+    #[test]
+    fn test_is_timeout_marker_false_when_prefix_missing() {
+        let status = std::process::Command::new("false").status().unwrap();
+        let out = ShellOutput {
+            status,
+            stdout: "normal output\n".into(),
+            stderr: String::new(),
+        };
+        assert!(!is_timeout_marker(&out, 5));
+    }
+
+    #[test]
+    fn test_is_timeout_marker_false_on_success_status() {
+        let out = ShellOutput {
+            status: std::process::Command::new("true").status().unwrap(),
+            stdout: "[timed out after 5 seconds]\nrest".into(),
+            stderr: String::new(),
+        };
+        assert!(
+            !is_timeout_marker(&out, 5),
+            "success status should not match timeout marker"
+        );
+    }
+
+    #[test]
+    fn test_is_timeout_marker_respects_seconds_value() {
+        let status = std::process::Command::new("false").status().unwrap();
+        let out = ShellOutput {
+            status,
+            stdout: "[timed out after 10 seconds]\n".into(),
+            stderr: String::new(),
+        };
+        assert!(is_timeout_marker(&out, 10));
+        assert!(!is_timeout_marker(&out, 5));
+    }
+
+    #[test]
+    fn test_cap_to_string_preserves_multibyte_utf8() {
+        let s = cap_to_string("héllo wörld".as_bytes().to_vec(), 0);
+        assert_eq!(s, "héllo wörld");
+    }
+
+    #[test]
+    fn test_cap_to_string_empty_input_no_marker() {
+        let s = cap_to_string(Vec::new(), 0);
+        assert_eq!(s, "");
+    }
+
+    #[test]
+    fn test_cap_to_string_invalid_utf8_lossy() {
+        let s = cap_to_string(vec![0xff, 0xfe, b'x'], 0);
+        assert!(s.contains("x"), "valid bytes should survive: {s}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_is_world_writable_false_for_private_dir() {
+        let dir = std::env::temp_dir().join("kirkforge_world_writable_private_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(!is_world_writable(&dir));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_is_world_writable_true_for_world_writable_dir() {
+        let dir = std::env::temp_dir().join("kirkforge_world_writable_open_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o777)).unwrap();
+        assert!(is_world_writable(&dir));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_is_world_writable_false_for_nonexistent_path() {
+        assert!(!is_world_writable(std::path::Path::new(
+            "/nonexistent/kirkforge-test-no-such-path"
+        )));
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn test_is_world_writable_always_false_on_non_unix() {
+        assert!(!is_world_writable(std::path::Path::new("/tmp")));
+    }
+
+    #[test]
+    fn test_model_command_path_starts_with_system_dir() {
+        let p = model_command_path();
+        if cfg!(windows) {
+            assert!(
+                p.contains(r"C:\Windows\System32"),
+                "model path should include System32 on Windows, got: {p}"
+            );
+        } else {
+            assert!(
+                p.contains("/usr/bin") || p.contains("/bin"),
+                "model path should include system dirs on Unix, got: {p}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_shell_error_display_spawn() {
+        let e = ShellError::Spawn("kaboom".into());
+        assert_eq!(format!("{e}"), "kaboom");
+    }
+
+    #[test]
+    fn test_shell_error_display_drain() {
+        let e = ShellError::Drain {
+            label: "stdout".into(),
+            message: "panic".into(),
+        };
+        let s = format!("{e}");
+        assert!(s.contains("drain stdout"), "got: {s}");
+        assert!(s.contains("panic"), "got: {s}");
+    }
+
+    #[test]
+    fn test_shell_error_display_cancelled() {
+        let e = ShellError::Cancelled;
+        assert_eq!(format!("{e}"), "cancelled");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_drain_capped_zero_cap_drains_all() {
+        use std::io::Cursor;
+        let payload: Vec<u8> = (0..128u32).map(|i| (i % 13) as u8).collect();
+        let (kept, dropped) = drain_capped(Cursor::new(payload.clone()), 0).await.unwrap();
+        assert_eq!(kept.len(), 0);
+        assert_eq!(dropped as usize, payload.len());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_drain_capped_exact_cap_keeps_all() {
+        use std::io::Cursor;
+        let payload: Vec<u8> = (0..100u32).map(|i| (i % 13) as u8).collect();
+        let cap = payload.len();
+        let (kept, dropped) = drain_capped(Cursor::new(payload.clone()), cap)
+            .await
+            .unwrap();
+        assert_eq!(kept.len(), cap);
+        assert_eq!(dropped, 0);
+        assert_eq!(&kept[..], &payload[..]);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_drain_capped_empty_input_returns_zero_dropped() {
+        use std::io::Cursor;
+        let (kept, dropped) = drain_capped::<std::io::Cursor<Vec<u8>>>(Cursor::new(Vec::new()), 64)
+            .await
+            .unwrap();
+        assert_eq!(kept.len(), 0);
+        assert_eq!(dropped, 0);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_run_shell_succeeds_for_true() {
+        let tmp = std::env::temp_dir();
+        let out = run_shell("true", &tmp, 5).await.expect("true should run");
+        assert!(out.status.success(), "got: {:?}", out.status);
+        assert!(out.stdout.is_empty());
+        assert!(out.stderr.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_run_shell_captures_stdout() {
+        let tmp = std::env::temp_dir();
+        let out = run_shell("echo hello", &tmp, 5)
+            .await
+            .expect("echo should run");
+        assert!(out.status.success());
+        assert_eq!(out.stdout.trim(), "hello");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_run_shell_captures_nonzero_exit() {
+        let tmp = std::env::temp_dir();
+        let out = run_shell("exit 7", &tmp, 5).await.expect("exit should run");
+        assert!(!out.status.success());
+        assert_eq!(out.status.code(), Some(7));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_run_shell_cancellation_returns_cancelled_error() {
+        use tokio_util::sync::CancellationToken;
+        let tmp = std::env::temp_dir();
+        let token = CancellationToken::new();
+        let token_clone = token.clone();
+        let handle = tokio::spawn(async move {
+            run_shell_with_token("sleep 30", &tmp, 30, Some(&token_clone), None).await
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        token.cancel();
+        let result = handle.await.expect("task join");
+        assert!(
+            matches!(result, Err(ShellError::Cancelled)),
+            "expected cancelled error"
+        );
+    }
 }

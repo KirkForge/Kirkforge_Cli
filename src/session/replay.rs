@@ -700,4 +700,289 @@ mod tests {
         assert!(truncated.contains("…"));
         assert!(!truncated.contains(&long_prompt));
     }
+
+    #[test]
+    fn format_turn_error_outcome() {
+        let record = TurnRecord {
+            turn: 1,
+            timestamp: "2026-07-22T00:00:00Z".to_string(),
+            prompt_messages: vec![],
+            model_response: "oops".to_string(),
+            tool_calls: vec![],
+            outcome: TurnOutcome::Error("broken".to_string()),
+            tokens_in: 10,
+            tokens_out: 5,
+            duration_ms: 100,
+        };
+        let formatted = format_turn(&record);
+        assert!(formatted.contains("Error: broken"), "got: {formatted}");
+    }
+
+    #[test]
+    fn format_turn_cancelled_outcome() {
+        let record = TurnRecord {
+            turn: 1,
+            timestamp: "2026-07-22T00:00:00Z".to_string(),
+            prompt_messages: vec![],
+            model_response: String::new(),
+            tool_calls: vec![],
+            outcome: TurnOutcome::Cancelled,
+            tokens_in: 10,
+            tokens_out: 5,
+            duration_ms: 100,
+        };
+        let formatted = format_turn(&record);
+        assert!(formatted.contains("Cancelled"), "got: {formatted}");
+    }
+
+    #[test]
+    fn format_turn_timeout_outcome() {
+        let record = TurnRecord {
+            turn: 1,
+            timestamp: "2026-07-22T00:00:00Z".to_string(),
+            prompt_messages: vec![],
+            model_response: String::new(),
+            tool_calls: vec![],
+            outcome: TurnOutcome::Timeout,
+            tokens_in: 10,
+            tokens_out: 5,
+            duration_ms: 100,
+        };
+        let formatted = format_turn(&record);
+        assert!(formatted.contains("Timeout"), "got: {formatted}");
+    }
+
+    #[test]
+    fn format_turn_empty_prompt_messages() {
+        let record = TurnRecord {
+            turn: 1,
+            timestamp: "2026-07-22T00:00:00Z".to_string(),
+            prompt_messages: vec![],
+            model_response: "response".to_string(),
+            tool_calls: vec![],
+            outcome: TurnOutcome::Success,
+            tokens_in: 0,
+            tokens_out: 0,
+            duration_ms: 0,
+        };
+        let formatted = format_turn(&record);
+        assert!(formatted.contains("Turn 1"));
+        assert!(formatted.contains("Model: response"));
+        assert!(formatted.contains("Success"));
+    }
+
+    #[test]
+    fn format_turn_truncates_long_prompt_message() {
+        let long = "Z".repeat(500);
+        let record = TurnRecord {
+            turn: 1,
+            timestamp: "2026-07-22T00:00:00Z".to_string(),
+            prompt_messages: vec![RecordedMessage {
+                role: "user".to_string(),
+                content: long.clone(),
+            }],
+            model_response: String::new(),
+            tool_calls: vec![],
+            outcome: TurnOutcome::Success,
+            tokens_in: 0,
+            tokens_out: 0,
+            duration_ms: 0,
+        };
+        let formatted = format_turn(&record);
+        assert!(formatted.contains("…"), "long prompt should be truncated");
+        assert!(!formatted.contains(&long));
+    }
+
+    #[test]
+    fn format_turn_truncates_long_model_response() {
+        let long = "Y".repeat(500);
+        let record = TurnRecord {
+            turn: 1,
+            timestamp: "2026-07-22T00:00:00Z".to_string(),
+            prompt_messages: vec![],
+            model_response: long.clone(),
+            tool_calls: vec![],
+            outcome: TurnOutcome::Success,
+            tokens_in: 0,
+            tokens_out: 0,
+            duration_ms: 0,
+        };
+        let formatted = format_turn(&record);
+        assert!(formatted.contains("…"), "long response should be truncated");
+        assert!(!formatted.contains(&long));
+    }
+
+    #[test]
+    fn render_turn_full_empty_prompt_messages() {
+        let record = TurnRecord {
+            turn: 1,
+            timestamp: "2026-07-22T00:00:00Z".to_string(),
+            prompt_messages: vec![],
+            model_response: "resp".to_string(),
+            tool_calls: vec![],
+            outcome: TurnOutcome::Success,
+            tokens_in: 0,
+            tokens_out: 0,
+            duration_ms: 0,
+        };
+        let rendered = render_turn_full(&record);
+        assert!(
+            rendered.contains("(none)"),
+            "empty prompt should show (none): {rendered}"
+        );
+    }
+
+    #[test]
+    fn render_turn_full_empty_model_response() {
+        let record = TurnRecord {
+            turn: 1,
+            timestamp: "2026-07-22T00:00:00Z".to_string(),
+            prompt_messages: vec![],
+            model_response: String::new(),
+            tool_calls: vec![],
+            outcome: TurnOutcome::Success,
+            tokens_in: 0,
+            tokens_out: 0,
+            duration_ms: 0,
+        };
+        let rendered = render_turn_full(&record);
+        assert!(
+            rendered.contains("(empty)"),
+            "empty response should show (empty): {rendered}"
+        );
+    }
+
+    #[test]
+    fn render_turn_full_empty_tool_calls() {
+        let record = TurnRecord {
+            turn: 1,
+            timestamp: "2026-07-22T00:00:00Z".to_string(),
+            prompt_messages: vec![],
+            model_response: "resp".to_string(),
+            tool_calls: vec![],
+            outcome: TurnOutcome::Success,
+            tokens_in: 0,
+            tokens_out: 0,
+            duration_ms: 0,
+        };
+        let rendered = render_turn_full(&record);
+        assert!(
+            rendered.contains("(none)"),
+            "empty tool calls should show (none): {rendered}"
+        );
+    }
+
+    #[test]
+    fn render_turn_full_includes_timestamp() {
+        let record = TurnRecord {
+            turn: 1,
+            timestamp: "2026-07-22T12:34:56Z".to_string(),
+            prompt_messages: vec![],
+            model_response: "resp".to_string(),
+            tool_calls: vec![],
+            outcome: TurnOutcome::Success,
+            tokens_in: 0,
+            tokens_out: 0,
+            duration_ms: 0,
+        };
+        let rendered = render_turn_full(&record);
+        assert!(
+            rendered.contains("Timestamp: 2026-07-22T12:34:56Z"),
+            "got: {rendered}"
+        );
+    }
+
+    #[test]
+    fn render_turn_full_cancelled_outcome() {
+        let record = TurnRecord {
+            turn: 1,
+            timestamp: "2026-07-22T00:00:00Z".to_string(),
+            prompt_messages: vec![],
+            model_response: String::new(),
+            tool_calls: vec![],
+            outcome: TurnOutcome::Cancelled,
+            tokens_in: 0,
+            tokens_out: 0,
+            duration_ms: 0,
+        };
+        let rendered = render_turn_full(&record);
+        assert!(rendered.contains("Cancelled"), "got: {rendered}");
+    }
+
+    #[test]
+    fn render_turn_full_timeout_outcome() {
+        let record = TurnRecord {
+            turn: 1,
+            timestamp: "2026-07-22T00:00:00Z".to_string(),
+            prompt_messages: vec![],
+            model_response: String::new(),
+            tool_calls: vec![],
+            outcome: TurnOutcome::Timeout,
+            tokens_in: 0,
+            tokens_out: 0,
+            duration_ms: 0,
+        };
+        let rendered = render_turn_full(&record);
+        assert!(rendered.contains("Timeout"), "got: {rendered}");
+    }
+
+    #[test]
+    fn stepper_render_current_empty_trace_returns_empty_string() {
+        let stepper = ReplayStepper::new(vec![]);
+        assert_eq!(stepper.render_current(), "");
+    }
+
+    #[test]
+    fn stepper_jump_to_on_empty_trace_returns_zero() {
+        let mut stepper = ReplayStepper::new(vec![]);
+        assert_eq!(stepper.jump_to(0), 0);
+        assert_eq!(stepper.jump_to(100), 0);
+    }
+
+    #[test]
+    fn stepper_step_forward_on_empty_trace_returns_false() {
+        let mut stepper = ReplayStepper::new(vec![]);
+        assert!(!stepper.step_forward());
+    }
+
+    #[test]
+    fn stepper_len_returns_record_count() {
+        let records = vec![
+            sample_record(1, "a"),
+            sample_record(2, "b"),
+            sample_record(3, "c"),
+        ];
+        let stepper = ReplayStepper::new(records);
+        assert_eq!(stepper.len(), 3);
+        assert!(!stepper.is_empty());
+    }
+
+    #[test]
+    fn trace_recorder_load_returns_err_for_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("is-a-dir.trace.ndjson");
+        std::fs::create_dir(&path).unwrap();
+        assert!(TraceRecorder::load(&path).is_err());
+    }
+
+    #[test]
+    fn turn_outcome_success_matches_itself() {
+        assert!(matches!(TurnOutcome::Success, TurnOutcome::Success));
+    }
+
+    #[test]
+    fn turn_outcome_error_carries_message() {
+        assert!(matches!(
+            TurnOutcome::Error("x".into()),
+            TurnOutcome::Error(_)
+        ));
+        let s = format!("{:?}", TurnOutcome::Error("x".into()));
+        assert!(s.contains("x"));
+    }
+
+    #[test]
+    fn turn_outcome_cancelled_and_timeout_are_distinct_variants() {
+        assert!(matches!(TurnOutcome::Cancelled, TurnOutcome::Cancelled));
+        assert!(matches!(TurnOutcome::Timeout, TurnOutcome::Timeout));
+    }
 }

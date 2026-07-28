@@ -558,4 +558,309 @@ mod tests {
         p.refresh_patterns();
         assert!(p.work_patterns.is_empty());
     }
+
+    #[test]
+    fn test_condense_path_41_chars_with_three_components_condensed() {
+        let path = format!("{}/{}/{}", "a".repeat(13), "b".repeat(13), "c".repeat(13));
+        assert!(path.len() > 40);
+        let condensed = condense_path(&path);
+        assert!(
+            condensed.len() < path.len(),
+            "41-char path with 3 components should be condensed, got: {condensed}"
+        );
+    }
+
+    #[test]
+    fn test_condense_path_41_chars_single_component_kept() {
+        let path = "a".repeat(41);
+        let condensed = condense_path(&path);
+        assert_eq!(
+            condensed, path,
+            "single component path should be kept as-is even if >40 chars"
+        );
+    }
+
+    #[test]
+    fn test_condense_path_single_component_long() {
+        let long = "very_long_filename_with_no_slashes_at_all.rs";
+        let condensed = condense_path(long);
+        assert_eq!(condensed, long, "single component should be kept as-is");
+    }
+
+    #[test]
+    fn test_condense_path_two_components_long() {
+        let long = "this/is-a-very-long-filename-with-no-additional-slashes.rs";
+        assert!(long.len() > 40);
+        let condensed = condense_path(long);
+        assert_eq!(condensed, long, "two components should be kept as-is");
+    }
+
+    #[test]
+    fn test_to_prompt_block_includes_active_patterns() {
+        let p = CarryoverProfile {
+            session_count: 1,
+            work_patterns: HashMap::from([
+                ("incremental-edits".into(), 0.8),
+                ("weak-pattern".into(), 0.1),
+            ]),
+            ..Default::default()
+        };
+        let block = p.to_prompt_block();
+        assert!(block.contains("Patterns:"), "got: {block}");
+        assert!(block.contains("incremental-edits"), "got: {block}");
+        assert!(
+            !block.contains("weak-pattern"),
+            "weak pattern should be filtered: {block}"
+        );
+    }
+
+    #[test]
+    fn test_to_prompt_block_includes_recurring_warnings() {
+        let p = CarryoverProfile {
+            session_count: 1,
+            verifier_warnings: HashMap::from([("unused".into(), 3), ("rare".into(), 1)]),
+            ..Default::default()
+        };
+        let block = p.to_prompt_block();
+        assert!(block.contains("Recurring:"), "got: {block}");
+        assert!(block.contains("unused"), "got: {block}");
+        assert!(
+            !block.contains("rare"),
+            "warnings <2 should be filtered: {block}"
+        );
+    }
+
+    #[test]
+    fn test_to_prompt_block_uses_recent_when_no_timestamp() {
+        let p = CarryoverProfile {
+            session_count: 1,
+            last_session_time: String::new(),
+            ..Default::default()
+        };
+        let block = p.to_prompt_block();
+        assert!(
+            block.contains("recent"),
+            "missing timestamp should show 'recent': {block}"
+        );
+    }
+
+    #[test]
+    fn test_to_prompt_block_includes_active_paths_when_present() {
+        let p = CarryoverProfile {
+            session_count: 1,
+            recent_paths: vec!["src/lib.rs".into(), "tests/t.rs".into()],
+            ..Default::default()
+        };
+        let block = p.to_prompt_block();
+        assert!(block.contains("Active paths:"), "got: {block}");
+        assert!(block.contains("src/lib.rs"), "got: {block}");
+        assert!(block.contains("tests/t.rs"), "got: {block}");
+    }
+
+    #[test]
+    fn test_to_prompt_block_omits_last_user_message_when_empty() {
+        let p = CarryoverProfile {
+            session_count: 1,
+            last_user_message: String::new(),
+            ..Default::default()
+        };
+        let block = p.to_prompt_block();
+        assert!(
+            !block.contains("Last topic:"),
+            "empty message should be omitted: {block}"
+        );
+    }
+
+    #[test]
+    fn test_refresh_patterns_detects_bash_heavy() {
+        let mut p = CarryoverProfile::default();
+        p.tool_usage.insert("bash".into(), 10);
+        p.tool_usage.insert("read_file".into(), 5);
+        p.refresh_patterns();
+        let strength = p.work_patterns.get("bash-heavy").unwrap_or(&0.0);
+        assert!(
+            *strength > 0.0,
+            "should detect bash-heavy pattern, got: {strength}"
+        );
+    }
+
+    #[test]
+    fn test_refresh_patterns_no_bash_heavy_below_threshold() {
+        let mut p = CarryoverProfile::default();
+        p.tool_usage.insert("bash".into(), 2);
+        p.tool_usage.insert("read_file".into(), 10);
+        p.refresh_patterns();
+        assert!(
+            !p.work_patterns.contains_key("bash-heavy"),
+            "low bash usage should not trigger bash-heavy"
+        );
+    }
+
+    #[test]
+    fn test_refresh_patterns_no_incremental_edits_below_ratio() {
+        let mut p = CarryoverProfile::default();
+        p.tool_usage.insert("edit_file".into(), 2);
+        p.tool_usage.insert("write_file".into(), 1);
+        p.refresh_patterns();
+        assert!(
+            !p.work_patterns.contains_key("incremental-edits"),
+            "ratio 2.0 should not trigger incremental-edits (needs > 2.0)"
+        );
+    }
+
+    #[test]
+    fn test_refresh_patterns_incremental_edits_at_high_ratio() {
+        let mut p = CarryoverProfile::default();
+        p.tool_usage.insert("edit_file".into(), 20);
+        p.tool_usage.insert("write_file".into(), 1);
+        p.refresh_patterns();
+        let strength = p.work_patterns.get("incremental-edits").unwrap_or(&0.0);
+        assert!(
+            *strength > 0.0,
+            "should detect incremental-edits, got: {strength}"
+        );
+    }
+
+    #[test]
+    fn test_refresh_patterns_no_read_first_below_threshold() {
+        let mut p = CarryoverProfile::default();
+        p.tool_usage.insert("read_file".into(), 2);
+        p.tool_usage.insert("bash".into(), 2);
+        p.refresh_patterns();
+        assert!(
+            !p.work_patterns.contains_key("read-first"),
+            "reads < 50% should not trigger read-first"
+        );
+    }
+
+    #[test]
+    fn test_record_path_empty_string() {
+        let mut p = CarryoverProfile::default();
+        p.record_path("");
+        assert_eq!(p.recent_paths, vec!["".to_string()]);
+    }
+
+    #[test]
+    fn test_record_path_dedup_preserves_order() {
+        let mut p = CarryoverProfile::default();
+        p.record_path("a.rs");
+        p.record_path("b.rs");
+        p.record_path("c.rs");
+        p.record_path("b.rs");
+        assert_eq!(p.recent_paths.len(), 3);
+        assert_eq!(p.recent_paths.last().unwrap(), "b.rs");
+        assert_eq!(p.recent_paths[0], "a.rs");
+    }
+
+    #[test]
+    fn test_record_verifier_warning_with_em_dash() {
+        let mut p = CarryoverProfile::default();
+        p.record_verifier_warning("security — missing check");
+        assert_eq!(
+            p.verifier_warnings.get("security"),
+            Some(&1),
+            "em-dash should split the category"
+        );
+    }
+
+    #[test]
+    fn test_record_verifier_warning_no_separator_uses_full_message() {
+        let mut p = CarryoverProfile::default();
+        p.record_verifier_warning("noseparator");
+        assert_eq!(p.verifier_warnings.get("noseparator"), Some(&1));
+    }
+
+    #[test]
+    fn test_record_verifier_warning_whitespace_only_key() {
+        let mut p = CarryoverProfile::default();
+        p.record_verifier_warning("   : details");
+        let key = p.verifier_warnings.keys().next().unwrap();
+        assert_eq!(key, "");
+    }
+
+    #[test]
+    fn test_save_carryover_prunes_recent_paths_to_three() {
+        let mut p = CarryoverProfile::default();
+        for i in 0..5 {
+            p.record_path(&format!("file{i}.rs"));
+        }
+        assert_eq!(p.recent_paths.len(), 3, "record_path already caps at 3");
+        save_carryover(&p);
+    }
+
+    #[test]
+    fn test_atomic_write_overwrites_existing_file() {
+        let dir = std::env::temp_dir().join("kirkforge_atomic_overwrite_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("target.json");
+        std::fs::write(&target, b"old").unwrap();
+        atomic_write(&target, b"new").unwrap();
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "new");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_atomic_write_fails_when_parent_dir_missing() {
+        let dir = std::env::temp_dir().join("kirkforge_atomic_no_parent_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        let target = dir.join("nested/carryover.json");
+        let result = atomic_write(&target, b"data");
+        assert!(
+            result.is_err(),
+            "atomic_write should fail when parent dir missing"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_clear_carryover_no_file_is_noop() {
+        let path = std::env::temp_dir().join("kirkforge-nonexistent-clear-test.json");
+        let _ = std::fs::remove_file(&path);
+        clear_carryover();
+    }
+
+    #[test]
+    fn test_load_carryover_missing_file_returns_default() {
+        let profile = CarryoverProfile::default();
+        assert_eq!(profile.session_count, 0);
+        assert!(profile.tool_usage.is_empty());
+        assert!(profile.recent_paths.is_empty());
+    }
+
+    #[test]
+    fn test_carryover_profile_clone_preserves_all_fields() {
+        let p = CarryoverProfile {
+            session_count: 5,
+            last_user_message: "msg".into(),
+            tool_usage: HashMap::from([("bash".into(), 3)]),
+            recent_paths: vec!["a.rs".into()],
+            verifier_warnings: HashMap::from([("warn".into(), 2)]),
+            work_patterns: HashMap::from([("pattern".into(), 0.5)]),
+            last_session_time: "2026-01-01".into(),
+        };
+        let cloned = p.clone();
+        assert_eq!(cloned.session_count, 5);
+        assert_eq!(cloned.last_user_message, "msg");
+        assert_eq!(cloned.tool_usage.get("bash"), Some(&3));
+        assert_eq!(cloned.recent_paths, p.recent_paths);
+        assert_eq!(cloned.verifier_warnings, p.verifier_warnings);
+        assert_eq!(cloned.work_patterns, p.work_patterns);
+        assert_eq!(cloned.last_session_time, "2026-01-01");
+    }
+
+    #[test]
+    fn test_estimated_tokens_grows_with_content() {
+        let small = CarryoverProfile {
+            session_count: 1,
+            last_user_message: "hi".into(),
+            ..Default::default()
+        };
+        let big = CarryoverProfile {
+            session_count: 1,
+            last_user_message: "x".repeat(2000),
+            ..Default::default()
+        };
+        assert!(big.estimated_tokens() > small.estimated_tokens());
+    }
 }

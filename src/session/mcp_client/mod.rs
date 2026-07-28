@@ -1031,4 +1031,228 @@ mod tests {
             "expected failure, got {outcome:?}"
         );
     }
+
+    #[test]
+    fn test_json_id_to_string_string_id() {
+        let id = serde_json::json!("abc-123");
+        assert_eq!(json_id_to_string(&id), Some("abc-123".to_string()));
+    }
+
+    #[test]
+    fn test_json_id_to_string_numeric_id() {
+        let id = serde_json::json!(42);
+        assert_eq!(json_id_to_string(&id), Some("42".to_string()));
+    }
+
+    #[test]
+    fn test_json_id_to_string_float_id_uses_to_string() {
+        let id = serde_json::json!(3.5);
+        assert_eq!(json_id_to_string(&id), Some("3.5".to_string()));
+    }
+
+    #[test]
+    fn test_json_id_to_string_null_returns_none() {
+        assert!(json_id_to_string(&serde_json::Value::Null).is_none());
+    }
+
+    #[test]
+    fn test_json_id_to_string_missing_field_returns_none() {
+        let v = serde_json::json!({});
+        assert!(json_id_to_string(&v).is_none());
+    }
+
+    #[test]
+    fn test_json_id_to_string_bool_returns_none() {
+        assert!(json_id_to_string(&serde_json::json!(true)).is_none());
+    }
+
+    #[test]
+    fn test_json_id_to_string_array_returns_none() {
+        assert!(json_id_to_string(&serde_json::json!([1, 2])).is_none());
+    }
+
+    #[test]
+    fn test_json_id_to_string_object_returns_none() {
+        assert!(json_id_to_string(&serde_json::json!({"a": 1})).is_none());
+    }
+
+    #[test]
+    fn test_content_blocks_surface_audio_placeholder() {
+        let result = serde_json::json!({
+            "content": [
+                { "type": "text", "text": "audio:" },
+                { "type": "audio" }
+            ]
+        });
+        let blocks = result.get("content").unwrap().as_array().unwrap();
+        let outcome = tool_result_from_content_blocks(blocks, &result);
+        let content = match outcome {
+            ToolOutcome::Success { content } => content,
+            other => panic!("expected success, got {other:?}"),
+        };
+        assert!(content.contains("audio:"), "{content}");
+        assert!(content.contains("[audio block]"), "{content}");
+    }
+
+    #[test]
+    fn test_content_blocks_surface_unknown_kind_placeholder() {
+        let result = serde_json::json!({
+            "content": [
+                { "type": "video" },
+                { "type": "text", "text": "tail" }
+            ]
+        });
+        let blocks = result.get("content").unwrap().as_array().unwrap();
+        let outcome = tool_result_from_content_blocks(blocks, &result);
+        let content = match outcome {
+            ToolOutcome::Success { content } => content,
+            other => panic!("expected success, got {other:?}"),
+        };
+        assert!(content.contains("[video content block]"), "{content}");
+        assert!(content.contains("tail"), "{content}");
+    }
+
+    #[test]
+    fn test_content_blocks_resource_with_missing_uri_uses_empty() {
+        let result = serde_json::json!({
+            "content": [
+                { "type": "resource" }
+            ]
+        });
+        let blocks = result.get("content").unwrap().as_array().unwrap();
+        let outcome = tool_result_from_content_blocks(blocks, &result);
+        let content = match outcome {
+            ToolOutcome::Success { content } => content,
+            other => panic!("expected success, got {other:?}"),
+        };
+        assert!(content.contains("[resource:  mime=*/*]"), "{content}");
+    }
+
+    #[test]
+    fn test_content_blocks_resource_with_mime_fallback() {
+        let result = serde_json::json!({
+            "content": [
+                { "type": "resource", "resource": { "uri": "file:///x.txt" } }
+            ]
+        });
+        let blocks = result.get("content").unwrap().as_array().unwrap();
+        let outcome = tool_result_from_content_blocks(blocks, &result);
+        let content = match outcome {
+            ToolOutcome::Success { content } => content,
+            other => panic!("expected success, got {other:?}"),
+        };
+        assert!(content.contains("[resource: file:///x.txt"), "{content}");
+    }
+
+    #[test]
+    fn test_content_blocks_block_without_text_or_type_falls_back_to_raw() {
+        let result = serde_json::json!({
+            "content": [
+                { "unexpected": "field" }
+            ]
+        });
+        let blocks = result.get("content").unwrap().as_array().unwrap();
+        let outcome = tool_result_from_content_blocks(blocks, &result);
+        assert!(
+            matches!(outcome, ToolOutcome::Success { ref content } if content.contains("unexpected")),
+            "got {outcome:?}"
+        );
+    }
+
+    #[test]
+    fn test_content_blocks_image_uses_default_mime_when_missing() {
+        let result = serde_json::json!({
+            "content": [
+                { "type": "image" }
+            ]
+        });
+        let blocks = result.get("content").unwrap().as_array().unwrap();
+        let outcome = tool_result_from_content_blocks(blocks, &result);
+        let content = match outcome {
+            ToolOutcome::Success { content } => content,
+            other => panic!("expected success, got {other:?}"),
+        };
+        assert!(content.contains("[image: mime=image/*]"), "{content}");
+    }
+
+    #[tokio::test]
+    async fn test_fail_all_pending_signals_all_waiters() {
+        let pending: PendingMap = Arc::new(Mutex::new(HashMap::new()));
+        let (tx1, rx1) = oneshot::channel();
+        let (tx2, rx2) = oneshot::channel();
+        pending.lock().await.insert("1".to_string(), tx1);
+        pending.lock().await.insert("2".to_string(), tx2);
+
+        McpClient::fail_all_pending(pending.clone()).await;
+
+        let r1 = rx1.await.expect("waiter 1 should receive");
+        let r2 = rx2.await.expect("waiter 2 should receive");
+        assert!(r1.is_err(), "waiter 1 should receive error");
+        assert!(r2.is_err(), "waiter 2 should receive error");
+    }
+
+    #[tokio::test]
+    async fn test_fail_all_pending_empty_map_is_noop() {
+        let pending: PendingMap = Arc::new(Mutex::new(HashMap::new()));
+        McpClient::fail_all_pending(pending).await;
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_response_missing_id_is_noop() {
+        let pending: PendingMap = Arc::new(Mutex::new(HashMap::new()));
+        let resp = serde_json::json!({ "jsonrpc": "2.0", "result": {} });
+        McpClient::dispatch_response("missing".to_string(), resp, &pending, "test").await;
+        assert!(pending.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_response_null_id_is_routed_correctly() {
+        let pending: PendingMap = Arc::new(Mutex::new(HashMap::new()));
+        let resp = serde_json::json!({ "jsonrpc": "2.0", "id": null, "result": {} });
+        McpClient::dispatch_response("null-id".to_string(), resp, &pending, "test").await;
+    }
+
+    #[test]
+    fn test_make_config_defaults() {
+        let cfg = make_config("test-server", "echo");
+        assert_eq!(cfg.name, "test-server");
+        assert_eq!(cfg.command, "echo");
+        assert_eq!(cfg.transport, "stdio");
+        assert!(cfg.args.is_empty());
+        assert!(cfg.url.is_empty());
+        assert!(cfg.bearer_token.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_manager_server_count_for_multiple_failed_connects() {
+        let servers = vec![
+            make_config("a", "/nonexistent/cmd-a"),
+            make_config("b", "/nonexistent/cmd-b"),
+        ];
+        let mgr = McpClientManager::new(&servers).await;
+        assert_eq!(mgr.server_count(), 0);
+        assert!(
+            mgr.warnings().len() >= 2,
+            "expected at least 2 warnings, got {}",
+            mgr.warnings().len()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_manager_tool_count_zero_when_empty() {
+        let mgr = McpClientManager::new(&[]).await;
+        assert_eq!(mgr.tool_count(), 0);
+    }
+
+    #[test]
+    fn test_has_tool_false_for_empty_manager() {
+        let mgr = McpClientManager {
+            configs: vec![],
+            clients: vec![],
+            tools: HashMap::new(),
+            tool_defs_cache: HashMap::new(),
+            warnings: vec![],
+        };
+        assert!(!mgr.has_tool("anything"));
+    }
 }

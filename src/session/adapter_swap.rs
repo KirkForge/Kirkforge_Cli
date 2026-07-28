@@ -288,6 +288,91 @@ mod tests {
         assert_eq!(swap.current_model_name, "glm-5.1:cloud");
     }
 
+    #[test]
+    fn test_adapter_swap_constructor_preserves_fields() {
+        let swap = AdapterSwap::new(
+            "model-x".into(),
+            "http://ollama.local:11434".into(),
+            Some("glm".into()),
+            60,
+        );
+        assert_eq!(swap.current_model_name, "model-x");
+        assert_eq!(swap.ollama_host, "http://ollama.local:11434");
+        assert_eq!(swap.model_type_override.as_deref(), Some("glm"));
+        assert_eq!(swap.timeout_secs, 60);
+    }
+
+    #[test]
+    fn test_adapter_swap_constructor_none_overrides() {
+        let swap = AdapterSwap::new("model-y".into(), "http://host".into(), None, 30);
+        assert_eq!(swap.current_model_name, "model-y");
+        assert!(swap.model_type_override.is_none());
+        assert_eq!(swap.timeout_secs, 30);
+    }
+
+    #[test]
+    fn test_force_swap_with_cache_enabled_wraps_in_caching_adapter() {
+        let mut swap =
+            AdapterSwap::new("model-a".into(), "http://ollama.example".into(), None, 120);
+        let mut cfg = Config::default();
+        cfg.model.cache_enabled = true;
+        let new = swap.force_swap("model-b", &mut make_dummy_adapter(), &cfg);
+        assert_eq!(new, "model-b");
+        assert_eq!(swap.current_model_name, "model-b");
+    }
+
+    #[test]
+    fn test_maybe_swap_no_swap_when_routing_enabled_but_same_model_resolved() {
+        let mut swap = AdapterSwap::new(
+            "model-current".into(),
+            "http://ollama.example".into(),
+            None,
+            120,
+        );
+        let mut cfg = make_config(true);
+        cfg.model
+            .routing_model_map
+            .insert("complex".into(), "model-current".into());
+        let result = swap.maybe_swap(
+            &cfg,
+            &mut make_dummy_adapter(),
+            "refactor the entire system with comprehensive error handling and tests",
+        );
+        assert!(result.is_none());
+        assert_eq!(swap.current_model_name, "model-current");
+    }
+
+    #[test]
+    fn test_maybe_swap_returns_none_for_empty_input() {
+        let mut swap =
+            AdapterSwap::new("model-x".into(), "http://ollama.example".into(), None, 120);
+        let cfg = make_config(false);
+        let result = swap.maybe_swap(&cfg, &mut make_dummy_adapter(), "");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_force_swap_returns_input_name_exactly() {
+        let mut swap =
+            AdapterSwap::new("initial".into(), "http://ollama.example".into(), None, 120);
+        let cfg = Config::default();
+        let new = swap.force_swap("custom-name:tag", &mut make_dummy_adapter(), &cfg);
+        assert_eq!(new, "custom-name:tag");
+        assert_eq!(swap.current_model_name, "custom-name:tag");
+    }
+
+    #[test]
+    fn test_force_swap_can_be_called_multiple_times() {
+        let mut swap = AdapterSwap::new("m1".into(), "http://ollama.example".into(), None, 120);
+        let cfg = Config::default();
+        let _ = swap.force_swap("m2", &mut make_dummy_adapter(), &cfg);
+        assert_eq!(swap.current_model_name, "m2");
+        let _ = swap.force_swap("m3", &mut make_dummy_adapter(), &cfg);
+        assert_eq!(swap.current_model_name, "m3");
+        let _ = swap.force_swap("m4", &mut make_dummy_adapter(), &cfg);
+        assert_eq!(swap.current_model_name, "m4");
+    }
+
     // --- helpers ---
 
     /// Minimal adapter for unit tests that don't exercise streaming.

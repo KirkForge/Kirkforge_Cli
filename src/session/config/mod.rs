@@ -1471,4 +1471,170 @@ mod tests {
 
         set_env("KIRKFORGE_REQUEST_TIMEOUT_SECS", None);
     }
+
+    #[test]
+    fn test_parse_plugin_sources_env_empty_string() {
+        let result = parse_plugin_sources_env("");
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_parse_plugin_sources_env_single_entry() {
+        let result = parse_plugin_sources_env("core=/path/to/plugins");
+        assert_eq!(result.len(), 1);
+        assert_eq!(
+            result.get("core"),
+            Some(&std::path::PathBuf::from("/path/to/plugins"))
+        );
+    }
+
+    #[test]
+    fn test_parse_plugin_sources_env_multiple_entries() {
+        let result = parse_plugin_sources_env("a=/p1,b=/p2,c=/p3");
+        assert_eq!(result.len(), 3);
+        assert_eq!(result.get("a"), Some(&std::path::PathBuf::from("/p1")));
+        assert_eq!(result.get("b"), Some(&std::path::PathBuf::from("/p2")));
+        assert_eq!(result.get("c"), Some(&std::path::PathBuf::from("/p3")));
+    }
+
+    #[test]
+    fn test_parse_plugin_sources_env_ignores_entries_without_equals() {
+        let result = parse_plugin_sources_env("nokey,/p1=valid,alsonokey");
+        assert_eq!(result.len(), 1);
+        assert!(result.contains_key("/p1=valid".split('=').next().unwrap()));
+    }
+
+    #[test]
+    fn test_parse_plugin_sources_env_trims_whitespace() {
+        let result = parse_plugin_sources_env("  core  =  /path/to/plugins  ");
+        assert_eq!(result.len(), 1);
+        assert_eq!(
+            result.get("core"),
+            Some(&std::path::PathBuf::from("/path/to/plugins"))
+        );
+    }
+
+    #[test]
+    fn test_parse_plugin_sources_env_ignores_empty_name_or_path() {
+        let result = parse_plugin_sources_env("=/p, name= , ,");
+        assert!(
+            result.is_empty(),
+            "empty name/path should be ignored, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_parse_plugin_sources_env_ignores_empty_entries_between_commas() {
+        let result = parse_plugin_sources_env("a=/p1,,b=/p2,,");
+        assert_eq!(result.len(), 2);
+        assert!(result.contains_key("a"));
+        assert!(result.contains_key("b"));
+    }
+
+    #[test]
+    fn test_expand_tilde_str_empty_string() {
+        assert_eq!(expand_tilde_str(""), "");
+    }
+
+    #[test]
+    fn test_expand_tilde_str_no_tilde() {
+        assert_eq!(expand_tilde_str("/usr/local/bin"), "/usr/local/bin");
+    }
+
+    #[test]
+    fn test_expand_tilde_str_expands_home() {
+        let expanded = expand_tilde_str("~/projects");
+        assert!(
+            !expanded.starts_with('~'),
+            "tilde should be expanded, got: {expanded}"
+        );
+    }
+
+    #[test]
+    fn test_expand_tilde_str_preserves_trailing_path() {
+        let expanded = expand_tilde_str("~/a/b/c");
+        assert!(expanded.ends_with("/a/b/c"), "got: {expanded}");
+    }
+
+    #[test]
+    fn test_config_diff_summary_bang_requires_approval_change() {
+        let a = Config::default();
+        let mut b = Config::default();
+        b.security.bang_requires_approval = true;
+        let s = config_diff_summary(&a, &b);
+        assert!(s.contains("bang_requires_approval"), "got: {s}");
+    }
+
+    #[test]
+    fn test_config_diff_summary_dry_run_change() {
+        let a = Config::default();
+        let mut b = Config::default();
+        b.tools.dry_run = true;
+        let s = config_diff_summary(&a, &b);
+        assert!(s.contains("dry_run"), "got: {s}");
+    }
+
+    #[test]
+    fn test_config_diff_summary_cache_enabled_change() {
+        let a = Config::default();
+        let mut b = Config::default();
+        b.model.cache_enabled = true;
+        let s = config_diff_summary(&a, &b);
+        assert!(s.contains("cache_enabled"), "got: {s}");
+    }
+
+    #[test]
+    fn test_config_diff_summary_sandbox_dir_change() {
+        let a = Config::default();
+        let mut b = Config::default();
+        b.security.sandbox_dir = Some("/new/sandbox".into());
+        let s = config_diff_summary(&a, &b);
+        assert!(s.contains("sandbox_dir"), "got: {s}");
+    }
+
+    #[test]
+    fn test_config_diff_summary_routing_enabled_change() {
+        let a = Config::default();
+        let mut b = Config::default();
+        b.model.routing_enabled = true;
+        let s = config_diff_summary(&a, &b);
+        assert!(s.contains("routing_enabled"), "got: {s}");
+    }
+
+    #[test]
+    fn test_config_diff_summary_summarize_enabled_change() {
+        let a = Config::default();
+        let mut b = Config::default();
+        b.model.summarize_enabled = true;
+        let s = config_diff_summary(&a, &b);
+        assert!(s.contains("summarize_enabled"), "got: {s}");
+    }
+
+    #[test]
+    fn test_config_diff_summary_enabled_plugins_change() {
+        let a = Config::default();
+        let mut b = Config::default();
+        b.tools.enabled_plugins = vec!["plugin-x".into()];
+        let s = config_diff_summary(&a, &b);
+        assert!(s.contains("enabled_plugins"), "got: {s}");
+    }
+
+    #[test]
+    fn test_config_diff_summary_ollama_host_change() {
+        let a = Config::default();
+        let mut b = Config::default();
+        b.model.ollama_host = "http://new:11434".into();
+        let s = config_diff_summary(&a, &b);
+        assert!(s.contains("ollama_host"), "got: {s}");
+        assert!(s.contains("http://new:11434"), "got: {s}");
+    }
+
+    #[test]
+    fn test_config_diff_summary_auto_approve_change() {
+        let a = Config::default();
+        let mut b = Config::default();
+        b.security.auto_approve = true;
+        let s = config_diff_summary(&a, &b);
+        assert!(s.contains("auto_approve"), "got: {s}");
+    }
 }

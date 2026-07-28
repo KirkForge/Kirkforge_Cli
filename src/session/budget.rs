@@ -1091,6 +1091,416 @@ mod tests {
         assert_eq!(hook.handle(&ctx), HookDecision::Allow);
     }
 
+    #[tokio::test]
+    async fn test_check_and_slice_result_fits_exactly_returns_keep() {
+        let budget = budget_with(900, 1000);
+        let store = InMemoryOffloadStore::new();
+        let result = "x".repeat(100);
+        match check_and_slice(&result, &budget, &store) {
+            BudgetAction::Keep(kept) => assert_eq!(kept.len(), 100),
+            other => panic!("exact-fit result must be kept, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_check_and_slice_over_budget_zero_remaining_slices_to_marker_only() {
+        let budget = TokenBudget {
+            ceiling: 1000,
+            approaching_ratio: 0.5,
+            used: 950,
+        };
+        assert_eq!(budget.state(), BudgetState::Approaching);
+        let store = InMemoryOffloadStore::new();
+        let result = "y".repeat(50);
+        match check_and_slice(&result, &budget, &store) {
+            BudgetAction::Keep(kept) => assert_eq!(kept, result),
+            other => panic!("fits-in-remaining must be kept, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_budget_action_equality_keep() {
+        assert_eq!(
+            BudgetAction::Keep("x".into()),
+            BudgetAction::Keep("x".into())
+        );
+        assert_ne!(
+            BudgetAction::Keep("x".into()),
+            BudgetAction::Keep("y".into())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_budget_action_equality_sliced() {
+        assert_eq!(
+            BudgetAction::Sliced {
+                display: "d".into(),
+                key: "k".into(),
+            },
+            BudgetAction::Sliced {
+                display: "d".into(),
+                key: "k".into(),
+            }
+        );
+        assert_ne!(
+            BudgetAction::Sliced {
+                display: "d".into(),
+                key: "k".into(),
+            },
+            BudgetAction::Sliced {
+                display: "d".into(),
+                key: "z".into(),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn test_budget_action_ne_between_variants() {
+        assert_ne!(
+            BudgetAction::Keep("x".into()),
+            BudgetAction::Sliced {
+                display: "x".into(),
+                key: "k".into(),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn test_init_from_config_updates_shared_budget() {
+        let _guard = shared_budget_test_lock().lock().await;
+        let mut cfg = crate::shared::Config::default();
+        cfg.tools.budget_ceiling = 12_345;
+        cfg.tools.budget_approaching_ratio = 0.9;
+        init_from_config(&cfg);
+        let budget = shared_budget();
+        let guard = budget.lock().expect("budget mutex poisoned");
+        assert_eq!(guard.ceiling, 12_345);
+        assert_eq!(guard.approaching_ratio, 0.9);
+        drop(guard);
+        reset_shared_budget(200_000, 0);
+    }
+
+    #[tokio::test]
+    async fn test_budget_set_missing_ceiling_arg_returns_error() {
+        let _guard = shared_budget_test_lock().lock().await;
+        reset_shared_budget(1000, 0);
+        let set_tool = budget_set_tool();
+        let ctx = ToolContext::new();
+        let out = set_tool.run(&ctx, serde_json::json!({})).await;
+        match out {
+            ToolOutcome::Error { message } => {
+                assert!(message.contains("ceiling"), "got: {message}");
+            }
+            other => panic!("expected Error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_budget_set_non_integer_ceiling_returns_error() {
+        let _guard = shared_budget_test_lock().lock().await;
+        reset_shared_budget(1000, 0);
+        let set_tool = budget_set_tool();
+        let ctx = ToolContext::new();
+        let out = set_tool
+            .run(&ctx, serde_json::json!({"ceiling": "not-a-number"}))
+            .await;
+        assert!(matches!(out, ToolOutcome::Error { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_budget_compact_resets_used_to_zero() {
+        let _guard = shared_budget_test_lock().lock().await;
+        reset_shared_budget(1000, 500);
+        let compact = BudgetCompact {
+            def: simple_tool_def("budget_compact", "Compact the budget store."),
+            budget: shared_budget(),
+        };
+        let ctx = ToolContext::new();
+        let out = compact.run(&ctx, serde_json::json!({})).await;
+        match out {
+            ToolOutcome::Success { content } => {
+                assert!(content.contains("reset"), "got: {content}");
+                assert!(content.contains("500"));
+            }
+            other => panic!("expected Success, got {other:?}"),
+        }
+        let used = {
+            let budget = shared_budget();
+            let guard = budget.lock().expect("budget mutex poisoned");
+            guard.used
+        };
+        assert_eq!(used, 0);
+    }
+
+    #[tokio::test]
+    async fn test_store_get_missing_marker_arg_returns_error() {
+        let store_get = StoreGet {
+            def: store_get_def(),
+            store: shared_store(),
+        };
+        let ctx = ToolContext::new();
+        let out = store_get.run(&ctx, serde_json::json!({})).await;
+        assert!(matches!(out, ToolOutcome::Error { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_store_get_unknown_marker_returns_error() {
+        let store_get = StoreGet {
+            def: store_get_def(),
+            store: shared_store(),
+        };
+        let ctx = ToolContext::new();
+        let out = store_get
+            .run(&ctx, serde_json::json!({"marker": "no-such-key"}))
+            .await;
+        match out {
+            ToolOutcome::Error { message } => assert!(message.contains("store_get")),
+            other => panic!("expected Error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_config_validate_returns_success_with_default_config() {
+        let validate = ConfigValidate {
+            def: simple_tool_def("config_validate", "Validate config."),
+        };
+        let ctx = ToolContext::new();
+        let out = validate.run(&ctx, serde_json::json!({})).await;
+        match out {
+            ToolOutcome::Success { content } => {
+                assert!(content.contains("Config valid"), "got: {content}");
+            }
+            other => panic!("expected Success, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_self_check_returns_paths_and_pass() {
+        let check = SelfCheck {
+            def: simple_tool_def("self_check", "Diagnostics."),
+        };
+        let ctx = ToolContext::new();
+        let out = check.run(&ctx, serde_json::json!({})).await;
+        match out {
+            ToolOutcome::Success { content } => {
+                assert!(content.contains("data_dir"), "got: {content}");
+                assert!(content.contains("PASS"), "got: {content}");
+            }
+            other => panic!("expected Success, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_record_tool_usage_no_result_returns_allow() {
+        let _guard = shared_budget_test_lock().lock().await;
+        reset_shared_budget(200_000, 0);
+        let budget = shared_budget();
+        let ctx = HookContext {
+            event: "post-tool-bash".into(),
+            tool_result: None,
+            ..Default::default()
+        };
+        let decision = record_tool_usage(&budget, &ctx, "bash");
+        assert_eq!(decision, HookDecision::Allow);
+        let guard = budget.lock().expect("budget mutex poisoned");
+        assert_eq!(guard.used, 0, "no result should not record usage");
+    }
+
+    #[tokio::test]
+    async fn test_record_tool_usage_empty_result_records_zero() {
+        let _guard = shared_budget_test_lock().lock().await;
+        reset_shared_budget(200_000, 0);
+        let budget = shared_budget();
+        let ctx = HookContext {
+            event: "post-tool-bash".into(),
+            tool_result: Some(String::new()),
+            ..Default::default()
+        };
+        let decision = record_tool_usage(&budget, &ctx, "bash");
+        assert_eq!(decision, HookDecision::Allow);
+        let guard = budget.lock().expect("budget mutex poisoned");
+        assert_eq!(guard.used, 0, "empty result records 0 tokens");
+    }
+
+    #[tokio::test]
+    async fn test_record_tool_usage_pushes_into_approaching() {
+        let _guard = shared_budget_test_lock().lock().await;
+        reset_shared_budget(1000, 800);
+        let budget = shared_budget();
+        let big = "x".repeat(200);
+        let ctx = HookContext {
+            event: "post-tool-write_file".into(),
+            tool_result: Some(big),
+            ..Default::default()
+        };
+        let _ = record_tool_usage(&budget, &ctx, "write_file");
+        let guard = budget.lock().expect("budget mutex poisoned");
+        assert_eq!(guard.state(), BudgetState::Approaching);
+    }
+
+    #[tokio::test]
+    async fn test_post_tool_write_file_hook_records_usage() {
+        let _guard = shared_budget_test_lock().lock().await;
+        reset_shared_budget(200_000, 0);
+        let hook = PostToolWriteFileHook {
+            budget: shared_budget(),
+        };
+        let ctx = HookContext {
+            event: "post-tool-write_file".into(),
+            tool_result: Some("x".repeat(400)),
+            ..Default::default()
+        };
+        assert_eq!(hook.handle(&ctx), HookDecision::Allow);
+        let budget = shared_budget();
+        let guard = budget.lock().expect("budget mutex poisoned");
+        assert!(guard.used > 0, "write_file hook must record usage");
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_sliced_no_listeners_returns_none() {
+        let _guard = shared_budget_test_lock().lock().await;
+        clear_sliced_listeners();
+        let event = BudgetSlicedEvent {
+            original_size: 100,
+            sliced_size: 50,
+            key: "k".into(),
+            sliced_display: "d".into(),
+        };
+        assert!(dispatch_sliced(event).is_none());
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_sliced_listener_returns_none_propagates_none() {
+        let _guard = shared_budget_test_lock().lock().await;
+        clear_sliced_listeners();
+        register_sliced_listener(std::sync::Arc::new(|_event: BudgetSlicedEvent| None));
+        let event = BudgetSlicedEvent {
+            original_size: 100,
+            sliced_size: 50,
+            key: "k".into(),
+            sliced_display: "d".into(),
+        };
+        assert!(dispatch_sliced(event).is_none());
+        clear_sliced_listeners();
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_sliced_first_listener_wins() {
+        let _guard = shared_budget_test_lock().lock().await;
+        clear_sliced_listeners();
+        register_sliced_listener(std::sync::Arc::new(|event: BudgetSlicedEvent| {
+            Some(format!("first:{}", event.sliced_size))
+        }));
+        register_sliced_listener(std::sync::Arc::new(|_event: BudgetSlicedEvent| {
+            Some("second".to_string())
+        }));
+        let event = BudgetSlicedEvent {
+            original_size: 100,
+            sliced_size: 50,
+            key: "k".into(),
+            sliced_display: "d".into(),
+        };
+        let result = dispatch_sliced(event);
+        assert_eq!(result.as_deref(), Some("first:50"));
+        clear_sliced_listeners();
+    }
+
+    #[tokio::test]
+    async fn test_apply_budget_slice_passes_through_errors_unchanged() {
+        let _guard = shared_budget_test_lock().lock().await;
+        reset_shared_budget(1000, 950);
+        let outcome = ToolOutcome::Error {
+            message: "boom".into(),
+        };
+        let result = apply_budget_slice(outcome);
+        match result {
+            ToolOutcome::Error { message } => assert_eq!(message, "boom"),
+            other => panic!("expected Error passthrough, got {other:?}"),
+        }
+        reset_shared_budget(200_000, 0);
+    }
+
+    #[tokio::test]
+    async fn test_apply_budget_slice_passes_through_failure_unchanged() {
+        let _guard = shared_budget_test_lock().lock().await;
+        reset_shared_budget(1000, 950);
+        let outcome = ToolOutcome::Failure(crate::shared::ToolError::Cancelled);
+        let result = apply_budget_slice(outcome);
+        assert!(matches!(result, ToolOutcome::Failure(_)));
+        reset_shared_budget(200_000, 0);
+    }
+
+    #[tokio::test]
+    async fn test_apply_budget_slice_file_content_over_sliced() {
+        let _guard = shared_budget_test_lock().lock().await;
+        clear_sliced_listeners();
+        reset_shared_budget(1000, 900);
+        let big = "z".repeat(10_000);
+        let outcome = ToolOutcome::FileContent {
+            path: std::path::PathBuf::from("/tmp/x.rs"),
+            content: big,
+            truncated: false,
+        };
+        let result = apply_budget_slice(outcome);
+        match result {
+            ToolOutcome::FileContent {
+                content, truncated, ..
+            } => {
+                assert!(truncated, "sliced file content must set truncated");
+                assert!(content.len() < 10_000);
+            }
+            other => panic!("expected FileContent, got {other:?}"),
+        }
+        reset_shared_budget(200_000, 0);
+        clear_sliced_listeners();
+    }
+
+    #[tokio::test]
+    async fn test_apply_budget_slice_file_content_under_budget_passes_through() {
+        let _guard = shared_budget_test_lock().lock().await;
+        reset_shared_budget(200_000, 0);
+        let outcome = ToolOutcome::FileContent {
+            path: std::path::PathBuf::from("/tmp/x.rs"),
+            content: "small".into(),
+            truncated: false,
+        };
+        let result = apply_budget_slice(outcome);
+        match result {
+            ToolOutcome::FileContent {
+                content, truncated, ..
+            } => {
+                assert_eq!(content, "small");
+                assert!(!truncated);
+            }
+            other => panic!("expected FileContent, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_all_budget_tools_returns_seven_tools() {
+        let tools = all_budget_tools();
+        assert_eq!(tools.len(), 7);
+        let names: Vec<&str> = tools.iter().map(|t| t.def().name).collect();
+        assert!(names.contains(&"budget_status"));
+        assert!(names.contains(&"budget_set"));
+        assert!(names.contains(&"budget_compact"));
+        assert!(names.contains(&"store_get"));
+        assert!(names.contains(&"config_validate"));
+        assert!(names.contains(&"report"));
+        assert!(names.contains(&"self_check"));
+    }
+
+    #[tokio::test]
+    async fn test_all_budget_hooks_returns_four_hooks() {
+        let hooks = all_budget_hooks();
+        assert_eq!(hooks.len(), 4);
+        let events: Vec<&str> = hooks.iter().map(|h| h.event()).collect();
+        assert!(events.contains(&"session-start"));
+        assert!(events.contains(&"post-tool-bash"));
+        assert!(events.contains(&"post-tool-write_file"));
+        assert!(events.contains(&"pre-compact"));
+    }
+
     // ── WO 8.6 coordination tests ──────────────────────────────────────
 
     /// Listener dispatch: a registered listener that returns
@@ -1099,9 +1509,9 @@ mod tests {
     /// the `BudgetSlicedEvent` carries the original size, the
     /// sliced size, the offload key, and the sliced display
     /// (the listener needs all of them to make a decision).
-    #[test]
-    fn test_apply_budget_slice_dispatches_to_sliced_listener() {
-        let _guard = shared_budget_test_lock().blocking_lock();
+    #[tokio::test]
+    async fn test_apply_budget_slice_dispatches_to_sliced_listener() {
+        let _guard = shared_budget_test_lock().lock().await;
         clear_sliced_listeners();
         reset_shared_budget(1000, 900);
         // Register a listener that returns a known short string.
@@ -1147,12 +1557,12 @@ mod tests {
     /// mode to `Full`. Gated by the `stratum` feature because the
     /// escalation target lives in the stratum module.
     #[cfg(feature = "stratum")]
-    #[test]
-    fn test_apply_budget_slice_auto_escalates_lite_to_full_on_approaching() {
+    #[tokio::test]
+    async fn test_apply_budget_slice_auto_escalates_lite_to_full_on_approaching() {
         use crate::session::stratum::{current_session_mode, set_session_mode};
         use kirkstratum_core::mode::Mode;
 
-        let _guard = shared_budget_test_lock().blocking_lock();
+        let _guard = shared_budget_test_lock().lock().await;
         clear_sliced_listeners();
         reset_shared_budget(1000, 850);
         // Force Approaching (850/1000 = 0.85 ≥ 0.8) and seed the
@@ -1177,12 +1587,12 @@ mod tests {
     /// Stratum session mode. Idempotent: re-running when the
     /// mode is already `Full` is a no-op.
     #[cfg(feature = "stratum")]
-    #[test]
-    fn test_pre_compact_hook_runs_stratum_compression() {
+    #[tokio::test]
+    async fn test_pre_compact_hook_runs_stratum_compression() {
         use crate::session::stratum::{current_session_mode, set_session_mode};
         use kirkstratum_core::mode::Mode;
 
-        let _guard = shared_budget_test_lock().blocking_lock();
+        let _guard = shared_budget_test_lock().lock().await;
         reset_shared_budget(1000, 850);
         // Seed session mode as Lite.
         set_session_mode(Mode::Lite);

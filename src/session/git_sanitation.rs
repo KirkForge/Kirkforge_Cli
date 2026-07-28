@@ -806,4 +806,374 @@ mod tests {
         std::fs::write(&path, b"\xff\xfe\xfd").unwrap();
         assert!(read_limited(&path, 1024).is_none());
     }
+
+    #[test]
+    fn human_size_tb_scales() {
+        let tb = 3 * 1024 * 1024 * 1024 * 1024;
+        assert_eq!(human_size(tb), "3.0 TB");
+    }
+
+    #[test]
+    fn human_size_small_bytes_stays_in_bytes() {
+        assert_eq!(human_size(512), "512.0 B");
+    }
+
+    #[test]
+    fn human_size_one_kb_boundary() {
+        assert_eq!(human_size(1023), "1023.0 B");
+        assert_eq!(human_size(1024), "1.0 KB");
+    }
+
+    #[test]
+    fn parse_status_handles_modified_both_staged_and_unstaged() {
+        let out = "MM src/both.rs";
+        let entries = parse_status(out);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].status, StatusCode::Staged);
+    }
+
+    #[test]
+    fn parse_status_handles_added_staged() {
+        let out = "A  src/new.rs";
+        let entries = parse_status(out);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].status, StatusCode::Staged);
+    }
+
+    #[test]
+    fn parse_status_handles_unknown_code_as_other() {
+        let out = " X src/weird.rs";
+        let entries = parse_status(out);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].status, StatusCode::Other);
+    }
+
+    #[test]
+    fn parse_status_empty_output_returns_empty_vec() {
+        let entries = parse_status("");
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn parse_status_only_whitespace_lines_returns_empty_vec() {
+        let entries = parse_status("\n\n\n");
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn classify_empty_code_returns_other() {
+        assert_eq!(classify("  "), StatusCode::Other);
+    }
+
+    #[test]
+    fn classify_single_char_code_returns_staged_or_other() {
+        // "X" has staged='X' (non-space, non-?) so it's Staged.
+        assert_eq!(classify("X"), StatusCode::Staged);
+    }
+
+    #[test]
+    fn classify_double_question_mark_is_untracked() {
+        assert_eq!(classify("??"), StatusCode::Untracked);
+    }
+
+    #[test]
+    fn classify_d_in_staged_position_is_deleted() {
+        assert_eq!(classify("D "), StatusCode::Deleted);
+    }
+
+    #[test]
+    fn classify_d_in_unstaged_position_is_deleted() {
+        assert_eq!(classify(" D"), StatusCode::Deleted);
+    }
+
+    #[test]
+    fn classify_double_d_is_deleted() {
+        assert_eq!(classify("DD"), StatusCode::Deleted);
+    }
+
+    #[test]
+    fn classify_m_staged_is_staged() {
+        assert_eq!(classify("M "), StatusCode::Staged);
+        assert_eq!(classify("A "), StatusCode::Staged);
+        assert_eq!(classify("R "), StatusCode::Staged);
+        assert_eq!(classify("C "), StatusCode::Staged);
+    }
+
+    #[test]
+    fn has_conflict_marker_only_seven_equals_exact() {
+        assert!(has_conflict_marker("======="));
+        assert!(!has_conflict_marker("======"));
+        assert!(!has_conflict_marker("========"));
+    }
+
+    #[test]
+    fn has_conflict_marker_only_exact_start_marker() {
+        assert!(has_conflict_marker("<<<<<<< HEAD"));
+        assert!(!has_conflict_marker("<<<<<<<HEAD"));
+        assert!(!has_conflict_marker("<<<<<< HEAD"));
+    }
+
+    #[test]
+    fn has_conflict_marker_only_exact_end_marker() {
+        assert!(has_conflict_marker(">>>>>>> branch"));
+        assert!(!has_conflict_marker(">>>>>>>> branch"));
+        assert!(!has_conflict_marker(">>>>>> branch"));
+    }
+
+    #[test]
+    fn contains_secret_pattern_detects_id_rsa() {
+        assert!(contains_secret_pattern(
+            &"path/to/id_rsa".to_lowercase(),
+            "id_rsa"
+        ));
+    }
+
+    #[test]
+    fn contains_secret_pattern_detects_id_ed25519() {
+        assert!(contains_secret_pattern(
+            &"path/to/id_ed25519".to_lowercase(),
+            "id_ed25519"
+        ));
+    }
+
+    #[test]
+    fn contains_secret_pattern_detects_github_pat_underscore() {
+        assert!(contains_secret_pattern(
+            &"github_pat_abc123".to_lowercase(),
+            "github_pat_"
+        ));
+    }
+
+    #[test]
+    fn contains_secret_pattern_detects_glpat() {
+        assert!(contains_secret_pattern(
+            &"glpat-xyz".to_lowercase(),
+            "glpat-"
+        ));
+    }
+
+    #[test]
+    fn contains_secret_pattern_detects_begin_rsa_private_key() {
+        assert!(contains_secret_pattern(
+            &"-----BEGIN RSA PRIVATE KEY-----".to_lowercase(),
+            "begin rsa private key"
+        ));
+    }
+
+    #[test]
+    fn contains_secret_pattern_detects_begin_openssh_private_key() {
+        assert!(contains_secret_pattern(
+            &"-----BEGIN OPENSSH PRIVATE KEY-----".to_lowercase(),
+            "begin openssh private key"
+        ));
+    }
+
+    #[test]
+    fn contains_secret_pattern_env_at_start_of_text() {
+        assert!(contains_secret_pattern(&".env".to_lowercase(), ".env"));
+    }
+
+    #[test]
+    fn contains_secret_pattern_env_at_end_of_text() {
+        assert!(contains_secret_pattern(&"see .env".to_lowercase(), ".env"));
+    }
+
+    #[test]
+    fn contains_secret_pattern_env_standalone_word() {
+        assert!(contains_secret_pattern(
+            &"cat .env now".to_lowercase(),
+            ".env"
+        ));
+    }
+
+    #[test]
+    fn contains_secret_pattern_env_with_dot_after_is_rejected() {
+        assert!(!contains_secret_pattern(
+            &".env.local".to_lowercase(),
+            ".env"
+        ));
+        assert!(!contains_secret_pattern(
+            &".environment".to_lowercase(),
+            ".env"
+        ));
+    }
+
+    #[test]
+    fn contains_secret_pattern_env_with_alphanumeric_before_is_rejected() {
+        assert!(!contains_secret_pattern(&"x.env".to_lowercase(), ".env"));
+    }
+
+    #[test]
+    fn contains_secret_pattern_env_with_underscore_after_is_rejected() {
+        assert!(!contains_secret_pattern(&".env_var".to_lowercase(), ".env"));
+    }
+
+    #[test]
+    fn suggest_message_single_file_no_extension() {
+        let lines = vec![" M Makefile".to_string()];
+        let msg = suggest_message(&lines);
+        assert!(
+            msg.starts_with("chore") || msg.starts_with("feat"),
+            "no-ext file should pick chore or feat, got: {msg}"
+        );
+        assert!(msg.contains("Makefile"), "got: {msg}");
+    }
+
+    #[test]
+    fn suggest_message_single_file_with_test_stem() {
+        let lines = vec![" M src/lib_test.rs".to_string()];
+        let msg = suggest_message(&lines);
+        assert!(
+            msg.starts_with("test"),
+            "test stem should pick test kind, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn suggest_message_single_file_txt_extension_is_docs() {
+        let lines = vec![" M NOTES.txt".to_string()];
+        let msg = suggest_message(&lines);
+        assert!(msg.starts_with("docs"), "got: {msg}");
+    }
+
+    #[test]
+    fn suggest_message_rust_and_docs_picks_docs_kind() {
+        let lines = vec![" M src/main.rs".to_string(), " M README.md".to_string()];
+        let msg = suggest_message(&lines);
+        assert!(
+            msg.starts_with("docs"),
+            "rust+docs should pick docs, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn strip_status_code_handles_rename_with_spaces() {
+        let path = strip_status_code("R  old name.rs -> new name.rs");
+        assert_eq!(path, PathBuf::from("new name.rs"));
+    }
+
+    #[test]
+    fn strip_status_code_handles_copy_with_spaces() {
+        let path = strip_status_code("C  old.rs -> copy.rs");
+        assert_eq!(path, PathBuf::from("copy.rs"));
+    }
+
+    #[test]
+    fn check_worktree_staged_file_is_scanned_for_size() {
+        let tmp = tempfile::tempdir().unwrap();
+        let big = tmp.path().join("staged.bin");
+        std::fs::write(&big, vec![0u8; 2048]).unwrap();
+        let status = format!("A  {}", big.display());
+        let report = check_worktree(tmp.path(), &status, Some(1024)).unwrap();
+        assert!(!report.is_clean());
+        assert!(report.blockers.iter().any(|b| b.contains("Large file")));
+    }
+
+    #[test]
+    fn check_worktree_modified_unstaged_is_scanned_for_size() {
+        let tmp = tempfile::tempdir().unwrap();
+        let big = tmp.path().join("modified.bin");
+        std::fs::write(&big, vec![0u8; 2048]).unwrap();
+        let status = format!(" M {}", big.display());
+        let report = check_worktree(tmp.path(), &status, Some(1024)).unwrap();
+        assert!(!report.is_clean());
+        assert!(report.blockers.iter().any(|b| b.contains("Large file")));
+    }
+
+    #[test]
+    fn check_worktree_default_max_used_when_none() {
+        let tmp = tempfile::tempdir().unwrap();
+        let normal = tmp.path().join("normal.txt");
+        std::fs::write(&normal, "small").unwrap();
+        let status = format!("?? {}", normal.display());
+        let report = check_worktree(tmp.path(), &status, None).unwrap();
+        assert!(report.is_clean(), "small file should pass default limit");
+    }
+
+    #[test]
+    fn check_worktree_unstaged_only_in_warning() {
+        let tmp = tempfile::tempdir().unwrap();
+        let f = tmp.path().join("unstaged.txt");
+        std::fs::write(&f, "x").unwrap();
+        let status = format!(" M {}", f.display());
+        let report = check_worktree(tmp.path(), &status, None).unwrap();
+        assert!(
+            report.warnings.iter().any(|w| w.contains("unstaged")),
+            "got: {:?}",
+            report.warnings
+        );
+    }
+
+    #[test]
+    fn check_worktree_mixed_staged_and_unstaged() {
+        let tmp = tempfile::tempdir().unwrap();
+        let staged = tmp.path().join("staged.txt");
+        let unstaged = tmp.path().join("unstaged.txt");
+        std::fs::write(&staged, "s").unwrap();
+        std::fs::write(&unstaged, "u").unwrap();
+        let status = format!("A  {}\n M {}", staged.display(), unstaged.display());
+        let report = check_worktree(tmp.path(), &status, None).unwrap();
+        assert!(report.warnings.iter().any(|w| w.contains("unstaged")));
+    }
+
+    #[test]
+    fn sanitation_report_format_only_warnings() {
+        let report = SanitationReport {
+            blockers: vec![],
+            warnings: vec!["just a warning".into()],
+        };
+        let s = report.format();
+        assert!(s.contains("⚠️  Warnings:"));
+        assert!(s.contains("just a warning"));
+        assert!(!s.contains("Commit blocked"));
+    }
+
+    #[test]
+    fn sanitation_report_is_clean_true_when_no_blockers() {
+        let report = SanitationReport {
+            blockers: vec![],
+            warnings: vec!["w".into()],
+        };
+        assert!(report.is_clean(), "warnings don't block");
+    }
+
+    #[test]
+    fn sanitation_report_is_clean_false_with_blockers() {
+        let report = SanitationReport {
+            blockers: vec!["b".into()],
+            warnings: vec![],
+        };
+        assert!(!report.is_clean());
+    }
+
+    #[test]
+    fn sanitation_report_default_is_clean() {
+        assert!(SanitationReport::default().is_clean());
+    }
+
+    #[test]
+    fn read_limited_empty_file_returns_empty_string() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("empty.txt");
+        std::fs::write(&path, "").unwrap();
+        let out = read_limited(&path, 1024).unwrap();
+        assert_eq!(out, "");
+    }
+
+    #[test]
+    fn read_limited_reads_only_limit_bytes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("big.txt");
+        std::fs::write(&path, "0123456789").unwrap();
+        let out = read_limited(&path, 4).unwrap();
+        assert_eq!(out.len(), 4);
+        assert_eq!(out, "0123");
+    }
+
+    #[test]
+    fn check_worktree_returns_ok_for_empty_status() {
+        let tmp = tempfile::tempdir().unwrap();
+        let report = check_worktree(tmp.path(), "", None).unwrap();
+        assert!(report.is_clean());
+    }
 }

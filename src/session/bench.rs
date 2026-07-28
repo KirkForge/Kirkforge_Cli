@@ -458,4 +458,188 @@ mod tests {
         assert_eq!(summary.total_tokens_in, 100);
         assert_eq!(summary.total_tool_calls, 2);
     }
+
+    #[test]
+    fn bench_collect_metrics_ignores_non_relevant_events() {
+        let dir = tempfile::tempdir().unwrap();
+        let task = sample_task(
+            "ignore-events",
+            VerifySpec::CommandExitsZero {
+                command: "true".to_string(),
+            },
+        );
+        let events = vec![
+            super::super::executor::TurnEvent::Token("hello".into()),
+            super::super::executor::TurnEvent::Thinking("thought".into()),
+            super::super::executor::TurnEvent::Error("err".into()),
+        ];
+        let result = collect_turn_metrics(&events, 1.0, &task, dir.path(), None);
+        assert!(result.success);
+        assert_eq!(result.tokens_in, 0);
+        assert_eq!(result.tokens_out, 0);
+        assert_eq!(result.tool_calls, 0);
+        assert_eq!(result.cost_usd, 0.0);
+    }
+
+    #[test]
+    fn bench_collect_metrics_accumulates_tool_calls_across_events() {
+        let dir = tempfile::tempdir().unwrap();
+        let task = sample_task(
+            "multi-tools",
+            VerifySpec::CommandExitsZero {
+                command: "true".to_string(),
+            },
+        );
+        let events = vec![
+            super::super::executor::TurnEvent::ToolStart {
+                name: "bash".to_string(),
+                args: serde_json::json!({}),
+            },
+            super::super::executor::TurnEvent::ToolStart {
+                name: "write_file".to_string(),
+                args: serde_json::json!({}),
+            },
+            super::super::executor::TurnEvent::ToolStart {
+                name: "edit_file".to_string(),
+                args: serde_json::json!({}),
+            },
+        ];
+        let result = collect_turn_metrics(&events, 2.5, &task, dir.path(), None);
+        assert_eq!(result.tool_calls, 3);
+    }
+
+    #[test]
+    fn bench_collect_metrics_cost_stats_accumulate_cost() {
+        let dir = tempfile::tempdir().unwrap();
+        let task = sample_task(
+            "cost-acc",
+            VerifySpec::CommandExitsZero {
+                command: "true".to_string(),
+            },
+        );
+        let events = vec![
+            super::super::executor::TurnEvent::CostStats {
+                prompt_tokens: 10,
+                completion_tokens: 5,
+                turn_cost: 0.001,
+                cumulative_cost: 0.001,
+            },
+            super::super::executor::TurnEvent::CostStats {
+                prompt_tokens: 20,
+                completion_tokens: 10,
+                turn_cost: 0.002,
+                cumulative_cost: 0.003,
+            },
+        ];
+        let result = collect_turn_metrics(&events, 1.0, &task, dir.path(), None);
+        assert_eq!(result.tokens_in, 30);
+        assert_eq!(result.tokens_out, 15);
+        assert!((result.cost_usd - 0.003).abs() < 0.0001);
+    }
+
+    #[test]
+    fn bench_collect_metrics_preserves_task_name_and_difficulty() {
+        let dir = tempfile::tempdir().unwrap();
+        let task = BenchTask {
+            name: "named-task".to_string(),
+            difficulty: Difficulty::Hard,
+            prompt: "p".to_string(),
+            setup: HashMap::new(),
+            verify: VerifySpec::CommandExitsZero {
+                command: "true".to_string(),
+            },
+            requires_model: false,
+        };
+        let result = collect_turn_metrics(&[], 1.0, &task, dir.path(), None);
+        assert_eq!(result.task_name, "named-task");
+        assert_eq!(result.difficulty, Difficulty::Hard);
+    }
+
+    #[test]
+    fn bench_collect_metrics_run_error_overrides_verify_success() {
+        let dir = tempfile::tempdir().unwrap();
+        let task = sample_task(
+            "err-overrides",
+            VerifySpec::CommandExitsZero {
+                command: "true".to_string(),
+            },
+        );
+        let result =
+            collect_turn_metrics(&[], 1.0, &task, dir.path(), Some("adapter crashed".into()));
+        assert!(!result.success);
+        assert_eq!(result.error.as_deref(), Some("adapter crashed"));
+    }
+
+    #[test]
+    fn bench_collect_metrics_zero_duration_is_preserved() {
+        let dir = tempfile::tempdir().unwrap();
+        let task = sample_task(
+            "zero-dur",
+            VerifySpec::CommandExitsZero {
+                command: "true".to_string(),
+            },
+        );
+        let result = collect_turn_metrics(&[], 0.0, &task, dir.path(), None);
+        assert_eq!(result.duration_secs, 0.0);
+    }
+
+    #[test]
+    fn bench_summary_from_empty_results() {
+        let summary = BenchSummary::from_results(&[]);
+        assert_eq!(summary.tasks_run, 0);
+        assert_eq!(summary.tasks_passed, 0);
+        assert_eq!(summary.success_rate, 0.0);
+    }
+
+    #[test]
+    fn bench_summary_all_pass() {
+        let results = vec![TaskResult {
+            task_name: "ok".to_string(),
+            difficulty: Difficulty::Easy,
+            success: true,
+            tokens_in: 10,
+            tokens_out: 5,
+            duration_secs: 1.0,
+            cost_usd: 0.001,
+            tool_calls: 1,
+            error: None,
+        }];
+        let summary = BenchSummary::from_results(&results);
+        assert_eq!(summary.tasks_run, 1);
+        assert_eq!(summary.tasks_passed, 1);
+        assert!((summary.success_rate - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn bench_summary_accumulates_tokens() {
+        let results = vec![
+            TaskResult {
+                task_name: "a".to_string(),
+                difficulty: Difficulty::Easy,
+                success: true,
+                tokens_in: 100,
+                tokens_out: 50,
+                duration_secs: 1.0,
+                cost_usd: 0.01,
+                tool_calls: 2,
+                error: None,
+            },
+            TaskResult {
+                task_name: "b".to_string(),
+                difficulty: Difficulty::Easy,
+                success: true,
+                tokens_in: 200,
+                tokens_out: 100,
+                duration_secs: 2.0,
+                cost_usd: 0.02,
+                tool_calls: 3,
+                error: None,
+            },
+        ];
+        let summary = BenchSummary::from_results(&results);
+        assert_eq!(summary.total_tokens_in, 300);
+        assert_eq!(summary.total_tokens_out, 150);
+        assert_eq!(summary.total_tool_calls, 5);
+        assert!((summary.total_cost_usd - 0.03).abs() < 0.001);
+    }
 }

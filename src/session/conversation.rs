@@ -1046,4 +1046,112 @@ mod tests {
         let prefix = checkpoint_prefix(path);
         assert!(prefix.ends_with(".checkpoint-"));
     }
+
+    #[test]
+    fn test_checkpoint_prefix_with_nested_path() {
+        let path = std::path::Path::new("sessions/main/session.conv.ndjson");
+        let prefix = checkpoint_prefix(path);
+        assert_eq!(prefix, "session.conv.ndjson.checkpoint-");
+    }
+
+    #[test]
+    fn test_checkpoint_prefix_with_extension_only() {
+        let path = std::path::Path::new("log.ndjson");
+        let prefix = checkpoint_prefix(path);
+        assert_eq!(prefix, "log.ndjson.checkpoint-");
+    }
+
+    #[test]
+    fn test_open_outcome_restored_zero_is_valid() {
+        let outcome = OpenOutcome::Restored(0);
+        assert_eq!(outcome, OpenOutcome::Restored(0));
+        assert_ne!(outcome, OpenOutcome::Loaded);
+    }
+
+    #[test]
+    fn test_open_outcome_debug_format() {
+        let outcome = OpenOutcome::Restored(3);
+        let debug = format!("{outcome:?}");
+        assert!(debug.contains("Restored"), "got: {debug}");
+        assert!(debug.contains("3"), "got: {debug}");
+    }
+
+    #[test]
+    fn test_load_messages_preserves_message_order() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("ordered.ndjson");
+        let lines = [
+            r#"{"role":"user","content":"first"}"#,
+            r#"{"role":"assistant","content":"second"}"#,
+            r#"{"role":"user","content":"third"}"#,
+        ];
+        std::fs::write(&path, lines.join("\n")).unwrap();
+        let (msgs, corrupt) = load_messages(&path).unwrap();
+        assert!(!corrupt);
+        assert_eq!(msgs.len(), 3);
+        assert_eq!(msgs[0].content, "first");
+        assert_eq!(msgs[1].content, "second");
+        assert_eq!(msgs[2].content, "third");
+    }
+
+    #[test]
+    fn test_load_messages_handles_trailing_newline() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("trailing.ndjson");
+        let content = r#"{"role":"user","content":"hi"}
+"#;
+        std::fs::write(&path, content).unwrap();
+        let (msgs, corrupt) = load_messages(&path).unwrap();
+        assert_eq!(msgs.len(), 1);
+        assert!(!corrupt);
+    }
+
+    #[test]
+    fn test_load_messages_handles_multiple_corrupt_lines() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("multi-corrupt.ndjson");
+        let lines = [
+            r#"{"role":"user","content":"valid"}"#,
+            "garbage1",
+            "garbage2",
+            r#"{"role":"assistant","content":"also-valid"}"#,
+        ];
+        std::fs::write(&path, lines.join("\n")).unwrap();
+        let (msgs, corrupt) = load_messages(&path).unwrap();
+        assert_eq!(msgs.len(), 2);
+        assert!(corrupt);
+    }
+
+    #[test]
+    fn test_load_messages_returns_error_for_nonexistent_file() {
+        let path = std::path::Path::new("/nonexistent/kirkforge-test-load-missing.ndjson");
+        assert!(load_messages(path).is_err());
+    }
+
+    #[test]
+    fn test_checkpoint_prefix_with_no_file_name_uses_fallback() {
+        let path = std::path::Path::new("");
+        let prefix = checkpoint_prefix(path);
+        assert!(prefix.ends_with(".checkpoint-"));
+    }
+
+    #[test]
+    fn test_checkpoint_prefix_with_dot_only() {
+        let path = std::path::Path::new(".");
+        let prefix = checkpoint_prefix(path);
+        assert!(prefix.ends_with(".checkpoint-"));
+    }
+
+    #[test]
+    fn test_open_outcome_clone_works() {
+        let outcome = OpenOutcome::Restored(5);
+        let cloned = outcome.clone();
+        assert_eq!(outcome, cloned);
+    }
+
+    #[test]
+    fn test_open_outcome_partial_eq_with_loaded() {
+        assert_eq!(OpenOutcome::Loaded, OpenOutcome::Loaded);
+        assert_ne!(OpenOutcome::Loaded, OpenOutcome::Created);
+    }
 }

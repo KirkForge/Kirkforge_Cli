@@ -966,4 +966,161 @@ mod tests {
         let (_stream, session_id) = open_sse_stream(&client, &url, None).await.unwrap();
         assert_eq!(session_id, None, "no session id when header is absent");
     }
+
+    #[test]
+    fn find_subseq_finds_needle_at_start() {
+        assert_eq!(find_subseq(b"hello world", b"hello"), Some(0));
+    }
+
+    #[test]
+    fn find_subseq_finds_needle_in_middle() {
+        assert_eq!(find_subseq(b"hello world", b"lo wo"), Some(3));
+    }
+
+    #[test]
+    fn find_subseq_finds_needle_at_end() {
+        assert_eq!(find_subseq(b"hello world", b"world"), Some(6));
+    }
+
+    #[test]
+    fn find_subseq_returns_none_for_missing_needle() {
+        assert_eq!(find_subseq(b"hello", b"xyz"), None);
+    }
+
+    #[test]
+    fn find_subseq_returns_none_when_needle_longer_than_haystack() {
+        assert_eq!(find_subseq(b"ab", b"abcd"), None);
+    }
+
+    #[test]
+    fn find_subseq_finds_single_byte_needle() {
+        assert_eq!(find_subseq(b"abc", b"b"), Some(1));
+    }
+
+    #[test]
+    fn find_subseq_finds_exact_match_full_string() {
+        assert_eq!(find_subseq(b"abcd", b"abcd"), Some(0));
+    }
+
+    #[test]
+    fn find_subseq_finds_first_occurrence() {
+        assert_eq!(find_subseq(b"ababab", b"ab"), Some(0));
+    }
+
+    #[test]
+    fn parse_session_id_from_url_handles_multiple_params() {
+        assert_eq!(
+            parse_session_id_from_url("https://x/m?foo=1&session_id=abc&bar=2"),
+            Some("abc".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_session_id_from_url_handles_trailing_amp() {
+        assert_eq!(
+            parse_session_id_from_url("https://x/m?session_id=abc&"),
+            Some("abc".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_session_id_from_url_handles_empty_value() {
+        assert_eq!(
+            parse_session_id_from_url("https://x/m?session_id="),
+            Some("".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_session_id_from_url_returns_none_for_valueless_param() {
+        assert_eq!(parse_session_id_from_url("https://x/m?session_id"), None);
+    }
+
+    #[test]
+    fn parse_session_id_from_url_returns_none_for_empty_url() {
+        assert_eq!(parse_session_id_from_url(""), None);
+    }
+
+    #[test]
+    fn parse_session_id_from_url_picks_first_matching_key() {
+        assert_eq!(
+            parse_session_id_from_url("https://x/m?session_id=first&session_id=second"),
+            Some("first".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_session_id_from_url_handles_question_mark_only() {
+        assert_eq!(parse_session_id_from_url("https://x/m?"), None);
+    }
+
+    #[test]
+    fn tool_result_from_content_returns_serialized_for_no_content_field() {
+        let result = json!({"other": "value"});
+        let outcome = McpHttpTransport::tool_result_from_content(&result, "tool");
+        match outcome {
+            crate::shared::ToolOutcome::Success { content } => {
+                assert!(content.contains("other"), "got: {content}");
+            }
+            other => panic!("expected Success, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tool_result_from_content_returns_serialized_for_empty_content_array() {
+        let result = json!({"content": []});
+        let outcome = McpHttpTransport::tool_result_from_content(&result, "tool");
+        match outcome {
+            crate::shared::ToolOutcome::Success { content } => {
+                assert!(content.contains("content"), "got: {content}");
+            }
+            other => panic!("expected Success, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tool_result_from_content_joins_multiple_text_blocks() {
+        let result = json!({
+            "content": [
+                {"type": "text", "text": "a"},
+                {"type": "text", "text": "b"},
+                {"type": "text", "text": "c"},
+            ]
+        });
+        let outcome = McpHttpTransport::tool_result_from_content(&result, "tool");
+        match outcome {
+            crate::shared::ToolOutcome::Success { content } => assert_eq!(content, "abc"),
+            other => panic!("expected Success, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tool_result_from_content_falls_back_when_pretty_fails() {
+        let result = json!({"content": [{"type": "image"}]});
+        let outcome = McpHttpTransport::tool_result_from_content(&result, "tool-name");
+        match outcome {
+            crate::shared::ToolOutcome::Success { content } => {
+                assert!(
+                    content.contains("image") || content.contains("tool-name"),
+                    "got: {content}"
+                );
+            }
+            other => panic!("expected Success, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn reqwest_to_io_wraps_error_message() {
+        let err = reqwest::Client::builder()
+            .build()
+            .unwrap()
+            .get("ht!tp://invalid url with spaces")
+            .send();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt.block_on(err);
+        if let Err(e) = result {
+            let io_err = reqwest_to_io(e);
+            assert!(!io_err.to_string().is_empty());
+        }
+    }
 }

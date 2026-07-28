@@ -1316,4 +1316,300 @@ command = "hooks/pre-tool-bash.sh"
         }
         let _ = (tmp, _hooks_tmp);
     }
+
+    #[test]
+    fn test_owned_env_vars_clones_pairs() {
+        let input = [("KF_EVENT", "post-turn"), ("KF_TOOL_NAME", "bash")];
+        let owned = HookRunner::owned_env_vars(&input);
+        assert_eq!(owned.len(), 2);
+        assert_eq!(owned[0].0, "KF_EVENT");
+        assert_eq!(owned[0].1, "post-turn");
+        assert_eq!(owned[1].0, "KF_TOOL_NAME");
+        assert_eq!(owned[1].1, "bash");
+    }
+
+    #[test]
+    fn test_owned_env_vars_empty_input() {
+        let owned = HookRunner::owned_env_vars(&[]);
+        assert!(owned.is_empty());
+    }
+
+    #[test]
+    fn test_ctx_to_env_vars_event_always_present() {
+        let ctx = HookContext {
+            event: "post-turn".into(),
+            ..Default::default()
+        };
+        let vars = ctx_to_env_vars(&ctx);
+        assert_eq!(vars.len(), 1);
+        assert_eq!(vars[0].0, "KF_EVENT");
+        assert_eq!(vars[0].1, "post-turn");
+    }
+
+    #[test]
+    fn test_ctx_to_env_vars_includes_optional_fields_when_set() {
+        let ctx = HookContext {
+            event: "pre-tool-bash".into(),
+            session_id: "sess-42".into(),
+            tool_name: Some("bash".into()),
+            tool_args_json: Some(r#"{"command":"ls"}"#.into()),
+            ..Default::default()
+        };
+        let vars = ctx_to_env_vars(&ctx);
+        let keys: Vec<&str> = vars.iter().map(|(k, _)| *k).collect();
+        assert!(keys.contains(&"KF_EVENT"));
+        assert!(keys.contains(&"KF_SESSION_ID"));
+        assert!(keys.contains(&"KF_TOOL_NAME"));
+        assert!(keys.contains(&"KF_TOOL_ARGS_JSON"));
+    }
+
+    #[test]
+    fn test_ctx_to_env_vars_omits_empty_session_id() {
+        let ctx = HookContext {
+            event: "post-turn".into(),
+            session_id: String::new(),
+            ..Default::default()
+        };
+        let vars = ctx_to_env_vars(&ctx);
+        let keys: Vec<&str> = vars.iter().map(|(k, _)| *k).collect();
+        assert!(!keys.contains(&"KF_SESSION_ID"));
+    }
+
+    #[test]
+    fn test_ctx_to_env_vars_omits_none_optional_fields() {
+        let ctx = HookContext {
+            event: "post-turn".into(),
+            tool_name: None,
+            tool_args_json: None,
+            ..Default::default()
+        };
+        let vars = ctx_to_env_vars(&ctx);
+        let keys: Vec<&str> = vars.iter().map(|(k, _)| *k).collect();
+        assert!(!keys.contains(&"KF_TOOL_NAME"));
+        assert!(!keys.contains(&"KF_TOOL_ARGS_JSON"));
+    }
+
+    #[test]
+    fn test_env_vars_to_ctx_event_name_always_set() {
+        let env = [("KF_SESSION_ID", "s1"), ("KF_TOOL_NAME", "bash")];
+        let ctx = env_vars_to_ctx("pre-tool-bash", &env);
+        assert_eq!(ctx.event, "pre-tool-bash");
+        assert_eq!(ctx.session_id, "s1");
+        assert_eq!(ctx.tool_name.as_deref(), Some("bash"));
+        assert!(ctx.tool_args_json.is_none());
+    }
+
+    #[test]
+    fn test_env_vars_to_ctx_includes_tool_args_json() {
+        let env = [("KF_TOOL_ARGS_JSON", r#"{"x":1}"#)];
+        let ctx = env_vars_to_ctx("post-tool-bash", &env);
+        assert_eq!(ctx.event, "post-tool-bash");
+        assert_eq!(ctx.tool_args_json.as_deref(), Some(r#"{"x":1}"#));
+        assert!(ctx.session_id.is_empty());
+    }
+
+    #[test]
+    fn test_env_vars_to_ctx_ignores_unknown_keys() {
+        let env = [("UNKNOWN_KEY", "ignored"), ("KF_SESSION_ID", "s2")];
+        let ctx = env_vars_to_ctx("session-start", &env);
+        assert_eq!(ctx.event, "session-start");
+        assert_eq!(ctx.session_id, "s2");
+    }
+
+    #[test]
+    fn test_env_vars_to_ctx_empty_env_keeps_defaults() {
+        let ctx = env_vars_to_ctx("post-turn", &[]);
+        assert_eq!(ctx.event, "post-turn");
+        assert!(ctx.session_id.is_empty());
+        assert!(ctx.tool_name.is_none());
+        assert!(ctx.tool_args_json.is_none());
+    }
+
+    #[test]
+    fn test_discover_hooks_skips_directories() {
+        let (_tmp, dir) = temp_hooks_dir();
+        std::fs::create_dir_all(dir.join("not-a-hook.sh")).unwrap();
+        let available = discover_hooks(&dir);
+        assert!(
+            !available.contains("not-a-hook"),
+            "directories should not be discovered as hooks: {available:?}"
+        );
+    }
+
+    #[test]
+    fn test_discover_hooks_strips_sh_suffix_only() {
+        let (_tmp, dir) = temp_hooks_dir();
+        std::fs::write(dir.join("no-extension"), "echo").unwrap();
+        std::fs::write(dir.join("post-turn.sh"), "echo").unwrap();
+        let available = discover_hooks(&dir);
+        assert!(available.contains("post-turn"));
+        assert!(!available.contains("no-extension"));
+    }
+
+    #[test]
+    fn test_discover_hooks_empty_filename_suffix_rejected() {
+        let (_tmp, dir) = temp_hooks_dir();
+        std::fs::write(dir.join(".sh"), "echo").unwrap();
+        let available = discover_hooks(&dir);
+        assert!(
+            available.iter().all(|name| !name.is_empty()),
+            "empty stem should be skipped, got: {available:?}"
+        );
+    }
+
+    #[test]
+    fn test_hook_runner_default_constructs_without_panicking() {
+        let runner = HookRunner::default();
+        assert!(!runner.has("no-such-hook"));
+    }
+
+    #[test]
+    fn test_hook_runner_clone_preserves_available_set() {
+        let (_tmp, dir) = temp_hooks_dir();
+        write_hook(&dir, "post-turn", "echo ok");
+        let runner = HookRunner::new(dir);
+        let cloned = runner.clone();
+        assert!(runner.has("post-turn"));
+        assert!(cloned.has("post-turn"));
+    }
+
+    #[test]
+    fn test_hook_decision_equality() {
+        assert_eq!(HookDecision::Allow, HookDecision::Allow);
+        assert_eq!(
+            HookDecision::Deny("x".into()),
+            HookDecision::Deny("x".into())
+        );
+        assert_ne!(HookDecision::Allow, HookDecision::Deny("x".into()));
+        assert_ne!(
+            HookDecision::Deny("x".into()),
+            HookDecision::Deny("y".into())
+        );
+    }
+
+    #[test]
+    fn test_hook_runner_with_audit_log_attaches_log() {
+        use crate::shared::audit::AuditLog;
+        let (_tmp, dir) = temp_hooks_dir();
+        let audit_path = std::env::temp_dir().join(format!(
+            "kirkforge-hooks-audit-{}-{}.ndjson",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let log = std::sync::Arc::new(AuditLog::new(Some(audit_path.clone())));
+        let runner = HookRunner::new(dir).with_audit_log(log);
+        assert!(runner.audit_log.is_some());
+        let _ = std::fs::remove_file(&audit_path);
+    }
+
+    #[test]
+    fn test_hook_context_default_is_all_none() {
+        let ctx = HookContext::default();
+        assert!(ctx.event.is_empty());
+        assert!(ctx.session_id.is_empty());
+        assert!(ctx.tool_name.is_none());
+        assert!(ctx.tool_args_json.is_none());
+        assert!(ctx.tool_result.is_none());
+        assert!(ctx.compact_stats.is_none());
+    }
+
+    #[test]
+    fn test_compact_hook_stats_data_default() {
+        let stats = CompactHookStatsData::default();
+        assert_eq!(stats.message_count, 0);
+        assert_eq!(stats.preserve_recent, 0);
+        assert_eq!(stats.strategy, "");
+    }
+
+    #[tokio::test]
+    async fn test_run_with_context_fires_in_process_hook() {
+        let (_tmp, dir) = temp_hooks_dir();
+        let runner = HookRunner::new(dir);
+        let ctx = HookContext {
+            event: "post-turn".into(),
+            ..Default::default()
+        };
+        runner.run_with_context("post-turn", &ctx, &default_config());
+    }
+
+    #[tokio::test]
+    async fn test_run_decision_with_context_missing_hook_returns_allow() {
+        let (_tmp, dir) = temp_hooks_dir();
+        let runner = HookRunner::new(dir);
+        let ctx = HookContext {
+            event: "no-such-event".into(),
+            ..Default::default()
+        };
+        let decision = runner
+            .run_decision_with_context("no-such-event", &ctx, &default_config())
+            .await;
+        assert_eq!(decision, HookDecision::Allow);
+    }
+
+    #[test]
+    fn test_in_process_hook_trait_object_box() {
+        struct DummyHook;
+        impl InProcessHook for DummyHook {
+            fn event(&self) -> &str {
+                "test-event"
+            }
+            fn handle(&self, _ctx: &HookContext) -> HookDecision {
+                HookDecision::Allow
+            }
+        }
+        let boxed: Box<dyn InProcessHook> = Box::new(DummyHook);
+        assert_eq!(boxed.event(), "test-event");
+        assert_eq!(boxed.handle(&HookContext::default()), HookDecision::Allow);
+    }
+
+    #[test]
+    fn test_in_process_hook_deny_variant() {
+        struct DenyHook;
+        impl InProcessHook for DenyHook {
+            fn event(&self) -> &str {
+                "deny-event"
+            }
+            fn handle(&self, _ctx: &HookContext) -> HookDecision {
+                HookDecision::Deny("blocked by test hook".into())
+            }
+        }
+        let boxed: Box<dyn InProcessHook> = Box::new(DenyHook);
+        match boxed.handle(&HookContext::default()) {
+            HookDecision::Deny(reason) => assert_eq!(reason, "blocked by test hook"),
+            other => panic!("expected Deny, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_hook_runner_add_in_process_hook_registers() {
+        struct CountingHook {
+            event: String,
+        }
+        impl InProcessHook for CountingHook {
+            fn event(&self) -> &str {
+                &self.event
+            }
+            fn handle(&self, _ctx: &HookContext) -> HookDecision {
+                HookDecision::Allow
+            }
+        }
+        let (_tmp, dir) = temp_hooks_dir();
+        let mut runner = HookRunner::new(dir);
+        assert!(!runner.has("custom-event"));
+        runner.add_in_process_hook(Box::new(CountingHook {
+            event: "custom-event".into(),
+        }));
+        assert!(runner.has("custom-event"));
+    }
+
+    #[test]
+    fn test_hook_runner_debug_includes_dir() {
+        let (_tmp, dir) = temp_hooks_dir();
+        let runner = HookRunner::new(dir.clone());
+        let debug = format!("{runner:?}");
+        assert!(debug.contains("hooks_dir"));
+    }
 }

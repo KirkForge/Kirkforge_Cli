@@ -257,4 +257,137 @@ mod tests {
         assert_eq!(tools[0].def().name, "x");
         assert_eq!(tools[1].def().name, "y");
     }
+
+    #[test]
+    fn vec_toolset_empty_predicates() {
+        let empty = VecToolset::new("empty", vec![]);
+        assert!(empty.is_empty());
+        assert_eq!(empty.len(), 0);
+        assert_eq!(empty.definitions().len(), 0);
+        assert!(empty.resolve("anything").is_none());
+
+        let non_empty = VecToolset::new("ne", vec![Arc::new(DummyTool { name: "a" })]);
+        assert!(!non_empty.is_empty());
+        assert_eq!(non_empty.len(), 1);
+    }
+
+    #[test]
+    fn composite_replace_existing_source_returns_true() {
+        let mut composite = CompositeToolset::empty();
+        composite.add(Box::new(VecToolset::new(
+            "builtin",
+            vec![Arc::new(DummyTool { name: "a" })],
+        )));
+        assert!(composite.replace(
+            "builtin",
+            Box::new(VecToolset::new(
+                "builtin",
+                vec![Arc::new(DummyTool { name: "b" })],
+            ))
+        ));
+        assert!(
+            composite.resolve("b").is_some(),
+            "expected replacement to take effect"
+        );
+        assert!(
+            composite.resolve("a").is_none(),
+            "old tool should be gone"
+        );
+    }
+
+    #[test]
+    fn composite_replace_missing_source_appends_and_returns_false() {
+        let mut composite = CompositeToolset::empty();
+        assert!(!composite.replace(
+            "plugin",
+            Box::new(VecToolset::new(
+                "plugin",
+                vec![Arc::new(DummyTool { name: "p" })],
+            ))
+        ));
+        assert!(composite.resolve("p").is_some());
+    }
+
+    #[test]
+    fn composite_total_definitions_counts_across_sets() {
+        let mut composite = CompositeToolset::empty();
+        composite.add(Box::new(VecToolset::new(
+            "builtin",
+            vec![
+                Arc::new(DummyTool { name: "a" }),
+                Arc::new(DummyTool { name: "b" }),
+            ],
+        )));
+        composite.add(Box::new(VecToolset::new(
+            "plugin",
+            vec![Arc::new(DummyTool { name: "c" })],
+        )));
+        assert_eq!(composite.total_definitions(), 3);
+    }
+
+    #[test]
+    fn composite_definitions_dedup_across_sets() {
+        let mut composite = CompositeToolset::empty();
+        composite.add(Box::new(VecToolset::new(
+            "builtin",
+            vec![Arc::new(DummyTool { name: "dup" })],
+        )));
+        composite.add(Box::new(VecToolset::new(
+            "plugin",
+            vec![Arc::new(DummyTool { name: "dup" })],
+        )));
+        let defs = composite.definitions();
+        assert_eq!(defs.len(), 1, "duplicate name should be deduped");
+    }
+
+    #[test]
+    fn composite_resolve_returns_first_match_in_order() {
+        let mut composite = CompositeToolset::empty();
+        composite.add(Box::new(VecToolset::new(
+            "builtin",
+            vec![Arc::new(DummyTool { name: "shared" })],
+        )));
+        composite.add(Box::new(VecToolset::new(
+            "plugin",
+            vec![Arc::new(DummyTool { name: "shared" })],
+        )));
+        let resolved = composite.resolve("shared").unwrap();
+        assert_eq!(resolved.def().name, "shared");
+    }
+
+    #[test]
+    fn composite_source_label_is_composite() {
+        let composite = CompositeToolset::empty();
+        assert_eq!(composite.source(), "composite");
+    }
+
+    #[test]
+    fn composite_new_constructor_preserves_order() {
+        let sets: Vec<Box<dyn Toolset>> = vec![
+            Box::new(VecToolset::new(
+                "a",
+                vec![Arc::new(DummyTool { name: "x" })],
+            )),
+            Box::new(VecToolset::new(
+                "b",
+                vec![Arc::new(DummyTool { name: "y" })],
+            )),
+        ];
+        let composite = CompositeToolset::new(sets);
+        let defs = composite.definitions();
+        assert_eq!(defs.len(), 2);
+        assert_eq!(defs[0].name, "x");
+        assert_eq!(defs[1].name, "y");
+    }
+
+    #[tokio::test]
+    async fn dummy_tool_run_returns_success() {
+        let tool = DummyTool { name: "z" };
+        let ctx = crate::tools::ToolContext::new();
+        let outcome = tool.run(&ctx, serde_json::json!({})).await;
+        match outcome {
+            ToolOutcome::Success { content } => assert_eq!(content, "ok"),
+            other => panic!("expected Success, got {other:?}"),
+        }
+    }
 }

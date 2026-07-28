@@ -742,4 +742,308 @@ mod tests {
         assert_eq!(outcome, OpenOutcome::Loaded);
         assert!(log.is_empty());
     }
+
+    #[test]
+    fn test_open_new_file_creates_log_with_created_outcome() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("brand-new.conv.ndjson");
+        let (log, outcome) = ConversationLog::open(path.clone()).unwrap();
+        assert_eq!(outcome, OpenOutcome::Created);
+        assert!(log.is_empty());
+        assert_eq!(log.len(), 0);
+        assert!(log.last().is_none());
+        assert!(
+            path.parent().unwrap().exists(),
+            "open() must create the parent dir"
+        );
+    }
+
+    #[test]
+    fn test_open_creates_parent_directory_when_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let nested = tmp.path().join("a/b/c");
+        let path = nested.join("log.conv.ndjson");
+        let (log, _outcome) = ConversationLog::open(path).unwrap();
+        assert!(log.is_empty());
+        assert!(nested.exists(), "nested parent dirs must be created");
+    }
+
+    #[test]
+    fn test_path_returns_log_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("path-test.conv.ndjson");
+        let (log, _outcome) = ConversationLog::open(path.clone()).unwrap();
+        assert_eq!(log.path(), &path);
+    }
+
+    #[test]
+    fn test_len_and_is_empty_track_appends() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("len-test.conv.ndjson");
+        let (mut log, _outcome) = ConversationLog::open(path).unwrap();
+        assert!(log.is_empty());
+        assert_eq!(log.len(), 0);
+        log.append(Message {
+            role: crate::shared::Role::User,
+            content: "first".into(),
+            ..Default::default()
+        })
+        .unwrap();
+        assert!(!log.is_empty());
+        assert_eq!(log.len(), 1);
+        log.append(Message {
+            role: crate::shared::Role::Assistant,
+            content: "second".into(),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(log.len(), 2);
+    }
+
+    #[test]
+    fn test_last_returns_most_recent_message() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("last-test.conv.ndjson");
+        let (mut log, _outcome) = ConversationLog::open(path).unwrap();
+        assert!(log.last().is_none());
+        log.append(Message {
+            role: crate::shared::Role::User,
+            content: "first".into(),
+            ..Default::default()
+        })
+        .unwrap();
+        log.append(Message {
+            role: crate::shared::Role::Assistant,
+            content: "second".into(),
+            ..Default::default()
+        })
+        .unwrap();
+        let last = log.last().expect("last should exist after two appends");
+        assert_eq!(last.content, "second");
+    }
+
+    #[test]
+    fn test_all_returns_borrowed_slice_of_messages() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("all-test.conv.ndjson");
+        let (mut log, _outcome) = ConversationLog::open(path).unwrap();
+        log.append(Message {
+            role: crate::shared::Role::User,
+            content: "x".into(),
+            ..Default::default()
+        })
+        .unwrap();
+        let all = log.all();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].content, "x");
+    }
+
+    #[test]
+    fn test_with_checkpoint_interval_returns_self_for_chaining() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("interval-test.conv.ndjson");
+        let (log, _outcome) = ConversationLog::open(path).unwrap();
+        let log = log.with_checkpoint_interval(5);
+        assert_eq!(log.checkpoint_interval, 5);
+        assert_eq!(log.messages_since_checkpoint, 0);
+    }
+
+    #[test]
+    fn test_with_checkpoint_interval_zero_disables_periodic_checkpointing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("zero-interval-test.conv.ndjson");
+        let (mut log, _outcome) = ConversationLog::open(path).unwrap();
+        log = log.with_checkpoint_interval(0);
+        for i in 0..10 {
+            log.append(Message {
+                role: crate::shared::Role::User,
+                content: format!("msg {i}"),
+                ..Default::default()
+            })
+            .unwrap();
+        }
+        let checkpoints: Vec<_> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| {
+                p.file_name()
+                    .and_then(|f| f.to_str())
+                    .is_some_and(|f| f.contains(".checkpoint-"))
+            })
+            .collect();
+        assert!(
+            checkpoints.is_empty(),
+            "interval=0 must not auto-checkpoint"
+        );
+    }
+
+    #[test]
+    fn test_replace_all_overwrites_in_memory_and_disk() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("replace-test.conv.ndjson");
+        let (mut log, _outcome) = ConversationLog::open(path.clone()).unwrap();
+        log.append(Message {
+            role: crate::shared::Role::User,
+            content: "old".into(),
+            ..Default::default()
+        })
+        .unwrap();
+        let replacement = vec![
+            Message {
+                role: crate::shared::Role::System,
+                content: "new system".into(),
+                ..Default::default()
+            },
+            Message {
+                role: crate::shared::Role::User,
+                content: "new user".into(),
+                ..Default::default()
+            },
+        ];
+        log.replace_all(replacement).unwrap();
+        assert_eq!(log.len(), 2);
+        assert_eq!(log.all()[0].content, "new system");
+        assert_eq!(log.all()[1].content, "new user");
+
+        let (reopened, _outcome) = ConversationLog::open(path).unwrap();
+        assert_eq!(reopened.len(), 2);
+        assert_eq!(reopened.all()[0].content, "new system");
+        assert_eq!(reopened.all()[1].content, "new user");
+    }
+
+    #[tokio::test]
+    async fn test_open_async_loads_existing_log() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("async-open.conv.ndjson");
+        let (mut log, _outcome) = ConversationLog::open(path.clone()).unwrap();
+        log.append(Message {
+            role: crate::shared::Role::User,
+            content: "async first".into(),
+            ..Default::default()
+        })
+        .unwrap();
+
+        let (log2, outcome) = ConversationLog::open_async(path).await.unwrap();
+        assert_eq!(outcome, OpenOutcome::Loaded);
+        assert_eq!(log2.len(), 1);
+        assert_eq!(log2.all()[0].content, "async first");
+    }
+
+    #[tokio::test]
+    async fn test_append_async_writes_and_updates_memory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("async-append.conv.ndjson");
+        let (mut log, _outcome) = ConversationLog::open(path.clone()).unwrap();
+        log.append_async(Message {
+            role: crate::shared::Role::User,
+            content: "async msg".into(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        assert_eq!(log.len(), 1);
+        let (reopened, _outcome) = ConversationLog::open(path).unwrap();
+        assert_eq!(reopened.len(), 1);
+        assert_eq!(reopened.all()[0].content, "async msg");
+    }
+
+    #[tokio::test]
+    async fn test_replace_all_async_rewrites_disk() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("async-replace.conv.ndjson");
+        let (mut log, _outcome) = ConversationLog::open(path.clone()).unwrap();
+        log.append(Message {
+            role: crate::shared::Role::User,
+            content: "old".into(),
+            ..Default::default()
+        })
+        .unwrap();
+        let replacement = vec![Message {
+            role: crate::shared::Role::System,
+            content: "fresh".into(),
+            ..Default::default()
+        }];
+        log.replace_all_async(replacement).await.unwrap();
+        assert_eq!(log.len(), 1);
+        assert_eq!(log.all()[0].content, "fresh");
+        let (reopened, _outcome) = ConversationLog::open(path).unwrap();
+        assert_eq!(reopened.all()[0].content, "fresh");
+    }
+
+    #[tokio::test]
+    async fn test_checkpoint_async_creates_checkpoint_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("async-checkpoint.conv.ndjson");
+        let (mut log, _outcome) = ConversationLog::open(path).unwrap();
+        log.append(Message {
+            role: crate::shared::Role::User,
+            content: "to be checkpointed".into(),
+            ..Default::default()
+        })
+        .unwrap();
+        let cp = log.checkpoint_async().await.unwrap();
+        assert!(cp.exists());
+    }
+
+    #[test]
+    fn test_open_outcome_equality_for_variants() {
+        assert_eq!(OpenOutcome::Loaded, OpenOutcome::Loaded);
+        assert_eq!(OpenOutcome::Created, OpenOutcome::Created);
+        assert_eq!(OpenOutcome::StartedEmpty, OpenOutcome::StartedEmpty);
+        assert_eq!(OpenOutcome::Restored(3), OpenOutcome::Restored(3));
+        assert_ne!(OpenOutcome::Loaded, OpenOutcome::Created);
+        assert_ne!(OpenOutcome::Restored(2), OpenOutcome::Restored(3));
+    }
+
+    #[test]
+    fn test_load_messages_returns_empty_for_empty_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("empty.ndjson");
+        std::fs::write(&path, b"").unwrap();
+        let (msgs, corrupt) = load_messages(&path).unwrap();
+        assert!(msgs.is_empty());
+        assert!(!corrupt);
+    }
+
+    #[test]
+    fn test_load_messages_skips_blank_lines_without_flagging_corrupt() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("blank.ndjson");
+        std::fs::write(&path, b"\n\n   \n\n").unwrap();
+        let (msgs, corrupt) = load_messages(&path).unwrap();
+        assert!(msgs.is_empty());
+        assert!(
+            !corrupt,
+            "whitespace-only lines should not be flagged corrupt"
+        );
+    }
+
+    #[test]
+    fn test_load_messages_flags_corrupt_when_unparseable_lines_present() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("mixed.ndjson");
+        std::fs::write(
+            &path,
+            b"{\"role\":\"user\",\"content\":\"hi\"}\nthis is not json\n",
+        )
+        .unwrap();
+        let (msgs, corrupt) = load_messages(&path).unwrap();
+        assert_eq!(msgs.len(), 1, "valid line should be loaded");
+        assert!(corrupt, "unparseable line should set corrupt=true");
+    }
+
+    #[test]
+    fn test_checkpoint_prefix_filename_format() {
+        let path = std::path::Path::new("session.conv.ndjson");
+        let prefix = checkpoint_prefix(path);
+        assert_eq!(prefix, "session.conv.ndjson.checkpoint-");
+    }
+
+    #[test]
+    fn test_checkpoint_prefix_fallback_for_path_without_filename() {
+        let path = std::path::Path::new("/");
+        let prefix = checkpoint_prefix(path);
+        assert!(prefix.ends_with(".checkpoint-"));
+    }
 }

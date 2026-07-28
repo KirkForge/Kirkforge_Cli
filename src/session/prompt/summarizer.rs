@@ -497,4 +497,169 @@ mod tests {
             result.error
         );
     }
+
+    #[test]
+    fn build_summary_prompt_handles_tool_without_tool_name() {
+        let messages = vec![Message {
+            role: Role::Tool,
+            content: "result without tool_name".into(),
+            tool_name: None,
+            ..Default::default()
+        }];
+        let prompt = build_summary_prompt(&messages);
+        assert!(
+            prompt.contains("tool result:"),
+            "tools without tool_name fall back to the generic label: {prompt}"
+        );
+        assert!(prompt.contains("result without tool_name"));
+    }
+
+    #[test]
+    fn build_summary_prompt_empty_assistant_without_tool_calls_shows_no_content() {
+        let messages = vec![Message {
+            role: Role::Assistant,
+            content: String::new(),
+            tool_calls: None,
+            ..Default::default()
+        }];
+        let prompt = build_summary_prompt(&messages);
+        assert!(
+            prompt.contains("[no content]"),
+            "empty assistant with no tool_calls shows [no content]"
+        );
+    }
+
+    #[test]
+    fn build_summary_prompt_truncates_tool_results_to_150_chars() {
+        let long = "x".repeat(400);
+        let messages = vec![Message {
+            role: Role::Tool,
+            content: long.clone(),
+            tool_name: Some("bash".into()),
+            ..Default::default()
+        }];
+        let prompt = build_summary_prompt(&messages);
+        assert!(
+            prompt.contains('…'),
+            "long tool result should be truncated with ellipsis"
+        );
+        assert!(
+            !prompt.contains(&long),
+            "full 400-char tool content must not appear"
+        );
+    }
+
+    #[test]
+    fn build_summarize_request_shape_matches_ollama_chat_api() {
+        let prompt = "summarize this";
+        let body = build_summarize_request("qwen3:32b", prompt, 250);
+        assert_eq!(body["model"], "qwen3:32b");
+        assert_eq!(body["stream"], false);
+        assert_eq!(body["options"]["num_predict"], 250);
+        assert_eq!(body["options"]["temperature"], 0.3);
+        assert_eq!(body["messages"][0]["role"], "user");
+        assert_eq!(body["messages"][0]["content"], prompt);
+    }
+
+    #[tokio::test]
+    async fn summarize_conversation_returns_error_when_no_messages() {
+        let config = SummarizerConfig::default();
+        let result = summarize_conversation(&config, &[], "http://localhost:11434").await;
+        assert!(result.fell_back);
+        assert!(result.summary.is_none());
+        assert_eq!(result.summarised_messages, 0);
+        assert_eq!(result.tokens_before, 0);
+        assert_eq!(result.tokens_after, 0);
+        assert!(result.error.is_some());
+        assert!(result.error.as_ref().unwrap().contains("No messages"));
+    }
+
+    #[tokio::test]
+    async fn summarize_conversation_fell_back_when_too_few_turns() {
+        let config = SummarizerConfig {
+            min_turns_for_summary: 10,
+            ..Default::default()
+        };
+        let messages = vec![
+            Message {
+                role: Role::User,
+                content: "hello".into(),
+                ..Default::default()
+            },
+            Message {
+                role: Role::Assistant,
+                content: "hi".into(),
+                ..Default::default()
+            },
+        ];
+        let result = summarize_conversation(&config, &messages, "http://localhost:11434").await;
+        assert!(result.fell_back);
+        assert!(result.error.is_some());
+        assert!(
+            result.error.as_ref().unwrap().contains("Not enough turns"),
+            "got {:?}",
+            result.error
+        );
+        assert_eq!(result.tokens_after, result.tokens_before);
+    }
+
+    #[test]
+    fn summarize_result_struct_is_constructible() {
+        let r = SummarizeResult {
+            summary: Some("s".into()),
+            summarised_messages: 4,
+            tokens_before: 100,
+            tokens_after: 40,
+            fell_back: false,
+            error: None,
+        };
+        assert_eq!(r.summary.as_deref(), Some("s"));
+        assert!(!r.fell_back);
+    }
+
+    #[test]
+    fn summarizer_config_default_has_sensible_values() {
+        let c = SummarizerConfig::default();
+        assert_eq!(c.max_summary_tokens, 500);
+        assert_eq!(c.min_turns_for_summary, 6);
+        assert!((c.min_compression_ratio - 0.5).abs() < 1e-9);
+        assert!(c.model.is_empty());
+    }
+
+    #[test]
+    fn summarizer_config_serde_roundtrip_preserves_fields() {
+        let c = SummarizerConfig {
+            model: "qwen3:32b".into(),
+            max_summary_tokens: 700,
+            min_turns_for_summary: 8,
+            min_compression_ratio: 0.7,
+        };
+        let json = serde_json::to_string(&c).unwrap();
+        let back: SummarizerConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.model, "qwen3:32b");
+        assert_eq!(back.max_summary_tokens, 700);
+        assert_eq!(back.min_turns_for_summary, 8);
+        assert!((back.min_compression_ratio - 0.7).abs() < 1e-9);
+    }
+
+    #[test]
+    fn estimate_token_count_handles_tool_calls_payload() {
+        let messages = vec![Message {
+            role: Role::Assistant,
+            content: "calling tools".into(),
+            tool_calls: Some(vec![crate::shared::ToolInvocation {
+                id: "call_1".into(),
+                name: "bash".into(),
+                arguments: serde_json::json!({"command": "ls"}),
+            }]),
+            ..Default::default()
+        }];
+        let est = estimate_token_count(&messages);
+        assert!(est > 0, "tool_calls should contribute tokens");
+    }
+
+    #[test]
+    fn estimate_token_count_zero_for_empty_messages() {
+        assert_eq!(estimate_token_count(&[]), 0);
+    }
 }

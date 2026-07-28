@@ -182,6 +182,86 @@ mod tests {
         );
     }
 
+    #[test]
+    fn module_path_prefix_tests_dir_yields_prefix() {
+        let root = std::path::PathBuf::from("/tmp/foo");
+        assert_eq!(
+            module_path_prefix(&root.join("tests/integration.rs"), &root),
+            Some("integration".into())
+        );
+        assert_eq!(
+            module_path_prefix(&root.join("tests/sub/integration.rs"), &root),
+            Some("sub::integration".into())
+        );
+    }
+
+    #[test]
+    fn module_path_prefix_returns_none_when_not_under_src_or_tests() {
+        let root = std::path::PathBuf::from("/tmp/foo");
+        assert_eq!(
+            module_path_prefix(&root.join("docs/guide.md"), &root),
+            None,
+            "paths outside src/ or tests/ return None"
+        );
+        assert_eq!(
+            module_path_prefix(&root.join("benches/bench1.rs"), &root),
+            None,
+            "benches/ is not recognised as a test root"
+        );
+    }
+
+    #[test]
+    fn module_path_prefix_returns_none_when_path_not_under_cargo_root() {
+        let root = std::path::PathBuf::from("/tmp/foo");
+        assert_eq!(
+            module_path_prefix(std::path::Path::new("/elsewhere/x.rs"), &root),
+            None,
+            "files not under cargo_root return None"
+        );
+    }
+
+    #[test]
+    fn module_path_prefix_returns_none_for_path_without_extension() {
+        let root = std::path::PathBuf::from("/tmp/foo");
+        assert_eq!(
+            module_path_prefix(&root.join("src/no_ext"), &root),
+            None,
+            "files without an extension cannot produce a stem"
+        );
+    }
+
+    #[test]
+    fn module_path_prefix_returns_none_for_root_relative_to_cargo_root() {
+        let root = std::path::PathBuf::from("/tmp/foo");
+        assert_eq!(module_path_prefix(&root, &root), None);
+    }
+
+    #[test]
+    fn find_cargo_root_finds_immediate_parent() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("Cargo.toml"), "").unwrap();
+        let src = tmp.path().join("lib.rs");
+        let found = find_cargo_root(&src).unwrap();
+        assert_eq!(found, tmp.path());
+    }
+
+    #[test]
+    fn find_cargo_root_walks_up_multiple_levels() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("Cargo.toml"), "").unwrap();
+        let deep = tmp.path().join("a/b/c/deep.rs");
+        std::fs::create_dir_all(deep.parent().unwrap()).unwrap();
+        let found = find_cargo_root(&deep).unwrap();
+        assert_eq!(found, tmp.path());
+    }
+
+    #[test]
+    fn find_cargo_root_returns_none_when_no_cargo_toml_in_ancestors() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("lonely.rs");
+        assert!(find_cargo_root(&path).is_none());
+    }
+
     // This test spawns `cargo test` in a temporary project. It cannot run
     // concurrently with another `cargo` invocation because the Cargo package
     // cache lock serializes all cargo processes, so it is ignored by default.

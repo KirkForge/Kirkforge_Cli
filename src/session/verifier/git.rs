@@ -433,4 +433,101 @@ mod tests {
         assert!(!is_git_modifying_command("rm -rf /tmp/x"));
         assert!(!is_git_modifying_command("echo git commit"));
     }
+
+    #[test]
+    fn test_git_subcommands_in_extracts_each_segment_subcommand() {
+        let subs = git_subcommands_in("git add . && git commit -m msg");
+        assert_eq!(subs, vec!["add", "commit"]);
+    }
+
+    #[test]
+    fn test_git_subcommands_in_handles_prefixes() {
+        let subs = git_subcommands_in("sudo env FOO=bar git pull");
+        assert_eq!(subs, vec!["pull"]);
+    }
+
+    #[test]
+    fn test_git_subcommands_in_empty_for_non_git() {
+        let subs = git_subcommands_in("ls -la && echo hi");
+        assert!(subs.is_empty());
+    }
+
+    #[test]
+    fn test_git_subcommands_in_returns_empty_subcommand_for_bare_git() {
+        let subs = git_subcommands_in("git");
+        assert_eq!(subs, vec![""]);
+    }
+
+    #[test]
+    fn test_git_subcommands_in_lowercases_subcommand() {
+        let subs = git_subcommands_in("git STATUS");
+        assert_eq!(subs, vec!["status"]);
+    }
+
+    #[test]
+    fn test_git_subcommands_in_skips_env_assignments_before_git() {
+        let subs = git_subcommands_in("FOO=bar BAZ=qux git checkout -b new");
+        assert_eq!(subs, vec!["checkout"]);
+    }
+
+    #[test]
+    fn test_git_subcommands_in_splits_on_pipes_and_newlines() {
+        let subs = git_subcommands_in("git status | grep modified\ngit diff");
+        assert_eq!(subs, vec!["status", "diff"]);
+    }
+
+    #[test]
+    fn test_is_conflict_prone_command_matches_merge_rebase_cherry_pick_pull() {
+        assert!(is_conflict_prone_command("git merge foo"));
+        assert!(is_conflict_prone_command("git rebase main"));
+        assert!(is_conflict_prone_command("git cherry-pick abc"));
+        assert!(is_conflict_prone_command("git pull origin main"));
+        assert!(is_conflict_prone_command("GIT merge"));
+        assert!(is_conflict_prone_command("MERGE branch"));
+    }
+
+    #[test]
+    fn test_is_conflict_prone_command_rejects_non_conflict_prone() {
+        assert!(!is_conflict_prone_command("git status"));
+        assert!(!is_conflict_prone_command("git log --oneline"));
+        assert!(!is_conflict_prone_command("cargo build"));
+        assert!(!is_conflict_prone_command(""));
+    }
+
+    #[tokio::test]
+    async fn test_verify_git_operation_commit_failure_is_unfixable() {
+        let v = verify_git_operation(&["commit".into()], "", false).await;
+        match v {
+            Verdict::Unfixable(err) => {
+                assert!(err.description.contains("commit failed"));
+            }
+            other => panic!("expected Unfixable, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_verify_git_operation_push_failure_is_unfixable() {
+        let v = verify_git_operation(&["push".into()], "", false).await;
+        match v {
+            Verdict::Unfixable(err) => {
+                assert!(err.description.contains("push failed"));
+            }
+            other => panic!("expected Unfixable, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_verify_git_operation_unknown_subcommand_failure_is_clean() {
+        let v = verify_git_operation(&["config".into()], "no-op", false).await;
+        assert!(
+            matches!(v, Verdict::Clean | Verdict::Unfixable(_)),
+            "unknown failed git subcommand should not crash"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_verify_git_operation_empty_args_failure_is_clean() {
+        let v = verify_git_operation(&[], "", false).await;
+        assert!(matches!(v, Verdict::Clean));
+    }
 }

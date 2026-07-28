@@ -540,4 +540,200 @@ mod tests {
             "trufflehog discovered via PATH should produce a finding"
         );
     }
+
+    #[test]
+    fn is_token_char_accepts_alphanumeric_and_secret_punctuation() {
+        assert!(is_token_char('a'));
+        assert!(is_token_char('Z'));
+        assert!(is_token_char('0'));
+        assert!(is_token_char('9'));
+        assert!(is_token_char('-'));
+        assert!(is_token_char('_'));
+        assert!(is_token_char('+'));
+        assert!(is_token_char('/'));
+        assert!(is_token_char('='));
+        assert!(is_token_char('.'));
+    }
+
+    #[test]
+    fn is_token_char_rejects_whitespace_and_most_punctuation() {
+        assert!(!is_token_char(' '));
+        assert!(!is_token_char('\n'));
+        assert!(!is_token_char('"'));
+        assert!(!is_token_char('\''));
+        assert!(!is_token_char('{'));
+        assert!(!is_token_char('!'));
+        assert!(!is_token_char('@'));
+        assert!(!is_token_char('#'));
+    }
+
+    #[test]
+    fn shannon_entropy_empty_is_zero() {
+        assert_eq!(shannon_entropy(""), 0.0);
+    }
+
+    #[test]
+    fn shannon_entropy_single_repeated_char_is_zero() {
+        // A single symbol with probability 1 → -1*log2(1) = 0
+        assert!(
+            shannon_entropy(&"a".repeat(64)).abs() < 1e-12,
+            "single repeated char has zero entropy"
+        );
+    }
+
+    #[test]
+    fn shannon_entropy_two_equal_symbols_is_one_bit() {
+        // Half 'a' / half 'b' → 1 bit/char
+        let s: String = "ab".repeat(32);
+        let e = shannon_entropy(&s);
+        assert!((e - 1.0).abs() < 1e-12, "expected 1.0 bit, got {e}");
+    }
+
+    #[test]
+    fn shannon_entropy_uniform_random_is_high() {
+        // A 64-char random-looking ASCII string should have >3 bits/char.
+        let token = "9f8a7d6c5b4e3210ABCDxyzWVUtsrq";
+        assert!(
+            shannon_entropy(token) > 3.0,
+            "random token should have high entropy, got {}",
+            shannon_entropy(token)
+        );
+    }
+
+    #[test]
+    fn shannon_entropy_is_non_decreasing_with_diversity() {
+        let low = "aaaaaa";
+        let med = "aabbcc";
+        let high = "abcdef";
+        let el = shannon_entropy(low);
+        let em = shannon_entropy(med);
+        let eh = shannon_entropy(high);
+        assert!(el < em, "low < med: {el} {em}");
+        assert!(em < eh, "med < high: {em} {eh}");
+    }
+
+    #[test]
+    fn scan_entropy_prefix_finds_high_entropy_token() {
+        let content = "api_key = sk-9f8a7d6c5b4e3210ABCDxyzWVUtsrq";
+        let path = std::path::Path::new("config.rs");
+        let verdict = scan_entropy_prefix(content, "sk-", "OpenAI API key", path);
+        assert!(
+            verdict.is_some(),
+            "high-entropy sk- token should be flagged"
+        );
+        if let Some(Verdict::Unfixable(err)) = verdict {
+            assert!(err.description.contains("OpenAI API key"));
+            assert!(err.file.as_ref().is_some_and(|f| f == path));
+        } else {
+            panic!("expected Unfixable verdict");
+        }
+    }
+
+    #[test]
+    fn scan_entropy_prefix_ignores_short_placeholder_tokens() {
+        let content = "api_key = sk-short";
+        let path = std::path::Path::new("config.rs");
+        let verdict = scan_entropy_prefix(content, "sk-", "OpenAI API key", path);
+        assert!(
+            verdict.is_none(),
+            "short low-entropy token must not be flagged"
+        );
+    }
+
+    #[test]
+    fn scan_entropy_prefix_ignores_low_entropy_repeated_token() {
+        let content = format!("sk-{}", "a".repeat(40));
+        let path = std::path::Path::new("config.rs");
+        let verdict = scan_entropy_prefix(content.as_str(), "sk-", "OpenAI API key", path);
+        assert!(
+            verdict.is_none(),
+            "long-but-low-entropy (all same char) token must not be flagged"
+        );
+    }
+
+    #[test]
+    fn scan_entropy_prefix_finds_multiple_occurrences() {
+        let content = "sk-9f8a7d6c5b4e3210ABCDxyzWVUtsrq sk-9f8a7d6c5b4e3210ABCDxyzWVUtsrq";
+        let path = std::path::Path::new("config.rs");
+        let verdict = scan_entropy_prefix(content, "sk-", "OpenAI API key", path);
+        assert!(verdict.is_some(), "any high-entropy hit should be flagged");
+    }
+
+    #[test]
+    fn scan_entropy_prefix_no_match_returns_none() {
+        let content = "no secret here";
+        let path = std::path::Path::new("config.rs");
+        assert!(scan_entropy_prefix(content, "sk-", "OpenAI API key", path).is_none());
+    }
+
+    #[test]
+    fn entropy_scan_finds_openai_key_among_known_prefixes() {
+        let content = "config: sk-9f8a7d6c5b4e3210ABCDxyzWVUtsrq";
+        let path = std::path::Path::new("config.rs");
+        let verdict = entropy_scan(content, path);
+        assert!(verdict.is_some());
+        if let Some(Verdict::Unfixable(err)) = verdict {
+            assert!(err.description.contains("OpenAI API key"));
+        }
+    }
+
+    #[test]
+    fn entropy_scan_finds_aws_access_key() {
+        let content = "AKIA9f8a7d6c5b4e3210ABCD";
+        let path = std::path::Path::new("config.rs");
+        let verdict = entropy_scan(content, path);
+        assert!(verdict.is_some(), "AWS access key prefix should be scanned");
+        if let Some(Verdict::Unfixable(err)) = verdict {
+            assert!(err.description.contains("AWS access key"));
+        }
+    }
+
+    #[test]
+    fn entropy_scan_returns_none_for_clean_content() {
+        let content = "fn main() { println!(\"hello\"); }";
+        let path = std::path::Path::new("config.rs");
+        assert!(entropy_scan(content, path).is_none());
+    }
+
+    #[test]
+    fn probe_path_returns_path_when_file_exists() {
+        let tmp = tempfile::tempdir().unwrap();
+        let f = tmp.path().join("probe_target");
+        std::fs::write(&f, b"x").unwrap();
+        assert_eq!(probe_path(f.to_str().unwrap()), Some(f.clone()));
+    }
+
+    #[test]
+    fn probe_path_returns_none_for_missing_file() {
+        assert!(probe_path("/nonexistent/path/please/missing-binary-xyz").is_none());
+    }
+
+    #[test]
+    fn probe_path_returns_none_for_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(probe_path(tmp.path().to_str().unwrap()).is_none());
+    }
+
+    #[test]
+    fn find_in_path_returns_none_when_path_unset() {
+        let original = std::env::var_os("PATH");
+        std::env::remove_var("PATH");
+        let result = find_in_path("definitely-not-on-path-xyz-987");
+        if let Some(p) = original {
+            std::env::set_var("PATH", p);
+        }
+        assert!(
+            result.is_none(),
+            "with PATH unset, lookup should return None"
+        );
+    }
+
+    #[test]
+    fn find_in_path_returns_none_for_missing_binary() {
+        let result = find_in_path("definitely-not-on-path-xyz-987");
+        assert!(
+            result.is_none(),
+            "made-up binary name must not resolve on PATH"
+        );
+    }
 }

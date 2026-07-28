@@ -790,4 +790,319 @@ Body."#;
             vec!["a", "b", "c"]
         );
     }
+
+    #[test]
+    fn test_new_registry_starts_with_default_scan_path() {
+        let reg = SkillRegistry::new();
+        assert!(reg.is_empty(), "new() seeds scan paths but no skills");
+        assert!(reg.scan_paths_contains(".claude/skills"));
+    }
+
+    impl SkillRegistry {
+        fn scan_paths_contains(&self, p: &str) -> bool {
+            self.scan_paths.iter().any(|x| x.to_string_lossy() == p)
+        }
+    }
+
+    #[test]
+    fn test_add_scan_path_appends_unique_paths() {
+        let mut reg = SkillRegistry::new();
+        let before = reg.scan_paths.len();
+        reg.add_scan_path(PathBuf::from("/tmp/custom-skills"));
+        assert_eq!(reg.scan_paths.len(), before + 1);
+        assert!(reg.scan_paths_contains("/tmp/custom-skills"));
+        reg.add_scan_path(PathBuf::from("/tmp/custom-skills"));
+        assert_eq!(reg.scan_paths.len(), before + 1);
+    }
+
+    #[test]
+    fn test_set_max_plugin_trust_updates_field() {
+        let mut reg = SkillRegistry::new();
+        reg.set_max_plugin_trust(TrustTier::ReadOnly);
+        assert_eq!(reg.max_plugin_trust, TrustTier::ReadOnly);
+        reg.set_max_plugin_trust(TrustTier::Network);
+        assert_eq!(reg.max_plugin_trust, TrustTier::Network);
+    }
+
+    #[test]
+    fn test_register_and_triggers_helper() {
+        let mut reg = SkillRegistry::new();
+        let skill = Skill {
+            meta: SkillMeta {
+                name: "lint".into(),
+                description: "Run clippy".into(),
+                trigger: "/lint".into(),
+                model: None,
+                plugin_name: None,
+            },
+            prompt_body: "Run cargo clippy.".into(),
+            source_dir: PathBuf::from("."),
+        };
+        reg.register(skill);
+        let triggers = reg.triggers();
+        assert!(triggers.contains(&"/lint"));
+    }
+
+    #[test]
+    fn test_all_returns_registered_skills() {
+        let mut reg = SkillRegistry::new();
+        reg.register(Skill {
+            meta: SkillMeta {
+                name: "a".into(),
+                description: "desc a".into(),
+                trigger: "/a".into(),
+                model: None,
+                plugin_name: None,
+            },
+            prompt_body: "body a".into(),
+            source_dir: PathBuf::from("."),
+        });
+        reg.register(Skill {
+            meta: SkillMeta {
+                name: "b".into(),
+                description: "desc b".into(),
+                trigger: "/b".into(),
+                model: None,
+                plugin_name: None,
+            },
+            prompt_body: "body b".into(),
+            source_dir: PathBuf::from("."),
+        });
+        let all = reg.all();
+        assert_eq!(all.len(), 2);
+    }
+
+    #[test]
+    fn test_clear_removes_all_skills_and_plugin_state() {
+        let mut reg = SkillRegistry::new();
+        reg.register(Skill {
+            meta: SkillMeta {
+                name: "a".into(),
+                description: "desc".into(),
+                trigger: "/a".into(),
+                model: None,
+                plugin_name: None,
+            },
+            prompt_body: "body".into(),
+            source_dir: PathBuf::from("."),
+        });
+        assert!(!reg.is_empty());
+        reg.clear();
+        assert!(reg.is_empty());
+        assert!(reg.triggers().is_empty());
+    }
+
+    #[test]
+    fn test_remove_returns_false_for_unknown_name() {
+        let mut reg = SkillRegistry::new();
+        assert!(!reg.remove("never-registered"));
+    }
+
+    #[test]
+    fn test_remove_plugin_no_op_when_no_skills_match() {
+        let mut reg = SkillRegistry::new();
+        reg.register(Skill {
+            meta: SkillMeta {
+                name: "a".into(),
+                description: "d".into(),
+                trigger: "/a".into(),
+                model: None,
+                plugin_name: Some("plugin-a".into()),
+            },
+            prompt_body: "b".into(),
+            source_dir: PathBuf::from("."),
+        });
+        assert!(!reg.remove_plugin("nonexistent-plugin"));
+        assert!(
+            reg.has_trigger("/a"),
+            "skill must remain when removing unknown plugin"
+        );
+    }
+
+    #[test]
+    fn test_remove_plugin_removes_all_skills_from_plugin() {
+        let mut reg = SkillRegistry::new();
+        for i in 0..3 {
+            reg.register(Skill {
+                meta: SkillMeta {
+                    name: format!("skill-{i}"),
+                    description: "d".into(),
+                    trigger: format!("/skill-{i}"),
+                    model: None,
+                    plugin_name: Some("plugin-x".into()),
+                },
+                prompt_body: "b".into(),
+                source_dir: PathBuf::from("."),
+            });
+        }
+        reg.register(Skill {
+            meta: SkillMeta {
+                name: "other".into(),
+                description: "d".into(),
+                trigger: "/other".into(),
+                model: None,
+                plugin_name: Some("plugin-y".into()),
+            },
+            prompt_body: "b".into(),
+            source_dir: PathBuf::from("."),
+        });
+        assert!(reg.remove_plugin("plugin-x"));
+        assert!(!reg.has_trigger("/skill-0"));
+        assert!(!reg.has_trigger("/skill-1"));
+        assert!(!reg.has_trigger("/skill-2"));
+        assert!(
+            reg.has_trigger("/other"),
+            "other plugin's skills must remain"
+        );
+    }
+
+    #[test]
+    fn test_render_prompt_substitutes_args_placeholder() {
+        let skill = Skill {
+            meta: SkillMeta {
+                name: "plugin-skill".into(),
+                description: "d".into(),
+                trigger: "/ps".into(),
+                model: None,
+                plugin_name: None,
+            },
+            prompt_body: "Run with {{args}} and proceed.".into(),
+            source_dir: PathBuf::from("."),
+        };
+        let rendered = skill.render_prompt("arg1 arg2");
+        assert!(rendered.contains("arg1 arg2"));
+        assert!(!rendered.contains("{{args}}"));
+        assert!(rendered.contains("User request: arg1 arg2"));
+    }
+
+    #[test]
+    fn test_parse_skill_skips_comment_lines_in_frontmatter() {
+        let content = "---\n# this is a comment\nname: test\ndescription: x\n---\nBody.";
+        let skill = parse_skill(content, PathBuf::from(".")).unwrap();
+        assert_eq!(skill.meta.name, "test");
+        assert_eq!(skill.meta.description, "x");
+    }
+
+    #[test]
+    fn test_parse_skill_unknown_keys_are_ignored() {
+        let content = "---\nname: test\nunknown_key: value\ndescription: d\n---\nBody.";
+        let skill = parse_skill(content, PathBuf::from(".")).unwrap();
+        assert_eq!(skill.meta.name, "test");
+        assert_eq!(skill.meta.description, "d");
+    }
+
+    #[test]
+    fn test_parse_skill_empty_body_yields_empty_string() {
+        let content = "---\nname: test\ndescription: d\n---\n";
+        let skill = parse_skill(content, PathBuf::from(".")).unwrap();
+        assert!(skill.prompt_body.is_empty());
+    }
+
+    #[test]
+    fn test_parse_skill_frontmatter_with_extra_whitespace() {
+        let content = "---\n  name:   spaced  \n  description:   d  \n---\nBody.";
+        let skill = parse_skill(content, PathBuf::from(".")).unwrap();
+        assert_eq!(skill.meta.name, "spaced");
+        assert_eq!(skill.meta.description, "d");
+    }
+
+    #[test]
+    fn test_parse_skill_strips_leading_whitespace_before_frontmatter() {
+        let content = "\n\n  ---\nname: test\ndescription: d\n---\nBody.";
+        let skill = parse_skill(content, PathBuf::from(".")).unwrap();
+        assert_eq!(skill.meta.name, "test");
+    }
+
+    #[test]
+    fn test_builtin_skills_have_unique_triggers() {
+        let skills = builtin_skills();
+        let triggers: Vec<&str> = skills.iter().map(|s| s.meta.trigger.as_str()).collect();
+        let mut sorted = triggers.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(
+            sorted.len(),
+            triggers.len(),
+            "builtin skills must have unique triggers"
+        );
+    }
+
+    #[test]
+    fn test_load_skill_from_file_missing_returns_error() {
+        let result = load_skill_from_file(std::path::Path::new("/nonexistent/skill.md"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_load_skill_from_file_parses_existing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("SKILL.md");
+        std::fs::write(
+            &path,
+            "---\nname: file_skill\ndescription: from file\ntrigger: /fs\n---\nBody from file.",
+        )
+        .unwrap();
+        let skill = load_skill_from_file(&path).unwrap();
+        assert_eq!(skill.meta.name, "file_skill");
+        assert_eq!(skill.meta.trigger, "/fs");
+        assert!(skill.prompt_body.contains("Body from file"));
+    }
+
+    #[test]
+    fn test_get_by_trigger_returns_none_for_unregistered() {
+        let reg = SkillRegistry::new();
+        assert!(reg.get_by_trigger("/never").is_none());
+        assert!(reg.get_by_name("never").is_none());
+    }
+
+    #[test]
+    fn test_register_replaces_existing_trigger() {
+        let mut reg = SkillRegistry::new();
+        reg.register(Skill {
+            meta: SkillMeta {
+                name: "first".into(),
+                description: "first".into(),
+                trigger: "/dup".into(),
+                model: None,
+                plugin_name: None,
+            },
+            prompt_body: "first".into(),
+            source_dir: PathBuf::from("."),
+        });
+        reg.register(Skill {
+            meta: SkillMeta {
+                name: "second".into(),
+                description: "second".into(),
+                trigger: "/dup".into(),
+                model: None,
+                plugin_name: None,
+            },
+            prompt_body: "second".into(),
+            source_dir: PathBuf::from("."),
+        });
+        assert_eq!(reg.len(), 2);
+        // Trigger maps to the most recently inserted name.
+        let found = reg.get_by_trigger("/dup").expect("trigger must resolve");
+        assert_eq!(found.meta.name, "second");
+    }
+
+    #[test]
+    fn test_len_tracks_register_and_remove() {
+        let mut reg = SkillRegistry::new();
+        let base = reg.len();
+        reg.register(Skill {
+            meta: SkillMeta {
+                name: "x".into(),
+                description: "d".into(),
+                trigger: "/x".into(),
+                model: None,
+                plugin_name: None,
+            },
+            prompt_body: "b".into(),
+            source_dir: PathBuf::from("."),
+        });
+        assert_eq!(reg.len(), base + 1);
+        reg.remove("x");
+        assert_eq!(reg.len(), base);
+    }
 }

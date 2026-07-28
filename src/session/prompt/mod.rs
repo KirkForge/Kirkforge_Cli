@@ -1495,4 +1495,81 @@ mod tests {
 
         assert_eq!(result[0].role, Role::System);
     }
+
+    #[test]
+    fn synthetic_extension_for_recognizes_rust_fences() {
+        assert_eq!(synthetic_extension_for("```rust\nfn main() {}```"), "rs");
+        assert_eq!(synthetic_extension_for("```rs\nfn main() {}```"), "rs");
+    }
+
+    #[test]
+    fn synthetic_extension_for_recognizes_python_fences() {
+        assert_eq!(synthetic_extension_for("```python\nprint('hi')```"), "py");
+        assert_eq!(synthetic_extension_for("```py\nprint('hi')```"), "py");
+    }
+
+    #[test]
+    fn synthetic_extension_for_recognizes_javascript_and_typescript() {
+        assert_eq!(synthetic_extension_for("```javascript\nx```"), "js");
+        assert_eq!(synthetic_extension_for("```js\nx```"), "js");
+        assert_eq!(synthetic_extension_for("```typescript\nx```"), "ts");
+        assert_eq!(synthetic_extension_for("```ts\nx```"), "ts");
+    }
+
+    #[test]
+    fn synthetic_extension_for_recognizes_jsx_and_tsx() {
+        assert_eq!(synthetic_extension_for("```jsx\nx```"), "jsx");
+        assert_eq!(synthetic_extension_for("```tsx\nx```"), "tsx");
+    }
+
+    #[test]
+    fn synthetic_extension_for_recognizes_other_languages() {
+        assert_eq!(synthetic_extension_for("```go\nx```"), "go");
+        assert_eq!(synthetic_extension_for("```c\nx```"), "c");
+        assert_eq!(synthetic_extension_for("```cpp\nx```"), "cpp");
+        assert_eq!(synthetic_extension_for("```c++\nx```"), "cpp");
+        assert_eq!(synthetic_extension_for("```java\nx```"), "java");
+        assert_eq!(synthetic_extension_for("```rb\nx```"), "rb");
+        assert_eq!(synthetic_extension_for("```ruby\nx```"), "rb");
+        assert_eq!(synthetic_extension_for("```sh\nx```"), "sh");
+        assert_eq!(synthetic_extension_for("```bash\nx```"), "sh");
+        assert_eq!(synthetic_extension_for("```zsh\nx```"), "sh");
+        assert_eq!(synthetic_extension_for("```md\nx```"), "md");
+        assert_eq!(synthetic_extension_for("```markdown\nx```"), "md");
+        assert_eq!(synthetic_extension_for("```json\nx```"), "json");
+        assert_eq!(synthetic_extension_for("```yaml\nx```"), "yaml");
+        assert_eq!(synthetic_extension_for("```yml\nx```"), "yaml");
+        assert_eq!(synthetic_extension_for("```toml\nx```"), "toml");
+    }
+
+    #[test]
+    fn synthetic_extension_for_picks_first_recognized_fence() {
+        let content = "intro\n```python\nx```\n```rust\ny```";
+        assert_eq!(synthetic_extension_for(content), "py");
+    }
+
+    #[test]
+    fn synthetic_extension_for_skips_unrecognized_fence_tags() {
+        let content = "```text\nplain```\n```rust\nfn x() {}```";
+        assert_eq!(synthetic_extension_for(content), "rs");
+    }
+
+    #[test]
+    fn synthetic_extension_for_returns_txt_for_unrecognized_block() {
+        assert_eq!(synthetic_extension_for("```text\nplain```"), "txt");
+        assert_eq!(
+            synthetic_extension_for("plain prose without any fence"),
+            "txt"
+        );
+    }
+
+    #[test]
+    fn synthetic_extension_for_infers_rust_from_fn_and_brace_without_fence() {
+        assert_eq!(synthetic_extension_for("fn main() { println!() }"), "rs");
+    }
+
+    #[test]
+    fn synthetic_extension_for_returns_txt_when_braces_present_without_fn() {
+        assert_eq!(synthetic_extension_for("just { braces }"), "txt");
+    }
 }

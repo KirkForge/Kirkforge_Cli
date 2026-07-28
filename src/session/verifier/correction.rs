@@ -393,4 +393,131 @@ mod tests {
 
         remove_test_file(&path);
     }
+
+    #[tokio::test]
+    async fn test_apply_command_fix_denied_by_path_guard_returns_false() {
+        let dir = std::env::temp_dir();
+        let path = dir.join("kirkforge_fmt_guarded.pem");
+        std::fs::write(&path, "secret").unwrap();
+
+        let guard = crate::session::access::PathGuard {
+            deny_extensions: vec![".pem".into()],
+            ..crate::session::access::PathGuard::default()
+        };
+        assert!(
+            !apply_command_fix("true", &path, &guard).await,
+            "path-guard denial must block command fix"
+        );
+        remove_test_file(&path);
+    }
+
+    #[test]
+    fn correction_loop_new_uses_default_max_iterations() {
+        let slots = std::sync::Arc::new(std::sync::RwLock::new(
+            super::super::slots::VerifierSlots::new(),
+        ));
+        let handler = std::sync::Arc::new(super::super::handler::VerifierHandler::new(
+            slots,
+            crate::session::access::PathGuard::default(),
+        ));
+        let loop_ = CorrectionLoop::new(handler.clone());
+        assert_eq!(loop_.max_iterations(), 3);
+        assert!(
+            std::sync::Arc::ptr_eq(&loop_.verifier_handler(), &handler),
+            "verifier_handler must return the same Arc"
+        );
+    }
+
+    #[test]
+    fn correction_loop_with_max_iterations_overrides_default() {
+        let slots = std::sync::Arc::new(std::sync::RwLock::new(
+            super::super::slots::VerifierSlots::new(),
+        ));
+        let handler = std::sync::Arc::new(super::super::handler::VerifierHandler::new(
+            slots,
+            crate::session::access::PathGuard::default(),
+        ));
+        let loop_ = CorrectionLoop::new(handler).with_max_iterations(7);
+        assert_eq!(loop_.max_iterations(), 7);
+    }
+
+    #[test]
+    fn correction_loop_with_max_iterations_zero_allows_zero_iterations() {
+        let slots = std::sync::Arc::new(std::sync::RwLock::new(
+            super::super::slots::VerifierSlots::new(),
+        ));
+        let handler = std::sync::Arc::new(super::super::handler::VerifierHandler::new(
+            slots,
+            crate::session::access::PathGuard::default(),
+        ));
+        let loop_ = CorrectionLoop::new(handler).with_max_iterations(0);
+        assert_eq!(loop_.max_iterations(), 0);
+    }
+
+    #[tokio::test]
+    async fn correction_loop_run_returns_empty_for_clean_event() {
+        let slots = std::sync::Arc::new(std::sync::RwLock::new(
+            super::super::slots::VerifierSlots::new(),
+        ));
+        let handler = std::sync::Arc::new(super::super::handler::VerifierHandler::new(
+            slots,
+            crate::session::access::PathGuard::default(),
+        ));
+        let loop_ = CorrectionLoop::new(handler);
+        let event = crate::session::event_bus::BusEvent::FileRead(
+            crate::session::event_bus::FileReadEvent {
+                path: std::path::PathBuf::from("x.rs"),
+                size_bytes: 1,
+                truncated: false,
+            },
+        );
+        let results = loop_.run(&event).await;
+        assert!(results.is_empty(), "empty slots → Clean → no results");
+    }
+
+    #[tokio::test]
+    async fn correction_loop_run_with_zero_iterations_returns_empty() {
+        let slots = std::sync::Arc::new(std::sync::RwLock::new(
+            super::super::slots::VerifierSlots::new(),
+        ));
+        let handler = std::sync::Arc::new(super::super::handler::VerifierHandler::new(
+            slots,
+            crate::session::access::PathGuard::default(),
+        ));
+        let loop_ = CorrectionLoop::new(handler).with_max_iterations(0);
+        let event = crate::session::event_bus::BusEvent::FileRead(
+            crate::session::event_bus::FileReadEvent {
+                path: std::path::PathBuf::from("x.rs"),
+                size_bytes: 1,
+                truncated: false,
+            },
+        );
+        let results = loop_.run(&event).await;
+        assert!(
+            results.is_empty(),
+            "max_iterations=0 must not run any iteration"
+        );
+    }
+
+    #[test]
+    fn correction_result_struct_has_expected_fields() {
+        let fix = FixSuggestion {
+            description: "d".into(),
+            file: PathBuf::from("x.rs"),
+            original: "a".into(),
+            replacement: "b".into(),
+            severity: "warning".into(),
+            command: None,
+        };
+        let cr = CorrectionResult {
+            verifier: "v".into(),
+            success: true,
+            message: "ok".into(),
+            fix: Some(fix.clone()),
+        };
+        assert_eq!(cr.verifier, "v");
+        assert!(cr.success);
+        assert_eq!(cr.message, "ok");
+        assert_eq!(cr.fix.as_ref().unwrap().file, fix.file);
+    }
 }

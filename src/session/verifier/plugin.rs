@@ -440,4 +440,69 @@ command = "bin/check.sh"
         assert_eq!(v.severity, Severity::Error);
         assert!(v.message.contains("nope"));
     }
+
+    #[test]
+    fn as_verifier_parts_returns_none_for_non_verifier_capability() {
+        let cap = kirkforge_plugin::Capability::Skill {
+            trigger: "/x".into(),
+            prompt: "do x".into(),
+            skill_file: None,
+            model_hint: None,
+        };
+        assert!(as_verifier_parts(&cap).is_none());
+    }
+
+    #[test]
+    fn as_verifier_parts_returns_none_for_verifier_without_command() {
+        let cap = kirkforge_plugin::Capability::Verifier {
+            name: "no-cmd".into(),
+            priority: 1,
+            command: None,
+        };
+        assert!(as_verifier_parts(&cap).is_none());
+    }
+
+    #[test]
+    fn as_verifier_parts_extracts_fields_when_command_present() {
+        let cap = kirkforge_plugin::Capability::Verifier {
+            name: "fmt".into(),
+            priority: 3,
+            command: Some(PathBuf::from("bin/fmt.sh")),
+        };
+        let (name, priority, command) =
+            as_verifier_parts(&cap).expect("verifier capability with command should yield parts");
+        assert_eq!(name, "fmt");
+        assert_eq!(priority, 3);
+        assert_eq!(command, PathBuf::from("bin/fmt.sh"));
+    }
+
+    #[test]
+    fn verifiers_from_registry_returns_empty_for_empty_registry() {
+        let registry = PluginRegistry::new();
+        let verifiers = verifiers_from_registry(&registry);
+        assert!(verifiers.is_empty());
+    }
+
+    #[test]
+    fn register_plugin_verifiers_into_bus_returns_zero_for_empty_registry() {
+        let registry = PluginRegistry::new();
+        let mut bus = crate::session::verifier::bus::VerifierBus::new();
+        let count = register_plugin_verifiers_into_bus(&registry, &mut bus);
+        assert_eq!(count, 0);
+        assert_eq!(bus.verifier_count(), 0);
+    }
+
+    #[test]
+    fn plugin_verifier_adapter_priority_round_trips() {
+        let pv = PluginVerifier {
+            name: "p".into(),
+            command: PathBuf::from("c.sh"),
+            plugin_root: PathBuf::from("/tmp"),
+        };
+        for prio in [0u8, 1, 5, 254, 255] {
+            let adapter = PluginVerifierAdapter::new(pv.clone(), prio);
+            assert_eq!(adapter.priority(), prio);
+            assert_eq!(adapter.name(), "p");
+        }
+    }
 }

@@ -251,4 +251,136 @@ edition = "2021"
 
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn lint_target_from_path_classifies_rust_extensions() {
+        assert!(matches!(
+            LintTarget::from_path(std::path::Path::new("x.rs")),
+            LintTarget::Rust
+        ));
+    }
+
+    #[test]
+    fn lint_target_from_path_classifies_python_extension() {
+        assert!(matches!(
+            LintTarget::from_path(std::path::Path::new("x.py")),
+            LintTarget::Python
+        ));
+    }
+
+    #[test]
+    fn lint_target_from_path_classifies_javascript_extensions() {
+        for ext in ["js", "ts", "jsx", "tsx"] {
+            let name = format!("file.{ext}");
+            let path = std::path::Path::new(&name);
+            assert!(
+                matches!(LintTarget::from_path(path), LintTarget::JavaScript),
+                "{ext} should classify as JavaScript"
+            );
+        }
+    }
+
+    #[test]
+    fn lint_target_from_path_unknown_for_unrecognized_extension() {
+        assert!(matches!(
+            LintTarget::from_path(std::path::Path::new("README.md")),
+            LintTarget::Unknown
+        ));
+        assert!(matches!(
+            LintTarget::from_path(std::path::Path::new("config.toml")),
+            LintTarget::Unknown
+        ));
+        assert!(matches!(
+            LintTarget::from_path(std::path::Path::new("no_ext")),
+            LintTarget::Unknown
+        ));
+    }
+
+    #[test]
+    fn lint_target_from_path_unknown_for_no_extension() {
+        assert!(matches!(
+            LintTarget::from_path(std::path::Path::new("just_a_name")),
+            LintTarget::Unknown
+        ));
+    }
+
+    #[test]
+    fn find_cargo_root_finds_immediate_parent_cargo_toml() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("Cargo.toml"), "").unwrap();
+        let src = tmp.path().join("lib.rs");
+        let found = find_cargo_root(&src).unwrap();
+        assert_eq!(found, tmp.path());
+    }
+
+    #[test]
+    fn find_cargo_root_walks_up_until_found() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("Cargo.toml"), "").unwrap();
+        let deep = tmp.path().join("a/b/c/file.rs");
+        std::fs::create_dir_all(deep.parent().unwrap()).unwrap();
+        let found = find_cargo_root(&deep).unwrap();
+        assert_eq!(found, tmp.path());
+    }
+
+    #[test]
+    fn find_cargo_root_returns_none_when_no_ancestor_has_cargo_toml() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("lonely.rs");
+        assert!(find_cargo_root(&path).is_none());
+    }
+
+    #[test]
+    fn parse_clippy_json_returns_none_for_non_compiler_message_reason() {
+        let line = r#"{"reason":"compiler-artifact"}"#;
+        let result = parse_clippy_json(
+            line,
+            std::path::Path::new("x.rs"),
+            std::path::Path::new("."),
+        );
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn parse_clippy_json_returns_none_for_info_level() {
+        let line = r#"{"reason":"compiler-message","message":{"level":"info","message":"m","spans":[{"file_name":"x.rs","line_start":1}]}}"#;
+        let result = parse_clippy_json(
+            line,
+            std::path::Path::new("x.rs"),
+            std::path::Path::new("."),
+        );
+        assert!(result.is_none(), "info level should not yield a suggestion");
+    }
+
+    #[test]
+    fn parse_clippy_json_returns_none_for_invalid_json() {
+        let result = parse_clippy_json(
+            "not json",
+            std::path::Path::new("x.rs"),
+            std::path::Path::new("."),
+        );
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn parse_clippy_json_returns_none_when_span_file_does_not_match_target() {
+        let line = r#"{"reason":"compiler-message","message":{"level":"warning","message":"m","spans":[{"file_name":"src/other.rs","line_start":1}]}}"#;
+        let cargo_root = std::path::PathBuf::from("/tmp/foo");
+        let target = std::path::PathBuf::from("/tmp/foo/src/main.rs");
+        let result = parse_clippy_json(line, &target, &cargo_root);
+        assert!(result.is_none(), "mismatching span should yield None");
+    }
+
+    #[tokio::test]
+    async fn verify_lint_skips_python_file_with_unsupported_message() {
+        let event = BusEvent::Edit(EditEvent {
+            path: std::path::PathBuf::from("script.py"),
+            diff: "".into(),
+        });
+        let v = verify_lint(&event).await;
+        match v {
+            Verdict::Skipped(reason) => assert!(reason.contains("not yet implemented")),
+            other => panic!("expected Skipped, got {other:?}"),
+        }
+    }
 }

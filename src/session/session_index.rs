@@ -951,4 +951,289 @@ mod tests {
             None => std::env::remove_var("KIRKFORGE_DATA_DIR"),
         }
     }
+
+    #[test]
+    fn test_session_content_matches_finds_substring() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("content-match.conv.ndjson");
+        std::fs::write(&path, "{\"role\":\"user\",\"content\":\"find me here\"}\n").unwrap();
+        assert!(session_content_matches(&path, "find me"));
+        assert!(session_content_matches(&path, "find"));
+        assert!(session_content_matches(&path, "user"));
+        assert!(!session_content_matches(&path, "not-found-text"));
+    }
+
+    #[test]
+    fn test_session_content_matches_handles_thinking_field() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("thinking-match.conv.ndjson");
+        let line = r#"{"role":"assistant","content":"visible","thinking":"secret thought"}"#;
+        std::fs::write(&path, format!("{line}\n")).unwrap();
+        assert!(session_content_matches(&path, "secret thought"));
+    }
+
+    #[test]
+    fn test_session_content_matches_handles_tool_name_field() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tool-name-match.conv.ndjson");
+        let line = r#"{"role":"tool","content":"output","tool_name":"special_tool_call_abc"}"#;
+        std::fs::write(&path, format!("{line}\n")).unwrap();
+        assert!(session_content_matches(&path, "special_tool_call_abc"));
+    }
+
+    #[test]
+    fn test_session_content_matches_returns_false_for_missing_file() {
+        let path = std::path::Path::new("/nonexistent/kf_content_match_test.conv.ndjson");
+        assert!(!session_content_matches(path, "anything"));
+    }
+
+    #[test]
+    fn test_session_content_matches_ignores_empty_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("empty-lines.conv.ndjson");
+        std::fs::write(&path, "\n\n   \n\n").unwrap();
+        assert!(!session_content_matches(&path, "anything"));
+    }
+
+    #[test]
+    fn test_session_content_matches_with_raw_substring_in_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("raw-substring.conv.ndjson");
+        std::fs::write(&path, "just some random text with findme word\n").unwrap();
+        assert!(session_content_matches(&path, "findme"));
+    }
+
+    #[test]
+    fn test_prune_oldest_in_dir_keeps_all_when_at_or_below_threshold() {
+        let dir = tempfile::tempdir().unwrap();
+        let sessions_dir = dir.path().join("sessions");
+        std::fs::create_dir_all(&sessions_dir).unwrap();
+        for i in 0..3 {
+            std::fs::write(sessions_dir.join(format!("keep-{i}.conv.ndjson")), b"").unwrap();
+        }
+        let deleted = prune_oldest_in_dir(&sessions_dir, 3, 1).unwrap();
+        assert!(
+            deleted.is_empty(),
+            "no deletion when len <= keep + delete_count"
+        );
+        assert_eq!(
+            std::fs::read_dir(&sessions_dir).unwrap().count(),
+            3,
+            "all three files should survive"
+        );
+    }
+
+    #[test]
+    fn test_prune_oldest_in_dir_skips_non_session_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let sessions_dir = dir.path().join("sessions");
+        std::fs::create_dir_all(&sessions_dir).unwrap();
+        std::fs::write(sessions_dir.join("a.conv.ndjson"), b"").unwrap();
+        std::fs::write(sessions_dir.join("notes.txt"), b"").unwrap();
+        std::fs::write(sessions_dir.join("b.conv.ndjson"), b"").unwrap();
+        let deleted = prune_oldest_in_dir(&sessions_dir, 0, 1).unwrap();
+        assert_eq!(deleted.len(), 1);
+        assert!(
+            std::fs::read_dir(&sessions_dir)
+                .unwrap()
+                .filter_map(Result::ok)
+                .any(|e| e.file_name() == "notes.txt"),
+            "non-session file should not be pruned"
+        );
+    }
+
+    #[test]
+    fn test_prune_oldest_in_dir_handles_missing_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let sessions_dir = dir.path().join("does-not-exist");
+        let deleted = prune_oldest_in_dir(&sessions_dir, 0, 5).unwrap();
+        assert!(deleted.is_empty());
+    }
+
+    #[test]
+    fn test_prune_oldest_in_dir_deletes_multiple_oldest() {
+        let dir = tempfile::tempdir().unwrap();
+        let sessions_dir = dir.path().join("sessions");
+        std::fs::create_dir_all(&sessions_dir).unwrap();
+        for i in 0..5 {
+            std::fs::write(
+                sessions_dir.join(format!("2026-06-0{i}-s.conv.ndjson")),
+                b"",
+            )
+            .unwrap();
+        }
+        let deleted = prune_oldest_in_dir(&sessions_dir, 1, 2).unwrap();
+        assert_eq!(deleted.len(), 2);
+        assert_eq!(
+            std::fs::read_dir(&sessions_dir)
+                .unwrap()
+                .filter_map(Result::ok)
+                .filter(|e| e.file_name().to_string_lossy().ends_with(".conv.ndjson"))
+                .count(),
+            3,
+            "5 - 2 = 3 sessions should remain"
+        );
+    }
+
+    #[test]
+    fn test_summarize_file_counts_only_non_empty_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mixed-blank.conv.ndjson");
+        std::fs::write(&path, "line1\n\n  \nline4\n").unwrap();
+        let entry = summarize_file(&path).unwrap();
+        assert_eq!(entry.message_count, 2, "blank lines are not counted");
+    }
+
+    #[test]
+    fn test_summarize_file_strips_conv_suffix() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("myid.conv.ndjson");
+        std::fs::write(&path, b"").unwrap();
+        let entry = summarize_file(&path).unwrap();
+        assert_eq!(entry.id, "myid");
+    }
+
+    #[test]
+    fn test_delete_session_returns_false_when_missing() {
+        let _guard = crate::session::test_data_dir_lock().blocking_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let previous = std::env::var("KIRKFORGE_DATA_DIR").ok();
+        std::env::set_var("KIRKFORGE_DATA_DIR", dir.path());
+        let sessions_dir = dir.path().join("sessions");
+        std::fs::create_dir_all(&sessions_dir).unwrap();
+        let deleted = delete_session("does-not-exist-12345").unwrap();
+        assert!(!deleted);
+        match previous {
+            Some(v) => std::env::set_var("KIRKFORGE_DATA_DIR", v),
+            None => std::env::remove_var("KIRKFORGE_DATA_DIR"),
+        }
+    }
+
+    #[test]
+    fn test_delete_session_removes_file_when_present() {
+        let _guard = crate::session::test_data_dir_lock().blocking_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let previous = std::env::var("KIRKFORGE_DATA_DIR").ok();
+        std::env::set_var("KIRKFORGE_DATA_DIR", dir.path());
+        let sessions_dir = dir.path().join("sessions");
+        std::fs::create_dir_all(&sessions_dir).unwrap();
+        let path = sessions_dir.join("to-delete.conv.ndjson");
+        std::fs::write(&path, "{\"role\":\"user\",\"content\":\"x\"}\n").unwrap();
+        let deleted = delete_session("to-delete").unwrap();
+        assert!(deleted);
+        assert!(!path.exists());
+        match previous {
+            Some(v) => std::env::set_var("KIRKFORGE_DATA_DIR", v),
+            None => std::env::remove_var("KIRKFORGE_DATA_DIR"),
+        }
+    }
+
+    #[test]
+    fn test_resolve_session_id_returns_none_when_no_match() {
+        let _guard = crate::session::test_data_dir_lock().blocking_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let previous = std::env::var("KIRKFORGE_DATA_DIR").ok();
+        std::env::set_var("KIRKFORGE_DATA_DIR", dir.path());
+        let sessions_dir = dir.path().join("sessions");
+        std::fs::create_dir_all(&sessions_dir).unwrap();
+        let resolved = resolve_session_id("missing").unwrap();
+        assert!(resolved.is_none());
+        match previous {
+            Some(v) => std::env::set_var("KIRKFORGE_DATA_DIR", v),
+            None => std::env::remove_var("KIRKFORGE_DATA_DIR"),
+        }
+    }
+
+    #[test]
+    fn test_resolve_session_id_matches_exact_id() {
+        let _guard = crate::session::test_data_dir_lock().blocking_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let previous = std::env::var("KIRKFORGE_DATA_DIR").ok();
+        std::env::set_var("KIRKFORGE_DATA_DIR", dir.path());
+        let sessions_dir = dir.path().join("sessions");
+        std::fs::create_dir_all(&sessions_dir).unwrap();
+        let path = sessions_dir.join("exact-id.conv.ndjson");
+        std::fs::write(&path, "{\"role\":\"user\",\"content\":\"x\"}\n").unwrap();
+        let resolved = resolve_session_id("exact-id").unwrap();
+        assert_eq!(resolved, Some(path));
+        match previous {
+            Some(v) => std::env::set_var("KIRKFORGE_DATA_DIR", v),
+            None => std::env::remove_var("KIRKFORGE_DATA_DIR"),
+        }
+    }
+
+    #[test]
+    fn test_resolve_session_id_matches_id_prefix() {
+        let _guard = crate::session::test_data_dir_lock().blocking_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let previous = std::env::var("KIRKFORGE_DATA_DIR").ok();
+        std::env::set_var("KIRKFORGE_DATA_DIR", dir.path());
+        let sessions_dir = dir.path().join("sessions");
+        std::fs::create_dir_all(&sessions_dir).unwrap();
+        let path = sessions_dir.join("2026-06-10-long-session.conv.ndjson");
+        std::fs::write(&path, "{\"role\":\"user\",\"content\":\"x\"}\n").unwrap();
+        let resolved = resolve_session_id("2026-06-10").unwrap();
+        assert_eq!(resolved, Some(path));
+        match previous {
+            Some(v) => std::env::set_var("KIRKFORGE_DATA_DIR", v),
+            None => std::env::remove_var("KIRKFORGE_DATA_DIR"),
+        }
+    }
+
+    #[test]
+    fn test_resolve_session_id_prefers_exact_match_over_prefix() {
+        let _guard = crate::session::test_data_dir_lock().blocking_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let previous = std::env::var("KIRKFORGE_DATA_DIR").ok();
+        std::env::set_var("KIRKFORGE_DATA_DIR", dir.path());
+        let sessions_dir = dir.path().join("sessions");
+        std::fs::create_dir_all(&sessions_dir).unwrap();
+        let prefix_path = sessions_dir.join("2026-prefix-id.conv.ndjson");
+        std::fs::write(&prefix_path, "{\"role\":\"user\",\"content\":\"x\"}\n").unwrap();
+        let exact_path = sessions_dir.join("2026.conv.ndjson");
+        std::fs::write(&exact_path, "{\"role\":\"user\",\"content\":\"x\"}\n").unwrap();
+        let resolved = resolve_session_id("2026").unwrap();
+        assert_eq!(resolved, Some(exact_path));
+        match previous {
+            Some(v) => std::env::set_var("KIRKFORGE_DATA_DIR", v),
+            None => std::env::remove_var("KIRKFORGE_DATA_DIR"),
+        }
+    }
+
+    #[test]
+    fn test_open_resolved_returns_none_when_no_match() {
+        let _guard = crate::session::test_data_dir_lock().blocking_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let previous = std::env::var("KIRKFORGE_DATA_DIR").ok();
+        std::env::set_var("KIRKFORGE_DATA_DIR", dir.path());
+        let sessions_dir = dir.path().join("sessions");
+        std::fs::create_dir_all(&sessions_dir).unwrap();
+        let opened = open_resolved("not-present").unwrap();
+        assert!(opened.is_none());
+        match previous {
+            Some(v) => std::env::set_var("KIRKFORGE_DATA_DIR", v),
+            None => std::env::remove_var("KIRKFORGE_DATA_DIR"),
+        }
+    }
+
+    #[test]
+    fn test_open_resolved_opens_conversation_log() {
+        let _guard = crate::session::test_data_dir_lock().blocking_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let previous = std::env::var("KIRKFORGE_DATA_DIR").ok();
+        std::env::set_var("KIRKFORGE_DATA_DIR", dir.path());
+        let sessions_dir = dir.path().join("sessions");
+        std::fs::create_dir_all(&sessions_dir).unwrap();
+        let path = sessions_dir.join("resume-target.conv.ndjson");
+        std::fs::write(&path, "{\"role\":\"user\",\"content\":\"hello\"}\n").unwrap();
+        let log = open_resolved("resume-target")
+            .unwrap()
+            .expect("should resolve");
+        assert_eq!(log.len(), 1);
+        assert_eq!(log.all()[0].content, "hello");
+        match previous {
+            Some(v) => std::env::set_var("KIRKFORGE_DATA_DIR", v),
+            None => std::env::remove_var("KIRKFORGE_DATA_DIR"),
+        }
+    }
 }

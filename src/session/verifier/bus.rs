@@ -910,4 +910,218 @@ mod tests {
             "unknown severity defaults to Warning (not dropped)"
         );
     }
+
+    #[test]
+    fn parse_severity_is_case_insensitive() {
+        assert_eq!(parse_severity("ERROR"), Severity::Error);
+        assert_eq!(parse_severity("Error"), Severity::Error);
+        assert_eq!(parse_severity("WARNING"), Severity::Warning);
+        assert_eq!(parse_severity("INFO"), Severity::Info);
+        assert_eq!(parse_severity("High"), Severity::Error);
+    }
+
+    #[test]
+    fn format_verdict_report_empty_says_no_verdicts() {
+        let report = format_verdict_report(&[]);
+        assert!(report.contains("No verifier verdicts"));
+        assert!(
+            !report.contains("Verifier"),
+            "empty case has no table header"
+        );
+    }
+
+    #[test]
+    fn format_verdict_report_renders_header_row() {
+        let verdicts = vec![VerdictEntry {
+            source: VerifierSource::Build,
+            severity: Severity::Info,
+            message: "ok".into(),
+            file: None,
+            line: None,
+        }];
+        let report = format_verdict_report(&verdicts);
+        assert!(report.contains("Verifier"));
+        assert!(report.contains("Source"));
+        assert!(report.contains("Verdict"));
+        assert!(report.contains("File:Line"));
+        assert!(report.contains("Message"));
+    }
+
+    #[test]
+    fn format_verdict_report_lists_verdict_entries() {
+        let verdicts = vec![
+            VerdictEntry {
+                source: VerifierSource::Build,
+                severity: Severity::Error,
+                message: "build failed".into(),
+                file: Some(PathBuf::from("src/lib.rs")),
+                line: Some(42),
+            },
+            VerdictEntry {
+                source: VerifierSource::Lint,
+                severity: Severity::Warning,
+                message: "unused import".into(),
+                file: Some(PathBuf::from("src/main.rs")),
+                line: None,
+            },
+        ];
+        let report = format_verdict_report(&verdicts);
+        assert!(report.contains("build failed"));
+        assert!(report.contains("unused import"));
+        assert!(report.contains("src/lib.rs:42"));
+        assert!(report.contains("src/main.rs"));
+        assert!(report.contains("2 verdict(s):"));
+        assert!(report.contains("1 pass, 1 fail"));
+    }
+
+    #[test]
+    fn format_verdict_report_shows_dash_when_file_and_line_absent() {
+        let verdicts = vec![VerdictEntry {
+            source: VerifierSource::Security,
+            severity: Severity::Info,
+            message: "ok".into(),
+            file: None,
+            line: None,
+        }];
+        let report = format_verdict_report(&verdicts);
+        assert!(
+            report.contains('—'),
+            "no file/line should render as em-dash"
+        );
+        assert!(report.contains("1 verdict(s):"));
+        assert!(report.contains("1 pass, 0 fail"));
+    }
+
+    #[test]
+    fn format_verdict_report_truncates_long_file_paths() {
+        let long_path = PathBuf::from(format!("src/{}/mod.rs", "x".repeat(40)));
+        let verdicts = vec![VerdictEntry {
+            source: VerifierSource::Build,
+            severity: Severity::Error,
+            message: "err".into(),
+            file: Some(long_path),
+            line: Some(1),
+        }];
+        let report = format_verdict_report(&verdicts);
+        assert!(
+            report.contains('…'),
+            "long file:line should be truncated with ellipsis"
+        );
+    }
+
+    #[test]
+    fn format_verdict_report_truncates_long_messages_to_60_chars() {
+        let long_message = "x".repeat(200);
+        let verdicts = vec![VerdictEntry {
+            source: VerifierSource::Lint,
+            severity: Severity::Warning,
+            message: long_message.clone(),
+            file: None,
+            line: None,
+        }];
+        let report = format_verdict_report(&verdicts);
+        assert!(
+            !report.contains(&long_message),
+            "the full 200-char message must not appear in the report"
+        );
+        let row = report
+            .lines()
+            .find(|l| l.contains("lint"))
+            .unwrap_or_else(|| panic!("no lint row in:\n{report}"));
+        assert!(
+            row.contains(&"x".repeat(60)),
+            "row should include the truncated 60-char message: {row}"
+        );
+    }
+
+    #[test]
+    fn format_verdict_report_summary_counts_error_as_fail() {
+        let verdicts = vec![
+            VerdictEntry {
+                source: VerifierSource::Build,
+                severity: Severity::Error,
+                message: "fail".into(),
+                file: None,
+                line: None,
+            },
+            VerdictEntry {
+                source: VerifierSource::Lint,
+                severity: Severity::Warning,
+                message: "warn".into(),
+                file: None,
+                line: None,
+            },
+            VerdictEntry {
+                source: VerifierSource::Security,
+                severity: Severity::Info,
+                message: "ok".into(),
+                file: None,
+                line: None,
+            },
+        ];
+        let report = format_verdict_report(&verdicts);
+        assert!(report.contains("3 verdict(s):"));
+        assert!(report.contains("2 pass, 1 fail"));
+    }
+
+    #[test]
+    fn default_verifier_bus_registers_two_built_in_verifiers() {
+        let bus = default_verifier_bus();
+        assert_eq!(bus.verifier_count(), 2);
+    }
+
+    #[test]
+    fn default_verifier_bus_verifies_without_errors_on_empty_changed_files() {
+        let mut bus = default_verifier_bus();
+        let ctx = VerifyContext {
+            sandbox_dir: PathBuf::from("/tmp"),
+            changed_files: vec![],
+        };
+        bus.run(&ctx);
+        assert!(!bus.has_errors(), "built-in stubs emit no verdicts");
+        assert!(bus.verdicts().is_empty());
+    }
+
+    #[test]
+    fn verifier_bus_retain_drops_verifiers_not_matching_predicate() {
+        let mut bus = VerifierBus::new();
+        bus.register(Box::new(StubVerifier {
+            name: "keep_me".into(),
+            entries: vec![],
+        }));
+        bus.register(Box::new(StubVerifier {
+            name: "drop_me".into(),
+            entries: vec![],
+        }));
+        assert_eq!(bus.verifier_count(), 2);
+        bus.retain_verifiers(|n| n == "keep_me");
+        assert_eq!(bus.verifier_count(), 1);
+        bus.run(&make_ctx());
+        assert!(bus.verdicts().is_empty());
+    }
+
+    #[test]
+    fn verifier_bus_run_overwrites_previous_verdicts() {
+        let mut bus = VerifierBus::new();
+        bus.register(Box::new(StubVerifier {
+            name: "stub".into(),
+            entries: vec![VerdictEntry {
+                source: VerifierSource::Build,
+                severity: Severity::Error,
+                message: "first run".into(),
+                file: None,
+                line: None,
+            }],
+        }));
+        bus.run(&make_ctx());
+        assert_eq!(bus.verdicts().len(), 1);
+        assert_eq!(bus.verdicts()[0].message, "first run");
+        bus.run(&make_ctx());
+        assert_eq!(
+            bus.verdicts().len(),
+            1,
+            "run() clears prior verdicts before collecting"
+        );
+        assert_eq!(bus.verdicts()[0].message, "first run");
+    }
 }

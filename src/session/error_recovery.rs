@@ -703,10 +703,7 @@ mod hint_tests {
         let h = classify_borrow_conflict(err).expect(
             "without 'also borrowed as', the regex for original_ref falls back to the conflicting_ref",
         );
-        assert!(
-            matches!(h, ErrorHint::BorrowConflict { .. }),
-            "got {h:?}"
-        );
+        assert!(matches!(h, ErrorHint::BorrowConflict { .. }), "got {h:?}");
         if let ErrorHint::BorrowConflict {
             original_ref,
             conflicting_ref,

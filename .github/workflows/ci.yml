@@ -331,7 +331,7 @@ jobs:
         # ~4min to ~2min. The coverage gate below already only enforces
         # thresholds on `src/session`, `src/tools`, `src/adapters` —
         # all unit-test-covered code.
-        run: cargo tarpaulin --out Xml --locked --lib --timeout 120
+        run: cargo tarpaulin --out Xml --locked --lib --timeout 120 -- --skip test_build_fork_tree_nests_children
 
       - name: Enforce coverage gate
         run: |

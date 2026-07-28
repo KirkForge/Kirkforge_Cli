@@ -139,6 +139,11 @@ fn session_token() -> Option<String> {
 mod tests {
     use super::*;
 
+    fn env_lock() -> &'static std::sync::Mutex<()> {
+        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+    }
+
     #[test]
     fn host_header_extracts_hostname() {
         assert_eq!(
@@ -194,6 +199,7 @@ mod tests {
 
     #[test]
     fn session_token_reads_from_env() {
+        let _guard = env_lock().lock().unwrap();
         let key = "AWS_SESSION_TOKEN";
         let prev = std::env::var(key).ok();
         std::env::set_var(key, "test-token-value");
@@ -206,6 +212,7 @@ mod tests {
 
     #[test]
     fn session_token_returns_none_when_unset() {
+        let _guard = env_lock().lock().unwrap();
         let key = "AWS_SESSION_TOKEN";
         let prev = std::env::var(key).ok();
         std::env::remove_var(key);
@@ -217,6 +224,7 @@ mod tests {
 
     #[test]
     fn resolve_credentials_reads_from_env() {
+        let _guard = env_lock().lock().unwrap();
         let access_key = "AWS_ACCESS_KEY_ID";
         let secret_key = "AWS_SECRET_ACCESS_KEY";
         let session_key = "AWS_SESSION_TOKEN";

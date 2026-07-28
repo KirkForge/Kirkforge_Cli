@@ -253,6 +253,7 @@ mod tests {
 
     #[test]
     fn resolve_credentials_fails_without_access_key() {
+        let _guard = env_lock().lock().unwrap();
         let access_key = "AWS_ACCESS_KEY_ID";
         let prev = std::env::var(access_key).ok();
         std::env::remove_var(access_key);
@@ -264,6 +265,7 @@ mod tests {
 
     #[test]
     fn resolve_credentials_fails_without_secret_key() {
+        let _guard = env_lock().lock().unwrap();
         let access_key = "AWS_ACCESS_KEY_ID";
         let secret_key = "AWS_SECRET_ACCESS_KEY";
         let prev_access = std::env::var(access_key).ok();
@@ -282,6 +284,7 @@ mod tests {
 
     #[test]
     fn sign_request_produces_authorization_header() {
+        let _guard = env_lock().lock().unwrap();
         let access_key = "AWS_ACCESS_KEY_ID";
         let secret_key = "AWS_SECRET_ACCESS_KEY";
         let session_key = "AWS_SESSION_TOKEN";
@@ -315,6 +318,7 @@ mod tests {
 
     #[test]
     fn sign_request_includes_security_token_when_set() {
+        let _guard = env_lock().lock().unwrap();
         let access_key = "AWS_ACCESS_KEY_ID";
         let secret_key = "AWS_SECRET_ACCESS_KEY";
         let session_key = "AWS_SESSION_TOKEN";
@@ -344,6 +348,7 @@ mod tests {
 
     #[test]
     fn sign_request_fails_for_invalid_url() {
+        let _guard = env_lock().lock().unwrap();
         let access_key = "AWS_ACCESS_KEY_ID";
         let secret_key = "AWS_SECRET_ACCESS_KEY";
         let prev_access = std::env::var(access_key).ok();

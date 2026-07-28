@@ -564,4 +564,249 @@ mod tests {
         assert_eq!(human_size(1024), "1.0 KB");
         assert_eq!(human_size(5 * 1024 * 1024), "5.0 MB");
     }
+
+    #[test]
+    fn human_size_gb_scales() {
+        assert_eq!(human_size(2 * 1024 * 1024 * 1024), "2.0 GB");
+    }
+
+    #[test]
+    fn parse_status_handles_copy() {
+        let out = "C  src/old.rs -> src/copy.rs";
+        let entries = parse_status(out);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].path, PathBuf::from("src/copy.rs"));
+    }
+
+    #[test]
+    fn parse_status_skips_short_lines() {
+        let out = "??\nM  src/lib.rs\n";
+        let entries = parse_status(out);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].path, PathBuf::from("src/lib.rs"));
+    }
+
+    #[test]
+    fn parse_status_handles_blank_lines() {
+        let out = " M src/a.rs\n\nM  src/b.rs\n";
+        let entries = parse_status(out);
+        assert_eq!(entries.len(), 2);
+    }
+
+    #[test]
+    fn classify_staged_modified_untracked_deleted_other() {
+        assert_eq!(classify("M "), StatusCode::Staged);
+        assert_eq!(classify(" M"), StatusCode::ModifiedUnstaged);
+        assert_eq!(classify("??"), StatusCode::Untracked);
+        assert_eq!(classify("D "), StatusCode::Deleted);
+        assert_eq!(classify(" D"), StatusCode::Deleted);
+        assert_eq!(classify("A "), StatusCode::Staged);
+        assert_eq!(classify(" X"), StatusCode::Other);
+    }
+
+    #[test]
+    fn has_conflict_marker_handles_each_variant() {
+        assert!(has_conflict_marker("<<<<<<< HEAD\nfoo\n"));
+        assert!(has_conflict_marker(">>>>>>> branch\n"));
+        assert!(has_conflict_marker("\n=======\n"));
+        assert!(!has_conflict_marker("not a marker"));
+        assert!(!has_conflict_marker("========= long equals rule"));
+        assert!(!has_conflict_marker(""));
+    }
+
+    #[test]
+    fn contains_secret_pattern_matches_known_prefixes() {
+        let text = "token=ghp_abc123";
+        assert!(contains_secret_pattern(&text.to_lowercase(), "ghp_"));
+        assert!(contains_secret_pattern(
+            &"key=sk-xyz".to_lowercase(),
+            "sk-"
+        ));
+        assert!(contains_secret_pattern(
+            &"AKIA1234".to_lowercase(),
+            "akia"
+        ));
+    }
+
+    #[test]
+    fn contains_secret_pattern_env_in_word_is_rejected() {
+        assert!(!contains_secret_pattern(
+            &"environment variable".to_lowercase(),
+            ".env"
+        ));
+        assert!(contains_secret_pattern(
+            &"see .env for details".to_lowercase(),
+            ".env"
+        ));
+    }
+
+    #[test]
+    fn check_worktree_no_trackable_changes_warns() {
+        let tmp = tempfile::tempdir().unwrap();
+        let report = check_worktree(tmp.path(), "   \n  ", None).unwrap();
+        assert!(report.warnings.iter().any(|w| w.contains("trackable")));
+    }
+
+    #[test]
+    fn check_worktree_reports_untracked_files_in_warning() {
+        let tmp = tempfile::tempdir().unwrap();
+        let f = tmp.path().join("u.txt");
+        std::fs::write(&f, "x").unwrap();
+        let status = format!("?? {}", f.display());
+        let report = check_worktree(tmp.path(), &status, None).unwrap();
+        assert!(report.warnings.iter().any(|w| w.contains("Untracked")));
+    }
+
+    #[test]
+    fn check_worktree_reports_unstaged_modified_files_in_warning() {
+        let tmp = tempfile::tempdir().unwrap();
+        let f = tmp.path().join("m.txt");
+        std::fs::write(&f, "x").unwrap();
+        let status = format!(" M {}", f.display());
+        let report = check_worktree(tmp.path(), &status, None).unwrap();
+        assert!(report.warnings.iter().any(|w| w.contains("unstaged")));
+    }
+
+    #[test]
+    fn check_worktree_skips_deleted_files_for_size_and_content() {
+        let tmp = tempfile::tempdir().unwrap();
+        let f = tmp.path().join("gone.txt");
+        let status = format!(" D {}", f.display());
+        let report = check_worktree(tmp.path(), &status, None).unwrap();
+        assert!(report.is_clean(), "deleted file should not block");
+        assert!(
+            !report
+                .blockers
+                .iter()
+                .any(|b| b.contains("Large file") || b.contains("secret")),
+            "deleted file should not be scanned: {report:?}"
+        );
+    }
+
+    #[test]
+    fn check_worktree_unreadable_file_warns_about_size() {
+        let tmp = tempfile::tempdir().unwrap();
+        let status = format!("?? /nonexistent/kirkforge-test-missing-file");
+        let report = check_worktree(tmp.path(), &status, None).unwrap();
+        assert!(report.warnings.iter().any(|w| w.contains("Could not check size")));
+    }
+
+    #[test]
+    fn check_worktree_flags_more_than_five_untracked_files_truncates() {
+        let tmp = tempfile::tempdir().unwrap();
+        for i in 0..7 {
+            let f = tmp.path().join(format!("u{i}.txt"));
+            std::fs::write(&f, "x").unwrap();
+        }
+        let status: Vec<String> = (0..7)
+            .map(|i| format!("?? {}/u{i}.txt", tmp.path().display()))
+            .collect();
+        let report = check_worktree(tmp.path(), &status.join("\n"), None).unwrap();
+        let untracked_warning = report
+            .warnings
+            .iter()
+            .find(|w| w.contains("Untracked"))
+            .expect("untracked warning present");
+        assert!(
+            untracked_warning.contains("and 2 more"),
+            "should mention 2 extra files, got: {untracked_warning}"
+        );
+    }
+
+    #[test]
+    fn check_worktree_default_max_file_size_is_five_mb() {
+        assert_eq!(DEFAULT_MAX_FILE_SIZE, 5 * 1024 * 1024);
+    }
+
+    #[test]
+    fn suggest_message_empty_returns_chore_no_changes() {
+        assert_eq!(suggest_message(&[]), "chore: no changes");
+    }
+
+    #[test]
+    fn suggest_message_test_files_get_test_kind() {
+        let lines = vec![" M tests/foo_test.rs".to_string()];
+        let msg = suggest_message(&lines);
+        assert!(msg.starts_with("test"), "got: {msg}");
+    }
+
+    #[test]
+    fn suggest_message_mixed_extensions_no_scope() {
+        let lines = vec![" M src/main.rs".to_string(), " M README.md".to_string()];
+        let msg = suggest_message(&lines);
+        assert!(
+            msg.starts_with("feat") || msg.starts_with("docs"),
+            "mixed ext should pick feat or docs kind, got: {msg}"
+        );
+        assert!(
+            !msg.contains("("),
+            "mixed ext should have no scope, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn suggest_message_strip_status_handles_rename() {
+        let line = "R  src/old.rs -> src/new.rs";
+        let path = strip_status_code(line);
+        assert_eq!(path, PathBuf::from("src/new.rs"));
+    }
+
+    #[test]
+    fn strip_status_code_handles_simple_path() {
+        assert_eq!(
+            strip_status_code(" M src/lib.rs"),
+            PathBuf::from("src/lib.rs")
+        );
+    }
+
+    #[test]
+    fn strip_status_code_handles_untracked_path() {
+        assert_eq!(
+            strip_status_code("?? untracked.txt"),
+            PathBuf::from("untracked.txt")
+        );
+    }
+
+    #[test]
+    fn sanitation_report_format_clean() {
+        let report = SanitationReport::default();
+        assert_eq!(report.format(), "✅ No sanitation issues found.");
+    }
+
+    #[test]
+    fn sanitation_report_format_with_blockers_and_warnings() {
+        let report = SanitationReport {
+            blockers: vec!["blocker one".into()],
+            warnings: vec!["warning one".into()],
+        };
+        let s = report.format();
+        assert!(s.contains("🚫 Commit blocked:"));
+        assert!(s.contains("  • blocker one"));
+        assert!(s.contains("⚠️  Warnings:"));
+        assert!(s.contains("  • warning one"));
+    }
+
+    #[test]
+    fn read_limited_returns_none_for_unreadable() {
+        let path = Path::new("/nonexistent/kirkforge-test-read-limited.bin");
+        assert!(read_limited(path, 1024).is_none());
+    }
+
+    #[test]
+    fn read_limited_truncates_to_cap() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("limited.txt");
+        std::fs::write(&path, "abcdefghij").unwrap();
+        let out = read_limited(&path, 4).unwrap();
+        assert_eq!(out.len(), 4);
+        assert_eq!(out, "abcd");
+    }
+
+    #[test]
+    fn read_limited_rejects_non_utf8() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("binary.bin");
+        std::fs::write(&path, b"\xff\xfe\xfd").unwrap();
+        assert!(read_limited(&path, 1024).is_none());
+    }
 }

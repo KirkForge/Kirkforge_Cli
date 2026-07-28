@@ -853,4 +853,445 @@ mod tests {
             other => panic!("VideoValidate must return Success or Error, got {other:?}"),
         }
     }
+
+    #[tokio::test]
+    async fn test_video_demos_unknown_command_errors() {
+        let tool = VideoDemos;
+        let ctx = ToolContext::new();
+        let out = tool
+            .run(&ctx, serde_json::json!({"command": "bogus"}))
+            .await;
+        match out {
+            ToolOutcome::Error { message } => assert!(
+                message.contains("unknown command") && message.contains("bogus"),
+                "got: {message}"
+            ),
+            other => panic!("expected Error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_video_demos_lists_pipelines() {
+        let tool = VideoDemos;
+        let ctx = ToolContext::new();
+        let out = tool
+            .run(&ctx, serde_json::json!({"command": "pipelines"}))
+            .await;
+        match out {
+            ToolOutcome::Success { content } => assert!(!content.is_empty(), "got: {content}"),
+            other => panic!("expected Success, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_video_demos_lists_profiles() {
+        let tool = VideoDemos;
+        let ctx = ToolContext::new();
+        let out = tool
+            .run(&ctx, serde_json::json!({"command": "profiles"}))
+            .await;
+        match out {
+            ToolOutcome::Success { content } => assert!(!content.is_empty(), "got: {content}"),
+            other => panic!("expected Success, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_video_demos_lists_tools() {
+        let tool = VideoDemos;
+        let ctx = ToolContext::new();
+        let out = tool
+            .run(&ctx, serde_json::json!({"command": "tools"}))
+            .await;
+        match out {
+            ToolOutcome::Success { content } => assert!(!content.is_empty(), "got: {content}"),
+            other => panic!("expected Success, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_video_demos_defaults_to_demos_command() {
+        let tool = VideoDemos;
+        let ctx = ToolContext::new();
+        let out = tool.run(&ctx, serde_json::json!({})).await;
+        assert!(matches!(out, ToolOutcome::Success { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_video_pipeline_unknown_kind_errors() {
+        let tool = VideoPipeline;
+        let ctx = ToolContext::new();
+        let out = tool
+            .run(&ctx, serde_json::json!({"kind": "definitely-not-a-pipeline"}))
+            .await;
+        match out {
+            ToolOutcome::Error { message } => assert!(
+                message.contains("unknown pipeline kind"),
+                "got: {message}"
+            ),
+            other => panic!("expected Error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_video_render_missing_plan_errors() {
+        let tool = VideoRender;
+        let ctx = ToolContext::new();
+        let out = tool
+            .run(
+                &ctx,
+                serde_json::json!({"project": "/nonexistent/kirkforge-render-test"}),
+            )
+            .await;
+        match out {
+            ToolOutcome::Error { message } => assert!(
+                message.contains("missing") && message.contains("scene_plan.json"),
+                "got: {message}"
+            ),
+            other => panic!("expected Error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_video_render_unknown_profile_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().to_path_buf();
+        let arts = project.join("artifacts");
+        std::fs::create_dir_all(&arts).unwrap();
+        let plan_path = arts.join("scene_plan.json");
+        std::fs::write(&plan_path, "{}").unwrap();
+        let tool = VideoRender;
+        let ctx = ToolContext::new();
+        let out = tool
+            .run(
+                &ctx,
+                serde_json::json!({"project": project, "profile": "not-a-profile"}),
+            )
+            .await;
+        match out {
+            ToolOutcome::Error { message } => assert!(
+                message.contains("unknown profile") && message.contains("not-a-profile"),
+                "got: {message}"
+            ),
+            other => panic!("expected Error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_video_validate_missing_path_errors() {
+        let tool = VideoValidate;
+        let ctx = ToolContext::new();
+        let out = tool
+            .run(
+                &ctx,
+                serde_json::json!({"path": "/nonexistent/kirkforge-validate-test.json"}),
+            )
+            .await;
+        match out {
+            ToolOutcome::Error { message } => assert!(
+                message.contains("not found"),
+                "got: {message}"
+            ),
+            other => panic!("expected Error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_video_from_brief_missing_brief_errors() {
+        let tool = VideoFromBrief;
+        let ctx = ToolContext::new();
+        let out = tool.run(&ctx, serde_json::json!({})).await;
+        match out {
+            ToolOutcome::Error { message } => assert!(
+                message.contains("missing required") && message.contains("brief"),
+                "got: {message}"
+            ),
+            other => panic!("expected Error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_video_from_brief_unknown_kind_errors() {
+        let tool = VideoFromBrief;
+        let ctx = ToolContext::new();
+        let out = tool
+            .run(
+                &ctx,
+                serde_json::json!({"brief": "/tmp/none.txt", "kind": "no-such-kind"}),
+            )
+            .await;
+        match out {
+            ToolOutcome::Error { message } => assert!(
+                message.contains("unknown pipeline kind"),
+                "got: {message}"
+            ),
+            other => panic!("expected Error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_video_from_brief_unreadable_brief_errors() {
+        let tool = VideoFromBrief;
+        let ctx = ToolContext::new();
+        let out = tool
+            .run(
+                &ctx,
+                serde_json::json!({"brief": "/nonexistent/kirkforge-brief.md"}),
+            )
+            .await;
+        match out {
+            ToolOutcome::Error { message } => assert!(
+                message.contains("copy brief") || message.contains("video_from_brief"),
+                "got: {message}"
+            ),
+            other => panic!("expected Error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_video_doctor_unknown_check_errors() {
+        let tool = VideoDoctor;
+        let ctx = ToolContext::new();
+        let out = tool
+            .run(&ctx, serde_json::json!({"check": "mystery"}))
+            .await;
+        match out {
+            ToolOutcome::Error { message } => assert!(
+                message.contains("unknown check") && message.contains("mystery"),
+                "got: {message}"
+            ),
+            other => panic!("expected Error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_video_doctor_ffmpeg_default_runs() {
+        let tool = VideoDoctor;
+        let ctx = ToolContext::new();
+        let out = tool.run(&ctx, serde_json::json!({})).await;
+        assert!(matches!(out, ToolOutcome::Success { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_video_doctor_project_returns_report() {
+        let tmp = tempfile::tempdir().unwrap();
+        let tool = VideoDoctor;
+        let ctx = ToolContext::new();
+        let out = tool
+            .run(
+                &ctx,
+                serde_json::json!({"check": "project", "project": tmp.path()}),
+            )
+            .await;
+        assert!(matches!(out, ToolOutcome::Success { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_video_risk_kinds_returns_report() {
+        let tool = VideoRisk;
+        let ctx = ToolContext::new();
+        let out = tool
+            .run(
+                &ctx,
+                serde_json::json!({"kinds": ["text", "image", "text"], "duration_s": 15.0}),
+            )
+            .await;
+        match out {
+            ToolOutcome::Success { content } => assert!(
+                !content.is_empty()
+                    && (content.contains("average") || content.contains("verdict")),
+                "got: {content}"
+            ),
+            other => panic!("expected Success, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_video_risk_no_input_errors() {
+        let tool = VideoRisk;
+        let ctx = ToolContext::new();
+        let out = tool.run(&ctx, serde_json::json!({})).await;
+        match out {
+            ToolOutcome::Error { message } => assert!(
+                message.contains("project") || message.contains("kinds"),
+                "got: {message}"
+            ),
+            other => panic!("expected Error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_video_risk_missing_composition_errors() {
+        let tool = VideoRisk;
+        let ctx = ToolContext::new();
+        let out = tool
+            .run(
+                &ctx,
+                serde_json::json!({"project": "/nonexistent/kirkforge-risk-test"}),
+            )
+            .await;
+        match out {
+            ToolOutcome::Error { message } => assert!(
+                message.contains("composition.json"),
+                "got: {message}"
+            ),
+            other => panic!("expected Error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_video_decision_log_missing_file_errors() {
+        let tool = VideoDecisionLog;
+        let ctx = ToolContext::new();
+        let out = tool
+            .run(
+                &ctx,
+                serde_json::json!({"project": "/nonexistent/kirkforge-decision-test"}),
+            )
+            .await;
+        match out {
+            ToolOutcome::Error { message } => assert!(
+                message.contains("not found"),
+                "got: {message}"
+            ),
+            other => panic!("expected Error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_video_decision_log_empty_returns_marker() {
+        let tmp = tempfile::tempdir().unwrap();
+        let arts = tmp.path().join("artifacts");
+        std::fs::create_dir_all(&arts).unwrap();
+        std::fs::write(arts.join("decision_log.jsonl"), "").unwrap();
+        let tool = VideoDecisionLog;
+        let ctx = ToolContext::new();
+        let out = tool
+            .run(&ctx, serde_json::json!({"project": tmp.path()}))
+            .await;
+        match out {
+            ToolOutcome::Success { content } => assert!(
+                content.contains("no matching entries"),
+                "got: {content}"
+            ),
+            other => panic!("expected Success, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_video_decision_log_returns_matching_entries() {
+        let tmp = tempfile::tempdir().unwrap();
+        let arts = tmp.path().join("artifacts");
+        std::fs::create_dir_all(&arts).unwrap();
+        let entry = serde_json::json!({
+            "category": "slideshow_risk",
+            "ts": std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+            "message": "test-entry",
+        });
+        std::fs::write(
+            arts.join("decision_log.jsonl"),
+            format!("{}\n", serde_json::to_string(&entry).unwrap()),
+        )
+        .unwrap();
+        let tool = VideoDecisionLog;
+        let ctx = ToolContext::new();
+        let out = tool
+            .run(&ctx, serde_json::json!({"project": tmp.path()}))
+            .await;
+        match out {
+            ToolOutcome::Success { content } => assert!(
+                content.contains("test-entry"),
+                "got: {content}"
+            ),
+            other => panic!("expected Success, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_video_decision_log_filters_by_category() {
+        let tmp = tempfile::tempdir().unwrap();
+        let arts = tmp.path().join("artifacts");
+        std::fs::create_dir_all(&arts).unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let a = serde_json::json!({"category": "alpha", "ts": now, "msg": "a"});
+        let b = serde_json::json!({"category": "beta", "ts": now, "msg": "b"});
+        std::fs::write(
+            arts.join("decision_log.jsonl"),
+            format!(
+                "{}\n{}\n",
+                serde_json::to_string(&a).unwrap(),
+                serde_json::to_string(&b).unwrap()
+            ),
+        )
+        .unwrap();
+        let tool = VideoDecisionLog;
+        let ctx = ToolContext::new();
+        let out = tool
+            .run(
+                &ctx,
+                serde_json::json!({"project": tmp.path(), "category": "alpha"}),
+            )
+            .await;
+        match out {
+            ToolOutcome::Success { content } => {
+                assert!(content.contains("\"alpha\""), "got: {content}");
+                assert!(!content.contains("\"beta\""), "got: {content}");
+            }
+            other => panic!("expected Success, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_video_tools_returns_all_tools() {
+        let tools = video_tools();
+        let names: Vec<&str> = tools.iter().map(|t| t.def().name).collect();
+        assert!(names.contains(&"video_demos"), "{names:?}");
+        assert!(names.contains(&"video_pipeline"), "{names:?}");
+        assert!(names.contains(&"video_render"), "{names:?}");
+        assert!(names.contains(&"video_validate"), "{names:?}");
+        assert!(names.contains(&"video_from_brief"), "{names:?}");
+        assert!(names.contains(&"video_doctor"), "{names:?}");
+        assert!(names.contains(&"video_risk"), "{names:?}");
+        assert!(names.contains(&"video_decision_log"), "{names:?}");
+    }
+
+    #[test]
+    fn test_json_helpers_round_trip() {
+        let args = serde_json::json!({
+            "s": "value",
+            "n": 42u64,
+            "b": true,
+            "f": 3.14_f64,
+            "arr": ["a", "b", "c"],
+        });
+        assert_eq!(json_get_string(&args, "s"), Some("value".to_string()));
+        assert_eq!(json_get_u64(&args, "n"), Some(42));
+        assert!(json_get_bool(&args, "b"));
+        assert!(!json_get_bool(&args, "missing"));
+        assert_eq!(json_get_f64(&args, "f"), Some(3.14));
+        assert_eq!(
+            json_get_string_array(&args, "arr"),
+            vec!["a".to_string(), "b".to_string(), "c".to_string()]
+        );
+        assert!(json_get_string_array(&args, "missing").is_empty());
+    }
+
+    #[test]
+    fn test_resolve_path_expands_tilde_and_relative() {
+        let abs = resolve_path("/tmp/kirkforge-test-abs");
+        assert!(abs.is_absolute(), "got: {abs:?}");
+        let rel = resolve_path("kirkforge-test-relative");
+        assert!(
+            rel.is_absolute(),
+            "relative should be made absolute: {rel:?}"
+        );
+        let home = resolve_path("~/kirkforge-test-tilde");
+        assert!(home.is_absolute(), "tilde should be expanded: {home:?}");
+    }
 }

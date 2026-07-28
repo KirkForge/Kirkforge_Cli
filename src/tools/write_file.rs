@@ -403,4 +403,132 @@ mod tests {
         );
         assert!(!path.exists(), "dry-run must not create the file");
     }
+
+    #[tokio::test]
+    async fn missing_path_arg_is_invalid_args() {
+        let tool = WriteFile::new(None, crate::session::access::PathGuard::default(), false);
+        let out = tool
+            .run(&ToolContext::new(), serde_json::json!({"content": "x"}))
+            .await;
+        match out {
+            ToolOutcome::Failure(ToolError::InvalidArgs { message }) => {
+                assert!(message.contains("Missing 'path'"), "got {message}");
+            }
+            other => panic!("expected InvalidArgs, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn missing_content_arg_is_invalid_args() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("f.txt");
+        std::fs::write(&path, "old").unwrap();
+        let tool = WriteFile::new(None, crate::session::access::PathGuard::default(), false);
+        let out = tool
+            .run(
+                &ToolContext::new(),
+                serde_json::json!({"path": path.to_string_lossy()}),
+            )
+            .await;
+        match out {
+            ToolOutcome::Failure(ToolError::InvalidArgs { message }) => {
+                assert!(message.contains("Missing 'content'"), "got {message}");
+            }
+            other => panic!("expected InvalidArgs, got {other:?}"),
+        }
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "old");
+    }
+
+    #[tokio::test]
+    async fn write_file_creates_parent_directories() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nested/deep/file.txt");
+        let tool = WriteFile::new(None, crate::session::access::PathGuard::default(), false);
+        let out = tool
+            .run(
+                &ToolContext::new(),
+                args(&path.display().to_string(), "body"),
+            )
+            .await;
+        assert!(matches!(out, ToolOutcome::Success { .. }), "got {out:?}");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "body");
+    }
+
+    #[tokio::test]
+    async fn write_file_appends_expanded_note_on_success() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("main.rs");
+        let minified =
+            crate::shared::minify::wrap_minified_envelope("rust", "fn main(){println!(\"hi\");}");
+        let tool = WriteFile::new(None, crate::session::access::PathGuard::default(), true);
+        let out = tool
+            .run(
+                &ToolContext::new(),
+                args(&path.display().to_string(), &minified),
+            )
+            .await;
+        match out {
+            ToolOutcome::Success { content } => {
+                assert!(content.contains("Wrote"), "got: {content}");
+                assert!(content.contains("expanded from minified"), "got: {content}");
+            }
+            other => panic!("expected Success, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn write_file_with_undo_snapshots_pre_write_bytes() {
+        use crate::session::undo::UndoStack;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("undo.txt");
+        std::fs::write(&path, "before").unwrap();
+        let id = format!(
+            "test-write-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let stack =
+            std::sync::Arc::new(std::sync::Mutex::new(UndoStack::for_session(&id).unwrap()));
+        let tool = WriteFile::new(
+            Some(stack.clone()),
+            crate::session::access::PathGuard::default(),
+            false,
+        );
+        let out = tool
+            .run(
+                &ToolContext::new(),
+                args(&path.display().to_string(), "after"),
+            )
+            .await;
+        assert!(matches!(out, ToolOutcome::Success { .. }), "got {out:?}");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "after");
+        let list = stack.lock().unwrap().list();
+        assert_eq!(list.len(), 1, "expected one undo entry");
+        assert_eq!(list[0].path, path);
+        let restored = stack.lock().unwrap().pop().unwrap().unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "before");
+        assert!(restored.prev_existed);
+    }
+
+    #[test]
+    fn snapshot_for_undo_none_returns_ok() {
+        let result = snapshot_for_undo(&None, std::path::Path::new("/tmp/x"), false, &[]);
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn def_has_correct_name_and_required_args() {
+        let tool = WriteFile::new(None, crate::session::access::PathGuard::default(), false);
+        let def = tool.def();
+        assert_eq!(def.name, "write_file");
+        let required = def
+            .parameters
+            .get("required")
+            .and_then(|r| r.as_array())
+            .expect("required array");
+        assert!(required.iter().any(|v| v.as_str() == Some("path")));
+        assert!(required.iter().any(|v| v.as_str() == Some("content")));
+    }
 }

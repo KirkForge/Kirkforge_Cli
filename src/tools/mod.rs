@@ -216,4 +216,123 @@ mod tests {
         let ctx = ToolContext::new();
         assert!(!ctx.token.is_cancelled());
     }
+
+    #[test]
+    fn tool_context_debug_reports_spawner_presence() {
+        let ctx = ToolContext::new();
+        let s = format!("{ctx:?}");
+        assert!(s.contains("dry_run"));
+        assert!(s.contains("task_spawner"));
+        assert!(s.contains("false"), "got: {s}");
+    }
+
+    #[test]
+    fn tool_context_with_dry_run_sets_flag() {
+        let ctx = ToolContext::with_dry_run(true);
+        assert!(ctx.dry_run);
+        assert!(!ctx.token.is_cancelled());
+    }
+
+    #[test]
+    fn all_tools_returns_core_tools_unconditionally() {
+        let tools = all_tools(
+            None,
+            false,
+            crate::session::access::DenyList::default(),
+            crate::session::access::PathGuard::default(),
+            false,
+            false,
+            0,
+            None,
+            None,
+            None,
+            None,
+            None,
+            crate::shared::SandboxConfig::default(),
+        );
+        let names: Vec<String> = tools.iter().map(|t| t.def().name.to_string()).collect();
+        for required in [
+            "read_file",
+            "write_file",
+            "edit_file",
+            "bash",
+            "grep",
+            "glob",
+            "web_fetch",
+            "web_search",
+            "task",
+            "task_output",
+            "todo_write",
+            "todo_read",
+            "workflow_run",
+        ] {
+            assert!(
+                names.iter().any(|n| n == required),
+                "missing {required} in all_tools: {names:?}"
+            );
+        }
+        assert!(
+            !names.iter().any(|n| n == "read_image"),
+            "read_image must be gated by supports_images=false"
+        );
+        assert!(
+            !names.iter().any(|n| n == "lsp_query"),
+            "lsp_query must be gated by lsp_pool=None"
+        );
+    }
+
+    #[test]
+    fn all_tools_includes_read_image_when_supports_images() {
+        let tools = all_tools(
+            None,
+            true,
+            crate::session::access::DenyList::default(),
+            crate::session::access::PathGuard::default(),
+            false,
+            false,
+            0,
+            None,
+            None,
+            None,
+            None,
+            None,
+            crate::shared::SandboxConfig::default(),
+        );
+        let names: Vec<String> = tools.iter().map(|t| t.def().name.to_string()).collect();
+        assert!(
+            names.iter().any(|n| n == "read_image"),
+            "read_image should be present when supports_images=true: {names:?}"
+        );
+    }
+
+    #[test]
+    fn all_tools_includes_lsp_query_when_pool_provided() {
+        let pool = std::sync::Arc::new(kirkforge_lsp::LspPool::new(
+            std::env::current_dir()
+                .unwrap()
+                .to_string_lossy()
+                .to_string(),
+            vec![],
+        ));
+        let tools = all_tools(
+            None,
+            false,
+            crate::session::access::DenyList::default(),
+            crate::session::access::PathGuard::default(),
+            false,
+            false,
+            0,
+            Some(pool),
+            None,
+            None,
+            None,
+            None,
+            crate::shared::SandboxConfig::default(),
+        );
+        let names: Vec<String> = tools.iter().map(|t| t.def().name.to_string()).collect();
+        assert!(
+            names.iter().any(|n| n == "lsp_query"),
+            "lsp_query should be present when pool is Some: {names:?}"
+        );
+    }
 }

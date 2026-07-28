@@ -606,6 +606,169 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn bash_missing_command_arg_is_invalid_args() {
+        let tool = Bash::new(
+            DenyList::default(),
+            PathGuard::default(),
+            false,
+            None,
+            crate::shared::SandboxConfig::default(),
+        );
+        let ctx = crate::tools::ToolContext::new();
+        let outcome = tool.run(&ctx, serde_json::json!({})).await;
+        match outcome {
+            crate::shared::ToolOutcome::Failure(crate::shared::ToolError::InvalidArgs {
+                message,
+            }) => assert!(message.contains("Missing 'command'"), "got {message}"),
+            other => panic!("expected InvalidArgs, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn bash_non_string_command_arg_is_invalid_args() {
+        let tool = Bash::new(
+            DenyList::default(),
+            PathGuard::default(),
+            false,
+            None,
+            crate::shared::SandboxConfig::default(),
+        );
+        let ctx = crate::tools::ToolContext::new();
+        let outcome = tool.run(&ctx, serde_json::json!({"command": 123})).await;
+        assert!(
+            matches!(
+                outcome,
+                crate::shared::ToolOutcome::Failure(crate::shared::ToolError::InvalidArgs { .. })
+            ),
+            "got {outcome:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn bash_timeout_clamped_to_max_value() {
+        let tool = Bash::new(
+            DenyList::default(),
+            PathGuard::default(),
+            false,
+            None,
+            crate::shared::SandboxConfig::default(),
+        );
+        let ctx = crate::tools::ToolContext::with_dry_run(true);
+        let outcome = tool
+            .run(
+                &ctx,
+                serde_json::json!({
+                    "command": "echo hi",
+                    "timeout": u64::MAX,
+                }),
+            )
+            .await;
+        let content = match outcome {
+            crate::shared::ToolOutcome::Success { content } => content,
+            other => panic!("expected dry-run Success, got {other:?}"),
+        };
+        assert!(
+            content.contains(&format!("timeout: {MAX_BASH_TIMEOUT_SECS}s")),
+            "expected timeout clamped to max, got: {content}"
+        );
+    }
+
+    #[tokio::test]
+    async fn bash_dry_run_uses_explicit_workdir() {
+        let tool = Bash::new(
+            DenyList::default(),
+            PathGuard::default(),
+            false,
+            None,
+            crate::shared::SandboxConfig::default(),
+        );
+        let ctx = crate::tools::ToolContext::with_dry_run(true);
+        let tmp = tempfile::tempdir().unwrap();
+        let outcome = tool
+            .run(
+                &ctx,
+                serde_json::json!({
+                    "command": "echo hello",
+                    "workdir": tmp.path().to_string_lossy(),
+                }),
+            )
+            .await;
+        let content = match outcome {
+            crate::shared::ToolOutcome::Success { content } => content,
+            other => panic!("expected dry-run Success, got {other:?}"),
+        };
+        assert!(
+            content.contains(tmp.path().to_string_lossy().as_ref()),
+            "dry-run should include the expanded workdir: {content}"
+        );
+    }
+
+    #[test]
+    fn bash_def_has_correct_name_and_required_command() {
+        let tool = Bash::new(
+            DenyList::default(),
+            PathGuard::default(),
+            false,
+            None,
+            crate::shared::SandboxConfig::default(),
+        );
+        let def = tool.def();
+        assert_eq!(def.name, "bash");
+        let required = def
+            .parameters
+            .get("required")
+            .and_then(|r| r.as_array())
+            .expect("required array");
+        assert!(required.iter().any(|v| v.as_str() == Some("command")));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn bash_nonexistent_command_returns_execution_failure() {
+        let tool = Bash::new(
+            DenyList::default(),
+            PathGuard::default(),
+            false,
+            None,
+            crate::shared::SandboxConfig::default(),
+        );
+        let ctx = crate::tools::ToolContext::new();
+        let outcome = tool
+            .run(
+                &ctx,
+                serde_json::json!({"command": "this_binary_does_not_exist_xyz"}),
+            )
+            .await;
+        match outcome {
+            crate::shared::ToolOutcome::Failure(crate::shared::ToolError::Execution { .. }) => {}
+            other => panic!("expected Execution failure, got {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn bash_failing_command_reports_nonzero_exit_code() {
+        let tool = Bash::new(
+            DenyList::default(),
+            PathGuard::default(),
+            false,
+            None,
+            crate::shared::SandboxConfig::default(),
+        );
+        let ctx = crate::tools::ToolContext::new();
+        let outcome = tool
+            .run(&ctx, serde_json::json!({"command": "exit 7"}))
+            .await;
+        match outcome {
+            crate::shared::ToolOutcome::Failure(crate::shared::ToolError::Execution {
+                exit_code,
+                ..
+            }) => assert_eq!(exit_code, Some(7), "got {exit_code:?}"),
+            other => panic!("expected Execution failure, got {other:?}"),
+        }
+    }
+
     /// When `harden` is true and the child exceeds `cpu_limit_secs`, the
     /// kernel sends SIGXCPU and the bash tool surfaces a non-zero exit.
     ///
@@ -640,10 +803,6 @@ mod tests {
             sandbox,
         );
         let ctx = crate::tools::ToolContext::new();
-        // An infinite loop that burns CPU. `:` is a no-op; the tight
-        // `while :; do :; done` loop pegs one core. The child never
-        // exits on its own — the rlimit is the only thing that stops
-        // it.
         let args = serde_json::json!({
             "command": "while :; do :; done",
             "timeout": 30,
@@ -653,27 +812,16 @@ mod tests {
         let outcome = tool.run(&ctx, args).await;
         let elapsed = start.elapsed();
 
-        // The rlimit should have fired well before the 30-second tool
-        // timeout. If elapsed >= 30s, the rlimit was ignored and the
-        // test is meaningless.
         assert!(
             elapsed < std::time::Duration::from_secs(25),
             "child ran for {elapsed:?} — rlimit did not fire (expected SIGXCPU within ~2s)"
         );
 
-        // The outcome must be a failure: the child was signal-killed
-        // before it could complete. The exit code is -1 (signal-killed
-        // processes have no exit code; `unwrap_or(-1)` is the bash
-        // tool's convention). A successful outcome here would mean
-        // the rlimit never fired.
         match outcome {
             crate::shared::ToolOutcome::Failure(crate::shared::ToolError::Execution {
                 exit_code,
                 ..
             }) => {
-                // Signal-killed processes report `None` from
-                // `ExitStatus::code()`, which the bash tool maps to
-                // -1 via `unwrap_or(-1)`.
                 assert!(
                     exit_code.is_none() || exit_code == Some(-1),
                     "expected signal-killed (None or -1), got {exit_code:?}"

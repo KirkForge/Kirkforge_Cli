@@ -552,4 +552,236 @@ mod tests {
         };
         assert!(req.model.is_none());
     }
+
+    #[tokio::test]
+    async fn task_empty_prompt_is_invalid_args() {
+        let tool = Task::new();
+        let spawner: Arc<dyn TaskSpawner> = Arc::new(MockSpawner {
+            result: Ok("ok".to_string()),
+        });
+        let ctx = ToolContext::with_spawner(spawner);
+        let outcome = tool.run(&ctx, serde_json::json!({"prompt": "   "})).await;
+        assert!(
+            matches!(outcome, ToolOutcome::Failure(ToolError::InvalidArgs { .. })),
+            "got {outcome:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn task_missing_prompt_is_invalid_args() {
+        let tool = Task::new();
+        let spawner: Arc<dyn TaskSpawner> = Arc::new(MockSpawner {
+            result: Ok("ok".to_string()),
+        });
+        let ctx = ToolContext::with_spawner(spawner);
+        let outcome = tool.run(&ctx, serde_json::json!({})).await;
+        assert!(
+            matches!(outcome, ToolOutcome::Failure(ToolError::InvalidArgs { .. })),
+            "got {outcome:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn task_spawner_error_is_surfaced_as_error_outcome() {
+        let tool = Task::new();
+        let spawner: Arc<dyn TaskSpawner> = Arc::new(MockSpawner {
+            result: Err("boom".to_string()),
+        });
+        let ctx = ToolContext::with_spawner(spawner);
+        let outcome = tool
+            .run(&ctx, serde_json::json!({"prompt": "do thing"}))
+            .await;
+        match outcome {
+            ToolOutcome::Error { message } => assert_eq!(message, "boom"),
+            other => panic!("expected Error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn task_output_missing_id_is_invalid_args() {
+        let manager = Arc::new(Mutex::new(TaskManager::new()));
+        let tool = TaskOutput::new(manager);
+        let outcome = tool.run(&ToolContext::new(), serde_json::json!({})).await;
+        assert!(
+            matches!(outcome, ToolOutcome::Failure(ToolError::InvalidArgs { .. })),
+            "got {outcome:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn task_output_unknown_id_is_invalid_args() {
+        let manager = Arc::new(Mutex::new(TaskManager::new()));
+        let tool = TaskOutput::new(manager);
+        let outcome = tool
+            .run(&ToolContext::new(), serde_json::json!({"id": "nope"}))
+            .await;
+        match outcome {
+            ToolOutcome::Failure(ToolError::InvalidArgs { message }) => {
+                assert!(message.contains("Unknown task id"), "got {message}");
+            }
+            other => panic!("expected InvalidArgs, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn task_output_pending_task_reports_still_running() {
+        let manager = Arc::new(Mutex::new(TaskManager::new()));
+        let id = {
+            let mut mgr = manager.lock().unwrap();
+            mgr.insert(TaskHandle {
+                result: None,
+                error: None,
+            })
+        };
+        let tool = TaskOutput::new(manager);
+        let outcome = tool
+            .run(&ToolContext::new(), serde_json::json!({"id": id}))
+            .await;
+        match outcome {
+            ToolOutcome::Success { content } => {
+                assert!(content.contains("still running"), "got: {content}");
+            }
+            other => panic!("expected Success, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn task_output_failed_task_returns_error_outcome() {
+        let manager = Arc::new(Mutex::new(TaskManager::new()));
+        let id = {
+            let mut mgr = manager.lock().unwrap();
+            mgr.insert(TaskHandle {
+                result: None,
+                error: Some("task blew up".to_string()),
+            })
+        };
+        let tool = TaskOutput::new(manager);
+        let outcome = tool
+            .run(&ToolContext::new(), serde_json::json!({"id": id}))
+            .await;
+        match outcome {
+            ToolOutcome::Error { message } => assert_eq!(message, "task blew up"),
+            other => panic!("expected Error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn task_manager_default_is_new() {
+        let mut mgr = TaskManager::default();
+        let id = mgr.insert(TaskHandle {
+            result: Some("x".to_string()),
+            error: None,
+        });
+        assert!(id.starts_with("task-"));
+    }
+
+    #[test]
+    fn task_default_is_new() {
+        let tool = Task::default();
+        assert_eq!(tool.def().name, "task");
+    }
+
+    #[test]
+    fn task_request_debug_includes_fields() {
+        let req = TaskRequest {
+            prompt: "p".into(),
+            persona: "coder".into(),
+            model: Some("m".into()),
+        };
+        let s = format!("{req:?}");
+        assert!(s.contains("coder") && s.contains("p") && s.contains("m"));
+    }
+
+    #[tokio::test]
+    async fn task_background_with_prompt_starts_async_task() {
+        use std::sync::Mutex as StdMutex;
+        struct CountingSpawner {
+            calls: Arc<StdMutex<usize>>,
+        }
+        #[async_trait::async_trait]
+        impl TaskSpawner for CountingSpawner {
+            async fn run_task(&self, _r: TaskRequest) -> Result<String, String> {
+                *self.calls.lock().unwrap() += 1;
+                Ok("done".to_string())
+            }
+        }
+        let calls = Arc::new(StdMutex::new(0usize));
+        let spawner: Arc<dyn TaskSpawner> = Arc::new(CountingSpawner {
+            calls: calls.clone(),
+        });
+        let tool = Task::new();
+        let ctx = ToolContext::with_spawner(spawner);
+        let outcome = tool
+            .run(
+                &ctx,
+                serde_json::json!({"prompt": "do thing", "background": true}),
+            )
+            .await;
+        let content = match outcome {
+            ToolOutcome::Success { content } => content,
+            other => panic!("expected Success, got {other:?}"),
+        };
+        assert!(
+            content.contains("Started background task"),
+            "got: {content}"
+        );
+        for _ in 0..50 {
+            if *calls.lock().unwrap() > 0 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert!(*calls.lock().unwrap() >= 1, "spawner was not invoked");
+    }
+
+    #[tokio::test]
+    async fn task_persona_defaults_to_coder() {
+        let tool = Task::new();
+        let spawner: Arc<dyn TaskSpawner> = Arc::new(MockSpawner {
+            result: Ok("ok".to_string()),
+        });
+        let ctx = ToolContext::with_spawner(spawner);
+        let outcome = tool
+            .run(
+                &ctx,
+                serde_json::json!({"prompt": "do thing", "persona": "PLAN"}),
+            )
+            .await;
+        assert!(
+            matches!(outcome, ToolOutcome::Success { .. }),
+            "persona should be lowercased and accepted, got {outcome:?}"
+        );
+    }
+
+    #[test]
+    fn task_output_def_has_correct_name_and_required_id() {
+        let manager = Arc::new(Mutex::new(TaskManager::new()));
+        let tool = TaskOutput::new(manager);
+        let def = tool.def();
+        assert_eq!(def.name, "task_output");
+        let required = def
+            .parameters
+            .get("required")
+            .and_then(|r| r.as_array())
+            .expect("required array");
+        assert!(required.iter().any(|v| v.as_str() == Some("id")));
+    }
+
+    #[test]
+    fn build_task_prompt_for_coder_persona_mentions_implementation() {
+        let p = build_task_prompt("coder", "do X");
+        assert!(p.contains("implementation") && p.contains("do X"));
+    }
+
+    #[test]
+    fn build_task_prompt_for_explore_persona_mentions_research() {
+        let p = build_task_prompt("explore", "explore Y");
+        assert!(p.contains("research") && p.contains("explore Y"));
+    }
+
+    #[test]
+    fn build_task_prompt_for_plan_persona_mentions_architect() {
+        let p = build_task_prompt("plan", "plan Z");
+        assert!(p.contains("architect") && p.contains("Plan Complete"));
+    }
 }

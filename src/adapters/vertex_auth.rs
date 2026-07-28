@@ -71,4 +71,63 @@ mod tests {
         tmp.write_all(b"not json").unwrap();
         assert!(!key_file_looks_valid(tmp.path()));
     }
+
+    #[test]
+    fn key_file_looks_valid_rejects_missing_file() {
+        let path = std::path::PathBuf::from("/tmp/definitely-does-not-exist-key.json");
+        assert!(!key_file_looks_valid(&path));
+    }
+
+    #[test]
+    fn key_file_looks_valid_accepts_array_json() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        tmp.write_all(b"[1, 2, 3]").unwrap();
+        assert!(key_file_looks_valid(tmp.path()));
+    }
+
+    #[test]
+    fn key_file_looks_valid_accepts_empty_object() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        tmp.write_all(b"{}").unwrap();
+        assert!(key_file_looks_valid(tmp.path()));
+    }
+
+    #[test]
+    fn key_file_looks_valid_rejects_empty_file() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        tmp.write_all(b"").unwrap();
+        assert!(!key_file_looks_valid(tmp.path()));
+    }
+
+    #[tokio::test]
+    async fn service_account_token_fails_without_path_or_env() {
+        let env_key = "GOOGLE_APPLICATION_CREDENTIALS";
+        let prev = std::env::var(env_key).ok();
+        std::env::remove_var(env_key);
+        let result =
+            service_account_token(None, &["https://www.googleapis.com/auth/cloud-platform"]).await;
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("no GCP service account configured"));
+        if let Some(v) = prev {
+            std::env::set_var(env_key, v)
+        }
+    }
+
+    #[tokio::test]
+    async fn service_account_token_fails_with_nonexistent_explicit_path() {
+        let path = std::path::PathBuf::from("/tmp/definitely-no-such-key-file.json");
+        let result = service_account_token(
+            Some(&path),
+            &["https://www.googleapis.com/auth/cloud-platform"],
+        )
+        .await;
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("failed to read GCP service-account key"));
+    }
 }

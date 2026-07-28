@@ -618,14 +618,8 @@ mod tests {
     fn contains_secret_pattern_matches_known_prefixes() {
         let text = "token=ghp_abc123";
         assert!(contains_secret_pattern(&text.to_lowercase(), "ghp_"));
-        assert!(contains_secret_pattern(
-            &"key=sk-xyz".to_lowercase(),
-            "sk-"
-        ));
-        assert!(contains_secret_pattern(
-            &"AKIA1234".to_lowercase(),
-            "akia"
-        ));
+        assert!(contains_secret_pattern(&"key=sk-xyz".to_lowercase(), "sk-"));
+        assert!(contains_secret_pattern(&"AKIA1234".to_lowercase(), "akia"));
     }
 
     #[test]
@@ -686,9 +680,12 @@ mod tests {
     #[test]
     fn check_worktree_unreadable_file_warns_about_size() {
         let tmp = tempfile::tempdir().unwrap();
-        let status = format!("?? /nonexistent/kirkforge-test-missing-file");
+        let status = "?? /nonexistent/kirkforge-test-missing-file".to_string();
         let report = check_worktree(tmp.path(), &status, None).unwrap();
-        assert!(report.warnings.iter().any(|w| w.contains("Could not check size")));
+        assert!(report
+            .warnings
+            .iter()
+            .any(|w| w.contains("Could not check size")));
     }
 
     #[test]

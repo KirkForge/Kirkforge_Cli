@@ -832,4 +832,617 @@ mod tests {
             .cloned();
         assert_eq!(effective, Some("qwen2.5:0.5b".to_string()));
     }
+
+    #[test]
+    fn should_retry_status_599_boundary() {
+        assert!(should_retry_status(599));
+        assert!(!should_retry_status(600));
+    }
+
+    #[test]
+    fn should_retry_status_429_only_rate_limit() {
+        assert!(should_retry_status(429));
+        assert!(!should_retry_status(428));
+        assert!(!should_retry_status(430));
+    }
+
+    #[test]
+    fn adapter_kind_for_claude_underscore_prefix() {
+        assert_eq!(
+            adapter_kind_for("claude_sonnet", None, "anthropic"),
+            AdapterKind::Anthropic
+        );
+    }
+
+    #[test]
+    fn adapter_kind_for_claude_no_dash_prefix() {
+        assert_eq!(
+            adapter_kind_for("claude", None, "anthropic"),
+            AdapterKind::Anthropic
+        );
+    }
+
+    #[test]
+    fn adapter_kind_for_anthropic_dot_claude_prefix() {
+        assert_eq!(
+            adapter_kind_for("anthropic.claude-3-sonnet", None, "anthropic"),
+            AdapterKind::Anthropic
+        );
+    }
+
+    #[test]
+    fn adapter_kind_for_anthropic_dot_claude_bedrock() {
+        assert_eq!(
+            adapter_kind_for("anthropic.claude-3-sonnet", None, "bedrock"),
+            AdapterKind::AnthropicBedrock
+        );
+    }
+
+    #[test]
+    fn adapter_kind_for_anthropic_dot_claude_vertex() {
+        assert_eq!(
+            adapter_kind_for("anthropic.claude-3-sonnet", None, "vertex"),
+            AdapterKind::AnthropicVertex
+        );
+    }
+
+    #[test]
+    fn adapter_kind_for_opencode_prefix() {
+        assert_eq!(
+            adapter_kind_for("opencode/zen-model", None, "anthropic"),
+            AdapterKind::OpenCodeZen
+        );
+    }
+
+    #[test]
+    fn adapter_kind_for_unknown_override_defaults_to_openai_compat() {
+        assert_eq!(
+            adapter_kind_for("my-model", Some("unknown-type"), "anthropic"),
+            AdapterKind::OpenAiCompat
+        );
+    }
+
+    #[test]
+    fn adapter_kind_for_override_anthropic_selects_anthropic() {
+        assert_eq!(
+            adapter_kind_for("my-model", Some("anthropic"), "bedrock"),
+            AdapterKind::Anthropic
+        );
+    }
+
+    #[test]
+    fn adapter_for_selects_anthropic_for_claude() {
+        let adapter = adapter_for("claude-3-opus", "http://host", None, 30);
+        let info = adapter.model_info();
+        assert_eq!(info.name, "claude-3-opus");
+        assert_eq!(
+            info.tool_call_format,
+            crate::shared::ToolCallStyle::Anthropic
+        );
+    }
+
+    #[test]
+    fn adapter_for_selects_anthropic_for_claude_underscore() {
+        let adapter = adapter_for("claude_sonnet", "http://host", None, 30);
+        assert_eq!(adapter.model_info().name, "claude_sonnet");
+    }
+
+    #[test]
+    fn adapter_for_with_provider_selects_vertex() {
+        let adapter = adapter_for_with_provider(
+            "claude-3-opus",
+            "",
+            None,
+            "vertex",
+            30,
+            "https://opencode.ai/zen/v1/chat/completions",
+            None,
+        );
+        assert_eq!(adapter.model_info().name, "claude-3-opus");
+        assert_eq!(
+            adapter.model_info().tool_call_format,
+            crate::shared::ToolCallStyle::Anthropic
+        );
+    }
+
+    #[test]
+    fn adapter_for_with_provider_selects_anthropic_default() {
+        let adapter = adapter_for_with_provider(
+            "claude-3-opus",
+            "",
+            None,
+            "anthropic",
+            30,
+            "https://opencode.ai/zen/v1/chat/completions",
+            None,
+        );
+        assert_eq!(adapter.model_info().name, "claude-3-opus");
+    }
+
+    #[test]
+    fn adapter_for_with_provider_opencode_zen_strips_prefix() {
+        let adapter = adapter_for_with_provider(
+            "opencode/big-pickle",
+            "",
+            None,
+            "anthropic",
+            30,
+            "https://opencode.ai/zen/v1/chat/completions",
+            Some("test-key"),
+        );
+        assert_eq!(adapter.model_info().name, "big-pickle");
+    }
+
+    #[test]
+    fn adapter_for_with_provider_opencode_zen_no_key() {
+        let adapter = adapter_for_with_provider(
+            "opencode/big-pickle",
+            "",
+            None,
+            "anthropic",
+            30,
+            "https://opencode.ai/zen/v1/chat/completions",
+            None,
+        );
+        assert_eq!(adapter.model_info().name, "big-pickle");
+    }
+
+    #[test]
+    fn adapter_for_with_provider_moonshot_override() {
+        let adapter = adapter_for_with_provider(
+            "my-model",
+            "http://host",
+            Some("moonshot"),
+            "anthropic",
+            30,
+            "https://opencode.ai/zen/v1/chat/completions",
+            None,
+        );
+        assert!(adapter.model_info().supports_thinking);
+    }
+
+    #[test]
+    fn adapter_for_with_provider_deepseek_override() {
+        let adapter = adapter_for_with_provider(
+            "my-model",
+            "http://host",
+            Some("deepseek"),
+            "anthropic",
+            30,
+            "https://opencode.ai/zen/v1/chat/completions",
+            None,
+        );
+        assert!(adapter.model_info().supports_thinking);
+    }
+
+    #[test]
+    fn adapter_for_with_provider_gemini_override() {
+        let adapter = adapter_for_with_provider(
+            "my-model",
+            "http://host",
+            Some("gemini"),
+            "anthropic",
+            30,
+            "https://opencode.ai/zen/v1/chat/completions",
+            None,
+        );
+        assert!(adapter.model_info().supports_images);
+    }
+
+    #[test]
+    fn adapter_for_with_provider_unknown_override_falls_to_openai_compat() {
+        let adapter = adapter_for_with_provider(
+            "my-model",
+            "http://host",
+            Some("unknown-type"),
+            "anthropic",
+            30,
+            "https://opencode.ai/zen/v1/chat/completions",
+            None,
+        );
+        assert_eq!(adapter.model_info().name, "my-model");
+    }
+
+    #[test]
+    fn build_content_object_string_content() {
+        let v = build_content_object(&Role::User, "hello", None);
+        assert_eq!(v["role"], "user");
+        assert_eq!(v["content"], "hello");
+    }
+
+    #[test]
+    fn build_content_object_empty_parts_uses_string() {
+        let v = build_content_object(&Role::User, "hello", Some(&[]));
+        assert_eq!(v["content"], "hello");
+    }
+
+    #[test]
+    fn build_content_object_text_part_emits_text() {
+        let parts = vec![ContentPart::Text { text: "hi".into() }];
+        let v = build_content_object(&Role::User, "", Some(&parts));
+        let arr = v["content"].as_array().unwrap();
+        assert_eq!(arr[0]["type"], "text");
+        assert_eq!(arr[0]["text"], "hi");
+    }
+
+    #[test]
+    fn build_content_object_image_part_emits_image_url() {
+        let parts = vec![ContentPart::Image {
+            data_base64: "BASE64".into(),
+            mime: "image/png".into(),
+        }];
+        let v = build_content_object(&Role::User, "", Some(&parts));
+        let arr = v["content"].as_array().unwrap();
+        assert_eq!(arr[0]["type"], "image_url");
+        assert_eq!(arr[0]["image_url"]["url"], "data:image/png;base64,BASE64");
+    }
+
+    #[test]
+    fn build_content_object_mixed_parts() {
+        let parts = vec![
+            ContentPart::Text {
+                text: "what?".into(),
+            },
+            ContentPart::Image {
+                data_base64: "B".into(),
+                mime: "image/png".into(),
+            },
+        ];
+        let v = build_content_object(&Role::User, "", Some(&parts));
+        let arr = v["content"].as_array().unwrap();
+        assert_eq!(arr.len(), 2);
+    }
+
+    #[test]
+    fn build_ollama_chat_body_basic_shape() {
+        let mi = crate::shared::ModelInfo {
+            name: "m".into(),
+            supports_thinking: false,
+            tool_call_format: crate::shared::ToolCallStyle::Native,
+            max_context_tokens: 4096,
+            recommended_temperature: 0.7,
+            supports_images: false,
+            supports_cache: false,
+        };
+        let msgs = vec![crate::shared::Message {
+            role: Role::User,
+            content: "hi".into(),
+            ..Default::default()
+        }];
+        let body = build_ollama_chat_body("m", &mi, &msgs, &[], true, false, None);
+        assert_eq!(body["model"], "m");
+        assert_eq!(body["stream"], true);
+        assert_eq!(body["messages"][0]["role"], "user");
+        assert_eq!(body["messages"][0]["content"], "hi");
+    }
+
+    #[test]
+    fn build_ollama_chat_body_includes_tools() {
+        let mi = crate::shared::ModelInfo {
+            name: "m".into(),
+            supports_thinking: false,
+            tool_call_format: crate::shared::ToolCallStyle::Native,
+            max_context_tokens: 4096,
+            recommended_temperature: 0.7,
+            supports_images: false,
+            supports_cache: false,
+        };
+        let tools = vec![crate::shared::ToolDef {
+            name: "bash",
+            description: "run a command",
+            parameters: serde_json::json!({"type": "object"}),
+        }];
+        let body = build_ollama_chat_body("m", &mi, &[], &tools, true, false, None);
+        let tools_arr = body["tools"].as_array().unwrap();
+        assert_eq!(tools_arr[0]["type"], "function");
+        assert_eq!(tools_arr[0]["function"]["name"], "bash");
+    }
+
+    #[test]
+    fn build_ollama_chat_body_json_mode_adds_format() {
+        let mi = crate::shared::ModelInfo {
+            name: "m".into(),
+            supports_thinking: false,
+            tool_call_format: crate::shared::ToolCallStyle::Native,
+            max_context_tokens: 4096,
+            recommended_temperature: 0.7,
+            supports_images: false,
+            supports_cache: false,
+        };
+        let body = build_ollama_chat_body("m", &mi, &[], &[], true, true, None);
+        assert_eq!(body["format"], "json");
+    }
+
+    #[test]
+    fn build_ollama_chat_body_seed_sets_options() {
+        let mi = crate::shared::ModelInfo {
+            name: "m".into(),
+            supports_thinking: false,
+            tool_call_format: crate::shared::ToolCallStyle::Native,
+            max_context_tokens: 4096,
+            recommended_temperature: 0.7,
+            supports_images: false,
+            supports_cache: false,
+        };
+        let body = build_ollama_chat_body("m", &mi, &[], &[], true, false, Some(42));
+        assert_eq!(body["options"]["temperature"], 0);
+        assert_eq!(body["options"]["seed"], 42);
+    }
+
+    #[test]
+    fn build_ollama_chat_body_thinking_field_included() {
+        let mi = crate::shared::ModelInfo {
+            name: "m".into(),
+            supports_thinking: false,
+            tool_call_format: crate::shared::ToolCallStyle::Native,
+            max_context_tokens: 4096,
+            recommended_temperature: 0.7,
+            supports_images: false,
+            supports_cache: false,
+        };
+        let msgs = vec![crate::shared::Message {
+            role: Role::Assistant,
+            content: "answer".into(),
+            thinking: Some("reasoning".into()),
+            ..Default::default()
+        }];
+        let body = build_ollama_chat_body("m", &mi, &msgs, &[], true, false, None);
+        assert_eq!(body["messages"][0]["thinking"], "reasoning");
+    }
+
+    #[test]
+    fn build_ollama_chat_body_tool_call_id_included() {
+        let mi = crate::shared::ModelInfo {
+            name: "m".into(),
+            supports_thinking: false,
+            tool_call_format: crate::shared::ToolCallStyle::Native,
+            max_context_tokens: 4096,
+            recommended_temperature: 0.7,
+            supports_images: false,
+            supports_cache: false,
+        };
+        let msgs = vec![crate::shared::Message {
+            role: Role::Tool,
+            content: "result".into(),
+            tool_call_id: Some("call_1".into()),
+            ..Default::default()
+        }];
+        let body = build_ollama_chat_body("m", &mi, &msgs, &[], true, false, None);
+        assert_eq!(body["messages"][0]["tool_call_id"], "call_1");
+    }
+
+    #[test]
+    fn build_ollama_chat_body_multimodal_emits_images() {
+        let mi = crate::shared::ModelInfo {
+            name: "m".into(),
+            supports_thinking: false,
+            tool_call_format: crate::shared::ToolCallStyle::Native,
+            max_context_tokens: 4096,
+            recommended_temperature: 0.7,
+            supports_images: true,
+            supports_cache: false,
+        };
+        let msgs = vec![crate::shared::Message {
+            role: Role::User,
+            content: String::new(),
+            content_parts: Some(vec![
+                ContentPart::Text {
+                    text: "what?".into(),
+                },
+                ContentPart::Image {
+                    data_base64: "BASE64".into(),
+                    mime: "image/png".into(),
+                },
+            ]),
+            ..Default::default()
+        }];
+        let body = build_ollama_chat_body("m", &mi, &msgs, &[], true, false, None);
+        assert_eq!(body["messages"][0]["images"][0], "BASE64");
+        assert!(body["messages"][0]["content"]
+            .as_str()
+            .unwrap()
+            .contains("[image]"));
+    }
+
+    #[test]
+    fn build_openai_compat_body_tool_role_emits_tool_call_id() {
+        let mi = crate::shared::ModelInfo {
+            name: "m".into(),
+            supports_thinking: false,
+            tool_call_format: crate::shared::ToolCallStyle::OpenAiCompat,
+            max_context_tokens: 4096,
+            recommended_temperature: 0.7,
+            supports_images: false,
+            supports_cache: false,
+        };
+        let msgs = vec![crate::shared::Message {
+            role: Role::Tool,
+            content: "result".into(),
+            tool_call_id: Some("call_1".into()),
+            ..Default::default()
+        }];
+        let body = build_openai_compat_body("m", &mi, &msgs, &[], false, None);
+        assert_eq!(body["messages"][0]["role"], "tool");
+        assert_eq!(body["messages"][0]["tool_call_id"], "call_1");
+        assert_eq!(body["messages"][0]["content"], "result");
+    }
+
+    #[test]
+    fn build_openai_compat_body_assistant_with_tool_calls() {
+        let mi = crate::shared::ModelInfo {
+            name: "m".into(),
+            supports_thinking: false,
+            tool_call_format: crate::shared::ToolCallStyle::OpenAiCompat,
+            max_context_tokens: 4096,
+            recommended_temperature: 0.7,
+            supports_images: false,
+            supports_cache: false,
+        };
+        let msgs = vec![crate::shared::Message {
+            role: Role::Assistant,
+            content: "thinking".into(),
+            tool_calls: Some(vec![crate::shared::ToolInvocation {
+                id: "call_1".into(),
+                name: "bash".into(),
+                arguments: serde_json::json!({"cmd": "ls"}),
+            }]),
+            ..Default::default()
+        }];
+        let body = build_openai_compat_body("m", &mi, &msgs, &[], false, None);
+        assert_eq!(body["messages"][0]["role"], "assistant");
+        let tcs = body["messages"][0]["tool_calls"].as_array().unwrap();
+        assert_eq!(tcs[0]["id"], "call_1");
+        assert_eq!(tcs[0]["function"]["name"], "bash");
+    }
+
+    #[test]
+    fn build_openai_compat_body_seed_sets_temperature_and_seed() {
+        let mi = crate::shared::ModelInfo {
+            name: "m".into(),
+            supports_thinking: false,
+            tool_call_format: crate::shared::ToolCallStyle::OpenAiCompat,
+            max_context_tokens: 4096,
+            recommended_temperature: 0.7,
+            supports_images: false,
+            supports_cache: false,
+        };
+        let body = build_openai_compat_body(
+            "m",
+            &mi,
+            &[crate::shared::Message {
+                role: Role::User,
+                content: "hi".into(),
+                ..Default::default()
+            }],
+            &[],
+            false,
+            Some(7),
+        );
+        assert_eq!(body["temperature"], 0.0);
+        assert_eq!(body["seed"], 7);
+    }
+
+    #[test]
+    fn build_openai_compat_body_json_mode_with_tools_sets_tool_choice() {
+        let mi = crate::shared::ModelInfo {
+            name: "m".into(),
+            supports_thinking: false,
+            tool_call_format: crate::shared::ToolCallStyle::OpenAiCompat,
+            max_context_tokens: 4096,
+            recommended_temperature: 0.7,
+            supports_images: false,
+            supports_cache: false,
+        };
+        let tools = vec![crate::shared::ToolDef {
+            name: "bash",
+            description: "x",
+            parameters: serde_json::json!({"type": "object"}),
+        }];
+        let body = build_openai_compat_body(
+            "m",
+            &mi,
+            &[crate::shared::Message {
+                role: Role::User,
+                content: "hi".into(),
+                ..Default::default()
+            }],
+            &tools,
+            true,
+            None,
+        );
+        assert_eq!(
+            body["response_format"],
+            serde_json::json!({"type": "json_object"})
+        );
+        assert_eq!(body["tool_choice"], "auto");
+    }
+
+    #[test]
+    fn build_openai_compat_body_json_mode_without_tools_omits_tool_choice() {
+        let mi = crate::shared::ModelInfo {
+            name: "m".into(),
+            supports_thinking: false,
+            tool_call_format: crate::shared::ToolCallStyle::OpenAiCompat,
+            max_context_tokens: 4096,
+            recommended_temperature: 0.7,
+            supports_images: false,
+            supports_cache: false,
+        };
+        let body = build_openai_compat_body(
+            "m",
+            &mi,
+            &[crate::shared::Message {
+                role: Role::User,
+                content: "hi".into(),
+                ..Default::default()
+            }],
+            &[],
+            true,
+            None,
+        );
+        assert!(body.get("tool_choice").is_none());
+    }
+
+    #[test]
+    fn build_openai_compat_body_single_message_no_cache_markers() {
+        let mi = crate::shared::ModelInfo {
+            name: "m".into(),
+            supports_thinking: false,
+            tool_call_format: crate::shared::ToolCallStyle::OpenAiCompat,
+            max_context_tokens: 4096,
+            recommended_temperature: 0.7,
+            supports_images: false,
+            supports_cache: true,
+        };
+        let body = build_openai_compat_body(
+            "m",
+            &mi,
+            &[crate::shared::Message {
+                role: Role::User,
+                content: "hi".into(),
+                ..Default::default()
+            }],
+            &[],
+            false,
+            None,
+        );
+        assert!(body["messages"][0].get("cache_control").is_none());
+    }
+
+    #[test]
+    fn build_reqwest_client_returns_a_client() {
+        let _client = build_reqwest_client();
+    }
+
+    #[test]
+    fn adapter_kind_for_chatglm_selects_ollama() {
+        assert_eq!(
+            adapter_kind_for("chatglm3-something", None, "anthropic"),
+            AdapterKind::Ollama
+        );
+    }
+
+    #[test]
+    fn adapter_kind_for_claude_3_prefix_anthropic_provider() {
+        assert_eq!(
+            adapter_kind_for("claude-3-opus", None, "anthropic"),
+            AdapterKind::Anthropic
+        );
+    }
+
+    #[test]
+    fn adapter_kind_for_claude_3_prefix_bedrock_provider() {
+        assert_eq!(
+            adapter_kind_for("claude-3-opus", None, "bedrock"),
+            AdapterKind::AnthropicBedrock
+        );
+    }
+
+    #[test]
+    fn adapter_kind_for_claude_3_prefix_vertex_provider() {
+        assert_eq!(
+            adapter_kind_for("claude-3-opus", None, "vertex"),
+            AdapterKind::AnthropicVertex
+        );
+    }
 }

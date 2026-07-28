@@ -154,4 +154,95 @@ mod tests {
         let a = AnthropicVertexAdapter::new("claude-3-opus", "p", "us-central1", None, 30);
         assert!(a.model_info().supports_images);
     }
+
+    #[test]
+    fn endpoint_includes_stream_raw_predict_suffix() {
+        let a = AnthropicVertexAdapter::new("claude-3-5-sonnet", "p", "us-central1", None, 30);
+        assert!(a.endpoint().ends_with(":streamRawPredict"));
+    }
+
+    #[test]
+    fn endpoint_includes_publishers_anthropic() {
+        let a = AnthropicVertexAdapter::new("claude-3-5-sonnet", "p", "us-central1", None, 30);
+        assert!(a.endpoint().contains("publishers/anthropic"));
+    }
+
+    #[test]
+    fn endpoint_for_europe_west_region() {
+        let a = AnthropicVertexAdapter::new("claude-3-opus", "p", "europe-west4", None, 30);
+        assert!(a
+            .endpoint()
+            .contains("europe-west4-aiplatform.googleapis.com"));
+    }
+
+    #[test]
+    fn model_info_reasoning_for_claude_3_7() {
+        let a = AnthropicVertexAdapter::new("claude-3-7-sonnet", "p", "us-central1", None, 30);
+        assert!(a.model_info().supports_thinking);
+    }
+
+    #[test]
+    fn model_info_reasoning_for_claude_4() {
+        let a = AnthropicVertexAdapter::new("claude-4-opus", "p", "us-central1", None, 30);
+        assert!(a.model_info().supports_thinking);
+    }
+
+    #[test]
+    fn model_info_no_thinking_for_claude_3_5() {
+        let a = AnthropicVertexAdapter::new("claude-3-5-sonnet", "p", "us-central1", None, 30);
+        assert!(!a.model_info().supports_thinking);
+    }
+
+    #[test]
+    fn model_info_no_images_for_claude_4() {
+        let a = AnthropicVertexAdapter::new("claude-4-opus", "p", "us-central1", None, 30);
+        assert!(!a.model_info().supports_images);
+    }
+
+    #[test]
+    fn model_info_anthropic_tool_call_format() {
+        let a = AnthropicVertexAdapter::new("claude-3-opus", "p", "us-central1", None, 30);
+        assert_eq!(a.model_info().tool_call_format, ToolCallStyle::Anthropic);
+    }
+
+    #[test]
+    fn model_info_supports_cache() {
+        let a = AnthropicVertexAdapter::new("claude-3-opus", "p", "us-central1", None, 30);
+        assert!(a.model_info().supports_cache);
+    }
+
+    #[test]
+    fn model_info_max_context_tokens() {
+        let a = AnthropicVertexAdapter::new("claude-3-opus", "p", "us-central1", None, 30);
+        assert_eq!(a.model_info().max_context_tokens, 200_000);
+    }
+
+    #[test]
+    fn set_json_mode_toggles_flag() {
+        let mut a = AnthropicVertexAdapter::new("claude-3-opus", "p", "us-central1", None, 30);
+        assert!(!a.json_mode);
+        a.set_json_mode(true);
+        assert!(a.json_mode);
+    }
+
+    #[test]
+    fn set_seed_sets_value() {
+        let mut a = AnthropicVertexAdapter::new("claude-3-opus", "p", "us-central1", None, 30);
+        assert!(a.seed.is_none());
+        a.set_seed(Some(55));
+        assert_eq!(a.seed, Some(55));
+    }
+
+    #[test]
+    fn new_stores_service_account_path() {
+        let path = std::path::PathBuf::from("/tmp/key.json");
+        let a = AnthropicVertexAdapter::new(
+            "claude-3-opus",
+            "p",
+            "us-central1",
+            Some(path.clone()),
+            30,
+        );
+        assert_eq!(a.service_account_path, Some(path));
+    }
 }

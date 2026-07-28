@@ -223,4 +223,101 @@ mod tests {
             json!({"type":"message_start","message":{}})
         );
     }
+
+    #[test]
+    fn endpoint_includes_invoke_with_response_stream_path() {
+        let a = AnthropicBedrockAdapter::new("anthropic.claude-3-opus", "eu-west-1", "", 30);
+        assert!(a.endpoint().ends_with("/invoke-with-response-stream"));
+    }
+
+    #[test]
+    fn endpoint_for_us_east_1_region() {
+        let a = AnthropicBedrockAdapter::new("anthropic.claude-3-5-sonnet", "us-east-1", "", 30);
+        assert!(a
+            .endpoint()
+            .contains("bedrock-runtime.us-east-1.amazonaws.com"));
+    }
+
+    #[test]
+    fn model_info_reasoning_for_claude_3_7() {
+        let a = AnthropicBedrockAdapter::new("anthropic.claude-3-7-sonnet", "us-east-1", "", 30);
+        assert!(a.model_info().supports_thinking);
+    }
+
+    #[test]
+    fn model_info_reasoning_for_claude_4() {
+        let a = AnthropicBedrockAdapter::new("anthropic.claude-4-opus", "us-east-1", "", 30);
+        assert!(a.model_info().supports_thinking);
+    }
+
+    #[test]
+    fn model_info_no_thinking_for_claude_3_5() {
+        let a = AnthropicBedrockAdapter::new("anthropic.claude-3-5-sonnet", "us-east-1", "", 30);
+        assert!(!a.model_info().supports_thinking);
+    }
+
+    #[test]
+    fn model_info_anthropic_tool_call_format() {
+        let a = AnthropicBedrockAdapter::new("anthropic.claude-3-opus", "us-east-1", "", 30);
+        assert_eq!(a.model_info().tool_call_format, ToolCallStyle::Anthropic);
+    }
+
+    #[test]
+    fn model_info_supports_cache() {
+        let a = AnthropicBedrockAdapter::new("anthropic.claude-3-opus", "us-east-1", "", 30);
+        assert!(a.model_info().supports_cache);
+    }
+
+    #[test]
+    fn model_info_max_context_tokens() {
+        let a = AnthropicBedrockAdapter::new("anthropic.claude-3-opus", "us-east-1", "", 30);
+        assert_eq!(a.model_info().max_context_tokens, 200_000);
+    }
+
+    #[test]
+    fn set_json_mode_toggles_flag() {
+        let mut a = AnthropicBedrockAdapter::new("anthropic.claude-3-opus", "us-east-1", "", 30);
+        assert!(!a.json_mode);
+        a.set_json_mode(true);
+        assert!(a.json_mode);
+    }
+
+    #[test]
+    fn set_seed_sets_value() {
+        let mut a = AnthropicBedrockAdapter::new("anthropic.claude-3-opus", "us-east-1", "", 30);
+        assert!(a.seed.is_none());
+        a.set_seed(Some(99));
+        assert_eq!(a.seed, Some(99));
+    }
+
+    #[test]
+    fn extract_payload_returns_none_for_no_type_key() {
+        let env = b"prelude{\"foo\":\"bar\"}crc";
+        assert!(extract_payload(env).is_none());
+    }
+
+    #[test]
+    fn extract_payload_returns_none_for_unclosed_object() {
+        let env = b"prelude{\"type\":\"message_start\",\"message\":";
+        assert!(extract_payload(env).is_none());
+    }
+
+    #[test]
+    fn extract_payload_handles_nested_objects() {
+        let env = b"x{\"type\":\"content_block_start\",\"content_block\":{\"type\":\"tool_use\",\"id\":\"tu_1\"}}y";
+        let out = extract_payload(env).expect("payload present");
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["type"], "content_block_start");
+        assert_eq!(v["content_block"]["type"], "tool_use");
+    }
+
+    #[test]
+    fn extract_payload_returns_none_for_empty_input() {
+        assert!(extract_payload(b"").is_none());
+    }
+
+    #[test]
+    fn extract_payload_returns_none_for_plain_text() {
+        assert!(extract_payload(b"just some text").is_none());
+    }
 }

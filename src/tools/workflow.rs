@@ -540,9 +540,7 @@ mod tests {
     async fn empty_template_arg_is_failure() {
         let t = WorkflowTool::new();
         let ctx = ToolContext::new();
-        let out = t
-            .run(&ctx, serde_json::json!({"template": "  "}))
-            .await;
+        let out = t.run(&ctx, serde_json::json!({"template": "  "})).await;
         assert!(
             matches!(out, ToolOutcome::Failure(ToolError::InvalidArgs { .. })),
             "got {out:?}"
@@ -573,15 +571,12 @@ mod tests {
                 }),
             )
             .await;
-        assert!(
-            matches!(out, ToolOutcome::Error { .. }),
-            "got {out:?}"
-        );
+        assert!(matches!(out, ToolOutcome::Error { .. }), "got {out:?}");
     }
 
     #[tokio::test]
     async fn default_impl_produces_workflow_tool() {
-        let tool = WorkflowTool::default();
+        let tool = WorkflowTool;
         assert_eq!(tool.def().name, "workflow_run");
     }
 }

@@ -949,8 +949,24 @@ mod tests {
             name: "foo".into(),
             kind: 12,
             range: kirkforge_lsp::Range {
-                start: kirkforge_lsp::Position { line: 0, character: 0 },
-                end: kirkforge_lsp::Position { line: 1, character: 0 },
+                start: kirkforge_lsp::Position {
+                    line: 0,
+                    character: 0,
+                },
+                end: kirkforge_lsp::Position {
+                    line: 1,
+                    character: 0,
+                },
+            },
+            selection_range: kirkforge_lsp::Range {
+                start: kirkforge_lsp::Position {
+                    line: 0,
+                    character: 0,
+                },
+                end: kirkforge_lsp::Position {
+                    line: 0,
+                    character: 3,
+                },
             },
             children: vec![],
         }];
@@ -968,15 +984,47 @@ mod tests {
             name: "outer".into(),
             kind: 2,
             range: kirkforge_lsp::Range {
-                start: kirkforge_lsp::Position { line: 0, character: 0 },
-                end: kirkforge_lsp::Position { line: 10, character: 0 },
+                start: kirkforge_lsp::Position {
+                    line: 0,
+                    character: 0,
+                },
+                end: kirkforge_lsp::Position {
+                    line: 10,
+                    character: 0,
+                },
+            },
+            selection_range: kirkforge_lsp::Range {
+                start: kirkforge_lsp::Position {
+                    line: 0,
+                    character: 0,
+                },
+                end: kirkforge_lsp::Position {
+                    line: 0,
+                    character: 5,
+                },
             },
             children: vec![kirkforge_lsp::DocumentSymbol {
                 name: "inner".into(),
                 kind: 13,
                 range: kirkforge_lsp::Range {
-                    start: kirkforge_lsp::Position { line: 1, character: 0 },
-                    end: kirkforge_lsp::Position { line: 2, character: 0 },
+                    start: kirkforge_lsp::Position {
+                        line: 1,
+                        character: 0,
+                    },
+                    end: kirkforge_lsp::Position {
+                        line: 2,
+                        character: 0,
+                    },
+                },
+                selection_range: kirkforge_lsp::Range {
+                    start: kirkforge_lsp::Position {
+                        line: 1,
+                        character: 0,
+                    },
+                    end: kirkforge_lsp::Position {
+                        line: 1,
+                        character: 5,
+                    },
                 },
                 children: vec![],
             }],
@@ -985,7 +1033,10 @@ mod tests {
         render_document_symbols(&syms, 0, &mut out);
         assert_eq!(out.len(), 2);
         assert!(out[0].starts_with("outer"), "got: {out:?}");
-        assert!(out[1].starts_with("  inner"), "expected indent for nested, got: {out:?}");
+        assert!(
+            out[1].starts_with("  inner"),
+            "expected indent for nested, got: {out:?}"
+        );
     }
 
     #[tokio::test]
@@ -1172,7 +1223,10 @@ mod tests {
             )
             .await;
         assert!(
-            matches!(outcome, ToolOutcome::Failure(ToolError::AccessDenied { .. })),
+            matches!(
+                outcome,
+                ToolOutcome::Failure(ToolError::AccessDenied { .. })
+            ),
             "got {outcome:?}"
         );
     }

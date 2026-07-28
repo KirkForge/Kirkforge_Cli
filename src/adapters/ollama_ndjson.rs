@@ -943,4 +943,310 @@ mod tests {
             .collect();
         assert_eq!(texts, vec!["a", "b"]);
     }
+
+    #[tokio::test]
+    async fn tool_call_includes_id_field_when_present() {
+        let events = run(&[r#"{"message":{"content":"","tool_calls":[{"id":"call_42","function":{"name":"bash","arguments":{"command":"ls"}}}]},"done":true,"done_reason":"tool_calls"}"#]).await;
+        let tool = events
+            .iter()
+            .find_map(|e| match e {
+                StreamEvent::ToolCall(tc) => Some(tc),
+                _ => None,
+            })
+            .expect("tool call");
+        assert_eq!(tool.id, "call_42");
+        assert_eq!(tool.name, "bash");
+    }
+
+    #[tokio::test]
+    async fn tool_call_without_id_uses_empty_string() {
+        let events = run(&[r#"{"message":{"content":"","tool_calls":[{"function":{"name":"bash","arguments":{}}}]},"done":true,"done_reason":"tool_calls"}"#]).await;
+        let tool = events
+            .iter()
+            .find_map(|e| match e {
+                StreamEvent::ToolCall(tc) => Some(tc),
+                _ => None,
+            })
+            .expect("tool call");
+        assert_eq!(tool.id, "");
+    }
+
+    #[tokio::test]
+    async fn multiple_tool_calls_in_one_line_all_buffered() {
+        let events = run(&[r#"{"message":{"content":"","tool_calls":[{"function":{"name":"read_file","arguments":{"path":"a"}}},{"function":{"name":"read_file","arguments":{"path":"b"}}}]},"done":true,"done_reason":"tool_calls"}"#]).await;
+        let tools: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                StreamEvent::ToolCall(tc) => Some(tc.name.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(tools, vec!["read_file", "read_file"]);
+    }
+
+    #[tokio::test]
+    async fn done_with_ollama_native_usage_fields() {
+        let events = run(&[r#"{"message":{"content":"hi"},"done":true,"done_reason":"stop","usage":{"prompt_eval_count":3,"eval_count":5}}"#]).await;
+        match events.last() {
+            Some(StreamEvent::Done { usage, .. }) => {
+                let u = usage.as_ref().unwrap();
+                assert_eq!(u.prompt_tokens, Some(3));
+                assert_eq!(u.completion_tokens, Some(5));
+            }
+            other => panic!("expected Done, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn done_with_cached_count_in_usage() {
+        let events = run(&[r#"{"message":{"content":"hi"},"done":true,"done_reason":"stop","usage":{"prompt_tokens":10,"completion_tokens":20,"cached_count":8}}"#]).await;
+        match events.last() {
+            Some(StreamEvent::Done { usage, .. }) => {
+                let u = usage.as_ref().unwrap();
+                assert_eq!(u.cached_tokens, Some(8));
+            }
+            other => panic!("expected Done, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn content_as_non_string_is_skipped() {
+        let events = run(&[r#"{"message":{"content":42},"done":true,"done_reason":"stop"}"#]).await;
+        assert!(!events.iter().any(|e| matches!(e, StreamEvent::Text(_))));
+        assert!(matches!(events.last(), Some(StreamEvent::Done { .. })));
+    }
+
+    #[tokio::test]
+    async fn thinking_as_non_string_is_skipped() {
+        let events = run(&[
+            r#"{"message":{"thinking":42,"content":"hi"},"done":true,"done_reason":"stop"}"#,
+        ])
+        .await;
+        assert!(!events.iter().any(|e| matches!(e, StreamEvent::Thinking(_))));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, StreamEvent::Text(s) if s == "hi")));
+    }
+
+    #[tokio::test]
+    async fn tool_calls_as_non_array_is_skipped() {
+        let events = run(&[r#"{"message":{"content":"hi","tool_calls":"not an array"},"done":true,"done_reason":"stop"}"#]).await;
+        assert!(!events.iter().any(|e| matches!(e, StreamEvent::ToolCall(_))));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, StreamEvent::Text(s) if s == "hi")));
+    }
+
+    #[tokio::test]
+    async fn done_false_does_not_emit_done_event() {
+        let events = run(&[
+            r#"{"message":{"content":"a"},"done":false}"#,
+            r#"{"message":{"content":"b"},"done":false}"#,
+        ])
+        .await;
+        assert!(!events.iter().any(|e| matches!(e, StreamEvent::Done { .. })));
+    }
+
+    #[tokio::test]
+    async fn done_reason_tool_calls_maps_correctly() {
+        let events =
+            run(&[r#"{"message":{"content":"x"},"done":true,"done_reason":"tool_calls"}"#]).await;
+        assert!(matches!(
+            events.last(),
+            Some(StreamEvent::Done {
+                finish_reason: FinishReason::ToolCalls,
+                ..
+            })
+        ));
+    }
+
+    #[tokio::test]
+    async fn done_reason_unknown_defaults_to_stop() {
+        let events =
+            run(&[r#"{"message":{"content":"x"},"done":true,"done_reason":"some_unknown"}"#]).await;
+        assert!(matches!(
+            events.last(),
+            Some(StreamEvent::Done {
+                finish_reason: FinishReason::Stop,
+                ..
+            })
+        ));
+    }
+
+    #[tokio::test]
+    async fn done_without_done_reason_defaults_to_stop() {
+        let events = run(&[r#"{"message":{"content":"x"},"done":true}"#]).await;
+        assert!(matches!(
+            events.last(),
+            Some(StreamEvent::Done {
+                finish_reason: FinishReason::Stop,
+                ..
+            })
+        ));
+    }
+
+    #[tokio::test]
+    async fn error_field_as_string_surfaces_directly() {
+        let events = run(&[r#"{"error":"oops"}"#]).await;
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, StreamEvent::Error(s) if s == "oops")));
+    }
+
+    #[tokio::test]
+    async fn error_field_as_object_without_message_falls_back_to_string() {
+        let events = run(&[r#"{"error":{"code":500}}"#]).await;
+        assert!(events.iter().any(|e| matches!(e, StreamEvent::Error(_))));
+    }
+
+    #[tokio::test]
+    async fn tool_calls_partial_entry_with_only_name_still_buffered() {
+        let events = run(&[r#"{"message":{"content":"","tool_calls":[{"function":{"name":"bash","arguments":{}}},{"function":{"name":"ls"}}]},"done":true,"done_reason":"tool_calls"}"#]).await;
+        let tools: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                StreamEvent::ToolCall(tc) => Some(tc.name.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(tools, vec!["bash"]);
+    }
+
+    #[tokio::test]
+    async fn tool_calls_entry_missing_function_skipped() {
+        let events = run(&[r#"{"message":{"content":"","tool_calls":[{"id":"x"}]},"done":true,"done_reason":"tool_calls"}"#]).await;
+        assert!(events.iter().any(|e| matches!(e, StreamEvent::Error(s) if s == "Model emitted tool_calls with no parseable entries")));
+    }
+
+    #[tokio::test]
+    async fn gemini_config_emits_text_without_thinking() {
+        let events = run_config(&[r#"{"message":{"thinking":"should be ignored","content":"hi"},"done":true,"done_reason":"stop"}"#], OllamaNdjsonConfig::GEMINI).await;
+        assert!(!events.iter().any(|e| matches!(e, StreamEvent::Thinking(_))));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, StreamEvent::Text(s) if s == "hi")));
+    }
+
+    #[tokio::test]
+    async fn deepseek_config_emits_reasoning_content() {
+        let events = run_config(&[r#"{"message":{"reasoning_content":"step 1","content":""},"done":false}"#, r#"{"message":{"reasoning_content":"","content":"answer"},"done":true,"done_reason":"stop"}"#], OllamaNdjsonConfig::DEEPSEEK).await;
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, StreamEvent::Thinking(s) if s == "step 1")));
+    }
+
+    #[tokio::test]
+    async fn kimi_config_emits_reasoning_content() {
+        let events = run_config(&[r#"{"message":{"reasoning_content":"reasoning","content":""},"done":false}"#, r#"{"message":{"reasoning_content":"","content":"final"},"done":true,"done_reason":"stop"}"#], OllamaNdjsonConfig::KIMI).await;
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, StreamEvent::Thinking(s) if s == "reasoning")));
+    }
+
+    #[tokio::test]
+    async fn multiple_lines_split_across_chunks() {
+        let body1 = line(r#"{"message":{"content":"a"},"done":false}"#);
+        let body2 = line(r#"{"message":{"content":"b"},"done":true,"done_reason":"stop"}"#);
+        let events = run_with_chunks(vec![body1, body2]).await;
+        let texts: Vec<&str> = events
+            .iter()
+            .filter_map(|e| match e {
+                StreamEvent::Text(s) => Some(s.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(texts, vec!["a", "b"]);
+    }
+
+    #[tokio::test]
+    async fn line_with_only_whitespace_skipped() {
+        let body: Vec<u8> = [
+            b"   \n".to_vec(),
+            line(r#"{"message":{"content":"x"},"done":true,"done_reason":"stop"}"#),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        let events = run_with_chunks(vec![body]).await;
+        let texts: Vec<&str> = events
+            .iter()
+            .filter_map(|e| match e {
+                StreamEvent::Text(s) => Some(s.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(texts, vec!["x"]);
+    }
+
+    #[tokio::test]
+    async fn tool_calls_flushed_at_eof_when_no_done_marker() {
+        let events = run(&[r#"{"message":{"content":"","tool_calls":[{"function":{"name":"bash","arguments":{"cmd":"ls"}}}]},"done":false}"#]).await;
+        let tool = events
+            .iter()
+            .find_map(|e| match e {
+                StreamEvent::ToolCall(tc) => Some(tc),
+                _ => None,
+            })
+            .expect("tool call flushed at EOF");
+        assert_eq!(tool.name, "bash");
+        assert_eq!(tool.arguments, json!({"cmd": "ls"}));
+    }
+
+    #[tokio::test]
+    async fn empty_content_string_skipped() {
+        let events = run(&[
+            r#"{"message":{"content":""},"done":false}"#,
+            r#"{"message":{"content":"real"},"done":true,"done_reason":"stop"}"#,
+        ])
+        .await;
+        let texts: Vec<&str> = events
+            .iter()
+            .filter_map(|e| match e {
+                StreamEvent::Text(s) => Some(s.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(texts, vec!["real"]);
+    }
+
+    #[tokio::test]
+    async fn mixed_text_and_thinking_in_order() {
+        let events = run(&[
+            r#"{"message":{"thinking":"t1","content":"c1"},"done":false}"#,
+            r#"{"message":{"thinking":"t2","content":"c2"},"done":true,"done_reason":"stop"}"#,
+        ])
+        .await;
+        let kinds: Vec<&str> = events
+            .iter()
+            .filter_map(|e| match e {
+                StreamEvent::Thinking(_) => Some("T"),
+                StreamEvent::Text(_) => Some("X"),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(kinds, vec!["T", "X", "T", "X"]);
+    }
+
+    #[test]
+    fn parse_token_usage_cached_count_alias_priority() {
+        let u = json!({"cached_count": 5, "cached_tokens": 6});
+        let t = parse_token_usage(&u);
+        assert_eq!(t.cached_tokens, Some(5));
+    }
+
+    #[test]
+    fn parse_token_usage_all_none_for_empty_object() {
+        let u = json!({});
+        let t = parse_token_usage(&u);
+        assert_eq!(t.prompt_tokens, None);
+        assert_eq!(t.completion_tokens, None);
+        assert_eq!(t.cached_tokens, None);
+    }
+
+    #[test]
+    fn ollama_ndjson_config_clone_preserves_thinking_field() {
+        let config = OllamaNdjsonConfig::GLM;
+        let cloned = config.clone();
+        assert_eq!(config.thinking_field, cloned.thinking_field);
+    }
 }

@@ -953,4 +953,361 @@ mod tests {
             .collect();
         assert_eq!(args, vec![json!({"command": "ls"})]);
     }
+
+    #[tokio::test]
+    async fn sse_error_field_surfaces_as_error_event() {
+        let events = run_sse(vec![sse_data(
+            json!({"error": {"message": "rate limited", "type": "rate_limit"}}),
+        )])
+        .await;
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, StreamEvent::Error(s) if s == "rate limited")));
+    }
+
+    #[tokio::test]
+    async fn sse_error_field_without_message_uses_default() {
+        let events = run_sse(vec![sse_data(json!({"error": {"type": "unknown"}}))]).await;
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, StreamEvent::Error(s) if s == "API error")));
+    }
+
+    #[tokio::test]
+    async fn sse_finish_reason_length_maps_to_length() {
+        let events = run_sse(vec![sse_data(
+            json!({"choices": [{"delta": {"content": "x"}, "finish_reason": "length"}]}),
+        )])
+        .await;
+        assert!(matches!(
+            events.last(),
+            Some(StreamEvent::Done {
+                finish_reason: FinishReason::Length,
+                ..
+            })
+        ));
+    }
+
+    #[tokio::test]
+    async fn sse_finish_reason_error_maps_to_error() {
+        let events = run_sse(vec![sse_data(
+            json!({"choices": [{"delta": {"content": "x"}, "finish_reason": "error"}]}),
+        )])
+        .await;
+        assert!(matches!(
+            events.last(),
+            Some(StreamEvent::Done {
+                finish_reason: FinishReason::Error,
+                ..
+            })
+        ));
+    }
+
+    #[tokio::test]
+    async fn sse_finish_reason_unknown_maps_to_stop() {
+        let events = run_sse(vec![sse_data(
+            json!({"choices": [{"delta": {"content": "x"}, "finish_reason": "weird"}]}),
+        )])
+        .await;
+        assert!(matches!(
+            events.last(),
+            Some(StreamEvent::Done {
+                finish_reason: FinishReason::Stop,
+                ..
+            })
+        ));
+    }
+
+    #[tokio::test]
+    async fn sse_finish_reason_tool_calls_with_no_calls_emits_error() {
+        let events = run_sse(vec![sse_data(
+            json!({"choices": [{"delta": {}, "finish_reason": "tool_calls"}]}),
+        )])
+        .await;
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, StreamEvent::Error(s) if s.contains("no parseable tool calls"))));
+    }
+
+    #[tokio::test]
+    async fn sse_usage_with_prompt_tokens_details_cached() {
+        let events = run_sse(vec![sse_data(json!({"choices": [{"delta": {"content": "x"}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 100, "completion_tokens": 50, "prompt_tokens_details": {"cached_tokens": 30}}}))]).await;
+        match events.last() {
+            Some(StreamEvent::Done { usage, .. }) => {
+                let u = usage.as_ref().unwrap();
+                assert_eq!(u.prompt_tokens, Some(100));
+                assert_eq!(u.completion_tokens, Some(50));
+                assert_eq!(u.cached_tokens, Some(30));
+            }
+            other => panic!("expected Done with usage, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn sse_usage_with_cache_read_input_tokens() {
+        let events = run_sse(vec![sse_data(json!({"choices": [{"delta": {"content": "x"}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 100, "completion_tokens": 50, "cache_read_input_tokens": 25}}))]).await;
+        match events.last() {
+            Some(StreamEvent::Done { usage, .. }) => {
+                let u = usage.as_ref().unwrap();
+                assert_eq!(u.cached_tokens, Some(25));
+            }
+            other => panic!("expected Done with usage, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn sse_usage_with_ollama_native_field_names() {
+        let events = run_sse(vec![sse_data(json!({"choices": [{"delta": {"content": "x"}, "finish_reason": "stop"}], "usage": {"prompt_eval_count": 8, "eval_count": 12}}))]).await;
+        match events.last() {
+            Some(StreamEvent::Done { usage, .. }) => {
+                let u = usage.as_ref().unwrap();
+                assert_eq!(u.prompt_tokens, Some(8));
+                assert_eq!(u.completion_tokens, Some(12));
+            }
+            other => panic!("expected Done with usage, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn sse_content_as_non_string_is_skipped() {
+        let events = run_sse(vec![sse_data(
+            json!({"choices": [{"delta": {"content": 42}, "finish_reason": "stop"}]}),
+        )])
+        .await;
+        assert!(!events.iter().any(|e| matches!(e, StreamEvent::Text(_))));
+        assert!(matches!(events.last(), Some(StreamEvent::Done { .. })));
+    }
+
+    #[tokio::test]
+    async fn sse_empty_content_string_skipped() {
+        let events = run_sse(vec![sse_data(
+            json!({"choices": [{"delta": {"content": ""}, "finish_reason": "stop"}]}),
+        )])
+        .await;
+        assert!(!events.iter().any(|e| matches!(e, StreamEvent::Text(_))));
+    }
+
+    #[tokio::test]
+    async fn sse_tool_calls_with_missing_index_defaults_to_zero() {
+        let events = run_sse(vec![
+            sse_data(json!({"choices": [{"delta": {"tool_calls": [{"id": "call_x", "function": {"name": "bash", "arguments": "{\"cmd\":\"ls\"}"}}]}}]})),
+            sse_data(json!({"choices": [{"delta": {}, "finish_reason": "tool_calls"}]})),
+        ]).await;
+        let tool = events
+            .iter()
+            .find_map(|e| match e {
+                StreamEvent::ToolCall(tc) => Some(tc),
+                _ => None,
+            })
+            .expect("tool call");
+        assert_eq!(tool.name, "bash");
+        assert_eq!(tool.arguments, json!({"cmd": "ls"}));
+    }
+
+    #[tokio::test]
+    async fn sse_multiple_tool_calls_in_parallel() {
+        let events = run_sse(vec![
+            sse_data(json!({"choices": [{"delta": {"tool_calls": [{"index": 0, "id": "a", "function": {"name": "read_file", "arguments": "{\"path\":\"x\"}"}}, {"index": 1, "id": "b", "function": {"name": "bash", "arguments": "{\"cmd\":\"ls\"}"}}]}}]})),
+            sse_data(json!({"choices": [{"delta": {}, "finish_reason": "tool_calls"}]})),
+        ]).await;
+        let tools: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                StreamEvent::ToolCall(tc) => Some(tc.name.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(tools, vec!["read_file", "bash"]);
+    }
+
+    #[tokio::test]
+    async fn sse_empty_data_frame_skipped() {
+        let events = run_sse(vec![
+            b"data: \n\n".to_vec(),
+            sse_data(json!({"choices": [{"delta": {"content": "hi"}, "finish_reason": "stop"}]})),
+        ])
+        .await;
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, StreamEvent::Text(s) if s == "hi")));
+    }
+
+    #[tokio::test]
+    async fn sse_transport_error_emits_error_event() {
+        let items = vec![Err::<Vec<u8>, std::io::Error>(std::io::Error::other(
+            "network down",
+        ))];
+        let stream = tokio_stream::iter(items);
+        let (tx, rx) = tokio::sync::mpsc::channel(64);
+        parse_openai_compat_stream(tx, stream).await;
+        let events = drain(rx, 64).await;
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, StreamEvent::Error(s) if s == "network down")));
+    }
+
+    #[tokio::test]
+    async fn sse_empty_choices_array_skipped() {
+        let events = run_sse(vec![
+            sse_data(json!({"choices": []})),
+            sse_data(json!({"choices": [{"delta": {"content": "ok"}, "finish_reason": "stop"}]})),
+        ])
+        .await;
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, StreamEvent::Text(s) if s == "ok")));
+    }
+
+    #[tokio::test]
+    async fn sse_cr_only_line_endings_accepted() {
+        let payload = serde_json::to_string(
+            &json!({"choices": [{"delta": {"content": "hi"}, "finish_reason": "stop"}]}),
+        )
+        .unwrap();
+        let frame = format!("data: {payload}\r\r");
+        let events = run_sse(vec![frame.into_bytes()]).await;
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, StreamEvent::Text(s) if s == "hi")));
+    }
+
+    #[test]
+    fn openai_compat_model_info_default_temperature() {
+        let a = OpenAiCompatAdapter::new("http://host", "some-model", 30);
+        assert_eq!(a.model_info().recommended_temperature, 0.7);
+    }
+
+    #[test]
+    fn openai_compat_model_info_default_max_context() {
+        let a = OpenAiCompatAdapter::new("http://host", "some-model", 30);
+        assert_eq!(a.model_info().max_context_tokens, 32_768);
+    }
+
+    #[test]
+    fn openai_compat_model_info_no_thinking() {
+        let a = OpenAiCompatAdapter::new("http://host", "gpt-4o", 30);
+        assert!(!a.model_info().supports_thinking);
+    }
+
+    #[test]
+    fn openai_compat_model_info_openai_tool_format() {
+        let a = OpenAiCompatAdapter::new("http://host", "gpt-4o", 30);
+        assert_eq!(a.model_info().tool_call_format, ToolCallStyle::OpenAiCompat);
+    }
+
+    #[test]
+    fn openai_compat_model_info_gpt4o_supports_images_and_cache() {
+        let a = OpenAiCompatAdapter::new("http://host", "gpt-4o", 30);
+        assert!(a.model_info().supports_images);
+        assert!(a.model_info().supports_cache);
+    }
+
+    #[test]
+    fn openai_compat_model_info_gpt5_supports_images_and_cache() {
+        let a = OpenAiCompatAdapter::new("http://host", "gpt-5", 30);
+        assert!(a.model_info().supports_images);
+        assert!(a.model_info().supports_cache);
+    }
+
+    #[test]
+    fn openai_compat_model_info_claude_3_5_supports_images_and_cache() {
+        let a = OpenAiCompatAdapter::new("http://host", "claude-3-5-sonnet", 30);
+        assert!(a.model_info().supports_images);
+        assert!(a.model_info().supports_cache);
+    }
+
+    #[test]
+    fn openai_compat_model_info_gemini_supports_images_not_cache() {
+        let a = OpenAiCompatAdapter::new("http://host", "gemini-3", 30);
+        assert!(a.model_info().supports_images);
+        assert!(!a.model_info().supports_cache);
+    }
+
+    #[test]
+    fn openai_compat_model_info_llava_supports_images_not_cache() {
+        let a = OpenAiCompatAdapter::new("http://host", "llava-7b", 30);
+        assert!(a.model_info().supports_images);
+        assert!(!a.model_info().supports_cache);
+    }
+
+    #[test]
+    fn openai_compat_model_info_unknown_model_no_images_no_cache() {
+        let a = OpenAiCompatAdapter::new("http://host", "qwen2.5", 30);
+        assert!(!a.model_info().supports_images);
+        assert!(!a.model_info().supports_cache);
+    }
+
+    #[test]
+    fn openai_compat_new_strips_trailing_slash() {
+        let a = OpenAiCompatAdapter::new("http://host/", "model", 30);
+        assert_eq!(a.api_base, "http://host");
+    }
+
+    #[test]
+    fn openai_compat_with_base_url_and_key_strips_slash() {
+        let a = OpenAiCompatAdapter::with_base_url_and_key(
+            "https://api.example.com/",
+            "model",
+            "key",
+            30,
+        );
+        assert_eq!(a.api_base, "https://api.example.com");
+        assert_eq!(a.api_key, "key");
+    }
+
+    #[test]
+    fn openai_compat_set_json_mode_toggles() {
+        let mut a = OpenAiCompatAdapter::new("http://host", "model", 30);
+        assert!(!a.json_mode);
+        a.set_json_mode(true);
+        assert!(a.json_mode);
+    }
+
+    #[test]
+    fn openai_compat_set_seed_sets_value() {
+        let mut a = OpenAiCompatAdapter::new("http://host", "model", 30);
+        assert!(a.seed.is_none());
+        a.set_seed(Some(42));
+        assert_eq!(a.seed, Some(42));
+    }
+
+    #[test]
+    fn openai_compat_with_base_url_and_key_empty_key() {
+        let a =
+            OpenAiCompatAdapter::with_base_url_and_key("https://api.example.com", "model", "", 30);
+        assert_eq!(a.api_key, "");
+    }
+
+    #[test]
+    fn find_subseq_locates_needle() {
+        assert_eq!(find_subseq(b"hello world", b"world"), Some(6));
+        assert_eq!(find_subseq(b"hello", b"xyz"), None);
+        assert_eq!(find_subseq(b"", b"x"), None);
+    }
+
+    #[test]
+    fn trim_ascii_whitespace_strips_both_ends() {
+        assert_eq!(trim_ascii_whitespace(b"  hi  "), b"hi");
+        assert_eq!(trim_ascii_whitespace(b"\n\tdata\r\n"), b"data");
+        assert_eq!(trim_ascii_whitespace(b"   "), b"");
+    }
+
+    #[tokio::test]
+    async fn send_done_once_returns_true_when_already_emitted() {
+        let (tx, _rx) = tokio::sync::mpsc::channel(4);
+        let mut emitted = true;
+        assert!(
+            send_done_once(
+                &tx,
+                &mut emitted,
+                StreamEvent::Done {
+                    finish_reason: FinishReason::Stop,
+                    usage: None
+                },
+                "test"
+            )
+            .await
+        );
+        assert!(emitted);
+    }
 }

@@ -871,4 +871,758 @@ mod tests {
             .iter()
             .any(|e| matches!(e, StreamEvent::Error(s) if s.contains("bad model"))));
     }
+
+    #[test]
+    fn model_info_reasoning_for_claude_3_7() {
+        let a = AnthropicAdapter::new("https://api.anthropic.com", "claude-3-7-sonnet", 30);
+        let info = a.model_info();
+        assert!(info.supports_thinking);
+        assert_eq!(info.tool_call_format, ToolCallStyle::Anthropic);
+        assert_eq!(info.max_context_tokens, 200_000);
+        assert!(info.supports_cache);
+    }
+
+    #[test]
+    fn model_info_reasoning_for_claude_4() {
+        let a = AnthropicAdapter::new("https://api.anthropic.com", "claude-4-opus", 30);
+        assert!(a.model_info().supports_thinking);
+    }
+
+    #[test]
+    fn model_info_no_thinking_for_claude_3_5() {
+        let a = AnthropicAdapter::new("https://api.anthropic.com", "claude-3-5-sonnet", 30);
+        assert!(!a.model_info().supports_thinking);
+    }
+
+    #[test]
+    fn model_info_images_for_claude_3() {
+        let a = AnthropicAdapter::new("https://api.anthropic.com", "claude-3-opus", 30);
+        assert!(a.model_info().supports_images);
+    }
+
+    #[test]
+    fn model_info_no_images_for_claude_4() {
+        let a = AnthropicAdapter::new("https://api.anthropic.com", "claude-4-opus", 30);
+        assert!(!a.model_info().supports_images);
+    }
+
+    #[test]
+    fn new_strips_trailing_slash_from_api_base() {
+        let a = AnthropicAdapter::new("https://api.anthropic.com/", "claude-4", 30);
+        assert_eq!(a.api_base, "https://api.anthropic.com");
+    }
+
+    #[test]
+    fn set_json_mode_toggles_flag() {
+        let mut a = AnthropicAdapter::new("https://api.anthropic.com", "claude-4", 30);
+        assert!(!a.json_mode);
+        a.set_json_mode(true);
+        assert!(a.json_mode);
+    }
+
+    #[test]
+    fn set_seed_sets_value() {
+        let mut a = AnthropicAdapter::new("https://api.anthropic.com", "claude-4", 30);
+        assert!(a.seed.is_none());
+        a.set_seed(Some(42));
+        assert_eq!(a.seed, Some(42));
+    }
+
+    #[test]
+    fn body_includes_tools_when_present() {
+        let messages = vec![Message {
+            role: Role::User,
+            content: "hi".into(),
+            ..Default::default()
+        }];
+        let tools = vec![crate::shared::ToolDef {
+            name: "read_file",
+            description: "read a file",
+            parameters: json!({"type": "object"}),
+        }];
+        let body = build_anthropic_body("claude-4", &messages, &tools, false, None);
+        let tools_arr = body["tools"].as_array().unwrap();
+        assert_eq!(tools_arr.len(), 1);
+        assert_eq!(tools_arr[0]["name"], "read_file");
+        assert_eq!(tools_arr[0]["input_schema"], json!({"type": "object"}));
+    }
+
+    #[test]
+    fn body_omits_tools_when_empty() {
+        let messages = vec![Message {
+            role: Role::User,
+            content: "hi".into(),
+            ..Default::default()
+        }];
+        let body = build_anthropic_body("claude-4", &messages, &[], false, None);
+        assert!(body.get("tools").is_none());
+    }
+
+    #[test]
+    fn body_seed_mode_pins_temperature_zero() {
+        let messages = vec![Message {
+            role: Role::User,
+            content: "hi".into(),
+            ..Default::default()
+        }];
+        let body = build_anthropic_body("claude-4", &messages, &[], false, Some(7));
+        assert_eq!(body["temperature"], json!(0.0));
+    }
+
+    #[test]
+    fn body_no_seed_omits_temperature() {
+        let messages = vec![Message {
+            role: Role::User,
+            content: "hi".into(),
+            ..Default::default()
+        }];
+        let body = build_anthropic_body("claude-4", &messages, &[], false, None);
+        assert!(body.get("temperature").is_none());
+    }
+
+    #[test]
+    fn body_tool_message_becomes_user_tool_result() {
+        let messages = vec![Message {
+            role: Role::Tool,
+            content: "result data".into(),
+            tool_call_id: Some("tu_1".into()),
+            ..Default::default()
+        }];
+        let body = build_anthropic_body("claude-4", &messages, &[], false, None);
+        let msg = &body["messages"][0];
+        assert_eq!(msg["role"], "user");
+        let block = &msg["content"][0];
+        assert_eq!(block["type"], "tool_result");
+        assert_eq!(block["tool_use_id"], "tu_1");
+        assert_eq!(block["content"], "result data");
+    }
+
+    #[test]
+    fn body_tool_message_without_id_uses_empty_string() {
+        let messages = vec![Message {
+            role: Role::Tool,
+            content: "x".into(),
+            ..Default::default()
+        }];
+        let body = build_anthropic_body("claude-4", &messages, &[], false, None);
+        assert_eq!(body["messages"][0]["content"][0]["tool_use_id"], "");
+    }
+
+    #[test]
+    fn body_assistant_with_tool_calls_emits_blocks() {
+        let messages = vec![Message {
+            role: Role::Assistant,
+            content: "thinking...".into(),
+            tool_calls: Some(vec![crate::shared::ToolInvocation {
+                id: "tu_1".into(),
+                name: "read_file".into(),
+                arguments: json!({"path": "a.md"}),
+            }]),
+            ..Default::default()
+        }];
+        let body = build_anthropic_body("claude-4", &messages, &[], false, None);
+        let blocks = body["messages"][0]["content"].as_array().unwrap();
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0]["type"], "text");
+        assert_eq!(blocks[0]["text"], "thinking...");
+        assert_eq!(blocks[1]["type"], "tool_use");
+        assert_eq!(blocks[1]["id"], "tu_1");
+        assert_eq!(blocks[1]["name"], "read_file");
+        assert_eq!(blocks[1]["input"], json!({"path": "a.md"}));
+    }
+
+    #[test]
+    fn body_assistant_with_tool_calls_no_content_omits_text_block() {
+        let messages = vec![Message {
+            role: Role::Assistant,
+            content: "".into(),
+            tool_calls: Some(vec![crate::shared::ToolInvocation {
+                id: "tu_1".into(),
+                name: "bash".into(),
+                arguments: json!({"command": "ls"}),
+            }]),
+            ..Default::default()
+        }];
+        let body = build_anthropic_body("claude-4", &messages, &[], false, None);
+        let blocks = body["messages"][0]["content"].as_array().unwrap();
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0]["type"], "tool_use");
+    }
+
+    #[test]
+    fn body_user_with_single_image_part_emits_image_block() {
+        let messages = vec![Message {
+            role: Role::User,
+            content: String::new(),
+            content_parts: Some(vec![ContentPart::Image {
+                data_base64: "BASE64".into(),
+                mime: "image/png".into(),
+            }]),
+            ..Default::default()
+        }];
+        let body = build_anthropic_body("claude-3-opus", &messages, &[], false, None);
+        let block = &body["messages"][0]["content"][0];
+        assert_eq!(block["type"], "image");
+        assert_eq!(block["source"]["type"], "base64");
+        assert_eq!(block["source"]["media_type"], "image/png");
+        assert_eq!(block["source"]["data"], "BASE64");
+    }
+
+    #[test]
+    fn body_user_with_single_text_part_emits_text_block() {
+        let messages = vec![Message {
+            role: Role::User,
+            content: String::new(),
+            content_parts: Some(vec![ContentPart::Text {
+                text: "just text".into(),
+            }]),
+            ..Default::default()
+        }];
+        let body = build_anthropic_body("claude-3-opus", &messages, &[], false, None);
+        let block = &body["messages"][0]["content"][0];
+        assert_eq!(block["type"], "text");
+        assert_eq!(block["text"], "just text");
+    }
+
+    #[test]
+    fn body_multiple_parts_collapse_to_text() {
+        let messages = vec![Message {
+            role: Role::User,
+            content: String::new(),
+            content_parts: Some(vec![
+                ContentPart::Text { text: "a".into() },
+                ContentPart::Image {
+                    data_base64: "B".into(),
+                    mime: "image/png".into(),
+                },
+                ContentPart::Text { text: "b".into() },
+            ]),
+            ..Default::default()
+        }];
+        let body = build_anthropic_body("claude-3-opus", &messages, &[], false, None);
+        let block = &body["messages"][0]["content"][0];
+        assert_eq!(block["type"], "text");
+        assert_eq!(block["text"], "a[image]b");
+    }
+
+    #[test]
+    fn body_single_system_uses_object_not_array() {
+        let messages = vec![Message {
+            role: Role::System,
+            content: "sys".into(),
+            ..Default::default()
+        }];
+        let body = build_anthropic_body("claude-4", &messages, &[], false, None);
+        assert!(body["system"].is_object());
+        assert!(!body["system"].is_array());
+        assert_eq!(body["system"]["text"], "sys");
+        assert_eq!(
+            body["system"]["cache_control"],
+            json!({"type": "ephemeral"})
+        );
+    }
+
+    #[test]
+    fn body_multiple_system_blocks_use_array() {
+        let messages = vec![
+            Message {
+                role: Role::System,
+                content: "sys1".into(),
+                ..Default::default()
+            },
+            Message {
+                role: Role::System,
+                content: "sys2".into(),
+                ..Default::default()
+            },
+        ];
+        let body = build_anthropic_body("claude-4", &messages, &[], false, None);
+        let arr = body["system"].as_array().unwrap();
+        assert_eq!(arr.len(), 2);
+        assert_eq!(arr[0]["text"], "sys1");
+        assert_eq!(arr[1]["text"], "sys2");
+        assert_eq!(arr[1]["cache_control"], json!({"type": "ephemeral"}));
+        assert!(arr[0].get("cache_control").is_none());
+    }
+
+    #[test]
+    fn body_no_system_omits_system_field() {
+        let messages = vec![Message {
+            role: Role::User,
+            content: "hi".into(),
+            ..Default::default()
+        }];
+        let body = build_anthropic_body("claude-4", &messages, &[], false, None);
+        assert!(body.get("system").is_none());
+    }
+
+    #[test]
+    fn body_short_conversation_skips_cache_markers() {
+        let messages = vec![
+            Message {
+                role: Role::User,
+                content: "a".into(),
+                ..Default::default()
+            },
+            Message {
+                role: Role::User,
+                content: "b".into(),
+                ..Default::default()
+            },
+        ];
+        let body = build_anthropic_body("claude-4", &messages, &[], false, None);
+        for m in body["messages"].as_array().unwrap() {
+            if let Some(content) = m.get("content").and_then(|c| c.as_array()) {
+                for block in content {
+                    assert!(block.get("cache_control").is_none());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn body_system_with_parts_uses_blocks() {
+        let messages = vec![Message {
+            role: Role::System,
+            content: String::new(),
+            content_parts: Some(vec![ContentPart::Text {
+                text: "system text".into(),
+            }]),
+            ..Default::default()
+        }];
+        let body = build_anthropic_body("claude-4", &messages, &[], false, None);
+        assert_eq!(body["system"]["type"], "text");
+        assert_eq!(body["system"]["text"], "system text");
+    }
+
+    #[test]
+    fn body_max_tokens_is_8192() {
+        let messages = vec![Message {
+            role: Role::User,
+            content: "hi".into(),
+            ..Default::default()
+        }];
+        let body = build_anthropic_body("claude-4", &messages, &[], false, None);
+        assert_eq!(body["max_tokens"], 8192);
+    }
+
+    #[test]
+    fn body_stream_is_true() {
+        let messages = vec![Message {
+            role: Role::User,
+            content: "hi".into(),
+            ..Default::default()
+        }];
+        let body = build_anthropic_body("claude-4", &messages, &[], false, None);
+        assert_eq!(body["stream"], true);
+    }
+
+    #[tokio::test]
+    async fn stream_done_sentinel_emits_done() {
+        let events: Vec<Vec<u8>> = vec![b"data: [DONE]\n\n".to_vec()];
+        let (tx, rx) = tokio::sync::mpsc::channel(64);
+        tokio::spawn(async move {
+            parse_anthropic_stream(tx, chunks(events)).await;
+        });
+        let events = drain(rx, 64).await;
+        assert!(matches!(
+            events.last(),
+            Some(StreamEvent::Done {
+                finish_reason: FinishReason::Stop,
+                ..
+            })
+        ));
+    }
+
+    #[tokio::test]
+    async fn stream_message_stop_max_tokens_maps_to_length() {
+        let events: Vec<Vec<u8>> = vec![line(
+            r#"{"type":"message_stop","stop_reason":"max_tokens"}"#,
+        )];
+        let (tx, rx) = tokio::sync::mpsc::channel(64);
+        tokio::spawn(async move {
+            parse_anthropic_stream(tx, chunks(events)).await;
+        });
+        let events = drain(rx, 64).await;
+        assert!(matches!(
+            events.last(),
+            Some(StreamEvent::Done {
+                finish_reason: FinishReason::Length,
+                ..
+            })
+        ));
+    }
+
+    #[tokio::test]
+    async fn stream_message_stop_tool_use_maps_to_tool_calls() {
+        let events: Vec<Vec<u8>> =
+            vec![line(r#"{"type":"message_stop","stop_reason":"tool_use"}"#)];
+        let (tx, rx) = tokio::sync::mpsc::channel(64);
+        tokio::spawn(async move {
+            parse_anthropic_stream(tx, chunks(events)).await;
+        });
+        let events = drain(rx, 64).await;
+        assert!(matches!(
+            events.last(),
+            Some(StreamEvent::Done {
+                finish_reason: FinishReason::ToolCalls,
+                ..
+            })
+        ));
+    }
+
+    #[tokio::test]
+    async fn stream_message_stop_unknown_reason_maps_to_stop() {
+        let events: Vec<Vec<u8>> = vec![line(
+            r#"{"type":"message_stop","stop_reason":"weird_reason"}"#,
+        )];
+        let (tx, rx) = tokio::sync::mpsc::channel(64);
+        tokio::spawn(async move {
+            parse_anthropic_stream(tx, chunks(events)).await;
+        });
+        let events = drain(rx, 64).await;
+        assert!(matches!(
+            events.last(),
+            Some(StreamEvent::Done {
+                finish_reason: FinishReason::Stop,
+                ..
+            })
+        ));
+    }
+
+    #[tokio::test]
+    async fn stream_message_stop_with_usage_emits_usage() {
+        let events: Vec<Vec<u8>> = vec![line(
+            r#"{"type":"message_stop","usage":{"input_tokens":5,"output_tokens":7,"cache_read_input_tokens":2}}"#,
+        )];
+        let (tx, rx) = tokio::sync::mpsc::channel(64);
+        tokio::spawn(async move {
+            parse_anthropic_stream(tx, chunks(events)).await;
+        });
+        let events = drain(rx, 64).await;
+        match events.last() {
+            Some(StreamEvent::Done { usage, .. }) => {
+                let u = usage.as_ref().unwrap();
+                assert_eq!(u.prompt_tokens, Some(5));
+                assert_eq!(u.completion_tokens, Some(7));
+                assert_eq!(u.cached_tokens, Some(2));
+            }
+            other => panic!("expected Done with usage, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn stream_message_delta_stop_reason_carried_to_message_stop() {
+        let events: Vec<Vec<u8>> = vec![
+            line(r#"{"type":"message_delta","delta":{"stop_reason":"max_tokens"}}"#),
+            line(r#"{"type":"message_stop"}"#),
+        ];
+        let (tx, rx) = tokio::sync::mpsc::channel(64);
+        tokio::spawn(async move {
+            parse_anthropic_stream(tx, chunks(events)).await;
+        });
+        let events = drain(rx, 64).await;
+        assert!(matches!(
+            events.last(),
+            Some(StreamEvent::Done {
+                finish_reason: FinishReason::Length,
+                ..
+            })
+        ));
+    }
+
+    #[tokio::test]
+    async fn stream_text_block_start_with_text_emits_text() {
+        let events: Vec<Vec<u8>> = vec![line(
+            r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":"preface"}}"#,
+        )];
+        let (tx, rx) = tokio::sync::mpsc::channel(64);
+        tokio::spawn(async move {
+            parse_anthropic_stream(tx, chunks(events)).await;
+        });
+        let events = drain(rx, 64).await;
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, StreamEvent::Text(s) if s == "preface")));
+    }
+
+    #[tokio::test]
+    async fn stream_unknown_event_type_is_ignored() {
+        let events: Vec<Vec<u8>> = vec![
+            line(r#"{"type":"some_unknown_event","foo":"bar"}"#),
+            line(r#"{"type":"message_stop"}"#),
+        ];
+        let (tx, rx) = tokio::sync::mpsc::channel(64);
+        tokio::spawn(async move {
+            parse_anthropic_stream(tx, chunks(events)).await;
+        });
+        let events = drain(rx, 64).await;
+        assert!(events.iter().any(|e| matches!(e, StreamEvent::Done { .. })));
+        assert!(!events.iter().any(|e| matches!(e, StreamEvent::Error(_))));
+    }
+
+    #[tokio::test]
+    async fn stream_invalid_json_emits_error() {
+        let events: Vec<Vec<u8>> = vec![b"data: {not valid json\n\n".to_vec()];
+        let (tx, rx) = tokio::sync::mpsc::channel(64);
+        tokio::spawn(async move {
+            parse_anthropic_stream(tx, chunks(events)).await;
+        });
+        let events = drain(rx, 64).await;
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, StreamEvent::Error(s) if s.contains("JSON parse"))));
+    }
+
+    #[tokio::test]
+    async fn stream_invalid_utf8_emits_error() {
+        let bad = b"data: \xC3\n\n".to_vec();
+        let (tx, rx) = tokio::sync::mpsc::channel(64);
+        tokio::spawn(async move {
+            parse_anthropic_stream(tx, chunks(vec![bad])).await;
+        });
+        let events = drain(rx, 64).await;
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, StreamEvent::Error(s) if s.contains("UTF-8"))));
+    }
+
+    #[tokio::test]
+    async fn stream_transport_error_emits_error() {
+        let items = vec![Err::<Vec<u8>, std::io::Error>(std::io::Error::other(
+            "connection reset",
+        ))];
+        let stream = tokio_stream::iter(items);
+        let (tx, rx) = tokio::sync::mpsc::channel(64);
+        parse_anthropic_stream(tx, stream).await;
+        let events = drain(rx, 64).await;
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, StreamEvent::Error(s) if s == "connection reset")));
+    }
+
+    #[tokio::test]
+    async fn stream_eof_without_done_emits_done() {
+        let events: Vec<Vec<u8>> = vec![line(
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}"#,
+        )];
+        let (tx, rx) = tokio::sync::mpsc::channel(64);
+        tokio::spawn(async move {
+            parse_anthropic_stream(tx, chunks(events)).await;
+        });
+        let events = drain(rx, 64).await;
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, StreamEvent::Text(s) if s == "hi")));
+        assert!(matches!(events.last(), Some(StreamEvent::Done { .. })));
+    }
+
+    #[tokio::test]
+    async fn stream_eof_flushes_pending_tool_call() {
+        let events: Vec<Vec<u8>> = vec![
+            line(
+                r#"{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"tu_9","name":"bash","input":{}}}"#,
+            ),
+            line(
+                r#"{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"cmd\":\"ls\"}"}}"#,
+            ),
+        ];
+        let (tx, rx) = tokio::sync::mpsc::channel(64);
+        tokio::spawn(async move {
+            parse_anthropic_stream(tx, chunks(events)).await;
+        });
+        let events = drain(rx, 64).await;
+        let tool = events
+            .iter()
+            .find_map(|e| match e {
+                StreamEvent::ToolCall(tc) => Some(tc),
+                _ => None,
+            })
+            .expect("tool call should be flushed at EOF");
+        assert_eq!(tool.id, "tu_9");
+        assert_eq!(tool.name, "bash");
+        assert_eq!(tool.arguments, json!({"cmd": "ls"}));
+    }
+
+    #[tokio::test]
+    async fn stream_content_block_stop_emits_tool_call() {
+        let events: Vec<Vec<u8>> = vec![
+            line(
+                r#"{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"tu_2","name":"read_file","input":{}}}"#,
+            ),
+            line(
+                r#"{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"path\":\"x\"}"}}"#,
+            ),
+            line(r#"{"type":"content_block_stop","index":0}"#),
+            line(r#"{"type":"message_stop"}"#),
+        ];
+        let (tx, rx) = tokio::sync::mpsc::channel(64);
+        tokio::spawn(async move {
+            parse_anthropic_stream(tx, chunks(events)).await;
+        });
+        let events = drain(rx, 64).await;
+        let tool = events
+            .iter()
+            .find_map(|e| match e {
+                StreamEvent::ToolCall(tc) => Some(tc),
+                _ => None,
+            })
+            .expect("tool call");
+        assert_eq!(tool.id, "tu_2");
+        assert_eq!(tool.arguments, json!({"path": "x"}));
+    }
+
+    #[tokio::test]
+    async fn stream_tool_use_with_initial_input_object() {
+        let events: Vec<Vec<u8>> = vec![
+            line(
+                r#"{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"tu_3","name":"bash","input":{"preset":"value"}}}"#,
+            ),
+            line(r#"{"type":"content_block_stop","index":0}"#),
+            line(r#"{"type":"message_stop"}"#),
+        ];
+        let (tx, rx) = tokio::sync::mpsc::channel(64);
+        tokio::spawn(async move {
+            parse_anthropic_stream(tx, chunks(events)).await;
+        });
+        let events = drain(rx, 64).await;
+        let tool = events
+            .iter()
+            .find_map(|e| match e {
+                StreamEvent::ToolCall(tc) => Some(tc),
+                _ => None,
+            })
+            .expect("tool call");
+        assert_eq!(tool.arguments, json!({"preset": "value"}));
+    }
+
+    #[tokio::test]
+    async fn stream_accepts_crlf_line_endings() {
+        let payload = serde_json::to_string(&json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}})).unwrap();
+        let frame = format!("data: {payload}\r\n\r\n");
+        let (tx, rx) = tokio::sync::mpsc::channel(64);
+        tokio::spawn(async move {
+            parse_anthropic_stream(tx, chunks(vec![frame.into_bytes()])).await;
+        });
+        let events = drain(rx, 64).await;
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, StreamEvent::Text(s) if s == "hi")));
+    }
+
+    #[tokio::test]
+    async fn stream_api_error_without_message_field_uses_error_string() {
+        let events: Vec<Vec<u8>> = vec![line(r#"{"type":"error","error":"something broke"}"#)];
+        let (tx, rx) = tokio::sync::mpsc::channel(64);
+        tokio::spawn(async move {
+            parse_anthropic_stream(tx, chunks(events)).await;
+        });
+        let events = drain(rx, 64).await;
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, StreamEvent::Error(s) if s == "something broke")));
+    }
+
+    #[tokio::test]
+    async fn stream_thinking_delta_empty_string_skipped() {
+        let events: Vec<Vec<u8>> = vec![
+            line(
+                r#"{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":""}}"#,
+            ),
+            line(r#"{"type":"message_stop"}"#),
+        ];
+        let (tx, rx) = tokio::sync::mpsc::channel(64);
+        tokio::spawn(async move {
+            parse_anthropic_stream(tx, chunks(events)).await;
+        });
+        let events = drain(rx, 64).await;
+        assert!(!events.iter().any(|e| matches!(e, StreamEvent::Thinking(_))));
+    }
+
+    #[tokio::test]
+    async fn stream_text_delta_empty_string_skipped() {
+        let events: Vec<Vec<u8>> = vec![
+            line(
+                r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":""}}"#,
+            ),
+            line(r#"{"type":"message_stop"}"#),
+        ];
+        let (tx, rx) = tokio::sync::mpsc::channel(64);
+        tokio::spawn(async move {
+            parse_anthropic_stream(tx, chunks(events)).await;
+        });
+        let events = drain(rx, 64).await;
+        assert!(!events.iter().any(|e| matches!(e, StreamEvent::Text(_))));
+    }
+
+    #[tokio::test]
+    async fn stream_content_block_start_unknown_type_ignored() {
+        let events: Vec<Vec<u8>> = vec![
+            line(
+                r#"{"type":"content_block_start","index":0,"content_block":{"type":"weird_block","text":"x"}}"#,
+            ),
+            line(r#"{"type":"message_stop"}"#),
+        ];
+        let (tx, rx) = tokio::sync::mpsc::channel(64);
+        tokio::spawn(async move {
+            parse_anthropic_stream(tx, chunks(events)).await;
+        });
+        let events = drain(rx, 64).await;
+        assert!(!events.iter().any(|e| matches!(e, StreamEvent::Text(_))));
+    }
+
+    #[tokio::test]
+    async fn stream_message_start_is_noop() {
+        let events: Vec<Vec<u8>> = vec![
+            line(r#"{"type":"message_start","message":{"role":"assistant","content":[]}}"#),
+            line(r#"{"type":"message_stop"}"#),
+        ];
+        let (tx, rx) = tokio::sync::mpsc::channel(64);
+        tokio::spawn(async move {
+            parse_anthropic_stream(tx, chunks(events)).await;
+        });
+        let events = drain(rx, 64).await;
+        assert_eq!(events.len(), 1);
+        assert!(matches!(events[0], StreamEvent::Done { .. }));
+    }
+
+    #[test]
+    fn find_subseq_locates_needle() {
+        assert_eq!(find_subseq(b"hello world", b"world"), Some(6));
+        assert_eq!(find_subseq(b"hello", b"xyz"), None);
+        assert_eq!(find_subseq(b"", b"x"), None);
+    }
+
+    #[test]
+    fn trim_ascii_whitespace_strips_both_ends() {
+        assert_eq!(trim_ascii_whitespace(b"  hi  "), b"hi");
+        assert_eq!(trim_ascii_whitespace(b"\n\tdata\r\n"), b"data");
+        assert_eq!(trim_ascii_whitespace(b"   "), b"");
+    }
+
+    #[test]
+    fn is_empty_object_detects_empty_objects() {
+        assert!(is_empty_object(&json!({})));
+        assert!(!is_empty_object(&json!({"a": 1})));
+        assert!(!is_empty_object(&json!("string")));
+        assert!(!is_empty_object(&json!([])));
+    }
+
+    #[test]
+    fn parse_usage_extracts_all_token_fields() {
+        let u = json!({"input_tokens": 10, "output_tokens": 20, "cache_read_input_tokens": 5});
+        let t = parse_usage(&u);
+        assert_eq!(t.prompt_tokens, Some(10));
+        assert_eq!(t.completion_tokens, Some(20));
+        assert_eq!(t.cached_tokens, Some(5));
+    }
+
+    #[test]
+    fn parse_usage_handles_missing_fields() {
+        let u = json!({});
+        let t = parse_usage(&u);
+        assert_eq!(t.prompt_tokens, None);
+        assert_eq!(t.completion_tokens, None);
+        assert_eq!(t.cached_tokens, None);
+    }
 }

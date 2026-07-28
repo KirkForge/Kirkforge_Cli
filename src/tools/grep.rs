@@ -361,7 +361,9 @@ mod tests {
     #[tokio::test]
     async fn grep_missing_pattern_arg_is_invalid_args() {
         let grep = Grep::new(PathGuard::default());
-        let outcome = grep.run(&ToolContext::default(), serde_json::json!({})).await;
+        let outcome = grep
+            .run(&ToolContext::default(), serde_json::json!({}))
+            .await;
         assert!(
             matches!(outcome, ToolOutcome::Failure(ToolError::InvalidArgs { .. })),
             "got {outcome:?}"
@@ -447,7 +449,11 @@ mod tests {
         let outcome = grep.run(&ToolContext::default(), args).await;
         match outcome {
             ToolOutcome::GrepMatches { matches, .. } => {
-                assert_eq!(matches.len(), 1, "only the .txt should match, got: {matches:?}");
+                assert_eq!(
+                    matches.len(),
+                    1,
+                    "only the .txt should match, got: {matches:?}"
+                );
                 assert!(matches[0].line.contains("txt"));
             }
             other => panic!("expected GrepMatches, got {other:?}"),
@@ -496,7 +502,11 @@ mod tests {
         let outcome = grep.run(&ToolContext::default(), args).await;
         match outcome {
             ToolOutcome::GrepMatches { matches, .. } => {
-                assert_eq!(matches.len(), 1, "only the text file should match, got {matches:?}");
+                assert_eq!(
+                    matches.len(),
+                    1,
+                    "only the text file should match, got {matches:?}"
+                );
                 assert!(matches[0].line.contains("text"));
             }
             other => panic!("expected GrepMatches, got {other:?}"),

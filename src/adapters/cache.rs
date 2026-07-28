@@ -236,4 +236,261 @@ mod tests {
             .collect();
         assert!(entries.is_empty());
     }
+
+    #[test]
+    fn disabled_cache_get_returns_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = ResponseCache::new(false, Some(dir.path().into()));
+        assert!(cache
+            .get(
+                "test-model",
+                &[message(crate::shared::Role::User, "hi")],
+                &[],
+                false
+            )
+            .is_none());
+    }
+
+    #[test]
+    fn cache_skips_empty_event_streams() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = ResponseCache::new(true, Some(dir.path().into()));
+        cache.put(
+            "test-model",
+            &[message(crate::shared::Role::User, "hi")],
+            &[],
+            false,
+            &[],
+        );
+        let entries: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .collect();
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn cache_skips_error_only_streams() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = ResponseCache::new(true, Some(dir.path().into()));
+        cache.put(
+            "test-model",
+            &[message(crate::shared::Role::User, "hi")],
+            &[],
+            false,
+            &[
+                StreamEvent::Error("boom".into()),
+                StreamEvent::Error("boom2".into()),
+            ],
+        );
+        let entries: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .collect();
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn cache_key_is_deterministic_for_same_inputs() {
+        let k1 = CacheKey::new(
+            "model",
+            &[message(crate::shared::Role::User, "hi")],
+            &[],
+            false,
+        );
+        let k2 = CacheKey::new(
+            "model",
+            &[message(crate::shared::Role::User, "hi")],
+            &[],
+            false,
+        );
+        assert_eq!(k1, k2);
+    }
+
+    #[test]
+    fn cache_key_differs_for_different_models() {
+        let k1 = CacheKey::new(
+            "model-a",
+            &[message(crate::shared::Role::User, "hi")],
+            &[],
+            false,
+        );
+        let k2 = CacheKey::new(
+            "model-b",
+            &[message(crate::shared::Role::User, "hi")],
+            &[],
+            false,
+        );
+        assert_ne!(k1, k2);
+    }
+
+    #[test]
+    fn cache_key_differs_for_different_messages() {
+        let k1 = CacheKey::new(
+            "model",
+            &[message(crate::shared::Role::User, "hi")],
+            &[],
+            false,
+        );
+        let k2 = CacheKey::new(
+            "model",
+            &[message(crate::shared::Role::User, "bye")],
+            &[],
+            false,
+        );
+        assert_ne!(k1, k2);
+    }
+
+    #[test]
+    fn cache_key_differs_for_different_json_mode() {
+        let k1 = CacheKey::new(
+            "model",
+            &[message(crate::shared::Role::User, "hi")],
+            &[],
+            false,
+        );
+        let k2 = CacheKey::new(
+            "model",
+            &[message(crate::shared::Role::User, "hi")],
+            &[],
+            true,
+        );
+        assert_ne!(k1, k2);
+    }
+
+    #[test]
+    fn cache_key_differs_for_different_tools() {
+        let tool_a = crate::shared::ToolDef {
+            name: "tool_a",
+            description: "desc",
+            parameters: serde_json::json!({"type": "object"}),
+        };
+        let tool_b = crate::shared::ToolDef {
+            name: "tool_b",
+            description: "desc",
+            parameters: serde_json::json!({"type": "object"}),
+        };
+        let k1 = CacheKey::new(
+            "model",
+            &[message(crate::shared::Role::User, "hi")],
+            &[tool_a],
+            false,
+        );
+        let k2 = CacheKey::new(
+            "model",
+            &[message(crate::shared::Role::User, "hi")],
+            &[tool_b],
+            false,
+        );
+        assert_ne!(k1, k2);
+    }
+
+    #[test]
+    fn cache_key_hash_is_hex_string() {
+        let k = CacheKey::new(
+            "model",
+            &[message(crate::shared::Role::User, "hi")],
+            &[],
+            false,
+        );
+        assert!(k.hash.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_eq!(k.hash.len(), 16);
+    }
+
+    #[test]
+    fn cache_put_promotes_to_memory_for_subsequent_get() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = ResponseCache::new(true, Some(dir.path().into()));
+        let events = vec![StreamEvent::Text("hello".into())];
+        cache.put(
+            "test-model",
+            &[message(crate::shared::Role::User, "hi")],
+            &[],
+            false,
+            &events,
+        );
+        let got = cache
+            .get(
+                "test-model",
+                &[message(crate::shared::Role::User, "hi")],
+                &[],
+                false,
+            )
+            .expect("cache hit from memory");
+        assert_eq!(got, events);
+    }
+
+    #[test]
+    fn cache_get_reads_from_disk_when_not_in_memory() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = ResponseCache::new(true, Some(dir.path().into()));
+        let events = vec![StreamEvent::Text("disk-hit".into())];
+        cache.put(
+            "test-model",
+            &[message(crate::shared::Role::User, "hi")],
+            &[],
+            false,
+            &events,
+        );
+        let cache2 = ResponseCache::new(true, Some(dir.path().into()));
+        let got = cache2
+            .get(
+                "test-model",
+                &[message(crate::shared::Role::User, "hi")],
+                &[],
+                false,
+            )
+            .expect("cache hit from disk");
+        assert_eq!(got, events);
+    }
+
+    #[test]
+    fn cache_path_for_uses_hex_hash_filename() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = ResponseCache::new(true, Some(dir.path().into()));
+        let key = CacheKey::new(
+            "model",
+            &[message(crate::shared::Role::User, "hi")],
+            &[],
+            false,
+        );
+        let path = cache.path_for(&key);
+        assert!(path.to_string_lossy().ends_with(".bin"));
+        assert!(path.starts_with(dir.path()));
+    }
+
+    #[test]
+    fn cache_returns_none_for_corrupt_disk_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = ResponseCache::new(true, Some(dir.path().into()));
+        let key = CacheKey::new(
+            "model",
+            &[message(crate::shared::Role::User, "hi")],
+            &[],
+            false,
+        );
+        let path = cache.path_for(&key);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"not valid serde_json").unwrap();
+        assert!(cache
+            .get(
+                "model",
+                &[message(crate::shared::Role::User, "hi")],
+                &[],
+                false
+            )
+            .is_none());
+    }
+
+    #[test]
+    fn default_cache_dir_joins_cache_subdir() {
+        let dir = default_cache_dir();
+        assert!(dir.ends_with("cache"));
+    }
+
+    #[test]
+    fn cache_new_uses_default_dir_when_none() {
+        let cache = ResponseCache::new(false, None);
+        assert!(cache.dir.ends_with("cache"));
+    }
 }

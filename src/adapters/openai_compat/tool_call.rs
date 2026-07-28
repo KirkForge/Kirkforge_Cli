@@ -204,3 +204,144 @@ pub(super) fn split_concatenated_json(s: &str) -> Vec<serde_json::Value> {
         out
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn accumulator_new_is_empty() {
+        let a = ToolCallAccumulator::new();
+        assert!(a.is_empty());
+    }
+
+    #[test]
+    fn accumulator_not_empty_after_accumulate() {
+        let mut a = ToolCallAccumulator::new();
+        a.accumulate(0, "id", Some("name"), Some("{}"));
+        assert!(!a.is_empty());
+    }
+
+    #[test]
+    fn accumulator_empty_id_uses_first_non_empty() {
+        let mut a = ToolCallAccumulator::new();
+        a.accumulate(0, "", Some("bash"), Some("{}"));
+        a.accumulate(0, "call_1", None, None);
+        let calls = a.drain();
+        assert_eq!(calls[0].id, "call_1");
+    }
+
+    #[test]
+    fn accumulator_appends_arguments_across_deltas() {
+        let mut a = ToolCallAccumulator::new();
+        a.accumulate(0, "id", Some("bash"), Some("{\"cmd\":\""));
+        a.accumulate(0, "", None, Some("ls\"}"));
+        let calls = a.drain();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].arguments, json!({"cmd": "ls"}));
+    }
+
+    #[test]
+    fn accumulator_name_overwritten_by_later_delta() {
+        let mut a = ToolCallAccumulator::new();
+        a.accumulate(0, "id", Some("first"), Some("{}"));
+        a.accumulate(0, "", Some("second"), None);
+        let calls = a.drain();
+        assert_eq!(calls[0].name, "second");
+    }
+
+    #[test]
+    fn accumulator_preserves_index_order() {
+        let mut a = ToolCallAccumulator::new();
+        a.accumulate(2, "c", Some("tool_c"), Some("{}"));
+        a.accumulate(0, "a", Some("tool_a"), Some("{}"));
+        a.accumulate(1, "b", Some("tool_b"), Some("{}"));
+        let calls = a.drain();
+        assert_eq!(calls[0].id, "a");
+        assert_eq!(calls[1].id, "b");
+        assert_eq!(calls[2].id, "c");
+    }
+
+    #[test]
+    fn accumulator_empty_arguments_produces_no_calls() {
+        let mut a = ToolCallAccumulator::new();
+        a.accumulate(0, "id", Some("bash"), None);
+        let calls = a.drain();
+        assert!(calls.is_empty());
+    }
+
+    #[test]
+    fn split_concatenated_json_whole_string_parse() {
+        let s = r#"{"a":1}"#;
+        let out = split_concatenated_json(s);
+        assert_eq!(out, vec![json!({"a": 1})]);
+    }
+
+    #[test]
+    fn split_concatenated_json_array_returns_as_single_value() {
+        let s = "[1,2,3]";
+        let out = split_concatenated_json(s);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0], json!([1, 2, 3]));
+    }
+
+    #[test]
+    fn split_concatenated_json_whitespace_trimmed() {
+        let s = "  {\"a\":1}  ";
+        let out = split_concatenated_json(s);
+        assert_eq!(out, vec![json!({"a": 1})]);
+    }
+
+    #[test]
+    fn split_concatenated_json_stray_closing_brace_returns_string() {
+        let s = "}}}";
+        let out = split_concatenated_json(s);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0], json!("}}}"));
+    }
+
+    #[test]
+    fn split_concatenated_json_nested_objects() {
+        let s = r#"{"outer":{"inner":1}}"#;
+        let out = split_concatenated_json(s);
+        assert_eq!(out, vec![json!({"outer": {"inner": 1}})]);
+    }
+
+    #[test]
+    fn split_concatenated_json_mixed_valid_invalid_drops_invalid() {
+        let s = r#"{"a":1}{invalid}{"b":2}"#;
+        let out = split_concatenated_json(s);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0], json!({"a": 1}));
+        assert_eq!(out[1], json!({"b": 2}));
+    }
+
+    #[test]
+    fn split_concatenated_json_only_whitespace_returns_empty() {
+        let out = split_concatenated_json("   ");
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn split_concatenated_json_unclosed_object_returns_string() {
+        let s = r#"{"a":1"#;
+        let out = split_concatenated_json(s);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0], json!(r#"{"a":1"#));
+    }
+
+    #[test]
+    fn split_concatenated_json_string_with_braces_inside() {
+        let s = r#"{"path":"{weird}"}"#;
+        let out = split_concatenated_json(s);
+        assert_eq!(out, vec![json!({"path": "{weird}"})]);
+    }
+
+    #[test]
+    fn split_concatenated_json_escaped_backslash_before_quote() {
+        let s = r#"{"path":"a\\b"}"#;
+        let out = split_concatenated_json(s);
+        assert_eq!(out, vec![json!({"path": "a\\b"})]);
+    }
+}

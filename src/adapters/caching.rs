@@ -259,4 +259,125 @@ mod tests {
             "partial stream should not be cached"
         );
     }
+
+    #[tokio::test]
+    async fn caching_adapter_incomplete_stream_not_cached() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = ResponseCache::new(true, Some(tmp.path().into()));
+        let events = vec![StreamEvent::Text("no done event".into())];
+        let inner = adapter(events.clone());
+        let wrapped = CachingAdapter::new(inner, cache.clone(), false);
+        let messages: Vec<Message> = vec![];
+        let tools: Vec<ToolDef> = vec![];
+        let mut rx = wrapped.stream(&messages, &tools).await.unwrap();
+        while let Some(_ev) = rx.recv().await {}
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert!(
+            cache
+                .get(&wrapped.model_info().name, &messages, &tools, false)
+                .is_none(),
+            "stream without Done event should not be cached"
+        );
+    }
+
+    #[tokio::test]
+    async fn caching_adapter_model_info_delegates_to_inner() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = ResponseCache::new(true, Some(tmp.path().into()));
+        let inner = adapter(vec![]);
+        let wrapped = CachingAdapter::new(inner, cache, false);
+        let info = wrapped.model_info();
+        assert_eq!(info.name, "test-model");
+        assert_eq!(info.max_context_tokens, 4096);
+    }
+
+    #[tokio::test]
+    async fn caching_adapter_set_json_mode_propagates_to_inner() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = ResponseCache::new(true, Some(tmp.path().into()));
+        let inner = adapter(vec![]);
+        let mut wrapped = CachingAdapter::new(inner, cache, false);
+        assert!(!wrapped.json_mode);
+        wrapped.set_json_mode(true);
+        assert!(wrapped.json_mode);
+    }
+
+    #[tokio::test]
+    async fn caching_adapter_caches_with_json_mode_flag() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = ResponseCache::new(true, Some(tmp.path().into()));
+        let events = vec![
+            StreamEvent::Text("hi".into()),
+            StreamEvent::Done {
+                finish_reason: FinishReason::Stop,
+                usage: None,
+            },
+        ];
+        let inner = adapter(events.clone());
+        let wrapped = CachingAdapter::new(inner, cache, true);
+        let messages: Vec<Message> = vec![];
+        let tools: Vec<ToolDef> = vec![];
+        let mut rx = wrapped.stream(&messages, &tools).await.unwrap();
+        while let Some(_ev) = rx.recv().await {}
+        let mut rx = wrapped.stream(&messages, &tools).await.unwrap();
+        let mut got = Vec::new();
+        while let Some(ev) = rx.recv().await {
+            got.push(ev);
+        }
+        assert_eq!(got, events);
+    }
+
+    #[tokio::test]
+    async fn maybe_wrap_cached_returns_cached_when_enabled() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = Config::default();
+        config.model.cache_enabled = true;
+        config.model.cache_dir = Some(tmp.path().into());
+        let events = vec![
+            StreamEvent::Text("hi".into()),
+            StreamEvent::Done {
+                finish_reason: FinishReason::Stop,
+                usage: None,
+            },
+        ];
+        let inner = adapter(events.clone());
+        let wrapped = maybe_wrap_cached(inner, &config);
+        let messages: Vec<Message> = vec![];
+        let tools: Vec<ToolDef> = vec![];
+        let mut rx = wrapped.stream(&messages, &tools).await.unwrap();
+        while let Some(_ev) = rx.recv().await {}
+        let mut rx = wrapped.stream(&messages, &tools).await.unwrap();
+        let mut got = Vec::new();
+        while let Some(ev) = rx.recv().await {
+            got.push(ev);
+        }
+        assert_eq!(got, events);
+    }
+
+    #[tokio::test]
+    async fn maybe_wrap_cached_returns_inner_when_disabled() {
+        let mut config = Config::default();
+        config.model.cache_enabled = false;
+        let events = vec![StreamEvent::Text("x".into())];
+        let inner = adapter(events.clone());
+        let wrapped = maybe_wrap_cached(inner, &config);
+        let messages: Vec<Message> = vec![];
+        let tools: Vec<ToolDef> = vec![];
+        let mut rx = wrapped.stream(&messages, &tools).await.unwrap();
+        let mut got = Vec::new();
+        while let Some(ev) = rx.recv().await {
+            got.push(ev);
+        }
+        assert_eq!(got, events);
+    }
+
+    #[tokio::test]
+    async fn maybe_wrap_cached_preserves_model_info() {
+        let mut config = Config::default();
+        config.model.cache_enabled = true;
+        let inner = adapter(vec![]);
+        let wrapped = maybe_wrap_cached(inner, &config);
+        let info = wrapped.model_info();
+        assert_eq!(info.name, "test-model");
+    }
 }

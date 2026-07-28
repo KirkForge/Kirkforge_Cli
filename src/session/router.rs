@@ -402,14 +402,20 @@ mod tests {
         let big = "x".repeat(600);
         let result = classify_local(&big);
         assert!(
-            matches!(result.tier, ComplexityTier::Medium | ComplexityTier::Complex),
+            matches!(
+                result.tier,
+                ComplexityTier::Medium | ComplexityTier::Complex
+            ),
             "600-char message should bump score, got {:?}",
             result.tier
         );
         let bigger = "y".repeat(1200);
         let result2 = classify_local(&bigger);
         assert!(
-            matches!(result2.tier, ComplexityTier::Medium | ComplexityTier::Complex),
+            matches!(
+                result2.tier,
+                ComplexityTier::Medium | ComplexityTier::Complex
+            ),
             "1200-char message should bump score, got {:?}",
             result2.tier
         );
@@ -419,7 +425,10 @@ mod tests {
     fn test_classify_local_add_keyword_is_medium_or_higher() {
         let result = classify_local("add a feature");
         assert!(
-            matches!(result.tier, ComplexityTier::Medium | ComplexityTier::Complex),
+            matches!(
+                result.tier,
+                ComplexityTier::Medium | ComplexityTier::Complex
+            ),
             "'add' is a medium indicator, got {:?}",
             result.tier
         );
@@ -429,7 +438,10 @@ mod tests {
     fn test_classify_local_extract_split_keywords_count() {
         let result = classify_local("extract the helper and split the module");
         assert!(
-            matches!(result.tier, ComplexityTier::Medium | ComplexityTier::Complex),
+            matches!(
+                result.tier,
+                ComplexityTier::Medium | ComplexityTier::Complex
+            ),
             "extract+split should be at least medium, got {:?}",
             result.tier
         );
@@ -544,8 +556,7 @@ mod tests {
         };
         let json = serde_json::to_string(&cfg).unwrap();
         let back: RouterConfig = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.enabled, true);
+        assert!(back.enabled);
         assert_eq!(back.router_model, "qwen2.5:0.5b");
     }
-}
 }

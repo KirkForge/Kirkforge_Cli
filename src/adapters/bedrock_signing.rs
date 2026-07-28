@@ -155,4 +155,201 @@ mod tests {
         assert_eq!(a, b);
         assert_ne!(a, c);
     }
+
+    #[test]
+    fn sha256_hex_empty_input() {
+        let h = sha256_hex(b"");
+        assert_eq!(
+            h,
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+    }
+
+    #[test]
+    fn sha256_hex_known_value() {
+        let h = sha256_hex(b"hello");
+        assert_eq!(
+            h,
+            "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+        );
+    }
+
+    #[test]
+    fn host_header_extracts_hostname_from_path() {
+        assert_eq!(
+            host_header("https://bedrock-runtime.us-west-2.amazonaws.com/model/x").unwrap(),
+            "bedrock-runtime.us-west-2.amazonaws.com"
+        );
+    }
+
+    #[test]
+    fn host_header_fails_for_invalid_url() {
+        assert!(host_header("not a url").is_err());
+    }
+
+    #[test]
+    fn host_header_fails_for_url_without_host() {
+        assert!(host_header("file:///local/path").is_err());
+    }
+
+    #[test]
+    fn session_token_reads_from_env() {
+        let key = "AWS_SESSION_TOKEN";
+        let prev = std::env::var(key).ok();
+        std::env::set_var(key, "test-token-value");
+        assert_eq!(session_token(), Some("test-token-value".to_string()));
+        match prev {
+            Some(v) => std::env::set_var(key, v),
+            None => std::env::remove_var(key),
+        }
+    }
+
+    #[test]
+    fn session_token_returns_none_when_unset() {
+        let key = "AWS_SESSION_TOKEN";
+        let prev = std::env::var(key).ok();
+        std::env::remove_var(key);
+        assert_eq!(session_token(), None);
+        if let Some(v) = prev {
+            std::env::set_var(key, v)
+        }
+    }
+
+    #[test]
+    fn resolve_credentials_reads_from_env() {
+        let access_key = "AWS_ACCESS_KEY_ID";
+        let secret_key = "AWS_SECRET_ACCESS_KEY";
+        let session_key = "AWS_SESSION_TOKEN";
+        let prev_access = std::env::var(access_key).ok();
+        let prev_secret = std::env::var(secret_key).ok();
+        let prev_session = std::env::var(session_key).ok();
+        std::env::set_var(access_key, "AKIATEST");
+        std::env::set_var(secret_key, "secretkey");
+        std::env::set_var(session_key, "sessiontoken");
+        let creds = resolve_credentials().unwrap();
+        assert_eq!(creds.access_key_id(), "AKIATEST");
+        assert_eq!(creds.secret_access_key(), "secretkey");
+        match prev_access {
+            Some(v) => std::env::set_var(access_key, v),
+            None => std::env::remove_var(access_key),
+        }
+        match prev_secret {
+            Some(v) => std::env::set_var(secret_key, v),
+            None => std::env::remove_var(secret_key),
+        }
+        match prev_session {
+            Some(v) => std::env::set_var(session_key, v),
+            None => std::env::remove_var(session_key),
+        }
+    }
+
+    #[test]
+    fn resolve_credentials_fails_without_access_key() {
+        let access_key = "AWS_ACCESS_KEY_ID";
+        let prev = std::env::var(access_key).ok();
+        std::env::remove_var(access_key);
+        assert!(resolve_credentials().is_err());
+        if let Some(v) = prev {
+            std::env::set_var(access_key, v)
+        }
+    }
+
+    #[test]
+    fn resolve_credentials_fails_without_secret_key() {
+        let access_key = "AWS_ACCESS_KEY_ID";
+        let secret_key = "AWS_SECRET_ACCESS_KEY";
+        let prev_access = std::env::var(access_key).ok();
+        let prev_secret = std::env::var(secret_key).ok();
+        std::env::set_var(access_key, "AKIATEST");
+        std::env::remove_var(secret_key);
+        assert!(resolve_credentials().is_err());
+        match prev_access {
+            Some(v) => std::env::set_var(access_key, v),
+            None => std::env::remove_var(access_key),
+        }
+        if let Some(v) = prev_secret {
+            std::env::set_var(secret_key, v);
+        }
+    }
+
+    #[test]
+    fn sign_request_produces_authorization_header() {
+        let access_key = "AWS_ACCESS_KEY_ID";
+        let secret_key = "AWS_SECRET_ACCESS_KEY";
+        let session_key = "AWS_SESSION_TOKEN";
+        let prev_access = std::env::var(access_key).ok();
+        let prev_secret = std::env::var(secret_key).ok();
+        let prev_session = std::env::var(session_key).ok();
+        std::env::set_var(access_key, "AKIATEST");
+        std::env::set_var(secret_key, "secretkey");
+        std::env::remove_var(session_key);
+        let url = "https://bedrock-runtime.us-east-1.amazonaws.com/model/test/invoke-with-response-stream";
+        let body = b"{\"hello\":\"world\"}";
+        let signed = sign_request(url, body, "us-east-1", "").unwrap();
+        assert_eq!(signed.method, reqwest::Method::POST);
+        assert_eq!(signed.url, url);
+        assert!(signed.headers.contains_key("authorization"));
+        assert!(signed.headers.contains_key("x-amz-content-sha256"));
+        assert!(signed.headers.contains_key("host"));
+        match prev_access {
+            Some(v) => std::env::set_var(access_key, v),
+            None => std::env::remove_var(access_key),
+        }
+        match prev_secret {
+            Some(v) => std::env::set_var(secret_key, v),
+            None => std::env::remove_var(secret_key),
+        }
+        match prev_session {
+            Some(v) => std::env::set_var(session_key, v),
+            None => std::env::remove_var(session_key),
+        }
+    }
+
+    #[test]
+    fn sign_request_includes_security_token_when_set() {
+        let access_key = "AWS_ACCESS_KEY_ID";
+        let secret_key = "AWS_SECRET_ACCESS_KEY";
+        let session_key = "AWS_SESSION_TOKEN";
+        let prev_access = std::env::var(access_key).ok();
+        let prev_secret = std::env::var(secret_key).ok();
+        let prev_session = std::env::var(session_key).ok();
+        std::env::set_var(access_key, "AKIATEST");
+        std::env::set_var(secret_key, "secretkey");
+        std::env::set_var(session_key, "mysessiontoken");
+        let url =
+            "https://bedrock-runtime.us-east-1.amazonaws.com/model/x/invoke-with-response-stream";
+        let signed = sign_request(url, b"{}", "us-east-1", "").unwrap();
+        assert!(signed.headers.contains_key("x-amz-security-token"));
+        match prev_access {
+            Some(v) => std::env::set_var(access_key, v),
+            None => std::env::remove_var(access_key),
+        }
+        match prev_secret {
+            Some(v) => std::env::set_var(secret_key, v),
+            None => std::env::remove_var(secret_key),
+        }
+        match prev_session {
+            Some(v) => std::env::set_var(session_key, v),
+            None => std::env::remove_var(session_key),
+        }
+    }
+
+    #[test]
+    fn sign_request_fails_for_invalid_url() {
+        let access_key = "AWS_ACCESS_KEY_ID";
+        let secret_key = "AWS_SECRET_ACCESS_KEY";
+        let prev_access = std::env::var(access_key).ok();
+        let prev_secret = std::env::var(secret_key).ok();
+        std::env::set_var(access_key, "AKIATEST");
+        std::env::set_var(secret_key, "secretkey");
+        assert!(sign_request("not a url", b"{}", "us-east-1", "").is_err());
+        match prev_access {
+            Some(v) => std::env::set_var(access_key, v),
+            None => std::env::remove_var(access_key),
+        }
+        match prev_secret {
+            Some(v) => std::env::set_var(secret_key, v),
+            None => std::env::remove_var(secret_key),
+        }
+    }
 }

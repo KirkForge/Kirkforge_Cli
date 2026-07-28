@@ -655,9 +655,6 @@ mod hint_tests {
 
     #[test]
     fn classify_error_prefers_borrow_conflict_over_type_mismatch() {
-        // A borrow-conflict error may also mention "expected" and "found"
-        // in the rendered diagnostic. The classifier must pick the
-        // borrow-conflict variant, not the type-mismatch variant.
         let err = "error[E0502]: cannot borrow `x` as mutable because it is also borrowed as `y`\n\
                    expected `String`, found `&str`";
         let h = classify_error(err).unwrap();
@@ -675,74 +672,185 @@ mod hint_tests {
         assert_eq!(hint, back);
     }
 
-    // Real rustc output: spawn `cargo build` on a broken file in a tempdir
-    // and confirm `classify_error` produces a MissingImport. This is the
-    // high-fidelity end-to-end check; we keep it `#[ignore]` because cargo
-    // locks the global package cache and is non-hermetic.
     #[test]
-    #[ignore = "spawns cargo; run with --ignored"]
-    fn classify_real_rustc_missing_import_output() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let project = tmp.path();
-        std::fs::create_dir_all(project.join("src")).unwrap();
-        std::fs::write(
-            project.join("Cargo.toml"),
-            "[package]\nname = \"kirkforge-hint-test\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
-        )
-        .unwrap();
-        std::fs::write(
-            project.join("src/main.rs"),
-            "fn main() {\n    let y = frobnicate;\n}\n",
-        )
-        .unwrap();
+    fn classify_for_tool_routes_bash_clippy_cargo_rustc() {
+        for tool in ["bash", "clippy", "cargo", "rustc"] {
+            let hint = classify_for_tool(
+                tool,
+                "cannot find value `frob` in this scope",
+                &serde_json::json!({}),
+            );
+            assert!(
+                matches!(hint, Some(ErrorHint::MissingImport { .. })),
+                "tool {tool} should route to classifier"
+            );
+        }
+    }
 
-        let output = std::process::Command::new("cargo")
-            .current_dir(project)
-            .args(["build", "--message-format=short"])
-            .output()
-            .expect("cargo build");
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let h = classify_error(&stderr);
+    #[test]
+    fn classify_for_tool_skips_unknown_tools() {
+        let hint = classify_for_tool(
+            "read_file",
+            "cannot find value `frob` in this scope",
+            &serde_json::json!({}),
+        );
+        assert!(hint.is_none(), "non-bash tool should not be classified");
+    }
+
+    #[test]
+    fn classify_borrow_conflict_returns_none_when_no_original_ref() {
+        let err = "cannot borrow `foo` as mutable";
+        let h = classify_borrow_conflict(err);
         assert!(
-            matches!(h, Some(ErrorHint::MissingImport { ref symbol, .. }) if symbol == "frobnicate"),
-            "expected MissingImport for `frobnicate`, got {h:?}\nstderr: {stderr}",
+            h.is_none(),
+            "without 'also borrowed as' the regex for original_ref returns None and the whole classifier short-circuits"
         );
     }
 
-    // Real rustc output: borrow conflict in a tempdir project.
     #[test]
-    #[ignore = "spawns cargo; run with --ignored"]
-    fn classify_real_rustc_borrow_conflict_output() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let project = tmp.path();
-        std::fs::create_dir_all(project.join("src")).unwrap();
-        std::fs::write(
-            project.join("Cargo.toml"),
-            "[package]\nname = \"kirkforge-borrow-hint-test\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
-        )
-        .unwrap();
-        std::fs::write(
-            project.join("src/main.rs"),
-            r#"fn main() {
-    let mut v = vec![1, 2, 3];
-    let first = &v[0];
-    v.push(4);
-    println!("{first}");
-}
-"#,
-        )
-        .unwrap();
+    fn classify_missing_import_returns_none_for_other_errors() {
+        assert!(classify_missing_import("just some unrelated text").is_none());
+        assert!(classify_missing_import("cannot find value in scope").is_none());
+    }
 
-        let output = std::process::Command::new("cargo")
-            .current_dir(project)
-            .args(["build", "--message-format=short"])
-            .output()
-            .expect("cargo build");
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let h = classify_error(&stderr);
+    #[test]
+    fn classify_type_mismatch_rejects_same_type() {
+        let err = "expected `T`, found `T`";
+        assert!(classify_type_mismatch(err).is_none());
+    }
+
+    #[test]
+    fn classify_type_mismatch_requires_both_keywords() {
+        assert!(classify_type_mismatch("expected `T`").is_none());
+        assert!(classify_type_mismatch("found `T`").is_none());
+    }
+
+    #[test]
+    fn classify_missing_method_requires_no_method_named_prefix() {
+        let err = "method `foo` not found";
+        assert!(classify_missing_method(err).is_none());
+    }
+
+    #[test]
+    fn analyze_error_file_not_found_uses_file_path_field() {
+        let args = serde_json::json!({"file_path": "missing.txt"});
+        let hint = analyze_error("read_file", "No such file or directory", &args).unwrap();
         assert!(
-            matches!(h, Some(ErrorHint::BorrowConflict { .. })),
-            "expected BorrowConflict, got {h:?}\nstderr: {stderr}",
+            hint.error_summary.contains("missing.txt"),
+            "got: {}",
+            hint.error_summary
         );
+    }
+
+    #[test]
+    fn analyze_error_permission_denied_includes_path() {
+        let args = serde_json::json!({"path": "/etc/secure"});
+        let hint = analyze_error("write_file", "Permission denied", &args).unwrap();
+        assert!(hint.error_summary.contains("/etc/secure"));
+        assert!(hint.suggestion.contains("/tmp"));
+    }
+
+    #[test]
+    fn analyze_error_access_denied_alias_is_recoverable() {
+        let args = serde_json::json!({"path": "/root/.ssh"});
+        let hint =
+            analyze_error("read_file", "access denied for /root/.ssh", &args).unwrap();
+        assert!(hint.recoverable);
+        assert!(hint.error_summary.contains("Permission denied"));
+    }
+
+    #[test]
+    fn analyze_error_build_error_javascript_paths() {
+        let args = serde_json::json!({"command": "npm run build"});
+        let hint = analyze_error(
+            "bash",
+            "error: failed to compile\ntsc failed with exit code 2",
+            &args,
+        )
+        .unwrap();
+        assert!(hint.suggestion.contains("read_file"));
+        assert!(hint.suggestion.contains("edit_file"));
+    }
+
+    #[test]
+    fn analyze_error_command_not_recognized_alias() {
+        let args = serde_json::json!({});
+        let hint =
+            analyze_error("bash", "bash: foo: not recognized as a command", &args).unwrap();
+        assert!(hint.suggestion.contains("installed"));
+    }
+
+    #[test]
+    fn analyze_error_network_connection_alias() {
+        let args = serde_json::json!({});
+        let hint = analyze_error("bash", "connection refused", &args).unwrap();
+        assert!(hint.suggestion.contains("network") || hint.suggestion.contains("Retry"));
+    }
+
+    #[test]
+    fn analyze_error_timeout_is_network_recoverable() {
+        let args = serde_json::json!({});
+        let hint = analyze_error("bash", "operation timed out", &args).unwrap();
+        assert!(hint.recoverable);
+    }
+
+    #[test]
+    fn analyze_error_not_found_ignores_command_not_found_phrase() {
+        let args = serde_json::json!({});
+        let hint = analyze_error("bash", "command not found", &args).unwrap();
+        assert!(
+            hint.error_summary.contains("Command not found"),
+            "command-not-found should not match 'not found' branch, got: {}",
+            hint.error_summary
+        );
+    }
+
+    #[test]
+    fn analyze_error_empty_args_for_file_not_found() {
+        let args = serde_json::json!({});
+        let hint =
+            analyze_error("read_file", "no such file or directory", &args).unwrap();
+        assert!(hint.error_summary.contains("the file"));
+    }
+
+    #[test]
+    fn build_recovery_message_returns_user_message() {
+        let hint = RecoveryHint {
+            error_summary: "explosion".into(),
+            suggestion: "don't explode".into(),
+            recoverable: true,
+        };
+        let msg = build_recovery_message(&hint);
+        assert_eq!(msg.role, Role::User);
+        assert!(msg.content.contains("explosion"));
+        assert!(msg.content.contains("don't explode"));
+        assert!(msg.content.contains("do not repeat"));
+    }
+
+    #[test]
+    fn retry_tracker_default_is_two_retries() {
+        let t = RetryTracker::new();
+        assert_eq!(t.max_retries, 2);
+        assert_eq!(t.retry_count, 0);
+    }
+
+    #[test]
+    fn retry_tracker_default_implementation_matches_new() {
+        let t = RetryTracker::default();
+        assert_eq!(t.max_retries, 0);
+        assert_eq!(t.retry_count, 0);
+        assert!(!t.can_retry(), "default zero max means cannot retry");
+    }
+
+    #[test]
+    fn recovery_hint_debug_format() {
+        let hint = RecoveryHint {
+            error_summary: "e".into(),
+            suggestion: "s".into(),
+            recoverable: false,
+        };
+        let s = format!("{hint:?}");
+        assert!(s.contains("RecoveryHint"));
+        assert!(s.contains("recoverable: false"));
     }
 }

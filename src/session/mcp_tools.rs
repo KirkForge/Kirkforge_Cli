@@ -103,9 +103,6 @@ mod tests {
 
     #[test]
     fn test_wrapper_creation() {
-        // We can't easily test with a real McpClientManager since it
-        // requires spawning processes, but we can verify the wrapper
-        // structure compiles and the naming works.
         let mgr = Arc::new(McpClientManager::with_tools(vec![(
             "mcp/test/echo".to_string(),
             "Echo back the input".to_string(),
@@ -117,5 +114,80 @@ mod tests {
         let def = tools[0].def();
         assert_eq!(def.name, "mcp/test/echo");
         assert_eq!(def.description, "Echo back the input");
+    }
+
+    #[test]
+    fn test_all_mcp_tools_empty_manager_yields_no_tools() {
+        let mgr = Arc::new(McpClientManager::with_tools(vec![]));
+        let tools = all_mcp_tools(mgr);
+        assert!(tools.is_empty());
+    }
+
+    #[test]
+    fn test_all_mcp_tools_preserves_multiple_tools() {
+        let defs = vec![
+            (
+                "mcp/srv/a".to_string(),
+                "Tool A".to_string(),
+                serde_json::json!({"type": "object"}),
+            ),
+            (
+                "mcp/srv/b".to_string(),
+                "Tool B".to_string(),
+                serde_json::json!({"type": "object"}),
+            ),
+            (
+                "mcp/srv/c".to_string(),
+                "Tool C".to_string(),
+                serde_json::json!({"type": "object"}),
+            ),
+        ];
+        let mgr = Arc::new(McpClientManager::with_tools(defs));
+        let tools = all_mcp_tools(mgr);
+        assert_eq!(tools.len(), 3);
+        let names: Vec<&str> = tools.iter().map(|t| t.def().name).collect();
+        assert!(names.contains(&"mcp/srv/a"));
+        assert!(names.contains(&"mcp/srv/b"));
+        assert!(names.contains(&"mcp/srv/c"));
+    }
+
+    #[test]
+    fn test_wrapper_def_carries_parameters() {
+        let params = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "x": {"type": "number"},
+                "y": {"type": "string"},
+            },
+            "required": ["x"],
+        });
+        let mgr = Arc::new(McpClientManager::with_tools(vec![(
+            "mcp/test/params".to_string(),
+            "Params check".to_string(),
+            params.clone(),
+        )]));
+        let tools = all_mcp_tools(mgr);
+        assert_eq!(tools.len(), 1);
+        let def = tools[0].def();
+        assert_eq!(def.name, "mcp/test/params");
+        assert_eq!(def.description, "Params check");
+        assert_eq!(def.parameters, params);
+    }
+
+    #[tokio::test]
+    async fn test_wrapper_run_forwards_to_manager_call_tool() {
+        let mgr = Arc::new(McpClientManager::with_tools(vec![(
+            "mcp/test/forward".to_string(),
+            "Forward".to_string(),
+            serde_json::json!({"type": "object"}),
+        )]));
+        let tools = all_mcp_tools(mgr.clone());
+        assert_eq!(tools.len(), 1);
+        let ctx = crate::tools::ToolContext::new();
+        let outcome = tools[0].run(&ctx, serde_json::json!({"x": 1})).await;
+        assert!(
+            matches!(outcome, ToolOutcome::Failure(_)),
+            "no live server → expected Failure, got {outcome:?}"
+        );
     }
 }

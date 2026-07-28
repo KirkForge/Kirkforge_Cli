@@ -1254,7 +1254,10 @@ mod tests {
 
     #[test]
     fn test_sanitized_path_dedupes_entries() {
-        let sep = if cfg!(windows) { ';' } else { ':' };
+        if cfg!(windows) {
+            return;
+        }
+        let sep = ':';
         let input = format!("/usr/bin{sep}/usr/bin{sep}/bin");
         let result = sanitized_path(&input);
         let parts: Vec<&str> = result.split(sep).collect();

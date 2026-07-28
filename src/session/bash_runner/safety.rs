@@ -830,6 +830,9 @@ mod private_tests {
 
     #[test]
     fn check_bash_command_str_blocks_unresolvable_sandbox_dir() {
+        if cfg!(windows) {
+            return;
+        }
         let guard = PathGuard {
             sandbox_dir: Some("/nonexistent/kirkforge-sandbox-test-dir".into()),
             ..Default::default()

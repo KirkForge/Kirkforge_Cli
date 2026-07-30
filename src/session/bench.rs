@@ -25,6 +25,7 @@ pub fn collect_turn_metrics(
     let mut tokens_out: u64 = 0;
     let mut cost_usd: f64 = 0.0;
     let mut tool_calls: u32 = 0;
+    let mut compression_passes: u32 = 0;
 
     for event in events {
         match event {
@@ -40,6 +41,9 @@ pub fn collect_turn_metrics(
             }
             super::executor::TurnEvent::ToolStart { .. } => {
                 tool_calls += 1;
+            }
+            super::executor::TurnEvent::CompactionReport { .. } => {
+                compression_passes += 1;
             }
             _ => {}
         }
@@ -60,6 +64,7 @@ pub fn collect_turn_metrics(
         duration_secs,
         cost_usd,
         tool_calls,
+        compression_passes,
         error: run_error,
     }
 }
@@ -136,6 +141,13 @@ pub async fn run_task(
     task_config.security.sandbox_dir = Some(sandbox_path.to_string_lossy().to_string());
     task_config.security.auto_approve = true;
     task_config.tools.dry_run = false;
+    // WO 14.7: when the task pins a budget ceiling, export it as
+    // KIRKFORGE_BUDGET_CEILING so the budget guard (init_from_config
+    // → apply_env_overrides) enforces it for this run. The Token
+    // Budget Challenge sets this per run; other tasks leave it None.
+    if let Some((env_name, ceiling)) = task.budget_env() {
+        std::env::set_var(env_name, ceiling.to_string());
+    }
     super::config::freeze_launch_sandbox(&mut task_config);
 
     let shared_config: SharedConfig = std::sync::Arc::new(std::sync::RwLock::new(task_config));
@@ -213,6 +225,14 @@ pub async fn run_task(
     )
     .await;
 
+    // WO 14.7: clear the budget-ceiling env var so it does not leak
+    // into subsequent tasks in the same `bench run` invocation. Only
+    // the task that set it clears it; tasks without a ceiling leave
+    // the env untouched.
+    if task.budget_ceiling.is_some() {
+        std::env::remove_var(kirkforge_bench::BUDGET_CEILING_ENV);
+    }
+
     let duration = start.elapsed().as_secs_f64();
 
     // Collect metrics from turn events.
@@ -231,6 +251,82 @@ pub async fn run_task(
     ))
 }
 
+/// Descending budget ceilings for the Token Budget Challenge (WO 14.7).
+/// The runner executes the task once per ceiling and records the six
+/// metrics per run. The progression showcases the tree-sitter index +
+/// Stratum compression + budget guard under progressively tighter
+/// context budgets. See ADR-0066.
+pub const BUDGET_CHALLENGE_CEILINGS: [usize; 5] = [131_072, 65_536, 32_768, 16_384, 8_192];
+
+/// Name of the signature Token Budget Challenge task. `run_all` detects
+/// this task by name and dispatches it to `run_token_budget_challenge`
+/// instead of the single-run path. See ADR-0066.
+pub const BUDGET_CHALLENGE_TASK_NAME: &str = "token_budget_challenge";
+
+/// Run the Token Budget Challenge: execute the task 5x under descending
+/// budget ceilings (128k → 64k → 32k → 16k → 8k), collecting the six
+/// metrics per run into a `BudgetChallengeReport`. Each run clones the
+/// task with `budget_ceiling` set to the current ceiling so the runner
+/// exports `KIRKFORGE_BUDGET_CEILING` for that run. Returns the report
+/// plus a flat `Vec<TaskResult>` (one per ceiling) so `run_all` can
+/// fold the per-ceiling results into the standard `BenchReport`.
+pub async fn run_token_budget_challenge(
+    task: &BenchTask,
+    model: &str,
+    config: &Config,
+    timeout_secs: u64,
+) -> (kirkforge_bench::BudgetChallengeReport, Vec<TaskResult>) {
+    let mut entries = Vec::with_capacity(BUDGET_CHALLENGE_CEILINGS.len());
+    let mut results = Vec::with_capacity(BUDGET_CHALLENGE_CEILINGS.len());
+    for ceiling in BUDGET_CHALLENGE_CEILINGS {
+        eprintln!("  running task: {} @ {}k...", task.name, ceiling / 1024);
+        let mut ceiling_task = task.clone();
+        ceiling_task.budget_ceiling = Some(ceiling);
+        match run_task(&ceiling_task, model, config, timeout_secs).await {
+            Ok(result) => {
+                entries.push(kirkforge_bench::BudgetChallengeEntry {
+                    ceiling,
+                    success: result.success,
+                    prompt_tokens: result.tokens_in,
+                    completion_tokens: result.tokens_out,
+                    compression_passes: result.compression_passes,
+                    cost_usd: result.cost_usd,
+                });
+                results.push(result);
+            }
+            Err(e) => {
+                let result = TaskResult {
+                    task_name: format!("{}@{}k", task.name, ceiling / 1024),
+                    difficulty: task.difficulty,
+                    success: false,
+                    tokens_in: 0,
+                    tokens_out: 0,
+                    duration_secs: 0.0,
+                    cost_usd: 0.0,
+                    tool_calls: 0,
+                    compression_passes: 0,
+                    error: Some(e.to_string()),
+                };
+                entries.push(kirkforge_bench::BudgetChallengeEntry {
+                    ceiling,
+                    success: false,
+                    prompt_tokens: 0,
+                    completion_tokens: 0,
+                    compression_passes: 0,
+                    cost_usd: 0.0,
+                });
+                results.push(result);
+            }
+        }
+    }
+    let report = kirkforge_bench::BudgetChallengeReport {
+        task_name: task.name.clone(),
+        model: model.to_string(),
+        entries,
+    };
+    (report, results)
+}
+
 /// Run all tasks and collect results.
 pub async fn run_all(
     tasks: &[BenchTask],
@@ -240,6 +336,17 @@ pub async fn run_all(
 ) -> BenchReport {
     let mut results = Vec::new();
     for task in tasks {
+        // WO 14.7: the signature Token Budget Challenge runs 5x under
+        // descending ceilings instead of the single-run path. The
+        // per-ceiling results fold into the standard report; the
+        // dedicated BudgetChallengeReport is written separately by
+        // the CLI handler when the task is present.
+        if task.name == BUDGET_CHALLENGE_TASK_NAME {
+            let (_challenge_report, challenge_results) =
+                run_token_budget_challenge(task, model, config, timeout_secs).await;
+            results.extend(challenge_results);
+            continue;
+        }
         eprintln!("  running task: {}...", task.name);
         match run_task(task, model, config, timeout_secs).await {
             Ok(result) => results.push(result),
@@ -252,6 +359,7 @@ pub async fn run_all(
                 duration_secs: 0.0,
                 cost_usd: 0.0,
                 tool_calls: 0,
+                compression_passes: 0,
                 error: Some(e.to_string()),
             }),
         }
@@ -279,6 +387,7 @@ mod tests {
             setup: HashMap::new(),
             verify,
             requires_model: false,
+            budget_ceiling: None,
         }
     }
 
@@ -402,6 +511,7 @@ mod tests {
                 contains: "fn main".to_string(),
             },
             requires_model: false,
+            budget_ceiling: None,
         };
         let result = collect_turn_metrics(&[], 1.0, &task, dir.path(), None);
         assert!(result.success);
@@ -420,6 +530,7 @@ mod tests {
                 contains: "hello".to_string(),
             },
             requires_model: false,
+            budget_ceiling: None,
         };
         let result = collect_turn_metrics(&[], 1.0, &task, dir.path(), None);
         assert!(!result.success);
@@ -437,6 +548,7 @@ mod tests {
                 duration_secs: 1.0,
                 cost_usd: 0.01,
                 tool_calls: 2,
+                compression_passes: 0,
                 error: None,
             },
             TaskResult {
@@ -448,6 +560,7 @@ mod tests {
                 duration_secs: 0.0,
                 cost_usd: 0.0,
                 tool_calls: 0,
+                compression_passes: 0,
                 error: Some("model error".to_string()),
             },
         ];
@@ -549,6 +662,7 @@ mod tests {
                 command: "true".to_string(),
             },
             requires_model: false,
+            budget_ceiling: None,
         };
         let result = collect_turn_metrics(&[], 1.0, &task, dir.path(), None);
         assert_eq!(result.task_name, "named-task");
@@ -602,6 +716,7 @@ mod tests {
             duration_secs: 1.0,
             cost_usd: 0.001,
             tool_calls: 1,
+            compression_passes: 0,
             error: None,
         }];
         let summary = BenchSummary::from_results(&results);
@@ -622,6 +737,7 @@ mod tests {
                 duration_secs: 1.0,
                 cost_usd: 0.01,
                 tool_calls: 2,
+                compression_passes: 0,
                 error: None,
             },
             TaskResult {
@@ -633,6 +749,7 @@ mod tests {
                 duration_secs: 2.0,
                 cost_usd: 0.02,
                 tool_calls: 3,
+                compression_passes: 0,
                 error: None,
             },
         ];
@@ -641,5 +758,95 @@ mod tests {
         assert_eq!(summary.total_tokens_out, 150);
         assert_eq!(summary.total_tool_calls, 5);
         assert!((summary.total_cost_usd - 0.03).abs() < 0.001);
+    }
+
+    // ── WO 14.7: Token Budget Challenge ──
+
+    #[test]
+    fn budget_challenge_ceilings_are_descending_powers_of_two() {
+        // ponytail: the signature challenge runs 128k → 64k → 32k →
+        // 16k → 8k. Pinning the exact ceilings catches a silent
+        // reorder or unit confusion (bytes vs k).
+        assert_eq!(
+            BUDGET_CHALLENGE_CEILINGS,
+            [131_072, 65_536, 32_768, 16_384, 8_192],
+            "ceilings must be 128k/64k/32k/16k/8k descending"
+        );
+        // Descending invariant: each ceiling is half the previous.
+        for w in BUDGET_CHALLENGE_CEILINGS.windows(2) {
+            assert_eq!(w[0], w[1] * 2, "each ceiling must be 2x the next");
+        }
+    }
+
+    #[test]
+    fn budget_challenge_task_name_is_token_budget_challenge() {
+        // ponytail: run_all dispatches on this exact name; a typo
+        // would silently fall through to the single-run path and the
+        // signature challenge would never run.
+        assert_eq!(BUDGET_CHALLENGE_TASK_NAME, "token_budget_challenge");
+    }
+
+    #[test]
+    fn budget_challenge_clones_task_with_ceiling_per_run() {
+        // The loop sets budget_ceiling on a per-run clone so the
+        // runner exports KIRKFORGE_BUDGET_CEILING for that run. Verify
+        // the base task is not mutated and the env helper resolves.
+        let base = BenchTask {
+            name: BUDGET_CHALLENGE_TASK_NAME.to_string(),
+            difficulty: Difficulty::Medium,
+            prompt: "p".to_string(),
+            setup: HashMap::new(),
+            verify: VerifySpec::CommandExitsZero {
+                command: "true".to_string(),
+            },
+            requires_model: true,
+            budget_ceiling: None,
+        };
+        for ceiling in BUDGET_CHALLENGE_CEILINGS {
+            let mut run = base.clone();
+            run.budget_ceiling = Some(ceiling);
+            let env = run.budget_env().expect("ceiling set → env Some");
+            assert_eq!(env.0, kirkforge_bench::BUDGET_CEILING_ENV);
+            assert_eq!(env.1, ceiling);
+        }
+        // Base task unchanged.
+        assert!(base.budget_ceiling.is_none());
+    }
+
+    #[test]
+    fn collect_turn_metrics_counts_compaction_reports_as_compression_passes() {
+        // ponytail: the six metrics per ceiling include
+        // compression_passes; this pins that a CompactionReport event
+        // increments the counter (the budget/Stratum pressure signal
+        // the challenge measures).
+        let dir = tempfile::tempdir().unwrap();
+        let task = sample_task(
+            "compress",
+            VerifySpec::CommandExitsZero {
+                command: "true".to_string(),
+            },
+        );
+        let events = vec![
+            super::super::executor::TurnEvent::CompactionReport {
+                new_messages: vec![],
+                dropped_tool_results: 1,
+                condensed_assistant_turns: 0,
+                original_count: 10,
+                compacted_count: 4,
+                tokens_before: 1000,
+                tokens_after: 400,
+            },
+            super::super::executor::TurnEvent::CompactionReport {
+                new_messages: vec![],
+                dropped_tool_results: 0,
+                condensed_assistant_turns: 1,
+                original_count: 4,
+                compacted_count: 2,
+                tokens_before: 400,
+                tokens_after: 200,
+            },
+        ];
+        let result = collect_turn_metrics(&events, 2.0, &task, dir.path(), None);
+        assert_eq!(result.compression_passes, 2);
     }
 }

@@ -82,6 +82,17 @@ pub(super) fn apply_env_overrides(cfg: &mut Config) {
         }
     }
 
+    // KIRKFORGE_BUDGET_CEILING
+    // WO 14.7: the Token Budget Challenge exports this to pin the
+    // token budget ceiling for a single run. The bench runner sets
+    // it before invoking the model; init_from_config reads it off
+    // cfg.tools.budget_ceiling via the standard env-override layer.
+    if let Ok(val) = std::env::var("KIRKFORGE_BUDGET_CEILING") {
+        if let Ok(n) = val.parse::<usize>() {
+            cfg.tools.budget_ceiling = n;
+        }
+    }
+
     // KIRKFORGE_CARRYOVER_ENABLED
     if let Ok(val) = std::env::var("KIRKFORGE_CARRYOVER_ENABLED") {
         if let Some(v) = parse_bool_env(&val) {

@@ -36,6 +36,9 @@ Requires a running Ollama server (or set provider config for cloud models).
 - **Plugin system** — Stratum, Plugin3, Draw, and Video are compiled-in
   behind feature flags (or shell fallbacks). External plugins via
   `kirkforge.toml` manifests with trust tiers and signature verification.
+- **Benchmarked** — 31 coding tasks organized against the
+  [KIRK-BENCH](KIRK-BENCH.md) spec, including the signature Token Budget
+  Challenge that showcases the tree-sitter + Stratum + budget architecture.
 
 ## Documentation
 

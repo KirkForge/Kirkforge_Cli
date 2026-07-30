@@ -526,8 +526,17 @@ lets the agent loop and bench harness run a named template via a tool call.
 
 ## Benchmarks
 
-The benchmark system measures agent capability on 30 coding tasks across three
-difficulty levels. 20 of those tasks are single-file coding-skills tasks
+The benchmark system measures agent capability on coding tasks across three
+difficulty levels. The task set is organized against the [KIRK-BENCH](../KIRK-BENCH.md)
+spec: eight categories (Repository Understanding, Refactoring, Bug Fixes, New
+Features, Verification, Context Intelligence, Real Engineering, Cost), 40
+numbered tasks, one universal scoring format, 10 hero benchmarks, and one
+signature challenge — the **Token Budget Challenge** (WO 14.7, ADR-0066). The
+spec documents 40 tasks; 30 are implemented today and mapped to the categories
+in `KIRK-BENCH.md`'s mapping table; the remaining ~10 are listed as planned
+(honest deferral — each exercises a specific feature and is a future WO).
+
+The 30 implemented tasks break down as follows: 20 are single-file coding-skills tasks
 (Rust refactors, bug fixes, doc/test additions), 4 are plugin-tool tasks
 (`use_stratum_compress`, `use_budget_check`, `use_draw_render`,
 `use_lsp_query`) that exercise the Stratum, Plugin3, Draw, and LSP tool
@@ -552,6 +561,37 @@ The harness (`kirkforge-bench` crate + `src/session/bench.rs`) spins up a
 headless agent session with a real model adapter, auto-approves all tool calls,
 runs the task, then verifies the result deterministically. Reports are written as
 JSON and markdown.
+
+### Token Budget Challenge (WO 14.7, ADR-0066)
+
+The signature benchmark. It runs the same task 5× under descending context
+budgets (128k → 64k → 32k → 16k → 8k) and records six metrics per ceiling:
+success, prompt tokens, completion tokens, compression passes, cost. This
+showcases the tree-sitter context index, Stratum compression, and the Plugin3
+budget guard under progressively tighter budgets — the architectural
+differentiator vs Claude Code / Vix / opencode.
+
+- **Task**: `benches/tasks/token_budget_challenge.toml` — a small Rust crate
+  with a failing test the model must fix (wire a `--verbose` flag into a stub
+  parser). `requires_model = true` so `bench verify-only` skips it.
+- **Runner**: `run_token_budget_challenge` in `src/session/bench.rs` runs the
+  task once per ceiling in `BUDGET_CHALLENGE_CEILINGS = [131_072, 65_536,
+  32_768, 16_384, 8_192]`. Each run clones the task with `budget_ceiling` set;
+  the runner exports `KIRKFORGE_BUDGET_CEILING=<n>` to the agent's env so the
+  budget guard enforces it for that run, then clears it after. `run_all`
+  dispatches on the task name (`token_budget_challenge`) to the loop instead
+  of the single-run path.
+- **Report**: `BudgetChallengeReport` (in `kirkforge-bench`) records the six
+  metrics per ceiling; `write_budget_challenge_report` emits the markdown
+  scoreboard table (ceiling × success × prompt tokens × completion tokens ×
+  compression passes × cost). `TaskResult` gained a serde-optional
+  `compression_passes` field (counts `TurnEvent::CompactionReport`) for this.
+- **Budget env wiring**: `BenchTask::budget_ceiling: Option<usize>`
+  (serde-optional, default `None`) is the task-side field. The
+  `KIRKFORGE_BUDGET_CEILING` env hook in `env_overrides.rs` (mirrors
+  `KIRKFORGE_MINIFY_ABOVE_BYTES` from WO 9.7) reads it into
+  `cfg.tools.budget_ceiling`; `init_from_config` applies it to the shared
+  `TokenBudget`. No new budget code — reuses ADR-0005 / WO 7.5 / WO 8.6.
 
 A `bench` CI job runs all tasks on Ollama with `qwen2.5:0.5b` on every push/PR.
 It posts a delta summary as a PR comment comparing against the `main` baseline

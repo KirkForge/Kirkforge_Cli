@@ -106,6 +106,7 @@ verifies the table and the file headers agree.
 | [063](./063-plugin-init-scaffolding.md) | Plugin init scaffolding command (`kirkforge plugin init`) | Accepted | CLI |
 | [064](./064-plugin-system-e2e-test.md) | Plugin system end-to-end integration test suite | Accepted | CLI |
 | [065](./065-coverage-threshold-policy.md) | Coverage-gate threshold policy (75% target, headroom, `--skip` workaround) | Accepted | CLI |
+| [066](./066-kirk-bench-spec.md) | KIRK-BENCH spec + signature Token Budget Challenge | Accepted | CLI |
 
 ## Native KirkForge-Cli ADRs
 
@@ -145,6 +146,7 @@ numbering scheme (`001`–`017`). Recent additions:
 - [ADR-053: VFS minification for the agent loop `read_file` tool](./053-vfs-minification.md)
 - [ADR-054: rlimit sandbox hardening for the non-Docker bash path](./054-rlimit-sandbox-hardening.md)
 - [ADR-055: HTTP MCP session-id tracking + resumable streams](./055-http-mcp-session-id.md)
+- [ADR-066: KIRK-BENCH spec + signature Token Budget Challenge](./066-kirk-bench-spec.md)
 
 These are **not** part of the Plugin3 series and are therefore not
 included in the 4-digit index table above.

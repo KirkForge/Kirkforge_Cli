@@ -50,6 +50,30 @@ fn load_tasks_nonexistent_dir() {
 }
 
 #[test]
+fn load_tasks_single_file() {
+    // WO 14.7: load_tasks accepts a single .toml file so
+    // `bench verify-only --tasks <file>` targets one task.
+    let dir = TempDir::new().unwrap();
+    let task_path = dir.path().join("only_task.toml");
+    std::fs::write(
+        &task_path,
+        r#"
+name = "single"
+difficulty = "easy"
+prompt = "one task"
+
+[verify]
+type = "command_exits_zero"
+command = "true"
+"#,
+    )
+    .unwrap();
+    let tasks = load_tasks(&task_path).unwrap();
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks[0].name, "single");
+}
+
+#[test]
 fn load_tasks_multiple_files() {
     let dir = TempDir::new().unwrap();
     std::fs::write(
@@ -97,6 +121,7 @@ fn verify_command_exits_zero() {
             command: "true".into(),
         },
         requires_model: false,
+        budget_ceiling: None,
     };
     assert!(verify_task(&task, dir.path()).unwrap());
 }
@@ -113,6 +138,7 @@ fn verify_command_fails() {
             command: "false".into(),
         },
         requires_model: false,
+        budget_ceiling: None,
     };
     assert!(!verify_task(&task, dir.path()).unwrap());
 }
@@ -131,6 +157,7 @@ fn verify_file_contains() {
             contains: "hello".into(),
         },
         requires_model: false,
+        budget_ceiling: None,
     };
     assert!(verify_task(&task, dir.path()).unwrap());
 }
@@ -148,6 +175,7 @@ fn verify_file_contains_missing_file() {
             contains: "hello".into(),
         },
         requires_model: false,
+        budget_ceiling: None,
     };
     assert!(!verify_task(&task, dir.path()).unwrap());
 }
@@ -167,6 +195,7 @@ fn write_report_and_summary() {
             duration_secs: 12.3,
             cost_usd: 0.001,
             tool_calls: 3,
+            compression_passes: 0,
             error: None,
         }],
         summary: BenchSummary {
@@ -212,6 +241,7 @@ fn bench_summary_from_results() {
             duration_secs: 10.0,
             cost_usd: 0.01,
             tool_calls: 2,
+            compression_passes: 0,
             error: None,
         },
         TaskResult {
@@ -223,6 +253,7 @@ fn bench_summary_from_results() {
             duration_secs: 20.0,
             cost_usd: 0.02,
             tool_calls: 5,
+            compression_passes: 0,
             error: Some("timeout".into()),
         },
     ];

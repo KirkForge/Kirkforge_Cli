@@ -1,0 +1,74 @@
+name = "token_budget_challenge"
+difficulty = "medium"
+requires_model = true
+
+prompt = "Add a `--verbose` flag to the CLI. The Config struct already has a `verbose` field and a `from_iter` helper, but `from_iter` is a stub that always returns false. Wire `from_iter` to parse `--verbose` from the argument iterator so the existing tests pass. When the flag is present, `run` already prints '[debug] verbose mode enabled' to stderr — do not change `run`, only fix `from_iter`."
+
+[setup]
+"Cargo.toml" = """[package]
+name = "token_budget_challenge"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "token_budget_challenge"
+path = "src/main.rs"
+"""
+"src/main.rs" = """use std::env;
+
+#[derive(Default)]
+struct Config {
+    verbose: bool,
+}
+
+impl Config {
+    fn from_args() -> Self {
+        Self::from_iter(env::args())
+    }
+
+    fn from_iter<I: Iterator<Item = String>>(_args: I) -> Self {
+        Self { verbose: false }
+    }
+}
+
+fn run(cfg: &Config) {
+    if cfg.verbose {
+        eprintln!("[debug] verbose mode enabled");
+    }
+    println!("running");
+}
+
+fn main() {
+    let cfg = Config::from_args();
+    run(&cfg);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_verbose_flag() {
+        let args = ["token_budget_challenge".to_string(), "--verbose".to_string()];
+        let cfg = Config::from_iter(args.into_iter());
+        assert!(cfg.verbose, "verbose should be true when --verbose is passed");
+    }
+
+    #[test]
+    fn absent_flag_is_false() {
+        let args = ["token_budget_challenge".to_string()];
+        let cfg = Config::from_iter(args.into_iter());
+        assert!(!cfg.verbose, "verbose should be false when --verbose is absent");
+    }
+}
+"""
+
+[verify]
+type = "command_exits_zero"
+# The setup's from_iter stub always returns false, so `cargo test`
+# fails on the unedited setup (the parses_verbose_flag test asserts
+# cfg.verbose == true). The model must wire from_iter to parse
+# --verbose for this verify to pass. requires_model = true so
+# bench verify-only skips it; bench run executes it 5x under
+# descending budget ceilings (128k/64k/32k/16k/8k).
+command = "cargo test --quiet && cargo clippy --all-targets -- -D warnings"

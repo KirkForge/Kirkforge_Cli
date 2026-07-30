@@ -289,7 +289,7 @@ fixes the one currently-red gate) and layers polish on it.
 | 14.1 | [First-run onboarding banner](14.1-first-run-onboarding-banner.md) | Planned | High | — |
 | 14.2 | [Grouped help + fill empty usage strings](14.2-grouped-help-usage-strings.md) | Planned | Medium | — |
 | 14.3 | [Actionable errors + typed error classification](14.3-actionable-errors-typed-classification.md) | Planned | High | — |
-| 14.4 | [Status bar graceful degradation on narrow terminals](14.4-status-bar-graceful-degradation.md) | Planned | Medium | — |
+| 14.4 | [Status bar graceful degradation on narrow terminals](14.4-status-bar-graceful-degradation.md) | Done | Medium | — |
 | 14.5 | [`/permissions` command (list + revoke `[A]lways` rules)](14.5-permissions-revoke-command.md) | Planned | Medium | 14.2 (soft) |
 | 14.6 | [Slash-command + `@`-mention autocomplete](14.6-slash-mention-autocomplete.md) | Planned | High | 14.2, 14.5 (soft) |
 | 14.7 | [Publish KIRK-BENCH spec + signature Token Budget Challenge](14.7-kirk-bench-spec-publish.md) | Planned | High | 14.0 (soft) |

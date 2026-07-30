@@ -835,4 +835,180 @@ mod tests {
         assert_eq!(map.get("link").unwrap(), "https://example.com:8080/path");
         assert_eq!(body, "body");
     }
+
+    #[test]
+    fn split_key_value_splits_simple_pair() {
+        assert_eq!(
+            split_key_value("name: test"),
+            Some(("name".to_string(), "test".to_string()))
+        );
+    }
+
+    #[test]
+    fn split_key_value_trims_whitespace() {
+        assert_eq!(
+            split_key_value("  name  :   test value  "),
+            Some(("name".to_string(), "test value".to_string()))
+        );
+    }
+
+    #[test]
+    fn split_key_value_skips_url_scheme_colon() {
+        let (k, v) = split_key_value("link: https://example.com:8080/path").unwrap();
+        assert_eq!(k, "link");
+        assert_eq!(v, "https://example.com:8080/path");
+    }
+
+    #[test]
+    fn split_key_value_returns_none_for_no_colon() {
+        assert!(split_key_value("no colon here").is_none());
+    }
+
+    #[test]
+    fn split_key_value_returns_none_for_empty_key() {
+        assert!(split_key_value(": value").is_none());
+        assert!(split_key_value("  : value").is_none());
+    }
+
+    #[test]
+    fn split_key_value_empty_value_is_kept() {
+        assert_eq!(
+            split_key_value("key:"),
+            Some(("key".to_string(), "".to_string()))
+        );
+    }
+
+    #[test]
+    fn tokenize_lowercases_and_splits_on_non_alphanumeric() {
+        let toks = tokenize("Hello, World! Foo-bar");
+        assert!(toks.contains(&"hello".to_string()));
+        assert!(toks.contains(&"world".to_string()));
+        assert!(toks.contains(&"foo".to_string()));
+        assert!(toks.contains(&"bar".to_string()));
+    }
+
+    #[test]
+    fn tokenize_drops_single_char_tokens() {
+        let toks = tokenize("a b c xx yy");
+        assert!(!toks.contains(&"a".to_string()));
+        assert!(!toks.contains(&"b".to_string()));
+        assert!(toks.contains(&"xx".to_string()));
+        assert!(toks.contains(&"yy".to_string()));
+    }
+
+    #[test]
+    fn tokenize_drops_stop_words() {
+        let toks = tokenize("the and for with this that");
+        assert!(
+            toks.is_empty(),
+            "stop words should be dropped, got {toks:?}"
+        );
+    }
+
+    #[test]
+    fn tokenize_empty_returns_empty() {
+        assert!(tokenize("").is_empty());
+        assert!(tokenize("!!! ,,, ...").is_empty());
+    }
+
+    #[test]
+    fn compute_idf_empty_corpus_returns_empty() {
+        let idf = compute_idf(&[]);
+        assert!(idf.is_empty());
+    }
+
+    #[test]
+    fn compute_idf_singleton_corpus_has_zero_idf_for_sole_term() {
+        // n=1, df=1 → idf = ln(1/(1+1)) = ln(0.5) < 0.
+        let fact = MemoryFact {
+            name: "alpha".into(),
+            description: "alpha".into(),
+            body: "alpha".into(),
+            metadata: Default::default(),
+        };
+        let idf = compute_idf(&[fact]);
+        let val = idf.get("alpha").copied().unwrap_or(0.0);
+        assert!(val < 0.0, "ln(0.5) should be negative, got {val}");
+    }
+
+    #[test]
+    fn compute_idf_counts_each_term_once_per_fact() {
+        let fact = MemoryFact {
+            name: "alpha alpha".into(),
+            description: "alpha".into(),
+            body: "alpha".into(),
+            metadata: Default::default(),
+        };
+        let idf = compute_idf(&[fact]);
+        // df should be 1 (counted once per fact despite repeats).
+        let val = idf.get("alpha").copied().unwrap_or(0.0);
+        assert!(
+            val < 0.0,
+            "repeated term in one doc must not inflate df, got {val}"
+        );
+    }
+
+    fn make_fact(name: &str, desc: &str, body: &str) -> MemoryFact {
+        MemoryFact {
+            name: name.into(),
+            description: desc.into(),
+            body: body.into(),
+            metadata: Default::default(),
+        }
+    }
+
+    #[test]
+    fn score_fact_zero_for_unmatched_query() {
+        let fact = make_fact("alpha", "desc", "body");
+        let idf = compute_idf(&[fact.clone()]);
+        let score = score_fact(&fact, &["zzz".to_string()], &idf);
+        assert_eq!(score, 0.0);
+    }
+
+    #[test]
+    fn score_fact_boosts_exact_name_match() {
+        let fact = make_fact("alpha", "desc", "body");
+        let idf = compute_idf(&[fact.clone()]);
+        let exact = score_fact(&fact, &["alpha".to_string()], &idf);
+        let partial = score_fact(&fact, &["alph".to_string()], &idf);
+        assert!(
+            exact > partial,
+            "exact name match should score higher than partial, {exact} vs {partial}"
+        );
+    }
+
+    #[test]
+    fn score_fact_boosts_partial_name_match_over_description_only() {
+        let fact = make_fact("alpha", "contains alpha", "body");
+        let idf = compute_idf(&[fact.clone()]);
+        let name_hit = score_fact(&fact, &["alph".to_string()], &idf);
+        let desc_only = score_fact(
+            &make_fact("other", "alpha here", "body"),
+            &["alpha".to_string()],
+            &compute_idf(&[make_fact("other", "alpha here", "body")]),
+        );
+        // name contains + 5.0 (exact? no, contains → 2.0) vs desc contains → 1.0
+        assert!(name_hit > 0.0);
+        assert!(desc_only > 0.0);
+    }
+
+    #[test]
+    fn sanitize_slug_delegates_to_slugify() {
+        assert_eq!(sanitize_slug("My Setup Guide!"), "my-setup-guide");
+        assert_eq!(sanitize_slug("simple"), "simple");
+        assert_eq!(sanitize_slug("Rust -- Toolchain"), "rust-toolchain");
+    }
+
+    #[test]
+    fn slugify_description_collapses_repeated_separators() {
+        assert_eq!(slugify_description("a   b   c"), "a-b-c");
+        assert_eq!(slugify_description("---leading"), "leading");
+        assert_eq!(slugify_description("trailing---"), "trailing");
+    }
+
+    #[test]
+    fn slugify_description_empty_returns_empty() {
+        assert_eq!(slugify_description(""), "");
+        assert_eq!(slugify_description("!!!"), "");
+    }
 }

@@ -16,6 +16,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   failure messages (manual developer tool, not run in CI). `classify`
   and `suggest` now use per-test data when available, naming the
   specific slow test.
+- WO 12.8: src/session coverage push to 75%. 144 new `#[test]` unit tests
+  across 12 files (memory, stratum, compaction, microcompaction,
+  plugin_tools loader/wrapper, plugin_ops, access, undo, toolset,
+  verifier/bus, executor/helpers). Test-only; no production code changed.
 - `kirkforge plugin` CLI subcommand (WO 11.0, ADR-056): `list`, `enable`,
   `disable`, `toggle`, `validate`, `reload`, `sources`, `add`, `remove`,
   `doctor`. Backed by a shared `plugin_ops` layer

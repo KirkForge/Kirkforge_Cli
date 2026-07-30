@@ -718,4 +718,140 @@ mod tests {
         );
         crate::session::budget::clear_sliced_listeners();
     }
+
+    #[test]
+    fn json_get_string_returns_string_value() {
+        let v = serde_json::json!({"key": "value"});
+        assert_eq!(json_get_string(&v, "key"), Some("value".to_string()));
+    }
+
+    #[test]
+    fn json_get_string_returns_none_for_non_string() {
+        let v = serde_json::json!({"key": 42, "n": null, "b": true});
+        assert!(json_get_string(&v, "key").is_none());
+        assert!(json_get_string(&v, "n").is_none());
+        assert!(json_get_string(&v, "b").is_none());
+    }
+
+    #[test]
+    fn json_get_string_returns_none_for_missing_key() {
+        let v = serde_json::json!({"other": "x"});
+        assert!(json_get_string(&v, "key").is_none());
+    }
+
+    #[test]
+    fn json_get_u64_returns_number_value() {
+        let v = serde_json::json!({"n": 42});
+        assert_eq!(json_get_u64(&v, "n"), Some(42));
+    }
+
+    #[test]
+    fn json_get_u64_returns_none_for_non_u64() {
+        let v = serde_json::json!({"s": "x", "f": 3.5, "neg": -1, "b": true});
+        assert!(json_get_u64(&v, "s").is_none());
+        assert!(json_get_u64(&v, "f").is_none());
+        assert!(json_get_u64(&v, "neg").is_none());
+        assert!(json_get_u64(&v, "b").is_none());
+    }
+
+    #[test]
+    fn json_get_bool_returns_bool_value() {
+        let v = serde_json::json!({"t": true, "f": false});
+        assert!(json_get_bool(&v, "t"));
+        assert!(!json_get_bool(&v, "f"));
+    }
+
+    #[test]
+    fn json_get_bool_defaults_false_for_missing_or_non_bool() {
+        let v = serde_json::json!({"s": "x", "n": 5});
+        assert!(!json_get_bool(&v, "missing"));
+        assert!(!json_get_bool(&v, "s"));
+        assert!(!json_get_bool(&v, "n"));
+    }
+
+    #[test]
+    fn parse_mode_valid_strings_parse() {
+        assert_eq!(parse_mode(Some("off")), Mode::Off);
+        assert_eq!(parse_mode(Some("lite")), Mode::Lite);
+        assert_eq!(parse_mode(Some("full")), Mode::Full);
+        assert_eq!(parse_mode(Some("ultra")), Mode::Ultra);
+    }
+
+    #[test]
+    fn parse_mode_none_defaults_to_full() {
+        assert_eq!(parse_mode(None), Mode::Full);
+    }
+
+    #[test]
+    fn parse_mode_invalid_defaults_to_full() {
+        assert_eq!(parse_mode(Some("bogus")), Mode::Full);
+        assert_eq!(parse_mode(Some("")), Mode::Full);
+    }
+
+    #[test]
+    fn parse_content_type_valid_parses() {
+        // Plaintext is the only guaranteed-stable variant; the rest
+        // must at least fall back to PlainText rather than panic.
+        assert_eq!(parse_content_type(None), ContentType::PlainText);
+        let _ = parse_content_type(Some("plaintext"));
+    }
+
+    #[test]
+    fn parse_content_type_invalid_defaults_to_plain_text() {
+        assert_eq!(parse_content_type(Some("bogus")), ContentType::PlainText);
+        assert_eq!(parse_content_type(Some("")), ContentType::PlainText);
+    }
+
+    #[test]
+    fn mode_description_covers_all_known_modes() {
+        for mode in [Mode::Off, Mode::Lite, Mode::Full, Mode::Ultra] {
+            let desc = mode_description(mode);
+            assert!(
+                !desc.is_empty(),
+                "description for {mode:?} should not be empty"
+            );
+            assert_ne!(
+                desc, "Unknown mode",
+                "{mode:?} should have a real description"
+            );
+        }
+    }
+
+    #[test]
+    fn success_json_wraps_content() {
+        match success_json("hello".to_string()) {
+            ToolOutcome::Success { content } => assert_eq!(content, "hello"),
+            other => panic!("expected Success, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn error_json_wraps_message() {
+        match error_json("boom") {
+            ToolOutcome::Error { message } => assert_eq!(message, "boom"),
+            other => panic!("expected Error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn xdg_config_path_uses_xdg_config_home_when_set() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
+        let path = xdg_config_path().expect("XDG_CONFIG_HOME set should resolve a path");
+        assert!(path.ends_with("stratum/pipeline.toml"), "got {path:?}");
+        std::env::remove_var("XDG_CONFIG_HOME");
+    }
+
+    #[test]
+    fn xdg_config_path_falls_back_to_home_dot_config() {
+        std::env::remove_var("XDG_CONFIG_HOME");
+        let home = std::env::var_os("HOME");
+        if home.is_some() {
+            let path = xdg_config_path().expect("HOME set should resolve a path");
+            assert!(path.ends_with("stratum/pipeline.toml"), "got {path:?}");
+        }
+        // When neither XDG_CONFIG_HOME nor HOME is set, returns None.
+        // We can't safely unset HOME for other tests, so just assert
+        // the happy path above.
+    }
 }

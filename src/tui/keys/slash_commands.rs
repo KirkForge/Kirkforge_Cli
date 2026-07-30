@@ -162,7 +162,7 @@ pub(crate) const COMMANDS: &[SlashCommand] = &[
     SlashCommand {
         triggers: &["/init"],
         description: "Initialize project configuration",
-        usage: "",
+        usage: "/init [--force] — creates .kirkforge/config.toml + CLAUDE.md skeleton",
     },
     SlashCommand {
         triggers: &["/plugins"],

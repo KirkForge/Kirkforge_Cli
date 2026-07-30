@@ -19,10 +19,10 @@ use crate::session::verifier::{
 use crate::shared::audit::AuditLog;
 use crate::shared::metrics::{record, MetricEvent};
 use crate::shared::{read_shared_config, Config, Message, Role, SharedConfig, ToolInvocation};
-use crate::tools::{ToolContext, UndoStackRef};
+use crate::tools::UndoStackRef;
 use std::sync::Arc;
 
-use helpers::{tool_cancel_token, tool_outcome_success};
+use helpers::tool_outcome_success;
 use tokio::sync::mpsc;
 
 pub(crate) mod approval;
@@ -310,17 +310,6 @@ impl Executor {
         let cfg = read_shared_config(&self.config);
         let secs = cfg.tools.tool_timeout_secs.unwrap_or(30).clamp(1, 3600);
         std::time::Duration::from_secs(secs)
-    }
-
-    /// Build a per-tool-call context linked to the turn's cancellation
-    /// state and the session's dry-run flag.
-    fn tool_context_for_call(&self, cancelled: &std::sync::atomic::AtomicBool) -> ToolContext {
-        let dry_run = read_shared_config(&self.config).tools.dry_run;
-        ToolContext {
-            token: tool_cancel_token(cancelled),
-            dry_run,
-            task_spawner: self.task_spawner.clone(),
-        }
     }
 
     /// Whether deterministic mode is active. When true, the parallel
@@ -671,7 +660,6 @@ impl Executor {
         crate::session::verifier::plugin::register_plugin_verifiers_into_bus(registry, &mut bus)
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub fn conversation_log(&self) -> &ConversationLog {
         &self.conversation
     }

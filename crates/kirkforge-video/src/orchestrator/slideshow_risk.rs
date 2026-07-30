@@ -116,16 +116,6 @@ fn score_repetition(kinds: &[&str]) -> DimensionScore {
     }
 }
 
-#[allow(dead_code)]
-fn score_decorative(_kinds: &[&str]) -> DimensionScore {
-    // Legacy hook — kept for any direct callers; the views-aware version
-    // below is what the pipeline uses.
-    DimensionScore {
-        score: 0.0,
-        reason: "use score_decorative_views".into(),
-    }
-}
-
 fn score_decorative_views(views: &[SceneView<'_>]) -> DimensionScore {
     let total = views.len().max(1) as f32;
     // A scene is "motion" if it's a clip_cut OR its author declared a
@@ -139,14 +129,6 @@ fn score_decorative_views(views: &[SceneView<'_>]) -> DimensionScore {
     DimensionScore {
         score,
         reason: format!("motion share={motion_share:.2}"),
-    }
-}
-
-#[allow(dead_code)]
-fn score_weak_motion(_kinds: &[&str]) -> DimensionScore {
-    DimensionScore {
-        score: 0.0,
-        reason: "use score_weak_motion_views".into(),
     }
 }
 

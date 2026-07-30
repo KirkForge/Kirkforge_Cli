@@ -123,7 +123,10 @@ struct StdioMcpClient {
     reader_shutdown_tx: Option<oneshot::Sender<()>>,
     stderr_shutdown_tx: Option<oneshot::Sender<()>>,
     /// Background task handles, kept so `disconnect()` can await them.
+    // reason: read only by disconnect(), a lifecycle API used by tests.
+    #[allow(dead_code)]
     reader_task: Option<tokio::task::JoinHandle<()>>,
+    #[allow(dead_code)]
     stderr_drain: Option<tokio::task::JoinHandle<()>>,
 }
 
@@ -499,6 +502,8 @@ impl McpClient {
     }
 
     /// Gracefully disconnect from the server.
+    // reason: lifecycle API used by tests; production relies on Drop fallback.
+    #[allow(dead_code)]
     async fn disconnect(&mut self) {
         match self {
             McpClient::Stdio(c) => c.disconnect().await,
@@ -690,6 +695,8 @@ impl StdioMcpClient {
     }
 
     /// Gracefully disconnect from the child-process server.
+    // reason: lifecycle API used by tests; production relies on Drop fallback.
+    #[allow(dead_code)]
     async fn disconnect(&mut self) {
         // Signal the background tasks to stop.
         if let Some(tx) = self.reader_shutdown_tx.take() {

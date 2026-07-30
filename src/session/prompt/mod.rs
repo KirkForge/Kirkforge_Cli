@@ -63,6 +63,7 @@ struct SystemStemKey {
 }
 
 impl SystemStemKey {
+    // reason: cache key components are heterogeneous (str/bool/slice/Option/usize); no obvious struct.
     #[allow(clippy::too_many_arguments)]
     fn new(
         model_name: &str,
@@ -127,6 +128,7 @@ impl PromptBuilder {
         self.system_override = override_prompt;
     }
 
+    // reason: build params mirror SystemStemKey::new; heterogeneous types, no obvious struct.
     #[allow(clippy::too_many_arguments)]
     pub fn build(
         &mut self,
@@ -499,7 +501,6 @@ impl PromptBuilder {
     }
 
     fn truncate_tool_results(messages: &mut [Message]) {
-        const TOOL_RESULT_DEFAULT_CAP: usize = 30_000; // chars (~7.5k tokens)
         const TOOL_RESULT_DEFAULT_HEAD: usize = 20_000;
         const TOOL_RESULT_DEFAULT_TAIL: usize = 8_000;
 

@@ -1106,7 +1106,6 @@ async fn reap_child(child: &mut Child, timeout: Duration) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
     use std::process::Stdio;
 
     /// Format a JSON-RPC message into the LSP `Content-Length` framing.
@@ -1393,9 +1392,4 @@ main()
         assert!(f.contains("\r\n\r\n"));
         assert!(f.contains("\"method\":\"ping\""));
     }
-
-    /// Suppress unused-import warning for `Write` when the test module
-    /// doesn't use it directly. Kept for future test scaffolding.
-    #[allow(dead_code)]
-    fn _write_use(_w: &mut impl Write) {}
 }

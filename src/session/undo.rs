@@ -141,9 +141,6 @@ impl From<&UndoOp> for UndoSummary {
 /// The undo stack. Wrapped in `Arc<Mutex<UndoStack>>` by callers;
 /// the struct itself is not internally synchronized.
 pub struct UndoStack {
-    /// Session id, used as the snapshot directory name. The
-    /// directory lives under `data_dir()/undo/`.
-    session_id: String,
     /// Absolute path to the snapshot directory for this session.
     dir: PathBuf,
     /// In-memory mirror of the disk state, in chronological order.
@@ -208,7 +205,6 @@ impl UndoStack {
         let ops: VecDeque<UndoOp> = ops_vec.into_iter().collect();
 
         Ok(Self {
-            session_id: session_id.to_string(),
             dir,
             ops,
             next_seq: AtomicU64::new(max_seq + 1),

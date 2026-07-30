@@ -1,5 +1,62 @@
 # lessons.md — Series 11 (Plugin System Hardening)
 
+## WO 14.8 — Dead-Code + #[allow] Audit
+
+### Warning counts per module-wide allow
+- `src/session/mod.rs` `#![allow(dead_code)]` hid **17 unique items**:
+  2 dead methods (`tool_context_for_call`, `dispatch_tool_call` — the
+  single-call dispatch superseded by `dispatch_tool_call_batch`), 2 dead
+  struct fields (`CompactHookStats.tokens_before/tokens_after`), 1 dead
+  const (`CONFLICT_MARKERS` — inlined in `has_conflict_marker`), 2 dead
+  struct fields (`StdioMcpClient.reader_task/stderr_drain`), 3 lifecycle
+  methods (`McpClient/StdioMcpClient/McpHttpTransport::disconnect` — used
+  by tests only), 7 dead struct fields (`McpHttpTransport` —
+  client/base_url/session_id/last_event_id stored but never read; clones
+  moved into spawned tasks do the real work), 1 dead const
+  (`TOOL_RESULT_DEFAULT_CAP` — head+tail used instead), 2 test-only
+  items (`DEFAULT_PRESERVE_RECENT`, `compact` — pub but only used in
+  same-file tests), 1 dead struct field (`MicrocompactResult.tokens_before`),
+  1 dead struct field (`UndoStack.session_id` — dir computed from it,
+  field never read after).
+- `src/shared/mod.rs` `#![allow(dead_code)]` hid **3 unique items**:
+  `expand_minified_by_ext` (pub fn, no callers at all), `CollapseBlankLines`
+  (struct + `new` + `Iterator` impl — no callers at all).
+
+### What I learned
+1. **The single-call `dispatch_tool_call` was 740 lines of dead code.**
+   It was superseded by `dispatch_tool_call_batch` in turn.rs but never
+   deleted. The module-wide allow hid it for many WOs. Deleting it
+   orphaned 13 imports — clippy caught them on the next run.
+2. **`McpHttpTransport` stored 7 fields that were never read.** The
+   constructor clones `client`/`session_id`/`last_event_id` into the
+   spawned reader/poster tasks; the struct copies were dead storage.
+   `reader_task`/`poster_task`/`shutdown_tx` are only read by
+   `disconnect()` (a lifecycle method used by tests, not production —
+   production relies on the Drop fallback).
+3. **`pub` items used only by same-file tests are a common dead-code
+   pattern.** `compact` and `DEFAULT_PRESERVE_RECENT` in compaction.rs
+   are `pub` but only called from the same module's `#[cfg(test)]`
+   block. The fix is `#[cfg(test)]` on the item (vanishes from lib
+   build, stays for test build) — cleaner than a targeted allow.
+4. **A stale `#[allow(clippy::too_many_arguments)]` sat on
+   `conversation_log(&self)`** (0 args) — probably leftover from a
+   refactor. Removed it; count went 12 → 11 real allows.
+5. **`BrandKit` in animated_explainer.rs has a `ponytail:` annotation
+   AND `#[allow(dead_code)]`.** The allow is legit (serde-deserialized
+   fields read by serde, not code). Preserved the ponytail; added a
+   reason comment.
+6. **Pre-existing `clippy::approx_constant` warnings in
+   `src/session/video.rs` tests** (`3.14` approximates PI) surface only
+   under `--features video`. These are NOT from this audit (pre-existing
+   on origin/dev). Out of scope for the #[allow] audit; noted for a
+   future video-feature clippy pass.
+7. **Background cargo via `setsid ... & disown` survives the tool's
+   command timeout.** The shell tool kills the foreground process group
+   on timeout, but `setsid` creates a new session, so the cargo process
+   keeps running. Poll with `pgrep`/`tail` on the log file.
+
+## Series 11 (Plugin System Hardening) — prior session notes
+
 ## What I learned
 
 1. **`Config::default()` includes 4 in-repo plugin_sources.** Tests that

@@ -41,9 +41,6 @@ const SECRET_PATTERNS: &[&str] = &[
     "AKIA", // AWS access key id prefix
 ];
 
-/// Merge-conflict marker prefixes.
-const CONFLICT_MARKERS: &[&str] = &["<<<<<<< ", "=======", ">>>>>>> "];
-
 /// Result of a sanitation pass.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct SanitationReport {

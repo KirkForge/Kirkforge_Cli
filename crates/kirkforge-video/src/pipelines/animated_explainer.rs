@@ -394,6 +394,7 @@ fn load_promise(dir: &Path) -> PromiseType {
 /// to `brief.txt` and `promise.json`. Schema is intentionally tiny —
 /// palette + primary color + font + voice. Missing file → all defaults.
 #[derive(Debug, Clone, Deserialize)]
+// reason: serde-deserialized brand config; fields are read by serde, not by code.
 #[allow(dead_code)]
 struct BrandKit {
     #[serde(default)]

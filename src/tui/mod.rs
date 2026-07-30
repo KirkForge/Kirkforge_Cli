@@ -123,6 +123,7 @@ fn run_session_picker_sync(
 }
 
 /// Run the TUI event loop.
+// reason: entry point; each arg is an independent session resource that the loop owns.
 #[allow(clippy::too_many_arguments)]
 pub async fn run_tui(
     shared_config: crate::shared::SharedConfig,
@@ -564,6 +565,7 @@ pub async fn run_tui(
     res
 }
 
+// reason: each arg is a distinct mpsc channel end; grouping would obscure the wiring.
 #[allow(clippy::too_many_arguments)]
 async fn run_event_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,

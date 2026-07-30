@@ -20,47 +20,6 @@ pub(super) fn minify_content_by_ext(content: &str, ext: &str, preserve_tests: bo
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
-/// Collapse consecutive blank lines to one, tracking state.
-struct CollapseBlankLines<'a> {
-    source: &'a str,
-    prev_was_newline: bool,
-    pos: usize,
-}
-
-impl<'a> CollapseBlankLines<'a> {
-    fn new(source: &'a str) -> Self {
-        Self {
-            source,
-            prev_was_newline: false,
-            pos: 0,
-        }
-    }
-}
-
-impl<'a> Iterator for CollapseBlankLines<'a> {
-    type Item = char;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        while self.pos < self.source.len() {
-            let ch = self.source[self.pos..].chars().next()?;
-            let ch_len = ch.len_utf8();
-            self.pos += ch_len;
-
-            if ch == '\n' {
-                if self.prev_was_newline {
-                    continue; // skip this blank line
-                }
-                self.prev_was_newline = true;
-                return Some(ch);
-            } else if !ch.is_whitespace() || ch == ' ' {
-                self.prev_was_newline = false;
-            }
-            return Some(ch);
-        }
-        None
-    }
-}
-
 /// Strip test-only blocks (`#[cfg(test)]` or `#[test]` in Rust).
 fn strip_test_blocks(source: &str) -> String {
     let mut out = String::new();

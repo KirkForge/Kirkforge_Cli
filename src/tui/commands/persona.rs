@@ -158,6 +158,7 @@ fn tools_for_persona(
 /// them through keeps the read-only tool surface identical to
 /// the per-persona read-only surface except `bash` is excluded
 /// (the scout is more conservative — see [`SCOUT_TOOLS`]).
+// reason: mirrors tools_for_persona's plumbing so the two can be swapped without surprise.
 #[allow(clippy::too_many_arguments)]
 pub fn tools_for_scout(
     undo_stack: Option<UndoStackRef>,
@@ -192,6 +193,7 @@ pub fn tools_for_scout(
 /// executor with the restricted toolset, runs one turn (which may itself
 /// loop over multiple tool-call iterations), and extracts the last
 /// assistant message from the fork log.
+// reason: each arg is an independent persona-task parameter; no obvious struct grouping.
 #[allow(clippy::too_many_arguments)]
 async fn run_persona_task(
     kind: PersonaKind,

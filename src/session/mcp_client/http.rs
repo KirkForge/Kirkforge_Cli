@@ -33,28 +33,19 @@ const MAX_SSE_DATA_LEN: usize = 1 << 20;
 /// A client that speaks MCP over streamable-HTTP (SSE + POST).
 pub(super) struct McpHttpTransport {
     config: McpServerConfig,
-    client: reqwest::Client,
-    base_url: String,
     pending: PendingMap,
     next_id: Arc<tokio::sync::Mutex<u64>>,
     alive: Arc<AtomicBool>,
     /// Channel used to inject outbound requests so the SSE reader task can
     /// keep reading while requests are in flight.
     request_tx: mpsc::UnboundedSender<HttpRequestEnvelope>,
+    // reason: read only by disconnect(), a lifecycle API used by tests.
+    #[allow(dead_code)]
     reader_task: tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
+    #[allow(dead_code)]
     poster_task: tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
+    #[allow(dead_code)]
     shutdown_tx: Option<oneshot::Sender<()>>,
-    /// MCP session id (WO 10.7). Parsed from the `endpoint` SSE event's
-    /// URL query param or the initial GET response's `Mcp-Session-Id`
-    /// header (MCP streamable-HTTP spec, 2025-06-18 §Session Management).
-    /// When `Some`, the poster adds `Mcp-Session-Id: <id>` to every POST.
-    /// Backward-compatible: if the server never sends a session id, the
-    /// header is omitted (some servers reject unknown headers).
-    session_id: Arc<tokio::sync::Mutex<Option<String>>>,
-    /// Last SSE event id seen by the reader (WO 10.7). Sent as the
-    /// `Last-Event-ID` header on reconnect so the server can replay
-    /// missed events (SSE spec §resumability).
-    last_event_id: Arc<tokio::sync::Mutex<Option<String>>>,
 }
 
 struct HttpRequestEnvelope {
@@ -118,14 +109,13 @@ impl McpHttpTransport {
         });
 
         // Poster task: consumes outbound request envelopes and POSTs them.
-        let client_for_poster = client.clone();
         let pending_for_poster = pending.clone();
         let session_id_for_poster = session_id.clone();
         let poster_task = tokio::spawn(async move {
             while let Some(envelope) = request_rx.recv().await {
                 let session_id_val = session_id_for_poster.lock().await.clone();
                 let resp = post_request(
-                    &client_for_poster,
+                    &client,
                     &post_url,
                     &envelope.body,
                     &envelope.id,
@@ -148,8 +138,6 @@ impl McpHttpTransport {
 
         let transport = Self {
             config: config.clone(),
-            client,
-            base_url,
             pending,
             next_id,
             alive,
@@ -157,8 +145,6 @@ impl McpHttpTransport {
             reader_task: tokio::sync::Mutex::new(Some(reader_task)),
             poster_task: tokio::sync::Mutex::new(Some(poster_task)),
             shutdown_tx: Some(shutdown_tx),
-            session_id,
-            last_event_id,
         };
 
         let init_req = serde_json::json!({
@@ -392,6 +378,8 @@ impl McpHttpTransport {
     }
 
     /// Gracefully disconnect.
+    // reason: lifecycle API used by tests; production relies on Drop fallback.
+    #[allow(dead_code)]
     pub(super) async fn disconnect(&mut self) {
         self.alive.store(false, Ordering::SeqCst);
         if let Some(tx) = self.shutdown_tx.take() {

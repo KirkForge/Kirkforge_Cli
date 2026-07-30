@@ -153,8 +153,31 @@ impl std::error::Error for KirkForgeError {
 
 impl From<anyhow::Error> for KirkForgeError {
     fn from(e: anyhow::Error) -> Self {
+        // Downcast migration (WO 14.3) — STARTED. These typed errors are now
+        // classified by type, not string. The string probes below remain the
+        // fallback for the categories that have no typed source yet:
+        //   - ModelUnreachable: adapters return bare `anyhow`, no typed error.
+        //   - AccessDenied (non-plugin): sandbox/path-policy denials from the
+        //     session layer are still `anyhow` with varied phrasing.
+        // Downcasted so far:
+        //   - kirkforge_plugin::ManifestError  -> ConfigParse
+        //   - kirkforge_plugin_host::ToolError -> AccessDenied (NotFound = the
+        //     tool command isn't present at the sandboxed plugin root, i.e. a
+        //     path-availability outcome after the root-gating policy).
+        if e.downcast_ref::<kirkforge_plugin::ManifestError>()
+            .is_some()
+        {
+            return KirkForgeError::ConfigParse(e);
+        }
+        if e.downcast_ref::<kirkforge_plugin_host::ToolError>()
+            .is_some()
+        {
+            return KirkForgeError::AccessDenied(e);
+        }
+
         // TODO: as more library calls return typed errors, replace these
-        // string probes with `downcast_ref` checks against concrete error types.
+        // string probes with further `downcast_ref` checks. See the note above
+        // for what's already downcast and what still relies on string matching.
         let msg = format!("{e:#}").to_lowercase();
         if msg.contains("connection refused")
             || msg.contains("failed to connect")
@@ -189,6 +212,31 @@ impl KirkForgeError {
             KirkForgeError::AccessDenied(_) => 4,
             KirkForgeError::ConfigParse(_) => 5,
             KirkForgeError::General(_) => 1,
+        }
+    }
+
+    // User-facing suggestion for an error category. `General` has no hint —
+    // a generic hint would be noise. The strings are &'static so they don't
+    // allocate and stay short (<=2 lines on an 80-col terminal). Pinned by the
+    // hint_* tests: a future edit must not silently drop the key substrings.
+    fn hint(&self) -> Option<&'static str> {
+        match self {
+            KirkForgeError::ModelUnreachable(_) => Some(
+                "Check that the model provider is running (e.g. `ollama serve` for \
+                 Ollama) or set the provider config in \
+                 ~/.local/share/kirkforge/config.toml. See config.toml.example for \
+                 all options.",
+            ),
+            KirkForgeError::AccessDenied(_) => Some(
+                "The sandbox or permission policy blocked this. Check the \
+                 `security.permission_rules` and `sandbox` sections in config.toml, \
+                 or run with `--auto-approve` for trusted commands.",
+            ),
+            KirkForgeError::ConfigParse(_) => Some(
+                "The config file at ~/.local/share/kirkforge/config.toml failed to \
+                 parse. Compare against config.toml.example for the expected format.",
+            ),
+            KirkForgeError::General(_) => None,
         }
     }
 }
@@ -319,6 +367,9 @@ async fn main() {
 
     if let Err(e) = result {
         eprintln!("kirkforge: {e}");
+        if let Some(h) = e.hint() {
+            eprintln!("hint: {h}");
+        }
         std::process::exit(e.exit_code());
     }
 }
@@ -2194,6 +2245,7 @@ fn print_recent_sessions_hint(sessions: &[kirkforge::session::session_index::Ses
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::anyhow;
     use std::io::Cursor;
 
     /// Path-style values (containing a `/`) are returned as-is,
@@ -2385,5 +2437,67 @@ mod tests {
             matches!(inner, Ok(None)),
             "expected Ok(None) on shutdown, got {inner:?}"
         );
+    }
+
+    // ---- WO 14.3: hint() + typed downcast tests ----
+
+    #[test]
+    fn hint_model_unreachable_mentions_ollama() {
+        let err = KirkForgeError::ModelUnreachable(anyhow!("boom"));
+        let h = err.hint().expect("ModelUnreachable should have a hint");
+        assert!(
+            h.contains("ollama"),
+            "ModelUnreachable hint must mention ollama, got: {h}"
+        );
+    }
+
+    #[test]
+    fn hint_access_denied_mentions_permission_rules() {
+        let err = KirkForgeError::AccessDenied(anyhow!("nope"));
+        let h = err.hint().expect("AccessDenied should have a hint");
+        assert!(
+            h.contains("permission_rules"),
+            "AccessDenied hint must mention permission_rules, got: {h}"
+        );
+    }
+
+    #[test]
+    fn hint_config_parse_mentions_config_toml() {
+        let err = KirkForgeError::ConfigParse(anyhow!("bad"));
+        let h = err.hint().expect("ConfigParse should have a hint");
+        assert!(
+            h.contains("config.toml"),
+            "ConfigParse hint must mention config.toml, got: {h}"
+        );
+    }
+
+    #[test]
+    fn hint_general_is_none() {
+        let err = KirkForgeError::General(anyhow!("whatever"));
+        assert!(err.hint().is_none(), "General must not have a fake hint");
+    }
+
+    #[test]
+    fn downcast_manifest_error_classifies_as_config_parse() {
+        let typed: kirkforge_plugin::ManifestError =
+            kirkforge_plugin::ManifestError::UnsupportedApiVersion {
+                version: "v99".into(),
+            };
+        let anyhow_err: anyhow::Error = typed.into();
+        match KirkForgeError::from(anyhow_err) {
+            KirkForgeError::ConfigParse(_) => {}
+            other => panic!("ManifestError must classify as ConfigParse, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn downcast_tool_error_notfound_classifies_as_access_denied() {
+        let typed: kirkforge_plugin_host::ToolError =
+            kirkforge_plugin_host::ToolError::NotFound(PathBuf::from("/plugins/x/cmd"));
+        let anyhow_err: anyhow::Error = typed.into();
+        match KirkForgeError::from(anyhow_err) {
+            KirkForgeError::AccessDenied(_) => {}
+            other => panic!("ToolError::NotFound must classify as AccessDenied, got {other:?}"),
+        }
     }
 }

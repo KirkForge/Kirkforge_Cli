@@ -146,6 +146,12 @@ pub(crate) const COMMANDS: &[SlashCommand] = &[
         group: "Safety",
     },
     SlashCommand {
+        triggers: &["/permissions"],
+        description: "List, revoke, or clear [A]lways permission rules",
+        usage: "/permissions list | revoke <i> | clear",
+        group: "Safety",
+    },
+    SlashCommand {
         triggers: &["/thinking"],
         description: "Toggle display of reasoning/thinking blocks",
         usage: "/thinking shows or hides thinking content; Esc also toggles.",
@@ -432,6 +438,13 @@ pub(crate) async fn dispatch_slash_command(
                 .push_back(ConversationEntry::new("system", msg));
             Ok(true)
         }
+        "/permissions" => {
+            let msg = handle_permissions_command(args, state);
+            state
+                .messages
+                .push_back(ConversationEntry::new("system", msg));
+            Ok(true)
+        }
         "/thinking" => {
             state.thinking_panel_visible = !state.thinking_panel_visible;
             let status = if state.thinking_panel_visible {
@@ -562,6 +575,69 @@ pub(crate) async fn dispatch_slash_command(
     }
 }
 
+/// Handle `/permissions list | revoke <i> | clear`.
+///
+/// `list` (default when no arg is given) prints the rules with
+/// 1-indexed positions and does not mutate. `revoke <i>` and `clear`
+/// mutate `Config.security.permission_rules` in the shared config and
+/// persist via `save_config` so the change survives across sessions.
+/// The pure ops layer lives in `src/tui/commands/permissions.rs`.
+fn handle_permissions_command(args: &str, state: &mut AppState) -> String {
+    use crate::tui::commands::permissions as ops;
+    let trimmed = args.trim();
+    let mut tokens = trimmed.split_whitespace();
+    let sub = tokens.next().unwrap_or("list");
+
+    match sub {
+        "list" | "" => ops::list(&crate::shared::read_shared_config(&state.config)),
+        "clear" => {
+            let msg = {
+                let mut cfg = state.config.write().unwrap_or_else(|e| e.into_inner());
+                ops::clear(&mut cfg)
+            };
+            match persist_shared(&state.config) {
+                Ok(()) => msg,
+                Err(e) => format!("{msg}\n⚠️ Failed to persist config: {e}"),
+            }
+        }
+        "revoke" => {
+            let idx_str = match tokens.next() {
+                Some(s) => s,
+                None => return "Usage: /permissions revoke <i>".to_string(),
+            };
+            if tokens.next().is_some() {
+                return "Usage: /permissions revoke <i>".to_string();
+            }
+            let idx: usize = match idx_str.parse() {
+                Ok(n) => n,
+                Err(_) => {
+                    return format!("Usage: /permissions revoke <i>\n`{idx_str}` is not a number");
+                }
+            };
+            let result = {
+                let mut cfg = state.config.write().unwrap_or_else(|e| e.into_inner());
+                ops::revoke(&mut cfg, idx)
+            };
+            match result {
+                Ok(msg) => match persist_shared(&state.config) {
+                    Ok(()) => msg,
+                    Err(e) => format!("{msg}\n⚠️ Failed to persist config: {e}"),
+                },
+                Err(e) => format!("❌ {e}"),
+            }
+        }
+        other => {
+            format!("Usage: /permissions list | revoke <i> | clear\nUnknown subcommand '{other}'")
+        }
+    }
+}
+
+/// Persist the shared config to disk via the existing config-write path.
+fn persist_shared(cfg: &crate::shared::SharedConfig) -> anyhow::Result<()> {
+    let snapshot = crate::shared::read_shared_config(cfg).clone();
+    crate::session::config::save_config(&snapshot)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -590,6 +666,7 @@ mod tests {
             "/implement",
             "/commit",
             "/undo",
+            "/permissions",
             "/thinking",
             "/reload",
             "/sessions",

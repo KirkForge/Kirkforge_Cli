@@ -265,6 +265,61 @@ series.
   timings, flaky detection, smart suggest). Developer ergonomics, not
   blockers for the coverage push.
 
+### Series 13 — (reserved, not yet defined)
+
+Series 13 is intentionally unused. Series 14 was prioritized over
+13 because the Pass-14 review (`REVIEW-KirkForge-Cli.md`) named UX
+polish + stability as the A− holdbacks, not a capability gap. 13 is
+reserved for a future capability series if needed.
+
+### Series 14.0-14.9 — Polish, Quality, and Stability
+
+Workorders 14.0-14.9 are the **polish / quality / stability** series.
+They address the Pass-14 review's UX findings (onboarding C+, error
+handling C+, discoverability B, status-bar rough edges) and the
+`123.md` KIRK-BENCH spec adoption, on top of the architectural depth
+the 10/11-series shipped. Each WO raises the polish level on top of
+a specific focus. Series 12 (coverage/test-infra) remains Planned and
+unblocks separately; the 14-series assumes a green CI base (WO 14.0
+fixes the one currently-red gate) and layers polish on it.
+
+| # | Workorder | Status | Priority | Depends on |
+|---|---|---|---|---|
+| 14.0 | [Bench Baseline Ollama-pull retry (fix the real red CI gate)](14.0-bench-baseline-ollama-retry.md) | Planned | High | — |
+| 14.1 | [First-run onboarding banner](14.1-first-run-onboarding-banner.md) | Planned | High | — |
+| 14.2 | [Grouped help + fill empty usage strings](14.2-grouped-help-usage-strings.md) | Planned | Medium | — |
+| 14.3 | [Actionable errors + typed error classification](14.3-actionable-errors-typed-classification.md) | Planned | High | — |
+| 14.4 | [Status bar graceful degradation on narrow terminals](14.4-status-bar-graceful-degradation.md) | Planned | Medium | — |
+| 14.5 | [`/permissions` command (list + revoke `[A]lways` rules)](14.5-permissions-revoke-command.md) | Planned | Medium | 14.2 (soft) |
+| 14.6 | [Slash-command + `@`-mention autocomplete](14.6-slash-mention-autocomplete.md) | Planned | High | 14.2, 14.5 (soft) |
+| 14.7 | [Publish KIRK-BENCH spec + signature Token Budget Challenge](14.7-kirk-bench-spec-publish.md) | Planned | High | 14.0 (soft) |
+| 14.8 | [Dead-code + `#[allow(...)]` audit (internal stability)](14.8-dead-code-clippy-allow-audit.md) | Planned | Medium | — |
+| 14.9 | [Doc-sync reconcile ADR count + stale claims](14.9-doc-sync-reconcile-adr-count.md) | Planned | Medium | 14.0 (soft) |
+
+### Priority rationale
+
+- **14.0 (High)**: The scheduled `Bench Baseline` CI job has failed
+  3 consecutive days (Ollama-pull registry redirect flake). The
+  Pass-14 review's "main CI-red on Windows" claim is stale — main is
+  green; the *actual* red is the scheduled bench job. A red badge is
+  a broken product; this is the P0 of the 14-series.
+- **14.1, 14.3, 14.6 (High)**: The three UX surfaces the review
+  grades C+ / C+ / B−: onboarding (silent first run), error handling
+  (opaque messages, string-based classification), and discoverability
+  (no autocomplete for 24 slash commands or `@`-mention syntax). Each
+  is small (10-300 lines) and high-payoff.
+- **14.7 (High)**: The `123.md` KIRK-BENCH spec + the signature
+  Token Budget Challenge is the public differentiator the review
+  names as KirkForge's "A" axis (bench/measurement). Publishing the
+  spec + one signature benchmark showcases the tree-sitter + Stratum
+  + budget architecture no competitor has.
+- **14.2, 14.4, 14.5, 14.8, 14.9 (Medium)**: Polish and stability.
+  Grouped help, status-bar degradation, `/permissions` revoke,
+  dead-code audit, and doc-sync reconciliation. Each closes a
+  named review finding or AGENTS.md contract violation; none is
+  blocking, but together they raise the floor from "depth hidden
+  behind a rough surface" to "depth that's reachable."
+
 ## Conventions
 
 - Each workorder is a single markdown file named `<number>-<slug>.md`.

@@ -227,16 +227,16 @@ series.
 
 | # | Workorder | Status | Priority | Depends on |
 |---|---|---|---|---|
-| 12.0 | [Fix final CI gate (tarpaulin flake)](12.0-fix-tarpaulin-flake.md) | Planned | High | — |
-| 12.1 | [Raise `src/session` coverage threshold 62% → 68%](12.1-raise-session-coverage-68.md) | Planned | High | 12.0 |
-| 12.2 | [Raise `src/tools` coverage threshold 50% → 65%](12.2-raise-tools-coverage-65.md) | Planned | High | 12.0 |
-| 12.3 | [Raise `src/adapters` coverage threshold 61% → 70%](12.3-raise-adapters-coverage-70.md) | Planned | High | 12.0 |
-| 12.4 | [Fold `kirkforge-testdoctor` into workspace + `kirkforge doctor` CLI](12.4-fold-testdoctor-into-workspace.md) | Planned | High | — |
-| 12.5 | [Advanced testdoctor: per-test timings + flaky-test detection](12.5-testdoctor-per-test-flaky.md) | Planned | Medium | 12.4 |
-| 12.6 | [Testdoctor: smart auto-suggest (real heuristics + fix application)](12.6-testdoctor-smart-suggest.md) | Done | Medium | 12.5 |
-| 12.7 | [Testdoctor: coverage-gap report (uncovered files + suggested targets)](12.7-testdoctor-coverage-gaps.md) | Planned | High | 12.4 |
-| 12.8 | [Final coverage push to 75% on all three target directories](12.8-final-coverage-push-75.md) | Planned | High | 12.0, 12.1-12.3, 12.7 |
-| 12.9 | [Enforce 75% coverage thresholds in CI](12.9-enforce-75-percent-thresholds.md) | Done | High | 12.8 |
+| 12.0 | [Fix final CI gate (tarpaulin flake)](12.0-fix-tarpaulin-flake.md) | Done (`095699b`; `session_index::save()` re-creates parent dir before rename) | High | — |
+| 12.1 | [Raise `src/session` coverage threshold 62% → 68%](12.1-raise-session-coverage-68.md) | Done (intermediate threshold landed) | High | 12.0 |
+| 12.2 | [Raise `src/tools` coverage threshold 50% → 65%](12.2-raise-tools-coverage-65.md) | Done (intermediate threshold landed) | High | 12.0 |
+| 12.3 | [Raise `src/adapters` coverage threshold 61% → 70%](12.3-raise-adapters-coverage-70.md) | Done (intermediate threshold landed) | High | 12.0 |
+| 12.4 | [Fold `kirkforge-testdoctor` into workspace + `kirkforge doctor` CLI](12.4-fold-testdoctor-into-workspace.md) | Done (`6ee64a4`) | High | — |
+| 12.5 | [Advanced testdoctor: per-test timings + flaky-test detection](12.5-testdoctor-per-test-flaky.md) | Done (`4e7ed78`) | Medium | 12.4 |
+| 12.6 | [Testdoctor: smart auto-suggest (real heuristics + fix application)](12.6-testdoctor-smart-suggest.md) | Done (`c86c34d`) | Medium | 12.5 |
+| 12.7 | [Testdoctor: coverage-gap report (uncovered files + suggested targets)](12.7-testdoctor-coverage-gaps.md) | Done (`095699b`; `kirkforge doctor gaps`) | High | 12.4 |
+| 12.8 | [Final coverage push to 75% on all three target directories](12.8-final-coverage-push-75.md) | Done (`3fb20b9`; 144 new tests; src/session 68.6%, src/tools 76.5%, src/adapters 84.1%) | High | 12.0, 12.1-12.3, 12.7 |
+| 12.9 | [Enforce 75% coverage thresholds in CI](12.9-enforce-75-percent-thresholds.md) | Done (`6bb4cc3`; ADR-065; src/session floor 68.5, src/tools 76.0, src/adapters 75.0) | High | 12.8 |
 
 ### Priority rationale
 
@@ -279,22 +279,23 @@ They address the Pass-14 review's UX findings (onboarding C+, error
 handling C+, discoverability B, status-bar rough edges) and the
 `123.md` KIRK-BENCH spec adoption, on top of the architectural depth
 the 10/11-series shipped. Each WO raises the polish level on top of
-a specific focus. Series 12 (coverage/test-infra) remains Planned and
-unblocks separately; the 14-series assumes a green CI base (WO 14.0
-fixes the one currently-red gate) and layers polish on it.
+a specific focus. Series 12 (coverage/test-infra) shipped; the
+14-series assumes a green CI base (WO 14.0 fixes the one
+currently-red gate) and layers polish on it. WO 14.5 and 14.6 are
+in progress in separate worktrees at the time of this WO.
 
 | # | Workorder | Status | Priority | Depends on |
 |---|---|---|---|---|
-| 14.0 | [Bench Baseline Ollama-pull retry (fix the real red CI gate)](14.0-bench-baseline-ollama-retry.md) | Planned | High | — |
-| 14.1 | [First-run onboarding banner](14.1-first-run-onboarding-banner.md) | Planned | High | — |
-| 14.2 | [Grouped help + fill empty usage strings](14.2-grouped-help-usage-strings.md) | Planned | Medium | — |
-| 14.3 | [Actionable errors + typed error classification](14.3-actionable-errors-typed-classification.md) | Planned | High | — |
-| 14.4 | [Status bar graceful degradation on narrow terminals](14.4-status-bar-graceful-degradation.md) | Done | Medium | — |
-| 14.5 | [`/permissions` command (list + revoke `[A]lways` rules)](14.5-permissions-revoke-command.md) | Planned | Medium | 14.2 (soft) |
-| 14.6 | [Slash-command + `@`-mention autocomplete](14.6-slash-mention-autocomplete.md) | Planned | High | 14.2, 14.5 (soft) |
-| 14.7 | [Publish KIRK-BENCH spec + signature Token Budget Challenge](14.7-kirk-bench-spec-publish.md) | Planned | High | 14.0 (soft) |
-| 14.8 | [Dead-code + `#[allow(...)]` audit (internal stability)](14.8-dead-code-clippy-allow-audit.md) | Planned | Medium | — |
-| 14.9 | [Doc-sync reconcile ADR count + stale claims](14.9-doc-sync-reconcile-adr-count.md) | Planned | Medium | 14.0 (soft) |
+| 14.0 | [Bench Baseline Ollama-pull retry (fix the real red CI gate)](14.0-bench-baseline-ollama-retry.md) | Done (`bbc84ec`; 3-attempt retry + `/api/tags` health check) | High | — |
+| 14.1 | [First-run onboarding banner](14.1-first-run-onboarding-banner.md) | Done (`455ca2e`) | High | — |
+| 14.2 | [Grouped help + fill empty usage strings](14.2-grouped-help-usage-strings.md) | Done (`c25bd79`; six fixed-order groups via `GROUPS` const) | Medium | — |
+| 14.3 | [Actionable errors + typed error classification](14.3-actionable-errors-typed-classification.md) | Done (`5bb731e`; `KirkForgeError::hint()` + `From<anyhow::Error>` downcast) | High | — |
+| 14.4 | [Status bar graceful degradation on narrow terminals](14.4-status-bar-graceful-degradation.md) | Done (`2f26cda`) | Medium | — |
+| 14.5 | [`/permissions` command (list + revoke `[A]lways` rules)](14.5-permissions-revoke-command.md) | In Progress (worktree) | Medium | 14.2 (soft) |
+| 14.6 | [Slash-command + `@`-mention autocomplete](14.6-slash-mention-autocomplete.md) | In Progress (worktree) | High | 14.2, 14.5 (soft) |
+| 14.7 | [Publish KIRK-BENCH spec + signature Token Budget Challenge](14.7-kirk-bench-spec-publish.md) | Done (`327510c`; ADR-066; `token_budget_challenge.toml`) | High | 14.0 (soft) |
+| 14.8 | [Dead-code + `#[allow(...)]` audit (internal stability)](14.8-dead-code-clippy-allow-audit.md) | Done (`120db95`; 20 dead items removed, 740-line `dispatch_tool_call` deleted) | Medium | — |
+| 14.9 | [Doc-sync reconcile ADR count + stale claims](14.9-doc-sync-reconcile-adr-count.md) | Done (this commit) | Medium | 14.0 (soft) |
 
 ### Priority rationale
 

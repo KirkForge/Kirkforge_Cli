@@ -262,6 +262,19 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `wo/8.6-stratum-budget-rebased` (stale upstream tracking) required
   `-D`; both verified merged-to-main by content (identical commit
   messages; the rebased version `5c679db` landed via merge `eb66156`).
+- doc-sync reconcile (WO 14.9, 14-series finale): corrected stale
+  counts in `docs/TECHNICAL.md` + `state.md` + `KIRK-BENCH.md` — ADR
+  count 83 → 84 (ADR-066 from WO 14.7), bench task count 30 → 31
+  (`token_budget_challenge.toml` from WO 14.7). Updated
+  `docs/workorders/README.md` Series 12 + Series 14 status tables (8
+  stale "Planned" rows in Series 12 → Done with SHAs; 14.0/14.1/14.2/
+  14.3/14.7/14.8 → Done; 14.5/14.6 → In Progress in worktrees; 14.9 →
+  Done). Added the resolved Windows `test_cache_results` mtime-race
+  entry to state.md (`4bdc13f` scans cache by path only). Full
+  TECHNICAL.md section-walk audit confirmed only the counts were stale;
+  architecture/plugin/feature-flag/tool/hook/verifier/context-index
+  sections are current. A follow-up `technical_md_count_drift` test is
+  noted in `lessons.md` (not built here — this WO is reconciliation).
 
 ## [0.3.6] - 2026-07-27
 

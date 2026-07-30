@@ -267,3 +267,52 @@
   status bar (1 row, rendered on state change). A bitmask over fixed
   spans (the workorder's suggestion) would avoid the `Vec` but adds
   complexity for no measurable gain at 1 row/frame.
+## WO 14.9 — Doc-Sync Reconcile ADR Count + Stale Claims
+
+### What I learned about this codebase
+1. **ADR/crate/bench counts drifted across 11 series with no test
+   catching it.** The `adr_xref_drift` test enforces ADR-header-vs-index
+   agreement (both at 84, green) but does NOT check `TECHNICAL.md` /
+   `state.md` count statements. Found: TECHNICAL.md said "83 ADRs" (line
+   64 + 702), state.md said "83 ADRs" (line 5, twice — start + end of
+   the baseline paragraph); actual = 84 (ADR-066 from WO 14.7 was the
+   +1). Bench task count said "30" in both TECHNICAL.md and
+   KIRK-BENCH.md; actual = 31 (`token_budget_challenge.toml` from WO
+   14.7). The KIRK-BENCH.md mapping TABLE was already at 31 rows (the
+   challenge row was added) but the surrounding prose still said "30".
+2. **The workorders/README.md status tables drift the same way.** The
+   Series 12 table had 8 rows still "Planned" after the whole 12-series
+   shipped (state.md confirmed all Done). The Series 14 table had only
+   14.4 marked Done. These tables are human-maintained per-WO; nothing
+   cross-checks them against `git log` or state.md.
+3. **state.md's "Known CI issues" section was already partly updated
+   by prior WOs** (the Ollama entry had WO 14.0's self-healing retry
+   noted; the tarpaulin entry had WO 12.0's root-cause fix). The
+   Windows `test_cache_results` flake was the one missing piece —
+   `4bdc13f` (a WO 14.0 follow-on) fixed it by scanning the cache by
+   path only instead of (path, mtime). Added a "resolved" entry.
+4. **TECHNICAL.md's architecture/plugin/feature-flag/tool/hook/verifier/
+   context-index sections were already current** — the 14-series WOs
+   (bench retry, onboarding, grouped help, error hints, status bar,
+   KIRK-BENCH, dead-code audit) each updated TECHNICAL.md in their own
+   commit per AGENTS.md §9. Only the aggregate counts were stale. The
+   full section-walk audit confirmed no other stale claims worth
+   fixing in this WO.
+
+### What I tried that didn't work
+- Nothing. This was a doc-only WO; the edits were mechanical once the
+  counts were verified against the filesystem.
+
+### What I'd do differently
+- **Build the `technical_md_count_drift` test.** Follow-up WO
+  suggestion: a `plugin3-core` test (mirroring `adr_xref_drift`) that
+  asserts `TECHNICAL.md`'s ADR count == `ls docs/adr/*.md | grep -v
+  README | wc -l`, the satellite-crate count == `ls crates/ | wc -l`,
+  and the bench-task count == `ls benches/tasks/*.toml | wc -l`. This
+  WO closes the gap manually; a test would close it permanently. Note
+  as a follow-up, don't build it here (this WO is reconciliation, not
+  test infrastructure — that's the 12-series' domain).
+- **Cross-check workorders/README.md status against git log.** A
+  cheap follow-up: the table rows could carry the commit SHA when
+  marked Done, so a drift is grep-visible. This WO added SHAs to the
+  12-series and 14-series rows; future WOs should keep the cadence.

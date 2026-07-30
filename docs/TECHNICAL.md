@@ -60,8 +60,8 @@ kirkforge (root bin)          ← the CLI the user runs
 │   ├── kirkforge-plugin3/     ← budget plugin (7 tools, 4 hooks)
 │   ├── kirkforge-draw/        ← diagram plugin (1 tool, 1 hook)
 │   └── kirkforge-video/       ← video plugin (8 tools)
-├── benches/tasks/             ← 30 benchmark task definitions (TOML)
-└── docs/adr/                  ← 83 Architecture Decision Records
+├── benches/tasks/             ← 31 benchmark task definitions (TOML)
+└── docs/adr/                  ← 84 Architecture Decision Records
 ```
 
 ### Compiled-in vs satellite
@@ -545,19 +545,20 @@ spec: eight categories (Repository Understanding, Refactoring, Bug Fixes, New
 Features, Verification, Context Intelligence, Real Engineering, Cost), 40
 numbered tasks, one universal scoring format, 10 hero benchmarks, and one
 signature challenge — the **Token Budget Challenge** (WO 14.7, ADR-0066). The
-spec documents 40 tasks; 30 are implemented today and mapped to the categories
-in `KIRK-BENCH.md`'s mapping table; the remaining ~10 are listed as planned
+spec documents 40 tasks; 31 are implemented today and mapped to the categories
+in `KIRK-BENCH.md`'s mapping table; the remaining ~9 are listed as planned
 (honest deferral — each exercises a specific feature and is a future WO).
 
-The 30 implemented tasks break down as follows: 20 are single-file coding-skills tasks
+The 31 implemented tasks break down as follows: 20 are single-file coding-skills tasks
 (Rust refactors, bug fixes, doc/test additions), 4 are plugin-tool tasks
 (`use_stratum_compress`, `use_budget_check`, `use_draw_render`,
 `use_lsp_query`) that exercise the Stratum, Plugin3, Draw, and LSP tool
-wrappers respectively, 1 is a workflow-tool task (`use_workflow_run`), and
+wrappers respectively, 1 is a workflow-tool task (`use_workflow_run`),
 5 are multi-file/multi-turn tasks (`multi_file_pattern`, `test_fix_cycle`,
 `pr_review`, `refactor_trait_extraction_multi`, `debug_log_trace`) added in
 WO 9.9 to exercise real agent skills (pattern-following, test-fix cycles,
-PR review, trait extraction, stack-trace debugging). Each task is a TOML
+PR review, trait extraction, stack-trace debugging), and 1 is the signature
+challenge (`token_budget_challenge`, WO 14.7). Each task is a TOML
 file with a prompt, optional setup files, and a deterministic verify spec
 (`test_passes`, `file_contains`, or `command_exits_zero`). All tasks use
 synthetic `setup_files` so they do not depend on the live repo state.
@@ -699,7 +700,7 @@ not the root binary.
 
 ## ADRs
 
-83 Architecture Decision Records live in [docs/adr/](docs/adr/). They pin
+84 Architecture Decision Records live in [docs/adr/](docs/adr/). They pin
 load-bearing decisions: token budget (0005), slicing orchestrator (0007),
 verifier bus (0028, 0043), context index (037), benchmark harness (038),
 execution replay (039), VFS minification (053), coverage-gate threshold

@@ -7,8 +7,8 @@ index, Stratum compression, and the Plugin3 budget guard.
 
 This document is the *spec*. The *implementation* is the bench harness
 (`crates/kirkforge-bench/` + `src/session/bench.rs`) and the task
-definitions in `benches/tasks/`. The existing 30 tasks are mapped to
-the spec categories below; the remaining ~10 spec tasks are listed as
+definitions in `benches/tasks/`. The existing 31 tasks are mapped to
+the spec categories below; the remaining ~9 spec tasks are listed as
 **planned** (honest deferral per AGENTS.md §5 — they are not built here).
 
 ## Why a spec
@@ -16,7 +16,7 @@ the spec categories below; the remaining ~10 spec tasks are listed as
 The bench harness was built incrementally (WO 6.1 → 9.9) by adding
 tasks that exercised specific features. It never adopted a *spec* —
 no category taxonomy, no universal scoring format, no signature
-challenge. The 30 tasks exist; this document organizes them and pins
+challenge. The 31 tasks exist; this document organizes them and pins
 the differentiator benchmark the architecture was built for.
 
 ## Categories
@@ -187,7 +187,7 @@ mirroring existing suites.
 
 ## Existing task mapping
 
-The 30 existing tasks in `benches/tasks/` map to the spec categories
+The 31 existing tasks in `benches/tasks/` map to the spec categories
 as follows. "Spec task" refers to the numbered list above. Coverage is
 **partial** when the existing task exercises the category but not the
 exact spec scenario.
@@ -255,4 +255,4 @@ workorder; the note names the feature it exercises.
 
 Honest deferral: the spec documents 40 tasks; this workorder (WO 14.7)
 builds the signature one (`token_budget_challenge`) and maps the
-existing 30. The remaining ~10 are future WOs.
+existing 31. The remaining ~9 are future WOs.

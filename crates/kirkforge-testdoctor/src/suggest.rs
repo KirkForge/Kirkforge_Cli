@@ -6,8 +6,8 @@
 
 use anyhow::Result;
 
-use crate::classify::{classify, Speed};
-use crate::profile::load;
+use crate::classify::{classify, classify_per_test, Speed};
+use crate::profile::{load, PerTestProfile, TestProfile};
 
 pub fn run(profile_path: &str) -> Result<()> {
     let profile = load(profile_path)?;
@@ -35,6 +35,68 @@ pub fn run(profile_path: &str) -> Result<()> {
         println!();
     }
     Ok(())
+}
+
+/// Print per-test suggestions. When per-test timings are available this
+/// names the specific slow test ("`test_foo` takes 2.3s; suggest
+/// `#[ignore]` + dedicated job") instead of just the binary. The v1
+/// binary-level suggestions remain the fallback when per-test data is
+/// absent.
+pub fn run_per_test(per: &PerTestProfile) -> Result<()> {
+    let class = classify_per_test(per);
+    let slow: Vec<_> = class
+        .tests
+        .iter()
+        .filter(|t| t.speed == Speed::Slow)
+        .collect();
+
+    if slow.is_empty() {
+        println!("no slow tests — nothing to suggest.");
+        return Ok(());
+    }
+
+    if per.coarse {
+        println!(
+            "note: per-test timings are coarse (stable fallback) — each test's\n\
+             duration is its binary's average, not a per-test measurement.\n"
+        );
+    }
+
+    println!("suggestions for {} slow tests:\n", slow.len());
+    for t in slow {
+        println!(
+            "── {} ({}::{} — {}ms) ──",
+            t.profile.name, t.profile.binary, t.profile.binary, t.profile.duration_ms
+        );
+        for s in suggestions_for_test(&t.profile) {
+            println!("  • {s}");
+        }
+        println!();
+    }
+    Ok(())
+}
+
+/// Per-test suggestions keyed on the individual test's duration. A test
+/// slower than 5000ms gets the strongest suggestion (`#[ignore]` +
+/// dedicated job); 2000-5000ms gets a "consider mocking" suggestion.
+/// Tests reaching this function are already classified `slow`
+/// (`duration_ms > SLOW_TEST_MS = 2000`).
+fn suggestions_for_test(t: &TestProfile) -> Vec<String> {
+    let mut out = Vec::new();
+    let secs = t.duration_ms as f64 / 1000.0;
+    if t.duration_ms > 5_000 {
+        out.push(format!(
+            "`{}` takes {:.1}s; suggest `#[ignore = \"slow: >5s\"]` + run in a dedicated `cargo test -- --ignored` job.",
+            t.name, secs
+        ));
+    } else {
+        // 2000ms < duration_ms <= 5000ms: slow enough to mock or split.
+        out.push(format!(
+            "`{}` takes {:.1}s; consider mocking the slow dependency (subprocess, network, sleep) or splitting the test.",
+            t.name, secs
+        ));
+    }
+    out
 }
 
 fn suggestions_for(binary: &str, suite: &str) -> Vec<String> {
@@ -104,5 +166,37 @@ mod tests {
     fn always_has_fallback() {
         let s = suggestions_for("random_binary", "lib");
         assert!(!s.is_empty());
+    }
+
+    fn tp(name: &str, ms: u64) -> TestProfile {
+        TestProfile {
+            name: name.to_string(),
+            binary: "kirkforge".to_string(),
+            duration_ms: ms,
+            passed: true,
+            ignored: false,
+        }
+    }
+
+    #[test]
+    fn per_test_very_slow_gets_ignore_suggestion() {
+        let s = suggestions_for_test(&tp("test_foo", 6_000));
+        assert!(s.iter().any(|x| x.contains("#[ignore")));
+        assert!(s.iter().any(|x| x.contains("test_foo")));
+    }
+
+    #[test]
+    fn per_test_slow_gets_mocking_suggestion() {
+        let s = suggestions_for_test(&tp("test_bar", 3_000));
+        assert!(s.iter().any(|x| x.contains("mocking")));
+        assert!(s.iter().any(|x| x.contains("test_bar")));
+    }
+
+    #[test]
+    fn per_test_just_over_threshold_gets_mocking_not_ignore() {
+        // 2100ms is slow (>2000) but below the 5000ms ignore threshold.
+        let s = suggestions_for_test(&tp("test_baz", 2_100));
+        assert!(s.iter().any(|x| x.contains("mocking")));
+        assert!(!s.iter().any(|x| x.contains("#[ignore")));
     }
 }

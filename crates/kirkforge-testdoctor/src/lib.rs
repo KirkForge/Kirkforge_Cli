@@ -5,6 +5,7 @@
 
 pub mod classify;
 pub mod diagnose;
+pub mod flaky;
 pub mod gaps;
 pub mod partition;
 pub mod profile;

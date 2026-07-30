@@ -420,6 +420,51 @@ fn handle_doctor_command(command: DoctorCommand) -> anyhow::Result<()> {
     use kirkforge_testdoctor as td;
     match command {
         DoctorCommand::Profile => td::profile::run("test-profile.json"),
+        DoctorCommand::ProfilePerTest => {
+            let per = td::profile::profile_per_test(Some(std::path::Path::new(
+                "test-profile-per-test.json",
+            )))?;
+            let class = td::classify::classify_per_test(&per);
+            println!(
+                "{:<40} {:<8} {:>10} {:<6}",
+                "test", "speed", "dur_ms", "pass"
+            );
+            println!("{}", "-".repeat(70));
+            for t in &class.tests {
+                println!(
+                    "{:<40} {:<8} {:>10} {:<6}",
+                    t.profile.name,
+                    t.speed.as_str(),
+                    t.profile.duration_ms,
+                    if t.profile.ignored {
+                        "ign"
+                    } else if t.profile.passed {
+                        "ok"
+                    } else {
+                        "FAIL"
+                    }
+                );
+            }
+            println!("{}", "-".repeat(70));
+            println!(
+                "summary: fast={} ({}ms)  medium={} ({}ms)  slow={} ({}ms)  ignored={}{}",
+                class.summary.fast,
+                class.summary.fast_total_ms,
+                class.summary.medium,
+                class.summary.medium_total_ms,
+                class.summary.slow,
+                class.summary.slow_total_ms,
+                class.summary.ignored,
+                if class.coarse {
+                    "  (coarse — stable fallback)"
+                } else {
+                    ""
+                },
+            );
+            println!();
+            td::suggest::run_per_test(&per)?;
+            Ok(())
+        }
         DoctorCommand::Classify => td::classify::run("test-profile.json"),
         DoctorCommand::Partition => td::partition::run("test-profile.json", "test-suites"),
         DoctorCommand::Suggest => td::suggest::run("test-profile.json"),
@@ -431,6 +476,11 @@ fn handle_doctor_command(command: DoctorCommand) -> anyhow::Result<()> {
         DoctorCommand::Diagnose { root } => {
             let report = td::diagnose::diagnose(&root)?;
             td::diagnose::print_report(&report);
+            Ok(())
+        }
+        DoctorCommand::Flaky { runs, filter } => {
+            let report = td::flaky::detect_flaky(&filter, runs)?;
+            td::flaky::print_report(&report);
             Ok(())
         }
     }

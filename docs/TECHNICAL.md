@@ -53,7 +53,7 @@ kirkforge (root bin)          ← the CLI the user runs
 │   ├── plugin3-core           ← budget/orchestrator/slicing data model
 │   ├── plugin3-hosts          ← host-side budget adapters
 │   ├── plugin3-cli            ← plugin3: budget CLI binary
-│   └── kirkforge-testdoctor   ← test-performance profiler (excluded from workspace)
+│   └── kirkforge-testdoctor   ← test-performance doctor (workspace member; profile, profile-per-test, classify, partition, suggest, gaps, diagnose, flaky)
 ├── plugins/                   ← 5 plugin manifests + shell tool/hook scripts
 │   ├── kirkforge-plugin/      ← SDK self-plugin (Node-backed verification tools)
 │   ├── stratum/               ← compression plugin (5 tools, 2 hooks)

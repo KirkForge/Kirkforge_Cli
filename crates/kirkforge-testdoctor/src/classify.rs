@@ -3,7 +3,7 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-use crate::profile::{BinaryProfile, Profile};
+use crate::profile::{BinaryProfile, PerTestProfile, Profile, TestProfile};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -61,6 +61,9 @@ pub struct Summary {
 const FAST_PER_TEST_MS: u64 = 100;
 const MEDIUM_PER_TEST_MS: u64 = 500;
 const SLOW_BINARY_MS: u64 = 60_000;
+// A single test slower than this is `slow` even if its binary avg is
+// fast (WO 12.5 per-test path). 2000ms is the workorder default.
+const SLOW_TEST_MS: u64 = 2_000;
 
 pub fn classify(profile: &Profile) -> Classification {
     let mut bins = Vec::with_capacity(profile.binaries.len());
@@ -107,6 +110,76 @@ pub fn classify(profile: &Profile) -> Classification {
     }
 
     Classification { bins, summary }
+}
+
+// ---- Per-test classification (WO 12.5) ------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClassifiedTest {
+    #[serde(flatten)]
+    pub profile: TestProfile,
+    pub speed: Speed,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PerTestClassification {
+    pub tests: Vec<ClassifiedTest>,
+    pub summary: Summary,
+    pub coarse: bool,
+}
+
+/// Classify each individual test. A test with `duration_ms > SLOW_TEST_MS`
+/// is `slow` even when its binary average is fast. Ignored tests are
+/// `ignored`. Otherwise the per-test duration is bucketed by the same
+/// fast/medium thresholds as the binary path.
+pub fn classify_per_test(per: &PerTestProfile) -> PerTestClassification {
+    let mut tests = Vec::with_capacity(per.tests.len());
+    let mut summary = Summary::default();
+    for t in &per.tests {
+        let speed = if t.ignored {
+            Speed::Ignored
+        } else if t.duration_ms > SLOW_TEST_MS || t.duration_ms > MEDIUM_PER_TEST_MS * 1000 {
+            // A single test slower than SLOW_TEST_MS is slow, even if its
+            // binary average is fast. The MEDIUM_PER_TEST_MS*1000 guard is
+            // the same guardrail as SLOW_BINARY_MS for a single test.
+            Speed::Slow
+        } else if !t.passed {
+            // A failing test is not slow/medium/fast — it did not finish
+            // cleanly. Keep it as medium so it shows up in the report
+            // without inflating the slow count.
+            Speed::Medium
+        } else if t.duration_ms <= FAST_PER_TEST_MS {
+            Speed::Fast
+        } else {
+            Speed::Medium
+        };
+        match speed {
+            Speed::Fast => {
+                summary.fast += 1;
+                summary.fast_total_ms += t.duration_ms;
+            }
+            Speed::Medium => {
+                summary.medium += 1;
+                summary.medium_total_ms += t.duration_ms;
+            }
+            Speed::Slow => {
+                summary.slow += 1;
+                summary.slow_total_ms += t.duration_ms;
+            }
+            Speed::Ignored => {
+                summary.ignored += 1;
+            }
+        }
+        tests.push(ClassifiedTest {
+            profile: t.clone(),
+            speed,
+        });
+    }
+    PerTestClassification {
+        tests,
+        summary,
+        coarse: per.coarse,
+    }
 }
 
 pub fn run(profile_path: &str) -> Result<()> {
@@ -209,5 +282,85 @@ mod tests {
         let c = classify(&p);
         assert_eq!(c.bins[0].speed, Speed::Ignored);
         assert_eq!(c.summary.ignored, 1);
+    }
+
+    // ---- classify_per_test (WO 12.5) ----
+
+    fn test_profile(name: &str, binary: &str, ms: u64, passed: bool, ignored: bool) -> TestProfile {
+        TestProfile {
+            name: name.to_string(),
+            binary: binary.to_string(),
+            duration_ms: ms,
+            passed,
+            ignored,
+        }
+    }
+
+    fn per_test_profile(tests: Vec<TestProfile>, coarse: bool) -> PerTestProfile {
+        PerTestProfile {
+            tests,
+            wall_time_ms: 0,
+            coarse,
+        }
+    }
+
+    #[test]
+    fn per_test_fast_test_is_fast() {
+        let p = per_test_profile(vec![test_profile("a", "kirkforge", 50, true, false)], false);
+        let c = classify_per_test(&p);
+        assert_eq!(c.tests[0].speed, Speed::Fast);
+        assert_eq!(c.summary.fast, 1);
+    }
+
+    #[test]
+    fn per_test_slow_single_test_is_slow_even_in_a_fast_binary() {
+        // One test at 3000ms is slow (above SLOW_TEST_MS=2000), even
+        // though a binary with a 30ms avg would be classified fast.
+        let p = per_test_profile(
+            vec![test_profile("slow_one", "kirkforge", 3000, true, false)],
+            false,
+        );
+        let c = classify_per_test(&p);
+        assert_eq!(c.tests[0].speed, Speed::Slow);
+        assert_eq!(c.summary.slow, 1);
+    }
+
+    #[test]
+    fn per_test_medium_test_is_medium() {
+        let p = per_test_profile(
+            vec![test_profile("m", "kirkforge", 300, true, false)],
+            false,
+        );
+        let c = classify_per_test(&p);
+        assert_eq!(c.tests[0].speed, Speed::Medium);
+        assert_eq!(c.summary.medium, 1);
+    }
+
+    #[test]
+    fn per_test_ignored_test_is_ignored() {
+        let p = per_test_profile(
+            vec![test_profile("ign", "kirkforge", 0, false, true)],
+            false,
+        );
+        let c = classify_per_test(&p);
+        assert_eq!(c.tests[0].speed, Speed::Ignored);
+        assert_eq!(c.summary.ignored, 1);
+    }
+
+    #[test]
+    fn per_test_carries_coarse_flag() {
+        let p = per_test_profile(vec![test_profile("a", "kirkforge", 100, true, false)], true);
+        let c = classify_per_test(&p);
+        assert!(c.coarse);
+    }
+
+    #[test]
+    fn per_test_failing_test_is_medium_not_slow() {
+        let p = per_test_profile(
+            vec![test_profile("fail", "kirkforge", 100, false, false)],
+            false,
+        );
+        let c = classify_per_test(&p);
+        assert_eq!(c.tests[0].speed, Speed::Medium);
     }
 }

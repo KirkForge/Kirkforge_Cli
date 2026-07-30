@@ -308,7 +308,7 @@ mod tests {
     fn roi_is_low_for_well_tested_files() {
         let tmp = std::env::temp_dir().join("testdoctor-roi-low.rs");
         let content = (0..50)
-            .map(|i| format!("#[test]\nfn test_{}() {{}}\n", i))
+            .map(|i| format!("#[test]\nfn test_{i}() {{}}\n"))
             .collect::<String>();
         std::fs::write(&tmp, &content).unwrap();
         let diag = analyze_file(&tmp, &std::env::temp_dir()).unwrap();

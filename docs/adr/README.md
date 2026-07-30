@@ -69,7 +69,7 @@ verifies the table and the file headers agree.
 | [026](./026-vscode-ndjson-bridge.md) | VS Code NDJSON Bridge (Option B) | Accepted | CLI |
 | [0027](./0027-context-management-depth.md) | Context management depth — cache-stem reuse, microcompaction, and tool-result truncation | Accepted | Plugin3 |
 | [0028](./0028-verifier-bus-unification.md) | Unify the Rust and TypeScript verifier buses | Accepted | Plugin3 |
-| [0029](./0029-test-partitioning.md) | Test partitioning — fast / full / coverage suites | Accepted (promoted: testdoctor is now a workspace member, WO 12.4) | Plugin3 |
+| [0029](./0029-test-partitioning.md) | Test partitioning — fast / full / coverage suites | Accepted (per-test timings + flaky-test detection shipped, WO 12.5) | Plugin3 |
 | [030](./030-deterministic-mode.md) | `--seed` deterministic mode | Accepted (2026-07-21) | CLI |
 | [0031](./0031-build-test-verifier-slots.md) | Build and Test Verifier Slots | Accepted | Plugin3 |
 | [0032](./0032-plan-reason-events.md) | PlanReason trace events | Accepted | Plugin3 |

@@ -7,6 +7,7 @@
 
 mod classify;
 mod diagnose;
+mod flaky;
 mod gaps;
 mod partition;
 mod profile;
@@ -39,6 +40,9 @@ struct Cli {
 enum Cmd {
     /// Run `cargo test --workspace --no-fail-fast` and capture per-binary timings.
     Profile,
+    /// Capture per-test timings (nightly JSON if available, per-binary
+    /// fallback otherwise). WO 12.5.
+    ProfilePerTest,
     /// Read the profile and classify tests as fast/medium/slow/ignored.
     Classify,
     /// Generate fast-suite.json, full-suite.json, coverage-suite.json.
@@ -57,12 +61,63 @@ enum Cmd {
         #[arg(long, default_value = ".")]
         root: PathBuf,
     },
+    /// Detect a flaky test by running it N times (WO 12.5). Slow dev tool.
+    Flaky {
+        /// Test filter (passed to `cargo test -- <filter> --exact`).
+        filter: String,
+        /// Number of runs. Default 10.
+        #[arg(long, default_value_t = 10)]
+        runs: u32,
+    },
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.cmd {
         Cmd::Profile => profile::run(&cli.profile),
+        Cmd::ProfilePerTest => {
+            let per = profile::profile_per_test(Some(std::path::Path::new(&cli.profile)))?;
+            let class = classify::classify_per_test(&per);
+            println!(
+                "{:<40} {:<8} {:>10} {:<6}",
+                "test", "speed", "dur_ms", "pass"
+            );
+            println!("{}", "-".repeat(70));
+            for t in &class.tests {
+                println!(
+                    "{:<40} {:<8} {:>10} {:<6}",
+                    t.profile.name,
+                    t.speed.as_str(),
+                    t.profile.duration_ms,
+                    if t.profile.ignored {
+                        "ign"
+                    } else if t.profile.passed {
+                        "ok"
+                    } else {
+                        "FAIL"
+                    }
+                );
+            }
+            println!("{}", "-".repeat(70));
+            println!(
+                "summary: fast={} ({}ms)  medium={} ({}ms)  slow={} ({}ms)  ignored={}{}",
+                class.summary.fast,
+                class.summary.fast_total_ms,
+                class.summary.medium,
+                class.summary.medium_total_ms,
+                class.summary.slow,
+                class.summary.slow_total_ms,
+                class.summary.ignored,
+                if class.coarse {
+                    "  (coarse — stable fallback)"
+                } else {
+                    ""
+                },
+            );
+            println!();
+            suggest::run_per_test(&per)?;
+            Ok(())
+        }
         Cmd::Classify => classify::run(&cli.profile),
         Cmd::Partition => partition::run(&cli.profile, &cli.out),
         Cmd::Suggest => suggest::run(&cli.profile),
@@ -74,6 +129,11 @@ fn main() -> Result<()> {
         Cmd::Diagnose { root } => {
             let report = diagnose::diagnose(&root)?;
             diagnose::print_report(&report);
+            Ok(())
+        }
+        Cmd::Flaky { runs, filter } => {
+            let report = flaky::detect_flaky(&filter, runs)?;
+            flaky::print_report(&report);
             Ok(())
         }
     }

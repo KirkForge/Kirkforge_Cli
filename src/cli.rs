@@ -242,6 +242,9 @@ pub enum Command {
 pub enum DoctorCommand {
     /// Run `cargo test --workspace --no-fail-fast` and capture per-binary timings.
     Profile,
+    /// Capture per-test timings (nightly JSON if available, per-binary
+    /// fallback otherwise). WO 12.5.
+    ProfilePerTest,
     /// Read the profile and classify tests as fast/medium/slow/ignored.
     Classify,
     /// Generate fast-suite.json, full-suite.json, coverage-suite.json.
@@ -259,6 +262,16 @@ pub enum DoctorCommand {
         /// Project root to scan (default: current directory).
         #[arg(long, default_value = ".")]
         root: PathBuf,
+    },
+    /// Detect a flaky test by running it N times (WO 12.5). Slow —
+    /// default 10 runs × the test's duration. Developer tool, NOT run
+    /// in CI.
+    Flaky {
+        /// Test filter (passed to `cargo test -- <filter> --exact`).
+        filter: String,
+        /// Number of runs. Default 10.
+        #[arg(long, default_value_t = 10)]
+        runs: u32,
     },
 }
 
@@ -830,5 +843,45 @@ mod tests {
         ])
         .expect_err("should conflict");
         assert!(err.kind() == clap::error::ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn doctor_profile_per_test_parses() {
+        let cli = Cli::try_parse_from(["kirkforge", "doctor", "profile-per-test"]).expect("parse");
+        assert!(matches!(
+            cli.command,
+            Command::Doctor {
+                command: DoctorCommand::ProfilePerTest
+            }
+        ));
+    }
+
+    #[test]
+    fn doctor_flaky_parses_with_default_runs() {
+        let cli = Cli::try_parse_from(["kirkforge", "doctor", "flaky", "foo::bar"]).expect("parse");
+        match cli.command {
+            Command::Doctor {
+                command: DoctorCommand::Flaky { filter, runs },
+            } => {
+                assert_eq!(filter, "foo::bar");
+                assert_eq!(runs, 10);
+            }
+            _ => panic!("expected Flaky"),
+        }
+    }
+
+    #[test]
+    fn doctor_flaky_parses_with_custom_runs() {
+        let cli = Cli::try_parse_from(["kirkforge", "doctor", "flaky", "foo::bar", "--runs", "3"])
+            .expect("parse");
+        match cli.command {
+            Command::Doctor {
+                command: DoctorCommand::Flaky { filter, runs },
+            } => {
+                assert_eq!(filter, "foo::bar");
+                assert_eq!(runs, 3);
+            }
+            _ => panic!("expected Flaky"),
+        }
     }
 }

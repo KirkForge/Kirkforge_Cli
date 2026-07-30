@@ -21,6 +21,7 @@ fn print_json_line(value: &serde_json::Value) {
 /// loop so the multi-turn driver can call it once per turn without
 /// duplicating the 165-line match. Mutates the running totals in
 /// place; the caller reads `final_error` directly for the JSON summary.
+// reason: each &mut arg is an independent running total accumulated in place.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn emit_turn_events(
     events: &[session::executor::TurnEvent],

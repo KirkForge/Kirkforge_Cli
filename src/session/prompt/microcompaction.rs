@@ -27,8 +27,9 @@ use crate::shared::{Message, Role};
 #[derive(Debug, Clone)]
 pub struct MicrocompactResult {
     pub messages: Vec<Message>,
+    // reason: diagnostic field read by tests; production only uses messages/tokens_after.
+    #[allow(dead_code)]
     pub summarised_messages: usize,
-    pub tokens_before: usize,
     pub tokens_after: usize,
 }
 
@@ -94,7 +95,6 @@ pub fn maybe_microcompact(
     Some(MicrocompactResult {
         messages: out,
         summarised_messages,
-        tokens_before,
         tokens_after,
     })
 }

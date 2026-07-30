@@ -1,6 +1,3 @@
-// Public/future API surface for upcoming phases; submodules expose symbols used by later work.
-#![allow(dead_code)]
-
 pub mod access;
 pub mod adapter_swap;
 pub mod bash_jobs;

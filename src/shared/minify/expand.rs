@@ -106,14 +106,6 @@ pub fn expand_minified(path: &Path, minified_code: &str) -> String {
 }
 
 /// Expand a minified code fragment (no envelope) given a file extension.
-pub fn expand_minified_by_ext(code: &str, ext: &str) -> String {
-    let path = Path::new("fragment").with_extension(ext);
-    if let Some(formatted) = try_external_formatter(code, ext, &path) {
-        return formatted;
-    }
-    fallback_expand(code, ext)
-}
-
 fn ext_for_lang(lang: &str) -> String {
     let lang = lang.to_lowercase();
     match lang.as_str() {

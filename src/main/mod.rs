@@ -1640,6 +1640,7 @@ fn spawn_non_interactive_approval_handler(
     });
 }
 
+// reason: entry point; each arg is an independent session resource for non-interactive mode.
 #[allow(clippy::too_many_arguments)]
 async fn run_line_mode(
     config: kirkforge::shared::SharedConfig,

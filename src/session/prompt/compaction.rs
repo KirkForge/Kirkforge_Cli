@@ -70,6 +70,7 @@ const ASSISTANT_CONDENSED_SUFFIX: &str = " chars]";
 /// value. Mirrors the historical `DEFAULT_PRESERVE_RECENT` of 8 for
 /// backwards compatibility in tests; production code should pass the
 /// configured value from `Config::preserve_recent_messages`.
+#[cfg(test)]
 pub const DEFAULT_PRESERVE_RECENT: usize = 8;
 
 /// Estimate tokens for a single message.
@@ -236,6 +237,7 @@ pub fn compact_to_budget(
 /// Equivalent to `compact_to_budget(messages, preserve_recent, None)`;
 /// keeps exactly `preserve_recent` trailing messages verbatim and does
 /// not expand the tail based on a token budget.
+#[cfg(test)]
 pub fn compact(messages: &[Message], preserve_recent: usize) -> CompactionResult {
     compact_to_budget(messages, preserve_recent, None)
 }

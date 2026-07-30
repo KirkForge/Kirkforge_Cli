@@ -210,6 +210,17 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   called; `minify_content_by_ext` dispatches to `minify_rust_inner`
   directly). Fixed the mixed `//` + `//!` comment style at the top of
   `lang.rs` to a single `//!` module doc block.
+- dead-code + #[allow] audit (WO 14.8): removed the module-wide
+  `#![allow(dead_code)]` from `src/session/mod.rs` (hid 17 items) and
+  `src/shared/mod.rs` (hid 3 items). Deleted 740 lines of dead
+  single-call `dispatch_tool_call` (superseded by the batch dispatcher),
+  dead constants, dead struct fields, and unused `expand_minified_by_ext`
+  / `CollapseBlankLines`. Targeted remaining lifecycle API items
+  (`disconnect`, MCP transport fields) with `#[allow(dead_code)]` +
+  reason comments. Added `// reason:` comments to all 11 remaining
+  `#[allow(clippy::too_many_arguments)]` (removed 1 stale allow on a
+  0-arg method). Deleted legacy video scoring hooks and an LSP test
+  import stub.
 - replay sync_all batching (Workorder 10.5):
   `TraceRecorder::record` no longer fsyncs on every turn. Added
   `turns_since_sync` + `sync_interval` (default 10) fields; `sync_all`

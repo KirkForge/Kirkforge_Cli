@@ -1,6 +1,3 @@
-// Public/shared API surface with fields/methods intentionally unused until later phases.
-#![allow(dead_code)]
-
 /// Send a value over a channel and log a warning if the receiver is gone.
 ///
 /// Use this instead of `let _ = tx.send(...)` so channel drops are not silent.

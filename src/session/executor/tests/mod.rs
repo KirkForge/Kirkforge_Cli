@@ -2364,8 +2364,6 @@ async fn test_compact_hooks_fire_pre_and_post() {
             dropped_tool_results: 0,
             condensed_assistant_turns: 0,
             summarised_messages: 0,
-            tokens_before: 1000,
-            tokens_after: 1000,
             strategy: "pending",
         },
     );
@@ -2379,8 +2377,6 @@ async fn test_compact_hooks_fire_pre_and_post() {
             dropped_tool_results: 5,
             condensed_assistant_turns: 3,
             summarised_messages: 0,
-            tokens_before: 1000,
-            tokens_after: 200,
             strategy: "naive",
         },
     );

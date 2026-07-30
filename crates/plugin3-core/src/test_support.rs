@@ -119,6 +119,7 @@ impl Drop for ReentrantMutexGuard<'_> {
 pub struct EnvGuard {
     key: &'static str,
     prior: Option<String>,
+    // reason: held for its Drop side-effect (releases the env test mutex); never read.
     #[allow(dead_code)]
     guard: ReentrantMutexGuard<'static>,
 }

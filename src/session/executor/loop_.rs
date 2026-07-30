@@ -139,6 +139,7 @@ pub struct DoomHit {
 }
 
 impl Executor {
+    // reason: each arg is a distinct mpsc channel end; grouping would obscure the wiring.
     #[allow(clippy::too_many_arguments)]
     pub async fn run(
         &mut self,
@@ -323,8 +324,6 @@ impl Executor {
                             dropped_tool_results: 0,
                             condensed_assistant_turns: 0,
                             summarised_messages: 0,
-                            tokens_before: original_tokens,
-                            tokens_after: original_tokens,
                             strategy: "pending",
                         },
                     );
@@ -394,10 +393,6 @@ impl Executor {
                                         new_msgs.push(msg.clone());
                                     }
 
-                                    let tokens_after = crate::session::prompt::compaction::estimate_tokens(
-                                        &new_msgs
-                                    );
-
                                     if let Err(e) = self.conversation.replace_all_async(new_msgs.clone()).await
                                     {
                                         if event_tx
@@ -420,8 +415,6 @@ impl Executor {
                                             dropped_tool_results: 0,
                                             condensed_assistant_turns: 0,
                                             summarised_messages: result.summarised_messages,
-                                            tokens_before: original_tokens,
-                                            tokens_after,
                                             strategy: "summarize",
                                         });
                                         let report = TurnEvent::Token(format!(
@@ -465,8 +458,6 @@ impl Executor {
                             dropped_tool_results: result.dropped_tool_results,
                             condensed_assistant_turns: result.condensed_assistant_turns,
                             summarised_messages: 0,
-                            tokens_before: result.tokens_before,
-                            tokens_after: result.tokens_after,
                             strategy: "naive",
                         });
                         let report = if let Err(e) = self.conversation.replace_all_async(result.new_messages.clone()).await {

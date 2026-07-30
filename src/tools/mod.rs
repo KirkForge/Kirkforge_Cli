@@ -121,6 +121,7 @@ pub type UndoStackRef = Arc<Mutex<crate::session::undo::UndoStack>>;
 /// hand-crafted `<tool_call>` invocation in the prompt is the user's
 /// problem rather than a server-side 400. The default is `false`
 /// (conservative — most Ollama-local models aren't vision-capable).
+// reason: each arg is an independent tool-config knob; heterogeneous types, no obvious struct.
 #[allow(clippy::too_many_arguments)]
 pub fn all_tools(
     undo_stack: Option<UndoStackRef>,

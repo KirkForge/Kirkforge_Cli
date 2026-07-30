@@ -6,6 +6,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- First-run onboarding banner (WO 14.1): `load_or_create_config` now
+  prints a stdout banner naming the config path + a concrete `-m`
+  model hint on first run, so a new user gets feedback instead of
+  silent success. Fires exactly once (gated by `!exists`). README
+  quick start shows `kirkforge run -m qwen2.5:0.5b` with a first-run
+  hint; `/init` slash command usage string filled in.
 - Testdoctor smart suggest + apply (WO 12.6, ADR-0029): `kirkforge
   doctor suggest-detailed [--filter <substr>]` composes per-test
   timings with source-file pattern analysis (subprocess spawn,

@@ -11,9 +11,11 @@ compression keep costs bounded on long sessions.
 
 ## Quick start
 
+First run? Pass `-m <model>` or edit `~/.local/share/kirkforge/config.toml`.
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/KirkForge/Kirkforge_Cli/main/scripts/install.sh | sh
-kirkforge run
+kirkforge run -m qwen2.5:0.5b
 ```
 
 Or build from source:

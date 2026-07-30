@@ -1,6 +1,6 @@
 # ADR-0029: Test partitioning — fast / full / coverage suites
 
-- **Status:** Accepted (promoted: testdoctor is now a workspace member, WO 12.4)
+- **Status:** Accepted (per-test timings + flaky-test detection shipped, WO 12.5)
 - **Date:** 2026-07-21
 - **Related:** [ADR-0016](./0016-test-strategy.md) (test categories),
   [test-doctor idea](../ideas/test-doctor.md)
@@ -100,6 +100,18 @@ not available, so the doctor parses the standard text output. This
 gives per-binary timings (not per-test) on stable; per-test timings
 require nightly or `cargo-nextest --format json` (nextest's JSON is
 stable).
+
+**Update (WO 12.5):** per-test timings are now available when the
+nightly toolchain is installed. `kirkforge doctor profile-per-test`
+runs `cargo +nightly test -- --format json -Z unstable-options
+--report-time` and parses the `exec_time` field per test (the binary
+name is taken from the interleaved `Running <binary>` lines, since the
+JSON test events do not carry it). When nightly is absent, it falls
+back to per-binary timings attributed to each test as the binary's
+average (coarse, not per-test — flagged in the report). Flaky-test
+detection (`kirkforge doctor flaky --runs N --filter <test>`) runs a
+test N times and reports the pass rate; it is a manual developer tool,
+not run in CI.
 
 ## Consequences
 

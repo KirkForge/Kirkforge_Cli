@@ -6,6 +6,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- Testdoctor per-test timings + flaky-test detection (WO 12.5,
+  ADR-0029): `kirkforge doctor profile-per-test` captures per-test
+  durations via nightly JSON (`cargo +nightly test -- --format json
+  -Z unstable-options --report-time`) when nightly is installed, and
+  falls back to per-binary timings attributed to each test (coarse,
+  flagged in the report) on stable. `kirkforge doctor flaky --runs N
+  --filter <test>` runs a test N times and reports the pass/fail rate +
+  failure messages (manual developer tool, not run in CI). `classify`
+  and `suggest` now use per-test data when available, naming the
+  specific slow test.
 - `kirkforge plugin` CLI subcommand (WO 11.0, ADR-056): `list`, `enable`,
   `disable`, `toggle`, `validate`, `reload`, `sources`, `add`, `remove`,
   `doctor`. Backed by a shared `plugin_ops` layer

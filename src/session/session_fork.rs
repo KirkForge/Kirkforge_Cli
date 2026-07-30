@@ -344,4 +344,89 @@ mod tests {
 
         remove_test_dir(&dir);
     }
+
+    #[test]
+    fn test_open_fork_returns_error_for_unknown_id() {
+        let dir = std::env::temp_dir().join("kirkforge_fork_open_missing_test");
+        remove_test_dir(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let log_path = dir.join("session.conv.ndjson");
+        let _log = ConversationLog::open(log_path.clone()).unwrap().0;
+        let mgr = ForkManager::new("test", &log_path);
+        let err = mgr.open_fork("nonexistent-fork");
+        assert!(err.is_err(), "opening an unknown fork must error");
+        assert!(
+            err.err().unwrap().to_string().contains("not found"),
+            "error must mention 'not found'"
+        );
+
+        remove_test_dir(&dir);
+    }
+
+    #[test]
+    fn test_delete_fork_returns_error_for_unknown_id() {
+        let dir = std::env::temp_dir().join("kirkforge_fork_del_missing_test");
+        remove_test_dir(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let log_path = dir.join("session.conv.ndjson");
+        let _log = ConversationLog::open(log_path.clone()).unwrap().0;
+        let mut mgr = ForkManager::new("test", &log_path);
+        let err = mgr.delete_fork("no-such-fork");
+        assert!(err.is_err(), "deleting an unknown fork must error");
+        assert!(
+            err.unwrap_err().to_string().contains("not found"),
+            "error must mention 'not found'"
+        );
+
+        remove_test_dir(&dir);
+    }
+
+    #[test]
+    fn test_load_existing_forks_skips_unparseable_metadata() {
+        let dir = std::env::temp_dir().join("kirkforge_fork_bad_json_test");
+        remove_test_dir(&dir);
+        let forks_dir = dir.join("forks");
+        std::fs::create_dir_all(forks_dir.join("fork-01")).unwrap();
+        // Invalid JSON in fork.json must be skipped, not panic.
+        std::fs::write(forks_dir.join("fork-01/fork.json"), "{ not valid json").unwrap();
+
+        let log_path = dir.join("session.conv.ndjson");
+        let mgr = ForkManager::new("test", &log_path);
+        assert!(
+            mgr.is_empty(),
+            "unparseable fork metadata must be skipped, not loaded"
+        );
+
+        remove_test_dir(&dir);
+    }
+
+    #[test]
+    fn test_create_fork_with_explicit_fork_point_truncates() {
+        let dir = std::env::temp_dir().join("kirkforge_fork_point_test");
+        remove_test_dir(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let log_path = dir.join("session.conv.ndjson");
+        let mut log = ConversationLog::open(log_path.clone()).unwrap().0;
+        use crate::shared::{Message, Role};
+        for i in 0..4 {
+            log.append(Message {
+                role: Role::User,
+                content: format!("msg-{i}"),
+                ..Default::default()
+            })
+            .unwrap();
+        }
+
+        let mut mgr = ForkManager::new("test", &log_path);
+        // Fork at index 2 must carry only the first 2 messages.
+        let fork = mgr.create_fork("truncated", &log, 2).unwrap();
+        assert_eq!(fork.fork_point, 2);
+        let (fork_log, _) = ConversationLog::open(fork.path.clone()).unwrap();
+        assert_eq!(fork_log.all().len(), 2);
+
+        remove_test_dir(&dir);
+    }
 }

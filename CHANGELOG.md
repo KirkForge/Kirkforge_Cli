@@ -20,6 +20,17 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   across 12 files (memory, stratum, compaction, microcompaction,
   plugin_tools loader/wrapper, plugin_ops, access, undo, toolset,
   verifier/bus, executor/helpers). Test-only; no production code changed.
+- WO 12.9: enforce coverage thresholds (12-series finale, ADR-065). Raised
+  the `src/session` CI threshold 68.0 → 68.5 (proven-green by the 68.6%
+  green run; 75% honestly deferred — the remaining gap is async executor +
+  MCP-HTTP code that needs integration test work, not pure-helper unit
+  tests). `src/tools` stays at 76.0 (stricter than 75; lowering would
+  weaken the gate) and `src/adapters` at 75.0 — both clear 75%
+  (measured 76.5% / 84.1%). Added a focused batch of pure-helper unit
+  tests (grep-output formatting, plugin-loader warning paths, fork-
+  manager error branches, validate-args edges, config empty-path
+  merging, verifier no-cargo-root skip). Pinned the headroom policy +
+  the `--skip` belt-and-suspenders workaround in ADR-065.
 - `kirkforge plugin` CLI subcommand (WO 11.0, ADR-056): `list`, `enable`,
   `disable`, `toggle`, `validate`, `reload`, `sources`, `add`, `remove`,
   `doctor`. Backed by a shared `plugin_ops` layer

@@ -957,6 +957,38 @@ Body."#;
     }
 
     #[test]
+    fn test_plugin_status_summary_none_when_empty_and_no_warnings() {
+        // A fresh registry has no active plugins and no warnings → None.
+        let reg = SkillRegistry::new();
+        assert!(reg.plugin_status_summary().is_none());
+    }
+
+    #[test]
+    fn test_plugin_status_summary_reports_blocked_warnings() {
+        // With no active plugins but pending warnings, the summary should
+        // surface the "☠️N blocked" suffix so the operator sees rejections.
+        let mut reg = SkillRegistry::new();
+        reg.plugin_warnings = vec!["a: rejected".into(), "b: rejected".into()];
+        let summary = reg
+            .plugin_status_summary()
+            .expect("warnings must produce a summary");
+        assert!(summary.contains("blocked"), "summary: {summary}");
+        assert!(summary.contains("2"), "two warnings → ☠️2 blocked");
+        // No active plugins → no tier glyphs.
+        assert!(!summary.contains('🔒'));
+        assert!(!summary.contains("⚡"));
+        assert!(!summary.contains("🌐"));
+    }
+
+    #[test]
+    fn test_plugin_status_summary_single_warning_counts_as_one_blocked() {
+        let mut reg = SkillRegistry::new();
+        reg.plugin_warnings = vec!["only one".into()];
+        let summary = reg.plugin_status_summary().unwrap();
+        assert!(summary.contains("1 blocked"));
+    }
+
+    #[test]
     fn test_render_prompt_substitutes_args_placeholder() {
         let skill = Skill {
             meta: SkillMeta {

@@ -392,4 +392,54 @@ mod loader_tests {
         assert_eq!(folded_feature("Stratum"), None);
         assert_eq!(folded_feature("STRATUM"), None);
     }
+
+    #[test]
+    fn load_workspace_plugins_empty_enabled_returns_no_warnings() {
+        let mut cfg = Config::default();
+        cfg.tools.enabled_plugins.clear();
+        cfg.tools.plugin_sources.clear();
+        let mut registry = PluginRegistry::new();
+        let warnings = load_workspace_plugins(&mut registry, &cfg);
+        assert!(warnings.is_empty(), "no enabled plugins → no warnings");
+        assert!(
+            registry.active_plugins().is_empty(),
+            "registry stays empty when nothing is enabled"
+        );
+    }
+
+    #[test]
+    fn load_workspace_plugins_warns_when_enabled_has_no_source() {
+        let mut cfg = Config::default();
+        cfg.tools.enabled_plugins.clear();
+        cfg.tools.plugin_sources.clear();
+        cfg.tools.enabled_plugins.push("ghost-plugin".into());
+        let mut registry = PluginRegistry::new();
+        let warnings = load_workspace_plugins(&mut registry, &cfg);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("ghost-plugin"));
+        assert!(warnings[0].contains("no plugin_source"));
+    }
+
+    #[test]
+    fn load_workspace_plugins_warns_when_source_dir_missing() {
+        // A non-folded enabled name with a configured source that does not
+        // exist on disk: the resolver falls back to the data-dir plugins path
+        // and, when that also does not exist, emits a "does not exist" warning.
+        let mut cfg = Config::default();
+        cfg.tools.enabled_plugins.clear();
+        cfg.tools.plugin_sources.clear();
+        cfg.tools.enabled_plugins.push("never-built-plugin".into());
+        cfg.tools.plugin_sources.insert(
+            "never-built-plugin".into(),
+            PathBuf::from("/nonexistent/path/that/does/not/exist"),
+        );
+        let mut registry = PluginRegistry::new();
+        let warnings = load_workspace_plugins(&mut registry, &cfg);
+        assert!(
+            !warnings.is_empty(),
+            "a missing source dir must produce a warning"
+        );
+        assert!(warnings.iter().any(|w| w.contains("never-built-plugin")));
+        assert!(registry.active_plugins().is_empty());
+    }
 }

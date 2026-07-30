@@ -693,6 +693,53 @@ mod tests {
     }
 
     #[test]
+    fn test_validate_args_rejects_non_object_args() {
+        // The tool-call arguments must be a JSON object; arrays/scalars are
+        // malformed calls and must be rejected up front.
+        let schema = serde_json::json!({"properties": {}});
+        assert!(
+            validate_args_against_schema(&serde_json::json!(["a", "b"]), &schema)
+                .is_some_and(|m| m.contains("arguments must be a JSON object")),
+            "non-object args must be rejected"
+        );
+        assert!(
+            validate_args_against_schema(&serde_json::json!(42), &schema)
+                .is_some_and(|m| m.contains("arguments must be a JSON object")),
+            "scalar args must be rejected"
+        );
+    }
+
+    #[test]
+    fn test_validate_args_allows_unknown_keys() {
+        // Unknown keys not in `properties` are ignored — the tool decides
+        // whether to error on them, the validator just skips them.
+        let schema = serde_json::json!({
+            "properties": { "name": { "type": "string" } }
+        });
+        assert!(
+            validate_args_against_schema(
+                &serde_json::json!({"name": "ok", "mystery": true}),
+                &schema
+            )
+            .is_none(),
+            "unknown keys should be allowed (skipped, not rejected)"
+        );
+    }
+
+    #[test]
+    fn test_validate_args_empty_anyof_accepts_anything() {
+        // An empty anyOf/oneOf list has no alternatives to fail against, so
+        // the value is treated as valid (matches vacuously).
+        let schema = serde_json::json!({
+            "properties": { "v": { "anyOf": [] } }
+        });
+        assert!(
+            validate_args_against_schema(&serde_json::json!({"v": "anything"}), &schema).is_none(),
+            "empty anyOf should accept any value"
+        );
+    }
+
+    #[test]
     fn git_command_is_read_only_recognizes_status_log_diff() {
         assert!(git_command_is_read_only("git status"));
         assert!(git_command_is_read_only("git log --oneline"));

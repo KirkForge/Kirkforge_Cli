@@ -320,4 +320,52 @@ mod tests {
             render_tool_error_with_hint("read_file", "cannot find value `x` in this scope", &args);
         assert!(!out.contains("Hint:"));
     }
+
+    #[test]
+    fn format_grep_output_empty_matches_lists_no_lines() {
+        let out = format_grep_output(std::path::Path::new("src/lib.rs"), &[]);
+        assert!(out.starts_with("Matches in "));
+        assert!(out.contains("src/lib.rs"));
+        // Header line + trailing newline only; no match bodies.
+        assert_eq!(out.matches('>').count(), 0);
+    }
+
+    #[test]
+    fn format_grep_output_renders_match_line_and_context() {
+        let m = crate::shared::Match {
+            line_number: 42,
+            line: "let x = 1;".into(),
+            context_before: vec!["fn foo() {".into()],
+            context_after: vec!["}".into()],
+        };
+        let out = format_grep_output(std::path::Path::new("src/foo.rs"), &[m]);
+        assert!(out.contains("Matches in src/foo.rs"));
+        // context-before is indented two spaces; match line is `>42: ...`.
+        assert!(out.contains("  fn foo() {"));
+        assert!(out.contains(">42: let x = 1;"));
+        assert!(out.contains("  }"));
+    }
+
+    #[test]
+    fn format_grep_output_renders_multiple_matches_separated_by_blank() {
+        let matches = vec![
+            crate::shared::Match {
+                line_number: 1,
+                line: "a".into(),
+                context_before: vec![],
+                context_after: vec![],
+            },
+            crate::shared::Match {
+                line_number: 2,
+                line: "b".into(),
+                context_before: vec![],
+                context_after: vec![],
+            },
+        ];
+        let out = format_grep_output(std::path::Path::new("/x"), &matches);
+        assert!(out.contains(">1: a"));
+        assert!(out.contains(">2: b"));
+        // Two matches → at least one blank-line separator between them.
+        assert!(out.contains("\n\n"));
+    }
 }

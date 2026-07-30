@@ -161,6 +161,39 @@ mod tests {
         assert!(matches!(v, Verdict::Skipped(_)));
     }
 
+    #[tokio::test]
+    async fn test_skips_rust_file_with_no_cargo_root() {
+        // A `.rs` file in a temp dir with no Cargo.toml ancestor: the
+        // verifier must skip (no project to run `cargo test` against)
+        // rather than spawning cargo in an unrelated directory.
+        let dir = tempfile::tempdir().unwrap();
+        let rs = dir.path().join("lonely.rs");
+        std::fs::write(&rs, "fn main() {}").unwrap();
+        let event = BusEvent::Edit(EditEvent {
+            path: rs.clone(),
+            diff: "".into(),
+        });
+        let v = verify_test(&event).await;
+        match v {
+            Verdict::Skipped(msg) => assert!(msg.contains("Cargo.toml")),
+            other => panic!("expected Skipped for rs file with no cargo root, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_skips_filewrite_rust_with_no_cargo_root() {
+        // Same skip path, but via the FileWrite event variant.
+        let dir = tempfile::tempdir().unwrap();
+        let rs = dir.path().join("orphan.rs");
+        std::fs::write(&rs, "fn main() {}").unwrap();
+        let event = BusEvent::FileWrite(FileWriteEvent {
+            path: rs,
+            content_length: 12,
+        });
+        let v = verify_test(&event).await;
+        assert!(matches!(v, Verdict::Skipped(_)));
+    }
+
     #[test]
     fn test_module_path_prefix_src() {
         let root = std::path::PathBuf::from("/tmp/foo");

@@ -105,6 +105,7 @@ verifies the table and the file headers agree.
 | [062](./062-plugin-verifier-ui.md) | Plugin verifier results in `/verify` panel + cost report | Accepted | CLI |
 | [063](./063-plugin-init-scaffolding.md) | Plugin init scaffolding command (`kirkforge plugin init`) | Accepted | CLI |
 | [064](./064-plugin-system-e2e-test.md) | Plugin system end-to-end integration test suite | Accepted | CLI |
+| [065](./065-coverage-threshold-policy.md) | Coverage-gate threshold policy (75% target, headroom, `--skip` workaround) | Accepted | CLI |
 
 ## Native KirkForge-Cli ADRs
 

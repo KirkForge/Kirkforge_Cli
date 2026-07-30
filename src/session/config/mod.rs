@@ -1152,6 +1152,33 @@ mod tests {
     }
 
     #[test]
+    fn test_merge_toml_empty_path_strings_yield_none() {
+        // Empty-string path fields in the config file must map to `None`
+        // (clearing a previously-set path) rather than a stray empty PathBuf.
+        let mut cfg = Config::default();
+        cfg.security.audit_log_path = Some("/prev/audit.log".into());
+        cfg.tools.hooks_dir = Some("/prev/hooks".into());
+        cfg.tools.plugin_public_key_path = Some("/prev/pub.key".into());
+        let table: toml::Table = r#"
+            audit_log_path = ""
+            hooks_dir = ""
+            plugin_public_key_path = ""
+        "#
+        .parse()
+        .unwrap();
+        merge_toml_into_config(&mut cfg, table);
+        assert!(
+            cfg.security.audit_log_path.is_none(),
+            "empty audit_log_path → None"
+        );
+        assert!(cfg.tools.hooks_dir.is_none(), "empty hooks_dir → None");
+        assert!(
+            cfg.tools.plugin_public_key_path.is_none(),
+            "empty plugin_public_key_path → None"
+        );
+    }
+
+    #[test]
     fn test_env_memory_enabled() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();

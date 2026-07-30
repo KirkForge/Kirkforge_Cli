@@ -61,7 +61,7 @@ kirkforge (root bin)          ← the CLI the user runs
 │   ├── kirkforge-draw/        ← diagram plugin (1 tool, 1 hook)
 │   └── kirkforge-video/       ← video plugin (8 tools)
 ├── benches/tasks/             ← 30 benchmark task definitions (TOML)
-└── docs/adr/                  ← 71 Architecture Decision Records
+└── docs/adr/                  ← 83 Architecture Decision Records
 ```
 
 ### Compiled-in vs satellite
@@ -593,6 +593,28 @@ second `ollama pull` adds 2-5 minutes per model and the PR job is
 latency-sensitive. The scheduled leaderboard covers multi-model
 comparison.
 
+### Coverage gate (WO 12.9, ADR-065)
+
+The `coverage` CI job runs `cargo tarpaulin --out Xml --locked --lib
+--timeout 120 -- --skip test_build_fork_tree_nests_children`. `--lib`
+instruments unit tests only (integration tests in `tests/` spawn
+ollama/cargo subprocesses and are excluded from coverage), and the
+`--skip` is belt-and-suspenders against the WO 12.0 tarpaulin flake
+(root cause fixed; the skip stays pending a verified flake-free run).
+
+A Python gate parses the Cobertura XML and fails the job when any of the
+three gated `src/` prefixes drops below its threshold: `src/session`
+(68.5), `src/tools` (76.0), `src/adapters` (75.0). The thresholds are
+set at or just below the *measured* coverage (the headroom policy,
+ADR-065): zero headroom at first catches regressions immediately,
+relaxing by at most 2 points only if a one-line flake fails CI
+repeatedly. The 12-series target was 75% on all three. `src/tools`
+(≈76.5%) and `src/adapters` (≈84%) clear it and their floors are at/above
+75; `src/session` (~68.6%) is honestly deferred to a follow-up
+workorder — the remaining gap is async executor + MCP-HTTP code that
+needs integration test work, not pure-helper unit tests. The gate is a
+regression guard, not a vanity number.
+
 ---
 
 ## Feature flags
@@ -624,12 +646,12 @@ not the root binary.
 
 ## ADRs
 
-71 Architecture Decision Records live in [docs/adr/](docs/adr/). They pin
+83 Architecture Decision Records live in [docs/adr/](docs/adr/). They pin
 load-bearing decisions: token budget (0005), slicing orchestrator (0007),
 verifier bus (0028, 0043), context index (037), benchmark harness (038),
-execution replay (039), VFS minification (053), and many more. A drift
-test (`adr_xref_drift`) enforces that ADR file headers and the README
-index table agree.
+execution replay (039), VFS minification (053), coverage-gate threshold
+policy (065), and many more. A drift test (`adr_xref_drift`) enforces that
+ADR file headers and the README index table agree.
 
 Conventions: `ponytail:` annotations pin spec literals (if a ponytail test
 fails, the spec and impl drifted, not the test). `ceiling:` and `upgrade path:`

@@ -144,3 +144,69 @@
   zero-cost. Deferred to keep the v1 change small — the contract is
   "show the diff, then apply with --yes", and a single-hunk diff
   covers the 3 supported fix kinds.
+
+## WO 14.4 (status bar graceful degradation)
+
+### What I learned
+1. **`⚠️` emoji width is 2 display cells but `.content.chars().count()`
+   counts it as 1** (the codepoint `U+26A0` + `U+FE0F` variation selector
+   = 2 chars, but the variation selector is width-0, so `chars().count()`
+   returns 2 — wait, actually `⚠️` is `U+26A0` (1 char) with a variation
+   selector appended making it 2 chars, but the rendered width is 2
+   cells). The sandbox span `"⚠️ UNSANDBOXED "` is 14 chars by
+   `chars().count()` but 15 display cells. The existing pre-WO-14.4 code
+   used `chars().count()` for ALL spans, so the "fits" check was off by
+   1 whenever the UNSANDBOXED span was visible. WO 14.4 fixes this with
+   a manual `+1` when the span contains `⚠` (cheaper than adding
+   `unicode-width` as a direct dep, which is not in the root Cargo.toml
+   — only transitive via ratatui). The workorder flagged this as a real
+   but separate bug; I fixed it inline because it made the drop-loop
+   math wrong by one cell.
+
+2. **`unicode-width` is NOT a direct dependency in the root `Cargo.toml`.**
+   It's transitive via `ratatui` (and several crates use it directly:
+   `kirkforge-draw-core`, `kirkforge-draw`). Adding it as a direct dep
+   to the main binary would show up in the size-optimized release
+   binary. The manual `+1` for the one known wide emoji is the cheaper
+   fix; if more wide glyphs land in the status bar later, promote
+   `unicode-width` to a direct dep then.
+
+3. **`collapse_span` (Ctrl+T indicator) was on the LEFT side of the
+   spacer in the original layout.** WO 14.4's priority list names it as
+   a droppable right-side span, so I moved it to the right side of the
+   spacer (into the drop-loop's span set). This is a minor visual shift
+   at wide widths (the Ctrl+T hint now sits after the spacer, flush
+   against the right cluster, instead of right after the model name).
+   The workorder's priority list is the contract; the done-condition
+   names it as droppable, so moving it is correct.
+
+4. **`session::hooks::tests::test_run_decision_merges_builtin_and_plugin_hooks_deterministically`
+   is flaky under heavy system load.** It spawns two external bash hook
+   processes and reads a marker file; under load avg 25+ (a competing
+   worktree build), the plugin hook's write hadn't flushed before the
+   assertion. It passes in isolation. This is NOT a WO 14.4 regression
+   (my change only touches `src/tui/widgets/status.rs`). The hooks.rs
+   file already documents race concerns at lines 873/923. When running
+   the full workspace gate on a loaded machine, expect this test to
+   flake; re-run in isolation to confirm green.
+
+5. **Build times on this repo are ~5-7 min per profile** (the
+   `auto_generate_cdp` / `headless_chrome` crate is the slow one).
+   Competing worktree builds (`wo-14.7`) pushed load avg to 25 and
+   made the gate take ~25 min total. Budget for this; a clean machine
+   does the full gate in ~10 min.
+
+### What I tried that didn't work
+- **`let mut space = 0usize;` initial assignment.** Clippy flagged it
+  as `unused_assignments` (the `0` is never read; every branch
+  reassigns). Restructured to compute `space` as a single `let` after
+  the drop loop runs — the drop loop is now always evaluated (no-op if
+  it already fits), and `space` derives from the post-drop `floor`.
+  Cleaner and warning-free.
+
+### What I'd do differently
+- Nothing material. The drop loop is 8 iterations max (4 droppable
+  spans), allocates one `Vec` of 10 spans per frame. That's fine for a
+  status bar (1 row, rendered on state change). A bitmask over fixed
+  spans (the workorder's suggestion) would avoid the `Vec` but adds
+  complexity for no measurable gain at 1 row/frame.

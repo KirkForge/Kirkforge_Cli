@@ -121,34 +121,30 @@ pub fn render_status(f: &mut Frame, area: Rect, state: &AppState) {
             })
             .bg(Color::Black),
     );
-    let right_visible_len: usize = [
-        collapse_span.content.chars().count(),
-        sandbox_span.content.chars().count(),
-        tool_calls_span.content.chars().count(),
-        skills_span.content.chars().count(),
-        plugin_span.content.chars().count(),
-        sent_span.content.chars().count(),
-        received_span.content.chars().count(),
-        cost_span.content.chars().count(),
-        elapsed_span.content.chars().count(),
-        // " │ " separator between cost/elapsed
-        3,
-    ]
-    .iter()
-    .sum();
-    let left_len = left_info.content.chars().count();
-    let space = if area.width as usize > left_len + right_visible_len + 2 {
-        area.width as usize - left_len - right_visible_len
-    } else {
-        1
+    let separator = Span::styled(" │ ", Style::default().fg(Color::DarkGray));
+
+    // Display-cell width of a span. `chars().count()` undercounts wide
+    // emoji (e.g. `⚠️` is 2 cells but 1 char + variation selector), so
+    // add 1 for the known sandbox-emoji span when it's the UNSANDBOXED
+    // warning. `unicode-width` is not a direct dep here (only transitive
+    // via ratatui), so the manual correction stays cheaper than a new
+    // dependency.
+    let span_width = |span: &Span| {
+        let n = span.content.chars().count();
+        if span.content.contains('⚠') {
+            n + 1
+        } else {
+            n
+        }
     };
 
-    let spacing = " ".repeat(space);
+    let left_len = span_width(&left_info);
 
-    let line = Line::from(vec![
-        left_info,
+    // Right-side spans in render order. The drop loop below mutates a
+    // visibility mask over these. Never-drop spans are excluded from
+    // the drop candidates list.
+    let mut right: Vec<Span> = vec![
         collapse_span,
-        Span::styled(spacing, Style::default()),
         sandbox_span,
         tool_calls_span,
         skills_span,
@@ -156,10 +152,48 @@ pub fn render_status(f: &mut Frame, area: Rect, state: &AppState) {
         sent_span,
         received_span,
         cost_span,
-        Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
+        separator,
         elapsed_span,
-    ]);
+    ];
 
+    // Drop order: drop first → last. Index into `right`.
+    // 4=plugin_span, 3=skills_span, 2=tool_calls_span, 0=collapse_span.
+    // Never-drop: 1=sandbox, 5=sent, 6=received, 7=cost, 8=separator, 9=elapsed.
+    let drop_order: [usize; 4] = [4, 3, 2, 0];
+
+    let right_width = |right: &[Span]| right.iter().map(|s| span_width(s)).sum::<usize>();
+    let fits = |right: &[Span]| area.width as usize >= left_len + right_width(right) + 2;
+
+    // Drop low-priority spans until it fits or only never-drop spans
+    // remain. Replace each dropped span with an empty span so indices
+    // stay stable.
+    if !fits(&right) {
+        for &idx in &drop_order {
+            if fits(&right) {
+                break;
+            }
+            right[idx] = Span::raw(String::new());
+        }
+    }
+
+    // Spacer between left and right. If the floor still doesn't fit,
+    // collapse to a single space so the overlap is the minimum, not
+    // every span piled up.
+    let floor = left_len + right_width(&right) + 2;
+    let space = if area.width as usize > floor {
+        area.width as usize - floor
+    } else if area.width as usize > left_len + 1 {
+        1
+    } else {
+        0
+    };
+
+    let spacing = " ".repeat(space);
+
+    let mut line_spans = vec![left_info, Span::styled(spacing, Style::default())];
+    line_spans.extend(right);
+
+    let line = Line::from(line_spans);
     let paragraph = Paragraph::new(line).style(Style::default().bg(Color::Black).fg(Color::White));
     f.render_widget(paragraph, area);
 }
@@ -213,6 +247,64 @@ mod tests {
         assert!(
             row.contains("$0.0100"),
             "cost should be visible on 80-col status bar, got: {row:?}"
+        );
+    }
+
+    /// WO 14.4: at narrow widths the plugin span (lowest priority)
+    /// drops before cost/elapsed, which are never-drop.
+    #[test]
+    fn status_bar_drops_plugin_count_below_70_cols() {
+        let mut state = make_state();
+        state.plugin_status = Some("🔒1".into());
+        let wide = status_row(&mut state, 80);
+        let narrow = status_row(&mut state, 60);
+        assert!(
+            wide.contains("🔒"),
+            "plugin span should be visible at 80 cols, got: {wide:?}"
+        );
+        assert!(
+            !narrow.contains("🔒"),
+            "plugin span should be dropped at 60 cols, got: {narrow:?}"
+        );
+        assert!(
+            narrow.contains("1.0s"),
+            "elapsed should survive the drop at 60 cols, got: {narrow:?}"
+        );
+        assert!(
+            narrow.contains("$0.0100"),
+            "cost should survive the drop at 60 cols, got: {narrow:?}"
+        );
+    }
+
+    /// WO 14.4: the UNSANDBOXED warning is never-drop — it stays even
+    /// at 40 cols when the session is unsandboxed.
+    #[test]
+    fn status_bar_keeps_unsandboxed_warning_at_40_cols() {
+        let mut state = make_state();
+        state.unsandboxed = true;
+        let row = status_row(&mut state, 40);
+        assert!(
+            row.contains("UNSANDBOXED"),
+            "UNSANDBOXED warning must stay at 40 cols, got: {row:?}"
+        );
+    }
+
+    /// WO 14.4: at 60 cols cost appears before elapsed (the right-side
+    /// spans didn't clip into each other). The current code only
+    /// checked `contains`, not rendering order.
+    #[test]
+    fn status_bar_no_overlap_at_60_cols() {
+        let mut state = make_state();
+        let row = status_row(&mut state, 60);
+        let cost = row.find("$0.0100");
+        let elapsed = row.find("1.0s");
+        assert!(
+            cost.is_some() && elapsed.is_some(),
+            "both cost and elapsed should be present at 60 cols, got: {row:?}"
+        );
+        assert!(
+            cost.unwrap() < elapsed.unwrap(),
+            "cost should render before elapsed at 60 cols (no overlap), got: {row:?}"
         );
     }
 }

@@ -182,6 +182,12 @@ resets the tracker so the next failure starts a fresh run. The TUI is purely
 reactive: the executor owns the detector and emits a `TurnEvent::DoomLoopDetected`
 that the TUI's `dispatch_turn_event` translates into banner state.
 
+The **status bar** (`render_status` in `src/tui/widgets/status.rs`) degrades by
+priority on narrow terminals: low-value spans (plugin count, skills, tool-call
+counter, Ctrl+T hint) drop before overlapping, while elapsed, cost, and the
+`⚠️ UNSANDBOXED` warning stay at all widths. The drop loop re-runs every frame,
+so a resize to 40 cols immediately re-evaluates the priority mask.
+
 `/sessions tree` renders the fork tree as ASCII (read from
 `<data_dir>/sessions/forks/<id>/fork.json` via
 `session_index::build_fork_tree`). The result is a flat list of roots with

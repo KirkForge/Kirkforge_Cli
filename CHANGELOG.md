@@ -12,6 +12,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   silent success. Fires exactly once (gated by `!exists`). README
   quick start shows `kirkforge run -m qwen2.5:0.5b` with a first-run
   hint; `/init` slash command usage string filled in.
+- Actionable error hints + typed error classification (WO 14.3):
+  `KirkForgeError::hint()` returns a per-variant suggestion string
+  (model/provider, permission/sandbox, config parse); the top-level
+  error printer now shows a `hint:` line when present. The
+  `From<anyhow::Error>` classifier downcasts two typed errors
+  (`kirkforge_plugin::ManifestError` -> ConfigParse,
+  `kirkforge_plugin_host::ToolError` -> AccessDenied) before falling
+  back to the existing string matcher. The migration TODO is updated,
+  not removed — ModelUnreachable still uses string matching (no typed
+  model-connection error exists in the adapter layer yet).
 - Testdoctor smart suggest + apply (WO 12.6, ADR-0029): `kirkforge
   doctor suggest-detailed [--filter <substr>]` composes per-test
   timings with source-file pattern analysis (subprocess spawn,

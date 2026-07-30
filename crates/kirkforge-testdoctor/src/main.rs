@@ -5,6 +5,7 @@
 //! fixes for slow tests, analyzes coverage gaps, and self-diagnoses
 //! untested code. See `docs/ideas/test-doctor.md` for the design.
 
+mod apply;
 mod classify;
 mod diagnose;
 mod flaky;
@@ -49,6 +50,24 @@ enum Cmd {
     Partition,
     /// Print fix suggestions for slow tests.
     Suggest,
+    /// Print smart (source-aware) fix suggestions for slow tests, using
+    /// per-test timings + source-file pattern analysis. WO 12.6.
+    SuggestDetailed {
+        /// Optional substring filter on the test name.
+        #[arg(long)]
+        filter: Option<String>,
+    },
+    /// Apply a suggestion to a test file (text-based rewrite). WO 12.6.
+    /// Always prints the diff first; requires `--yes` to write.
+    Apply {
+        /// Suggestion id (as printed by `suggest-detailed`).
+        suggestion: String,
+        /// Path to the test source file to rewrite.
+        test: String,
+        /// Confirm the write. Without this flag, only the diff is printed.
+        #[arg(long)]
+        yes: bool,
+    },
     /// Analyze coverage gaps from a Cobertura XML file.
     Gaps {
         /// Path to the tarpaulin Cobertura XML.
@@ -121,6 +140,41 @@ fn main() -> Result<()> {
         Cmd::Classify => classify::run(&cli.profile),
         Cmd::Partition => partition::run(&cli.profile, &cli.out),
         Cmd::Suggest => suggest::run(&cli.profile),
+        Cmd::SuggestDetailed { filter } => {
+            let per = profile::profile_per_test(Some(std::path::Path::new(&cli.profile)))?;
+            suggest::run_suggest_detailed(&per, filter.as_deref())?;
+            Ok(())
+        }
+        Cmd::Apply {
+            suggestion,
+            test,
+            yes,
+        } => {
+            // Resolve the suggestion id to a Suggestion. The id form is
+            // `<test>::<kind_slug>`; we reconstruct a minimal Suggestion
+            // for the apply path. The kind is parsed from the slug.
+            let kind = parse_kind_from_id(&suggestion)
+                .ok_or_else(|| anyhow::anyhow!("could not parse suggestion id `{suggestion}`"))?;
+            let test_name = suggestion
+                .split("::")
+                .next()
+                .unwrap_or(&suggestion)
+                .to_string();
+            let s = suggest::Suggestion {
+                id: suggestion.clone(),
+                test: test_name,
+                severity: "medium".to_string(),
+                fix: String::new(),
+                rationale: String::new(),
+                kind,
+            };
+            let diff = apply::apply_suggestion(std::path::Path::new(&test), &s, yes)?;
+            println!("{diff}");
+            if !yes {
+                println!("\n(dry-run — pass --yes to write)");
+            }
+            Ok(())
+        }
         Cmd::Gaps { xml } => {
             let gaps = gaps::analyze_gaps(&xml)?;
             gaps::print_report(&gaps);
@@ -137,4 +191,19 @@ fn main() -> Result<()> {
             Ok(())
         }
     }
+}
+
+/// Parse the `SuggestionKind` slug out of a suggestion id of the form
+/// `<test>::<kind_slug>`. Returns `None` if the slug is unrecognized.
+fn parse_kind_from_id(id: &str) -> Option<suggest::SuggestionKind> {
+    let slug = id.split("::").nth(1)?;
+    Some(match slug {
+        "ignore_slow" => suggest::SuggestionKind::IgnoreSlow,
+        "tokio_start_paused" => suggest::SuggestionKind::TokioStartPaused,
+        "env_guard" => suggest::SuggestionKind::EnvGuard,
+        "mock_subprocess" => suggest::SuggestionKind::MockSubprocess,
+        "wiremock" => suggest::SuggestionKind::Wiremock,
+        "named_temp_file" => suggest::SuggestionKind::NamedTempFile,
+        _ => return None,
+    })
 }

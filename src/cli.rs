@@ -251,6 +251,24 @@ pub enum DoctorCommand {
     Partition,
     /// Print fix suggestions for slow tests.
     Suggest,
+    /// Print smart (source-aware) fix suggestions for slow tests, using
+    /// per-test timings + source-file pattern analysis. WO 12.6.
+    SuggestDetailed {
+        /// Optional substring filter on the test name.
+        #[arg(long)]
+        filter: Option<String>,
+    },
+    /// Apply a suggestion to a test file (text-based rewrite). WO 12.6.
+    /// Always prints the diff first; requires `--yes` to write.
+    Apply {
+        /// Suggestion id (as printed by `suggest-detailed`).
+        suggestion: String,
+        /// Path to the test source file to rewrite.
+        test: String,
+        /// Confirm the write. Without this flag, only the diff is printed.
+        #[arg(long)]
+        yes: bool,
+    },
     /// Analyze coverage gaps from a Cobertura XML file (tarpaulin output).
     Gaps {
         /// Path to the tarpaulin Cobertura XML.
@@ -882,6 +900,85 @@ mod tests {
                 assert_eq!(runs, 3);
             }
             _ => panic!("expected Flaky"),
+        }
+    }
+
+    #[test]
+    fn doctor_suggest_detailed_parses() {
+        let cli = Cli::try_parse_from(["kirkforge", "doctor", "suggest-detailed"]).expect("parse");
+        assert!(matches!(
+            cli.command,
+            Command::Doctor {
+                command: DoctorCommand::SuggestDetailed { filter: None }
+            }
+        ));
+    }
+
+    #[test]
+    fn doctor_suggest_detailed_with_filter_parses() {
+        let cli = Cli::try_parse_from([
+            "kirkforge",
+            "doctor",
+            "suggest-detailed",
+            "--filter",
+            "sleep",
+        ])
+        .expect("parse");
+        match cli.command {
+            Command::Doctor {
+                command: DoctorCommand::SuggestDetailed { filter },
+            } => {
+                assert_eq!(filter.as_deref(), Some("sleep"));
+            }
+            _ => panic!("expected SuggestDetailed"),
+        }
+    }
+
+    #[test]
+    fn doctor_apply_parses_dry_run() {
+        let cli = Cli::try_parse_from([
+            "kirkforge",
+            "doctor",
+            "apply",
+            "test_foo::env_guard",
+            "tests/foo.rs",
+        ])
+        .expect("parse");
+        match cli.command {
+            Command::Doctor {
+                command:
+                    DoctorCommand::Apply {
+                        suggestion,
+                        test,
+                        yes,
+                    },
+            } => {
+                assert_eq!(suggestion, "test_foo::env_guard");
+                assert_eq!(test, "tests/foo.rs");
+                assert!(!yes);
+            }
+            _ => panic!("expected Apply"),
+        }
+    }
+
+    #[test]
+    fn doctor_apply_parses_with_yes() {
+        let cli = Cli::try_parse_from([
+            "kirkforge",
+            "doctor",
+            "apply",
+            "test_foo::env_guard",
+            "tests/foo.rs",
+            "--yes",
+        ])
+        .expect("parse");
+        match cli.command {
+            Command::Doctor {
+                command: DoctorCommand::Apply { yes, .. },
+            } => {
+                assert!(yes);
+            }
+            _ => panic!("expected Apply"),
         }
     }
 }

@@ -233,7 +233,7 @@ series.
 | 12.3 | [Raise `src/adapters` coverage threshold 61% → 70%](12.3-raise-adapters-coverage-70.md) | Planned | High | 12.0 |
 | 12.4 | [Fold `kirkforge-testdoctor` into workspace + `kirkforge doctor` CLI](12.4-fold-testdoctor-into-workspace.md) | Planned | High | — |
 | 12.5 | [Advanced testdoctor: per-test timings + flaky-test detection](12.5-testdoctor-per-test-flaky.md) | Planned | Medium | 12.4 |
-| 12.6 | [Testdoctor: smart auto-suggest (real heuristics + fix application)](12.6-testdoctor-smart-suggest.md) | Planned | Medium | 12.5 |
+| 12.6 | [Testdoctor: smart auto-suggest (real heuristics + fix application)](12.6-testdoctor-smart-suggest.md) | Done | Medium | 12.5 |
 | 12.7 | [Testdoctor: coverage-gap report (uncovered files + suggested targets)](12.7-testdoctor-coverage-gaps.md) | Planned | High | 12.4 |
 | 12.8 | [Final coverage push to 75% on all three target directories](12.8-final-coverage-push-75.md) | Planned | High | 12.0, 12.1-12.3, 12.7 |
 | 12.9 | [Enforce 75% coverage thresholds in CI](12.9-enforce-75-percent-thresholds.md) | Planned | High | 12.8 |

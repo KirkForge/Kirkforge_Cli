@@ -6,6 +6,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- Testdoctor smart suggest + apply (WO 12.6, ADR-0029): `kirkforge
+  doctor suggest-detailed [--filter <substr>]` composes per-test
+  timings with source-file pattern analysis (subprocess spawn,
+  `tokio::time::sleep`, `std::env::set_var`, network calls, temp-dir
+  writes) to produce specific, actionable suggestions. `kirkforge
+  doctor apply --suggestion <id> --test <path> [--yes]` performs a
+  text-based rewrite (add `#[ignore]`, wrap `#[tokio::test(start_paused
+  = true)]`, replace `std::env::set_var` with `EnvGuard::set`); always
+  shows the diff first, requires `--yes` to write. No `syn` dep.
 - Testdoctor per-test timings + flaky-test detection (WO 12.5,
   ADR-0029): `kirkforge doctor profile-per-test` captures per-test
   durations via nightly JSON (`cargo +nightly test -- --format json

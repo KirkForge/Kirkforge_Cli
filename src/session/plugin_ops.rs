@@ -738,6 +738,111 @@ command = "tools/greet.sh"
         assert!(err.to_string().contains("already exists"), "{err}");
     }
 
+    #[test]
+    fn resolve_source_path_keeps_absolute_path() {
+        let abs = if cfg!(windows) {
+            "C:\\plugins\\demo"
+        } else {
+            "/plugins/demo"
+        };
+        let resolved = resolve_source_path(abs);
+        assert_eq!(resolved, PathBuf::from(abs));
+    }
+
+    #[test]
+    fn resolve_source_path_joins_relative_to_cwd() {
+        let resolved = resolve_source_path("relative/path");
+        let cwd = std::env::current_dir().unwrap();
+        assert_eq!(resolved, cwd.join("relative/path"));
+    }
+
+    #[test]
+    fn sources_non_empty_lists_each_source_with_status() {
+        let tmp = tempfile::tempdir().unwrap();
+        let _g = DataDirGuard::new(tmp.path());
+        let mut cfg = empty_config();
+        let dir = tmp.path().join("demo");
+        std::fs::create_dir_all(&dir).unwrap();
+        cfg.tools
+            .plugin_sources
+            .insert("demo".to_string(), dir.clone());
+        // Not enabled — should show as off.
+        let out = sources(&cfg);
+        assert!(out.contains("Workspace plugin sources (1)"), "{out}");
+        assert!(out.contains("demo"), "{out}");
+        assert!(out.contains("[off]"), "{out}");
+
+        // Enable it — should show as on.
+        cfg.tools.enabled_plugins.push("demo".to_string());
+        let out2 = sources(&cfg);
+        assert!(out2.contains("[on]"), "{out2}");
+    }
+
+    #[test]
+    fn add_source_missing_dir_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        let _g = DataDirGuard::new(tmp.path());
+        let mut cfg = empty_config();
+        // A path that exists but is a file, not a directory.
+        let file_path = tmp.path().join("not-a-dir");
+        std::fs::write(&file_path, "x").unwrap();
+        let err = add_source(&mut cfg, "x", file_path.to_str().unwrap()).unwrap_err();
+        assert!(err.to_string().contains("not a directory"), "{err}");
+    }
+
+    #[test]
+    fn add_source_adds_to_enabled_list() {
+        let tmp = tempfile::tempdir().unwrap();
+        let _g = DataDirGuard::new(tmp.path());
+        let plugin_dir = tmp.path().join("demo");
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        let mut cfg = empty_config();
+        let msg = add_source(&mut cfg, "demo", plugin_dir.to_str().unwrap()).unwrap();
+        assert!(msg.contains("Added plugin source 'demo'"), "{msg}");
+        assert!(cfg.tools.enabled_plugins.iter().any(|n| n == "demo"));
+        // Clean up the persisted config so the test doesn't leak state.
+        let _ = std::fs::remove_file(
+            std::env::var("KIRKFORGE_DATA_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| PathBuf::from("."))
+                .join("config.toml"),
+        );
+    }
+
+    #[test]
+    fn init_rejects_consecutive_hyphens() {
+        let tmp = tempfile::tempdir().unwrap();
+        let err = init("foo--bar", Some(tmp.path())).unwrap_err();
+        assert!(err.to_string().contains("consecutive hyphens"), "{err}");
+    }
+
+    #[test]
+    fn init_rejects_leading_or_trailing_hyphen() {
+        let tmp = tempfile::tempdir().unwrap();
+        let err = init("-leading", Some(tmp.path())).unwrap_err();
+        assert!(err.to_string().contains("hyphen"), "{err}");
+        let err = init("trailing-", Some(tmp.path())).unwrap_err();
+        assert!(err.to_string().contains("hyphen"), "{err}");
+    }
+
+    #[test]
+    fn init_rejects_uppercase_and_non_ascii_alphanumeric() {
+        let tmp = tempfile::tempdir().unwrap();
+        let err = init("UpperCase", Some(tmp.path())).unwrap_err();
+        assert!(err.to_string().contains("lowercase"), "{err}");
+        let err = init("with_underscore", Some(tmp.path())).unwrap_err();
+        assert!(err.to_string().contains("lowercase"), "{err}");
+    }
+
+    #[test]
+    fn init_accepts_valid_kebab_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let parent = tmp.path();
+        let dir = init("valid-name-1", Some(parent)).unwrap();
+        assert!(dir.ends_with("valid-name-1"), "{dir:?}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     /// `Config::default()` includes the four in-repo default plugin_sources;
     /// tests that assert "empty" need a config with those cleared.
     fn empty_config() -> Config {

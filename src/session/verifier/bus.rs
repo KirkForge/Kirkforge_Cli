@@ -1124,4 +1124,144 @@ mod tests {
         );
         assert_eq!(bus.verdicts()[0].message, "first run");
     }
+
+    #[test]
+    fn parse_ndjson_empty_string_returns_no_verdicts() {
+        let v = TsOrchestratorBridgeVerifier::new(
+            "ts-bridge".into(),
+            PathBuf::from("bridge.sh"),
+            PathBuf::from("/tmp"),
+        );
+        assert!(v.parse_ndjson("", &make_ctx()).is_empty());
+    }
+
+    #[test]
+    fn parse_ndjson_skips_blank_lines() {
+        let v = TsOrchestratorBridgeVerifier::new(
+            "ts-bridge".into(),
+            PathBuf::from("bridge.sh"),
+            PathBuf::from("/tmp"),
+        );
+        let entries = v.parse_ndjson("\n  \n\t\n", &make_ctx());
+        assert!(entries.is_empty(), "blank lines should be skipped");
+    }
+
+    #[test]
+    fn parse_ndjson_verdict_without_rule_has_plain_message() {
+        let v = TsOrchestratorBridgeVerifier::new(
+            "ts-bridge".into(),
+            PathBuf::from("bridge.sh"),
+            PathBuf::from("/tmp"),
+        );
+        let stdout =
+            "{\"verifier\":\"lint\",\"severity\":\"warning\",\"message\":\"unused import\"}";
+        let entries = v.parse_ndjson(stdout, &make_ctx());
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].message, "unused import");
+        assert!(!entries[0].message.contains("["));
+    }
+
+    #[test]
+    fn parse_ndjson_verdict_with_missing_optional_fields_uses_none() {
+        let v = TsOrchestratorBridgeVerifier::new(
+            "ts-bridge".into(),
+            PathBuf::from("bridge.sh"),
+            PathBuf::from("/tmp"),
+        );
+        let stdout = "{\"verifier\":\"x\",\"severity\":\"info\",\"message\":\"hi\"}";
+        let entries = v.parse_ndjson(stdout, &make_ctx());
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].file.is_none());
+        assert!(entries[0].line.is_none());
+    }
+
+    #[test]
+    fn parse_ndjson_malformed_line_becomes_warning_verdict() {
+        let v = TsOrchestratorBridgeVerifier::new(
+            "ts-bridge".into(),
+            PathBuf::from("bridge.sh"),
+            PathBuf::from("/tmp"),
+        );
+        let stdout = "not valid json at all";
+        let entries = v.parse_ndjson(stdout, &make_ctx());
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].severity, Severity::Warning);
+        assert!(
+            entries[0].message.contains("malformed NDJSON"),
+            "got: {}",
+            entries[0].message
+        );
+        assert!(entries[0].message.contains("line 1"));
+    }
+
+    #[test]
+    fn parse_ndjson_malformed_line_includes_line_number() {
+        let v = TsOrchestratorBridgeVerifier::new(
+            "ts-bridge".into(),
+            PathBuf::from("bridge.sh"),
+            PathBuf::from("/tmp"),
+        );
+        let stdout =
+            "{\"verifier\":\"ok\",\"severity\":\"info\",\"message\":\"good\"}\nbroken line";
+        let entries = v.parse_ndjson(stdout, &make_ctx());
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[1].severity, Severity::Warning);
+        assert!(
+            entries[1].message.contains("line 2"),
+            "got: {}",
+            entries[1].message
+        );
+    }
+
+    #[test]
+    fn parse_ndjson_rule_is_prefixed_to_message_in_brackets() {
+        let v = TsOrchestratorBridgeVerifier::new(
+            "ts-bridge".into(),
+            PathBuf::from("bridge.sh"),
+            PathBuf::from("/tmp"),
+        );
+        let stdout =
+            "{\"verifier\":\"sec\",\"severity\":\"error\",\"message\":\"bad\",\"rule\":\"no-eval\"}";
+        let entries = v.parse_ndjson(stdout, &make_ctx());
+        assert_eq!(entries.len(), 1);
+        assert!(
+            entries[0].message.contains("[no-eval]"),
+            "got: {}",
+            entries[0].message
+        );
+        assert!(entries[0].message.contains("bad"));
+    }
+
+    #[test]
+    fn parse_ndjson_source_is_ts_prefixed_verifier_name() {
+        let v = TsOrchestratorBridgeVerifier::new(
+            "ts-bridge".into(),
+            PathBuf::from("bridge.sh"),
+            PathBuf::from("/tmp"),
+        );
+        let stdout = "{\"verifier\":\"security\",\"severity\":\"info\",\"message\":\"x\"}";
+        let entries = v.parse_ndjson(stdout, &make_ctx());
+        assert!(matches!(
+            entries[0].source,
+            VerifierSource::Custom(ref s) if s == "ts:security"
+        ));
+    }
+
+    #[test]
+    fn run_bridge_missing_command_returns_error() {
+        let v = TsOrchestratorBridgeVerifier::new(
+            "ts-bridge".into(),
+            PathBuf::from("does-not-exist.sh"),
+            PathBuf::from("/tmp/nonexistent-bridge-dir"),
+        );
+        let result = v.run_bridge(&make_ctx());
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("bridge command not found"), "got: {err}");
+    }
+
+    #[test]
+    fn parse_severity_empty_string_defaults_to_warning() {
+        assert_eq!(parse_severity(""), Severity::Warning);
+    }
 }

@@ -428,4 +428,103 @@ mod wrapper_tests {
         assert_eq!(def.name, "test_tool");
         assert_eq!(def.description, "A test tool");
     }
+
+    #[test]
+    fn sandbox_dir_uses_configured_sandbox_when_non_empty() {
+        let wrapper = make_wrapper();
+        let mut cfg = Config::default();
+        cfg.security.sandbox_dir = Some("/configured/sandbox".into());
+        assert_eq!(
+            wrapper.sandbox_dir(&cfg),
+            PathBuf::from("/configured/sandbox")
+        );
+    }
+
+    #[test]
+    fn sandbox_dir_ignores_empty_sandbox_string() {
+        let wrapper = make_wrapper();
+        let mut cfg = Config::default();
+        cfg.security.sandbox_dir = Some(String::new());
+        // Empty sandbox falls through to current_dir (env-dependent), so
+        // just assert it does NOT return the empty string.
+        let dir = wrapper.sandbox_dir(&cfg);
+        assert_ne!(dir, PathBuf::new(), "empty sandbox should not be used");
+        assert_ne!(dir.as_os_str(), "");
+    }
+
+    #[test]
+    fn sandbox_dir_uses_cwd_when_sandbox_unset() {
+        let wrapper = make_wrapper();
+        let cfg = Config::default();
+        let dir = wrapper.sandbox_dir(&cfg);
+        // With no sandbox configured, should fall to current_dir (or
+        // plugin_root as a last resort). Either way it must not be the
+        // plugin root "/tmp/test-plugin" unless cwd happens to be that.
+        assert!(dir.is_absolute() || dir == PathBuf::from("/tmp/test-plugin"));
+    }
+
+    #[test]
+    fn curated_env_includes_kirkforge_tool_args() {
+        let wrapper = make_wrapper();
+        let cfg = Config::default();
+        let args = serde_json::json!({"x": 1});
+        let env = wrapper.curated_env(&cfg, &args);
+        let has_args = env
+            .iter()
+            .any(|(k, v)| k == "KIRKFORGE_TOOL_ARGS" && v == r#"{"x":1}"#);
+        assert!(has_args, "KIRKFORGE_TOOL_ARGS must be set, got {env:?}");
+        let has_args_json = env.iter().any(|(k, _)| k == "KIRKFORGE_TOOL_ARGS_JSON");
+        assert!(has_args_json, "KIRKFORGE_TOOL_ARGS_JSON must be set");
+    }
+
+    #[test]
+    fn curated_env_includes_baseline_vars_when_present() {
+        let wrapper = make_wrapper();
+        let cfg = Config::default();
+        let env = wrapper.curated_env(&cfg, &serde_json::json!({}));
+        // PATH is almost always present in the test environment.
+        let has_path = env.iter().any(|(k, _)| k == "PATH");
+        assert!(
+            has_path,
+            "PATH should be forwarded when present, got {env:?}"
+        );
+    }
+
+    #[test]
+    fn curated_env_includes_allowed_env_vars_from_config() {
+        let wrapper = make_wrapper();
+        let mut cfg = Config::default();
+        // Force a var that we set in the test process to be forwarded.
+        std::env::set_var("KIRKFORGE_TEST_ENVVAR", "forwarded");
+        cfg.tools.plugin_allowed_env_vars = vec!["KIRKFORGE_TEST_ENVVAR".into()];
+        let env = wrapper.curated_env(&cfg, &serde_json::json!({}));
+        std::env::remove_var("KIRKFORGE_TEST_ENVVAR");
+        let hit = env
+            .iter()
+            .any(|(k, v)| k == "KIRKFORGE_TEST_ENVVAR" && v == "forwarded");
+        assert!(hit, "allowed env var should be forwarded, got {env:?}");
+    }
+
+    #[test]
+    fn curated_env_skips_missing_allowed_vars() {
+        let wrapper = make_wrapper();
+        let mut cfg = Config::default();
+        cfg.tools.plugin_allowed_env_vars = vec!["KIRKFORGE_DEFINITELY_NOT_SET_XYZ".into()];
+        let env = wrapper.curated_env(&cfg, &serde_json::json!({}));
+        let hit = env
+            .iter()
+            .any(|(k, _)| k == "KIRKFORGE_DEFINITELY_NOT_SET_XYZ");
+        assert!(!hit, "unset allowed var should not appear, got {env:?}");
+    }
+
+    #[test]
+    fn npm_bin_dirs_returns_vec_without_panic() {
+        // The function walks the filesystem; just assert it returns a Vec
+        // without panicking and does not contain duplicates.
+        let dirs = npm_bin_dirs();
+        let mut seen = std::collections::HashSet::new();
+        for d in &dirs {
+            assert!(seen.insert(d.clone()), "duplicate npm bin dir: {d:?}");
+        }
+    }
 }

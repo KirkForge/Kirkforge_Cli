@@ -725,4 +725,58 @@ mod tests {
         let list = stack.list();
         assert!(list[0].seq < list[1].seq);
     }
+
+    #[test]
+    fn undo_kind_as_str_covers_both_variants() {
+        assert_eq!(UndoKind::Edit.as_str(), "edit");
+        assert_eq!(UndoKind::Write.as_str(), "write");
+    }
+
+    #[test]
+    fn undo_summary_from_copies_fields() {
+        let op = UndoOp {
+            seq: 7,
+            kind: UndoKind::Write,
+            path: PathBuf::from("/tmp/x.rs"),
+            prev_existed: true,
+            snapshot_size: 42,
+            timestamp: chrono::Local::now(),
+        };
+        let summary = UndoSummary::from(&op);
+        assert_eq!(summary.seq, 7);
+        assert_eq!(summary.path, PathBuf::from("/tmp/x.rs"));
+        assert_eq!(summary.snapshot_size, 42);
+    }
+
+    #[test]
+    fn fresh_stack_is_empty_and_len_zero() {
+        let _guard = DataDirGuard::new();
+        let id = format!(
+            "fresh-empty-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let stack = UndoStack::for_session(&id).unwrap();
+        assert!(stack.is_empty());
+        assert_eq!(stack.len(), 0);
+        assert!(stack.list().is_empty());
+    }
+
+    #[test]
+    fn snapshot_path_and_meta_path_use_zero_padded_seq() {
+        let _guard = DataDirGuard::new();
+        let id = format!(
+            "snap-paths-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let stack = UndoStack::for_session(&id).unwrap();
+        assert!(stack.snapshot_path(1).ends_with("00000001.snap"));
+        assert!(stack.snapshot_path(99999999).ends_with("99999999.snap"));
+        assert!(stack.meta_path(1).ends_with("00000001.meta.json"));
+    }
 }

@@ -1192,4 +1192,149 @@ mod tests {
         let dl = DenyList::default();
         assert!(dl.is_url_denied("http://100.100.100.200/latest/meta-data/"));
     }
+
+    #[test]
+    fn is_binary_samples_only_first_512_bytes() {
+        // 512 bytes of text with a null byte just past the 512-byte boundary.
+        let mut content = vec![0x41u8; 512];
+        content.push(0x00);
+        assert!(
+            !PathGuard::is_binary(&content),
+            "null byte past the 512-byte sample should not be detected"
+        );
+    }
+
+    #[test]
+    fn is_binary_detects_null_within_first_512_bytes() {
+        let mut content = vec![0x41u8; 512];
+        content[511] = 0x00;
+        assert!(PathGuard::is_binary(&content));
+    }
+
+    #[test]
+    fn is_binary_short_text_is_not_binary() {
+        assert!(!PathGuard::is_binary(b"hello world"));
+        assert!(!PathGuard::is_binary(b"a"));
+    }
+
+    #[test]
+    fn read_gate_new_starts_empty() {
+        let gate = ReadGate::new();
+        assert!(
+            !gate.was_read(Path::new("/nonexistent/path")),
+            "fresh gate should not report any path as read"
+        );
+        // was_read canonicalizes; a nonexistent path falls back to the
+        // literal, which was never marked, so returns false.
+        assert!(!ReadGate::new().was_read(Path::new("/another/missing")));
+    }
+
+    #[test]
+    fn read_gate_check_edit_denies_unread_path() {
+        let gate = ReadGate::new();
+        let path = Path::new("/tmp/kirkforge-test-never-read.rs");
+        match gate.check_edit(path, path) {
+            GuardVerdict::Denied(msg) => assert!(msg.contains("Read-before-edit"), "{msg}"),
+            other => panic!("expected Denied, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn read_gate_check_edit_allows_after_mark_read() {
+        let mut gate = ReadGate::new();
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("gate_target.txt");
+        std::fs::write(&file, "x").unwrap();
+        gate.mark_read(&file);
+        match gate.check_edit(&file, &file) {
+            GuardVerdict::Allowed(p) => assert_eq!(p, file),
+            other => panic!("expected Allowed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn read_gate_mark_read_idempotent() {
+        let mut gate = ReadGate::new();
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("idem.txt");
+        std::fs::write(&file, "x").unwrap();
+        gate.mark_read(&file);
+        gate.mark_read(&file);
+        assert!(gate.was_read(&file));
+    }
+
+    #[test]
+    fn access_from_config_default_has_default_deny_extensions() {
+        let config = crate::shared::Config::default();
+        let (_deny, guard, _gate) = access_from_config(&config);
+        assert!(guard.deny_extensions.iter().any(|e| e == ".pem"));
+        assert!(guard.deny_extensions.iter().any(|e| e == ".key"));
+        assert!(guard.deny_extensions.iter().any(|e| e == ".so"));
+    }
+
+    #[test]
+    fn access_from_config_merges_custom_deny_extensions() {
+        let mut config = crate::shared::Config::default();
+        config.security.deny_extensions = vec![".custom".into()];
+        let (_deny, guard, _gate) = access_from_config(&config);
+        assert!(
+            guard.deny_extensions.iter().any(|e| e == ".pem"),
+            "defaults kept"
+        );
+        assert!(
+            guard.deny_extensions.iter().any(|e| e == ".custom"),
+            "custom added"
+        );
+    }
+
+    #[test]
+    fn access_from_config_filters_empty_sandbox_dir() {
+        let mut config = crate::shared::Config::default();
+        config.security.sandbox_dir = Some(String::new());
+        let (_deny, guard, _gate) = access_from_config(&config);
+        assert!(
+            guard.sandbox_dir.is_none(),
+            "empty sandbox_dir should be filtered out"
+        );
+    }
+
+    #[test]
+    fn access_from_config_filters_empty_allowed_write_dirs() {
+        let mut config = crate::shared::Config::default();
+        config.security.allowed_write_dirs = vec![String::new(), "/real/dir".into()];
+        let (_deny, guard, _gate) = access_from_config(&config);
+        assert_eq!(guard.allowed_write_dirs.len(), 1, "empty entries filtered");
+        assert_eq!(guard.allowed_write_dirs[0], PathBuf::from("/real/dir"));
+    }
+
+    #[test]
+    fn access_from_config_returns_fresh_read_gate() {
+        let config = crate::shared::Config::default();
+        let (_deny, _guard, gate) = access_from_config(&config);
+        assert!(!gate.was_read(Path::new("/nonexistent/fresh-gate")));
+    }
+
+    #[test]
+    fn access_from_config_propagates_deny_urls() {
+        let mut config = crate::shared::Config::default();
+        config.security.deny_urls = vec!["https://evil.example.com/".into()];
+        let (deny, _guard, _gate) = access_from_config(&config);
+        assert!(deny.is_url_denied("https://evil.example.com/path"));
+    }
+
+    #[test]
+    fn access_from_config_propagates_block_dotfiles_flag() {
+        let mut config = crate::shared::Config::default();
+        config.security.block_dotfiles = true;
+        let (_deny, guard, _gate) = access_from_config(&config);
+        assert!(guard.block_dotfiles);
+    }
+
+    #[test]
+    fn access_from_config_propagates_follow_symlinks_flag() {
+        let mut config = crate::shared::Config::default();
+        config.tools.follow_symlinks = true;
+        let (_deny, guard, _gate) = access_from_config(&config);
+        assert!(guard.follow_symlinks);
+    }
 }

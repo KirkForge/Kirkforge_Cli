@@ -691,4 +691,294 @@ mod tests {
             "wrong type should be rejected by anyOf"
         );
     }
+
+    #[test]
+    fn git_command_is_read_only_recognizes_status_log_diff() {
+        assert!(git_command_is_read_only("git status"));
+        assert!(git_command_is_read_only("git log --oneline"));
+        assert!(git_command_is_read_only("git diff HEAD"));
+        assert!(git_command_is_read_only("git show"));
+        assert!(git_command_is_read_only("git ls-files"));
+        assert!(git_command_is_read_only("git rev-parse HEAD"));
+    }
+
+    #[test]
+    fn git_command_is_read_only_rejects_mutating_subcommands() {
+        assert!(!git_command_is_read_only("git add ."));
+        assert!(!git_command_is_read_only("git commit -m x"));
+        assert!(!git_command_is_read_only("git push"));
+        assert!(!git_command_is_read_only("git reset --hard"));
+        assert!(!git_command_is_read_only("git checkout main"));
+    }
+
+    #[test]
+    fn git_command_is_read_only_skips_global_options() {
+        assert!(git_command_is_read_only("git -C /repo status"));
+        assert!(git_command_is_read_only("git --no-pager log"));
+        assert!(git_command_is_read_only("git -C /repo --no-pager diff"));
+    }
+
+    #[test]
+    fn git_command_is_read_only_rejects_bare_git_and_unknown() {
+        assert!(!git_command_is_read_only("git"));
+        assert!(!git_command_is_read_only("git unknown-subcommand"));
+    }
+
+    #[test]
+    fn is_read_only_bash_allows_simple_read_only_commands() {
+        assert!(is_read_only_bash("ls -la"));
+        assert!(is_read_only_bash("cat file.txt"));
+        assert!(is_read_only_bash("git status"));
+        assert!(is_read_only_bash("echo hello"));
+        assert!(is_read_only_bash(""));
+        assert!(is_read_only_bash("   "));
+    }
+
+    #[test]
+    fn is_read_only_bash_rejects_mutating_commands() {
+        assert!(!is_read_only_bash("rm file.txt"));
+        assert!(!is_read_only_bash("mv a b"));
+        assert!(!is_read_only_bash("cp src dst"));
+        assert!(!is_read_only_bash("git add ."));
+        assert!(!is_read_only_bash("bash script.sh"));
+    }
+
+    #[test]
+    fn is_read_only_bash_rejects_redirects_and_metacharacters() {
+        assert!(!is_read_only_bash("cat x > out"));
+        assert!(!is_read_only_bash("cat x >> out"));
+        assert!(!is_read_only_bash("ls; rm file"));
+        assert!(!is_read_only_bash("ls && rm file"));
+        assert!(!is_read_only_bash("ls || rm file"));
+        assert!(!is_read_only_bash("echo $(rm file)"));
+        assert!(!is_read_only_bash("echo `rm file`"));
+    }
+
+    #[test]
+    fn is_read_only_bash_rejects_pipe_into_mutating_command() {
+        assert!(!is_read_only_bash("cat list | sort > /tmp/out"));
+        assert!(!is_read_only_bash("cat list | rm file"));
+    }
+
+    #[test]
+    fn is_read_only_bash_rejects_find_with_destructive_flags() {
+        assert!(!is_read_only_bash("find . -delete"));
+        assert!(!is_read_only_bash("find . -exec rm {} \\;"));
+        assert!(!is_read_only_bash("find . -execdir touch x \\;"));
+        assert!(!is_read_only_bash("find . -ok rm {} \\;"));
+        assert!(!is_read_only_bash("find . -fprint out"));
+    }
+
+    #[test]
+    fn is_read_only_bash_allows_safe_find() {
+        assert!(is_read_only_bash("find . -name '*.rs'"));
+        assert!(is_read_only_bash("find . -type f -print"));
+    }
+
+    #[test]
+    fn truncate_tool_output_zero_max_returns_original() {
+        let outcome = ToolOutcome::Success {
+            content: "hello".into(),
+        };
+        let out = truncate_tool_output(outcome, 0);
+        match out {
+            ToolOutcome::Success { content } => assert_eq!(content, "hello"),
+            other => panic!("expected original, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn truncate_tool_output_truncates_long_success_content() {
+        let outcome = ToolOutcome::Success {
+            content: "abcdefghij".into(),
+        };
+        let out = truncate_tool_output(outcome, 5);
+        match out {
+            ToolOutcome::Success { content } => {
+                assert!(content.contains("abcde"), "{content}");
+                assert!(content.contains("truncated"), "{content}");
+                assert!(content.contains("5 chars"), "{content}");
+            }
+            other => panic!("expected truncated Success, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn truncate_tool_output_preserves_short_content() {
+        let outcome = ToolOutcome::Success {
+            content: "abc".into(),
+        };
+        let out = truncate_tool_output(outcome, 10);
+        match out {
+            ToolOutcome::Success { content } => assert_eq!(content, "abc"),
+            other => panic!("expected unmodified Success, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn truncate_tool_output_passes_through_error_and_failure() {
+        let err = ToolOutcome::Error {
+            message: "boom".into(),
+        };
+        match truncate_tool_output(err, 2) {
+            ToolOutcome::Error { message } => assert_eq!(message, "boom"),
+            other => panic!("expected Error preserved, got {other:?}"),
+        }
+        let fail = ToolOutcome::Failure(crate::shared::ToolError::Cancelled);
+        match truncate_tool_output(fail, 2) {
+            ToolOutcome::Failure(crate::shared::ToolError::Cancelled) => {}
+            other => panic!("expected Failure preserved, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn extract_bash_metrics_success_returns_zero_exit() {
+        let outcome = ToolOutcome::Success {
+            content: "hello".into(),
+        };
+        let (code, stdout, stderr) = extract_bash_metrics(&outcome);
+        assert_eq!(code, Some(0));
+        assert_eq!(stdout, Some(5));
+        assert_eq!(stderr, Some(0));
+    }
+
+    #[test]
+    fn extract_bash_metrics_error_message_parses_exit_code() {
+        let outcome = ToolOutcome::Error {
+            message: "command exited with code 42\nstderr:\nboom".into(),
+        };
+        let (code, stdout, stderr) = extract_bash_metrics(&outcome);
+        assert_eq!(code, Some(42));
+        assert!(stdout.is_some());
+        assert_eq!(stderr, Some(4)); // "boom" length
+    }
+
+    #[test]
+    fn extract_bash_metrics_error_without_code_defaults_to_one() {
+        let outcome = ToolOutcome::Error {
+            message: "some error".into(),
+        };
+        let (code, _stdout, _stderr) = extract_bash_metrics(&outcome);
+        assert_eq!(code, Some(1));
+    }
+
+    #[test]
+    fn extract_bash_metrics_failure_execution_uses_exit_code() {
+        let outcome = ToolOutcome::Failure(crate::shared::ToolError::Execution {
+            message: "fail".into(),
+            exit_code: Some(7),
+            stderr: "err".into(),
+        });
+        let (code, stdout, stderr) = extract_bash_metrics(&outcome);
+        assert_eq!(code, Some(7));
+        assert_eq!(stdout, Some(0));
+        assert_eq!(stderr, Some(3));
+    }
+
+    #[test]
+    fn extract_bash_metrics_timeout_and_cancelled_default_one() {
+        let timeout = ToolOutcome::Failure(crate::shared::ToolError::Timeout { after_secs: 5 });
+        let (code, stdout, stderr) = extract_bash_metrics(&timeout);
+        assert_eq!(code, Some(1));
+        assert_eq!(stdout, Some(0));
+        assert_eq!(stderr, Some(0));
+
+        let cancelled = ToolOutcome::Failure(crate::shared::ToolError::Cancelled);
+        let (code, _, _) = extract_bash_metrics(&cancelled);
+        assert_eq!(code, Some(1));
+    }
+
+    #[test]
+    fn check_deny_list_blocks_denied_path_for_read_tools() {
+        let dl = DenyList::new(vec!["/secret/**".into()], vec![]);
+        for tool in ["read_file", "read_image", "write_file", "edit_file"] {
+            let args = serde_json::json!({"path": "/secret/data"});
+            let result = check_deny_list(&dl, tool, &args);
+            assert!(result.is_some(), "{tool} should block denied path");
+            assert!(result.unwrap().contains("denied"), "{tool}");
+        }
+    }
+
+    #[test]
+    fn check_deny_list_blocks_denied_path_for_grep_glob() {
+        let dl = DenyList::new(vec!["/secret/**".into()], vec![]);
+        for tool in ["grep", "glob"] {
+            let args = serde_json::json!({"path": "/secret/data"});
+            assert!(check_deny_list(&dl, tool, &args).is_some(), "{tool}");
+        }
+    }
+
+    #[test]
+    fn check_deny_list_allows_safe_path() {
+        let dl = DenyList::new(vec!["/secret/**".into()], vec![]);
+        let args = serde_json::json!({"path": "/tmp/safe.txt"});
+        assert!(check_deny_list(&dl, "read_file", &args).is_none());
+    }
+
+    #[test]
+    fn check_deny_list_bash_is_noop() {
+        let dl = DenyList::new(vec!["/secret/**".into()], vec![]);
+        let args = serde_json::json!({"command": "cat /secret/data"});
+        assert!(check_deny_list(&dl, "bash", &args).is_none());
+    }
+
+    #[test]
+    fn check_deny_list_unknown_tool_is_noop() {
+        let dl = DenyList::new(vec!["/secret/**".into()], vec![]);
+        let args = serde_json::json!({"path": "/secret/data"});
+        assert!(check_deny_list(&dl, "unknown_tool", &args).is_none());
+    }
+
+    #[test]
+    fn check_deny_list_missing_path_arg_is_noop() {
+        let dl = DenyList::new(vec!["/secret/**".into()], vec![]);
+        let args = serde_json::json!({"other": "value"});
+        assert!(check_deny_list(&dl, "read_file", &args).is_none());
+    }
+
+    #[test]
+    fn check_deny_list_non_string_path_is_noop() {
+        let dl = DenyList::new(vec!["/secret/**".into()], vec![]);
+        let args = serde_json::json!({"path": 42});
+        assert!(check_deny_list(&dl, "read_file", &args).is_none());
+    }
+
+    #[test]
+    fn json_value_type_name_covers_all_variants() {
+        assert_eq!(json_value_type_name(&serde_json::json!("s")), "string");
+        assert_eq!(json_value_type_name(&serde_json::json!(1)), "number");
+        assert_eq!(json_value_type_name(&serde_json::json!(true)), "boolean");
+        assert_eq!(json_value_type_name(&serde_json::json!([1])), "array");
+        assert_eq!(json_value_type_name(&serde_json::json!({"a": 1})), "object");
+        assert_eq!(json_value_type_name(&serde_json::Value::Null), "null");
+    }
+
+    #[test]
+    fn value_matches_type_accepts_matching_types() {
+        assert!(value_matches_type(&serde_json::json!("s"), "string", "k").is_none());
+        assert!(value_matches_type(&serde_json::json!(1), "integer", "k").is_none());
+        assert!(value_matches_type(&serde_json::json!(1.5), "number", "k").is_none());
+        assert!(value_matches_type(&serde_json::json!(true), "boolean", "k").is_none());
+        assert!(value_matches_type(&serde_json::json!([1]), "array", "k").is_none());
+        assert!(value_matches_type(&serde_json::json!({}), "object", "k").is_none());
+        assert!(value_matches_type(&serde_json::Value::Null, "null", "k").is_none());
+    }
+
+    #[test]
+    fn value_matches_type_rejects_mismatched_types() {
+        let result = value_matches_type(&serde_json::json!(1), "string", "mykey");
+        assert!(result.is_some());
+        let msg = result.unwrap();
+        assert!(msg.contains("mykey"), "{msg}");
+        assert!(msg.contains("expected type 'string'"), "{msg}");
+        assert!(msg.contains("got number"), "{msg}");
+    }
+
+    #[test]
+    fn value_matches_type_unknown_schema_type_is_ignored() {
+        assert!(
+            value_matches_type(&serde_json::json!("s"), "custom-type", "k").is_none(),
+            "unknown schema types are accepted (forward-compat)"
+        );
+    }
 }

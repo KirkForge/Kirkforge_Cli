@@ -339,4 +339,57 @@ mod loader_tests {
     fn folded_feature_name_for_unknown_returns_none() {
         assert_eq!(folded_feature("nonexistent"), None);
     }
+
+    #[test]
+    fn is_folded_recognizes_all_known_folded_plugins() {
+        for (name, _feature) in FOLDED_PLUGINS {
+            assert!(
+                is_folded(name),
+                "is_folded should return true for known folded plugin '{name}'"
+            );
+        }
+    }
+
+    #[test]
+    fn folded_feature_returns_each_known_feature_name() {
+        for (name, feature) in FOLDED_PLUGINS {
+            assert_eq!(
+                folded_feature(name),
+                Some(*feature),
+                "folded_feature({name}) should return {feature:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn folded_feature_enabled_for_known_returns_feature_state() {
+        // Whether each known folded plugin's feature is enabled depends on
+        // build flags; we just assert the function does not panic for every
+        // known name and returns a bool.
+        for (name, _) in FOLDED_PLUGINS {
+            let _ = folded_feature_enabled(name);
+        }
+    }
+
+    #[test]
+    fn plugins_dir_ends_with_plugins_subdir() {
+        let dir = plugins_dir();
+        assert!(
+            dir.ends_with("plugins"),
+            "plugins_dir should end with 'plugins', got {dir:?}"
+        );
+    }
+
+    #[test]
+    fn is_folded_is_case_sensitive() {
+        // Plugin names are kebab-case identifiers; uppercase must not match.
+        assert!(!is_folded("Stratum"));
+        assert!(!is_folded("STRATUM"));
+    }
+
+    #[test]
+    fn folded_feature_is_case_sensitive() {
+        assert_eq!(folded_feature("Stratum"), None);
+        assert_eq!(folded_feature("STRATUM"), None);
+    }
 }

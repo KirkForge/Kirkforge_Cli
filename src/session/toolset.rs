@@ -387,4 +387,43 @@ mod tests {
             other => panic!("expected Success, got {other:?}"),
         }
     }
+
+    #[test]
+    fn composite_empty_into_tools_returns_empty_vec() {
+        let composite = CompositeToolset::empty();
+        let tools = composite.into_tools().unwrap();
+        assert!(tools.is_empty());
+    }
+
+    #[test]
+    fn composite_empty_total_definitions_is_zero() {
+        let composite = CompositeToolset::empty();
+        assert_eq!(composite.total_definitions(), 0);
+        assert!(composite.definitions().is_empty());
+    }
+
+    #[test]
+    fn composite_resolve_missing_returns_none() {
+        let composite = CompositeToolset::empty();
+        assert!(composite.resolve("nonexistent").is_none());
+    }
+
+    #[test]
+    fn vec_toolset_definitions_match_len() {
+        let ts = VecToolset::new(
+            "s",
+            vec![
+                Arc::new(DummyTool { name: "a" }),
+                Arc::new(DummyTool { name: "b" }),
+                Arc::new(DummyTool { name: "c" }),
+            ],
+        );
+        assert_eq!(ts.definitions().len(), ts.len());
+    }
+
+    #[test]
+    fn vec_toolset_source_returns_constructed_label() {
+        let ts = VecToolset::new("custom-source", vec![]);
+        assert_eq!(ts.source(), "custom-source");
+    }
 }

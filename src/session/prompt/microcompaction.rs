@@ -305,4 +305,159 @@ mod tests {
         assert_eq!(res.messages[0].content, "anchor");
         assert_eq!(res.messages.len(), 4); // anchor + summary + 2 tail
     }
+
+    #[test]
+    fn extract_path_pulls_single_path_field() {
+        let mut out = Vec::new();
+        extract_path(&serde_json::json!({"path": "/tmp/foo.rs"}), &mut out);
+        assert_eq!(out, vec!["/tmp/foo.rs".to_string()]);
+    }
+
+    #[test]
+    fn extract_path_pulls_paths_array() {
+        let mut out = Vec::new();
+        extract_path(
+            &serde_json::json!({"paths": ["a.rs", "b.rs", "c.rs"]}),
+            &mut out,
+        );
+        assert_eq!(
+            out,
+            vec!["a.rs".to_string(), "b.rs".to_string(), "c.rs".to_string()]
+        );
+    }
+
+    #[test]
+    fn extract_path_deduplicates() {
+        let mut out = Vec::new();
+        extract_path(&serde_json::json!({"path": "x.rs"}), &mut out);
+        extract_path(&serde_json::json!({"path": "x.rs"}), &mut out);
+        assert_eq!(out, vec!["x.rs".to_string()]);
+    }
+
+    #[test]
+    fn extract_path_ignores_non_path_args() {
+        let mut out = Vec::new();
+        extract_path(&serde_json::json!({"command": "ls", "n": 5}), &mut out);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn extract_path_skips_non_string_path_values() {
+        let mut out = Vec::new();
+        extract_path(&serde_json::json!({"path": 42}), &mut out);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn extract_path_from_text_finds_absolute_and_relative_paths() {
+        let mut out = Vec::new();
+        extract_path_from_text("edited /etc/hosts and ./src/main.rs", &mut out);
+        assert!(out.contains(&"/etc/hosts".to_string()));
+        assert!(out.contains(&"./src/main.rs".to_string()));
+    }
+
+    #[test]
+    fn extract_path_from_text_finds_rs_files() {
+        let mut out = Vec::new();
+        extract_path_from_text("see lib.rs for details", &mut out);
+        assert!(out.contains(&"lib.rs".to_string()));
+    }
+
+    #[test]
+    fn extract_path_from_text_caps_at_twelve_entries() {
+        let text: String = (0..20).map(|i| format!("/p{i}/f.rs ")).collect();
+        let mut out = Vec::new();
+        extract_path_from_text(&text, &mut out);
+        assert_eq!(out.len(), 12, "should cap at 12, got {}", out.len());
+    }
+
+    #[test]
+    fn extract_path_from_text_deduplicates() {
+        let mut out = Vec::new();
+        extract_path_from_text("/a.rs /a.rs /a.rs", &mut out);
+        assert_eq!(out, vec!["/a.rs".to_string()]);
+    }
+
+    #[test]
+    fn heuristic_summary_lists_tool_names_and_paths() {
+        let msgs = vec![
+            assistant_with_tools(
+                "",
+                vec![ToolInvocation {
+                    id: "t1".into(),
+                    name: "read_file".into(),
+                    arguments: serde_json::json!({"path": "src/x.rs"}),
+                }],
+            ),
+            tool("read_file", "ok"),
+        ];
+        let summary = heuristic_summary(&msgs);
+        assert!(summary.contains("read_file"), "{summary}");
+        assert!(summary.contains("src/x.rs"), "{summary}");
+    }
+
+    #[test]
+    fn heuristic_summary_counts_errors() {
+        let msgs = vec![
+            tool("bash", "error: command not found"),
+            tool("bash", "Error: permission denied"),
+        ];
+        let summary = heuristic_summary(&msgs);
+        assert!(summary.contains("2 error(s)"), "{summary}");
+    }
+
+    #[test]
+    fn heuristic_summary_omits_when_no_signal() {
+        let msgs = vec![user("hello"), assistant("hi")];
+        let summary = heuristic_summary(&msgs);
+        assert!(summary.contains("omitted"), "{summary}");
+    }
+
+    #[test]
+    fn heuristic_summary_dedupes_tool_names() {
+        let msgs = vec![
+            assistant_with_tools(
+                "",
+                vec![ToolInvocation {
+                    id: "t1".into(),
+                    name: "bash".into(),
+                    arguments: serde_json::json!({}),
+                }],
+            ),
+            tool("bash", "ok"),
+            assistant_with_tools(
+                "",
+                vec![ToolInvocation {
+                    id: "t2".into(),
+                    name: "bash".into(),
+                    arguments: serde_json::json!({}),
+                }],
+            ),
+        ];
+        let summary = heuristic_summary(&msgs);
+        // "bash" should appear once in the "tools used" list.
+        let count = summary.matches("bash").count();
+        assert_eq!(count, 1, "bash should appear once, got: {summary}");
+    }
+
+    #[test]
+    fn estimate_tokens_empty_is_zero() {
+        assert_eq!(estimate_tokens(&[]), 0);
+    }
+
+    #[test]
+    fn estimate_message_tokens_includes_thinking_and_tool_calls() {
+        let mut m = assistant("1234");
+        m.thinking = Some("5678".into());
+        m.tool_calls = Some(vec![ToolInvocation {
+            id: "c1".into(),
+            name: "bash".into(),
+            arguments: serde_json::json!({}),
+        }]);
+        let extra = serde_json::to_string(m.tool_calls.as_ref().unwrap())
+            .unwrap()
+            .len()
+            / 4;
+        assert_eq!(estimate_message_tokens(&m), 1 + 1 + extra);
+    }
 }

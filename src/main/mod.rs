@@ -1886,12 +1886,16 @@ async fn run_line_mode(
 
         if trimmed == "/help" || trimmed == "/h" || trimmed == "/?" {
             if output == kirkforge::shared::OutputFormat::Text {
-                println!("Built-in line-mode commands:");
+                println!("Line-mode commands (most commands are TUI-only):");
                 println!("  /exit, /quit          Exit the session");
                 println!("  /reload               Reload config.toml");
                 println!("  /reload plugins       Re-scan plugin directory");
                 println!("  /carryover            Show or clear cross-session carryover");
                 println!("  /help                 Show this help");
+                println!();
+                println!(
+                    "Type `/help` in the TUI (`kirkforge run`) for the full grouped command list."
+                );
             }
             continue;
         }

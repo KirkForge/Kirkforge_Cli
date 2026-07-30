@@ -22,6 +22,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   back to the existing string matcher. The migration TODO is updated,
   not removed — ModelUnreachable still uses string matching (no typed
   model-connection error exists in the adapter layer yet).
+- Grouped `/help` + filled empty usage strings (WO 14.2): the TUI
+  `/help` output is now sectioned into six groups (Session, Model,
+  Safety, Workflow, Plugins, Diagnostics) in a fixed order via a
+  `GROUPS` const, with commands alphabetized within each group. The
+  six commands that shipped with empty `usage` strings (`/memory`,
+  `/metrics`, `/verify`, `/gh`, `/init`, `/plugins`) now carry concrete
+  syntax verified against their dispatch arms. Line-mode `/help` adds
+  a pointer to the TUI's grouped list. 3 new tests enforce group
+  coverage.
 - Testdoctor smart suggest + apply (WO 12.6, ADR-0029): `kirkforge
   doctor suggest-detailed [--filter <substr>]` composes per-test
   timings with source-file pattern analysis (subprocess spawn,

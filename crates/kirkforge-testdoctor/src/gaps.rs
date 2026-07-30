@@ -51,10 +51,11 @@ pub struct CoverageGaps {
 }
 
 /// Default thresholds matching `.github/workflows/ci.yml`.
+// Must match the CI thresholds in .github/workflows/ci.yml (the coverage gate).
 const DEFAULT_THRESHOLDS: &[(&str, f64)] = &[
-    ("src/session", 62.0),
-    ("src/tools", 50.0),
-    ("src/adapters", 61.0),
+    ("src/session", 68.0),
+    ("src/tools", 76.0),
+    ("src/adapters", 75.0),
 ];
 
 pub fn analyze_gaps(xml_path: &Path) -> Result<CoverageGaps> {
@@ -409,5 +410,14 @@ mod tests {
     fn extract_attr_missing_returns_none() {
         let xml = r#"<class filename="foo.rs"/>"#;
         assert_eq!(extract_attr(xml, "missing"), None);
+    }
+
+    #[test]
+    fn default_thresholds_match_ci() {
+        let by_dir: std::collections::HashMap<&str, f64> =
+            DEFAULT_THRESHOLDS.iter().copied().collect();
+        assert_eq!(by_dir.get("src/session").copied(), Some(68.0));
+        assert_eq!(by_dir.get("src/tools").copied(), Some(76.0));
+        assert_eq!(by_dir.get("src/adapters").copied(), Some(75.0));
     }
 }

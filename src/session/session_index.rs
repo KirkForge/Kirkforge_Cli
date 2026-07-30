@@ -196,6 +196,10 @@ impl SessionIndex {
             }
             file.sync_all()?;
         }
+        if let Some(parent) = self.path.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("recreate index directory {}", parent.display()))?;
+        }
         std::fs::rename(&tmp, &self.path).with_context(|| {
             format!(
                 "commit session index from {} to {}",
@@ -796,6 +800,34 @@ mod tests {
             Some(v) => std::env::set_var("KIRKFORGE_DATA_DIR", v),
             None => std::env::remove_var("KIRKFORGE_DATA_DIR"),
         }
+    }
+
+    /// `save()` re-creates its parent directory if it was removed
+    /// between the first `create_dir_all` and the rename. This is the
+    /// tarpaulin tempdir/rename race root-cause fix (WO 12.0).
+    #[test]
+    fn save_recreates_parent_dir_if_removed() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let index_path = dir.path().join("sessions").join(".index.ndjson");
+        let mut index = SessionIndex {
+            path: index_path.clone(),
+            entries: Vec::new(),
+        };
+        index.entries.push(SessionEntry {
+            id: "test".into(),
+            path: index_path.clone(),
+            started_at: "2026-07-30T00:00:00+00:00".into(),
+            message_count: 1,
+            size_bytes: 0,
+        });
+        index.save().expect("first save");
+        assert!(index_path.exists(), "index file written after first save");
+
+        std::fs::remove_dir_all(dir.path().join("sessions")).expect("remove parent dir");
+        assert!(!dir.path().join("sessions").exists(), "parent dir gone");
+
+        index.save().expect("second save recreates parent dir");
+        assert!(index_path.exists(), "index file written after second save");
     }
 
     /// Search should match message content, not just metadata.

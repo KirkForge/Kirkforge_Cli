@@ -64,7 +64,7 @@ The hooks for WO 6.6/6.7/6.8 are now in-process Rust handlers (no shell scripts)
 ### Known CI issues
 
 - **Ollama model pull fails intermittently**: The `integration` CI job fails when `ollama pull` encounters a registry redirect. External service issue; re-running typically succeeds.
-- **Coverage (`tarpaulin`) flake on `test_build_fork_tree_orphan_fork_is_a_root`**: Under `cargo tarpaulin --lib`, this test in `src/session/session_index.rs` occasionally panics with "No such file or directory" committing the `.index.ndjson` temp file (a tempdir/rename race exposed by tarpaulin's instrumentation). It passed on the `main` CI run for `30b55ee` but failed 3× on the `dev` run; a fresh full re-run cleared it. Pre-existing; out of WO 10.x scope. Not a code regression (same commit passed on `main`).
+- **Coverage (`tarpaulin`) flake on `test_build_fork_tree_orphan_fork_is_a_root`**: Under `cargo tarpaulin --lib`, this test in `src/session/session_index.rs` occasionally panicked with "No such file or directory" committing the `.index.ndjson` temp file (a tempdir/rename race exposed by tarpaulin's instrumentation). WO 12.0 fixed the root cause: `save()` now re-creates the parent dir immediately before the rename so a mid-write `/tmp` cleanup can't break the rename. The `--skip test_build_fork_tree_nests_children` is still in CI (`.github/workflows/ci.yml:334`) as belt-and-suspenders; removing it is a separate verification step that needs a tarpaulin run.
 
 ### Gates
 

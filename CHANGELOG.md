@@ -71,6 +71,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   box. 3 new tests (round-trip, invalid name, existing dir).
 
 ### Fixed
+- WO 12.0: `SessionIndex::save()` now re-creates its parent directory
+  immediately before the atomic rename, fixing the tarpaulin tempdir/rename
+  race that flaked `test_build_fork_tree_orphan_fork_is_a_root`. WO 12.7
+  follow-up: synced the stale `DEFAULT_THRESHOLDS` in
+  `crates/kirkforge-testdoctor/src/gaps.rs` to the current CI coverage gate
+  (session 68.0, tools 76.0, adapters 75.0) so `kirkforge doctor gaps`
+  reports correct headroom.
 - Windows env_guard race (Workorder 10.0): the
   `env_guard_restores_prior_value_some_branch` tests in
   `crates/plugin3-core/src/cost.rs` and `paths.rs` read

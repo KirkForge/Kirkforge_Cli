@@ -6,6 +6,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- `/permissions list | revoke <i> | clear` (WO 14.5): surfaces the
+  permission rules created by the approval dialog's `[A]lways` key so
+  users no longer need to edit `config.toml` to undo an always-allow.
+  Pure ops layer (`src/tui/commands/permissions.rs`) over `&Config` /
+  `&mut Config`; the TUI arm persists on `revoke`/`clear` via
+  `save_config`. 1-indexed to match `/jobs` and `/undo list`. 6 unit
+  tests.
 - First-run onboarding banner (WO 14.1): `load_or_create_config` now
   prints a stdout banner naming the config path + a concrete `-m`
   model hint on first run, so a new user gets feedback instead of

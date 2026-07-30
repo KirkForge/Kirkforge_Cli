@@ -291,11 +291,11 @@ in progress in separate worktrees at the time of this WO.
 | 14.2 | [Grouped help + fill empty usage strings](14.2-grouped-help-usage-strings.md) | Done (`c25bd79`; six fixed-order groups via `GROUPS` const) | Medium | — |
 | 14.3 | [Actionable errors + typed error classification](14.3-actionable-errors-typed-classification.md) | Done (`5bb731e`; `KirkForgeError::hint()` + `From<anyhow::Error>` downcast) | High | — |
 | 14.4 | [Status bar graceful degradation on narrow terminals](14.4-status-bar-graceful-degradation.md) | Done (`2f26cda`) | Medium | — |
-| 14.5 | [`/permissions` command (list + revoke `[A]lways` rules)](14.5-permissions-revoke-command.md) | In Progress (worktree) | Medium | 14.2 (soft) |
+| 14.5 | [`/permissions` command (list + revoke `[A]lways` rules)](14.5-permissions-revoke-command.md) | Done (`f8e9f4c`; pure ops layer + 6 tests) | Medium | 14.2 (soft) |
 | 14.6 | [Slash-command + `@`-mention autocomplete](14.6-slash-mention-autocomplete.md) | In Progress (worktree) | High | 14.2, 14.5 (soft) |
 | 14.7 | [Publish KIRK-BENCH spec + signature Token Budget Challenge](14.7-kirk-bench-spec-publish.md) | Done (`327510c`; ADR-066; `token_budget_challenge.toml`) | High | 14.0 (soft) |
 | 14.8 | [Dead-code + `#[allow(...)]` audit (internal stability)](14.8-dead-code-clippy-allow-audit.md) | Done (`120db95`; 20 dead items removed, 740-line `dispatch_tool_call` deleted) | Medium | — |
-| 14.9 | [Doc-sync reconcile ADR count + stale claims](14.9-doc-sync-reconcile-adr-count.md) | Done (this commit) | Medium | 14.0 (soft) |
+| 14.9 | [Doc-sync reconcile ADR count + stale claims](14.9-doc-sync-reconcile-adr-count.md) | Done (`9c6bf5a`) | Medium | 14.0 (soft) |
 
 ### Priority rationale
 

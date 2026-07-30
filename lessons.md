@@ -91,3 +91,56 @@
 - No other scope creep. All 10 WOs touched only their named files + the
   shared doc files (TECHNICAL.md, state.md, CHANGELOG.md, ADR index,
   workorders README).
+
+## WO 12.6 (testdoctor smart suggest + apply)
+
+### What I learned
+1. **`regex` is a root `[dependencies]` entry but not a
+   `[workspace.dependencies]` entry.** To share it with the testdoctor
+   (a separate bin), I added `regex = "1"` to
+   `[workspace.dependencies]` and `regex = { workspace = true }` in the
+   testdoctor's `Cargo.toml`. The root `[dependencies] regex = "1"`
+   line (used by web_fetch) stays — it's the same version, so cargo
+   dedups. Adding a workspace dep is the clean way to share without
+   bumping the main binary's size (the testdoctor is a separate bin).
+
+2. **The `readme_drift` test counts `#[test]` under `crates/` only.**
+   Confirmed again: I added 25 net `#[test]` under
+   `crates/kirkforge-testdoctor/` (1616 → 1641). The drift window is 2,
+   so I had to bump `crates/plugin3-core/README.md` from 1615 → 1641.
+   The count script (`python3` walk) matches the test's logic exactly
+   (`#[test]` on its own line + next non-blank line starts with `fn `).
+
+3. **Hand-rolled unified diff is fine for the doctor's "show the diff
+   first" contract.** No `similar` dep needed. The diff is a
+   single-hunk, line-level diff — O(n*m) worst case but test files are
+   a few hundred lines. The format (`---`/`+++`/`@@`) is good enough
+   for a CLI tool; a human reads it, applies with `--yes`.
+
+4. **Text-based apply must refuse to guess.** If a pattern matches
+   multiple sites (e.g. two `std::env::set_var(` calls in one test),
+   return an error — don't pick one. The doctor prints the diff; the
+   human decides. This is the v1 contract; a `syn`-based v2 could
+   resolve by line number.
+
+5. **`Regex::new(...).is_ok_and(|r| r.is_match(src))`** is the clippy-
+   safe way to use a one-shot regex without `unwrap()`. The pattern
+   is a static literal so it never fails to compile, but clippy still
+   wants the `is_ok_and` form over `.unwrap().is_match()`.
+
+### What I tried that didn't work
+- **Rewriting `apply_tokio_start_paused` with an in-place `out.clear()`
+  mid-loop.** The first version tried to rewind the output buffer to
+  drop the previously-emitted attribute line, then rebuild. It was
+  fragile (off-by-one on the trailing newline, missed lines after the
+  fn signature). Replaced with a clean two-pass approach: first pass
+  locates the fn + attr indices, second pass rebuilds the whole file
+  substituting the new attr line at the known index.
+
+### What I'd do differently
+- **Use `similar` for the diff.** The hand-rolled diff is fine but a
+  real diff library produces better multi-hunk output. `similar` is
+  already a root dep (line 105); sharing it via workspace deps would be
+  zero-cost. Deferred to keep the v1 change small — the contract is
+  "show the diff, then apply with --yes", and a single-hunk diff
+  covers the 3 supported fix kinds.

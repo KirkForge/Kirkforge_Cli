@@ -51,6 +51,11 @@ thiserror = "1"
 toml = "0.8"
 tempfile = "3"
 directories = "6"
+# Regex for the testdoctor source-analysis heuristics (WO 12.6). Shared
+# via workspace so the testdoctor (a separate bin) can opt in without
+# adding a duplicate version. The main binary already pulls regex via
+# web_fetch (see [dependencies] below).
+regex = "1"
 
 [dependencies]
 # Test doctor (WO 12.4) — workspace member, called from `kirkforge doctor`.

@@ -1,6 +1,6 @@
 # ADR-0029: Test partitioning — fast / full / coverage suites
 
-- **Status:** Accepted (per-test timings + flaky-test detection shipped, WO 12.5)
+- **Status:** Accepted (per-test timings + flaky-test detection shipped, WO 12.5; smart suggest + apply shipped, WO 12.6)
 - **Date:** 2026-07-21
 - **Related:** [ADR-0016](./0016-test-strategy.md) (test categories),
   [test-doctor idea](../ideas/test-doctor.md)
@@ -84,16 +84,24 @@ runs only `--test integration_test -- --include-ignored` and
 ### `kirkforge-testdoctor` prototype
 
 A workspace member crate at `crates/kirkforge-testdoctor/` (promoted from
-prototype in WO 12.4) provides six subcommands:
+prototype in WO 12.4) provides these subcommands:
 
 - `profile` — runs `cargo test --workspace --no-fail-fast` and parses
   the per-binary `test result:` lines into `test-profile.json`.
 - `classify` — reads the profile and classifies each binary.
 - `partition` — writes `fast-suite.json`, `full-suite.json`,
   `coverage-suite.json`.
-- `suggest` — prints fix suggestions for slow binaries (mark
+- `suggest` — prints v1 fix suggestions for slow binaries (mark
   `#[ignore]`, use `tokio::time::pause`, mock the subprocess, move to
   `tests/`).
+- `suggest-detailed` (WO 12.6) — composes per-test timings with
+  source-file pattern analysis to produce specific, actionable
+  suggestions keyed on real source patterns.
+- `apply` (WO 12.6) — text-based rewrite that applies a suggestion
+  (`#[ignore]`, `start_paused`, `EnvGuard::set`). Opt-in; always
+  shows the diff first and requires `--yes` to write.
+- `profile-per-test` (WO 12.5), `flaky` (WO 12.5), `gaps`, `diagnose`
+  — see the WO 12.5 update below and the gap-analysis workorder.
 
 On stable Rust 1.88 the nightly-only `--format json` test output is
 not available, so the doctor parses the standard text output. This
@@ -112,6 +120,25 @@ average (coarse, not per-test — flagged in the report). Flaky-test
 detection (`kirkforge doctor flaky --runs N --filter <test>`) runs a
 test N times and reports the pass rate; it is a manual developer tool,
 not run in CI.
+
+**Update (WO 12.6):** the suggest command now composes per-test
+timings with source-file pattern analysis. `kirkforge doctor
+suggest-detailed [--filter <substr>]` reads each slow test's source
+file and scans for five patterns: `std::process::Command` (mock the
+subprocess), `tokio::time::sleep` (`tokio::time::pause` +
+`#[tokio::test(start_paused = true)]`), `std::env::set_var`
+(`EnvGuard::set` from WO 10.0), `reqwest::` / `http::` (use
+`wiremock`), and `std::fs::write` near a temp dir
+(`tempfile::NamedTempFile`). The v1 binary-level `suggest` remains as
+the fallback when no source data is available. An opt-in `kirkforge
+doctor apply --suggestion <id> --test <path> [--yes]` command performs
+a text-based rewrite (no `syn` dep): it adds `#[ignore = "slow:
+..."]`, wraps `#[tokio::test]` with `start_paused = true`, or replaces
+`std::env::set_var(K, V)` with `EnvGuard::set(K, V)`. Apply always
+prints the diff first and requires `--yes` to write; the remaining
+kinds (mock subprocess, wiremock, named-temp-file) are suggestion-only
+for v1 (they require factoring code into a trait, which a text rewrite
+cannot do safely).
 
 ## Consequences
 

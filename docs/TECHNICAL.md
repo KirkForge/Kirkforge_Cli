@@ -202,6 +202,17 @@ so a resize to 40 cols immediately re-evaluates the priority mask.
 roots so dangling metadata is never silently dropped. The TUI side is in
 `src/tui/commands/sessions.rs::tree_sessions_text`.
 
+The input box offers **Tab-completion** (WO 14.6): when the buffer starts with
+`/`, Tab completes against the `COMMANDS` primary triggers (prefix match —
+readline contract, no fuzzy); when it starts with `@`, Tab completes the path
+portion against the filesystem (the `:A-B:raw` suffix is left alone). A single
+match replaces the buffer; multiple matches populate
+`AppState::completion_suggestions`, rendered as a one-line dim hint above the
+input text. The completion layer is `complete_command` (pure, over `COMMANDS`)
+and `complete_path` (`std::fs::read_dir`, capped at 24 entries). The legacy
+"Tab on empty input toggles expand/collapse" behavior is preserved when the
+buffer doesn't start with `/` or `@`.
+
 The **scout subagent** (Workorder 8.2c) is the in-process, fork-free sibling
 of `/explore`. Where `/explore` always spawns a forked executor in a
 background task, the scout runs synchronously in the calling task and never

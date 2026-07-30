@@ -40,7 +40,7 @@ pub fn render_input(f: &mut Frame, area: Rect, state: &AppState) {
 
     let visible_rows = area.height.saturating_sub(2) as usize;
 
-    let display_text: Vec<Line> = if state.input.is_empty() {
+    let mut display_text: Vec<Line> = if state.input.is_empty() {
         vec![Line::from(Span::styled(
             " Type a message or /help for commands...",
             Style::default().fg(Color::DarkGray),
@@ -73,8 +73,25 @@ pub fn render_input(f: &mut Frame, area: Rect, state: &AppState) {
             .collect()
     };
 
+    // WO 14.6: one-line completion suggestions shown above the input
+    // text when Tab produced multiple matches (slash commands or
+    // @-mention paths). Dim so it reads as a hint, not input.
+    if !state.completion_suggestions.is_empty() {
+        display_text.insert(0, render_suggestions(&state.completion_suggestions));
+    }
+
     let paragraph = Paragraph::new(display_text).block(block);
     f.render_widget(paragraph, area);
+}
+
+fn render_suggestions(suggestions: &[String]) -> Line<'static> {
+    let joined = suggestions.join("  ");
+    Line::from(Span::styled(
+        format!(" {joined} "),
+        Style::default()
+            .fg(Color::DarkGray)
+            .add_modifier(Modifier::DIM),
+    ))
 }
 
 /// Render the line that currently holds the cursor, with a block cursor.

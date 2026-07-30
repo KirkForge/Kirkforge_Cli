@@ -21,7 +21,7 @@ use tokio::sync::mpsc;
 mod slash_commands;
 mod text;
 
-use slash_commands::{dispatch_slash_command, SlashContext};
+use slash_commands::{complete_command, dispatch_slash_command, SlashContext};
 use text::{
     char_index_for_line_col, current_line_bounds, delete_word_backward, search_nav_direction,
     SearchDirection,
@@ -326,6 +326,12 @@ pub(crate) async fn handle_input_key(
             None => {}
         }
     }
+    // Any key except Tab dismisses the one-line completion list (the
+    // user resumed typing / moved the cursor). Tab itself manages the
+    // suggestions field in `try_completion`.
+    if key.code != KeyCode::Tab {
+        state.completion_suggestions.clear();
+    }
     match key.code {
         KeyCode::Char(c) => {
             // Ctrl+Shift+C: copy the last assistant message to the
@@ -504,6 +510,17 @@ pub(crate) async fn handle_input_key(
             }
         }
         KeyCode::Tab => {
+            // Tab-completion (WO 14.6). When the buffer starts with
+            // `/` or `@` and the cursor is right after the trigger
+            // char, complete against `COMMANDS` (slash) or the
+            // filesystem (@-mention paths). One match → replace the
+            // buffer with it; many → show a one-line suggestion list
+            // in `completion_suggestions`; zero → no-op. The existing
+            // "Tab on empty input toggles expand/collapse" behavior is
+            // preserved when the buffer is empty.
+            if try_completion(state) {
+                return Ok(());
+            }
             // Tab on an empty input toggles expand/collapse on the most
             // recent message. Tool entries use `expanded_tools`; all other
             // messages use `collapsed_messages`.
@@ -811,9 +828,150 @@ pub(crate) async fn handle_input_key(
     Ok(())
 }
 
+// ── Tab completion helpers (WO 14.6) ─────────────────────────────
+// The two completion sources are the `COMMANDS` table (slash) and the
+// filesystem (@-mention paths). Both are prefix-match (readline
+// contract — no fuzzy). A single match replaces the buffer; multiple
+// matches fill `state.completion_suggestions` so the renderer shows a
+// one-line hint. Returns true if the Tab key was consumed (a completion
+// was attempted), false to let the caller fall through to the legacy
+// empty-input expand/collapse behavior.
+
+fn try_completion(state: &mut AppState) -> bool {
+    // Completion only fires on the first line (no multi-line @-mentions
+    // mid-buffer) and when the cursor is past the trigger char.
+    let (line, col) = state.cursor_line_col();
+    if line != 0 {
+        return false;
+    }
+    let chars: Vec<char> = state.input.chars().collect();
+    if chars.is_empty() || col <= 1 {
+        return false;
+    }
+    let first = chars[0];
+    if first != '/' && first != '@' {
+        return false;
+    }
+    let prefix: String = chars[1..col].iter().collect();
+    match first {
+        '/' => complete_slash(state, &prefix),
+        '@' => complete_mention(state, &prefix),
+        _ => false,
+    }
+}
+
+// Slash completion. `complete_command` returns triggers that already
+// include the leading `/`, so we pass an empty trigger to
+// `apply_completion` (it would otherwise double the slash).
+fn complete_slash(state: &mut AppState, prefix: &str) -> bool {
+    let matches = complete_command(prefix);
+    apply_completion(state, "", matches.into_iter().map(String::from).collect())
+}
+
+// @-mention path completion. The `:A-B:raw` suffix is a modifier, not a
+// path — only complete the path portion up to the first `:`. We read the
+// parent directory of the typed prefix and list entries starting with
+// the last path component. The directory portion of the typed prefix is
+// preserved so `@src/ma` → `@src/main.rs` (not `@main.rs`).
+fn complete_mention(state: &mut AppState, prefix: &str) -> bool {
+    let (path_part, suffix) = match prefix.split_once(':') {
+        Some((p, s)) => (p, format!(":{s}")),
+        None => (prefix, String::new()),
+    };
+    let (dir, _last) = split_path_prefix(path_part);
+    let entries = complete_path(prefix);
+    let dir_prefix = if dir == "." {
+        String::new()
+    } else {
+        format!("{dir}/")
+    };
+    let matches: Vec<String> = entries
+        .into_iter()
+        .map(|name| format!("{dir_prefix}{name}{suffix}"))
+        .collect();
+    apply_completion(state, "@", matches)
+}
+
+// Shared apply logic for both completion kinds. `trigger` is "/" or "@".
+// On a single match, replace the whole buffer with `trigger + match`.
+// On many, store them in `completion_suggestions`. Returns true (the
+// Tab was consumed) in both cases; the caller never falls through.
+fn apply_completion(state: &mut AppState, trigger: &str, matches: Vec<String>) -> bool {
+    state.completion_suggestions.clear();
+    match matches.len() {
+        0 => {
+            // No match — no-op (the WO allows a beep; we stay silent).
+            true
+        }
+        1 => {
+            let completed = format!("{trigger}{}", matches.into_iter().next().unwrap());
+            state.input = completed;
+            state.cursor_position = state.input.chars().count();
+            state.mark_dirty();
+            true
+        }
+        _ => {
+            state.completion_suggestions = matches;
+            state.mark_dirty();
+            true
+        }
+    }
+}
+
+// Filesystem path completion for @-mentions. `prefix` is the text after
+// `@` up to the cursor, e.g. `src/main` from `@src/main`. The `:A-B:raw`
+// suffix is split off (only the path portion before the first `:` is
+// completed). Returns matching entry names (without the `@`).
+//
+// Capped at a small constant so a giant directory never floods the
+// suggestion line. Entries are sorted for a stable display.
+fn complete_path(prefix: &str) -> Vec<String> {
+    let path_part = prefix.split(':').next().unwrap_or(prefix);
+    let (dir, last) = split_path_prefix(path_part);
+    let mut out = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            if let Some(name) = entry.file_name().to_str() {
+                if name.starts_with(&last) {
+                    out.push(name.to_string());
+                    if out.len() >= 24 {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+// Split a path prefix into (parent_dir, last_component). An empty or
+// bare `foo` prefix completes against `.`. A trailing separator means
+// "list the whole dir" (last component empty).
+fn split_path_prefix(prefix: &str) -> (String, String) {
+    if prefix.is_empty() {
+        return (".".to_string(), String::new());
+    }
+    // Normalize separators: handle both `/` and `\` so the completion
+    // works on Windows too (the glob crate handles this, but read_dir
+    // takes OS-native paths, so we just split on `/`).
+    let (dir, last) = match prefix.rfind('/') {
+        Some(idx) => {
+            let (d, l) = prefix.split_at(idx);
+            (d.to_string(), l[1..].to_string())
+        }
+        None => (".".to_string(), prefix.to_string()),
+    };
+    let dir = if dir.is_empty() { ".".to_string() } else { dir };
+    (dir, last)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{delete_word_backward, search_nav_direction, SearchDirection};
+    use super::{
+        complete_path, delete_word_backward, search_nav_direction, split_path_prefix,
+        SearchDirection,
+    };
     use crate::session::prompt::CompactRequest;
 
     fn check(input: &str, cursor_byte: usize, expected_input: &str, expected_cursor: usize) {
@@ -1084,5 +1242,305 @@ mod tests {
             "unexpected message: {}",
             state.messages[0].content
         );
+    }
+
+    // ── WO 14.6 Tab-completion tests ──────────────────────────────
+
+    #[test]
+    fn split_path_prefix_empty_completes_cwd() {
+        assert_eq!(split_path_prefix(""), (".".to_string(), String::new()));
+    }
+
+    #[test]
+    fn split_path_prefix_bare_name_completes_dot() {
+        assert_eq!(
+            split_path_prefix("foo"),
+            (".".to_string(), "foo".to_string())
+        );
+    }
+
+    #[test]
+    fn split_path_prefix_with_separator_splits() {
+        assert_eq!(
+            split_path_prefix("src/main"),
+            ("src".to_string(), "main".to_string())
+        );
+    }
+
+    #[test]
+    fn split_path_prefix_trailing_separator_lists_dir() {
+        // "src/" → list the whole "src" dir (last component empty).
+        assert_eq!(
+            split_path_prefix("src/"),
+            ("src".to_string(), String::new())
+        );
+    }
+
+    #[test]
+    fn complete_path_completes_against_temp_dir() {
+        // Use an absolute path prefix so the test does not depend on
+        // the process CWD (which is global and shared across parallel
+        // test threads).
+        let tmp = std::env::temp_dir().join("kirkforge_complete_path_test");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::write(tmp.join("tmpfile.txt"), "x").unwrap();
+        std::fs::write(tmp.join("tmpfile2.txt"), "y").unwrap();
+        std::fs::write(tmp.join("other.txt"), "z").unwrap();
+
+        // Pass the absolute dir with a trailing separator so the
+        // parent dir is `tmp` and the last component is "" (match all).
+        let prefix = format!("{}/tmp", tmp.display());
+        let matches = complete_path(&prefix);
+        let _ = std::fs::remove_dir_all(&tmp);
+
+        assert!(matches.contains(&"tmpfile.txt".to_string()));
+        assert!(matches.contains(&"tmpfile2.txt".to_string()));
+        assert!(
+            !matches.iter().any(|m| m == "other.txt"),
+            "should not match non-prefix entry: {matches:?}"
+        );
+    }
+
+    #[test]
+    fn complete_path_strips_range_suffix_before_completing() {
+        // `@foo.rs:10-20:raw` — only the path portion before the first
+        // `:` is completed. The suffix must not corrupt the lookup.
+        let tmp = std::env::temp_dir().join("kirkforge_complete_path_suffix_test");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::write(tmp.join("foo.rs"), "x").unwrap();
+
+        let prefix = format!("{}/foo.rs:10-20:raw", tmp.display());
+        let matches = complete_path(&prefix);
+        let _ = std::fs::remove_dir_all(&tmp);
+
+        // The path portion is "<tmp>/foo.rs" which exists; the suffix
+        // is ignored. We expect the matching entry back.
+        assert_eq!(matches, vec!["foo.rs".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn tab_completes_slash_command_single_match() {
+        // "/he" + Tab → "/help" (single match replaces the buffer).
+        let mut state = AppState::new(Arc::new(RwLock::new(Config::default())));
+        state.input = "/he".into();
+        state.cursor_position = 3; // end of "/he"
+
+        let ctx_holder = make_ctx();
+        let ctx = ctx_holder.ctx();
+        handle_input_key(KeyEvent::from(KeyCode::Tab), &mut state, &ctx)
+            .await
+            .unwrap();
+        assert_eq!(state.input, "/help");
+        assert_eq!(state.cursor_position, 5);
+        assert!(state.completion_suggestions.is_empty());
+    }
+
+    #[tokio::test]
+    async fn tab_completes_slash_command_multiple_matches_shows_suggestions() {
+        // "/p" + Tab → multiple matches (e.g. /plan, /plugins). The
+        // buffer is unchanged; suggestions are populated.
+        let mut state = AppState::new(Arc::new(RwLock::new(Config::default())));
+        state.input = "/p".into();
+        state.cursor_position = 2;
+
+        let ctx_holder = make_ctx();
+        let ctx = ctx_holder.ctx();
+        handle_input_key(KeyEvent::from(KeyCode::Tab), &mut state, &ctx)
+            .await
+            .unwrap();
+        // Buffer unchanged (multiple matches → no auto-replace).
+        assert_eq!(state.input, "/p");
+        assert!(
+            state.completion_suggestions.len() >= 2,
+            "expected >=2 suggestions, got {:?}",
+            state.completion_suggestions
+        );
+        assert!(state
+            .completion_suggestions
+            .iter()
+            .all(|t| t.starts_with("/p")));
+    }
+
+    #[tokio::test]
+    async fn tab_on_at_mention_completes_path() {
+        // Use an absolute @-mention so the test doesn't depend on the
+        // global process CWD (shared across parallel test threads).
+        let tmp = std::env::temp_dir().join("kirkforge_tab_at_test");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::write(tmp.join("tmpfile.txt"), "x").unwrap();
+
+        let mut state = AppState::new(Arc::new(RwLock::new(Config::default())));
+        // Type "@<tmp>/tmpfile" — the absolute path prefix.
+        let typed = format!("@{}/tmpfile", tmp.display());
+        state.input = typed.clone();
+        state.cursor_position = typed.chars().count();
+
+        let ctx_holder = make_ctx();
+        let ctx = ctx_holder.ctx();
+        handle_input_key(KeyEvent::from(KeyCode::Tab), &mut state, &ctx)
+            .await
+            .unwrap();
+
+        let _ = std::fs::remove_dir_all(&tmp);
+
+        let expected = format!("@{}/tmpfile.txt", tmp.display());
+        assert_eq!(state.input, expected);
+        assert_eq!(state.cursor_position, state.input.chars().count());
+        assert!(state.completion_suggestions.is_empty());
+    }
+
+    #[tokio::test]
+    async fn tab_preserves_expand_collapse_on_empty_input() {
+        // Tab on empty input must still toggle expand/collapse on the
+        // last message (the legacy behavior — don't break it).
+        let mut state = AppState::new(Arc::new(RwLock::new(Config::default())));
+        state.input.clear();
+        state.cursor_position = 0;
+        state
+            .messages
+            .push_back(crate::tui::app::ConversationEntry::new("assistant", "hi"));
+
+        let ctx_holder = make_ctx();
+        let ctx = ctx_holder.ctx();
+        let last_idx = state.messages.len() - 1;
+        assert!(!state.collapsed_messages.contains(&last_idx));
+        handle_input_key(KeyEvent::from(KeyCode::Tab), &mut state, &ctx)
+            .await
+            .unwrap();
+        assert!(
+            state.collapsed_messages.contains(&last_idx),
+            "Tab on empty input should collapse the last message"
+        );
+        assert!(state.completion_suggestions.is_empty());
+    }
+
+    #[tokio::test]
+    async fn tab_no_match_on_unknown_slash_is_noop() {
+        // "/zzz" + Tab → no matches, buffer unchanged, no suggestions.
+        let mut state = AppState::new(Arc::new(RwLock::new(Config::default())));
+        state.input = "/zzz".into();
+        state.cursor_position = 4;
+
+        let ctx_holder = make_ctx();
+        let ctx = ctx_holder.ctx();
+        handle_input_key(KeyEvent::from(KeyCode::Tab), &mut state, &ctx)
+            .await
+            .unwrap();
+        assert_eq!(state.input, "/zzz");
+        assert!(state.completion_suggestions.is_empty());
+    }
+
+    #[tokio::test]
+    async fn typing_clears_completion_suggestions() {
+        // After Tab shows suggestions, pressing any non-Tab key clears
+        // them so the hint doesn't linger.
+        let mut state = AppState::new(Arc::new(RwLock::new(Config::default())));
+        state.input = "/p".into();
+        state.cursor_position = 2;
+        state.completion_suggestions = vec!["/plan".into(), "/plugins".into()];
+
+        let ctx_holder = make_ctx();
+        let ctx = ctx_holder.ctx();
+        // Press 'x' — should clear suggestions and insert the char.
+        handle_input_key(
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
+            &mut state,
+            &ctx,
+        )
+        .await
+        .unwrap();
+        assert!(state.completion_suggestions.is_empty());
+        assert_eq!(state.input, "/px");
+    }
+
+    fn make_ctx() -> TestCtx {
+        TestCtx::new()
+    }
+
+    // Owns the channels so the `HandleInputContext` borrows stay valid
+    // for the test body. Inlining 11 channel creations per test was
+    // too noisy; this keeps the WO 14.6 tests readable.
+    struct TestCtx {
+        _input_rx: mpsc::UnboundedReceiver<String>,
+        input_tx: mpsc::UnboundedSender<String>,
+        _cancel_rx: mpsc::UnboundedReceiver<()>,
+        cancel_tx: mpsc::UnboundedSender<()>,
+        _resume_rx: mpsc::UnboundedReceiver<ConversationLog>,
+        resume_tx: mpsc::UnboundedSender<ConversationLog>,
+        _compact_rx: mpsc::UnboundedReceiver<CompactRequest>,
+        compact_tx: mpsc::UnboundedSender<CompactRequest>,
+        _model_rx: mpsc::UnboundedReceiver<String>,
+        model_tx: mpsc::UnboundedSender<String>,
+        _undo_rx: mpsc::UnboundedReceiver<()>,
+        undo_tx: mpsc::UnboundedSender<()>,
+        _config_rx: mpsc::UnboundedReceiver<Config>,
+        config_tx: mpsc::UnboundedSender<Config>,
+        _plan_rx: mpsc::UnboundedReceiver<bool>,
+        plan_tx: mpsc::UnboundedSender<bool>,
+        _persona_rx: mpsc::UnboundedReceiver<PersonaResult>,
+        persona_tx: mpsc::UnboundedSender<PersonaResult>,
+        _event_rx: mpsc::Receiver<TurnEvent>,
+        event_tx: mpsc::Sender<TurnEvent>,
+        _plugin_reload_rx: mpsc::UnboundedReceiver<kirkforge_plugin_host::PluginRegistry>,
+        plugin_reload_tx: mpsc::UnboundedSender<kirkforge_plugin_host::PluginRegistry>,
+    }
+
+    impl TestCtx {
+        fn new() -> Self {
+            let (input_tx, _input_rx) = mpsc::unbounded_channel();
+            let (cancel_tx, _cancel_rx) = mpsc::unbounded_channel();
+            let (resume_tx, _resume_rx) = mpsc::unbounded_channel();
+            let (compact_tx, _compact_rx) = mpsc::unbounded_channel();
+            let (model_tx, _model_rx) = mpsc::unbounded_channel();
+            let (undo_tx, _undo_rx) = mpsc::unbounded_channel();
+            let (config_tx, _config_rx) = mpsc::unbounded_channel();
+            let (plan_tx, _plan_rx) = mpsc::unbounded_channel();
+            let (persona_tx, _persona_rx) = mpsc::unbounded_channel();
+            let (event_tx, _event_rx) = mpsc::channel(10_000);
+            let (plugin_reload_tx, _plugin_reload_rx) = mpsc::unbounded_channel();
+            Self {
+                _input_rx,
+                input_tx,
+                _cancel_rx,
+                cancel_tx,
+                _resume_rx,
+                resume_tx,
+                _compact_rx,
+                compact_tx,
+                _model_rx,
+                model_tx,
+                _undo_rx,
+                undo_tx,
+                _config_rx,
+                config_tx,
+                _plan_rx,
+                plan_tx,
+                _persona_rx,
+                persona_tx,
+                _event_rx,
+                event_tx,
+                _plugin_reload_rx,
+                plugin_reload_tx,
+            }
+        }
+
+        fn ctx(&self) -> HandleInputContext<'_> {
+            HandleInputContext {
+                input_tx: &self.input_tx,
+                cancel_tx: &self.cancel_tx,
+                resume_tx: &self.resume_tx,
+                compact_tx: &self.compact_tx,
+                model_tx: &self.model_tx,
+                undo_tx: &self.undo_tx,
+                config_tx: &self.config_tx,
+                plan_tx: &self.plan_tx,
+                persona_tx: &self.persona_tx,
+                event_tx: &self.event_tx,
+                plugin_reload_tx: &self.plugin_reload_tx,
+            }
+        }
     }
 }

@@ -34,6 +34,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - WO 14.4: status bar degrades by priority on narrow terminals —
   drops plugin/skills/tool-call/Ctrl+T spans before overlapping;
   keeps elapsed, cost, and the `⚠️ UNSANDBOXED` warning at all widths.
+- Slash-command + `@`-mention Tab autocomplete (WO 14.6): typing a
+  `/` prefix and pressing Tab completes against the `COMMANDS` primary
+  triggers (single match replaces the buffer, multiple show a one-line
+  dim suggestion list above the input); typing `@` completes the path
+  portion against the filesystem, leaving the `:A-B:raw` suffix alone.
+  The legacy "Tab on empty input toggles expand/collapse" behavior is
+  preserved. `complete_command` is a pure function over `COMMANDS`;
+  `complete_path` is `std::fs::read_dir` capped at 24 entries.
 - KIRK-BENCH spec + signature Token Budget Challenge (WO 14.7,
   ADR-066): published `KIRK-BENCH.md` (8 categories, 40 tasks,
   universal scoring, 10 hero benchmarks) with a mapping table for the

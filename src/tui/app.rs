@@ -386,6 +386,14 @@ pub struct AppState {
     /// resetting the underlying state on a successful tool call
     /// shouldn't lose the user's current selection.
     pub doom_loop_selection: crate::tui::widgets::doom_banner::DoomLoopSelection,
+
+    // ── Tab-completion suggestions (WO 14.6) ───────────────────────
+    /// One-line completion list shown above/below the input when Tab
+    /// produces multiple matches (slash commands or @-mention paths).
+    /// Empty when there is nothing to suggest. The key handler fills
+    /// it on Tab; any other keypress clears it. Rendered as a dim
+    /// hint line in `widgets/input.rs`.
+    pub completion_suggestions: Vec<String>,
 }
 
 /// Snapshot of a detected doom loop. Held on `AppState` so the
@@ -479,6 +487,7 @@ impl AppState {
             workflow_cancel: None,
             doom_loop: None,
             doom_loop_selection: crate::tui::widgets::doom_banner::DoomLoopSelection::default(),
+            completion_suggestions: Vec::new(),
         }
     }
 

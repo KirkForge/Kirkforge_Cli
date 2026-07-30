@@ -220,6 +220,23 @@ pub(crate) const COMMANDS: &[SlashCommand] = &[
     },
 ];
 
+/// Return the primary trigger (first alias) of every command whose
+/// primary trigger starts with `/<prefix>`. The `prefix` argument is
+/// the text the user typed AFTER the `/` (e.g. `"he"` for `/he`); the
+/// returned triggers include the leading `/` (e.g. `"/help"`). Pure,
+/// deterministic, no I/O. Used by the Tab-completion handler.
+pub(crate) fn complete_command(prefix: &str) -> Vec<&'static str> {
+    COMMANDS
+        .iter()
+        .filter_map(|c| c.triggers.first())
+        .filter(|t| {
+            t.strip_prefix('/')
+                .is_some_and(|rest| rest.starts_with(prefix))
+        })
+        .copied()
+        .collect()
+}
+
 /// Generate the `/help` text from the `COMMANDS` table plus static keybinding
 /// and mention documentation. Keeping the command listing in the table means
 /// we only need to add a row to `COMMANDS` — the help text stays in sync.
@@ -683,5 +700,59 @@ mod tests {
                 "{trigger} usage is empty — fill it with the real syntax"
             );
         }
+    }
+
+    #[test]
+    fn complete_command_he_returns_help() {
+        // "he" uniquely matches "/help" via the primary trigger.
+        // Aliases ("/h", "/?") are NOT returned — `complete_command`
+        // returns the primary (first alias) for each command.
+        assert_eq!(complete_command("he"), vec!["/help"]);
+    }
+
+    #[test]
+    fn complete_command_p_returns_multiple() {
+        // "p" matches the primary triggers of several commands
+        // (/plan, /plugins, ...). The exact set depends on what is
+        // in COMMANDS at merge time — pin that it is at least two.
+        let matches = complete_command("p");
+        assert!(
+            matches.len() >= 2,
+            "expected >=2 matches for \"p\", got {matches:?}"
+        );
+        assert!(matches.iter().all(|t| t.starts_with("/p")));
+        // No duplicates — each command contributes at most its primary.
+        let mut sorted = matches.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(
+            sorted.len(),
+            matches.len(),
+            "duplicate primaries in {matches:?}"
+        );
+        // /plan and /plugins are stable across the WO 14.x series.
+        assert!(matches.contains(&"/plan"), "missing /plan in {matches:?}");
+        assert!(
+            matches.contains(&"/plugins"),
+            "missing /plugins in {matches:?}"
+        );
+    }
+
+    #[test]
+    fn complete_command_zzz_returns_empty() {
+        // No command starts with "zzz".
+        assert!(complete_command("zzz").is_empty());
+    }
+
+    #[test]
+    fn complete_command_empty_prefix_returns_all_primaries() {
+        // An empty prefix matches every command's primary trigger.
+        let all = complete_command("");
+        assert!(!all.is_empty());
+        assert_eq!(
+            all.len(),
+            COMMANDS.len(),
+            "expected one primary per command"
+        );
     }
 }

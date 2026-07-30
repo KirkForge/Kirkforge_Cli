@@ -59,7 +59,13 @@ jobs:
         shell: bash
         run: |
           if ! curl -fsS http://localhost:11434/api/tags | grep -q "${BENCH_MODEL}"; then
-            ollama pull "${BENCH_MODEL}"
+            for attempt in 1 2 3; do
+              if ollama pull "${BENCH_MODEL}"; then break; fi
+              echo "ollama pull attempt $attempt failed; retrying in 30s"
+              sleep 30
+            done
+            curl -fsS http://localhost:11434/api/tags | grep -q "${BENCH_MODEL}" \
+              || { echo "model ${BENCH_MODEL} not available after 3 retries"; exit 1; }
           else
             echo "Bench model ${BENCH_MODEL} already cached"
           fi
@@ -108,7 +114,13 @@ jobs:
         shell: bash
         run: |
           if ! curl -fsS http://localhost:11434/api/tags | grep -q "${BENCH_MODEL}"; then
-            ollama pull "${BENCH_MODEL}"
+            for attempt in 1 2 3; do
+              if ollama pull "${BENCH_MODEL}"; then break; fi
+              echo "ollama pull attempt $attempt failed; retrying in 30s"
+              sleep 30
+            done
+            curl -fsS http://localhost:11434/api/tags | grep -q "${BENCH_MODEL}" \
+              || { echo "model ${BENCH_MODEL} not available after 3 retries"; exit 1; }
           else
             echo "Bench model ${BENCH_MODEL} already cached"
           fi
@@ -221,7 +233,13 @@ jobs:
           for model in "${MODELS[@]}"; do
             if ! curl -fsS http://localhost:11434/api/tags | grep -q "$model"; then
               echo "Pulling $model..."
-              ollama pull "$model"
+              for attempt in 1 2 3; do
+                if ollama pull "$model"; then break; fi
+                echo "ollama pull attempt $attempt failed for $model; retrying in 30s"
+                sleep 30
+              done
+              curl -fsS http://localhost:11434/api/tags | grep -q "$model" \
+                || { echo "model $model not available after 3 retries"; exit 1; }
             else
               echo "Model $model already cached"
             fi

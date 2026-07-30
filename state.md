@@ -66,7 +66,7 @@ The hooks for WO 6.6/6.7/6.8 are now in-process Rust handlers (no shell scripts)
 
 ### Known CI issues
 
-- **Ollama model pull fails intermittently**: The `integration` CI job fails when `ollama pull` encounters a registry redirect. External service issue; re-running typically succeeds.
+- **Ollama model pull fails intermittently**: The `integration` CI job fails when `ollama pull` encounters a registry redirect. External service issue; re-running typically succeeds. The `Bench Baseline` workflow's `ollama pull` steps now self-heal via a 3-attempt retry loop with a 30s backoff plus an authoritative `/api/tags` health check (WO 14.0), so a transient redirect no longer reds the scheduled bench badge.
 - **Coverage (`tarpaulin`) flake on `test_build_fork_tree_orphan_fork_is_a_root`**: Under `cargo tarpaulin --lib`, this test in `src/session/session_index.rs` occasionally panicked with "No such file or directory" committing the `.index.ndjson` temp file (a tempdir/rename race exposed by tarpaulin's instrumentation). WO 12.0 fixed the root cause: `save()` now re-creates the parent dir immediately before the rename so a mid-write `/tmp` cleanup can't break the rename. The `--skip test_build_fork_tree_nests_children` is still in CI (`.github/workflows/ci.yml:334`) as belt-and-suspenders; removing it is a separate verification step that needs a tarpaulin run.
 
 ### Gates

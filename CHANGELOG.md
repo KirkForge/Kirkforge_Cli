@@ -105,6 +105,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   box. 3 new tests (round-trip, invalid name, existing dir).
 
 ### Fixed
+- WO 14.0: the `Bench Baseline` workflow's three `ollama pull` steps
+  (`.github/workflows/bench-baseline.yml`, jobs `bench-baseline`,
+  `bench-pr-delta`, `bench-leaderboard`) now self-heal through a 3-attempt
+  retry loop with a 30s backoff, plus an authoritative `/api/tags` health
+  check that fails the job only when the model is still unregistered after
+  all retries. Fixes the intermittent scheduled-bench red badge caused by
+  the Ollama registry redirect flake (`realm host "ollama.com" does not
+  match original host "registry.ollama.ai"`). No `continue-on-error` on the
+  pull step; the downstream artifact-download `continue-on-error` steps are
+  preserved (first-run-has-no-baseline is a real state).
 - WO 12.0: `SessionIndex::save()` now re-creates its parent directory
   immediately before the atomic rename, fixing the tarpaulin tempdir/rename
   race that flaked `test_build_fork_tree_orphan_fork_is_a_root`. WO 12.7

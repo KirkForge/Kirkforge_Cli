@@ -801,6 +801,35 @@ mod tests {
     }
 
     #[test]
+    fn test_env_budget_ceiling() {
+        // WO 14.7: KIRKFORGE_BUDGET_CEILING pins the token budget
+        // ceiling for a single run (the Token Budget Challenge sets
+        // this per ceiling level). Mirrors KIRKFORGE_MINIFY_ABOVE_BYTES.
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut cfg = Config::default();
+        let default_ceiling = cfg.tools.budget_ceiling;
+        set_env("KIRKFORGE_BUDGET_CEILING", Some("32768"));
+        apply_env_overrides(&mut cfg);
+        assert_eq!(cfg.tools.budget_ceiling, 32_768);
+        set_env("KIRKFORGE_BUDGET_CEILING", None);
+        // Confirm removal restores the default (no stale leak).
+        let mut cfg2 = Config::default();
+        apply_env_overrides(&mut cfg2);
+        assert_eq!(cfg2.tools.budget_ceiling, default_ceiling);
+    }
+
+    #[test]
+    fn test_env_budget_ceiling_bad_value_ignored() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut cfg = Config::default();
+        let default_ceiling = cfg.tools.budget_ceiling;
+        set_env("KIRKFORGE_BUDGET_CEILING", Some("not-a-number"));
+        apply_env_overrides(&mut cfg);
+        assert_eq!(cfg.tools.budget_ceiling, default_ceiling);
+        set_env("KIRKFORGE_BUDGET_CEILING", None);
+    }
+
+    #[test]
     fn test_env_max_read_size() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();

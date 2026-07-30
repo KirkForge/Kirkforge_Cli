@@ -38,6 +38,12 @@ pub enum VerifySpec {
     CommandExitsZero { command: String },
 }
 
+/// Environment variable exported to the agent process when a task
+/// sets `budget_ceiling`. The bench runner reads this on the budget
+/// guard (via `src/session/config/env_overrides.rs`) to pin the token
+/// budget ceiling for a single run. See WO 14.7 / ADR-0066.
+pub const BUDGET_CEILING_ENV: &str = "KIRKFORGE_BUDGET_CEILING";
+
 /// A single benchmark task definition.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BenchTask {
@@ -55,6 +61,22 @@ pub struct BenchTask {
     /// Default false so existing tasks are unaffected. See WO 9.9.
     #[serde(default)]
     pub requires_model: bool,
+    /// Optional token-budget ceiling exported to the agent as
+    /// `KIRKFORGE_BUDGET_CEILING` for this run. `None` (default) leaves
+    /// the budget at the config default. The Token Budget Challenge
+    /// (WO 14.7) sets this and runs the task 5x under descending
+    /// ceilings (128k/64k/32k/16k/8k). See ADR-0066.
+    #[serde(default)]
+    pub budget_ceiling: Option<usize>,
+}
+
+impl BenchTask {
+    /// Return the env var assignment `(BUDGET_CEILING_ENV, n)` if the
+    /// task pins a budget ceiling, else `None`. The runner applies
+    /// this to the agent's environment before invoking the model.
+    pub fn budget_env(&self) -> Option<(&'static str, usize)> {
+        self.budget_ceiling.map(|n| (BUDGET_CEILING_ENV, n))
+    }
 }
 
 /// Result of running a single benchmark task.
@@ -68,6 +90,12 @@ pub struct TaskResult {
     pub duration_secs: f64,
     pub cost_usd: f64,
     pub tool_calls: u32,
+    /// Number of Stratum/budget compression passes observed during the
+    /// run (`TurnEvent::CompactionReport` count). The Token Budget
+    /// Challenge records this per ceiling level (WO 14.7). Defaults to
+    /// 0 so existing serialized reports parse without the field.
+    #[serde(default)]
+    pub compression_passes: u32,
     pub error: Option<String>,
 }
 
@@ -95,13 +123,24 @@ pub struct BenchReport {
 
 // ── Task loading ──
 
-/// Parse all `.toml` task files in a directory.
-pub fn load_tasks(dir: &Path) -> Result<Vec<BenchTask>> {
+/// Parse `.toml` task files from a directory, or a single `.toml` file.
+///
+/// When `path` is a directory, every `.toml` file inside is loaded
+/// (sorted by filename). When `path` is a single `.toml` file, just
+/// that file is loaded. This lets `bench verify-only --tasks <file>`
+/// target one task without filtering the whole directory.
+pub fn load_tasks(path: &Path) -> Result<Vec<BenchTask>> {
     let mut tasks = Vec::new();
-    if !dir.is_dir() {
-        anyhow::bail!("task directory does not exist: {}", dir.display());
+    if path.is_file() {
+        let content = std::fs::read_to_string(path)?;
+        let task: BenchTask = toml::from_str(&content)?;
+        tasks.push(task);
+        return Ok(tasks);
     }
-    let mut entries: Vec<_> = std::fs::read_dir(dir)?
+    if !path.is_dir() {
+        anyhow::bail!("task directory does not exist: {}", path.display());
+    }
+    let mut entries: Vec<_> = std::fs::read_dir(path)?
         .filter_map(|e| e.ok())
         .filter(|e| e.path().extension().is_some_and(|ext| ext == "toml"))
         .collect();
@@ -434,6 +473,7 @@ pub fn verify_only(task: &BenchTask, sandbox_path: &Path) -> TaskResult {
             duration_secs: 0.0,
             cost_usd: 0.0,
             tool_calls: 0,
+            compression_passes: 0,
             error: Some("skipped (requires model)".to_string()),
         };
     }
@@ -456,6 +496,7 @@ pub fn verify_only(task: &BenchTask, sandbox_path: &Path) -> TaskResult {
         duration_secs: 0.0,
         cost_usd: 0.0,
         tool_calls: 0,
+        compression_passes: 0,
         error: if success {
             None
         } else {
@@ -574,6 +615,65 @@ pub fn write_markdown_summary(report: &BenchReport, path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// One row of the Token Budget Challenge report: the six metrics
+/// recorded for a single ceiling level (WO 14.7 / ADR-0066). The
+/// runner runs the same task 5x under descending ceilings and
+/// collects one entry per run.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BudgetChallengeEntry {
+    pub ceiling: usize,
+    pub success: bool,
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
+    pub compression_passes: u32,
+    pub cost_usd: f64,
+}
+
+/// Token Budget Challenge report: the task name, the model, and one
+/// entry per ceiling level. `write_budget_challenge_report` emits
+/// the markdown scoreboard table.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BudgetChallengeReport {
+    pub task_name: String,
+    pub model: String,
+    pub entries: Vec<BudgetChallengeEntry>,
+}
+
+/// Write the Token Budget Challenge markdown scoreboard to disk.
+///
+/// The table has one row per ceiling level (descending) and the six
+/// metric columns from `123.md` lines 282-288: ceiling, success,
+/// prompt tokens, completion tokens, compression passes, cost. An
+/// empty `entries` slice yields a header-only table so the report is
+/// still a valid markdown document.
+pub fn write_budget_challenge_report(report: &BudgetChallengeReport, path: &Path) -> Result<()> {
+    let mut md = String::new();
+    md.push_str(&format!(
+        "# Token Budget Challenge: {}\n\n",
+        report.task_name
+    ));
+    md.push_str(&format!("**Model:** {}\n\n", report.model));
+    md.push_str("| Ceiling | Success | Prompt Tokens | Completion Tokens | Compression Passes | Cost ($) |\n");
+    md.push_str("|---------|---------|---------------|-------------------|-------------------|----------|\n");
+    for e in &report.entries {
+        md.push_str(&format!(
+            "| {} | {} | {} | {} | {} | {:.4} |\n",
+            e.ceiling,
+            if e.success { "Yes" } else { "No" },
+            e.prompt_tokens,
+            e.completion_tokens,
+            e.compression_passes,
+            e.cost_usd,
+        ));
+    }
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, md)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -591,6 +691,7 @@ mod tests {
                 duration_secs: 1.0,
                 cost_usd: cost,
                 tool_calls: 1,
+                compression_passes: 0,
                 error: None,
             }],
             summary: BenchSummary {
@@ -657,6 +758,7 @@ mod tests {
             duration_secs: 2.0,
             cost_usd: 0.02,
             tool_calls: 2,
+            compression_passes: 0,
             error: None,
         });
         current.summary.tasks_run = 2;
@@ -707,6 +809,7 @@ mod tests {
                 command: "true".to_string(),
             },
             requires_model: false,
+            budget_ceiling: None,
         };
         let result = verify_only(&task, dir.path());
         assert!(result.success);
@@ -774,6 +877,7 @@ mod tests {
                 command: "false".to_string(),
             },
             requires_model: false,
+            budget_ceiling: None,
         };
         let result = verify_only(&task, dir.path());
         assert!(!result.success);
@@ -795,6 +899,7 @@ mod tests {
                 command: "false".to_string(),
             },
             requires_model: true,
+            budget_ceiling: None,
         };
         let result = verify_only(&task, dir.path());
         // SKIP counts as success (the task is not broken, just not
@@ -823,6 +928,7 @@ mod tests {
                 duration_secs: 1.0,
                 cost_usd: 0.001,
                 tool_calls: 2,
+                compression_passes: 0,
                 error: if success { None } else { Some("failed".into()) },
             });
         }
@@ -898,5 +1004,134 @@ mod tests {
             "improvement is never a regression"
         );
         assert!(result.delta.success_rate_delta > 0.0);
+    }
+
+    // ── WO 14.7: budget_ceiling + BudgetChallengeReport tests ──
+
+    #[test]
+    fn budget_ceiling_serializes_when_some() {
+        // ponytail: budget_ceiling is serde-optional; Some(N) must
+        // round-trip through toml so the task file format stays
+        // stable. None must be omitted (default) so existing task
+        // files parse without the field.
+        let task = BenchTask {
+            name: "tbc".to_string(),
+            difficulty: Difficulty::Medium,
+            prompt: "p".to_string(),
+            setup: HashMap::new(),
+            verify: VerifySpec::CommandExitsZero {
+                command: "true".to_string(),
+            },
+            requires_model: true,
+            budget_ceiling: Some(32_768),
+        };
+        let toml = toml::to_string(&task).expect("serialize BenchTask");
+        assert!(
+            toml.contains("budget_ceiling = 32768"),
+            "Some(32768) must serialize as a literal, got:\n{toml}"
+        );
+        let parsed: BenchTask = toml::from_str(&toml).expect("deserialize BenchTask");
+        assert_eq!(parsed.budget_ceiling, Some(32_768));
+    }
+
+    #[test]
+    fn budget_ceiling_defaults_none_when_absent() {
+        let toml = r#"
+            name = "no_budget"
+            difficulty = "easy"
+            prompt = "p"
+
+            [verify]
+            type = "command_exits_zero"
+            command = "true"
+        "#;
+        let task: BenchTask = toml::from_str(toml).expect("parse without budget_ceiling");
+        assert!(task.budget_ceiling.is_none());
+    }
+
+    #[test]
+    fn budget_env_returns_var_when_set() {
+        let task = BenchTask {
+            name: "tbc".to_string(),
+            difficulty: Difficulty::Medium,
+            prompt: "p".to_string(),
+            setup: HashMap::new(),
+            verify: VerifySpec::CommandExitsZero {
+                command: "true".to_string(),
+            },
+            requires_model: true,
+            budget_ceiling: Some(16_384),
+        };
+        let env = task.budget_env().expect("Some ceiling → Some env");
+        assert_eq!(env.0, BUDGET_CEILING_ENV);
+        assert_eq!(env.1, 16_384);
+    }
+
+    #[test]
+    fn budget_env_returns_none_when_unset() {
+        let task = BenchTask {
+            name: "tbc".to_string(),
+            difficulty: Difficulty::Medium,
+            prompt: "p".to_string(),
+            setup: HashMap::new(),
+            verify: VerifySpec::CommandExitsZero {
+                command: "true".to_string(),
+            },
+            requires_model: true,
+            budget_ceiling: None,
+        };
+        assert!(task.budget_env().is_none());
+    }
+
+    #[test]
+    fn write_budget_challenge_report_emits_table() {
+        let dir = tempfile::tempdir().unwrap();
+        let report = BudgetChallengeReport {
+            task_name: "token_budget_challenge".to_string(),
+            model: "qwen2.5:0.5b".to_string(),
+            entries: vec![
+                BudgetChallengeEntry {
+                    ceiling: 131_072,
+                    success: true,
+                    prompt_tokens: 8_412,
+                    completion_tokens: 1_153,
+                    compression_passes: 0,
+                    cost_usd: 0.1200,
+                },
+                BudgetChallengeEntry {
+                    ceiling: 8_192,
+                    success: false,
+                    prompt_tokens: 1_200,
+                    completion_tokens: 300,
+                    compression_passes: 3,
+                    cost_usd: 0.0100,
+                },
+            ],
+        };
+        let path = dir.path().join("tbc.md");
+        write_budget_challenge_report(&report, &path).unwrap();
+        let md = std::fs::read_to_string(&path).unwrap();
+        assert!(md.contains("# Token Budget Challenge: token_budget_challenge"));
+        assert!(md.contains("**Model:** qwen2.5:0.5b"));
+        assert!(md.contains("| Ceiling | Success | Prompt Tokens | Completion Tokens | Compression Passes | Cost ($) |"));
+        // Descending-ceiling rows present with the six metric columns.
+        assert!(md.contains("| 131072 | Yes | 8412 | 1153 | 0 | 0.1200 |"));
+        assert!(md.contains("| 8192 | No | 1200 | 300 | 3 | 0.0100 |"));
+    }
+
+    #[test]
+    fn write_budget_challenge_report_empty_entries_header_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let report = BudgetChallengeReport {
+            task_name: "tbc".to_string(),
+            model: "m".to_string(),
+            entries: vec![],
+        };
+        let path = dir.path().join("empty.md");
+        write_budget_challenge_report(&report, &path).unwrap();
+        let md = std::fs::read_to_string(&path).unwrap();
+        assert!(md.contains("| Ceiling | Success |"));
+        // No data rows, just the header line.
+        assert!(!md.contains("| 131072 |"));
     }
 }

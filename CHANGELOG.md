@@ -34,6 +34,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - WO 14.4: status bar degrades by priority on narrow terminals —
   drops plugin/skills/tool-call/Ctrl+T spans before overlapping;
   keeps elapsed, cost, and the `⚠️ UNSANDBOXED` warning at all widths.
+- KIRK-BENCH spec + signature Token Budget Challenge (WO 14.7,
+  ADR-066): published `KIRK-BENCH.md` (8 categories, 40 tasks,
+  universal scoring, 10 hero benchmarks) with a mapping table for the
+  existing 30 tasks; new `benches/tasks/token_budget_challenge.toml`
+  signature task run 5× under descending budget ceilings (128k/64k/
+  32k/16k/8k) via `KIRKFORGE_BUDGET_CEILING` env; `BudgetChallengeReport`
+  markdown scoreboard; `load_tasks` now accepts a single `.toml` file.
 - Testdoctor smart suggest + apply (WO 12.6, ADR-0029): `kirkforge
   doctor suggest-detailed [--filter <substr>]` composes per-test
   timings with source-file pattern analysis (subprocess spawn,

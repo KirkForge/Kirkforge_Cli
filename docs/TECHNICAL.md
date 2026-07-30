@@ -173,6 +173,13 @@ plugin management, persona switching, session forking/resume, and approval
 gates. Drains three event sources (user input, model stream, approval queue) in
 a single loop.
 
+The `/help` text is generated from the `COMMANDS` table in
+`src/tui/keys/slash_commands.rs` and grouped into sections (Session, Model,
+Safety, Workflow, Plugins, Diagnostics) in a fixed order defined by the
+`GROUPS` const — adding a command is one row + one match arm, and the
+`help_text_groups_cover_all_commands` test enforces that every row carries a
+`group` tag.
+
 The TUI also surfaces a **doom-loop warning banner** when the executor detects
 the same tool failing the same way 3 turns in a row (the
 `DoomLoopTracker` in `src/session/executor/loop_.rs`). The banner offers three

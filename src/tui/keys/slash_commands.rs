@@ -24,155 +24,199 @@ pub(crate) struct SlashCommand {
     pub description: &'static str,
     /// Extended usage shown in `/help` (multi-line, optional).
     pub usage: &'static str,
+    /// Help-section header this command belongs under (see `GROUPS`).
+    pub group: &'static str,
 }
+
+// Display order for the grouped `/help` output. A const array (not a
+// HashMap) so the section order is deterministic. Every `SlashCommand`
+// row must tag itself with one of these strings — the
+// `help_text_groups_cover_all_commands` test enforces it.
+pub(crate) const GROUPS: &[&str] = &[
+    "Session",
+    "Model",
+    "Safety",
+    "Workflow",
+    "Plugins",
+    "Diagnostics",
+];
 
 pub(crate) const COMMANDS: &[SlashCommand] = &[
     SlashCommand {
         triggers: &["/clear"],
         description: "Clear conversation",
         usage: "",
+        group: "Session",
     },
     SlashCommand {
         triggers: &["/exit", "/quit"],
         description: "Quit",
         usage: "",
+        group: "Session",
     },
     SlashCommand {
         triggers: &["/help", "/h", "/?"],
         description: "Show available commands",
         usage: "",
+        group: "Diagnostics",
     },
     SlashCommand {
         triggers: &["/fork"],
         description: "Fork session",
         usage: "/fork list | <label> [count]",
+        group: "Session",
     },
     SlashCommand {
         triggers: &["/resume"],
         description: "Resume a fork",
         usage: "/resume <fork-id>",
+        group: "Session",
     },
     SlashCommand {
         triggers: &["/jobs"],
         description: "Background bash jobs",
         usage: "/jobs | <id> | clean\n\
                 Scheduled jobs: /jobs schedule <spec> bash <cmd>, /jobs scheduled list, /jobs run-now <id>, /jobs logs <id>",
+        group: "Workflow",
     },
     SlashCommand {
         triggers: &["/status"],
         description: "Show model, cost, tokens, and context pressure (one-shot)",
         usage: "",
+        group: "Model",
     },
     SlashCommand {
         triggers: &["/model"],
         description: "Hot-swap the active model (bypasses smart routing)",
         usage: "/model <name>",
+        group: "Model",
     },
     SlashCommand {
         triggers: &["/route"],
         description: "Switch to the model configured for a tier",
         usage: "/route simple|medium|complex",
+        group: "Model",
     },
     SlashCommand {
         triggers: &["/compact"],
         description: "Compact conversation history (destructive — see TUI for stats)",
         usage: "",
+        group: "Diagnostics",
     },
     SlashCommand {
         triggers: &["/save"],
         description: "Save conversation transcript to markdown",
         usage: "/save [path]. Default: next to session log.",
+        group: "Session",
     },
     SlashCommand {
         triggers: &["/explore"],
         description: "Fork-isolated research: read-only tools, returns a summary",
         usage: "",
+        group: "Workflow",
     },
     SlashCommand {
         triggers: &["/plan"],
         description: "Fork-isolated plan mode: no shell, returns a step-by-step plan",
         usage: "",
+        group: "Workflow",
     },
     SlashCommand {
         triggers: &["/coder"],
         description: "Fork-isolated implementation: full toolset, returns a summary of changes",
         usage: "",
+        group: "Workflow",
     },
     SlashCommand {
         triggers: &["/implement"],
         description: "Exit plan mode and allow the model to implement the approved plan",
         usage: "",
+        group: "Workflow",
     },
     SlashCommand {
         triggers: &["/commit"],
         description: "Commit changes safely",
         usage: "/commit shows status + suggested message; /commit \"message\" stages all and commits after sanitation checks; /commit --push \"message\" also pushes.",
+        group: "Safety",
     },
     SlashCommand {
         triggers: &["/undo"],
         description: "Undo the most recent edit_file or write_file",
         usage: "/undo list shows the stack; /undo count prints the depth.",
+        group: "Safety",
     },
     SlashCommand {
         triggers: &["/thinking"],
         description: "Toggle display of reasoning/thinking blocks",
         usage: "/thinking shows or hides thinking content; Esc also toggles.",
+        group: "Model",
     },
     SlashCommand {
         triggers: &["/reload"],
         description: "Reload config.toml and environment overrides",
         usage: "/reload plugins  Re-scan plugin directory.\n\
                 /reload skills   Re-scan project SKILL.md files.",
+        group: "Plugins",
     },
     SlashCommand {
         triggers: &["/sessions"],
         description: "List/search saved sessions, prune old ones, or delete one by id",
-        usage: "",
+        usage: "/sessions list | search <q> | tree | prune [N] [keep K] | delete <id>",
+        group: "Session",
     },
     SlashCommand {
         triggers: &["/carryover"],
         description: "Show or clear cross-session carryover profile",
-        usage: "",
+        usage: "/carryover show | clear",
+        group: "Session",
     },
     SlashCommand {
         triggers: &["/test"],
         description: "Run cargo test --no-fail-fast; surface a parsed pass/fail summary",
         usage: "/test <timeout-secs>",
+        group: "Diagnostics",
     },
     SlashCommand {
         triggers: &["/memory"],
         description: "Memory commands",
-        usage: "",
+        usage: "/memory add <fact> | list | search <query> | rm <name>",
+        group: "Diagnostics",
     },
     SlashCommand {
         triggers: &["/metrics"],
         description: "Show metrics",
-        usage: "",
+        usage: "/metrics shows tool-call/verifier/turn/approval counts",
+        group: "Diagnostics",
     },
     SlashCommand {
         triggers: &["/verify"],
         description: "Show recent verifier verdicts",
-        usage: "",
+        usage: "/verify shows recent verifier verdicts",
+        group: "Diagnostics",
     },
     SlashCommand {
         triggers: &["/gh"],
         description: "GitHub integration commands",
-        usage: "",
+        usage: "/gh issue | pr | search | run | file  (run with no args for full usage)",
+        group: "Diagnostics",
     },
     SlashCommand {
         triggers: &["/init"],
         description: "Initialize project configuration",
-        usage: "",
+        usage: "/init [--force] — creates .kirkforge/config.toml + CLAUDE.md skeleton",
+        group: "Diagnostics",
     },
     SlashCommand {
         triggers: &["/plugins"],
         description: "Plugin management",
-        usage: "",
+        usage: "/plugins list | enable <n> | disable <n> | toggle <n> | reload | trust <n> <tier> | setup | sources | add <n> <path> | remove <n>",
+        group: "Plugins",
     },
     SlashCommand {
         triggers: &["/workflow"],
         description: "Run a programmable JSON workflow",
         usage: "/workflow run <name>, /workflow status, /workflow cancel",
+        group: "Workflow",
     },
 ];
 
@@ -181,12 +225,18 @@ pub(crate) const COMMANDS: &[SlashCommand] = &[
 /// we only need to add a row to `COMMANDS` — the help text stays in sync.
 pub(crate) fn help_text(skill_registry: &SkillRegistry) -> String {
     let mut out = String::from("Built-in commands:\n");
-    for cmd in COMMANDS {
-        let triggers = cmd.triggers.join(" | ");
-        if cmd.usage.is_empty() {
-            out.push_str(&format!("  {:10} {}\n", triggers, cmd.description));
-        } else {
-            out.push_str(&format!("  {:10} {}\n", triggers, cmd.usage));
+    for group in GROUPS {
+        let mut rows: Vec<&SlashCommand> = COMMANDS.iter().filter(|c| c.group == *group).collect();
+        rows.sort_by_key(|c| c.triggers[0]);
+        out.push_str(&format!("\n{group}:\n"));
+        for cmd in rows {
+            let triggers = cmd.triggers.join(" | ");
+            let body = if cmd.usage.is_empty() {
+                cmd.description
+            } else {
+                cmd.usage
+            };
+            out.push_str(&format!("  {triggers:10} {body}\n"));
         }
     }
     out.push_str(
@@ -578,6 +628,60 @@ mod tests {
                     "help text missing trigger {trigger:?}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn help_text_includes_group_headers() {
+        let registry = SkillRegistry::new();
+        let text = help_text(&registry);
+        for group in GROUPS {
+            let header = format!("\n{group}:\n");
+            assert!(
+                text.contains(&header),
+                "help text missing group header {group:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn help_text_groups_cover_all_commands() {
+        // Every command must be tagged with a known group, and every
+        // group must list at least one command. Catches a future row
+        // that forgets the `group` field or invents a new group name
+        // without adding it to `GROUPS`.
+        for cmd in COMMANDS {
+            assert!(
+                GROUPS.contains(&cmd.group),
+                "command {:?} has unknown group {:?} — add it to GROUPS",
+                cmd.triggers[0],
+                cmd.group,
+            );
+        }
+        for group in GROUPS {
+            assert!(
+                COMMANDS.iter().any(|c| c.group == *group),
+                "group {group:?} has no commands — remove it from GROUPS or tag a command",
+            );
+        }
+    }
+
+    #[test]
+    fn help_text_no_empty_usage_for_documented_commands() {
+        // The six commands that shipped with `usage: ""` in WO 14.1's
+        // base now carry concrete syntax. A regression here means
+        // someone blanked a usage string — the user would see the
+        // command exists but not how to call it.
+        let documented = ["/memory", "/metrics", "/verify", "/gh", "/init", "/plugins"];
+        for trigger in documented {
+            let cmd = COMMANDS
+                .iter()
+                .find(|c| c.triggers.contains(&trigger))
+                .unwrap_or_else(|| panic!("command {trigger} missing from COMMANDS"));
+            assert!(
+                !cmd.usage.is_empty(),
+                "{trigger} usage is empty — fill it with the real syntax"
+            );
         }
     }
 }

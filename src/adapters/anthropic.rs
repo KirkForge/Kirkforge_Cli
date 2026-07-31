@@ -453,9 +453,15 @@ pub(crate) async fn parse_anthropic_stream<B, E, S>(
 
     if !done_emitted {
         if let Some(tool) = pending_tool.take() {
-            if tool.input.is_some() {
-                let _ = tx.send(StreamEvent::ToolCall(tool.into_invocation())).await;
-            }
+            // A pending tool with `input.is_some()` is the normal EOF
+            // flush (content_block_start + partial_json, no
+            // content_block_stop). A pending tool with `input.is_none()`
+            // means content_block_start arrived but the connection
+            // dropped before any partial_json — the tool was attempted
+            // but truncated. Emit a ToolCall with an empty input so the
+            // executor knows a tool was attempted rather than seeing an
+            // empty turn (WO 15.11).
+            let _ = tx.send(StreamEvent::ToolCall(tool.into_invocation())).await;
         }
         let _ = send_done(&tx, &mut done_emitted, FinishReason::Stop, None).await;
     }
@@ -1442,6 +1448,34 @@ mod tests {
         assert_eq!(tool.id, "tu_9");
         assert_eq!(tool.name, "bash");
         assert_eq!(tool.arguments, json!({"cmd": "ls"}));
+    }
+
+    #[tokio::test]
+    async fn stream_eof_with_truncated_tool_use_emits_tool_call() {
+        // content_block_start arrives, but the connection drops before
+        // any partial_json. The pending tool has no input, so the tool
+        // was attempted but truncated. The stream must emit a ToolCall
+        // with an empty input (not silently drop the tool) followed by
+        // Done (WO 15.11).
+        let events: Vec<Vec<u8>> = vec![line(
+            r#"{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"tu_x","name":"bash","input":{}}}"#,
+        )];
+        let (tx, rx) = tokio::sync::mpsc::channel(64);
+        tokio::spawn(async move {
+            parse_anthropic_stream(tx, chunks(events)).await;
+        });
+        let events = drain(rx, 64).await;
+        let tool = events
+            .iter()
+            .find_map(|e| match e {
+                StreamEvent::ToolCall(tc) => Some(tc),
+                _ => None,
+            })
+            .expect("truncated tool call should still be emitted at EOF");
+        assert_eq!(tool.id, "tu_x");
+        assert_eq!(tool.name, "bash");
+        assert_eq!(tool.arguments, json!({}));
+        assert!(matches!(events.last(), Some(StreamEvent::Done { .. })));
     }
 
     #[tokio::test]

@@ -10,6 +10,7 @@ serde_json.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
 thiserror.workspace = true
+libc = "0.2"
 minisign-verify = "0.2"
 
 [dev-dependencies]

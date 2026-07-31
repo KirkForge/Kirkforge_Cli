@@ -2179,6 +2179,7 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "kirkforge-plugin",
+ "libc",
  "minisign",
  "minisign-verify",
  "serde_json",

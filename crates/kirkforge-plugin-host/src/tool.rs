@@ -7,7 +7,7 @@
 //! message.
 
 use crate::env::curated_env;
-use kirkforge_plugin::Capability;
+use kirkforge_plugin::{Capability, ResourceLimits};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -24,6 +24,11 @@ pub struct PluginTool {
     pub schema: serde_json::Value,
     pub command: PathBuf,
     pub plugin_root: PathBuf,
+    /// Per-plugin resource limits applied to the spawned subprocess
+    /// (ADR-060, WO 15.11). `None` (the default) leaves the rlimits at
+    /// the OS default; `Some` installs `RLIMIT_CPU` / `RLIMIT_AS` /
+    /// `RLIMIT_FSIZE` in a `pre_exec` hook (Unix only; Windows no-op).
+    pub resource_limits: Option<ResourceLimits>,
 }
 
 /// Errors that can occur when running a plugin tool.
@@ -55,10 +60,22 @@ impl PluginTool {
                     schema: schema.clone(),
                     command,
                     plugin_root: plugin_root.to_path_buf(),
+                    resource_limits: None,
                 })
             }
             _ => None,
         }
+    }
+
+    /// Attach per-plugin resource limits (ADR-060). When set, the
+    /// spawned subprocess is capped via `RLIMIT_CPU` / `RLIMIT_AS` /
+    /// `RLIMIT_FSIZE` (Unix only). Callers that have the plugin
+    /// manifest should pass its `resource_limits` here so the
+    /// host-crate spawn path hardens the same way the bin's
+    /// `PluginToolWrapper` does.
+    pub fn with_resource_limits(mut self, limits: Option<ResourceLimits>) -> Self {
+        self.resource_limits = limits;
+        self
     }
 
     /// Execute the tool with the given JSON arguments.
@@ -70,14 +87,17 @@ impl PluginTool {
 
         let mut attempts = 0;
         let output = loop {
-            match Command::new(&cmd_path)
+            let mut command = Command::new(&cmd_path);
+            command
                 .env_clear()
                 .envs(curated_env(&std::collections::HashMap::new()))
                 .env(KIRKFORGE_TOOL_ARGS, args.to_string())
                 .env(KIRKFORGE_TOOL_ARGS_JSON, args.to_string())
-                .current_dir(&self.plugin_root)
-                .output()
-            {
+                .current_dir(&self.plugin_root);
+            // WO 15.11 (ADR-060): apply rlimits to the host-crate
+            // spawn path too, mirroring the bin's `PluginToolWrapper`.
+            crate::rlimits::setup_rlimits(&mut command, self.resource_limits.as_ref());
+            match command.output() {
                 Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy && attempts < 3 => {
                     std::thread::sleep(std::time::Duration::from_millis(10));
                     attempts += 1;
@@ -127,6 +147,7 @@ mod tests {
             schema: serde_json::Value::Null,
             command,
             plugin_root: root,
+            resource_limits: None,
         };
         (tmp, tool)
     }
@@ -155,5 +176,39 @@ mod tests {
     fn non_zero_becomes_error() {
         let (_tmp, tool) = make_tool("fail.sh", "echo boom >&2\nexit 1");
         assert!(tool.execute(serde_json::Value::Null).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resource_limits_cap_cpu_burn() {
+        // A plugin tool that burns CPU forever. With
+        // `resource_limits.cpu_secs = Some(1)`, `RLIMIT_CPU` delivers
+        // SIGXCPU and the child exits non-zero, proving the rlimit
+        // hook fired in the host-crate spawn path (WO 15.11, ADR-060).
+        let (_tmp, tool) = make_tool("burn.sh", "while :; do :; done");
+        let tool = tool.with_resource_limits(Some(ResourceLimits {
+            cpu_secs: Some(1),
+            memory_mb: None,
+            filesize_mb: None,
+        }));
+        let result = tool.execute(serde_json::Value::Null);
+        assert!(result.is_err(), "cpu burn should be killed by RLIMIT_CPU");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn without_resource_limits_burn_is_uncapped() {
+        // Sanity: the same burn script with no `resource_limits` is
+        // NOT killed by an rlimit. Guard the test with a short outer
+        // timeout so a regression (rlimits applied when they
+        // shouldn't be) fails fast rather than hanging.
+        let (_tmp, tool) = make_tool("burn-quick.sh", "exit 7");
+        let tool = tool.with_resource_limits(None);
+        // exit 7 proves the script ran to completion without an
+        // rlimit-induced signal.
+        let result = tool.execute(serde_json::Value::Null);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("7"), "expected exit 7, got {err}");
     }
 }

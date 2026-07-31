@@ -61,6 +61,23 @@ impl ResponseCache {
 
         // 2. On-disk
         let path = self.path_for(&key);
+        // Cap the read at 64 MiB so a corrupted or crafted multi-GB cache
+        // file can't OOM the process (WO 15.11). A size over the cap is
+        // treated as a cache miss with a warning.
+        const MAX_CACHE_FILE_BYTES: u64 = 64 * 1024 * 1024;
+        match std::fs::metadata(&path) {
+            Ok(m) if m.len() > MAX_CACHE_FILE_BYTES => {
+                tracing::warn!(
+                    path = %path.display(),
+                    size = m.len(),
+                    cap = MAX_CACHE_FILE_BYTES,
+                    "response cache entry exceeds size cap; treating as miss"
+                );
+                return None;
+            }
+            Ok(_) => {}
+            Err(_) => return None,
+        }
         let bytes = std::fs::read(&path).ok()?;
         let events: Vec<StreamEvent> = serde_json::from_slice(&bytes).ok()?;
 
@@ -472,6 +489,42 @@ mod tests {
         let path = cache.path_for(&key);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, b"not valid serde_json").unwrap();
+        assert!(cache
+            .get(
+                "model",
+                &[message(crate::shared::Role::User, "hi")],
+                &[],
+                false
+            )
+            .is_none());
+    }
+
+    #[test]
+    fn cache_returns_none_for_oversized_disk_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = ResponseCache::new(true, Some(dir.path().into()));
+        let key = CacheKey::new(
+            "model",
+            &[message(crate::shared::Role::User, "hi")],
+            &[],
+            false,
+        );
+        let path = cache.path_for(&key);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        // Write a file larger than the 64 MiB cap. A sparse seek would
+        // not report the full length on all filesystems, so write real
+        // bytes: 64 MiB + 1 byte. This is the boundary the cap guards.
+        let cap = 64 * 1024 * 1024usize;
+        let mut f = std::fs::File::create(&path).unwrap();
+        use std::io::Write;
+        let chunk = vec![0u8; 1024 * 1024];
+        for _ in 0..64 {
+            f.write_all(&chunk).unwrap();
+        }
+        f.write_all(b"!").unwrap();
+        f.sync_all().unwrap();
+        drop(f);
+        assert_eq!(std::fs::metadata(&path).unwrap().len() as usize, cap + 1);
         assert!(cache
             .get(
                 "model",

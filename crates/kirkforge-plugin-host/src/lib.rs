@@ -10,6 +10,7 @@ mod compat;
 pub mod env;
 mod hook;
 mod paths;
+mod rlimits;
 mod sandbox;
 mod tool;
 mod toolset;

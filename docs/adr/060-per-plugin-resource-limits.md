@@ -63,3 +63,13 @@ the same risks WO 9.8 closed for the bash tool.
   don't spawn subprocesses. The trust-tier gating handles this.
 - The `setup_rlimits` function was changed from `fn` to `pub(crate) fn`
   so the plugin wrapper can reuse it — no behavior change.
+- WO 15.11: the host crate's `PluginTool::execute` (the library spawn
+  path, distinct from the bin's `PluginToolWrapper`) now applies the
+  same rlimits when its `resource_limits` field is set. A
+  `with_resource_limits` builder attaches the manifest's
+  `ResourceLimits`; the host-crate `setup_rlimits`
+  (`crates/kirkforge-plugin-host/src/rlimits.rs`) mirrors the bin's
+  `bash_runner::setup_rlimits`. When `resource_limits` is `None` (the
+  default) the spawn is uncapped, matching the pre-15.11 behavior. The
+  bin's production path (`PluginToolWrapper`) remains the hardened
+  path; the host-crate path is now hardened-when-configured.

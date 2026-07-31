@@ -297,31 +297,33 @@ impl Tool for ComputerUse {
                 }
             }
             _ => {
-                let has_session = self.session.lock().unwrap().is_some();
-                if has_session {
-                    // Increment step counter, then drop the lock before
-                    // doing any work that might involve an await.
-                    {
-                        let mut guard = self.session.lock().unwrap();
-                        let session = guard.as_mut().unwrap();
-                        if let Err(e) = session.step() {
-                            return ToolOutcome::Failure(ToolError::Internal {
-                                message: format!("{e:#}"),
-                            });
-                        }
-                    }
-                    // All BrowserSession methods are sync, so we do the
-                    // action inside the lock and return. The lock is held
-                    // only for the duration of the sync call.
+                // Hold a single lock across check + step + use. All
+                // BrowserSession/ChromeTab methods are sync, so no await
+                // while the guard is held. Splitting the check, step,
+                // and use across separate acquisitions left the boolean
+                // stale between locks (a concurrent close() could drop
+                // the session between the peek and the unwrap).
+                // The guard is scoped to the inner block so it drops
+                // before the async single-shot fallback (a held
+                // std::sync::MutexGuard is not Send and would make the
+                // future non-Send across the await).
+                let outcome = {
                     let mut guard = self.session.lock().unwrap();
-                    let session = guard.as_mut().unwrap();
-                    let outcome = run_on_session_sync(session, action, &args, &self.config);
-                    drop(guard);
-                    outcome
-                } else {
-                    // No active session - fall back to single-shot tab usage
-                    // for backward compatibility with PlaceholderTab.
-                    run_on_tab(&*self.tab, action, &args, &self.config).await
+                    match guard.as_mut() {
+                        Some(session) => {
+                            if let Err(e) = session.step() {
+                                return ToolOutcome::Failure(ToolError::Internal {
+                                    message: format!("{e:#}"),
+                                });
+                            }
+                            Some(run_on_session_sync(session, action, &args, &self.config))
+                        }
+                        None => None,
+                    }
+                };
+                match outcome {
+                    Some(o) => o,
+                    None => run_on_tab(&*self.tab, action, &args, &self.config).await,
                 }
             }
         }

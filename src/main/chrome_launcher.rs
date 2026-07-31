@@ -8,6 +8,7 @@
 
 use headless_chrome::browser::tab::point::Point;
 use headless_chrome::protocol::cdp::Page::CaptureScreenshotFormatOption;
+use std::ffi::OsStr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -120,6 +121,30 @@ fn launch_sync(
     }))
 }
 
+// Chrome args that block network egress from the browser, closing the SSRF
+// surface where `computer_use` `evaluate` runs model-supplied JS that could
+// `fetch('http://169.254.169.254/...')` from inside the page. The
+// host-resolver-rules deny ALL DNS resolution except localhost / 127.0.0.1,
+// so the browser can still load local pages (advertised as supported) but
+// cannot resolve any external or RFC1918 / link-local hostname. Literal-IP
+// navigation to internal addresses is already blocked by
+// `host_is_literal_internal_ip` on the `open`/`navigate` url arg.
+//
+// `EXCLUDE` keeps the listed hosts resolvable; everything else maps to
+// `~NOTFOUND` (DNS NXDOMAIN), so a `fetch(...)` to a public hostname that
+// would rebind to an internal IP fails at resolution.
+const NETWORK_BLOCK_ARGS: &[&str] =
+    &["--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost, EXCLUDE 127.0.0.1"];
+
+// Returns the full set of extra Chrome args so tests can assert on them
+// without launching a Chrome process.
+fn chrome_extra_args() -> Vec<&'static OsStr> {
+    NETWORK_BLOCK_ARGS
+        .iter()
+        .map(|s| s.as_ref() as &OsStr)
+        .collect()
+}
+
 /// Launch Chrome and return both the Browser process handle and the active Tab.
 /// The caller must keep the `Browser` alive for the `Tab` to remain functional.
 fn launch_browser_and_tab(
@@ -132,6 +157,8 @@ fn launch_browser_and_tab(
         builder.path(Some(path.clone()));
     }
     builder.window_size(Some((config.width, config.height)));
+    let extra = chrome_extra_args();
+    builder.args(extra);
     let options = builder
         .build()
         .map_err(|e| anyhow::anyhow!("failed to build Chrome launch options: {e}"))?;
@@ -250,4 +277,48 @@ pub async fn open_browser_session(
     })
     .await
     .map_err(|e| anyhow::anyhow!("Chrome session launch task panicked: {e}"))?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // WO 15.3: the browser must launch with network-blocking args so
+    // `evaluate` cannot `fetch` internal IPs from inside a loaded page.
+    #[test]
+    fn chrome_extra_args_block_dns_resolution() {
+        let args: Vec<&str> = chrome_extra_args()
+            .iter()
+            .map(|s| s.to_str().expect("arg is utf-8"))
+            .collect();
+        let joined = args.join(" ");
+        assert!(
+            joined.contains("--host-resolver-rules"),
+            "expected --host-resolver-rules in args: {args:?}"
+        );
+        assert!(
+            joined.contains("~NOTFOUND"),
+            "expected ~NOTFOUND fallback in args: {args:?}"
+        );
+        assert!(
+            joined.contains("EXCLUDE localhost"),
+            "localhost must remain resolvable: {args:?}"
+        );
+        assert!(
+            joined.contains("EXCLUDE 127.0.0.1"),
+            "127.0.0.1 must remain resolvable: {args:?}"
+        );
+    }
+
+    #[test]
+    fn network_block_args_is_nonempty() {
+        // Defense-in-depth: the const must not be accidentally emptied.
+        // Use a runtime equality check (not `is_empty()` on a const, which
+        // clippy flags as always-true/false).
+        assert_eq!(
+            NETWORK_BLOCK_ARGS.len(),
+            1,
+            "NETWORK_BLOCK_ARGS must contain exactly one blocking flag"
+        );
+    }
 }

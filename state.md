@@ -54,6 +54,23 @@
 | 11 pre-existing bench tasks (added in WO 7.8) fail `verify-only` | Their `file_contains` verify specs look for post-model substrings the setup file does not contain. Pre-existing flaw in those tasks; not part of WO 8.3 scope. |
 | 75% coverage on `src/session` (WO 12.9) | Measured at 68.6% (CI run 30333515698); WO 12.8's ~75% estimate was optimistic. The remaining gap is async executor (`executor/dispatch.rs`, `loop_.rs`, `turn.rs`) + network (`mcp_client/http.rs`) code that needs integration test work, not pure-helper unit tests. Threshold raised 68.0 → 68.5 (proven-green by the 68.6% run); 75% deferred to a follow-up WO. ADR-065. |
 
+### Series 15 (cross-review bucketlist)
+
+WO 15.3 Done (security): closed bucketlist items 1.4 (`computer_use`
+`evaluate` SSRF via browser — Chrome now launches with
+`--host-resolver-rules` blocking all DNS except localhost), 1.5
+(`web_fetch` DNS rebinding — host is now resolved via the OS resolver
+and rejected if any resolved IP is internal; literal-IP hosts not
+re-resolved so no TOCTOU on a pinned literal), 1.6 (`bash` Docker
+bind-mount injection + missing `cmd` check — workdir canonicalized and
+rejected if its path contains `:`; `check_bash_command_str` now runs on
+the Docker path's `cmd` before spawn). 10 new tests. Residual ceiling:
+the `web_fetch` resolve→connect TOCTOU is not IP-pinned (reqwest has no
+per-request pinning without a custom resolver); the simple rebinding
+door is closed. `docs/TECHNICAL.md` `tools/` section updated. Remaining
+bucketlist Tier-1 items (1.1, 1.2, 1.3, 1.7) and Tier-2/3/4 items are
+still open pending their own workorders.
+
 ### In-process hook infrastructure (shipped)
 
 The hooks for WO 6.6/6.7/6.8 are now in-process Rust handlers (no shell scripts) built on shared infrastructure:

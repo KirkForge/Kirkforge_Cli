@@ -173,6 +173,23 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   silently accepted invalid manifests. Also adds `post-tool-write_file`
   to `KNOWN_EVENTS` (the runtime emits it via `budget.rs`; the validator
   allowlist was stale). 2 new tests.
+- WO 15.3 security: closed three SSRF / injection surfaces. (1) The
+  `computer_use` Chrome launcher now passes
+  `--host-resolver-rules="MAP * ~NOTFOUND, EXCLUDE localhost, EXCLUDE
+  127.0.0.1"` so a page loaded by `open`/`navigate` cannot
+  `fetch('http://169.254.169.254/...')` from inside the browser via
+  `evaluate` — all DNS except localhost returns NXDOMAIN. (2) `web_fetch`
+  resolves the URL host via the OS resolver and rejects the request when
+  any resolved IP is loopback / link-local / RFC1918 / RFC4193, closing the
+  DNS-rebinding door where a public hostname's A record points at
+  `127.0.0.1` (the prior `ceiling:` is now closed; a residual resolve→
+  connect TOCTOU is documented since reqwest has no per-request IP
+  pinning). (3) The `bash` Docker path now canonicalizes the bind-mount
+  source and rejects a workdir whose path contains `:` (which Docker
+  parses as host/container/opts split), and routes the model-supplied
+  `cmd` through `check_bash_command_str` — the Docker branch previously
+  skipped the deny-list / dangerous-pattern gate the foreground path
+  runs. 10 new tests (chrome_launcher: 2, web_fetch: 5, bash: 3).
 - WO 14.0: the `Bench Baseline` workflow's three `ollama pull` steps
   (`.github/workflows/bench-baseline.yml`, jobs `bench-baseline`,
   `bench-pr-delta`, `bench-leaderboard`) now self-heal through a 3-attempt

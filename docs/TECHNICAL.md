@@ -166,6 +166,23 @@ warning). It is ignored when `--docker` is set (Docker already enforces
 ADR-054 — it needs a BPF compiler that's too heavy for the
 size-optimized binary.
 
+WO 15.3 closed three SSRF / injection surfaces across the networked
+tools. (1) The `computer_use` Chrome launcher now passes
+`--host-resolver-rules="MAP * ~NOTFOUND, EXCLUDE localhost, EXCLUDE
+127.0.0.1"` so a page loaded by `open`/`navigate` cannot `fetch`
+internal IPs (e.g. `169.254.169.254`) from inside the browser via
+`evaluate` — all DNS except localhost returns NXDOMAIN. (2) `web_fetch`
+resolves the URL host via the OS resolver and rejects the request when
+any resolved `IpAddr` is loopback / link-local / RFC1918 / RFC4193,
+closing the DNS-rebinding door where a public hostname's A record
+points at `127.0.0.1`. Literal-IP hosts are not re-resolved (no TOCTOU
+on a pinned literal). (3) The `bash` Docker path now canonicalizes the
+bind-mount source and rejects a workdir whose path contains `:` (which
+Docker would parse as host/container/opts split), and routes the
+model-supplied `cmd` through `check_bash_command_str` — the Docker
+branch previously skipped the deny-list / dangerous-pattern gate that
+the foreground path runs.
+
 ### `tui/` — interactive UI
 
 A ratatui-based terminal UI with chat, input, status, search, slash commands,

@@ -236,3 +236,40 @@
   to learn its counting method, then bump to match — don't grep.
 - For "fix N→M in K places" WO items, read the target doc's
   time-context before editing; the prescribed number may be wrong.
+
+## WO 15.26 Batch A — config + adapters (2026-08-01)
+
+### What landed
+- Subagent dispatched for Batch A was *cancelled* mid-run but had
+  already committed 4 of the CODE items (3.28, 4.16, 3.48, 3.29) before
+  the cancel — branch inspection (`git log wo15..HEAD`) recovered them.
+  Lesson: a "Task cancelled" result does NOT mean zero work landed;
+  ALWAYS check the branch for commits before re-dispatching.
+- The cancelled subagent skipped the full gate. `cargo fmt --check`
+  caught an unformatted `serde_json::Deserializer` chain in
+  `anthropic_bedrock.rs` (the 4.16 commit). One `cargo fmt` + a `style:`
+  commit fixed it. Lesson: never trust a subagent's "done" claim without
+  running the series gate yourself; the gate is the contract.
+
+### The flake (important)
+- `cargo test -p kirkforge --lib` reported 1 failure:
+  `tools::edit_file::tests::test_edit_file_snapshots_for_undo`. It
+  passed in isolation AND on re-run (2908 passed, 0 failed). Root cause:
+  the test hardcodes a shared temp path `/tmp/kirkforge_edit_undo.txt`
+  (only one test uses it; no collision). It's a genuine intermittent
+  flake — NOT a Batch A regression (Batch A touched only 4 adapter
+  files, zero in `src/tools/`). Fixing it (unique tempdir) is Batch C
+  scope (`src/tools/edit_file.rs`). Flagged for Batch C.
+- Lesson: when the gate goes red on an out-of-scope file, run the single
+  test in isolation first — that distinguishes flake from regression in
+  ~30s instead of a 3-min re-run + a branch switch.
+
+### What I'd do differently
+- 3.1 (Config field-drift guard) deferred: Config is deeply nested
+  (~60 leaf fields across 5 sub-structs), so a flat field-count test is
+  non-trivial and a brittle substring test gives false confidence. Right
+  fix is a derive macro. Don't ship a guard that doesn't guard.
+- For the "make it config-driven" items (3.20-3.23), documenting the
+  `ceiling:` + upgrade path was the right polish-batch resolution; the
+  real refactor is its own WO. WO's either/or framing ("fix OR document
+  the ceiling") is permission to defer honestly — use it.

@@ -13,8 +13,7 @@
 //! queries across forked personas or repeated `/explore` passes.
 
 use crate::shared::{Message, StreamEvent, ToolDef};
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
+use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 
 /// In-memory + on-disk cache for model streams.
@@ -152,12 +151,11 @@ struct CacheKey {
 
 impl CacheKey {
     fn new(model: &str, messages: &[Message], tools: &[ToolDef], json_mode: bool) -> Self {
-        let mut hasher = DefaultHasher::new();
-        model.hash(&mut hasher);
+        let mut hasher = Sha256::new();
+        hasher.update(model.as_bytes());
 
-        // Serialize deterministically for hashing.
         if let Ok(bytes) = serde_json::to_vec(messages) {
-            bytes.hash(&mut hasher);
+            hasher.update(&bytes);
         }
         if let Ok(bytes) = serde_json::to_vec(
             &tools
@@ -165,12 +163,12 @@ impl CacheKey {
                 .map(|t| (t.name, t.description, &t.parameters))
                 .collect::<Vec<_>>(),
         ) {
-            bytes.hash(&mut hasher);
+            hasher.update(&bytes);
         }
-        json_mode.hash(&mut hasher);
+        hasher.update([json_mode as u8]);
 
         Self {
-            hash: format!("{:016x}", hasher.finish()),
+            hash: hex::encode(hasher.finalize()),
         }
     }
 }
@@ -411,7 +409,7 @@ mod tests {
             false,
         );
         assert!(k.hash.chars().all(|c| c.is_ascii_hexdigit()));
-        assert_eq!(k.hash.len(), 16);
+        assert_eq!(k.hash.len(), 64);
     }
 
     #[test]

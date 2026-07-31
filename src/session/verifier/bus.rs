@@ -99,13 +99,17 @@ impl VerifierBus {
         }
     }
 
-    pub fn register(&mut self, verifier: Box<dyn BusVerifier>) -> anyhow::Result<()> {
-        let name = verifier.name().to_string();
-        if self.verifiers.iter().any(|v| v.name() == name) {
-            anyhow::bail!("Verifier '{name}' is already registered on the bus");
-        }
+    /// Register a verifier on the bus.
+    ///
+    /// `ceiling:` duplicate names are allowed and COEXIST — every
+    /// registered verifier runs on each `run()` and contributes verdicts.
+    /// This is intentional: the built-in slot stubs (`SecurityBusVerifier`,
+    /// `GitBusVerifier`) share their slot name (`"security"`, `"git"`) with
+    /// plugin verifiers that augment the same slot, so a plugin-declared
+    /// `security` verifier runs alongside the built-in stub (which returns
+    /// no verdicts) rather than replacing it. (bucketlist 3.41)
+    pub fn register(&mut self, verifier: Box<dyn BusVerifier>) {
         self.verifiers.push(verifier);
-        Ok(())
     }
 
     /// Register a plugin-declared verifier. `plugin_root` is the plugin
@@ -115,16 +119,17 @@ impl VerifierBus {
     /// `PluginVerifier` (exit 0 = pass, non-zero = fail with stderr as the
     /// message), with `plugin_root` as the subprocess cwd. Results are
     /// tagged `VerifierSource::Plugin(name)`.
+    ///
+    /// See [`register`](Self::register): a plugin verifier whose declared
+    /// name matches a built-in slot stub (e.g. `"security"`) coexists with
+    /// the stub rather than replacing it.
     pub fn add_plugin_verifier(
         &mut self,
         name: String,
         priority: u8,
         plugin_root: PathBuf,
         command: PathBuf,
-    ) -> anyhow::Result<()> {
-        if self.verifiers.iter().any(|v| v.name() == name) {
-            anyhow::bail!("Verifier '{name}' is already registered on the bus");
-        }
+    ) {
         let verifier = PluginBusVerifier {
             inner: PluginVerifier {
                 name,
@@ -134,7 +139,6 @@ impl VerifierBus {
             priority,
         };
         self.verifiers.push(Box::new(verifier));
-        Ok(())
     }
 
     /// Run all registered verifiers against the given context.
@@ -346,10 +350,8 @@ impl BusVerifier for PluginBusVerifier {
 /// Build a VerifierBus with all built-in verifiers registered.
 pub fn default_verifier_bus() -> VerifierBus {
     let mut bus = VerifierBus::new();
-    bus.register(Box::new(SecurityBusVerifier))
-        .expect("built-in verifier names are unique");
-    bus.register(Box::new(GitBusVerifier))
-        .expect("built-in verifier names are unique");
+    bus.register(Box::new(SecurityBusVerifier));
+    bus.register(Box::new(GitBusVerifier));
     bus
 }
 
@@ -581,8 +583,7 @@ mod tests {
                 file: Some(PathBuf::from("src/lib.rs")),
                 line: None,
             }],
-        }))
-        .unwrap();
+        }));
         bus.register(Box::new(StubVerifier {
             name: "stub_b".into(),
             entries: vec![VerdictEntry {
@@ -592,8 +593,7 @@ mod tests {
                 file: None,
                 line: None,
             }],
-        }))
-        .unwrap();
+        }));
 
         bus.run(&make_ctx());
         assert_eq!(
@@ -615,8 +615,7 @@ mod tests {
                 file: Some(PathBuf::from("src/config.rs")),
                 line: Some(42),
             }],
-        }))
-        .unwrap();
+        }));
 
         bus.run(&make_ctx());
         assert!(bus.has_errors(), "should detect error verdicts");
@@ -634,8 +633,7 @@ mod tests {
                 file: None,
                 line: None,
             }],
-        }))
-        .unwrap();
+        }));
 
         bus.run(&make_ctx());
         assert!(
@@ -656,8 +654,7 @@ mod tests {
                 file: Some(PathBuf::from("src/lib.rs")),
                 line: None,
             }],
-        }))
-        .unwrap();
+        }));
 
         bus.run(&make_ctx());
         assert!(!bus.verdicts().is_empty());
@@ -729,8 +726,7 @@ mod tests {
             5,
             tmp.path().to_path_buf(),
             PathBuf::from("pass.sh"),
-        )
-        .unwrap();
+        );
         bus.run(&make_ctx());
         assert!(
             bus.verdicts().is_empty(),
@@ -750,8 +746,7 @@ mod tests {
             5,
             tmp.path().to_path_buf(),
             PathBuf::from("fail.sh"),
-        )
-        .unwrap();
+        );
         bus.run(&make_ctx());
         assert_eq!(bus.verdicts().len(), 1);
         let v = &bus.verdicts()[0];
@@ -769,8 +764,7 @@ mod tests {
             1,
             PathBuf::from("/nonexistent"),
             PathBuf::from("does-not-exist.sh"),
-        )
-        .unwrap();
+        );
         bus.run(&make_ctx());
         assert_eq!(bus.verdicts().len(), 1);
         assert_eq!(bus.verdicts()[0].severity, Severity::Error);
@@ -806,8 +800,7 @@ mod tests {
             "ts-bridge".into(),
             PathBuf::from("bridge.sh"),
             tmp.path().to_path_buf(),
-        )))
-        .unwrap();
+        )));
 
         bus.run(&make_ctx());
         assert_eq!(bus.verdicts().len(), 1, "one NDJSON line → one verdict");
@@ -860,8 +853,7 @@ mod tests {
             "ts-bridge".into(),
             PathBuf::from("bridge.sh"),
             tmp.path().to_path_buf(),
-        )))
-        .unwrap();
+        )));
 
         bus.run(&make_ctx());
         assert_eq!(
@@ -888,8 +880,7 @@ mod tests {
             "ts-bridge".into(),
             PathBuf::from("bridge.sh"),
             tmp.path().to_path_buf(),
-        )))
-        .unwrap();
+        )));
 
         bus.run(&make_ctx());
         assert_eq!(bus.verdicts().len(), 2, "malformed + valid → 2 verdicts");
@@ -918,8 +909,7 @@ mod tests {
             "ts-bridge".into(),
             PathBuf::from("bridge.sh"),
             tmp.path().to_path_buf(),
-        )))
-        .unwrap();
+        )));
 
         bus.run(&make_ctx());
         assert_eq!(bus.verdicts().len(), 1);
@@ -1143,49 +1133,70 @@ mod tests {
     }
 
     #[test]
-    fn verifier_bus_rejects_duplicate_register() {
+    fn verifier_bus_duplicate_names_coexist() {
+        // bucketlist 3.41: duplicate names are intentionally allowed to
+        // coexist — the built-in slot stubs share their slot name with
+        // plugin verifiers that augment the same slot. Two same-name
+        // verifiers both run and both contribute verdicts.
         let mut bus = VerifierBus::new();
         bus.register(Box::new(StubVerifier {
             name: "dup".into(),
-            entries: vec![],
-        }))
-        .unwrap();
-        let err = bus
-            .register(Box::new(StubVerifier {
-                name: "dup".into(),
-                entries: vec![],
-            }))
-            .unwrap_err();
-        assert!(
-            err.to_string().contains("already registered"),
-            "duplicate register should bail: {err}"
+            entries: vec![VerdictEntry {
+                source: VerifierSource::Build,
+                severity: Severity::Info,
+                message: "first".into(),
+                file: None,
+                line: None,
+            }],
+        }));
+        bus.register(Box::new(StubVerifier {
+            name: "dup".into(),
+            entries: vec![VerdictEntry {
+                source: VerifierSource::Build,
+                severity: Severity::Warning,
+                message: "second".into(),
+                file: None,
+                line: None,
+            }],
+        }));
+        assert_eq!(bus.verifier_count(), 2, "both same-name verifiers kept");
+        bus.run(&make_ctx());
+        assert_eq!(
+            bus.verdicts().len(),
+            2,
+            "both same-name verifiers ran and contributed verdicts"
         );
-        assert_eq!(bus.verifier_count(), 1, "second register was rejected");
     }
 
     #[test]
-    fn verifier_bus_rejects_duplicate_add_plugin_verifier() {
-        let mut bus = VerifierBus::new();
-        bus.add_plugin_verifier(
-            "plug_v".into(),
-            1,
-            PathBuf::from("/tmp"),
-            PathBuf::from("x.sh"),
-        )
-        .unwrap();
-        let err = bus
-            .add_plugin_verifier(
-                "plug_v".into(),
-                2,
-                PathBuf::from("/tmp"),
-                PathBuf::from("y.sh"),
-            )
-            .unwrap_err();
-        assert!(
-            err.to_string().contains("already registered"),
-            "duplicate add_plugin_verifier should bail: {err}"
+    fn verifier_bus_plugin_verifier_coexists_with_builtin_stub() {
+        // bucketlist 3.41: a plugin verifier named "security" (the slot
+        // the built-in SecurityBusVerifier stub occupies) coexists with
+        // the stub. The stub returns no verdicts; the plugin verifier
+        // (simulated here by a same-named StubVerifier) contributes the
+        // real verdict.
+        let mut bus = default_verifier_bus();
+        let builtin_count = bus.verifier_count();
+        bus.register(Box::new(StubVerifier {
+            name: "security".into(),
+            entries: vec![VerdictEntry {
+                source: VerifierSource::Plugin("sec-plugin".into()),
+                severity: Severity::Error,
+                message: "plugin finding".into(),
+                file: None,
+                line: None,
+            }],
+        }));
+        assert_eq!(
+            bus.verifier_count(),
+            builtin_count + 1,
+            "plugin 'security' verifier is registered alongside the built-in stub"
         );
-        assert_eq!(bus.verifier_count(), 1);
+        bus.run(&make_ctx());
+        assert!(
+            bus.verdicts().iter().any(|v| v.message == "plugin finding"),
+            "the plugin verifier's verdict survived alongside the stub"
+        );
     }
 
     #[test]
@@ -1194,13 +1205,11 @@ mod tests {
         bus.register(Box::new(StubVerifier {
             name: "keep_me".into(),
             entries: vec![],
-        }))
-        .unwrap();
+        }));
         bus.register(Box::new(StubVerifier {
             name: "drop_me".into(),
             entries: vec![],
-        }))
-        .unwrap();
+        }));
         assert_eq!(bus.verifier_count(), 2);
         bus.retain_verifiers(|n| n == "keep_me");
         assert_eq!(bus.verifier_count(), 1);
@@ -1220,8 +1229,7 @@ mod tests {
                 file: None,
                 line: None,
             }],
-        }))
-        .unwrap();
+        }));
         bus.run(&make_ctx());
         assert_eq!(bus.verdicts().len(), 1);
         assert_eq!(bus.verdicts()[0].message, "first run");

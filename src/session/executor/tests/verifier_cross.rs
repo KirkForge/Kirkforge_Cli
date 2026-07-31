@@ -77,8 +77,7 @@ async fn write_file_event_is_non_conflicting_across_both_verifier_paths() {
 
     // ── Bus path ──
     let mut bus = VerifierBus::new();
-    bus.register(Box::new(CleanBusVerifier))
-        .expect("register CleanBusVerifier");
+    bus.register(Box::new(CleanBusVerifier));
     let ctx = VerifyContext {
         sandbox_dir: PathBuf::from("/tmp"),
         changed_files: vec![path.clone()],

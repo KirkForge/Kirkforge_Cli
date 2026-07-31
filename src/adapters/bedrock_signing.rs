@@ -81,18 +81,21 @@ pub fn sign_request(
 
     let mut headers = reqwest::header::HeaderMap::new();
     for (key, value) in request.headers() {
-        if let Ok(name) = reqwest::header::HeaderName::from_bytes(key.as_ref()) {
-            if let Ok(v) = reqwest::header::HeaderValue::from_str(value.to_str().unwrap_or("")) {
-                headers.insert(name, v);
-            }
-        }
+        let name = reqwest::header::HeaderName::from_bytes(key.as_ref())
+            .with_context(|| format!("invalid header name from SigV4 request: {key:?}"))?;
+        let v_str = value
+            .to_str()
+            .with_context(|| format!("non-ASCII value for SigV4 header {key:?}"))?;
+        let v = reqwest::header::HeaderValue::from_str(v_str)
+            .with_context(|| format!("non-ASCII value for SigV4 header {key:?}"))?;
+        headers.insert(name, v);
     }
     for (key, value) in signing_instructions.headers() {
-        if let Ok(name) = reqwest::header::HeaderName::from_bytes(key.as_ref()) {
-            if let Ok(v) = reqwest::header::HeaderValue::from_str(value) {
-                headers.insert(name, v);
-            }
-        }
+        let name = reqwest::header::HeaderName::from_bytes(key.as_ref())
+            .with_context(|| format!("invalid header name from signing instructions: {key:?}"))?;
+        let v = reqwest::header::HeaderValue::from_str(value)
+            .with_context(|| format!("non-ASCII value for signing header {key:?}"))?;
+        headers.insert(name, v);
     }
 
     Ok(SignedRequest {

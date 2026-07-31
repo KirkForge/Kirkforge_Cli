@@ -276,6 +276,79 @@ async fn test_correction_loop_runs_command_fix() {
 }
 
 #[tokio::test]
+async fn test_correction_loop_stops_at_max_iterations() {
+    // bucketlist 3.40: a verifier that is always Fixable (command fix
+    // keeps "succeeding") drives the loop to its max_iterations cap (3)
+    // and then stops — proving the bound is enforced.
+    let dir = std::env::temp_dir();
+    let path = dir.join("kirkforge_max_iter_test.txt");
+    std::fs::write(&path, "hello world").unwrap();
+
+    struct AlwaysFixableCommandVerifier {
+        file: PathBuf,
+    }
+    #[async_trait::async_trait]
+    impl Verifier for AlwaysFixableCommandVerifier {
+        fn name(&self) -> &str {
+            "rustfmt"
+        }
+        fn priority(&self) -> u8 {
+            1
+        }
+        async fn verify(&self, _event: &BusEvent) -> Verdict {
+            Verdict::Fixable(FixSuggestion {
+                description: "not formatted".into(),
+                file: self.file.clone(),
+                original: "".into(),
+                replacement: "".into(),
+                severity: "warning".into(),
+                command: Some("true".into()),
+            })
+        }
+    }
+
+    let slots = Arc::new(std::sync::RwLock::new(VerifierSlots::new()));
+    let handler = Arc::new(VerifierHandler::new(
+        slots.clone(),
+        crate::session::access::PathGuard::default(),
+    ));
+    {
+        let mut s = slots.write().unwrap();
+        s.register(Arc::new(AlwaysFixableCommandVerifier {
+            file: path.clone(),
+        }))
+        .unwrap();
+    }
+
+    let loop_ = CorrectionLoop::new(handler);
+    assert_eq!(loop_.max_iterations(), 3, "default cap is 3");
+    let event = BusEvent::Edit(EditEvent {
+        path: path.clone(),
+        diff: "@@ -1 +1 @@".into(),
+    });
+    let results = loop_.run(&event).await;
+    assert_eq!(
+        results.len(),
+        3,
+        "loop must stop at max_iterations (3), got {}",
+        results.len()
+    );
+    for (i, r) in results.iter().enumerate() {
+        assert!(
+            r.success,
+            "iteration {i}: command fix should report success"
+        );
+        assert!(
+            r.message.contains("Auto-formatted"),
+            "iteration {i}: expected formatter message, got {}",
+            r.message
+        );
+    }
+
+    remove_test_file(&path);
+}
+
+#[tokio::test]
 async fn test_correction_loop_unfixable_stops() {
     let slots = Arc::new(std::sync::RwLock::new(VerifierSlots::new()));
     let handler = Arc::new(VerifierHandler::new(

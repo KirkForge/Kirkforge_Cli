@@ -328,9 +328,13 @@ jobs:
         # `--lib` instruments unit tests only, skipping the slow
         # integration tests in `tests/*` that spawn ollama/cargo
         # subprocesses. Per ADR-0029 this cuts the coverage job from
-        # ~4min to ~2min. The coverage gate below already only enforces
+        # ~4min to ~2min. The coverage gate below only enforces
         # thresholds on `src/session`, `src/tools`, `src/adapters` —
-        # all unit-test-covered code.
+        # all unit-test-covered code. `src/tui` (terminal rendering,
+        # hard to unit-test) and `src/daemon` (socket IPC, needs an
+        # integration harness) are intentionally NOT gated: a threshold
+        # there would either be unreachable or punish TUI/IPC code for
+        # lacking unit tests it cannot meaningfully have.
         run: cargo tarpaulin --out Xml --locked --lib --timeout 120 -- --skip test_build_fork_tree_nests_children
 
       - name: Enforce coverage gate

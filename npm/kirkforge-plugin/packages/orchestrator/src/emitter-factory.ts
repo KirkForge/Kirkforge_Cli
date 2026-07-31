@@ -22,9 +22,10 @@ function hasJsTs(files?: string[]): boolean {
 // emitters, not external tools. `ChangesEmitter` computes real insertions/deletions
 // with `git diff --numstat -- <paths>` when git is available; it falls back to
 // counting the number of written files with zero insertions/deletions if the
-// working tree is not a git repo. `graph` is implemented in `graph-emitter.ts`
-// (regex import-edge extraction → cycles/brokenEdges/newEdges); `security` is
-// implemented in `security-emitter.ts` (obfuscated dangerous-call scan).
+// working tree is not a git repo. `graph` is the external `GraphifyEmitter`
+// from `@kirkforge/tool-graphify` (regex import-edge extraction →
+// cycles/brokenEdges/newEdges); `security` is implemented in
+// `security-emitter.ts` (obfuscated dangerous-call scan).
 class ChangesEmitter {
   constructor(private opts: { eventBus: EventBus; writtenFiles?: string[]; cwd?: string }) {}
 

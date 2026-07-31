@@ -190,6 +190,25 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `cmd` through `check_bash_command_str` — the Docker branch previously
   skipped the deny-list / dangerous-pattern gate the foreground path
   runs. 10 new tests (chrome_launcher: 2, web_fetch: 5, bash: 3).
+- WO 15.6: (1) Bedrock `parse_bedrock_event_stream` now caps the outer
+  envelope buffer at 8 MiB (matching the inner `parse_anthropic_stream`
+  `MAX_SSE_BUFFER_BYTES`); a runaway stream emits an error event + clears
+  instead of OOM. The drain loop now `while let` over `extract_payload`
+  instead of `if let`, so a chunk carrying multiple event-stream frames
+  forwards every frame rather than dropping all but the first (mid-turn
+  tool-call deltas were silently discarded by the old `clear()`). (2)
+  Vertex `service_account_token` now returns an `Err("service account
+  token endpoint returned None")` when the authenticator yields a `None`
+  token, instead of silently sending `Authorization: Bearer ` (empty)
+  and surfacing as a generic GCP 401. (3) TS orchestrator bridge test
+  drift (2 failing → 1006/1006): `SecurityEmitter` now resolves relative
+  file paths against `opts.cwd` before the `existsSync` filter (the
+  bridge passes `KF_CHANGED_FILES` as relative paths with a configured
+  cwd; the old form resolved against `process.cwd()` and dropped them);
+  the `graph-emitter` test was rewritten to the refactored
+  `GraphifyEmitter` API (`@kirkforge/tool-graphify`), and the
+  `verification-emitter-routing` test's `constructor.name` assertion was
+  updated from `GraphEmitter` to `GraphifyEmitter`. 3 new Rust tests.
 - WO 14.0: the `Bench Baseline` workflow's three `ollama pull` steps
   (`.github/workflows/bench-baseline.yml`, jobs `bench-baseline`,
   `bench-pr-delta`, `bench-leaderboard`) now self-heal through a 3-attempt

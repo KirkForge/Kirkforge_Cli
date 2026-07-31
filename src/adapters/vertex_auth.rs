@@ -41,7 +41,10 @@ pub async fn service_account_token(
         .token(scopes)
         .await
         .context("failed to fetch GCP access token")?;
-    Ok(token.token().unwrap_or_default().to_string())
+    Ok(token
+        .token()
+        .ok_or_else(|| anyhow::anyhow!("service account token endpoint returned None"))?
+        .to_string())
 }
 
 /// Verify that a service-account key file is readable JSON.

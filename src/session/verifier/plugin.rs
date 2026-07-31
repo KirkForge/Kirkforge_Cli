@@ -162,8 +162,10 @@ pub fn register_plugin_verifiers_into_bus(
         let plugin_root = plugin.root().to_path_buf();
         for cap in plugin.verifiers() {
             if let Some((name, priority, command)) = as_verifier_parts(&cap) {
-                bus.add_plugin_verifier(name, priority, plugin_root.clone(), command);
-                count += 1;
+                match bus.add_plugin_verifier(name, priority, plugin_root.clone(), command) {
+                    Ok(()) => count += 1,
+                    Err(e) => tracing::warn!("skipping plugin verifier: {e}"),
+                }
             }
         }
     }

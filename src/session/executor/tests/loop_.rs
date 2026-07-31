@@ -723,3 +723,97 @@ async fn observe_tool_outcome_different_tool_resets_run() {
     // No doom event: the consecutive run was broken by tool_b.
     // (3 identical in a row are needed; the interspersed tool_b resets the run.)
 }
+
+/// Cancellation mid-batch must abort un-awaited `JoinHandle`s so already-
+/// spawned tasks do not run detached holding subprocess/network resources
+/// (WO 15.7 2.3 — cancel leak). The first tool runs to completion and is
+/// recorded; the second is spawned, then cancellation flips; the collect
+/// loop awaits the first handle, records it, and on observing `cancelled`
+/// aborts the remaining handle. The second tool's `run()` body must never
+/// execute (call_count stays at 1).
+#[tokio::test]
+async fn test_cancelled_batch_aborts_remaining_spawned_tasks() {
+    let (start_tx, start_rx) = tokio::sync::oneshot::channel();
+    let tool_one = SleepingTool {
+        def: ToolDef {
+            name: "sleep_a",
+            description: "sleep a",
+            parameters: serde_json::json!({"type": "object", "properties": {}}),
+        },
+        sleep_ms: 50,
+        call_count: Arc::new(Mutex::new(0)),
+        start_tx: Arc::new(std::sync::Mutex::new(Some(start_tx))),
+    };
+    let tool_two = SleepingTool {
+        def: ToolDef {
+            name: "sleep_b",
+            description: "sleep b",
+            parameters: serde_json::json!({"type": "object", "properties": {}}),
+        },
+        // Long enough that if it were NOT aborted it would run well past
+        // the turn's completion and we could observe the call_count bump.
+        sleep_ms: 4000,
+        call_count: Arc::new(Mutex::new(0)),
+        start_tx: Arc::new(std::sync::Mutex::new(None)),
+    };
+    let call_count_one = tool_one.call_count.clone();
+    let call_count_two = tool_two.call_count.clone();
+
+    let adapter = MockAdapter::new(
+        vec![
+            StreamEvent::ToolCall(ToolInvocation {
+                id: "call-1".into(),
+                name: "sleep_a".into(),
+                arguments: serde_json::json!({}),
+            }),
+            StreamEvent::ToolCall(ToolInvocation {
+                id: "call-2".into(),
+                name: "sleep_b".into(),
+                arguments: serde_json::json!({}),
+            }),
+            StreamEvent::Done {
+                finish_reason: FinishReason::ToolCalls,
+                usage: None,
+            },
+        ],
+        make_info(),
+    );
+
+    let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
+    let mut exe = make_executor(
+        Box::new(adapter),
+        vec![Arc::new(tool_one), Arc::new(tool_two)],
+        make_config(true),
+    );
+
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let cancelled_flag = cancelled.clone();
+    tokio::spawn(async move {
+        // Wait until the first tool starts, then cancel so the second
+        // task is either not spawned or is aborted by the collect loop.
+        let _ = start_rx.await;
+        cancelled_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+    });
+
+    let _events = exe
+        .run_turn_collecting("run two sleeps", &approval_tx, &cancelled)
+        .await
+        .unwrap();
+
+    // The first tool started and ran to completion.
+    assert_eq!(
+        *call_count_one.lock().unwrap(),
+        1,
+        "first tool should have run exactly once"
+    );
+    // The second tool must NOT have run — it was either never spawned (the
+    // spawn loop broke before reaching it) or was aborted by the collect
+    // loop before its body began. A detached task would eventually bump
+    // this count; the abort prevents that.
+    assert_eq!(
+        *call_count_two.lock().unwrap(),
+        0,
+        "second tool should not have run (cancel leak fix); it ran {} times",
+        *call_count_two.lock().unwrap()
+    );
+}

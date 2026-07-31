@@ -70,6 +70,25 @@ door is closed. `docs/TECHNICAL.md` `tools/` section updated. Remaining
 bucketlist Tier-1 items (1.1, 1.2, 1.3, 1.7) and Tier-2/3/4 items are
 still open pending their own workorders.
 
+WO 15.7 Done (cancel leak + double-record AccessDenied + enabled_plugins
+runtime gate): closed bucketlist items 2.3, 2.8, 5.1. (2.3)
+`dispatch_tool_call_batch` Phase 2 collect loop now aborts un-awaited
+`JoinHandle`s when cancellation fires mid-batch, so already-spawned
+tasks no longer run detached holding subprocess/network resources for
+up to `tool_timeout_secs`; `run_prepared_call` short-circuits when its
+token was already cancelled at spawn time. (2.8) Phase 3 no longer
+re-runs the path guard + read gate for a deferred file call already
+denied in Phase 2.5, so the model sees one "Access denied" result per
+failed edit instead of two. (5.1) Stratum/Budget tool + hook
+registration in `src/main/mod.rs` and `src/session/executor/mod.rs`
+now checks `cfg.tools.enabled_plugins` at runtime (config key
+`"stratum"` / `"kirkforge-plugin3"`), so `/plugins disable stratum`
+actually removes the compiled-in tools/hooks on the next `kirkforge
+run`, not just the `/plugins list` display. 2 new tests
+(`test_cancelled_batch_aborts_remaining_spawned_tasks`,
+`test_denied_edit_records_single_access_denied_result`); 148 executor
+tests pass. `docs/TECHNICAL.md` plugin section updated.
+
 ### In-process hook infrastructure (shipped)
 
 The hooks for WO 6.6/6.7/6.8 are now in-process Rust handlers (no shell scripts) built on shared infrastructure:

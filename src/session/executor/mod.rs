@@ -210,30 +210,54 @@ impl Executor {
         }
         #[cfg(feature = "stratum")]
         {
-            hook_runner.add_in_process_hook(Box::new(
-                crate::session::stratum::StratumSessionStartHook {
-                    config: config.clone(),
-                },
-            ));
-            hook_runner
-                .add_in_process_hook(Box::new(crate::session::stratum::StratumPreToolBashHook));
-            tracing::info!("stratum session-start and pre-tool-bash hooks registered");
+            // Runtime `enabled_plugins` gate (WO 15.7 5.1): skip hooks when
+            // the plugin is disabled at runtime, even if the compile-time
+            // feature is on. Matches the tool-registration gate in main.rs.
+            if cfg.tools.enabled_plugins.iter().any(|n| n == "stratum") {
+                hook_runner.add_in_process_hook(Box::new(
+                    crate::session::stratum::StratumSessionStartHook {
+                        config: config.clone(),
+                    },
+                ));
+                hook_runner
+                    .add_in_process_hook(Box::new(crate::session::stratum::StratumPreToolBashHook));
+                tracing::info!("stratum session-start and pre-tool-bash hooks registered");
+            } else {
+                tracing::info!("stratum hooks skipped (disabled via enabled_plugins)");
+            }
         }
         #[cfg(all(feature = "budget", feature = "stratum"))]
         {
             // WO 8.6: register Stratum's default compression listener on
             // the budget's slice path so a slice triggers compression
             // and the post-tool hook records the post-compression size.
-            crate::session::stratum::register_default_budget_listener();
-            tracing::info!("stratum->budget slice listener registered");
+            // Runtime-gated on stratum being enabled (WO 15.7 5.1): the
+            // listener is only useful when stratum hooks are live.
+            if cfg.tools.enabled_plugins.iter().any(|n| n == "stratum") {
+                crate::session::stratum::register_default_budget_listener();
+                tracing::info!("stratum->budget slice listener registered");
+            }
         }
         #[cfg(feature = "budget")]
         {
-            crate::session::budget::init_from_config(&cfg);
-            for hook in crate::session::budget::all_budget_hooks() {
-                hook_runner.add_in_process_hook(hook);
+            // Runtime `enabled_plugins` gate (WO 15.7 5.1): the config key
+            // for the folded budget plugin is `"kirkforge-plugin3"` (per
+            // `default_plugin_sources` in `shared/config/tools.rs`). Skip
+            // hooks when disabled at runtime.
+            if cfg
+                .tools
+                .enabled_plugins
+                .iter()
+                .any(|n| n == "kirkforge-plugin3")
+            {
+                crate::session::budget::init_from_config(&cfg);
+                for hook in crate::session::budget::all_budget_hooks() {
+                    hook_runner.add_in_process_hook(hook);
+                }
+                tracing::info!("budget session-start, post-tool-bash, post-tool-write_file, pre-compact hooks registered");
+            } else {
+                tracing::info!("budget hooks skipped (disabled via enabled_plugins)");
             }
-            tracing::info!("budget session-start, post-tool-bash, post-tool-write_file, pre-compact hooks registered");
         }
 
         let event_bus = EventBus::new();
@@ -607,23 +631,37 @@ impl Executor {
         }
         #[cfg(feature = "stratum")]
         {
-            hook_runner.add_in_process_hook(Box::new(
-                crate::session::stratum::StratumSessionStartHook {
-                    config: self.config.clone(),
-                },
-            ));
-            hook_runner
-                .add_in_process_hook(Box::new(crate::session::stratum::StratumPreToolBashHook));
+            // Runtime `enabled_plugins` gate (WO 15.7 5.1).
+            if cfg.tools.enabled_plugins.iter().any(|n| n == "stratum") {
+                hook_runner.add_in_process_hook(Box::new(
+                    crate::session::stratum::StratumSessionStartHook {
+                        config: self.config.clone(),
+                    },
+                ));
+                hook_runner
+                    .add_in_process_hook(Box::new(crate::session::stratum::StratumPreToolBashHook));
+            }
         }
         #[cfg(all(feature = "budget", feature = "stratum"))]
         {
-            crate::session::stratum::register_default_budget_listener();
+            if cfg.tools.enabled_plugins.iter().any(|n| n == "stratum") {
+                crate::session::stratum::register_default_budget_listener();
+            }
         }
         #[cfg(feature = "budget")]
         {
-            crate::session::budget::init_from_config(&cfg);
-            for hook in crate::session::budget::all_budget_hooks() {
-                hook_runner.add_in_process_hook(hook);
+            // Runtime `enabled_plugins` gate (WO 15.7 5.1): config key is
+            // `"kirkforge-plugin3"` for the folded budget plugin.
+            if cfg
+                .tools
+                .enabled_plugins
+                .iter()
+                .any(|n| n == "kirkforge-plugin3")
+            {
+                crate::session::budget::init_from_config(&cfg);
+                for hook in crate::session::budget::all_budget_hooks() {
+                    hook_runner.add_in_process_hook(hook);
+                }
             }
         }
         self.hook_runner = hook_runner;

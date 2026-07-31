@@ -738,3 +738,82 @@ command = "bin/check.sh"
 
     remove_test_file(&log_path);
 }
+
+/// A deferred file call denied by the read-before-edit gate (Phase 2.5)
+/// must produce exactly one "Access denied" tool result — not two. Before
+/// WO 15.7 2.8, Phase 3 re-ran `record_tool_result`, which re-checked the
+/// path guard + read gate and emitted a second, identical denial message,
+/// so the model saw two "Access denied" results for one failed edit.
+#[tokio::test]
+async fn test_denied_edit_records_single_access_denied_result() {
+    let tmp = std::env::temp_dir().join(format!(
+        "kirkforge_denied_edit_single_{}.txt",
+        std::process::id()
+    ));
+    std::fs::write(&tmp, "original").expect("seed existing file");
+    let _cleanup = CleanupFile(tmp.clone());
+
+    use crate::tools::edit_file::EditFile;
+    let edit_tool: Arc<dyn Tool> = Arc::new(EditFile::new(
+        None,
+        crate::session::access::PathGuard::default(),
+        false,
+    ));
+
+    let adapter = MockAdapter::new(
+        vec![
+            StreamEvent::ToolCall(ToolInvocation {
+                id: "call-edit".into(),
+                name: "edit_file".into(),
+                arguments: serde_json::json!({
+                    "path": tmp.to_string_lossy(),
+                    "old_string": "original",
+                    "new_string": "updated",
+                }),
+            }),
+            StreamEvent::Done {
+                finish_reason: FinishReason::ToolCalls,
+                usage: None,
+            },
+        ],
+        make_info(),
+    );
+
+    let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
+    let mut exe = make_executor(Box::new(adapter), vec![edit_tool], make_config(true));
+    // Deliberately do NOT mark_read — the edit must be denied by the
+    // read-before-edit gate in Phase 2.5.
+
+    let events = exe
+        .run_turn_collecting("edit unread file", &approval_tx, never_cancelled())
+        .await
+        .unwrap();
+
+    let denied_results: Vec<_> = events
+        .iter()
+        .filter(|e| {
+            matches!(
+                e,
+                TurnEvent::ToolResult { name, output, success: false }
+                    if name == "edit_file" && output.contains("Access denied")
+            )
+        })
+        .collect();
+    assert_eq!(
+        denied_results.len(),
+        1,
+        "denied edit should produce exactly one Access denied ToolResult, got {denied_results:?}; \
+         events: {events:?}"
+    );
+
+    let msgs = exe.conversation.all();
+    let denial_msgs: Vec<_> = msgs
+        .iter()
+        .filter(|m| m.role == Role::Tool && m.content.contains("Access denied"))
+        .collect();
+    assert_eq!(
+        denial_msgs.len(),
+        1,
+        "conversation should contain exactly one Access denied message, got {denial_msgs:?}"
+    );
+}

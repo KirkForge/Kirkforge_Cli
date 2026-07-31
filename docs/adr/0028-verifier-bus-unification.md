@@ -3,6 +3,22 @@
 - **Status:** Accepted
 - **Date:** 2026-07-20
 
+## Amendment (2026-07-31)
+
+The Status was promoted from `Accepted (partially implemented)` to
+`Accepted` in WO 9.6 after confirming the plugin-verifier bridge is
+code-complete: `register_plugin_verifiers_into_bus` wires any
+`Capability::Verifier` into the unified `VerifierBus`, and the
+executor's `emit_tool_event_and_correct` converts each
+`Severity::Error` `VerdictEntry` into a `CorrectionResult` — the same
+struct the correction loop emits — so a single correction path handles
+built-in and plugin verdicts. The end-to-end path is proven by the
+`plugin_verifier_triggers_correction_result` integration test. The
+cross-language NDJSON wire bridge (Rust ↔ TS orchestrator over stdio)
+shipped subsequently in WO 10.8 (`TsOrchestratorBridgeVerifier` in
+`bus.rs`). See the `## ponytail` section below for the full
+implementation record.
+
 ## Context
 
 KirkForge has two verifier systems that overlap rather than cooperate:

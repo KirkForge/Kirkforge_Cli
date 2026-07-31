@@ -551,6 +551,49 @@ async fn handler_handle_skipped_verdict() {
 }
 
 #[tokio::test]
+async fn handler_tool_error_event_short_circuits_without_fanout() {
+    // bucketlist 3.25 + 3.42: a ToolError event is short-circuited in
+    // verify_event — no verifier runs (they would all skip anyway), and
+    // the handler reports a Skipped result. A MockVerifier that would
+    // return Unfixable proves the fan-out never reached it.
+    let mut s = VerifierSlots::new();
+    let _ = s.register(Arc::new(MockVerifier {
+        name: "would-fail".into(),
+        prio: 1,
+        verdict: Verdict::Unfixable(super::VerificationError {
+            description: "should not run".into(),
+            file: None,
+            details: "ToolError must short-circuit before the fan-out".into(),
+        }),
+    }));
+    let slots = Arc::new(std::sync::RwLock::new(s));
+    let guard = PathGuard::default();
+    let handler = VerifierHandler::new(slots, guard);
+
+    let event = BusEvent::ToolError(crate::session::event_bus::ToolErrorEvent {
+        tool: "bash".into(),
+        error: "exit code 1".into(),
+    });
+
+    // verify_event returns Skipped for a ToolError (short-circuit).
+    let (verdict, name) = handler.verify_event(&event).await;
+    assert!(
+        matches!(&verdict, Verdict::Skipped(_)),
+        "ToolError should short-circuit to Skipped, got {verdict:?}"
+    );
+    assert_eq!(name, "aggregate");
+
+    // handle() surfaces the same short-circuit as a success Skipped result.
+    let result = handler.handle(&event).await;
+    assert!(result.success, "ToolError short-circuit is success=true");
+    assert!(result.message.contains("Skipped"));
+    assert!(
+        !result.message.contains("should not run"),
+        "the registered Unfixable verifier must not have run"
+    );
+}
+
+#[tokio::test]
 async fn handler_drain_corrections_returns_fixable() {
     let mut s = VerifierSlots::new();
     let _ = s.register(Arc::new(MockVerifier {

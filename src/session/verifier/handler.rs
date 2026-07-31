@@ -45,6 +45,21 @@ impl VerifierHandler {
     /// verifier's name (used by the correction loop so the model sees
     /// `verifier:lint` instead of the useless `verifier:verifier`).
     pub async fn verify_event(&self, event: &BusEvent) -> (Verdict, String) {
+        // Short-circuit ToolError events: no built-in verifier acts on a
+        // tool-error payload (they all return Skipped), so fanning the
+        // event out to every verifier is wasted work. Skip the fan-out
+        // entirely. (bucketlist 3.25)
+        if event.kind() == EventKind::ToolError {
+            record(MetricEvent::Verifier {
+                name: "aggregate".to_string(),
+                verdict: "skipped".to_string(),
+                source: "built-in".to_string(),
+            });
+            return (
+                Verdict::Skipped("tool-error event: no verifiers act on ToolError".into()),
+                "aggregate".to_string(),
+            );
+        }
         // Extract verifiers from the lock to avoid holding it across .await
         let verifiers: Vec<Arc<dyn Verifier>> = {
             let slots = self.slots.read().unwrap_or_else(|e| e.into_inner());

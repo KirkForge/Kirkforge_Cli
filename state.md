@@ -55,6 +55,31 @@
 
 ### Series 15 (cross-review bucketlist)
 
+WO 15.9 Done (TOCTOU + git staged + bash_minify path guard): closed
+bucketlist items 2.7, 2.10, 2.11. (2.7) Phase 3 `record_tool_result`
+now reuses the resolved path Phase 1 (`pre_run_verdict`) already
+sandbox-checked instead of re-running `PathGuard::check_write`/
+`check_read` for file tools — eliminates a second canonicalize +
+sandbox-contains + `git check-ignore` subprocess per edit and closes
+the TOCTOU window where a parallel tool could flip guard state between
+Phase 1 and Phase 3 (the `pre_run_verdict` docstring already claimed
+this; the impl now honours it). The resolved path is carried through
+the `results` map as a third tuple element from Phase 2.5 into Phase
+3. (2.10) The git worktree verifier now parses `git status --porcelain`
+XY status — staged-only files (`A  file.txt`) are no longer reported
+as `Unfixable` "Dirty worktree" (the model can commit them); genuine
+unstaged modifications (` M file.txt`) and untracked files (`??`) still
+fail. (2.11) `bash_minify::try_minify_bash_output` now takes a
+`&PathGuard` and routes the extracted file path through
+`PathGuard::check_read` before reading, so a symlink to
+`~/.ssh/id_rsa` or a path outside the sandbox is refused instead of
+followed with no recheck; the bash tool passes its existing
+`self.path_guard`. 3 new tests (git: 2, bash_minify: 1); 1 existing
+git test replaced. No architecture/feature-flag/tool-list/hook/
+verifier-bus/context-index surface changed, so `docs/TECHNICAL.md`
+not updated. Remaining bucketlist items still open pending their own
+workorders.
+
 WO 15.3 Done (security): closed bucketlist items 1.4 (`computer_use`
 `evaluate` SSRF via browser — Chrome now launches with
 `--host-resolver-rules` blocking all DNS except localhost), 1.5

@@ -706,13 +706,23 @@ impl Executor {
 
     /// Phase-3 recorder: apply the mutable side-effects of one completed tool
     /// call in input order. The tool body itself has already run in Phase 2,
-    /// so this method only performs stateful checks (path guard, read-before-edit
-    /// gate, pre-tool hook for file tools) and records the result.
+    /// so this method only performs stateful checks (read-before-edit gate,
+    /// pre-tool hook for file tools) and records the result.
+    ///
+    /// `resolved_path` carries the path that Phase 1 (`pre_run_verdict`)
+    /// already canonicalized and sandbox-checked for file tools. Passing it
+    /// in lets Phase 3 reuse that verdict instead of re-running
+    /// `path_guard.check_read`/`check_write` (which would spawn a second
+    /// `git check-ignore` for writes and open a TOCTOU window where a
+    /// parallel tool flips the guard state between Phase 1 and Phase 3).
+    /// Non-file tools pass `None`.
+    #[allow(clippy::too_many_arguments)]
     async fn record_tool_result(
         &mut self,
         tc: &mut ToolInvocation,
         _invocation: &ToolInvocation,
         outcome: ToolOutcome,
+        resolved_path: Option<&std::path::Path>,
         _approval_sender: &mpsc::UnboundedSender<ApprovalRequest>,
         _cancelled: &AtomicBool,
         event_tx: &mpsc::Sender<TurnEvent>,
@@ -724,26 +734,28 @@ impl Executor {
             tc.name.as_str(),
             "read_file" | "read_image" | "write_file" | "edit_file"
         ) {
-            let path_str = tc
-                .arguments
-                .get("path")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let path = std::path::Path::new(path_str);
-            let verdict = if tc.name == "read_file" || tc.name == "read_image" {
-                self.path_guard.check_read(path)
-            } else {
-                self.path_guard.check_write(path).await
-            };
-
-            match verdict {
-                GuardVerdict::Allowed(resolved) => {
-                    let needs_read_gate =
-                        tc.name == "edit_file" || (tc.name == "write_file" && path.exists());
-                    if needs_read_gate {
-                        if let GuardVerdict::Denied(msg) =
-                            self.read_gate.check_edit(path, &resolved)
-                        {
+            // Phase 1 already resolved and sandbox-checked the path; reuse
+            // that verdict here. Falling back to a fresh check only happens
+            // when no resolved path was carried in (defensive — should not
+            // happen for file tools in the normal flow, but keeps the
+            // method self-contained if called directly).
+            let resolved = match resolved_path {
+                Some(p) => p.to_path_buf(),
+                None => {
+                    let path_str = tc
+                        .arguments
+                        .get("path")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    let path = std::path::Path::new(path_str);
+                    let verdict = if tc.name == "read_file" || tc.name == "read_image" {
+                        self.path_guard.check_read(path)
+                    } else {
+                        self.path_guard.check_write(path).await
+                    };
+                    match verdict {
+                        GuardVerdict::Allowed(r) => r,
+                        GuardVerdict::Denied(msg) => {
                             let denied = format!("🔒 Access denied: {msg}");
                             if is_destructive {
                                 self.audit_log.log_destructive(
@@ -775,116 +787,19 @@ impl Executor {
                             return Ok(());
                         }
                     }
-
-                    let mut run_args = tc.arguments.clone();
-                    if let Ok(path_obj) = serde_json::to_value(resolved.to_string_lossy().as_ref())
-                    {
-                        if let Some(obj) = run_args.as_object_mut() {
-                            obj.insert("path".into(), path_obj);
-                        }
-                    }
-
-                    // Pre-tool hook for file tools now that paths are resolved.
-                    let args_json = serde_json::to_string(&run_args).unwrap_or_default();
-                    if let Some(reason) = self
-                        .run_pre_tool_hook(
-                            &format!("pre-tool-{}", tc.name),
-                            Some(&tc.name),
-                            Some(&args_json),
-                        )
-                        .await
-                    {
-                        let denied = format!("❌ Hook denied {}: {}", tc.name, reason);
-                        if is_destructive {
-                            self.audit_log.log_destructive(
-                                &tc.name,
-                                &tc.arguments,
-                                false,
-                                Some(&denied),
-                            );
-                        }
-                        crate::send_or_warn!(
-                            event_tx
-                                .send(TurnEvent::ToolResult {
-                                    name: tc.name.clone(),
-                                    output: denied.clone(),
-                                    success: false,
-                                })
-                                .await,
-                            "TurnEvent receiver dropped; discarding event"
-                        );
-                        self.conversation
-                            .append_async(Message {
-                                role: Role::Tool,
-                                content: denied,
-                                tool_call_id: Some(tc.id.clone()),
-                                tool_name: Some(tc.name.clone()),
-                                ..Default::default()
-                            })
-                            .await?;
-                        return Ok(());
-                    }
-
-                    crate::send_or_warn!(
-                        event_tx
-                            .send(TurnEvent::ToolStart {
-                                name: tc.name.clone(),
-                                args: run_args.clone(),
-                            })
-                            .await,
-                        "TurnEvent receiver dropped; discarding event"
-                    );
-
-                    if matches!(tc.name.as_str(), "read_file" | "read_image") {
-                        self.read_gate.mark_read(&resolved);
-                    }
-
-                    let tool_start = Instant::now();
-                    let outcome =
-                        tokio::time::timeout(self.tool_call_timeout(), std::future::ready(outcome))
-                            .await
-                            .unwrap_or(ToolOutcome::Failure(crate::shared::ToolError::Timeout {
-                                after_secs: self.tool_call_timeout().as_secs(),
-                            }));
-                    let tool_duration = tool_start.elapsed();
-
-                    let outcome = apply_budget_slice(outcome);
-                    let outcome_for_emit = outcome.clone();
-                    let edit_diff =
-                        handle_tool_outcome(outcome, tc, event_tx, &mut self.conversation).await?;
-                    self.observe_tool_outcome(&tc.name, &outcome_for_emit, event_tx);
-                    record(MetricEvent::ToolCall {
-                        name: tc.name.clone(),
-                        success: tool_outcome_success(&outcome_for_emit),
-                        duration_ms: tool_duration.as_millis() as u64,
-                        error_kind: tool_error_kind(&outcome_for_emit).map(String::from),
-                    });
-
-                    let result_text = outcome_for_emit.text_content();
-                    self.run_hook_with_result(
-                        &format!("post-tool-{}", tc.name),
-                        Some(&tc.name),
-                        Some(&args_json),
-                        Some(&result_text),
-                    );
-
-                    let crs = self
-                        .emit_tool_event_and_correct(
-                            tc,
-                            &tc.name,
-                            &run_args,
-                            &outcome_for_emit,
-                            None,
-                            None,
-                            None,
-                            edit_diff,
-                        )
-                        .await;
-                    self.collect_carryover(tc, &crs);
-                    emit_correction_results(crs, tc, event_tx, &mut self.conversation).await?;
-                    return Ok(());
                 }
-                GuardVerdict::Denied(msg) => {
+            };
+
+            let path = std::path::Path::new(
+                tc.arguments
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(""),
+            );
+            let needs_read_gate =
+                tc.name == "edit_file" || (tc.name == "write_file" && path.exists());
+            if needs_read_gate {
+                if let GuardVerdict::Denied(msg) = self.read_gate.check_edit(path, &resolved) {
                     let denied = format!("🔒 Access denied: {msg}");
                     if is_destructive {
                         self.audit_log.log_destructive(
@@ -916,6 +831,109 @@ impl Executor {
                     return Ok(());
                 }
             }
+
+            let mut run_args = tc.arguments.clone();
+            if let Ok(path_obj) = serde_json::to_value(resolved.to_string_lossy().as_ref()) {
+                if let Some(obj) = run_args.as_object_mut() {
+                    obj.insert("path".into(), path_obj);
+                }
+            }
+
+            // Pre-tool hook for file tools now that paths are resolved.
+            let args_json = serde_json::to_string(&run_args).unwrap_or_default();
+            if let Some(reason) = self
+                .run_pre_tool_hook(
+                    &format!("pre-tool-{}", tc.name),
+                    Some(&tc.name),
+                    Some(&args_json),
+                )
+                .await
+            {
+                let denied = format!("❌ Hook denied {}: {}", tc.name, reason);
+                if is_destructive {
+                    self.audit_log
+                        .log_destructive(&tc.name, &tc.arguments, false, Some(&denied));
+                }
+                crate::send_or_warn!(
+                    event_tx
+                        .send(TurnEvent::ToolResult {
+                            name: tc.name.clone(),
+                            output: denied.clone(),
+                            success: false,
+                        })
+                        .await,
+                    "TurnEvent receiver dropped; discarding event"
+                );
+                self.conversation
+                    .append_async(Message {
+                        role: Role::Tool,
+                        content: denied,
+                        tool_call_id: Some(tc.id.clone()),
+                        tool_name: Some(tc.name.clone()),
+                        ..Default::default()
+                    })
+                    .await?;
+                return Ok(());
+            }
+
+            crate::send_or_warn!(
+                event_tx
+                    .send(TurnEvent::ToolStart {
+                        name: tc.name.clone(),
+                        args: run_args.clone(),
+                    })
+                    .await,
+                "TurnEvent receiver dropped; discarding event"
+            );
+
+            if matches!(tc.name.as_str(), "read_file" | "read_image") {
+                self.read_gate.mark_read(&resolved);
+            }
+
+            let tool_start = Instant::now();
+            let outcome =
+                tokio::time::timeout(self.tool_call_timeout(), std::future::ready(outcome))
+                    .await
+                    .unwrap_or(ToolOutcome::Failure(crate::shared::ToolError::Timeout {
+                        after_secs: self.tool_call_timeout().as_secs(),
+                    }));
+            let tool_duration = tool_start.elapsed();
+
+            let outcome = apply_budget_slice(outcome);
+            let outcome_for_emit = outcome.clone();
+            let edit_diff =
+                handle_tool_outcome(outcome, tc, event_tx, &mut self.conversation).await?;
+            self.observe_tool_outcome(&tc.name, &outcome_for_emit, event_tx);
+            record(MetricEvent::ToolCall {
+                name: tc.name.clone(),
+                success: tool_outcome_success(&outcome_for_emit),
+                duration_ms: tool_duration.as_millis() as u64,
+                error_kind: tool_error_kind(&outcome_for_emit).map(String::from),
+            });
+
+            let result_text = outcome_for_emit.text_content();
+            self.run_hook_with_result(
+                &format!("post-tool-{}", tc.name),
+                Some(&tc.name),
+                Some(&args_json),
+                Some(&result_text),
+            );
+
+            let crs = self
+                .emit_tool_event_and_correct(
+                    tc,
+                    &tc.name,
+                    &run_args,
+                    &outcome_for_emit,
+                    None,
+                    None,
+                    None,
+                    edit_diff,
+                )
+                .await;
+            self.collect_carryover(tc, &crs);
+            emit_correction_results(crs, tc, event_tx, &mut self.conversation).await?;
+            return Ok(());
         }
 
         // Non-file tools already passed their pre-gate hooks and checks; the
@@ -1065,8 +1083,14 @@ impl Executor {
         // testing; the model's output content may still vary by provider.
         let mut running: Vec<RunningTask> = Vec::with_capacity(prepared.len());
         let mut deferred_file_calls: Vec<PreparedCall> = Vec::new();
-        let mut results: std::collections::HashMap<usize, (ToolInvocation, ToolOutcome)> =
-            std::collections::HashMap::with_capacity(prepared.len());
+        // The third element is the resolved path Phase 1 already sandbox-
+        // checked; Phase 3 reuses it instead of re-running the path guard
+        // (closes the WO 15.9 TOCTOU + double `git check-ignore` window).
+        // Non-file tools store `None`.
+        let mut results: std::collections::HashMap<
+            usize,
+            (ToolInvocation, ToolOutcome, Option<std::path::PathBuf>),
+        > = std::collections::HashMap::with_capacity(prepared.len());
         let deterministic = self.is_deterministic();
         for prep in prepared {
             if prep.resolved_path.is_some() {
@@ -1078,7 +1102,7 @@ impl Executor {
                 // Run sequentially — no tokio::spawn, no concurrency.
                 let outcome = run_prepared_call(prep).await;
                 if let Some((invocation, result)) = outcome {
-                    results.insert(idx, (invocation, result));
+                    results.insert(idx, (invocation, result, None));
                 }
             } else {
                 let handle = tokio::spawn(run_prepared_call(prep));
@@ -1133,6 +1157,7 @@ impl Executor {
                 tc,
                 &invocation,
                 outcome,
+                None,
                 approval_sender,
                 cancelled,
                 event_tx,
@@ -1195,6 +1220,7 @@ impl Executor {
                             ToolOutcome::Failure(crate::shared::ToolError::AccessDenied {
                                 message: denied,
                             }),
+                            Some(path.clone()),
                         ),
                     );
                     continue;
@@ -1209,7 +1235,7 @@ impl Executor {
                 if name == "read_file" || name == "read_image" {
                     self.read_gate.mark_read(&path);
                 }
-                results.insert(idx, (invocation, o.clone()));
+                results.insert(idx, (invocation, o.clone(), Some(path.clone())));
             }
         }
 
@@ -1252,7 +1278,7 @@ impl Executor {
                 continue;
             }
 
-            let Some((invocation, outcome)) = results.remove(&idx) else {
+            let Some((invocation, outcome, resolved_path)) = results.remove(&idx) else {
                 let err = format!("Tool call {} did not return an outcome", tc.id);
                 crate::send_or_warn!(
                     event_tx
@@ -1280,6 +1306,7 @@ impl Executor {
                 tc,
                 &invocation,
                 outcome,
+                resolved_path.as_deref(),
                 approval_sender,
                 cancelled,
                 event_tx,

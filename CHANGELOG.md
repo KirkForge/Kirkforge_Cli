@@ -155,6 +155,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   box. 3 new tests (round-trip, invalid name, existing dir).
 
 ### Fixed
+- WO 15.1: honest CI gate naming in `.github/workflows/ci.yml`. Renamed
+  the `Fail if success rate drops below 10%` step to `Warn if success
+  rate drops below 10%` (it only emits a `::warning::` then exits 0;
+  the real regression gate is `bench-baseline.yml`'s `bench-pr-delta`
+  with `--fail-on-regression 10`). Replaced `cargo audit || true` with
+  `continue-on-error: true` on the step so RUSTSEC advisories are
+  *visible* in the run UI (non-blocking) instead of hidden by the
+  shell-level `|| true`. Removes the gate-theater anti-pattern
+  (AGENTS.md §4/§6); no logic change.
 - WO 14.0: the `Bench Baseline` workflow's three `ollama pull` steps
   (`.github/workflows/bench-baseline.yml`, jobs `bench-baseline`,
   `bench-pr-delta`, `bench-leaderboard`) now self-heal through a 3-attempt

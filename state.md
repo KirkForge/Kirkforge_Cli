@@ -54,6 +54,63 @@
 |---|---|
 | 75% coverage on `src/session` (WO 12.9) | Measured at 68.6% (CI run 30333515698); WO 12.8's ~75% estimate was optimistic. The remaining gap is async executor (`executor/dispatch.rs`, `loop_.rs`, `turn.rs`) + network (`mcp_client/http.rs`) code that needs integration test work, not pure-helper unit tests. Threshold raised 68.0 → 68.5 (proven-green by the 68.6% run); 75% deferred to a follow-up WO. ADR-065. |
 
+### Series 15.26 Batch D deferrals (WO 15.26)
+
+Batch D (docs + polish) shipped concrete fixes for 3.3, 3.19, 3.24,
+4.1+4.2, 4.3, 4.4, 4.5, 4.12 (commits on `wo/15.26-batch-d-docs-polish`).
+The rest resolve to honest deferral or were already done — per the WO
+done-condition ("fixed OR honestly deferred with a note in state.md"):
+
+- **3.13 ConnectionState::Connecting — already done.** Never
+  constructed, but `src/tui/app.rs:22-25` already carries the ceiling
+  comment ("Reserved for async connection transitions ... not currently
+  emitted") and 4 render paths match it; deletion is out of polish-scope.
+- **4.9 plugin3-hosts stub modules — already done.** All four shims
+  (`aider`, `claude_code`, `cursor`, `kirkforge`) carry `ponytail:
+  stub-only`; `canonical` is real schemas.
+- **4.18 kirkstratum/plugin3 legacy weight — already done.**
+  `docs/TECHNICAL.md` already documents the ADR-050 two-path dispatch
+  (compiled-in when feature on, shell fallback when off) at L84/104/
+  430/441/732.
+- **4.6 / 3.53 ci.yml `--skip` name mismatch — deferred.** The coverage
+  job skips `test_build_fork_tree_nests_children` but the historical
+  tarpaulin flake was `test_build_fork_tree_orphan_fork_is_a_root`.
+  WO 12.0 fixed the root cause (`save()` re-create); reconciling or
+  removing the skip needs a verified tarpaulin run to confirm
+  flake-freeness — a separate verification step.
+- **4.7 architecture diagram — deferred.** Open-ended, low priority;
+  the ASCII tree + tables in `docs/TECHNICAL.md` are functional. A
+  mermaid diagram is a future docs WO.
+- **4.8 coverage-per-file metrics — deferred.** Needs real coverage-
+  closing work or soft-warning telemetry; not a polish item.
+- **4.10 m5_tests.rs sibling module — deferred (Batch A).** File is
+  `src/adapters/`; cosmetic fold, defer to an adapters WO.
+- **4.11 collect_carryover `cargo test` substring match — deferred
+  (Batch C).** Lives in `src/session/executor/mod.rs`.
+- **4.13 PostTurnHookGuard sync Drop — deferred (Batch C).**
+  `src/session/executor/turn.rs`.
+- **4.14 executor/loop_.rs detached cancel-watcher — deferred (Batch C).**
+- **4.15 scout.rs StubTool::run `unimplemented!` — deferred (Batch C).**
+- **4.16 bedrock_signing extract_payload literal match — deferred
+  (Batch A).** `src/adapters/bedrock_signing.rs`.
+- **4.17 crate-boundary audit — deferred.** Periodic, open-ended
+  ("would this still deserve its own crate?"); revisit per-crate.
+- **4.19 more execution metrics — deferred.** Extending the bench
+  report (retrieval count + verification retries) is a bench-harness WO.
+- **4.20 more semantic benchmarks — deferred.** New bench tasks
+  (context-index validation); separate bench WO.
+- **4.21 provider abstraction / capability detection — deferred.**
+  Long-term plan (Core abstraction → Capability detection → Provider-
+  specific enhancements); short-term fix is 3.20 (Batch A). Defer to a
+  providers WO.
+- **4.22 publish benchmark dashboards — deferred.** Requires verifying
+  the `bench-leaderboard` scheduled job is green and populating
+  `docs/bench/leaderboard.md`; separate WO.
+- **4.23 `--harden` rlimit test `#[ignore]` in CI — deferred.** Needs a
+  dedicated Linux CI job running the ignored security tests; CI-matrix work.
+- **4.24 Windows CI job — deferred.** Needs a Windows CI matrix running
+  the previously-flaky tests 3×; CI-matrix work.
+
 ### Series 15 (cross-review bucketlist)
 
 WO 15.14 Done (split plugin3-cli/src/main.rs by feature): the

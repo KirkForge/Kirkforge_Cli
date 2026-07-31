@@ -162,6 +162,14 @@ pub enum AdapterKind {
 /// Classify a model name (and optional type override) into an
 /// [`AdapterKind`]. This is the routing decision before we build the
 /// concrete adapter.
+///
+/// ceiling: routing is by hardcoded model-name prefix (`claude-`,
+/// `claude_`, `glm`, `chatglm`, `deepseek`, `gemini`, `kimi`,
+/// `moonshot`, `anthropic.claude-`, `claude-3`, `opencode/`). A new
+/// model family currently requires a code change here AND in
+/// `adapter_for_with_provider`. upgrade path: move the
+/// prefix→AdapterKind table into Config so new models route without a
+/// recompile (WO 15.26 3.20 deferred).
 pub fn adapter_kind_for(
     model_name: &str,
     model_type_override: Option<&str>,

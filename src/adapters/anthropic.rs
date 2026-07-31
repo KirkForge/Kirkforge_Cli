@@ -56,6 +56,11 @@ impl ModelAdapter for AnthropicAdapter {
             name: self.model.clone(),
             supports_thinking: is_reasoning,
             tool_call_format: ToolCallStyle::Anthropic,
+            // ceiling: flat 200_000 for every claude model; model-specific
+            // context sizing is deferred rather than guessed (real windows
+            // vary by model/beta and citing an unverified number would be
+            // a false claim). upgrade path: branch on model id or make it
+            // config-driven (WO 15.26 3.22 deferred).
             max_context_tokens: 200_000,
             recommended_temperature: 1.0,
             supports_images: lower.starts_with("claude-3"),
@@ -192,6 +197,10 @@ pub(crate) fn build_anthropic_body(
         }
     }
 
+    // ceiling: max_tokens hardcoded to 8192; not configurable. Making it a
+    // Config field touches every Config site (Default impl, test literals
+    // across executor/tests, adapter_for wrappers) — out of polish-batch
+    // scope. upgrade path: Config field (WO 15.26 3.23 deferred).
     let mut body = serde_json::json!({
         "model": model,
         "max_tokens": 8192,

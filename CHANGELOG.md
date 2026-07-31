@@ -6,6 +6,21 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- WO 15.26 Batch B (verifier + security): all 15 items fixed (zero
+  deferrals). `VerifierHandler` short-circuits `ToolError` events (skip
+  the verifier fan-out); `bash_jobs` watcher has a watchdog that flips
+  `Running`→`Failed` on watcher death; `ENTROPY_PREFIXES` expanded
+  (`xai-`, `hf_`) with `claude-`/`key-` excluded (false positives) and a
+  `ceiling:` note; the test verifier's full-suite fallback is now scoped
+  to crate-root `main.rs`/`lib.rs` (nested files keep a targeted filter);
+  `VerifierBus` duplicate-name **coexistence** is documented (built-in
+  slot stubs + plugin verifiers share slot names by design). Dead
+  `event_kinds.rs` deleted. New tests: write_file cross-test of both
+  verifier paths, ToolError-through-handler, CorrectionLoop max-iterations,
+  PluginToolWrapper.run Cancelled path, bus duplicate-coexistence,
+  entropy-prefix coverage. Docs: env-var contract divergence, trusted-
+  verifier command env, `split_whitespace` ceiling, ADR-028 amendment
+  note, stale prose ADR list deleted (index table is source of truth).
 - WO 15.26 Batch D (docs + polish): `scripts/ci-local.sh full` mode
   mirrors the CI coverage gate (tarpaulin + thresholds) and runs the
   `adr_xref_drift` test locally; `WorktreeSession::create` now

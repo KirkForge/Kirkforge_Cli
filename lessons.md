@@ -273,3 +273,97 @@
   `ceiling:` + upgrade path was the right polish-batch resolution; the
   real refactor is its own WO. WO's either/or framing ("fix OR document
   the ceiling") is permission to defer honestly — use it.
+
+## WO 15.26 Batch B — verifier + security (2026-08-01)
+
+### What landed
+- All 15 Batch B items resolved as concrete fixes/tests/docs — **zero
+  deferrals** (every item had a small safe fix available). 15 commits on
+  `wo/15.26-batch-b-verifier-security`, one per item (+ one fix-forward).
+
+### The big lesson — 3.41 reject broke the stub+plugin slot design
+- My first cut at 3.41 (duplicate-verifier `register()` → `bail!`,
+  matching `slots.rs`) **broke the plugin-verifier bridge**. The full
+  workspace gate caught it: `plugin_verifier_triggers_correction_result`
+  FAILED because the plugin's `"security"` verifier was rejected by my
+  new duplicate guard.
+- **Root cause:** `default_verifier_bus()` registers built-in STUBS
+  (`SecurityBusVerifier`/`GitBusVerifier`) whose `name()` is `"security"`/
+  `"git"` and which return empty verdicts. `register_plugin_verifiers_into_bus`
+  then registers plugin verifiers that AUGMENT the same slot name. A plugin
+  declaring `name = "security"` MUST coexist with the built-in `"security"`
+  stub. My reject-by-name collapsed the plugin verifier away.
+- **Fix-forward:** reverted `register`/`add_plugin_verifier` to push-based
+  `()` (coexistence) + documented the contract + replaced the two
+  reject-tests with two coexistence tests (one proving a same-named plugin
+  verifier's verdict survives alongside the stub). The WO's "reject OR
+  document last-wins" framing didn't surface the stub+plugin design — the
+  CODE is the truth, not the WO. The slot path (`slots.rs`) rejecting
+  duplicates is a DIFFERENT contract from the bus path.
+- Lesson: **the two verifier systems have DIFFERENT duplicate policies by
+  design** — `VerifierSlots::register` rejects duplicates (one verifier per
+  slot, event-driven truth model), `VerifierBus::register` allows duplicates
+  (built-in stub + plugin override coexist, all run). Do NOT unify them.
+
+### What I learned about this codebase
+- **`cargo test --workspace` catches what `cargo check`/per-module tests
+  miss.** The bus tests all passed after the reject change; only the
+  executor integration test (`plugin_verifier_triggers_correction_result`,
+  in `executor/tests/dispatch.rs`) exercised the real
+  `default_verifier_bus()` + `register_plugin_verifiers_into_bus` flow.
+  Per-module tests can't catch cross-subsystem regressions. Run the FULL
+  gate before claiming green (AGENTS §4) — this saved a broken merge.
+- **`VerifierBus` is sync; `VerifierHandler`/slots are async.** The bus
+  path takes a `&VerifyContext { sandbox_dir, changed_files }` and returns
+  `Vec<VerdictEntry>`; the event-driven path takes a `&BusEvent` and
+  returns `Verdict`. The two env-var contracts diverge accordingly
+  (`KF_CHANGED_FILES` vs `KF_EVENT_JSON` — documented in 3.30, NOT unified).
+- **3.25 short-circuit belongs in `verify_event`, not `handle()`.**
+  `verify_event` is the fan-out point called by BOTH `EventHandler::handle`
+  AND `CorrectionLoop::run`. Putting the `ToolError` short-circuit there
+  covers both call sites with one guard. Returning `Verdict::Skipped` keeps
+  the correction loop's `Clean | Skipped => break` semantics intact.
+- **3.37's bug was subtle.** `module_path_prefix` returned an empty prefix
+  (full crate suite) for ANY file whose stem was `main`/`lib`, including
+  nested `src/foo/main.rs`. The fix: only fall back to the full suite when
+  the file sits DIRECTLY at the crate root (`components.is_empty()` after
+  stripping `src/`). Existing tests only checked `src/main.rs`/`src/lib.rs`,
+  so they passed — the nested case was untested. Always add a test for the
+  boundary the fix creates, not just the case that already worked.
+- **3.33 `claude-` would false-positive.** A model-name like
+  `claude-3-opus-20240229` has an 18-char tail (`3-opus-20240229`) whose
+  Shannon entropy clears the 3.5-bit threshold — so adding `claude-` to
+  `ENTROPY_PREFIXES` would flag legitimate model-name references as
+  `Unfixable` secrets and block the correction loop. Verified empirically
+  with `entropy_scan_does_not_flag_claude_model_name`. Anthropic keys
+  (`sk-ant-...`) are already caught by `sk-`. The entropy+length gate does
+  NOT protect against this because model names happen to be high-entropy.
+- **3.32 watchdog: `JoinHandle::await` returns `Err(JoinError)` on panic.**
+  No need for `catch_unwind`/`futures::FutureExt`. Capture the watcher's
+  handle, spawn a detached watchdog that awaits it, and on `Err` call a
+  small `mark_failed_if_running` helper. Test the helper directly
+  (injecting a Running job) since forcing a real panic is impractical.
+- **3.39 `Tool::run` borrows `&ToolContext`, so it can't be `tokio::spawn`d
+  directly (needs `'static`).** Cancel from a SEPARATE spawned task that
+  clones the `CancellationToken` and fires after a delay; keep `run` on
+  the test task.
+- **`docs/adr/README.md` has ONE source of truth: the index TABLE.** The
+  old prose bullet list was a stale duplicate that jumped 055→066 (missing
+  056-065). `adr_xref_drift` only checks header-vs-table-status agreement,
+  so deleting the prose list didn't affect it — but always re-run the test
+  after any ADR-doc edit.
+
+### What I tried that didn't work
+- 3.41 reject-by-name (first attempt). Broke `plugin_verifier_triggers_
+  correction_result`. Reverted to documented coexistence.
+- For 3.39, first spawned the `run` future directly — `tokio::spawn`
+  rejected the borrow (`ctx` not `'static`). Fixed by cancelling from a
+  sibling task.
+
+### What I'd do differently
+- For any "reject duplicates" change on a registry, FIRST grep for whether
+  the same key is intentionally reused across registration sources
+  (built-in stubs vs plugins). The bus's coexistence contract was 5 minutes
+  of grep away (`default_verifier_bus` + `SecurityBusVerifier::name`).
+- Treat a per-module green as a hint, not proof. The cross-subsystem
+  integration test is the real gate.

@@ -325,6 +325,22 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `stderr_len` (two `git add .` calls in a batch no longer dedup) and
   `FileWrite` now includes a `content_hash` (two same-length writes to
   the same path no longer dedup). Closes bucketlist items 2.4, 2.5, 2.6.
+- WO 15.13: split `crates/kirkforge-draw/src/event.rs` (8,226 lines, the
+  largest file in the repo) by event category. The production code
+  (event loop, key/mouse dispatchers, palette, panel click handlers,
+  style cycles, clipboard, save) is cohesive — `handle_key` calls
+  nearly every helper — so it stays in `event/mod.rs` (2,254 lines).
+  The 6,000-line inline test block (251 tests) is split into 11
+  category sub-files under `event/tests/`: `common.rs` (shared
+  `make_app`/`key`/`key_ctrl`/`key_ctrl_shift`/`make_app_with_three_
+  boxes` helpers), `keyboard.rs`, `restyle.rs`, `align.rs`, `layers.rs`,
+  `inspector.rs`, `mouse.rs`, `palette.rs`, `save.rs`, `text_edit.rs`,
+  `grouping.rs`, `find.rs`. Pure refactor: test bodies moved verbatim,
+  no logic/assertion change, test count unchanged (251 in `event::`,
+  328 in `kirkforge-draw`). `ponytail:`/`ceiling:` annotations preserved.
+  The one behaviour-affecting edit is the `include_str!("event.rs")` in
+  `keymap_doc_block_lists_palette_and_z_order_chords` →
+  `include_str!("../mod.rs")` (the production file moved).
 
 ### Added
 - Prompt-cache stem-reuse wiring (Workorder 10.2): the

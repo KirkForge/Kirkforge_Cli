@@ -137,11 +137,30 @@ async fn parse_bedrock_event_stream<B, E>(
         match chunk_result {
             Ok(chunk) => {
                 envelope_buffer.extend_from_slice(chunk.as_ref());
-                if let Some(inner) = extract_payload(&envelope_buffer) {
+                if envelope_buffer.len() > MAX_ENVELOPE_BUFFER_BYTES {
+                    let _ = inner_tx
+                        .send(Ok(format!(
+                            "data: {{\"type\":\"error\",\"error\":{{\"message\":\"Bedrock envelope buffer exceeded {} MiB limit; aborting stream\"}}}}\n\n",
+                            MAX_ENVELOPE_BUFFER_BYTES / (1024 * 1024)
+                        ).into_bytes()))
+                        .await;
+                    envelope_buffer.clear();
+                    continue;
+                }
+                // Drain every complete frame in the buffer, not just the first.
+                // A single chunk may carry multiple event-stream frames; the
+                // previous `if let` + `clear()` discarded all but the first.
+                while let Some((inner, end)) = extract_payload(&envelope_buffer) {
                     let _ = inner_tx
                         .send(Ok(format!("data: {inner}\n\n").into_bytes()))
                         .await;
-                    envelope_buffer.clear();
+                    // Drop the consumed frame (and any prelude/CRC bytes before
+                    // it); keep the residual tail for the next chunk.
+                    if end >= envelope_buffer.len() {
+                        envelope_buffer.clear();
+                        break;
+                    }
+                    envelope_buffer.drain(..end);
                 }
             }
             Err(e) => {
@@ -156,9 +175,16 @@ async fn parse_bedrock_event_stream<B, E>(
     let _ = parser_handle.await;
 }
 
+/// Ceiling on the outer Bedrock envelope buffer. Matches the inner
+/// `parse_anthropic_stream`'s `MAX_SSE_BUFFER_BYTES` so a runaway stream
+/// produces an error event instead of OOM.
+const MAX_ENVELOPE_BUFFER_BYTES: usize = 8 * 1024 * 1024;
+
 /// Best-effort extraction of the first JSON object in the AWS event-stream envelope.
-/// Returns the raw JSON string without `data:` prefix.
-fn extract_payload(envelope: &[u8]) -> Option<String> {
+/// Returns the raw JSON string (without `data:` prefix) and the byte offset in
+/// `envelope` immediately after the parsed object, so the caller can drain the
+/// consumed bytes and continue parsing the next frame in the same chunk.
+fn extract_payload(envelope: &[u8]) -> Option<(String, usize)> {
     let text = String::from_utf8_lossy(envelope);
     let start = text.find("{\"type\"")?;
     // Find the matching closing brace by scanning from the start of the
@@ -182,7 +208,7 @@ fn extract_payload(envelope: &[u8]) -> Option<String> {
     }
     let candidate = &text[start..end];
     if serde_json::from_str::<serde_json::Value>(candidate).is_ok() {
-        Some(candidate.to_string())
+        Some((candidate.to_string(), end))
     } else {
         None
     }
@@ -217,11 +243,13 @@ mod tests {
     #[test]
     fn extract_payload_pulls_first_json_object() {
         let env = b"prelude{\"type\":\"message_start\",\"message\":{}}crc";
-        let out = extract_payload(env).expect("payload present");
+        let (out, end) = extract_payload(env).expect("payload present");
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(&out).unwrap(),
             json!({"type":"message_start","message":{}})
         );
+        // end points just past the closing brace of the parsed object.
+        assert_eq!(end, env.len() - b"crc".len());
     }
 
     #[test]
@@ -305,10 +333,12 @@ mod tests {
     #[test]
     fn extract_payload_handles_nested_objects() {
         let env = b"x{\"type\":\"content_block_start\",\"content_block\":{\"type\":\"tool_use\",\"id\":\"tu_1\"}}y";
-        let out = extract_payload(env).expect("payload present");
+        let (out, end) = extract_payload(env).expect("payload present");
         let v: serde_json::Value = serde_json::from_str(&out).unwrap();
         assert_eq!(v["type"], "content_block_start");
         assert_eq!(v["content_block"]["type"], "tool_use");
+        // end is the byte index immediately after the outer closing brace.
+        assert_eq!(end, env.len() - b"y".len());
     }
 
     #[test]
@@ -319,5 +349,83 @@ mod tests {
     #[test]
     fn extract_payload_returns_none_for_plain_text() {
         assert!(extract_payload(b"just some text").is_none());
+    }
+
+    #[test]
+    fn extract_payload_reports_end_offset_for_drain() {
+        // prelude bytes before the object must be included in the end offset
+        // so the caller can drain them along with the parsed frame.
+        let env = b"hdr{\"type\":\"message_start\"}tail";
+        let (_out, end) = extract_payload(env).expect("payload present");
+        assert_eq!(end, env.len() - b"tail".len());
+    }
+
+    // WO 15.6 / 2.1: a chunk carrying multiple event-stream frames must not
+    // drop the second frame. The previous `if let` + `clear()` parsed only the
+    // first and discarded the rest.
+    #[tokio::test]
+    async fn parse_bedrock_event_stream_drains_all_frames_in_one_chunk() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<StreamEvent>(4096);
+        // Two content_block_delta/text_delta frames in a single chunk. Each
+        // produces a StreamEvent::Text, so two forwarded frames yield two Text
+        // events. The previous `if let` + `clear()` dropped the second frame.
+        let frame1 =
+            br#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"A"}}"#;
+        let frame2 =
+            br#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"B"}}"#;
+        let chunk: Vec<u8> = [frame1.as_slice(), frame2.as_slice()].concat();
+
+        let stream = tokio_stream::iter(vec![Ok::<Vec<u8>, std::convert::Infallible>(chunk)]);
+        parse_bedrock_event_stream(tx, stream).await;
+
+        // Collect Text events; both deltas must be forwarded, not just the first.
+        let mut texts: Vec<String> = Vec::new();
+        while let Ok(Some(ev)) =
+            tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv()).await
+        {
+            match ev {
+                StreamEvent::Done { .. } => break,
+                StreamEvent::Error(e) => panic!("stream error: {e}"),
+                StreamEvent::Text(t) => texts.push(t),
+                _ => {}
+            }
+        }
+        assert_eq!(
+            texts,
+            vec!["A".to_string(), "B".to_string()],
+            "both frames in one chunk must be forwarded (got {texts:?})"
+        );
+    }
+
+    // WO 15.6 / 2.1: an envelope buffer that grows past the cap must emit an
+    // error event and clear, not OOM. Feed >8 MiB of non-matching bytes.
+    #[tokio::test]
+    async fn parse_bedrock_event_stream_caps_envelope_buffer_at_8mib() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<StreamEvent>(4096);
+        // A single chunk larger than the cap with no `{"type"` frame, so
+        // extract_payload returns None and the buffer would grow unbounded
+        // under the old code.
+        let big: Vec<u8> = vec![b'x'; MAX_ENVELOPE_BUFFER_BYTES + 1];
+        let stream = tokio_stream::iter(vec![Ok::<Vec<u8>, std::convert::Infallible>(big)]);
+
+        // Must not hang or panic.
+        parse_bedrock_event_stream(tx, stream).await;
+
+        let mut saw_error = false;
+        while let Ok(Some(ev)) =
+            tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv()).await
+        {
+            if let StreamEvent::Error(msg) = ev {
+                assert!(
+                    msg.contains("envelope buffer exceeded"),
+                    "unexpected error message: {msg}"
+                );
+                saw_error = true;
+            }
+        }
+        assert!(
+            saw_error,
+            "expected an envelope-buffer-overflow error event"
+        );
     }
 }

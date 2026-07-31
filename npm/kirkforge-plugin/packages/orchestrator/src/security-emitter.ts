@@ -1,5 +1,5 @@
 import { readFileSync, existsSync } from "node:fs";
-import { extname } from "node:path";
+import { extname, resolve, isAbsolute } from "node:path";
 import type { EventBus } from "@kirkforge/core-events";
 
 // ponytail: token/regex dangerous-call scanner, not tree-sitter or semgrep/bandit.
@@ -158,17 +158,26 @@ export class SecurityEmitter {
 
   async emit(taskId: string): Promise<void> {
     const start = Date.now();
-    const files = (this.opts.files ?? []).filter((f) => existsSync(f));
+    const cwd = this.opts.cwd ?? process.cwd();
+    // Resolve relative paths against cwd before the existsSync filter; the
+    // previous form resolved against process.cwd() and silently dropped
+    // relative changed-file paths (the bridge passes KF_CHANGED_FILES as
+    // relative paths with a configured cwd). Preserve the caller-supplied
+    // path string in Finding.file so the bridge NDJSON wire format is stable.
+    const files = (this.opts.files ?? [])
+      .map((f) => ({ orig: f, abs: isAbsolute(f) ? f : resolve(cwd, f) }))
+      .filter(({ abs }) => existsSync(abs));
+
     const findings: Finding[] = [];
 
-    for (const file of files) {
-      const ext = extname(file);
+    for (const { orig, abs } of files) {
+      const ext = extname(abs);
       const isJs = JS_EXT_SET.has(ext);
       const isPy = ext === ".py";
       if (!isJs && !isPy) continue;
       let src: string;
       try {
-        src = readFileSync(file, "utf8");
+        src = readFileSync(abs, "utf8");
       } catch {
         continue;
       }
@@ -180,7 +189,7 @@ export class SecurityEmitter {
         let m: RegExpExecArray | null;
         while ((m = rule.pattern.exec(clean)) !== null) {
           findings.push({
-            file,
+            file: orig,
             line: lineOf(clean, m.index),
             rule: rule.rule,
             severity: rule.severity,

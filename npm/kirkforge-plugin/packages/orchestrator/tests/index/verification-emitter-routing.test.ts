@@ -23,6 +23,6 @@ describe("verification emitter routing", () => {
     expect(emitters.lint.constructor.name).toBe("LintEngine");
     expect(emitters.types.constructor.name).toBe("TscEmitter");
     expect(emitters.security.constructor.name).toBe("SecurityEmitter");
-    expect(emitters.graph.constructor.name).toBe("GraphEmitter");
+    expect(emitters.graph.constructor.name).toBe("GraphifyEmitter");
   });
 });

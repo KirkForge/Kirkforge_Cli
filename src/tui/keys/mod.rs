@@ -1277,6 +1277,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn complete_path_completes_against_temp_dir() {
         // Use an absolute path prefix so the test does not depend on
@@ -1305,6 +1306,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn complete_path_strips_range_suffix_before_completing() {
         // `@foo.rs:10-20:raw` — only the path portion before the first
@@ -1369,6 +1371,7 @@ mod tests {
             .all(|t| t.starts_with("/p")));
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn tab_on_at_mention_completes_path() {
         // Use an absolute @-mention so the test doesn't depend on the

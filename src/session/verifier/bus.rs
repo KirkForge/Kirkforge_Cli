@@ -300,6 +300,16 @@ impl BusVerifier for PluginBusVerifier {
     }
 
     fn verify(&self, ctx: &VerifyContext) -> Vec<VerdictEntry> {
+        // `ceiling:` env-var contract divergence (bucketlist 3.30). This
+        // bus path passes `KF_CHANGED_FILES` (newline-separated list from
+        // `VerifyContext`), while the legacy event-driven path
+        // (`PluginVerifierAdapter` in `plugin.rs`) passes `KF_EVENT_KIND`
+        // + `KF_EVENT_JSON` (the full serialized `BusEvent`). The two
+        // paths intentionally serve different shapes: the bus verifier is
+        // sync and context-based (a file list), the event-driven verifier
+        // is async and event-based (the full event payload). Unifying the
+        // env-var contract would change the behaviour plugin verifier
+        // scripts depend on; the divergence is documented, not closed.
         let mut env = HashMap::new();
         env.insert("KF_VERIFIER_NAME".to_string(), self.inner.name.clone());
         env.insert(

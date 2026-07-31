@@ -195,6 +195,26 @@ async fn apply_text_fix(
 }
 
 /// Apply a formatter-style fix by running an external command on the file.
+///
+/// `ceiling:` the command is spawned inheriting the user's environment
+/// (no env clearing here, unlike the plugin-verifier subprocess in
+/// `plugin.rs`). This is consistent with the threat model: only built-in
+/// verifiers and trusted (signed, validated) plugins can emit a
+/// `FixSuggestion.command`, so they are trusted to run formatter
+/// invocations in the session env. Sanitizing or env-clearing the
+/// command would change behaviour (e.g. drop `PATH` lookups for
+/// `rustfmt`) without a security gain, since the command author is
+/// already trusted. See ADR-054 for the sandbox-rlimit path that still
+/// applies when `--harden` is set.
+///
+/// `ceiling:` the command string is parsed with `split_whitespace`, so
+/// only single-word commands and whitespace-separated arg lists are
+/// supported (e.g. `rustfmt`, `rustfmt --edition 2021`). Quoted args,
+/// shell operators, or args containing whitespace are NOT handled —
+/// `apply_command_fix` is intended for zero-arg / simple-arg formatter
+/// invocations only. Using `shlex` for full shell-quoting would add a
+/// dependency; the binary is size-optimized (`opt-level = "z"`), so the
+/// ceiling is documented rather than closed.
 async fn apply_command_fix(
     command: &str,
     path: &std::path::Path,

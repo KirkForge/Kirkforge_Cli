@@ -46,6 +46,7 @@
 | WO 9.6: Verifier bus code unification | Confirmed the Rust-side plugin-verifier bridge (ADR-028 / ADR-043) is already code-complete: `register_plugin_verifiers_into_bus` wires any `Capability::Verifier` into the unified `VerifierBus`, and `emit_tool_event_and_correct` (dispatch.rs:900-921) converts each `Severity::Error` `VerdictEntry` into a `CorrectionResult` — the same struct the correction loop emits — so a single correction path handles built-in and plugin verdicts. Added end-to-end integration test `plugin_verifier_triggers_correction_result` in `src/session/executor/tests/mod.rs` proving a mock plugin declaring a `security` verifier flows through the bus into a `CorrectionResult`. ADR-028 status updated from "Accepted (partially implemented)" to "Accepted" (header + README index row); ponytail revised to clarify the plugin-verifier bridge is complete while the cross-language NDJSON wire bridge remains future work. No `bus.rs` / `plugin.rs` code changes needed — the bridge was already shipped in WO 7.7. |
 | WO 15.2: plugin validate() on load_from_dir + post-tool-write_file in KNOWN_EVENTS | `PluginRegistry::load_from_dir` (production plugin-load path) now calls `PluginManifest::validate()` after the API-version check, surfaces every schema error as a warning, and skips the offending plugin — matching the `load_one` contract from WO 8.8. Previously the bulk-load path silently accepted bad names, bad semver, duplicate triggers, unknown hook events, and untrusted command paths. Also added `post-tool-write_file` to `KNOWN_EVENTS` (the runtime emits it via `budget.rs:664`; the validator allowlist was stale — masked by the missing `validate()` call). 2 new tests (`load_from_dir_surfaces_invalid_manifest_and_skips_plugin`, `known_events_includes_post_tool_write_file`); 1 pre-existing test (`registry_drops_capability_with_command_outside_root`) updated to assert the new stricter contract (whole plugin skipped, not just the escaping capability). Bucketlist items 1.3 + 2.20 fixed. Commit `c9f0854` on `wo/15.2-plugin-validate-known-events` (not pushed — user merging the worktree branch). |
 | WO 15.5: split executor tests/mod.rs | `src/session/executor/tests/mod.rs` (3,760 lines, 79 tests) split into feature-aligned sub-files: `common.rs` (shared `MockAdapter`/`MockTool`/`make_executor`/`make_info`/`make_config`/`never_cancelled`/`cfg`/`CleanupFile`/`temp_hooks_dir`/`SleepingTool`), `dispatch.rs` (11), `turn.rs` (10), `loop_.rs` (11), `approval.rs` (48), `scout.rs` (empty — no scout tests exist yet). `mod.rs` is now a 13-line router. Pure refactor: test bodies moved verbatim (sorted-line equivalence verified), no logic/assertion change, test count unchanged at 79. `#[cfg(unix)]` guards on `temp_hooks_dir` and the 4 hook tests + `plugin_verifier_triggers_correction_result` preserved. Closes bucketlist item 3.2. |
+| WO 15.10: security scanner comments + git_sanitation cap + trufflehog timeout + docker expect | Closed bucketlist items 2.9, 2.13, 2.14, 2.15. (2.9) The security verifier's dangerous-shell-pattern check now skips comment-prefixed lines (`//`, `#`, `/*`, `*`) so documentation that mentions `rm -rf /` is no longer flagged `Unfixable` (a simple line-prefix filter, not a full parser; the entropy/secret-substring scans still run on all content). (2.13) `git_sanitation::SCAN_CAP_BYTES` raised 1 MiB → 10 MiB and the docstring now documents the ceiling honestly (a secret past the cap still slips through — documented, not overclaimed). (2.14) `trufflehog_scan` spawn is wrapped in `tokio::time::timeout` (60s prod / 2s test override via `#[cfg(test)]`, matching the `undo.rs` size-cap pattern) so a hung trufflehog returns `None` (no finding) instead of deadlocking the correction loop. (2.15) `Bash::run_docker` replaced `.expect("docker_config is Some")` with an early `return Err(ShellError::Spawn(...))` so a future caller that forgets the `docker_config.enabled` guard surfaces a tool failure, not a runtime panic. 8 new tests (5 comment-skip + 2 `is_comment_line` unit + 1 trufflehog-timeout + 1 docker-None — net new: security 6, bash 1, plus the existing shell-danger tests kept green). |
 
 ### Deferred items (honest deferral)
 
@@ -69,6 +70,23 @@ per-request pinning without a custom resolver); the simple rebinding
 door is closed. `docs/TECHNICAL.md` `tools/` section updated. Remaining
 bucketlist Tier-1 items (1.1, 1.2, 1.3, 1.7) and Tier-2/3/4 items are
 still open pending their own workorders.
+
+WO 15.10 Done (security scanner polish): closed bucketlist items 2.9
+(shell-pattern scanner flagged comments as secrets — the
+dangerous-shell-pattern check now skips comment-prefixed lines so
+documentation mentioning `rm -rf /` is no longer `Unfixable`; entropy
+and secret-substring scans still run on all content), 2.13
+(`git_sanitation` 1 MiB scan cap raised to 10 MiB and the docstring now
+documents the ceiling honestly), 2.14 (`trufflehog_scan` spawn wrapped
+in `tokio::time::timeout` — 60s prod / 2s test override — so a hung
+trufflehog returns `None` instead of deadlocking the correction loop),
+2.15 (`Bash::run_docker` replaced `.expect("docker_config is Some")`
+with an early `Err(ShellError::Spawn)` so a future caller that skips
+the `enabled` guard surfaces a tool failure, not a runtime panic).
+8 new tests. No architecture/plugin/feature-flag/tool-list/hook/
+verifier-bus/context-index shape change, so `docs/TECHNICAL.md` is
+unchanged. Remaining bucketlist items still open pending their own
+workorders.
 
 ### In-process hook infrastructure (shipped)
 

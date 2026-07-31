@@ -1381,7 +1381,10 @@ mod tests {
         let mut state = AppState::new(Arc::new(RwLock::new(Config::default())));
         // Type "@<tmp>/tmpfile" — the absolute path prefix. Use the
         // OS-native path so Windows backslashes parse correctly.
-        let typed = format!("@{}tmpfile", tmp.display().to_string() + std::path::MAIN_SEPARATOR_STR);
+        let typed = format!(
+            "@{}tmpfile",
+            tmp.display().to_string() + std::path::MAIN_SEPARATOR_STR
+        );
         state.input = typed.clone();
         state.cursor_position = typed.chars().count();
 

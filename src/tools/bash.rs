@@ -340,8 +340,12 @@ impl Tool for Bash {
                         // (path, mtime) so this is essentially free when
                         // the model has already called read_file on the
                         // same path earlier in the session.
-                        let content = bash_minify::try_minify_bash_output(&cmd, &output.stdout)
-                            .unwrap_or(output.stdout);
+                        let content = bash_minify::try_minify_bash_output(
+                            &cmd,
+                            &output.stdout,
+                            &self.path_guard,
+                        )
+                        .unwrap_or(output.stdout);
                         // v1.2 phase 22: if the command was a build
                         // (cargo build/test/check/clippy, rustc) and
                         // produced the canonical cargo progress + warning
@@ -370,9 +374,12 @@ impl Tool for Bash {
                         // (`error: command not found`, segfault traces) that's
                         // already small and where minification heuristics are
                         // more likely to drop the wrong line.
-                        let minified_stdout =
-                            bash_minify::try_minify_bash_output(&cmd, &output.stdout)
-                                .unwrap_or_else(|| output.stdout.clone());
+                        let minified_stdout = bash_minify::try_minify_bash_output(
+                            &cmd,
+                            &output.stdout,
+                            &self.path_guard,
+                        )
+                        .unwrap_or_else(|| output.stdout.clone());
                         let minified_stdout =
                             bash_minify::try_minify_build_log(&cmd, &minified_stdout)
                                 .unwrap_or(minified_stdout);

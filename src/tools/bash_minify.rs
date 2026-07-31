@@ -23,6 +23,8 @@
 
 use std::path::PathBuf;
 
+use crate::session::access::{GuardVerdict, PathGuard};
+
 /// Minimum savings (as a fraction of the original char count) required for
 /// us to substitute the minified output. `0.20` = must save at least 20% of
 /// characters. Below this threshold the per-call minification is a net loss
@@ -336,25 +338,42 @@ fn classify(line: &str) -> LineKind {
 ///
 /// Returns `Some(minified_output)` if:
 ///   * the command matches a known file-dump pattern, AND
+///   * the referenced file passes `PathGuard::check_read` (so a symlink to
+///     `~/.ssh/id_rsa` or a path outside the sandbox is refused — the
+///     extracted path is never read without the same gate `read_file` uses),
+///     AND
 ///   * the referenced file exists on disk, AND
 ///   * the file has a known minifiable extension, AND
 ///   * the minified form saves at least `MIN_SAVINGS_RATIO` of characters.
 ///
 /// Returns `None` in every other case — the caller should pass the original
-/// stdout through unchanged.
-pub fn try_minify_bash_output(cmd: &str, stdout: &str) -> Option<String> {
+/// stdout through unchanged. The `path_guard` argument is the same guard the
+/// bash tool already uses for its own path checks, so the minifier honours
+/// the sandbox + deny-list + symlink policy consistently.
+pub fn try_minify_bash_output(cmd: &str, stdout: &str, path_guard: &PathGuard) -> Option<String> {
     if stdout.is_empty() {
         return None;
     }
 
     let path = extract_file_path(cmd)?;
-    if !path.is_file() {
+
+    // WO 15.9 (bucketlist 2.11): route the extracted path through the read
+    // gate before touching disk. `extract_file_path` parses the command
+    // string and tilde-expands, so without this check a symlink target like
+    // `~/.ssh/id_rsa` would be followed by `minify_source_safe`'s metadata
+    // read with no sandbox/deny-list recheck. On denial, pass the original
+    // stdout through (never break a successful command).
+    let resolved = match path_guard.check_read(&path) {
+        GuardVerdict::Allowed(resolved) => resolved,
+        GuardVerdict::Denied(_) => return None,
+    };
+    if !resolved.is_file() {
         return None;
     }
 
     // Minify (use the safe variant — same one prompt history uses, so
     // the model sees the same form it would have seen from read_file).
-    let minified = crate::shared::minify::minify_source_safe(&path, stdout);
+    let minified = crate::shared::minify::minify_source_safe(&resolved, stdout);
 
     // Refuse the swap if the savings are too small to be worth the
     // round-trip minification cost.
@@ -479,6 +498,7 @@ fn looks_like_number(tok: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::session::access::PathGuard;
     use crate::shared::test_util::remove_test_file;
 
     // ── Command recognition ─────────────────────────────────────────
@@ -560,21 +580,31 @@ mod tests {
 
     #[test]
     fn try_minify_returns_none_for_empty_output() {
-        assert!(try_minify_bash_output("cat /tmp/foo.txt", "").is_none());
+        assert!(try_minify_bash_output("cat /tmp/foo.txt", "", &PathGuard::default()).is_none());
     }
 
     #[test]
     fn try_minify_returns_none_for_non_dump_command() {
         // Even if the output is huge source code, a `grep` is not a file-dump
         // and we mustn't try to minify it.
-        assert!(try_minify_bash_output("grep -r fn main src/", "fn main() {}").is_none());
+        assert!(try_minify_bash_output(
+            "grep -r fn main src/",
+            "fn main() {}",
+            &PathGuard::default()
+        )
+        .is_none());
     }
 
     #[test]
     fn try_minify_returns_none_for_missing_file() {
         // File doesn't exist on disk — pass through raw.
         let output = "fn main() {\n    // hello\n    println!(\"hi\");\n}\n";
-        assert!(try_minify_bash_output("cat /nonexistent/path/foo.rs", output).is_none());
+        assert!(try_minify_bash_output(
+            "cat /nonexistent/path/foo.rs",
+            output,
+            &PathGuard::default()
+        )
+        .is_none());
     }
 
     #[test]
@@ -584,7 +614,11 @@ mod tests {
         let original = "fn main() {\n    // this is a comment that takes space\n    // and another one\n    println!(\"hi\");\n}\n";
         std::fs::write(&tmp, original).unwrap();
 
-        let result = try_minify_bash_output(&format!("cat {}", tmp.display()), original);
+        let result = try_minify_bash_output(
+            &format!("cat {}", tmp.display()),
+            original,
+            &PathGuard::default(),
+        );
         assert!(result.is_some(), "minification should fire on a real file");
         let minified = result.unwrap();
         assert!(
@@ -604,7 +638,11 @@ mod tests {
         let original = "fn x(){1+1}\nfn y(){2+2}\n";
         std::fs::write(&tmp, original).unwrap();
 
-        let result = try_minify_bash_output(&format!("cat {}", tmp.display()), original);
+        let result = try_minify_bash_output(
+            &format!("cat {}", tmp.display()),
+            original,
+            &PathGuard::default(),
+        );
         // The minifier is a near no-op on this — savings < 20% — so we
         // should refuse the swap and return None.
         assert!(
@@ -623,10 +661,47 @@ mod tests {
             "this is some text content\nwith multiple lines\nthat should pass through unchanged\n";
         std::fs::write(&tmp, original).unwrap();
 
-        let result = try_minify_bash_output(&format!("cat {}", tmp.display()), original);
+        let result = try_minify_bash_output(
+            &format!("cat {}", tmp.display()),
+            original,
+            &PathGuard::default(),
+        );
         assert!(result.is_none(), "unknown extension must pass through");
 
         remove_test_file(&tmp);
+    }
+
+    #[test]
+    fn try_minify_refuses_path_outside_sandbox() {
+        // WO 15.9 (bucketlist 2.11): a path outside the sandbox dir must be
+        // refused by the read gate — the minifier must not follow a symlink
+        // or read an arbitrary path that the bash tool's PathGuard would
+        // block. Write a real file OUTSIDE the sandbox, point a guard with
+        // a sandbox_dir at it, and confirm we get None (passthrough).
+        let sandbox = std::env::temp_dir().join("kirkforge_bash_minify_sandbox");
+        let _ = std::fs::remove_dir_all(&sandbox);
+        std::fs::create_dir_all(&sandbox).unwrap();
+
+        // The real source file lives OUTSIDE the sandbox dir.
+        let outside = std::env::temp_dir().join("kirkforge_bash_minify_outside.rs");
+        let original =
+            "fn main() {\n    // comment that would minify if we read it\n    println!(1);\n}\n";
+        std::fs::write(&outside, original).unwrap();
+
+        let guard = PathGuard {
+            sandbox_dir: Some(sandbox.clone()),
+            ..PathGuard::default()
+        };
+
+        let result =
+            try_minify_bash_output(&format!("cat {}", outside.display()), original, &guard);
+        assert!(
+            result.is_none(),
+            "path outside sandbox must be refused by the read gate"
+        );
+
+        remove_test_file(&outside);
+        let _ = std::fs::remove_dir_all(&sandbox);
     }
 
     // ── Build-log minification ───────────────────────────────────
@@ -819,8 +894,8 @@ mod tests {
         }
 
         // The error path runs the same two-step chain.
-        let step1 =
-            try_minify_bash_output("cargo build", &original).unwrap_or_else(|| original.clone());
+        let step1 = try_minify_bash_output("cargo build", &original, &PathGuard::default())
+            .unwrap_or_else(|| original.clone());
         // `cargo build` is not in the file-dump allowlist, so step1 is
         // a no-op pass-through. Step2 is the build-log filter.
         let final_out = try_minify_build_log("cargo build", &step1)
@@ -855,7 +930,7 @@ mod tests {
         // a tiny stderr ("cat: ...: No such file or directory") and
         // an empty stdout. The minifier chain must be a clean no-op.
         let stdout = "";
-        let step1 = try_minify_bash_output("cat /nonexistent", stdout)
+        let step1 = try_minify_bash_output("cat /nonexistent", stdout, &PathGuard::default())
             .unwrap_or_else(|| stdout.to_string());
         let step2 = try_minify_build_log("cat /nonexistent", &step1).unwrap_or(step1);
         assert_eq!(step2, stdout, "empty stdout must pass through unchanged");
@@ -866,7 +941,7 @@ mod tests {
         // A 20-line failing build is below BUILD_LOG_MIN_LINES —
         // the chain should refuse the swap.
         let original = "warning: tiny\n  --> x.rs:1:1\n 1 | x\n   = note\n\n".repeat(20);
-        let step1 = try_minify_bash_output("cargo build", &original);
+        let step1 = try_minify_bash_output("cargo build", &original, &PathGuard::default());
         let step2 = try_minify_build_log("cargo build", step1.as_deref().unwrap_or(&original));
         // Either minifier refuses (None) or both pass through; both
         // outcomes are fine, what matters is the composed output

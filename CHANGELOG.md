@@ -224,6 +224,25 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `GraphifyEmitter` API (`@kirkforge/tool-graphify`), and the
   `verification-emitter-routing` test's `constructor.name` assertion was
   updated from `GraphEmitter` to `GraphifyEmitter`. 3 new Rust tests.
+- WO 15.9: closed three cross-review findings (bucketlist 2.7, 2.10,
+  2.11). (1) Phase 3 `record_tool_result` no longer re-runs
+  `PathGuard::check_write`/`check_read` for file tools — Phase 1's
+  resolved path is now carried through Phase 2.5 into Phase 3 and reused,
+  eliminating a second canonicalize + sandbox-contains + `git
+  check-ignore` subprocess per edit and the TOCTOU window where a
+  parallel tool could flip the guard state between phases (the
+  `pre_run_verdict` docstring already claimed this; the impl now honours
+  it). (2) The git worktree verifier now distinguishes staged files from
+  dirty worktree changes via `git status --porcelain` XY parsing — a
+  staged-only file (`A  file.txt`) is no longer reported as an
+  `Unfixable` "Dirty worktree" violation (the model can commit it); a
+  genuine unstaged modification (` M file.txt`) still fails. (3)
+  `bash_minify::try_minify_bash_output` now routes the extracted file
+  path through `PathGuard::check_read` before reading, so a symlink
+  target like `~/.ssh/id_rsa` or a path outside the sandbox is refused
+  instead of followed with no recheck (the bash tool already owns a
+  `path_guard`; it's now passed to the minifier). 3 new tests (git:
+  2, bash_minify: 1); 1 existing git test replaced.
 - WO 14.0: the `Bench Baseline` workflow's three `ollama pull` steps
   (`.github/workflows/bench-baseline.yml`, jobs `bench-baseline`,
   `bench-pr-delta`, `bench-leaderboard`) now self-heal through a 3-attempt

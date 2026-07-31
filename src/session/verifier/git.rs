@@ -163,6 +163,12 @@ fn git_cmd(workdir: Option<&Path>) -> tokio::process::Command {
 }
 
 /// Check for dirty worktree after an operation.
+///
+/// `git status --porcelain` emits one line per non-clean entry as `XY <path>`
+/// where `X` is the index (staged) status and `Y` is the worktree status. A
+/// staged-only file (`A  file.txt` — X non-space, Y space) is NOT a worktree
+/// violation — the model can commit it. Only entries with a non-space `Y`
+/// (unstaged modifications) or untracked files (`??`) count as "dirty".
 async fn check_dirty_worktree(workdir: Option<&Path>) -> Verdict {
     let output = git_cmd(workdir)
         .args(["status", "--porcelain"])
@@ -175,20 +181,37 @@ async fn check_dirty_worktree(workdir: Option<&Path>) -> Verdict {
     };
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let dirty_count = stdout.lines().count();
+    let mut dirty: Vec<&str> = Vec::new();
+    for line in stdout.lines() {
+        if line.is_empty() {
+            continue;
+        }
+        // Porcelain format: two status chars, a space, then the path.
+        // `??` = untracked (dirty). Otherwise Y (worktree status, byte 1)
+        // non-space means unstaged changes — dirty. X non-space with Y space
+        // means staged-only — not a violation, so we skip it.
+        let bytes = line.as_bytes();
+        let is_untracked = bytes.len() >= 2 && bytes[0] == b'?' && bytes[1] == b'?';
+        let has_worktree_changes = bytes.len() >= 2 && bytes[1] != b' ' && bytes[1] != b'\0';
+        if is_untracked || has_worktree_changes {
+            dirty.push(line);
+        }
+    }
 
-    if dirty_count > 0 {
+    if dirty.is_empty() {
+        // Staged-only (or fully clean) is not a worktree violation.
+        Verdict::Clean
+    } else {
+        let dirty_count = dirty.len();
         Verdict::Unfixable(VerificationError {
             description: format!("Dirty worktree: {dirty_count} uncommitted changes"),
             file: None,
             details: format!(
                 "There are {} uncommitted files. Consider committing or stashing before proceeding.\n{}",
                 dirty_count,
-                stdout.lines().take(10).collect::<Vec<_>>().join("\n")
+                dirty.iter().take(10).copied().collect::<Vec<_>>().join("\n")
             ),
         })
-    } else {
-        Verdict::Clean
     }
 }
 
@@ -289,12 +312,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_dirty_worktree_after_git_add() {
-        let tmp = std::env::temp_dir().join("kirkforge_git_dirty");
+    async fn test_staged_file_is_not_a_worktree_violation() {
+        // WO 15.9 (bucketlist 2.10): a staged file (`A  file.txt` in
+        // porcelain) is not a worktree violation — the model can commit it.
+        let tmp = std::env::temp_dir().join("kirkforge_git_staged");
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
 
-        // Initialise a repo and stage a new file so status --porcelain reports it.
+        // Initialise a repo and stage a new file so status --porcelain
+        // reports it as `A  file.txt` (staged, no worktree changes).
         let init = tokio::process::Command::new("git")
             .current_dir(&tmp)
             .args(["init"])
@@ -322,8 +348,55 @@ mod tests {
         });
         let v = verify_git(&event).await;
         assert!(
+            matches!(v, Verdict::Clean),
+            "staged-only file should NOT be a worktree violation: {v:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[tokio::test]
+    async fn test_dirty_worktree_after_unstaged_modification() {
+        // A genuine unstaged modification (` M file.txt` in porcelain) IS a
+        // dirty worktree and must stay Unfixable.
+        let tmp = std::env::temp_dir().join("kirkforge_git_dirty");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        async fn git(tmp: &std::path::Path, args: &[&str]) {
+            let out = tokio::process::Command::new("git")
+                .current_dir(tmp)
+                .args(args)
+                .output()
+                .await
+                .expect("git command failed");
+            assert!(
+                out.status.success(),
+                "git {:?} failed: {}",
+                args,
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+
+        git(&tmp, &["init"]).await;
+        git(&tmp, &["config", "user.email", "test@example.com"]).await;
+        git(&tmp, &["config", "user.name", "Test User"]).await;
+
+        std::fs::write(tmp.join("file.txt"), "hello").unwrap();
+        git(&tmp, &["add", "file.txt"]).await;
+        git(&tmp, &["commit", "-m", "initial"]).await;
+
+        // Modify the tracked file WITHOUT staging — porcelain shows ` M`.
+        std::fs::write(tmp.join("file.txt"), "hello modified").unwrap();
+
+        // A genuine unstaged modification (` M file.txt` in porcelain) IS a
+        // dirty worktree and must stay Unfixable. Call the checker directly
+        // so we exercise the parsing without depending on a modifying-command
+        // classifier.
+        let v = check_dirty_worktree(Some(&tmp)).await;
+        assert!(
             matches!(v, Verdict::Unfixable(_)),
-            "staged file should leave a dirty worktree: {v:?}"
+            "unstaged modification should be a dirty worktree: {v:?}"
         );
         if let Verdict::Unfixable(err) = v {
             assert!(err.description.contains("Dirty worktree"));

@@ -115,6 +115,18 @@ run`, not just the `/plugins list` display. 2 new tests
 `test_denied_edit_records_single_access_denied_result`); 148 executor
 tests pass. `docs/TECHNICAL.md` plugin section updated.
 
+WO 15.15 Done (split kirkforge-draw-core state.rs): split the 4,863-line
+`crates/kirkforge-draw-core/src/state.rs` (draw document model, 161
+tests) by state-domain into `state/` submodules — `mod.rs` (struct +
+constructors), `tool`, `history`, `selection`, `draft`, `resize`,
+`mutate`, `query`, `helpers`, `tests`. Pure refactor: every function
+moved verbatim, only edits are `pub(super)` visibility on private
+fields + cross-submodule helpers so sibling `impl DrawState` blocks can
+touch the struct. Test count unchanged (161). Also fixed 6
+`FileWriteEvent` literals in `src/session/verifier/security.rs` tests
+that WO 15.8 missed adding `content_hash: 0` to (pre-existing compile
+error on base branch fb334cb that blocked the workspace gate).
+
 ### In-process hook infrastructure (shipped)
 
 The hooks for WO 6.6/6.7/6.8 are now in-process Rust handlers (no shell scripts) built on shared infrastructure:

@@ -325,6 +325,17 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `stderr_len` (two `git add .` calls in a batch no longer dedup) and
   `FileWrite` now includes a `content_hash` (two same-length writes to
   the same path no longer dedup). Closes bucketlist items 2.4, 2.5, 2.6.
+- WO 15.15: split `crates/kirkforge-draw-core/src/state.rs` (4,863 lines,
+  161 tests) by state-domain into `state/` submodules — `mod.rs` (struct +
+  constructors + `find_object_index`), `tool`, `history`, `selection`,
+  `draft`, `resize`, `mutate`, `query`, `helpers`, `tests`. Pure refactor:
+  every function/struct/enum moved verbatim; only edits are `pub(super)`
+  visibility on the private fields + a handful of cross-submodule helpers
+  (`push_undo`, `reconcile_selection`, `next_z`) so sibling `impl DrawState`
+  blocks can touch the struct. Test count unchanged (161). Also fixed 6
+  `FileWriteEvent` literals in `src/session/verifier/security.rs` tests
+  that WO 15.8 missed adding `content_hash: 0` to (pre-existing compile
+  error on the base branch that blocked the workspace gate).
 
 ### Added
 - Prompt-cache stem-reuse wiring (Workorder 10.2): the

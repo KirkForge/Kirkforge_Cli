@@ -541,9 +541,25 @@ impl Executor {
         let h = handler.clone();
         match tokio::runtime::Handle::try_current() {
             Ok(rt) => {
+                // The constructor is sync and is called from inside
+                // #[tokio::test] current-thread workers (and from
+                // main), so `Handle::block_on` would panic ("Cannot
+                // block the current thread from within a runtime") and
+                // building a nested runtime is forbidden too. The
+                // registration is therefore fire-and-forget by
+                // necessity: it is spawned on the ambient runtime and
+                // its result is logged (at `error!` on failure so a
+                // dropped handler is visible). `count` does NOT
+                // include this handler (it counts only slot verifiers
+                // above), so the returned count is honest regardless of
+                // the async registration outcome (WO 15.11). A failed
+                // registration leaves `correction_loop` pointing at a
+                // handler that never receives events; this is a
+                // degraded mode, not a silent overclaim — the
+                // `error!` log surfaces it.
                 rt.spawn(async move {
                     if let Err(e) = bus.register(h).await {
-                        tracing::warn!(error = %e, "failed to register verifier handler on event bus");
+                        tracing::error!(error = %e, "failed to register verifier handler on event bus; correction loop will not receive events");
                     }
                 });
                 self.correction_loop = Some(CorrectionLoop::new(handler));

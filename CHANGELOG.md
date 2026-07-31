@@ -186,6 +186,25 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   an early `Err(ShellError::Spawn)` so a future caller that forgets the
   `docker_config.enabled` guard surfaces a tool failure, not a runtime
   panic (bucketlist 2.15). 8 new tests.
+- WO 15.11: `computer_use` stale-boolean triple-lock collapsed to a
+  single `Mutex` acquisition (check + step + use in one block-scoped
+  guard, dropped before the async fallback so the future stays `Send`);
+  `ResponseCache::get` caps the disk read at 64 MiB (metadata size
+  check before `std::fs::read`, warning + cache miss on overflow) so a
+  crafted/huge cache file can't OOM; Anthropic `parse_anthropic_stream`
+  EOF flush now emits a `ToolCall` with empty `{}` input when a
+  `content_block_start` arrived with no `partial_json` (truncated tool
+  was silently dropped); `init_default_verifiers` bus-handler
+  registration failure log upgraded `warn!` → `error!` (the sync
+  constructor runs inside tokio workers so `block_on` panics —
+  registration stays fire-and-forget by necessity; `count` was already
+  honest as it counts slot verifiers only); host-crate
+  `PluginTool::execute` now applies rlimits via a new
+  `crates/kirkforge-plugin-host/src/rlimits.rs` mirroring
+  `bash_runner::setup_rlimits`, gated on an optional
+  `resource_limits` field + `with_resource_limits` builder (ADR-060;
+  default `None` preserves today's behavior). Closes bucketlist items
+  2.12, 2.16, 2.17, 2.18, 2.19.
 - WO 15.1: honest CI gate naming in `.github/workflows/ci.yml`. Renamed
   the `Fail if success rate drops below 10%` step to `Warn if success
   rate drops below 10%` (it only emits a `::warning::` then exits 0;

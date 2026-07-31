@@ -321,6 +321,40 @@ in progress in separate worktrees at the time of this WO.
   blocking, but together they raise the floor from "depth hidden
   behind a rough surface" to "depth that's reachable."
 
+### Series 15.0.0.1 — Cross-Review Bucketlist (5-Reviewer Pass)
+
+Five independent reviews of the `dev` branch (DeepSeek V4 Pro, MiniMax
+M3, GLM 5.2, and two webchat instances) all found real dead code, bugs,
+errors, security gaps, and doc-drift. WO 15.0.0.1 is the consolidated
+bucketlist — 86 deduplicated findings across all 5 reviews, verified
+against HEAD `8926fe2`, graded by severity (Tier 1-4), and prioritized.
+It is the single-source backlog for Series 15.
+
+| # | Workorder | Status | Priority | Depends on |
+|---|---|---|---|---|
+| 15.0.0.1 | [Cross-review bucketlist (5-reviewer pass)](15.0.0.1-cross-review-bucketlist.md) | Planned | High | — |
+
+### Priority rationale
+
+- **Tier 1 (7 items)**: Honesty / Safety violations — CI gate theater
+  (`|| true`-style gates that don't gate), plugin `validate()` skipped
+  on the primary load path, `computer_use` SSRF via browser,
+  `web_fetch` DNS rebinding, Docker bind-mount unsanitized, false
+  deferral in state.md. These are direct AGENTS.md §4/§6/§7 violations
+  and the highest-priority fixes because they make "CI green" mean
+  less than it claims.
+- **Tier 2 (24 items)**: Real correctness bugs — Bedrock OOM + dropped
+  events, Vertex empty token, task leak on cancel, double-record
+  AccessDenied, security scanner false positives on comments, cache
+  OOM, etc. Fix soon.
+- **Tier 3 (31 items)**: Architecture / Code quality — config field
+  drift, 3,760-line test file split, coverage gate gaps, monolithic
+  functions, AppState God object, duplicated code, dead code, provider
+  abstraction leak. Action this quarter.
+- **Tier 4 (24 items)**: Doc drift / Stale counts / Polish — ADR-066
+  count, KIRK-BENCH arithmetic, test counts, leaderboard stub, crate
+  audit, more metrics, more semantic benchmarks. Polish.
+
 ## Conventions
 
 - Each workorder is a single markdown file named `<number>-<slug>.md`.

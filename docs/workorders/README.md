@@ -333,6 +333,7 @@ It is the single-source backlog for Series 15.
 | # | Workorder | Status | Priority | Depends on |
 |---|---|---|---|---|
 | 15.0.0.1 | [Cross-review bucketlist (5-reviewer pass)](15.0.0.1-cross-review-bucketlist.md) | Planned | High | — |
+| 15.0.0.2 | [Series 15 execution plan (workorder map)](15.0.0.2-series-15-execution-plan.md) | Planned | High | 15.0.0.1 |
 
 ### Priority rationale
 

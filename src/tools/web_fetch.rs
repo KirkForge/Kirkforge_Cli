@@ -1,6 +1,7 @@
 use crate::session::access::DenyList;
 use crate::shared::{ToolDef, ToolError, ToolOutcome};
 use crate::tools::{Tool, ToolContext};
+use std::net::ToSocketAddrs;
 use std::time::Duration;
 
 /// Maximum response body we will accept (1 MiB). This caps both memory usage
@@ -94,6 +95,18 @@ impl Tool for WebFetch {
             });
         }
 
+        // WO 15.3: DNS-rebinding check. A public hostname whose A record
+        // resolves to 127.0.0.1 / 169.254.169.254 / RFC1918 defeats the
+        // literal-IP gate above. Resolve the host and reject if any
+        // resolved address is internal. Literal-IP hosts already went
+        // through `host_is_literal_internal_ip` and are not re-resolved
+        // (no TOCTOU — they're pinned to the literal in the URL).
+        if host_resolves_to_internal_ip(trimmed) {
+            return ToolOutcome::Failure(ToolError::AccessDenied {
+                message: "URL host resolves to a private/internal IP (DNS-rebinding guard)".into(),
+            });
+        }
+
         let request = match self.client.get(trimmed).build() {
             Ok(r) => r,
             Err(e) => {
@@ -174,8 +187,15 @@ impl Tool for WebFetch {
 /// Reject URLs whose host is a literal loopback, link-local, or RFC1918 / RFC4193
 /// address. This is a lightweight complement to the deny-list; it does not do
 /// DNS resolution, but it stops the model from passing `http://127.0.0.1/...`
-/// directly. DNS-rebinding at lookup time remains a hard problem for a client
-/// tool; a future iteration should pin the resolved IP and re-check it.
+/// directly.
+///
+/// ceiling: this guard only catches *literal* internal IPs. The DNS-rebinding
+/// path (a public hostname resolving to an internal IP at lookup time) is now
+/// closed by `host_resolves_to_internal_ip`, which resolves the host and
+/// re-checks each resolved address against `is_internal_addr`. A residual
+/// TOCTOU between this resolve and the actual TCP connect is not pinned (the
+/// reqwest client does not expose per-request IP pinning without a custom
+/// resolver); the resolve-and-check closes the simple rebinding door.
 pub(crate) fn host_is_literal_internal_ip(url: &str) -> bool {
     let Some(host) = extract_host(url) else {
         return true; // malformed URL -> fail closed
@@ -184,6 +204,36 @@ pub(crate) fn host_is_literal_internal_ip(url: &str) -> bool {
         return is_internal_addr(&addr);
     }
     false
+}
+
+// WO 15.3: resolve the URL host via the OS resolver and reject if any
+// resolved address is internal (loopback / link-local / RFC1918 / RFC4193).
+// This closes the DNS-rebinding SSRF path: a public hostname whose A record
+// points at 127.0.0.1 or 169.254.169.254 defeats the literal-IP guard above.
+//
+// Returns false when the host is itself a literal IP (those are already
+// handled by `host_is_literal_internal_ip`) so we never re-resolve a pinned
+// literal. Returns false on resolution *error* — a hostname that does not
+// resolve at all will fail later at the actual fetch, and failing closed on
+// every NXDOMAIN would break legitimate clients that pin DNS inside the
+// reqwest client (tests) rather than the system resolver. The rebinding
+// threat requires the attacker's hostname to actually resolve to an
+// internal IP, which this guard catches.
+pub(crate) fn host_resolves_to_internal_ip(url: &str) -> bool {
+    let Some(host) = extract_host(url) else {
+        return true; // malformed -> fail closed
+    };
+    // Literal IPs are already gated by `host_is_literal_internal_ip`; skip
+    // re-resolution so there's no TOCTOU on a pinned literal.
+    if host.parse::<std::net::IpAddr>().is_ok() {
+        return false;
+    }
+    // `to_socket_addrs` needs a :port pair; use a dummy port 80 for http.
+    let probe = format!("{host}:80");
+    match probe.to_socket_addrs() {
+        Ok(addrs) => addrs.map(|sa| sa.ip()).any(|addr| is_internal_addr(&addr)),
+        Err(_) => false, // resolution error -> let the fetch fail later
+    }
 }
 
 fn is_internal_addr(addr: &std::net::IpAddr) -> bool {
@@ -390,6 +440,62 @@ mod tests {
             ),
             "expected denied internal IP, got {outcome:?}"
         );
+    }
+
+    // WO 15.3: a hostname that resolves to an internal IP via the system
+    // resolver must be rejected even though it's not a literal IP. `localhost`
+    // resolves to 127.0.0.1 on every CI host, so this is a reliable real
+    // (non-mocked) DNS-rebinding guard test.
+    #[tokio::test]
+    async fn rejects_hostname_resolving_to_internal_ip() {
+        let tool = WebFetch::new(DenyList::default());
+        let outcome = tool
+            .run(&ToolContext::new(), json!({"url": "http://localhost/"}))
+            .await;
+        assert!(
+            matches!(
+                outcome,
+                ToolOutcome::Failure(ToolError::AccessDenied { .. })
+            ),
+            "expected AccessDenied for localhost (resolves to 127.0.0.1), got {outcome:?}"
+        );
+    }
+
+    #[test]
+    fn host_resolves_to_internal_ip_localhost_is_true() {
+        // localhost resolves to 127.0.0.1 (or ::1) on every host.
+        assert!(
+            host_resolves_to_internal_ip("http://localhost/"),
+            "localhost should resolve to an internal IP"
+        );
+    }
+
+    #[test]
+    fn host_resolves_to_internal_ip_literal_ip_is_false() {
+        // Literal IPs are handled by `host_is_literal_internal_ip`; the
+        // resolver guard must NOT re-resolve them (avoids TOCTOU on a
+        // pinned literal and avoids double-denying, which would still be
+        // safe but is not this function's job).
+        assert!(!host_resolves_to_internal_ip("http://127.0.0.1/"));
+        assert!(!host_resolves_to_internal_ip("http://8.8.8.8/"));
+    }
+
+    #[test]
+    fn host_resolves_to_internal_ip_nonexistent_host_is_false() {
+        // A hostname that does not resolve at all should NOT trip the
+        // guard — the fetch will fail later at connect time. Failing closed
+        // on every NXDOMAIN would break clients that pin DNS inside reqwest
+        // (tests) rather than the system resolver.
+        assert!(
+            !host_resolves_to_internal_ip("http://kirkforge-nonexistent-host-zzz.invalid/"),
+            "NXDOMAIN should not trip the internal-IP guard"
+        );
+    }
+
+    #[test]
+    fn host_resolves_to_internal_ip_malformed_is_true() {
+        // Malformed URL -> extract_host returns None -> fail closed.
+        assert!(host_resolves_to_internal_ip(""));
     }
 
     fn test_tool_for(server: &wiremock::MockServer) -> WebFetch {

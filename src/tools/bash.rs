@@ -49,7 +49,47 @@ impl Bash {
     ) -> Result<(i32, String, String), ShellError> {
         let cfg = self.docker_config.as_ref().expect("docker_config is Some");
 
-        let workdir_str = workdir.to_string_lossy();
+        // WO 15.3: route the model-supplied `cmd` through the same
+        // deny-list / dangerous-pattern gate the foreground path uses.
+        // The Docker branch previously skipped `check_bash_command_str`,
+        // so a model-supplied `rm -rf /` or metadata-endpoint curl ran
+        // unchecked inside the container.
+        if let Some(denied) = check_bash_command_str(
+            cmd,
+            None,
+            &self.deny_list,
+            &self.path_guard,
+            self.bash_sandbox_workdir,
+        ) {
+            return Err(ShellError::Spawn(denied));
+        }
+
+        // WO 15.3: sanitize the bind-mount source. Docker parses the first
+        // `:` in `-v SRC:/work` as the host/container split, so a workdir
+        // string containing `:` (e.g. `/tmp/evil:/etc:ro`) would mount
+        // `/tmp/evil` at `/etc`. The workdir comes from `DockerConfig`
+        // (config), not the model, so this is defense-in-depth — but a
+        // misconfigured path with `:` must not silently inject mount opts.
+        // Canonicalize first so a relative `.` resolves, then reject if the
+        // canonical path string contains a `:` (a valid filesystem path
+        // never contains `:` on Unix; on Windows `C:\` would, but the Docker
+        // tool is Unix-only by nature of the container runtime).
+        let resolved_workdir = match workdir.canonicalize() {
+            Ok(p) => p,
+            Err(e) => {
+                return Err(ShellError::Spawn(format!(
+                    "docker workdir cannot be resolved: {} ({e})",
+                    workdir.display()
+                )));
+            }
+        };
+        let workdir_str = resolved_workdir.to_string_lossy();
+        if workdir_str.contains(':') {
+            return Err(ShellError::Spawn(format!(
+                "docker workdir contains ':' which would inject Docker mount options: {workdir_str}"
+            )));
+        }
+
         let docker_args = vec![
             "run".to_string(),
             "--rm".to_string(),
@@ -622,6 +662,139 @@ mod tests {
                 message,
             }) => assert!(message.contains("Missing 'command'"), "got {message}"),
             other => panic!("expected InvalidArgs, got {other:?}"),
+        }
+    }
+
+    // WO 15.3: the Docker path must route `cmd` through
+    // `check_bash_command_str` even though the foreground path already does.
+    // A dangerous model-supplied command must be denied before docker spawn.
+    #[tokio::test]
+    async fn bash_docker_path_blocks_dangerous_command() {
+        let docker_cfg = DockerConfig {
+            enabled: true,
+            image: "alpine:latest".into(),
+            memory: "512m".into(),
+            cpus: "1".into(),
+        };
+        let tool = Bash::new(
+            DenyList::default(),
+            PathGuard::default(),
+            false,
+            Some(docker_cfg),
+            crate::shared::SandboxConfig::default(),
+        );
+        let ctx = crate::tools::ToolContext::new();
+        // `rm -rf /` is in DANGEROUS_SHELL_COMMANDS and must be denied before
+        // docker is ever spawned — so this test does NOT require Docker to be
+        // installed or running.
+        let outcome = tool
+            .run(
+                &ctx,
+                serde_json::json!({
+                    "command": "rm -rf /",
+                }),
+            )
+            .await;
+        match outcome {
+            crate::shared::ToolOutcome::Failure(crate::shared::ToolError::Execution {
+                message,
+                ..
+            }) => assert!(
+                message.contains("Command blocked") || message.contains("rm -rf"),
+                "expected deny-list message, got {message}"
+            ),
+            other => panic!("expected Execution failure from denied cmd, got {other:?}"),
+        }
+    }
+
+    // WO 15.3: the Docker path must reject a workdir containing `:` so the
+    // `-v SRC:/work` bind-mount string can't be split into extra mount opts.
+    // The workdir is canonicalized first, so we need a real path whose
+    // canonical form contains `:` — impossible on Unix. Instead we assert
+    // the guard fires on a non-canonicalizable path (the canonicalize-err
+    // branch) and on a path that resolves to one containing `:` by pointing
+    // at a temp file whose name includes `:` (legal on Unix as a filename).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn bash_docker_path_rejects_workdir_with_colon() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Create a directory whose name contains ':' — legal on Unix, and
+        // its canonical path string will contain ':' which would inject
+        // Docker mount options if not sanitized.
+        let evil = tmp.path().join("evil:etc:ro");
+        std::fs::create_dir(&evil).unwrap();
+        let docker_cfg = DockerConfig {
+            enabled: true,
+            image: "alpine:latest".into(),
+            memory: "512m".into(),
+            cpus: "1".into(),
+        };
+        let tool = Bash::new(
+            DenyList::default(),
+            PathGuard::default(),
+            false,
+            Some(docker_cfg),
+            crate::shared::SandboxConfig::default(),
+        );
+        let ctx = crate::tools::ToolContext::new();
+        let outcome = tool
+            .run(
+                &ctx,
+                serde_json::json!({
+                    "command": "echo hello",
+                    "workdir": evil.to_string_lossy(),
+                }),
+            )
+            .await;
+        match outcome {
+            crate::shared::ToolOutcome::Failure(crate::shared::ToolError::Execution {
+                message,
+                ..
+            }) => assert!(
+                message.contains("docker workdir contains ':'")
+                    || message.contains("mount options"),
+                "expected colon-injection guard message, got {message}"
+            ),
+            other => panic!("expected Execution failure for ':' workdir, got {other:?}"),
+        }
+    }
+
+    // WO 15.3: a non-existent workdir must be rejected before docker spawn
+    // (the canonicalize-err branch of the bind-mount sanitize).
+    #[tokio::test]
+    async fn bash_docker_path_rejects_unresolvable_workdir() {
+        let docker_cfg = DockerConfig {
+            enabled: true,
+            image: "alpine:latest".into(),
+            memory: "512m".into(),
+            cpus: "1".into(),
+        };
+        let tool = Bash::new(
+            DenyList::default(),
+            PathGuard::default(),
+            false,
+            Some(docker_cfg),
+            crate::shared::SandboxConfig::default(),
+        );
+        let ctx = crate::tools::ToolContext::new();
+        let outcome = tool
+            .run(
+                &ctx,
+                serde_json::json!({
+                    "command": "echo hello",
+                    "workdir": "/tmp/kirkforge-nonexistent-xyz-123/nope",
+                }),
+            )
+            .await;
+        match outcome {
+            crate::shared::ToolOutcome::Failure(crate::shared::ToolError::Execution {
+                message,
+                ..
+            }) => assert!(
+                message.contains("docker workdir cannot be resolved"),
+                "expected canonicalize-err message, got {message}"
+            ),
+            other => panic!("expected Execution failure for unresolvable workdir, got {other:?}"),
         }
     }
 

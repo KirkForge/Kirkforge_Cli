@@ -560,6 +560,7 @@ mod tests {
         let event = BusEvent::FileWrite(FileWriteEvent {
             path: path.clone(),
             content_length: 40,
+            content_hash: 0,
         });
         let v = verify_security(&event).await;
         assert!(
@@ -578,6 +579,7 @@ mod tests {
         let event = BusEvent::FileWrite(FileWriteEvent {
             path: path.clone(),
             content_length: 35,
+            content_hash: 0,
         });
         let v = verify_security(&event).await;
         assert!(
@@ -600,6 +602,7 @@ mod tests {
         let event = BusEvent::FileWrite(FileWriteEvent {
             path: path.clone(),
             content_length: 55,
+            content_hash: 0,
         });
         let v = verify_security(&event).await;
         assert!(
@@ -622,6 +625,7 @@ mod tests {
         let event = BusEvent::FileWrite(FileWriteEvent {
             path: path.clone(),
             content_length: 50,
+            content_hash: 0,
         });
         let v = verify_security(&event).await;
         assert!(
@@ -642,6 +646,7 @@ mod tests {
         let event = BusEvent::FileWrite(FileWriteEvent {
             path: path.clone(),
             content_length: 20,
+            content_hash: 0,
         });
         let v = verify_security(&event).await;
         assert!(
@@ -717,6 +722,7 @@ mod tests {
         let event = BusEvent::FileWrite(FileWriteEvent {
             path: path.clone(),
             content_length: 40,
+            content_hash: 0,
         });
         // Drive verify_security with a per-test timeout shorter than the
         // fake trufflehog's 30s sleep but longer than the 2s test-mode

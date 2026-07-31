@@ -1,141 +1,100 @@
-# Lessons — WO 15.13 session (split kirkforge-draw/src/event.rs by event category)
+# Lessons — WO 15.14 session (split plugin3-cli/src/main.rs by feature)
 
 ## What I learned about this codebase
-- `kirkforge-draw` is a **binary** crate (`[[bin]] name = "kfd"`), not a
-  lib. There's no `lib.rs`. `main.rs` declares `mod event;` — Rust
-  resolves that to either `event.rs` OR `event/mod.rs`. So the
-  directory-form split (event.rs → event/mod.rs + event/tests/*.rs)
-  needs NO change to `main.rs` or any consumer. The four public
-  items consumed externally (`event::run`, `event::atomic_write`,
-  `event::validate_path_arg`, `event::HELP_LINES`) stay at the same
-  `crate::event::*` path automatically.
-- The `event.rs` production code is **cohesive**, not separable. The
-  `handle_key` 650-line `match` calls ~40 private helpers
-  (`save_app`, `copy_selected`, `cut`, `paste`, `commit_palette`,
-  `dispatch_palette_action`, `cycle_line_style`, `cycle_box_style`,
-  `recolor_selection`, `group_selection`, `align_selection`,
-  `distribute_selection`, `invert_selection`, `cycle_layer_focus`,
-  `clear_layer_focus`, `commit_layer_focus`, `handle_layer_click`,
-  `handle_inspector_click`, `mode_from_modifiers`, `marquee_rect`,
-  `plural_s`, `status_n_objects_to`, `hit_test_selected_box`,
-  `ink_color_for_digit`, `next_ink_color`, `color_name`,
-  `next_line_style`, `line_style_name`, `next_box_style`,
-  `box_style_name`, `next_text_border`, `text_border_name`,
-  `next_brush`, `cycle_brush`, `cycle_text_border`,
-  `cycle_selection_color`, `ungroup_selection`, `align_name`,
-  `distribute_name`, `palette_align`, `surface_panic`,
-  `scroll_app_pages`). Splitting the production helpers into separate
-  sub-modules would force every one of those to `pub(super)` + a forest
-  of `use` statements in `handle_key`. The WO explicitly anticipated
-  this: "If the file is cohesive ... split the tests out at minimum."
-  The conservative, behaviour-preserving split is: keep production in
-  one `event/mod.rs`, split the 6,000-line test block by category.
-  That's what shipped.
-- The test block had a `use super::*` + explicit
-  `use kirkforge_draw_core::{DrawObject, DrawState, InkColor, Point}`
-  + `use crate::app::PaletteTrigger` + `use ratatui::layout::Rect` at
-  the top of `mod tests`. When splitting into sub-modules, each sub-
-  module's `use super::*` pulls in the production items (re-exported
-  via the parent `tests` mod's `use super::*`), but `DrawState` and
-  `InkColor` are NOT in the production `use` — they're only imported
-  locally inside individual production functions. So sub-modules
-  that use `DrawState`/`InkColor` at the top level need their own
-  explicit `use kirkforge_draw_core::{DrawState, InkColor}`.
-  `DrawObject`, `Point`, `Rect` ARE in the production top-level `use`,
-  so they come via `use super::*`. `DrawMode` also (production imports
-  it). The `make_app_with_two_boxes`/`make_app_with_findable`/
-  `make_app_with_text` helpers use fully-qualified
-  `kirkforge_draw_core::DrawState::new()` so they DON'T need a
-  `DrawState` import — only the helpers that write `DrawState::new()`
-  unqualified (inspector.rs, layers.rs) do.
-- `include_str!("event.rs")` in a test is **path-relative to the
-  source file it lives in**. When the test moves from
-  `crates/kirkforge-draw/src/event.rs` to
-  `crates/kirkforge-draw/src/event/tests/keyboard.rs`, the path must
-  become `include_str!("../mod.rs")` (the production file moved from
-  `event.rs` to `event/mod.rs`). This is the ONE behaviour-affecting
-  edit in the whole refactor — documented in the CHANGELOG. A grep
-  for `include_str!` in the original file before splitting would have
-  caught it; I caught it during the planning read.
-- Cross-category test helper dependencies decide what goes in
-  `common.rs` vs the category file. The rule: if a helper is used by
-  >1 category, it goes to `common`. I found: `make_app`, `key`,
-  `key_with_shift`, `key_ctrl`, `key_with_shift_ctrl`, `key_ctrl_alt`
-  (used everywhere), `key_ctrl_shift` (defined in the align section but
-  used by restyle tests too → common), `make_app_with_three_boxes`
-  (defined in marquee section but used by align/distribute/invert/
-  palette → common). Helpers used by exactly one category
-  (`commit_one_smooth_line`/`commit_one_light_box` → restyle,
-  `app_with_three_layers_and_panel_open`/`app_with_three_layer_rows`/
-  `mouse_down` → layers, `mouse_click`/`mouse_marquee` → mouse,
-  `open_palette`/`run_palette_command`/`run_palette_command_into`
-  → palette, `make_app_with_text` → text_edit,
-  `make_app_with_two_boxes` → grouping, `app_with_inspector_panel`/
-  its own `mouse_down` → inspector, `make_app_with_findable` → find,
-  `key_ctrl_a` → align) stay with their category.
-- The `pub(super)` visibility on `common.rs` helpers works because
-  `super` from `common` is the `tests` mod, and the category sub-
-  modules are children of `tests` — so they're descendants of `tests`
-  and can `use crate::event::tests::common::*;`. A `pub(crate) use
-  common::*;` glob re-export in the `tests` mod is NOT needed and
-  produces a "glob import doesn't reexport anything... because no
-  imported item is public enough" warning — the sub-modules import
-  directly from `common`, not via a re-export.
-- `git stash` in a worktree that has a leftover stash from ANOTHER
-  branch (wo/15.14) will pop the other branch's WIP into your tree.
-  I stashed my WO 15.13 work to verify the baseline, and the pop
-  brought in `kirkforge-draw-core/src/state.rs` → `state/mod.rs`
-  changes from WO 15.14. Had to `git reset HEAD` + `git checkout --
-  ` + `rm` to clean it up, and re-delete `event.rs` (the stash had
-  restored it). Lesson: in shared-worktree setups, check `git stash
-  list` before stashing, and prefer `git stash push -- <specific
-  paths>` to scope the stash to only your files.
-- `cargo clippy --all-targets` on this worktree hit a pre-existing
-  baseline failure: `FileWriteEvent` got a `content_hash` field from
-  a merged WO, but `src/session/verifier/security.rs` test fixtures
-  (lines 600, 622, 642, 717) construct `FileWriteEvent` without it.
-  6 `E0063` errors in the `kirkforge` main binary lib test. This is
-  NOT in `kirkforge-draw` and NOT caused by my changes — verified by
-  stashing my changes and reproducing the identical 6 errors on the
-  clean tree. The worktree branch (`fb334cb merge: wo/15.11`) is
-  behind `dev` on the WO that fixed security.rs. Per AGENTS.md §6,
-  fixing it is out of WO 15.13 scope ("This is a draw-TUI crate, not
-  the main binary. The split is localized."). The scoped gate
-  (`cargo clippy -p kirkforge-draw --all-targets -- -D warnings` and
-  `cargo test -p kirkforge-draw`) is green.
+- `crates/plugin3-cli/src/main.rs` was a 7,706-line monolith: ~550
+  lines of production (CLI def + `main()` + `self_check` + shared
+  helpers) + ~7,150 lines of 4 inline `#[cfg(test)]` modules. The
+  production helpers were already partially split (`commands/`,
+  `hooks/`, `exit.rs`, `json_out.rs`, `precedence.rs`) per ADR-0002,
+  but the budget/recent/stdin helpers and ALL tests stayed inline.
+  ADR-0002 § Crate layout is the authority for the split — reference
+  it in the new module headers.
+- The 4 inline test modules (`tests`, `validate_tests`,
+  `adr_0015_validate_tests`, `recent_outputs_tests`) are each
+  self-contained: own helpers, own `use super::*;`, NO cross-test-
+  module calls (verified by grep). Each module's `super` = crate
+  root (main.rs). Moving them to sibling files declared as
+  `#[cfg(test)] mod tests_x;` in main.rs preserves `use super::*;`
+  semantics exactly — DO NOT nest them under a `tests/` mod (that
+  changes `super` to the `tests` mod and breaks every `super::*`
+  reference). This is the cleanest pattern for splitting inline
+  `#[cfg(test)] mod` blocks out of a bin root.
+- `ponytail:` annotations are load-bearing and must move verbatim.
+  When extracting test module bodies via `sed`, the `// ponytail:`
+  HEADER comments above each `mod xxx {` line are NOT captured (they
+  live between `}` and `mod`, outside the body range). I dropped two
+  (`ADR-0014 § Recent outputs file — pins the` above
+  `recent_outputs_tests`, `ADR-0015 § Exit codes — exercises the
+  binary` above `adr_0015_validate_tests`) and caught it only via a
+  whitespace-normalized `comm -23` diff of ponytail lines before vs
+  after. ALWAYS run that diff after a test-module extraction: 
+  `git show HEAD:file | grep 'ponytail:' | sed 's/^[[:space:]]*//' | sort -u`
+  vs the same across the new files. The raw count lies (rustfmt
+  re-indents, so un-normalized diff shows every line as
+  changed/missing).
+- `pub(crate) use` re-exports that are ONLY consumed by `#[cfg(test)]`
+  modules (via `super::*`) trigger `unused_imports` in non-test
+  builds under `-D warnings`. Fix: gate those re-exports with
+  `#[cfg(test)]`. Same for crate-root `use` imports that exist only
+  so test `super::*` can reach them (e.g. `BudgetConfig`,
+  `ConfigFile`, `Paths`, `UsageRecord`). The split: production
+  re-exports un-gated; test-only re-exports `#[cfg(test)]`-gated.
+  `plugin3_binary_path` was already `#[cfg(test)]` in its module.
+- A `use` import that is ONLY referenced inside string literals
+  (assertion messages) is genuinely unused — `VecDeque` appeared in
+  4 test assertion strings but never as a type after the
+  `RecentEntry`/`load_recent_outputs` code moved to `recent.rs`
+  (which has its own `use std::collections::VecDeque`). Drop it
+  rather than gating it.
+- `SlicingTransform` is imported in main.rs but never named anywhere
+  in the crate (only `HeadTailSlicer` is used in `self_check`).
+  rustc does NOT flag it `unused_imports` — empirically, a name in a
+  grouped `use` whose sibling is used is not flagged even if the
+  name itself is unreferenced. Don't "fix" it by removing it; the
+  baseline clippy is green with it present.
 
-## What I tried that didn't work
-- First compile after the split had `use crate::app::PaletteTrigger;
-  use kirkforge_draw_core::{DrawObject, DrawState, InkColor, Point};
-  use ratatui::layout::Rect;` at the top of the `tests` mod in
-  `event/mod.rs` (copied from the original). These all generated
-  "unused import" warnings because the sub-modules import what they
-  need directly. Removed them; the `tests` mod now only has
-  `use super::*;` + the `pub(crate) mod` declarations.
-- First compile also had a `pub(crate) use common::*;` re-export in
-  the `tests` mod, intended to surface the shared helpers to the
-  sub-modules. Produced a "glob import doesn't reexport anything with
-  visibility pub(crate) because no imported item is public enough"
-  warning (the `common` helpers are `pub(super)`, can't be re-
-  exported at `pub(crate)`). Removed the re-export — the sub-modules
-  `use crate::event::tests::common::*;` directly, which works because
-  they're descendants of `tests`.
-- `cargo clippy --all-targets` (workspace) timed out at 10 min with
-  2-3 concurrent worktree builds. Used the `setsid bash -c '... >
-  log 2>&1' & disown` background pattern from WO 15.10's lessons to
-  run it, then polled the log with `sleep N; tail`. Same for the
-  workspace test.
+## What I tried that didn't work and why
+- Naive Python brace-counting to find test-module end lines: fails
+  because `{`/`}` appear in string literals and char literals inside
+  the test bodies (the count never returns to 0). Reliable approach:
+  top-level test modules close with a `}` at column 0 alone on a
+  line — `grep -n '^}$'` + pair with the nearest `^}$` after each
+  `^mod xxx {`. (A full Rust-aware tokenizer that skips
+  strings/comments/char-literals also works but is overkill.)
+- `git stash -u` + `git stash pop` round-trip to verify a pre-existing
+  error: the pop left the working tree in a confusing state (a
+  spurious `event.rs` deletion appeared, my untracked new files
+  vanished). The work was safe in `stash@{0}` (verified via
+  `git stash show -u stash@{0}`) and re-popping after `git checkout
+  -- <file>` restored everything. Lesson: before stashing untracked
+  work for a quick HEAD comparison, `git stash push -u -m "wo15.14
+  wip"` with a label, and verify the pop fully restored with
+  `git status` before proceeding. Safer alternative for "is this
+  pre-existing": `git show HEAD:<file> | grep <pattern>` avoids
+  touching the working tree at all.
 
-## What I'd do differently
-- The `git stash` cross-branch contamination was the only real
-  time-sink. In a worktree that shares `.git` with other branches,
-  `git stash push -- crates/kirkforge-draw/src/event.rs crates/
-  kirkforge-draw/src/event/` would have scoped the stash to only my
-  files and avoided popping WO 15.14's state.rs work. Worth doing in
-  any shared-`.git` worktree setup.
-- The cross-category helper audit (which helpers go to `common` vs
-  the category file) took a careful read of every test's call sites.
-  A faster approach: `grep -n "<helper_name>(" event.rs` for each
-  helper, count the distinct category sections it appears in. I did
-  this manually during the planning read; a scripted version would
-  have been quicker for a file this size.
+## Scope creep I took (documented)
+- `src/session/verifier/security.rs`: 6 `FileWriteEvent` test
+  construction sites (lines ~560/579/602/625/646/722) were missing
+  the `content_hash` field that WO 15.8 added to the struct. This
+  was a PRE-EXISTING compile error on clean HEAD (verified:
+  `git stash -u && cargo check -p kirkforge --tests` showed the same
+  6 `E0063 missing field content_hash` errors without any of my
+  changes). It blocked the WO 15.14 workspace gate
+  (`cargo clippy --all-targets` + `cargo test --workspace`). Fix was
+  mechanical: add `content_hash: 0,` to each, matching the 11
+  already-updated sites and the struct doc comment "tests may leave
+  it 0." Took the fix to unblock the gate rather than escalate,
+  since it's 6 lines, obviously correct, and the root cause
+  (incomplete WO 15.8 test update) is unambiguous.
+
+## What I'd do differently next time
+- Before extracting test module bodies with `sed <start>,<end>p`,
+  also capture the header comment block immediately above each
+  `mod xxx {` line (the lines between the previous `^}$` and the
+  `#[cfg(test)]`/`mod` lines). Those headers are usually
+  `ponytail:` spec pins and MUST move with the module. I'd extract
+  them as the file's leading doc comment.
+- Run the whitespace-normalized ponytail diff as a gate step in
+  workplan.md for any "move code verbatim" refactor — it catches
+  dropped comments the raw line count misses.

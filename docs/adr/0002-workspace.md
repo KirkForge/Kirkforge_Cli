@@ -217,3 +217,14 @@ the ADR and the drift test together.
 
 The README's "Building from source" section mirrors Stratum's
 four-command entry point set.
+
+WO 15.14 split `plugin3-cli/src/main.rs` (7,706 lines) by feature
+per the Crate layout above: the shared helpers moved to
+`budget_io.rs` (budget.toml/config.toml persistence), `recent.rs`
+(`recent_outputs.jsonl` FIFO + CompactHint helpers), and
+`helpers.rs` (offload-store + stdin seams), and the four inline
+`#[cfg(test)]` modules moved to sibling `tests_*.rs` files.
+`main.rs` is now a thin clap router that re-exports the helper
+modules `pub(crate)` so `commands::`/`hooks`/test `super::*`
+call sites keep resolving. No behaviour change; test count
+unchanged (141 unit + 53 integration).

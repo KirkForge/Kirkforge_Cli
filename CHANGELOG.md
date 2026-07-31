@@ -290,6 +290,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   architecture/plugin/feature-flag/tool/hook/verifier/context-index
   sections are current. A follow-up `technical_md_count_drift` test is
   noted in `lessons.md` (not built here — this WO is reconciliation).
+- state.md false-deferral cleanup (WO 15.4): deleted two rows from the
+  "Deferred items" table that listed already-shipped work as deferred —
+  `use_workflow_run` (shipped in WO 9.1; `WorkflowTool` exists at
+  `src/tools/workflow.rs:42`) and "11 pre-existing bench tasks fail
+  `verify-only`" (fixed in WO 9.0; the `file_contains` specs now check
+  setup content, not post-model output). AGENTS.md §7 anti-pattern.
 
 ## [0.3.6] - 2026-07-27
 

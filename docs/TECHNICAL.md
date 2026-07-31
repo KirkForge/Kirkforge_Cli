@@ -64,6 +64,10 @@ kirkforge (root bin)          ← the CLI the user runs
 └── docs/adr/                  ← 84 Architecture Decision Records
 ```
 
+The workspace has ~3,900 `#[test]` functions (~2,200 under `src/`,
+~1,675 under `crates/`). The `crates/` count is pinned by the
+`readme_drift` test (`crates/plugin3-core/README.md` State table).
+
 ### Compiled-in vs satellite
 
 The root `kirkforge` binary directly depends on six crates:

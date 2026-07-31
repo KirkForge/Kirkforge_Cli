@@ -38,8 +38,19 @@ const SECRET_PATTERNS: &[(&str, &str)] = &[
 /// These intentionally overlap with the fast-path list used by the pre-commit
 /// `git_sanitation.rs` scanner so both passes agree on the most common secret
 /// prefixes (`sk-`, `ghp_`, `github_pat_`, `glpat-`, `AKIA`).
+///
+/// `ceiling:` this list is supplementary — the primary detectors are the
+/// substring scan above, the entropy+length gate (`MIN_TOKEN_LEN` +
+/// `ENTROPY_THRESHOLD`), and the external `trufflehog` pass. Two prefixes
+/// are intentionally NOT listed: `claude-` (would false-positive on
+/// legitimate model-name references like `claude-3-opus-20240229`, whose
+/// 18-char tail clears the entropy gate) and `key-` (a generic English
+/// fragment whose 16+ char high-entropy tail is too often benign config).
+/// Anthropic keys (`sk-ant-...`) are already caught by the `sk-` entry.
 const ENTROPY_PREFIXES: &[(&str, &str)] = &[
     ("OpenAI API key", "sk-"),
+    ("xAI API key", "xai-"),
+    ("HuggingFace access token", "hf_"),
     ("GitHub personal-access token", "ghp_"),
     ("GitHub fine-grained PAT", "github_pat_"),
     ("GitHub OAuth token", "gho_"),
@@ -951,6 +962,31 @@ mod tests {
         if let Some(Verdict::Unfixable(err)) = verdict {
             assert!(err.description.contains("AWS access key"));
         }
+    }
+
+    #[test]
+    fn entropy_scan_finds_xai_and_huggingface_tokens() {
+        let path = std::path::Path::new("config.rs");
+        let xai = entropy_scan("key = xai-9f8a7d6c5b4e3210ABCDxyzWVUtsrq", path);
+        assert!(xai.is_some(), "xai- prefix should be scanned");
+        if let Some(Verdict::Unfixable(err)) = xai {
+            assert!(err.description.contains("xAI API key"));
+        }
+        let hf = entropy_scan("key = hf_9f8a7d6c5b4e3210ABCDxyzWVUtsrq", path);
+        assert!(hf.is_some(), "hf_ prefix should be scanned");
+        if let Some(Verdict::Unfixable(err)) = hf {
+            assert!(err.description.contains("HuggingFace access token"));
+        }
+    }
+
+    #[test]
+    fn entropy_scan_does_not_flag_claude_model_name() {
+        let path = std::path::Path::new("config.rs");
+        let verdict = entropy_scan("model = claude-3-opus-20240229", path);
+        assert!(
+            verdict.is_none(),
+            "claude- is intentionally excluded (model-name false positives)"
+        );
     }
 
     #[test]

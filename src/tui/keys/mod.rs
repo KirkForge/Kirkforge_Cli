@@ -970,9 +970,10 @@ fn split_path_prefix(prefix: &str) -> (String, String) {
 #[cfg(test)]
 mod tests {
     use super::{
-        complete_path, delete_word_backward, search_nav_direction, split_path_prefix,
-        SearchDirection,
+        delete_word_backward, search_nav_direction, split_path_prefix, SearchDirection,
     };
+    #[cfg(unix)]
+    use super::complete_path;
     use crate::session::prompt::CompactRequest;
 
     fn check(input: &str, cursor_byte: usize, expected_input: &str, expected_cursor: usize) {

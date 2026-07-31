@@ -2144,6 +2144,7 @@ async fn test_plan_complete_marker_emits_event() {
     );
 }
 
+#[cfg(unix)]
 fn temp_hooks_dir() -> (tempfile::TempDir, std::path::PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
     let hooks_dir = tmp.path().join("hooks");

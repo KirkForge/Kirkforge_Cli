@@ -181,6 +181,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   not on the racy post-drop env state. Test-only fix; no behavior
   change. Unblocks the v0.3.6 release (the `windows` CI job was red).
 
+### Changed
+- WO 15.12: split `src/main/mod.rs` (2,508 lines) into feature-aligned
+  sub-files (`cli_dispatch`, `handle_bench`, `handle_doctor`,
+  `handle_plugin`, `handle_replay`, `handle_sessions`, `run_session`,
+  `line_mode`, `error`). `mod.rs` is now a 33-line thin router that
+  re-exports `main`. Pure refactor — every function moved verbatim, no
+  behaviour change, test count unchanged (19 binary-crate tests). The
+  `[[bin]] path = "src/main/mod.rs"` in `Cargo.toml` is unchanged.
+
 ### Added
 - Prompt-cache stem-reuse wiring (Workorder 10.2): the
   `CacheStemTracker` from WO 9.5 is now instantiated on the `Executor`

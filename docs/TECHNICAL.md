@@ -65,7 +65,7 @@ kirkforge (root bin)          ← the CLI the user runs
 ```
 
 The workspace has ~3,900 `#[test]` functions (~2,200 under `src/`,
-~1,675 under `crates/`). The `crates/` count is pinned by the
+~1,650 under `crates/`). The `crates/` count is pinned by the
 `readme_drift` test (`crates/plugin3-core/README.md` State table).
 
 ### Compiled-in vs satellite

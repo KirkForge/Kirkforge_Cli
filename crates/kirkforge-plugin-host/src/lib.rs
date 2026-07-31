@@ -177,6 +177,19 @@ impl PluginRegistry {
                         continue;
                     }
 
+                    // WO 15.2: surface every manifest validation error as a
+                    // warning and skip the plugin, matching the load_one
+                    // contract (WO 8.8 "show every issue at once"). Before
+                    // this, load_from_dir silently accepted bad names, bad
+                    // semver, duplicate triggers, unknown hook events, and
+                    // untrusted command paths on the production load path.
+                    if let Err(errs) = plugin.manifest().validate() {
+                        for e in errs {
+                            warnings.push(format!("{}: {}", path.display(), e));
+                        }
+                        continue;
+                    }
+
                     if policy.verify_signatures {
                         if let Err(e) =
                             verify_plugin_signature(&path, policy.signature_key_path.as_deref())
@@ -805,6 +818,15 @@ command = "hooks/post-turn.sh"
 
     #[test]
     fn registry_drops_capability_with_command_outside_root() {
+        // WO 15.2: load_from_dir now calls validate() before indexing.
+        // validate() rejects the `../evil.sh` command path (parent-dir
+        // segment), so the whole plugin is skipped with a validation
+        // warning — stricter than the old behavior (which loaded the
+        // plugin and dropped only the escaping capability via
+        // filter_capabilities). The stratum-escape behavior is still
+        // covered by load_one_warns_when_capability_command_escapes_root
+        // (which uses an absolute path that validate() also rejects,
+        // but load_one keeps the plugin and surfaces warnings).
         let tmp = tempfile::tempdir().unwrap();
         let plugins = tmp.path().join("plugins");
         let plugin_dir = plugins.join("bad");
@@ -849,20 +871,24 @@ command = "tools/ok.sh"
         let warnings = reg
             .load_from_dir(&plugins, TrustPolicy::up_to(TrustTier::Shell))
             .unwrap();
-        assert_eq!(reg.active_count(), 1);
-        assert!(
-            reg.tool_by_name("bad/escape").is_none(),
-            "escaped tool should be dropped"
+        assert_eq!(
+            reg.active_count(),
+            0,
+            "plugin with a `..` command path is skipped by validate()"
         );
         assert!(
-            reg.tool_by_name("bad/ok").is_some(),
-            "valid tool should be kept"
+            reg.tool_by_name("bad/escape").is_none(),
+            "escaped tool must not be indexed"
+        );
+        assert!(
+            reg.tool_by_name("bad/ok").is_none(),
+            "whole plugin skipped, so valid tool is also absent"
         );
         assert!(
             warnings
                 .iter()
-                .any(|w| w.contains("resolves outside plugin root")),
-            "expected command-escape warning, got: {warnings:?}"
+                .any(|w| w.contains("bad") && w.contains("command")),
+            "expected a command validation warning, got: {warnings:?}"
         );
     }
 
@@ -1124,6 +1150,41 @@ prompt = "second"
         assert!(
             joined.contains("capabilities[2].trigger"),
             "warnings: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn load_from_dir_surfaces_invalid_manifest_and_skips_plugin() {
+        // WO 15.2: load_from_dir must call validate() and skip the plugin
+        // on error, matching load_one. Before this fix the bulk-load path
+        // silently accepted a bad name. Uses a bad name (`Bad Name!`) so
+        // the only validation error is the name check; the path prefix
+        // and the "name" path must both appear in the warnings.
+        let tmp = tempfile::tempdir().unwrap();
+        let plugins = tmp.path().join("plugins");
+        let plugin_dir = plugins.join("bad-name");
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        std::fs::write(
+            plugin_dir.join("kirkforge.toml"),
+            r#"
+name = "Bad Name!"
+version = "0.1.0"
+description = "bad name"
+trust = "read-only"
+"#,
+        )
+        .unwrap();
+
+        let mut reg = PluginRegistry::new();
+        let warnings = reg
+            .load_from_dir(&plugins, TrustPolicy::up_to(TrustTier::ReadOnly))
+            .unwrap();
+        assert_eq!(reg.active_count(), 0, "invalid plugin should be skipped");
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("bad-name") && w.contains("name")),
+            "expected a name validation warning prefixed by the plugin path, got: {warnings:?}"
         );
     }
 

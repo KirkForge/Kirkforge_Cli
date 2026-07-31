@@ -300,6 +300,7 @@ pub const KNOWN_EVENTS: &[&str] = &[
     "post-turn",
     "pre-tool-bash",
     "post-tool-bash",
+    "post-tool-write_file",
     "pre-compact",
     "post-compact",
 ];
@@ -776,6 +777,17 @@ prompt = "Demo task: {{args}}"
         assert_eq!(
             plugin.skill_prompt("/demo", "hello"),
             Some("Demo task: hello".to_string())
+        );
+    }
+
+    #[test]
+    fn known_events_includes_post_tool_write_file() {
+        // WO 15.2: the runtime emits `post-tool-write_file` (budget.rs),
+        // so the validator allowlist must include it. A bundled plugin
+        // declares it; before this fix the manifest failed validation.
+        assert!(
+            KNOWN_EVENTS.contains(&"post-tool-write_file"),
+            "KNOWN_EVENTS must include post-tool-write_file: {KNOWN_EVENTS:?}"
         );
     }
 

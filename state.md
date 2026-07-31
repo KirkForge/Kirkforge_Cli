@@ -32,7 +32,7 @@
 | WO 10.7: HTTP MCP session-id + resumable streams | The HTTP/SSE MCP transport (`http.rs`) now tracks the MCP session id (parsed from the `endpoint` SSE event's URL query param or the `Mcp-Session-Id` GET response header), sends `Mcp-Session-Id` on every POST when known (omitted when absent — backward-compatible), tracks the last SSE event id and sends `Last-Event-ID` on reconnect, and reconnects with backoff (1s, 2s, 5s, 10s, 30s, max 5 retries). The SSE parser was rewritten from a `data:`-only parser to a full `field: value` parser (event:, data:, id:, comments). ADR-055. 11 tests. |
 | WO 10.8: TS orchestrator → VerifierBus NDJSON bridge | The `TsOrchestratorBridgeVerifier` in `bus.rs` implements `BusVerifier` by shelling out to the TS orchestrator's bridge emitter (`bridge-emitter.ts`) and parsing NDJSON verdicts from stdout. Wire format: `{"verifier":"security","severity":"error","file":"...","line":N,"message":"...","rule":"..."}`. Malformed lines → `Severity::Warning` (never dropped). ADR-028 ponytail updated: "cross-language NDJSON wire bridge shipped in WO 10.8". `docs/TECHNICAL.md` verifier-bus section describes the unified bus. 5 Rust tests + 2 TS tests. `kirkforge-plugin-host` `env` module made `pub`. |
 | WO 10.9: Bench leaderboard + regression gate | `compare_with_threshold(baseline, current, threshold) -> CompareResult` in `kirkforge-bench` flags regression when `success_rate_delta < -threshold`. `bench compare --fail-on-regression <pct>` CLI flag exits non-zero on regression. `bench-pr-delta` CI job fails on regression (10pp threshold) while still posting the delta comment. New `bench-leaderboard` scheduled job runs `bench run-models`, commits `docs/bench/leaderboard.md` to `main` with `[skip ci]` (loop avoidance: commit message + `paths-ignore`). `docs/TECHNICAL.md` bench section documents the CI loop. 4 unit tests. |
-| WO 12.6: Testdoctor smart suggest + apply | `kirkforge doctor suggest-detailed [--filter <substr>]` composes per-test timings with source-file pattern analysis (`std::process::Command`, `tokio::time::sleep`, `std::env::set_var`, `reqwest::`/`http::`, `std::fs::write`+tempdir) into specific `Suggestion` structs keyed by `SuggestionKind`. `kirkforge doctor apply --suggestion <id> --test <path> [--yes]` does a text-based rewrite (no `syn` dep): adds `#[ignore = "slow: ..."]`, wraps `#[tokio::test(start_paused = true)]`, replaces `std::env::set_var(K,V)` with `EnvGuard::set(K,V)`. Always shows a hand-rolled unified diff first; requires `--yes` to write. The v1 `suggest` (binary-name string match) remains as fallback. 24 new `#[test]` under `crates/kirkforge-testdoctor/` (testdoctor total 88). ADR-0029 status + body updated; TECHNICAL.md + plugin3-core README test count (1615 → 1641) bumped. |
+| WO 12.6: Testdoctor smart suggest + apply | `kirkforge doctor suggest-detailed [--filter <substr>]` composes per-test timings with source-file pattern analysis (`std::process::Command`, `tokio::time::sleep`, `std::env::set_var`, `reqwest::`/`http::`, `std::fs::write`+tempdir) into specific `Suggestion` structs keyed by `SuggestionKind`. `kirkforge doctor apply --suggestion <id> --test <path> [--yes]` does a text-based rewrite (no `syn` dep): adds `#[ignore = "slow: ..."]`, wraps `#[tokio::test(start_paused = true)]`, replaces `std::env::set_var(K,V)` with `EnvGuard::set(K,V)`. Always shows a hand-rolled unified diff first; requires `--yes` to write. The v1 `suggest` (binary-name string match) remains as fallback. 24 new `#[test]` under `crates/kirkforge-testdoctor/` (testdoctor total 96). ADR-0029 status + body updated; TECHNICAL.md + plugin3-core README test count (1615 → 1641) bumped. |
 | WO 12.9: Coverage-gate threshold policy (12-series finale) | ADR-065 pins the coverage-gate threshold + headroom policy. Measured (CI run `30333515698`): `src/session` 68.6%, `src/tools` 76.5%, `src/adapters` 84.1% — tools + adapters clear the 75% bar; session does not (remaining gap is async executor + MCP-HTTP code needing integration test work, not pure-helper unit tests). WO 12.9 added a focused batch of pure-helper unit tests (grep-output formatting, plugin-loader warning paths, fork-manager error branches, validate-args edges, config empty-path merging, verifier no-cargo-root skip) and raised the `src/session` threshold 68.0 → 68.5 (proven-green: the 68.6% green run clears 68.5; tools stays at 76.0 — stricter than 75, lowering it would weaken the gate). **75% for `src/session` is honestly deferred** to a follow-up WO (not faked). The `--skip test_build_fork_tree_nests_children` stays in CI as belt-and-suspenders pending a verified flake-free tarpaulin run. ADR-065. |
 
 ### What shipped (session 8.x)
@@ -53,6 +53,63 @@
 | Item | Why deferred |
 |---|---|
 | 75% coverage on `src/session` (WO 12.9) | Measured at 68.6% (CI run 30333515698); WO 12.8's ~75% estimate was optimistic. The remaining gap is async executor (`executor/dispatch.rs`, `loop_.rs`, `turn.rs`) + network (`mcp_client/http.rs`) code that needs integration test work, not pure-helper unit tests. Threshold raised 68.0 → 68.5 (proven-green by the 68.6% run); 75% deferred to a follow-up WO. ADR-065. |
+
+### Series 15.26 Batch D deferrals (WO 15.26)
+
+Batch D (docs + polish) shipped concrete fixes for 3.3, 3.19, 3.24,
+4.1+4.2, 4.3, 4.4, 4.5, 4.12 (commits on `wo/15.26-batch-d-docs-polish`).
+The rest resolve to honest deferral or were already done — per the WO
+done-condition ("fixed OR honestly deferred with a note in state.md"):
+
+- **3.13 ConnectionState::Connecting — already done.** Never
+  constructed, but `src/tui/app.rs:22-25` already carries the ceiling
+  comment ("Reserved for async connection transitions ... not currently
+  emitted") and 4 render paths match it; deletion is out of polish-scope.
+- **4.9 plugin3-hosts stub modules — already done.** All four shims
+  (`aider`, `claude_code`, `cursor`, `kirkforge`) carry `ponytail:
+  stub-only`; `canonical` is real schemas.
+- **4.18 kirkstratum/plugin3 legacy weight — already done.**
+  `docs/TECHNICAL.md` already documents the ADR-050 two-path dispatch
+  (compiled-in when feature on, shell fallback when off) at L84/104/
+  430/441/732.
+- **4.6 / 3.53 ci.yml `--skip` name mismatch — deferred.** The coverage
+  job skips `test_build_fork_tree_nests_children` but the historical
+  tarpaulin flake was `test_build_fork_tree_orphan_fork_is_a_root`.
+  WO 12.0 fixed the root cause (`save()` re-create); reconciling or
+  removing the skip needs a verified tarpaulin run to confirm
+  flake-freeness — a separate verification step.
+- **4.7 architecture diagram — deferred.** Open-ended, low priority;
+  the ASCII tree + tables in `docs/TECHNICAL.md` are functional. A
+  mermaid diagram is a future docs WO.
+- **4.8 coverage-per-file metrics — deferred.** Needs real coverage-
+  closing work or soft-warning telemetry; not a polish item.
+- **4.10 m5_tests.rs sibling module — deferred (Batch A).** File is
+  `src/adapters/`; cosmetic fold, defer to an adapters WO.
+- **4.11 collect_carryover `cargo test` substring match — deferred
+  (Batch C).** Lives in `src/session/executor/mod.rs`.
+- **4.13 PostTurnHookGuard sync Drop — deferred (Batch C).**
+  `src/session/executor/turn.rs`.
+- **4.14 executor/loop_.rs detached cancel-watcher — deferred (Batch C).**
+- **4.15 scout.rs StubTool::run `unimplemented!` — deferred (Batch C).**
+- **4.16 bedrock_signing extract_payload literal match — deferred
+  (Batch A).** `src/adapters/bedrock_signing.rs`.
+- **4.17 crate-boundary audit — deferred.** Periodic, open-ended
+  ("would this still deserve its own crate?"); revisit per-crate.
+- **4.19 more execution metrics — deferred.** Extending the bench
+  report (retrieval count + verification retries) is a bench-harness WO.
+- **4.20 more semantic benchmarks — deferred.** New bench tasks
+  (context-index validation); separate bench WO.
+- **4.21 provider abstraction / capability detection — deferred.**
+  Long-term plan (Core abstraction → Capability detection → Provider-
+  specific enhancements); short-term fix is 3.20 (Batch A). Defer to a
+  providers WO.
+- **4.22 publish benchmark dashboards — deferred.** Requires verifying
+  the `bench-leaderboard` scheduled job is green and populating
+  `docs/bench/leaderboard.md`; separate WO.
+- **4.23 `--harden` rlimit test `#[ignore]` in CI — deferred.** Needs a
+  dedicated Linux CI job running the ignored security tests; CI-matrix work.
+- **4.24 Windows CI job — deferred.** Needs a Windows CI matrix running
+  the previously-flaky tests 3×; CI-matrix work.
 
 ### Series 15 (cross-review bucketlist)
 

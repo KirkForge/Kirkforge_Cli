@@ -28,8 +28,10 @@ you'll have something more compelling than 'we support more providers.'"
    Repository Understanding, B Refactoring, C Bug Fixes, D New
    Features, E Verification, F Context Intelligence, G Real
    Engineering, H Cost), 40 numbered tasks, one universal scoring
-   block, 10 hero benchmarks. The 30 existing tasks are mapped to the
-   spec categories in a table; the remaining ~10 are listed as
+   block, 10 hero benchmarks. The 30 pre-existing tasks (31 once the
+   signature challenge below ships) are mapped to the spec categories
+   in a table — many-to-one, so they cover a subset of the 40 slots;
+   19 spec tasks have no existing implementation and are listed as
    "planned" (honest deferral — they are future WOs, not built here).
 
 2. **The Token Budget Challenge is the signature benchmark.** It runs
@@ -79,7 +81,7 @@ you'll have something more compelling than 'we support more providers.'"
   a failing test the model must fix); `bench verify-only` skips it
   (`requires_model = true`), `bench run` executes it. A live `bench
   run` is the real test, gated on Ollama per AGENTS.md §4.
-- The remaining ~10 spec tasks (Find Dead Code, Cross-Repository
+- The remaining 19 spec tasks (Find Dead Code, Cross-Repository
   Search, Large Repository Navigation, etc.) are future WOs — each
   exercises a specific feature (context index, workspace support,
   verifier bus) and is listed in `KIRK-BENCH.md` as planned.

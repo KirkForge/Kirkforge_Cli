@@ -12,6 +12,15 @@ impl WorktreeSession {
     /// Create a new git worktree at a temp path for the given session id.
     /// Returns the worktree path and a guard that removes it on drop.
     pub fn create(session_id: &str, repo_root: &std::path::Path) -> anyhow::Result<Self> {
+        if session_id.is_empty()
+            || session_id.contains('/')
+            || session_id.contains('\\')
+            || session_id.contains("..")
+        {
+            anyhow::bail!(
+                "invalid session id `{session_id}`: must be non-empty with no path separators or `..`"
+            );
+        }
         let worktree_path = std::env::temp_dir().join(format!("kirkforge-session-{session_id}"));
 
         let output = Command::new("git")
@@ -161,5 +170,18 @@ mod tests {
 
         // Cleanup temp repo
         let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn worktree_create_rejects_path_traversal_session_id() {
+        // Validation runs before any git spawn, so a dummy repo root is fine.
+        let dummy = std::path::Path::new("/nonexistent-repo");
+        for bad in ["", "..", "../escape", "a/b", "a\\b"] {
+            let err = WorktreeSession::create(bad, dummy);
+            assert!(
+                err.is_err(),
+                "session id `{bad}` should be rejected as a path-traversal risk"
+            );
+        }
     }
 }

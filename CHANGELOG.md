@@ -6,6 +6,18 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- WO 15.26 Batch D (docs + polish): `scripts/ci-local.sh full` mode
+  mirrors the CI coverage gate (tarpaulin + thresholds) and runs the
+  `adr_xref_drift` test locally; `WorktreeSession::create` now
+  validates `session_id` (rejects empty / path separators / `..`); the
+  testdoctor `DEFAULT_THRESHOLDS` drift test now parses `ci.yml`
+  instead of asserting against its own literals (and the stale
+  `src/session` 68.0 const was corrected to 68.5). Plus doc fixes:
+  ci.yml documents the src/tui + src/daemon coverage exclusion;
+  KIRK-BENCH/ADR-066 task-count arithmetic reconciled (19 planned, not
+  ~9); TECHNICAL.md notes the ~3,900-test workspace total. Open-ended
+  items (Windows CI, `--harden` in CI, leaderboard dashboard, bench
+  metrics, architecture diagram) honestly deferred to state.md.
 - `/permissions list | revoke <i> | clear` (WO 14.5): surfaces the
   permission rules created by the approval dialog's `[A]lways` key so
   users no longer need to edit `config.toml` to undo an always-allow.

@@ -190,8 +190,8 @@ fn extract_payload(envelope: &[u8]) -> Option<(String, usize)> {
         if ch != '{' {
             continue;
         }
-        let mut de = serde_json::Deserializer::from_str(&text[start..])
-            .into_iter::<serde_json::Value>();
+        let mut de =
+            serde_json::Deserializer::from_str(&text[start..]).into_iter::<serde_json::Value>();
         if let Some(Ok(v)) = de.next() {
             if v.is_object() && v.get("type").is_some() {
                 let end = start + de.byte_offset();

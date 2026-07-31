@@ -56,6 +56,40 @@
 
 ### Series 15 (cross-review bucketlist)
 
+WO 15.14 Done (split plugin3-cli/src/main.rs by feature): the
+7,706-line `crates/plugin3-cli/src/main.rs` monolith split per
+ADR-0002 § Crate layout — pure refactor, no behaviour change. The
+~550 lines of production helpers moved to three feature modules:
+`budget_io.rs` (budget.toml/config.toml persistence layer:
+`budget_path`/`config_path`/`load_budget`/`save_budget`/`
+save_budget_at`/`load_budget_config_at`/`save_budget_config_at`/
+`load_budget_with_config`), `recent.rs` (`recent_outputs.jsonl`
+FIFO: `RecentEntry`/`RECENT_BOUND`/`load_recent_outputs`/`
+load_recent_outputs_at`/`append_recent`/`append_recent_at`/
+`empty_record`/`emit_compact_hint`), `helpers.rs` (`open_store`/
+`read_stdin_json`/cfg(test) `plugin3_binary_path`). The ~7,150
+lines of inline `#[cfg(test)]` modules moved to four sibling
+files declared as direct children of the bin root
+(`tests_main.rs`, `tests_validate.rs`, `tests_adr_0015.rs`,
+`tests_recent.rs`) so each module's `use super::*;` keeps
+resolving against the crate root. `main.rs` is now a 468-line
+thin clap router (CLI def + `main()` + `self_check`) that
+re-exports the helper modules `pub(crate)`; test-only re-exports
+are `#[cfg(test)]`-gated to keep non-test builds from flagging
+them unused. Test count unchanged (141 unit + 53 integration);
+`#[test]` count under `crates/` unchanged (1674) so
+`plugin3-core/README.md` not bumped. All 181 `ponytail:`
+annotations preserved verbatim (verified by whitespace-normalized
+diff). ADR-0002 Implementation notes amended with the split
+summary. Scope creep: `src/session/verifier/security.rs` — 6
+`FileWriteEvent` test sites (560/579/602/625/646/722) were
+missing the `content_hash` field added in an earlier WO, a
+pre-existing compile error on clean HEAD that blocked the
+workspace gate; added `content_hash: 0,` to each (matches the
+struct doc "tests may leave it 0" and the 11 already-updated
+sites). Commit on `wo/15.14-split-plugin3-cli` (not pushed —
+user merging the worktree branch).
+
 WO 15.9 Done (TOCTOU + git staged + bash_minify path guard): closed
 bucketlist items 2.7, 2.10, 2.11. (2.7) Phase 3 `record_tool_result`
 now reuses the resolved path Phase 1 (`pre_run_verdict`) already

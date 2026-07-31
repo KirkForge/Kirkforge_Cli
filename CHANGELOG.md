@@ -325,6 +325,24 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `stderr_len` (two `git add .` calls in a batch no longer dedup) and
   `FileWrite` now includes a `content_hash` (two same-length writes to
   the same path no longer dedup). Closes bucketlist items 2.4, 2.5, 2.6.
+- WO 15.14: split `crates/plugin3-cli/src/main.rs` (7,706 lines) by
+  feature per ADR-0002 § Crate layout — pure refactor, no behaviour
+  change. Production helpers moved to `budget_io.rs`
+  (budget.toml/config.toml persistence), `recent.rs`
+  (`recent_outputs.jsonl` FIFO + CompactHint helpers), and
+  `helpers.rs` (offload-store + stdin seams); the four inline
+  `#[cfg(test)]` modules moved to sibling `tests_main.rs`/
+  `tests_validate.rs`/`tests_adr_0015.rs`/`tests_recent.rs` files
+  (each a direct child of the bin root so `use super::*;` keeps
+  resolving against the crate root). `main.rs` is now a 468-line
+  thin clap router that re-exports the helper modules `pub(crate)`.
+  Test count unchanged (141 unit + 53 integration); all 181
+  `ponytail:` annotations preserved. Also fixed a pre-existing
+  compile error in `src/session/verifier/security.rs` (6
+  `FileWriteEvent` test sites missed when WO 15.8 added
+  `content_hash` — added `content_hash: 0,` to each, matching the
+  11 already-updated sites and the struct doc "tests may leave it
+  0").
 
 ### Added
 - Prompt-cache stem-reuse wiring (Workorder 10.2): the

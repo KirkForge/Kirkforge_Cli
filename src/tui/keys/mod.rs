@@ -952,10 +952,11 @@ fn split_path_prefix(prefix: &str) -> (String, String) {
     if prefix.is_empty() {
         return (".".to_string(), String::new());
     }
-    // Normalize separators: handle both `/` and `\` so the completion
-    // works on Windows too (the glob crate handles this, but read_dir
-    // takes OS-native paths, so we just split on `/`).
-    let (dir, last) = match prefix.rfind('/') {
+    // Split on the LAST separator (either `/` or `\`) so the
+    // completion works on Windows where `Path::display()` emits
+    // backslashes. `read_dir` takes OS-native paths, so the dir
+    // portion keeps its native separators.
+    let (dir, last) = match prefix.rfind(['/', '\\']) {
         Some(idx) => {
             let (d, l) = prefix.split_at(idx);
             (d.to_string(), l[1..].to_string())
@@ -1290,8 +1291,10 @@ mod tests {
 
         // Pass the absolute dir with a trailing separator so the
         // parent dir is `tmp` and the last component is "" (match all).
-        let prefix = format!("{}/tmp", tmp.display());
-        let matches = complete_path(&prefix);
+        // Use the OS-native separator so the path parses correctly on
+        // Windows (split_path_prefix splits on both `/` and `\`).
+        let prefix = tmp.join("tmp");
+        let matches = complete_path(&prefix.display().to_string());
         let _ = std::fs::remove_dir_all(&tmp);
 
         assert!(matches.contains(&"tmpfile.txt".to_string()));
@@ -1311,7 +1314,10 @@ mod tests {
         std::fs::create_dir_all(&tmp).unwrap();
         std::fs::write(tmp.join("foo.rs"), "x").unwrap();
 
-        let prefix = format!("{}/foo.rs:10-20:raw", tmp.display());
+        // Use OS-native path joining; append the `:10-20:raw` suffix
+        // as a string (the `:` is the @-mention range delimiter, not a
+        // path separator).
+        let prefix = format!("{}:10-20:raw", tmp.join("foo.rs").display());
         let matches = complete_path(&prefix);
         let _ = std::fs::remove_dir_all(&tmp);
 
@@ -1373,8 +1379,9 @@ mod tests {
         std::fs::write(tmp.join("tmpfile.txt"), "x").unwrap();
 
         let mut state = AppState::new(Arc::new(RwLock::new(Config::default())));
-        // Type "@<tmp>/tmpfile" — the absolute path prefix.
-        let typed = format!("@{}/tmpfile", tmp.display());
+        // Type "@<tmp>/tmpfile" — the absolute path prefix. Use the
+        // OS-native path so Windows backslashes parse correctly.
+        let typed = format!("@{}tmpfile", tmp.display().to_string() + std::path::MAIN_SEPARATOR_STR);
         state.input = typed.clone();
         state.cursor_position = typed.chars().count();
 
@@ -1386,7 +1393,10 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&tmp);
 
-        let expected = format!("@{}/tmpfile.txt", tmp.display());
+        let expected = format!(
+            "@{}tmpfile.txt",
+            tmp.display().to_string() + std::path::MAIN_SEPARATOR_STR
+        );
         assert_eq!(state.input, expected);
         assert_eq!(state.cursor_position, state.input.chars().count());
         assert!(state.completion_suggestions.is_empty());

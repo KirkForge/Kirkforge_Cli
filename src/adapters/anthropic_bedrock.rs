@@ -186,32 +186,20 @@ const MAX_ENVELOPE_BUFFER_BYTES: usize = 8 * 1024 * 1024;
 /// consumed bytes and continue parsing the next frame in the same chunk.
 fn extract_payload(envelope: &[u8]) -> Option<(String, usize)> {
     let text = String::from_utf8_lossy(envelope);
-    let start = text.find("{\"type\"")?;
-    // Find the matching closing brace by scanning from the start of the
-    // candidate object and tracking brace depth. This handles nested objects
-    // that the previous naive `find("}")` missed.
-    let mut depth = 0i32;
-    let mut end = 0;
-    for (i, c) in text[start..].char_indices() {
-        if c == '{' {
-            depth += 1;
-        } else if c == '}' {
-            depth -= 1;
-            if depth == 0 {
-                end = start + i + 1;
-                break;
+    for (start, ch) in text.char_indices() {
+        if ch != '{' {
+            continue;
+        }
+        let mut de =
+            serde_json::Deserializer::from_str(&text[start..]).into_iter::<serde_json::Value>();
+        if let Some(Ok(v)) = de.next() {
+            if v.is_object() && v.get("type").is_some() {
+                let end = start + de.byte_offset();
+                return Some((text[start..end].to_string(), end));
             }
         }
     }
-    if end == 0 {
-        return None;
-    }
-    let candidate = &text[start..end];
-    if serde_json::from_str::<serde_json::Value>(candidate).is_ok() {
-        Some((candidate.to_string(), end))
-    } else {
-        None
-    }
+    None
 }
 
 #[cfg(test)]
@@ -357,6 +345,15 @@ mod tests {
         // so the caller can drain them along with the parsed frame.
         let env = b"hdr{\"type\":\"message_start\"}tail";
         let (_out, end) = extract_payload(env).expect("payload present");
+        assert_eq!(end, env.len() - b"tail".len());
+    }
+
+    #[test]
+    fn extract_payload_tolerates_whitespace_and_key_reordering() {
+        let env = b"prelude{  \"message\" : {} , \"type\":\"message_start\" }tail";
+        let (out, end) = extract_payload(env).expect("payload present");
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["type"], "message_start");
         assert_eq!(end, env.len() - b"tail".len());
     }
 

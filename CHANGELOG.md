@@ -18,6 +18,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   ~9); TECHNICAL.md notes the ~3,900-test workspace total. Open-ended
   items (Windows CI, `--harden` in CI, leaderboard dashboard, bench
   metrics, architecture diagram) honestly deferred to state.md.
+- WO 15.26 Batch A (config + adapters): bedrock signing returns an
+  error on non-ASCII header values instead of silently dropping;
+  bedrock event-stream frame bodies parsed via serde_json (no fragile
+  `{"type` literal match); vertex service-account key files must carry
+  `"type": "service_account"`; `CacheKey` switched from `DefaultHasher`
+  to sha256 (collision-resistant, no new dep). Config-driven model
+  routing / capability detection / context-window / max_tokens all
+  documented as `ceiling:` notes with upgrade paths (3.20-3.23), as is
+  the Vertex token-fetch retry (3.36); the Config field-drift guard
+  (3.1) deferred pending a derive macro (see state.md).
 - `/permissions list | revoke <i> | clear` (WO 14.5): surfaces the
   permission rules created by the approval dialog's `[A]lways` key so
   users no longer need to edit `config.toml` to undo an always-allow.

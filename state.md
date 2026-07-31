@@ -111,6 +111,43 @@ done-condition ("fixed OR honestly deferred with a note in state.md"):
 - **4.24 Windows CI job — deferred.** Needs a Windows CI matrix running
   the previously-flaky tests 3×; CI-matrix work.
 
+### Series 15.26 Batch A deferrals (WO 15.26)
+
+Batch A (config + adapters) shipped concrete fixes: 3.28 (bedrock
+non-ASCII header value → error instead of silent drop), 4.16 (bedrock
+event-stream frame parse via serde_json — picked up from Batch D's
+deferral), 3.48 (vertex key files must carry `"type": "service_account"`),
+3.29 (CacheKey switched DefaultHasher → sha256, sha256 already a dep).
+The rest resolve to documented ceilings or honest deferral — per the WO
+done-condition ("fixed OR honestly deferred with a note in state.md"):
+
+- **3.20 model-name prefix routing — deferred (ceiling documented).**
+  `adapter_kind_for` + `adapter_for_with_provider` route by hardcoded
+  prefix in `src/adapters/mod.rs`; a config-driven prefix→AdapterKind
+  table is the upgrade path (ceiling comment at the fn).
+- **3.21 OpenAiCompat vision/cache by model name — deferred (ceiling
+  documented).** `src/adapters/openai_compat/mod.rs::model_info`;
+  config-driven capability map is the upgrade path.
+- **3.22 Anthropic max_context_tokens flat 200_000 — deferred (ceiling
+  documented).** Model-specific sizing (3.7/4 windows) not hardcoded to
+  avoid citing unverified token counts; `src/adapters/anthropic.rs`.
+- **3.23 Anthropic max_tokens 8192 — deferred (ceiling documented).** A
+  Config field would touch every Config site (Default, test literals,
+  adapter_for wrappers); `src/adapters/anthropic.rs::build_anthropic_body`.
+- **3.36 Vertex token fetch no retry — deferred.** Moving the fetch
+  inside `send_with_retry` is a clean refactor but needs a failure-
+  injection test to prove the retry fires; separate adapters WO.
+- **3.1 Config field drift guard — deferred.** Config is deeply nested
+  (ModelConfig/SecurityConfig/ToolConfig/SessionConfig/DisplayConfig,
+  ~60 leaf fields), so a flat field-count assertion against
+  `merge_toml_into_config`/`apply_env_overrides`/`config_diff_summary`
+  is non-trivial and a brittle substring test would give false
+  confidence without catching real drift. Right fix is a derive macro
+  (long-term, per the WO); the human checklist in AGENTS.md §7 stands
+  until then.
+- **4.10 m5_tests.rs sibling module — deferred.** Cosmetic fold into
+  `mod.rs`'s `#[cfg(test)] mod tests`; low value, low priority.
+
 ### Series 15 (cross-review bucketlist)
 
 WO 15.14 Done (split plugin3-cli/src/main.rs by feature): the

@@ -406,6 +406,11 @@ impl OpenAiCompatAdapter {
 #[async_trait::async_trait]
 impl ModelAdapter for OpenAiCompatAdapter {
     fn model_info(&self) -> ModelInfo {
+        // ceiling: vision/cache capability is detected by model-name
+        // prefix below. A model not on the allow-list (e.g. gpt-4.5) is
+        // reported supports_images=false even when the upstream server
+        // accepts images. upgrade path: config-driven capability map per
+        // model (WO 15.26 3.21 deferred).
         let lower = self.model.to_lowercase();
         let is_claude3 = lower.starts_with("claude-3")
             || lower.starts_with("claude-3.5")

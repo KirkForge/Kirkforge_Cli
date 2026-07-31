@@ -71,6 +71,7 @@ mod tests {
         let event = BusEvent::FileWrite(FileWriteEvent {
             path: std::path::PathBuf::from("readme.md"),
             content_length: 10,
+            content_hash: 0,
         });
         let v = verify_rustfmt(&event).await;
         assert!(matches!(v, Verdict::Skipped(_)));
@@ -85,6 +86,7 @@ mod tests {
         let event = BusEvent::FileWrite(FileWriteEvent {
             path: path.clone(),
             content_length: 30,
+            content_hash: 0,
         });
         let v = verify_rustfmt(&event).await;
         assert!(
@@ -105,6 +107,7 @@ mod tests {
         let event = BusEvent::FileWrite(FileWriteEvent {
             path: path.clone(),
             content_length: 32,
+            content_hash: 0,
         });
         let v = verify_rustfmt(&event).await;
         match v {

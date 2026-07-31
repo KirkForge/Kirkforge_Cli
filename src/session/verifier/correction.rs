@@ -42,7 +42,7 @@ impl CorrectionLoop {
         let mut results = Vec::new();
 
         for _iteration in 0..self.max_iterations {
-            let verdict = self.verifier_handler.verify_event(event).await;
+            let (verdict, decisive_name) = self.verifier_handler.verify_event(event).await;
             match verdict {
                 Verdict::Clean | Verdict::Skipped(_) => break,
                 Verdict::Fixable(fix) => {
@@ -105,7 +105,7 @@ impl CorrectionLoop {
                         };
 
                     results.push(CorrectionResult {
-                        verifier: "verifier".into(),
+                        verifier: decisive_name.clone(),
                         success: applied,
                         message,
                         fix: Some(fix),
@@ -116,7 +116,7 @@ impl CorrectionLoop {
                 }
                 Verdict::Unfixable(err) => {
                     results.push(CorrectionResult {
-                        verifier: "verifier".into(),
+                        verifier: decisive_name.clone(),
                         success: false,
                         message: format!(
                             "Verification failed: {} — {}",
@@ -519,5 +519,55 @@ mod tests {
         assert!(cr.success);
         assert_eq!(cr.message, "ok");
         assert_eq!(cr.fix.as_ref().unwrap().file, fix.file);
+    }
+
+    /// WO 15.8 (2.4): the correction loop must populate
+    /// `CorrectionResult.verifier` with the decisive verifier's `name()`,
+    /// not the hard-coded `"verifier"` (which produced the useless
+    /// `verifier:verifier` tool name the model saw).
+    #[tokio::test]
+    async fn correction_loop_run_carries_decisive_verifier_name() {
+        use super::super::types::{Verdict, Verifier};
+        struct StubFixableVerifier;
+        #[async_trait::async_trait]
+        impl Verifier for StubFixableVerifier {
+            fn name(&self) -> &str {
+                "lint"
+            }
+            fn priority(&self) -> u8 {
+                1
+            }
+            async fn verify(&self, _event: &BusEvent) -> Verdict {
+                Verdict::Fixable(FixSuggestion {
+                    description: "unused import".into(),
+                    file: PathBuf::from("/tmp/none.rs"),
+                    original: "use foo;".into(),
+                    replacement: "".into(),
+                    severity: "warning".into(),
+                    command: None,
+                })
+            }
+        }
+        let mut slots_inner = super::super::slots::VerifierSlots::new();
+        slots_inner
+            .register(std::sync::Arc::new(StubFixableVerifier))
+            .unwrap();
+        let slots = std::sync::Arc::new(std::sync::RwLock::new(slots_inner));
+        let handler = std::sync::Arc::new(super::super::handler::VerifierHandler::new(
+            slots,
+            crate::session::access::PathGuard::default(),
+        ));
+        let loop_ = CorrectionLoop::new(handler).with_max_iterations(1);
+        let event =
+            crate::session::event_bus::BusEvent::Edit(crate::session::event_bus::EditEvent {
+                path: PathBuf::from("/tmp/none.rs"),
+                diff: "@@ -1 +1 @@\n-use foo;\n+".into(),
+            });
+        let results = loop_.run(&event).await;
+        assert_eq!(results.len(), 1);
+        assert_eq!(
+            results[0].verifier, "lint",
+            "verifier name must be the decisive verifier's name(), not \"verifier\""
+        );
     }
 }

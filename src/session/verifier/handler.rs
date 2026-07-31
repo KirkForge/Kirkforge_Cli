@@ -41,8 +41,10 @@ impl VerifierHandler {
         std::mem::take(&mut *pending)
     }
 
-    /// Run verification and return the verdict (used by correction loop).
-    pub async fn verify_event(&self, event: &BusEvent) -> Verdict {
+    /// Run verification and return the verdict plus the decisive
+    /// verifier's name (used by the correction loop so the model sees
+    /// `verifier:lint` instead of the useless `verifier:verifier`).
+    pub async fn verify_event(&self, event: &BusEvent) -> (Verdict, String) {
         // Extract verifiers from the lock to avoid holding it across .await
         let verifiers: Vec<Arc<dyn Verifier>> = {
             let slots = self.slots.read().unwrap_or_else(|e| e.into_inner());
@@ -52,7 +54,7 @@ impl VerifierHandler {
                     verdict: "clean".to_string(),
                     source: "built-in".to_string(),
                 });
-                return Verdict::Clean;
+                return (Verdict::Clean, "aggregate".to_string());
             }
             slots.all_verifiers()
         };
@@ -82,7 +84,7 @@ impl VerifierHandler {
             Verdict::Skipped(_) => "skipped",
         };
         record(MetricEvent::Verifier {
-            name: decisive_name,
+            name: decisive_name.clone(),
             verdict: verdict_label.to_string(),
             source: "built-in".to_string(),
         });
@@ -93,7 +95,7 @@ impl VerifierHandler {
             pending.push(fix.clone());
         }
 
-        verdict
+        (verdict, decisive_name)
     }
 }
 
@@ -114,7 +116,7 @@ impl EventHandler for VerifierHandler {
     }
 
     async fn handle(&self, event: &BusEvent) -> HandlerResult {
-        let verdict = self.verify_event(event).await;
+        let (verdict, _decisive_name) = self.verify_event(event).await;
         let msg = match &verdict {
             Verdict::Clean => "All verifiers passed".into(),
             Verdict::Fixable(f) => format!("Fixable: {} ({})", f.description, f.severity),

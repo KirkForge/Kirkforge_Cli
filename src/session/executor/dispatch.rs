@@ -50,10 +50,17 @@ impl Executor {
                     .unwrap_or("")
                     .to_string();
                 let content = args.get("content").and_then(|v| v.as_str()).unwrap_or("");
+                // Content-address the write so two same-length writes to the
+                // same path (a real re-write vs. a duplicate dispatch) don't
+                // share an idem key (WO 15.8 / 2.6).
+                use std::hash::{Hash, Hasher};
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                content.hash(&mut hasher);
                 Some(BusEvent::FileWrite(
                     crate::session::event_bus::FileWriteEvent {
                         path: std::path::PathBuf::from(&path),
                         content_length: content.len(),
+                        content_hash: hasher.finish(),
                     },
                 ))
             }

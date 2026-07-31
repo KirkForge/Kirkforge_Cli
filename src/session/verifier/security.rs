@@ -215,6 +215,7 @@ pub async fn verify_security(event: &BusEvent) -> Verdict {
         BusEvent::FileWrite(FileWriteEvent {
             path,
             content_length,
+            ..
         }) => (path.clone(), *content_length),
         BusEvent::Edit(EditEvent { path, .. }) => {
             // For edits, re-read the file after the edit to check for secrets/shell
@@ -340,6 +341,7 @@ mod tests {
         let event = BusEvent::FileWrite(FileWriteEvent {
             path: path.clone(),
             content_length: 10,
+            content_hash: 0,
         });
         let v = verify_security(&event).await;
         assert!(matches!(v, Verdict::Clean));
@@ -356,6 +358,7 @@ mod tests {
         let event = BusEvent::FileWrite(FileWriteEvent {
             path: path.clone(),
             content_length: 50,
+            content_hash: 0,
         });
         let v = verify_security(&event).await;
         assert!(matches!(v, Verdict::Unfixable(_)));
@@ -375,6 +378,7 @@ mod tests {
         let event = BusEvent::FileWrite(FileWriteEvent {
             path: path.clone(),
             content_length: 80,
+            content_hash: 0,
         });
         let v = verify_security(&event).await;
         assert!(matches!(v, Verdict::Unfixable(_)));
@@ -390,6 +394,7 @@ mod tests {
         let event = BusEvent::FileWrite(FileWriteEvent {
             path: path.clone(),
             content_length: 10,
+            content_hash: 0,
         });
         let v = verify_security(&event).await;
         assert!(matches!(v, Verdict::Unfixable(_)));
@@ -405,6 +410,7 @@ mod tests {
         let event = BusEvent::FileWrite(FileWriteEvent {
             path: path.clone(),
             content_length: 10,
+            content_hash: 0,
         });
         let v = verify_security(&event).await;
         assert!(
@@ -423,6 +429,7 @@ mod tests {
         let event = BusEvent::FileWrite(FileWriteEvent {
             path: path.clone(),
             content_length: 1_000_001,
+            content_hash: 0,
         });
         let v = verify_security(&event).await;
         assert!(
@@ -442,6 +449,7 @@ mod tests {
         let event = BusEvent::FileWrite(FileWriteEvent {
             path: path.clone(),
             content_length: 30,
+            content_hash: 0,
         });
         let v = verify_security(&event).await;
         // Must be Clean (no Fixable) — ../ is a normal code pattern, not a vulnerability here
@@ -458,6 +466,7 @@ mod tests {
         let event = BusEvent::FileWrite(FileWriteEvent {
             path: path.clone(),
             content_length: 50,
+            content_hash: 0,
         });
         let v = verify_security(&event).await;
         assert!(
@@ -476,6 +485,7 @@ mod tests {
         let event = BusEvent::FileWrite(FileWriteEvent {
             path: path.clone(),
             content_length: 40,
+            content_hash: 0,
         });
         let v = verify_security(&event).await;
         assert!(
@@ -522,6 +532,7 @@ mod tests {
         let event = BusEvent::FileWrite(FileWriteEvent {
             path: path.clone(),
             content_length: 40,
+            content_hash: 0,
         });
         let v = verify_security(&event).await;
 

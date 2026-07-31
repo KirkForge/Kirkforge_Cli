@@ -235,6 +235,7 @@ edition = "2021"
         let event = BusEvent::FileWrite(FileWriteEvent {
             path: path.clone(),
             content_length: 25,
+            content_hash: 0,
         });
         let v = verify_lint(&event).await;
         match v {

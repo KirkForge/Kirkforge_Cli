@@ -1,73 +1,77 @@
-# Lessons — WO 15.7 session (cancel leak + double-record + enabled_plugins gate)
+# Lessons — WO 15.10 session (security scanner comments + git_sanitation cap + trufflehog timeout + docker expect)
 
 ## What I learned about this codebase
-- `dispatch_tool_call_batch` Phase 2 has TWO loops that touch `running`:
-  the **spawn loop** (pushes `JoinHandle`s) and the **collect loop**
-  (awaits them). The cancel leak (bucketlist 2.3) is in the COLLECT loop,
-  not the spawn loop: when the collect loop `break`s on `cancelled`, the
-  remaining `(idx, handle)` pairs are dropped by the `for` iterator, and
-  dropping a `JoinHandle` DETACHES the task (it keeps running). The fix
-  is to `handle.abort()` the remaining handles on break. The spawn loop's
-  own `break` is fine — its handles go into the collect loop.
-- `running.drain(..)` yields a consuming iterator that still owns the
-  vec; on `break`, the remaining un-yielded elements are still in the
-  vec and can be aborted via the iterator's remaining items
-  (`for (_, h) in iter { h.abort(); }`). This preserves input-order
-  awaiting (front-to-back) AND aborts the tail.
-- Adding a `tokio::task::yield_now()` inside `run_prepared_call`
-  (before the cancel check) CHANGES scheduling: it lets the spawn loop
-  advance and spawn task N+1 before task N's `tool.run()` body starts,
-  which broke `test_cancelled_tool_batch_appends_placeholders` (both
-  tools' `call_count` hit 2 instead of 1). The existing test relies on
-  the spawn loop's single `yield_now()` being the only yield point so
-  task 2 is NOT spawned before `cancelled` is checked. Lesson: do NOT
-  add yield points inside spawned-task entry functions; the spawn
-  loop's yield is the contract. The `cancel_token.is_cancelled()` check
-  without a yield is sufficient for the "already cancelled at spawn"
-  case; the abort handles the "spawned before flag flip" case.
-- The folded-plugin config key for Budget is `"kirkforge-plugin3"`, NOT
-  `"budget"`. The bucketlist item 5.1 text said
-  `enabled_plugins.contains("budget")` but the actual config key (per
-  `default_plugin_sources()` in `shared/config/tools.rs:63` and
-  `FOLDED_PLUGINS` in `plugin_tools/loader.rs:33`) is
-  `"kirkforge-plugin3"`. The feature flag is `"budget"`; the plugin
-  name / `enabled_plugins` key is `"kirkforge-plugin3"`. Always check
-  the actual config key, not the WO text.
-- `ToolDef.name` and `.description` are `&'static str`, not `String`.
-  Clippy (`useless_conversion`) flags `.into()` on `&str` literals for
-  these fields. Use bare string literals: `name: "sleep_a"` not
-  `name: "sleep_a".into()`.
-- `ToolError::AccessDenied { message }`'s `message` field is already
-  the full user-facing string ("🔒 Access denied: {msg}").
-  `ToolError::to_user_message()` prepends "Access denied: " again, and
-  `handle_tool_outcome` for `Failure` wraps in "Error: ". So to record
-  a pre-built denial ONCE without re-prefixing, read the `message`
-  field directly and emit the `Role::Tool` message + `TurnEvent`
-  manually — do NOT route through `handle_tool_outcome` (it would
-  double-prefix).
-- `cargo check -p kirkforge --lib` takes ~6-7 min on a cold build when
-  other worktrees are building in parallel (file lock contention + CPU
-  saturation). The full workspace test suite took ~6 min (363s for the
-  biggest binary). Budget ~15-20 min for the full gate when parallel
-  worktrees are active.
+- `cargo test -p kirkforge --lib session::verifier tools` (the WO gate as
+  literally written) is NOT valid cargo syntax: `cargo test` accepts
+  exactly ONE positional TESTNAME (a substring filter), not a space-
+  separated list. The intended gate is two separate invocations:
+  `cargo test -p kirkforge --lib session::verifier` and
+  `cargo test -p kirkforge --lib tools`. Running them as one command
+  errors with `unexpected argument 'tools' found`. Worth noting for
+  future WOs that list multiple module filters — split them.
+- The `undo.rs` `#[cfg(not(test))] / #[cfg(test)]` const-override pattern
+  (production value vs. a smaller test value for the same const) is the
+  repo's established way to make a timeout/size cap testable without
+  injecting a parameter. Used it for `TRUFFLEHOG_TIMEOUT_SECS`
+  (60s prod / 2s test) so the timeout test runs in ~2s instead of ~60s.
+  This is preferable to a `tokio::time::timeout` outer test budget that
+  would have to be >60s to prove the inner timeout fires.
+- `src/session/verifier/security.rs` dangerous-shell-pattern scan
+  (`DANGEROUS_SHELL_PATTERNS`) is a substring `content.contains(pattern)`
+  over the whole file. The entropy scan and secret-substring scan
+  (`SECRET_PATTERNS`) ALSO run over the whole file — but per the WO,
+  only the shell-pattern check needed comment-skipping (comments
+  documenting `rm -rf /` were the false-positive source; secret
+  patterns in comments are still real secrets the user should see).
+  Scope discipline: I only added `is_comment_line` filtering to the
+  shell-pattern loop (step 4), NOT to the entropy/secret-substring
+  scans (steps 1-2), to match the WO's "skip comment lines for
+  shell-pattern checks" wording exactly.
+- `Bash::run_docker` is a private method on `Bash` (`src/tools/bash.rs`).
+  Its test module uses `use super::*;` so the test can call
+  `tool.run_docker(...)` directly without a `pub` change. This is the
+  pattern for testing private methods in this repo: keep the test in the
+  same module, rely on `super::*`.
+- The worktree's `target/` dir compiles from scratch and is slow
+  (~8 min for a full `cargo clippy --all-targets`, ~8 min for the first
+  `cargo check --tests`) because it doesn't share the main checkout's
+  `target/`. Competing worktree builds (wo-15.8, wo-15.11 were running
+  concurrently this session) amplify the wall-clock time. Budget ~20-25
+  min for the full gate (fmt + clippy + test + check) on a cold worktree
+  with 2-3 concurrent neighbors. Using `setsid bash -c '... > log 2>&1'
+  & disown` to launch long cargo jobs in the background and polling the
+  log with `sleep N; tail` avoids the 600s tool timeout while the build
+  runs.
+- `git_sanitation::read_limited` tests pass an EXPLICIT `limit` arg
+  (e.g. `read_limited(&path, 4)`) and never reference the module-level
+  `SCAN_CAP_BYTES` const. So raising `SCAN_CAP_BYTES` 1 MiB → 10 MiB
+  does not break any `read_limited` test. The const is only consumed at
+  the one call site `read_limited(&path, SCAN_CAP_BYTES)` in
+  `check_worktree`.
+- `lessons.md` IS in `.gitignore` (line 23) but was force-added
+  (`git ls-files lessons.md` shows it tracked) in a prior session. So
+  `git check-ignore lessons.md` returns exit 1 (ignored) but `git
+  status` shows it clean because it's already tracked — the tracked
+  copy wins over the ignore once added. Per AGENTS.md §7, the convention
+  is gitignored scratch; since it's already tracked here, updating it
+  in-place is fine and will be committed.
 
 ## What I tried that didn't work
-- First attempt added `yield_now()` + `cancel_token.is_cancelled()` in
-  `run_prepared_call`. This broke
-  `test_cancelled_tool_batch_appends_placeholders` (call_count 2 vs 1)
-  because the extra yield let task 2 spawn before cancellation was
-  checked. Fixed by removing the yield and keeping only the token
-  check (catches already-cancelled-at-spawn; the collect-loop abort
-  catches the rest).
-- First Phase 3 fix for 2.8 routed the `AccessDenied` outcome through
-  `handle_tool_outcome`, which double-prefixed the message ("Error:
-  Access denied: 🔒 Access denied: ..."). Fixed by reading the
-  `message` field directly and emitting the event + message manually,
-  mirroring the `GuardVerdict::Denied` branch in `record_tool_result`.
+- First trufflehog-timeout test used a fake trufflehog that `sleep 120`
+  and an outer `tokio::time::timeout(20s, verify_security(&event))`. The
+  inner `TRUFFLEHOG_TIMEOUT_SECS` was 60s, so the inner timeout fired at
+  60s — but my 20s outer test budget tripped FIRST, failing with
+  `verify_security should resolve before the 20s test budget: Elapsed`.
+  Fix: introduced the `#[cfg(not(test))] / #[cfg(test)]` const override
+  (60s prod / 2s test) and shortened the fake sleep to 30s (still well
+  over 2s). The test now runs in ~2s. Lesson: when an inner timeout
+  needs testing, make the timeout VALUE test-overridable (the repo's
+  established pattern) rather than sizing the outer test budget around
+  the production value.
 
 ## What I'd do differently
-- Before adding a yield point inside a spawned task, trace the
-  existing cancellation test's timing assumptions. The spawn loop's
-  single `yield_now()` is a load-bearing scheduling contract; adding a
-  second one inside the task body changes which tasks get spawned
-  before the flag check.
+- Nothing significant. The four fixes were small and independent; the
+  only wrinkle was the trufflehog test timeout sizing (resolved with the
+  cfg-test const override). The WO gate wording `session::verifier tools`
+  should be read as two commands — flagging that for future WO authors
+  would save a wasted compile cycle.

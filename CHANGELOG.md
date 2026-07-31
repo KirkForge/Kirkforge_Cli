@@ -170,6 +170,22 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   display (bucketlist 5.1). 2 new tests
   (`test_cancelled_batch_aborts_remaining_spawned_tasks`,
   `test_denied_edit_records_single_access_denied_result`).
+- WO 15.10: four security-scanner polish fixes from the cross-review
+  bucketlist. (1) The security verifier's dangerous-shell-pattern check
+  now skips comment-prefixed lines (`//`, `#`, `/*`, `*`) so
+  documentation that mentions `rm -rf /` is no longer flagged
+  `Unfixable` and blocking the correction loop (bucketlist 2.9); the
+  entropy and secret-substring scans still run on all content. (2)
+  `git_sanitation::SCAN_CAP_BYTES` raised 1 MiB → 10 MiB so a secret
+  placed after the old cap in a large generated file is caught; the
+  docstring documents the ceiling honestly (bucketlist 2.13). (3)
+  `trufflehog_scan` spawn wrapped in `tokio::time::timeout` (60s prod /
+  2s test override) so a hung trufflehog returns no finding instead of
+  deadlocking the correction loop (bucketlist 2.14). (4)
+  `Bash::run_docker` replaced `.expect("docker_config is Some")` with
+  an early `Err(ShellError::Spawn)` so a future caller that forgets the
+  `docker_config.enabled` guard surfaces a tool failure, not a runtime
+  panic (bucketlist 2.15). 8 new tests.
 - WO 15.1: honest CI gate naming in `.github/workflows/ci.yml`. Renamed
   the `Fail if success rate drops below 10%` step to `Warn if success
   rate drops below 10%` (it only emits a `::warning::` then exits 0;

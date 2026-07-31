@@ -47,7 +47,20 @@ impl Bash {
         timeout_secs: u64,
         token: &tokio_util::sync::CancellationToken,
     ) -> Result<(i32, String, String), ShellError> {
-        let cfg = self.docker_config.as_ref().expect("docker_config is Some");
+        // WO 15.10: the only caller guards with
+        // `docker_config.as_ref().map_or(false, |c| c.enabled)`, so this
+        // is `Some` in practice — but the invariant was implicit
+        // (`.expect` would panic the runtime if a future caller forgets
+        // the guard). Surface it as a normal `ShellError::Spawn` so the
+        // tool result is a failure the model can react to, not a panic.
+        let cfg = match self.docker_config.as_ref() {
+            Some(c) => c,
+            None => {
+                return Err(ShellError::Spawn(
+                    "docker_config is None (run_docker called without docker enabled)".into(),
+                ));
+            }
+        };
 
         // WO 15.3: route the model-supplied `cmd` through the same
         // deny-list / dangerous-pattern gate the foreground path uses.
@@ -802,6 +815,36 @@ mod tests {
                 "expected canonicalize-err message, got {message}"
             ),
             other => panic!("expected Execution failure for unresolvable workdir, got {other:?}"),
+        }
+    }
+
+    // WO 15.10 (bucketlist 2.15): `run_docker` previously did
+    // `.expect("docker_config is Some")` on the `Option<DockerConfig>`.
+    // The only caller guards with `docker_config.as_ref().map_or(false,
+    // |c| c.enabled)`, so the expect could not fire in production — but
+    // the invariant was implicit and a future caller would panic the
+    // runtime. This test calls `run_docker` directly (it's private, so
+    // the test lives in the same module) on a `Bash` with
+    // `docker_config: None` and asserts an `Err(ShellError::Spawn)`
+    // with a "docker_config" message rather than a panic.
+    #[tokio::test]
+    async fn bash_run_docker_returns_spawn_err_when_docker_config_none() {
+        let tool = Bash::new(
+            DenyList::default(),
+            PathGuard::default(),
+            false,
+            None,
+            crate::shared::SandboxConfig::default(),
+        );
+        let token = tokio_util::sync::CancellationToken::new();
+        let workdir = std::path::Path::new("/tmp");
+        let result = tool.run_docker("echo hello", workdir, 30, &token).await;
+        match result {
+            Err(ShellError::Spawn(msg)) => assert!(
+                msg.contains("docker_config"),
+                "expected a docker_config message, got: {msg}"
+            ),
+            other => panic!("expected Err(ShellError::Spawn), got {other:?}"),
         }
     }
 

@@ -66,6 +66,24 @@ fn is_token_char(c: char) -> bool {
     c.is_alphanumeric() || c == '-' || c == '_' || c == '+' || c == '/' || c == '=' || c == '.'
 }
 
+/// True if a line is a comment whose content should be skipped by the
+/// dangerous-shell-pattern check. WO 15.10 (bucketlist 2.9): patterns
+/// like `rm -rf /` substring-matched in ALL file content, including
+/// comments and docstrings, returning `Verdict::Unfixable` and blocking
+/// the correction loop for documentation that documents the dangerous
+/// command. This is a simple line-prefix filter (not a full parser):
+/// a line is treated as a comment if, after trimming leading
+/// whitespace, it starts with `//`, `#`, `/*`, or `*` (the common
+/// comment markers across the languages this repo scans).
+#[inline]
+fn is_comment_line(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    trimmed.starts_with("//")
+        || trimmed.starts_with('#')
+        || trimmed.starts_with("/*")
+        || trimmed.starts_with('*')
+}
+
 /// Shannon entropy in bits per character for the ASCII string `s`.
 fn shannon_entropy(s: &str) -> f64 {
     let len = s.len() as f64;
@@ -172,21 +190,49 @@ fn find_in_path(name: &str) -> Option<PathBuf> {
 /// Run `trufflehog filesystem --no-update --json <path>` if a `trufflehog`
 /// binary is available. Any JSON output line is treated as a finding and
 /// produces an `Unfixable` verdict.
+///
+/// WO 15.10: the spawn is wrapped in `tokio::time::timeout` so a hung
+/// trufflehog (network stall, git fetch hang) cannot block the correction
+/// loop indefinitely. On timeout the verifier returns `None` (no finding)
+/// rather than hanging — a missed finding is better than a deadlocked
+/// correction loop. The timeout is generous (60s) because trufflehog's
+/// filesystem scan is local and fast when healthy. The test override
+/// shrinks the cap so the timeout test runs in seconds, not minutes
+/// (same `#[cfg(test)]` pattern `undo.rs` uses for its size cap).
+#[cfg(not(test))]
+const TRUFFLEHOG_TIMEOUT_SECS: u64 = 60;
+#[cfg(test)]
+const TRUFFLEHOG_TIMEOUT_SECS: u64 = 2;
+
 async fn trufflehog_scan(path: &Path) -> Option<Verdict> {
     let binary = match trufflehog_path() {
         Some(b) => b,
         None => return None,
     };
-    let output = match tokio::process::Command::new(&binary)
-        .arg("filesystem")
-        .arg("--no-update")
-        .arg("--json")
-        .arg(path)
-        .output()
-        .await
+    let output = match tokio::time::timeout(
+        std::time::Duration::from_secs(TRUFFLEHOG_TIMEOUT_SECS),
+        tokio::process::Command::new(&binary)
+            .arg("filesystem")
+            .arg("--no-update")
+            .arg("--json")
+            .arg(path)
+            .output(),
+    )
+    .await
     {
-        Ok(o) => o,
-        Err(_) => return None,
+        Ok(Ok(o)) => o,
+        // Spawn failed — trufflehog missing/unavailable. Not a finding.
+        Ok(Err(_)) => return None,
+        // Timed out: do not block the correction loop. A hung trufflehog
+        // is an environment issue, not a security finding.
+        Err(_) => {
+            tracing::warn!(
+                path = %path.display(),
+                timeout_secs = TRUFFLEHOG_TIMEOUT_SECS,
+                "trufflehog_scan timed out; skipping (no finding)"
+            );
+            return None;
+        }
     };
     let stdout = String::from_utf8_lossy(&output.stdout);
     for line in stdout.lines() {
@@ -267,8 +313,14 @@ pub async fn verify_security(event: &BusEvent) -> Verdict {
     }
 
     // 4. Check for dangerous shell patterns in any file content.
+    // WO 15.10 (bucketlist 2.9): skip comment lines so documentation
+    // that mentions `rm -rf /` is not flagged as `Unfixable`. Only the
+    // non-comment lines are substring-matched against the patterns.
     for pattern in DANGEROUS_SHELL_PATTERNS {
-        if content.contains(pattern) {
+        let in_code = content
+            .lines()
+            .any(|line| !is_comment_line(line) && line.contains(pattern));
+        if in_code {
             return Verdict::Unfixable(VerificationError {
                 description: format!("Dangerous shell command: {pattern}"),
                 file: Some(path.clone()),
@@ -493,6 +545,202 @@ mod tests {
             "low-entropy sk- placeholder should not be flagged"
         );
         remove_test_file(&path);
+    }
+
+    // WO 15.10 (bucketlist 2.9): a dangerous shell pattern that appears
+    // only inside a comment must not be flagged as Unfixable. The
+    // correction loop would otherwise block on documentation that
+    // documents the dangerous command.
+    #[tokio::test]
+    async fn test_shell_danger_in_slash_comment_is_skipped() {
+        let dir = std::env::temp_dir();
+        let path = dir.join("kirkforge_sec_comment_slash.txt");
+        std::fs::write(&path, "// do not run: rm -rf /\nlet x = 1;\n").unwrap();
+
+        let event = BusEvent::FileWrite(FileWriteEvent {
+            path: path.clone(),
+            content_length: 40,
+        });
+        let v = verify_security(&event).await;
+        assert!(
+            matches!(v, Verdict::Clean),
+            "dangerous shell pattern in a // comment must not be flagged"
+        );
+        remove_test_file(&path);
+    }
+
+    #[tokio::test]
+    async fn test_shell_danger_in_hash_comment_is_skipped() {
+        let dir = std::env::temp_dir();
+        let path = dir.join("kirkforge_sec_comment_hash.txt");
+        std::fs::write(&path, "# do not run: rm -rf /\nx = 1\n").unwrap();
+
+        let event = BusEvent::FileWrite(FileWriteEvent {
+            path: path.clone(),
+            content_length: 35,
+        });
+        let v = verify_security(&event).await;
+        assert!(
+            matches!(v, Verdict::Clean),
+            "dangerous shell pattern in a # comment must not be flagged"
+        );
+        remove_test_file(&path);
+    }
+
+    #[tokio::test]
+    async fn test_shell_danger_in_block_comment_is_skipped() {
+        let dir = std::env::temp_dir();
+        let path = dir.join("kirkforge_sec_comment_block.txt");
+        std::fs::write(
+            &path,
+            "/* warning: do not run rm -rf / on this host */\nlet x = 1;\n",
+        )
+        .unwrap();
+
+        let event = BusEvent::FileWrite(FileWriteEvent {
+            path: path.clone(),
+            content_length: 55,
+        });
+        let v = verify_security(&event).await;
+        assert!(
+            matches!(v, Verdict::Clean),
+            "dangerous shell pattern in a /* */ comment must not be flagged"
+        );
+        remove_test_file(&path);
+    }
+
+    #[tokio::test]
+    async fn test_shell_danger_in_star_comment_line_is_skipped() {
+        let dir = std::env::temp_dir();
+        let path = dir.join("kirkforge_sec_comment_star.txt");
+        std::fs::write(
+            &path,
+            "/**\n * beware: rm -rf / wipes the disk\n */\nlet x = 1;\n",
+        )
+        .unwrap();
+
+        let event = BusEvent::FileWrite(FileWriteEvent {
+            path: path.clone(),
+            content_length: 50,
+        });
+        let v = verify_security(&event).await;
+        assert!(
+            matches!(v, Verdict::Clean),
+            "dangerous shell pattern on a ` * ` doc line must not be flagged"
+        );
+        remove_test_file(&path);
+    }
+
+    // Regression guard: a dangerous pattern on a real code line (no
+    // comment prefix) must still trip the detector after the 2.9 fix.
+    #[tokio::test]
+    async fn test_shell_danger_on_code_line_still_flagged() {
+        let dir = std::env::temp_dir();
+        let path = dir.join("kirkforge_sec_code_line.txt");
+        std::fs::write(&path, "system(\"rm -rf /\");\n").unwrap();
+
+        let event = BusEvent::FileWrite(FileWriteEvent {
+            path: path.clone(),
+            content_length: 20,
+        });
+        let v = verify_security(&event).await;
+        assert!(
+            matches!(v, Verdict::Unfixable(_)),
+            "dangerous shell pattern on a code line must still be flagged"
+        );
+        remove_test_file(&path);
+    }
+
+    #[test]
+    fn is_comment_line_recognises_common_prefixes() {
+        assert!(is_comment_line("// rm -rf /"));
+        assert!(is_comment_line("# rm -rf /"));
+        assert!(is_comment_line("/* rm -rf /"));
+        assert!(is_comment_line("* rm -rf /"));
+        // Leading whitespace is trimmed before the prefix check.
+        assert!(is_comment_line("    // rm -rf /"));
+        assert!(is_comment_line("\t# rm -rf /"));
+    }
+
+    #[test]
+    fn is_comment_line_rejects_code_lines() {
+        assert!(!is_comment_line("rm -rf /"));
+        assert!(!is_comment_line("system(\"rm -rf /\");"));
+        assert!(!is_comment_line("let x = 1;"));
+        assert!(!is_comment_line(""));
+    }
+
+    // WO 15.10 (bucketlist 2.14): a hung trufflehog (network/git-fetch
+    // stall) must not block the correction loop indefinitely. The
+    // verifier wraps the spawn in `tokio::time::timeout` and returns
+    // `None` (no finding) on timeout. This test injects a fake
+    // trufflehog that sleeps past the timeout and asserts the verifier
+    // returns `Clean` rather than hanging.
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn test_trufflehog_timeout_does_not_block() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir();
+        let path = dir.join("kirkforge_sec_trufflehog_timeout.txt");
+        let fake_bin_dir = dir.join("kirkforge_fake_bin_timeout");
+        let fake_trufflehog = fake_bin_dir.join("trufflehog");
+        std::fs::create_dir_all(&fake_bin_dir).unwrap();
+
+        // Fake trufflehog sleeps well past the verifier timeout. Gated
+        // on the marker env var so it can't leak into other tests if
+        // PATH leaks; the sleep is long enough to prove the timeout
+        // fires but bounded so a leaked process self-terminates.
+        let script =
+            "#!/bin/sh\nif [ \"$KIRKFORGE_FAKE_TRUFFLEHOG_SLEEP\" = \"1\" ]; then sleep 30; fi\n";
+        std::fs::write(&fake_trufflehog, script).unwrap();
+        let mut perms = std::fs::metadata(&fake_trufflehog).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&fake_trufflehog, perms).unwrap();
+
+        // Use a low-entropy file so the local entropy check stays Clean
+        // and the verifier reaches the trufflehog step.
+        std::fs::write(&path, "api_key = \"sk-aaaaaaaaaaaaaaaa\"").unwrap();
+
+        let original_path = std::env::var_os("PATH").clone();
+        let new_path = format!(
+            "{}:{}",
+            fake_bin_dir.display(),
+            original_path
+                .as_ref()
+                .map(|s| s.to_string_lossy())
+                .unwrap_or_default()
+        );
+        std::env::set_var("PATH", new_path);
+        std::env::set_var("KIRKFORGE_FAKE_TRUFFLEHOG_SLEEP", "1");
+
+        let event = BusEvent::FileWrite(FileWriteEvent {
+            path: path.clone(),
+            content_length: 40,
+        });
+        // Drive verify_security with a per-test timeout shorter than the
+        // fake trufflehog's 30s sleep but longer than the 2s test-mode
+        // trufflehog cap. If the inner timeout regresses to an unbounded
+        // wait, this outer timeout trips and the test fails. The test
+        // `TRUFFLEHOG_TIMEOUT_SECS` override (2s) keeps this fast.
+        let v = tokio::time::timeout(std::time::Duration::from_secs(15), verify_security(&event))
+            .await
+            .expect("verify_security should resolve before the 15s test budget");
+
+        if let Some(p) = original_path {
+            std::env::set_var("PATH", p);
+        } else {
+            std::env::remove_var("PATH");
+        }
+        std::env::remove_var("KIRKFORGE_FAKE_TRUFFLEHOG_SLEEP");
+        remove_test_file(&path);
+        remove_test_file(&fake_trufflehog);
+        let _ = std::fs::remove_dir(&fake_bin_dir);
+
+        assert!(
+            matches!(v, Verdict::Clean),
+            "a timed-out trufflehog must not block the correction loop (expected Clean, got {v:?})"
+        );
     }
 
     #[tokio::test]

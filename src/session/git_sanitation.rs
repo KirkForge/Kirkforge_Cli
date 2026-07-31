@@ -18,8 +18,11 @@ pub const DEFAULT_MAX_FILE_SIZE: u64 = 5 * 1024 * 1024;
 
 /// Cap for how much of a file we scan for secret/conflict patterns.
 /// Reading more than this is not useful for a quick sanitation pass and
-/// keeps I/O bounded.
-const SCAN_CAP_BYTES: u64 = 1024 * 1024;
+/// keeps I/O bounded. A secret placed after this cap in a large generated
+/// file passes the scan — the cap is documented here so callers know the
+/// ceiling. 10 MiB is still fast for a pre-commit pass and closes the
+/// 1 MiB gap where a secret placed just past the old cap slipped through.
+const SCAN_CAP_BYTES: u64 = 10 * 1024 * 1024;
 
 /// Patterns that look like secrets or credentials.
 ///

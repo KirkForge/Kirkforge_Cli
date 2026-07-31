@@ -48,9 +48,15 @@ fn module_path_prefix(file_path: &Path, cargo_root: &Path) -> Option<String> {
     }
     let last = components.pop()?;
     let (stem, _ext) = last.split_once('.')?;
+    // Full-suite fallback only for `main.rs` / `lib.rs` sitting DIRECTLY at
+    // the crate root (`src/main.rs`, `src/lib.rs`). A nested file like
+    // `src/foo/main.rs` keeps a targeted filter (`foo::main`) so editing a
+    // bin/example doesn't trigger the whole crate's test suite.
+    // (bucketlist 3.37)
+    let at_crate_root = components.is_empty();
     let mut path_parts = components;
     path_parts.push(stem);
-    if stem == "main" || stem == "lib" {
+    if (stem == "main" || stem == "lib") && at_crate_root {
         // Running `main` or `lib` as a test filter would not match anything.
         // Fall back to the whole crate by returning an empty prefix, which the
         // caller can translate into `cargo test` without a filter.
@@ -226,6 +232,33 @@ mod tests {
         assert_eq!(
             module_path_prefix(&root.join("tests/sub/integration.rs"), &root),
             Some("sub::integration".into())
+        );
+    }
+
+    #[test]
+    fn module_path_prefix_nested_main_lib_keeps_targeted_filter() {
+        // bucketlist 3.37: only crate-root `src/main.rs` / `src/lib.rs`
+        // fall back to the full suite (empty prefix). A nested main/lib
+        // keeps a targeted filter so it does not run the whole crate.
+        let root = std::path::PathBuf::from("/tmp/foo");
+        assert_eq!(
+            module_path_prefix(&root.join("src/foo/main.rs"), &root),
+            Some("foo::main".into()),
+            "nested src/foo/main.rs must NOT trigger the full suite"
+        );
+        assert_eq!(
+            module_path_prefix(&root.join("src/bin/lib.rs"), &root),
+            Some("bin::lib".into()),
+            "nested src/bin/lib.rs must NOT trigger the full suite"
+        );
+        // Sanity: crate-root main.rs / lib.rs still fall back to empty.
+        assert_eq!(
+            module_path_prefix(&root.join("src/main.rs"), &root),
+            Some(String::new())
+        );
+        assert_eq!(
+            module_path_prefix(&root.join("src/lib.rs"), &root),
+            Some(String::new())
         );
     }
 

@@ -1119,7 +1119,14 @@ impl Executor {
         // `running` vec is empty, so this loop is a no-op.
         let mut recorded: std::collections::HashSet<usize> =
             std::collections::HashSet::with_capacity(running.len());
-        for (idx, handle) in running {
+        // Await handles in input order (front-to-back) so the conversation
+        // records tool results in the order the model requested them. On
+        // cancellation, abort the remaining un-awaited handles so they do
+        // not run detached holding subprocess/network resources for up to
+        // `tool_timeout_secs` (WO 15.7 2.3 — cancel leak: a dropped
+        // `JoinHandle` detaches its task instead of stopping it).
+        let mut iter = running.drain(..);
+        while let Some((idx, handle)) = iter.next() {
             let pair = if let Ok(Some(p)) = handle.await {
                 p
             } else {
@@ -1148,9 +1155,13 @@ impl Executor {
                 );
             }
             recorded.insert(idx);
-            // Stop launching further awaits once cancelled; the in-flight
+            // Stop awaiting further handles once cancelled; the in-flight
             // task we just awaited is recorded, later ones get placeholders.
+            // Abort the remaining un-awaited handles (WO 15.7 2.3).
             if cancelled.load(Ordering::SeqCst) {
+                for (_, h) in iter {
+                    h.abort();
+                }
                 break;
             }
         }
@@ -1275,6 +1286,52 @@ impl Executor {
                     .await?;
                 continue;
             };
+
+            // Phase 2.5 already ran the read-before-edit gate and produced
+            // an `AccessDenied` failure for deferred file calls. Re-running
+            // `record_tool_result` here would re-check the path guard + read
+            // gate and emit a second, identical "Access denied" message —
+            // the model would see two denials for one failed edit (WO 15.7
+            // 2.8). Record the pre-built denial once and skip the re-check.
+            if let ToolOutcome::Failure(crate::shared::ToolError::AccessDenied { message }) =
+                &outcome
+            {
+                let is_destructive =
+                    matches!(tc.name.as_str(), "write_file" | "edit_file" | "bash");
+                if is_destructive {
+                    self.audit_log
+                        .log_destructive(&tc.name, &tc.arguments, false, Some(message));
+                }
+                crate::send_or_warn!(
+                    event_tx
+                        .send(TurnEvent::ToolResult {
+                            name: tc.name.clone(),
+                            output: message.clone(),
+                            success: false,
+                        })
+                        .await,
+                    "TurnEvent receiver dropped; discarding event"
+                );
+                self.conversation
+                    .append_async(Message {
+                        role: Role::Tool,
+                        content: message.clone(),
+                        tool_call_id: Some(tc.id.clone()),
+                        tool_name: Some(tc.name.clone()),
+                        ..Default::default()
+                    })
+                    .await?;
+                if let Err(e) = self.conversation.checkpoint_async().await {
+                    tracing::warn!(error = %e, "mid-batch checkpoint failed after tool {}", tc.id);
+                    crate::send_or_warn!(
+                        event_tx
+                            .send(TurnEvent::Error(format!("Checkpoint failed: {e}")))
+                            .await,
+                        "TurnEvent receiver dropped; discarding event"
+                    );
+                }
+                continue;
+            }
 
             self.record_tool_result(
                 tc,
@@ -1653,10 +1710,20 @@ struct PreparedCall {
 /// invocation and the tool outcome.
 ///
 /// This function deliberately does not touch `Executor` state; it is the
-/// concurrency boundary where tool I/O may run in parallel. It checks the
-/// shared cancellation flag after yielding so tasks spawned just before a
-/// cancellation get a chance to short-circuit before invoking the tool body.
+/// concurrency boundary where tool I/O may run in parallel. Tasks already
+/// past the spawn point when the user cancels are stopped by aborting
+/// their `JoinHandle` in the collect loop (WO 15.7 2.3) — a dropped
+/// `JoinHandle` detaches the task instead of stopping it, so the collect
+/// loop aborts the remaining un-awaited handles on cancellation.
 async fn run_prepared_call(prep: PreparedCall) -> Option<(ToolInvocation, ToolOutcome)> {
+    // Short-circuit when the token was already cancelled at spawn time
+    // (the `tool_cancel_token` helper snapshots the `cancelled` flag).
+    if prep.cancel_token.is_cancelled() {
+        return Some((
+            prep.invocation,
+            ToolOutcome::Failure(crate::shared::ToolError::Cancelled),
+        ));
+    }
     let ctx = crate::tools::ToolContext {
         token: prep.cancel_token,
         dry_run: false,

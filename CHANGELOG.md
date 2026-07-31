@@ -155,6 +155,21 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   box. 3 new tests (round-trip, invalid name, existing dir).
 
 ### Fixed
+- WO 15.7: cancel leak + double-record `AccessDenied` +
+  `enabled_plugins` runtime gate. (1) `dispatch_tool_call_batch` Phase 2
+  collect loop now aborts un-awaited `JoinHandle`s when cancellation
+  fires mid-batch, so already-spawned tasks no longer run detached
+  holding subprocess/network resources for up to `tool_timeout_secs`
+  (bucketlist 2.3). (2) Phase 3 no longer re-runs the path guard + read
+  gate for a deferred file call already denied in Phase 2.5, so the
+  model sees one "Access denied" result per failed edit instead of two
+  (bucketlist 2.8). (3) Stratum/Budget tool + hook registration now
+  checks `cfg.tools.enabled_plugins` at runtime, so `/plugins disable
+  stratum` (or `kirkforge-plugin3`) actually removes the compiled-in
+  tools/hooks on the next `kirkforge run`, not just the `/plugins list`
+  display (bucketlist 5.1). 2 new tests
+  (`test_cancelled_batch_aborts_remaining_spawned_tasks`,
+  `test_denied_edit_records_single_access_denied_result`).
 - WO 15.1: honest CI gate naming in `.github/workflows/ci.yml`. Renamed
   the `Fail if success rate drops below 10%` step to `Warn if success
   rate drops below 10%` (it only emits a `::warning::` then exits 0;

@@ -1515,16 +1515,30 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     // ── Stratum in-process tools (feature-gated) ──
     // When the `stratum` feature is enabled, the five core Stratum tools
     // (run, apply, mode, rules, config_validate) are registered as direct
-    // Rust calls instead of shell-plugin subprocesses.
+    // Rust calls instead of shell-plugin subprocesses. The runtime
+    // `enabled_plugins` toggle (WO 15.7 5.1) gates this on top of the
+    // compile-time feature: `/plugins disable stratum` removes "stratum"
+    // from `enabled_plugins`, so the tools are not registered even when
+    // the feature is compiled in.
     #[cfg(feature = "stratum")]
     {
-        let stratum_tool_list = session::stratum::stratum_tools();
-        let count = stratum_tool_list.len();
-        toolset.add(Box::new(session::toolset::VecToolset::new(
-            "stratum",
-            stratum_tool_list,
-        )));
-        tracing::info!(count, "stratum in-process tools registered");
+        let cfg_stratum = kirkforge::shared::read_shared_config(&shared_config);
+        if cfg_stratum
+            .tools
+            .enabled_plugins
+            .iter()
+            .any(|n| n == "stratum")
+        {
+            let stratum_tool_list = session::stratum::stratum_tools();
+            let count = stratum_tool_list.len();
+            toolset.add(Box::new(session::toolset::VecToolset::new(
+                "stratum",
+                stratum_tool_list,
+            )));
+            tracing::info!(count, "stratum in-process tools registered");
+        } else {
+            tracing::info!("stratum in-process tools skipped (disabled via enabled_plugins)");
+        }
     }
 
     // ── Draw in-process tool (feature-gated) ──
@@ -1559,16 +1573,31 @@ async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     // ── Budget (Plugin3) in-process tools (feature-gated) ──
     // When the `budget` feature is enabled, the 7 Plugin3 budget tools
     // are registered as direct Rust calls instead of shell-plugin
-    // subprocesses. ADR-047 pins this decision.
+    // subprocesses. ADR-047 pins this decision. The runtime
+    // `enabled_plugins` toggle (WO 15.7 5.1) gates this on top of the
+    // compile-time feature: the config key is `"kirkforge-plugin3"`
+    // (per `default_plugin_sources` in `shared/config/tools.rs`); when
+    // it is absent, the tools are not registered even when the feature
+    // is compiled in.
     #[cfg(feature = "budget")]
     {
-        let budget_tool_list = session::budget::all_budget_tools();
-        let count = budget_tool_list.len();
-        toolset.add(Box::new(session::toolset::VecToolset::new(
-            "budget",
-            budget_tool_list,
-        )));
-        tracing::info!(count, "budget in-process tools registered");
+        let cfg_budget = kirkforge::shared::read_shared_config(&shared_config);
+        if cfg_budget
+            .tools
+            .enabled_plugins
+            .iter()
+            .any(|n| n == "kirkforge-plugin3")
+        {
+            let budget_tool_list = session::budget::all_budget_tools();
+            let count = budget_tool_list.len();
+            toolset.add(Box::new(session::toolset::VecToolset::new(
+                "budget",
+                budget_tool_list,
+            )));
+            tracing::info!(count, "budget in-process tools registered");
+        } else {
+            tracing::info!("budget in-process tools skipped (disabled via enabled_plugins)");
+        }
     }
 
     if let Some(sys) = &system {

@@ -441,10 +441,16 @@ dispatch paths (ADR-050):
 The four folded plugins (Stratum, Plugin3, Draw, Video) use this two-path
 dispatch. A single toggle — `enabled_plugins` in `ToolConfig` — controls both
 paths: a folded plugin name enables the compiled-in path (feature on) or the
-shell path (feature off). `plugin_sources` is only needed for external/shell
-plugins. The `kirkforge-plugin` self-plugin (Node SDK) is **not** folded; it
-stays an external shell-out under all configurations because its tools depend
-on the Node ecosystem (ESLint, TypeScript, Ruff, Pyright, Bandit).
+shell path (feature off). As of WO 15.7 (item 5.1), the runtime toggle also
+gates the compiled-in path: when a folded plugin name is absent from
+`enabled_plugins`, its tools and in-process hooks are not registered even
+when the compile-time feature is on. So `/plugins disable stratum` removes
+"stratum" from `enabled_plugins` and the Stratum tools/hooks stay live only
+on the next `kirkforge run` that re-registers them. `plugin_sources` is only
+needed for external/shell plugins. The `kirkforge-plugin` self-plugin (Node
+SDK) is **not** folded; it stays an external shell-out under all
+configurations because its tools depend on the Node ecosystem (ESLint,
+TypeScript, Ruff, Pyright, Bandit).
 
 `/plugins list` shows the source (`compiled-in` / `external` /
 `external (feature off)`) and feature gate for each workspace plugin source.

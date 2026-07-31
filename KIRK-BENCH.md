@@ -7,9 +7,12 @@ index, Stratum compression, and the Plugin3 budget guard.
 
 This document is the *spec*. The *implementation* is the bench harness
 (`crates/kirkforge-bench/` + `src/session/bench.rs`) and the task
-definitions in `benches/tasks/`. The existing 31 tasks are mapped to
-the spec categories below; the remaining ~9 spec tasks are listed as
-**planned** (honest deferral per AGENTS.md §5 — they are not built here).
+definitions in `benches/tasks/`. The existing 31 task files are mapped
+to the spec categories below. The mapping is many-to-one (31 files
+cover 18 of the 40 spec slots); 19 spec tasks are listed as
+**planned**, and 3 (Fix Compilation Error, Fix Integration Test,
+Implement Missing Trait) are neither mapped nor planned yet — a known
+gap.
 
 ## Why a spec
 
@@ -255,4 +258,5 @@ workorder; the note names the feature it exercises.
 
 Honest deferral: the spec documents 40 tasks; this workorder (WO 14.7)
 builds the signature one (`token_budget_challenge`) and maps the
-existing 31. The remaining ~9 are future WOs.
+existing 31 task files (covering 18 of 40 spec slots). The remaining
+19 spec tasks are future WOs; 3 more have no mapping yet.

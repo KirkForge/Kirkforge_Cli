@@ -444,17 +444,23 @@ mod tests {
                 .trim()
                 .trim_matches('\'')
                 .trim_matches('"');
-            if let (false, Ok(v)) = (key.is_empty(), parts.next().unwrap_or("").trim().parse::<f64>())
-            {
+            if let (false, Ok(v)) = (
+                key.is_empty(),
+                parts.next().unwrap_or("").trim().parse::<f64>(),
+            ) {
                 ci.insert(key, v);
             }
         }
-        assert!(!ci.is_empty(), "parsed no thresholds from ci.yml targets dict");
+        assert!(
+            !ci.is_empty(),
+            "parsed no thresholds from ci.yml targets dict"
+        );
 
         for (dir, threshold) in DEFAULT_THRESHOLDS {
-            let ci_val = ci.get(*dir).copied().unwrap_or_else(|| {
-                panic!("ci.yml coverage gate has no threshold for `{dir}`")
-            });
+            let ci_val = ci
+                .get(*dir)
+                .copied()
+                .unwrap_or_else(|| panic!("ci.yml coverage gate has no threshold for `{dir}`"));
             assert!(
                 (ci_val - threshold).abs() < 1e-9,
                 "DEFAULT_THRESHOLDS[{dir}] = {threshold} but ci.yml coverage gate = {ci_val} (drift)",

@@ -50,8 +50,6 @@
 
 | Item | Why deferred |
 |---|---|
-| `use_workflow_run` bench task | No `Tool` impl exists for `kirkforge-workflow`. The crate ships a library and a TUI slash command but the in-process `Tool` wrapper was never created. Belongs in a follow-up WO. |
-| 11 pre-existing bench tasks (added in WO 7.8) fail `verify-only` | Their `file_contains` verify specs look for post-model substrings the setup file does not contain. Pre-existing flaw in those tasks; not part of WO 8.3 scope. |
 | 75% coverage on `src/session` (WO 12.9) | Measured at 68.6% (CI run 30333515698); WO 12.8's ~75% estimate was optimistic. The remaining gap is async executor (`executor/dispatch.rs`, `loop_.rs`, `turn.rs`) + network (`mcp_client/http.rs`) code that needs integration test work, not pure-helper unit tests. Threshold raised 68.0 → 68.5 (proven-green by the 68.6% run); 75% deferred to a follow-up WO. ADR-065. |
 
 ### Series 15 (cross-review bucketlist)

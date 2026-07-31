@@ -271,9 +271,52 @@ pub(super) fn resolve_continue_path(value: &str) -> anyhow::Result<std::path::Pa
 
 #[cfg(test)]
 mod tests {
-    use super::emit_turn_events;
+    use super::{emit_turn_events, resolve_continue_path};
     use kirkforge::session::executor::TurnEvent;
     use kirkforge::shared::{OutputFormat, ToolCallRecord};
+
+    /// Path-style values (containing a `/`) are returned as-is,
+    /// without touching the session index. This is the "I have a
+    /// specific log file path" case.
+    #[test]
+    fn resolve_continue_path_passthrough_for_path_style() {
+        let p = resolve_continue_path("/home/kirk/sessions/foo.conv.ndjson").unwrap();
+        assert_eq!(
+            p,
+            std::path::PathBuf::from("/home/kirk/sessions/foo.conv.ndjson")
+        );
+    }
+
+    /// `.conv.ndjson` suffix is enough to be treated as a path,
+    /// even without a separator. Belt-and-suspenders for users
+    /// who pass a bare filename.
+    #[test]
+    fn resolve_continue_path_passthrough_for_conv_ndjson_suffix() {
+        let p = resolve_continue_path("foo.conv.ndjson").unwrap();
+        assert_eq!(p, std::path::PathBuf::from("foo.conv.ndjson"));
+    }
+
+    /// Empty input: contains neither a slash nor the suffix, so
+    /// it would be treated as a session id prefix. An empty prefix
+    /// is unlikely to resolve to anything; we just check the call
+    /// goes through the id-resolution path (and errors out at the
+    /// session-index layer for this test env, which is fine).
+    #[test]
+    fn resolve_continue_path_id_prefix_goes_to_index() {
+        // We can't assert the exact error text (depends on the
+        // real session directory) but we can assert it's an error
+        // and that it doesn't fall through as a path.
+        let r = resolve_continue_path("definitely-not-a-real-session-xyzzy");
+        assert!(r.is_err(), "expected an error, got: {r:?}");
+        let err = r.unwrap_err().to_string();
+        // Either "No saved session found" (empty sessions dir) or
+        // a session-index error. Both indicate the id-resolution
+        // path was taken, which is what we want to verify.
+        assert!(
+            err.contains("No saved session") || err.contains("Error resolving session id"),
+            "unexpected error: {err}"
+        );
+    }
 
     /// C20 regression: a cached or zero-cost turn must not reset the
     /// running session cost to 0.0 while token counters keep growing.

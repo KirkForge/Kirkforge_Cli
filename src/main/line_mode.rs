@@ -1,0 +1,774 @@
+// Line-mode driver loop + interactive/non-interactive approval polling
+// (Unix /dev/tty poll, Windows stdin race, other-platform fallback).
+// Extracted from the binary root — pure move, no behaviour change.
+
+use super::turn_events::emit_turn_events;
+use kirkforge::{adapters, line_mode, session};
+use std::io::Write;
+use tokio::sync::mpsc;
+
+/// Spawn the approval responder used by non-interactive runs.
+///
+/// Non-interactive mode has no human in the loop, so every request
+/// that reaches this channel is denied. The executor already auto-allows
+/// read-only discovery tools and benign bash; anything that still needs
+/// approval (non-read-only bash, explicit Deny rules, etc.) must be
+/// rejected rather than silently approved.
+pub(super) fn spawn_non_interactive_approval_handler(
+    mut approval_rx: mpsc::UnboundedReceiver<session::executor::ApprovalRequest>,
+) {
+    tokio::spawn(async move {
+        while let Some(req) = approval_rx.recv().await {
+            tracing::warn!(
+                tool = %req.tool_name,
+                args = %req.args,
+                "non-interactive run denied approval for tool; use interactive mode or add a permission rule that explicitly allows this operation"
+            );
+            kirkforge::send_or_warn!(req.response.send(session::executor::ApprovalResponse::DeniedWithReason(
+                "non-interactive mode cannot approve destructive tools; use interactive mode or add a permission rule".into(),
+            )), "approval response receiver dropped; response discarded");
+        }
+    });
+}
+
+// reason: entry point; each arg is an independent session resource for non-interactive mode.
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn run_line_mode(
+    config: kirkforge::shared::SharedConfig,
+    adapter: Box<dyn adapters::ModelAdapter>,
+    tools: kirkforge::session::toolset::CompositeToolset,
+    conversation: (
+        session::conversation::ConversationLog,
+        session::conversation::OpenOutcome,
+    ),
+    system: Option<String>,
+    output: kirkforge::shared::OutputFormat,
+    max_turns: usize,
+    non_interactive: bool,
+    no_color: bool,
+    plugin_registry: &kirkforge_plugin_host::PluginRegistry,
+    session_id: String,
+    context_index: Option<kirkforge_context_index::ContextIndex>,
+    trace_recorder: Option<session::replay::TraceRecorder>,
+) -> anyhow::Result<()> {
+    // If running in non-interactive mode (scripted), deny all approvals.
+    // If running in line-mode interactive (no TUI), prompt on stderr and
+    // read from /dev/tty so the user can actually approve or deny.
+    let model_name = adapter.model_info().name.clone();
+
+    let (conversation, open_outcome) = conversation;
+    let mut executor = session::executor::Executor::with_log_and_undo_and_plugins(
+        adapter,
+        tools,
+        config.clone(),
+        conversation,
+        None,
+        None,
+        Some(plugin_registry),
+    );
+    executor.set_session_id(session_id);
+    if let session::conversation::OpenOutcome::Restored(messages) = open_outcome {
+        executor.set_recovered_messages(messages);
+    }
+    executor.set_system_override(system.clone());
+
+    // Attach the repo-graph context index if one was built.
+    if let Some(idx) = context_index {
+        executor.set_context_index(idx);
+    }
+
+    // Attach the turn-trace recorder if tracing is enabled.
+    if let Some(recorder) = trace_recorder {
+        executor.set_trace(recorder);
+    }
+
+    let (approval_tx, approval_rx) =
+        mpsc::unbounded_channel::<session::executor::ApprovalRequest>();
+
+    if non_interactive {
+        spawn_non_interactive_approval_handler(approval_rx);
+    } else {
+        spawn_line_mode_approval_handler(approval_rx, no_color);
+    }
+
+    if let Some(sys) = &system {
+        tracing::info!("System prompt set from CLI: {}", sys);
+    }
+
+    let cancelled = std::sync::atomic::AtomicBool::new(false);
+
+    let mut line_reader = line_mode::LineReader::new(!non_interactive)?;
+    let mut turn_no: usize = 0;
+    let mut total_prompt_tokens: usize = 0;
+    let mut total_completion_tokens: usize = 0;
+    let mut cumulative_cost: f64 = 0.0;
+    let mut all_tool_records: Vec<kirkforge::shared::ToolCallRecord> = Vec::new();
+    let mut final_error: Option<String> = None;
+    let overall_started = std::time::Instant::now();
+
+    while let Some(input) = line_reader.next_line().await? {
+        turn_no += 1;
+        if max_turns > 0 && turn_no > max_turns {
+            tracing::info!(
+                turn_no,
+                max_turns,
+                "reached --max-turns cap; stopping stdin read"
+            );
+            break;
+        }
+
+        // Built-in slash commands in line mode (where there is no TUI
+        // key handler to intercept them). This makes `/exit` and
+        // `/quit` behave consistently with the TUI.
+        let trimmed = input.trim();
+        if trimmed == "/exit" || trimmed == "/quit" {
+            if output == kirkforge::shared::OutputFormat::Text {
+                println!("Exiting.");
+            }
+            break;
+        }
+
+        if trimmed == "/reload plugins" {
+            let cfg = kirkforge::shared::read_shared_config(&config).clone();
+            match session::plugin_tools::load_plugin_registry(&cfg) {
+                Ok((registry, warnings)) => {
+                    let summary = executor.reload_plugins(&registry);
+                    if output == kirkforge::shared::OutputFormat::Text {
+                        let icon = line_mode::symbol(no_color, "🔌");
+                        let sep = if icon.is_empty() { "" } else { " " };
+                        println!("{icon}{sep}{summary}");
+                    }
+                    for w in warnings {
+                        tracing::warn!(warning = %w, "plugin reload warning");
+                    }
+                }
+                Err(e) => {
+                    let icon = line_mode::symbol(no_color, "❌");
+                    let sep = if icon.is_empty() { "" } else { " " };
+                    eprintln!("{icon}{sep}Plugin reload failed: {e}");
+                }
+            }
+            continue;
+        }
+
+        if trimmed.starts_with("/workflow ") || trimmed == "/workflow" {
+            let args = trimmed.strip_prefix("/workflow").unwrap_or("").trim();
+            let (sub, rest) = args.split_once(' ').unwrap_or((args, ""));
+            let sub = sub.trim();
+            let rest = rest.trim();
+            match sub {
+                "run" => {
+                    if rest.is_empty() {
+                        if output == kirkforge::shared::OutputFormat::Text {
+                            println!("Usage: /workflow run <name>");
+                        }
+                    } else {
+                        let path = match kirkforge_workflow::find_workflow_file(rest) {
+                            Some(p) => p,
+                            None => {
+                                if output == kirkforge::shared::OutputFormat::Text {
+                                    println!("Workflow '{rest}' not found.");
+                                }
+                                continue;
+                            }
+                        };
+                        match kirkforge_workflow::Workflow::from_file(&path) {
+                            Ok(workflow) => {
+                                let cfg = kirkforge::shared::read_shared_config(&config).clone();
+                                let ollama_host = cfg.model.ollama_host.clone();
+                                let supports_images = cfg.model.ollama_host.contains("localhost")
+                                    || cfg.model.ollama_host.contains("127.0.0.1")
+                                    || cfg.model.ollama_host.contains("[::1]");
+                                let cancel =
+                                    std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+                                let workflow_name = workflow.name.clone();
+                                let step_count = workflow.steps.len();
+                                if output == kirkforge::shared::OutputFormat::Text {
+                                    println!("🚀 Started workflow '{workflow_name}' ({step_count} steps).");
+                                }
+                                let runner = kirkforge::tui::commands::workflow::LineStepRunner {
+                                    model_name: model_name.clone(),
+                                    ollama_host,
+                                    config: cfg,
+                                    supports_images,
+                                    undo_stack: None,
+                                };
+                                let result = kirkforge_workflow::WorkflowExecutor::new(workflow)
+                                    .run(&runner, Some(&cancel))
+                                    .await;
+                                match result {
+                                    Ok(summary) => {
+                                        if output == kirkforge::shared::OutputFormat::Text {
+                                            let s =
+                                                kirkforge::tui::commands::workflow::format_summary(
+                                                    &workflow_name,
+                                                    &summary,
+                                                );
+                                            println!("{s}");
+                                        }
+                                    }
+                                    Err(e) => {
+                                        if output == kirkforge::shared::OutputFormat::Text {
+                                            println!("Workflow failed: {e}");
+                                        }
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                if output == kirkforge::shared::OutputFormat::Text {
+                                    println!("Failed to load workflow '{rest}': {e}");
+                                }
+                            }
+                        }
+                    }
+                }
+                "status" => {
+                    if output == kirkforge::shared::OutputFormat::Text {
+                        println!("No workflow is currently running. Use /workflow run <name>.");
+                    }
+                }
+                "cancel" => {
+                    if output == kirkforge::shared::OutputFormat::Text {
+                        println!("⛔ Workflow cancelled.");
+                    }
+                }
+                _ => {
+                    if output == kirkforge::shared::OutputFormat::Text {
+                        println!("Usage: /workflow run <name> | status | cancel");
+                    }
+                }
+            }
+            continue;
+        }
+
+        if trimmed == "/reload skills" {
+            // Line mode has no AppState skill registry; just report that the
+            // interactive skill reload is a TUI-only feature.
+            if output == kirkforge::shared::OutputFormat::Text {
+                let icon = line_mode::symbol(no_color, "🧠");
+                let sep = if icon.is_empty() { "" } else { " " };
+                println!("{icon}{sep}Skill reload is only available in the TUI. Use /help to see available line-mode commands.");
+            }
+            continue;
+        }
+
+        if trimmed == "/carryover show" || trimmed == "/carryover" {
+            let profile = session::carryover::load_carryover();
+            if output == kirkforge::shared::OutputFormat::Text {
+                if profile.session_count == 0 {
+                    println!("No carryover profile yet.");
+                } else {
+                    println!(
+                        "{}",
+                        session::carryover::CarryoverProfile::to_prompt_block(&profile)
+                    );
+                }
+            }
+            continue;
+        }
+
+        if trimmed == "/carryover clear" {
+            session::carryover::clear_carryover();
+            if output == kirkforge::shared::OutputFormat::Text {
+                println!("Carryover profile cleared.");
+            }
+            continue;
+        }
+
+        if trimmed == "/help" || trimmed == "/h" || trimmed == "/?" {
+            if output == kirkforge::shared::OutputFormat::Text {
+                println!("Line-mode commands (most commands are TUI-only):");
+                println!("  /exit, /quit          Exit the session");
+                println!("  /reload               Reload config.toml");
+                println!("  /reload plugins       Re-scan plugin directory");
+                println!("  /carryover            Show or clear cross-session carryover");
+                println!("  /help                 Show this help");
+                println!();
+                println!(
+                    "Type `/help` in the TUI (`kirkforge run`) for the full grouped command list."
+                );
+            }
+            continue;
+        }
+
+        let turn_started_at = std::time::Instant::now();
+        let events = executor
+            .run_turn_collecting(&input, &approval_tx, &cancelled)
+            .await?;
+        let _turn_duration_ms = turn_started_at.elapsed().as_millis() as u64;
+        emit_turn_events(
+            &events,
+            output,
+            &mut total_prompt_tokens,
+            &mut total_completion_tokens,
+            &mut cumulative_cost,
+            &mut all_tool_records,
+            &mut final_error,
+        );
+    }
+
+    if turn_no == 0 && system.is_none() {
+        tracing::warn!("No input provided. Pipe a prompt or use --system.");
+        return Ok(());
+    }
+
+    if output == kirkforge::shared::OutputFormat::Text {
+        println!();
+    }
+
+    if output == kirkforge::shared::OutputFormat::Json {
+        let total_duration_ms = overall_started.elapsed().as_millis() as u64;
+        let recorded_messages: Vec<_> = executor.conversation_log().all().to_vec();
+        let summary = kirkforge::shared::SessionSummary {
+            version: "1.0".into(),
+            session: kirkforge::shared::SessionInfo {
+                id: if non_interactive {
+                    "non-interactive".into()
+                } else {
+                    "line-mode".into()
+                },
+                model: model_name,
+                duration_ms: total_duration_ms,
+                started_at: chrono::Local::now().to_rfc3339(),
+            },
+            messages: recorded_messages,
+            tool_calls: all_tool_records,
+            usage: kirkforge::shared::UsageSummary {
+                prompt_tokens: total_prompt_tokens,
+                completion_tokens: total_completion_tokens,
+                total_tokens: total_prompt_tokens + total_completion_tokens,
+                cost_usd: cumulative_cost,
+            },
+            error: final_error,
+        };
+        println!("{}", serde_json::to_string_pretty(&summary)?);
+    }
+
+    Ok(())
+}
+
+/// Read a single line approval answer from the terminal.
+///
+/// On Unix, reads from the controlling terminal (`/dev/tty`) so it does
+/// not compete with stdin prompt reading. On Windows there is no
+/// equivalent device, so we read from stdin; the line-mode main loop is
+/// not reading stdin while a tool call is awaiting approval.
+#[cfg(unix)]
+fn read_approval_answer_pollable(
+    _tool_name: &str,
+    shutdown: &std::sync::atomic::AtomicBool,
+) -> Option<bool> {
+    use std::os::fd::AsRawFd;
+    let tty = match std::fs::OpenOptions::new().read(true).open("/dev/tty") {
+        Ok(f) => f,
+        Err(e) => {
+            tracing::warn!(error = %e, "line-mode approval: no /dev/tty available; denying");
+            // Some(false) = a real decision (deny); None = shutdown interrupted.
+            return Some(false);
+        }
+    };
+    // Keep `tty` alive for the fd lifetime; poll the raw fd with a short timeout
+    // so `shutdown` is re-checked between polls and the thread is joinable.
+    let line = poll_read_line(tty.as_raw_fd(), shutdown)?;
+    let trimmed = line.trim().to_ascii_lowercase();
+    Some(trimmed == "y" || trimmed == "yes")
+}
+
+/// Poll `fd` for readability with a 200 ms timeout, accumulating bytes until a
+/// newline arrives. Returns `Some(line)` on a complete line (or EOF), or `None`
+/// the moment `shutdown` is set. This is the testable seam that makes the
+/// approval-reader thread joinable on shutdown instead of detached forever.
+///
+/// # Safety / blocking
+/// `fd` must remain valid and open for the duration of the call. The poll
+/// interval bounds the worst-case join latency to ~200 ms.
+#[cfg(unix)]
+fn poll_read_line(
+    fd: std::os::fd::RawFd,
+    shutdown: &std::sync::atomic::AtomicBool,
+) -> Option<String> {
+    use std::sync::atomic::Ordering;
+    let mut buf = [0u8; 256];
+    let mut acc = String::new();
+    loop {
+        if shutdown.load(Ordering::Acquire) {
+            return None;
+        }
+        let mut pfd = libc::pollfd {
+            fd,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: `pfd` references `fd`, which the caller keeps open for the
+        // call. Single-threaded access (one reader thread per request).
+        let n = unsafe { libc::poll(&mut pfd as *mut libc::pollfd, 1, 200) };
+        if n < 0 {
+            let e = std::io::Error::last_os_error();
+            if e.kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            tracing::warn!(error = %e, "poll(/dev/tty) failed; denying");
+            return Some(acc);
+        }
+        if pfd.revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0 {
+            return Some(acc);
+        }
+        if pfd.revents & libc::POLLIN != 0 {
+            // SAFETY: reading from `fd` which is open and readable per poll.
+            let r = unsafe { libc::read(fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len()) };
+            if r > 0 {
+                let bytes = &buf[..r as usize];
+                if let Ok(s) = std::str::from_utf8(bytes) {
+                    acc.push_str(s);
+                }
+                if acc.contains('\n') {
+                    return Some(acc);
+                }
+                // partial line (no newline yet) — keep polling for the rest
+            } else if r == 0 {
+                return Some(acc); // EOF
+            } else {
+                let e = std::io::Error::last_os_error();
+                if e.kind() == std::io::ErrorKind::WouldBlock {
+                    continue;
+                }
+                return Some(acc);
+            }
+        }
+        // n == 0 (timeout) → loop and re-check shutdown
+    }
+}
+
+#[cfg(windows)]
+fn read_approval_answer_pollable(
+    _tool_name: &str,
+    shutdown: &std::sync::atomic::AtomicBool,
+) -> Option<bool> {
+    // Windows has no /dev/tty. We race a blocking stdin reader against a
+    // periodic poll of the shutdown flag. The reader is a tokio
+    // `spawn_blocking` task, so the outer async caller can abort it on
+    // shutdown/timeout without waiting for a line to arrive. We return `None`
+    // when shutdown is observed so the caller can distinguish "interrupted"
+    // from "denied". The line-mode main loop is not reading stdin while a tool
+    // awaits approval, so holding the stdin lock here is safe.
+    use std::sync::atomic::Ordering;
+
+    if shutdown.load(Ordering::Acquire) {
+        return None;
+    }
+
+    tokio::runtime::Handle::current().block_on(async {
+        let reader = tokio::task::spawn_blocking(|| {
+            use std::io::BufRead;
+            let mut answer = String::new();
+            let stdin = std::io::stdin();
+            let mut reader = std::io::BufReader::new(stdin.lock());
+            match reader.read_line(&mut answer) {
+                Ok(0) => false,
+                Ok(_) => {
+                    let trimmed = answer.trim().to_ascii_lowercase();
+                    trimmed == "y" || trimmed == "yes"
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "failed to read approval answer from stdin");
+                    false
+                }
+            }
+        });
+
+        let mut interval = tokio::time::interval(std::time::Duration::from_millis(200));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+        let abort = reader.abort_handle();
+
+        tokio::select! {
+            biased;
+            a = reader => Some(a.unwrap_or(false)),
+            _ = async {
+                loop {
+                    interval.tick().await;
+                    if shutdown.load(Ordering::Acquire) {
+                        break;
+                    }
+                }
+            } => {
+                abort.abort();
+                None
+            }
+        }
+    })
+}
+
+#[cfg(not(any(unix, windows)))]
+fn read_approval_answer_pollable(
+    _tool_name: &str,
+    _shutdown: &std::sync::atomic::AtomicBool,
+) -> Option<bool> {
+    tracing::warn!("line-mode approval is not supported on this platform");
+    Some(false)
+}
+
+/// Spawn an approval responder for interactive line mode.
+///
+/// When the TUI is disabled, destructive tool calls still need a human
+/// decision. This handler prints the request to stderr and reads a line
+/// from the controlling terminal when available, or stdin on Windows, so
+/// it does not compete with prompt reading. `y`/`yes` approves; anything
+/// else denies.
+///
+/// The read runs on its own OS thread (a tokio `spawn_blocking` task would
+/// keep the runtime alive while it waits forever on a quiet terminal). On Unix
+/// the thread polls `/dev/tty` with a short interval and is joined on shutdown
+/// (answer or timeout), so it does not detach and linger. On Windows the read
+/// is blocking and not interruptible, so that path remains detached.
+fn spawn_line_mode_approval_handler(
+    mut approval_rx: mpsc::UnboundedReceiver<session::executor::ApprovalRequest>,
+    no_color: bool,
+) {
+    tokio::spawn(async move {
+        while let Some(req) = approval_rx.recv().await {
+            let args_preview = match serde_json::to_string_pretty(&req.args) {
+                Ok(s) => s,
+                Err(_) => req.args.to_string(),
+            };
+            let warn_icon = line_mode::symbol(no_color, "⚠️");
+            let warn_sep = if warn_icon.is_empty() { "" } else { " " };
+            eprintln!();
+            eprintln!("{warn_icon}{warn_sep}Approval required: {}", req.tool_name);
+            eprintln!("{args_preview}");
+            eprint!("Approve? [y/N]: ");
+            if let Err(e) = std::io::stderr().flush() {
+                tracing::warn!(error = %e, "failed to flush stderr approval prompt");
+            }
+
+            let tool_name = req.tool_name.clone();
+            let (answer_tx, answer_rx) = tokio::sync::oneshot::channel::<bool>();
+
+            // Reader thread: reads the terminal and sends the answer back. On
+            // Unix it polls /dev/tty with a 200 ms interval so the `shutdown`
+            // flag interrupts it; the JoinHandle is joined below (on timeout via
+            // shutdown, on answer because the thread already exited) so no
+            // reader thread is left detached at the end of the iteration.
+            // On Windows the same pollable abstraction races a blocking stdin
+            // reader against the shutdown flag and returns `None` when
+            // interrupted, so the same timeout/gate logic applies.
+            let shutdown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let shutdown_reader = shutdown.clone();
+            let reader_handle: std::thread::JoinHandle<()> = std::thread::spawn(move || {
+                let approved =
+                    read_approval_answer_pollable(&tool_name, &shutdown_reader).unwrap_or(false);
+                // If the tokio side already timed out, `answer_rx` was dropped
+                // and this send is harmless.
+                kirkforge::send_or_warn!(
+                    answer_tx.send(approved),
+                    "line-mode answer channel receiver dropped"
+                );
+            });
+
+            let result = tokio::time::timeout(std::time::Duration::from_secs(120), answer_rx).await;
+            if result.is_err() {
+                // Signal the poll loop to exit, then join so the thread is
+                // reclaimed rather than lingering until the next input.
+                shutdown.store(true, std::sync::atomic::Ordering::Release);
+                eprintln!("\nApproval prompt timed out after 120 s; denying.");
+            }
+            // Always join: on the answer path the thread has already exited
+            // (instant); on the timeout path it exits within one poll interval.
+            let _ = reader_handle.join();
+
+            let approved = result.map(|r| r.unwrap_or(false)).unwrap_or(false);
+
+            let resp = if approved {
+                session::executor::ApprovalResponse::Approved
+            } else {
+                session::executor::ApprovalResponse::Denied
+            };
+            kirkforge::send_or_warn!(
+                req.response.send(resp),
+                "approval response receiver dropped; response discarded"
+            );
+        }
+    });
+}
+
+/// Parse the next prompt from a `BufRead` source, applying the
+/// multi-turn rules:
+///
+/// - EOF (0 bytes)              → `None` (loop exits)
+/// - Blank/whitespace-only line → `None` (heredoc terminator)
+/// - Non-blank line             → `Some(trimmed)`
+///
+/// Review.md gap #2: this replaces the pre-M4 `read_to_string` +
+/// one-shot `run_turn` flow. The function is pure (it takes a
+/// `&mut String` buffer for reuse, but otherwise has no side
+/// effects) and is the unit-testable seam for the loop driver.
+#[cfg(test)]
+fn next_prompt<R: std::io::BufRead>(
+    reader: &mut R,
+    buf: &mut String,
+) -> std::io::Result<Option<String>> {
+    buf.clear();
+    let n = reader.read_line(buf)?;
+    if n == 0 {
+        return Ok(None);
+    }
+    let trimmed = buf.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(trimmed.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    /// `next_prompt` returns `None` at EOF.
+    #[test]
+    fn next_prompt_returns_none_on_eof() {
+        let input = "";
+        let mut reader = Cursor::new(input);
+        let mut buf = String::new();
+        let r = next_prompt(&mut reader, &mut buf).unwrap();
+        assert!(r.is_none());
+    }
+
+    /// `next_prompt` returns `None` for a blank/whitespace-only
+    /// line. This is the heredoc terminator behaviour.
+    #[test]
+    fn next_prompt_returns_none_for_blank_line() {
+        let input = "   \t  \n";
+        let mut reader = Cursor::new(input);
+        let mut buf = String::new();
+        let r = next_prompt(&mut reader, &mut buf).unwrap();
+        assert!(r.is_none());
+    }
+
+    /// `next_prompt` returns the trimmed line for non-blank input.
+    #[test]
+    fn next_prompt_returns_trimmed_line() {
+        let input = "  hello world  \n";
+        let mut reader = Cursor::new(input);
+        let mut buf = String::new();
+        let r = next_prompt(&mut reader, &mut buf).unwrap();
+        assert_eq!(r.as_deref(), Some("hello world"));
+    }
+
+    /// `next_prompt` over a 3-line stream: first two are prompts,
+    /// the third is blank → the function returns the first prompt
+    /// and the second call sees the blank and returns None. The
+    /// loop driver would then exit.
+    #[test]
+    fn next_prompt_sequence_three_lines() {
+        let input = "turn 1\nturn 2\n\n";
+        let mut reader = Cursor::new(input);
+        let mut buf = String::new();
+        assert_eq!(
+            next_prompt(&mut reader, &mut buf).unwrap().as_deref(),
+            Some("turn 1")
+        );
+        assert_eq!(
+            next_prompt(&mut reader, &mut buf).unwrap().as_deref(),
+            Some("turn 2")
+        );
+        // Third call: blank line → None (loop exits).
+        assert!(next_prompt(&mut reader, &mut buf).unwrap().is_none());
+    }
+
+    /// `next_prompt` with no trailing newline on the last prompt
+    /// still works (the `read_line` call returns the bytes; `trim`
+    /// handles the missing newline).
+    #[test]
+    fn next_prompt_handles_missing_trailing_newline() {
+        let input = "no newline here";
+        let mut reader = Cursor::new(input);
+        let mut buf = String::new();
+        let r = next_prompt(&mut reader, &mut buf).unwrap();
+        assert_eq!(r.as_deref(), Some("no newline here"));
+        // Subsequent call sees EOF.
+        assert!(next_prompt(&mut reader, &mut buf).unwrap().is_none());
+    }
+
+    /// The non-interactive approval handler must deny every request,
+    /// even when global auto_approve is true. Otherwise it would bypass
+    /// the executor's safety downgrade for non-read-only bash.
+    #[tokio::test]
+    async fn non_interactive_approval_handler_denies_all_requests() {
+        let (tx, rx) = mpsc::unbounded_channel();
+        spawn_non_interactive_approval_handler(rx);
+
+        let (oneshot_tx, oneshot_rx) = tokio::sync::oneshot::channel();
+        tx.send(session::executor::ApprovalRequest {
+            tool_name: "bash".into(),
+            args: serde_json::json!({"command": "rm -rf /"}),
+            response: session::executor::ApprovalResponder::new(oneshot_tx),
+        })
+        .unwrap();
+
+        let resp = oneshot_rx.await.expect("handler sent a response");
+        assert!(
+            matches!(
+                resp,
+                session::executor::ApprovalResponse::DeniedWithReason(_)
+            ),
+            "expected a reasoned denial, got {resp:?}"
+        );
+    }
+
+    /// Gate (Task 8 sub-task 5): the Unix approval-reader thread must JOIN on
+    /// shutdown rather than detach and linger. `poll_read_line` is the seam —
+    /// given a fd that is never readable and never reaches EOF (a UnixStream
+    /// read half whose write half is held open), it must return `None` promptly
+    /// once `shutdown` is set, so the spawned reader thread joins within ~one
+    /// poll interval. A blocking `read_line` would hang here forever.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn approval_reader_thread_joins_on_shutdown() {
+        use std::os::fd::AsRawFd;
+        use std::os::unix::net::UnixStream;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+
+        // A connected socket pair: we hold the write end open and never write,
+        // so the read end is never readable and never EOF — the reader's poll
+        // loop must rely on `shutdown` to exit.
+        let (read_end, write_end) = UnixStream::pair().expect("UnixStream::pair");
+        read_end.set_nonblocking(true).expect("set_nonblocking");
+        let fd = read_end.as_raw_fd();
+        // Keep both ends alive for the thread's lifetime.
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let shutdown_reader = shutdown.clone();
+        let handle = std::thread::spawn(move || {
+            let _ = write_end; // keep write end open so read never sees EOF
+            poll_read_line(fd, &shutdown_reader)
+        });
+
+        // Let the thread enter its poll loop.
+        tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+        assert!(
+            !handle.is_finished(),
+            "reader should be blocked in poll, not finished"
+        );
+
+        shutdown.store(true, Ordering::Release);
+
+        // Join must complete within one poll interval plus slack (no /dev/tty
+        // involved — the fd is the socket). A detached/blocking reader would
+        // never join here.
+        let joined = tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            tokio::task::spawn_blocking(move || handle.join()),
+        )
+        .await;
+        assert!(joined.is_ok(), "reader thread did not join within 3s");
+        let join_inner = joined.expect("spawn_blocking timed out");
+        assert!(join_inner.is_ok(), "join returned an error: {join_inner:?}");
+        // And it returned Ok(None) (shutdown interrupted), not Ok(Some(line)).
+        let inner = join_inner.unwrap();
+        assert!(
+            matches!(inner, Ok(None)),
+            "expected Ok(None) on shutdown, got {inner:?}"
+        );
+    }
+}

@@ -216,6 +216,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   not on the racy post-drop env state. Test-only fix; no behavior
   change. Unblocks the v0.3.6 release (the `windows` CI job was red).
 
+### Changed
+- WO 15.5: split `src/session/executor/tests/mod.rs` (3,760 lines, 79
+  tests) into feature-aligned sub-files — `tests/common.rs` (shared
+  `MockAdapter`/`MockTool`/`make_executor`/`temp_hooks_dir`/`SleepingTool`
+  helpers), `tests/dispatch.rs`, `tests/turn.rs`, `tests/loop_.rs`,
+  `tests/approval.rs`, `tests/scout.rs`. `mod.rs` is now a 13-line
+  router. Pure refactor: test bodies moved verbatim, no logic/assertion
+  change, test count unchanged (79). `#[cfg(unix)]` guards on
+  `temp_hooks_dir` and the 4 hook tests preserved.
+
 ### Added
 - Prompt-cache stem-reuse wiring (Workorder 10.2): the
   `CacheStemTracker` from WO 9.5 is now instantiated on the `Executor`

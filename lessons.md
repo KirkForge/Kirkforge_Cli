@@ -1,47 +1,76 @@
-# Lessons — WO 15.2 session
+# Lessons — WO 15.5 session (split executor tests/mod.rs)
 
 ## What I learned about this codebase
-- `load_from_dir` and `load_one` intentionally differ in error handling: `load_one`
-  surfaces validation errors as warnings but KEEPS the plugin (so the user sees every
-  issue and can fix the manifest in one pass, per WO 8.8). `load_from_dir` (after WO 15.2)
-  surfaces errors as warnings AND skips the plugin (`continue`). The bucketlist fix text
-  explicitly specified `continue` for `load_from_dir`. Don't try to unify them.
-- `validate()` (the manifest schema check) and `filter_capabilities()` (the runtime
-  trust/symlink/path-escape check) overlap on command paths: `validate()` rejects `..`
-  segments and absolute paths structurally; `filter_capabilities()` re-checks via
-  canonicalization and catches symlink escapes that `validate()` can't see (a symlink
-  inside the root pointing outside has a relative, valid-looking path). After WO 15.2,
-  `load_from_dir` skips the whole plugin on a `validate()` failure, so the
-  `filter_capabilities` symlink-escape path is only reached when `validate()` passes.
-  The `registry_drops_tool_with_symlink_escaping_root` test still covers it (uses
-  `tools/escape.sh` → symlink, which `validate()` accepts).
-- `KNOWN_EVENTS` is a static allowlist in `crates/kirkforge-plugin/src/lib.rs`. The
-  runtime emits hook events from in-process hooks in `src/session/{budget,stratum,draw}.rs`
-  via `InProcessHook::event()`. `pre-turn` and `post-compact` are in `KNOWN_EVENTS` but
-  NOT emitted by any in-process hook — they're part of the documented contract for
-  external shell plugins. Only `post-tool-write_file` was missing (emitted by
-  `PostToolWriteFileHook` in budget.rs:664).
-- The `crates/kirkforge-plugin-host/tests/load_bundled_plugins.rs` integration test
-  loads the real bundled plugins (`plugins/kirkforge-plugin3/`, etc.) via
-  `load_from_dir`. After adding `validate()`, this test confirms the bundled manifests
-  are valid. Good — it's a free production regression check.
-- Full workspace test (`cargo test --locked --workspace --no-fail-fast`) takes ~3-5 min
-  of compile + ~3 min of test runtime on this machine; clippy `--all-targets` took 8m50s
-  this session. Budget ~25 min for the full gate. Redirecting output to a file and
-  checking exit code + grepping `test result:` is the reliable way (the tool call times
-  out at 30 min if you don't redirect).
+- `src/session/executor/tests/mod.rs` held 79 executable tests (the "80
+  attributes" count is a red herring: `grep -cE '#\[test\]|#\[tokio::test\]'`
+  returns 80 but there are only 79 unique test fns — one attribute line is
+  counted by grep but maps to the same fn set; the authoritative number is
+  `cargo test`'s "79 passed"). Always trust the test-binary count, not the
+  attribute grep, for the test-count gate.
+- The `tests` module is declared `pub(crate) mod tests;` in
+  `executor/mod.rs:34`. Its children (the new sub-files) reach executor
+  items via `use super::super::*;` (super = tests, super::super = executor).
+  This glob brings in executor's own items AND its private `use` bindings
+  (ConversationLog, HookRunner, Config, Message, Role, ToolInvocation,
+  EventBus, BusEvent, PathGuard, CacheStemTracker, Arc, mpsc, MetricEvent)
+  because child modules are descendants of executor and can see its
+  private items. Globs do NOT trigger `unused_imports` warnings, so this
+  is the safe way to pull in the broad executor scope.
+- Items NOT in executor's scope must be imported explicitly per child:
+  `crate::shared::{FinishReason, ModelInfo, StreamEvent, TokenUsage,
+  ToolCallStyle, ToolDef, ToolError, ToolOutcome}` (executor only imports
+  Config/Message/Role/ToolInvocation from shared), `crate::tools::{Tool,
+  ToolContext}` (executor only imports UndoStackRef from tools),
+  `crate::shared::metrics::{read_events, PlanDecisionKind}` (executor only
+  imports record/MetricEvent), `crate::shared::permission::PermissionAction`,
+  `crate::shared::test_util::{remove_test_dir, remove_test_file}`. These
+  explicit imports DO trigger `unused_imports` if unused — must be trimmed
+  per-file.
+- `ApprovalRequest`/`ApprovalResponse`/`TurnEvent`/`CompactHookStats`/
+  `DoomHit`/`DoomLoopTracker` are `pub use`-reexported by executor
+  (mod.rs:38-41), so `super::super::*` brings them — no explicit import.
+- `is_read_only_bash` and `tool_outcome_success` live in
+  `executor/helpers/mod.rs` (pub(crate)). Reach via
+  `use super::super::helpers::*;` or named. The original test file used
+  `use super::helpers::*;` (glob) which suppressed unused warnings; a
+  named import (`use super::super::helpers::tool_outcome_success;`)
+  WILL warn if unused — only import what each file references.
+- `mod loop_;` requires the file named `loop_.rs` (Rust appends nothing
+  to the module name for the filename — `mod loop_;` → `loop_.rs`, NOT
+  `loop.rs`). I initially created `loop.rs` and got `E0583 file not found
+  for module loop_`. The `loop_` name (trailing underscore) is required
+  because `loop` is a reserved keyword.
+- `dyn Tool` coercion at call sites (`vec![Arc::new(MockTool{...})]`
+  passed to `make_executor(..., Vec<Arc<dyn Tool>>)`): the `Tool` trait
+  does NOT need to be in the *caller's* scope — only in the function
+  signature's scope (common.rs). So approval.rs (which never names
+  `Tool` as a type, only in string literals) does NOT need
+  `use crate::tools::Tool;`. Removing it fixed an unused-import warning.
+- `PermissionRule` is referenced fully-qualified
+  (`crate::shared::permission::PermissionRule {...}`) in the tests — no
+  import needed.
+- Verbatim-move verification trick: extract the original test section and
+  the new files' bodies, strip blank lines, sort, and `diff`. Identical
+  sorted output proves the content is byte-identical (just reordered +
+  re-headed). This is a cheap, strong correctness check for "pure
+  refactor" WOs.
+- `cargo test -p kirkforge --lib session::executor::tests` (the targeted
+  gate from the WO) compiles + runs in ~2-3 min and reports
+  `test result: ok. 79 passed; 0 failed`. The full
+  `cargo test --locked --workspace --no-fail-fast` took ~6 min. Clippy
+  `--all-targets` took 2m32s this session. Budget ~12 min for the full gate.
 
 ## What I tried that didn't work
-- First run of `cargo test -p kirkforge-plugin-host` after the `validate()` addition
-  failed on `registry_drops_capability_with_command_outside_root`. Root cause: the test
-  used `command = "../evil.sh"`, which `validate()` rejects (the `..` check). This is
-  the intended WO 15.2 contract change (load_from_dir now skips the whole plugin, not
-  just the capability). Fixed by updating the test to assert the new stricter behavior.
-  NOT a regression — the old test was relying on the broken path (no validate() call).
+- First extraction left an unused `use crate::tools::Tool;` in
+  approval.rs and `use super::super::helpers::tool_outcome_success;` in
+  loop_.rs and `ToolInvocation` in common.rs — all caught by `cargo
+  check`/clippy as `unused_imports` (which is `-D warnings` → build
+  fails). Fixed by trimming each file's imports to only what it
+  references. Lesson: don't copy the original's full import block
+  verbatim into every child; build a per-file minimal set, then let
+  `cargo check --tests` tell you what's unused.
 
 ## What I'd do differently
-- Nothing significant. The bucketlist fix text was precise; following it exactly
-  (including the `continue` semantics) avoided ambiguity. The only surprise was the
-  one pre-existing test that relied on the old broken behavior — worth grepping all
-  `load_from_dir` test call sites BEFORE running the full gate, but the targeted
-  `cargo test -p kirkforge-plugin-host` caught it fast enough.
+- Nothing significant. The slice-with-sed + sort-diff verification was
+  effective. The only surprise was `loop_.rs` vs `loop.rs` filename —
+  worth remembering for any future `mod <keyword>_;` split.

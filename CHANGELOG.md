@@ -164,6 +164,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   *visible* in the run UI (non-blocking) instead of hidden by the
   shell-level `|| true`. Removes the gate-theater anti-pattern
   (AGENTS.md §4/§6); no logic change.
+- WO 15.2: `PluginRegistry::load_from_dir` (the production plugin-load
+  path) now calls `PluginManifest::validate()` after the API-version
+  check, surfaces every schema error (bad name, bad semver, duplicate
+  triggers, unknown hook events, untrusted command paths) as a warning,
+  and skips the offending plugin — matching the `load_one` contract from
+  WO 8.8 ("show every issue at once"). Previously the bulk-load path
+  silently accepted invalid manifests. Also adds `post-tool-write_file`
+  to `KNOWN_EVENTS` (the runtime emits it via `budget.rs`; the validator
+  allowlist was stale). 2 new tests.
 - WO 14.0: the `Bench Baseline` workflow's three `ollama pull` steps
   (`.github/workflows/bench-baseline.yml`, jobs `bench-baseline`,
   `bench-pr-delta`, `bench-leaderboard`) now self-heal through a 3-attempt

@@ -213,6 +213,7 @@ edition = "2021"
         let event = BusEvent::FileWrite(FileWriteEvent {
             path: path.clone(),
             content_length: 26,
+            content_hash: 0,
         });
         let v = verify_build(&event).await;
         match v {

@@ -122,6 +122,7 @@ impl BusEvent {
             BusEvent::FileWrite(e) => {
                 e.path.hash(&mut hasher);
                 e.content_length.hash(&mut hasher);
+                e.content_hash.hash(&mut hasher);
             }
             BusEvent::Edit(e) => {
                 e.path.hash(&mut hasher);
@@ -129,6 +130,13 @@ impl BusEvent {
             }
             BusEvent::BashExec(e) => {
                 e.command.hash(&mut hasher);
+                // Include result-derived fields so two runs of the same
+                // command in a batch (e.g. `git add .` twice) don't dedup:
+                // the second dispatch's handlers (incl. the git verifier)
+                // would otherwise never see the event.
+                e.exit_code.hash(&mut hasher);
+                e.stdout_len.hash(&mut hasher);
+                e.stderr_len.hash(&mut hasher);
             }
             BusEvent::GitOperation(e) => {
                 e.args.hash(&mut hasher);
@@ -165,6 +173,10 @@ pub struct FileReadEvent {
 pub struct FileWriteEvent {
     pub path: PathBuf,
     pub content_length: usize,
+    /// Content hash so two writes of the same length to the same path
+    /// (a real re-write vs. a duplicate dispatch) don't dedup. Populated
+    /// by the dispatch site; tests may leave it 0.
+    pub content_hash: u64,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -637,6 +649,7 @@ mod tests {
             EventKind::FileWrite => BusEvent::FileWrite(FileWriteEvent {
                 path: PathBuf::from("/tmp/test.rs"),
                 content_length: 200,
+                content_hash: 0,
             }),
             EventKind::Edit => BusEvent::Edit(EditEvent {
                 path: PathBuf::from("/tmp/test.rs"),
@@ -993,10 +1006,29 @@ mod tests {
         let e1 = BusEvent::FileWrite(FileWriteEvent {
             path: PathBuf::from("/tmp/a.rs"),
             content_length: 100,
+            content_hash: 0,
         });
         let e2 = BusEvent::FileWrite(FileWriteEvent {
             path: PathBuf::from("/tmp/a.rs"),
             content_length: 200,
+            content_hash: 0,
+        });
+        assert_ne!(e1.idem_key(), e2.idem_key());
+    }
+
+    #[test]
+    fn test_bus_event_idem_key_file_write_same_length_differs_by_hash() {
+        // WO 15.8 (2.6): two writes of the same length to the same path
+        // must NOT dedup — a real re-write vs. a duplicate dispatch.
+        let e1 = BusEvent::FileWrite(FileWriteEvent {
+            path: PathBuf::from("/tmp/a.rs"),
+            content_length: 100,
+            content_hash: 1,
+        });
+        let e2 = BusEvent::FileWrite(FileWriteEvent {
+            path: PathBuf::from("/tmp/a.rs"),
+            content_length: 100,
+            content_hash: 2,
         });
         assert_ne!(e1.idem_key(), e2.idem_key());
     }
@@ -1031,6 +1063,32 @@ mod tests {
             workdir: None,
         });
         assert_ne!(e1.idem_key(), e2.idem_key());
+    }
+
+    #[test]
+    fn test_bus_event_idem_key_bash_exec_same_command_differs_by_result() {
+        // WO 15.8 (2.6): two `git add .` calls in a batch must NOT dedup.
+        // The result-derived fields (exit_code/stdout_len/stderr_len)
+        // differentiate the two dispatches.
+        let e1 = BusEvent::BashExec(BashExecEvent {
+            command: "git add .".into(),
+            exit_code: 0,
+            stdout_len: 0,
+            stderr_len: 0,
+            workdir: None,
+        });
+        let e2 = BusEvent::BashExec(BashExecEvent {
+            command: "git add .".into(),
+            exit_code: 1,
+            stdout_len: 5,
+            stderr_len: 2,
+            workdir: None,
+        });
+        assert_ne!(
+            e1.idem_key(),
+            e2.idem_key(),
+            "same command with different results must not dedup"
+        );
     }
 
     #[test]

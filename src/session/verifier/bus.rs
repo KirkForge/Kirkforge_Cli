@@ -191,7 +191,13 @@ pub fn format_verdict_report(verdicts: &[VerdictEntry]) -> String {
             _ => "—".to_string(),
         };
         let file_line_display = if file_line.len() > 24 {
-            format!("{}…", &file_line[..23])
+            // Walk back to the nearest UTF-8 char boundary so a multi-byte
+            // char at byte 22 (e.g. `café.txt`) doesn't panic the slice.
+            let mut boundary = 23;
+            while !file_line.is_char_boundary(boundary) {
+                boundary -= 1;
+            }
+            format!("{}…", &file_line[..boundary])
         } else {
             file_line
         };
@@ -1006,6 +1012,27 @@ mod tests {
         assert!(
             report.contains('…'),
             "long file:line should be truncated with ellipsis"
+        );
+    }
+
+    /// WO 15.8 (2.5): a path with a multi-byte UTF-8 char at byte index 22
+    /// (e.g. `café.txt`) must not panic the `&file_line[..23]` slice.
+    #[test]
+    fn format_verdict_report_truncates_multibyte_path_without_panicking() {
+        // `café` — é is 2 bytes, so a path landing é at the truncation
+        // boundary exercises the char-boundary walk-back.
+        let path = PathBuf::from(format!("src/{}é.txt", "a".repeat(18)));
+        let verdicts = vec![VerdictEntry {
+            source: VerifierSource::Build,
+            severity: Severity::Error,
+            message: "err".into(),
+            file: Some(path),
+            line: None,
+        }];
+        let report = format_verdict_report(&verdicts);
+        assert!(
+            report.contains('…'),
+            "long multi-byte path should be truncated with ellipsis"
         );
     }
 

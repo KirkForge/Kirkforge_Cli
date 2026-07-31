@@ -225,6 +225,18 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   router. Pure refactor: test bodies moved verbatim, no logic/assertion
   change, test count unchanged (79). `#[cfg(unix)]` guards on
   `temp_hooks_dir` and the 4 hook tests preserved.
+- WO 15.8: three cross-review correctness fixes. (1) `CorrectionResult.verifier`
+  on the event-driven path now carries the decisive verifier's `name()`
+  (was hard-coded `"verifier"`, producing the useless `verifier:verifier`
+  tool name the model saw); `VerifierHandler::verify_event` returns
+  `(Verdict, String)` so the correction loop can use it. (2)
+  `format_verdict_report` now walks back to the nearest UTF-8 char
+  boundary before slicing `&file_line[..23]` — a path with a multi-byte
+  char at byte 22 (e.g. `café.txt`) no longer panics. (3) `EventBus`
+  idempotency keys for `BashExec` now include `exit_code`/`stdout_len`/
+  `stderr_len` (two `git add .` calls in a batch no longer dedup) and
+  `FileWrite` now includes a `content_hash` (two same-length writes to
+  the same path no longer dedup). Closes bucketlist items 2.4, 2.5, 2.6.
 
 ### Added
 - Prompt-cache stem-reuse wiring (Workorder 10.2): the

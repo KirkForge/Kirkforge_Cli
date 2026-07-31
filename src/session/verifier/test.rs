@@ -189,6 +189,7 @@ mod tests {
         let event = BusEvent::FileWrite(FileWriteEvent {
             path: rs,
             content_length: 12,
+            content_hash: 0,
         });
         let v = verify_test(&event).await;
         assert!(matches!(v, Verdict::Skipped(_)));
@@ -324,6 +325,7 @@ edition = "2021"
         let event = BusEvent::FileWrite(FileWriteEvent {
             path: path.clone(),
             content_length: 120,
+            content_hash: 0,
         });
         let v = verify_test(&event).await;
         match v {

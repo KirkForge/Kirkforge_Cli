@@ -159,3 +159,80 @@
   preserved. The only unplanned work was the 6-line `content_hash` fix
   in security.rs, which was a pre-existing base-branch regression that
   had to be cleared to get a green workspace gate.
+
+## WO 15.26 Batch D — docs + polish (2026-07-31)
+
+### What I learned about this codebase
+- **`readme_drift` counts `#[test]` STRICTLY.** It requires `#[test]`
+  on its own line AND the next line to start with `fn ` (filters
+  `#[test]` followed by `#[ignore]`/`#[should_panic]`/other attrs). A
+  loose `grep -rn "#\[test\]" crates/` overcounts: it gave 1674 but the
+  test's own counter gave 1652. The binding number is the test's
+  counter, NOT a plain grep. I bumped the README 1652→1674 (wrong),
+  `readme_drift` failed with "drift 22", and I reverted. Always trust
+  the drift test's own counter when bumping the State table.
+- **Self-referential drift tests give false confidence.** `gaps.rs`
+  had `default_thresholds_match_ci` that asserted the const against its
+  OWN hardcoded literals — so it passed while the const (68.0) had
+  drifted from ci.yml (68.5, raised in WO 12.9). A real drift test must
+  parse the external source. Replaced it with one that parses the ci.yml
+  `targets = { ... }` dict. The loose-grep-1674 vs strict-1652 lesson
+  (above) is the same class of error: the test's contract is the truth.
+- **`cargo fmt --check` exit code via a pipe lies.** `cargo fmt
+  --check 2>&1 | tail` makes `$?` capture `tail`'s exit (0), masking
+  the real fmt failure. Run `cargo fmt --check` WITHOUT a pipe to read
+  its true exit, or just run `cargo fmt` to auto-fix then verify.
+- **ADR-066's "30 tasks" is historically accurate, not stale.** WO 9.9
+  reached 30 tasks; ADR-066 adds the signature challenge as the 31st.
+  So the four "30"s in ADR-066 are the PRE-signature count. The WO
+  4.1 premise ("30→31 in four places") conflated pre-ADR and post-ADR
+  state. Lesson: don't blindly apply WO-prescribed numeric edits —
+  verify the semantic/time context first. The REAL arithmetic error
+  (4.2) was "~9/~10 planned" (actual: 19 planned, 18 covered, 3 gap).
+- **KIRK-BENCH mapping is many-to-one.** The 31 existing task files map
+  to only 18 of the 40 spec slots; 19 spec tasks are planned; 3 (Fix
+  Compilation Error, Fix Integration Test, Implement Missing Trait) are
+  neither mapped nor planned. So "31 existing + ~9 planned = 40" was
+  wrong on two counts.
+- **Verify-first paid off (AGENTS.md §7).** 3.13
+  (`ConnectionState::Connecting` — already has a ceiling comment at
+  app.rs:22-25), 4.9 (all plugin3-hosts shims already carry `ponytail:
+  stub-only`), and 4.18 (TECHNICAL.md already documents ADR-050
+  two-path at L84/104/430/441/732) were all already done. Thirty
+  seconds of grep saved three duplicate edits.
+- **Several Batch D 4.x items live in Batch A/C files.** 4.10
+  (src/adapters/m5_tests.rs), 4.11 (src/session/executor/mod.rs), 4.13
+  (executor/turn.rs), 4.14 (executor/loop_.rs), 4.15 (executor/scout.rs),
+  4.16 (src/adapters/bedrock_signing.rs) all touch out-of-scope
+  subsystems. Per the hard scope rule these are honest deferrals, not
+  fixes — recorded in state.md, not silently skipped.
+- **`src/session/worktree.rs` is NOT in any guarded subsystem**
+  (not config/, not verifier/, not executor/), so 4.12 (session_id
+  validation) was in-scope even though it's under `src/session/`. The
+  scope boundary is the subdirectory, not the parent.
+- **`new_session_id()` produces `YYYY-MM-DD-session-N`** (hyphens only),
+  so adding "no `/`, no `\`, no `..`" validation to
+  `WorktreeSession::create` can't break the sole caller — safe
+  defensive hardening.
+- **ci.yml `--skip test_build_fork_tree_nests_children` targets the
+  WRONG test.** The historical tarpaulin flake was
+  `test_build_fork_tree_orphan_fork_is_a_root`. WO 12.0 fixed the root
+  cause; reconciling/removing the skip needs a verified tarpaulin run,
+  so it's deferred (4.6/3.53), not blind-fixed.
+
+### What I tried that didn't work
+- **4.3 README 1652→1674** (based on a loose grep). `readme_drift`
+  failed (drift 22). Reverted to 1652 — the test's strict counter is
+  the binding value.
+- Considered deleting `ManifestError::UnsupportedApiVersion` (3.16),
+  but it's matched in `src/main/error.rs:182` as forward-compat for a
+  future V2 and `ApiVersion` only has `V1` (serde rejects unknown
+  versions at parse → `ManifestError::Parse`, so it's never
+  constructed). Wiring is impossible without a 2nd variant; removal
+  touches error.rs (out of clean scope). Deferred honestly.
+
+### What I'd do differently
+- For any "update test count" item, FIRST run the relevant drift test
+  to learn its counting method, then bump to match — don't grep.
+- For "fix N→M in K places" WO items, read the target doc's
+  time-context before editing; the prescribed number may be wrong.

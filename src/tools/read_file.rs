@@ -6,7 +6,6 @@ use std::path::PathBuf;
 pub struct ReadFile {
     path_guard: PathGuard,
     minify_write_side: bool,
-    #[allow(dead_code)]
     minify_above_bytes: usize,
 }
 

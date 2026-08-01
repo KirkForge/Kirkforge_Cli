@@ -157,17 +157,26 @@ pub fn load_tasks(path: &Path) -> Result<Vec<BenchTask>> {
 // ── Verification ──
 
 /// Verify a task completed successfully.
+///
+/// The verify command inherits the calling process environment plus the
+/// task's curated env (`budget_env()`, currently `KIRKFORGE_BUDGET_CEILING`
+/// when set) so verification runs under the same env conditions the agent
+/// operated under, regardless of process-env drift between run and verify.
 pub fn verify_task(task: &BenchTask, sandbox: &Path) -> Result<bool> {
+    let curated = task.budget_env();
     match &task.verify {
         VerifySpec::TestPasses { command } => {
-            let status = std::process::Command::new("sh")
-                .arg("-c")
+            let mut cmd = std::process::Command::new("sh");
+            cmd.arg("-c")
                 .arg(command)
                 .current_dir(sandbox)
                 .env("CARGO_TERM_COLOR", "never")
                 .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status()?;
+                .stderr(std::process::Stdio::null());
+            if let Some((k, v)) = curated {
+                cmd.env(k, v.to_string());
+            }
+            let status = cmd.status()?;
             Ok(status.success())
         }
         VerifySpec::FileContains { path, contains } => {
@@ -179,13 +188,16 @@ pub fn verify_task(task: &BenchTask, sandbox: &Path) -> Result<bool> {
             Ok(content.contains(contains))
         }
         VerifySpec::CommandExitsZero { command } => {
-            let status = std::process::Command::new("sh")
-                .arg("-c")
+            let mut cmd = std::process::Command::new("sh");
+            cmd.arg("-c")
                 .arg(command)
                 .current_dir(sandbox)
                 .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status()?;
+                .stderr(std::process::Stdio::null());
+            if let Some((k, v)) = curated {
+                cmd.env(k, v.to_string());
+            }
+            let status = cmd.status()?;
             Ok(status.success())
         }
     }
@@ -309,6 +321,10 @@ pub fn compare_reports(baseline: &BenchReport, current: &BenchReport) -> DeltaRe
         };
         tasks.push(TaskDelta {
             name: name.clone(),
+            // A name appears in `all_names` only if it's in the baseline OR
+            // current report (the list is their union), so at least one side
+            // always carries the difficulty. The `Difficulty::Easy` fallback
+            // is therefore a defensive unreachable default, not a real guess.
             difficulty: c
                 .map(|r| r.difficulty)
                 .or(b.map(|r| r.difficulty))

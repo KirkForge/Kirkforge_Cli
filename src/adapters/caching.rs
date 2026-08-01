@@ -87,10 +87,17 @@ impl ModelAdapter for CachingAdapter {
         tokio::spawn(async move {
             let mut events = Vec::new();
             let mut inner = rx;
-            while let Some(ev) = inner.recv().await {
-                events.push(ev.clone());
-                if tx_out.send(ev).await.is_err() {
-                    break;
+            loop {
+                tokio::select! {
+                    biased;
+                    _ = tx_out.closed() => break,
+                    ev = inner.recv() => {
+                        let Some(ev) = ev else { break; };
+                        events.push(ev.clone());
+                        if tx_out.send(ev).await.is_err() {
+                            break;
+                        }
+                    }
                 }
             }
             // Only cache complete streams — the final event must be Done.
@@ -257,6 +264,77 @@ mod tests {
                 .get(&wrapped.model_info().name, &messages, &tools, false)
                 .is_none(),
             "partial stream should not be cached"
+        );
+    }
+
+    #[tokio::test]
+    async fn caching_adapter_aborts_forwarder_on_consumer_drop() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+        // Inner adapter emits events one at a time (capacity-1 channel), so
+        // emission of event N+1 is gated by the forwarder pulling event N.
+        // `emitted` therefore counts how many events the forwarder drained.
+        // With the consumer-drop abort, the forwarder stops pulling after the
+        // consumer drops, so `emitted` stays small. Without the abort it would
+        // drain all events.
+        let emitted = Arc::new(AtomicUsize::new(0));
+        struct CountingAdapter {
+            emitted: Arc<AtomicUsize>,
+            n: usize,
+        }
+        #[async_trait::async_trait]
+        impl ModelAdapter for CountingAdapter {
+            fn model_info(&self) -> ModelInfo {
+                ModelInfo {
+                    name: "count-model".into(),
+                    supports_thinking: false,
+                    tool_call_format: ToolCallStyle::Native,
+                    max_context_tokens: 4096,
+                    recommended_temperature: 0.7,
+                    supports_images: false,
+                    supports_cache: false,
+                }
+            }
+            async fn stream(
+                &self,
+                _messages: &[Message],
+                _tools: &[ToolDef],
+            ) -> anyhow::Result<tokio::sync::mpsc::Receiver<StreamEvent>> {
+                let (tx, rx) = tokio::sync::mpsc::channel::<StreamEvent>(1);
+                let emitted = self.emitted.clone();
+                let n = self.n;
+                tokio::spawn(async move {
+                    for i in 0..n {
+                        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                        let ev = StreamEvent::Text(format!("ev{i}"));
+                        if tx.send(ev).await.is_err() {
+                            break;
+                        }
+                        emitted.fetch_add(1, Ordering::SeqCst);
+                    }
+                });
+                Ok(rx)
+            }
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = ResponseCache::new(true, Some(tmp.path().into()));
+        let inner = Box::new(CountingAdapter {
+            emitted: emitted.clone(),
+            n: 10,
+        });
+        let wrapped = CachingAdapter::new(inner, cache, false);
+        let messages: Vec<Message> = vec![];
+        let tools: Vec<ToolDef> = vec![];
+
+        let mut rx = wrapped.stream(&messages, &tools).await.unwrap();
+        let _first = rx.recv().await;
+        drop(rx);
+        tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+
+        let count = emitted.load(Ordering::SeqCst);
+        assert!(
+            count < 10,
+            "forwarder should abort after consumer drop, but drained {count}/10 events"
         );
     }
 

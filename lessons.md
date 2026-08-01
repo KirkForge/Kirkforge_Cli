@@ -274,6 +274,109 @@
   real refactor is its own WO. WO's either/or framing ("fix OR document
   the ceiling") is permission to defer honestly — use it.
 
+## WO 15.26 Batch C — tools + executor (2026-08-01)
+
+### What landed
+- 14 of 15 safe items shipped as one-commit-per-item on
+  `wo/15.26-batch-c-tools-executor` (3.47 verified already-done — see
+  below). Zero deferrals among the safe set; 3.5 + 3.6 honestly deferred
+  to a dedicated refactor WO.
+
+### The big lessons
+- **3.15 the pre-flight was half-right.** The dispatcher said "no
+  `impl ChromeTab for` in the file" — that was WRONG; BOTH `RealChromeTab`
+  and `BrowserSessionOwner` implemented `ChromeTab` with byte-identical
+  bodies (~80 lines copy-paste). The real dedup decision was which name to
+  keep: `BrowserSessionOwner` is `pub` and referenced in AGENTS.md §71 +
+  ADR-0044 + CHANGELOG as the canonical owning-pattern example, so I kept
+  IT, deleted `RealChromeTab`, and also dropped its two dead `_step`/
+  `_max_steps` write-only fields (§5 no-dead-code). Lesson: when a doc
+  references a type by name as an EXAMPLE, keep that name; rename forces a
+  doc-sync cascade across AGENTS.md + ADR + CHANGELOG. The computer_use.rs
+  comment mentioning `RealChromeTab` was a 1-line stale-name fix.
+- **3.47 verify-don't-fix (§7) paid off.** The cancel-race the WO
+  describes ("cancel removes child → empty stdout") is ALREADY HANDLED by
+  the watcher's take-semantics at `bash_jobs.rs:182-197`: if `cancel()`
+  takes the child handle first, the watcher's `children.remove(&id)`
+  returns `None` and the `else` branch marks the job `Cancelled` (the
+  comment at :188 documents it). Batch B's 3.32 added the watcher-panic
+  watchdog on top. The residual empty-stdout affects only intentionally-
+  cancelled jobs, which is acceptable. A "register watcher before spawn"
+  refactor would be a risky concurrency rewrite for a benign residual —
+  not appropriate for a catch-all batch. Noted as already-done.
+- **3.46 was also already-shipped.** The timeout path already joins the
+  drain tasks (`join_drain`) BEFORE prepending the `[timed out]` marker,
+  so partial stdout IS flushed + preserved. The existing timeout test
+  used a no-stdout command (`sleep 30; touch`), so it never asserted
+  partial-stdout preservation — I added a focused regression test
+  (`echo MARKER; sleep 30`) that locks in the behavior. Lesson: an
+  "already done" item still deserves a regression test if the existing
+  coverage doesn't actually exercise the fixed path.
+
+### What I learned about this codebase
+- **`url` IS a direct dep** (`url = "2"` in root Cargo.toml; used in
+  `bedrock_signing.rs:109`). So 3.18 (percent-encode `file://` URIs) used
+  `url::Url::from_file_path` — no new dep, no hand-rolled encoder.
+  `from_file_path` rejects relative paths (returns Err), so the fallback
+  keeps the legacy `file:///{rel}` shape for the relative test case while
+  absolute paths (the real LSP case) get correct percent-encoding of
+  spaces + non-ASCII.
+- **`find_cargo_root` had THREE identical copies** (build/lint/test.rs),
+  each with its own triplicate of identical tests (9 total). Extracted to
+  `verifier/helpers.rs` with ONE canonical test set (3 tests). Net -6
+  tests in `src/` (the `readme_drift` test only counts `crates/`, so no
+  drift). After removing the local fn, `use std::path::{Path, PathBuf}`
+  flagged `PathBuf` unused in all three files → trimmed to `use
+  std::path::Path`. Lesson: extracting a fn often orphans an import;
+  compile-check after each extraction.
+- **Module visibility for a shared sibling helper:** `mod helpers;`
+  (private) in `verifier/mod.rs` + `pub(super) fn` inside `helpers.rs`
+  makes the fn visible to the sibling `build`/`lint`/`test` modules (all
+  descendants of `verifier`), reachable via
+  `use crate::session::verifier::helpers::find_cargo_root;`. Same
+  `pub(super)` pattern WO 15.15 used for `state/helpers.rs`.
+- **`tokio::select! { biased; _ = tx.closed() => break, ... }`** is the
+  prompt-cancellation pattern for 3.26. `Sender::closed()` resolves when
+  ALL receivers drop; with `biased` it's polled first so the forwarder
+  exits on consumer drop WITHOUT waiting for the next inner event. The
+  new test proves the inner stream stops being drained (capacity-1 inner
+  + emitted counter plateaus < N after drop).
+- **`compare_reports` difficulty fallback is unreachable.** `all_names`
+  is the UNION of baseline+current keys, so every name is in ≥1 side;
+  `c.or(b).unwrap_or(Easy)` — the `unwrap_or` never fires. Documented the
+  invariant rather than "fixing" non-buggy code.
+- **`run_decision` / `run_decision_with_context` shared body** (3.8): the
+  only diff was how `ctx` + `owned_vars` were derived (env-vars-in vs
+  ctx-in). Extracted `run_decision_inner(event_name, ctx, owned_vars,
+  config)` that both call after computing those two inputs. -45 lines.
+
+### The flake (important — DIFFERENT from the workplan's two)
+- The workplan listed two known flakes (`edit_file_snapshots_for_undo`,
+  `run_now_and_logs_and_notifier`). Neither fired. Instead
+  `session::session_index::tests::test_build_fork_tree_nests_children`
+  FAILED once under the full workspace parallel load, then PASSED in
+  isolation AND on full re-run. This is the tarpaulin tempdir/rename flake
+  documented in state.md (CI `--skip` targets this EXACT test name); it
+  can also fire under plain `cargo test` parallel load. I touched nothing
+  in `session_index.rs`. Lesson: the known-flake list isn't exhaustive —
+  state.md's "Known CI issues" section names this test too; trust the
+  isolation re-run.
+
+### What I tried that didn't work
+- First 3.15 instinct was to extract a new `ChromeTabImpl` and delete
+  BOTH old structs. Rejected: `BrowserSessionOwner` is the documented
+  name (AGENTS.md + ADR-0044), so deleting it forces a doc cascade.
+  Kept `BrowserSessionOwner`, deleted only `RealChromeTab`.
+
+### What I'd do differently
+- For the "document the ceiling" items (3.27 dir-fsync, 3.50 difficulty
+  fallback), the WO's either/or ("fix OR document") is explicit
+  permission to defer honestly when the cross-platform/structural fix is
+  disproportionate. Use it — don't force a risky change to claim a "fix."
+- For any "X and Y have identical impls" item, FIRST grep whether the
+  type name is referenced in docs/AGENTS.md/ADRs before choosing which to
+  keep; the documented name wins to avoid a stale-doc cascade.
+
 ## WO 15.26 Batch B — verifier + security (2026-08-01)
 
 ### What landed

@@ -1,6 +1,7 @@
 pub mod build;
 pub mod bus;
 pub mod git;
+mod helpers;
 /// Verifier slots — deterministic post-execution checks and correction loop.
 ///
 /// Verifiers sit on the event bus and react to tool execution events.

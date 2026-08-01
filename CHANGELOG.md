@@ -6,6 +6,22 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- WO 15.26 Batch C (tools + executor): 14 of 15 safe items fixed (one
+  commit each), 3.47 verified already-done, 3.5/3.6 deferred to a
+  refactor WO. Dedup wins: `find_cargo_root` extracted to
+  `verifier/helpers.rs` (was triplicated), `ChromeTab` impl deduped
+  (deleted `RealChromeTab` + 2 dead fields), `run_decision` shared body
+  extracted. Correctness: bash now surfaces stderr on success (so
+  `cargo` warnings reach the model), `file://` LSP URIs are percent-
+  encoded (spaces + non-ASCII), `CachingAdapter` forwarder aborts on
+  consumer drop (`select! closed()` — no more 30s network drain),
+  workflow batch results are paired by name with partial-result
+  detection, `verify_task` passes the task's curated `budget_env`.
+  `atomic_write` dir-fsync + `compare_reports` difficulty fallback
+  documented as ceilings. New `--help` smoke tests for 9 subcommands.
+  Tests: caching consumer-drop abort, workflow partial-batch detection,
+  bash timeout partial-stdout preservation, bench curated-env, lsp
+  percent-encoding.
 - WO 15.26 Batch B (verifier + security): all 15 items fixed (zero
   deferrals). `VerifierHandler` short-circuits `ToolError` events (skip
   the verifier fan-out); `bash_jobs` watcher has a watchdog that flips

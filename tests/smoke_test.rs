@@ -51,3 +51,30 @@ fn completions_command_outputs_script() {
         "completion script should mention kirkforge"
     );
 }
+
+/// `kirkforge <subcommand> --help` must exit 0 and mention the subcommand
+/// name. Covers the subcommands not exercised by the tests above
+/// (metrics + completions). `--help` short-circuits before any required
+/// positional args or side effects, so it is safe for daemon/replay/etc.
+#[test]
+fn help_flag_for_remaining_subcommands() {
+    let subcommands = [
+        "run", "verify", "sessions", "daemon", "jobd", "replay", "bench", "plugin", "doctor",
+    ];
+    for sub in subcommands {
+        let output = Command::new(bin())
+            .args([sub, "--help"])
+            .output()
+            .unwrap_or_else(|e| panic!("failed to run kirkforge {sub} --help: {e}"));
+        assert!(
+            output.status.success(),
+            "kirkforge {sub} --help failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains(sub),
+            "kirkforge {sub} --help output should mention '{sub}':\n{stdout}"
+        );
+    }
+}

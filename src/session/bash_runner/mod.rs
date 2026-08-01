@@ -678,6 +678,29 @@ mod tests {
         remove_test_file(&marker);
     }
 
+    /// Partial stdout produced before a timeout must survive the kill: the
+    /// drain buffer is flushed (`join_drain`) and appended after the timeout
+    /// marker. Regression guard for WO 15.26 3.46.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn run_shell_timeout_preserves_partial_stdout() {
+        let tmp = std::env::temp_dir();
+        let cmd = "echo KIRKFORGE_PARTIAL_MARKER; sleep 30";
+        let out = run_shell(cmd, &tmp, 1)
+            .await
+            .expect("run_shell should time out, not error");
+        assert!(
+            out.stdout.contains("timed out"),
+            "expected timeout marker, got: {:?}",
+            &out.stdout[..out.stdout.len().min(200)]
+        );
+        assert!(
+            out.stdout.contains("KIRKFORGE_PARTIAL_MARKER"),
+            "partial stdout should be flushed + preserved on timeout, got: {:?}",
+            &out.stdout[..out.stdout.len().min(200)]
+        );
+    }
+
     /// A `run_shell` invocation that exceeds the cap gets the marker in
     /// stdout. We use `yes` (which prints "y\n" forever) and rely on
     /// SIGPIPE from a non-tty writer; if `yes` doesn't exist on the

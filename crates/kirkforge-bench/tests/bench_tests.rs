@@ -181,6 +181,35 @@ fn verify_file_contains_missing_file() {
 }
 
 #[test]
+fn verify_task_inherits_curated_budget_env() {
+    // A task with a budget ceiling must export KIRKFORGE_BUDGET_CEILING to
+    // the verify command. The verify command prints the var; FileContains
+    // would need a file, so use CommandExitsZero with a shell test that
+    // succeeds only when the env var matches the curated value.
+    let dir = TempDir::new().unwrap();
+    std::env::remove_var(BUDGET_CEILING_ENV);
+    let task = BenchTask {
+        name: "curated-env".into(),
+        difficulty: Difficulty::Easy,
+        prompt: String::new(),
+        setup: HashMap::new(),
+        verify: VerifySpec::CommandExitsZero {
+            command: format!("test \"${BUDGET_CEILING_ENV}\" = 4096"),
+        },
+        requires_model: false,
+        budget_ceiling: Some(4096),
+    };
+    assert!(
+        verify_task(&task, dir.path()).unwrap(),
+        "verify command should see the curated budget ceiling env"
+    );
+    assert!(
+        std::env::var(BUDGET_CEILING_ENV).is_err(),
+        "verify_task must not leak the curated env into the process"
+    );
+}
+
+#[test]
 fn write_report_and_summary() {
     let dir = TempDir::new().unwrap();
     let report = BenchReport {

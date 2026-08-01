@@ -623,14 +623,24 @@ fn language_id_for(language: &str) -> String {
 }
 
 /// Convert a filesystem path to a `file://` URI.
+///
+/// Builds the `file://` form from the path string (so a Unix-style
+/// absolute path like "/home/x.rs" maps to "file:///home/x.rs" on every
+/// host OS) and round-trips it through `Url::parse` to percent-encode
+/// spaces / non-ASCII. `Url::from_file_path` is deliberately NOT used:
+/// it is platform-specific (rejects "/home/x.rs" as non-absolute on
+/// Windows), which broke the cross-platform path_to_uri tests on Windows
+/// (regression caught by CI, WO 15.26 3.18 follow-up).
 fn path_to_uri(path: &Path) -> String {
-    match url::Url::from_file_path(path) {
-        Ok(url) => url.to_string(),
-        Err(_) => {
-            let s = path.to_string_lossy();
-            format!("file:///{s}")
-        }
-    }
+    let s = path.to_string_lossy().replace('\\', "/");
+    let candidate = if s.starts_with('/') {
+        format!("file://{s}")
+    } else {
+        format!("file:///{s}")
+    };
+    url::Url::parse(&candidate)
+        .map(|u| u.to_string())
+        .unwrap_or(candidate)
 }
 
 /// Shorten an absolute path for display by stripping the cwd prefix when

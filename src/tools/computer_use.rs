@@ -31,7 +31,7 @@ pub type SessionLauncher = Arc<dyn Fn() -> SessionFuture + Send + Sync>;
 
 /// Trait that abstracts the actual Chrome tab so tests can inject a fake.
 /// Exported so the launcher in `main/mod.rs` can hand a real tab handle to
-/// the tool. `RealChromeTab` lives next to the launcher to keep headless_chrome
+/// the tool. `BrowserSessionOwner` lives next to the launcher to keep headless_chrome
 /// imports in one place.
 pub trait ChromeTab: Send + Sync {
     fn navigate(&self, url: &str) -> anyhow::Result<()>;

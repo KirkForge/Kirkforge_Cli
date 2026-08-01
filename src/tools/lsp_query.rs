@@ -624,11 +624,12 @@ fn language_id_for(language: &str) -> String {
 
 /// Convert a filesystem path to a `file://` URI.
 fn path_to_uri(path: &Path) -> String {
-    let s = path.to_string_lossy();
-    if s.starts_with('/') {
-        format!("file://{s}")
-    } else {
-        format!("file:///{s}")
+    match url::Url::from_file_path(path) {
+        Ok(url) => url.to_string(),
+        Err(_) => {
+            let s = path.to_string_lossy();
+            format!("file:///{s}")
+        }
     }
 }
 
@@ -934,6 +935,24 @@ mod tests {
         let p = Path::new("/");
         let uri = path_to_uri(p);
         assert_eq!(uri, "file:///");
+    }
+
+    #[test]
+    fn path_to_uri_percent_encodes_space_in_absolute_path() {
+        let p = Path::new("/home/kirk/my dir/x.rs");
+        let uri = path_to_uri(p);
+        assert_eq!(uri, "file:///home/kirk/my%20dir/x.rs");
+    }
+
+    #[test]
+    fn path_to_uri_percent_encodes_non_ascii_in_absolute_path() {
+        let p = Path::new("/home/kirk/café/x.rs");
+        let uri = path_to_uri(p);
+        assert!(uri.starts_with("file:///home/kirk/caf"), "uri was: {uri}");
+        assert!(
+            uri.contains("%C3%A9") || uri.contains("%c3%a9"),
+            "non-ASCII must be percent-encoded, uri: {uri}"
+        );
     }
 
     #[test]

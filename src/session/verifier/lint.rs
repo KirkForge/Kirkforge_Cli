@@ -1,5 +1,6 @@
 use crate::session::error_recovery;
 use crate::session::event_bus::{BusEvent, EditEvent, FileWriteEvent};
+use crate::session::verifier::helpers::find_cargo_root;
 /// Lint verifier — runs `cargo clippy` on Rust files and reports findings.
 ///
 /// This verifier subscribes to `Edit` and `FileWrite` events. When a Rust
@@ -12,7 +13,7 @@ use crate::session::event_bus::{BusEvent, EditEvent, FileWriteEvent};
 ///
 /// The lint verifier is registered at priority 2 (after security).
 use crate::session::verifier::{FixSuggestion, Verdict, VerificationError};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// Lint targets supported by the verifier.
 #[derive(Debug)]
@@ -30,20 +31,6 @@ impl LintTarget {
             Some("py") => LintTarget::Python,
             Some("js" | "ts" | "jsx" | "tsx") => LintTarget::JavaScript,
             _ => LintTarget::Unknown,
-        }
-    }
-}
-
-/// Walk up from `path` looking for a `Cargo.toml`.
-fn find_cargo_root(path: &Path) -> Option<PathBuf> {
-    let mut dir = path.parent()?;
-    loop {
-        if dir.join("Cargo.toml").exists() {
-            return Some(dir.to_path_buf());
-        }
-        match dir.parent() {
-            Some(parent) => dir = parent,
-            None => return None,
         }
     }
 }
@@ -303,32 +290,6 @@ edition = "2021"
             LintTarget::from_path(std::path::Path::new("just_a_name")),
             LintTarget::Unknown
         ));
-    }
-
-    #[test]
-    fn find_cargo_root_finds_immediate_parent_cargo_toml() {
-        let tmp = tempfile::tempdir().unwrap();
-        std::fs::write(tmp.path().join("Cargo.toml"), "").unwrap();
-        let src = tmp.path().join("lib.rs");
-        let found = find_cargo_root(&src).unwrap();
-        assert_eq!(found, tmp.path());
-    }
-
-    #[test]
-    fn find_cargo_root_walks_up_until_found() {
-        let tmp = tempfile::tempdir().unwrap();
-        std::fs::write(tmp.path().join("Cargo.toml"), "").unwrap();
-        let deep = tmp.path().join("a/b/c/file.rs");
-        std::fs::create_dir_all(deep.parent().unwrap()).unwrap();
-        let found = find_cargo_root(&deep).unwrap();
-        assert_eq!(found, tmp.path());
-    }
-
-    #[test]
-    fn find_cargo_root_returns_none_when_no_ancestor_has_cargo_toml() {
-        let tmp = tempfile::tempdir().unwrap();
-        let path = tmp.path().join("lonely.rs");
-        assert!(find_cargo_root(&path).is_none());
     }
 
     #[test]

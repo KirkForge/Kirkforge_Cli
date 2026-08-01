@@ -1,4 +1,5 @@
 use crate::session::event_bus::{BusEvent, EditEvent, FileWriteEvent};
+use crate::session::verifier::helpers::find_cargo_root;
 /// Test verifier — runs targeted `cargo test` for the edited Rust file.
 ///
 /// This verifier subscribes to `Edit` and `FileWrite` events. When a Rust file
@@ -11,21 +12,7 @@ use crate::session::event_bus::{BusEvent, EditEvent, FileWriteEvent};
 ///
 /// The test verifier is registered at priority 5 (after rustfmt).
 use crate::session::verifier::{FixSuggestion, Verdict, VerificationError};
-use std::path::{Path, PathBuf};
-
-/// Walk up from `path` looking for a `Cargo.toml`.
-fn find_cargo_root(path: &Path) -> Option<PathBuf> {
-    let mut dir = path.parent()?;
-    loop {
-        if dir.join("Cargo.toml").exists() {
-            return Some(dir.to_path_buf());
-        }
-        match dir.parent() {
-            Some(parent) => dir = parent,
-            None => return None,
-        }
-    }
-}
+use std::path::Path;
 
 /// Convert a file path inside a crate into a likely Rust module path prefix.
 ///
@@ -301,32 +288,6 @@ mod tests {
     fn module_path_prefix_returns_none_for_root_relative_to_cargo_root() {
         let root = std::path::PathBuf::from("/tmp/foo");
         assert_eq!(module_path_prefix(&root, &root), None);
-    }
-
-    #[test]
-    fn find_cargo_root_finds_immediate_parent() {
-        let tmp = tempfile::tempdir().unwrap();
-        std::fs::write(tmp.path().join("Cargo.toml"), "").unwrap();
-        let src = tmp.path().join("lib.rs");
-        let found = find_cargo_root(&src).unwrap();
-        assert_eq!(found, tmp.path());
-    }
-
-    #[test]
-    fn find_cargo_root_walks_up_multiple_levels() {
-        let tmp = tempfile::tempdir().unwrap();
-        std::fs::write(tmp.path().join("Cargo.toml"), "").unwrap();
-        let deep = tmp.path().join("a/b/c/deep.rs");
-        std::fs::create_dir_all(deep.parent().unwrap()).unwrap();
-        let found = find_cargo_root(&deep).unwrap();
-        assert_eq!(found, tmp.path());
-    }
-
-    #[test]
-    fn find_cargo_root_returns_none_when_no_cargo_toml_in_ancestors() {
-        let tmp = tempfile::tempdir().unwrap();
-        let path = tmp.path().join("lonely.rs");
-        assert!(find_cargo_root(&path).is_none());
     }
 
     // This test spawns `cargo test` in a temporary project. It cannot run

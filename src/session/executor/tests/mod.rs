@@ -11,3 +11,4 @@ mod dispatch;
 mod loop_;
 mod scout;
 mod turn;
+mod verifier_cross;

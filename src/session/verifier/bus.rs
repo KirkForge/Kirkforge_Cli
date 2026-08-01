@@ -99,6 +99,15 @@ impl VerifierBus {
         }
     }
 
+    /// Register a verifier on the bus.
+    ///
+    /// `ceiling:` duplicate names are allowed and COEXIST — every
+    /// registered verifier runs on each `run()` and contributes verdicts.
+    /// This is intentional: the built-in slot stubs (`SecurityBusVerifier`,
+    /// `GitBusVerifier`) share their slot name (`"security"`, `"git"`) with
+    /// plugin verifiers that augment the same slot, so a plugin-declared
+    /// `security` verifier runs alongside the built-in stub (which returns
+    /// no verdicts) rather than replacing it. (bucketlist 3.41)
     pub fn register(&mut self, verifier: Box<dyn BusVerifier>) {
         self.verifiers.push(verifier);
     }
@@ -110,6 +119,10 @@ impl VerifierBus {
     /// `PluginVerifier` (exit 0 = pass, non-zero = fail with stderr as the
     /// message), with `plugin_root` as the subprocess cwd. Results are
     /// tagged `VerifierSource::Plugin(name)`.
+    ///
+    /// See [`register`](Self::register): a plugin verifier whose declared
+    /// name matches a built-in slot stub (e.g. `"security"`) coexists with
+    /// the stub rather than replacing it.
     pub fn add_plugin_verifier(
         &mut self,
         name: String,
@@ -291,6 +304,16 @@ impl BusVerifier for PluginBusVerifier {
     }
 
     fn verify(&self, ctx: &VerifyContext) -> Vec<VerdictEntry> {
+        // `ceiling:` env-var contract divergence (bucketlist 3.30). This
+        // bus path passes `KF_CHANGED_FILES` (newline-separated list from
+        // `VerifyContext`), while the legacy event-driven path
+        // (`PluginVerifierAdapter` in `plugin.rs`) passes `KF_EVENT_KIND`
+        // + `KF_EVENT_JSON` (the full serialized `BusEvent`). The two
+        // paths intentionally serve different shapes: the bus verifier is
+        // sync and context-based (a file list), the event-driven verifier
+        // is async and event-based (the full event payload). Unifying the
+        // env-var contract would change the behaviour plugin verifier
+        // scripts depend on; the divergence is documented, not closed.
         let mut env = HashMap::new();
         env.insert("KF_VERIFIER_NAME".to_string(), self.inner.name.clone());
         env.insert(
@@ -1107,6 +1130,73 @@ mod tests {
         bus.run(&ctx);
         assert!(!bus.has_errors(), "built-in stubs emit no verdicts");
         assert!(bus.verdicts().is_empty());
+    }
+
+    #[test]
+    fn verifier_bus_duplicate_names_coexist() {
+        // bucketlist 3.41: duplicate names are intentionally allowed to
+        // coexist — the built-in slot stubs share their slot name with
+        // plugin verifiers that augment the same slot. Two same-name
+        // verifiers both run and both contribute verdicts.
+        let mut bus = VerifierBus::new();
+        bus.register(Box::new(StubVerifier {
+            name: "dup".into(),
+            entries: vec![VerdictEntry {
+                source: VerifierSource::Build,
+                severity: Severity::Info,
+                message: "first".into(),
+                file: None,
+                line: None,
+            }],
+        }));
+        bus.register(Box::new(StubVerifier {
+            name: "dup".into(),
+            entries: vec![VerdictEntry {
+                source: VerifierSource::Build,
+                severity: Severity::Warning,
+                message: "second".into(),
+                file: None,
+                line: None,
+            }],
+        }));
+        assert_eq!(bus.verifier_count(), 2, "both same-name verifiers kept");
+        bus.run(&make_ctx());
+        assert_eq!(
+            bus.verdicts().len(),
+            2,
+            "both same-name verifiers ran and contributed verdicts"
+        );
+    }
+
+    #[test]
+    fn verifier_bus_plugin_verifier_coexists_with_builtin_stub() {
+        // bucketlist 3.41: a plugin verifier named "security" (the slot
+        // the built-in SecurityBusVerifier stub occupies) coexists with
+        // the stub. The stub returns no verdicts; the plugin verifier
+        // (simulated here by a same-named StubVerifier) contributes the
+        // real verdict.
+        let mut bus = default_verifier_bus();
+        let builtin_count = bus.verifier_count();
+        bus.register(Box::new(StubVerifier {
+            name: "security".into(),
+            entries: vec![VerdictEntry {
+                source: VerifierSource::Plugin("sec-plugin".into()),
+                severity: Severity::Error,
+                message: "plugin finding".into(),
+                file: None,
+                line: None,
+            }],
+        }));
+        assert_eq!(
+            bus.verifier_count(),
+            builtin_count + 1,
+            "plugin 'security' verifier is registered alongside the built-in stub"
+        );
+        bus.run(&make_ctx());
+        assert!(
+            bus.verdicts().iter().any(|v| v.message == "plugin finding"),
+            "the plugin verifier's verdict survived alongside the stub"
+        );
     }
 
     #[test]

@@ -527,4 +527,46 @@ mod wrapper_tests {
             assert!(seen.insert(d.clone()), "duplicate npm bin dir: {d:?}");
         }
     }
+
+    /// bucketlist 3.39: cancelling the `ToolContext` token while a plugin
+    /// tool is running takes the `Finish::Cancelled` branch — the child is
+    /// killed/reaped and the outcome is `Failure(ToolError::Cancelled)`.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn run_returns_cancelled_when_token_fires() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("sleep.sh");
+        std::fs::write(&script, "#!/bin/sh\nsleep 30\n").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&script).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&script, perms).unwrap();
+
+        let cfg = Arc::new(std::sync::RwLock::new(Config::default()));
+        let wrapper = PluginToolWrapper::new(
+            "sleep_tool".into(),
+            "sleeps".into(),
+            serde_json::json!({"type": "object"}),
+            dir.path().to_path_buf(),
+            PathBuf::from("sleep.sh"),
+            cfg,
+            SandboxConfig::default(),
+        );
+
+        let ctx = make_ctx();
+        // Cancel from a separate task after the child has spawned and
+        // entered the select! wait (run() borrows ctx, so it cannot be
+        // spawned itself).
+        let token = ctx.token.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            token.cancel();
+        });
+
+        let outcome = wrapper.run(&ctx, serde_json::json!({})).await;
+        match outcome {
+            ToolOutcome::Failure(ToolError::Cancelled) => {}
+            other => panic!("expected Cancelled failure, got {other:?}"),
+        }
+    }
 }

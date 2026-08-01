@@ -148,7 +148,64 @@ done-condition ("fixed OR honestly deferred with a note in state.md"):
 - **4.10 m5_tests.rs sibling module — deferred.** Cosmetic fold into
   `mod.rs`'s `#[cfg(test)] mod tests`; low value, low priority.
 
-### Series 15 (cross-review bucketlist)
+### Series 15.26 Batch B deferrals (WO 15.26)
+
+Batch B (verifier + security) shipped concrete fixes/tests/docs for ALL
+15 items — **zero deferrals**. Per the WO done-condition ("fixed OR
+honestly deferred"), each item resolved to a small fix:
+
+- **3.11** fixed — cross-test firing `write_file` through both the
+  event-driven `Verifier` path and the `BusVerifier` path, asserting
+  non-conflicting verdicts (`src/session/executor/tests/verifier_cross.rs`).
+- **3.12** fixed — deleted dead `src/session/verifier/event_kinds.rs`
+  (`verifier_event_kinds()` had zero production callers; `VerifierHandler`
+  hardcodes its own subscription list) + the `pub use` re-export.
+- **3.25** fixed — `VerifierHandler::verify_event` short-circuits
+  `ToolError` events (no built-in verifier acts on the payload; all would
+  skip) so the fan-out is skipped entirely.
+- **3.30** fixed — documented the env-var contract divergence in
+  `bus.rs` + `plugin.rs`: the bus path passes `KF_CHANGED_FILES` (file
+  list), the legacy event-driven path passes `KF_EVENT_KIND` +
+  `KF_EVENT_JSON` (full event). Not unified (would change behaviour).
+- **3.31** fixed — documented that `apply_command_fix` runs verifier-
+  supplied commands in the user env (consistent with the trusted-verifier
+  threat model; built-in + signed plugins only).
+- **3.32** fixed — `bash_jobs` watcher now has a watchdog: if the watcher
+  task panics (`JoinHandle::await → Err`) before recording a terminal
+  status, a detached watchdog flips the still-`Running` job to `Failed`.
+- **3.33** fixed — expanded `ENTROPY_PREFIXES` with `xai-` + `hf_`;
+  `claude-`/`key-` intentionally excluded (false positives on model names
+  / generic word fragments — `claude-3-opus-20240229`'s tail clears the
+  entropy gate) with a `ceiling:` note.
+- **3.34** fixed — documented the `split_whitespace` ceiling
+  (`apply_command_fix` handles zero-arg / simple-arg formatter commands
+  only; `shlex` would add a dep the size-optimized binary doesn't need).
+- **3.37** fixed — `module_path_prefix` now returns the empty prefix
+  (full crate suite) ONLY for `main.rs`/`lib.rs` directly at the crate
+  root; nested `src/foo/main.rs` keeps a targeted filter (`foo::main`).
+- **3.39** fixed — added `PluginToolWrapper.run` `Cancelled`-path test.
+- **3.40** fixed — added `CorrectionLoop` max-iterations bound test
+  (always-Fixable verifier drives the loop to 3 then stops).
+- **3.41** fixed — **documented duplicate-name coexistence** on
+  `VerifierBus`. (Initial reject-by-name attempt broke the
+  `plugin_verifier_triggers_correction_result` integration test: the
+  built-in `SecurityBusVerifier`/`GitBusVerifier` stubs share their slot
+  name with plugin verifiers that augment the same slot, so duplicates
+  must coexist. This differs from `VerifierSlots::register`, which DOES
+  reject duplicates — the two systems have different policies by design.)
+- **3.42** fixed — added `ToolError`-through-`VerifierHandler` test
+  (validates the 3.25 short-circuit: a registered Unfixable verifier must
+  NOT run on a ToolError event).
+- **3.52** fixed — deleted the stale "Native KirkForge-Cli ADRs" prose
+  bullet list from `docs/adr/README.md` (it jumped 055→066, missing
+  056-065); the index TABLE is the single source of truth.
+  `adr_xref_drift` stays green.
+- **3.54** fixed — added `## Amendment (2026-07-31)` note to ADR-028
+  recording the promotion from "Accepted (partially implemented)" to
+  "Accepted" (WO 9.6 plugin-verifier bridge confirmed code-complete +
+  WO 10.8 NDJSON wire bridge).
+
+
 
 WO 15.14 Done (split plugin3-cli/src/main.rs by feature): the
 7,706-line `crates/plugin3-cli/src/main.rs` monolith split per

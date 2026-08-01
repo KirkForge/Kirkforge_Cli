@@ -24,6 +24,14 @@
 //! - `KF_EVENT_KIND`      — event kind label (e.g. "file_write")
 //! - `KF_EVENT_JSON`      — full `BusEvent` serialized to JSON
 //!
+//! `ceiling:` env-var contract divergence (bucketlist 3.30). This
+//! event-driven path passes the full event payload (`KF_EVENT_KIND` +
+//! `KF_EVENT_JSON`), while the bus path (`PluginBusVerifier` in
+//! `bus.rs`) passes a newline-separated file list (`KF_CHANGED_FILES`).
+//! The two paths serve different shapes and are not unified; a plugin
+//! verifier script targeting one path may not receive the same env vars
+//! on the other.
+//!
 //! Exit code `0` means pass; any non-zero exit code fails, with stderr as
 //! the failure message. The plugin-host `PluginVerifier` already implements
 //! this convention; this adapter just converts between the executor's

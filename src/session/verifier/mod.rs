@@ -31,14 +31,12 @@ pub mod security;
 pub mod test;
 
 pub mod correction;
-pub mod event_kinds;
 pub mod handler;
 pub mod slots;
 pub mod types;
 
 pub use bus::{BusVerifier, Severity, VerdictEntry, VerifierBus, VerifierSource, VerifyContext};
 pub use correction::{CorrectionLoop, CorrectionResult};
-pub use event_kinds::verifier_event_kinds;
 pub use handler::VerifierHandler;
 pub use slots::VerifierSlots;
 pub use types::{FixSuggestion, Verdict, VerificationError, Verifier};

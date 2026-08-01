@@ -4,6 +4,9 @@
 use super::super::*;
 use super::common::*;
 use crate::shared::metrics::{read_events, PlanDecisionKind};
+// Only used by `#[cfg(unix)]` tests below; gate the import so the
+// Windows build (deny(warnings)) doesn't flag it unused.
+#[cfg(unix)]
 use crate::shared::test_util::remove_test_file;
 use crate::shared::{FinishReason, ModelInfo, StreamEvent, TokenUsage, ToolDef, ToolOutcome};
 use crate::tools::Tool;

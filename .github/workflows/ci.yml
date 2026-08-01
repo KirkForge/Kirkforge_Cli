@@ -335,7 +335,13 @@ jobs:
         # integration harness) are intentionally NOT gated: a threshold
         # there would either be unreachable or punish TUI/IPC code for
         # lacking unit tests it cannot meaningfully have.
-        run: cargo tarpaulin --out Xml --locked --lib --timeout 120 -- --skip test_build_fork_tree_nests_children
+        run: cargo tarpaulin --out Xml --locked --lib --timeout 120 -- --skip test_build_fork_tree_nests_children --skip test_trufflehog_path_discovery
+        # `test_trufflehog_path_discovery` is skipped under tarpaulin: it
+        # spawns a fake `trufflehog` discovered via global `PATH`/env
+        # mutation, which tarpaulin's instrumentation doesn't reliably
+        # forward to the subprocess (the test passes under the regular
+        # `cargo test` jobs — incl. `quality` — where it's still enforced).
+        # The sibling timeout test still exercises `trufflehog_scan` here.
 
       - name: Enforce coverage gate
         run: |

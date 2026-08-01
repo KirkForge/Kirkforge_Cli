@@ -148,6 +148,51 @@ done-condition ("fixed OR honestly deferred with a note in state.md"):
 - **4.10 m5_tests.rs sibling module — deferred.** Cosmetic fold into
   `mod.rs`'s `#[cfg(test)] mod tests`; low value, low priority.
 
+### Series 15.26 Batch C deferrals (WO 15.26)
+
+Batch C (tools + executor) shipped concrete fixes for 14 of the 15 safe
+items (one commit each on `wo/15.26-batch-c-tools-executor`, head
+`3342de9`); 3.47 verified already-done; 3.5 + 3.6 honestly deferred to a
+dedicated refactor WO. Per the WO done-condition ("fixed OR honestly
+deferred"):
+
+- **3.5 monolithic functions >200 loc — deferred.** `run_tui` (~442 loc,
+  `src/tui/mod.rs`), `run_event_loop` (~351 loc), and `turn.rs`
+  (`run_turn_inner`/`dispatch_tool_call_batch`/`record_tool_result`) need
+  behavior-preserving decomposition into named sub-methods. Too risky for
+  a catch-all batch — core async/TUI code where a subtle behavior change
+  is hard to catch. Needs a per-function dedicated WO with focused
+  verification.
+- **3.6 `AppState` 44-field God object — deferred.** Grouping into
+  `TuiState`/`SessionState`/`CompletionState`/`ConnectionState` sub-
+  structs is the same risk class as 3.5 (touches every construction +
+  field-access site across `src/tui/`). Dedicated refactor WO.
+- **3.47 `bash_jobs` watcher race — already done.** The cancel-race the
+  WO describes ("cancel removes child handle between spawn and watcher
+  registration → empty stdout") is ALREADY HANDLED by the watcher's
+  take-semantics at `src/session/bash_jobs.rs:182-197`: if `cancel()`
+  takes the child handle first, the watcher's `children.remove(&id)`
+  returns `None` and the `else` branch marks the job `Cancelled` (comment
+  at :188). Batch B's 3.32 watchdog covers watcher-panic. The residual
+  empty-stdout affects only intentionally-cancelled jobs (acceptable; the
+  job was killed before meaningful output). A "register watcher before
+  spawn" refactor is a risky concurrency rewrite for a benign residual —
+  not appropriate here. No commit (would be a no-op); noted as resolved.
+
+The 14 fixed items: 3.7 (extract `find_cargo_root` →
+`verifier/helpers.rs`), 3.8 (`run_decision` shared body →
+`run_decision_inner`), 3.14 (remove stale `#[allow(dead_code)]`), 3.15
+(dedup `ChromeTab` impl — delete `RealChromeTab`, drop dead fields), 3.17
+(surface stderr on successful bash), 3.18 (percent-encode `file://` URI
+via the already-present `url` crate), 3.26 (abort `CachingAdapter`
+forwarder on consumer drop via `select! closed()`), 3.27 (document
+`atomic_write` dir-fsync ceiling), 3.43 (`--help` smoke tests for 9
+subcommands), 3.45 (`.worktrees/locks/` coverage note), 3.46 (regression
+test for partial-stdout preservation on bash timeout — already flushed),
+3.49 (pair workflow batch results by name, detect partial results), 3.50
+(document `compare_reports` difficulty fallback as unreachable union
+invariant), 3.51 (pass curated `budget_env` to `verify_task`).
+
 ### Series 15.26 Batch B deferrals (WO 15.26)
 
 Batch B (verifier + security) shipped concrete fixes/tests/docs for ALL

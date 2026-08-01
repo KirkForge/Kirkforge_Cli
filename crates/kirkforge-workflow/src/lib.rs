@@ -311,9 +311,15 @@ impl WorkflowExecutor {
                 })
                 .collect();
             let results = runner.run_batch(batch).await?;
-            for ((name, _prompt, persona, with_critique), (_, summary)) in
-                tasks.iter().zip(results.iter())
-            {
+            // Pair results by step name (not position) so a misordered or
+            // partial batch can't misalign summaries. A partial batch (fewer
+            // results than tasks) is a runner contract violation; bailing
+            // surfaces it instead of silently re-scheduling or mislabeling.
+            let by_name: HashMap<&String, &String> = results.iter().map(|(n, s)| (n, s)).collect();
+            for (name, _prompt, persona, with_critique) in &tasks {
+                let summary = by_name
+                    .get(name)
+                    .ok_or_else(|| anyhow!("runner returned no result for step '{name}'"))?;
                 let critique = if *with_critique {
                     let critique_prompt = format!(
                         "You are a critical reviewer. Evaluate the following output for risks, gaps, and correctness. Keep it concise.\n\nOutput to critique:\n{summary}"
@@ -331,7 +337,7 @@ impl WorkflowExecutor {
                     StepOutput {
                         name: name.clone(),
                         persona: persona.clone(),
-                        summary: summary.clone(),
+                        summary: summary.to_string(),
                         critique,
                     },
                 );
@@ -646,6 +652,58 @@ mod tests {
                 ends: self.ends.clone(),
             }
         }
+    }
+
+    /// A runner whose `run_batch` drops the second result (partial batch).
+    struct PartialBatchRunner;
+
+    #[async_trait::async_trait]
+    impl StepRunner for PartialBatchRunner {
+        async fn run_step(&self, name: &str, _prompt: &str, persona: &str) -> Result<String> {
+            Ok(format!("{persona}:{name}:done"))
+        }
+
+        async fn run_batch(&self, steps: Vec<StepRequest>) -> Result<Vec<(String, String)>> {
+            // Return only the first step's result, dropping the rest.
+            Ok(steps
+                .into_iter()
+                .take(1)
+                .map(|req| (req.name, "partial".to_string()))
+                .collect())
+        }
+    }
+
+    #[tokio::test]
+    async fn partial_batch_result_is_detected() {
+        let wf = Workflow {
+            name: "partial".into(),
+            steps: vec![
+                Step {
+                    name: "a".into(),
+                    prompt: "a".into(),
+                    persona: "explore".into(),
+                    depends_on: vec![],
+                    critique: None,
+                },
+                Step {
+                    name: "b".into(),
+                    prompt: "b".into(),
+                    persona: "explore".into(),
+                    depends_on: vec![],
+                    critique: None,
+                },
+            ],
+        };
+        let exe = WorkflowExecutor::new(wf);
+        let err = exe
+            .run(&PartialBatchRunner, None)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("no result for step"),
+            "expected partial-batch error, got: {err}"
+        );
     }
 
     #[tokio::test]

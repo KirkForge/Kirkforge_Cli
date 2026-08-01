@@ -369,6 +369,11 @@ impl Tool for Bash {
                         // can typically be reduced to ~50 lines.
                         let content =
                             bash_minify::try_minify_build_log(&cmd, &content).unwrap_or(content);
+                        let content = if output.stderr.is_empty() {
+                            content
+                        } else {
+                            format!("{content}\nstderr:\n{}", output.stderr)
+                        };
                         ToolOutcome::Success { content }
                     } else if is_timeout_marker(&output, timeout_secs) {
                         // run_shell reports timeouts as a synthetic killed

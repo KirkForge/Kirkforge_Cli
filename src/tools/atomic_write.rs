@@ -16,6 +16,14 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// in the same directory as `path` (so `rename` is atomic within one
 /// filesystem), fsynced before rename, and removed automatically if the
 /// rename fails.
+///
+/// ceiling: the parent directory entry is NOT fsynced after rename. On a
+/// hard power loss immediately after `rename` returns, the new directory
+/// entry may not yet be durable and the rename can be lost (the temp file
+/// was fsynced, so its data survives, but the directory update is not
+/// flushed). Cross-platform dir-fsync is non-portable (Unix `fsync(fd)` on
+/// the dir vs Windows differs); the tradeoff is accepted here — the data
+/// integrity window is limited to the rename durability, not the bytes.
 pub fn atomic_write(path: &Path, contents: impl AsRef<[u8]>) -> std::io::Result<()> {
     let contents = contents.as_ref();
     let parent = path.parent().unwrap_or(Path::new("."));

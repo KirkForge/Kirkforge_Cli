@@ -2,7 +2,6 @@
 
 *This file is the verifier contract for any AI agent working in this repo. Read it before starting. Follow it always. Violations are regressions.*
 
-**See also**: [REPORULES.md](../REPORULES.md) — multi-machine sync, git identity, PAT handling, and new-repo bootstrap.
 **See also**: [CLAUDE.md](CLAUDE.md) and [docs/adr/](docs/adr/) — ADRs that pin load-bearing decisions (don't break them silently).
 
 ## 0. Repo-specific guidance (existing — keep)

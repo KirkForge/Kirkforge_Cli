@@ -521,11 +521,11 @@ mod tests {
         // turns a Value::String into a quoted string, so the
         // accumulator can receive the leading/trailing quotes
         // already stripped to the inner contents).
-        let s = r#"{"path":"AGENTS.md"}{"path":"REPORULES.md"}{"path":"README.md"}{"path":"ARCHITECTURE.md"}"#;
+        let s = r#"{"path":"AGENTS.md"}{"path":"CHANGELOG.md"}{"path":"README.md"}{"path":"ARCHITECTURE.md"}"#;
         let out = split_concatenated_json(s);
         assert_eq!(out.len(), 4, "expected 4 objects, got: {out:?}");
         assert_eq!(out[0], json!({"path":"AGENTS.md"}));
-        assert_eq!(out[1], json!({"path":"REPORULES.md"}));
+        assert_eq!(out[1], json!({"path":"CHANGELOG.md"}));
         assert_eq!(out[2], json!({"path":"README.md"}));
         assert_eq!(out[3], json!({"path":"ARCHITECTURE.md"}));
     }

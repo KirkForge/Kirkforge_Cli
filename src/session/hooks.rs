@@ -360,13 +360,42 @@ impl HookRunner {
         config: &Config,
     ) -> HookDecision {
         let owned_vars = Self::owned_env_vars(env_vars);
+        let ctx = env_vars_to_ctx(event_name, env_vars);
+        self.run_decision_inner(event_name, &ctx, &owned_vars, config)
+            .await
+    }
+
+    /// Run decision hooks with full `HookContext` (including tool result).
+    ///
+    /// Used by the executor for post-tool hooks where the in-process handler
+    /// needs to see the tool's output (e.g. Plugin3 budget guard checking
+    /// whether a bash result is oversized).
+    pub async fn run_decision_with_context(
+        &self,
+        event_name: &str,
+        ctx: &HookContext,
+        config: &Config,
+    ) -> HookDecision {
+        let env_vars = ctx_to_env_vars(ctx);
+        let env_refs: Vec<(&str, &str)> = env_vars.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        let owned_vars = Self::owned_env_vars(&env_refs);
+        self.run_decision_inner(event_name, ctx, &owned_vars, config)
+            .await
+    }
+
+    async fn run_decision_inner(
+        &self,
+        event_name: &str,
+        ctx: &HookContext,
+        owned_vars: &[(String, String)],
+        config: &Config,
+    ) -> HookDecision {
         let mut decisions: Vec<HookDecision> = Vec::new();
 
         // In-process hooks (synchronous, run first so they can short-circuit).
-        let ctx = env_vars_to_ctx(event_name, env_vars);
         for hook in &self.in_process_hooks {
             if hook.event() == event_name {
-                let d = hook.handle(&ctx);
+                let d = hook.handle(ctx);
                 if let HookDecision::Deny(ref reason) = d {
                     self.audit_hook(event_name, None, "deny", Some(reason));
                 }
@@ -377,7 +406,7 @@ impl HookRunner {
         // Built-in hook.
         if self.available.contains(event_name) {
             let script_path = self.hooks_dir.join(format!("{event_name}.sh"));
-            match run_hook_script(&script_path, &owned_vars, config).await {
+            match run_hook_script(&script_path, owned_vars, config).await {
                 Ok(HookDecision::Deny(reason)) => {
                     self.audit_hook(event_name, None, "deny", Some(&reason));
                     decisions.push(HookDecision::Deny(reason));
@@ -392,7 +421,7 @@ impl HookRunner {
 
         // Plugin hooks.
         for (script_path, plugin_name) in self.plugin_hooks_for(event_name) {
-            match run_hook_script(&script_path, &owned_vars, config).await {
+            match run_hook_script(&script_path, owned_vars, config).await {
                 Ok(HookDecision::Deny(reason)) => {
                     tracing::warn!(
                         event = %event_name,
@@ -416,80 +445,6 @@ impl HookRunner {
         }
 
         // Any explicit deny wins; otherwise allow.
-        decisions
-            .into_iter()
-            .find(|d| matches!(d, HookDecision::Deny(_)))
-            .unwrap_or(HookDecision::Allow)
-    }
-
-    /// Run decision hooks with full `HookContext` (including tool result).
-    ///
-    /// Used by the executor for post-tool hooks where the in-process handler
-    /// needs to see the tool's output (e.g. Plugin3 budget guard checking
-    /// whether a bash result is oversized).
-    pub async fn run_decision_with_context(
-        &self,
-        event_name: &str,
-        ctx: &HookContext,
-        config: &Config,
-    ) -> HookDecision {
-        let mut decisions: Vec<HookDecision> = Vec::new();
-
-        // In-process hooks.
-        for hook in &self.in_process_hooks {
-            if hook.event() == event_name {
-                let d = hook.handle(ctx);
-                if let HookDecision::Deny(ref reason) = d {
-                    self.audit_hook(event_name, None, "deny", Some(reason));
-                }
-                decisions.push(d);
-            }
-        }
-
-        // Shell hooks (via the standard path).
-        let env_vars = ctx_to_env_vars(ctx);
-        let env_refs: Vec<(&str, &str)> = env_vars.iter().map(|(k, v)| (*k, v.as_str())).collect();
-        let owned_vars = Self::owned_env_vars(&env_refs);
-
-        if self.available.contains(event_name) {
-            let script_path = self.hooks_dir.join(format!("{event_name}.sh"));
-            match run_hook_script(&script_path, &owned_vars, config).await {
-                Ok(HookDecision::Deny(reason)) => {
-                    self.audit_hook(event_name, None, "deny", Some(&reason));
-                    decisions.push(HookDecision::Deny(reason));
-                }
-                Ok(d) => decisions.push(d),
-                Err(e) => {
-                    tracing::warn!(event = %event_name, error = %e, "Built-in decision hook failed (fail-open)");
-                    self.audit_hook(event_name, None, "allow_fail_open", Some(&e));
-                }
-            }
-        }
-
-        for (script_path, plugin_name) in self.plugin_hooks_for(event_name) {
-            match run_hook_script(&script_path, &owned_vars, config).await {
-                Ok(HookDecision::Deny(reason)) => {
-                    tracing::warn!(
-                        event = %event_name,
-                        path = %script_path.display(),
-                        "Plugin decision hook denied"
-                    );
-                    self.audit_hook(event_name, plugin_name, "deny", Some(&reason));
-                    decisions.push(HookDecision::Deny(reason));
-                }
-                Ok(d) => decisions.push(d),
-                Err(e) => {
-                    tracing::warn!(
-                        event = %event_name,
-                        path = %script_path.display(),
-                        error = %e,
-                        "Plugin decision hook failed (fail-open)"
-                    );
-                    self.audit_hook(event_name, plugin_name, "allow_fail_open", Some(&e));
-                }
-            }
-        }
-
         decisions
             .into_iter()
             .find(|d| matches!(d, HookDecision::Deny(_)))

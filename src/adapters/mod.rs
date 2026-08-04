@@ -196,7 +196,11 @@ impl FromStr for AdapterKind {
 /// Hardcoded default routing from model name prefix and provider to
 /// [`AdapterKind`]. This is the fallback used when no config-level
 /// routing table match is found.
-fn adapter_kind_for_default(model_name: &str, model_type_override: Option<&str>, provider: &str) -> AdapterKind {
+fn adapter_kind_for_default(
+    model_name: &str,
+    model_type_override: Option<&str>,
+    provider: &str,
+) -> AdapterKind {
     if let Some(override_type) = model_type_override {
         return match override_type {
             "glm" | "deepseek" | "gemini" | "kimi" | "moonshot" => AdapterKind::Ollama,
@@ -356,7 +360,12 @@ pub fn adapter_for_with_provider(
     adapter_routing: Option<&HashMap<String, String>>,
 ) -> Box<dyn ModelAdapter> {
     let override_lower = model_type_override.map(|s| s.to_lowercase());
-    match adapter_kind_for_routed(model_name, model_type_override, anthropic_provider, adapter_routing) {
+    match adapter_kind_for_routed(
+        model_name,
+        model_type_override,
+        anthropic_provider,
+        adapter_routing,
+    ) {
         AdapterKind::Ollama => {
             let lower = model_name.to_lowercase();
             // Respect the model_type_override when selecting the concrete
@@ -1616,8 +1625,9 @@ mod tests {
 
     #[test]
     fn adapter_kind_for_routed_unknown_kind_string_ignored() {
-        let routing: HashMap<String, String> =
-            [("qwen".to_string(), "NoSuchAdapter".to_string())].into_iter().collect();
+        let routing: HashMap<String, String> = [("qwen".to_string(), "NoSuchAdapter".to_string())]
+            .into_iter()
+            .collect();
         // Invalid kind string → no match → falls back to default.
         assert_eq!(
             adapter_kind_for_routed("qwen2.5:7b", None, "anthropic", Some(&routing)),

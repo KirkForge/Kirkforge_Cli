@@ -1728,7 +1728,10 @@ mod tests {
             "adapter_routing defaults to empty"
         );
 
-        set_env("KF_CODE_ADAPTER_ROUTING", Some("grok-=OpenAiCompat,my-llm=Ollama"));
+        set_env(
+            "KF_CODE_ADAPTER_ROUTING",
+            Some("grok-=OpenAiCompat,my-llm=Ollama"),
+        );
         apply_env_overrides(&mut cfg);
         assert_eq!(cfg.model.adapter_routing.len(), 2);
         assert_eq!(

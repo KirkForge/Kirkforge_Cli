@@ -244,8 +244,8 @@ impl Executor {
             })
             .await?;
 
-        if self.carryover_enabled {
-            self.carryover.last_user_message = user_input.to_string();
+        if self.cost.carryover_enabled {
+            self.cost.carryover.last_user_message = user_input.to_string();
         }
 
         // If this session was recovered from a checkpoint, tell the user
@@ -1399,8 +1399,8 @@ impl Executor {
         let tool_defs: Vec<ToolDef> = self.tools.definitions();
         let tool_names: Vec<&str> = tool_defs.iter().map(|t| t.name).collect();
 
-        let carryover_block = if self.carryover_enabled {
-            let block = self.carryover.to_prompt_block();
+        let carryover_block = if self.cost.carryover_enabled {
+            let block = self.cost.carryover.to_prompt_block();
             if block.is_empty() {
                 None
             } else {
@@ -1482,7 +1482,7 @@ impl Executor {
         // `cache_control` markers in `anthropic.rs` are unchanged. This
         // is the measurement, not a wire-bytes saving (ADR-052).
         let prefix_len = 1;
-        if self.cache_stem.is_stable(&messages, prefix_len) {
+        if self.cost.cache_stem.is_stable(&messages, prefix_len) {
             record(MetricEvent::PlanReason {
                 decision_kind: PlanDecisionKind::CacheStemReuse,
                 reason: "prompt-cache stem stable across turns".into(),
@@ -1490,7 +1490,7 @@ impl Executor {
                 confidence: 1.0,
             });
         }
-        self.cache_stem.record_prefix_hash(&messages, prefix_len);
+        self.cost.cache_stem.record_prefix_hash(&messages, prefix_len);
 
         // Snapshot the stable prompt-cache stem size for this turn so we
         // can verify KV-cache reuse against the adapter usage stats.
@@ -1648,14 +1648,14 @@ impl Executor {
                         let completion = u.completion_tokens.unwrap_or(0);
                         let cached = u.cached_tokens.unwrap_or(0);
                         let cost = crate::shared::calculate_cost(&self.model_name, u);
-                        self.cost_tracking.record_turn(prompt, completion, cost);
+                        self.cost.usage.record_turn(prompt, completion, cost);
                         crate::send_or_warn!(
                             event_tx
                                 .send(TurnEvent::CostStats {
                                     prompt_tokens: prompt,
                                     completion_tokens: completion,
                                     turn_cost: cost,
-                                    cumulative_cost: self.cost_tracking.cumulative_cost,
+                                    cumulative_cost: self.cost.usage.cumulative_cost,
                                 })
                                 .await,
                             "TurnEvent receiver dropped; discarding event"

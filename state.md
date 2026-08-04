@@ -4,9 +4,9 @@
 
 ## Branch
 
-**`dev2`** at commit `b1bfeb9` — all completed work merged. The `refactor/kf-code-rename-and-modularize` branch has the same content but `dev2` is the clean integration point.
+**`dev2`** at commit `6ff1e95` — all completed work merged. The `refactor/kf-code-rename-and-modularize` branch has the same content but `dev2` is the clean integration point.
 
-Worktrees exist at `.worktrees/phase-{3..7}/` but are all merged into dev2. Phase 4 worktree was reset (broken macro code). Phase 3 worktree has the verifier bus commit.
+Worktrees exist at `.worktrees/phase-{3..7}/` but are all merged into dev2.
 
 ## What shipped this session
 
@@ -20,23 +20,9 @@ Worktrees exist at `.worktrees/phase-{3..7}/` but are all merged into dev2. Phas
 | 7 | ToolRegistry builder replacing `all_tools()` factory | `02e96dd` |
 | Docs | AGENTS.md, CHANGELOG.md, TECHNICAL.md, state.md | `207dfe3` |
 | Plugin toggle | Runtime enable/disable of plugins via `/plugins toggle` | `a4474da` |
+| TUI tabs | F1-F5 tab system (Chat, Models, Plugins, Jobs, Settings) | `6ff1e95` |
 
-**Net impact**: ~2400 lines deleted, ~1500 lines added.
-
-## What DID NOT ship
-
-| Item | Status | Why |
-|---|---|---|
-| Plugin simplification | Not started | Current architecture (feature-gated compilation + runtime toggle) is already close to what's needed |
-| TUI improvements | Not started | Vix analysis complete but no code changes made |
-
-## Gate status
-
-- `cargo check --workspace`: PASS
-- `cargo fmt --check`: PASS
-- `cargo clippy --all-targets -- -D warnings`: PASS
-- `cargo test -p kf-code --lib`: 2879 passed, 1 failed (`bundled_node_sdk_tool_executes_via_host` — requires Node.js, pre-existing)
-- `cargo test --workspace`: ~2910 passed across all crates
+**Net impact**: ~2400 lines deleted, ~2000 lines added.
 
 ## Config drift guard (Phase 4)
 
@@ -47,6 +33,25 @@ The config system has a triple-copy pattern: struct fields, `merge_toml_into_con
 - `ENV_OVERRIDE_EXPECTED = 58` (KF_CODE_* env vars)
 - 16 struct fields intentionally skipped by `merge_toml_into_config` (documented in test)
 - 4 additional fields skipped by `apply_env_overrides` (Vec/array types without env representations)
+
+## TUI tab system
+
+F1-F5 switch between panels. Chat (F1) is the default and shows the existing conversation view. Other tabs render their content in the main area:
+
+- **F2 Models**: Connection status, model info, adapter routing, token usage
+- **F3 Plugins**: Plugin list with ON/OFF/— status, path, toggle hints
+- **F4 Jobs**: Placeholder for scheduled job status
+- **F5 Settings**: Key config values with reload hint
+
+The active tab label appears in the status bar when on a non-Chat tab. On the Chat tab, no indicator is shown (zero visual noise during normal usage).
+
+## Gate status
+
+- `cargo check --workspace`: PASS
+- `cargo fmt --check`: PASS
+- `cargo clippy --all-targets -- -D warnings`: PASS
+- `cargo test -p kf-code --lib`: 2879 passed, 1 failed (`bundled_node_sdk_tool_executes_via_host` — requires Node.js, pre-existing)
+- `cargo test --workspace`: ~2910 passed across all crates
 
 ## Sub-crate rename mapping (for reference)
 
@@ -80,16 +85,17 @@ All `KIRKFORGE_*` env vars renamed to `KF_CODE_*`. Data dir is `~/.local/share/k
 2. **Inline tool output**: vix uses one-line summaries for tool results with ID-matched insertion. kf-code shows more detail.
 3. **Permission flow**: vix uses a dedicated panel that replaces the input area. kf-code has approval dialogs but not a full panel.
 4. **Context indicator**: vix shows `◔ 128k/200k · 64%` in status bar, color-coded. kf-code already has this.
-5. **Multi-thread tabs**: vix has F1-F6 tabs for Threads/Chat/Models/MCP/Jobs/Settings. kf-code has no tab system.
-6. **Model switching**: vix has a full Models tab with provider grid. kf-code uses `/model` command.
+5. **Multi-thread tabs**: vix has F1-F6 tabs for Threads/Chat/Models/MCP/Jobs/Settings. kf-code now has F1-F5 tabs.
+6. **Model switching**: vix has a full Models tab with provider grid. kf-code's F2 Models tab shows model info.
 7. **Daemon protocol**: vix uses JSON-over-unix-socket with ThreadClient/InstanceClient. kf-code's daemon protocol is similar.
 
 ## Next steps (prioritized)
 
-1. **TUI tabs**: Add F-key tab system (Threads, Chat, Models, Plugins, Jobs, Settings)
-2. **TUI permission panel**: Replace the inline approval flow with a dedicated panel
-3. **Plugin simplification**: Consider removing shell fallbacks and making all plugins always-compiled-in with runtime toggles
-4. **Stratum/compress plugin**: Consider absorbing the stratum compression into the main binary permanently (remove the feature flag, make it always-on)
+1. **TUI permission panel**: Replace the inline approval flow with a dedicated panel (the F-key tab infrastructure is now in place)
+2. **Plugin simplification**: Consider removing shell fallbacks and making all plugins always-compiled-in with runtime toggles
+3. **Stratum/compress plugin**: Consider absorbing the stratum compression into the main binary permanently (remove the feature flag, make it always-on)
+4. **Jobs tab content**: Wire the F4 Jobs tab to show actual scheduled job status from the executor
+5. **Models tab enhancements**: Add model switching capability to the F2 Models tab
 
 ## Rust toolchain
 

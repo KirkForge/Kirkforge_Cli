@@ -511,7 +511,7 @@ test result: ok. 1285 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; f
         let bins = parse_cargo_test_output(text);
         assert_eq!(bins.len(), 1);
         let b = &bins[0];
-        assert_eq!(b.binary, "kf-code");
+        assert_eq!(b.binary, "kf_code");
         assert_eq!(b.suite, "lib");
         assert_eq!(b.passed, 1285);
         assert_eq!(b.failed, 0);
@@ -544,7 +544,7 @@ test result: ok. 5 passed; 0 failed; 0 ignored; finished in 2.50s
 ";
         let bins = parse_cargo_test_output(text);
         assert_eq!(bins.len(), 2);
-        assert_eq!(bins[0].binary, "kf-code");
+        assert_eq!(bins[0].binary, "kf_code");
         assert_eq!(bins[0].duration_ms, 1500);
         assert_eq!(bins[1].binary, "smoke_test");
         assert_eq!(bins[1].duration_ms, 2500);
@@ -554,7 +554,7 @@ test result: ok. 5 passed; 0 failed; 0 ignored; finished in 2.50s
     fn parse_failed_result_line() {
         let line =
             "FAILED. 10 passed; 2 failed; 1 ignored; 0 measured; 0 filtered out; finished in 5.0s";
-        let b = parse_result_line(line, "kf-code", "lib").unwrap();
+        let b = parse_result_line(line, "kf_code", "lib").unwrap();
         assert_eq!(b.passed, 10);
         assert_eq!(b.failed, 2);
         assert_eq!(b.ignored, 1);
@@ -575,7 +575,7 @@ test result: ok. 5 passed; 0 failed; 0 ignored; finished in 2.50s
         let tests = parse_nightly_json(text);
         assert_eq!(tests.len(), 2);
         assert_eq!(tests[0].name, "foo::a");
-        assert_eq!(tests[0].binary, "kf-code");
+        assert_eq!(tests[0].binary, "kf_code");
         assert_eq!(tests[0].duration_ms, 24);
         assert!(tests[0].passed);
         assert!(!tests[0].ignored);
@@ -612,7 +612,7 @@ test result: ok. 5 passed; 0 failed; 0 ignored; finished in 2.50s
 ";
         let tests = parse_nightly_json(text);
         assert_eq!(tests.len(), 2);
-        assert_eq!(tests[0].binary, "kf-code");
+        assert_eq!(tests[0].binary, "kf_code");
         assert_eq!(tests[1].binary, "integration_test");
         assert_eq!(tests[1].duration_ms, 3000);
     }
@@ -648,7 +648,7 @@ not json either
     fn per_test_from_binary_profiles_splits_pass_fail() {
         let bins = vec![
             BinaryProfile {
-                binary: "kf-code".into(),
+                binary: "kf_code".into(),
                 suite: "lib".into(),
                 duration_ms: 1000,
                 passed: 4,

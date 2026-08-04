@@ -359,7 +359,7 @@ fn npm_bin_dirs_includes_source_layout_from_target_binary() {
     let _guard = DataDirGuard::set(tmp.path().to_string_lossy().as_ref());
 
     let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let source_bin = repo_root.join("npm/kf-plugin-sdk/node_modules/.bin");
+    let source_bin = repo_root.join("npm/kf-plugin/node_modules/.bin");
     // The source-layout Node SDK install only exists after `npm ci`, which
     // the Rust CI jobs don't run. The detection logic is what we're testing,
     // not whether a sibling language's install happened, so ensure the
@@ -376,7 +376,7 @@ fn npm_bin_dirs_includes_source_layout_from_target_binary() {
 
     // The temporary data directory has no npm install, so no data-dir entry
     // should be present.
-    let data_bin = tmp.path().join("npm/kf-plugin-sdk/node_modules/.bin");
+    let data_bin = tmp.path().join("npm/kf-plugin/node_modules/.bin");
     assert!(
         !dirs.contains(&data_bin),
         "unexpected data-dir bin {data_bin:?} in {dirs:?}"
@@ -388,7 +388,7 @@ fn npm_bin_dirs_includes_source_layout_from_target_binary() {
 #[test]
 fn npm_bin_dirs_includes_data_dir_install() {
     let tmp = tempfile::tempdir().unwrap();
-    let data_bin = tmp.path().join("npm/kf-plugin-sdk/node_modules/.bin");
+    let data_bin = tmp.path().join("npm/kf-plugin/node_modules/.bin");
     std::fs::create_dir_all(&data_bin).unwrap();
     let _guard = DataDirGuard::set(tmp.path().to_string_lossy().as_ref());
 
@@ -522,8 +522,8 @@ fn bundled_plugins_load_from_data_dir() {
     let mut expected = vec![
         "kf-draw",
         "stratum",
-        "kf-plugin-sdk3",
-        "kf-plugin-sdk",
+        "kf-budget",
+        "kf-plugin",
     ];
     #[cfg(feature = "video")]
     expected.push("kf-video");
@@ -621,7 +621,7 @@ async fn bundled_stratum_mode_tool_executes_via_host() {
 }
 
 /// End-to-end installed-layout regression for the Node SDK plugin: the
-/// bundled `npm/kf-plugin-sdk` tree must be reachable from the plugin
+/// bundled `npm/kf-plugin` tree must be reachable from the plugin
 /// scripts so that `plugin_tools` can list verification engines through the
 /// host's `PluginToolWrapper`. Skipped when node or the built SDK is not
 /// available (e.g. a bare `cargo test -p kf-code` without `npm ci`).
@@ -641,7 +641,7 @@ async fn bundled_node_sdk_tool_executes_via_host() {
     }
 
     let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let repo_sdk = repo_root.join("npm/kf-plugin-sdk/apps/cli/dist/index.js");
+    let repo_sdk = repo_root.join("npm/kf-plugin/apps/cli/dist/index.js");
     if which_node().is_none() || !repo_sdk.exists() {
         eprintln!("skipping Node SDK end-to-end test: node or built SDK not available");
         return;
@@ -649,9 +649,9 @@ async fn bundled_node_sdk_tool_executes_via_host() {
 
     let tmp = tempfile::tempdir().unwrap();
     let installed_plugins = tmp.path().join("plugins");
-    let installed_npm = tmp.path().join("npm/kf-plugin-sdk");
+    let installed_npm = tmp.path().join("npm/kf-plugin");
     let repo_plugins = repo_root.join("plugins");
-    let repo_npm = repo_root.join("npm/kf-plugin-sdk");
+    let repo_npm = repo_root.join("npm/kf-plugin");
     copy_dir_all(&repo_plugins, &installed_plugins).unwrap();
     copy_dir_all(&repo_npm, &installed_npm).unwrap();
 
@@ -678,7 +678,7 @@ async fn bundled_node_sdk_tool_executes_via_host() {
 
 /// Verify the built-in workspace plugin sources are registered by default,
 /// exist on disk, and can be loaded by the plugin host under the default
-/// trust policy. Folded plugins (stratum, plugin3, draw, video) are skipped
+/// trust policy. Folded plugins (stratum, budget, draw, video) are skipped
 /// by the shell loader when their feature is ON — they're served compiled-in.
 /// The Node SDK plugin (`kf-plugin-sdk`) is always shell-loaded.
 #[test]
@@ -686,8 +686,8 @@ fn default_plugin_sources_are_present_and_loadable() {
     let mut all_expected = vec![
         "kf-draw",
         "stratum",
-        "kf-plugin-sdk3",
-        "kf-plugin-sdk",
+        "kf-budget",
+        "kf-plugin",
     ];
     #[cfg(feature = "video")]
     all_expected.push("kf-video");
@@ -743,7 +743,7 @@ fn default_plugin_sources_are_present_and_loadable() {
 fn folded_plugin_shell_fallback_when_feature_off() {
     let folded_names = [
         "stratum",
-        "kf-plugin-sdk3",
+        "kf-budget",
         "kf-draw",
         "kf-video",
     ];
@@ -780,10 +780,10 @@ fn folded_plugin_shell_fallback_when_feature_off() {
 #[test]
 fn folded_plugin_identification() {
     assert!(crate::session::plugin_tools::is_folded("stratum"));
-    assert!(crate::session::plugin_tools::is_folded("kf-plugin-sdk3"));
+    assert!(crate::session::plugin_tools::is_folded("kf-budget"));
     assert!(crate::session::plugin_tools::is_folded("kf-draw"));
     assert!(crate::session::plugin_tools::is_folded("kf-video"));
-    assert!(!crate::session::plugin_tools::is_folded("kf-plugin-sdk"));
+    assert!(!crate::session::plugin_tools::is_folded("kf-plugin"));
     assert!(!crate::session::plugin_tools::is_folded("custom-plugin"));
 
     assert_eq!(
@@ -791,11 +791,11 @@ fn folded_plugin_identification() {
         Some("stratum")
     );
     assert_eq!(
-        crate::session::plugin_tools::folded_feature("kf-plugin-sdk3"),
+        crate::session::plugin_tools::folded_feature("kf-budget"),
         Some("budget")
     );
     assert_eq!(
-        crate::session::plugin_tools::folded_feature("kf-plugin-sdk"),
+        crate::session::plugin_tools::folded_feature("kf-plugin"),
         None
     );
 }

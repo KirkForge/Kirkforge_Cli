@@ -21,7 +21,7 @@ pub(crate) fn tool_outcome_success(outcome: &ToolOutcome) -> bool {
     )
 }
 
-/// Apply the Plugin3 budget guard to a tool outcome before it enters
+/// Apply the budget guard to a tool outcome before it enters
 /// the conversation. When the `budget` feature is enabled and the
 /// shared budget is `Approaching` or `Over`, oversized `Success` and
 /// `FileContent` results are sliced (head + tail + offload marker) and

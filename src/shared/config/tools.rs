@@ -60,12 +60,12 @@ fn default_plugin_sources() -> HashMap<String, PathBuf> {
     );
     sources.insert("stratum".into(), base.join("plugins/stratum"));
     sources.insert(
-        "kf-plugin-sdk3".into(),
-        base.join("plugins/kf-plugin-sdk3"),
+        "kf-budget".into(),
+        base.join("plugins/kf-budget"),
     );
     sources.insert(
-        "kf-plugin-sdk".into(),
-        base.join("plugins/kf-plugin-sdk"),
+        "kf-plugin".into(),
+        base.join("plugins/kf-plugin"),
     );
     sources
 }

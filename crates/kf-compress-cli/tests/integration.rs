@@ -1,7 +1,7 @@
 //! Integration tests for the `stratum` CLI binary.
 //!
 //! These tests exercise the compiled binary end-to-end. They are kept separate
-//! from the library unit tests so `assert_cmd` can rely on `CARGO_BIN_EXE_stratum`.
+//! from the library unit tests so `assert_cmd` can rely on `CARGO_BIN_EXE_kf-compress`.
 
 use assert_cmd::Command as AssertCommand;
 use predicates::str;
@@ -408,7 +408,7 @@ fn run_exits_cleanly_on_broken_pipe() {
         .canonicalize()
         .ok();
     let candidates = [
-        std::env::var("CARGO_BIN_EXE_stratum").ok(),
+        std::env::var("CARGO_BIN_EXE_kf-compress").ok(),
         fallback.as_ref().map(|p| p.to_string_lossy().into_owned()),
     ];
     let bin = candidates

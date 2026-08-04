@@ -17,10 +17,10 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 fn binary() -> PathBuf {
-    // Cargo sets CARGO_BIN_EXE_kf-budget for integration tests; we
+    // Cargo sets CARGO_BIN_EXE_kf-budget-cli for integration tests; we
     // honour that path so `cargo test --workspace` picks up the
     // built binary without a separate path lookup.
-    PathBuf::from(env!("CARGO_BIN_EXE_kf-budget"))
+    PathBuf::from(env!("CARGO_BIN_EXE_kf-budget-cli"))
 }
 
 struct FreshDirs {

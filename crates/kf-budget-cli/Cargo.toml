@@ -8,7 +8,7 @@ repository = "https://github.com/KirkForge/KirkForge-Cli"
 description = "CLI for the Plugin3 budget assistant"
 
 [[bin]]
-name = "plugin3"
+name = "kf-budget-cli"
 path = "src/main.rs"
 
 [dependencies]

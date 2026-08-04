@@ -46,7 +46,7 @@ pub(crate) fn kf_budget_binary_path() -> std::path::PathBuf {
     // cargo test runner. When the binary path is unknown, fall
     // back to a sibling of the running test executable
     // (target/debug/deps/kf-budget-<hash> -> target/debug/kf-budget).
-    if let Ok(p) = std::env::var("CARGO_BIN_EXE_kf-budget") {
+    if let Ok(p) = std::env::var("CARGO_BIN_EXE_kf-budget-cli") {
         return std::path::PathBuf::from(p);
     }
     let exe = std::env::current_exe().expect("current_exe");

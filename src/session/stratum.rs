@@ -698,7 +698,7 @@ mod tests {
             original_size: 10_000,
             sliced_size: 200,
             key: "abc123".into(),
-            sliced_display: "head\n<<plugin3:slice:abc123>>\ntail".into(),
+            sliced_display: "head\n<<kf-budget:slice:abc123>>\ntail".into(),
         };
         let replacement = listener(event);
         assert!(replacement.is_some(), "default listener must return Some");

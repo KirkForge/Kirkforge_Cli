@@ -743,7 +743,7 @@ fn record_tool_usage(budget: &SharedBudget, ctx: &HookContext, tool_name: &str) 
 // Public entry point
 // ---------------------------------------------------------------------------
 
-/// Build all 7 Plugin3 budget tools as `Arc<dyn Tool>` instances.
+/// Build all 7 budget tools as `Arc<dyn Tool>` instances.
 ///
 /// The tools share a `TokenBudget` via `Arc<Mutex<>>` so that
 /// `budget_set` mutations are visible to `budget_status` and the
@@ -775,18 +775,18 @@ pub fn all_budget_tools() -> Vec<Arc<dyn Tool>> {
             store: store.clone(),
         }),
         Arc::new(ConfigValidate {
-            def: simple_tool_def("config_validate", "Validate the Plugin3 configuration."),
+            def: simple_tool_def("config_validate", "Validate the budget configuration."),
         }),
         Arc::new(Report {
             def: simple_tool_def("report", "Print a spending report from usage logs."),
         }),
         Arc::new(SelfCheck {
-            def: simple_tool_def("self_check", "Run Plugin3 self-check diagnostics."),
+            def: simple_tool_def("self_check", "Run budget self-check diagnostics."),
         }),
     ]
 }
 
-/// Build all 4 Plugin3 in-process hooks, sharing the same `TokenBudget`
+/// Build all 4 budget in-process hooks, sharing the same `TokenBudget`
 /// as the tools via the process-global `SHARED_BUDGET`.
 pub fn all_budget_hooks() -> Vec<Box<dyn InProcessHook>> {
     let budget = shared_budget();
@@ -860,7 +860,7 @@ mod tests {
                 let stored = store.get(&key).expect("full content retrievable");
                 assert!(!stored.is_empty(), "middle must be offloaded");
                 assert!(
-                    parse_slice_marker(&display).is_some() || display.contains("<<plugin3:slice:"),
+                    parse_slice_marker(&display).is_some() || display.contains("<<kf-budget:slice:"),
                     "display must carry a slice marker, got: {display:?}"
                 );
             }
@@ -924,7 +924,7 @@ mod tests {
         match sliced {
             ToolOutcome::Success { content } => {
                 assert!(
-                    content.contains("<<plugin3:slice:"),
+                    content.contains("<<kf-budget:slice:"),
                     "sliced Success must carry the marker, got: {content:?}"
                 );
             }
@@ -1545,7 +1545,7 @@ mod tests {
         assert!(event.sliced_size > 0 && event.sliced_size < 10_000);
         assert_eq!(event.key.len(), 24, "key must be the 24-hex content key");
         assert!(
-            event.sliced_display.contains("<<plugin3:slice:"),
+            event.sliced_display.contains("<<kf-budget:slice:"),
             "sliced_display must carry the slice marker, got: {:?}",
             event.sliced_display
         );

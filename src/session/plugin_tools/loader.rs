@@ -6,7 +6,7 @@
 //!
 //! ## Two-path dispatch (ADR-050)
 //!
-//! Folded plugins (Stratum, Plugin3, Draw, Video) can run as either:
+//! Folded plugins (Stratum, Budget, Draw, Video) can run as either:
 //! - **Compiled-in** (feature on): tools register as direct Rust calls in
 //!   `main/mod.rs`; the shell plugin dir is skipped here.
 //! - **External** (feature off): the shell plugin dir loads here as
@@ -30,7 +30,7 @@ use super::wrapper::PluginToolWrapper;
 /// When the feature is disabled, the shell plugin dir is loaded as fallback.
 const FOLDED_PLUGINS: &[(&str, &str)] = &[
     ("stratum", "stratum"),
-    ("kf-plugin-sdk3", "budget"),
+    ("kf-budget", "budget"),
     ("kf-draw", "draw"),
     ("kf-video", "video"),
 ];

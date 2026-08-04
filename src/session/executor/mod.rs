@@ -838,7 +838,7 @@ impl Executor {
     /// Run a lifecycle hook with tool result content (fire-and-forget).
     ///
     /// This is the in-process variant: folded-plugin hooks receive the tool's
-    /// output via `HookContext.tool_result`, enabling the Plugin3 budget guard
+    /// output via `HookContext.tool_result`, enabling the budget guard
     /// to inspect bash/write_file results and decide whether to slice/compact.
     fn run_hook_with_result(
         &self,

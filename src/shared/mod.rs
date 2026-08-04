@@ -498,7 +498,7 @@ impl ToolOutcome {
     ///
     /// Returns the primary text content (success message, file content, diff,
     /// grep matches, or error message). Used by in-process hooks (e.g. the
-    /// Plugin3 budget guard) to inspect tool results without parsing the full
+    /// budget guard) to inspect tool results without parsing the full
     /// enum at the call site.
     pub fn text_content(&self) -> String {
         match self {

@@ -515,8 +515,8 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
         tracing::info!(count, "video in-process tools registered");
     }
 
-    // ── Budget (Plugin3) in-process tools (feature-gated) ──
-    // When the `budget` feature is enabled, the 7 Plugin3 budget tools
+    // ── Budget in-process tools (feature-gated) ──
+    // When the `budget` feature is enabled, the 7 budget tools
     // are registered as direct Rust calls instead of shell-plugin
     // subprocesses. ADR-047 pins this decision.
     #[cfg(feature = "budget")]

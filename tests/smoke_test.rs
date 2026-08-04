@@ -8,7 +8,7 @@ use std::process::Command;
 
 /// Return the path to the built `kirkforge` binary.
 fn bin() -> std::path::PathBuf {
-    env!("CARGO_BIN_EXE_kirkforge").into()
+    env!("CARGO_BIN_EXE_kf-code").into()
 }
 
 #[test]

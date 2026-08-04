@@ -41,14 +41,14 @@ const BASELINE_ENV_VARS: &[&str] = &[
 /// Two layouts are supported:
 ///   1. Installed/data-directory layout (`~/.local/share/kf-code/npm/...`).
 ///   2. Source layout: when the running binary is under `<repo>/target/`,
-///      the workspace sibling `<repo>/npm/kf-plugin-sdk/node_modules/.bin`
+///      the workspace sibling `<repo>/npm/kf-plugin/node_modules/.bin`
 ///      is also included so development builds resolve `tsc`/`pyright` without
 ///      a global install.
 pub(crate) fn npm_bin_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
 
     if let Ok(data_dir) = crate::session::data_dir() {
-        let installed = data_dir.join("npm/kf-plugin-sdk/node_modules/.bin");
+        let installed = data_dir.join("npm/kf-plugin/node_modules/.bin");
         if installed.is_dir() {
             dirs.push(installed);
         }
@@ -60,7 +60,7 @@ pub(crate) fn npm_bin_dirs() -> Vec<PathBuf> {
         // and test binaries at `<repo>/target/{release,debug}/deps/kf-code-<hash>`.
         let mut current = exe.parent();
         while let Some(dir) = current {
-            let candidate = dir.join("npm/kf-plugin-sdk/node_modules/.bin");
+            let candidate = dir.join("npm/kf-plugin/node_modules/.bin");
             if candidate.is_dir() && !dirs.contains(&candidate) {
                 dirs.push(candidate);
                 break;

@@ -11,7 +11,7 @@ set -euo pipefail
 #   1. $KF_CODE_CLI_JS override (useful for custom installs and CI).
 #   2. Same-directory / source-layout candidate (resolved from tools/ up to the
 #      workspace or data-directory root):
-#      ../../../npm/kf-code-plugin/apps/cli/dist/index.js
+#      ../../../npm/kf-plugin/apps/cli/dist/index.js
 #   3. Global npm install:
 #      $(npm root -g)/@kf-code/cli/dist/index.js
 #
@@ -40,7 +40,7 @@ find_cli() {
 
     local script_dir
     script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    local candidate="${script_dir}/../../../npm/kf-code-plugin/apps/cli/dist/index.js"
+    local candidate="${script_dir}/../../../npm/kf-plugin/apps/cli/dist/index.js"
     if [ -f "$candidate" ] && _is_node_script "$candidate"; then
         printf '%s' "$candidate"
         return 0

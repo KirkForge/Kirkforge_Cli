@@ -10,7 +10,7 @@ keywords = ["compression", "llm", "context", "prompt"]
 categories = ["command-line-utilities", "development-tools"]
 
 [[bin]]
-name = "stratum"
+name = "kf-compress"
 path = "src/main.rs"
 
 [dependencies]

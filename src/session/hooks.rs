@@ -55,7 +55,7 @@ pub struct HookContext {
     /// Tool result content (post-tool events only).
     ///
     /// This is the key field that shell hooks could NOT access — it gives
-    /// in-process hooks like the Plugin3 budget guard real visibility into
+    /// in-process hooks like the budget guard real visibility into
     /// what the tool returned, so it can decide whether to slice/compact.
     pub tool_result: Option<String>,
     /// Compact metadata (pre-compact / post-compact events only).
@@ -77,7 +77,7 @@ pub struct CompactHookStatsData {
 
 /// An in-process Rust hook handler that replaces a shell script.
 ///
-/// Folded plugins (Stratum, Plugin3, Draw) implement this trait and register
+/// Folded plugins (Stratum,  budget, Draw) implement this trait and register
 /// instances with `HookRunner::add_in_process_hook`. When the feature is
 /// enabled, the in-process handler runs instead of the shell script.
 pub trait InProcessHook: Send + Sync {
@@ -368,7 +368,7 @@ impl HookRunner {
     /// Run decision hooks with full `HookContext` (including tool result).
     ///
     /// Used by the executor for post-tool hooks where the in-process handler
-    /// needs to see the tool's output (e.g. Plugin3 budget guard checking
+    /// needs to see the tool's output (e.g. budget guard checking
     /// whether a bash result is oversized).
     pub async fn run_decision_with_context(
         &self,

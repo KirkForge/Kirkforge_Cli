@@ -1,5 +1,5 @@
 use super::*;
-use crate::session::event_bus::{BusEvent, EditEvent, EventBus};
+use crate::session::verifier::types::{BusEvent, EditEvent, EventKind, ToolErrorEvent};
 use crate::shared::test_util::remove_test_file;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -487,80 +487,25 @@ async fn test_correction_loop_applies_and_returns() {
     remove_test_file(&path);
 }
 
-#[tokio::test]
-async fn test_verifier_handler_event_bus_integration() {
-    let bus = EventBus::new();
-    let slots = Arc::new(std::sync::RwLock::new(VerifierSlots::new()));
-    let handler = Arc::new(VerifierHandler::new(
-        slots.clone(),
-        crate::session::access::PathGuard::default(),
-    ));
-
-    // Register as event bus handler
-    bus.register(handler.clone()).await.unwrap();
-
-    // Register a verifier
-    {
-        let mut s = slots.write().unwrap();
-        s.register(Arc::new(MockVerifier {
-            name: "lint".into(),
-            prio: 1,
-            verdict: Verdict::Clean,
-        }))
-        .unwrap();
-    }
-
-    // Dispatch via bus
-    let event = BusEvent::Edit(EditEvent {
-        path: PathBuf::from("/tmp/test.rs"),
-        diff: "test diff".into(),
-    });
-    let results = bus.dispatch(&event).await;
-
-    // VerifierHandler should have been called
-    let verifier_results: Vec<_> = results
-        .iter()
-        .filter(|r| r.handler_id == "verifier")
-        .collect();
-    assert_eq!(verifier_results.len(), 1);
-    assert_eq!(verifier_results[0].message, "All verifiers passed");
-}
-
 // ── VerifierHandler tests (WO 12-series coverage) ──────────────────────
 
 use super::handler::VerifierHandler;
 use crate::session::access::PathGuard;
-use crate::session::event_bus::{EventHandler, EventKind};
 use crate::session::verifier::slots::VerifierSlots;
 
 #[tokio::test]
-async fn handler_subscribed_kinds_are_correct() {
-    let slots = Arc::new(std::sync::RwLock::new(VerifierSlots::new()));
-    let guard = PathGuard::default();
-    let handler = VerifierHandler::new(slots, guard);
-    let kinds = handler.subscribed_kinds();
-    assert_eq!(kinds.len(), 5);
-    assert!(kinds.contains(&EventKind::Edit));
-    assert!(kinds.contains(&EventKind::FileWrite));
-    assert!(kinds.contains(&EventKind::BashExec));
-    assert!(kinds.contains(&EventKind::GitOperation));
-    assert!(kinds.contains(&EventKind::ToolError));
-}
-
-#[tokio::test]
-async fn handler_handle_clean_verdict() {
+async fn handler_verify_event_clean_verdict() {
     let slots = Arc::new(std::sync::RwLock::new(VerifierSlots::new()));
     let guard = PathGuard::default();
     let handler = VerifierHandler::new(slots, guard);
     let event = make_edit_event();
-    let result = handler.handle(&event).await;
-    assert!(result.success);
-    assert_eq!(result.handler_id, "verifier");
-    assert!(result.message.contains("All verifiers passed"));
+    let (verdict, name) = handler.verify_event(&event).await;
+    assert!(matches!(verdict, Verdict::Clean));
+    assert_eq!(name, "aggregate");
 }
 
 #[tokio::test]
-async fn handler_handle_fixable_verdict() {
+async fn handler_verify_event_fixable_verdict() {
     let mut s = VerifierSlots::new();
     let _ = s.register(Arc::new(MockVerifier {
         name: "fix-verifier".into(),
@@ -578,13 +523,13 @@ async fn handler_handle_fixable_verdict() {
     let guard = PathGuard::default();
     let handler = VerifierHandler::new(slots, guard);
     let event = make_edit_event();
-    let result = handler.handle(&event).await;
-    assert!(result.success, "fixable should be success=true");
-    assert!(result.message.contains("Fixable"));
+    let (verdict, name) = handler.verify_event(&event).await;
+    assert!(matches!(verdict, Verdict::Fixable(_)));
+    assert_eq!(name, "fix-verifier");
 }
 
 #[tokio::test]
-async fn handler_handle_unfixable_verdict() {
+async fn handler_verify_event_unfixable_verdict() {
     let mut s = VerifierSlots::new();
     let _ = s.register(Arc::new(MockVerifier {
         name: "strict-verifier".into(),
@@ -599,13 +544,13 @@ async fn handler_handle_unfixable_verdict() {
     let guard = PathGuard::default();
     let handler = VerifierHandler::new(slots, guard);
     let event = make_edit_event();
-    let result = handler.handle(&event).await;
-    assert!(!result.success, "unfixable should be success=false");
-    assert!(result.message.contains("Unfixable"));
+    let (verdict, name) = handler.verify_event(&event).await;
+    assert!(matches!(verdict, Verdict::Unfixable(_)));
+    assert_eq!(name, "strict-verifier");
 }
 
 #[tokio::test]
-async fn handler_handle_skipped_verdict() {
+async fn handler_verify_event_skipped_verdict() {
     let mut s = VerifierSlots::new();
     let _ = s.register(Arc::new(MockVerifier {
         name: "skip-verifier".into(),
@@ -616,19 +561,14 @@ async fn handler_handle_skipped_verdict() {
     let guard = PathGuard::default();
     let handler = VerifierHandler::new(slots, guard);
     let event = make_edit_event();
-    let result = handler.handle(&event).await;
+    let (verdict, _) = handler.verify_event(&event).await;
     // Skipped is treated as Clean by the verify_event loop (continue),
-    // so the aggregate verdict is Clean and the message says "All verifiers
-    // passed". The success flag is still true.
-    assert!(result.success, "skipped should be success=true");
+    // so the aggregate verdict is Clean.
+    assert!(matches!(verdict, Verdict::Clean));
 }
 
 #[tokio::test]
 async fn handler_tool_error_event_short_circuits_without_fanout() {
-    // bucketlist 3.25 + 3.42: a ToolError event is short-circuited in
-    // verify_event — no verifier runs (they would all skip anyway), and
-    // the handler reports a Skipped result. A MockVerifier that would
-    // return Unfixable proves the fan-out never reached it.
     let mut s = VerifierSlots::new();
     let _ = s.register(Arc::new(MockVerifier {
         name: "would-fail".into(),
@@ -643,27 +583,17 @@ async fn handler_tool_error_event_short_circuits_without_fanout() {
     let guard = PathGuard::default();
     let handler = VerifierHandler::new(slots, guard);
 
-    let event = BusEvent::ToolError(crate::session::event_bus::ToolErrorEvent {
+    let event = BusEvent::ToolError(ToolErrorEvent {
         tool: "bash".into(),
         error: "exit code 1".into(),
     });
 
-    // verify_event returns Skipped for a ToolError (short-circuit).
     let (verdict, name) = handler.verify_event(&event).await;
     assert!(
         matches!(&verdict, Verdict::Skipped(_)),
         "ToolError should short-circuit to Skipped, got {verdict:?}"
     );
     assert_eq!(name, "aggregate");
-
-    // handle() surfaces the same short-circuit as a success Skipped result.
-    let result = handler.handle(&event).await;
-    assert!(result.success, "ToolError short-circuit is success=true");
-    assert!(result.message.contains("Skipped"));
-    assert!(
-        !result.message.contains("should not run"),
-        "the registered Unfixable verifier must not have run"
-    );
 }
 
 #[tokio::test]
@@ -714,12 +644,4 @@ async fn handler_drain_corrections_empty_after_drain() {
     let _ = handler.drain_corrections().await;
     let corrections = handler.drain_corrections().await;
     assert!(corrections.is_empty(), "second drain should be empty");
-}
-
-#[test]
-fn handler_id_is_verifier() {
-    let slots = Arc::new(std::sync::RwLock::new(VerifierSlots::new()));
-    let guard = PathGuard::default();
-    let handler = VerifierHandler::new(slots, guard);
-    assert_eq!(handler.id(), "verifier");
 }

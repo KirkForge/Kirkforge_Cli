@@ -1,4 +1,4 @@
-use crate::session::event_bus::{BashExecEvent, BusEvent, GitOperationEvent};
+use crate::session::verifier::types::{BashExecEvent, BusEvent, GitOperationEvent};
 /// Git verifier — validates git state after operations.
 ///
 /// Checks for:
@@ -254,7 +254,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_skips_non_git_events() {
-        let event = BusEvent::Edit(crate::session::event_bus::EditEvent {
+        let event = BusEvent::Edit(crate::session::verifier::types::EditEvent {
             path: std::path::PathBuf::from("x.rs"),
             diff: "".into(),
         });
@@ -264,7 +264,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_non_git_bash_skipped() {
-        let event = BusEvent::BashExec(crate::session::event_bus::BashExecEvent {
+        let event = BusEvent::BashExec(crate::session::verifier::types::BashExecEvent {
             command: "ls -la".into(),
             exit_code: 0,
             stdout_len: 100,
@@ -277,7 +277,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_successful_git_op_returns_clean() {
-        let event = BusEvent::GitOperation(crate::session::event_bus::GitOperationEvent {
+        let event = BusEvent::GitOperation(crate::session::verifier::types::GitOperationEvent {
             args: vec!["status".into()],
             output: "On branch main".into(),
             success: true,
@@ -294,7 +294,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
 
-        let event = BusEvent::BashExec(crate::session::event_bus::BashExecEvent {
+        let event = BusEvent::BashExec(crate::session::verifier::types::BashExecEvent {
             command: "git status".into(),
             exit_code: 0,
             stdout_len: 0,
@@ -339,7 +339,7 @@ mod tests {
             .expect("git add failed");
         assert!(stage.status.success());
 
-        let event = BusEvent::BashExec(crate::session::event_bus::BashExecEvent {
+        let event = BusEvent::BashExec(crate::session::verifier::types::BashExecEvent {
             command: "git add file.txt".into(),
             exit_code: 0,
             stdout_len: 0,
@@ -454,7 +454,7 @@ mod tests {
             .expect("git merge failed");
         assert!(!merge.status.success(), "merge should have conflicted");
 
-        let event = BusEvent::BashExec(crate::session::event_bus::BashExecEvent {
+        let event = BusEvent::BashExec(crate::session::verifier::types::BashExecEvent {
             command: "git merge branch".into(),
             exit_code: 1,
             stdout_len: 0,

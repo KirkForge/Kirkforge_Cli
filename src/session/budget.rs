@@ -33,9 +33,9 @@ static SHARED_STORE: OnceLock<SharedStore> = OnceLock::new();
 // is asked to compress the sliced display so the model sees a single
 // post-coordination size, and `budget.used` reflects the post-Stratum
 // size. The dispatch is a sync registered-listener model — not the
-// async `EventBus` in `event_bus.rs` — because the slice path is
-// itself sync and the in-process test runtime is single-threaded (a
-// bus roundtrip would require `block_in_place` and panic per
+// removed async EventBus — because the slice path is itself sync and
+// the in-process test runtime is single-threaded (a bus roundtrip
+// would require `block_in_place` and panic per
 // `AGENTS.md` §7).
 
 /// Payload of a `BudgetSliced` notification. Carries the pre- and

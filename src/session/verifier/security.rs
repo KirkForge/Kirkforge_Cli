@@ -1,4 +1,4 @@
-use crate::session::event_bus::{BusEvent, EditEvent, FileWriteEvent};
+use crate::session::verifier::types::{BusEvent, EditEvent, FileWriteEvent};
 /// Security verifier — scans file writes and edits for dangerous patterns.
 ///
 /// Checks written/edited files for:
@@ -351,7 +351,7 @@ mod tests {
     #[tokio::test]
     async fn test_skips_unrelated_events() {
         // Only FileWrite and Edit are scanned; BashExec, FileRead, etc. should skip
-        let event = BusEvent::BashExec(crate::session::event_bus::BashExecEvent {
+        let event = BusEvent::BashExec(crate::session::verifier::types::BashExecEvent {
             command: "echo hi".into(),
             exit_code: 0,
             stdout_len: 0,

@@ -1,5 +1,176 @@
-use crate::session::event_bus::BusEvent;
+use std::hash::Hash;
 use std::path::PathBuf;
+
+// ── Event Kinds ─────────────────────────────────────────────────────────
+
+/// All event kinds the bus supports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize)]
+pub enum EventKind {
+    FileRead,
+    FileWrite,
+    Edit,
+    BashExec,
+    GitOperation,
+    LintRun,
+    TypeCheck,
+    SecurityScan,
+    ToolError,
+}
+
+impl EventKind {
+    /// All known kinds.
+    pub fn all() -> &'static [EventKind] {
+        &[
+            EventKind::FileRead,
+            EventKind::FileWrite,
+            EventKind::Edit,
+            EventKind::BashExec,
+            EventKind::GitOperation,
+            EventKind::LintRun,
+            EventKind::TypeCheck,
+            EventKind::SecurityScan,
+            EventKind::ToolError,
+        ]
+    }
+
+    /// Human-readable label.
+    pub fn label(self) -> &'static str {
+        match self {
+            EventKind::FileRead => "file_read",
+            EventKind::FileWrite => "file_write",
+            EventKind::Edit => "edit",
+            EventKind::BashExec => "bash_exec",
+            EventKind::GitOperation => "git_operation",
+            EventKind::LintRun => "lint_run",
+            EventKind::TypeCheck => "type_check",
+            EventKind::SecurityScan => "security_scan",
+            EventKind::ToolError => "tool_error",
+        }
+    }
+}
+
+impl std::fmt::Display for EventKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.label())
+    }
+}
+
+// ── Events ──────────────────────────────────────────────────────────────
+
+/// A concrete event describing a tool operation.
+///
+/// Constructed by the executor dispatch layer and passed directly to
+/// verifiers and the correction loop — no intermediate pub/sub bus.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(tag = "kind", content = "payload")]
+pub enum BusEvent {
+    FileRead(FileReadEvent),
+    FileWrite(FileWriteEvent),
+    Edit(EditEvent),
+    BashExec(BashExecEvent),
+    GitOperation(GitOperationEvent),
+    LintRun(LintRunEvent),
+    TypeCheck(TypeCheckEvent),
+    SecurityScan(SecurityScanEvent),
+    ToolError(ToolErrorEvent),
+}
+
+impl BusEvent {
+    /// The event kind discriminator.
+    pub fn kind(&self) -> EventKind {
+        match self {
+            BusEvent::FileRead(_) => EventKind::FileRead,
+            BusEvent::FileWrite(_) => EventKind::FileWrite,
+            BusEvent::Edit(_) => EventKind::Edit,
+            BusEvent::BashExec(_) => EventKind::BashExec,
+            BusEvent::GitOperation(_) => EventKind::GitOperation,
+            BusEvent::LintRun(_) => EventKind::LintRun,
+            BusEvent::TypeCheck(_) => EventKind::TypeCheck,
+            BusEvent::SecurityScan(_) => EventKind::SecurityScan,
+            BusEvent::ToolError(_) => EventKind::ToolError,
+        }
+    }
+}
+
+// ── Event payloads ──────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct FileReadEvent {
+    pub path: PathBuf,
+    pub size_bytes: u64,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct FileWriteEvent {
+    pub path: PathBuf,
+    pub content_length: usize,
+    pub content_hash: u64,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct EditEvent {
+    pub path: PathBuf,
+    pub diff: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct BashExecEvent {
+    pub command: String,
+    pub exit_code: i32,
+    pub stdout_len: usize,
+    pub stderr_len: usize,
+    pub workdir: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct GitOperationEvent {
+    pub args: Vec<String>,
+    pub output: String,
+    pub success: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct LintRunEvent {
+    pub tool: String,
+    pub target: String,
+    pub findings: Vec<LintFinding>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TypeCheckEvent {
+    pub target: String,
+    pub errors: Vec<String>,
+    pub success: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SecurityScanEvent {
+    pub target: String,
+    pub issues: Vec<SecurityIssue>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ToolErrorEvent {
+    pub tool: String,
+    pub error: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct LintFinding {
+    pub severity: String,
+    pub message: String,
+    pub file: Option<String>,
+    pub line: Option<usize>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SecurityIssue {
+    pub severity: String,
+    pub kind: String,
+    pub description: String,
+    pub file: Option<String>,
+}
 
 // ── Verification result ─────────────────────────────────────────────────
 
@@ -19,20 +190,11 @@ pub enum Verdict {
 /// A fix suggestion from a verifier.
 #[derive(Debug, Clone)]
 pub struct FixSuggestion {
-    /// Human-readable description of the issue.
     pub description: String,
-    /// The file that needs fixing.
     pub file: PathBuf,
-    /// The original text to replace.
     pub original: String,
-    /// The replacement text.
     pub replacement: String,
-    /// Suggested severity: "error" | "warning" | "info"
     pub severity: String,
-    /// Optional external command that performs the fix in-place (e.g.
-    /// `rustfmt`). When set and `original`/`replacement` are empty, the
-    /// correction loop runs this command on `file` instead of doing a text
-    /// replacement.
     pub command: Option<String>,
 }
 
@@ -48,9 +210,9 @@ pub struct VerificationError {
 
 /// A verifier performs deterministic checks on tool execution results.
 ///
-/// Verifiers register as event bus handlers to react to specific events.
-/// Unlike generic handlers, verifiers return a [`Verification`] that
-/// the correction loop can act on.
+/// Verifiers are called directly by the dispatch layer after each
+/// tool call. Unlike generic handlers, verifiers return a [`Verdict`]
+/// that the correction loop can act on.
 #[async_trait::async_trait]
 pub trait Verifier: Send + Sync {
     /// Unique verifier name (e.g. "lint", "type-check", "git", "security").
@@ -61,8 +223,5 @@ pub trait Verifier: Send + Sync {
     fn priority(&self) -> u8;
 
     /// Verify the state after a tool event.
-    ///
-    /// Implementations should be fast and deterministic — this runs
-    /// synchronously in the tool execution pipeline.
     async fn verify(&self, event: &BusEvent) -> Verdict;
 }

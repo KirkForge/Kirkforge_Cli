@@ -1,5 +1,4 @@
-use super::types::{Verdict, Verifier};
-use crate::session::event_bus::BusEvent;
+use super::types::{BusEvent, Verdict, Verifier};
 use std::sync::Arc;
 
 // ── Verifier Slots ──────────────────────────────────────────────────────

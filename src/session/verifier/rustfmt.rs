@@ -1,4 +1,4 @@
-use crate::session::event_bus::{BusEvent, EditEvent, FileWriteEvent};
+use crate::session::verifier::types::{BusEvent, EditEvent, FileWriteEvent};
 /// Rustfmt verifier — checks formatting for edited Rust files.
 ///
 /// Subscribes to `Edit` and `FileWrite` events. For Rust files, it runs
@@ -55,7 +55,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_skips_non_edit_events() {
-        let event = BusEvent::BashExec(crate::session::event_bus::BashExecEvent {
+        let event = BusEvent::BashExec(crate::session::verifier::types::BashExecEvent {
             command: "echo hi".into(),
             exit_code: 0,
             stdout_len: 3,

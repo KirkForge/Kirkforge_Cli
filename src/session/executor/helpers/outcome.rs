@@ -78,8 +78,9 @@ pub(crate) async fn handle_tool_outcome(
                 .await?;
         }
         ToolOutcome::FileEdit { diff, .. } => {
-            // Hand the rendered diff to the caller so the
-            // BusEvent::Edit event downstream carries the real
+            // The rendered diff from the edit_file tool is passed to
+            // the correction loop so downstream verifiers see the
+            // real unified diff rather than the user's `old_string`.
             // diff text — see the docstring on this fn.
             crate::send_or_warn!(
                 event_tx

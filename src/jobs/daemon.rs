@@ -7,7 +7,7 @@
 //! - runs due bash jobs (skill jobs are stored but not executed yet),
 //! - records stdout/stderr artifacts and updates each job's `last_run` / `next_run`.
 //!
-//! Communication is line-delimited JSON over `~/.local/share/kirkforge/jobd.sock`.
+//! Communication is line-delimited JSON over `~/.local/share/kf-code/jobd.sock`.
 
 use crate::daemon::{read_line_limited, Request, Response};
 use crate::jobs::runner::run_job;

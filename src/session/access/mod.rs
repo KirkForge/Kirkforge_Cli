@@ -528,7 +528,7 @@ pub fn warn_if_unsandboxed(path_guard: &PathGuard) {
         tracing::warn!(
             "PathGuard is unsandboxed: no `sandbox_dir` and no `allowed_write_dirs` configured. \
              Model-driven writes are not restricted to any directory tree (only the deny list and \
-             deny extensions apply). Set `sandbox_dir` in config.toml or via KIRKFORGE_SANDBOX_DIR, \
+             deny extensions apply). Set `sandbox_dir` in config.toml or via KF_CODE_SANDBOX_DIR, \
              or list `allowed_write_dirs` to scope writes."
         );
     }
@@ -695,7 +695,7 @@ mod tests {
             ..Default::default()
         };
         // This writes to tmp so the path exists for the read check
-        let tmp = std::env::temp_dir().join(".kirkforge_test_dotfile");
+        let tmp = std::env::temp_dir().join(".kf-code_test_dotfile");
         std::fs::write(&tmp, "test").unwrap();
         let result = guard.check_read(&tmp);
         remove_test_file(&tmp);
@@ -705,7 +705,7 @@ mod tests {
     #[test]
     fn test_path_guard_allows_normal_files() {
         let guard = PathGuard::default();
-        let tmp = std::env::temp_dir().join("kirkforge_test_normal.txt");
+        let tmp = std::env::temp_dir().join("kf_code_test_normal.txt");
         std::fs::write(&tmp, "hello").unwrap();
         let result = guard.check_read(&tmp);
         remove_test_file(&tmp);
@@ -715,7 +715,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn test_check_read_size_limit_follows_symlink_target() {
-        let dir = std::env::temp_dir().join("kirkforge_guard_symlink_test");
+        let dir = std::env::temp_dir().join("kf_code_guard_symlink_test");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir(&dir).unwrap();
 
@@ -744,7 +744,7 @@ mod tests {
     #[tokio::test]
     async fn test_path_guard_write_for_nonexistent_path() {
         let guard = PathGuard::default();
-        let tmp = std::env::temp_dir().join("kirkforge_new_file_test.txt");
+        let tmp = std::env::temp_dir().join("kf_code_new_file_test.txt");
         // Should not exist for this test
         remove_test_file(&tmp);
         let result = guard.check_write(&tmp).await;
@@ -771,7 +771,7 @@ mod tests {
     #[test]
     fn test_read_gate_tracks_reads() {
         let mut gate = ReadGate::new();
-        let p = Path::new("/tmp/kirkforge_read_gate_test.txt");
+        let p = Path::new("/tmp/kf_code_read_gate_test.txt");
         // Not read yet
         assert!(matches!(gate.check_edit(p, p), GuardVerdict::Denied(_)));
         // Mark as read
@@ -782,7 +782,7 @@ mod tests {
     #[test]
     fn test_read_gate_clear() {
         let mut gate = ReadGate::new();
-        let p = Path::new("/tmp/kirkforge_clear_test.txt");
+        let p = Path::new("/tmp/kf_code_clear_test.txt");
         gate.mark_read(p);
         gate.clear();
         assert!(matches!(gate.check_edit(p, p), GuardVerdict::Denied(_)));
@@ -793,8 +793,8 @@ mod tests {
         // The gate should match the resolved canonical key even when the
         // display path and the resolved path differ in form.
         let mut gate = ReadGate::new();
-        let display = Path::new("/tmp/../tmp/kirkforge_resolved_test.txt");
-        let resolved = Path::new("/tmp/kirkforge_resolved_test.txt");
+        let display = Path::new("/tmp/../tmp/kf_code_resolved_test.txt");
+        let resolved = Path::new("/tmp/kf_code_resolved_test.txt");
         gate.mark_read(resolved);
         assert!(matches!(
             gate.check_edit(display, resolved),
@@ -802,7 +802,7 @@ mod tests {
         ));
 
         // A different resolved key that was never read should still be denied.
-        let other = Path::new("/tmp/kirkforge_other_test.txt");
+        let other = Path::new("/tmp/kf_code_other_test.txt");
         assert!(matches!(
             gate.check_edit(display, other),
             GuardVerdict::Denied(_)
@@ -864,7 +864,7 @@ mod tests {
             "default PathGuard is unsandboxed by design"
         );
         // Writes to /tmp are allowed (no sandbox, no allowlist blocking it).
-        let tmp = std::env::temp_dir().join("kirkforge_default_failopen.txt");
+        let tmp = std::env::temp_dir().join("kf_code_default_failopen.txt");
         remove_test_file(&tmp);
         let result = guard.check_write(&tmp).await;
         remove_test_file(&tmp);
@@ -876,7 +876,7 @@ mod tests {
         );
         // But the deny list and deny extensions still apply — even
         // unsandboxed, .ssh and .pem are blocked.
-        let ssh_like = std::env::temp_dir().join("kirkforge.pem");
+        let ssh_like = std::env::temp_dir().join("kf-code.pem");
         let result = guard.check_write(&ssh_like).await;
         assert!(
             matches!(result, GuardVerdict::Denied(_)),
@@ -915,7 +915,7 @@ mod tests {
     /// **Contract:** `Config::default()` now sandboxes to the current
     /// working directory. Operators who want unsandboxed operation must
     /// explicitly opt out via `sandbox_dir = ""` in the config file (or
-    /// `KIRKFORGE_SANDBOX_DIR=""` env var); `access_from_config` treats
+    /// `KF_CODE_SANDBOX_DIR=""` env var); `access_from_config` treats
     /// the empty string as `None`. This replaces the prior fail-open
     /// default, which was the source of GPT 5.5's review finding #5
     /// ("Default mode is fail-open for writes").
@@ -983,9 +983,9 @@ mod tests {
         );
 
         // `None` is also the escape hatch — same path, different
-        // spelling (e.g. resolved from `KIRKFORGE_SANDBOX_DIR=""`).
+        // spelling (e.g. resolved from `KF_CODE_SANDBOX_DIR=""`).
         let mut config_none = crate::shared::Config::default();
-        // For the test, simulate the "KIRKFORGE_SANDBOX_DIR=\"\""
+        // For the test, simulate the "KF_CODE_SANDBOX_DIR=\"\""
         // path by clearing the field *after* the helper would
         // normally have filled it. The user-facing property is
         // that `None` produces an unsandboxed guard.
@@ -1001,7 +1001,7 @@ mod tests {
     // ── Git-ignored dotfile blocking ────────────────────────────────
 
     fn setup_gitignored_dotfile_repo(suffix: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("kirkforge_guard_gitignored_test_{suffix}"));
+        let dir = std::env::temp_dir().join(format!("kf_code_guard_gitignored_test_{suffix}"));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
@@ -1085,7 +1085,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn test_check_read_rechecks_deny_list_on_canonical_target() {
-        let dir = std::env::temp_dir().join("kirkforge_deny_symlink_test");
+        let dir = std::env::temp_dir().join("kf_code_deny_symlink_test");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir(&dir).unwrap();
 
@@ -1112,7 +1112,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn test_check_traversal_rechecks_deny_list_on_canonical_target() {
-        let dir = std::env::temp_dir().join("kirkforge_traversal_deny_symlink_test");
+        let dir = std::env::temp_dir().join("kf_code_traversal_deny_symlink_test");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir(&dir).unwrap();
 
@@ -1232,7 +1232,7 @@ mod tests {
     #[test]
     fn read_gate_check_edit_denies_unread_path() {
         let gate = ReadGate::new();
-        let path = Path::new("/tmp/kirkforge-test-never-read.rs");
+        let path = Path::new("/tmp/kf-code-test-never-read.rs");
         match gate.check_edit(path, path) {
             GuardVerdict::Denied(msg) => assert!(msg.contains("Read-before-edit"), "{msg}"),
             other => panic!("expected Denied, got {other:?}"),

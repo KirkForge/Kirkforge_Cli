@@ -1,7 +1,7 @@
 name = "add_cli_flag"
 difficulty = "medium"
 
-prompt = "Add a `--verbose` flag to the kirkforge CLI run subcommand that sets the log level to 'debug' when present. Wire it into the Run variant and the run function in src/main.rs."
+prompt = "Add a `--verbose` flag to the kf-code CLI run subcommand that sets the log level to 'debug' when present. Wire it into the Run variant and the run function in src/main.rs."
 
 [setup]
 "Cargo.toml" = """[package]

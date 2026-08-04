@@ -1,0 +1,19 @@
+[package]
+name = "kf-draw-core"
+version = "0.2.0"
+edition = "2021"
+rust-version = "1.88"
+license = "MIT"
+repository = "https://github.com/KirkForge/KirkForge-Cli"
+description = "Pure document model and editor state for KirkForge-Draw"
+
+[lib]
+name = "kf_draw_core"
+path = "src/lib.rs"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+unicode-segmentation = "1"
+unicode-width = "0.2"

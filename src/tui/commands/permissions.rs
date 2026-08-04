@@ -4,7 +4,7 @@
 //!
 //! Mirrors the `plugin_ops` split (WO 11.0): the ops layer is pure
 //! (no I/O) so it is unit-testable without a TUI, and the TUI match
-//! arm (or a future `kirkforge permissions` CLI) is a thin wrapper
+//! arm (or a future `kf-code permissions` CLI) is a thin wrapper
 //! that calls these and persists via `save_config`.
 //!
 //! `list` is the source of truth for the 1-indexed position the user

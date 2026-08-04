@@ -337,7 +337,7 @@ mod tests {
     fn test_save_and_load() {
         // Use a temp path by overriding the carryover_path function's return
         // by writing to and reading from a temp file
-        let temp = std::env::temp_dir().join("kirkforge-carryover-test.json");
+        let temp = std::env::temp_dir().join("kf-code-carryover-test.json");
         let backup_path = PathBuf::from(".");
 
         // Manually test save/load logic by writing to temp path
@@ -364,7 +364,7 @@ mod tests {
 
     #[test]
     fn test_atomic_write_replaces_target_without_leaving_tmp() {
-        let dir = std::env::temp_dir().join("kirkforge_atomic_write_test");
+        let dir = std::env::temp_dir().join("kf_code_atomic_write_test");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
@@ -790,7 +790,7 @@ mod tests {
 
     #[test]
     fn test_atomic_write_overwrites_existing_file() {
-        let dir = std::env::temp_dir().join("kirkforge_atomic_overwrite_test");
+        let dir = std::env::temp_dir().join("kf_code_atomic_overwrite_test");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let target = dir.join("target.json");
@@ -802,7 +802,7 @@ mod tests {
 
     #[test]
     fn test_atomic_write_fails_when_parent_dir_missing() {
-        let dir = std::env::temp_dir().join("kirkforge_atomic_no_parent_test");
+        let dir = std::env::temp_dir().join("kf_code_atomic_no_parent_test");
         let _ = std::fs::remove_dir_all(&dir);
         let target = dir.join("nested/carryover.json");
         let result = atomic_write(&target, b"data");
@@ -815,7 +815,7 @@ mod tests {
 
     #[test]
     fn test_clear_carryover_no_file_is_noop() {
-        let path = std::env::temp_dir().join("kirkforge-nonexistent-clear-test.json");
+        let path = std::env::temp_dir().join("kf-code-nonexistent-clear-test.json");
         let _ = std::fs::remove_file(&path);
         clear_carryover();
     }

@@ -2,7 +2,7 @@
 //!
 //! Records lightweight, structured events for tool calls, verifier
 //! verdicts, turn outcomes, and approval decisions. The log lives at
-//! `~/.local/share/kirkforge/metrics.ndjson` and is designed to be
+//! `~/.local/share/kf-code/metrics.ndjson` and is designed to be
 //! human-readable and trivial to query with standard shell tools.
 //!
 //! When the `otel` feature is enabled and `OTEL_EXPORTER_OTLP_ENDPOINT` is
@@ -39,7 +39,7 @@ mod otel {
     pub fn init_telemetry() -> Option<String> {
         let endpoint = otlp_endpoint()?;
         let resource = Resource::builder()
-            .with_attribute(KeyValue::new("service.name", "kirkforge"))
+            .with_attribute(KeyValue::new("service.name", "kf-code"))
             .with_attribute(KeyValue::new("service.version", env!("CARGO_PKG_VERSION")))
             .build();
 
@@ -78,7 +78,7 @@ mod otel {
 
     pub fn emit_event_span(event_name: &str, attributes: &[KeyValue]) {
         if let Some(provider) = TRACER_PROVIDER.get() {
-            let tracer = provider.tracer("kirkforge");
+            let tracer = provider.tracer("kf-code");
             let mut builder = tracer.span_builder(event_name.to_string());
             builder.span_kind = Some(SpanKind::Internal);
             let mut span = tracer.build(builder);
@@ -333,7 +333,7 @@ pub fn metrics_path() -> Option<PathBuf> {
             return Some(path);
         }
     }
-    let dirs = directories::ProjectDirs::from("", "KirkForge", "kirkforge")?;
+    let dirs = directories::ProjectDirs::from("", "KirkForge", "kf-code")?;
     let data = dirs.data_local_dir();
     std::fs::create_dir_all(data).ok()?;
     Some(data.join("metrics.ndjson"))
@@ -474,7 +474,7 @@ pub fn read_events() -> Vec<MetricEvent> {
 /// Format the recent verifier verdicts from the metrics log as a
 /// report (WO 11.7, ADR-062). Reads the last `limit` `MetricEvent::Verifier`
 /// entries and renders them as a table: `Name | Source | Verdict`.
-/// Used by `/verify` TUI and `kirkforge verify` CLI.
+/// Used by `/verify` TUI and `kf-code verify` CLI.
 pub fn format_verifier_report(limit: usize) -> String {
     let events = read_events();
     let verifier_events: Vec<_> = events
@@ -543,7 +543,7 @@ pub fn summarize() -> MetricsSummary {
             },
             MetricEvent::PlanReason { .. } => {
                 // Planning decisions are traced for observability but do not
-                // participate in the high-level counts shown by `kirkforge metrics`.
+                // participate in the high-level counts shown by `kf-code metrics`.
             }
             MetricEvent::DoomLoop { .. } => {
                 // Doom loop detections are traced; the high-level counts
@@ -612,7 +612,7 @@ where
     let lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let counter = TEST_DIR_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     let dir = std::env::temp_dir().join(format!(
-        "kirkforge_metrics_test_{}_{}",
+        "kf_code_metrics_test_{}_{}",
         std::process::id(),
         counter
     ));

@@ -39,7 +39,7 @@
 
 use super::{Verdict, VerificationError, Verifier};
 use crate::session::event_bus::BusEvent;
-use kirkforge_plugin_host::{PluginVerifier, VerifierVerdict};
+use kf_plugin_host::{PluginVerifier, VerifierVerdict};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -118,9 +118,9 @@ impl Verifier for PluginVerifierAdapter {
 /// Returns a vector so the caller can register each adapter into the
 /// executor's `VerifierSlots` with its declared priority.
 pub fn verifiers_from_registry(
-    registry: &kirkforge_plugin_host::PluginRegistry,
+    registry: &kf_plugin_host::PluginRegistry,
 ) -> Vec<Arc<dyn Verifier>> {
-    use kirkforge_plugin::Plugin;
+    use kf_plugin_sdk::Plugin;
     let mut out: Vec<Arc<dyn Verifier>> = Vec::new();
     for hosted in registry.active_plugins() {
         let plugin = &hosted.plugin;
@@ -139,10 +139,10 @@ pub fn verifiers_from_registry(
 }
 
 fn as_verifier_parts(
-    cap: &kirkforge_plugin::Capability,
+    cap: &kf_plugin_sdk::Capability,
 ) -> Option<(String, u8, std::path::PathBuf)> {
     match cap {
-        kirkforge_plugin::Capability::Verifier {
+        kf_plugin_sdk::Capability::Verifier {
             name,
             priority,
             command: Some(command),
@@ -160,10 +160,10 @@ fn as_verifier_parts(
 /// `verifiers_from_registry` + `PluginVerifierAdapter` path is retained for
 /// sessions that still drive verifiers through the event bus.
 pub fn register_plugin_verifiers_into_bus(
-    registry: &kirkforge_plugin_host::PluginRegistry,
+    registry: &kf_plugin_host::PluginRegistry,
     bus: &mut crate::session::verifier::bus::VerifierBus,
 ) -> usize {
-    use kirkforge_plugin::Plugin;
+    use kf_plugin_sdk::Plugin;
     let mut count = 0;
     for hosted in registry.active_plugins() {
         let plugin = &hosted.plugin;
@@ -183,7 +183,7 @@ mod tests {
     use super::*;
     #[cfg(unix)]
     use crate::session::event_bus::FileReadEvent;
-    use kirkforge_plugin_host::{PluginRegistry, TrustPolicy};
+    use kf_plugin_host::{PluginRegistry, TrustPolicy};
     use std::path::PathBuf;
 
     #[test]
@@ -357,7 +357,7 @@ mod tests {
         let plugin_bin_dir = plugin_dir.join("bin");
         std::fs::create_dir_all(&plugin_bin_dir).unwrap();
         std::fs::write(
-            plugin_dir.join("kirkforge.toml"),
+            plugin_dir.join("kf-code.toml"),
             r#"
 name = "demo-verifier"
 version = "0.1.0"
@@ -378,7 +378,7 @@ command = "bin/check.sh"
         let warnings = registry
             .load_from_dir(
                 &plugins_dir,
-                TrustPolicy::up_to(kirkforge_plugin::TrustTier::Shell),
+                TrustPolicy::up_to(kf_plugin_sdk::TrustTier::Shell),
             )
             .unwrap();
         assert!(warnings.is_empty(), "{warnings:?}");
@@ -408,7 +408,7 @@ command = "bin/check.sh"
         std::fs::set_permissions(&check, perms).unwrap();
 
         std::fs::write(
-            plugin_dir.join("kirkforge.toml"),
+            plugin_dir.join("kf-code.toml"),
             r#"
 name = "demo-verifier"
 version = "0.1.0"
@@ -428,7 +428,7 @@ command = "bin/check.sh"
         let warnings = registry
             .load_from_dir(
                 &plugins_dir,
-                TrustPolicy::up_to(kirkforge_plugin::TrustTier::Shell),
+                TrustPolicy::up_to(kf_plugin_sdk::TrustTier::Shell),
             )
             .unwrap();
         assert!(warnings.is_empty(), "{warnings:?}");
@@ -451,7 +451,7 @@ command = "bin/check.sh"
 
     #[test]
     fn as_verifier_parts_returns_none_for_non_verifier_capability() {
-        let cap = kirkforge_plugin::Capability::Skill {
+        let cap = kf_plugin_sdk::Capability::Skill {
             trigger: "/x".into(),
             prompt: "do x".into(),
             skill_file: None,
@@ -462,7 +462,7 @@ command = "bin/check.sh"
 
     #[test]
     fn as_verifier_parts_returns_none_for_verifier_without_command() {
-        let cap = kirkforge_plugin::Capability::Verifier {
+        let cap = kf_plugin_sdk::Capability::Verifier {
             name: "no-cmd".into(),
             priority: 1,
             command: None,
@@ -472,7 +472,7 @@ command = "bin/check.sh"
 
     #[test]
     fn as_verifier_parts_extracts_fields_when_command_present() {
-        let cap = kirkforge_plugin::Capability::Verifier {
+        let cap = kf_plugin_sdk::Capability::Verifier {
             name: "fmt".into(),
             priority: 3,
             command: Some(PathBuf::from("bin/fmt.sh")),

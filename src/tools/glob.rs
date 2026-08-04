@@ -139,7 +139,7 @@ mod tests {
 
     #[tokio::test]
     async fn glob_respects_max_matches_and_reports_total() {
-        let dir = std::env::temp_dir().join("kirkforge_glob_cap_test");
+        let dir = std::env::temp_dir().join("kf_code_glob_cap_test");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         for i in 0..5 {
@@ -175,7 +175,7 @@ mod tests {
 
     #[tokio::test]
     async fn glob_no_truncation_when_under_cap() {
-        let dir = std::env::temp_dir().join("kirkforge_glob_under_cap_test");
+        let dir = std::env::temp_dir().join("kf_code_glob_under_cap_test");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("a.txt"), "x").unwrap();
@@ -215,7 +215,7 @@ mod tests {
 
     #[tokio::test]
     async fn glob_invalid_pattern_is_invalid_args() {
-        let dir = std::env::temp_dir().join("kirkforge_glob_invalid_pattern_test");
+        let dir = std::env::temp_dir().join("kf_code_glob_invalid_pattern_test");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
@@ -237,7 +237,7 @@ mod tests {
         let glob = Glob::new(PathGuard::default());
         let args = serde_json::json!({
             "pattern": "*.txt",
-            "base_dir": "/nonexistent/kirkforge/does/not/exist",
+            "base_dir": "/nonexistent/kf-code/does/not/exist",
         });
         let outcome = glob.run(&ToolContext::default(), args).await;
         assert!(
@@ -248,7 +248,7 @@ mod tests {
 
     #[tokio::test]
     async fn glob_no_matches_returns_empty_message() {
-        let dir = std::env::temp_dir().join("kirkforge_glob_empty_test");
+        let dir = std::env::temp_dir().join("kf_code_glob_empty_test");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("a.txt"), "x").unwrap();
@@ -273,7 +273,7 @@ mod tests {
 
     #[tokio::test]
     async fn glob_default_max_matches_is_1000() {
-        let dir = std::env::temp_dir().join("kirkforge_glob_default_cap_test");
+        let dir = std::env::temp_dir().join("kf_code_glob_default_cap_test");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("a.txt"), "x").unwrap();
@@ -293,7 +293,7 @@ mod tests {
 
     #[tokio::test]
     async fn glob_matches_recursive_pattern() {
-        let dir = std::env::temp_dir().join("kirkforge_glob_recursive_test");
+        let dir = std::env::temp_dir().join("kf_code_glob_recursive_test");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("sub")).unwrap();
         std::fs::write(dir.join("a.txt"), "x").unwrap();
@@ -318,7 +318,7 @@ mod tests {
 
     #[tokio::test]
     async fn glob_results_are_sorted() {
-        let dir = std::env::temp_dir().join("kirkforge_glob_sort_test");
+        let dir = std::env::temp_dir().join("kf_code_glob_sort_test");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("zebra.txt"), "x").unwrap();
@@ -346,7 +346,7 @@ mod tests {
 
     #[tokio::test]
     async fn glob_skips_directories_in_results() {
-        let dir = std::env::temp_dir().join("kirkforge_glob_skip_dirs_test");
+        let dir = std::env::temp_dir().join("kf_code_glob_skip_dirs_test");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("sub")).unwrap();
         std::fs::write(dir.join("a.txt"), "x").unwrap();
@@ -378,7 +378,7 @@ mod tests {
 
     #[tokio::test]
     async fn glob_default_base_dir_is_cwd() {
-        let dir = std::env::temp_dir().join("kirkforge_glob_default_base_test");
+        let dir = std::env::temp_dir().join("kf_code_glob_default_base_test");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("a.txt"), "x").unwrap();

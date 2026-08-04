@@ -432,7 +432,7 @@ mod tests {
             .run(
                 &ToolContext::default(),
                 serde_json::json!({
-                    "path": "/nonexistent/kirkforge/no_such.ipynb",
+                    "path": "/nonexistent/kf-code/no_such.ipynb",
                     "index": 0,
                     "source": "x"
                 }),

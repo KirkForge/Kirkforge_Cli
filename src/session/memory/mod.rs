@@ -41,7 +41,7 @@ pub struct MemoryFact {
 }
 
 /// The on-disk memory store. Files live in
-/// `~/.local/share/kirkforge/memory/`.
+/// `~/.local/share/kf-code/memory/`.
 #[derive(Debug, Clone)]
 pub struct MemoryStore {
     root: PathBuf,
@@ -54,9 +54,9 @@ impl MemoryStore {
         Ok(Self { root })
     }
 
-    /// Default store at `~/.local/share/kirkforge/memory/`.
+    /// Default store at `~/.local/share/kf-code/memory/`.
     pub fn default_store() -> std::io::Result<Self> {
-        let data_dir = crate::session::data_dir().unwrap_or_else(|_| PathBuf::from(".kirkforge"));
+        let data_dir = crate::session::data_dir().unwrap_or_else(|_| PathBuf::from(".kf-code"));
         Self::open(data_dir.join("memory"))
     }
 

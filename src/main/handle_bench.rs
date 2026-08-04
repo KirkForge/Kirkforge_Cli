@@ -1,10 +1,10 @@
-// `kirkforge bench <subcommand>` dispatch + handlers.
+// `kf-code bench <subcommand>` dispatch + handlers.
 // Extracted from the binary root — pure move, no behaviour change.
 
-use kirkforge::cli::BenchCommand;
+use kf_code::cli::BenchCommand;
 
 pub(super) async fn handle_bench_command(
-    command: kirkforge::cli::BenchCommand,
+    command: kf_code::cli::BenchCommand,
 ) -> anyhow::Result<()> {
     match command {
         BenchCommand::Run {
@@ -39,9 +39,9 @@ async fn handle_bench_run(
     summary: Option<std::path::PathBuf>,
     timeout: u64,
 ) -> anyhow::Result<()> {
-    let config = kirkforge::session::config::load_or_create_config();
+    let config = kf_code::session::config::load_or_create_config();
     let model_name = model.unwrap_or_else(|| config.model.default_model.clone());
-    let bench_tasks = kirkforge_bench::load_tasks(&tasks)?;
+    let bench_tasks = kf_bench::load_tasks(&tasks)?;
     if bench_tasks.is_empty() {
         anyhow::bail!("no task files found in {}", tasks.display());
     }
@@ -51,7 +51,7 @@ async fn handle_bench_run(
         model_name
     );
     let report =
-        kirkforge::session::bench::run_all(&bench_tasks, &model_name, &config, timeout).await;
+        kf_code::session::bench::run_all(&bench_tasks, &model_name, &config, timeout).await;
     eprintln!(
         "{}/{} tasks passed ({:.0}%)",
         report.summary.tasks_passed,
@@ -64,10 +64,10 @@ async fn handle_bench_run(
             chrono::Local::now().format("%Y%m%d-%H%M%S")
         ))
     });
-    kirkforge_bench::write_report(&report, &json_path)?;
+    kf_bench::write_report(&report, &json_path)?;
     eprintln!("report written to {}", json_path.display());
     if let Some(md_path) = summary {
-        kirkforge_bench::write_markdown_summary(&report, &md_path)?;
+        kf_bench::write_markdown_summary(&report, &md_path)?;
         eprintln!("summary written to {}", md_path.display());
     }
     Ok(())
@@ -83,8 +83,8 @@ async fn handle_bench_run_models(
     if models.is_empty() {
         anyhow::bail!("--models requires at least one model name");
     }
-    let config = kirkforge::session::config::load_or_create_config();
-    let bench_tasks = kirkforge_bench::load_tasks(&tasks)?;
+    let config = kf_code::session::config::load_or_create_config();
+    let bench_tasks = kf_bench::load_tasks(&tasks)?;
     if bench_tasks.is_empty() {
         anyhow::bail!("no task files found in {}", tasks.display());
     }
@@ -98,7 +98,7 @@ async fn handle_bench_run_models(
     for model in &models {
         eprintln!("→ model: {model}");
         let report =
-            kirkforge::session::bench::run_all(&bench_tasks, model, &config, timeout).await;
+            kf_code::session::bench::run_all(&bench_tasks, model, &config, timeout).await;
         eprintln!(
             "  {}/{} tasks passed ({:.0}%)",
             report.summary.tasks_passed,
@@ -109,13 +109,13 @@ async fn handle_bench_run_models(
             std::fs::create_dir_all(out_dir)?;
             let safe_name = model.replace([':', '/'], "_");
             let json_path = out_dir.join(format!("{safe_name}.json"));
-            kirkforge_bench::write_report(&report, &json_path)?;
+            kf_bench::write_report(&report, &json_path)?;
             eprintln!("  report written to {}", json_path.display());
         }
         reports.push(report);
     }
 
-    let comparison = kirkforge_bench::write_model_comparison(&reports);
+    let comparison = kf_bench::write_model_comparison(&reports);
     println!("{comparison}");
     if let Some(md_path) = summary {
         if let Some(parent) = md_path.parent() {
@@ -135,8 +135,8 @@ fn handle_bench_compare(
 ) -> anyhow::Result<()> {
     let baseline_json = std::fs::read_to_string(&baseline)?;
     let current_json = std::fs::read_to_string(&current)?;
-    let baseline_report: kirkforge_bench::BenchReport = serde_json::from_str(&baseline_json)?;
-    let current_report: kirkforge_bench::BenchReport = serde_json::from_str(&current_json)?;
+    let baseline_report: kf_bench::BenchReport = serde_json::from_str(&baseline_json)?;
+    let current_report: kf_bench::BenchReport = serde_json::from_str(&current_json)?;
 
     if let Some(threshold_pct) = fail_on_regression {
         // WO 10.9: regression gate. The CLI flag is a percentage (e.g.
@@ -144,7 +144,7 @@ fn handle_bench_compare(
         // fraction (0.10).
         let threshold = threshold_pct / 100.0;
         let result =
-            kirkforge_bench::compare_with_threshold(&baseline_report, &current_report, threshold);
+            kf_bench::compare_with_threshold(&baseline_report, &current_report, threshold);
         let delta = &result.delta;
         println!("Delta: {} → {}", delta.baseline_model, delta.current_model);
         println!(
@@ -154,7 +154,7 @@ fn handle_bench_compare(
             delta.total_cost_delta_usd,
         );
         if let Some(md_path) = summary {
-            kirkforge_bench::write_markdown_delta(delta, &md_path)?;
+            kf_bench::write_markdown_delta(delta, &md_path)?;
             eprintln!("delta summary written to {}", md_path.display());
         }
         if result.regression_detected {
@@ -175,7 +175,7 @@ fn handle_bench_compare(
     }
 
     // Historical path (no --fail-on-regression): always exits 0.
-    let delta = kirkforge_bench::compare_reports(&baseline_report, &current_report);
+    let delta = kf_bench::compare_reports(&baseline_report, &current_report);
     println!("Delta: {} → {}", delta.baseline_model, delta.current_model);
     println!(
         "Success rate: {:+.0}% | Δtokens_in: {:+} | Δcost: ${:+.4}",
@@ -184,14 +184,14 @@ fn handle_bench_compare(
         delta.total_cost_delta_usd,
     );
     if let Some(md_path) = summary {
-        kirkforge_bench::write_markdown_delta(&delta, &md_path)?;
+        kf_bench::write_markdown_delta(&delta, &md_path)?;
         eprintln!("delta summary written to {}", md_path.display());
     }
     Ok(())
 }
 
 fn handle_bench_list(tasks: std::path::PathBuf) -> anyhow::Result<()> {
-    let task_infos = kirkforge_bench::list_tasks(&tasks)?;
+    let task_infos = kf_bench::list_tasks(&tasks)?;
     if task_infos.is_empty() {
         println!("No tasks found in {}", tasks.display());
         return Ok(());
@@ -200,9 +200,9 @@ fn handle_bench_list(tasks: std::path::PathBuf) -> anyhow::Result<()> {
     println!("{}", "-".repeat(55));
     for t in &task_infos {
         let diff_str = match t.difficulty {
-            kirkforge_bench::Difficulty::Easy => "easy",
-            kirkforge_bench::Difficulty::Medium => "medium",
-            kirkforge_bench::Difficulty::Hard => "hard",
+            kf_bench::Difficulty::Easy => "easy",
+            kf_bench::Difficulty::Medium => "medium",
+            kf_bench::Difficulty::Hard => "hard",
         };
         println!("{:<30} {:<12} {}", t.name, diff_str, t.verify_type);
     }
@@ -211,7 +211,7 @@ fn handle_bench_list(tasks: std::path::PathBuf) -> anyhow::Result<()> {
 }
 
 fn handle_bench_verify_only(tasks: std::path::PathBuf, task: Option<String>) -> anyhow::Result<()> {
-    let bench_tasks = kirkforge_bench::load_tasks(&tasks)?;
+    let bench_tasks = kf_bench::load_tasks(&tasks)?;
     if bench_tasks.is_empty() {
         anyhow::bail!("no task files found in {}", tasks.display());
     }
@@ -229,7 +229,7 @@ fn handle_bench_verify_only(tasks: std::path::PathBuf, task: Option<String>) -> 
     let mut passed = 0;
     let mut skipped = 0;
     for bt in &filtered {
-        let result = kirkforge_bench::verify_only(bt, tmp.path());
+        let result = kf_bench::verify_only(bt, tmp.path());
         let is_skip = result
             .error
             .as_deref()

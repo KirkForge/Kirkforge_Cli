@@ -728,7 +728,7 @@ mod tests {
 
     fn tmp_jobs_dir() -> (tempfile::TempDir, JobStore) {
         let dir = tempfile::tempdir().unwrap();
-        std::env::set_var("KIRKFORGE_DATA_DIR", dir.path().as_os_str());
+        std::env::set_var("KF_CODE_DATA_DIR", dir.path().as_os_str());
         let store = job_store().unwrap();
         (dir, store)
     }

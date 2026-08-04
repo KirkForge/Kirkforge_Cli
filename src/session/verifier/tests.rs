@@ -217,7 +217,7 @@ async fn test_correction_loop_returns_suggestion_when_no_fix_available() {
 #[tokio::test]
 async fn test_correction_loop_runs_command_fix() {
     let dir = std::env::temp_dir();
-    let path = dir.join("kirkforge_command_fix.txt");
+    let path = dir.join("kf_code_command_fix.txt");
     std::fs::write(&path, "hello world").unwrap();
 
     struct OnceCommandVerifier {
@@ -281,7 +281,7 @@ async fn test_correction_loop_stops_at_max_iterations() {
     // keeps "succeeding") drives the loop to its max_iterations cap (3)
     // and then stops — proving the bound is enforced.
     let dir = std::env::temp_dir();
-    let path = dir.join("kirkforge_max_iter_test.txt");
+    let path = dir.join("kf_code_max_iter_test.txt");
     std::fs::write(&path, "hello world").unwrap();
 
     struct AlwaysFixableCommandVerifier {
@@ -455,7 +455,7 @@ async fn test_correction_loop_applies_and_returns() {
     ));
 
     let dir = std::env::temp_dir();
-    let path = dir.join("kirkforge_correction_loop.txt");
+    let path = dir.join("kf_code_correction_loop.txt");
     std::fs::write(&path, "let x = 1;").unwrap();
 
     {

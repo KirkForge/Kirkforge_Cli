@@ -520,7 +520,7 @@ async fn test_deny_paths_blocks_write_file_even_with_auto_approve() {
 #[tokio::test]
 async fn test_write_file_overwrite_blocked_without_read() {
     let tmp = std::env::temp_dir().join(format!(
-        "kirkforge_write_gate_test_{}.txt",
+        "kf_code_write_gate_test_{}.txt",
         std::process::id()
     ));
     std::fs::write(&tmp, "original").expect("seed existing file");
@@ -588,7 +588,7 @@ async fn test_write_file_overwrite_blocked_without_read() {
 #[tokio::test]
 async fn test_write_file_overwrite_allowed_after_read() {
     let tmp = std::env::temp_dir().join(format!(
-        "kirkforge_write_gate_read_test_{}.txt",
+        "kf_code_write_gate_read_test_{}.txt",
         std::process::id()
     ));
     std::fs::write(&tmp, "original").expect("seed existing file");
@@ -659,7 +659,7 @@ async fn test_write_file_overwrite_allowed_after_read() {
 #[tokio::test]
 async fn test_write_file_new_file_allowed_without_read() {
     let tmp = std::env::temp_dir().join(format!(
-        "kirkforge_write_gate_new_test_{}.txt",
+        "kf_code_write_gate_new_test_{}.txt",
         std::process::id()
     ));
     // Ensure it does NOT exist going in; clean up after.
@@ -1269,7 +1269,7 @@ async fn test_plan_mode_blocks_non_read_only_bash() {
 #[tokio::test]
 async fn test_plan_mode_allows_read_file() {
     let tmp = std::env::temp_dir().join(format!(
-        "kirkforge_plan_read_test_{}.txt",
+        "kf_code_plan_read_test_{}.txt",
         std::process::id()
     ));
     std::fs::write(&tmp, "file contents").expect("write temp file");

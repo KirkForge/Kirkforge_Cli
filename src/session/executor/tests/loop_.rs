@@ -483,7 +483,7 @@ async fn test_mid_batch_checkpoint_persists_partial_results() {
     );
 
     let log_path = std::env::temp_dir().join(format!(
-        "kirkforge-mid-batch-test-{}.ndjson",
+        "kf-code-mid-batch-test-{}.ndjson",
         std::process::id()
     ));
     remove_test_file(&log_path);
@@ -548,7 +548,7 @@ async fn cache_stem_reuse_emitted_on_stable_turn() {
 
     static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let dir = std::env::temp_dir().join(format!(
-        "kirkforge_cache_stem_test_{}_{}",
+        "kf_code_cache_stem_test_{}_{}",
         std::process::id(),
         COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
     ));

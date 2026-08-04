@@ -1,6 +1,6 @@
 # KirkForge example configuration
 #
-# Copy this file to ~/.local/share/kirkforge/config.toml and uncomment the
+# Copy this file to ~/.local/share/kf-code/config.toml and uncomment the
 # settings you want to change. Any field omitted from the real config file
 # keeps its built-in default, so a minimal config can be a single line.
 
@@ -8,7 +8,7 @@
 # Model and endpoint
 # ---------------------------------------------------------------------------
 
-# Default model used when `kirkforge run` is invoked without `--model`.
+# Default model used when `kf-code run` is invoked without `--model`.
 # Examples: "kimi-2.7k-coder:cloud", "glm-5.2:cloud", "qwen3:32b:cloud",
 # or any model name your Ollama / OpenAI-compatible gateway knows.
 # Default: "" (empty — you must pick a model with -m/--model).
@@ -143,7 +143,7 @@
 # the file content exceeds this many bytes and the caller did not pass an
 # explicit `minify` argument. Small files are never auto-minified. The
 # model can pass minify=false to opt out per-call. Default: 4096.
-# Env: KIRKFORGE_MINIFY_ABOVE_BYTES.
+# Env: KF_CODE_MINIFY_ABOVE_BYTES.
 # minify_above_bytes = 4096
 
 # Maximum bytes the read_file tool returns. Default: 1048576 (1 MiB).
@@ -285,7 +285,7 @@
 # audit_log_path = ""
 
 # Optional directory containing lifecycle hook scripts (`<event>.sh`). When
-# omitted, the default `~/.local/share/kirkforge/hooks/` is used.
+# omitted, the default `~/.local/share/kf-code/hooks/` is used.
 # hooks_dir = ""
 
 # ---------------------------------------------------------------------------
@@ -297,16 +297,16 @@
 # Disable individual plugins at runtime with `/plugins toggle <name>` or remove
 # them from `enabled_plugins`. Relative paths resolve against the current working
 # directory; in an installed release the bundled plugins are looked up under
-# `~/.local/share/kirkforge/plugins/<name>`.
+# `~/.local/share/kf-code/plugins/<name>`.
 #
 # [plugin_sources]
-# kirkforge-draw = "plugins/kirkforge-draw"
-# kirkforge-video = "plugins/kirkforge-video"
+# kf-code-draw = "plugins/kf-code-draw"
+# kf-code-video = "plugins/kf-code-video"
 # stratum = "plugins/stratum"
-# kirkforge-plugin3 = "plugins/kirkforge-plugin3"
-# kirkforge-plugin = "plugins/kirkforge-plugin"
+# kf-code-plugin3 = "plugins/kf-code-plugin3"
+# kf-code-plugin = "plugins/kf-code-plugin"
 #
-enabled_plugins = ["kirkforge-draw", "kirkforge-video", "stratum", "kirkforge-plugin3", "kirkforge-plugin"]
+enabled_plugins = ["kf-code-draw", "kf-code-video", "stratum", "kf-code-plugin3", "kf-code-plugin"]
 
 # ---------------------------------------------------------------------------
 # Stratum compression and token budget

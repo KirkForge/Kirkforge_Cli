@@ -246,7 +246,7 @@ mod tests {
         use std::sync::atomic::{AtomicUsize, Ordering};
         static COUNTER: AtomicUsize = AtomicUsize::new(0);
         let dir = std::env::temp_dir().join(format!(
-            "kirkforge_audit_lines_test_{}_{}",
+            "kf_code_audit_lines_test_{}_{}",
             std::process::id(),
             COUNTER.fetch_add(1, Ordering::SeqCst)
         ));
@@ -285,7 +285,7 @@ mod tests {
         use std::sync::atomic::{AtomicUsize, Ordering};
         static COUNTER: AtomicUsize = AtomicUsize::new(0);
         let dir = std::env::temp_dir().join(format!(
-            "kirkforge_audit_bash_test_{}_{}",
+            "kf_code_audit_bash_test_{}_{}",
             std::process::id(),
             COUNTER.fetch_add(1, Ordering::SeqCst)
         ));
@@ -316,7 +316,7 @@ mod tests {
         use std::sync::atomic::{AtomicUsize, Ordering};
         static COUNTER: AtomicUsize = AtomicUsize::new(0);
         let dir = std::env::temp_dir().join(format!(
-            "kirkforge_audit_hook_test_{}_{}",
+            "kf_code_audit_hook_test_{}_{}",
             std::process::id(),
             COUNTER.fetch_add(1, Ordering::SeqCst)
         ));

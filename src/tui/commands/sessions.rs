@@ -2,7 +2,7 @@
 //!
 //! Review.md gap #3: the user wants a way to see what sessions
 //! exist on disk and clean up old ones. The underlying data is in
-//! `~/.local/share/kirkforge/sessions/*.conv.ndjson`; this command
+//! `~/.local/share/kf-code/sessions/*.conv.ndjson`; this command
 //! is the human interface.
 //!
 //! Subcommands:
@@ -61,7 +61,7 @@ Usage:
                              the K most recent. Defaults: N=5, K=10.
   /sessions delete <id>      Delete a single session by id or prefix
 
-Sessions are stored in ~/.local/share/kirkforge/sessions/<id>.conv.ndjson.
+Sessions are stored in ~/.local/share/kf-code/sessions/<id>.conv.ndjson.
 Each line in the NDJSON is a JSON message in the conversation.
 
 Tip: combine with /resume <id> to load a prior session into the
@@ -147,7 +147,7 @@ fn search_sessions_text(query: &str) -> String {
 fn list_sessions_text() -> String {
     match session_index::list_sessions() {
         Ok(entries) if entries.is_empty() => {
-            "No sessions found in ~/.local/share/kirkforge/sessions/.".to_string()
+            "No sessions found in ~/.local/share/kf-code/sessions/.".to_string()
         }
         Ok(entries) => format_session_table(
             &entries,

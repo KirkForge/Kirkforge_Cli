@@ -9,8 +9,8 @@
 
 use crate::shared::{read_shared_config, SharedConfig};
 use crate::tui::app::AppState;
-use kirkforge_plugin::TrustTier;
-use kirkforge_plugin_host::{PluginRegistry, TrustPolicy};
+use kf_plugin_sdk::TrustTier;
+use kf_plugin_host::{PluginRegistry, TrustPolicy};
 use std::path::PathBuf;
 use tokio::sync::mpsc;
 
@@ -567,7 +567,7 @@ mod tests {
     use crate::shared::Config;
     use std::sync::Arc;
 
-    /// Sets `KIRKFORGE_DATA_DIR` to `dir` for the lifetime of the guard.
+    /// Sets `KF_CODE_DATA_DIR` to `dir` for the lifetime of the guard.
     /// Uses the crate-wide `test_data_dir_lock()` so every test that mutates
     /// the data directory is serialized against every other such test.
     struct TempDataDir {
@@ -578,8 +578,8 @@ mod tests {
     impl TempDataDir {
         async fn new(dir: &std::path::Path) -> Self {
             let guard = crate::session::test_data_dir_lock().lock().await;
-            let prev = std::env::var_os("KIRKFORGE_DATA_DIR");
-            std::env::set_var("KIRKFORGE_DATA_DIR", dir.as_os_str());
+            let prev = std::env::var_os("KF_CODE_DATA_DIR");
+            std::env::set_var("KF_CODE_DATA_DIR", dir.as_os_str());
             Self {
                 prev,
                 _guard: guard,
@@ -590,8 +590,8 @@ mod tests {
     impl Drop for TempDataDir {
         fn drop(&mut self) {
             match &self.prev {
-                Some(v) => std::env::set_var("KIRKFORGE_DATA_DIR", v),
-                None => std::env::remove_var("KIRKFORGE_DATA_DIR"),
+                Some(v) => std::env::set_var("KF_CODE_DATA_DIR", v),
+                None => std::env::remove_var("KF_CODE_DATA_DIR"),
             }
         }
     }
@@ -715,7 +715,7 @@ mod tests {
         let plugin_dir = plugins_dir.join("demo");
         std::fs::create_dir_all(&plugin_dir).unwrap();
         std::fs::write(
-            plugin_dir.join("kirkforge.toml"),
+            plugin_dir.join("kf-code.toml"),
             r#"
 name = "demo"
 version = "0.1.0"
@@ -759,7 +759,7 @@ prompt = "Demo skill"
         let plugin_dir = plugins_dir.join("demo");
         std::fs::create_dir_all(&plugin_dir).unwrap();
         std::fs::write(
-            plugin_dir.join("kirkforge.toml"),
+            plugin_dir.join("kf-code.toml"),
             r#"
 name = "demo"
 version = "0.1.0"
@@ -863,7 +863,7 @@ prompt = "Demo skill"
         std::fs::create_dir_all(&tools_dir).unwrap();
         std::fs::create_dir_all(&hooks_dir).unwrap();
         std::fs::write(
-            plugin_dir.join("kirkforge.toml"),
+            plugin_dir.join("kf-code.toml"),
             r#"
 name = "downgraded"
 version = "0.1.0"

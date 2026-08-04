@@ -11,7 +11,7 @@ use std::path::PathBuf;
 /// Handle `/save [path]` command.
 ///
 /// - `args` is empty → write to a default path next to the session log
-///   (`~/.local/share/kirkforge/sessions/YYYY-MM-DD-session-NN.md`).
+///   (`~/.local/share/kf-code/sessions/YYYY-MM-DD-session-NN.md`).
 /// - `args` is a path → write to that path.
 ///
 /// Returns a user-visible status string.
@@ -84,7 +84,7 @@ fn resolve_save_path(args: &str, state: &AppState) -> PathBuf {
         let now = chrono::Local::now().format("%Y-%m-%d-%H%M%S").to_string();
         std::env::current_dir()
             .unwrap_or_else(|_| PathBuf::from("."))
-            .join(format!("kirkforge-transcript-{now}.md"))
+            .join(format!("kf-code-transcript-{now}.md"))
     }
 }
 

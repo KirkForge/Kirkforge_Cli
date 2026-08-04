@@ -610,7 +610,7 @@ mod tests {
     #[test]
     fn try_minify_works_on_real_file() {
         // Write a real file, run the minifier through the full path.
-        let tmp = std::env::temp_dir().join("kirkforge_bash_minify_smoke.rs");
+        let tmp = std::env::temp_dir().join("kf_code_bash_minify_smoke.rs");
         let original = "fn main() {\n    // this is a comment that takes space\n    // and another one\n    println!(\"hi\");\n}\n";
         std::fs::write(&tmp, original).unwrap();
 
@@ -634,7 +634,7 @@ mod tests {
     fn try_minify_refuses_small_savings() {
         // A file that's already tight (no comments, no blank lines) should
         // not be substituted — the savings threshold guards us.
-        let tmp = std::env::temp_dir().join("kirkforge_bash_minify_tight.rs");
+        let tmp = std::env::temp_dir().join("kf_code_bash_minify_tight.rs");
         let original = "fn x(){1+1}\nfn y(){2+2}\n";
         std::fs::write(&tmp, original).unwrap();
 
@@ -656,7 +656,7 @@ mod tests {
     #[test]
     fn try_minify_passthrough_for_unknown_extension() {
         // .txt is not in the minify allowlist — we should never modify it.
-        let tmp = std::env::temp_dir().join("kirkforge_bash_minify_txt.txt");
+        let tmp = std::env::temp_dir().join("kf_code_bash_minify_txt.txt");
         let original =
             "this is some text content\nwith multiple lines\nthat should pass through unchanged\n";
         std::fs::write(&tmp, original).unwrap();
@@ -678,12 +678,12 @@ mod tests {
         // or read an arbitrary path that the bash tool's PathGuard would
         // block. Write a real file OUTSIDE the sandbox, point a guard with
         // a sandbox_dir at it, and confirm we get None (passthrough).
-        let sandbox = std::env::temp_dir().join("kirkforge_bash_minify_sandbox");
+        let sandbox = std::env::temp_dir().join("kf_code_bash_minify_sandbox");
         let _ = std::fs::remove_dir_all(&sandbox);
         std::fs::create_dir_all(&sandbox).unwrap();
 
         // The real source file lives OUTSIDE the sandbox dir.
-        let outside = std::env::temp_dir().join("kirkforge_bash_minify_outside.rs");
+        let outside = std::env::temp_dir().join("kf_code_bash_minify_outside.rs");
         let original =
             "fn main() {\n    // comment that would minify if we read it\n    println!(1);\n}\n";
         std::fs::write(&outside, original).unwrap();

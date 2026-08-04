@@ -189,7 +189,7 @@ mod tests {
         // the full-file stats/body). The output must report the actual
         // minified size and include the minified body.
         let tmp = std::env::temp_dir().join(format!(
-            "kirkforge_read_file_minify_test_{}.rs",
+            "kf_code_read_file_minify_test_{}.rs",
             std::process::id()
         ));
         let source = "// header\npub fn add(a: i32, b: i32) -> i32 { a + b }\n";
@@ -235,7 +235,7 @@ mod tests {
     #[tokio::test]
     async fn threshold_skip_small_file_not_minified() {
         let tmp = std::env::temp_dir().join(format!(
-            "kirkforge_read_file_threshold_skip_{}.rs",
+            "kf_code_read_file_threshold_skip_{}.rs",
             std::process::id()
         ));
         let source = "// tiny comment\nfn add(a: i32, b: i32) -> i32 { a + b }\n";
@@ -271,7 +271,7 @@ mod tests {
     #[tokio::test]
     async fn auto_minify_large_file_emits_note() {
         let tmp = std::env::temp_dir().join(format!(
-            "kirkforge_read_file_auto_minify_{}.rs",
+            "kf_code_read_file_auto_minify_{}.rs",
             std::process::id()
         ));
         let mut source = String::new();
@@ -322,7 +322,7 @@ mod tests {
     #[tokio::test]
     async fn explicit_minify_false_returns_raw() {
         let tmp = std::env::temp_dir().join(format!(
-            "kirkforge_read_file_explicit_false_{}.rs",
+            "kf_code_read_file_explicit_false_{}.rs",
             std::process::id()
         ));
         let mut source = String::new();
@@ -376,7 +376,7 @@ mod tests {
     #[tokio::test]
     async fn path_guard_denial_propagates_access_denied() {
         let dir = std::env::temp_dir();
-        let path = dir.join("kirkforge_read_file_deny_test.pem");
+        let path = dir.join("kf_code_read_file_deny_test.pem");
         std::fs::write(&path, "secret").unwrap();
         let tool = ReadFile::new(PathGuard::default(), false, 4096);
         let outcome = tool
@@ -401,7 +401,7 @@ mod tests {
         let outcome = tool
             .run(
                 &ToolContext::new(),
-                json!({ "path": "/nonexistent/kirkforge/no/such/file.txt" }),
+                json!({ "path": "/nonexistent/kf-code/no/such/file.txt" }),
             )
             .await;
         match outcome {
@@ -415,7 +415,7 @@ mod tests {
     #[tokio::test]
     async fn empty_file_returns_empty_marker() {
         let tmp = std::env::temp_dir().join(format!(
-            "kirkforge_read_file_empty_{}.txt",
+            "kf_code_read_file_empty_{}.txt",
             std::process::id()
         ));
         std::fs::write(&tmp, "").unwrap();
@@ -441,7 +441,7 @@ mod tests {
     #[tokio::test]
     async fn offset_beyond_file_length_returns_internal_error() {
         let tmp = std::env::temp_dir().join(format!(
-            "kirkforge_read_file_offset_{}.txt",
+            "kf_code_read_file_offset_{}.txt",
             std::process::id()
         ));
         std::fs::write(&tmp, "a\nb\nc\n").unwrap();
@@ -464,7 +464,7 @@ mod tests {
     #[tokio::test]
     async fn partial_read_reports_truncated_lines_range() {
         let tmp = std::env::temp_dir().join(format!(
-            "kirkforge_read_file_partial_{}.txt",
+            "kf_code_read_file_partial_{}.txt",
             std::process::id()
         ));
         let mut source = String::new();
@@ -499,7 +499,7 @@ mod tests {
     #[tokio::test]
     async fn whole_file_read_reports_not_truncated() {
         let tmp = std::env::temp_dir().join(format!(
-            "kirkforge_read_file_whole_{}.txt",
+            "kf_code_read_file_whole_{}.txt",
             std::process::id()
         ));
         std::fs::write(&tmp, "hello\nworld\n").unwrap();
@@ -522,7 +522,7 @@ mod tests {
     #[tokio::test]
     async fn minify_write_side_wraps_envelope_when_enabled() {
         let tmp = std::env::temp_dir().join(format!(
-            "kirkforge_read_file_envelope_{}.rs",
+            "kf_code_read_file_envelope_{}.rs",
             std::process::id()
         ));
         let source = "// header\npub fn add(a: i32, b: i32) -> i32 { a + b }\n";
@@ -547,7 +547,7 @@ mod tests {
     #[tokio::test]
     async fn partial_read_with_minify_write_side_wraps_envelope() {
         let tmp = std::env::temp_dir().join(format!(
-            "kirkforge_read_file_partial_min_{}.rs",
+            "kf_code_read_file_partial_min_{}.rs",
             std::process::id()
         ));
         let mut source = String::new();

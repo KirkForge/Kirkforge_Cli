@@ -1,12 +1,12 @@
-// `kirkforge doctor <subcommand>` dispatch (WO 12.4, ADR-0029).
+// `kf-code doctor <subcommand>` dispatch (WO 12.4, ADR-0029).
 // Extracted from the binary root — pure move, no behaviour change.
 
-use kirkforge::cli::DoctorCommand;
+use kf_code::cli::DoctorCommand;
 
-/// Handle `kirkforge doctor <subcommand>` (WO 12.4, ADR-0029).
-/// Dispatches to the kirkforge-testdoctor library.
+/// Handle `kf-code doctor <subcommand>` (WO 12.4, ADR-0029).
+/// Dispatches to the kf-testdoctor library.
 pub(super) fn handle_doctor_command(command: DoctorCommand) -> anyhow::Result<()> {
-    use kirkforge_testdoctor as td;
+    use kf_testdoctor as td;
     match command {
         DoctorCommand::Profile => td::profile::run("test-profile.json"),
         DoctorCommand::ProfilePerTest => {
@@ -111,8 +111,8 @@ pub(super) fn handle_doctor_command(command: DoctorCommand) -> anyhow::Result<()
 
 /// Parse the `SuggestionKind` slug out of a suggestion id of the form
 /// `<test>::<kind_slug>`. Returns `None` if the slug is unrecognized.
-fn parse_doctor_kind_from_id(id: &str) -> Option<kirkforge_testdoctor::suggest::SuggestionKind> {
-    use kirkforge_testdoctor::suggest::SuggestionKind;
+fn parse_doctor_kind_from_id(id: &str) -> Option<kf_testdoctor::suggest::SuggestionKind> {
+    use kf_testdoctor::suggest::SuggestionKind;
     let slug = id.split("::").nth(1)?;
     Some(match slug {
         "ignore_slow" => SuggestionKind::IgnoreSlow,

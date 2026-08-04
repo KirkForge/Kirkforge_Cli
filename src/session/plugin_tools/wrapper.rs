@@ -13,7 +13,7 @@ use crate::shared::{
     ToolOutcome,
 };
 use crate::tools::{Tool, ToolContext};
-use kirkforge_plugin_host::KIRKFORGE_TOOL_ARGS;
+use kf_plugin_host::KF_CODE_TOOL_ARGS;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
@@ -39,16 +39,16 @@ const BASELINE_ENV_VARS: &[&str] = &[
 /// prepended to the plugin tool PATH.
 ///
 /// Two layouts are supported:
-///   1. Installed/data-directory layout (`~/.local/share/kirkforge/npm/...`).
+///   1. Installed/data-directory layout (`~/.local/share/kf-code/npm/...`).
 ///   2. Source layout: when the running binary is under `<repo>/target/`,
-///      the workspace sibling `<repo>/npm/kirkforge-plugin/node_modules/.bin`
+///      the workspace sibling `<repo>/npm/kf-plugin-sdk/node_modules/.bin`
 ///      is also included so development builds resolve `tsc`/`pyright` without
 ///      a global install.
 pub(crate) fn npm_bin_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
 
     if let Ok(data_dir) = crate::session::data_dir() {
-        let installed = data_dir.join("npm/kirkforge-plugin/node_modules/.bin");
+        let installed = data_dir.join("npm/kf-plugin-sdk/node_modules/.bin");
         if installed.is_dir() {
             dirs.push(installed);
         }
@@ -56,11 +56,11 @@ pub(crate) fn npm_bin_dirs() -> Vec<PathBuf> {
 
     if let Ok(exe) = std::env::current_exe() {
         // Walk up from the binary looking for a workspace/source-layout Node SDK.
-        // Handles both release/debug binaries at `<repo>/target/{release,debug}/kirkforge`
-        // and test binaries at `<repo>/target/{release,debug}/deps/kirkforge-<hash>`.
+        // Handles both release/debug binaries at `<repo>/target/{release,debug}/kf-code`
+        // and test binaries at `<repo>/target/{release,debug}/deps/kf-code-<hash>`.
         let mut current = exe.parent();
         while let Some(dir) = current {
-            let candidate = dir.join("npm/kirkforge-plugin/node_modules/.bin");
+            let candidate = dir.join("npm/kf-plugin-sdk/node_modules/.bin");
             if candidate.is_dir() && !dirs.contains(&candidate) {
                 dirs.push(candidate);
                 break;
@@ -147,7 +147,7 @@ impl PluginToolWrapper {
         for key in BASELINE_ENV_VARS {
             if let Ok(v) = std::env::var(key) {
                 // PATH gets sanitized so plugin wrappers don't fail when the
-                // host launches kirkforge with a minimal or world-writable PATH.
+                // host launches kf-code with a minimal or world-writable PATH.
                 // Prepend any bundled Node SDK `node_modules/.bin` directories
                 // (data-directory install or source-layout sibling) so Node SDK
                 // tools like tsc and pyright resolve without a global install.
@@ -177,8 +177,8 @@ impl PluginToolWrapper {
                 env.push((key.clone(), v));
             }
         }
-        env.push((KIRKFORGE_TOOL_ARGS.to_string(), args.to_string()));
-        env.push(("KIRKFORGE_TOOL_ARGS_JSON".to_string(), args.to_string()));
+        env.push((KF_CODE_TOOL_ARGS.to_string(), args.to_string()));
+        env.push(("KF_CODE_TOOL_ARGS_JSON".to_string(), args.to_string()));
         env
     }
 
@@ -464,17 +464,17 @@ mod wrapper_tests {
     }
 
     #[test]
-    fn curated_env_includes_kirkforge_tool_args() {
+    fn curated_env_includes_kf_code_tool_args() {
         let wrapper = make_wrapper();
         let cfg = Config::default();
         let args = serde_json::json!({"x": 1});
         let env = wrapper.curated_env(&cfg, &args);
         let has_args = env
             .iter()
-            .any(|(k, v)| k == "KIRKFORGE_TOOL_ARGS" && v == r#"{"x":1}"#);
-        assert!(has_args, "KIRKFORGE_TOOL_ARGS must be set, got {env:?}");
-        let has_args_json = env.iter().any(|(k, _)| k == "KIRKFORGE_TOOL_ARGS_JSON");
-        assert!(has_args_json, "KIRKFORGE_TOOL_ARGS_JSON must be set");
+            .any(|(k, v)| k == "KF_CODE_TOOL_ARGS" && v == r#"{"x":1}"#);
+        assert!(has_args, "KF_CODE_TOOL_ARGS must be set, got {env:?}");
+        let has_args_json = env.iter().any(|(k, _)| k == "KF_CODE_TOOL_ARGS_JSON");
+        assert!(has_args_json, "KF_CODE_TOOL_ARGS_JSON must be set");
     }
 
     #[test]
@@ -495,13 +495,13 @@ mod wrapper_tests {
         let wrapper = make_wrapper();
         let mut cfg = Config::default();
         // Force a var that we set in the test process to be forwarded.
-        std::env::set_var("KIRKFORGE_TEST_ENVVAR", "forwarded");
-        cfg.tools.plugin_allowed_env_vars = vec!["KIRKFORGE_TEST_ENVVAR".into()];
+        std::env::set_var("KF_CODE_TEST_ENVVAR", "forwarded");
+        cfg.tools.plugin_allowed_env_vars = vec!["KF_CODE_TEST_ENVVAR".into()];
         let env = wrapper.curated_env(&cfg, &serde_json::json!({}));
-        std::env::remove_var("KIRKFORGE_TEST_ENVVAR");
+        std::env::remove_var("KF_CODE_TEST_ENVVAR");
         let hit = env
             .iter()
-            .any(|(k, v)| k == "KIRKFORGE_TEST_ENVVAR" && v == "forwarded");
+            .any(|(k, v)| k == "KF_CODE_TEST_ENVVAR" && v == "forwarded");
         assert!(hit, "allowed env var should be forwarded, got {env:?}");
     }
 
@@ -509,11 +509,11 @@ mod wrapper_tests {
     fn curated_env_skips_missing_allowed_vars() {
         let wrapper = make_wrapper();
         let mut cfg = Config::default();
-        cfg.tools.plugin_allowed_env_vars = vec!["KIRKFORGE_DEFINITELY_NOT_SET_XYZ".into()];
+        cfg.tools.plugin_allowed_env_vars = vec!["KF_CODE_DEFINITELY_NOT_SET_XYZ".into()];
         let env = wrapper.curated_env(&cfg, &serde_json::json!({}));
         let hit = env
             .iter()
-            .any(|(k, _)| k == "KIRKFORGE_DEFINITELY_NOT_SET_XYZ");
+            .any(|(k, _)| k == "KF_CODE_DEFINITELY_NOT_SET_XYZ");
         assert!(!hit, "unset allowed var should not appear, got {env:?}");
     }
 

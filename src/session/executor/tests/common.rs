@@ -153,7 +153,7 @@ pub(super) fn make_executor(
     static COUNTER: AtomicUsize = AtomicUsize::new(0);
     let temp_dir = std::env::temp_dir();
     let log_path = temp_dir.join(format!(
-        "kirkforge-test-{}-{}.ndjson",
+        "kf-code-test-{}-{}.ndjson",
         std::process::id(),
         COUNTER.fetch_add(1, Ordering::SeqCst)
     ));

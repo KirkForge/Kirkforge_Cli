@@ -1,0 +1,15 @@
+[package]
+name = "kf-lsp"
+version = "0.2.0"
+edition = "2021"
+description = "LSP client pool for KirkForge — symbol-aware code navigation for the model."
+
+[dependencies]
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

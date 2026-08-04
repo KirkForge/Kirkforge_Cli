@@ -2,7 +2,7 @@
 //!
 //! When the `draw` feature is enabled, this module provides a `draw_render`
 //! tool that loads a `.td.json` file and renders it as plain text using
-//! `kirkforge_draw_core` directly, eliminating subprocess overhead.
+//! `kf_draw_core` directly, eliminating subprocess overhead.
 
 use crate::session::hooks::{HookContext, HookDecision, InProcessHook};
 use crate::shared::{ToolDef, ToolError, ToolOutcome};
@@ -57,7 +57,7 @@ impl Tool for DrawRenderTool {
             }
         };
 
-        let (doc, report) = match kirkforge_draw_core::load_document(&json) {
+        let (doc, report) = match kf_draw_core::load_document(&json) {
             Ok(pair) => pair,
             Err(e) => {
                 return ToolOutcome::Failure(ToolError::Internal {
@@ -67,7 +67,7 @@ impl Tool for DrawRenderTool {
         };
 
         let warnings = report.unknown_object_warnings;
-        let rendered = kirkforge_draw_core::render_plain(&doc);
+        let rendered = kf_draw_core::render_plain(&doc);
 
         if fenced {
             let mut out = String::from("```\n");
@@ -100,7 +100,7 @@ pub fn draw_tools() -> Vec<std::sync::Arc<dyn Tool>> {
 
 /// In-process `post-turn` hook: nudges the model to render any new
 /// `.td.json` files in the working directory. Mirrors the shell hook in
-/// `plugins/kirkforge-draw/hooks/post-turn.sh`.
+/// `plugins/kf-draw/hooks/post-turn.sh`.
 pub struct DrawPostTurnHook;
 
 impl InProcessHook for DrawPostTurnHook {

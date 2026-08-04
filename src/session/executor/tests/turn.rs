@@ -11,7 +11,7 @@ use crate::shared::{FinishReason, StreamEvent};
 /// Smoke test for `PostTurnHookGuard`. Constructs a guard with the
 /// default `HookRunner` and lets it fall out of scope. The
 /// `HookRunner::run` call inside `Drop` is fire-and-forget and
-/// (in the absence of a real `~/.local/share/kirkforge/hooks/
+/// (in the absence of a real `~/.local/share/kf-code/hooks/
 /// post-turn.sh`) is a no-op, so this test exercises construction
 /// and Drop without making any external assumptions.
 ///
@@ -258,7 +258,7 @@ async fn replace_conversation_swaps_log() {
     assert_eq!(old_count, 1, "old log should have 1 message");
     let temp_dir = std::env::temp_dir();
     let new_path = temp_dir.join(format!(
-        "kirkforge-test-replace-{}-{}.ndjson",
+        "kf-code-test-replace-{}-{}.ndjson",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

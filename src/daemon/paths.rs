@@ -1,12 +1,12 @@
 //! Paths used by the session daemon.
 //!
-//! Everything lives under `~/.local/share/kirkforge/`:
+//! Everything lives under `~/.local/share/kf-code/`:
 //!   - `daemon.sock` — Unix domain socket for client/daemon RPC
 //!   - `daemon.pid`  — PID file so `--stop` and health checks can find it
 
 use std::path::PathBuf;
 
-/// Base data directory for kirkforge.
+/// Base data directory for kf-code.
 pub fn data_dir() -> anyhow::Result<PathBuf> {
     crate::session::data_dir()
 }

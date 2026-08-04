@@ -1,6 +1,6 @@
 //! `/workflow` slash-command handler.
 //!
-//! Workflows are user-editable JSON DAGs defined in the `kirkforge-workflow`
+//! Workflows are user-editable JSON DAGs defined in the `kf-workflow`
 //! crate. This module wires them into the TUI: loading, command dispatch,
 //! rendering, and cancellation. Each step is executed via the existing
 //! `task` tool's `InProcessTaskSpawner` through a thin `StepRunner`
@@ -11,7 +11,7 @@ use crate::tools::task::TaskSpawner;
 use crate::tui::app::AppState;
 use crate::tui::commands::PersonaResult;
 use anyhow::Result;
-use kirkforge_workflow::{StepOutput, StepRunner, Workflow, WorkflowExecutor};
+use kf_workflow::{StepOutput, StepRunner, Workflow, WorkflowExecutor};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -135,11 +135,11 @@ async fn handle_run(
         );
     }
 
-    let path = match kirkforge_workflow::find_workflow_file(&name) {
+    let path = match kf_workflow::find_workflow_file(&name) {
         Some(p) => p,
         None => {
             return format!(
-                "Workflow '{name}' not found. Looked in .kirkforge/workflows/{name}.json and ~/.local/share/kirkforge/workflows/{name}.json"
+                "Workflow '{name}' not found. Looked in .kf-code/workflows/{name}.json and ~/.local/share/kf-code/workflows/{name}.json"
             );
         }
     };
@@ -220,7 +220,7 @@ async fn handle_run(
     format!("🚀 Started workflow '{name}' ({step_count} steps).")
 }
 
-fn build_final_summary(name: &str, summary: &kirkforge_workflow::WorkflowSummary) -> String {
+fn build_final_summary(name: &str, summary: &kf_workflow::WorkflowSummary) -> String {
     let mut lines = vec![format!("Workflow '{name}' complete:")];
     for step in summary.ordered_outputs(&ordered_names(summary)) {
         lines.push(format!(
@@ -234,7 +234,7 @@ fn build_final_summary(name: &str, summary: &kirkforge_workflow::WorkflowSummary
     lines.join("\n")
 }
 
-fn ordered_names(summary: &kirkforge_workflow::WorkflowSummary) -> Vec<String> {
+fn ordered_names(summary: &kf_workflow::WorkflowSummary) -> Vec<String> {
     let mut names: Vec<String> = summary.outputs.keys().cloned().collect();
     names.sort();
     names
@@ -317,7 +317,7 @@ impl StepRunner for LineStepRunner {
 }
 
 /// Render a workflow summary for line-mode output.
-pub fn format_summary(name: &str, summary: &kirkforge_workflow::WorkflowSummary) -> String {
+pub fn format_summary(name: &str, summary: &kf_workflow::WorkflowSummary) -> String {
     let mut lines = vec![format!("Workflow '{name}' complete:")];
     let mut names: Vec<String> = summary.outputs.keys().cloned().collect();
     names.sort();
@@ -381,7 +381,7 @@ mod tests {
     #[tokio::test]
     async fn run_starts_workflow_and_sets_state() {
         let tmp = tempfile::tempdir().unwrap();
-        let wf_dir = tmp.path().join(".kirkforge/workflows");
+        let wf_dir = tmp.path().join(".kf-code/workflows");
         std::fs::create_dir_all(&wf_dir).unwrap();
         std::fs::write(
             wf_dir.join("smoke.json"),

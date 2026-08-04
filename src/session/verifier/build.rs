@@ -180,13 +180,13 @@ mod tests {
     #[tokio::test]
     #[ignore = "spawns cargo; run separately with cargo test --workspace -- --ignored"]
     async fn test_build_error_on_temp_project() {
-        let dir = std::env::temp_dir().join("kirkforge_build_test");
+        let dir = std::env::temp_dir().join("kf_code_build_test");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("src")).unwrap();
         std::fs::write(
             dir.join("Cargo.toml"),
             r#"[package]
-name = "kirkforge-build-test"
+name = "kf-code-build-test"
 version = "0.1.0"
 edition = "2021"
 "#,

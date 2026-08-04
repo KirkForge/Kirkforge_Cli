@@ -33,7 +33,7 @@ Usage:
   /carryover show    Display the persisted carryover profile
   /carryover clear   Delete the profile and start fresh
 
-Carryover is stored in ~/.local/share/kirkforge/carryover.json.";
+Carryover is stored in ~/.local/share/kf-code/carryover.json.";
 
 /// Render the current carryover profile as human-readable text.
 fn show_carryover() -> String {

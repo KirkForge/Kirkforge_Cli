@@ -155,7 +155,7 @@ impl McpHttpTransport {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {},
                 "clientInfo": {
-                    "name": "kirkforge",
+                    "name": "kf-code",
                     "version": "0.1.0"
                 }
             }

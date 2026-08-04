@@ -7,7 +7,7 @@
 //! - `/memory rm <name>` — delete a fact by its name slug
 //!
 //! Facts are stored as markdown files with YAML frontmatter in
-//! `~/.local/share/kirkforge/memory/`. They're injected into the
+//! `~/.local/share/kf-code/memory/`. They're injected into the
 //! system prompt each turn.
 
 use crate::session::memory::MemoryStore;

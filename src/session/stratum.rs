@@ -1,7 +1,7 @@
 //! In-process Stratum tool wrappers.
 //!
 //! When the `stratum` feature is enabled, these structs implement the `Tool`
-//! trait and call `kirkstratum_core` directly, eliminating subprocess overhead.
+//! trait and call `kf_compress_core` directly, eliminating subprocess overhead.
 //! When the feature is off, the shell-plugin path (`plugins/stratum/tools/*.sh`)
 //! remains as fallback.
 
@@ -9,11 +9,11 @@ use crate::session::budget::{BudgetSlicedEvent, BudgetSlicedListener};
 use crate::session::hooks::{HookContext, HookDecision, InProcessHook};
 use crate::shared::{ToolDef, ToolOutcome};
 use crate::tools::{Tool, ToolContext};
-use kirkstratum_core::config::PipelineConfig;
-use kirkstratum_core::content::ContentType;
-use kirkstratum_core::mode::Mode;
-use kirkstratum_core::pipeline::{CompressionContext, CompressionPipeline};
-use kirkstratum_core::store::InMemoryOffloadStore;
+use kf_compress_core::config::PipelineConfig;
+use kf_compress_core::content::ContentType;
+use kf_compress_core::mode::Mode;
+use kf_compress_core::pipeline::{CompressionContext, CompressionPipeline};
+use kf_compress_core::store::InMemoryOffloadStore;
 use serde_json::Value;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};

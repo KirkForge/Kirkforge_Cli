@@ -834,7 +834,7 @@ mod private_tests {
             return;
         }
         let guard = PathGuard {
-            sandbox_dir: Some("/nonexistent/kirkforge-sandbox-test-dir".into()),
+            sandbox_dir: Some("/nonexistent/kf-code-sandbox-test-dir".into()),
             ..Default::default()
         };
         let r = check_bash_command_str("ls", Some("/tmp"), &DenyList::default(), &guard, true);

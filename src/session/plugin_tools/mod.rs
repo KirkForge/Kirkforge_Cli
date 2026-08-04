@@ -1,6 +1,6 @@
 //! Tool wrappers for KirkForge plugins.
 //!
-//! Plugin tools are loaded from `~/.local/share/kirkforge/plugins` via the
+//! Plugin tools are loaded from `~/.local/share/kf-code/plugins` via the
 //! `PluginRegistry`. Each plugin tool is wrapped to implement the executor's
 //! `Tool` trait. Plugin tool scripts are invoked asynchronously with a
 //! sandboxed working directory, curated environment, timeout, and process-group

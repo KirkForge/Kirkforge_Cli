@@ -1,4 +1,4 @@
-// Generate kirkforge.1 man page at build time.
+// Generate kf-code.1 man page at build time.
 // The real CLI definition is shared in src/cli.rs so the man page cannot
 // drift from the runtime parser.
 
@@ -14,7 +14,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let man = clap_mangen::Man::new(Cli::command());
     let mut buf = vec![];
     man.render(&mut buf)?;
-    std::fs::write(out.join("kirkforge.1"), buf)?;
+    std::fs::write(out.join("kf-code.1"), buf)?;
     println!("cargo:rerun-if-changed=src/cli.rs");
     println!("cargo:rerun-if-changed=build.rs");
     Ok(())

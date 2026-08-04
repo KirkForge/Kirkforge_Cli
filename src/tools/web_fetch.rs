@@ -487,7 +487,7 @@ mod tests {
         // on every NXDOMAIN would break clients that pin DNS inside reqwest
         // (tests) rather than the system resolver.
         assert!(
-            !host_resolves_to_internal_ip("http://kirkforge-nonexistent-host-zzz.invalid/"),
+            !host_resolves_to_internal_ip("http://kf-code-nonexistent-host-zzz.invalid/"),
             "NXDOMAIN should not trip the internal-IP guard"
         );
     }

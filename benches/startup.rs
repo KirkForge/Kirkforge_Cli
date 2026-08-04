@@ -4,7 +4,7 @@ use std::time::Instant;
 /// Minimal CLI clone used only for the startup benchmark. This avoids
 /// needing a lib target for the binary crate.
 #[derive(Parser)]
-#[command(name = "kirkforge")]
+#[command(name = "kf-code")]
 struct Cli {
     #[arg(
         long,
@@ -31,7 +31,7 @@ fn main() {
     let iterations = 1000;
     let start = Instant::now();
     for _ in 0..iterations {
-        let _cli = Cli::parse_from(["kirkforge", "run", "--non-interactive"]);
+        let _cli = Cli::parse_from(["kf-code", "run", "--non-interactive"]);
     }
     let elapsed = start.elapsed();
     println!(

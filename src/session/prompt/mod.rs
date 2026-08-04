@@ -11,7 +11,7 @@ use std::path::PathBuf;
 pub use compaction::CompactRequest;
 pub(crate) use compaction::{compact_to_budget, estimate_tokens};
 
-use kirkforge_context_index::ContextIndex;
+use kf_context_index::ContextIndex;
 
 /// Number of trailing messages kept verbatim by automatic microcompaction.
 /// Mirrors `Config::preserve_recent_messages` semantics: the live user turn
@@ -330,15 +330,15 @@ impl PromptBuilder {
                         content.push_str(&format!(
                             "{} {} at {}:{}",
                             match sym.kind {
-                                kirkforge_context_index::SymbolKind::Function => "fn",
-                                kirkforge_context_index::SymbolKind::Struct => "struct",
-                                kirkforge_context_index::SymbolKind::Enum => "enum",
-                                kirkforge_context_index::SymbolKind::Impl => "impl",
-                                kirkforge_context_index::SymbolKind::Module => "mod",
-                                kirkforge_context_index::SymbolKind::Use => "use",
-                                kirkforge_context_index::SymbolKind::Class => "class",
-                                kirkforge_context_index::SymbolKind::Interface => "interface",
-                                kirkforge_context_index::SymbolKind::TypeAlias => "type",
+                                kf_context_index::SymbolKind::Function => "fn",
+                                kf_context_index::SymbolKind::Struct => "struct",
+                                kf_context_index::SymbolKind::Enum => "enum",
+                                kf_context_index::SymbolKind::Impl => "impl",
+                                kf_context_index::SymbolKind::Module => "mod",
+                                kf_context_index::SymbolKind::Use => "use",
+                                kf_context_index::SymbolKind::Class => "class",
+                                kf_context_index::SymbolKind::Interface => "interface",
+                                kf_context_index::SymbolKind::TypeAlias => "type",
                             },
                             sym.name,
                             sym.file.display(),

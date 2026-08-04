@@ -1,9 +1,9 @@
 //! In-process Video tool wrappers.
 //!
 //! When the `video` feature is enabled, these structs implement the `Tool`
-//! trait and call `kirkforge_video` functions directly, eliminating subprocess
+//! trait and call `kf_video` functions directly, eliminating subprocess
 //! overhead. When the feature is off, the shell-plugin path
-//! (`plugins/kirkforge-video/tools/*.sh`) remains as fallback.
+//! (`plugins/kf-video/tools/*.sh`) remains as fallback.
 
 use crate::shared::{ToolDef, ToolOutcome};
 use crate::tools::{Tool, ToolContext};
@@ -69,7 +69,7 @@ impl Tool for VideoDemos {
     fn def(&self) -> ToolDef {
         ToolDef {
             name: "video_demos",
-            description: "List demos, pipelines, render profiles, or internal tools available in kirkforge-video.",
+            description: "List demos, pipelines, render profiles, or internal tools available in kf-video.",
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -88,7 +88,7 @@ impl Tool for VideoDemos {
         let cmd = json_get_string(&args, "command").unwrap_or_else(|| "demos".into());
         match cmd.as_str() {
             "demos" => {
-                let demos = kirkforge_video::demos::list();
+                let demos = kf_video::demos::list();
                 let lines: Vec<String> = demos
                     .iter()
                     .map(|d| format!("{} — {}", d.label, d.description))
@@ -96,7 +96,7 @@ impl Tool for VideoDemos {
                 success(lines.join("\n"))
             }
             "pipelines" => {
-                let pipes = kirkforge_video::pipelines::all_pipelines();
+                let pipes = kf_video::pipelines::all_pipelines();
                 let lines: Vec<String> = pipes
                     .iter()
                     .map(|p| format!("{} — {}", p.name(), p.description()))
@@ -104,7 +104,7 @@ impl Tool for VideoDemos {
                 success(lines.join("\n"))
             }
             "profiles" => {
-                use kirkforge_video::compose::ALL_PROFILES;
+                use kf_video::compose::ALL_PROFILES;
                 let lines: Vec<String> = ALL_PROFILES
                     .iter()
                     .map(|p| {
@@ -117,7 +117,7 @@ impl Tool for VideoDemos {
                 success(lines.join("\n"))
             }
             "tools" => {
-                let reg = kirkforge_video::tools::ToolRegistry::with_builtins();
+                let reg = kf_video::tools::ToolRegistry::with_builtins();
                 let lines: Vec<String> = reg
                     .names()
                     .iter()
@@ -181,7 +181,7 @@ impl Tool for VideoPipeline {
             json_get_string(&args, "project").unwrap_or_else(|| "projects/default".into());
         let brief_str = json_get_string(&args, "brief");
 
-        let kind = match kirkforge_video::pipelines::Kind::from_label(&kind_str) {
+        let kind = match kf_video::pipelines::Kind::from_label(&kind_str) {
             Some(k) => k,
             None => {
                 return error(format!(
@@ -195,8 +195,8 @@ impl Tool for VideoPipeline {
             let _ = std::fs::create_dir_all(parent);
         }
 
-        let reg = kirkforge_video::tools::ToolRegistry::with_builtins();
-        let pipe = kirkforge_video::pipelines::get(kind);
+        let reg = kf_video::tools::ToolRegistry::with_builtins();
+        let pipe = kf_video::pipelines::get(kind);
 
         if let Some(brief_str) = brief_str {
             let brief_path = resolve_path(&brief_str);
@@ -213,7 +213,7 @@ impl Tool for VideoPipeline {
             }
         }
 
-        match kirkforge_video::orchestrator::run_pipeline(pipe.as_ref(), &project, &reg).await {
+        match kf_video::orchestrator::run_pipeline(pipe.as_ref(), &project, &reg).await {
             Ok(()) => success(format!(
                 "pipeline '{}' completed for {}",
                 kind_str,
@@ -279,18 +279,18 @@ impl Tool for VideoRender {
             Err(e) => return error(format!("video_render: parse scene_plan.json: {e}")),
         };
 
-        let mut comp = match kirkforge_video::synthesize_from_plan(&plan_v) {
+        let mut comp = match kf_video::synthesize_from_plan(&plan_v) {
             Ok(c) => c,
             Err(e) => return error(format!("video_render: synthesize: {e:#}")),
         };
 
         if let Some(name) = profile_str.as_deref() {
-            match kirkforge_video::compose::get_profile(name) {
+            match kf_video::compose::get_profile(name) {
                 Some(p) => {
-                    kirkforge_video::compose::apply_to_composition(p, &mut comp);
+                    kf_video::compose::apply_to_composition(p, &mut comp);
                 }
                 None => {
-                    let available: Vec<&str> = kirkforge_video::compose::ALL_PROFILES
+                    let available: Vec<&str> = kf_video::compose::ALL_PROFILES
                         .iter()
                         .map(|p| p.name)
                         .collect();
@@ -314,8 +314,8 @@ impl Tool for VideoRender {
             return error(format!("video_render: write composition.json: {e}"));
         }
 
-        use kirkforge_video::compose::scene_kind_tag;
-        use kirkforge_video::orchestrator::slideshow_risk;
+        use kf_video::compose::scene_kind_tag;
+        use kf_video::orchestrator::slideshow_risk;
         let kinds: Vec<&str> = comp.scenes.iter().map(scene_kind_tag).collect();
         let report = slideshow_risk::score_slideshow_risk(&kinds, comp.total_duration_s());
         let risk_path = arts.join("risk_report.json");
@@ -329,7 +329,7 @@ impl Tool for VideoRender {
             let _ = std::fs::create_dir_all(parent);
         }
 
-        match kirkforge_video::compose::render_composition(&comp, &out).await {
+        match kf_video::compose::render_composition(&comp, &out).await {
             Ok(()) => {
                 let risk_json = serde_json::to_string_pretty(&report).unwrap_or_default();
                 success(format!("rendered: {}\n{}", out.display(), risk_json))
@@ -390,16 +390,16 @@ impl Tool for VideoValidate {
             Err(e) => return error(format!("video_validate: parse scene_plan.json: {e}")),
         };
 
-        let comp = match kirkforge_video::synthesize_from_plan(&plan_v) {
+        let comp = match kf_video::synthesize_from_plan(&plan_v) {
             Ok(c) => c,
             Err(e) => return error(format!("video_validate: INVALID — {e:#}")),
         };
 
-        use kirkforge_video::compose::scene_kind_tag;
+        use kf_video::compose::scene_kind_tag;
         let kinds: Vec<&str> = comp.scenes.iter().map(scene_kind_tag).collect();
-        use kirkforge_video::orchestrator::slideshow_risk;
+        use kf_video::orchestrator::slideshow_risk;
         let risk = slideshow_risk::score_slideshow_risk(&kinds, comp.total_duration_s());
-        let filter_plan = kirkforge_video::compose::build_filter_graph(
+        let filter_plan = kf_video::compose::build_filter_graph(
             &comp.scenes,
             comp.width,
             comp.height,
@@ -409,7 +409,7 @@ impl Tool for VideoValidate {
         let mut issues: Vec<String> = Vec::new();
         for (i, s) in comp.scenes.iter().enumerate() {
             let kind = scene_kind_tag(s);
-            let dur = kirkforge_video::compose::scene_duration_s(s);
+            let dur = kf_video::compose::scene_duration_s(s);
             if dur <= 0.0 || !dur.is_finite() {
                 issues.push(format!(
                     "scene {i} ({kind}): duration_s={dur} (must be > 0 and finite)"
@@ -502,7 +502,7 @@ impl Tool for VideoFromBrief {
         let kind_str =
             json_get_string(&args, "kind").unwrap_or_else(|| "animated_explainer".into());
 
-        let kind = match kirkforge_video::pipelines::Kind::from_label(&kind_str) {
+        let kind = match kf_video::pipelines::Kind::from_label(&kind_str) {
             Some(k) => k,
             None => {
                 return error(format!(
@@ -528,10 +528,10 @@ impl Tool for VideoFromBrief {
             }
         }
 
-        let reg = kirkforge_video::tools::ToolRegistry::with_builtins();
-        let pipe = kirkforge_video::pipelines::get(kind);
+        let reg = kf_video::tools::ToolRegistry::with_builtins();
+        let pipe = kf_video::pipelines::get(kind);
 
-        match kirkforge_video::orchestrator::run_pipeline(pipe.as_ref(), &project, &reg).await {
+        match kf_video::orchestrator::run_pipeline(pipe.as_ref(), &project, &reg).await {
             Ok(()) => success(format!(
                 "pipeline '{}' completed for {}",
                 kind_str,
@@ -589,22 +589,22 @@ impl Tool for VideoDoctor {
             "ffmpeg" => {
                 let ffmpeg_path =
                     json_get_string(&args, "ffmpeg_path").unwrap_or_else(|| "ffmpeg".into());
-                let report = kirkforge_video::tools::doctor::run_doctor(&ffmpeg_path);
+                let report = kf_video::tools::doctor::run_doctor(&ffmpeg_path);
                 if json_out {
                     success(serde_json::to_string_pretty(&report).unwrap_or_default())
                 } else {
-                    success(kirkforge_video::tools::doctor::render_text_report(&report))
+                    success(kf_video::tools::doctor::render_text_report(&report))
                 }
             }
             "project" => {
                 let project_str =
                     json_get_string(&args, "project").unwrap_or_else(|| "projects/default".into());
                 let project = resolve_path(&project_str);
-                let report = kirkforge_video::tools::doctor::run_project_doctor(&project);
+                let report = kf_video::tools::doctor::run_project_doctor(&project);
                 if json_out {
                     success(serde_json::to_string_pretty(&report).unwrap_or_default())
                 } else {
-                    success(kirkforge_video::tools::doctor::render_text_report(&report))
+                    success(kf_video::tools::doctor::render_text_report(&report))
                 }
             }
             other => error(format!(
@@ -657,13 +657,13 @@ impl Tool for VideoRisk {
                 Ok(r) => r,
                 Err(e) => return error(format!("video_risk: {}: {e}", comp_path.display())),
             };
-            let comp: kirkforge_video::compose::Composition = match serde_json::from_str(&raw) {
+            let comp: kf_video::compose::Composition = match serde_json::from_str(&raw) {
                 Ok(c) => c,
                 Err(e) => return error(format!("video_risk: parse composition.json: {e}")),
             };
-            use kirkforge_video::compose::scene_kind_tag;
+            use kf_video::compose::scene_kind_tag;
             let kinds: Vec<&str> = comp.scenes.iter().map(scene_kind_tag).collect();
-            kirkforge_video::orchestrator::slideshow_risk::score_slideshow_risk(
+            kf_video::orchestrator::slideshow_risk::score_slideshow_risk(
                 &kinds,
                 comp.total_duration_s(),
             )
@@ -673,7 +673,7 @@ impl Tool for VideoRisk {
                 return error("video_risk: provide project or kinds array");
             }
             let kinds_refs: Vec<&str> = kinds.iter().map(|s| s.as_str()).collect();
-            kirkforge_video::orchestrator::slideshow_risk::score_slideshow_risk(
+            kf_video::orchestrator::slideshow_risk::score_slideshow_risk(
                 &kinds_refs,
                 duration_s,
             )
@@ -830,7 +830,7 @@ mod tests {
         let out = tool
             .run(
                 &ctx,
-                serde_json::json!({"path": "/nonexistent/kirkforge-video-test-scene-plan.json"}),
+                serde_json::json!({"path": "/nonexistent/kf-video-test-scene-plan.json"}),
             )
             .await;
         match out {
@@ -942,7 +942,7 @@ mod tests {
         let out = tool
             .run(
                 &ctx,
-                serde_json::json!({"project": "/nonexistent/kirkforge-render-test"}),
+                serde_json::json!({"project": "/nonexistent/kf-code-render-test"}),
             )
             .await;
         match out {
@@ -986,7 +986,7 @@ mod tests {
         let out = tool
             .run(
                 &ctx,
-                serde_json::json!({"path": "/nonexistent/kirkforge-validate-test.json"}),
+                serde_json::json!({"path": "/nonexistent/kf-code-validate-test.json"}),
             )
             .await;
         match out {
@@ -1036,7 +1036,7 @@ mod tests {
         let out = tool
             .run(
                 &ctx,
-                serde_json::json!({"brief": "/nonexistent/kirkforge-brief.md"}),
+                serde_json::json!({"brief": "/nonexistent/kf-code-brief.md"}),
             )
             .await;
         match out {
@@ -1126,7 +1126,7 @@ mod tests {
         let out = tool
             .run(
                 &ctx,
-                serde_json::json!({"project": "/nonexistent/kirkforge-risk-test"}),
+                serde_json::json!({"project": "/nonexistent/kf-code-risk-test"}),
             )
             .await;
         match out {
@@ -1144,7 +1144,7 @@ mod tests {
         let out = tool
             .run(
                 &ctx,
-                serde_json::json!({"project": "/nonexistent/kirkforge-decision-test"}),
+                serde_json::json!({"project": "/nonexistent/kf-code-decision-test"}),
             )
             .await;
         match out {
@@ -1279,14 +1279,14 @@ mod tests {
 
     #[test]
     fn test_resolve_path_expands_tilde_and_relative() {
-        let abs = resolve_path("/tmp/kirkforge-test-abs");
+        let abs = resolve_path("/tmp/kf-code-test-abs");
         assert!(abs.is_absolute(), "got: {abs:?}");
-        let rel = resolve_path("kirkforge-test-relative");
+        let rel = resolve_path("kf-code-test-relative");
         assert!(
             rel.is_absolute(),
             "relative should be made absolute: {rel:?}"
         );
-        let home = resolve_path("~/kirkforge-test-tilde");
+        let home = resolve_path("~/kf-code-test-tilde");
         assert!(home.is_absolute(), "tilde should be expanded: {home:?}");
     }
 }

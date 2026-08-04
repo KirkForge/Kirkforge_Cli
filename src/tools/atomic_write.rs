@@ -35,7 +35,7 @@ pub fn atomic_write(path: &Path, contents: impl AsRef<[u8]>) -> std::io::Result<
     // The timestamp makes the name hard to predict, which blocks a
     // symlink-race attacker from pre-creating the temp path.
     let tmp_name = format!(
-        ".kirkforge-{file_name}.{}-{}-{}.tmp",
+        ".kf-code-{file_name}.{}-{}-{}.tmp",
         std::process::id(),
         unique_timestamp_nanos(),
         unique_counter()

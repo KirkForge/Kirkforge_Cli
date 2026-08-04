@@ -1,7 +1,7 @@
 //! Execution replay — structured turn traces for time-travel debugging.
 //!
 //! Persists a `TurnRecord` per turn as NDJSON alongside the conversation log.
-//! `kirkforge replay <session-id>` steps through the trace to show exactly
+//! `kf-code replay <session-id>` steps through the trace to show exactly
 //! what the model saw, what tools it called, and what the results were.
 //!
 //! ponytail: NDJSON turn traces parallel the conversation log. The upgrade

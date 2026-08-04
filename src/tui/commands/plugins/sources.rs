@@ -11,7 +11,7 @@ use super::{
 };
 use crate::shared::read_shared_config;
 use crate::tui::app::AppState;
-use kirkforge_plugin_host::PluginRegistry;
+use kf_plugin_host::PluginRegistry;
 use std::path::PathBuf;
 use tokio::sync::mpsc;
 

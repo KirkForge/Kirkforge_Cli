@@ -1,8 +1,8 @@
 use super::*;
 use crate::shared::{Config, SharedConfig, ToolOutcome};
 use crate::tools::ToolContext;
-use kirkforge_plugin::{Capability, Plugin, TrustTier};
-use kirkforge_plugin_host::{PluginRegistry, TrustPolicy};
+use kf_plugin_sdk::{Capability, Plugin, TrustTier};
+use kf_plugin_host::{PluginRegistry, TrustPolicy};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -13,7 +13,7 @@ fn make_greet_plugin() -> (tempfile::TempDir, PluginRegistry, SharedConfig) {
     let plugin_dir = plugins.join("demo");
     std::fs::create_dir_all(&plugin_dir).unwrap();
     std::fs::write(
-        plugin_dir.join("kirkforge.toml"),
+        plugin_dir.join("kf-code.toml"),
         r#"
 name = "demo"
 version = "0.1.0"
@@ -179,7 +179,7 @@ async fn curated_env_blocks_unlisted_vars() {
     // Replace greet.sh with one that echoes a non-baseline variable.
     std::fs::write(
         plugin_dir.join("greet.sh"),
-        "#!/bin/sh\nprintf '%s' \"$KIRKFORGE_SECRET_VAR\"",
+        "#!/bin/sh\nprintf '%s' \"$KF_CODE_SECRET_VAR\"",
     )
     .unwrap();
     #[cfg(unix)]
@@ -192,12 +192,12 @@ async fn curated_env_blocks_unlisted_vars() {
         std::fs::set_permissions(plugin_dir.join("greet.sh"), perms).unwrap();
     }
 
-    std::env::set_var("KIRKFORGE_SECRET_VAR", "leaked");
+    std::env::set_var("KF_CODE_SECRET_VAR", "leaked");
     let tools = all_plugin_tools(&reg, cfg);
     let outcome = tools[0]
         .run(&ToolContext::new(), serde_json::Value::Null)
         .await;
-    std::env::remove_var("KIRKFORGE_SECRET_VAR");
+    std::env::remove_var("KF_CODE_SECRET_VAR");
 
     assert!(
         matches!(outcome, ToolOutcome::Success { ref content } if content.is_empty()),
@@ -206,7 +206,7 @@ async fn curated_env_blocks_unlisted_vars() {
 }
 
 /// Plugin tool subprocesses receive a sanitized PATH so shell wrappers can
-/// resolve standard utilities even when kirkforge is launched with a minimal
+/// resolve standard utilities even when kf-code is launched with a minimal
 /// or world-writable PATH.
 #[cfg(unix)]
 #[tokio::test]
@@ -274,7 +274,7 @@ fn load_workspace_plugins_loads_enabled_source() {
     let source_dir = tmp.path().join("workspace-plugin");
     std::fs::create_dir_all(&source_dir).unwrap();
     std::fs::write(
-        source_dir.join("kirkforge.toml"),
+        source_dir.join("kf-code.toml"),
         r#"
 name = "workspace-demo"
 version = "0.1.0"
@@ -327,15 +327,15 @@ struct DataDirGuard {
 impl DataDirGuard {
     fn set(value: &str) -> Self {
         let _lock = crate::session::test_data_dir_lock().blocking_lock();
-        let prior = std::env::var("KIRKFORGE_DATA_DIR").ok();
-        std::env::set_var("KIRKFORGE_DATA_DIR", value);
+        let prior = std::env::var("KF_CODE_DATA_DIR").ok();
+        std::env::set_var("KF_CODE_DATA_DIR", value);
         Self { prior, _lock }
     }
 
     async fn set_async(value: &str) -> Self {
         let _lock = crate::session::test_data_dir_lock().lock().await;
-        let prior = std::env::var("KIRKFORGE_DATA_DIR").ok();
-        std::env::set_var("KIRKFORGE_DATA_DIR", value);
+        let prior = std::env::var("KF_CODE_DATA_DIR").ok();
+        std::env::set_var("KF_CODE_DATA_DIR", value);
         Self { prior, _lock }
     }
 }
@@ -343,8 +343,8 @@ impl DataDirGuard {
 impl Drop for DataDirGuard {
     fn drop(&mut self) {
         match &self.prior {
-            Some(v) => std::env::set_var("KIRKFORGE_DATA_DIR", v),
-            None => std::env::remove_var("KIRKFORGE_DATA_DIR"),
+            Some(v) => std::env::set_var("KF_CODE_DATA_DIR", v),
+            None => std::env::remove_var("KF_CODE_DATA_DIR"),
         }
     }
 }
@@ -359,7 +359,7 @@ fn npm_bin_dirs_includes_source_layout_from_target_binary() {
     let _guard = DataDirGuard::set(tmp.path().to_string_lossy().as_ref());
 
     let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let source_bin = repo_root.join("npm/kirkforge-plugin/node_modules/.bin");
+    let source_bin = repo_root.join("npm/kf-plugin-sdk/node_modules/.bin");
     // The source-layout Node SDK install only exists after `npm ci`, which
     // the Rust CI jobs don't run. The detection logic is what we're testing,
     // not whether a sibling language's install happened, so ensure the
@@ -376,7 +376,7 @@ fn npm_bin_dirs_includes_source_layout_from_target_binary() {
 
     // The temporary data directory has no npm install, so no data-dir entry
     // should be present.
-    let data_bin = tmp.path().join("npm/kirkforge-plugin/node_modules/.bin");
+    let data_bin = tmp.path().join("npm/kf-plugin-sdk/node_modules/.bin");
     assert!(
         !dirs.contains(&data_bin),
         "unexpected data-dir bin {data_bin:?} in {dirs:?}"
@@ -388,7 +388,7 @@ fn npm_bin_dirs_includes_source_layout_from_target_binary() {
 #[test]
 fn npm_bin_dirs_includes_data_dir_install() {
     let tmp = tempfile::tempdir().unwrap();
-    let data_bin = tmp.path().join("npm/kirkforge-plugin/node_modules/.bin");
+    let data_bin = tmp.path().join("npm/kf-plugin-sdk/node_modules/.bin");
     std::fs::create_dir_all(&data_bin).unwrap();
     let _guard = DataDirGuard::set(tmp.path().to_string_lossy().as_ref());
 
@@ -409,7 +409,7 @@ fn workspace_plugin_source_falls_back_to_data_dir() {
     let demo = plugins.join("demo");
     std::fs::create_dir_all(&demo).unwrap();
     std::fs::write(
-        demo.join("kirkforge.toml"),
+        demo.join("kf-code.toml"),
         r#"
 name = "demo"
 version = "0.1.0"
@@ -520,13 +520,13 @@ fn bundled_plugins_load_from_data_dir() {
         .collect();
     #[allow(unused_mut)]
     let mut expected = vec![
-        "kirkforge-draw",
+        "kf-draw",
         "stratum",
-        "kirkforge-plugin3",
-        "kirkforge-plugin",
+        "kf-plugin-sdk3",
+        "kf-plugin-sdk",
     ];
     #[cfg(feature = "video")]
-    expected.push("kirkforge-video");
+    expected.push("kf-video");
     for expected in expected {
         assert!(
             names.contains(&expected.to_string()),
@@ -553,7 +553,7 @@ fn bundled_plugin_tool_commands_exist_in_data_dir() {
     for hosted in registry.active_plugins() {
         let root = hosted.plugin.root().to_path_buf();
         for cap in hosted.plugin.tools() {
-            if let kirkforge_plugin::Capability::Tool {
+            if let kf_plugin_sdk::Capability::Tool {
                 name,
                 command: Some(cmd),
                 ..
@@ -573,7 +573,7 @@ fn bundled_plugin_tool_commands_exist_in_data_dir() {
 /// End-to-end installed-layout regression for a Rust-binary-backed plugin:
 /// `stratum_mode` must return the active mode through the host's
 /// `PluginToolWrapper`. Skipped when the workspace `stratum` binary is not
-/// built (e.g. a bare `cargo test -p kirkforge`).
+/// built (e.g. a bare `cargo test -p kf-code`).
 #[tokio::test]
 async fn bundled_stratum_mode_tool_executes_via_host() {
     let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -621,10 +621,10 @@ async fn bundled_stratum_mode_tool_executes_via_host() {
 }
 
 /// End-to-end installed-layout regression for the Node SDK plugin: the
-/// bundled `npm/kirkforge-plugin` tree must be reachable from the plugin
+/// bundled `npm/kf-plugin-sdk` tree must be reachable from the plugin
 /// scripts so that `plugin_tools` can list verification engines through the
 /// host's `PluginToolWrapper`. Skipped when node or the built SDK is not
-/// available (e.g. a bare `cargo test -p kirkforge` without `npm ci`).
+/// available (e.g. a bare `cargo test -p kf-code` without `npm ci`).
 #[tokio::test]
 async fn bundled_node_sdk_tool_executes_via_host() {
     fn which_node() -> Option<PathBuf> {
@@ -641,7 +641,7 @@ async fn bundled_node_sdk_tool_executes_via_host() {
     }
 
     let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let repo_sdk = repo_root.join("npm/kirkforge-plugin/apps/cli/dist/index.js");
+    let repo_sdk = repo_root.join("npm/kf-plugin-sdk/apps/cli/dist/index.js");
     if which_node().is_none() || !repo_sdk.exists() {
         eprintln!("skipping Node SDK end-to-end test: node or built SDK not available");
         return;
@@ -649,9 +649,9 @@ async fn bundled_node_sdk_tool_executes_via_host() {
 
     let tmp = tempfile::tempdir().unwrap();
     let installed_plugins = tmp.path().join("plugins");
-    let installed_npm = tmp.path().join("npm/kirkforge-plugin");
+    let installed_npm = tmp.path().join("npm/kf-plugin-sdk");
     let repo_plugins = repo_root.join("plugins");
-    let repo_npm = repo_root.join("npm/kirkforge-plugin");
+    let repo_npm = repo_root.join("npm/kf-plugin-sdk");
     copy_dir_all(&repo_plugins, &installed_plugins).unwrap();
     copy_dir_all(&repo_npm, &installed_npm).unwrap();
 
@@ -680,17 +680,17 @@ async fn bundled_node_sdk_tool_executes_via_host() {
 /// exist on disk, and can be loaded by the plugin host under the default
 /// trust policy. Folded plugins (stratum, plugin3, draw, video) are skipped
 /// by the shell loader when their feature is ON — they're served compiled-in.
-/// The Node SDK plugin (`kirkforge-plugin`) is always shell-loaded.
+/// The Node SDK plugin (`kf-plugin-sdk`) is always shell-loaded.
 #[test]
 fn default_plugin_sources_are_present_and_loadable() {
     let mut all_expected = vec![
-        "kirkforge-draw",
+        "kf-draw",
         "stratum",
-        "kirkforge-plugin3",
-        "kirkforge-plugin",
+        "kf-plugin-sdk3",
+        "kf-plugin-sdk",
     ];
     #[cfg(feature = "video")]
-    all_expected.push("kirkforge-video");
+    all_expected.push("kf-video");
     all_expected.sort();
 
     let base = Config::default();
@@ -743,9 +743,9 @@ fn default_plugin_sources_are_present_and_loadable() {
 fn folded_plugin_shell_fallback_when_feature_off() {
     let folded_names = [
         "stratum",
-        "kirkforge-plugin3",
-        "kirkforge-draw",
-        "kirkforge-video",
+        "kf-plugin-sdk3",
+        "kf-draw",
+        "kf-video",
     ];
     let base = Config::default();
 
@@ -780,10 +780,10 @@ fn folded_plugin_shell_fallback_when_feature_off() {
 #[test]
 fn folded_plugin_identification() {
     assert!(crate::session::plugin_tools::is_folded("stratum"));
-    assert!(crate::session::plugin_tools::is_folded("kirkforge-plugin3"));
-    assert!(crate::session::plugin_tools::is_folded("kirkforge-draw"));
-    assert!(crate::session::plugin_tools::is_folded("kirkforge-video"));
-    assert!(!crate::session::plugin_tools::is_folded("kirkforge-plugin"));
+    assert!(crate::session::plugin_tools::is_folded("kf-plugin-sdk3"));
+    assert!(crate::session::plugin_tools::is_folded("kf-draw"));
+    assert!(crate::session::plugin_tools::is_folded("kf-video"));
+    assert!(!crate::session::plugin_tools::is_folded("kf-plugin-sdk"));
     assert!(!crate::session::plugin_tools::is_folded("custom-plugin"));
 
     assert_eq!(
@@ -791,11 +791,11 @@ fn folded_plugin_identification() {
         Some("stratum")
     );
     assert_eq!(
-        crate::session::plugin_tools::folded_feature("kirkforge-plugin3"),
+        crate::session::plugin_tools::folded_feature("kf-plugin-sdk3"),
         Some("budget")
     );
     assert_eq!(
-        crate::session::plugin_tools::folded_feature("kirkforge-plugin"),
+        crate::session::plugin_tools::folded_feature("kf-plugin-sdk"),
         None
     );
 }
@@ -817,8 +817,8 @@ mod e2e {
     use crate::session::hooks::{HookDecision, HookRunner};
     use crate::shared::audit::{AuditEntry, AuditLog};
     use crate::shared::ToolError;
-    use kirkforge_plugin::{Capability, Plugin, TrustTier};
-    use kirkforge_plugin_host::VerifierVerdict;
+    use kf_plugin_sdk::{Capability, Plugin, TrustTier};
+    use kf_plugin_host::VerifierVerdict;
     use std::os::unix::fs::PermissionsExt;
     use std::sync::Arc;
 
@@ -838,7 +838,7 @@ mod e2e {
         std::fs::create_dir_all(&verifier_dir).unwrap();
 
         std::fs::write(
-            root.join("kirkforge.toml"),
+            root.join("kf-code.toml"),
             r#"
 name = "e2e-plugin"
 version = "0.1.0"
@@ -968,7 +968,7 @@ command = "verifiers/check.sh"
             command: Some(_), ..
         } = vcap
         {
-            let pv = kirkforge_plugin_host::PluginVerifier::from_capability(vcap, vplugin.root())
+            let pv = kf_plugin_host::PluginVerifier::from_capability(vcap, vplugin.root())
                 .expect("verifier should build from capability");
             let mut env = std::collections::HashMap::new();
             env.insert("KF_EVENT".to_string(), "post-tool-bash".to_string());
@@ -1040,7 +1040,7 @@ mod resource_limits_tests {
     use super::*;
     use crate::shared::SandboxConfig;
     use crate::shared::ToolError;
-    use kirkforge_plugin::{Plugin, ResourceLimits, TrustTier};
+    use kf_plugin_sdk::{Plugin, ResourceLimits, TrustTier};
     use std::os::unix::fs::PermissionsExt;
     use std::sync::Arc;
 
@@ -1051,7 +1051,7 @@ mod resource_limits_tests {
         let tools_dir = plugin_dir.join("tools");
         std::fs::create_dir_all(&tools_dir).unwrap();
         std::fs::write(
-            plugin_dir.join("kirkforge.toml"),
+            plugin_dir.join("kf-code.toml"),
             format!(
                 r#"
 name = "burn"
@@ -1164,7 +1164,7 @@ cpu_secs = {cpu_secs}
         let plugin_dir = tmp.path().join("demo");
         std::fs::create_dir_all(&plugin_dir).unwrap();
         std::fs::write(
-            plugin_dir.join("kirkforge.toml"),
+            plugin_dir.join("kf-code.toml"),
             r#"
 name = "demo"
 version = "0.1.0"
@@ -1177,7 +1177,7 @@ memory_mb = 256
 "#,
         )
         .unwrap();
-        let plugin = kirkforge_plugin::LoadedPlugin::load(&plugin_dir).unwrap();
+        let plugin = kf_plugin_sdk::LoadedPlugin::load(&plugin_dir).unwrap();
         let limits = plugin.manifest.resource_limits.expect("resource_limits");
         assert_eq!(limits.cpu_secs, Some(10));
         assert_eq!(limits.memory_mb, Some(256));
@@ -1190,7 +1190,7 @@ mod hot_reload_tests {
     use super::*;
 
     /// The plugin file watcher fires a reload signal within ~2s when a
-    /// `kirkforge.toml` is modified (WO 11.4, ADR-059). Timing-sensitive;
+    /// `kf-code.toml` is modified (WO 11.4, ADR-059). Timing-sensitive;
     /// uses a 3s timeout and is `#[ignore]` to avoid CI flake.
     #[cfg(unix)]
     #[ignore = "timing-sensitive file-system watcher test"]
@@ -1201,7 +1201,7 @@ mod hot_reload_tests {
         let plugin_dir = plugins_dir.join("demo");
         std::fs::create_dir_all(&plugin_dir).unwrap();
         std::fs::write(
-            plugin_dir.join("kirkforge.toml"),
+            plugin_dir.join("kf-code.toml"),
             r#"
 name = "demo"
 version = "0.1.0"
@@ -1225,7 +1225,7 @@ prompt = "hi"
 
         // Modify the manifest.
         std::fs::write(
-            plugin_dir.join("kirkforge.toml"),
+            plugin_dir.join("kf-code.toml"),
             r#"
 name = "demo"
 version = "0.2.0"

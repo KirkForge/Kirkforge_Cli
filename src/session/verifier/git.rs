@@ -290,7 +290,7 @@ mod tests {
     async fn test_non_modifying_git_command_is_clean() {
         // `git status` succeeds without modifying anything, so we should not
         // complain about a dirty worktree even if one exists elsewhere.
-        let tmp = std::env::temp_dir().join("kirkforge_git_nonmod");
+        let tmp = std::env::temp_dir().join("kf_code_git_nonmod");
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
 
@@ -315,7 +315,7 @@ mod tests {
     async fn test_staged_file_is_not_a_worktree_violation() {
         // WO 15.9 (bucketlist 2.10): a staged file (`A  file.txt` in
         // porcelain) is not a worktree violation — the model can commit it.
-        let tmp = std::env::temp_dir().join("kirkforge_git_staged");
+        let tmp = std::env::temp_dir().join("kf_code_git_staged");
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
 
@@ -359,7 +359,7 @@ mod tests {
     async fn test_dirty_worktree_after_unstaged_modification() {
         // A genuine unstaged modification (` M file.txt` in porcelain) IS a
         // dirty worktree and must stay Unfixable.
-        let tmp = std::env::temp_dir().join("kirkforge_git_dirty");
+        let tmp = std::env::temp_dir().join("kf_code_git_dirty");
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
 
@@ -408,7 +408,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_failed_merge_conflict_detection() {
-        let tmp = std::env::temp_dir().join("kirkforge_git_conflict");
+        let tmp = std::env::temp_dir().join("kf_code_git_conflict");
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
 

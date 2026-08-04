@@ -2,7 +2,7 @@
 //!
 //! Ports Vix's `lspQueryImpl` + `lspFileOperation` into KirkForge's Rust
 //! runtime. The tool dispatches on an `operation` argument and calls the
-//! matching method on [`LspPool`][kirkforge_lsp::LspPool]. File-based
+//! matching method on [`LspPool`][kf_lsp::LspPool]. File-based
 //! operations (`go_to_definition`, `find_references`, `hover`,
 //! `document_symbols`, `find_implementations`, `diagnostics`) follow the
 //! Vix pattern: resolve the file to an absolute path inside the sandbox,
@@ -15,7 +15,7 @@
 use crate::session::access::{GuardVerdict, PathGuard};
 use crate::shared::{ToolDef, ToolError, ToolOutcome};
 use crate::tools::{Tool, ToolContext};
-use kirkforge_lsp::{uri_to_path, LspPool};
+use kf_lsp::{uri_to_path, LspPool};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -240,7 +240,7 @@ impl LspQuery {
         // Branch the timeout around each call separately — the two
         // methods return distinct `impl Future` types that can't be
         // unified in a single `if/else`.
-        let locs: std::result::Result<Vec<kirkforge_lsp::Location>, anyhow::Error> = if kind
+        let locs: std::result::Result<Vec<kf_lsp::Location>, anyhow::Error> = if kind
             == "definition"
         {
             let f = client.definition(&uri, line.saturating_sub(1), character.saturating_sub(1));
@@ -492,7 +492,7 @@ impl LspQuery {
         args: &serde_json::Value,
     ) -> Result<
         (
-            std::sync::Arc<kirkforge_lsp::LspClient>,
+            std::sync::Arc<kf_lsp::LspClient>,
             String,
             String,
             PathBuf,
@@ -586,7 +586,7 @@ impl LspQuery {
 
 /// Render hierarchical document symbols as indented lines.
 fn render_document_symbols(
-    syms: &[kirkforge_lsp::DocumentSymbol],
+    syms: &[kf_lsp::DocumentSymbol],
     depth: usize,
     out: &mut Vec<String>,
 ) {
@@ -659,7 +659,7 @@ fn short_path(path: &str) -> String {
 mod tests {
     use super::*;
     use crate::session::access::PathGuard;
-    use kirkforge_lsp::{LanguageConfig, LspPool};
+    use kf_lsp::{LanguageConfig, LspPool};
     use tokio_util::sync::CancellationToken;
 
     fn empty_pool() -> Arc<LspPool> {
@@ -681,7 +681,7 @@ mod tests {
             vec![LanguageConfig {
                 name: "rust".to_string(),
                 extensions: vec![".rs".to_string()],
-                lsp: Some(kirkforge_lsp::LspServerConfig {
+                lsp: Some(kf_lsp::LspServerConfig {
                     command: "/nonexistent/binary/xyzzy".to_string(),
                     args: vec![],
                 }),
@@ -974,25 +974,25 @@ mod tests {
 
     #[test]
     fn render_document_symbols_flat() {
-        let syms = vec![kirkforge_lsp::DocumentSymbol {
+        let syms = vec![kf_lsp::DocumentSymbol {
             name: "foo".into(),
             kind: 12,
-            range: kirkforge_lsp::Range {
-                start: kirkforge_lsp::Position {
+            range: kf_lsp::Range {
+                start: kf_lsp::Position {
                     line: 0,
                     character: 0,
                 },
-                end: kirkforge_lsp::Position {
+                end: kf_lsp::Position {
                     line: 1,
                     character: 0,
                 },
             },
-            selection_range: kirkforge_lsp::Range {
-                start: kirkforge_lsp::Position {
+            selection_range: kf_lsp::Range {
+                start: kf_lsp::Position {
                     line: 0,
                     character: 0,
                 },
-                end: kirkforge_lsp::Position {
+                end: kf_lsp::Position {
                     line: 0,
                     character: 3,
                 },
@@ -1009,48 +1009,48 @@ mod tests {
 
     #[test]
     fn render_document_symbols_nested_increments_indent() {
-        let syms = vec![kirkforge_lsp::DocumentSymbol {
+        let syms = vec![kf_lsp::DocumentSymbol {
             name: "outer".into(),
             kind: 2,
-            range: kirkforge_lsp::Range {
-                start: kirkforge_lsp::Position {
+            range: kf_lsp::Range {
+                start: kf_lsp::Position {
                     line: 0,
                     character: 0,
                 },
-                end: kirkforge_lsp::Position {
+                end: kf_lsp::Position {
                     line: 10,
                     character: 0,
                 },
             },
-            selection_range: kirkforge_lsp::Range {
-                start: kirkforge_lsp::Position {
+            selection_range: kf_lsp::Range {
+                start: kf_lsp::Position {
                     line: 0,
                     character: 0,
                 },
-                end: kirkforge_lsp::Position {
+                end: kf_lsp::Position {
                     line: 0,
                     character: 5,
                 },
             },
-            children: vec![kirkforge_lsp::DocumentSymbol {
+            children: vec![kf_lsp::DocumentSymbol {
                 name: "inner".into(),
                 kind: 13,
-                range: kirkforge_lsp::Range {
-                    start: kirkforge_lsp::Position {
+                range: kf_lsp::Range {
+                    start: kf_lsp::Position {
                         line: 1,
                         character: 0,
                     },
-                    end: kirkforge_lsp::Position {
+                    end: kf_lsp::Position {
                         line: 2,
                         character: 0,
                     },
                 },
-                selection_range: kirkforge_lsp::Range {
-                    start: kirkforge_lsp::Position {
+                selection_range: kf_lsp::Range {
+                    start: kf_lsp::Position {
                         line: 1,
                         character: 0,
                     },
-                    end: kirkforge_lsp::Position {
+                    end: kf_lsp::Position {
                         line: 1,
                         character: 5,
                     },
@@ -1269,7 +1269,7 @@ mod tests {
                 &ToolContext::new(),
                 serde_json::json!({
                     "operation": "hover",
-                    "file": "/nonexistent/kirkforge/no_such_file.rs",
+                    "file": "/nonexistent/kf-code/no_such_file.rs",
                     "line": 1,
                     "character": 1
                 }),

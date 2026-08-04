@@ -2,7 +2,7 @@
 // Extracted from the binary root — pure move, no behaviour change.
 
 use clap::{CommandFactory, Parser};
-use kirkforge::cli::Command;
+use kf_code::cli::Command;
 use std::path::PathBuf;
 use tracing_subscriber::prelude::*;
 
@@ -18,8 +18,8 @@ use super::run_session::{run_session, RunArgs};
 ///
 /// In interactive (TUI) mode stdout is the alternate screen, so any
 /// tracing output written there would be drawn over the UI. We always
-/// write logs to `<data_dir>/kirkforge.log` and additionally mirror them
-/// to stderr when `KIRKFORGE_LOG_STDERR=1` is set (useful for daemon or
+/// write logs to `<data_dir>/kf-code.log` and additionally mirror them
+/// to stderr when `KF_CODE_LOG_STDERR=1` is set (useful for daemon or
 /// non-interactive debugging).
 fn init_tracing(log_level: &str) -> anyhow::Result<()> {
     // Writer enum so that a failure to open the log file falls back to
@@ -52,9 +52,9 @@ fn init_tracing(log_level: &str) -> anyhow::Result<()> {
             .map_err(|e| anyhow::anyhow!("invalid log level '{log_level}': {e}"))?,
     };
 
-    let log_file = kirkforge::session::data_dir()
-        .map(|d| d.join("kirkforge.log"))
-        .unwrap_or_else(|_| PathBuf::from("kirkforge.log"));
+    let log_file = kf_code::session::data_dir()
+        .map(|d| d.join("kf-code.log"))
+        .unwrap_or_else(|_| PathBuf::from("kf-code.log"));
     let log_dir = log_file
         .parent()
         .unwrap_or_else(|| std::path::Path::new("."));
@@ -96,7 +96,7 @@ fn init_tracing(log_level: &str) -> anyhow::Result<()> {
         .with(env_filter)
         .with(file_layer);
 
-    if std::env::var("KIRKFORGE_LOG_STDERR").is_ok() {
+    if std::env::var("KF_CODE_LOG_STDERR").is_ok() {
         let stderr_layer = tracing_subscriber::fmt::layer().with_writer(std::io::stderr);
         registry.with(stderr_layer).init();
     } else {
@@ -107,13 +107,13 @@ fn init_tracing(log_level: &str) -> anyhow::Result<()> {
 
 #[tokio::main]
 pub async fn main() {
-    let cli = kirkforge::cli::Cli::parse();
+    let cli = kf_code::cli::Cli::parse();
     if let Err(e) = init_tracing(&cli.log_level) {
         eprintln!("{e:#}");
         std::process::exit(2);
     }
 
-    if let Some(endpoint) = kirkforge::shared::metrics::init_telemetry() {
+    if let Some(endpoint) = kf_code::shared::metrics::init_telemetry() {
         tracing::info!(otel_endpoint = %endpoint, "OpenTelemetry export enabled");
     }
 
@@ -165,20 +165,20 @@ pub async fn main() {
         Command::Completions { shell } => {
             clap_complete::generate(
                 shell,
-                &mut kirkforge::cli::Cli::command(),
-                "kirkforge",
+                &mut kf_code::cli::Cli::command(),
+                "kf-code",
                 &mut std::io::stdout(),
             );
             Ok(())
         }
         Command::Metrics => {
-            let summary = kirkforge::shared::metrics::summarize();
-            println!("{}", kirkforge::shared::metrics::format_summary(&summary));
+            let summary = kf_code::shared::metrics::summarize();
+            println!("{}", kf_code::shared::metrics::format_summary(&summary));
             Ok(())
         }
         Command::Verify => {
             // WO 11.7: print recent verifier verdicts from the metrics log.
-            println!("{}", kirkforge::shared::metrics::format_verifier_report(20));
+            println!("{}", kf_code::shared::metrics::format_verifier_report(20));
             Ok(())
         }
         Command::Sessions {
@@ -190,7 +190,7 @@ pub async fn main() {
         Command::Daemon { foreground, stop } => {
             #[cfg(unix)]
             {
-                kirkforge::daemon::server::run_daemon(foreground, stop).await
+                kf_code::daemon::server::run_daemon(foreground, stop).await
             }
             #[cfg(windows)]
             {
@@ -203,7 +203,7 @@ pub async fn main() {
         Command::Jobd { foreground, stop } => {
             #[cfg(unix)]
             {
-                kirkforge::jobs::run_job_daemon(foreground, stop).await
+                kf_code::jobs::run_job_daemon(foreground, stop).await
             }
             #[cfg(windows)]
             {
@@ -227,10 +227,10 @@ pub async fn main() {
     }
     .map_err(KirkForgeError::from);
 
-    kirkforge::shared::metrics::shutdown_telemetry();
+    kf_code::shared::metrics::shutdown_telemetry();
 
     if let Err(e) = result {
-        eprintln!("kirkforge: {e}");
+        eprintln!("kf-code: {e}");
         if let Some(h) = e.hint() {
             eprintln!("hint: {h}");
         }

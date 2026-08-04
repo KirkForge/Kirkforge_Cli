@@ -365,7 +365,7 @@ mod tests {
     #[tokio::test]
     async fn test_scans_edit_event() {
         let dir = std::env::temp_dir();
-        let path = dir.join("kirkforge_sec_edit_check.txt");
+        let path = dir.join("kf_code_sec_edit_check.txt");
         std::fs::write(&path, "let x = 1;").unwrap();
 
         let event = BusEvent::Edit(EditEvent {
@@ -381,7 +381,7 @@ mod tests {
     #[tokio::test]
     async fn test_edit_event_detects_key() {
         let dir = std::env::temp_dir();
-        let path = dir.join("kirkforge_sec_edit_key.txt");
+        let path = dir.join("kf_code_sec_edit_key.txt");
         // Use a long high-entropy token so the entropy detector catches it.
         std::fs::write(&path, "api_key = \"sk-abcdefghijklmnopqrstuvwxyz012345\"").unwrap();
 
@@ -398,7 +398,7 @@ mod tests {
     #[tokio::test]
     async fn test_clean_file_passes() {
         let dir = std::env::temp_dir();
-        let path = dir.join("kirkforge_sec_clean.txt");
+        let path = dir.join("kf_code_sec_clean.txt");
         std::fs::write(&path, "let x = 1;").unwrap();
 
         let event = BusEvent::FileWrite(FileWriteEvent {
@@ -414,7 +414,7 @@ mod tests {
     #[tokio::test]
     async fn test_detects_api_key_pattern() {
         let dir = std::env::temp_dir();
-        let path = dir.join("kirkforge_sec_key.txt");
+        let path = dir.join("kf_code_sec_key.txt");
         // High-entropy token long enough to trip the entropy detector.
         std::fs::write(&path, "api_key = \"sk-abcdefghijklmnopqrstuvwxyz012345\"").unwrap();
 
@@ -431,7 +431,7 @@ mod tests {
     #[tokio::test]
     async fn test_detects_private_key() {
         let dir = std::env::temp_dir();
-        let path = dir.join("kirkforge_sec_private.pem");
+        let path = dir.join("kf_code_sec_private.pem");
         std::fs::write(
             &path,
             "-----BEGIN PRIVATE KEY-----\nABC123\n-----END PRIVATE KEY-----",
@@ -451,7 +451,7 @@ mod tests {
     #[tokio::test]
     async fn test_detects_shell_danger() {
         let dir = std::env::temp_dir();
-        let path = dir.join("kirkforge_sec_danger.sh");
+        let path = dir.join("kf_code_sec_danger.sh");
         std::fs::write(&path, "rm -rf /").unwrap();
 
         let event = BusEvent::FileWrite(FileWriteEvent {
@@ -467,7 +467,7 @@ mod tests {
     #[tokio::test]
     async fn test_detects_shell_danger_in_non_shell_file() {
         let dir = std::env::temp_dir();
-        let path = dir.join("kirkforge_sec_danger.txt");
+        let path = dir.join("kf_code_sec_danger.txt");
         std::fs::write(&path, "rm -rf /").unwrap();
 
         let event = BusEvent::FileWrite(FileWriteEvent {
@@ -486,7 +486,7 @@ mod tests {
     #[tokio::test]
     async fn test_large_file_is_skipped_not_clean() {
         let dir = std::env::temp_dir();
-        let path = dir.join("kirkforge_sec_large.txt");
+        let path = dir.join("kf_code_sec_large.txt");
         std::fs::write(&path, "tiny content").unwrap();
 
         let event = BusEvent::FileWrite(FileWriteEvent {
@@ -506,7 +506,7 @@ mod tests {
     async fn test_path_traversal_no_false_positive() {
         // `../` inside string content must NOT be flagged (it's a legitimate import)
         let dir = std::env::temp_dir();
-        let path = dir.join("kirkforge_sec_traversal.txt");
+        let path = dir.join("kf_code_sec_traversal.txt");
         std::fs::write(&path, "require('../../secret')").unwrap();
 
         let event = BusEvent::FileWrite(FileWriteEvent {
@@ -523,7 +523,7 @@ mod tests {
     #[tokio::test]
     async fn test_high_entropy_token_detected() {
         let dir = std::env::temp_dir();
-        let path = dir.join("kirkforge_sec_entropy_high.txt");
+        let path = dir.join("kf_code_sec_entropy_high.txt");
         std::fs::write(&path, "api_key = \"sk-abcdefghijklmnopqrstuvwxyz\"").unwrap();
 
         let event = BusEvent::FileWrite(FileWriteEvent {
@@ -542,7 +542,7 @@ mod tests {
     #[tokio::test]
     async fn test_low_entropy_token_not_detected() {
         let dir = std::env::temp_dir();
-        let path = dir.join("kirkforge_sec_entropy_low.txt");
+        let path = dir.join("kf_code_sec_entropy_low.txt");
         std::fs::write(&path, "api_key = \"sk-aaaaaaaaaaaaaaaa\"").unwrap();
 
         let event = BusEvent::FileWrite(FileWriteEvent {
@@ -565,7 +565,7 @@ mod tests {
     #[tokio::test]
     async fn test_shell_danger_in_slash_comment_is_skipped() {
         let dir = std::env::temp_dir();
-        let path = dir.join("kirkforge_sec_comment_slash.txt");
+        let path = dir.join("kf_code_sec_comment_slash.txt");
         std::fs::write(&path, "// do not run: rm -rf /\nlet x = 1;\n").unwrap();
 
         let event = BusEvent::FileWrite(FileWriteEvent {
@@ -584,7 +584,7 @@ mod tests {
     #[tokio::test]
     async fn test_shell_danger_in_hash_comment_is_skipped() {
         let dir = std::env::temp_dir();
-        let path = dir.join("kirkforge_sec_comment_hash.txt");
+        let path = dir.join("kf_code_sec_comment_hash.txt");
         std::fs::write(&path, "# do not run: rm -rf /\nx = 1\n").unwrap();
 
         let event = BusEvent::FileWrite(FileWriteEvent {
@@ -603,7 +603,7 @@ mod tests {
     #[tokio::test]
     async fn test_shell_danger_in_block_comment_is_skipped() {
         let dir = std::env::temp_dir();
-        let path = dir.join("kirkforge_sec_comment_block.txt");
+        let path = dir.join("kf_code_sec_comment_block.txt");
         std::fs::write(
             &path,
             "/* warning: do not run rm -rf / on this host */\nlet x = 1;\n",
@@ -626,7 +626,7 @@ mod tests {
     #[tokio::test]
     async fn test_shell_danger_in_star_comment_line_is_skipped() {
         let dir = std::env::temp_dir();
-        let path = dir.join("kirkforge_sec_comment_star.txt");
+        let path = dir.join("kf_code_sec_comment_star.txt");
         std::fs::write(
             &path,
             "/**\n * beware: rm -rf / wipes the disk\n */\nlet x = 1;\n",
@@ -651,7 +651,7 @@ mod tests {
     #[tokio::test]
     async fn test_shell_danger_on_code_line_still_flagged() {
         let dir = std::env::temp_dir();
-        let path = dir.join("kirkforge_sec_code_line.txt");
+        let path = dir.join("kf_code_sec_code_line.txt");
         std::fs::write(&path, "system(\"rm -rf /\");\n").unwrap();
 
         let event = BusEvent::FileWrite(FileWriteEvent {
@@ -698,8 +698,8 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
 
         let dir = std::env::temp_dir();
-        let path = dir.join("kirkforge_sec_trufflehog_timeout.txt");
-        let fake_bin_dir = dir.join("kirkforge_fake_bin_timeout");
+        let path = dir.join("kf_code_sec_trufflehog_timeout.txt");
+        let fake_bin_dir = dir.join("kf_code_fake_bin_timeout");
         let fake_trufflehog = fake_bin_dir.join("trufflehog");
         std::fs::create_dir_all(&fake_bin_dir).unwrap();
 
@@ -708,7 +708,7 @@ mod tests {
         // PATH leaks; the sleep is long enough to prove the timeout
         // fires but bounded so a leaked process self-terminates.
         let script =
-            "#!/bin/sh\nif [ \"$KIRKFORGE_FAKE_TRUFFLEHOG_SLEEP\" = \"1\" ]; then sleep 30; fi\n";
+            "#!/bin/sh\nif [ \"$KF_CODE_FAKE_TRUFFLEHOG_SLEEP\" = \"1\" ]; then sleep 30; fi\n";
         std::fs::write(&fake_trufflehog, script).unwrap();
         let mut perms = std::fs::metadata(&fake_trufflehog).unwrap().permissions();
         perms.set_mode(0o755);
@@ -728,7 +728,7 @@ mod tests {
                 .unwrap_or_default()
         );
         std::env::set_var("PATH", new_path);
-        std::env::set_var("KIRKFORGE_FAKE_TRUFFLEHOG_SLEEP", "1");
+        std::env::set_var("KF_CODE_FAKE_TRUFFLEHOG_SLEEP", "1");
 
         let event = BusEvent::FileWrite(FileWriteEvent {
             path: path.clone(),
@@ -749,7 +749,7 @@ mod tests {
         } else {
             std::env::remove_var("PATH");
         }
-        std::env::remove_var("KIRKFORGE_FAKE_TRUFFLEHOG_SLEEP");
+        std::env::remove_var("KF_CODE_FAKE_TRUFFLEHOG_SLEEP");
         remove_test_file(&path);
         remove_test_file(&fake_trufflehog);
         let _ = std::fs::remove_dir(&fake_bin_dir);
@@ -766,14 +766,14 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
 
         let dir = std::env::temp_dir();
-        let path = dir.join("kirkforge_sec_trufflehog.txt");
-        let fake_bin_dir = dir.join("kirkforge_fake_bin");
+        let path = dir.join("kf_code_sec_trufflehog.txt");
+        let fake_bin_dir = dir.join("kf_code_fake_bin");
         let fake_trufflehog = fake_bin_dir.join("trufflehog");
         std::fs::create_dir_all(&fake_bin_dir).unwrap();
 
         // Fake trufflehog emits a JSON finding only when the marker variable is set.
         // This avoids spurious findings in other concurrent tests if PATH leaks.
-        let script = "#!/bin/sh\nif [ \"$1\" = \"filesystem\" ] && [ \"$KIRKFORGE_FAKE_TRUFFLEHOG\" = \"1\" ]; then echo '{\"detector_name\":\"test\"}'; fi\n";
+        let script = "#!/bin/sh\nif [ \"$1\" = \"filesystem\" ] && [ \"$KF_CODE_FAKE_TRUFFLEHOG\" = \"1\" ]; then echo '{\"detector_name\":\"test\"}'; fi\n";
         std::fs::write(&fake_trufflehog, script).unwrap();
         let mut perms = std::fs::metadata(&fake_trufflehog).unwrap().permissions();
         perms.set_mode(0o755);
@@ -792,7 +792,7 @@ mod tests {
                 .unwrap_or_default()
         );
         std::env::set_var("PATH", new_path);
-        std::env::set_var("KIRKFORGE_FAKE_TRUFFLEHOG", "1");
+        std::env::set_var("KF_CODE_FAKE_TRUFFLEHOG", "1");
 
         let event = BusEvent::FileWrite(FileWriteEvent {
             path: path.clone(),
@@ -806,7 +806,7 @@ mod tests {
         } else {
             std::env::remove_var("PATH");
         }
-        std::env::remove_var("KIRKFORGE_FAKE_TRUFFLEHOG");
+        std::env::remove_var("KF_CODE_FAKE_TRUFFLEHOG");
         remove_test_file(&path);
         remove_test_file(&fake_trufflehog);
         let _ = std::fs::remove_dir(&fake_bin_dir);

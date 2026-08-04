@@ -1,6 +1,6 @@
 //! Lifecycle hook system — user-defined shell scripts triggered on events.
 //!
-//! Hooks are shell scripts placed in `~/.local/share/kirkforge/hooks/`.
+//! Hooks are shell scripts placed in `~/.local/share/kf-code/hooks/`.
 //! Naming convention: `<event>.sh` — e.g., `pre-tool-bash.sh`,
 //! `post-tool-write_file.sh`, `post-turn.sh`, `session-start.sh`,
 //! `pre-compact.sh`, `post-compact.sh`.
@@ -33,8 +33,8 @@ use crate::session::bash_runner::{
 use crate::session::process_group::{kill_process_group, reap_child, setup_process_group};
 use crate::shared::audit::AuditLog;
 use crate::shared::Config;
-use kirkforge_plugin::Plugin;
-use kirkforge_plugin_host::PluginRegistry;
+use kf_plugin_sdk::Plugin;
+use kf_plugin_host::PluginRegistry;
 use std::sync::Arc;
 
 /// Context passed to an in-process hook handler.
@@ -178,7 +178,7 @@ impl HookRunner {
             let plugin_name = plugin.manifest().name.clone();
             let root = plugin.root();
             for cap in plugin.hooks() {
-                if let kirkforge_plugin::Capability::Hook { event, command } = cap {
+                if let kf_plugin_sdk::Capability::Hook { event, command } = cap {
                     let script_path = root.join(&command);
                     self.plugin_hooks
                         .push((event, script_path, Some(plugin_name.clone())));
@@ -485,7 +485,7 @@ fn discover_hooks(hooks_dir: &std::path::Path) -> HashSet<String> {
     set
 }
 
-/// Default hooks directory: `~/.local/share/kirkforge/hooks/`.
+/// Default hooks directory: `~/.local/share/kf-code/hooks/`.
 fn default_hooks_dir() -> anyhow::Result<PathBuf> {
     let base = crate::session::data_dir()?;
     Ok(base.join("hooks"))
@@ -729,7 +729,7 @@ async fn join_hook_drain(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kirkforge_plugin_host::TrustPolicy;
+    use kf_plugin_host::TrustPolicy;
 
     fn temp_hooks_dir() -> (tempfile::TempDir, PathBuf) {
         let tmp = tempfile::tempdir().unwrap();
@@ -1013,7 +1013,7 @@ mod tests {
         let plugin_hooks_dir = plugin_dir.join("hooks");
         std::fs::create_dir_all(&plugin_hooks_dir).unwrap();
         std::fs::write(
-            plugin_dir.join("kirkforge.toml"),
+            plugin_dir.join("kf-code.toml"),
             r#"
 name = "demo-hooks"
 version = "0.1.0"
@@ -1033,7 +1033,7 @@ command = "hooks/post-turn.sh"
         let warnings = registry
             .load_from_dir(
                 &plugins_dir,
-                TrustPolicy::up_to(kirkforge_plugin::TrustTier::Shell),
+                TrustPolicy::up_to(kf_plugin_sdk::TrustTier::Shell),
             )
             .unwrap();
         assert!(warnings.is_empty(), "{warnings:?}");
@@ -1054,7 +1054,7 @@ command = "hooks/post-turn.sh"
         let plugin_hooks_dir = plugin_dir.join("hooks");
         std::fs::create_dir_all(&plugin_hooks_dir).unwrap();
         std::fs::write(
-            plugin_dir.join("kirkforge.toml"),
+            plugin_dir.join("kf-code.toml"),
             r#"
 name = "demo-hooks"
 version = "0.1.0"
@@ -1081,7 +1081,7 @@ command = "hooks/post-turn.sh"
         registry
             .load_from_dir(
                 &plugins_dir,
-                TrustPolicy::up_to(kirkforge_plugin::TrustTier::Shell),
+                TrustPolicy::up_to(kf_plugin_sdk::TrustTier::Shell),
             )
             .unwrap();
 
@@ -1210,7 +1210,7 @@ command = "hooks/post-turn.sh"
         let plugin_hooks_dir = plugin_dir.join("hooks");
         std::fs::create_dir_all(&plugin_hooks_dir).unwrap();
         std::fs::write(
-            plugin_dir.join("kirkforge.toml"),
+            plugin_dir.join("kf-code.toml"),
             r#"
 name = "sec-plugin"
 version = "0.1.0"
@@ -1234,7 +1234,7 @@ command = "hooks/pre-tool-bash.sh"
         registry
             .load_from_dir(
                 &plugins_dir,
-                TrustPolicy::up_to(kirkforge_plugin::TrustTier::Shell),
+                TrustPolicy::up_to(kf_plugin_sdk::TrustTier::Shell),
             )
             .unwrap();
 
@@ -1447,7 +1447,7 @@ command = "hooks/pre-tool-bash.sh"
         use crate::shared::audit::AuditLog;
         let (_tmp, dir) = temp_hooks_dir();
         let audit_path = std::env::temp_dir().join(format!(
-            "kirkforge-hooks-audit-{}-{}.ndjson",
+            "kf-code-hooks-audit-{}-{}.ndjson",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

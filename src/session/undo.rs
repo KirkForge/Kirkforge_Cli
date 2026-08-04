@@ -10,7 +10,7 @@
 //! On every successful `edit_file` / `write_file`, we snapshot the
 //! file's pre-edit bytes to disk before the tool writes the new
 //! content. The snapshots are kept in
-//! `~/.local/share/kirkforge/undo/<session_id>/<n>.snap` — one file
+//! `~/.local/share/kf-code/undo/<session_id>/<n>.snap` — one file
 //! per op, in chronological order. The `UndoStack` struct manages
 //! reading and writing the snapshots.
 //!
@@ -435,7 +435,7 @@ mod tests {
     use std::env;
 
     /// Guard that atomically creates a temp data directory, sets
-    /// `KIRKFORGE_DATA_DIR` to it, and cleans it up on drop. The
+    /// `KF_CODE_DATA_DIR` to it, and cleans it up on drop. The
     /// shared `test_data_dir_lock` prevents concurrent tests from
     /// racing on the environment variable or deleting each other's
     /// temp directories.
@@ -448,21 +448,21 @@ mod tests {
         fn new() -> Self {
             let _lock = crate::session::test_data_dir_lock().blocking_lock();
             let dir = env::temp_dir().join(format!(
-                "kirkforge-undo-test-{}",
+                "kf-code-undo-test-{}",
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap()
                     .as_nanos()
             ));
             std::fs::create_dir_all(&dir).expect("create temp data dir");
-            env::set_var("KIRKFORGE_DATA_DIR", &dir);
+            env::set_var("KF_CODE_DATA_DIR", &dir);
             Self { dir, _lock }
         }
     }
 
     impl Drop for DataDirGuard {
         fn drop(&mut self) {
-            env::remove_var("KIRKFORGE_DATA_DIR");
+            env::remove_var("KF_CODE_DATA_DIR");
             let _ = std::fs::remove_dir_all(&self.dir);
         }
     }
@@ -487,7 +487,7 @@ mod tests {
     #[test]
     fn test_push_pop_round_trip_existing_file() {
         let (mut stack, _guard) = fresh_stack();
-        let target = env::temp_dir().join("kirkforge_undo_target.txt");
+        let target = env::temp_dir().join("kf_code_undo_target.txt");
         std::fs::write(&target, b"original content").unwrap();
 
         // Simulate the tool: snapshot, then write new content.
@@ -510,7 +510,7 @@ mod tests {
     #[test]
     fn test_push_pop_round_trip_new_file() {
         let (mut stack, _guard) = fresh_stack();
-        let target = env::temp_dir().join("kirkforge_undo_new.txt");
+        let target = env::temp_dir().join("kf_code_undo_new.txt");
         // Pre-edit state: file does not exist.
         assert!(!target.exists());
 
@@ -533,8 +533,8 @@ mod tests {
     #[test]
     fn test_pop_returns_most_recent() {
         let (mut stack, _guard) = fresh_stack();
-        let a = env::temp_dir().join("kirkforge_undo_a.txt");
-        let b = env::temp_dir().join("kirkforge_undo_b.txt");
+        let a = env::temp_dir().join("kf_code_undo_a.txt");
+        let b = env::temp_dir().join("kf_code_undo_b.txt");
         std::fs::write(&a, b"A1").unwrap();
         std::fs::write(&b, b"B1").unwrap();
 
@@ -562,7 +562,7 @@ mod tests {
     #[test]
     fn test_fifo_trim_at_max() {
         let (mut stack, _guard) = fresh_stack();
-        let target = env::temp_dir().join("kirkforge_undo_trim.txt");
+        let target = env::temp_dir().join("kf_code_undo_trim.txt");
         for i in 0..(MAX_ENTRIES + 1) {
             std::fs::write(&target, format!("v{i}")).unwrap();
             let prev = std::fs::read(&target).unwrap();
@@ -577,7 +577,7 @@ mod tests {
     #[test]
     fn test_list_in_chronological_order() {
         let (mut stack, _guard) = fresh_stack();
-        let target = env::temp_dir().join("kirkforge_undo_list.txt");
+        let target = env::temp_dir().join("kf_code_undo_list.txt");
         for i in 0..3 {
             std::fs::write(&target, format!("v{i}")).unwrap();
             let prev = std::fs::read(&target).unwrap();
@@ -595,7 +595,7 @@ mod tests {
     #[test]
     fn test_total_size_cap_evicts_oldest() {
         let (mut stack, _guard) = fresh_stack();
-        let target = env::temp_dir().join("kirkforge_undo_size_cap.txt");
+        let target = env::temp_dir().join("kf_code_undo_size_cap.txt");
         // Push two 1.5 MiB snapshots. With the 2 MiB test cap, the second
         // push should evict the first.
         let one_and_half = 3 * 1024 * 1024 / 2;
@@ -626,7 +626,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
 
         let (mut stack, _guard) = fresh_stack();
-        let target = env::temp_dir().join("kirkforge_undo_fail.txt");
+        let target = env::temp_dir().join("kf_code_undo_fail.txt");
         std::fs::write(&target, b"first").unwrap();
         let prev = std::fs::read(&target).unwrap();
         stack.push(UndoKind::Edit, &target, true, &prev).unwrap();
@@ -677,7 +677,7 @@ mod tests {
     #[test]
     fn test_clear_empties_stack_and_disk() {
         let (mut stack, _guard) = fresh_stack();
-        let target = env::temp_dir().join("kirkforge_undo_clear.txt");
+        let target = env::temp_dir().join("kf_code_undo_clear.txt");
         std::fs::write(&target, b"v1").unwrap();
         let prev = std::fs::read(&target).unwrap();
         stack.push(UndoKind::Edit, &target, true, &prev).unwrap();
@@ -702,7 +702,7 @@ mod tests {
                 .unwrap()
                 .as_nanos()
         );
-        let target = env::temp_dir().join("kirkforge_undo_recon.txt");
+        let target = env::temp_dir().join("kf_code_undo_recon.txt");
         std::fs::write(&target, b"v0").unwrap();
 
         {

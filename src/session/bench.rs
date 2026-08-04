@@ -1,11 +1,11 @@
 //! Headless benchmark session execution.
 //!
-//! Runs a single benchmark task against a kirkforge executor, collects
+//! Runs a single benchmark task against a kf-code executor, collects
 //! metrics from turn events, and verifies the result.
 
 use crate::session::access::{DenyList, PathGuard};
 use crate::shared::{Config, SharedConfig};
-use kirkforge_bench::{BenchReport, BenchSummary, BenchTask, TaskResult};
+use kf_bench::{BenchReport, BenchSummary, BenchTask, TaskResult};
 use std::path::Path;
 use std::time::Instant;
 
@@ -50,7 +50,7 @@ pub fn collect_turn_metrics(
     }
 
     let success = if run_error.is_none() {
-        kirkforge_bench::verify_task(task, sandbox_path).unwrap_or(false)
+        kf_bench::verify_task(task, sandbox_path).unwrap_or(false)
     } else {
         false
     };
@@ -113,7 +113,7 @@ fn build_bench_toolset(sandbox_path: &Path) -> super::toolset::CompositeToolset 
 /// Run a single benchmark task.
 ///
 /// Creates a temp sandbox dir, applies setup files, starts a headless
-/// kirkforge session, sends the prompt, waits for completion (or timeout),
+/// kf-code session, sends the prompt, waits for completion (or timeout),
 /// runs the verify command, and collects metrics.
 pub async fn run_task(
     task: &BenchTask,
@@ -142,7 +142,7 @@ pub async fn run_task(
     task_config.security.auto_approve = true;
     task_config.tools.dry_run = false;
     // WO 14.7: when the task pins a budget ceiling, export it as
-    // KIRKFORGE_BUDGET_CEILING so the budget guard (init_from_config
+    // KF_CODE_BUDGET_CEILING so the budget guard (init_from_config
     // → apply_env_overrides) enforces it for this run. The Token
     // Budget Challenge sets this per run; other tasks leave it None.
     if let Some((env_name, ceiling)) = task.budget_env() {
@@ -185,7 +185,7 @@ pub async fn run_task(
     );
 
     // Open conversation log in sandbox.
-    let data_dir = sandbox_path.join("kirkforge-data");
+    let data_dir = sandbox_path.join("kf-code-data");
     std::fs::create_dir_all(&data_dir)?;
     let session_id = format!("bench-{}", task.name);
     let log_path = data_dir.join(format!("{session_id}.conv.ndjson"));
@@ -230,7 +230,7 @@ pub async fn run_task(
     // the task that set it clears it; tasks without a ceiling leave
     // the env untouched.
     if task.budget_ceiling.is_some() {
-        std::env::remove_var(kirkforge_bench::BUDGET_CEILING_ENV);
+        std::env::remove_var(kf_bench::BUDGET_CEILING_ENV);
     }
 
     let duration = start.elapsed().as_secs_f64();
@@ -267,7 +267,7 @@ pub const BUDGET_CHALLENGE_TASK_NAME: &str = "token_budget_challenge";
 /// budget ceilings (128k → 64k → 32k → 16k → 8k), collecting the six
 /// metrics per run into a `BudgetChallengeReport`. Each run clones the
 /// task with `budget_ceiling` set to the current ceiling so the runner
-/// exports `KIRKFORGE_BUDGET_CEILING` for that run. Returns the report
+/// exports `KF_CODE_BUDGET_CEILING` for that run. Returns the report
 /// plus a flat `Vec<TaskResult>` (one per ceiling) so `run_all` can
 /// fold the per-ceiling results into the standard `BenchReport`.
 pub async fn run_token_budget_challenge(
@@ -275,7 +275,7 @@ pub async fn run_token_budget_challenge(
     model: &str,
     config: &Config,
     timeout_secs: u64,
-) -> (kirkforge_bench::BudgetChallengeReport, Vec<TaskResult>) {
+) -> (kf_bench::BudgetChallengeReport, Vec<TaskResult>) {
     let mut entries = Vec::with_capacity(BUDGET_CHALLENGE_CEILINGS.len());
     let mut results = Vec::with_capacity(BUDGET_CHALLENGE_CEILINGS.len());
     for ceiling in BUDGET_CHALLENGE_CEILINGS {
@@ -284,7 +284,7 @@ pub async fn run_token_budget_challenge(
         ceiling_task.budget_ceiling = Some(ceiling);
         match run_task(&ceiling_task, model, config, timeout_secs).await {
             Ok(result) => {
-                entries.push(kirkforge_bench::BudgetChallengeEntry {
+                entries.push(kf_bench::BudgetChallengeEntry {
                     ceiling,
                     success: result.success,
                     prompt_tokens: result.tokens_in,
@@ -307,7 +307,7 @@ pub async fn run_token_budget_challenge(
                     compression_passes: 0,
                     error: Some(e.to_string()),
                 };
-                entries.push(kirkforge_bench::BudgetChallengeEntry {
+                entries.push(kf_bench::BudgetChallengeEntry {
                     ceiling,
                     success: false,
                     prompt_tokens: 0,
@@ -319,7 +319,7 @@ pub async fn run_token_budget_challenge(
             }
         }
     }
-    let report = kirkforge_bench::BudgetChallengeReport {
+    let report = kf_bench::BudgetChallengeReport {
         task_name: task.name.clone(),
         model: model.to_string(),
         entries,
@@ -376,7 +376,7 @@ pub async fn run_all(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kirkforge_bench::{Difficulty, VerifySpec};
+    use kf_bench::{Difficulty, VerifySpec};
     use std::collections::HashMap;
 
     fn sample_task(name: &str, verify: VerifySpec) -> BenchTask {
@@ -789,7 +789,7 @@ mod tests {
     #[test]
     fn budget_challenge_clones_task_with_ceiling_per_run() {
         // The loop sets budget_ceiling on a per-run clone so the
-        // runner exports KIRKFORGE_BUDGET_CEILING for that run. Verify
+        // runner exports KF_CODE_BUDGET_CEILING for that run. Verify
         // the base task is not mutated and the env helper resolves.
         let base = BenchTask {
             name: BUDGET_CHALLENGE_TASK_NAME.to_string(),
@@ -806,7 +806,7 @@ mod tests {
             let mut run = base.clone();
             run.budget_ceiling = Some(ceiling);
             let env = run.budget_env().expect("ceiling set → env Some");
-            assert_eq!(env.0, kirkforge_bench::BUDGET_CEILING_ENV);
+            assert_eq!(env.0, kf_bench::BUDGET_CEILING_ENV);
             assert_eq!(env.1, ceiling);
         }
         // Base task unchanged.

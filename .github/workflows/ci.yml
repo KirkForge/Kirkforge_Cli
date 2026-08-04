@@ -197,7 +197,7 @@ jobs:
             BASE="${{ github.event.pull_request.base.sha }}"
             CHANGED=$(git diff --name-only "$BASE..HEAD" -- \
               'src/session/**' 'src/adapters/**' 'src/tools/**' \
-              'crates/kirkforge-bench/**' 'benches/tasks/**' \
+              'crates/kf-code-bench/**' 'benches/tasks/**' \
               '.github/workflows/ci.yml' || true)
           else
             CHANGED="yes"
@@ -412,15 +412,15 @@ jobs:
         with:
           node-version: "24"
           cache: "npm"
-          cache-dependency-path: npm/kirkforge-plugin/package-lock.json
+          cache-dependency-path: npm/kf-code-plugin/package-lock.json
 
       - name: Install Node SDK dependencies
         run: npm ci
-        working-directory: npm/kirkforge-plugin
+        working-directory: npm/kf-code-plugin
 
       - name: Run Node SDK tests
         run: npm test
-        working-directory: npm/kirkforge-plugin
+        working-directory: npm/kf-code-plugin
 
   # Build and test the VS Code extension. Produces a .vsix artifact on tag pushes.
   vscode:
@@ -451,5 +451,5 @@ jobs:
       - name: Upload .vsix artifact
         uses: actions/upload-artifact@v4
         with:
-          name: kirkforge-vscode-extension
+          name: kf-code-vscode-extension
           path: editors/vscode/*.vsix

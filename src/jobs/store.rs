@@ -1,6 +1,6 @@
 //! Persistent, append-only store for scheduled jobs.
 //!
-//! Each job lives in its own directory under `~/.local/share/kirkforge/jobs/`:
+//! Each job lives in its own directory under `~/.local/share/kf-code/jobs/`:
 //! - `job.json` — the current [`ScheduledJob`] record.
 //! - `runs/` — one directory per run with `run.json`, `stdout`, and `stderr`.
 //!

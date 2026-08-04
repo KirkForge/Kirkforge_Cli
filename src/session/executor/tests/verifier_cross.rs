@@ -52,7 +52,7 @@ impl BusVerifier for CleanBusVerifier {
 
 #[tokio::test]
 async fn write_file_event_is_non_conflicting_across_both_verifier_paths() {
-    let path = PathBuf::from("/tmp/kirkforge_cross_test.rs");
+    let path = PathBuf::from("/tmp/kf_code_cross_test.rs");
 
     // ── Event-driven path ──
     let mut slots = VerifierSlots::new();

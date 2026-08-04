@@ -9,12 +9,12 @@
 #   scripts/build-all.sh --test    # run Node SDK tests too
 #
 # Produces:
-#   - target/<profile>/kirkforge
+#   - target/<profile>/kf-code
 #   - target/<profile>/kfd
-#   - target/<profile>/kirkforge-video
+#   - target/<profile>/kf-code-video
 #   - target/<profile>/stratum
 #   - target/<profile>/plugin3
-#   - npm/kirkforge-plugin/apps/cli/dist/index.js
+#   - npm/kf-code-plugin/apps/cli/dist/index.js
 
 set -euo pipefail
 
@@ -68,7 +68,7 @@ fi
 
 if [ "$BUILD_NODE" = true ]; then
     echo "==> Building Node SDK"
-    cd "$ROOT/npm/kirkforge-plugin"
+    cd "$ROOT/npm/kf-code-plugin"
     if [ ! -d node_modules ]; then
         npm ci
     fi

@@ -1124,7 +1124,7 @@ mod tests {
 
     #[test]
     fn test_load_messages_returns_error_for_nonexistent_file() {
-        let path = std::path::Path::new("/nonexistent/kirkforge-test-load-missing.ndjson");
+        let path = std::path::Path::new("/nonexistent/kf-code-test-load-missing.ndjson");
         assert!(load_messages(path).is_err());
     }
 

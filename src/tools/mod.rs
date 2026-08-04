@@ -131,7 +131,7 @@ pub fn all_tools(
     bash_sandbox_workdir: bool,
     minify_write_side: bool,
     minify_above_bytes: usize,
-    lsp_pool: Option<std::sync::Arc<kirkforge_lsp::LspPool>>,
+    lsp_pool: Option<std::sync::Arc<kf_lsp::LspPool>>,
     computer_use: Option<(bool, crate::shared::ComputerUseConfig)>,
     chrome_tab: Option<std::sync::Arc<dyn crate::tools::computer_use::ChromeTab>>,
     session_launcher: Option<crate::tools::computer_use::SessionLauncher>,
@@ -308,7 +308,7 @@ mod tests {
 
     #[test]
     fn all_tools_includes_lsp_query_when_pool_provided() {
-        let pool = std::sync::Arc::new(kirkforge_lsp::LspPool::new(
+        let pool = std::sync::Arc::new(kf_lsp::LspPool::new(
             std::env::current_dir()
                 .unwrap()
                 .to_string_lossy()

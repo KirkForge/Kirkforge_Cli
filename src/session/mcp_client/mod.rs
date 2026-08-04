@@ -6,7 +6,7 @@
 //!
 //! # Usage
 //!
-//! Servers are defined in `~/.local/share/kirkforge/config.toml` under
+//! Servers are defined in `~/.local/share/kf-code/config.toml` under
 //! the `[[mcp_servers]]` array:
 //!
 //! ```toml
@@ -261,7 +261,7 @@ impl McpClient {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {},
                 "clientInfo": {
-                    "name": "kirkforge",
+                    "name": "kf-code",
                     "version": "0.1.0"
                 }
             }

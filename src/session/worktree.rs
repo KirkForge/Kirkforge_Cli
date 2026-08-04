@@ -21,7 +21,7 @@ impl WorktreeSession {
                 "invalid session id `{session_id}`: must be non-empty with no path separators or `..`"
             );
         }
-        let worktree_path = std::env::temp_dir().join(format!("kirkforge-session-{session_id}"));
+        let worktree_path = std::env::temp_dir().join(format!("kf-code-session-{session_id}"));
 
         let output = Command::new("git")
             .args([
@@ -81,7 +81,7 @@ mod tests {
     #[test]
     fn worktree_create_write_file_drop_cleanup() {
         // Create a temp git repo
-        let tmp = std::env::temp_dir().join(format!("kirkforge-wt-test-{}", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("kf-code-wt-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&tmp);
         fs::create_dir_all(&tmp).unwrap();
 

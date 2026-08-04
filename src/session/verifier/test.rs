@@ -297,13 +297,13 @@ mod tests {
     #[tokio::test]
     #[ignore = "spawns cargo; run separately with cargo test --workspace -- --ignored"]
     async fn test_test_failure_on_temp_project() {
-        let dir = std::env::temp_dir().join("kirkforge_test_test");
+        let dir = std::env::temp_dir().join("kf_code_test_test");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("src")).unwrap();
         std::fs::write(
             dir.join("Cargo.toml"),
             r#"[package]
-name = "kirkforge-test-test"
+name = "kf-code-test-test"
 version = "0.1.0"
 edition = "2021"
 "#,

@@ -2,7 +2,7 @@
 //! Extracted from the binary root so `mod.rs` stays focused on argument
 //! parsing, session setup, and the multi-turn driver loop.
 
-use kirkforge::session;
+use kf_code::session;
 use std::io::Write;
 
 /// Serialize a JSON value and emit it as one stream-json line.
@@ -25,11 +25,11 @@ fn print_json_line(value: &serde_json::Value) {
 #[allow(clippy::too_many_arguments)]
 pub(super) fn emit_turn_events(
     events: &[session::executor::TurnEvent],
-    output: kirkforge::shared::OutputFormat,
+    output: kf_code::shared::OutputFormat,
     total_prompt_tokens: &mut usize,
     total_completion_tokens: &mut usize,
     cumulative_cost: &mut f64,
-    tool_records: &mut Vec<kirkforge::shared::ToolCallRecord>,
+    tool_records: &mut Vec<kf_code::shared::ToolCallRecord>,
     final_error: &mut Option<String>,
 ) {
     // Per-tool timing + structured records for the JSON summary.
@@ -45,26 +45,26 @@ pub(super) fn emit_turn_events(
     for event in events {
         match event {
             session::executor::TurnEvent::Token(t) => {
-                if output == kirkforge::shared::OutputFormat::Text {
+                if output == kf_code::shared::OutputFormat::Text {
                     print!("{t}");
                     if let Err(e) = std::io::stdout().flush() {
                         tracing::debug!(error = %e, "failed to flush stdout token");
                     }
-                } else if output == kirkforge::shared::OutputFormat::StreamJson {
+                } else if output == kf_code::shared::OutputFormat::StreamJson {
                     let line = serde_json::json!({"type": "token", "content": t});
                     print_json_line(&line);
                 }
             }
             session::executor::TurnEvent::Thinking(t) => {
-                if output == kirkforge::shared::OutputFormat::Text {
+                if output == kf_code::shared::OutputFormat::Text {
                     eprintln!("\n[thinking] {t}");
-                } else if output == kirkforge::shared::OutputFormat::StreamJson {
+                } else if output == kf_code::shared::OutputFormat::StreamJson {
                     let line = serde_json::json!({"type": "thinking", "content": t});
                     print_json_line(&line);
                 }
             }
             session::executor::TurnEvent::ToolStart { name, args } => {
-                if output == kirkforge::shared::OutputFormat::StreamJson {
+                if output == kf_code::shared::OutputFormat::StreamJson {
                     let line = serde_json::json!({"type": "tool_start", "name": name});
                     print_json_line(&line);
                 }
@@ -81,14 +81,14 @@ pub(super) fn emit_turn_events(
                 output: result,
                 success,
             } => {
-                if output == kirkforge::shared::OutputFormat::StreamJson {
+                if output == kf_code::shared::OutputFormat::StreamJson {
                     let line = serde_json::json!({
                         "type": "tool_result",
                         "name": name,
                         "content": result,
                     });
                     print_json_line(&line);
-                } else if output == kirkforge::shared::OutputFormat::Text {
+                } else if output == kf_code::shared::OutputFormat::Text {
                     // Keep non-interactive output compact: one line per tool,
                     // and only the body if it failed. Successful tool churn is
                     // the main source of terminal spam.
@@ -113,7 +113,7 @@ pub(super) fn emit_turn_events(
                     } else {
                         (name.clone(), serde_json::json!({}), 0)
                     };
-                let record = kirkforge::shared::ToolCallRecord {
+                let record = kf_code::shared::ToolCallRecord {
                     name: record_name,
                     arguments: record_args,
                     result: result.clone(),
@@ -123,7 +123,7 @@ pub(super) fn emit_turn_events(
                 tool_records.push(record);
             }
             session::executor::TurnEvent::Verification { message, success } => {
-                if output == kirkforge::shared::OutputFormat::StreamJson {
+                if output == kf_code::shared::OutputFormat::StreamJson {
                     let line = serde_json::json!({
                         "type": "verification",
                         "message": message,
@@ -134,9 +134,9 @@ pub(super) fn emit_turn_events(
             }
             session::executor::TurnEvent::Error(e) => {
                 *final_error = Some(e.clone());
-                if output == kirkforge::shared::OutputFormat::Text {
+                if output == kf_code::shared::OutputFormat::Text {
                     eprintln!("\n[error] {e}");
-                } else if output == kirkforge::shared::OutputFormat::StreamJson {
+                } else if output == kf_code::shared::OutputFormat::StreamJson {
                     let line = serde_json::json!({"type": "error", "content": e});
                     print_json_line(&line);
                 }
@@ -156,7 +156,7 @@ pub(super) fn emit_turn_events(
                 *total_completion_tokens += completion_tokens;
                 *cumulative_cost += *turn_cost;
 
-                if output == kirkforge::shared::OutputFormat::StreamJson {
+                if output == kf_code::shared::OutputFormat::StreamJson {
                     let line = serde_json::json!({
                         "type": "cost",
                         "prompt_tokens": prompt_tokens,
@@ -172,9 +172,9 @@ pub(super) fn emit_turn_events(
                 // event should not arrive. If it does, ignore it.
             }
             session::executor::TurnEvent::Recovered { messages } => {
-                if output == kirkforge::shared::OutputFormat::Text {
+                if output == kf_code::shared::OutputFormat::Text {
                     eprintln!("\n[recovered] restored {messages} message(s) from checkpoint");
-                } else if output == kirkforge::shared::OutputFormat::StreamJson {
+                } else if output == kf_code::shared::OutputFormat::StreamJson {
                     let line = serde_json::json!({"type": "recovered", "messages": messages});
                     print_json_line(&line);
                 }
@@ -188,11 +188,11 @@ pub(super) fn emit_turn_events(
                 tokens_after,
                 new_messages: _,
             } => {
-                if output == kirkforge::shared::OutputFormat::Text {
+                if output == kf_code::shared::OutputFormat::Text {
                     eprintln!(
                         "\n[compaction] {original_count} → {compacted_count} messages ({tokens_before} → {tokens_after} tokens), dropped {dropped_tool_results} tool result(s), condensed {condensed_assistant_turns} assistant turn(s).",
                     );
-                } else if output == kirkforge::shared::OutputFormat::StreamJson {
+                } else if output == kf_code::shared::OutputFormat::StreamJson {
                     let line = serde_json::json!({
                         "type": "compaction",
                         "original_count": original_count,
@@ -214,7 +214,7 @@ pub(super) fn emit_turn_events(
                 prompt_tokens,
                 stem_tokens,
             } => {
-                if output == kirkforge::shared::OutputFormat::StreamJson {
+                if output == kf_code::shared::OutputFormat::StreamJson {
                     let line = serde_json::json!({
                         "type": "cache_stats",
                         "cached_tokens": cached_tokens,
@@ -229,11 +229,11 @@ pub(super) fn emit_turn_events(
                 tool,
                 last_error,
             } => {
-                if output == kirkforge::shared::OutputFormat::Text {
+                if output == kf_code::shared::OutputFormat::Text {
                     eprintln!(
                         "\n[doom-loop] {tool} has failed {count} times in a row: {last_error}"
                     );
-                } else if output == kirkforge::shared::OutputFormat::StreamJson {
+                } else if output == kf_code::shared::OutputFormat::StreamJson {
                     let line = serde_json::json!({
                         "type": "doom_loop",
                         "tool": tool,
@@ -261,7 +261,7 @@ pub(super) fn resolve_continue_path(value: &str) -> anyhow::Result<std::path::Pa
     match session::session_index::resolve_session_id(value) {
         Ok(Some(p)) => Ok(p),
         Ok(None) => Err(anyhow::anyhow!(
-            "No saved session found matching '{value}'. Run `kirkforge run --non-interactive` once to create one, or use `/sessions` in the TUI to list."
+            "No saved session found matching '{value}'. Run `kf-code run --non-interactive` once to create one, or use `/sessions` in the TUI to list."
         )),
         Err(e) => Err(anyhow::anyhow!(
             "Error resolving session id '{value}': {e}"
@@ -272,8 +272,8 @@ pub(super) fn resolve_continue_path(value: &str) -> anyhow::Result<std::path::Pa
 #[cfg(test)]
 mod tests {
     use super::{emit_turn_events, resolve_continue_path};
-    use kirkforge::session::executor::TurnEvent;
-    use kirkforge::shared::{OutputFormat, ToolCallRecord};
+    use kf_code::session::executor::TurnEvent;
+    use kf_code::shared::{OutputFormat, ToolCallRecord};
 
     /// Path-style values (containing a `/`) are returned as-is,
     /// without touching the session index. This is the "I have a

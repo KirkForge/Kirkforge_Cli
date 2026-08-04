@@ -680,7 +680,7 @@ mod tests {
     #[test]
     fn check_worktree_unreadable_file_warns_about_size() {
         let tmp = tempfile::tempdir().unwrap();
-        let status = "?? /nonexistent/kirkforge-test-missing-file".to_string();
+        let status = "?? /nonexistent/kf-code-test-missing-file".to_string();
         let report = check_worktree(tmp.path(), &status, None).unwrap();
         assert!(report
             .warnings
@@ -785,7 +785,7 @@ mod tests {
 
     #[test]
     fn read_limited_returns_none_for_unreadable() {
-        let path = Path::new("/nonexistent/kirkforge-test-read-limited.bin");
+        let path = Path::new("/nonexistent/kf-code-test-read-limited.bin");
         assert!(read_limited(path, 1024).is_none());
     }
 

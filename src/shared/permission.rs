@@ -43,7 +43,7 @@
 //!
 //! The TUI's `[A]lways` key in the approval dialog now writes a
 //! rule matching the current tool call instead of flipping the
-//! global flag. The rule persists in `~/.local/share/kirkforge/config.toml`
+//! global flag. The rule persists in `~/.local/share/kf-code/config.toml`
 //! and survives across sessions.
 
 use serde::{Deserialize, Serialize};

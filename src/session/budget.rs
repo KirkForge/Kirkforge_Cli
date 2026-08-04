@@ -1,9 +1,9 @@
-//! Budget tool wrappers — direct Rust calls to `plugin3_core`.
+//! Budget tool wrappers — direct Rust calls to `kf_budget_core`.
 //!
 //! Enabled by the `budget` feature flag. When disabled, the plugin
-//! shell scripts in `plugins/kirkforge-plugin3/tools/` remain the
+//! shell scripts in `plugins/kf-plugin-sdk3/tools/` remain the
 //! invocation path. This module eliminates the lossy shim by calling
-//! `plugin3_core` functions in-process, giving budget logic full
+//! `kf_budget_core` functions in-process, giving budget logic full
 //! access to session state.
 //!
 //! ADR-047 pins this decision.
@@ -12,7 +12,7 @@ use crate::session::hooks::{HookContext, HookDecision, InProcessHook};
 use crate::shared::{ToolDef, ToolOutcome};
 use crate::tools::Tool;
 use crate::tools::ToolContext;
-use plugin3_core::{
+use kf_budget_core::{
     aggregate_sessions, filter_lines, format_summary_line, parse_slice_marker,
     slicing::HeadTailSlicer, BudgetState, ConfigFile, InMemoryOffloadStore, OffloadStore, Paths,
     SlicingTransform, TokenBudget,
@@ -326,7 +326,7 @@ fn dispatch_sliced(event: BudgetSlicedEvent) -> Option<String> {
 fn maybe_escalate_stratum() {
     #[cfg(feature = "stratum")]
     {
-        use kirkstratum_core::mode::Mode;
+        use kf_compress_core::mode::Mode;
         let current = crate::session::stratum::current_session_mode();
         if current == Mode::Lite {
             crate::session::stratum::set_session_mode(Mode::Full);
@@ -1560,7 +1560,7 @@ mod tests {
     #[tokio::test]
     async fn test_apply_budget_slice_auto_escalates_lite_to_full_on_approaching() {
         use crate::session::stratum::{current_session_mode, set_session_mode};
-        use kirkstratum_core::mode::Mode;
+        use kf_compress_core::mode::Mode;
 
         let _guard = shared_budget_test_lock().lock().await;
         clear_sliced_listeners();
@@ -1590,7 +1590,7 @@ mod tests {
     #[tokio::test]
     async fn test_pre_compact_hook_runs_stratum_compression() {
         use crate::session::stratum::{current_session_mode, set_session_mode};
-        use kirkstratum_core::mode::Mode;
+        use kf_compress_core::mode::Mode;
 
         let _guard = shared_budget_test_lock().lock().await;
         reset_shared_budget(1000, 850);

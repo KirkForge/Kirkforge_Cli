@@ -75,10 +75,10 @@ fn ensure_private_data_dir(dir: &std::path::Path) {
 pub fn data_dir() -> anyhow::Result<PathBuf> {
     // Allow tests and advanced deployments to override the canonical data
     // directory location without changing XDG variables.
-    if let Ok(dir) = std::env::var("KIRKFORGE_DATA_DIR") {
+    if let Ok(dir) = std::env::var("KF_CODE_DATA_DIR") {
         return Ok(PathBuf::from(dir));
     }
-    let project = directories::ProjectDirs::from("", "", "kirkforge")
+    let project = directories::ProjectDirs::from("", "", "kf-code")
         .ok_or_else(|| anyhow::anyhow!("Cannot determine data directory"))?;
     let dir = project.data_dir().to_path_buf();
     ensure_private_data_dir(&dir);
@@ -95,7 +95,7 @@ pub fn config_path() -> PathBuf {
     let mut path = data_dir().unwrap_or_else(|e| {
         tracing::warn!(
             error = %e,
-            "Cannot determine kirkforge data directory; falling back to current directory for config.toml"
+            "Cannot determine kf-code data directory; falling back to current directory for config.toml"
         );
         PathBuf::from(".")
     });
@@ -151,17 +151,17 @@ mod session_tests {
     async fn data_dir_respects_env_override() {
         let _lock = test_data_dir_lock().lock().await;
         let temp = std::env::temp_dir().join(format!(
-            "kirkforge-data-dir-test-{}-{}",
+            "kf-code-data-dir-test-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_nanos()
         ));
-        std::env::set_var("KIRKFORGE_DATA_DIR", &temp);
+        std::env::set_var("KF_CODE_DATA_DIR", &temp);
         let dir = data_dir().expect("data_dir should succeed");
         assert_eq!(dir, temp);
-        std::env::remove_var("KIRKFORGE_DATA_DIR");
+        std::env::remove_var("KF_CODE_DATA_DIR");
         remove_test_dir(&temp);
     }
 
@@ -169,7 +169,7 @@ mod session_tests {
     async fn new_session_id_picks_max_seq_plus_one() {
         let _lock = test_data_dir_lock().lock().await;
         let temp = std::env::temp_dir().join(format!(
-            "kirkforge-session-id-test-{}-{}",
+            "kf-code-session-id-test-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -183,11 +183,11 @@ mod session_tests {
         std::fs::write(sessions_dir.join(format!("{date}-session-1.ndjson")), "").unwrap();
         std::fs::write(sessions_dir.join(format!("{date}-session-7.ndjson")), "").unwrap();
         std::fs::write(sessions_dir.join(format!("{date}-session-3.ndjson")), "").unwrap();
-        std::env::set_var("KIRKFORGE_DATA_DIR", &temp);
+        std::env::set_var("KF_CODE_DATA_DIR", &temp);
         let id = new_session_id();
         assert_eq!(id.date, date);
         assert_eq!(id.seq, 8, "should pick max(1,3,7) + 1 = 8");
-        std::env::remove_var("KIRKFORGE_DATA_DIR");
+        std::env::remove_var("KF_CODE_DATA_DIR");
         remove_test_dir(&temp);
     }
 
@@ -195,7 +195,7 @@ mod session_tests {
     async fn new_session_id_returns_1_for_empty_dir() {
         let _lock = test_data_dir_lock().lock().await;
         let temp = std::env::temp_dir().join(format!(
-            "kirkforge-session-empty-test-{}-{}",
+            "kf-code-session-empty-test-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -204,10 +204,10 @@ mod session_tests {
         ));
         let sessions_dir = temp.join("sessions");
         std::fs::create_dir_all(&sessions_dir).unwrap();
-        std::env::set_var("KIRKFORGE_DATA_DIR", &temp);
+        std::env::set_var("KF_CODE_DATA_DIR", &temp);
         let id = new_session_id();
         assert_eq!(id.seq, 1, "empty sessions dir should return seq=1");
-        std::env::remove_var("KIRKFORGE_DATA_DIR");
+        std::env::remove_var("KF_CODE_DATA_DIR");
         remove_test_dir(&temp);
     }
 
@@ -215,7 +215,7 @@ mod session_tests {
     async fn new_session_id_returns_1_when_no_sessions_dir() {
         let _lock = test_data_dir_lock().lock().await;
         let temp = std::env::temp_dir().join(format!(
-            "kirkforge-no-sessions-test-{}-{}",
+            "kf-code-no-sessions-test-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -224,10 +224,10 @@ mod session_tests {
         ));
         std::fs::create_dir_all(&temp).unwrap();
         // No "sessions" subdirectory
-        std::env::set_var("KIRKFORGE_DATA_DIR", &temp);
+        std::env::set_var("KF_CODE_DATA_DIR", &temp);
         let id = new_session_id();
         assert_eq!(id.seq, 1, "no sessions dir should return seq=1");
-        std::env::remove_var("KIRKFORGE_DATA_DIR");
+        std::env::remove_var("KF_CODE_DATA_DIR");
         remove_test_dir(&temp);
     }
 
@@ -235,17 +235,17 @@ mod session_tests {
     async fn jobs_dir_respects_env_override() {
         let _lock = test_data_dir_lock().lock().await;
         let temp = std::env::temp_dir().join(format!(
-            "kirkforge-jobs-dir-test-{}-{}",
+            "kf-code-jobs-dir-test-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_nanos()
         ));
-        std::env::set_var("KIRKFORGE_DATA_DIR", &temp);
+        std::env::set_var("KF_CODE_DATA_DIR", &temp);
         let dir = jobs_dir().expect("jobs_dir should succeed");
         assert!(dir.ends_with("jobs"));
-        std::env::remove_var("KIRKFORGE_DATA_DIR");
+        std::env::remove_var("KF_CODE_DATA_DIR");
         remove_test_dir(&temp);
     }
 }

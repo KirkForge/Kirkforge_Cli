@@ -20,8 +20,8 @@
 ///
 /// The body after the frontmatter is the system prompt that's injected
 /// when the skill is invoked.
-use kirkforge_plugin::{Capability, TrustTier};
-use kirkforge_plugin_host::{PluginRegistry, TrustPolicy};
+use kf_plugin_sdk::{Capability, TrustTier};
+use kf_plugin_host::{PluginRegistry, TrustPolicy};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -144,7 +144,7 @@ impl SkillRegistry {
 
     /// Scan all registered paths and load any SKILL.md files found.
     ///
-    /// Also loads plugin directories from `~/.local/share/kirkforge/plugins`
+    /// Also loads plugin directories from `~/.local/share/kf-code/plugins`
     /// and any enabled workspace plugin sources, then registers their skills.
     pub fn scan_and_load(&mut self, cfg: &crate::shared::Config) -> anyhow::Result<usize> {
         let mut count = 0;
@@ -164,7 +164,7 @@ impl SkillRegistry {
     fn load_plugins(&mut self, cfg: &crate::shared::Config) -> anyhow::Result<usize> {
         let plugins_dir = crate::session::data_dir()
             .map(|d| d.join("plugins"))
-            .unwrap_or_else(|_| PathBuf::from(".local/share/kirkforge/plugins"));
+            .unwrap_or_else(|_| PathBuf::from(".local/share/kf-code/plugins"));
 
         self.plugin_registry = PluginRegistry::new();
         let mut warnings = self
@@ -179,8 +179,8 @@ impl SkillRegistry {
 
         let mut count = 0;
         let plugin_entries: Vec<(
-            kirkforge_plugin::PluginManifest,
-            std::sync::Arc<kirkforge_plugin::LoadedPlugin>,
+            kf_plugin_sdk::PluginManifest,
+            std::sync::Arc<kf_plugin_sdk::LoadedPlugin>,
         )> = self
             .plugin_registry
             .active_plugins()
@@ -193,7 +193,7 @@ impl SkillRegistry {
             })
             .collect();
         for (manifest, plugin_arc) in plugin_entries {
-            let plugin = plugin_arc.as_ref() as &dyn kirkforge_plugin::Plugin;
+            let plugin = plugin_arc.as_ref() as &dyn kf_plugin_sdk::Plugin;
             count += self.add_plugin(&manifest, plugin);
         }
         Ok(count)
@@ -203,12 +203,12 @@ impl SkillRegistry {
     /// Returns the number of skills added.
     pub fn add_plugin(
         &mut self,
-        manifest: &kirkforge_plugin::PluginManifest,
-        plugin: &dyn kirkforge_plugin::Plugin,
+        manifest: &kf_plugin_sdk::PluginManifest,
+        plugin: &dyn kf_plugin_sdk::Plugin,
     ) -> usize {
         let plugins_dir = crate::session::data_dir()
             .map(|d| d.join("plugins"))
-            .unwrap_or_else(|_| PathBuf::from(".local/share/kirkforge/plugins"));
+            .unwrap_or_else(|_| PathBuf::from(".local/share/kf-code/plugins"));
 
         let mut count = 0;
         for cap in &manifest.capabilities {
@@ -266,7 +266,7 @@ impl SkillRegistry {
     }
 
     /// Active plugin manifests, useful for status/logging.
-    pub fn active_plugins(&self) -> Vec<&kirkforge_plugin::PluginManifest> {
+    pub fn active_plugins(&self) -> Vec<&kf_plugin_sdk::PluginManifest> {
         self.plugin_registry
             .active_plugins()
             .iter()

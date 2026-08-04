@@ -1,0 +1,22 @@
+[package]
+name = "kf-budget-cli"
+version = "0.2.0"
+edition = "2021"
+rust-version = "1.88"
+license = "MIT"
+repository = "https://github.com/KirkForge/KirkForge-Cli"
+description = "CLI for the Plugin3 budget assistant"
+
+[[bin]]
+name = "plugin3"
+path = "src/main.rs"
+
+[dependencies]
+kf-budget-core = { path = "../kf-budget-core" }
+kf-budget-hosts = { path = "../kf-budget-hosts" }
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+clap.workspace = true
+chrono.workspace = true
+tempfile.workspace = true

@@ -1,0 +1,26 @@
+[package]
+name = "kf-testdoctor"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+license = "MIT"
+repository = "https://github.com/KirkForge/KirkForge-Cli"
+description = "Test-performance doctor for Rust workspaces — profiles, classifies, partitions, and diagnoses test coverage gaps."
+
+[lib]
+name = "kf_testdoctor"
+path = "src/lib.rs"
+
+[[bin]]
+name = "kf-testdoctor"
+path = "src/main.rs"
+
+[dependencies]
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+regex = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

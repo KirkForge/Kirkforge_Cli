@@ -3,7 +3,7 @@
 // Extracted from the binary root — pure move, no behaviour change.
 
 use super::turn_events::emit_turn_events;
-use kirkforge::{adapters, line_mode, session};
+use kf_code::{adapters, line_mode, session};
 use std::io::Write;
 use tokio::sync::mpsc;
 
@@ -24,7 +24,7 @@ pub(super) fn spawn_non_interactive_approval_handler(
                 args = %req.args,
                 "non-interactive run denied approval for tool; use interactive mode or add a permission rule that explicitly allows this operation"
             );
-            kirkforge::send_or_warn!(req.response.send(session::executor::ApprovalResponse::DeniedWithReason(
+            kf_code::send_or_warn!(req.response.send(session::executor::ApprovalResponse::DeniedWithReason(
                 "non-interactive mode cannot approve destructive tools; use interactive mode or add a permission rule".into(),
             )), "approval response receiver dropped; response discarded");
         }
@@ -34,21 +34,21 @@ pub(super) fn spawn_non_interactive_approval_handler(
 // reason: entry point; each arg is an independent session resource for non-interactive mode.
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn run_line_mode(
-    config: kirkforge::shared::SharedConfig,
+    config: kf_code::shared::SharedConfig,
     adapter: Box<dyn adapters::ModelAdapter>,
-    tools: kirkforge::session::toolset::CompositeToolset,
+    tools: kf_code::session::toolset::CompositeToolset,
     conversation: (
         session::conversation::ConversationLog,
         session::conversation::OpenOutcome,
     ),
     system: Option<String>,
-    output: kirkforge::shared::OutputFormat,
+    output: kf_code::shared::OutputFormat,
     max_turns: usize,
     non_interactive: bool,
     no_color: bool,
-    plugin_registry: &kirkforge_plugin_host::PluginRegistry,
+    plugin_registry: &kf_plugin_host::PluginRegistry,
     session_id: String,
-    context_index: Option<kirkforge_context_index::ContextIndex>,
+    context_index: Option<kf_context_index::ContextIndex>,
     trace_recorder: Option<session::replay::TraceRecorder>,
 ) -> anyhow::Result<()> {
     // If running in non-interactive mode (scripted), deny all approvals.
@@ -102,7 +102,7 @@ pub(super) async fn run_line_mode(
     let mut total_prompt_tokens: usize = 0;
     let mut total_completion_tokens: usize = 0;
     let mut cumulative_cost: f64 = 0.0;
-    let mut all_tool_records: Vec<kirkforge::shared::ToolCallRecord> = Vec::new();
+    let mut all_tool_records: Vec<kf_code::shared::ToolCallRecord> = Vec::new();
     let mut final_error: Option<String> = None;
     let overall_started = std::time::Instant::now();
 
@@ -122,18 +122,18 @@ pub(super) async fn run_line_mode(
         // `/quit` behave consistently with the TUI.
         let trimmed = input.trim();
         if trimmed == "/exit" || trimmed == "/quit" {
-            if output == kirkforge::shared::OutputFormat::Text {
+            if output == kf_code::shared::OutputFormat::Text {
                 println!("Exiting.");
             }
             break;
         }
 
         if trimmed == "/reload plugins" {
-            let cfg = kirkforge::shared::read_shared_config(&config).clone();
+            let cfg = kf_code::shared::read_shared_config(&config).clone();
             match session::plugin_tools::load_plugin_registry(&cfg) {
                 Ok((registry, warnings)) => {
                     let summary = executor.reload_plugins(&registry);
-                    if output == kirkforge::shared::OutputFormat::Text {
+                    if output == kf_code::shared::OutputFormat::Text {
                         let icon = line_mode::symbol(no_color, "🔌");
                         let sep = if icon.is_empty() { "" } else { " " };
                         println!("{icon}{sep}{summary}");
@@ -159,22 +159,22 @@ pub(super) async fn run_line_mode(
             match sub {
                 "run" => {
                     if rest.is_empty() {
-                        if output == kirkforge::shared::OutputFormat::Text {
+                        if output == kf_code::shared::OutputFormat::Text {
                             println!("Usage: /workflow run <name>");
                         }
                     } else {
-                        let path = match kirkforge_workflow::find_workflow_file(rest) {
+                        let path = match kf_workflow::find_workflow_file(rest) {
                             Some(p) => p,
                             None => {
-                                if output == kirkforge::shared::OutputFormat::Text {
+                                if output == kf_code::shared::OutputFormat::Text {
                                     println!("Workflow '{rest}' not found.");
                                 }
                                 continue;
                             }
                         };
-                        match kirkforge_workflow::Workflow::from_file(&path) {
+                        match kf_workflow::Workflow::from_file(&path) {
                             Ok(workflow) => {
-                                let cfg = kirkforge::shared::read_shared_config(&config).clone();
+                                let cfg = kf_code::shared::read_shared_config(&config).clone();
                                 let ollama_host = cfg.model.ollama_host.clone();
                                 let supports_images = cfg.model.ollama_host.contains("localhost")
                                     || cfg.model.ollama_host.contains("127.0.0.1")
@@ -183,24 +183,24 @@ pub(super) async fn run_line_mode(
                                     std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
                                 let workflow_name = workflow.name.clone();
                                 let step_count = workflow.steps.len();
-                                if output == kirkforge::shared::OutputFormat::Text {
+                                if output == kf_code::shared::OutputFormat::Text {
                                     println!("🚀 Started workflow '{workflow_name}' ({step_count} steps).");
                                 }
-                                let runner = kirkforge::tui::commands::workflow::LineStepRunner {
+                                let runner = kf_code::tui::commands::workflow::LineStepRunner {
                                     model_name: model_name.clone(),
                                     ollama_host,
                                     config: cfg,
                                     supports_images,
                                     undo_stack: None,
                                 };
-                                let result = kirkforge_workflow::WorkflowExecutor::new(workflow)
+                                let result = kf_workflow::WorkflowExecutor::new(workflow)
                                     .run(&runner, Some(&cancel))
                                     .await;
                                 match result {
                                     Ok(summary) => {
-                                        if output == kirkforge::shared::OutputFormat::Text {
+                                        if output == kf_code::shared::OutputFormat::Text {
                                             let s =
-                                                kirkforge::tui::commands::workflow::format_summary(
+                                                kf_code::tui::commands::workflow::format_summary(
                                                     &workflow_name,
                                                     &summary,
                                                 );
@@ -208,14 +208,14 @@ pub(super) async fn run_line_mode(
                                         }
                                     }
                                     Err(e) => {
-                                        if output == kirkforge::shared::OutputFormat::Text {
+                                        if output == kf_code::shared::OutputFormat::Text {
                                             println!("Workflow failed: {e}");
                                         }
                                     }
                                 }
                             }
                             Err(e) => {
-                                if output == kirkforge::shared::OutputFormat::Text {
+                                if output == kf_code::shared::OutputFormat::Text {
                                     println!("Failed to load workflow '{rest}': {e}");
                                 }
                             }
@@ -223,17 +223,17 @@ pub(super) async fn run_line_mode(
                     }
                 }
                 "status" => {
-                    if output == kirkforge::shared::OutputFormat::Text {
+                    if output == kf_code::shared::OutputFormat::Text {
                         println!("No workflow is currently running. Use /workflow run <name>.");
                     }
                 }
                 "cancel" => {
-                    if output == kirkforge::shared::OutputFormat::Text {
+                    if output == kf_code::shared::OutputFormat::Text {
                         println!("⛔ Workflow cancelled.");
                     }
                 }
                 _ => {
-                    if output == kirkforge::shared::OutputFormat::Text {
+                    if output == kf_code::shared::OutputFormat::Text {
                         println!("Usage: /workflow run <name> | status | cancel");
                     }
                 }
@@ -244,7 +244,7 @@ pub(super) async fn run_line_mode(
         if trimmed == "/reload skills" {
             // Line mode has no AppState skill registry; just report that the
             // interactive skill reload is a TUI-only feature.
-            if output == kirkforge::shared::OutputFormat::Text {
+            if output == kf_code::shared::OutputFormat::Text {
                 let icon = line_mode::symbol(no_color, "🧠");
                 let sep = if icon.is_empty() { "" } else { " " };
                 println!("{icon}{sep}Skill reload is only available in the TUI. Use /help to see available line-mode commands.");
@@ -254,7 +254,7 @@ pub(super) async fn run_line_mode(
 
         if trimmed == "/carryover show" || trimmed == "/carryover" {
             let profile = session::carryover::load_carryover();
-            if output == kirkforge::shared::OutputFormat::Text {
+            if output == kf_code::shared::OutputFormat::Text {
                 if profile.session_count == 0 {
                     println!("No carryover profile yet.");
                 } else {
@@ -269,14 +269,14 @@ pub(super) async fn run_line_mode(
 
         if trimmed == "/carryover clear" {
             session::carryover::clear_carryover();
-            if output == kirkforge::shared::OutputFormat::Text {
+            if output == kf_code::shared::OutputFormat::Text {
                 println!("Carryover profile cleared.");
             }
             continue;
         }
 
         if trimmed == "/help" || trimmed == "/h" || trimmed == "/?" {
-            if output == kirkforge::shared::OutputFormat::Text {
+            if output == kf_code::shared::OutputFormat::Text {
                 println!("Line-mode commands (most commands are TUI-only):");
                 println!("  /exit, /quit          Exit the session");
                 println!("  /reload               Reload config.toml");
@@ -285,7 +285,7 @@ pub(super) async fn run_line_mode(
                 println!("  /help                 Show this help");
                 println!();
                 println!(
-                    "Type `/help` in the TUI (`kirkforge run`) for the full grouped command list."
+                    "Type `/help` in the TUI (`kf-code run`) for the full grouped command list."
                 );
             }
             continue;
@@ -312,16 +312,16 @@ pub(super) async fn run_line_mode(
         return Ok(());
     }
 
-    if output == kirkforge::shared::OutputFormat::Text {
+    if output == kf_code::shared::OutputFormat::Text {
         println!();
     }
 
-    if output == kirkforge::shared::OutputFormat::Json {
+    if output == kf_code::shared::OutputFormat::Json {
         let total_duration_ms = overall_started.elapsed().as_millis() as u64;
         let recorded_messages: Vec<_> = executor.conversation_log().all().to_vec();
-        let summary = kirkforge::shared::SessionSummary {
+        let summary = kf_code::shared::SessionSummary {
             version: "1.0".into(),
-            session: kirkforge::shared::SessionInfo {
+            session: kf_code::shared::SessionInfo {
                 id: if non_interactive {
                     "non-interactive".into()
                 } else {
@@ -333,7 +333,7 @@ pub(super) async fn run_line_mode(
             },
             messages: recorded_messages,
             tool_calls: all_tool_records,
-            usage: kirkforge::shared::UsageSummary {
+            usage: kf_code::shared::UsageSummary {
                 prompt_tokens: total_prompt_tokens,
                 completion_tokens: total_completion_tokens,
                 total_tokens: total_prompt_tokens + total_completion_tokens,
@@ -559,7 +559,7 @@ fn spawn_line_mode_approval_handler(
                     read_approval_answer_pollable(&tool_name, &shutdown_reader).unwrap_or(false);
                 // If the tokio side already timed out, `answer_rx` was dropped
                 // and this send is harmless.
-                kirkforge::send_or_warn!(
+                kf_code::send_or_warn!(
                     answer_tx.send(approved),
                     "line-mode answer channel receiver dropped"
                 );
@@ -583,7 +583,7 @@ fn spawn_line_mode_approval_handler(
             } else {
                 session::executor::ApprovalResponse::Denied
             };
-            kirkforge::send_or_warn!(
+            kf_code::send_or_warn!(
                 req.response.send(resp),
                 "approval response receiver dropped; response discarded"
             );

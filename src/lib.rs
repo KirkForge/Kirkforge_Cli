@@ -1,4 +1,4 @@
-//! Library crate for the `kirkforge` CLI.
+//! Library crate for the `kf-code` CLI.
 //!
 //! The binary in `src/main.rs` is a thin wrapper that consumes this library.
 //! Exposing the internal modules as a library lets `benches/` and `tests/`

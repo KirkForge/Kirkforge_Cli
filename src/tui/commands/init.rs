@@ -1,7 +1,7 @@
 //! `/init` command — project initialization.
 //!
 //! Detects the project type from marker files, writes a tailored
-//! `.kirkforge/config.toml`, and optionally creates a project instructions
+//! `.kf-code/config.toml`, and optionally creates a project instructions
 //! file (`CLAUDE.md`). Never overwrites existing files without the user
 //! opting in.
 //!
@@ -81,14 +81,14 @@ fn detect_project(cwd: &Path) -> ProjectType {
     ProjectType::Generic
 }
 
-/// Handle `/init` — detect project type and write `.kirkforge/config.toml`.
+/// Handle `/init` — detect project type and write `.kf-code/config.toml`.
 ///
 /// Returns a formatted status message for display in the TUI.
 pub fn handle_init_command(args: &str, cwd: &Path) -> String {
     let _force = args.trim() == "--force";
 
     let project = detect_project(cwd);
-    let config_dir = cwd.join(".kirkforge");
+    let config_dir = cwd.join(".kf-code");
     let config_path = config_dir.join("config.toml");
 
     let mut output = String::new();
@@ -97,7 +97,7 @@ pub fn handle_init_command(args: &str, cwd: &Path) -> String {
     // --- write config ---
     if config_path.exists() && !_force {
         output.push_str(&format!(
-            "⚠ .kirkforge/config.toml already exists at {}\n\
+            "⚠ .kf-code/config.toml already exists at {}\n\
              Use `/init --force` to overwrite, or edit it manually.",
             config_path.display()
         ));
@@ -107,7 +107,7 @@ pub fn handle_init_command(args: &str, cwd: &Path) -> String {
     let config_content = generate_config(&project);
 
     if let Err(e) = std::fs::create_dir_all(&config_dir) {
-        output.push_str(&format!("❌ Failed to create .kirkforge/ directory: {e}\n"));
+        output.push_str(&format!("❌ Failed to create .kf-code/ directory: {e}\n"));
         return output;
     }
 
@@ -135,11 +135,11 @@ pub fn handle_init_command(args: &str, cwd: &Path) -> String {
         output.push_str("ℹ CLAUDE.md already exists — not overwritten.\n");
     }
 
-    output.push_str("\nNext: start a session with `kirkforge run`\n");
+    output.push_str("\nNext: start a session with `kf-code run`\n");
     output
 }
 
-/// Generate a `.kirkforge/config.toml` for the detected project type.
+/// Generate a `.kf-code/config.toml` for the detected project type.
 fn generate_config(project: &ProjectType) -> String {
     let mut c = String::new();
     c.push_str("# KirkForge project config\n");
@@ -317,15 +317,15 @@ mod tests {
         let out = handle_init_command("", tmp.path());
         assert!(out.contains("Rust"), "got: {out}");
         assert!(out.contains("Created"), "got: {out}");
-        assert!(tmp.path().join(".kirkforge/config.toml").exists());
-        assert!(tmp.path().join(".kirkforge/CLAUDE.md").exists());
+        assert!(tmp.path().join(".kf-code/config.toml").exists());
+        assert!(tmp.path().join(".kf-code/CLAUDE.md").exists());
     }
 
     #[test]
     fn test_handle_init_existing_config_skips() {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("Cargo.toml"), "[package]\n").unwrap();
-        let config_dir = tmp.path().join(".kirkforge");
+        let config_dir = tmp.path().join(".kf-code");
         std::fs::create_dir_all(&config_dir).unwrap();
         std::fs::write(config_dir.join("config.toml"), "# existing\n").unwrap();
         let out = handle_init_command("", tmp.path());
@@ -336,7 +336,7 @@ mod tests {
     fn test_handle_init_force_overwrites() {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("Cargo.toml"), "[package]\n").unwrap();
-        let config_dir = tmp.path().join(".kirkforge");
+        let config_dir = tmp.path().join(".kf-code");
         std::fs::create_dir_all(&config_dir).unwrap();
         std::fs::write(config_dir.join("config.toml"), "# old\n").unwrap();
         let out = handle_init_command("--force", tmp.path());

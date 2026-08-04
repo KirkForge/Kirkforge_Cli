@@ -2,7 +2,7 @@
 use crate::session::session_fork::ForkManager;
 use crate::session::skills::SkillRegistry;
 use crate::shared::{ModelInfo, SharedConfig};
-use kirkforge_plugin_host::PluginRegistry;
+use kf_plugin_host::PluginRegistry;
 use ratatui::text::Line;
 use std::collections::{HashSet, VecDeque};
 use std::path::PathBuf;

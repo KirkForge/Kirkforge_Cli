@@ -80,7 +80,7 @@ mod tests {
     #[tokio::test]
     async fn test_formatted_file_is_clean() {
         let dir = std::env::temp_dir();
-        let path = dir.join("kirkforge_rustfmt_clean.rs");
+        let path = dir.join("kf_code_rustfmt_clean.rs");
         std::fs::write(&path, "fn main() {\n    println!(\"hi\");\n}\n").unwrap();
 
         let event = BusEvent::FileWrite(FileWriteEvent {
@@ -100,7 +100,7 @@ mod tests {
     #[tokio::test]
     async fn test_unformatted_file_returns_rustfmt_command() {
         let dir = std::env::temp_dir();
-        let path = dir.join("kirkforge_rustfmt_dirty.rs");
+        let path = dir.join("kf_code_rustfmt_dirty.rs");
         // Missing space after `fn` so rustfmt will want to rewrite it.
         std::fs::write(&path, "fn  main(){println!(\"hi\");}\n").unwrap();
 

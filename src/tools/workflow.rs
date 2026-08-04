@@ -1,11 +1,11 @@
-//! `workflow_run` tool: invoke a `kirkforge-workflow` template as a tool
+//! `workflow_run` tool: invoke a `kf-workflow` template as a tool
 //! call so the agent loop and the bench harness can run workflows the
 //! same way the TUI `/workflow run` slash command does.
 //!
 //! Mirrors `src/tools/task.rs`: the tool holds no state of its own; it
 //! borrows a `StepRunner` from the `ToolContext`'s `task_spawner` (wrapped
 //! by `TaskSpawnerStepRunner`) and delegates execution to
-//! `WorkflowExecutor::run` from the `kirkforge-workflow` crate.
+//! `WorkflowExecutor::run` from the `kf-workflow` crate.
 //!
 //! The workflow crate is always compiled into the binary (not feature
 //! gated — see root `Cargo.toml`), so this tool is registered
@@ -17,7 +17,7 @@ use crate::shared::{ToolDef, ToolError, ToolOutcome};
 use crate::tools::task::TaskSpawner;
 use crate::tools::{Tool, ToolContext};
 use anyhow::{Context, Result};
-use kirkforge_workflow::{StepOutput, StepRequest, StepRunner, Workflow, WorkflowExecutor};
+use kf_workflow::{StepOutput, StepRequest, StepRunner, Workflow, WorkflowExecutor};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -45,8 +45,8 @@ impl Tool for WorkflowTool {
             name: "workflow_run",
             description: "Run a named workflow template (a JSON DAG of persona-driven steps) \
             and return the per-step summaries as JSON. Templates are resolved from \
-            `.kirkforge/workflows/<template>.json` or \
-            `~/.local/share/kirkforge/workflows/<template>.json`. `${var}` tokens in step \
+            `.kf-code/workflows/<template>.json` or \
+            `~/.local/share/kf-code/workflows/<template>.json`. `${var}` tokens in step \
             prompts are interpolated from the `vars` map. Each step runs as an isolated \
             subagent under the persona declared in the template (`explore`, `plan`, or \
             `coder`); the tool reuses the same in-process spawner as the `task` tool.",
@@ -56,7 +56,7 @@ impl Tool for WorkflowTool {
                     "template": {
                         "type": "string",
                         "description": "Workflow template name (file stem, no `.json` extension). \
-                        Resolved from `.kirkforge/workflows/<template>.json` or the user share dir."
+                        Resolved from `.kf-code/workflows/<template>.json` or the user share dir."
                     },
                     "vars": {
                         "type": "object",
@@ -115,7 +115,7 @@ async fn run_workflow(
     vars: &HashMap<String, String>,
     spawner: Arc<dyn TaskSpawner>,
 ) -> Result<String> {
-    let path = kirkforge_workflow::find_workflow_file(template)
+    let path = kf_workflow::find_workflow_file(template)
         .with_context(|| format!("workflow template '{template}' not found"))?;
     let raw = std::fs::read(&path).with_context(|| format!("failed to read {}", path.display()))?;
     let mut workflow = Workflow::from_json(&raw)?;
@@ -148,7 +148,7 @@ fn interpolate_vars(workflow: &mut Workflow, vars: &HashMap<String, String>) {
 /// stable, comparable result. The crate does not expose the original
 /// declaration order on the summary, so alphabetical is the honest
 /// stable choice.
-fn summary_to_json(summary: &kirkforge_workflow::WorkflowSummary) -> String {
+fn summary_to_json(summary: &kf_workflow::WorkflowSummary) -> String {
     let mut names: Vec<&String> = summary.outputs.keys().collect();
     names.sort();
     let steps: Vec<&StepOutput> = names
@@ -213,7 +213,7 @@ mod tests {
     use tokio::sync::Mutex;
 
     /// Global guard serializing tests that mutate the process CWD.
-    /// `find_workflow_file` resolves `.kirkforge/workflows/<name>.json`
+    /// `find_workflow_file` resolves `.kf-code/workflows/<name>.json`
     /// relative to CWD, so two CDB-mutating tests running in parallel
     /// would race and flake. The guard is process-local and test-only.
     /// `tokio::sync::Mutex` (not `std::sync`) because the guard is held
@@ -242,7 +242,7 @@ mod tests {
     }
 
     fn write_template(dir: &std::path::Path, name: &str, body: &str) {
-        let wf_dir = dir.join(".kirkforge/workflows");
+        let wf_dir = dir.join(".kf-code/workflows");
         std::fs::create_dir_all(&wf_dir).unwrap();
         std::fs::write(wf_dir.join(format!("{name}.json")), body).unwrap();
     }
@@ -358,7 +358,7 @@ mod tests {
     fn interpolate_vars_replaces_known_tokens() {
         let mut wf = Workflow {
             name: "x".into(),
-            steps: vec![kirkforge_workflow::Step {
+            steps: vec![kf_workflow::Step {
                 name: "a".into(),
                 prompt: "do ${thing} and ${unknown}".into(),
                 persona: "explore".into(),
@@ -376,7 +376,7 @@ mod tests {
     fn interpolate_vars_empty_map_is_noop() {
         let mut wf = Workflow {
             name: "x".into(),
-            steps: vec![kirkforge_workflow::Step {
+            steps: vec![kf_workflow::Step {
                 name: "a".into(),
                 prompt: "do ${thing}".into(),
                 persona: "explore".into(),
@@ -392,7 +392,7 @@ mod tests {
     fn interpolate_vars_replaces_multiple_known_tokens() {
         let mut wf = Workflow {
             name: "x".into(),
-            steps: vec![kirkforge_workflow::Step {
+            steps: vec![kf_workflow::Step {
                 name: "a".into(),
                 prompt: "do ${thing} then ${other}".into(),
                 persona: "explore".into(),
@@ -412,14 +412,14 @@ mod tests {
         let mut wf = Workflow {
             name: "wf".into(),
             steps: vec![
-                kirkforge_workflow::Step {
+                kf_workflow::Step {
                     name: "a".into(),
                     prompt: "step a ${v}".into(),
                     persona: "explore".into(),
                     depends_on: vec![],
                     critique: None,
                 },
-                kirkforge_workflow::Step {
+                kf_workflow::Step {
                     name: "b".into(),
                     prompt: "step b ${v}".into(),
                     persona: "plan".into(),
@@ -439,7 +439,7 @@ mod tests {
     fn interpolate_vars_repeated_token_in_same_prompt_is_replaced_each_time() {
         let mut wf = Workflow {
             name: "x".into(),
-            steps: vec![kirkforge_workflow::Step {
+            steps: vec![kf_workflow::Step {
                 name: "a".into(),
                 prompt: "${x} and ${x} again".into(),
                 persona: "explore".into(),
@@ -455,13 +455,13 @@ mod tests {
 
     #[test]
     fn summary_to_json_sorts_step_names_alphabetically() {
-        let mut summary = kirkforge_workflow::WorkflowSummary {
+        let mut summary = kf_workflow::WorkflowSummary {
             workflow_name: "wf".into(),
             outputs: std::collections::HashMap::new(),
         };
         summary.outputs.insert(
             "zebra".into(),
-            kirkforge_workflow::StepOutput {
+            kf_workflow::StepOutput {
                 name: "zebra".into(),
                 persona: "explore".into(),
                 summary: "z summary".into(),
@@ -470,7 +470,7 @@ mod tests {
         );
         summary.outputs.insert(
             "apple".into(),
-            kirkforge_workflow::StepOutput {
+            kf_workflow::StepOutput {
                 name: "apple".into(),
                 persona: "plan".into(),
                 summary: "a summary".into(),
@@ -486,13 +486,13 @@ mod tests {
 
     #[test]
     fn summary_to_json_includes_critique_field_when_present() {
-        let mut summary = kirkforge_workflow::WorkflowSummary {
+        let mut summary = kf_workflow::WorkflowSummary {
             workflow_name: "wf".into(),
             outputs: std::collections::HashMap::new(),
         };
         summary.outputs.insert(
             "s".into(),
-            kirkforge_workflow::StepOutput {
+            kf_workflow::StepOutput {
                 name: "s".into(),
                 persona: "plan".into(),
                 summary: "summary".into(),
@@ -506,13 +506,13 @@ mod tests {
 
     #[test]
     fn summary_to_json_critique_is_null_when_absent() {
-        let mut summary = kirkforge_workflow::WorkflowSummary {
+        let mut summary = kf_workflow::WorkflowSummary {
             workflow_name: "wf".into(),
             outputs: std::collections::HashMap::new(),
         };
         summary.outputs.insert(
             "s".into(),
-            kirkforge_workflow::StepOutput {
+            kf_workflow::StepOutput {
                 name: "s".into(),
                 persona: "plan".into(),
                 summary: "summary".into(),
@@ -526,7 +526,7 @@ mod tests {
 
     #[test]
     fn summary_to_json_empty_outputs_returns_empty_array() {
-        let summary = kirkforge_workflow::WorkflowSummary {
+        let summary = kf_workflow::WorkflowSummary {
             workflow_name: "wf".into(),
             outputs: std::collections::HashMap::new(),
         };

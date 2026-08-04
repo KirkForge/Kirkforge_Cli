@@ -15,8 +15,8 @@ This directory packages the Stratum compression/rules pipeline as a KirkForge-Cl
 2. Copy this directory to the KirkForge plugin path:
 
    ```bash
-   mkdir -p ~/.local/share/kirkforge/plugins
-   cp -r plugins/stratum ~/.local/share/kirkforge/plugins/stratum
+   mkdir -p ~/.local/share/kf-code/plugins
+   cp -r plugins/stratum ~/.local/share/kf-code/plugins/stratum
    ```
 
 3. Restart KirkForge-Cli or reload plugins. The manifest declares `trust = "shell"`, so ensure your KirkForge configuration allows shell-tier plugins.
@@ -50,8 +50,8 @@ This directory packages the Stratum compression/rules pipeline as a KirkForge-Cl
 ## File layout
 
 ```
-~/.local/share/kirkforge/plugins/stratum/
-├── kirkforge.toml
+~/.local/share/kf-code/plugins/stratum/
+├── kf-code.toml
 ├── README.md
 ├── tools/
 │   ├── run.sh

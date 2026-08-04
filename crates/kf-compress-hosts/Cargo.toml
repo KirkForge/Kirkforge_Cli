@@ -1,0 +1,13 @@
+[package]
+name = "kf-compress-hosts"
+version = "0.2.0"
+edition = "2021"
+rust-version = "1.88"
+license = "MIT"
+repository = "https://github.com/KirkForge/KirkForge-Cli"
+description = "Host-specific adapters for the Stratum compression pipeline"
+keywords = ["compression", "llm", "context", "prompt"]
+categories = ["development-tools"]
+
+[dependencies]
+kf-compress-core = { path = "../kf-compress-core" }

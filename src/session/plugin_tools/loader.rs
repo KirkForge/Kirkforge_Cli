@@ -16,8 +16,8 @@
 
 use crate::shared::{Config, SharedConfig};
 use crate::tools::Tool;
-use kirkforge_plugin::{Capability, Plugin};
-use kirkforge_plugin_host::{PluginRegistry, TrustPolicy};
+use kf_plugin_sdk::{Capability, Plugin};
+use kf_plugin_host::{PluginRegistry, TrustPolicy};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -30,9 +30,9 @@ use super::wrapper::PluginToolWrapper;
 /// When the feature is disabled, the shell plugin dir is loaded as fallback.
 const FOLDED_PLUGINS: &[(&str, &str)] = &[
     ("stratum", "stratum"),
-    ("kirkforge-plugin3", "budget"),
-    ("kirkforge-draw", "draw"),
-    ("kirkforge-video", "video"),
+    ("kf-plugin-sdk3", "budget"),
+    ("kf-draw", "draw"),
+    ("kf-video", "video"),
 ];
 
 /// Check if a plugin name is folded and whether its feature is compiled in.
@@ -41,11 +41,11 @@ pub fn folded_feature_enabled(name: &str) -> bool {
         #[cfg(feature = "stratum")]
         "stratum" => true,
         #[cfg(feature = "budget")]
-        "kirkforge-plugin3" => true,
+        "kf-plugin-sdk3" => true,
         #[cfg(feature = "draw")]
-        "kirkforge-draw" => true,
+        "kf-draw" => true,
         #[cfg(feature = "video")]
-        "kirkforge-video" => true,
+        "kf-video" => true,
         _ => false,
     }
 }
@@ -63,11 +63,11 @@ pub fn folded_feature(name: &str) -> Option<&'static str> {
         .map(|(_, f)| *f)
 }
 
-/// Default plugins directory: `~/.local/share/kirkforge/plugins/`.
+/// Default plugins directory: `~/.local/share/kf-code/plugins/`.
 pub fn plugins_dir() -> PathBuf {
     crate::session::data_dir()
         .map(|d| d.join("plugins"))
-        .unwrap_or_else(|_| PathBuf::from(".local/share/kirkforge/plugins"))
+        .unwrap_or_else(|_| PathBuf::from(".local/share/kf-code/plugins"))
 }
 
 /// Build the host trust policy from the current config snapshot.
@@ -126,7 +126,7 @@ pub fn load_workspace_plugins(registry: &mut PluginRegistry, cfg: &Config) -> Ve
         } else {
             // Production install fallback: the compile-time workspace paths only
             // exist when running from the source tree. Installed releases ship
-            // bundled plugins under the data directory (`~/.local/share/kirkforge/plugins`).
+            // bundled plugins under the data directory (`~/.local/share/kf-code/plugins`).
             plugins_dir().join(name)
         };
         if !resolved.exists() {
@@ -200,7 +200,7 @@ pub fn all_plugin_tools(
 }
 
 /// Spawn a file-system watcher on the plugins directory that sends a
-/// reload signal on `reload_tx` when a `kirkforge.toml` or tool/hook
+/// reload signal on `reload_tx` when a `kf-code.toml` or tool/hook
 /// script changes (WO 11.4, ADR-059). The watcher debounces events for
 /// 500ms (coalescing editor multi-file saves) before firing.
 ///
@@ -258,7 +258,7 @@ pub fn spawn_plugin_watcher(
                     || path
                         .file_name()
                         .and_then(|n| n.to_str())
-                        .is_some_and(|n| n == "kirkforge.toml");
+                        .is_some_and(|n| n == "kf-code.toml");
                 if relevant {
                     tracing::debug!(
                         path = %path.display(),
@@ -295,12 +295,12 @@ mod loader_tests {
     #[test]
     fn trust_policy_from_config_maps_all_fields() {
         let mut cfg = Config::default();
-        cfg.tools.max_plugin_trust = kirkforge_plugin::TrustTier::Network;
+        cfg.tools.max_plugin_trust = kf_plugin_sdk::TrustTier::Network;
         cfg.tools.reject_on_excess_plugin_trust = true;
         cfg.tools.plugin_signature_validation = true;
         cfg.tools.plugin_public_key_path = Some("/keys/pub.key".into());
         let policy = trust_policy_from_config(&cfg);
-        assert_eq!(policy.max, kirkforge_plugin::TrustTier::Network);
+        assert_eq!(policy.max, kf_plugin_sdk::TrustTier::Network);
         assert!(policy.reject_on_excess);
         assert!(policy.verify_signatures);
         assert_eq!(

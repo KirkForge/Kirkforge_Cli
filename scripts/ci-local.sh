@@ -41,11 +41,11 @@ run_step "Run smoke tests" cargo test --test smoke_test
 run_step "Run Clippy" cargo clippy --all-targets -- -D warnings
 
 # Optional Node SDK pass when the vendored package is present.
-if [ -d "npm/kirkforge-plugin" ] && [ -f "npm/kirkforge-plugin/package.json" ]; then
+if [ -d "npm/kf-code-plugin" ] && [ -f "npm/kf-code-plugin/package.json" ]; then
     if [ "$MODE" = "quick" ]; then
-        run_step "Build Node SDK" bash -c 'cd npm/kirkforge-plugin && npm run build'
+        run_step "Build Node SDK" bash -c 'cd npm/kf-code-plugin && npm run build'
     else
-        run_step "Run Node SDK tests" bash -c 'cd npm/kirkforge-plugin && npm test'
+        run_step "Run Node SDK tests" bash -c 'cd npm/kf-code-plugin && npm test'
     fi
 fi
 

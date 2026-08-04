@@ -516,7 +516,7 @@ mod tests {
         // A relative path with no existing components cannot be resolved,
         // so the function must deny rather than falling back to the literal
         // path (which could accidentally pass a sandbox prefix check).
-        let dir = std::env::temp_dir().join("kirkforge_search_unresolvable_test");
+        let dir = std::env::temp_dir().join("kf_code_search_unresolvable_test");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir(&dir).unwrap();
 
@@ -539,7 +539,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn test_check_search_path_rechecks_deny_list_on_canonical_target() {
-        let dir = std::env::temp_dir().join("kirkforge_search_deny_symlink_test");
+        let dir = std::env::temp_dir().join("kf_code_search_deny_symlink_test");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir(&dir).unwrap();
 

@@ -1,5 +1,5 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use kirkforge::adapters::ollama_ndjson::{parse_ollama_ndjson_stream, OllamaNdjsonConfig};
+use kf_code::adapters::ollama_ndjson::{parse_ollama_ndjson_stream, OllamaNdjsonConfig};
 
 /// Benchmark the latency from the start of NDJSON parsing to the first
 /// `StreamEvent::Text` event. This isolates the adapter parser path without

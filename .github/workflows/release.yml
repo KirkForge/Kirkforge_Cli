@@ -129,12 +129,12 @@ jobs:
         with:
           node-version: "24"
           cache: npm
-          cache-dependency-path: npm/kirkforge-plugin/package-lock.json
+          cache-dependency-path: npm/kf-code-plugin/package-lock.json
 
       - name: Build bundled Node SDK
         shell: bash
         run: |
-          cd npm/kirkforge-plugin
+          cd npm/kf-code-plugin
           npm ci
           npm run build
           npm prune --production
@@ -142,7 +142,7 @@ jobs:
       - name: Strip Node SDK dev artifacts
         shell: bash
         run: |
-          cd npm/kirkforge-plugin
+          cd npm/kf-code-plugin
           # Workspace source/tests/source maps are not needed at runtime.
           find apps packages -type f \( -name "*.map" -o -name "*.test.ts" -o -name "*.test.js" -o -name "*.test.d.ts" \) -delete
           find apps packages -type d \( -name tests -o -name src \) -exec rm -rf {} +
@@ -161,7 +161,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist
-          bins=(kirkforge kfd plugin3 stratum kirkforge-video)
+          bins=(kf-code kfd plugin3 stratum kf-code-video)
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
             ext=".exe"
           else
@@ -172,10 +172,10 @@ jobs:
           done
           cp -R plugins dist/plugins
           mkdir -p dist/npm
-          cp -R -P npm/kirkforge-plugin dist/npm/kirkforge-plugin
-          archive="kirkforge-${{ matrix.target }}.${{ matrix.archive_ext }}"
+          cp -R -P npm/kf-code-plugin dist/npm/kf-code-plugin
+          archive="kf-code-${{ matrix.target }}.${{ matrix.archive_ext }}"
           if [ "${{ matrix.archive_ext }}" = "zip" ]; then
-            powershell -Command "Compress-Archive -Path 'dist\kirkforge.exe','dist\kfd.exe','dist\plugin3.exe','dist\stratum.exe','dist\kirkforge-video.exe','dist\plugins','dist\npm' -DestinationPath 'dist\\$archive'"
+            powershell -Command "Compress-Archive -Path 'dist\kf-code.exe','dist\kfd.exe','dist\plugin3.exe','dist\stratum.exe','dist\kf-code-video.exe','dist\plugins','dist\npm' -DestinationPath 'dist\\$archive'"
           else
             tar -czf "dist/${archive}" -C dist $(for b in "${bins[@]}"; do echo "${b}${ext}"; done) plugins npm
           fi
@@ -187,8 +187,8 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: kirkforge-${{ matrix.target }}
-          path: dist/kirkforge-${{ matrix.target }}.*
+          name: kf-code-${{ matrix.target }}
+          path: dist/kf-code-${{ matrix.target }}.*
 
   release:
     name: Create GitHub release
@@ -204,14 +204,14 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: dist
-          pattern: kirkforge-*
+          pattern: kf-code-*
           merge-multiple: true
 
       - name: Generate checksums
         shell: bash
         run: |
           cd dist
-          sha256sum kirkforge-* > SHA256SUMS.txt
+          sha256sum kf-code-* > SHA256SUMS.txt
           cd ..
           cat dist/SHA256SUMS.txt
 

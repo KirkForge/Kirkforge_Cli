@@ -1,5 +1,5 @@
 //! Shared plugin-ops layer — pure functions used by both the TUI
-//! `/plugins` slash-command family and the `kirkforge plugin` CLI
+//! `/plugins` slash-command family and the `kf-code plugin` CLI
 //! subcommand.
 //!
 //! The functions take a `&Config` (or `&mut Config`) and return a
@@ -11,7 +11,7 @@
 //! ADR-056 pins the shared-layer decision (WO 11.0).
 
 use crate::shared::Config;
-use kirkforge_plugin::{Plugin, PluginManifest};
+use kf_plugin_sdk::{Plugin, PluginManifest};
 use std::path::{Path, PathBuf};
 
 /// `list` — format the active/blocked/available plugin summary from a
@@ -140,7 +140,7 @@ pub fn list(cfg: &Config) -> String {
 
 /// `enable <name>` — add `name` to `enabled_plugins` and persist.
 ///
-/// Returns a status message. The next `kirkforge run` (or a TUI reload)
+/// Returns a status message. The next `kf-code run` (or a TUI reload)
 /// picks up the change. The CLI path does not have a live registry to
 /// reload — that is documented in the returned message.
 pub fn enable(cfg: &mut Config, name: &str) -> anyhow::Result<String> {
@@ -151,7 +151,7 @@ pub fn enable(cfg: &mut Config, name: &str) -> anyhow::Result<String> {
         let dir = crate::session::plugin_tools::plugins_dir().join(name);
         if !dir.is_dir() {
             return Ok(format!(
-                "❌ Unknown plugin '{name}'. Use `kirkforge plugin add {name} <path>` \
+                "❌ Unknown plugin '{name}'. Use `kf-code plugin add {name} <path>` \
                  to register a source, or place it under {dir}",
                 dir = dir.display()
             ));
@@ -163,7 +163,7 @@ pub fn enable(cfg: &mut Config, name: &str) -> anyhow::Result<String> {
     cfg.tools.enabled_plugins.push(name.to_string());
     crate::session::config::save_config(cfg)?;
     Ok(format!(
-        "Enabled plugin '{name}'. Run `kirkforge run` (or `/plugins reload` in the TUI) \
+        "Enabled plugin '{name}'. Run `kf-code run` (or `/plugins reload` in the TUI) \
          to load it."
     ))
 }
@@ -177,7 +177,7 @@ pub fn disable(cfg: &mut Config, name: &str) -> anyhow::Result<String> {
     }
     crate::session::config::save_config(cfg)?;
     Ok(format!(
-        "Disabled plugin '{name}'. Run `kirkforge run` (or `/plugins reload` in the TUI) \
+        "Disabled plugin '{name}'. Run `kf-code run` (or `/plugins reload` in the TUI) \
          to apply."
     ))
 }
@@ -187,7 +187,7 @@ pub fn toggle(cfg: &mut Config, name: &str) -> anyhow::Result<String> {
     if !cfg.tools.plugin_sources.contains_key(name) {
         return Ok(format!(
             "❌ Unknown workspace plugin source '{name}'. \
-             Use `kirkforge plugin add {name} <path>` to register one."
+             Use `kf-code plugin add {name} <path>` to register one."
         ));
     }
     let was_on = cfg.tools.enabled_plugins.iter().any(|n| n == name);
@@ -201,11 +201,11 @@ pub fn toggle(cfg: &mut Config, name: &str) -> anyhow::Result<String> {
     Ok(format!("Toggled plugin '{name}' to {now}."))
 }
 
-/// `validate <path>` — load a manifest from a `kirkforge.toml` and report
+/// `validate <path>` — load a manifest from a `kf-code.toml` and report
 /// every validation error. Pure read; no config mutation.
 pub fn validate(path: &Path) -> anyhow::Result<String> {
     let manifest_path = if path.is_dir() {
-        path.join("kirkforge.toml")
+        path.join("kf-code.toml")
     } else {
         path.to_path_buf()
     };
@@ -232,7 +232,7 @@ pub fn validate(path: &Path) -> anyhow::Result<String> {
 /// `sources` — list configured workspace plugin sources.
 pub fn sources(cfg: &Config) -> String {
     if cfg.tools.plugin_sources.is_empty() {
-        return "No workspace plugin sources configured. Use `kirkforge plugin add <name> <path>`."
+        return "No workspace plugin sources configured. Use `kf-code plugin add <name> <path>`."
             .to_string();
     }
     let mut lines = vec![format!(
@@ -272,7 +272,7 @@ pub fn add_source(cfg: &mut Config, name: &str, path: &str) -> anyhow::Result<St
     crate::session::config::save_config(cfg)?;
     Ok(format!(
         "Added plugin source '{name}' -> {}. It is now enabled; \
-         run `kirkforge run` or `/plugins reload` to load it.",
+         run `kf-code run` or `/plugins reload` to load it.",
         cfg.tools.plugin_sources[name].display()
     ))
 }
@@ -317,7 +317,7 @@ pub fn doctor(cfg: &Config) -> String {
         let root = hosted.plugin.root();
         let mut missing: Vec<String> = Vec::new();
         for cap in hosted.plugin.tools() {
-            if let kirkforge_plugin::Capability::Tool {
+            if let kf_plugin_sdk::Capability::Tool {
                 name: cap_name,
                 command: Some(cmd),
                 ..
@@ -329,7 +329,7 @@ pub fn doctor(cfg: &Config) -> String {
             }
         }
         for cap in hosted.plugin.hooks() {
-            if let kirkforge_plugin::Capability::Hook { event, command } = cap {
+            if let kf_plugin_sdk::Capability::Hook { event, command } = cap {
                 if !root.join(&command).exists() {
                     missing.push(format!("hook '{event}' -> {}", command.display()));
                 }
@@ -360,7 +360,7 @@ fn resolve_source_path(path: &str) -> PathBuf {
     }
 }
 
-/// Scaffold a new plugin directory with a valid `kirkforge.toml`
+/// Scaffold a new plugin directory with a valid `kf-code.toml`
 /// (WO 11.8, ADR-063). The scaffolded manifest uses `trust = "read-only"`
 /// (safest default — a copy-pasted scaffold can't accidentally run
 /// shell commands until the author bumps the trust tier) and a
@@ -405,8 +405,8 @@ pub fn init(name: &str, path: Option<&Path>) -> anyhow::Result<PathBuf> {
 
     let manifest = format!(
         r#"# {name} plugin manifest.
-# Scaffolded by `kirkforge plugin init`. Edit this file, then run
-# `kirkforge plugin enable {name}` (or `/plugins enable {name}` in the
+# Scaffolded by `kf-code plugin init`. Edit this file, then run
+# `kf-code plugin enable {name}` (or `/plugins enable {name}` in the
 # TUI) to activate.
 
 name = "{name}"
@@ -458,29 +458,29 @@ model-hint = "default"
 # command = "verifiers/check.sh"
 "#
     );
-    std::fs::write(plugin_dir.join("kirkforge.toml"), manifest)?;
+    std::fs::write(plugin_dir.join("kf-code.toml"), manifest)?;
 
     let readme = format!(
         r#"# {name}
 
-A KirkForge plugin. See `kirkforge.toml` for the manifest schema.
+A KirkForge plugin. See `kf-code.toml` for the manifest schema.
 
 ## Getting started
 
-1. Edit `kirkforge.toml` — replace the placeholder prompt, add tools/hooks/verifiers.
-2. Run `kirkforge plugin validate {path}` to check the manifest.
-3. Run `kirkforge plugin enable {name}` (or `/plugins enable {name}` in the TUI).
-4. Run `kirkforge run` to start a session with the plugin active.
+1. Edit `kf-code.toml` — replace the placeholder prompt, add tools/hooks/verifiers.
+2. Run `kf-code plugin validate {path}` to check the manifest.
+3. Run `kf-code plugin enable {name}` (or `/plugins enable {name}` in the TUI).
+4. Run `kf-code run` to start a session with the plugin active.
 
 ## Signing (optional)
 
 If you want signature verification, generate a minisign keypair and sign
 the manifest:
 ```
-minisign -S -m kirkforge.toml
+minisign -S -m kf-code.toml
 ```
 Then configure `plugin_signature_validation = true` and
-`plugin_public_key_path = <path-to-pubkey>` in your kirkforge config.
+`plugin_public_key_path = <path-to-pubkey>` in your kf-code config.
 "#,
         path = plugin_dir.display()
     );
@@ -502,8 +502,8 @@ mod tests {
     impl DataDirGuard {
         fn new(dir: &std::path::Path) -> Self {
             let lock = crate::session::test_data_dir_lock().blocking_lock();
-            let prev = std::env::var_os("KIRKFORGE_DATA_DIR");
-            std::env::set_var("KIRKFORGE_DATA_DIR", dir.as_os_str());
+            let prev = std::env::var_os("KF_CODE_DATA_DIR");
+            std::env::set_var("KF_CODE_DATA_DIR", dir.as_os_str());
             Self { prev, _lock: lock }
         }
     }
@@ -511,8 +511,8 @@ mod tests {
     impl Drop for DataDirGuard {
         fn drop(&mut self) {
             match &self.prev {
-                Some(v) => std::env::set_var("KIRKFORGE_DATA_DIR", v),
-                None => std::env::remove_var("KIRKFORGE_DATA_DIR"),
+                Some(v) => std::env::set_var("KF_CODE_DATA_DIR", v),
+                None => std::env::remove_var("KF_CODE_DATA_DIR"),
             }
         }
     }
@@ -545,7 +545,7 @@ mod tests {
         let plugin_dir = tmp.path().join("demo");
         std::fs::create_dir_all(&plugin_dir).unwrap();
         std::fs::write(
-            plugin_dir.join("kirkforge.toml"),
+            plugin_dir.join("kf-code.toml"),
             r#"
 name = "demo"
 version = "0.1.0"
@@ -588,7 +588,7 @@ prompt = "hi"
         let dir = tmp.path().join("demo");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
-            dir.join("kirkforge.toml"),
+            dir.join("kf-code.toml"),
             r#"
 name = "demo"
 version = "0.1.0"
@@ -607,7 +607,7 @@ trust = "read-only"
         let dir = tmp.path().join("bad");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
-            dir.join("kirkforge.toml"),
+            dir.join("kf-code.toml"),
             r#"
 name = "Bad_Name"
 version = "not-semver"
@@ -675,7 +675,7 @@ trust = "read-only"
         let plugin_dir = plugins.join("demo");
         std::fs::create_dir_all(&plugin_dir).unwrap();
         std::fs::write(
-            plugin_dir.join("kirkforge.toml"),
+            plugin_dir.join("kf-code.toml"),
             r#"
 name = "demo"
 version = "0.1.0"
@@ -709,7 +709,7 @@ command = "tools/greet.sh"
         let tmp = tempfile::tempdir().unwrap();
         let parent = tmp.path().join("plugins");
         let plugin_dir = init("my-plugin", Some(&parent)).unwrap();
-        assert!(plugin_dir.join("kirkforge.toml").is_file());
+        assert!(plugin_dir.join("kf-code.toml").is_file());
         assert!(plugin_dir.join("tools").is_dir());
         assert!(plugin_dir.join("hooks").is_dir());
         assert!(plugin_dir.join("README.md").is_file());
@@ -802,7 +802,7 @@ command = "tools/greet.sh"
         assert!(cfg.tools.enabled_plugins.iter().any(|n| n == "demo"));
         // Clean up the persisted config so the test doesn't leak state.
         let _ = std::fs::remove_file(
-            std::env::var("KIRKFORGE_DATA_DIR")
+            std::env::var("KF_CODE_DATA_DIR")
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| PathBuf::from("."))
                 .join("config.toml"),

@@ -1,4 +1,4 @@
-//! Shared test utilities for the `kirkforge` binary crate.
+//! Shared test utilities for the `kf-code` binary crate.
 //!
 //! Helpers in this module are only compiled under `#[cfg(test)]` and
 //! exported through `crate::shared::test_util` so that unit tests across

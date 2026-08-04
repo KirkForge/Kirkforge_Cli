@@ -442,7 +442,7 @@ mod tests {
     async fn bash_tool_respects_cancellation_token() {
         let tmp = std::env::temp_dir();
         let marker = tmp.join(format!(
-            "kirkforge_bash_cancel_marker_{}",
+            "kf_code_bash_cancel_marker_{}",
             std::process::id()
         ));
         let marker_str = marker.to_string_lossy().to_string();
@@ -528,7 +528,7 @@ mod tests {
         );
         let tmp = std::env::temp_dir();
         let marker = tmp.join(format!(
-            "kirkforge_bash_huge_timeout_{}",
+            "kf_code_bash_huge_timeout_{}",
             std::process::id()
         ));
         let _ = std::fs::remove_file(&marker);
@@ -807,7 +807,7 @@ mod tests {
                 &ctx,
                 serde_json::json!({
                     "command": "echo hello",
-                    "workdir": "/tmp/kirkforge-nonexistent-xyz-123/nope",
+                    "workdir": "/tmp/kf-code-nonexistent-xyz-123/nope",
                 }),
             )
             .await;

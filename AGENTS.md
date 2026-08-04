@@ -6,7 +6,7 @@
 
 ## 0. Repo-specific guidance (existing — keep)
 
-This repo is a Rust CLI coding agent (`kirkforge`). It uses `tokio`, `ratatui`, `crossterm`, `reqwest`, `serde`, `clap`, `tracing`, and `anyhow`. Conventions:
+This repo is a Rust CLI coding agent (`kf-code`). It uses `tokio`, `ratatui`, `crossterm`, `reqwest`, `serde`, `clap`, `tracing`, and `anyhow`. Conventions:
 
 - Match the existing style: plain comments, `snake_case`, small pure helpers, `anyhow` for errors.
 - Prefer `Edit` over full-file rewrites for small changes.

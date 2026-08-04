@@ -1,0 +1,24 @@
+[package]
+name = "kf-draw"
+version = "0.2.0"
+edition = "2021"
+rust-version = "1.88"
+license = "MIT"
+repository = "https://github.com/KirkForge/KirkForge-Cli"
+description = "Terminal diagram editor binary and KirkForge plugin"
+
+[[bin]]
+name = "kfd"
+path = "src/main.rs"
+
+[dependencies]
+kf-draw-core = { path = "../kf-draw-core" }
+
+crossterm = { version = "0.28" }
+ratatui = { version = "0.30", default-features = false, features = ["crossterm_0_28"] }
+clap.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+unicode-width = "0.2"
+arboard = "3"

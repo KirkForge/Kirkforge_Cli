@@ -11,11 +11,11 @@ compression keep costs bounded on long sessions.
 
 ## Quick start
 
-First run? Pass `-m <model>` or edit `~/.local/share/kirkforge/config.toml`.
+First run? Pass `-m <model>` or edit `~/.local/share/kf-code/config.toml`.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/KirkForge/Kirkforge_Cli/main/scripts/install.sh | sh
-kirkforge run -m qwen2.5:0.5b
+kf-code run -m qwen2.5:0.5b
 ```
 
 Or build from source:
@@ -37,7 +37,7 @@ Requires a running Ollama server (or set provider config for cloud models).
   spend on outputs.
 - **Plugin system** — Stratum, Plugin3, Draw, and Video are compiled-in
   behind feature flags (or shell fallbacks). External plugins via
-  `kirkforge.toml` manifests with trust tiers and signature verification.
+  `kf-code.toml` manifests with trust tiers and signature verification.
 - **Benchmarked** — 31 coding tasks organized against the
   [KIRK-BENCH](KIRK-BENCH.md) spec, including the signature Token Budget
   Challenge that showcases the tree-sitter + Stratum + budget architecture.

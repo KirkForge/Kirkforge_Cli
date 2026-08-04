@@ -13,7 +13,7 @@ use crate::session::skills::SkillRegistry;
 use crate::shared::Config;
 use crate::tui::app::{AppState, ConversationEntry};
 use crate::tui::commands::{PersonaKind, PersonaResult};
-use kirkforge_plugin_host::PluginRegistry;
+use kf_plugin_host::PluginRegistry;
 use tokio::sync::mpsc;
 
 /// One row in the slash-command table.
@@ -209,7 +209,7 @@ pub(crate) const COMMANDS: &[SlashCommand] = &[
     SlashCommand {
         triggers: &["/init"],
         description: "Initialize project configuration",
-        usage: "/init [--force] — creates .kirkforge/config.toml + CLAUDE.md skeleton",
+        usage: "/init [--force] — creates .kf-code/config.toml + CLAUDE.md skeleton",
         group: "Diagnostics",
     },
     SlashCommand {

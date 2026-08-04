@@ -11,7 +11,7 @@
 
 use crate::shared::{read_shared_config, Config};
 use crate::tui::app::AppState;
-use kirkforge_plugin_host::PluginRegistry;
+use kf_plugin_host::PluginRegistry;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 

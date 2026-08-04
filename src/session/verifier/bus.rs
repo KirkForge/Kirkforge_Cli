@@ -7,7 +7,7 @@
 //! file-modifying tool calls; error verdicts are injected into the
 //! conversation so the model sees them immediately.
 
-use kirkforge_plugin_host::PluginVerifier;
+use kf_plugin_host::PluginVerifier;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Command;
@@ -326,8 +326,8 @@ impl BusVerifier for PluginBusVerifier {
         );
         let _ = self.priority;
         match self.inner.run(&env) {
-            Ok(kirkforge_plugin_host::VerifierVerdict::Pass) => Vec::new(),
-            Ok(kirkforge_plugin_host::VerifierVerdict::Fail { message }) => {
+            Ok(kf_plugin_host::VerifierVerdict::Pass) => Vec::new(),
+            Ok(kf_plugin_host::VerifierVerdict::Fail { message }) => {
                 vec![VerdictEntry {
                     source: VerifierSource::Plugin(self.inner.name.clone()),
                     severity: Severity::Error,
@@ -454,7 +454,7 @@ impl TsOrchestratorBridgeVerifier {
         let output = loop {
             let mut cmd = Command::new(&cmd_path);
             cmd.env_clear();
-            for (k, v) in kirkforge_plugin_host::env::curated_env(&env) {
+            for (k, v) in kf_plugin_host::env::curated_env(&env) {
                 cmd.env(k, v);
             }
             cmd.current_dir(&self.plugin_root);

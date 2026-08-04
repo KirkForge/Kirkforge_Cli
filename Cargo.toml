@@ -1,5 +1,5 @@
 [package]
-name = "kirkforge"
+name = "kf-code"
 version = "0.3.6"
 edition = "2021"
 description = "Native Ollama CLI coding agent — static binary, TUI, potato hardware"
@@ -14,9 +14,9 @@ resolver = "2"
 
 # Binary root lives at `src/main/mod.rs` (split into submodules for the
 # event-emission / path-resolution seam). Cargo auto-detects `src/main.rs`
-# but not the dir form, so point the `kirkforge` bin at it explicitly.
+# but not the dir form, so point the `kf-code` bin at it explicitly.
 [[bin]]
-name = "kirkforge"
+name = "kf-code"
 path = "src/main/mod.rs"
 
 [[bench]]
@@ -28,17 +28,17 @@ name = "first_token_latency"
 harness = false
 
 [workspace.dependencies]
-kirkforge-plugin = { path = "crates/kirkforge-plugin" }
-kirkforge-plugin-host = { path = "crates/kirkforge-plugin-host" }
-kirkforge-lsp = { path = "crates/kirkforge-lsp" }
-kirkforge-workflow = { path = "crates/kirkforge-workflow" }
-kirkforge-context-index = { path = "crates/kirkforge-context-index" }
-kirkforge-bench = { path = "crates/kirkforge-bench" }
-kirkforge-draw-core = { path = "crates/kirkforge-draw-core" }
-kirkstratum-core = { path = "crates/kirkstratum-core" }
-kirkforge-video = { path = "crates/kirkforge-video" }
-kirkforge-testdoctor = { path = "crates/kirkforge-testdoctor" }
-plugin3-core = { path = "crates/plugin3-core" }
+kf-plugin-sdk = { path = "crates/kf-plugin-sdk" }
+kf-plugin-host = { path = "crates/kf-plugin-host" }
+kf-lsp = { path = "crates/kf-lsp" }
+kf-workflow = { path = "crates/kf-workflow" }
+kf-context-index = { path = "crates/kf-context-index" }
+kf-bench = { path = "crates/kf-bench" }
+kf-draw-core = { path = "crates/kf-draw-core" }
+kf-compress-core = { path = "crates/kf-compress-core" }
+kf-video = { path = "crates/kf-video" }
+kf-testdoctor = { path = "crates/kf-testdoctor" }
+kf-budget-core = { path = "crates/kf-budget-core" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
@@ -58,8 +58,8 @@ directories = "6"
 regex = "1"
 
 [dependencies]
-# Test doctor (WO 12.4) — workspace member, called from `kirkforge doctor`.
-kirkforge-testdoctor = { path = "crates/kirkforge-testdoctor" }
+# Test doctor (WO 12.4) — workspace member, called from `kf-code doctor`.
+kf-testdoctor = { path = "crates/kf-testdoctor" }
 
 # TUI
 ratatui = { version = "0.30", features = ["unstable"] }
@@ -143,22 +143,22 @@ base64 = "0.22"
 arboard = "3"
 
 # Rust-native plugin SDK (vendored workspace members)
-kirkforge-plugin = { workspace = true }
-kirkforge-plugin-host = { workspace = true }
+kf-plugin-sdk = { workspace = true }
+kf-plugin-host = { workspace = true }
 # LSP client pool (vendored workspace member) — symbol-aware code nav.
-kirkforge-lsp = { workspace = true }
+kf-lsp = { workspace = true }
 # Workflow engine (vendored workspace member) — programmable JSON workflows.
-kirkforge-workflow = { workspace = true }
+kf-workflow = { workspace = true }
 # Repo-graph context index (tree-sitter-backed symbol extraction).
-kirkforge-context-index = { workspace = true }
+kf-context-index = { workspace = true }
 # Task-benchmark harness (TOML tasks, headless runs, metrics collection).
-kirkforge-bench = { workspace = true }
+kf-bench = { workspace = true }
 # Terminal diagram rendering (optional, behind `draw` feature flag).
-kirkforge-draw-core = { workspace = true, optional = true }
+kf-draw-core = { workspace = true, optional = true }
 # Stratum context compression (optional; default on).
-kirkstratum-core = { workspace = true, optional = true }
+kf-compress-core = { workspace = true, optional = true }
 # Video editing tools (optional; off by default).
-kirkforge-video = { workspace = true, optional = true }
+kf-video = { workspace = true, optional = true }
 # Headless Chrome CDP driver for the computer_use tool.
 headless_chrome = { version = "1", default-features = false }
 # SigV4 signing for Anthropic-on-Bedrock requests.
@@ -178,7 +178,7 @@ url = "2"
 # the unmaintained bincode crate.
 # Temp directory creation for benchmark harness.
 # Plugin3 budget guard (optional — feature-gated behind "budget").
-plugin3-core = { workspace = true, optional = true }
+kf-budget-core = { workspace = true, optional = true }
 tempfile.workspace = true
 
 [dev-dependencies]
@@ -191,10 +191,10 @@ wiremock = "0.6"
 
 [features]
 default = ["stratum", "draw", "budget"]
-stratum = ["dep:kirkstratum-core"]
-draw = ["dep:kirkforge-draw-core"]
-budget = ["dep:plugin3-core"]
-video = ["dep:kirkforge-video"]
+stratum = ["dep:kf-compress-core"]
+draw = ["dep:kf-draw-core"]
+budget = ["dep:kf-budget-core"]
+video = ["dep:kf-video"]
 # Enable OpenTelemetry span/metric export from the Rust runtime.
 otel = [
     "dep:opentelemetry",

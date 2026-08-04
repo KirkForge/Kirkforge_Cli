@@ -1,10 +1,10 @@
-// `kirkforge run` session setup: `RunArgs` + `run_session` + the
+// `kf-code run` session setup: `RunArgs` + `run_session` + the
 // recent-sessions hint helper. Extracted from the binary root — pure
 // move, no behaviour change.
 
 use super::line_mode::run_line_mode;
 use super::turn_events::resolve_continue_path;
-use kirkforge::{adapters, daemon, line_mode, session, tools, tui};
+use kf_code::{adapters, daemon, line_mode, session, tools, tui};
 use std::io::IsTerminal;
 
 pub(crate) struct RunArgs {
@@ -16,7 +16,7 @@ pub(crate) struct RunArgs {
     pub(crate) system: Option<String>,
     pub(crate) resume: Option<String>,
     pub(crate) non_interactive: bool,
-    pub(crate) output: kirkforge::shared::OutputFormat,
+    pub(crate) output: kf_code::shared::OutputFormat,
     pub(crate) max_turns: usize,
     pub(crate) continue_session: Option<String>,
     pub(crate) auto_resume: bool,
@@ -180,7 +180,7 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
                 // In machine-readable output modes the hint would pollute
                 // stderr that callers may capture; only show it in plain
                 // text mode where a human is reading the terminal.
-                if output == kirkforge::shared::OutputFormat::Text {
+                if output == kf_code::shared::OutputFormat::Text {
                     print_recent_sessions_hint(&sessions);
                 }
                 let sessions_dir = data_dir.join("sessions");
@@ -202,7 +202,7 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
         .map(|s| s.trim_end_matches(".conv").to_string())
         .unwrap_or_else(|| session_id.to_string());
     daemon::client::try_touch(&touch_id, log_path.clone()).await;
-    kirkforge::session::session_index::touch_session(&touch_id, &log_path);
+    kf_code::session::session_index::touch_session(&touch_id, &log_path);
 
     let (mut conversation, open_outcome) =
         session::conversation::ConversationLog::open(log_path.clone())?;
@@ -283,24 +283,24 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     // lazily on the first `lsp_query` call for that language, so this is
     // cheap when no LSP-aware tool runs. The pool is wrapped in `Arc` and
     // shared with the `lsp_query` tool below.
-    let lsp_pool: Option<std::sync::Arc<kirkforge_lsp::LspPool>> =
+    let lsp_pool: Option<std::sync::Arc<kf_lsp::LspPool>> =
         if config.tools.lsp_servers.is_empty() {
             None
         } else {
-            let language_configs: Vec<kirkforge_lsp::LanguageConfig> = config
+            let language_configs: Vec<kf_lsp::LanguageConfig> = config
                 .tools
                 .lsp_servers
                 .iter()
-                .map(|e| kirkforge_lsp::LanguageConfig {
+                .map(|e| kf_lsp::LanguageConfig {
                     name: e.language.clone(),
                     extensions: e.extensions.clone(),
-                    lsp: Some(kirkforge_lsp::LspServerConfig {
+                    lsp: Some(kf_lsp::LspServerConfig {
                         command: e.command.clone(),
                         args: e.args.clone(),
                     }),
                 })
                 .collect();
-            Some(std::sync::Arc::new(kirkforge_lsp::LspPool::new(
+            Some(std::sync::Arc::new(kf_lsp::LspPool::new(
                 std::env::current_dir()
                     .map(|p| p.to_string_lossy().to_string())
                     .unwrap_or_else(|_| ".".to_string()),
@@ -376,21 +376,21 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     // Build a tree-sitter-backed symbol index from the sandbox directory.
     // The index is passed to the executor's PromptBuilder so relevant
     // symbols are injected into the system prompt before every turn.
-    // ADR-037 Phase 4: disk caching at .kirkforge/context-index/cache.json.
+    // ADR-037 Phase 4: disk caching at .kf-code/context-index/cache.json.
     // On subsequent runs, if the cached index matches the current git HEAD,
     // we load from disk instead of rebuilding.
     let context_index = {
-        let cfg = kirkforge::shared::read_shared_config(&shared_config);
+        let cfg = kf_code::shared::read_shared_config(&shared_config);
         cfg.security.sandbox_dir.as_ref().and_then(|dir| {
             let path = std::path::Path::new(dir);
             if !path.is_dir() {
                 return None;
             }
-            let cache_path = path.join(".kirkforge/context-index/cache.json");
+            let cache_path = path.join(".kf-code/context-index/cache.json");
             if cache_path.exists() {
-                if let Ok(cached) = kirkforge_context_index::ContextIndex::load(&cache_path) {
-                    if kirkforge_context_index::ContextIndex::is_current(&cached, path) {
-                        let idx = kirkforge_context_index::ContextIndex::from_symbols_and_edges_and_calls(cached.symbols, cached.edges, cached.call_edges);
+                if let Ok(cached) = kf_context_index::ContextIndex::load(&cache_path) {
+                    if kf_context_index::ContextIndex::is_current(&cached, path) {
+                        let idx = kf_context_index::ContextIndex::from_symbols_and_edges_and_calls(cached.symbols, cached.edges, cached.call_edges);
                         tracing::info!(
                             symbol_count = idx.symbols().len(),
                             "loaded repo-graph context index from cache"
@@ -402,12 +402,12 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
                     tracing::info!("context index cache is corrupt, rebuilding");
                 }
             }
-            let mut idx = kirkforge_context_index::ContextIndex::new();
+            let mut idx = kf_context_index::ContextIndex::new();
             match idx.index_dir(path) {
                 Ok(()) => {
                     let count = idx.symbols().len();
                     tracing::info!(symbol_count = count, sandbox_dir = %dir, "built repo-graph context index");
-                    let head = kirkforge_context_index::current_head(path).unwrap_or_default();
+                    let head = kf_context_index::current_head(path).unwrap_or_default();
                     if let Err(e) = idx.save(&cache_path, &head) {
                         tracing::warn!(error = %e, "failed to save context index cache");
                     }
@@ -422,7 +422,7 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     };
 
     // --- MCP tools ---
-    let cfg_for_mcp = kirkforge::shared::read_shared_config(&shared_config).clone();
+    let cfg_for_mcp = kf_code::shared::read_shared_config(&shared_config).clone();
     if !cfg_for_mcp.tools.mcp_servers.is_empty() {
         let mcp_mgr =
             session::mcp_client::McpClientManager::new(&cfg_for_mcp.tools.mcp_servers).await;
@@ -442,13 +442,13 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     }
 
     // ── Plugin tools ──
-    let cfg_for_plugins = kirkforge::shared::read_shared_config(&shared_config).clone();
+    let cfg_for_plugins = kf_code::shared::read_shared_config(&shared_config).clone();
     let (plugin_registry, plugin_warnings) =
         match session::plugin_tools::load_plugin_registry(&cfg_for_plugins) {
             Ok(rw) => rw,
             Err(e) => {
                 eprintln!("Warning: failed to load plugin registry: {e:#}");
-                (kirkforge_plugin_host::PluginRegistry::new(), vec![])
+                (kf_plugin_host::PluginRegistry::new(), vec![])
             }
         };
     let plugin_tools =
@@ -474,7 +474,7 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     // Rust calls instead of shell-plugin subprocesses.
     #[cfg(feature = "stratum")]
     {
-        let cfg = kirkforge::shared::read_shared_config(&shared_config);
+        let cfg = kf_code::shared::read_shared_config(&shared_config);
         if cfg.tools.enabled_plugins.iter().any(|n| n == "stratum") {
             let stratum_tool_list = session::stratum::stratum_tools();
             let count = stratum_tool_list.len();
@@ -488,7 +488,7 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
 
     // ── Draw in-process tool (feature-gated) ──
     // When the `draw` feature is enabled, the draw_render tool loads and
-    // renders .td.json files using kirkforge_draw_core directly, eliminating
+    // renders .td.json files using kf_draw_core directly, eliminating
     // the subprocess overhead of shelling out to the kfd binary.
     #[cfg(feature = "draw")]
     {
@@ -503,7 +503,7 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
 
     // ── Video in-process tools (feature-gated) ──
     // When the `video` feature is enabled, the eight video tools call
-    // kirkforge_video directly, eliminating subprocess overhead.
+    // kf_video directly, eliminating subprocess overhead.
     #[cfg(feature = "video")]
     {
         let video_tool_list = session::video::video_tools();
@@ -521,12 +521,12 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     // subprocesses. ADR-047 pins this decision.
     #[cfg(feature = "budget")]
     {
-        let cfg = kirkforge::shared::read_shared_config(&shared_config);
+        let cfg = kf_code::shared::read_shared_config(&shared_config);
         if cfg
             .tools
             .enabled_plugins
             .iter()
-            .any(|n| n == "kirkforge-plugin3")
+            .any(|n| n == "kf-plugin-sdk3")
         {
             let budget_tool_list = session::budget::all_budget_tools();
             let count = budget_tool_list.len();
@@ -585,12 +585,12 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
 
 /// Print a hint listing recent sessions when running non-interactively
 /// without an explicit resume target.
-fn print_recent_sessions_hint(sessions: &[kirkforge::session::session_index::SessionEntry]) {
+fn print_recent_sessions_hint(sessions: &[kf_code::session::session_index::SessionEntry]) {
     eprintln!("Recent sessions (run with --auto-resume or --attach <id> to resume):");
     for (i, e) in sessions
         .iter()
         .enumerate()
-        .take(kirkforge::daemon::RECENT_SESSIONS_LIMIT)
+        .take(kf_code::daemon::RECENT_SESSIONS_LIMIT)
     {
         eprintln!(
             "  {}. {} — {} messages — {}",

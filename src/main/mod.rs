@@ -28,6 +28,6 @@ mod turn_events;
 // `crate::tools::computer_use` / `crate::shared::…` paths verbatim
 // (notably `chrome_launcher.rs`, which is unchanged by this split).
 // Referenced via `crate::tools` / `crate::shared` from those submodules.
-use kirkforge::{shared, tools};
+use kf_code::{shared, tools};
 
 pub use cli_dispatch::main;

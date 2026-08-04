@@ -1,7 +1,7 @@
 name = "use_workflow_run"
 difficulty = "medium"
 
-prompt = "A workflow template lives at .kirkforge/workflows/feature.json (already in the sandbox). Use the workflow_run tool with template='feature' and vars={feature: 'auth'} to run it. The tool should return JSON with a 'steps' array; each step has a 'summary' field."
+prompt = "A workflow template lives at .kf-code/workflows/feature.json (already in the sandbox). Use the workflow_run tool with template='feature' and vars={feature: 'auth'} to run it. The tool should return JSON with a 'steps' array; each step has a 'summary' field."
 
 [setup]
 "Cargo.toml" = """[package]
@@ -9,7 +9,7 @@ name = "use_workflow_run"
 version = "0.1.0"
 edition = "2021"
 """
-".kirkforge/workflows/feature.json" = """{
+".kf-code/workflows/feature.json" = """{
   "name": "feature",
   "steps": [
     {"name": "explore", "prompt": "Map the codebase areas relevant to ${feature}.", "persona": "explore"},
@@ -20,4 +20,4 @@ edition = "2021"
 
 [verify]
 type = "command_exits_zero"
-command = "test -f .kirkforge/workflows/feature.json"
+command = "test -f .kf-code/workflows/feature.json"

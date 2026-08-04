@@ -2,50 +2,50 @@
 ///
 /// Resolution order (highest to lowest priority):
 /// 1. CLI arguments (handled in main.rs)
-/// 2. Environment variables (`KIRKFORGE_*`)
-/// 3. Config file (`~/.local/share/kirkforge/config.toml`)
+/// 2. Environment variables (`KF_CODE_*`)
+/// 3. Config file (`~/.local/share/kf-code/config.toml`)
 /// 4. Built-in defaults
 ///
 /// Environment variable reference:
-/// - `KIRKFORGE_MODEL` — default model name
-/// - `KIRKFORGE_HOST` — Ollama host URL
-/// - `KIRKFORGE_AUTO_APPROVE` — "true" to auto-approve destructive calls
-/// - `KIRKFORGE_DRY_RUN` — "true" to make destructive tools report only
-/// - `KIRKFORGE_SANDBOX_DIR` — sandbox directory path
-/// - `KIRKFORGE_BLOCK_DOTFILES` — "true" to block dotfile writes
-/// - `KIRKFORGE_BLOCK_GITIGNORED_DOTFILES` — "true" to block git-ignored dotfile writes
-/// - `KIRKFORGE_MAX_READ_SIZE` — max file read size in bytes
-/// - `KIRKFORGE_MAX_OVERWRITE_SIZE` — max existing file size that write tools may overwrite
-/// - `KIRKFORGE_FOLLOW_SYMLINKS` — "true" to allow following symlinks
-/// - `KIRKFORGE_BLOCK_BINARY` — "true" to block binary file reads
-/// - `KIRKFORGE_MINIFY_WRITE_SIDE` — "true" to enable minified-envelope write-side expansion
-/// - `KIRKFORGE_MINIFY_ABOVE_BYTES` — auto-minify `read_file` output above this byte threshold (default 4096)
-/// - `KIRKFORGE_SCHEDULED_BASH_AUTO_APPROVE` — "true" to let scheduled bash jobs skip interactive approval
-/// - `KIRKFORGE_MAX_CONCURRENT_SCHEDULED_JOBS` — max concurrent scheduled jobs (clamped to ≥1)
-/// - `KIRKFORGE_BASH_SANDBOX_WORKDIR` — "true"/"false" to force bash cwd into the sandbox
-/// - `KIRKFORGE_BANG_REQUIRES_APPROVAL` — "true" to route `!` passthrough through approval gate
-/// - `KIRKFORGE_JSON_MODE` — "true" to request JSON-formatted model responses
-/// - `KIRKFORGE_REJECT_ON_EXCESS_PLUGIN_TRUST` — "true" to reject plugins above max trust
-/// - `KIRKFORGE_PLUGIN_SIGNATURE_VALIDATION` — "true" to require `.kirkforge.sig`
-/// - `KIRKFORGE_PLUGIN_PUBLIC_KEY_PATH` — minisign public key for plugin signatures
-/// - `KIRKFORGE_PLUGIN_ALLOWED_ENV_VARS` — comma-separated extra env vars for plugin tools
-/// - `KIRKFORGE_PLUGIN_SOURCES` — comma-separated `name=path` workspace plugin sources
-/// - `KIRKFORGE_ENABLED_PLUGINS` — comma-separated names from `plugin_sources` to load
-/// - `KIRKFORGE_MEMORY_ENABLED` — "true"/"false" to enable or disable memory injection
-/// - `KIRKFORGE_MEMORY_MAX_TOKENS` — token budget for injected memory facts
-/// - `KIRKFORGE_MEMORY_TOP_N` — maximum number of facts to consider per turn
-/// - `KIRKFORGE_REQUEST_TIMEOUT_SECS` — model request timeout (clamped to ≥1 s)
-/// - `KIRKFORGE_TOOL_TIMEOUT_SECS` — per-tool hard timeout (clamped to [1, 3600])
-/// - `KIRKFORGE_CHECKPOINT_INTERVAL_MESSAGES` — write a checkpoint every N messages
-/// - `KIRKFORGE_SUMMARIZE_MODEL` — fast model used by `/compact`
-/// - `KIRKFORGE_ROUTING_ENABLED` — "true" to enable smart model routing
-/// - `KIRKFORGE_ROUTER_MODEL` — model used for routing classification
-/// - `KIRKFORGE_COMMIT_MAX_FILE_SIZE` — max file size allowed in `/commit`
-/// - `KIRKFORGE_PRESERVE_RECENT_MESSAGES` — number of recent messages kept verbatim on compact
-/// - `KIRKFORGE_MAX_TOOL_CALLS_PER_TURN` — cap on model↔tool iterations per turn
-/// - `KIRKFORGE_MAX_PERSONA_TURNS` — cap on fork-isolated persona turns
-/// - `KIRKFORGE_AUDIT_LOG_PATH` — path for the append-only JSONL audit log (empty disables)
-/// - `KIRKFORGE_HOOKS_DIR` — directory containing lifecycle hook scripts
+/// - `KF_CODE_MODEL` — default model name
+/// - `KF_CODE_HOST` — Ollama host URL
+/// - `KF_CODE_AUTO_APPROVE` — "true" to auto-approve destructive calls
+/// - `KF_CODE_DRY_RUN` — "true" to make destructive tools report only
+/// - `KF_CODE_SANDBOX_DIR` — sandbox directory path
+/// - `KF_CODE_BLOCK_DOTFILES` — "true" to block dotfile writes
+/// - `KF_CODE_BLOCK_GITIGNORED_DOTFILES` — "true" to block git-ignored dotfile writes
+/// - `KF_CODE_MAX_READ_SIZE` — max file read size in bytes
+/// - `KF_CODE_MAX_OVERWRITE_SIZE` — max existing file size that write tools may overwrite
+/// - `KF_CODE_FOLLOW_SYMLINKS` — "true" to allow following symlinks
+/// - `KF_CODE_BLOCK_BINARY` — "true" to block binary file reads
+/// - `KF_CODE_MINIFY_WRITE_SIDE` — "true" to enable minified-envelope write-side expansion
+/// - `KF_CODE_MINIFY_ABOVE_BYTES` — auto-minify `read_file` output above this byte threshold (default 4096)
+/// - `KF_CODE_SCHEDULED_BASH_AUTO_APPROVE` — "true" to let scheduled bash jobs skip interactive approval
+/// - `KF_CODE_MAX_CONCURRENT_SCHEDULED_JOBS` — max concurrent scheduled jobs (clamped to ≥1)
+/// - `KF_CODE_BASH_SANDBOX_WORKDIR` — "true"/"false" to force bash cwd into the sandbox
+/// - `KF_CODE_BANG_REQUIRES_APPROVAL` — "true" to route `!` passthrough through approval gate
+/// - `KF_CODE_JSON_MODE` — "true" to request JSON-formatted model responses
+/// - `KF_CODE_REJECT_ON_EXCESS_PLUGIN_TRUST` — "true" to reject plugins above max trust
+/// - `KF_CODE_PLUGIN_SIGNATURE_VALIDATION` — "true" to require `.kf-code.sig`
+/// - `KF_CODE_PLUGIN_PUBLIC_KEY_PATH` — minisign public key for plugin signatures
+/// - `KF_CODE_PLUGIN_ALLOWED_ENV_VARS` — comma-separated extra env vars for plugin tools
+/// - `KF_CODE_PLUGIN_SOURCES` — comma-separated `name=path` workspace plugin sources
+/// - `KF_CODE_ENABLED_PLUGINS` — comma-separated names from `plugin_sources` to load
+/// - `KF_CODE_MEMORY_ENABLED` — "true"/"false" to enable or disable memory injection
+/// - `KF_CODE_MEMORY_MAX_TOKENS` — token budget for injected memory facts
+/// - `KF_CODE_MEMORY_TOP_N` — maximum number of facts to consider per turn
+/// - `KF_CODE_REQUEST_TIMEOUT_SECS` — model request timeout (clamped to ≥1 s)
+/// - `KF_CODE_TOOL_TIMEOUT_SECS` — per-tool hard timeout (clamped to [1, 3600])
+/// - `KF_CODE_CHECKPOINT_INTERVAL_MESSAGES` — write a checkpoint every N messages
+/// - `KF_CODE_SUMMARIZE_MODEL` — fast model used by `/compact`
+/// - `KF_CODE_ROUTING_ENABLED` — "true" to enable smart model routing
+/// - `KF_CODE_ROUTER_MODEL` — model used for routing classification
+/// - `KF_CODE_COMMIT_MAX_FILE_SIZE` — max file size allowed in `/commit`
+/// - `KF_CODE_PRESERVE_RECENT_MESSAGES` — number of recent messages kept verbatim on compact
+/// - `KF_CODE_MAX_TOOL_CALLS_PER_TURN` — cap on model↔tool iterations per turn
+/// - `KF_CODE_MAX_PERSONA_TURNS` — cap on fork-isolated persona turns
+/// - `KF_CODE_AUDIT_LOG_PATH` — path for the append-only JSONL audit log (empty disables)
+/// - `KF_CODE_HOOKS_DIR` — directory containing lifecycle hook scripts
 ///
 /// Boolean env vars accept `true`/`1`/`yes` (case-insensitive) for true and
 /// `false`/`0`/`no` for false. Unrecognized values leave the prior layer
@@ -131,7 +131,7 @@ pub fn load_config() -> (Config, Option<String>) {
 // stdout.
 fn first_run_banner(path: &std::path::Path) -> String {
     format!(
-        "Config created at {}. Next: set a model — try `kirkforge run -m qwen2.5:0.5b` \
+        "Config created at {}. Next: set a model — try `kf-code run -m qwen2.5:0.5b` \
          (Ollama) or edit `default_model` in the config file. See config.toml.example \
          for all options.",
         path.display()
@@ -237,7 +237,7 @@ pub fn save_config(config: &Config) -> anyhow::Result<()> {
 pub fn freeze_launch_sandbox(config: &mut Config) -> Option<String> {
     if config.security.sandbox_dir.is_some() {
         // Operator already set it (via config file, env var, or
-        // an earlier `KIRKFORGE_SANDBOX_DIR` override). Respect
+        // an earlier `KF_CODE_SANDBOX_DIR` override). Respect
         // their choice — even if it's an explicit empty string
         // meaning "unsandboxed."
         return config.security.sandbox_dir.clone();
@@ -641,7 +641,7 @@ pub fn config_diff_summary(before: &Config, after: &Config) -> String {
     diffs.join(", ")
 }
 
-/// Parse `KIRKFORGE_PLUGIN_SOURCES` env var.
+/// Parse `KF_CODE_PLUGIN_SOURCES` env var.
 ///
 /// Format: comma-separated `name=path` entries. Entries without `=` are
 /// ignored. Paths are kept exactly as written; the loader canonicalizes
@@ -694,10 +694,10 @@ mod tests {
             "default_model is empty by default; configure it explicitly"
         );
 
-        set_env("KIRKFORGE_MODEL", Some("deepseek-v4:cloud"));
+        set_env("KF_CODE_MODEL", Some("deepseek-v4:cloud"));
         apply_env_overrides(&mut cfg);
         assert_eq!(cfg.model.default_model, "deepseek-v4:cloud");
-        set_env("KIRKFORGE_MODEL", None);
+        set_env("KF_CODE_MODEL", None);
     }
 
     #[test]
@@ -706,10 +706,10 @@ mod tests {
         let mut cfg = Config::default();
         assert!(!cfg.security.auto_approve);
 
-        set_env("KIRKFORGE_AUTO_APPROVE", Some("true"));
+        set_env("KF_CODE_AUTO_APPROVE", Some("true"));
         apply_env_overrides(&mut cfg);
         assert!(cfg.security.auto_approve);
-        set_env("KIRKFORGE_AUTO_APPROVE", None);
+        set_env("KF_CODE_AUTO_APPROVE", None);
     }
 
     #[test]
@@ -718,10 +718,10 @@ mod tests {
         let mut cfg = Config::default();
         cfg.security.auto_approve = true;
 
-        set_env("KIRKFORGE_AUTO_APPROVE", Some("false"));
+        set_env("KF_CODE_AUTO_APPROVE", Some("false"));
         apply_env_overrides(&mut cfg);
         assert!(!cfg.security.auto_approve);
-        set_env("KIRKFORGE_AUTO_APPROVE", None);
+        set_env("KF_CODE_AUTO_APPROVE", None);
     }
 
     #[test]
@@ -730,10 +730,10 @@ mod tests {
         let mut cfg = Config::default();
         assert!(!cfg.tools.dry_run);
 
-        set_env("KIRKFORGE_DRY_RUN", Some("true"));
+        set_env("KF_CODE_DRY_RUN", Some("true"));
         apply_env_overrides(&mut cfg);
         assert!(cfg.tools.dry_run);
-        set_env("KIRKFORGE_DRY_RUN", None);
+        set_env("KF_CODE_DRY_RUN", None);
     }
 
     #[test]
@@ -742,40 +742,40 @@ mod tests {
         let mut cfg = Config::default();
         cfg.tools.dry_run = true;
 
-        set_env("KIRKFORGE_DRY_RUN", Some("false"));
+        set_env("KF_CODE_DRY_RUN", Some("false"));
         apply_env_overrides(&mut cfg);
         assert!(!cfg.tools.dry_run);
-        set_env("KIRKFORGE_DRY_RUN", None);
+        set_env("KF_CODE_DRY_RUN", None);
     }
 
     #[test]
     fn test_env_block_dotfiles() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
-        set_env("KIRKFORGE_BLOCK_DOTFILES", Some("true"));
+        set_env("KF_CODE_BLOCK_DOTFILES", Some("true"));
         apply_env_overrides(&mut cfg);
         assert!(cfg.security.block_dotfiles);
-        set_env("KIRKFORGE_BLOCK_DOTFILES", None);
+        set_env("KF_CODE_BLOCK_DOTFILES", None);
     }
 
     #[test]
     fn test_env_follow_symlinks() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
-        set_env("KIRKFORGE_FOLLOW_SYMLINKS", Some("true"));
+        set_env("KF_CODE_FOLLOW_SYMLINKS", Some("true"));
         apply_env_overrides(&mut cfg);
         assert!(cfg.tools.follow_symlinks);
-        set_env("KIRKFORGE_FOLLOW_SYMLINKS", None);
+        set_env("KF_CODE_FOLLOW_SYMLINKS", None);
     }
 
     #[test]
     fn test_env_block_binary() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
-        set_env("KIRKFORGE_BLOCK_BINARY", Some("true"));
+        set_env("KF_CODE_BLOCK_BINARY", Some("true"));
         apply_env_overrides(&mut cfg);
         assert!(cfg.tools.block_binary_reads);
-        set_env("KIRKFORGE_BLOCK_BINARY", None);
+        set_env("KF_CODE_BLOCK_BINARY", None);
     }
 
     #[test]
@@ -783,10 +783,10 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
         assert!(!cfg.tools.minify_write_side);
-        set_env("KIRKFORGE_MINIFY_WRITE_SIDE", Some("true"));
+        set_env("KF_CODE_MINIFY_WRITE_SIDE", Some("true"));
         apply_env_overrides(&mut cfg);
         assert!(cfg.tools.minify_write_side);
-        set_env("KIRKFORGE_MINIFY_WRITE_SIDE", None);
+        set_env("KF_CODE_MINIFY_WRITE_SIDE", None);
     }
 
     #[test]
@@ -794,24 +794,24 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
         assert_eq!(cfg.tools.minify_above_bytes, 4096);
-        set_env("KIRKFORGE_MINIFY_ABOVE_BYTES", Some("512"));
+        set_env("KF_CODE_MINIFY_ABOVE_BYTES", Some("512"));
         apply_env_overrides(&mut cfg);
         assert_eq!(cfg.tools.minify_above_bytes, 512);
-        set_env("KIRKFORGE_MINIFY_ABOVE_BYTES", None);
+        set_env("KF_CODE_MINIFY_ABOVE_BYTES", None);
     }
 
     #[test]
     fn test_env_budget_ceiling() {
-        // WO 14.7: KIRKFORGE_BUDGET_CEILING pins the token budget
+        // WO 14.7: KF_CODE_BUDGET_CEILING pins the token budget
         // ceiling for a single run (the Token Budget Challenge sets
-        // this per ceiling level). Mirrors KIRKFORGE_MINIFY_ABOVE_BYTES.
+        // this per ceiling level). Mirrors KF_CODE_MINIFY_ABOVE_BYTES.
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
         let default_ceiling = cfg.tools.budget_ceiling;
-        set_env("KIRKFORGE_BUDGET_CEILING", Some("32768"));
+        set_env("KF_CODE_BUDGET_CEILING", Some("32768"));
         apply_env_overrides(&mut cfg);
         assert_eq!(cfg.tools.budget_ceiling, 32_768);
-        set_env("KIRKFORGE_BUDGET_CEILING", None);
+        set_env("KF_CODE_BUDGET_CEILING", None);
         // Confirm removal restores the default (no stale leak).
         let mut cfg2 = Config::default();
         apply_env_overrides(&mut cfg2);
@@ -823,30 +823,30 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
         let default_ceiling = cfg.tools.budget_ceiling;
-        set_env("KIRKFORGE_BUDGET_CEILING", Some("not-a-number"));
+        set_env("KF_CODE_BUDGET_CEILING", Some("not-a-number"));
         apply_env_overrides(&mut cfg);
         assert_eq!(cfg.tools.budget_ceiling, default_ceiling);
-        set_env("KIRKFORGE_BUDGET_CEILING", None);
+        set_env("KF_CODE_BUDGET_CEILING", None);
     }
 
     #[test]
     fn test_env_max_read_size() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
-        set_env("KIRKFORGE_MAX_READ_SIZE", Some("65536"));
+        set_env("KF_CODE_MAX_READ_SIZE", Some("65536"));
         apply_env_overrides(&mut cfg);
         assert_eq!(cfg.security.max_file_read_size, 65536);
-        set_env("KIRKFORGE_MAX_READ_SIZE", None);
+        set_env("KF_CODE_MAX_READ_SIZE", None);
     }
 
     #[test]
     fn test_env_bad_max_read_size_ignored() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
-        set_env("KIRKFORGE_MAX_READ_SIZE", Some("not-a-number"));
+        set_env("KF_CODE_MAX_READ_SIZE", Some("not-a-number"));
         apply_env_overrides(&mut cfg);
         assert_eq!(cfg.security.max_file_read_size, 1024 * 1024);
-        set_env("KIRKFORGE_MAX_READ_SIZE", None);
+        set_env("KF_CODE_MAX_READ_SIZE", None);
     }
 
     #[test]
@@ -906,21 +906,21 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
 
-        set_env("KIRKFORGE_BANG_REQUIRES_APPROVAL", Some("true"));
-        set_env("KIRKFORGE_JSON_MODE", Some("true"));
-        set_env("KIRKFORGE_BASH_SANDBOX_WORKDIR", Some("false"));
-        set_env("KIRKFORGE_BLOCK_GITIGNORED_DOTFILES", Some("false"));
-        set_env("KIRKFORGE_MAX_OVERWRITE_SIZE", Some("2097152"));
-        set_env("KIRKFORGE_SUMMARIZE_MODEL", Some("my-summarize-model"));
-        set_env("KIRKFORGE_ROUTING_ENABLED", Some("true"));
-        set_env("KIRKFORGE_ROUTER_MODEL", Some("my-router-model"));
-        set_env("KIRKFORGE_COMMIT_MAX_FILE_SIZE", Some("1048576"));
-        set_env("KIRKFORGE_PRESERVE_RECENT_MESSAGES", Some("5"));
-        set_env("KIRKFORGE_MAX_TOOL_CALLS_PER_TURN", Some("25"));
-        set_env("KIRKFORGE_MAX_PERSONA_TURNS", Some("3"));
-        set_env("KIRKFORGE_TOOL_TIMEOUT_SECS", Some("60"));
-        set_env("KIRKFORGE_AUDIT_LOG_PATH", Some("/tmp/kf-audit.ndjson"));
-        set_env("KIRKFORGE_HOOKS_DIR", Some("/tmp/kf-hooks"));
+        set_env("KF_CODE_BANG_REQUIRES_APPROVAL", Some("true"));
+        set_env("KF_CODE_JSON_MODE", Some("true"));
+        set_env("KF_CODE_BASH_SANDBOX_WORKDIR", Some("false"));
+        set_env("KF_CODE_BLOCK_GITIGNORED_DOTFILES", Some("false"));
+        set_env("KF_CODE_MAX_OVERWRITE_SIZE", Some("2097152"));
+        set_env("KF_CODE_SUMMARIZE_MODEL", Some("my-summarize-model"));
+        set_env("KF_CODE_ROUTING_ENABLED", Some("true"));
+        set_env("KF_CODE_ROUTER_MODEL", Some("my-router-model"));
+        set_env("KF_CODE_COMMIT_MAX_FILE_SIZE", Some("1048576"));
+        set_env("KF_CODE_PRESERVE_RECENT_MESSAGES", Some("5"));
+        set_env("KF_CODE_MAX_TOOL_CALLS_PER_TURN", Some("25"));
+        set_env("KF_CODE_MAX_PERSONA_TURNS", Some("3"));
+        set_env("KF_CODE_TOOL_TIMEOUT_SECS", Some("60"));
+        set_env("KF_CODE_AUDIT_LOG_PATH", Some("/tmp/kf-audit.ndjson"));
+        set_env("KF_CODE_HOOKS_DIR", Some("/tmp/kf-hooks"));
 
         apply_env_overrides(&mut cfg);
 
@@ -943,21 +943,21 @@ mod tests {
         );
         assert_eq!(cfg.tools.hooks_dir, Some(PathBuf::from("/tmp/kf-hooks")));
 
-        set_env("KIRKFORGE_BANG_REQUIRES_APPROVAL", None);
-        set_env("KIRKFORGE_JSON_MODE", None);
-        set_env("KIRKFORGE_BASH_SANDBOX_WORKDIR", None);
-        set_env("KIRKFORGE_BLOCK_GITIGNORED_DOTFILES", None);
-        set_env("KIRKFORGE_MAX_OVERWRITE_SIZE", None);
-        set_env("KIRKFORGE_SUMMARIZE_MODEL", None);
-        set_env("KIRKFORGE_ROUTING_ENABLED", None);
-        set_env("KIRKFORGE_ROUTER_MODEL", None);
-        set_env("KIRKFORGE_COMMIT_MAX_FILE_SIZE", None);
-        set_env("KIRKFORGE_PRESERVE_RECENT_MESSAGES", None);
-        set_env("KIRKFORGE_MAX_TOOL_CALLS_PER_TURN", None);
-        set_env("KIRKFORGE_MAX_PERSONA_TURNS", None);
-        set_env("KIRKFORGE_TOOL_TIMEOUT_SECS", None);
-        set_env("KIRKFORGE_AUDIT_LOG_PATH", None);
-        set_env("KIRKFORGE_HOOKS_DIR", None);
+        set_env("KF_CODE_BANG_REQUIRES_APPROVAL", None);
+        set_env("KF_CODE_JSON_MODE", None);
+        set_env("KF_CODE_BASH_SANDBOX_WORKDIR", None);
+        set_env("KF_CODE_BLOCK_GITIGNORED_DOTFILES", None);
+        set_env("KF_CODE_MAX_OVERWRITE_SIZE", None);
+        set_env("KF_CODE_SUMMARIZE_MODEL", None);
+        set_env("KF_CODE_ROUTING_ENABLED", None);
+        set_env("KF_CODE_ROUTER_MODEL", None);
+        set_env("KF_CODE_COMMIT_MAX_FILE_SIZE", None);
+        set_env("KF_CODE_PRESERVE_RECENT_MESSAGES", None);
+        set_env("KF_CODE_MAX_TOOL_CALLS_PER_TURN", None);
+        set_env("KF_CODE_MAX_PERSONA_TURNS", None);
+        set_env("KF_CODE_TOOL_TIMEOUT_SECS", None);
+        set_env("KF_CODE_AUDIT_LOG_PATH", None);
+        set_env("KF_CODE_HOOKS_DIR", None);
     }
 
     #[test]
@@ -965,15 +965,15 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
 
-        set_env("KIRKFORGE_TOOL_TIMEOUT_SECS", Some("0"));
+        set_env("KF_CODE_TOOL_TIMEOUT_SECS", Some("0"));
         apply_env_overrides(&mut cfg);
         assert_eq!(cfg.tools.tool_timeout_secs, Some(1));
 
-        set_env("KIRKFORGE_TOOL_TIMEOUT_SECS", Some("7200"));
+        set_env("KF_CODE_TOOL_TIMEOUT_SECS", Some("7200"));
         apply_env_overrides(&mut cfg);
         assert_eq!(cfg.tools.tool_timeout_secs, Some(3600));
 
-        set_env("KIRKFORGE_TOOL_TIMEOUT_SECS", None);
+        set_env("KF_CODE_TOOL_TIMEOUT_SECS", None);
     }
 
     #[test]
@@ -1132,10 +1132,10 @@ mod tests {
         let mut cfg = Config::default();
         assert!(cfg.tools.reject_on_excess_plugin_trust);
 
-        set_env("KIRKFORGE_REJECT_ON_EXCESS_PLUGIN_TRUST", Some("false"));
+        set_env("KF_CODE_REJECT_ON_EXCESS_PLUGIN_TRUST", Some("false"));
         apply_env_overrides(&mut cfg);
         assert!(!cfg.tools.reject_on_excess_plugin_trust);
-        set_env("KIRKFORGE_REJECT_ON_EXCESS_PLUGIN_TRUST", None);
+        set_env("KF_CODE_REJECT_ON_EXCESS_PLUGIN_TRUST", None);
     }
 
     #[test]
@@ -1144,33 +1144,33 @@ mod tests {
         let mut cfg = Config::default();
         assert!(!cfg.tools.plugin_signature_validation);
 
-        set_env("KIRKFORGE_PLUGIN_SIGNATURE_VALIDATION", Some("true"));
+        set_env("KF_CODE_PLUGIN_SIGNATURE_VALIDATION", Some("true"));
         apply_env_overrides(&mut cfg);
         assert!(cfg.tools.plugin_signature_validation);
-        set_env("KIRKFORGE_PLUGIN_SIGNATURE_VALIDATION", None);
+        set_env("KF_CODE_PLUGIN_SIGNATURE_VALIDATION", None);
     }
 
     #[test]
     fn test_env_plugin_public_key_path() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
-        set_env("KIRKFORGE_PLUGIN_PUBLIC_KEY_PATH", Some("/tmp/key.pub"));
+        set_env("KF_CODE_PLUGIN_PUBLIC_KEY_PATH", Some("/tmp/key.pub"));
         apply_env_overrides(&mut cfg);
         assert_eq!(
             cfg.tools.plugin_public_key_path.as_deref(),
             Some("/tmp/key.pub")
         );
-        set_env("KIRKFORGE_PLUGIN_PUBLIC_KEY_PATH", None);
+        set_env("KF_CODE_PLUGIN_PUBLIC_KEY_PATH", None);
     }
 
     #[test]
     fn test_env_plugin_allowed_env_vars() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
-        set_env("KIRKFORGE_PLUGIN_ALLOWED_ENV_VARS", Some("FOO,BAR"));
+        set_env("KF_CODE_PLUGIN_ALLOWED_ENV_VARS", Some("FOO,BAR"));
         apply_env_overrides(&mut cfg);
         assert_eq!(cfg.tools.plugin_allowed_env_vars, vec!["FOO", "BAR"]);
-        set_env("KIRKFORGE_PLUGIN_ALLOWED_ENV_VARS", None);
+        set_env("KF_CODE_PLUGIN_ALLOWED_ENV_VARS", None);
     }
 
     #[test]
@@ -1179,7 +1179,7 @@ mod tests {
         let table: toml::Table = r#"
             reject_on_excess_plugin_trust = false
             plugin_signature_validation = true
-            plugin_public_key_path = "/opt/kirkforge/plugin.pub"
+            plugin_public_key_path = "/opt/kf-code/plugin.pub"
             plugin_allowed_env_vars = ["CUSTOM_VAR"]
         "#
         .parse()
@@ -1190,7 +1190,7 @@ mod tests {
         assert!(cfg.tools.plugin_signature_validation);
         assert_eq!(
             cfg.tools.plugin_public_key_path.as_deref(),
-            Some("/opt/kirkforge/plugin.pub")
+            Some("/opt/kf-code/plugin.pub")
         );
         assert_eq!(cfg.tools.plugin_allowed_env_vars, vec!["CUSTOM_VAR"]);
     }
@@ -1228,30 +1228,30 @@ mod tests {
         let mut cfg = Config::default();
         assert!(cfg.display.memory_enabled);
 
-        set_env("KIRKFORGE_MEMORY_ENABLED", Some("false"));
+        set_env("KF_CODE_MEMORY_ENABLED", Some("false"));
         apply_env_overrides(&mut cfg);
         assert!(!cfg.display.memory_enabled);
-        set_env("KIRKFORGE_MEMORY_ENABLED", None);
+        set_env("KF_CODE_MEMORY_ENABLED", None);
     }
 
     #[test]
     fn test_env_memory_max_tokens() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
-        set_env("KIRKFORGE_MEMORY_MAX_TOKENS", Some("250"));
+        set_env("KF_CODE_MEMORY_MAX_TOKENS", Some("250"));
         apply_env_overrides(&mut cfg);
         assert_eq!(cfg.display.memory_max_tokens, 250);
-        set_env("KIRKFORGE_MEMORY_MAX_TOKENS", None);
+        set_env("KF_CODE_MEMORY_MAX_TOKENS", None);
     }
 
     #[test]
     fn test_env_memory_top_n() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
-        set_env("KIRKFORGE_MEMORY_TOP_N", Some("5"));
+        set_env("KF_CODE_MEMORY_TOP_N", Some("5"));
         apply_env_overrides(&mut cfg);
         assert_eq!(cfg.display.memory_top_n, 5);
-        set_env("KIRKFORGE_MEMORY_TOP_N", None);
+        set_env("KF_CODE_MEMORY_TOP_N", None);
     }
 
     #[test]
@@ -1288,10 +1288,10 @@ mod tests {
     fn test_env_checkpoint_interval_messages() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
-        set_env("KIRKFORGE_CHECKPOINT_INTERVAL_MESSAGES", Some("20"));
+        set_env("KF_CODE_CHECKPOINT_INTERVAL_MESSAGES", Some("20"));
         apply_env_overrides(&mut cfg);
         assert_eq!(cfg.session.checkpoint_interval_messages, 20);
-        set_env("KIRKFORGE_CHECKPOINT_INTERVAL_MESSAGES", None);
+        set_env("KF_CODE_CHECKPOINT_INTERVAL_MESSAGES", None);
     }
 
     #[test]
@@ -1417,17 +1417,17 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
 
-        set_env("KIRKFORGE_ANTHROPIC_PROVIDER", Some("vertex"));
-        set_env("KIRKFORGE_AWS_REGION", Some("eu-west-1"));
-        set_env("KIRKFORGE_AWS_PROFILE", Some("prod"));
-        set_env("KIRKFORGE_GCP_PROJECT_ID", Some("p2"));
-        set_env("KIRKFORGE_GCP_REGION", Some("europe-west1"));
-        set_env("KIRKFORGE_GCP_SERVICE_ACCOUNT_PATH", Some("/tmp/p2.json"));
-        set_env("KIRKFORGE_COMPUTER_USE_ENABLED", Some("true"));
-        set_env("KIRKFORGE_COMPUTER_USE_WIDTH", Some("1366"));
-        set_env("KIRKFORGE_COMPUTER_USE_HEIGHT", Some("768"));
-        set_env("KIRKFORGE_COMPUTER_USE_STARTUP_TIMEOUT", Some("60"));
-        set_env("KIRKFORGE_COMPUTER_USE_WAIT_TIMEOUT", Some("20"));
+        set_env("KF_CODE_ANTHROPIC_PROVIDER", Some("vertex"));
+        set_env("KF_CODE_AWS_REGION", Some("eu-west-1"));
+        set_env("KF_CODE_AWS_PROFILE", Some("prod"));
+        set_env("KF_CODE_GCP_PROJECT_ID", Some("p2"));
+        set_env("KF_CODE_GCP_REGION", Some("europe-west1"));
+        set_env("KF_CODE_GCP_SERVICE_ACCOUNT_PATH", Some("/tmp/p2.json"));
+        set_env("KF_CODE_COMPUTER_USE_ENABLED", Some("true"));
+        set_env("KF_CODE_COMPUTER_USE_WIDTH", Some("1366"));
+        set_env("KF_CODE_COMPUTER_USE_HEIGHT", Some("768"));
+        set_env("KF_CODE_COMPUTER_USE_STARTUP_TIMEOUT", Some("60"));
+        set_env("KF_CODE_COMPUTER_USE_WAIT_TIMEOUT", Some("20"));
 
         apply_env_overrides(&mut cfg);
 
@@ -1446,17 +1446,17 @@ mod tests {
         assert_eq!(cfg.security.computer_use.startup_timeout_secs, 60);
         assert_eq!(cfg.security.computer_use.wait_timeout_secs, 20);
 
-        set_env("KIRKFORGE_ANTHROPIC_PROVIDER", None);
-        set_env("KIRKFORGE_AWS_REGION", None);
-        set_env("KIRKFORGE_AWS_PROFILE", None);
-        set_env("KIRKFORGE_GCP_PROJECT_ID", None);
-        set_env("KIRKFORGE_GCP_REGION", None);
-        set_env("KIRKFORGE_GCP_SERVICE_ACCOUNT_PATH", None);
-        set_env("KIRKFORGE_COMPUTER_USE_ENABLED", None);
-        set_env("KIRKFORGE_COMPUTER_USE_WIDTH", None);
-        set_env("KIRKFORGE_COMPUTER_USE_HEIGHT", None);
-        set_env("KIRKFORGE_COMPUTER_USE_STARTUP_TIMEOUT", None);
-        set_env("KIRKFORGE_COMPUTER_USE_WAIT_TIMEOUT", None);
+        set_env("KF_CODE_ANTHROPIC_PROVIDER", None);
+        set_env("KF_CODE_AWS_REGION", None);
+        set_env("KF_CODE_AWS_PROFILE", None);
+        set_env("KF_CODE_GCP_PROJECT_ID", None);
+        set_env("KF_CODE_GCP_REGION", None);
+        set_env("KF_CODE_GCP_SERVICE_ACCOUNT_PATH", None);
+        set_env("KF_CODE_COMPUTER_USE_ENABLED", None);
+        set_env("KF_CODE_COMPUTER_USE_WIDTH", None);
+        set_env("KF_CODE_COMPUTER_USE_HEIGHT", None);
+        set_env("KF_CODE_COMPUTER_USE_STARTUP_TIMEOUT", None);
+        set_env("KF_CODE_COMPUTER_USE_WAIT_TIMEOUT", None);
     }
 
     #[test]
@@ -1475,23 +1475,23 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
         assert!(!cfg.tools.scheduled_bash_auto_approve);
-        set_env("KIRKFORGE_SCHEDULED_BASH_AUTO_APPROVE", Some("true"));
+        set_env("KF_CODE_SCHEDULED_BASH_AUTO_APPROVE", Some("true"));
         apply_env_overrides(&mut cfg);
         assert!(cfg.tools.scheduled_bash_auto_approve);
-        set_env("KIRKFORGE_SCHEDULED_BASH_AUTO_APPROVE", None);
+        set_env("KF_CODE_SCHEDULED_BASH_AUTO_APPROVE", None);
     }
 
     #[test]
     fn test_env_max_concurrent_scheduled_jobs_is_clamped() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
-        set_env("KIRKFORGE_MAX_CONCURRENT_SCHEDULED_JOBS", Some("0"));
+        set_env("KF_CODE_MAX_CONCURRENT_SCHEDULED_JOBS", Some("0"));
         apply_env_overrides(&mut cfg);
         assert_eq!(cfg.tools.max_concurrent_scheduled_jobs, 1);
-        set_env("KIRKFORGE_MAX_CONCURRENT_SCHEDULED_JOBS", Some("8"));
+        set_env("KF_CODE_MAX_CONCURRENT_SCHEDULED_JOBS", Some("8"));
         apply_env_overrides(&mut cfg);
         assert_eq!(cfg.tools.max_concurrent_scheduled_jobs, 8);
-        set_env("KIRKFORGE_MAX_CONCURRENT_SCHEDULED_JOBS", None);
+        set_env("KF_CODE_MAX_CONCURRENT_SCHEDULED_JOBS", None);
     }
 
     #[test]
@@ -1529,18 +1529,18 @@ mod tests {
     fn test_env_request_timeout_override_and_clamp() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
-        set_env("KIRKFORGE_REQUEST_TIMEOUT_SECS", Some("0"));
+        set_env("KF_CODE_REQUEST_TIMEOUT_SECS", Some("0"));
         apply_env_overrides(&mut cfg);
         assert_eq!(
             cfg.model.request_timeout_secs, 1,
             "env zero timeout must be clamped"
         );
 
-        set_env("KIRKFORGE_REQUEST_TIMEOUT_SECS", Some("45"));
+        set_env("KF_CODE_REQUEST_TIMEOUT_SECS", Some("45"));
         apply_env_overrides(&mut cfg);
         assert_eq!(cfg.model.request_timeout_secs, 45);
 
-        set_env("KIRKFORGE_REQUEST_TIMEOUT_SECS", None);
+        set_env("KF_CODE_REQUEST_TIMEOUT_SECS", None);
     }
 
     #[test]
@@ -1715,7 +1715,7 @@ mod tests {
     // `load_or_create_config` prints to stdout on first run.
     #[test]
     fn first_run_banner_printed_to_stdout() {
-        let path = std::path::PathBuf::from("/tmp/kirkforge/config.toml");
+        let path = std::path::PathBuf::from("/tmp/kf-code/config.toml");
         let banner = first_run_banner(&path);
         // The banner is what `load_or_create_config` prints via `println!`
         // on a first run (no config file present). Asserting on the helper
@@ -1723,7 +1723,7 @@ mod tests {
         // exact user-visible wording.
         assert!(banner.contains("Config created"), "got: {banner}");
         assert!(
-            banner.contains("/tmp/kirkforge/config.toml"),
+            banner.contains("/tmp/kf-code/config.toml"),
             "got: {banner}"
         );
         assert!(banner.contains("-m qwen2.5:0.5b"), "got: {banner}");
@@ -1733,7 +1733,7 @@ mod tests {
     // with the file already present must NOT re-print. The gating
     // condition in `load_or_create_config` is `!exists`, so once the
     // first call writes the file, the banner branch is skipped. This
-    // uses a process-unique temp `KIRKFORGE_DATA_DIR` per WO 10.6 so
+    // uses a process-unique temp `KF_CODE_DATA_DIR` per WO 10.6 so
     // the first-run detection is deterministic and does not race with
     // other config tests.
     #[test]
@@ -1741,11 +1741,11 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
         let dir =
-            std::env::temp_dir().join(format!("kirkforge_first_run_{}_0", std::process::id(),));
+            std::env::temp_dir().join(format!("kf_code_first_run_{}_0", std::process::id(),));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
-        std::env::set_var("KIRKFORGE_DATA_DIR", dir.as_os_str());
+        std::env::set_var("KF_CODE_DATA_DIR", dir.as_os_str());
         let config_path = super::super::config_path();
         assert!(!config_path.exists(), "precondition: no config yet");
 
@@ -1763,7 +1763,7 @@ mod tests {
         );
         let _cfg2 = load_or_create_config();
 
-        std::env::remove_var("KIRKFORGE_DATA_DIR");
+        std::env::remove_var("KF_CODE_DATA_DIR");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -84,7 +84,7 @@ impl Drop for TerminalGuard {
 
 /// Show a standalone recent-session picker before the main TUI starts.
 ///
-/// This is used by `main.rs` when the user runs `kirkforge run` without
+/// This is used by `main.rs` when the user runs `kf-code run` without
 /// an explicit `--continue` / `--resume` / `--attach` / `--auto-resume`
 /// and the session daemon reports recent sessions. The picker runs in a
 /// temporary terminal session; when it returns, the alternate screen is
@@ -132,8 +132,8 @@ pub async fn run_tui(
     conversation: (ConversationLog, crate::session::conversation::OpenOutcome),
     system: Option<String>,
     undo_stack: Option<crate::tools::UndoStackRef>,
-    plugin_registry: &kirkforge_plugin_host::PluginRegistry,
-    context_index: Option<kirkforge_context_index::ContextIndex>,
+    plugin_registry: &kf_plugin_host::PluginRegistry,
+    context_index: Option<kf_context_index::ContextIndex>,
     trace_recorder: Option<crate::session::replay::TraceRecorder>,
 ) -> anyhow::Result<()> {
     // ── Terminal setup ──
@@ -192,7 +192,7 @@ pub async fn run_tui(
         state.messages.push_back(crate::tui::app::ConversationEntry::new(
             "system",
             "⚠️  PathGuard is unsandboxed: no `sandbox_dir` or `allowed_write_dirs` configured. \
-             Model-driven writes are not restricted to a directory tree. Set `sandbox_dir` in config.toml or via KIRKFORGE_SANDBOX_DIR, or list `allowed_write_dirs`.",
+             Model-driven writes are not restricted to a directory tree. Set `sandbox_dir` in config.toml or via KF_CODE_SANDBOX_DIR, or list `allowed_write_dirs`.",
         ));
     }
 
@@ -256,7 +256,7 @@ pub async fn run_tui(
     // `/reload plugins` re-scans the plugins directory and asks the
     // executor to swap the plugin toolset, hooks, and verifiers.
     let (plugin_reload_tx, plugin_reload_rx) =
-        mpsc::unbounded_channel::<kirkforge_plugin_host::PluginRegistry>();
+        mpsc::unbounded_channel::<kf_plugin_host::PluginRegistry>();
 
     // ── Plugin hot-reload watcher (WO 11.4, ADR-059) ──
     // Watch the plugins directory for changes; on a debounced event,
@@ -583,7 +583,7 @@ async fn run_event_loop(
     config_tx: &mpsc::UnboundedSender<Config>,
     plan_tx: &mpsc::UnboundedSender<bool>,
     persona_tx: &mpsc::UnboundedSender<PersonaResult>,
-    plugin_reload_tx: &mpsc::UnboundedSender<kirkforge_plugin_host::PluginRegistry>,
+    plugin_reload_tx: &mpsc::UnboundedSender<kf_plugin_host::PluginRegistry>,
     slow_tick: &mut tokio::time::Interval,
     conn_probe_rx: &mut mpsc::Receiver<ConnectionState>,
     event_tx_for_commands: &mpsc::Sender<executor::TurnEvent>,

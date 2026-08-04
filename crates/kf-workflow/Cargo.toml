@@ -1,0 +1,17 @@
+[package]
+name = "kf-workflow"
+version = "0.2.0"
+edition = "2021"
+description = "Programmable JSON workflow engine for KirkForge — reusable multi-step coding pipelines."
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+directories.workspace = true
+async-trait.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

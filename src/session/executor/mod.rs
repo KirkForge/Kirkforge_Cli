@@ -159,7 +159,7 @@ impl Executor {
         conversation: ConversationLog,
         carryover_target: Option<std::sync::Arc<std::sync::Mutex<CarryoverProfile>>>,
         undo_stack: Option<UndoStackRef>,
-        plugin_registry: Option<&kirkforge_plugin_host::PluginRegistry>,
+        plugin_registry: Option<&kf_plugin_host::PluginRegistry>,
     ) -> Self {
         let model_name = adapter.model_info().name.clone();
         let config_for_startup = config.clone();
@@ -241,14 +241,14 @@ impl Executor {
         #[cfg(feature = "budget")]
         {
             // Runtime `enabled_plugins` gate (WO 15.7 5.1): the config key
-            // for the folded budget plugin is `"kirkforge-plugin3"` (per
+            // for the folded budget plugin is `"kf-plugin-sdk3"` (per
             // `default_plugin_sources` in `shared/config/tools.rs`). Skip
             // hooks when disabled at runtime.
             if cfg
                 .tools
                 .enabled_plugins
                 .iter()
-                .any(|n| n == "kirkforge-plugin3")
+                .any(|n| n == "kf-plugin-sdk3")
             {
                 crate::session::budget::init_from_config(&cfg);
                 for hook in crate::session::budget::all_budget_hooks() {
@@ -345,7 +345,7 @@ impl Executor {
 
     /// Attach a repo-graph context index to the prompt builder.
     /// Called once at session start after the index is built.
-    pub fn set_context_index(&mut self, idx: kirkforge_context_index::ContextIndex) {
+    pub fn set_context_index(&mut self, idx: kf_context_index::ContextIndex) {
         let mut pb = crate::session::prompt::PromptBuilder::new();
         pb = pb.with_context_index(idx);
         self.prompt_builder = pb;
@@ -392,7 +392,7 @@ impl Executor {
 
     pub fn init_default_verifiers(
         &mut self,
-        plugin_registry: Option<&kirkforge_plugin_host::PluginRegistry>,
+        plugin_registry: Option<&kf_plugin_host::PluginRegistry>,
     ) -> usize {
         use crate::session::verifier::{Verdict, Verifier};
 
@@ -594,7 +594,7 @@ impl Executor {
     /// Returns the number of plugin verifiers now registered.
     fn rebuild_plugin_verifiers(
         &mut self,
-        registry: &kirkforge_plugin_host::PluginRegistry,
+        registry: &kf_plugin_host::PluginRegistry,
     ) -> usize {
         const BUILTIN_VERIFIERS: &[&str] = &["security", "lint", "build", "git", "rustfmt", "test"];
 
@@ -622,7 +622,7 @@ impl Executor {
     ///
     /// Built-in and MCP toolsets are preserved; only the plugin source is
     /// replaced. Returns a short human-readable summary.
-    pub fn reload_plugins(&mut self, registry: &kirkforge_plugin_host::PluginRegistry) -> String {
+    pub fn reload_plugins(&mut self, registry: &kf_plugin_host::PluginRegistry) -> String {
         let cfg = read_shared_config(&self.config).clone();
 
         // 1. Replace the plugin toolset.
@@ -667,12 +667,12 @@ impl Executor {
         #[cfg(feature = "budget")]
         {
             // Runtime `enabled_plugins` gate (WO 15.7 5.1): config key is
-            // `"kirkforge-plugin3"` for the folded budget plugin.
+            // `"kf-plugin-sdk3"` for the folded budget plugin.
             if cfg
                 .tools
                 .enabled_plugins
                 .iter()
-                .any(|n| n == "kirkforge-plugin3")
+                .any(|n| n == "kf-plugin-sdk3")
             {
                 crate::session::budget::init_from_config(&cfg);
                 for hook in crate::session::budget::all_budget_hooks() {
@@ -703,7 +703,7 @@ impl Executor {
     /// `rebuild_plugin_verifiers` for the event-driven path. ADR-028.
     fn rebuild_bus_plugin_verifiers(
         &mut self,
-        registry: &kirkforge_plugin_host::PluginRegistry,
+        registry: &kf_plugin_host::PluginRegistry,
     ) -> usize {
         const BUILTIN_BUS_VERIFIERS: &[&str] = &["security", "git"];
         let Some(ref bus_lock) = self.verifier_bus else {

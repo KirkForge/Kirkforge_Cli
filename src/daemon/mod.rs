@@ -40,8 +40,8 @@ where
     let current_exe = std::env::current_exe().context("get current exe")?;
     let mut cmd = std::process::Command::new(current_exe);
     cmd.args(args);
-    if let Ok(v) = std::env::var("KIRKFORGE_DATA_DIR") {
-        cmd.env("KIRKFORGE_DATA_DIR", v);
+    if let Ok(v) = std::env::var("KF_CODE_DATA_DIR") {
+        cmd.env("KF_CODE_DATA_DIR", v);
     }
     // Create a new session so the daemon survives the closing of the
     // terminal/session that spawned it. Without setsid the daemon remains in
@@ -301,20 +301,20 @@ mod tests {
         }
     }
 
-    /// Set `KIRKFORGE_DATA_DIR` to an empty temporary directory for the
+    /// Set `KF_CODE_DATA_DIR` to an empty temporary directory for the
     /// duration of the test. Returns the temp dir and the previous env
     /// value so it can be restored.
     fn with_empty_data_dir() -> (tempfile::TempDir, Option<String>) {
         let dir = tempfile::tempdir().unwrap();
-        let previous = std::env::var("KIRKFORGE_DATA_DIR").ok();
-        std::env::set_var("KIRKFORGE_DATA_DIR", dir.path());
+        let previous = std::env::var("KF_CODE_DATA_DIR").ok();
+        std::env::set_var("KF_CODE_DATA_DIR", dir.path());
         (dir, previous)
     }
 
     fn restore_data_dir(previous: Option<String>) {
         match previous {
-            Some(v) => std::env::set_var("KIRKFORGE_DATA_DIR", v),
-            None => std::env::remove_var("KIRKFORGE_DATA_DIR"),
+            Some(v) => std::env::set_var("KF_CODE_DATA_DIR", v),
+            None => std::env::remove_var("KF_CODE_DATA_DIR"),
         }
     }
 

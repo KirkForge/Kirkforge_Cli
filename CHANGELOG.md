@@ -5,6 +5,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+- Renamed the binary from `kirkforge` to `kf-code`. All CLI invocations,
+  env var prefixes (`KIRKFORGE_` → `KF_CODE_`), config/data directory
+  paths (`~/.local/share/kirkforge` → `~/.local/share/kf-code`), and
+  documentation references updated accordingly. The GitHub org/repo URLs
+  remain `KirkForge/KirkForge-Cli`.
+
 ### Added
 - WO 15.26 Batch C (tools + executor): 14 of 15 safe items fixed (one
   commit each), 3.47 verified already-done, 3.5/3.6 deferred to a

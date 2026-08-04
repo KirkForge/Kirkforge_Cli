@@ -334,7 +334,7 @@ mod tests {
         clear_minify_cache();
 
         let tmp = std::env::temp_dir().join(format!(
-            "kirkforge_minify_cache_test_{}.txt",
+            "kf_code_minify_cache_test_{}.txt",
             std::process::id()
         ));
         remove_test_file(&tmp);
@@ -386,7 +386,7 @@ mod tests {
     fn test_cache_contains_round_trip() {
         clear_minify_cache();
 
-        let tmp = std::env::temp_dir().join("kirkforge_minify_cache_contains_test.rs");
+        let tmp = std::env::temp_dir().join("kf_code_minify_cache_contains_test.rs");
         remove_test_file(&tmp);
         std::fs::write(&tmp, "fn main() {}").unwrap();
 

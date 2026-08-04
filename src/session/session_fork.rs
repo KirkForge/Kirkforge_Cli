@@ -207,7 +207,7 @@ mod tests {
 
     #[test]
     fn test_create_and_list_fork() {
-        let dir = std::env::temp_dir().join("kirkforge_fork_test");
+        let dir = std::env::temp_dir().join("kf_code_fork_test");
         remove_test_dir(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
@@ -247,7 +247,7 @@ mod tests {
 
     #[test]
     fn test_get_fork_by_id() {
-        let dir = std::env::temp_dir().join("kirkforge_fork_get_test");
+        let dir = std::env::temp_dir().join("kf_code_fork_get_test");
         remove_test_dir(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
@@ -268,7 +268,7 @@ mod tests {
 
     #[test]
     fn test_delete_fork() {
-        let dir = std::env::temp_dir().join("kirkforge_fork_del_test");
+        let dir = std::env::temp_dir().join("kf_code_fork_del_test");
         remove_test_dir(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
@@ -286,7 +286,7 @@ mod tests {
 
     #[test]
     fn test_fork_manager_loads_existing_forks() {
-        let dir = std::env::temp_dir().join("kirkforge_fork_load_test");
+        let dir = std::env::temp_dir().join("kf_code_fork_load_test");
         remove_test_dir(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
@@ -316,7 +316,7 @@ mod tests {
 
     #[test]
     fn test_create_fork_does_not_reuse_id_or_corrupt_existing() {
-        let dir = std::env::temp_dir().join("kirkforge_fork_reuse_test");
+        let dir = std::env::temp_dir().join("kf_code_fork_reuse_test");
         remove_test_dir(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
@@ -347,7 +347,7 @@ mod tests {
 
     #[test]
     fn test_open_fork_returns_error_for_unknown_id() {
-        let dir = std::env::temp_dir().join("kirkforge_fork_open_missing_test");
+        let dir = std::env::temp_dir().join("kf_code_fork_open_missing_test");
         remove_test_dir(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
@@ -366,7 +366,7 @@ mod tests {
 
     #[test]
     fn test_delete_fork_returns_error_for_unknown_id() {
-        let dir = std::env::temp_dir().join("kirkforge_fork_del_missing_test");
+        let dir = std::env::temp_dir().join("kf_code_fork_del_missing_test");
         remove_test_dir(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
@@ -385,7 +385,7 @@ mod tests {
 
     #[test]
     fn test_load_existing_forks_skips_unparseable_metadata() {
-        let dir = std::env::temp_dir().join("kirkforge_fork_bad_json_test");
+        let dir = std::env::temp_dir().join("kf_code_fork_bad_json_test");
         remove_test_dir(&dir);
         let forks_dir = dir.join("forks");
         std::fs::create_dir_all(forks_dir.join("fork-01")).unwrap();
@@ -404,7 +404,7 @@ mod tests {
 
     #[test]
     fn test_create_fork_with_explicit_fork_point_truncates() {
-        let dir = std::env::temp_dir().join("kirkforge_fork_point_test");
+        let dir = std::env::temp_dir().join("kf_code_fork_point_test");
         remove_test_dir(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 

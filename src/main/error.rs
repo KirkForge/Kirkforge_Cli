@@ -53,16 +53,16 @@ impl From<anyhow::Error> for KirkForgeError {
         //   - AccessDenied (non-plugin): sandbox/path-policy denials from the
         //     session layer are still `anyhow` with varied phrasing.
         // Downcasted so far:
-        //   - kirkforge_plugin::ManifestError  -> ConfigParse
-        //   - kirkforge_plugin_host::ToolError -> AccessDenied (NotFound = the
+        //   - kf_plugin_sdk::ManifestError  -> ConfigParse
+        //   - kf_plugin_host::ToolError -> AccessDenied (NotFound = the
         //     tool command isn't present at the sandboxed plugin root, i.e. a
         //     path-availability outcome after the root-gating policy).
-        if e.downcast_ref::<kirkforge_plugin::ManifestError>()
+        if e.downcast_ref::<kf_plugin_sdk::ManifestError>()
             .is_some()
         {
             return KirkForgeError::ConfigParse(e);
         }
-        if e.downcast_ref::<kirkforge_plugin_host::ToolError>()
+        if e.downcast_ref::<kf_plugin_host::ToolError>()
             .is_some()
         {
             return KirkForgeError::AccessDenied(e);
@@ -117,7 +117,7 @@ impl KirkForgeError {
             KirkForgeError::ModelUnreachable(_) => Some(
                 "Check that the model provider is running (e.g. `ollama serve` for \
                  Ollama) or set the provider config in \
-                 ~/.local/share/kirkforge/config.toml. See config.toml.example for \
+                 ~/.local/share/kf-code/config.toml. See config.toml.example for \
                  all options.",
             ),
             KirkForgeError::AccessDenied(_) => Some(
@@ -126,7 +126,7 @@ impl KirkForgeError {
                  or run with `--auto-approve` for trusted commands.",
             ),
             KirkForgeError::ConfigParse(_) => Some(
-                "The config file at ~/.local/share/kirkforge/config.toml failed to \
+                "The config file at ~/.local/share/kf-code/config.toml failed to \
                  parse. Compare against config.toml.example for the expected format.",
             ),
             KirkForgeError::General(_) => None,
@@ -178,8 +178,8 @@ mod tests {
 
     #[test]
     fn downcast_manifest_error_classifies_as_config_parse() {
-        let typed: kirkforge_plugin::ManifestError =
-            kirkforge_plugin::ManifestError::UnsupportedApiVersion {
+        let typed: kf_plugin_sdk::ManifestError =
+            kf_plugin_sdk::ManifestError::UnsupportedApiVersion {
                 version: "v99".into(),
             };
         let anyhow_err: anyhow::Error = typed.into();
@@ -191,8 +191,8 @@ mod tests {
 
     #[test]
     fn downcast_tool_error_notfound_classifies_as_access_denied() {
-        let typed: kirkforge_plugin_host::ToolError =
-            kirkforge_plugin_host::ToolError::NotFound(PathBuf::from("/plugins/x/cmd"));
+        let typed: kf_plugin_host::ToolError =
+            kf_plugin_host::ToolError::NotFound(PathBuf::from("/plugins/x/cmd"));
         let anyhow_err: anyhow::Error = typed.into();
         match KirkForgeError::from(anyhow_err) {
             KirkForgeError::AccessDenied(_) => {}

@@ -15,7 +15,7 @@ use crate::shared::Config;
 use crate::tui::app::{AppState, ConversationEntry};
 use crate::tui::commands::PersonaResult;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use kirkforge_plugin_host::PluginRegistry;
+use kf_plugin_host::PluginRegistry;
 use tokio::sync::mpsc;
 
 mod slash_commands;
@@ -1103,7 +1103,7 @@ mod tests {
         let (persona_tx, _persona_rx) = mpsc::unbounded_channel::<PersonaResult>();
         let (event_tx, _event_rx) = mpsc::channel::<TurnEvent>(10_000);
         let (plugin_reload_tx, _plugin_reload_rx) =
-            mpsc::unbounded_channel::<kirkforge_plugin_host::PluginRegistry>();
+            mpsc::unbounded_channel::<kf_plugin_host::PluginRegistry>();
 
         let ctx = HandleInputContext {
             input_tx: &input_tx,
@@ -1149,7 +1149,7 @@ mod tests {
         let (persona_tx, _persona_rx) = mpsc::unbounded_channel::<PersonaResult>();
         let (event_tx, _event_rx) = mpsc::channel::<TurnEvent>(10_000);
         let (plugin_reload_tx, _plugin_reload_rx) =
-            mpsc::unbounded_channel::<kirkforge_plugin_host::PluginRegistry>();
+            mpsc::unbounded_channel::<kf_plugin_host::PluginRegistry>();
 
         let ctx = HandleInputContext {
             input_tx: &input_tx,
@@ -1218,7 +1218,7 @@ mod tests {
         let (persona_tx, _persona_rx) = mpsc::unbounded_channel::<PersonaResult>();
         let (event_tx, _event_rx) = mpsc::channel::<TurnEvent>(10_000);
         let (plugin_reload_tx, _plugin_reload_rx) =
-            mpsc::unbounded_channel::<kirkforge_plugin_host::PluginRegistry>();
+            mpsc::unbounded_channel::<kf_plugin_host::PluginRegistry>();
 
         let ctx = HandleInputContext {
             input_tx: &input_tx,
@@ -1282,7 +1282,7 @@ mod tests {
         // Use an absolute path prefix so the test does not depend on
         // the process CWD (which is global and shared across parallel
         // test threads).
-        let tmp = std::env::temp_dir().join("kirkforge_complete_path_test");
+        let tmp = std::env::temp_dir().join("kf_code_complete_path_test");
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
         std::fs::write(tmp.join("tmpfile.txt"), "x").unwrap();
@@ -1310,7 +1310,7 @@ mod tests {
     fn complete_path_strips_range_suffix_before_completing() {
         // `@foo.rs:10-20:raw` — only the path portion before the first
         // `:` is completed. The suffix must not corrupt the lookup.
-        let tmp = std::env::temp_dir().join("kirkforge_complete_path_suffix_test");
+        let tmp = std::env::temp_dir().join("kf_code_complete_path_suffix_test");
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
         std::fs::write(tmp.join("foo.rs"), "x").unwrap();
@@ -1375,7 +1375,7 @@ mod tests {
     async fn tab_on_at_mention_completes_path() {
         // Use an absolute @-mention so the test doesn't depend on the
         // global process CWD (shared across parallel test threads).
-        let tmp = std::env::temp_dir().join("kirkforge_tab_at_test");
+        let tmp = std::env::temp_dir().join("kf_code_tab_at_test");
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
         std::fs::write(tmp.join("tmpfile.txt"), "x").unwrap();
@@ -1499,8 +1499,8 @@ mod tests {
         persona_tx: mpsc::UnboundedSender<PersonaResult>,
         _event_rx: mpsc::Receiver<TurnEvent>,
         event_tx: mpsc::Sender<TurnEvent>,
-        _plugin_reload_rx: mpsc::UnboundedReceiver<kirkforge_plugin_host::PluginRegistry>,
-        plugin_reload_tx: mpsc::UnboundedSender<kirkforge_plugin_host::PluginRegistry>,
+        _plugin_reload_rx: mpsc::UnboundedReceiver<kf_plugin_host::PluginRegistry>,
+        plugin_reload_tx: mpsc::UnboundedSender<kf_plugin_host::PluginRegistry>,
     }
 
     impl TestCtx {

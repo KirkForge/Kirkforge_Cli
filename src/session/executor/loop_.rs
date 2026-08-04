@@ -153,7 +153,7 @@ impl Executor {
         mut undo_rx: mpsc::UnboundedReceiver<()>,
         mut config_rx: mpsc::UnboundedReceiver<Config>,
         mut plan_rx: mpsc::UnboundedReceiver<bool>,
-        mut plugin_reload_rx: mpsc::UnboundedReceiver<kirkforge_plugin_host::PluginRegistry>,
+        mut plugin_reload_rx: mpsc::UnboundedReceiver<kf_plugin_host::PluginRegistry>,
     ) -> anyhow::Result<()> {
         let cancelled = Arc::new(AtomicBool::new(false));
 

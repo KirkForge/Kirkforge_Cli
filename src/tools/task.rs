@@ -366,7 +366,7 @@ impl TaskSpawner for InProcessTaskSpawner {
         };
 
         let temp_dir = std::env::temp_dir().join(format!(
-            "kirkforge-task-{}-{}",
+            "kf-code-task-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

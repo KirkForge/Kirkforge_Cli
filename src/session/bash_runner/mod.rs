@@ -652,7 +652,7 @@ mod tests {
     async fn run_shell_timeout_kills_descendants() {
         let tmp = std::env::temp_dir();
         let marker = tmp.join(format!(
-            "kirkforge_run_shell_orphan_test_{}",
+            "kf_code_run_shell_orphan_test_{}",
             std::process::id()
         ));
         let marker_str = marker.to_string_lossy().to_string();
@@ -685,7 +685,7 @@ mod tests {
     #[tokio::test]
     async fn run_shell_timeout_preserves_partial_stdout() {
         let tmp = std::env::temp_dir();
-        let cmd = "echo KIRKFORGE_PARTIAL_MARKER; sleep 30";
+        let cmd = "echo KF_CODE_PARTIAL_MARKER; sleep 30";
         let out = run_shell(cmd, &tmp, 1)
             .await
             .expect("run_shell should time out, not error");
@@ -695,7 +695,7 @@ mod tests {
             &out.stdout[..out.stdout.len().min(200)]
         );
         assert!(
-            out.stdout.contains("KIRKFORGE_PARTIAL_MARKER"),
+            out.stdout.contains("KF_CODE_PARTIAL_MARKER"),
             "partial stdout should be flushed + preserved on timeout, got: {:?}",
             &out.stdout[..out.stdout.len().min(200)]
         );
@@ -1200,7 +1200,7 @@ mod tests {
     #[test]
     fn test_sanitized_path_filters_world_writable_and_relative() {
         let tmp = std::env::temp_dir();
-        let safe = tmp.join("kirkforge_safe_path_test");
+        let safe = tmp.join("kf_code_safe_path_test");
         let _ = std::fs::remove_dir_all(&safe);
         std::fs::create_dir_all(&safe).unwrap();
         // Ensure the test directory is NOT world-writable.
@@ -1362,7 +1362,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn test_is_world_writable_false_for_private_dir() {
-        let dir = std::env::temp_dir().join("kirkforge_world_writable_private_test");
+        let dir = std::env::temp_dir().join("kf_code_world_writable_private_test");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         use std::os::unix::fs::PermissionsExt;
@@ -1374,7 +1374,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn test_is_world_writable_true_for_world_writable_dir() {
-        let dir = std::env::temp_dir().join("kirkforge_world_writable_open_test");
+        let dir = std::env::temp_dir().join("kf_code_world_writable_open_test");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         use std::os::unix::fs::PermissionsExt;
@@ -1387,7 +1387,7 @@ mod tests {
     #[test]
     fn test_is_world_writable_false_for_nonexistent_path() {
         assert!(!is_world_writable(std::path::Path::new(
-            "/nonexistent/kirkforge-test-no-such-path"
+            "/nonexistent/kf-code-test-no-such-path"
         )));
     }
 

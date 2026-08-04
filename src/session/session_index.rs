@@ -1,7 +1,7 @@
 //! Session index — list, prune, delete, and search prior sessions.
 //!
 //! Review.md gap #3: prior to this, the only way to find an old
-//! session was to `ls ~/.local/share/kirkforge/sessions/` and open the
+//! session was to `ls ~/.local/share/kf-code/sessions/` and open the
 //! NDJSON by hand. There was no `/sessions` command in the TUI and
 //! `--continue <id>` was just "open this path verbatim."
 //!
@@ -27,7 +27,7 @@
 //! the count of non-empty lines.
 //!
 //! The id is derived from the filename (`<id>.conv.ndjson` → `<id>`)
-//! so the listing matches what the user sees in `kirkforge run
+//! so the listing matches what the user sees in `kf-code run
 //! --continue <id>`.
 
 use crate::session::conversation::ConversationLog;
@@ -390,7 +390,7 @@ pub fn prune_oldest(keep: usize, delete_count: usize) -> anyhow::Result<Vec<Stri
 }
 
 /// Internal variant that works on an explicit directory so tests can
-/// stay isolated from the user's real `~/.local/share/kirkforge`.
+/// stay isolated from the user's real `~/.local/share/kf-code`.
 fn prune_oldest_in_dir(
     sessions_dir: &std::path::Path,
     keep: usize,
@@ -750,8 +750,8 @@ mod tests {
     fn test_session_index_roundtrip() {
         let _guard = crate::session::test_data_dir_lock().blocking_lock();
         let dir = tempfile::tempdir().unwrap();
-        let previous = std::env::var("KIRKFORGE_DATA_DIR").ok();
-        std::env::set_var("KIRKFORGE_DATA_DIR", dir.path());
+        let previous = std::env::var("KF_CODE_DATA_DIR").ok();
+        std::env::set_var("KF_CODE_DATA_DIR", dir.path());
 
         let sessions_dir = dir.path().join("sessions");
         std::fs::create_dir_all(&sessions_dir).unwrap();
@@ -766,8 +766,8 @@ mod tests {
         assert!(sessions_dir.join(".index.ndjson").exists());
 
         match previous {
-            Some(v) => std::env::set_var("KIRKFORGE_DATA_DIR", v),
-            None => std::env::remove_var("KIRKFORGE_DATA_DIR"),
+            Some(v) => std::env::set_var("KF_CODE_DATA_DIR", v),
+            None => std::env::remove_var("KF_CODE_DATA_DIR"),
         }
     }
 
@@ -775,8 +775,8 @@ mod tests {
     fn test_search_sessions_filters_by_id_and_date() {
         let _guard = crate::session::test_data_dir_lock().blocking_lock();
         let dir = tempfile::tempdir().unwrap();
-        let previous = std::env::var("KIRKFORGE_DATA_DIR").ok();
-        std::env::set_var("KIRKFORGE_DATA_DIR", dir.path());
+        let previous = std::env::var("KF_CODE_DATA_DIR").ok();
+        std::env::set_var("KF_CODE_DATA_DIR", dir.path());
 
         let sessions_dir = dir.path().join("sessions");
         std::fs::create_dir_all(&sessions_dir).unwrap();
@@ -797,8 +797,8 @@ mod tests {
         assert_eq!(all.len(), 2);
 
         match previous {
-            Some(v) => std::env::set_var("KIRKFORGE_DATA_DIR", v),
-            None => std::env::remove_var("KIRKFORGE_DATA_DIR"),
+            Some(v) => std::env::set_var("KF_CODE_DATA_DIR", v),
+            None => std::env::remove_var("KF_CODE_DATA_DIR"),
         }
     }
 
@@ -835,8 +835,8 @@ mod tests {
     fn test_search_sessions_matches_content() {
         let _guard = crate::session::test_data_dir_lock().blocking_lock();
         let dir = tempfile::tempdir().unwrap();
-        let previous = std::env::var("KIRKFORGE_DATA_DIR").ok();
-        std::env::set_var("KIRKFORGE_DATA_DIR", dir.path());
+        let previous = std::env::var("KF_CODE_DATA_DIR").ok();
+        std::env::set_var("KF_CODE_DATA_DIR", dir.path());
 
         let sessions_dir = dir.path().join("sessions");
         std::fs::create_dir_all(&sessions_dir).unwrap();
@@ -859,8 +859,8 @@ mod tests {
         assert!(none.is_empty());
 
         match previous {
-            Some(v) => std::env::set_var("KIRKFORGE_DATA_DIR", v),
-            None => std::env::remove_var("KIRKFORGE_DATA_DIR"),
+            Some(v) => std::env::set_var("KF_CODE_DATA_DIR", v),
+            None => std::env::remove_var("KF_CODE_DATA_DIR"),
         }
     }
 
@@ -871,8 +871,8 @@ mod tests {
     fn test_build_fork_tree_nests_children() {
         let _guard = crate::session::test_data_dir_lock().blocking_lock();
         let dir = tempfile::tempdir().unwrap();
-        let previous = std::env::var("KIRKFORGE_DATA_DIR").ok();
-        std::env::set_var("KIRKFORGE_DATA_DIR", dir.path());
+        let previous = std::env::var("KF_CODE_DATA_DIR").ok();
+        std::env::set_var("KF_CODE_DATA_DIR", dir.path());
 
         let sessions_dir = dir.path().join("sessions");
         std::fs::create_dir_all(&sessions_dir).unwrap();
@@ -919,8 +919,8 @@ mod tests {
         assert_eq!(tree[1].children.len(), 0);
 
         match previous {
-            Some(v) => std::env::set_var("KIRKFORGE_DATA_DIR", v),
-            None => std::env::remove_var("KIRKFORGE_DATA_DIR"),
+            Some(v) => std::env::set_var("KF_CODE_DATA_DIR", v),
+            None => std::env::remove_var("KF_CODE_DATA_DIR"),
         }
     }
 
@@ -930,8 +930,8 @@ mod tests {
     fn test_build_fork_tree_orphan_fork_is_a_root() {
         let _guard = crate::session::test_data_dir_lock().blocking_lock();
         let dir = tempfile::tempdir().unwrap();
-        let previous = std::env::var("KIRKFORGE_DATA_DIR").ok();
-        std::env::set_var("KIRKFORGE_DATA_DIR", dir.path());
+        let previous = std::env::var("KF_CODE_DATA_DIR").ok();
+        std::env::set_var("KF_CODE_DATA_DIR", dir.path());
 
         let sessions_dir = dir.path().join("sessions");
         std::fs::create_dir_all(&sessions_dir).unwrap();
@@ -958,8 +958,8 @@ mod tests {
         assert!(!tree[0].is_root, "orphan forks are flagged non-root");
 
         match previous {
-            Some(v) => std::env::set_var("KIRKFORGE_DATA_DIR", v),
-            None => std::env::remove_var("KIRKFORGE_DATA_DIR"),
+            Some(v) => std::env::set_var("KF_CODE_DATA_DIR", v),
+            None => std::env::remove_var("KF_CODE_DATA_DIR"),
         }
     }
 
@@ -969,8 +969,8 @@ mod tests {
     fn test_build_fork_tree_empty() {
         let _guard = crate::session::test_data_dir_lock().blocking_lock();
         let dir = tempfile::tempdir().unwrap();
-        let previous = std::env::var("KIRKFORGE_DATA_DIR").ok();
-        std::env::set_var("KIRKFORGE_DATA_DIR", dir.path());
+        let previous = std::env::var("KF_CODE_DATA_DIR").ok();
+        std::env::set_var("KF_CODE_DATA_DIR", dir.path());
 
         let sessions_dir = dir.path().join("sessions");
         std::fs::create_dir_all(&sessions_dir).unwrap();
@@ -979,8 +979,8 @@ mod tests {
         assert!(tree.is_empty());
 
         match previous {
-            Some(v) => std::env::set_var("KIRKFORGE_DATA_DIR", v),
-            None => std::env::remove_var("KIRKFORGE_DATA_DIR"),
+            Some(v) => std::env::set_var("KF_CODE_DATA_DIR", v),
+            None => std::env::remove_var("KF_CODE_DATA_DIR"),
         }
     }
 
@@ -1129,15 +1129,15 @@ mod tests {
     fn test_delete_session_returns_false_when_missing() {
         let _guard = crate::session::test_data_dir_lock().blocking_lock();
         let dir = tempfile::tempdir().unwrap();
-        let previous = std::env::var("KIRKFORGE_DATA_DIR").ok();
-        std::env::set_var("KIRKFORGE_DATA_DIR", dir.path());
+        let previous = std::env::var("KF_CODE_DATA_DIR").ok();
+        std::env::set_var("KF_CODE_DATA_DIR", dir.path());
         let sessions_dir = dir.path().join("sessions");
         std::fs::create_dir_all(&sessions_dir).unwrap();
         let deleted = delete_session("does-not-exist-12345").unwrap();
         assert!(!deleted);
         match previous {
-            Some(v) => std::env::set_var("KIRKFORGE_DATA_DIR", v),
-            None => std::env::remove_var("KIRKFORGE_DATA_DIR"),
+            Some(v) => std::env::set_var("KF_CODE_DATA_DIR", v),
+            None => std::env::remove_var("KF_CODE_DATA_DIR"),
         }
     }
 
@@ -1145,8 +1145,8 @@ mod tests {
     fn test_delete_session_removes_file_when_present() {
         let _guard = crate::session::test_data_dir_lock().blocking_lock();
         let dir = tempfile::tempdir().unwrap();
-        let previous = std::env::var("KIRKFORGE_DATA_DIR").ok();
-        std::env::set_var("KIRKFORGE_DATA_DIR", dir.path());
+        let previous = std::env::var("KF_CODE_DATA_DIR").ok();
+        std::env::set_var("KF_CODE_DATA_DIR", dir.path());
         let sessions_dir = dir.path().join("sessions");
         std::fs::create_dir_all(&sessions_dir).unwrap();
         let path = sessions_dir.join("to-delete.conv.ndjson");
@@ -1155,8 +1155,8 @@ mod tests {
         assert!(deleted);
         assert!(!path.exists());
         match previous {
-            Some(v) => std::env::set_var("KIRKFORGE_DATA_DIR", v),
-            None => std::env::remove_var("KIRKFORGE_DATA_DIR"),
+            Some(v) => std::env::set_var("KF_CODE_DATA_DIR", v),
+            None => std::env::remove_var("KF_CODE_DATA_DIR"),
         }
     }
 
@@ -1164,15 +1164,15 @@ mod tests {
     fn test_resolve_session_id_returns_none_when_no_match() {
         let _guard = crate::session::test_data_dir_lock().blocking_lock();
         let dir = tempfile::tempdir().unwrap();
-        let previous = std::env::var("KIRKFORGE_DATA_DIR").ok();
-        std::env::set_var("KIRKFORGE_DATA_DIR", dir.path());
+        let previous = std::env::var("KF_CODE_DATA_DIR").ok();
+        std::env::set_var("KF_CODE_DATA_DIR", dir.path());
         let sessions_dir = dir.path().join("sessions");
         std::fs::create_dir_all(&sessions_dir).unwrap();
         let resolved = resolve_session_id("missing").unwrap();
         assert!(resolved.is_none());
         match previous {
-            Some(v) => std::env::set_var("KIRKFORGE_DATA_DIR", v),
-            None => std::env::remove_var("KIRKFORGE_DATA_DIR"),
+            Some(v) => std::env::set_var("KF_CODE_DATA_DIR", v),
+            None => std::env::remove_var("KF_CODE_DATA_DIR"),
         }
     }
 
@@ -1180,8 +1180,8 @@ mod tests {
     fn test_resolve_session_id_matches_exact_id() {
         let _guard = crate::session::test_data_dir_lock().blocking_lock();
         let dir = tempfile::tempdir().unwrap();
-        let previous = std::env::var("KIRKFORGE_DATA_DIR").ok();
-        std::env::set_var("KIRKFORGE_DATA_DIR", dir.path());
+        let previous = std::env::var("KF_CODE_DATA_DIR").ok();
+        std::env::set_var("KF_CODE_DATA_DIR", dir.path());
         let sessions_dir = dir.path().join("sessions");
         std::fs::create_dir_all(&sessions_dir).unwrap();
         let path = sessions_dir.join("exact-id.conv.ndjson");
@@ -1189,8 +1189,8 @@ mod tests {
         let resolved = resolve_session_id("exact-id").unwrap();
         assert_eq!(resolved, Some(path));
         match previous {
-            Some(v) => std::env::set_var("KIRKFORGE_DATA_DIR", v),
-            None => std::env::remove_var("KIRKFORGE_DATA_DIR"),
+            Some(v) => std::env::set_var("KF_CODE_DATA_DIR", v),
+            None => std::env::remove_var("KF_CODE_DATA_DIR"),
         }
     }
 
@@ -1198,8 +1198,8 @@ mod tests {
     fn test_resolve_session_id_matches_id_prefix() {
         let _guard = crate::session::test_data_dir_lock().blocking_lock();
         let dir = tempfile::tempdir().unwrap();
-        let previous = std::env::var("KIRKFORGE_DATA_DIR").ok();
-        std::env::set_var("KIRKFORGE_DATA_DIR", dir.path());
+        let previous = std::env::var("KF_CODE_DATA_DIR").ok();
+        std::env::set_var("KF_CODE_DATA_DIR", dir.path());
         let sessions_dir = dir.path().join("sessions");
         std::fs::create_dir_all(&sessions_dir).unwrap();
         let path = sessions_dir.join("2026-06-10-long-session.conv.ndjson");
@@ -1207,8 +1207,8 @@ mod tests {
         let resolved = resolve_session_id("2026-06-10").unwrap();
         assert_eq!(resolved, Some(path));
         match previous {
-            Some(v) => std::env::set_var("KIRKFORGE_DATA_DIR", v),
-            None => std::env::remove_var("KIRKFORGE_DATA_DIR"),
+            Some(v) => std::env::set_var("KF_CODE_DATA_DIR", v),
+            None => std::env::remove_var("KF_CODE_DATA_DIR"),
         }
     }
 
@@ -1216,8 +1216,8 @@ mod tests {
     fn test_resolve_session_id_prefers_exact_match_over_prefix() {
         let _guard = crate::session::test_data_dir_lock().blocking_lock();
         let dir = tempfile::tempdir().unwrap();
-        let previous = std::env::var("KIRKFORGE_DATA_DIR").ok();
-        std::env::set_var("KIRKFORGE_DATA_DIR", dir.path());
+        let previous = std::env::var("KF_CODE_DATA_DIR").ok();
+        std::env::set_var("KF_CODE_DATA_DIR", dir.path());
         let sessions_dir = dir.path().join("sessions");
         std::fs::create_dir_all(&sessions_dir).unwrap();
         let prefix_path = sessions_dir.join("2026-prefix-id.conv.ndjson");
@@ -1227,8 +1227,8 @@ mod tests {
         let resolved = resolve_session_id("2026").unwrap();
         assert_eq!(resolved, Some(exact_path));
         match previous {
-            Some(v) => std::env::set_var("KIRKFORGE_DATA_DIR", v),
-            None => std::env::remove_var("KIRKFORGE_DATA_DIR"),
+            Some(v) => std::env::set_var("KF_CODE_DATA_DIR", v),
+            None => std::env::remove_var("KF_CODE_DATA_DIR"),
         }
     }
 
@@ -1236,15 +1236,15 @@ mod tests {
     fn test_open_resolved_returns_none_when_no_match() {
         let _guard = crate::session::test_data_dir_lock().blocking_lock();
         let dir = tempfile::tempdir().unwrap();
-        let previous = std::env::var("KIRKFORGE_DATA_DIR").ok();
-        std::env::set_var("KIRKFORGE_DATA_DIR", dir.path());
+        let previous = std::env::var("KF_CODE_DATA_DIR").ok();
+        std::env::set_var("KF_CODE_DATA_DIR", dir.path());
         let sessions_dir = dir.path().join("sessions");
         std::fs::create_dir_all(&sessions_dir).unwrap();
         let opened = open_resolved("not-present").unwrap();
         assert!(opened.is_none());
         match previous {
-            Some(v) => std::env::set_var("KIRKFORGE_DATA_DIR", v),
-            None => std::env::remove_var("KIRKFORGE_DATA_DIR"),
+            Some(v) => std::env::set_var("KF_CODE_DATA_DIR", v),
+            None => std::env::remove_var("KF_CODE_DATA_DIR"),
         }
     }
 
@@ -1252,8 +1252,8 @@ mod tests {
     fn test_open_resolved_opens_conversation_log() {
         let _guard = crate::session::test_data_dir_lock().blocking_lock();
         let dir = tempfile::tempdir().unwrap();
-        let previous = std::env::var("KIRKFORGE_DATA_DIR").ok();
-        std::env::set_var("KIRKFORGE_DATA_DIR", dir.path());
+        let previous = std::env::var("KF_CODE_DATA_DIR").ok();
+        std::env::set_var("KF_CODE_DATA_DIR", dir.path());
         let sessions_dir = dir.path().join("sessions");
         std::fs::create_dir_all(&sessions_dir).unwrap();
         let path = sessions_dir.join("resume-target.conv.ndjson");
@@ -1264,8 +1264,8 @@ mod tests {
         assert_eq!(log.len(), 1);
         assert_eq!(log.all()[0].content, "hello");
         match previous {
-            Some(v) => std::env::set_var("KIRKFORGE_DATA_DIR", v),
-            None => std::env::remove_var("KIRKFORGE_DATA_DIR"),
+            Some(v) => std::env::set_var("KF_CODE_DATA_DIR", v),
+            None => std::env::remove_var("KF_CODE_DATA_DIR"),
         }
     }
 }

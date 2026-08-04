@@ -1,4 +1,4 @@
-// `kirkforge replay <args>` command + interactive replay TUI loop.
+// `kf-code replay <args>` command + interactive replay TUI loop.
 // Extracted from the binary root — pure move, no behaviour change.
 
 pub(super) fn handle_replay_command(
@@ -9,10 +9,10 @@ pub(super) fn handle_replay_command(
     to: Option<u32>,
     interactive: bool,
 ) -> anyhow::Result<()> {
-    use kirkforge::session::replay::{format_turn, TraceRecorder};
+    use kf_code::session::replay::{format_turn, TraceRecorder};
 
     let data = data_dir.unwrap_or_else(|| {
-        kirkforge::session::data_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+        kf_code::session::data_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
     });
 
     // Resolve session id to trace file path.
@@ -92,14 +92,14 @@ pub(super) fn handle_replay_command(
 /// until it signals quit, then restore terminal state. Errors during
 /// teardown are logged but not propagated (the user has already seen
 /// the replay; a dirty terminal on exit is worse than a lost log line).
-fn run_replay_tui(records: Vec<kirkforge::session::replay::TurnRecord>) -> anyhow::Result<()> {
+fn run_replay_tui(records: Vec<kf_code::session::replay::TurnRecord>) -> anyhow::Result<()> {
     use crossterm::{
         event::{self, Event},
         execute,
         terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
     };
-    use kirkforge::session::replay::ReplayStepper;
-    use kirkforge::tui::replay::ReplayApp;
+    use kf_code::session::replay::ReplayStepper;
+    use kf_code::tui::replay::ReplayApp;
     use ratatui::{backend::CrosstermBackend, Terminal};
 
     enable_raw_mode()?;

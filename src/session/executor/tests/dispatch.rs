@@ -350,7 +350,7 @@ async fn test_edit_event_diff_carries_real_diff_not_old_string() {
 #[tokio::test]
 async fn test_read_image_honours_path_guard_size_limit() {
     let tmp = std::env::temp_dir().join(format!(
-        "kirkforge_oversized_image_test_{}.png",
+        "kf_code_oversized_image_test_{}.png",
         std::process::id()
     ));
     // Write one byte over the default 1 MiB max_file_read_size.
@@ -476,7 +476,7 @@ async fn test_max_tool_calls_per_turn_respected() {
 #[tokio::test]
 async fn test_read_then_write_in_same_batch_passes_read_gate() {
     let tmp = std::env::temp_dir().join(format!(
-        "kirkforge_read_then_write_{}.txt",
+        "kf_code_read_then_write_{}.txt",
         std::process::id()
     ));
     std::fs::write(&tmp, "original").expect("seed existing file");
@@ -614,7 +614,7 @@ async fn test_plan_reason_emitted_after_tool_call() {
 #[cfg(unix)]
 #[tokio::test]
 async fn plugin_verifier_triggers_correction_result() {
-    use kirkforge_plugin_host::{PluginRegistry, TrustPolicy};
+    use kf_plugin_host::{PluginRegistry, TrustPolicy};
     use std::os::unix::fs::PermissionsExt;
 
     // 1. Build a mock plugin whose `security` verifier fails with a
@@ -636,7 +636,7 @@ async fn plugin_verifier_triggers_correction_result() {
     std::fs::set_permissions(&check, perms).unwrap();
 
     std::fs::write(
-        plugin_dir.join("kirkforge.toml"),
+        plugin_dir.join("kf-code.toml"),
         r#"
 name = "sec-plugin"
 version = "0.1.0"
@@ -656,7 +656,7 @@ command = "bin/check.sh"
     let warnings = registry
         .load_from_dir(
             &plugins_dir,
-            TrustPolicy::up_to(kirkforge_plugin::TrustTier::Shell),
+            TrustPolicy::up_to(kf_plugin_sdk::TrustTier::Shell),
         )
         .unwrap();
     assert!(warnings.is_empty(), "{warnings:?}");
@@ -667,7 +667,7 @@ command = "bin/check.sh"
     //    unified `VerifierBus` via `register_plugin_verifiers_into_bus`.
     let adapter = MockAdapter::new(vec![], make_info());
     let log_path = std::env::temp_dir().join(format!(
-        "kirkforge-plugin-verifier-test-{}.ndjson",
+        "kf-plugin-sdk-verifier-test-{}.ndjson",
         std::process::id()
     ));
     remove_test_file(&log_path);
@@ -750,7 +750,7 @@ command = "bin/check.sh"
 #[tokio::test]
 async fn test_denied_edit_records_single_access_denied_result() {
     let tmp = std::env::temp_dir().join(format!(
-        "kirkforge_denied_edit_single_{}.txt",
+        "kf_code_denied_edit_single_{}.txt",
         std::process::id()
     ));
     std::fs::write(&tmp, "original").expect("seed existing file");

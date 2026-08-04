@@ -287,7 +287,7 @@ mod tests {
     #[tokio::test]
     async fn test_apply_text_fix_basic() {
         let dir = std::env::temp_dir();
-        let path = dir.join("kirkforge_fix_test.txt");
+        let path = dir.join("kf_code_fix_test.txt");
         std::fs::write(&path, "let x = 1;").unwrap();
 
         let fix = FixSuggestion {
@@ -309,7 +309,7 @@ mod tests {
     async fn test_apply_text_fix_nonexistent_file() {
         let fix = FixSuggestion {
             description: "fix".into(),
-            file: PathBuf::from("/tmp/kirkforge_nonexistent_fix.txt"),
+            file: PathBuf::from("/tmp/kf_code_nonexistent_fix.txt"),
             original: "old".into(),
             replacement: "new".into(),
             severity: "warning".into(),
@@ -321,7 +321,7 @@ mod tests {
     #[tokio::test]
     async fn test_apply_text_fix_original_not_found() {
         let dir = std::env::temp_dir();
-        let path = dir.join("kirkforge_fix_nomatch.txt");
+        let path = dir.join("kf_code_fix_nomatch.txt");
         std::fs::write(&path, "hello world").unwrap();
 
         let fix = FixSuggestion {
@@ -339,7 +339,7 @@ mod tests {
     #[tokio::test]
     async fn test_apply_text_fix_denied_by_path_guard() {
         let dir = std::env::temp_dir();
-        let path = dir.join("kirkforge_fix_denied.pem");
+        let path = dir.join("kf_code_fix_denied.pem");
         std::fs::write(&path, "secret").unwrap();
 
         let guard = crate::session::access::PathGuard {
@@ -361,7 +361,7 @@ mod tests {
     #[tokio::test]
     async fn test_apply_text_fix_empty_replacement_deletes() {
         let dir = std::env::temp_dir();
-        let path = dir.join("kirkforge_fix_delete.txt");
+        let path = dir.join("kf_code_fix_delete.txt");
         std::fs::write(&path, "use std::fs;\nfn main() {}\n").unwrap();
 
         let fix = FixSuggestion {
@@ -381,7 +381,7 @@ mod tests {
     async fn test_apply_text_fix_empty_original_refused() {
         let fix = FixSuggestion {
             description: "fix".into(),
-            file: PathBuf::from("/tmp/kirkforge_empty_original.txt"),
+            file: PathBuf::from("/tmp/kf_code_empty_original.txt"),
             original: "".into(),
             replacement: "new".into(),
             severity: "warning".into(),
@@ -393,7 +393,7 @@ mod tests {
     #[tokio::test]
     async fn test_apply_command_fix_runs_formatter() {
         let dir = std::env::temp_dir();
-        let path = dir.join("kirkforge_fmt_test.txt");
+        let path = dir.join("kf_code_fmt_test.txt");
         std::fs::write(&path, "hello world").unwrap();
 
         // `true` is a harmless no-op command that exits successfully.
@@ -417,7 +417,7 @@ mod tests {
     #[tokio::test]
     async fn test_apply_command_fix_denied_by_path_guard_returns_false() {
         let dir = std::env::temp_dir();
-        let path = dir.join("kirkforge_fmt_guarded.pem");
+        let path = dir.join("kf_code_fmt_guarded.pem");
         std::fs::write(&path, "secret").unwrap();
 
         let guard = crate::session::access::PathGuard {

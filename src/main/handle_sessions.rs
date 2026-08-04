@@ -1,4 +1,4 @@
-// `kirkforge sessions <args>` command (list / search / export).
+// `kf-code sessions <args>` command (list / search / export).
 // Extracted from the binary root — pure move, no behaviour change.
 
 use std::path::PathBuf;
@@ -9,9 +9,9 @@ pub(super) fn handle_sessions_command(
     out_path: Option<PathBuf>,
     search: Option<String>,
 ) -> anyhow::Result<()> {
-    use kirkforge::session::conversation::ConversationLog;
-    use kirkforge::session::session_index::{list_sessions, resolve_session_id, search_sessions};
-    use kirkforge::{shared, tui};
+    use kf_code::session::conversation::ConversationLog;
+    use kf_code::session::session_index::{list_sessions, resolve_session_id, search_sessions};
+    use kf_code::{shared, tui};
 
     // Search takes priority over list when no id/export is given.
     if let Some(query) = search {

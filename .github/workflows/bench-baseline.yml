@@ -7,7 +7,7 @@ on:
       - 'src/session/**'
       - 'src/adapters/**'
       - 'src/tools/**'
-      - 'crates/kirkforge-bench/**'
+      - 'crates/kf-code-bench/**'
       - 'benches/tasks/**'
       - '!docs/bench/**'
   pull_request:
@@ -15,7 +15,7 @@ on:
       - 'src/session/**'
       - 'src/adapters/**'
       - 'src/tools/**'
-      - 'crates/kirkforge-bench/**'
+      - 'crates/kf-code-bench/**'
       - 'benches/tasks/**'
   schedule:
     - cron: '0 4 * * *'

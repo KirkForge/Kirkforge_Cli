@@ -426,7 +426,7 @@ mod tests {
         // Content with trailing whitespace on some lines
         let content = "fn main() {\n    let x = 1;    \n    println!(\"hello\");\n}\n";
         let dir = std::env::temp_dir();
-        let path = dir.join("kirkforge_edit_fuzzy.txt");
+        let path = dir.join("kf_code_edit_fuzzy.txt");
         std::fs::write(&path, content).unwrap();
 
         let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false);
@@ -463,7 +463,7 @@ mod tests {
         // test for deepseek-v4's review finding.
         let content = "fn main() {\r\n    let x = 1;\r\n    println!(\"hello\");\r\n}\r\n";
         let dir = std::env::temp_dir();
-        let path = dir.join("kirkforge_edit_fuzzy_crlf.txt");
+        let path = dir.join("kf_code_edit_fuzzy_crlf.txt");
         std::fs::write(&path, content).unwrap();
 
         let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false);
@@ -513,7 +513,7 @@ mod tests {
         // the only way to match is through fuzzy normalization.
         let content = "fn main() {\r\n    let x = 1;    \r\n    println!(\"hello\");\r\n}\r\n";
         let dir = std::env::temp_dir();
-        let path = dir.join("kirkforge_edit_fuzzy_crlf_norm.txt");
+        let path = dir.join("kf_code_edit_fuzzy_crlf_norm.txt");
         std::fs::write(&path, content).unwrap();
 
         let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false);
@@ -553,7 +553,7 @@ mod tests {
         use crate::session::undo::{UndoKind, UndoStack};
 
         let dir = std::env::temp_dir();
-        let path = dir.join("kirkforge_edit_undo.txt");
+        let path = dir.join("kf_code_edit_undo.txt");
         std::fs::write(&path, b"original content").unwrap();
 
         // Fresh stack with a unique session id.
@@ -599,7 +599,7 @@ mod tests {
     #[tokio::test]
     async fn test_edit_file_rejects_ambiguous_exact_match() {
         let dir = std::env::temp_dir();
-        let path = dir.join("kirkforge_edit_ambiguous.txt");
+        let path = dir.join("kf_code_edit_ambiguous.txt");
         std::fs::write(&path, "fn foo() {}\nfn bar() {}\nfn foo() {}\n").unwrap();
 
         let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false);
@@ -621,7 +621,7 @@ mod tests {
     #[tokio::test]
     async fn test_edit_file_rejects_whitespace_only_old_string() {
         let dir = std::env::temp_dir();
-        let path = dir.join("kirkforge_edit_whitespace_old.txt");
+        let path = dir.join("kf_code_edit_whitespace_old.txt");
         // A single non-whitespace line so normalization is unique, plus an
         // empty line so the whitespace-only old_string can be found exactly
         // once after normalization.
@@ -646,7 +646,7 @@ mod tests {
     #[tokio::test]
     async fn test_edit_file_rejects_ambiguous_fuzzy_match() {
         let dir = std::env::temp_dir();
-        let path = dir.join("kirkforge_edit_ambiguous_fuzzy.txt");
+        let path = dir.join("kf_code_edit_ambiguous_fuzzy.txt");
         // Same line twice with differing trailing whitespace.
         std::fs::write(&path, "let x = 1;    \nlet y = 2;\nlet x = 1;\n").unwrap();
 
@@ -902,7 +902,7 @@ mod tests {
     async fn test_fuzzy_fallback_exact_match_skips_fuzzy() {
         let content = "fn main() {\n    let x = 1;\n}\n";
         let dir = std::env::temp_dir();
-        let path = dir.join("kirkforge_edit_exact_match.txt");
+        let path = dir.join("kf_code_edit_exact_match.txt");
         std::fs::write(&path, content).unwrap();
 
         let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false);
@@ -934,7 +934,7 @@ mod tests {
     async fn test_fuzzy_fallback_whitespace_tolerant() {
         let content = "fn main() {\n    let x = 1;   \n}\n";
         let dir = std::env::temp_dir();
-        let path = dir.join("kirkforge_edit_whitespace.txt");
+        let path = dir.join("kf_code_edit_whitespace.txt");
         std::fs::write(&path, content).unwrap();
 
         let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false);
@@ -963,7 +963,7 @@ mod tests {
     async fn test_fuzzy_fallback_no_match() {
         let content = "fn main() {\n    let x = 1;\n}\n";
         let dir = std::env::temp_dir();
-        let path = dir.join("kirkforge_edit_no_match.txt");
+        let path = dir.join("kf_code_edit_no_match.txt");
         std::fs::write(&path, content).unwrap();
 
         let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false);
@@ -989,7 +989,7 @@ mod tests {
     async fn test_fuzzy_fallback_partial_match_rejects() {
         let content = "fn main() {\n    let x = 1;\n}\n";
         let dir = std::env::temp_dir();
-        let path = dir.join("kirkforge_edit_partial_match.txt");
+        let path = dir.join("kf_code_edit_partial_match.txt");
         std::fs::write(&path, content).unwrap();
 
         let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false);

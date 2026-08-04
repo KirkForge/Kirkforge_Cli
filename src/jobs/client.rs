@@ -1,6 +1,6 @@
 //! Client for the scheduled-job daemon socket.
 //!
-//! Used by `kirkforge jobd --stop` and future TUI reload commands.
+//! Used by `kf-code jobd --stop` and future TUI reload commands.
 
 use crate::daemon::{read_line_limited, Request, Response};
 use anyhow::{Context, Result};

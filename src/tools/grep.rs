@@ -355,7 +355,7 @@ mod tests {
 
     #[test]
     fn is_binary_content_missing_file_returns_false() {
-        assert!(!is_binary_content(Path::new("/nonexistent/kirkforge/file")));
+        assert!(!is_binary_content(Path::new("/nonexistent/kf-code/file")));
     }
 
     #[tokio::test]
@@ -375,7 +375,7 @@ mod tests {
         let grep = Grep::new(PathGuard::default());
         let args = serde_json::json!({
             "pattern": "needle",
-            "path": "/nonexistent/kirkforge/path/does/not/exist"
+            "path": "/nonexistent/kf-code/path/does/not/exist"
         });
         let outcome = grep.run(&ToolContext::default(), args).await;
         assert!(
@@ -386,7 +386,7 @@ mod tests {
 
     #[tokio::test]
     async fn grep_no_matches_returns_success_with_message() {
-        let dir = std::env::temp_dir().join("kirkforge_grep_nomatch_test");
+        let dir = std::env::temp_dir().join("kf_code_grep_nomatch_test");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("a.txt"), "nothing relevant here\n").unwrap();
@@ -409,7 +409,7 @@ mod tests {
 
     #[tokio::test]
     async fn grep_single_file_match_returns_grep_matches() {
-        let dir = std::env::temp_dir().join("kirkforge_grep_singlefile_test");
+        let dir = std::env::temp_dir().join("kf_code_grep_singlefile_test");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("a.txt");
@@ -435,7 +435,7 @@ mod tests {
 
     #[tokio::test]
     async fn grep_skips_binary_files_by_extension() {
-        let dir = std::env::temp_dir().join("kirkforge_grep_skipbinext_test");
+        let dir = std::env::temp_dir().join("kf_code_grep_skipbinext_test");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("a.png"), "needle inside a png\n").unwrap();
@@ -463,7 +463,7 @@ mod tests {
 
     #[tokio::test]
     async fn grep_skips_files_larger_than_max() {
-        let dir = std::env::temp_dir().join("kirkforge_grep_bigfile_test");
+        let dir = std::env::temp_dir().join("kf_code_grep_bigfile_test");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let big = "x".repeat(11 * 1024 * 1024);
@@ -488,7 +488,7 @@ mod tests {
 
     #[tokio::test]
     async fn grep_skips_binary_files_by_content() {
-        let dir = std::env::temp_dir().join("kirkforge_grep_bincontent_test");
+        let dir = std::env::temp_dir().join("kf_code_grep_bincontent_test");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("a.dat"), b"needle\x00\x01\x02").unwrap();
@@ -516,7 +516,7 @@ mod tests {
 
     #[tokio::test]
     async fn grep_single_binary_file_returns_internal_error() {
-        let dir = std::env::temp_dir().join("kirkforge_grep_singlebin_test");
+        let dir = std::env::temp_dir().join("kf_code_grep_singlebin_test");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("a.dat");
@@ -537,7 +537,7 @@ mod tests {
 
     #[tokio::test]
     async fn grep_single_oversized_file_returns_internal_error() {
-        let dir = std::env::temp_dir().join("kirkforge_grep_singlebig_test");
+        let dir = std::env::temp_dir().join("kf_code_grep_singlebig_test");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("big.txt");
@@ -559,7 +559,7 @@ mod tests {
 
     #[tokio::test]
     async fn grep_context_lines_default_is_two() {
-        let dir = std::env::temp_dir().join("kirkforge_grep_ctxdefault_test");
+        let dir = std::env::temp_dir().join("kf_code_grep_ctxdefault_test");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("a.txt"), "l1\nl2\nneedle\nl4\nl5\n").unwrap();
@@ -596,7 +596,7 @@ mod tests {
 
     #[tokio::test]
     async fn grep_total_counts_all_matches_not_just_collected() {
-        let dir = std::env::temp_dir().join("kirkforge_grep_total_test");
+        let dir = std::env::temp_dir().join("kf_code_grep_total_test");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("a.txt"), "needle\nneedle\nneedle\n").unwrap();

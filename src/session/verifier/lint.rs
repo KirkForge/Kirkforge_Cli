@@ -204,13 +204,13 @@ mod tests {
     #[tokio::test]
     #[ignore = "spawns cargo clippy; run separately with cargo test --workspace -- --ignored"]
     async fn test_clippy_warning_on_temp_project() {
-        let dir = std::env::temp_dir().join("kirkforge_lint_test");
+        let dir = std::env::temp_dir().join("kf_code_lint_test");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("src")).unwrap();
         std::fs::write(
             dir.join("Cargo.toml"),
             r#"[package]
-name = "kirkforge-lint-test"
+name = "kf-code-lint-test"
 version = "0.1.0"
 edition = "2021"
 "#,

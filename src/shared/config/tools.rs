@@ -52,20 +52,20 @@ fn default_budget_approaching_ratio() -> f64 {
 fn default_plugin_sources() -> HashMap<String, PathBuf> {
     let mut sources = HashMap::new();
     let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    sources.insert("kirkforge-draw".into(), base.join("plugins/kirkforge-draw"));
+    sources.insert("kf-draw".into(), base.join("plugins/kf-draw"));
     #[cfg(feature = "video")]
     sources.insert(
-        "kirkforge-video".into(),
-        base.join("plugins/kirkforge-video"),
+        "kf-video".into(),
+        base.join("plugins/kf-video"),
     );
     sources.insert("stratum".into(), base.join("plugins/stratum"));
     sources.insert(
-        "kirkforge-plugin3".into(),
-        base.join("plugins/kirkforge-plugin3"),
+        "kf-plugin-sdk3".into(),
+        base.join("plugins/kf-plugin-sdk3"),
     );
     sources.insert(
-        "kirkforge-plugin".into(),
-        base.join("plugins/kirkforge-plugin"),
+        "kf-plugin-sdk".into(),
+        base.join("plugins/kf-plugin-sdk"),
     );
     sources
 }
@@ -109,7 +109,7 @@ pub struct ToolConfig {
     #[serde(default = "default_max_concurrent_scheduled_jobs")]
     pub max_concurrent_scheduled_jobs: usize,
     #[serde(default = "default_max_plugin_trust")]
-    pub max_plugin_trust: kirkforge_plugin::TrustTier,
+    pub max_plugin_trust: kf_plugin_sdk::TrustTier,
     #[serde(default = "default_reject_on_excess_plugin_trust")]
     pub reject_on_excess_plugin_trust: bool,
     #[serde(default)]
@@ -130,8 +130,8 @@ pub struct ToolConfig {
     pub budget_approaching_ratio: f64,
 }
 
-fn default_max_plugin_trust() -> kirkforge_plugin::TrustTier {
-    kirkforge_plugin::TrustTier::Shell
+fn default_max_plugin_trust() -> kf_plugin_sdk::TrustTier {
+    kf_plugin_sdk::TrustTier::Shell
 }
 
 impl Default for ToolConfig {

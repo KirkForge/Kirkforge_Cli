@@ -4,9 +4,7 @@
 
 ## Branch
 
-**`dev2`** at commit `6ff1e95` — all completed work merged. The `refactor/kf-code-rename-and-modularize` branch has the same content but `dev2` is the clean integration point.
-
-Worktrees exist at `.worktrees/phase-{3..7}/` but are all merged into dev2.
+**`dev2`** at commit `287a263` — all completed work merged.
 
 ## What shipped this session
 
@@ -21,8 +19,9 @@ Worktrees exist at `.worktrees/phase-{3..7}/` but are all merged into dev2.
 | Docs | AGENTS.md, CHANGELOG.md, TECHNICAL.md, state.md | `207dfe3` |
 | Plugin toggle | Runtime enable/disable of plugins via `/plugins toggle` | `a4474da` |
 | TUI tabs | F1-F5 tab system (Chat, Models, Plugins, Jobs, Settings) | `6ff1e95` |
+| Approval panel | Full-width approval dialog (was 60-col centered popup) | `287a263` |
 
-**Net impact**: ~2400 lines deleted, ~2000 lines added.
+**Net impact**: ~2400 lines deleted, ~2500 lines added.
 
 ## Config drift guard (Phase 4)
 
@@ -43,7 +42,14 @@ F1-F5 switch between panels. Chat (F1) is the default and shows the existing con
 - **F4 Jobs**: Placeholder for scheduled job status
 - **F5 Settings**: Key config values with reload hint
 
-The active tab label appears in the status bar when on a non-Chat tab. On the Chat tab, no indicator is shown (zero visual noise during normal usage).
+The active tab label appears in the status bar when on a non-Chat tab. On Chat, no indicator is shown (zero visual noise during normal usage).
+
+## Approval dialog
+
+The approval dialog was expanded from a 60-col centered popup to a full-width panel. This gives maximum readability for:
+- JSON args preview (more content per line)
+- Unified diff view (full-width context)
+- Side-by-side diff (available on terminals >= 80 cols)
 
 ## Gate status
 
@@ -79,23 +85,33 @@ The active tab label appears in the status bar when on a non-Chat tab. On the Ch
 
 All `KIRKFORGE_*` env vars renamed to `KF_CODE_*`. Data dir is `~/.local/share/kf-code/`. Config dir is `.kf-code/`. Plugin manifests are `kf-code.toml`.
 
-## Vix TUI analysis (key takeaways for future TUI work)
+## Plugin architecture (for reference)
 
-1. **Dual-buffer streaming**: vix uses raw text + rendered buffer, throttles markdown rendering to 100ms intervals. kf-code already does this.
-2. **Inline tool output**: vix uses one-line summaries for tool results with ID-matched insertion. kf-code shows more detail.
-3. **Permission flow**: vix uses a dedicated panel that replaces the input area. kf-code has approval dialogs but not a full panel.
-4. **Context indicator**: vix shows `◔ 128k/200k · 64%` in status bar, color-coded. kf-code already has this.
-5. **Multi-thread tabs**: vix has F1-F6 tabs for Threads/Chat/Models/MCP/Jobs/Settings. kf-code now has F1-F5 tabs.
-6. **Model switching**: vix has a full Models tab with provider grid. kf-code's F2 Models tab shows model info.
-7. **Daemon protocol**: vix uses JSON-over-unix-socket with ThreadClient/InstanceClient. kf-code's daemon protocol is similar.
+Four folded plugins use a "two-path dispatch" architecture (ADR-050):
+- **stratum**: Compiled-in when `stratum` feature is on (default), shell fallback in `plugins/stratum/`
+- **kf-budget**: Compiled-in when `budget` feature is on (default), shell fallback in `plugins/kf-budget/`
+- **kf-draw**: Compiled-in when `draw` feature is on (default), shell fallback in `plugins/kf-draw/`
+- **kf-video**: Compiled-in when `video` feature is on (**NOT default**), shell fallback in `plugins/kf-video/`
+
+Runtime enable/disable via `enabled_plugins`/`disabled_plugins` in config. The `F3 Plugins` tab shows status.
+
+Feature gates in Cargo.toml:
+```
+[features]
+default = ["stratum", "draw", "budget"]
+stratum = ["dep:kf-compress-core"]
+draw = ["dep:kf-draw-core"]
+budget = ["dep:kf-budget-core"]
+video = ["dep:kf-video"]
+```
 
 ## Next steps (prioritized)
 
-1. **TUI permission panel**: Replace the inline approval flow with a dedicated panel (the F-key tab infrastructure is now in place)
-2. **Plugin simplification**: Consider removing shell fallbacks and making all plugins always-compiled-in with runtime toggles
-3. **Stratum/compress plugin**: Consider absorbing the stratum compression into the main binary permanently (remove the feature flag, make it always-on)
-4. **Jobs tab content**: Wire the F4 Jobs tab to show actual scheduled job status from the executor
-5. **Models tab enhancements**: Add model switching capability to the F2 Models tab
+1. **Stratum absorption**: Remove `stratum` feature flag, make it always-on. Requires removing 11 `#[cfg(feature = "stratum")]` gates and making `kf-compress-core` an unconditional dependency.
+2. **Plugin simplification**: Remove shell fallbacks in `plugins/` for plugins that are always compiled-in (stratum, draw, budget). Video shell fallback remains since the feature is off by default.
+3. **Jobs tab content**: Wire the F4 Jobs tab to show actual scheduled job status from the executor.
+4. **Models tab enhancements**: Add model switching to the F2 Models tab.
+5. **Permission panel**: Consider converting the approval dialog into a panel that replaces the input area (like Vix's approach)
 
 ## Rust toolchain
 
@@ -103,5 +119,5 @@ Rust 1.88.0 is installed at `~/.cargo/bin/`. Run `export PATH="$HOME/.cargo/bin:
 
 ## Known issues
 
-- `bundled_node_sdk_tool_executes_via_host` test fails because Node.js and the kf-plugin SDK aren't built — this is pre-existing, not related to the rename
+- `bundled_node_sdk_tool_executes_via_host` test fails because Node.js and the kf-plugin SDK aren't built — pre-existing
 - The `adr_0010_emission_site_block_uses_eprintln_for_errors` test in `kf-budget-core` fails — ADR vs impl drift, pre-existing

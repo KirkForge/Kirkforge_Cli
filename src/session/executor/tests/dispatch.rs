@@ -3,7 +3,7 @@
 
 use super::super::*;
 use super::common::*;
-use crate::shared::metrics::{read_events, PlanDecisionKind};
+use crate::shared::metrics::{read_events, MetricEvent, PlanDecisionKind};
 // Only used by `#[cfg(unix)]` tests below; gate the import so the
 // Windows build (deny(warnings)) doesn't flag it unused.
 #[cfg(unix)]

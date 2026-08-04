@@ -186,8 +186,7 @@ impl FromStr for AdapterKind {
             "AnthropicVertex" => Ok(AdapterKind::AnthropicVertex),
             "OpenCodeZen" => Ok(AdapterKind::OpenCodeZen),
             _ => Err(format!(
-                "unknown AdapterKind {:?}; expected one of Ollama, OpenAiCompat, Anthropic, AnthropicBedrock, AnthropicVertex, OpenCodeZen",
-                s
+                "unknown AdapterKind {s:?}; expected one of Ollama, OpenAiCompat, Anthropic, AnthropicBedrock, AnthropicVertex, OpenCodeZen"
             )),
         }
     }
@@ -349,6 +348,7 @@ pub fn adapter_for(
 
 /// Build the right adapter from a model name string, taking the Anthropic
 /// cloud provider hint into account.
+#[allow(clippy::too_many_arguments)]
 pub fn adapter_for_with_provider(
     model_name: &str,
     ollama_host: &str,

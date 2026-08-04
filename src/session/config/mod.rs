@@ -444,6 +444,12 @@ fn merge_toml_into_config(cfg: &mut Config, table: toml::Table) {
             .filter_map(|v| v.as_str().map(String::from))
             .collect();
     }
+    if let Some(Value::Array(v)) = table.get("disabled_plugins") {
+        cfg.tools.disabled_plugins = v
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect();
+    }
 
     // Anthropic cloud-provider routing
     if let Some(Value::String(v)) = table.get("anthropic_provider") {
@@ -1843,7 +1849,8 @@ mod tests {
     ///   1. `merge_toml_into_config`
     ///   2. `apply_env_overrides`
     ///   3. this test's TOML table / env-var list
-    /// and update `CONFIG_FIELD_COUNT` in `shared::config`.
+    ///
+    ///   and update `CONFIG_FIELD_COUNT` in `shared::config`.
     ///
     /// If any site is missing the field, the counts below will diverge
     /// from their expected values and the test will fail.
@@ -1852,10 +1859,10 @@ mod tests {
         use crate::shared::config::CONFIG_FIELD_COUNT;
 
         // ── 1. Total struct-level fields ──────────────────────────
-        // ModelConfig=22, SecurityConfig=18, ToolConfig=25,
+        // ModelConfig=22, SecurityConfig=18, ToolConfig=26,
         // SessionConfig=4, DisplayConfig=3
         assert_eq!(
-            CONFIG_FIELD_COUNT, 72,
+            CONFIG_FIELD_COUNT, 73,
             "CONFIG_FIELD_COUNT has drifted — did you add/remove a config field?"
         );
 
@@ -1916,6 +1923,7 @@ mod tests {
             plugin_allowed_env_vars = ["x"]
             plugin_sources = { x = "/x" }
             enabled_plugins = ["x"]
+            disabled_plugins = ["x"]
             routing_model_map = { x = "x" }
             adapter_routing = { x = "x" }
 
@@ -1938,8 +1946,8 @@ mod tests {
                 toml_key_count += 1;
             }
         }
-        // 54 top-level leaf keys + 7 computer_use sub-keys = 61
-        const MERGE_TOML_EXPECTED: usize = 61;
+        // 55 top-level leaf keys + 7 computer_use sub-keys = 62
+        const MERGE_TOML_EXPECTED: usize = 62;
         assert_eq!(
             toml_key_count, MERGE_TOML_EXPECTED,
             "merge_toml_into_config key count changed — did you add/remove a handled field?"
@@ -1948,9 +1956,9 @@ mod tests {
         // ── 3. apply_env_overrides field coverage ─────────────────
         // Count KF_CODE_* env var checks in apply_env_overrides.
         // This must stay in sync with env_overrides.rs.
-        const ENV_OVERRIDE_EXPECTED: usize = 57;
+        const ENV_OVERRIDE_EXPECTED: usize = 58;
         assert_eq!(
-            ENV_OVERRIDE_EXPECTED, 57,
+            ENV_OVERRIDE_EXPECTED, 58,
             "apply_env_overrides env-var count changed — did you add/remove a KF_CODE_* var?"
         );
 
@@ -1963,7 +1971,7 @@ mod tests {
         // is: every struct field is EITHER handled by merge_toml OR
         // intentionally skipped. The same applies to apply_env_overrides.
         //
-        // Intentionally skipped by merge_toml (17 struct-level fields):
+        // Intentionally skipped by merge_toml (16 struct-level fields):
         //   ModelConfig:  summarize_enabled, subagent_allowed_models,
         //                 opencode_zen_api_key, opencode_zen_endpoint, seed
         //   SecurityConfig: permission_rules, docker (4 sub-fields),
@@ -1973,14 +1981,18 @@ mod tests {
         //                stratum_mode, budget_ceiling, budget_approaching_ratio
         //   SessionConfig: worktree_enabled
         //
-        // Additionally skipped by apply_env_overrides (4 more, beyond the 17):
+        // Additionally skipped by apply_env_overrides (4 more, beyond the 16):
         //   SecurityConfig: deny_paths, deny_urls, deny_extensions,
         //                   allowed_write_dirs
         //   (Arrays/Vec fields without env-var representations.)
         //
         // The expansion of computer_use (1 struct field → 7 TOML keys)
-        // means MERGE_TOML_EXPECTED = 55 handled struct fields + 6 expansion
-        // keys = 61, not 72 - 17 = 55.
-        let _ = (CONFIG_FIELD_COUNT, MERGE_TOML_EXPECTED, ENV_OVERRIDE_EXPECTED);
+        // means MERGE_TOML_EXPECTED = 56 handled struct fields + 6 expansion
+        // keys = 62, not 73 - 16 = 57.
+        let _ = (
+            CONFIG_FIELD_COUNT,
+            MERGE_TOML_EXPECTED,
+            ENV_OVERRIDE_EXPECTED,
+        );
     }
 }

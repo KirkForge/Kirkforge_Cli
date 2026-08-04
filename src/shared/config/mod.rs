@@ -22,10 +22,10 @@ use serde::{Deserialize, Serialize};
 /// Breakdown:
 ///   ModelConfig    22
 ///   SecurityConfig 18  (15 direct + 3 sub-struct handles)
-///   ToolConfig     25
+///   ToolConfig     26
 ///   SessionConfig   4
 ///   DisplayConfig   3
-pub const CONFIG_FIELD_COUNT: usize = 72;
+pub const CONFIG_FIELD_COUNT: usize = 73;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {

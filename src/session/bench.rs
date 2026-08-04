@@ -89,21 +89,23 @@ fn build_bench_toolset(sandbox_path: &Path) -> super::toolset::CompositeToolset 
         block_binary_reads: false,
     };
 
-    let tools = crate::tools::all_tools(
-        None,
-        false,
+    let ctx = crate::tools::ToolContextBuilder {
+        undo_stack: None,
+        supports_images: false,
         deny_list,
         path_guard,
-        true,
-        false,
-        4096,
-        None,
-        None,
-        None,
-        None,
-        None,
-        crate::shared::SandboxConfig::default(),
-    );
+        bash_sandbox_workdir: true,
+        minify_write_side: false,
+        minify_above_bytes: 4096,
+        lsp_pool: None,
+        computer_use_enabled: false,
+        computer_use_config: None,
+        chrome_tab: None,
+        session_launcher: None,
+        docker_config: None,
+        sandbox_config: crate::shared::SandboxConfig::default(),
+    };
+    let tools = crate::tools::all_tools(&ctx);
 
     let mut toolset = super::toolset::CompositeToolset::empty();
     toolset.add(Box::new(super::toolset::VecToolset::new("builtin", tools)));

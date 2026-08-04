@@ -318,24 +318,22 @@ impl TaskSpawner for InProcessTaskSpawner {
 
         let (deny_list, path_guard, _read_gate) =
             crate::session::access::access_from_config(&self.config);
-        let all = crate::tools::all_tools(
-            self.undo_stack.clone(),
-            self.supports_images,
+        let all = crate::tools::all_tools(&crate::tools::ToolContextBuilder {
+            undo_stack: self.undo_stack.clone(),
+            supports_images: self.supports_images,
             deny_list,
             path_guard,
-            self.config.security.bash_sandbox_workdir,
-            self.config.tools.minify_write_side,
-            self.config.tools.minify_above_bytes,
-            None,
-            Some((
-                self.config.security.computer_use.enabled,
-                self.config.security.computer_use.clone(),
-            )),
-            None,
-            None,
-            Some(self.config.security.docker.clone()),
-            self.config.security.sandbox.clone(),
-        );
+            bash_sandbox_workdir: self.config.security.bash_sandbox_workdir,
+            minify_write_side: self.config.tools.minify_write_side,
+            minify_above_bytes: self.config.tools.minify_above_bytes,
+            lsp_pool: None,
+            computer_use_enabled: self.config.security.computer_use.enabled,
+            computer_use_config: Some(self.config.security.computer_use.clone()),
+            chrome_tab: None,
+            session_launcher: None,
+            docker_config: Some(self.config.security.docker.clone()),
+            sandbox_config: self.config.security.sandbox.clone(),
+        });
         let tools: Vec<Arc<dyn Tool>> = match request.persona.as_str() {
             "explore" => all
                 .into_iter()

@@ -272,9 +272,6 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     // launch-time config.
     let (builtin_deny_list, builtin_path_guard, _builtin_read_gate) =
         session::access::access_from_config(&config);
-    let bash_sandbox_workdir = config.security.bash_sandbox_workdir;
-    let minify_write_side = config.tools.minify_write_side;
-    let minify_above_bytes = config.tools.minify_above_bytes;
     let computer_use_cfg = config.security.computer_use.clone();
     let computer_use_enabled = computer_use_cfg.enabled;
 
@@ -346,24 +343,26 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     // collection. The executor receives the flattened vector, but order and
     // duplicate-name resolution are controlled here: built-ins win over MCP,
     // and MCP wins over plugins.
+    let tool_ctx = tools::ToolContextBuilder {
+        undo_stack: undo_stack.clone(),
+        supports_images: adapter.model_info().supports_images,
+        deny_list: builtin_deny_list,
+        path_guard: builtin_path_guard,
+        bash_sandbox_workdir: config.security.bash_sandbox_workdir,
+        minify_write_side: config.tools.minify_write_side,
+        minify_above_bytes: config.tools.minify_above_bytes,
+        lsp_pool: lsp_pool.clone(),
+        computer_use_enabled,
+        computer_use_config: Some(computer_use_cfg.clone()),
+        chrome_tab: Some(chrome_tab),
+        session_launcher,
+        docker_config: Some(config.security.docker.clone()),
+        sandbox_config: config.security.sandbox.clone(),
+    };
     let mut toolset = session::toolset::CompositeToolset::empty();
     toolset.add(Box::new(session::toolset::VecToolset::new(
         "builtin",
-        tools::all_tools(
-            undo_stack.clone(),
-            adapter.model_info().supports_images,
-            builtin_deny_list,
-            builtin_path_guard,
-            bash_sandbox_workdir,
-            minify_write_side,
-            minify_above_bytes,
-            lsp_pool.clone(),
-            Some((computer_use_enabled, computer_use_cfg.clone())),
-            Some(chrome_tab),
-            session_launcher,
-            Some(config.security.docker.clone()),
-            config.security.sandbox.clone(),
-        ),
+        tools::all_tools(&tool_ctx),
     )));
 
     // ── Shared config (hot-reload foundation) ──

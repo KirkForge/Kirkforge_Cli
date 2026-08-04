@@ -11,6 +11,7 @@ pub mod lsp_query;
 pub mod notebook_edit;
 pub mod read_file;
 pub mod read_image;
+pub mod registry;
 pub mod task;
 pub mod todo;
 pub mod web_fetch;
@@ -18,7 +19,9 @@ pub mod web_search;
 pub mod workflow;
 pub mod write_file;
 
-use crate::shared::{SandboxConfig, ToolDef, ToolOutcome};
+pub use registry::{ToolContextBuilder, ToolRegistry};
+
+use crate::shared::{ToolDef, ToolOutcome};
 use std::sync::{Arc, Mutex};
 use tokio_util::sync::CancellationToken;
 
@@ -111,95 +114,89 @@ pub type UndoStackRef = Arc<Mutex<crate::session::undo::UndoStack>>;
 
 /// All built-in tools.
 ///
-/// `undo_stack` is passed only to the file-mutating tools
-/// (`edit_file`, `write_file`). Read-only tools don't need it.
-/// Pass `None` to disable undo — the tools still work, they just
-/// don't snapshot.
-///
-/// `supports_images` gates the `read_image` tool: a non-vision model
-/// never sees the tool in its available-tool list, and any
-/// hand-crafted `<tool_call>` invocation in the prompt is the user's
-/// problem rather than a server-side 400. The default is `false`
-/// (conservative — most Ollama-local models aren't vision-capable).
-// reason: each arg is an independent tool-config knob; heterogeneous types, no obvious struct.
-#[allow(clippy::too_many_arguments)]
-pub fn all_tools(
-    undo_stack: Option<UndoStackRef>,
-    supports_images: bool,
-    deny_list: crate::session::access::DenyList,
-    path_guard: crate::session::access::PathGuard,
-    bash_sandbox_workdir: bool,
-    minify_write_side: bool,
-    minify_above_bytes: usize,
-    lsp_pool: Option<std::sync::Arc<kf_lsp::LspPool>>,
-    computer_use: Option<(bool, crate::shared::ComputerUseConfig)>,
-    chrome_tab: Option<std::sync::Arc<dyn crate::tools::computer_use::ChromeTab>>,
-    session_launcher: Option<crate::tools::computer_use::SessionLauncher>,
-    docker_config: Option<crate::shared::DockerConfig>,
-    sandbox_config: SandboxConfig,
-) -> Vec<Arc<dyn Tool>> {
-    let task_manager = Arc::new(Mutex::new(task::TaskManager::new()));
-    let mut tools: Vec<Arc<dyn Tool>> = vec![
-        Arc::new(read_file::ReadFile::new(
-            path_guard.clone(),
-            minify_write_side,
-            minify_above_bytes,
-        )),
-        Arc::new(write_file::WriteFile::new(
-            undo_stack.clone(),
-            path_guard.clone(),
-            minify_write_side,
-        )),
-        Arc::new(edit_file::EditFile::new(
-            undo_stack.clone(),
-            path_guard.clone(),
-            minify_write_side,
-        )),
-        Arc::new(notebook_edit::NotebookEdit::new(
-            undo_stack.clone(),
-            path_guard.clone(),
-        )),
-        Arc::new(bash::Bash::new(
-            deny_list.clone(),
-            path_guard.clone(),
-            bash_sandbox_workdir,
-            docker_config,
-            sandbox_config,
-        )),
-        Arc::new(bash_status::BashStatus),
-        Arc::new(bash_cancel::BashCancel),
-        Arc::new(grep::Grep::new(path_guard.clone())),
-        Arc::new(glob::Glob::new(path_guard.clone())),
-        Arc::new(web_fetch::WebFetch::new(deny_list.clone())),
-        Arc::new(web_search::WebSearch::new()),
-        Arc::new(task::Task::with_manager(task_manager.clone())),
-        Arc::new(task::TaskOutput::new(task_manager)),
-        Arc::new(workflow::WorkflowTool::new()),
-    ];
+/// Constructs the full set of built-in tools from the shared resources in
+/// `ctx`. Tools that require optional capabilities (images, LSP,
+/// computer_use) are conditionally registered based on the corresponding
+/// flags in `ctx`.
+pub fn all_tools(ctx: &ToolContextBuilder) -> Vec<Arc<dyn Tool>> {
+    use crate::tools::{
+        bash::Bash, bash_cancel::BashCancel, bash_status::BashStatus, computer_use::ComputerUse,
+        edit_file::EditFile, glob::Glob, grep::Grep, lsp_query::LspQuery,
+        notebook_edit::NotebookEdit, read_file::ReadFile, read_image::ReadImage, task::Task,
+        task::TaskOutput, todo::TodoRead, todo::TodoWrite, web_fetch::WebFetch,
+        web_search::WebSearch, workflow::WorkflowTool, write_file::WriteFile,
+    };
 
-    // Session-scoped TODO list shared between `todo_write` and `todo_read`
-    // so a read always reflects the last write. One Arc per toolset.
-    let todo_state: todo::TodoState = Arc::new(Mutex::new(Vec::new()));
-    tools.push(Arc::new(todo::TodoWrite::new(todo_state.clone())));
-    tools.push(Arc::new(todo::TodoRead::new(todo_state)));
-    if supports_images {
-        tools.push(Arc::new(read_image::ReadImage::new(path_guard.clone())));
+    let task_manager = Arc::new(std::sync::Mutex::new(task::TaskManager::new()));
+    let todo_state: todo::TodoState = Arc::new(std::sync::Mutex::new(Vec::new()));
+
+    let mut registry = ToolRegistry::new();
+
+    // Core tools — always registered.
+    registry.register(Arc::new(ReadFile::new(
+        ctx.path_guard.clone(),
+        ctx.minify_write_side,
+        ctx.minify_above_bytes,
+    )));
+    registry.register(Arc::new(WriteFile::new(
+        ctx.undo_stack.clone(),
+        ctx.path_guard.clone(),
+        ctx.minify_write_side,
+    )));
+    registry.register(Arc::new(EditFile::new(
+        ctx.undo_stack.clone(),
+        ctx.path_guard.clone(),
+        ctx.minify_write_side,
+    )));
+    registry.register(Arc::new(NotebookEdit::new(
+        ctx.undo_stack.clone(),
+        ctx.path_guard.clone(),
+    )));
+    registry.register(Arc::new(Bash::new(
+        ctx.deny_list.clone(),
+        ctx.path_guard.clone(),
+        ctx.bash_sandbox_workdir,
+        ctx.docker_config.clone(),
+        ctx.sandbox_config.clone(),
+    )));
+    registry.register(Arc::new(BashStatus));
+    registry.register(Arc::new(BashCancel));
+    registry.register(Arc::new(Grep::new(ctx.path_guard.clone())));
+    registry.register(Arc::new(Glob::new(ctx.path_guard.clone())));
+    registry.register(Arc::new(WebFetch::new(ctx.deny_list.clone())));
+    registry.register(Arc::new(WebSearch::new()));
+    registry.register(Arc::new(Task::with_manager(task_manager.clone())));
+    registry.register(Arc::new(TaskOutput::new(task_manager)));
+    registry.register(Arc::new(WorkflowTool::new()));
+    registry.register(Arc::new(TodoWrite::new(todo_state.clone())));
+    registry.register(Arc::new(TodoRead::new(todo_state)));
+
+    // Conditionally registered tools.
+    registry.register_if(
+        ctx.supports_images,
+        Arc::new(ReadImage::new(ctx.path_guard.clone())),
+    );
+
+    if let Some(pool) = ctx.lsp_pool.clone() {
+        registry.register(Arc::new(LspQuery::new(pool, ctx.path_guard.clone())));
     }
-    if let Some(pool) = lsp_pool {
-        tools.push(Arc::new(lsp_query::LspQuery::new(pool, path_guard)));
-    }
-    if let Some((enabled, config)) = computer_use {
-        if enabled && supports_images {
-            let tab = chrome_tab.unwrap_or_else(|| Arc::new(computer_use::PlaceholderTab));
-            tools.push(Arc::new(computer_use::ComputerUse::new(
-                deny_list,
+
+    if ctx.computer_use_enabled && ctx.supports_images {
+        if let Some(config) = ctx.computer_use_config.clone() {
+            let tab = ctx
+                .chrome_tab
+                .clone()
+                .unwrap_or_else(|| Arc::new(computer_use::PlaceholderTab));
+            registry.register(Arc::new(ComputerUse::new(
+                ctx.deny_list.clone(),
                 config,
                 tab,
-                session_launcher,
+                ctx.session_launcher.clone(),
             )));
         }
     }
-    tools
+
+    registry.build()
 }
 
 #[cfg(test)]
@@ -236,21 +233,23 @@ mod tests {
 
     #[test]
     fn all_tools_returns_core_tools_unconditionally() {
-        let tools = all_tools(
-            None,
-            false,
-            crate::session::access::DenyList::default(),
-            crate::session::access::PathGuard::default(),
-            false,
-            false,
-            0,
-            None,
-            None,
-            None,
-            None,
-            None,
-            crate::shared::SandboxConfig::default(),
-        );
+        let ctx = ToolContextBuilder {
+            undo_stack: None,
+            supports_images: false,
+            deny_list: crate::session::access::DenyList::default(),
+            path_guard: crate::session::access::PathGuard::default(),
+            bash_sandbox_workdir: false,
+            minify_write_side: false,
+            minify_above_bytes: 0,
+            lsp_pool: None,
+            computer_use_enabled: false,
+            computer_use_config: None,
+            chrome_tab: None,
+            session_launcher: None,
+            docker_config: None,
+            sandbox_config: crate::shared::SandboxConfig::default(),
+        };
+        let tools = all_tools(&ctx);
         let names: Vec<String> = tools.iter().map(|t| t.def().name.to_string()).collect();
         for required in [
             "read_file",
@@ -284,21 +283,23 @@ mod tests {
 
     #[test]
     fn all_tools_includes_read_image_when_supports_images() {
-        let tools = all_tools(
-            None,
-            true,
-            crate::session::access::DenyList::default(),
-            crate::session::access::PathGuard::default(),
-            false,
-            false,
-            0,
-            None,
-            None,
-            None,
-            None,
-            None,
-            crate::shared::SandboxConfig::default(),
-        );
+        let ctx = ToolContextBuilder {
+            undo_stack: None,
+            supports_images: true,
+            deny_list: crate::session::access::DenyList::default(),
+            path_guard: crate::session::access::PathGuard::default(),
+            bash_sandbox_workdir: false,
+            minify_write_side: false,
+            minify_above_bytes: 0,
+            lsp_pool: None,
+            computer_use_enabled: false,
+            computer_use_config: None,
+            chrome_tab: None,
+            session_launcher: None,
+            docker_config: None,
+            sandbox_config: crate::shared::SandboxConfig::default(),
+        };
+        let tools = all_tools(&ctx);
         let names: Vec<String> = tools.iter().map(|t| t.def().name.to_string()).collect();
         assert!(
             names.iter().any(|n| n == "read_image"),
@@ -315,21 +316,23 @@ mod tests {
                 .to_string(),
             vec![],
         ));
-        let tools = all_tools(
-            None,
-            false,
-            crate::session::access::DenyList::default(),
-            crate::session::access::PathGuard::default(),
-            false,
-            false,
-            0,
-            Some(pool),
-            None,
-            None,
-            None,
-            None,
-            crate::shared::SandboxConfig::default(),
-        );
+        let ctx = ToolContextBuilder {
+            undo_stack: None,
+            supports_images: false,
+            deny_list: crate::session::access::DenyList::default(),
+            path_guard: crate::session::access::PathGuard::default(),
+            bash_sandbox_workdir: false,
+            minify_write_side: false,
+            minify_above_bytes: 0,
+            lsp_pool: Some(pool),
+            computer_use_enabled: false,
+            computer_use_config: None,
+            chrome_tab: None,
+            session_launcher: None,
+            docker_config: None,
+            sandbox_config: crate::shared::SandboxConfig::default(),
+        };
+        let tools = all_tools(&ctx);
         let names: Vec<String> = tools.iter().map(|t| t.def().name.to_string()).collect();
         assert!(
             names.iter().any(|n| n == "lsp_query"),

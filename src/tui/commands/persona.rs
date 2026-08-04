@@ -103,24 +103,23 @@ fn tools_for_persona(
     config: &Config,
 ) -> Vec<Arc<dyn Tool>> {
     let (deny_list, path_guard, _read_gate) = crate::session::access::access_from_config(config);
-    let all = crate::tools::all_tools(
+    let ctx = crate::tools::ToolContextBuilder {
         undo_stack,
         supports_images,
         deny_list,
         path_guard,
-        config.security.bash_sandbox_workdir,
-        config.tools.minify_write_side,
-        config.tools.minify_above_bytes,
-        None,
-        Some((
-            config.security.computer_use.enabled,
-            config.security.computer_use.clone(),
-        )),
-        None,
-        None,
-        Some(config.security.docker.clone()),
-        config.security.sandbox.clone(),
-    );
+        bash_sandbox_workdir: config.security.bash_sandbox_workdir,
+        minify_write_side: config.tools.minify_write_side,
+        minify_above_bytes: config.tools.minify_above_bytes,
+        lsp_pool: None,
+        computer_use_enabled: config.security.computer_use.enabled,
+        computer_use_config: Some(config.security.computer_use.clone()),
+        chrome_tab: None,
+        session_launcher: None,
+        docker_config: Some(config.security.docker.clone()),
+        sandbox_config: config.security.sandbox.clone(),
+    };
+    let all = crate::tools::all_tools(&ctx);
     match kind {
         PersonaKind::Explore => all
             .into_iter()
@@ -145,45 +144,39 @@ fn tools_for_persona(
     }
 }
 
-/// Build the read-only tool set for the scout subagent. The
-/// scout is a stripped-down, in-process alternative to the
+/// Build the read-only tool set for the scout subagent.
+///
+/// The scout is a stripped-down, in-process alternative to the
 /// `/explore` persona (which always forks); it uses the same
 /// underlying `all_tools` builder, then filters through
 /// [`ScoutSubagent::filter_tools`] to enforce the read-only
 /// guarantee at the type level.
 ///
 /// `undo_stack` and `supports_images` mirror the persona helpers
-/// so the two can be swapped without surprise. The remaining
-/// arguments replicate `tools_for_persona`'s plumbing; passing
-/// them through keeps the read-only tool surface identical to
-/// the per-persona read-only surface except `bash` is excluded
-/// (the scout is more conservative — see [`SCOUT_TOOLS`]).
-// reason: mirrors tools_for_persona's plumbing so the two can be swapped without surprise.
-#[allow(clippy::too_many_arguments)]
+/// so the two can be swapped without surprise.
 pub fn tools_for_scout(
     undo_stack: Option<UndoStackRef>,
     supports_images: bool,
     config: &Config,
 ) -> Vec<Arc<dyn Tool>> {
     let (deny_list, path_guard, _read_gate) = crate::session::access::access_from_config(config);
-    let all = crate::tools::all_tools(
+    let ctx = crate::tools::ToolContextBuilder {
         undo_stack,
         supports_images,
         deny_list,
         path_guard,
-        config.security.bash_sandbox_workdir,
-        config.tools.minify_write_side,
-        config.tools.minify_above_bytes,
-        None,
-        Some((
-            config.security.computer_use.enabled,
-            config.security.computer_use.clone(),
-        )),
-        None,
-        None,
-        Some(config.security.docker.clone()),
-        config.security.sandbox.clone(),
-    );
+        bash_sandbox_workdir: config.security.bash_sandbox_workdir,
+        minify_write_side: config.tools.minify_write_side,
+        minify_above_bytes: config.tools.minify_above_bytes,
+        lsp_pool: None,
+        computer_use_enabled: config.security.computer_use.enabled,
+        computer_use_config: Some(config.security.computer_use.clone()),
+        chrome_tab: None,
+        session_launcher: None,
+        docker_config: Some(config.security.docker.clone()),
+        sandbox_config: config.security.sandbox.clone(),
+    };
+    let all = crate::tools::all_tools(&ctx);
     crate::session::executor::ScoutSubagent::new().filter_tools(all)
 }
 

@@ -49,7 +49,7 @@ pub(crate) use recent::{append_recent, emit_compact_hint, empty_record, load_rec
 #[cfg(test)]
 pub(crate) use budget_io::{load_budget_config_at, load_budget_with_config, save_budget_at};
 #[cfg(test)]
-pub(crate) use helpers::kf-budget_binary_path;
+pub(crate) use helpers::kf_budget_binary_path;
 #[cfg(test)]
 pub(crate) use recent::{append_recent_at, load_recent_outputs_at, RecentEntry, RECENT_BOUND};
 

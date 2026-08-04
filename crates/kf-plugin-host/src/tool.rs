@@ -1,8 +1,8 @@
 //! Plugin-defined tool wrapper.
 //!
 //! v1 tools are shell scripts. The host serializes the tool arguments as JSON
-//! in the `KIRKFORGE_TOOL_ARGS_JSON` environment variable (the legacy
-//! `KIRKFORGE_TOOL_ARGS` alias is also set for compatibility) and reads the tool
+//! in the `KF_CODE_TOOL_ARGS_JSON` environment variable (the legacy
+//! `KF_CODE_TOOL_ARGS` alias is also set for compatibility) and reads the tool
 //! result from stdout. A non-zero exit code becomes an error using stderr as the
 //! message.
 
@@ -12,9 +12,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// Environment variable used to pass tool arguments to a v1 plugin tool.
-pub const KIRKFORGE_TOOL_ARGS: &str = "KIRKFORGE_TOOL_ARGS";
+pub const KF_CODE_TOOL_ARGS: &str = "KF_CODE_TOOL_ARGS";
 /// Alias used by plugin tool scripts that need `jq`-style JSON parsing.
-pub const KIRKFORGE_TOOL_ARGS_JSON: &str = "KIRKFORGE_TOOL_ARGS_JSON";
+pub const KF_CODE_TOOL_ARGS_JSON: &str = "KF_CODE_TOOL_ARGS_JSON";
 
 /// A plugin tool that can be executed.
 #[derive(Debug, Clone)]
@@ -91,8 +91,8 @@ impl PluginTool {
             command
                 .env_clear()
                 .envs(curated_env(&std::collections::HashMap::new()))
-                .env(KIRKFORGE_TOOL_ARGS, args.to_string())
-                .env(KIRKFORGE_TOOL_ARGS_JSON, args.to_string())
+                .env(KF_CODE_TOOL_ARGS, args.to_string())
+                .env(KF_CODE_TOOL_ARGS_JSON, args.to_string())
                 .current_dir(&self.plugin_root);
             // WO 15.11 (ADR-060): apply rlimits to the host-crate
             // spawn path too, mirroring the bin's `PluginToolWrapper`.
@@ -164,7 +164,7 @@ mod tests {
     fn receives_args_in_env() {
         let (_tmp, tool) = make_tool(
             "args.sh",
-            "printf '%s' \"$KIRKFORGE_TOOL_ARGS\"; printf '%s' \"$KIRKFORGE_TOOL_ARGS_JSON\"",
+            "printf '%s' \"$KF_CODE_TOOL_ARGS\"; printf '%s' \"$KF_CODE_TOOL_ARGS_JSON\"",
         );
         let args = serde_json::json!({"n": 7});
         let out = tool.execute(args.clone()).unwrap();

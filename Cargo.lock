@@ -2029,7 +2029,54 @@ dependencies = [
 ]
 
 [[package]]
-name = "kirkforge"
+name = "kf-bench"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "toml",
+]
+
+[[package]]
+name = "kf-budget-cli"
+version = "0.2.0"
+dependencies = [
+ "chrono",
+ "clap",
+ "kf-budget-core",
+ "kf-budget-hosts",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "toml",
+]
+
+[[package]]
+name = "kf-budget-core"
+version = "0.2.0"
+dependencies = [
+ "blake3",
+ "chrono",
+ "directories",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "toml",
+]
+
+[[package]]
+name = "kf-budget-hosts"
+version = "0.2.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "kf-code"
 version = "0.3.6"
 dependencies = [
  "anyhow",
@@ -2054,22 +2101,22 @@ dependencies = [
  "hex",
  "http 1.4.2",
  "ignore",
- "kirkforge-bench",
- "kirkforge-context-index",
- "kirkforge-draw-core",
- "kirkforge-lsp",
- "kirkforge-plugin",
- "kirkforge-plugin-host",
- "kirkforge-testdoctor",
- "kirkforge-video",
- "kirkforge-workflow",
- "kirkstratum-core",
+ "kf-bench",
+ "kf-budget-core",
+ "kf-compress-core",
+ "kf-context-index",
+ "kf-draw-core",
+ "kf-lsp",
+ "kf-plugin-host",
+ "kf-plugin-sdk",
+ "kf-testdoctor",
+ "kf-video",
+ "kf-workflow",
  "libc",
  "notify-debouncer-mini",
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
- "plugin3-core",
  "proptest",
  "pulldown-cmark",
  "ratatui",
@@ -2096,18 +2143,46 @@ dependencies = [
 ]
 
 [[package]]
-name = "kirkforge-bench"
-version = "0.1.0"
+name = "kf-compress-cli"
+version = "0.2.0"
 dependencies = [
  "anyhow",
+ "assert_cmd",
+ "clap",
+ "clap_complete",
+ "kf-compress-core",
+ "kf-compress-hosts",
+ "predicates",
  "serde",
  "serde_json",
  "tempfile",
  "toml",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
-name = "kirkforge-context-index"
+name = "kf-compress-core"
+version = "0.2.0"
+dependencies = [
+ "blake3",
+ "criterion",
+ "proptest",
+ "serde",
+ "thiserror 1.0.69",
+ "toml",
+ "tracing",
+]
+
+[[package]]
+name = "kf-compress-hosts"
+version = "0.2.0"
+dependencies = [
+ "kf-compress-core",
+]
+
+[[package]]
+name = "kf-context-index"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -2123,14 +2198,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "kirkforge-draw"
+name = "kf-draw"
 version = "0.2.0"
 dependencies = [
  "anyhow",
  "arboard",
  "clap",
  "crossterm 0.28.1",
- "kirkforge-draw-core",
+ "kf-draw-core",
  "ratatui",
  "serde",
  "serde_json",
@@ -2138,7 +2213,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "kirkforge-draw-core"
+name = "kf-draw-core"
 version = "0.2.0"
 dependencies = [
  "serde",
@@ -2149,7 +2224,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "kirkforge-lsp"
+name = "kf-lsp"
 version = "0.2.0"
 dependencies = [
  "anyhow",
@@ -2161,7 +2236,22 @@ dependencies = [
 ]
 
 [[package]]
-name = "kirkforge-plugin"
+name = "kf-plugin-host"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "kf-plugin-sdk",
+ "libc",
+ "minisign",
+ "minisign-verify",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tracing",
+]
+
+[[package]]
+name = "kf-plugin-sdk"
 version = "0.2.0"
 dependencies = [
  "serde",
@@ -2174,22 +2264,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "kirkforge-plugin-host"
-version = "0.2.0"
-dependencies = [
- "anyhow",
- "kirkforge-plugin",
- "libc",
- "minisign",
- "minisign-verify",
- "serde_json",
- "tempfile",
- "thiserror 1.0.69",
- "tracing",
-]
-
-[[package]]
-name = "kirkforge-testdoctor"
+name = "kf-testdoctor"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -2201,7 +2276,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "kirkforge-video"
+name = "kf-video"
 version = "0.2.0"
 dependencies = [
  "anyhow",
@@ -2222,7 +2297,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "kirkforge-workflow"
+name = "kf-workflow"
 version = "0.2.0"
 dependencies = [
  "anyhow",
@@ -2233,45 +2308,6 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
-]
-
-[[package]]
-name = "kirkstratum-cli"
-version = "0.2.0"
-dependencies = [
- "anyhow",
- "assert_cmd",
- "clap",
- "clap_complete",
- "kirkstratum-core",
- "kirkstratum-hosts",
- "predicates",
- "serde",
- "serde_json",
- "tempfile",
- "toml",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "kirkstratum-core"
-version = "0.2.0"
-dependencies = [
- "blake3",
- "criterion",
- "proptest",
- "serde",
- "thiserror 1.0.69",
- "toml",
- "tracing",
-]
-
-[[package]]
-name = "kirkstratum-hosts"
-version = "0.2.0"
-dependencies = [
- "kirkstratum-core",
 ]
 
 [[package]]
@@ -3072,42 +3108,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "51bae2ac328883f7acdfea3d66a7c35751187f870bc81f94563733a154d7a670"
 dependencies = [
  "plotters-backend",
-]
-
-[[package]]
-name = "plugin3-cli"
-version = "0.2.0"
-dependencies = [
- "chrono",
- "clap",
- "plugin3-core",
- "plugin3-hosts",
- "serde",
- "serde_json",
- "tempfile",
- "toml",
-]
-
-[[package]]
-name = "plugin3-core"
-version = "0.2.0"
-dependencies = [
- "blake3",
- "chrono",
- "directories",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 1.0.69",
- "toml",
-]
-
-[[package]]
-name = "plugin3-hosts"
-version = "0.2.0"
-dependencies = [
- "serde",
- "serde_json",
 ]
 
 [[package]]

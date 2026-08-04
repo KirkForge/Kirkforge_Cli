@@ -443,7 +443,7 @@ fn run_hook_subprocess(subcmd: &str, stdin: &[u8]) -> std::process::Output {
     let cfg_dir = tempfile::tempdir().unwrap();
     let data_dir = tempfile::tempdir().unwrap();
     let runtime_dir = tempfile::tempdir().unwrap();
-    let mut child = std::process::Command::new(kf-budget_binary_path())
+    let mut child = std::process::Command::new(kf_budget_binary_path())
         .args(["hook", subcmd])
         .env("PLUGIN3_CONFIG_DIR", cfg_dir.path())
         .env("PLUGIN3_DATA_DIR", data_dir.path())
@@ -724,7 +724,7 @@ fn hook_user_prompt_submit_warn_variant_wire_shape_is_pinned() {
         "session_id": "sess-warn",
     });
 
-    let mut child = std::process::Command::new(kf-budget_binary_path())
+    let mut child = std::process::Command::new(kf_budget_binary_path())
         .args(["hook", "user-prompt-submit"])
         .env("PLUGIN3_CONFIG_DIR", cfg_dir.path())
         .env("PLUGIN3_DATA_DIR", data_dir.path())
@@ -837,7 +837,7 @@ fn hook_user_prompt_submit_slice_variant_wire_shape_is_pinned() {
         "session_id": "sess-slice",
     });
 
-    let mut child = std::process::Command::new(kf-budget_binary_path())
+    let mut child = std::process::Command::new(kf_budget_binary_path())
         .args(["hook", "user-prompt-submit"])
         .env("PLUGIN3_CONFIG_DIR", cfg_dir.path())
         .env("PLUGIN3_DATA_DIR", data_dir.path())
@@ -947,7 +947,7 @@ fn hook_user_prompt_submit_compact_variant_wire_shape_is_pinned() {
         "session_id": "sess-compact",
     });
 
-    let mut child = std::process::Command::new(kf-budget_binary_path())
+    let mut child = std::process::Command::new(kf_budget_binary_path())
         .args(["hook", "user-prompt-submit"])
         .env("PLUGIN3_CONFIG_DIR", cfg_dir.path())
         .env("PLUGIN3_DATA_DIR", data_dir.path())
@@ -1380,7 +1380,7 @@ fn run_budget_set_subprocess(
     let cfg_dir = tempfile::tempdir().expect("cfg tempdir");
     let data_dir = tempfile::tempdir().expect("data tempdir");
     let runtime_dir = tempfile::tempdir().expect("runtime tempdir");
-    let mut cmd = std::process::Command::new(kf-budget_binary_path());
+    let mut cmd = std::process::Command::new(kf_budget_binary_path());
     cmd.args(["budget", "set", &ceiling.to_string()])
         .env("PLUGIN3_DATA_DIR", data_dir.path())
         .env("PLUGIN3_CONFIG_DIR", cfg_dir.path())

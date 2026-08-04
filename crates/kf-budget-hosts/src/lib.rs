@@ -30,8 +30,7 @@ pub enum Host {
     ClaudeCode,
     Cursor,
     Aider,
-    #[serde(rename = "kf-code")]
-    KirkForge,
+    KfCode,
 }
 
 #[must_use]
@@ -308,7 +307,7 @@ mod tests {
             assert_eq!(
                 detect_host_with(&env(&["KIRKFORGE"])),
                 Host::ClaudeCode,
-                "near-miss KIRKFORGE must not be treated as KirkForge"
+                "near-miss KIRKFORGE must not be treated as KfCode"
             );
             // Stronger signal: a near-miss CLAUDE_PROJECT must
             // NOT shadow a real Cursor signal. If the check

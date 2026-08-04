@@ -182,7 +182,7 @@ fn verify_file_contains_missing_file() {
 
 #[test]
 fn verify_task_inherits_curated_budget_env() {
-    // A task with a budget ceiling must export KIRKFORGE_BUDGET_CEILING to
+    // A task with a budget ceiling must export KF_CODE_BUDGET_CEILING to
     // the verify command. The verify command prints the var; FileContains
     // would need a file, so use CommandExitsZero with a shell test that
     // succeeds only when the env var matches the curated value.

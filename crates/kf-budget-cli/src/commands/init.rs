@@ -354,7 +354,7 @@ mod tests {
     use kf_budget_core::test_support::EnvGuard;
     use serde_json::json;
 
-    fn kf-budget_hooks() -> Value {
+    fn kf_budget_hooks() -> Value {
         // The shape `register_hooks(ClaudeCode)` serialises to —
         // built inline so the test doesn't depend on the registry
         // (the registry has its own drift tests).
@@ -383,7 +383,7 @@ mod tests {
     // emits an empty `{}` here breaks the very first run.
     #[test]
     fn merge_with_no_existing_writes_fresh_hooks_block() {
-        let ours = kf-budget_hooks();
+        let ours = kf_budget_hooks();
         let outcome = merge_into_settings(None, &ours, false).unwrap();
         assert_eq!(outcome.merged, json!({ "hooks": ours }));
         assert!(!outcome.updated_own, "no existing file → nothing updated");
@@ -400,7 +400,7 @@ mod tests {
     // a fresh `serde_json::Map::new()` silently deletes them.
     #[test]
     fn merge_preserves_unrelated_top_level_keys() {
-        let ours = kf-budget_hooks();
+        let ours = kf_budget_hooks();
         let existing = json!({
             "mcpServers": { "github": { "command": "gh-mcp" } },
             "permissions": { "allow": ["Read", "Glob"] },
@@ -423,7 +423,7 @@ mod tests {
     // "we added ourselves to someone else's config".
     #[test]
     fn merge_preserves_user_added_hook_on_same_slot() {
-        let ours = kf-budget_hooks();
+        let ours = kf_budget_hooks();
         let existing = json!({
             "hooks": {
                 "PostToolUse": [{
@@ -455,8 +455,8 @@ mod tests {
     // install with a different timeout (or any other field drift)
     // must get the new entry, not a duplicate.
     #[test]
-    fn merge_replaces_existing_kf-budget_entry_with_same_command() {
-        let ours = kf-budget_hooks();
+    fn merge_replaces_existing_kf_budget_entry_with_same_command() {
+        let ours = kf_budget_hooks();
         let existing = json!({
             "hooks": {
                 "PostToolUse": [{
@@ -497,8 +497,8 @@ mod tests {
     // both named kf-budget" situation (rare, but the merge has
     // to be conservative).
     #[test]
-    fn merge_refuses_different_kf-budget_command_without_force() {
-        let ours = kf-budget_hooks();
+    fn merge_refuses_different_kf_budget_command_without_force() {
+        let ours = kf_budget_hooks();
         let existing = json!({
             "hooks": {
                 "PostToolUse": [{
@@ -521,8 +521,8 @@ mod tests {
     // mapping is the I/O wrapper's job; this just confirms the
     // pure helper returns Ok and writes the new entry.
     #[test]
-    fn merge_with_force_accepts_different_kf-budget_command() {
-        let ours = kf-budget_hooks();
+    fn merge_with_force_accepts_different_kf_budget_command() {
+        let ours = kf_budget_hooks();
         let existing = json!({
             "hooks": {
                 "PostToolUse": [{
@@ -549,8 +549,8 @@ mod tests {
     // A contributor who forgets to check `is_ours` and always
     // appends would surface here.
     #[test]
-    fn merge_with_existing_identical_kf-budget_entries_is_stable() {
-        let ours = kf-budget_hooks();
+    fn merge_with_existing_identical_kf_budget_entries_is_stable() {
+        let ours = kf_budget_hooks();
         let existing = json!({ "hooks": ours.clone() });
         let outcome = merge_into_settings(Some(&existing), &ours, false).unwrap();
         // The result is identical (same JSON object), not a
@@ -576,7 +576,7 @@ mod tests {
     // overwriting.
     #[test]
     fn merge_with_existing_top_level_string_returns_not_an_object() {
-        let ours = kf-budget_hooks();
+        let ours = kf_budget_hooks();
         let existing = json!("just a string");
         let err = merge_into_settings(Some(&existing), &ours, false).unwrap_err();
         assert_eq!(err, MergeError::NotAnObject);

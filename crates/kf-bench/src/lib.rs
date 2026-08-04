@@ -42,7 +42,7 @@ pub enum VerifySpec {
 /// sets `budget_ceiling`. The bench runner reads this on the budget
 /// guard (via `src/session/config/env_overrides.rs`) to pin the token
 /// budget ceiling for a single run. See WO 14.7 / ADR-0066.
-pub const BUDGET_CEILING_ENV: &str = "KIRKFORGE_BUDGET_CEILING";
+pub const BUDGET_CEILING_ENV: &str = "KF_CODE_BUDGET_CEILING";
 
 /// A single benchmark task definition.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -62,7 +62,7 @@ pub struct BenchTask {
     #[serde(default)]
     pub requires_model: bool,
     /// Optional token-budget ceiling exported to the agent as
-    /// `KIRKFORGE_BUDGET_CEILING` for this run. `None` (default) leaves
+    /// `KF_CODE_BUDGET_CEILING` for this run. `None` (default) leaves
     /// the budget at the config default. The Token Budget Challenge
     /// (WO 14.7) sets this and runs the task 5x under descending
     /// ceilings (128k/64k/32k/16k/8k). See ADR-0066.
@@ -159,7 +159,7 @@ pub fn load_tasks(path: &Path) -> Result<Vec<BenchTask>> {
 /// Verify a task completed successfully.
 ///
 /// The verify command inherits the calling process environment plus the
-/// task's curated env (`budget_env()`, currently `KIRKFORGE_BUDGET_CEILING`
+/// task's curated env (`budget_env()`, currently `KF_CODE_BUDGET_CEILING`
 /// when set) so verification runs under the same env conditions the agent
 /// operated under, regardless of process-env drift between run and verify.
 pub fn verify_task(task: &BenchTask, sandbox: &Path) -> Result<bool> {

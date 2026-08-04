@@ -172,7 +172,7 @@ command = "greet.sh"
         std::fs::write(
             plugin_dir.join("greet.sh"),
             r#"#!/bin/sh
-printf 'hello %s' "$KIRKFORGE_TOOL_ARGS"
+printf 'hello %s' "$KF_CODE_TOOL_ARGS"
 "#,
         )
         .unwrap();

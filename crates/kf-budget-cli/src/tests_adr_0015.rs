@@ -19,7 +19,7 @@ fn run_cli_subprocess(
     let cfg_dir = tempfile::tempdir().unwrap();
     let data_dir = tempfile::tempdir().unwrap();
     let runtime_dir = tempfile::tempdir().unwrap();
-    let out = std::process::Command::new(kf-budget_binary_path())
+    let out = std::process::Command::new(kf_budget_binary_path())
         .args(args)
         .env("PLUGIN3_CONFIG_DIR", cfg_dir.path())
         .env("PLUGIN3_DATA_DIR", data_dir.path())
@@ -56,7 +56,7 @@ fn run_cli_subprocess_with_corrupt_file(
         other => panic!("unknown dir slot: {other}"),
     };
     std::fs::write(&target, body).unwrap();
-    let out = std::process::Command::new(kf-budget_binary_path())
+    let out = std::process::Command::new(kf_budget_binary_path())
         .args(args)
         .env("PLUGIN3_CONFIG_DIR", cfg_dir.path())
         .env("PLUGIN3_DATA_DIR", data_dir.path())
@@ -142,7 +142,7 @@ fn budget_status_human_branch_full_line_shape_and_pascal_case_state() {
         };
         std::fs::write(&budget_path, toml::to_string(&seed).unwrap()).unwrap();
 
-        let out = std::process::Command::new(kf-budget_binary_path())
+        let out = std::process::Command::new(kf_budget_binary_path())
             // NOTE: no `--json`. The human branch uses
             // `println!("used: {} / {} ({:?})", ...)`, which
             // Debug-formats the state as PascalCase — distinct
@@ -239,7 +239,7 @@ fn budget_set_emits_json_with_ceiling_and_persisted_default() {
     let cfg_dir = tempfile::tempdir().expect("cfg tempdir");
     let data_dir = tempfile::tempdir().expect("data tempdir");
     let runtime_dir = tempfile::tempdir().expect("runtime tempdir");
-    let out = std::process::Command::new(kf-budget_binary_path())
+    let out = std::process::Command::new(kf_budget_binary_path())
         .args(["--json", "budget", "set", "275000", "--default"])
         .env("PLUGIN3_CONFIG_DIR", cfg_dir.path())
         .env("PLUGIN3_DATA_DIR", data_dir.path())
@@ -290,7 +290,7 @@ fn budget_set_emits_json_with_persisted_default_false_when_flag_omitted() {
     let cfg_dir = tempfile::tempdir().expect("cfg tempdir");
     let data_dir = tempfile::tempdir().expect("data tempdir");
     let runtime_dir = tempfile::tempdir().expect("runtime tempdir");
-    let out = std::process::Command::new(kf-budget_binary_path())
+    let out = std::process::Command::new(kf_budget_binary_path())
         .args(["--json", "budget", "set", "125000"])
         .env("PLUGIN3_CONFIG_DIR", cfg_dir.path())
         .env("PLUGIN3_DATA_DIR", data_dir.path())
@@ -356,7 +356,7 @@ fn budget_set_emits_human_branch_one_or_two_lines_per_default_flag() {
     let data_dir = tempfile::tempdir().expect("data tempdir");
     let runtime_dir = tempfile::tempdir().expect("runtime tempdir");
     let run = |extra: &[&str]| -> std::process::Output {
-        std::process::Command::new(kf-budget_binary_path())
+        std::process::Command::new(kf_budget_binary_path())
             // NOTE: no `--json`. Human branch.
             .args(
                 ["budget", "set", "150000"]
@@ -806,7 +806,7 @@ fn config_show_json_envelope_includes_sources_when_show_sources_passed() {
     // env vars would silently turn the "XDG default" branch
     // into "env VAR=" here.
     let custom_cfg = tempfile::tempdir().expect("custom cfg tempdir");
-    let out = std::process::Command::new(kf-budget_binary_path())
+    let out = std::process::Command::new(kf_budget_binary_path())
         .args(["--json", "config", "--show-sources"])
         .env("PLUGIN3_CONFIG_DIR", custom_cfg.path())
         .env_remove("PLUGIN3_DATA_DIR")
@@ -1187,7 +1187,7 @@ fn config_show_human_branch_emits_8_padded_label_lines_without_sources() {
     let cfg_dir = tempfile::tempdir().expect("cfg tempdir");
     let data_dir = tempfile::tempdir().expect("data tempdir");
     let runtime_dir = tempfile::tempdir().expect("runtime tempdir");
-    let out = std::process::Command::new(kf-budget_binary_path())
+    let out = std::process::Command::new(kf_budget_binary_path())
         // NOTE: no `--json`. Human branch.
         .args(["config"])
         .env("PLUGIN3_CONFIG_DIR", cfg_dir.path())
@@ -1311,7 +1311,7 @@ fn config_show_human_branch_emits_8_padded_label_lines_without_sources() {
     // re-aligns both to 16 surfaces here as the env-source
     // labels gaining more spaces.
     let cfg2 = tempfile::tempdir().expect("cfg tempdir 2");
-    let out = std::process::Command::new(kf-budget_binary_path())
+    let out = std::process::Command::new(kf_budget_binary_path())
         .args(["config", "--show-sources"])
         .env("PLUGIN3_CONFIG_DIR", cfg2.path())
         // Remove PLUGIN3_DATA_DIR / PLUGIN3_RUNTIME_DIR so
@@ -1463,7 +1463,7 @@ fn report_last_n_truncates_to_n_records_at_subprocess() {
     std::fs::write(&usage_path, s).unwrap();
 
     // Arm 1: --last 2 → 2 records (the tail, in seed order).
-    let out = std::process::Command::new(kf-budget_binary_path())
+    let out = std::process::Command::new(kf_budget_binary_path())
         .args(["--json", "report", "--last", "2"])
         .env("PLUGIN3_CONFIG_DIR", cfg_dir.path())
         .env("PLUGIN3_DATA_DIR", data_dir.path())
@@ -1514,7 +1514,7 @@ fn report_last_n_truncates_to_n_records_at_subprocess() {
     // the CLI must emit the full set, not crash or return
     // zero. A contributor who replaces the fallback with
     // `panic!` or `return &[]` surfaces here.
-    let out = std::process::Command::new(kf-budget_binary_path())
+    let out = std::process::Command::new(kf_budget_binary_path())
         .args(["--json", "report", "--last", "100"])
         .env("PLUGIN3_CONFIG_DIR", cfg_dir.path())
         .env("PLUGIN3_DATA_DIR", data_dir.path())
@@ -1625,7 +1625,7 @@ fn report_last_n_human_branch_truncates_keeping_seed_order() {
     // order, the LAST 3 records (r2, r3, r4). The order pin
     // catches a head-first regression; the count pin catches
     // off-by-one or over-truncation.
-    let out = std::process::Command::new(kf-budget_binary_path())
+    let out = std::process::Command::new(kf_budget_binary_path())
         // NOTE: no `--json`. Human branch.
         .args(["report", "--last", "3"])
         .env("PLUGIN3_CONFIG_DIR", cfg_dir.path())
@@ -1705,7 +1705,7 @@ fn report_last_n_human_branch_truncates_keeping_seed_order() {
     // arm 1 but might over-truncate here on `n == len`
     // (returning 4 lines if `>=` is interpreted as `>` minus
     // the boundary, depending on the slice arithmetic).
-    let out = std::process::Command::new(kf-budget_binary_path())
+    let out = std::process::Command::new(kf_budget_binary_path())
         .args(["report", "--last", "5"])
         .env("PLUGIN3_CONFIG_DIR", cfg_dir.path())
         .env("PLUGIN3_DATA_DIR", data_dir.path())
@@ -1747,7 +1747,7 @@ fn report_last_n_human_branch_truncates_keeping_seed_order() {
     // to pin the FLAG VALUE behaviour, not the DEFAULT
     // behaviour (the default is pinned at the unit level
     // via clap's own derive).
-    let out = std::process::Command::new(kf-budget_binary_path())
+    let out = std::process::Command::new(kf_budget_binary_path())
         .args(["report", "--last", "100"])
         .env("PLUGIN3_CONFIG_DIR", cfg_dir.path())
         .env("PLUGIN3_DATA_DIR", data_dir.path())
@@ -1857,7 +1857,7 @@ fn report_last_n_with_session_filter_human_branch_orders_filter_then_tail() {
     }
 
     let run = |last: &str, sid: &str| -> std::process::Output {
-        std::process::Command::new(kf-budget_binary_path())
+        std::process::Command::new(kf_budget_binary_path())
             // NOTE: no `--json`. Human branch.
             .args(["report", "--last", last, "--session", sid])
             .env("PLUGIN3_CONFIG_DIR", cfg_dir.path())
@@ -2046,7 +2046,7 @@ fn report_last_n_with_session_and_kind_filters_human_branch() {
     std::fs::write(&usage_path, s).unwrap();
 
     let run = |last: &str, sid: &str, kind: &str| -> std::process::Output {
-        std::process::Command::new(kf-budget_binary_path())
+        std::process::Command::new(kf_budget_binary_path())
             // NOTE: no `--json`. Human branch.
             .args(["report", "--last", last, "--session", sid, "--kind", kind])
             .env("PLUGIN3_CONFIG_DIR", cfg_dir.path())
@@ -2258,7 +2258,7 @@ fn report_kind_filter_human_branch_prints_filtered_lines_verbatim() {
     // wire), sessions s1 + s2 in seed order. The lines must be
     // the JSONL source bytes verbatim — single-line records,
     // no pretty-printing, no leading whitespace.
-    let out = std::process::Command::new(kf-budget_binary_path())
+    let out = std::process::Command::new(kf_budget_binary_path())
         // NOTE: no `--json` here. The human branch is reached
         // by omitting it; `commands::report::at()` routes to
         // `for line in lines { println!("{line}"); }`.
@@ -2347,7 +2347,7 @@ fn report_kind_filter_human_branch_prints_filtered_lines_verbatim() {
     // This arm pins the dash/underscore boundary on the
     // human branch; the JSON sibling pins the same boundary
     // separately.
-    let out = std::process::Command::new(kf-budget_binary_path())
+    let out = std::process::Command::new(kf_budget_binary_path())
         .args(["report", "--kind", "budget-warn"])
         .env("PLUGIN3_CONFIG_DIR", cfg_dir.path())
         .env("PLUGIN3_DATA_DIR", data_dir.path())
@@ -2449,7 +2449,7 @@ fn report_kind_filter_at_subprocess_pins_kebab_to_snake_enum_mapping() {
     std::fs::write(&usage_path, s).unwrap();
 
     // Arm 1: --kind slice → 2 records, all kind="slice".
-    let out = std::process::Command::new(kf-budget_binary_path())
+    let out = std::process::Command::new(kf_budget_binary_path())
         .args(["--json", "report", "--kind", "slice"])
         .env("PLUGIN3_CONFIG_DIR", cfg_dir.path())
         .env("PLUGIN3_DATA_DIR", data_dir.path())
@@ -2494,7 +2494,7 @@ fn report_kind_filter_at_subprocess_pins_kebab_to_snake_enum_mapping() {
     // and the wire format are snake_case (`budget_warn`). This
     // arm pins the conversion across the dash/underscore
     // boundary.
-    let out = std::process::Command::new(kf-budget_binary_path())
+    let out = std::process::Command::new(kf_budget_binary_path())
         .args(["--json", "report", "--kind", "budget-warn"])
         .env("PLUGIN3_CONFIG_DIR", cfg_dir.path())
         .env("PLUGIN3_DATA_DIR", data_dir.path())
@@ -2601,7 +2601,7 @@ fn report_kind_filter_for_budget_over_and_compact_hint_at_subprocess() {
     // `budget_over` (serde). A contributor who flips the
     // kebab rename rule to snake_case (loses the dash) would
     // make `budget-over` fail to parse here as exit 64.
-    let out = std::process::Command::new(kf-budget_binary_path())
+    let out = std::process::Command::new(kf_budget_binary_path())
         .args(["--json", "report", "--kind", "budget-over"])
         .env("PLUGIN3_CONFIG_DIR", cfg_dir.path())
         .env("PLUGIN3_DATA_DIR", data_dir.path())
@@ -2652,7 +2652,7 @@ fn report_kind_filter_for_budget_over_and_compact_hint_at_subprocess() {
     // Same dual-rename contract as arm 1; CompactHint is the
     // second kebab variant with an internal word boundary
     // (the only one not tested in Round 43 besides BudgetOver).
-    let out = std::process::Command::new(kf-budget_binary_path())
+    let out = std::process::Command::new(kf_budget_binary_path())
         .args(["--json", "report", "--kind", "compact-hint"])
         .env("PLUGIN3_CONFIG_DIR", cfg_dir.path())
         .env("PLUGIN3_DATA_DIR", data_dir.path())
@@ -2767,7 +2767,7 @@ fn report_session_filter_at_subprocess_pins_field_equality() {
     std::fs::write(&usage_path, s).unwrap();
 
     // Arm 1: --session alpha → 2 records, all session_id="alpha".
-    let out = std::process::Command::new(kf-budget_binary_path())
+    let out = std::process::Command::new(kf_budget_binary_path())
         .args(["--json", "report", "--session", "alpha"])
         .env("PLUGIN3_CONFIG_DIR", cfg_dir.path())
         .env("PLUGIN3_DATA_DIR", data_dir.path())
@@ -2824,7 +2824,7 @@ fn report_session_filter_at_subprocess_pins_field_equality() {
     // value to "alpha", arm 2 would emit zero records (no
     // match), which would surface here as a count mismatch
     // (expecting 1, got 0).
-    let out = std::process::Command::new(kf-budget_binary_path())
+    let out = std::process::Command::new(kf_budget_binary_path())
         .args(["--json", "report", "--session", "bravo"])
         .env("PLUGIN3_CONFIG_DIR", cfg_dir.path())
         .env("PLUGIN3_DATA_DIR", data_dir.path())
@@ -2927,7 +2927,7 @@ fn report_kind_filter_multi_word_kebab_human_branch() {
     std::fs::write(&usage_path, s).unwrap();
 
     let run = |kind_flag: &str| -> std::process::Output {
-        std::process::Command::new(kf-budget_binary_path())
+        std::process::Command::new(kf_budget_binary_path())
             // NOTE: no `--json`. Human branch.
             .args(["report", "--kind", kind_flag])
             .env("PLUGIN3_CONFIG_DIR", cfg_dir.path())
@@ -3100,7 +3100,7 @@ fn report_session_filter_human_branch_prints_only_matching_sids() {
     std::fs::write(&usage_path, s).unwrap();
 
     // Arm 1: --session s1 → 3 surviving lines, all session_id="s1".
-    let out = std::process::Command::new(kf-budget_binary_path())
+    let out = std::process::Command::new(kf_budget_binary_path())
         // NOTE: no `--json`. The human branch is reached by
         // omitting it; `commands::report::at()` routes to
         // `for line in lines { println!("{line}"); }`.
@@ -3167,7 +3167,7 @@ fn report_session_filter_human_branch_prints_only_matching_sids() {
     // current code does, returning false on mismatch and
     // keeping the rest), the s1 rows would survive and s2
     // would NOT — opposite of arm 1.
-    let out = std::process::Command::new(kf-budget_binary_path())
+    let out = std::process::Command::new(kf_budget_binary_path())
         .args(["report", "--session", "s2"])
         .env("PLUGIN3_CONFIG_DIR", cfg_dir.path())
         .env("PLUGIN3_DATA_DIR", data_dir.path())
@@ -3219,7 +3219,7 @@ fn report_session_filter_human_branch_prints_only_matching_sids() {
     // — clap would reject "nonexistent" with exit 64. The
     // empty-stdout contract lets `kf-budget report --session $X
     // | wc -l` reliably return zero.
-    let out = std::process::Command::new(kf-budget_binary_path())
+    let out = std::process::Command::new(kf_budget_binary_path())
         .args(["report", "--session", "nonexistent"])
         .env("PLUGIN3_CONFIG_DIR", cfg_dir.path())
         .env("PLUGIN3_DATA_DIR", data_dir.path())
@@ -3320,7 +3320,7 @@ fn report_session_and_kind_filters_combine_human_branch() {
     // `budget-warn` exercises the kebab→snake boundary on
     // the human branch.
     let run = |sid: &str, kind: &str| -> std::process::Output {
-        std::process::Command::new(kf-budget_binary_path())
+        std::process::Command::new(kf_budget_binary_path())
             .args(["report", "--session", sid, "--kind", kind])
             .env("PLUGIN3_CONFIG_DIR", cfg_dir.path())
             .env("PLUGIN3_DATA_DIR", data_dir.path())
@@ -3515,7 +3515,7 @@ fn report_session_and_kind_filters_combine_at_subprocess() {
     std::fs::write(&usage_path, s).unwrap();
 
     // Arm 1: --session alpha --kind slice → 2 records.
-    let out = std::process::Command::new(kf-budget_binary_path())
+    let out = std::process::Command::new(kf_budget_binary_path())
         .args(["--json", "report", "--session", "alpha", "--kind", "slice"])
         .env("PLUGIN3_CONFIG_DIR", cfg_dir.path())
         .env("PLUGIN3_DATA_DIR", data_dir.path())
@@ -3565,7 +3565,7 @@ fn report_session_and_kind_filters_combine_at_subprocess() {
     // rows in any kind). Also catches the OR-bug symmetric
     // to arm 1: if the filter was OR'd, this arm would
     // emit BOTH slice/alpha and slice/bravo (=3 records).
-    let out = std::process::Command::new(kf-budget_binary_path())
+    let out = std::process::Command::new(kf_budget_binary_path())
         .args(["--json", "report", "--session", "bravo", "--kind", "slice"])
         .env("PLUGIN3_CONFIG_DIR", cfg_dir.path())
         .env("PLUGIN3_DATA_DIR", data_dir.path())
@@ -3673,7 +3673,7 @@ fn report_last_after_combined_filters_at_subprocess() {
     // the tail-2 of the full seed (the second slice/bravo
     // and the budget_warn/charlie row) — surface: count=2
     // but kind mismatch on arr[1].
-    let out = std::process::Command::new(kf-budget_binary_path())
+    let out = std::process::Command::new(kf_budget_binary_path())
         .args([
             "--json",
             "report",
@@ -3730,7 +3730,7 @@ fn report_last_after_combined_filters_at_subprocess() {
     // BEFORE filtering (tail-1 of the full file = the
     // budget_warn/charlie row) would emit kind=budget_warn
     // here, not slice — surface as kind mismatch.
-    let out = std::process::Command::new(kf-budget_binary_path())
+    let out = std::process::Command::new(kf_budget_binary_path())
         .args([
             "--json",
             "report",
@@ -3794,7 +3794,7 @@ fn report_last_after_combined_filters_at_subprocess() {
     // bypasses --kind (e.g. routes only --session through
     // filter_lines) — surface: count=1 (the charlie row),
     // kind=budget_warn.
-    let out = std::process::Command::new(kf-budget_binary_path())
+    let out = std::process::Command::new(kf_budget_binary_path())
         .args([
             "--json",
             "report",
@@ -3875,7 +3875,7 @@ fn budget_status_json_state_approaching_and_over_are_pinned() {
         };
         std::fs::write(&budget_path, toml::to_string(&seed).unwrap()).unwrap();
 
-        let out = std::process::Command::new(kf-budget_binary_path())
+        let out = std::process::Command::new(kf_budget_binary_path())
             .args(["--json", "budget", "status"])
             .env("PLUGIN3_CONFIG_DIR", cfg_dir.path())
             .env("PLUGIN3_DATA_DIR", data_dir.path())
@@ -4065,7 +4065,7 @@ fn report_summary_json_envelope_shape_is_pinned() {
     }
     std::fs::write(&usage_path, s).unwrap();
 
-    let out = std::process::Command::new(kf-budget_binary_path())
+    let out = std::process::Command::new(kf_budget_binary_path())
         .args(["--json", "report", "--summary"])
         .env("PLUGIN3_CONFIG_DIR", cfg_dir.path())
         .env("PLUGIN3_DATA_DIR", data_dir.path())
@@ -4234,7 +4234,7 @@ fn report_summary_human_text_output_shape_is_pinned() {
     }
     std::fs::write(&usage_path, s).unwrap();
 
-    let out = std::process::Command::new(kf-budget_binary_path())
+    let out = std::process::Command::new(kf_budget_binary_path())
         // NOTE: no `--json` here — this is the human-readable
         // branch. `commands::report::at()` routes to the
         // `format_summary_line` loop (per-session println!).
@@ -4446,7 +4446,7 @@ fn report_summary_with_session_and_kind_filters_at_subprocess() {
     // aggregation without filters. Used as the baseline to
     // confirm the filtered arms are stricter (fewer keys,
     // narrower totals).
-    let out = std::process::Command::new(kf-budget_binary_path())
+    let out = std::process::Command::new(kf_budget_binary_path())
         .args(["--json", "report", "--summary"])
         .env("PLUGIN3_CONFIG_DIR", cfg_dir.path())
         .env("PLUGIN3_DATA_DIR", data_dir.path())
@@ -4481,7 +4481,7 @@ fn report_summary_with_session_and_kind_filters_at_subprocess() {
     //       alpha+bravo+charlie (=3 keys, count mismatch)
     //   (b) summary path routes through tail_lines → still
     //       3 keys but alpha's records would be tail-truncated
-    let out = std::process::Command::new(kf-budget_binary_path())
+    let out = std::process::Command::new(kf_budget_binary_path())
         .args([
             "--json",
             "report",
@@ -4547,7 +4547,7 @@ fn report_summary_with_session_and_kind_filters_at_subprocess() {
     // (e.g. `--session` filter hardcodes kind=slice). The
     // charlie rows are deliberately non-Slice so the
     // expectations differ from arm 2's alpha totals.
-    let out = std::process::Command::new(kf-budget_binary_path())
+    let out = std::process::Command::new(kf_budget_binary_path())
         .args(["--json", "report", "--summary", "--session", "charlie"])
         .env("PLUGIN3_CONFIG_DIR", cfg_dir.path())
         .env("PLUGIN3_DATA_DIR", data_dir.path())
@@ -4760,7 +4760,7 @@ fn budget_compact_json_envelope_with_populated_recent_is_pinned() {
     }
     std::fs::write(&recent_path, body).unwrap();
 
-    let out = std::process::Command::new(kf-budget_binary_path())
+    let out = std::process::Command::new(kf_budget_binary_path())
         .args(["--json", "budget", "compact"])
         .env("PLUGIN3_CONFIG_DIR", cfg_dir.path())
         .env("PLUGIN3_DATA_DIR", data_dir.path())
@@ -4947,7 +4947,7 @@ fn budget_compact_human_branch_emits_3_or_5_lines_per_recent_window() {
             std::fs::write(&recent_path, s).unwrap();
         }
 
-        let out = std::process::Command::new(kf-budget_binary_path())
+        let out = std::process::Command::new(kf_budget_binary_path())
             // NOTE: no `--json`. Human branch.
             .args(["budget", "compact"])
             .env("PLUGIN3_CONFIG_DIR", cfg_dir.path())
@@ -5094,7 +5094,7 @@ fn report_json_emits_empty_envelope_when_usage_log_missing() {
     let runtime_dir = tempfile::tempdir().expect("runtime tempdir");
 
     // arm 1: detailed --json → []
-    let out = std::process::Command::new(kf-budget_binary_path())
+    let out = std::process::Command::new(kf_budget_binary_path())
         .args(["--json", "report"])
         .env("PLUGIN3_CONFIG_DIR", cfg_dir.path())
         .env("PLUGIN3_DATA_DIR", data_dir.path())
@@ -5126,7 +5126,7 @@ fn report_json_emits_empty_envelope_when_usage_log_missing() {
     );
 
     // arm 2: --summary --json → {}
-    let out = std::process::Command::new(kf-budget_binary_path())
+    let out = std::process::Command::new(kf_budget_binary_path())
         .args(["--json", "report", "--summary"])
         .env("PLUGIN3_CONFIG_DIR", cfg_dir.path())
         .env("PLUGIN3_DATA_DIR", data_dir.path())
@@ -5158,7 +5158,7 @@ fn report_json_emits_empty_envelope_when_usage_log_missing() {
     );
 
     // arm 3: human branch (no --json) keeps the breadcrumb.
-    let out = std::process::Command::new(kf-budget_binary_path())
+    let out = std::process::Command::new(kf_budget_binary_path())
         .args(["report"])
         .env("PLUGIN3_CONFIG_DIR", cfg_dir.path())
         .env("PLUGIN3_DATA_DIR", data_dir.path())

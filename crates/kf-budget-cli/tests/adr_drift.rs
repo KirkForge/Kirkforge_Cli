@@ -126,8 +126,8 @@ fn no_orphan_adr_files() {
         // In the merged KirkForge-Cli repo we only enforce the kf-budget
         // ADR index (4-digit numbered ADRs). CLI-native ADRs use a
         // separate 3-digit numbering scheme.
-        let is_kf-budget_adr = adr.len() >= 4 && adr[..4].chars().all(|c| c.is_ascii_digit());
-        if !is_kf-budget_adr {
+        let is_kf_budget_adr = adr.len() >= 4 && adr[..4].chars().all(|c| c.is_ascii_digit());
+        if !is_kf_budget_adr {
             continue;
         }
         if !index_body.contains(adr) {

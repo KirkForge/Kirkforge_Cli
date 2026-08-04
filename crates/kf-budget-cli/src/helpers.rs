@@ -41,7 +41,7 @@ pub(crate) fn read_stdin_json<T: for<'de> Deserialize<'de>>() -> Option<T> {
 // `cfg(test)` keeps it out of release builds — the binary's own
 // path-lookup isn't a runtime concern.
 #[cfg(test)]
-pub(crate) fn kf-budget_binary_path() -> std::path::PathBuf {
+pub(crate) fn kf_budget_binary_path() -> std::path::PathBuf {
     // CARGO_BIN_EXE_<name> is set when the test is run via the
     // cargo test runner. When the binary path is unknown, fall
     // back to a sibling of the running test executable

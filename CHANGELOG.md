@@ -1,16 +1,32 @@
 # Changelog
 
-All notable changes to kirkforge are documented here.
+All notable changes to kf-code are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
 ### Changed
-- Renamed the binary from `kirkforge` to `kf-code`. All CLI invocations,
+- Renamed the binary from `kf-code` to `kf-code`. All CLI invocations,
   env var prefixes (`KIRKFORGE_` → `KF_CODE_`), config/data directory
-  paths (`~/.local/share/kirkforge` → `~/.local/share/kf-code`), and
+  paths (`~/.local/share/kf-code` → `~/.local/share/kf-code`), and
   documentation references updated accordingly. The GitHub org/repo URLs
   remain `KirkForge/KirkForge-Cli`.
+- Renamed all sub-crates to the `kf-` prefix: `kf-plugin-sdk` →
+  `kf-plugin-sdk`, `kf-plugin-host` → `kf-plugin-host`,
+  `kf-context-index` → `kf-context-index`,
+  `kf-workflow` → `kf-workflow`, `kf-lsp` → `kf-lsp`,
+  `kf-bench` → `kf-bench`, `kf-draw-core` →
+  `kf-draw-core`, `kf-draw` → `kf-draw`,
+  `kf-video` → `kf-video`, `kf-compress-core` →
+  `kf-compress-core`, `kf-compress-hosts` → `kf-compress-hosts`,
+  `kf-compress-cli` → `kf-compress-cli`, `kf-budget-core` →
+  `kf-budget-core`, `kf-budget-hosts` → `kf-budget-hosts`,
+  `kf-budget-cli` → `kf-budget-cli`, `kf-testdoctor` →
+  `kf-testdoctor`. Plugin directories renamed:
+  `kf-budget` → `kf-budget`, `kf-plugin-sdk` → `kf-plugin`,
+  `kf-draw` → `kf-draw`, `kf-video` → `kf-video`.
+  The manifest filename changed from `kf-code.toml` to `kf-code.toml`.
+  All documentation updated to reflect the new names.
 
 ### Added
 - WO 15.26 Batch C (tools + executor): 14 of 15 safe items fixed (one
@@ -77,15 +93,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   prints a stdout banner naming the config path + a concrete `-m`
   model hint on first run, so a new user gets feedback instead of
   silent success. Fires exactly once (gated by `!exists`). README
-  quick start shows `kirkforge run -m qwen2.5:0.5b` with a first-run
+  quick start shows `kf-code run -m qwen2.5:0.5b` with a first-run
   hint; `/init` slash command usage string filled in.
 - Actionable error hints + typed error classification (WO 14.3):
   `KirkForgeError::hint()` returns a per-variant suggestion string
   (model/provider, permission/sandbox, config parse); the top-level
   error printer now shows a `hint:` line when present. The
   `From<anyhow::Error>` classifier downcasts two typed errors
-  (`kirkforge_plugin::ManifestError` -> ConfigParse,
-  `kirkforge_plugin_host::ToolError` -> AccessDenied) before falling
+  (`kf_plugin_sdk::ManifestError` -> ConfigParse,
+  `kf_plugin_host::ToolError` -> AccessDenied) before falling
   back to the existing string matcher. The migration TODO is updated,
   not removed — ModelUnreachable still uses string matching (no typed
   model-connection error exists in the adapter layer yet).
@@ -114,23 +130,23 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   universal scoring, 10 hero benchmarks) with a mapping table for the
   existing 30 tasks; new `benches/tasks/token_budget_challenge.toml`
   signature task run 5× under descending budget ceilings (128k/64k/
-  32k/16k/8k) via `KIRKFORGE_BUDGET_CEILING` env; `BudgetChallengeReport`
+  32k/16k/8k) via `KF_CODE_BUDGET_CEILING` env; `BudgetChallengeReport`
   markdown scoreboard; `load_tasks` now accepts a single `.toml` file.
-- Testdoctor smart suggest + apply (WO 12.6, ADR-0029): `kirkforge
+- Testdoctor smart suggest + apply (WO 12.6, ADR-0029): `kf-code
   doctor suggest-detailed [--filter <substr>]` composes per-test
   timings with source-file pattern analysis (subprocess spawn,
   `tokio::time::sleep`, `std::env::set_var`, network calls, temp-dir
-  writes) to produce specific, actionable suggestions. `kirkforge
+  writes) to produce specific, actionable suggestions. `kf-code
   doctor apply --suggestion <id> --test <path> [--yes]` performs a
   text-based rewrite (add `#[ignore]`, wrap `#[tokio::test(start_paused
   = true)]`, replace `std::env::set_var` with `EnvGuard::set`); always
   shows the diff first, requires `--yes` to write. No `syn` dep.
 - Testdoctor per-test timings + flaky-test detection (WO 12.5,
-  ADR-0029): `kirkforge doctor profile-per-test` captures per-test
+  ADR-0029): `kf-code doctor profile-per-test` captures per-test
   durations via nightly JSON (`cargo +nightly test -- --format json
   -Z unstable-options --report-time`) when nightly is installed, and
   falls back to per-binary timings attributed to each test (coarse,
-  flagged in the report) on stable. `kirkforge doctor flaky --runs N
+  flagged in the report) on stable. `kf-code doctor flaky --runs N
   --filter <test>` runs a test N times and reports the pass/fail rate +
   failure messages (manual developer tool, not run in CI). `classify`
   and `suggest` now use per-test data when available, naming the
@@ -150,7 +166,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   manager error branches, validate-args edges, config empty-path
   merging, verifier no-cargo-root skip). Pinned the headroom policy +
   the `--skip` belt-and-suspenders workaround in ADR-065.
-- `kirkforge plugin` CLI subcommand (WO 11.0, ADR-056): `list`, `enable`,
+- `kf-code plugin` CLI subcommand (WO 11.0, ADR-056): `list`, `enable`,
   `disable`, `toggle`, `validate`, `reload`, `sources`, `add`, `remove`,
   `doctor`. Backed by a shared `plugin_ops` layer
   (`src/session/plugin_ops.rs`) that the TUI `/plugins` commands will
@@ -178,7 +194,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   gains a `depends_on: Vec<String>` field (serde `#[serde(rename =
   "depends_on")]`). The loader applies a DFS-based topological sort so
   dependencies load before dependents; missing deps + cycles are
-  rejected with clear errors. `plugins/kirkforge-plugin3/kirkforge.toml`
+  rejected with clear errors. `plugins/kf-budget/kf-code.toml`
   now declares `depends_on = ["stratum"]` (the real WO 8.6 dependency
   made explicit). 11 new tests (7 manifest validation + 4 host
   load-order: empty, missing, cycle, transitive).
@@ -192,14 +208,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Plugin verifier UI (WO 11.7, ADR-062): `MetricEvent::Verifier` gains
   a `source: String` field (`"built-in"` or `"plugin:<name>"`,
   additive via `#[serde(default)]`). `/verify` TUI slash command +
-  `kirkforge verify` CLI print a table of recent verifier verdicts
+  `kf-code verify` CLI print a table of recent verifier verdicts
   from the metrics log. `format_verdict_report` formats the bus's
   in-memory verdicts. 3 new metric tests (source field, default,
   empty report).
 - Plugin hot-reload via file watcher (WO 11.4, ADR-059): added
   `notify-debouncer-mini` dep. `spawn_plugin_watcher` watches the
   plugins dir with 500ms debounce and sends a reload signal on
-  `kirkforge.toml` / tool/hook script changes. The TUI spawns the
+  `kf-code.toml` / tool/hook script changes. The TUI spawns the
   watcher at startup; the reload uses the same path as `/plugins
   reload`. 1 `#[ignore]` integration test (timing-sensitive).
 - Surface trust-tier downgrades (WO 11.3): `/plugins list` now shows
@@ -207,11 +223,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (e.g. "shell (effective: read-only)") and the count of filtered
   capabilities. `HostedPlugin` gains an `original_capability_count`
   field. The non-downgraded case is quiet (no noise). 1 new test.
-- Plugin init scaffolding (WO 11.8, ADR-063): `kirkforge plugin init
+- Plugin init scaffolding (WO 11.8, ADR-063): `kf-code plugin init
   <name>` scaffolds a new plugin directory with a valid
-  `kirkforge.toml` (default `trust = "read-only"` + placeholder skill),
+  `kf-code.toml` (default `trust = "read-only"` + placeholder skill),
   `tools/` + `hooks/` dirs (with `.gitkeep`), and a `README.md`. The
-  scaffolded manifest passes `kirkforge plugin validate` out of the
+  scaffolded manifest passes `kf-code plugin validate` out of the
   box. 3 new tests (round-trip, invalid name, existing dir).
 
 ### Fixed
@@ -225,8 +241,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   model sees one "Access denied" result per failed edit instead of two
   (bucketlist 2.8). (3) Stratum/Budget tool + hook registration now
   checks `cfg.tools.enabled_plugins` at runtime, so `/plugins disable
-  stratum` (or `kirkforge-plugin3`) actually removes the compiled-in
-  tools/hooks on the next `kirkforge run`, not just the `/plugins list`
+  stratum` (or `kf-budget`) actually removes the compiled-in
+  tools/hooks on the next `kf-code run`, not just the `/plugins list`
   display (bucketlist 5.1). 2 new tests
   (`test_cancelled_batch_aborts_remaining_spawned_tasks`,
   `test_denied_edit_records_single_access_denied_result`).
@@ -260,7 +276,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   registration stays fire-and-forget by necessity; `count` was already
   honest as it counts slot verifiers only); host-crate
   `PluginTool::execute` now applies rlimits via a new
-  `crates/kirkforge-plugin-host/src/rlimits.rs` mirroring
+  `crates/kf-plugin-host/src/rlimits.rs` mirroring
   `bash_runner::setup_rlimits`, gated on an optional
   `resource_limits` field + `with_resource_limits` builder (ADR-060;
   default `None` preserves today's behavior). Closes bucketlist items
@@ -316,7 +332,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   bridge passes `KF_CHANGED_FILES` as relative paths with a configured
   cwd; the old form resolved against `process.cwd()` and dropped them);
   the `graph-emitter` test was rewritten to the refactored
-  `GraphifyEmitter` API (`@kirkforge/tool-graphify`), and the
+  `GraphifyEmitter` API (`@kf-code/tool-graphify`), and the
   `verification-emitter-routing` test's `constructor.name` assertion was
   updated from `GraphEmitter` to `GraphifyEmitter`. 3 new Rust tests.
 - WO 15.9: closed three cross-review findings (bucketlist 2.7, 2.10,
@@ -352,12 +368,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   immediately before the atomic rename, fixing the tarpaulin tempdir/rename
   race that flaked `test_build_fork_tree_orphan_fork_is_a_root`. WO 12.7
   follow-up: synced the stale `DEFAULT_THRESHOLDS` in
-  `crates/kirkforge-testdoctor/src/gaps.rs` to the current CI coverage gate
-  (session 68.0, tools 76.0, adapters 75.0) so `kirkforge doctor gaps`
+  `crates/kf-testdoctor/src/gaps.rs` to the current CI coverage gate
+  (session 68.0, tools 76.0, adapters 75.0) so `kf-code doctor gaps`
   reports correct headroom.
 - Windows env_guard race (Workorder 10.0): the
   `env_guard_restores_prior_value_some_branch` tests in
-  `crates/plugin3-core/src/cost.rs` and `paths.rs` read
+  `crates/kf-budget-core/src/cost.rs` and `paths.rs` read
   `PLUGIN3_CONFIG_DIR` after `EnvGuard::Drop` released the test mutex,
   racing other test threads on Windows. Added `EnvGuard::prior()` and
   assert on the captured prior (the contract: prior=None ⇒ Drop removed),
@@ -385,7 +401,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `stderr_len` (two `git add .` calls in a batch no longer dedup) and
   `FileWrite` now includes a `content_hash` (two same-length writes to
   the same path no longer dedup). Closes bucketlist items 2.4, 2.5, 2.6.
-- WO 15.13: split `crates/kirkforge-draw/src/event.rs` (8,226 lines, the
+- WO 15.13: split `crates/kf-draw/src/event.rs` (8,226 lines, the
   largest file in the repo) by event category. The production code
   (event loop, key/mouse dispatchers, palette, panel click handlers,
   style cycles, clipboard, save) is cohesive — `handle_key` calls
@@ -397,7 +413,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `inspector.rs`, `mouse.rs`, `palette.rs`, `save.rs`, `text_edit.rs`,
   `grouping.rs`, `find.rs`. Pure refactor: test bodies moved verbatim,
   no logic/assertion change, test count unchanged (251 in `event::`,
-  328 in `kirkforge-draw`). `ponytail:`/`ceiling:` annotations preserved.
+  328 in `kf-draw`). `ponytail:`/`ceiling:` annotations preserved.
   The one behaviour-affecting edit is the `include_str!("event.rs")` in
   `keymap_doc_block_lists_palette_and_z_order_chords` →
   `include_str!("../mod.rs")` (the production file moved).
@@ -434,11 +450,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `bridge-emitter.ts` wraps the `SecurityEmitter` and outputs NDJSON.
   ADR-028 ponytail updated to reflect the cross-language bridge shipped.
   `docs/TECHNICAL.md` verifier-bus section updated. 5 new Rust tests +
-  2 TS tests. The `kirkforge-plugin-host` `env` module is now `pub`
+  2 TS tests. The `kf-plugin-host` `env` module is now `pub`
   (the bridge reuses `curated_env`).
 - Bench leaderboard publish + regression gate (Workorder 10.9):
   `compare_with_threshold(baseline, current, threshold) -> CompareResult`
-  in `kirkforge-bench` flags a regression when the success rate drops
+  in `kf-bench` flags a regression when the success rate drops
   by more than the threshold. `bench compare --fail-on-regression <pct>`
   CLI flag exits non-zero on regression. The `bench-pr-delta` CI job
   now fails on regression (10pp threshold) while still posting the
@@ -588,7 +604,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   Added 4 new tasks that exercise plugin tools
   (`use_stratum_compress`, `use_budget_check`, `use_draw_render`,
   `use_lsp_query`). `use_workflow_run` is deferred — no `Tool` impl
-  exists for `kirkforge-workflow` yet. Total bench tasks: 24.
+  exists for `kf-workflow` yet. Total bench tasks: 24.
 
 ### Changed
 - Raised the `src/session` tarpaulin coverage threshold in CI from 61.0% to 62.0%
@@ -627,7 +643,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   for `ToolOutcome::Error` / `ToolOutcome::Failure`, so the model sees the
   raw error and the structured hint side-by-side.
 - Plugin manifest schema validation (Workorder 8.8): `PluginManifest::validate()`
-  in `crates/kirkforge-plugin/src/lib.rs` returns
+  in `crates/kf-plugin-sdk/src/lib.rs` returns
   `Result<(), Vec<ValidationError>>` and collects every rule violation —
   name regex (kebab-case), semver, api_version, trust tier, tool
   command must be relative, tool schema sanity, hook event must be in
@@ -640,10 +656,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   surfaces every error as a load warning (does not reject the plugin —
   the user sees all issues at once). `ValidationError` derives
   `Serialize`/`Deserialize` so the error can flow across the
-  plugin-host boundary as JSON. 19 new unit tests in `kirkforge-plugin`
-  + 1 in `kirkforge-plugin-host`.
+  plugin-host boundary as JSON. 19 new unit tests in `kf-plugin-sdk`
+  + 1 in `kf-plugin-host`.
 - Context index edge-case extraction (Workorder 8.9): the tree-sitter
-  walker in `kirkforge-context-index` now handles (1) TypeScript
+  walker in `kf-context-index` now handles (1) TypeScript
   `export const foo = () => {}` arrow function assignments (extracts
   `foo` as a Function symbol), (2) TypeScript interface merging via
   a new `ContextIndex::dedup_interfaces()` pass keyed by `(name, file)`,
@@ -651,7 +667,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   spurious module-level symbols are produced), and (4) Go method
   receivers (both pointer and value, e.g. `func (s *Server) Start()` →
   `Server.Start`). 7 new tests against 5 fixture files in
-  `crates/kirkforge-context-index/tests/`.
+  `crates/kf-context-index/tests/`.
 - Multi-model benchmark leaderboard (Workorder 8.1, ADR-038): `bench run-models
   --models a,b,c --tasks <dir> --summary <md>` runs all bench tasks for each
   model and produces a `write_model_comparison()` markdown table (Model | Tasks
@@ -663,7 +679,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   ACTIVE guard, not a passive monitor. `check_and_slice` in `src/session/budget.rs`
   intercepts oversized tool results before they enter the conversation — when
   the budget is `Over` or `Approaching`, the result is sliced (head + tail with
-  a slice marker) via `plugin3_core::slicing::HeadTailSlicer` and the full
+  a slice marker) via `kf_budget_core::slicing::HeadTailSlicer` and the full
   content is stored in the offload store (retrievable via `store_get`). The
   sliced result enters the conversation. Closes the deferred "Plugin3 hook
   action" item from `state.md`.
@@ -697,19 +713,19 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     `src/session/executor/mod.rs` under their respective feature flags.
   - The Plugin3 hooks observe and report budget usage; slicing/compacting tool
   results before they enter the conversation remains a follow-up (deferred).
-- Fold `kirkstratum-core` into the main binary as an optional `stratum` feature
+- Fold `kf-compress-core` into the main binary as an optional `stratum` feature
   (default on). 5 tools (`run`, `apply`, `mode`, `rules`, `config_validate`)
   are now direct Rust calls, eliminating subprocess overhead. ADR-046.
-- Fold `kirkforge-draw-core` into the main binary as an optional `draw` feature
+- Fold `kf-draw-core` into the main binary as an optional `draw` feature
   (default on). The `draw_render` tool loads `.td.json` files and renders them
   in-process. ADR-048.
 - Fold Plugin3 (token-budget guard) into core as an optional `budget` feature
   (default on). 7 tools (`budget_status`, `budget_set`, `budget_compact`,
   `store_get`, `config_validate`, `report`, `self_check`) are now direct
-  Rust calls via `plugin3-core`, eliminating the lossy shell-plugin shim.
+  Rust calls via `kf-budget-core`, eliminating the lossy shell-plugin shim.
   ADR-047. The 4 hooks are now in-process handlers with full event context
   (see the in-process hooks entry above).
-- Fold `kirkforge-video` into the main binary as an optional `video` feature
+- Fold `kf-video` into the main binary as an optional `video` feature
   (non-default). 8 video tools are direct Rust calls when enabled. ADR-049.
 - ADR-045: Continuous evaluation pipeline (nightly baseline, per-PR delta,
   PR comments, verify-only smoke).
@@ -722,7 +738,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   Folded plugins (Stratum, Plugin3, Draw, Video) with their feature ON are
   skipped by the shell loader and served compiled-in; with feature OFF they
   fall back to shell plugins (graceful degradation). The Node SDK
-  (`kirkforge-plugin`) stays external. `/plugins list` shows source and
+  (`kf-plugin-sdk`) stays external. `/plugins list` shows source and
   feature gate.
 - Plugin system consolidation (Workorder 7.0): the shell-plugin loader
   (`load_workspace_plugins`) now checks `folded_feature_enabled(name)` for each
@@ -737,14 +753,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `folded_plugin_shell_fallback_when_feature_off`, `folded_plugin_identification`.
 - `bench compare` subcommand: compare two JSON bench reports and emit a delta
   summary (markdown table of per-task deltas + aggregate success rate / cost /
-  token changes). Usage: `kirkforge bench compare --baseline <json> --current <json> [--summary <md>]`.
+  token changes). Usage: `kf-code bench compare --baseline <json> --current <json> [--summary <md>]`.
 - `bench list` subcommand: list all benchmark tasks in a directory with name,
   difficulty, and verification type.
 - `bench verify-only` subcommand: run verification only (no LLM) for benchmark
   tasks, useful for validating task definitions.
 - `TaskDelta`, `DeltaReport`, `TaskInfo` types and `compare_reports`,
   `write_markdown_delta`, `list_tasks`, `verify_only` functions in
-  `kirkforge-bench`.
+  `kf-bench`.
 - Unit tests for `compare_reports`: regression (same report → zero deltas),
   improvement, and new-task scenarios.
 - Unit tests for `list_tasks` and `verify_only`.
@@ -822,7 +838,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 - Disk caching for context index (P1-long-1 Phase 4, ADR-037):
   `CachedIndex` with git-HEAD-based invalidation. Cache at
-  `.kirkforge/context-index/cache.json`. Session startup is instant
+  `.kf-code/context-index/cache.json`. Session startup is instant
   on subsequent runs when HEAD matches. 5 new tests.
 
 - TypeScript tree-sitter grammar in context-index (P1-long-1 Phase 5,
@@ -912,18 +928,18 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   and tool call rendering, LSP bridge collecting diagnostics on save
   and debounce, bridge sendPrompt/sendApproval NDJSON methods, pure
   `format.ts` module for testability. 13 tests. `.vsix` packaging
-  (kirkforge-vscode-0.2.0.vsix). CI `vscode` job. ADR-040. (P2-long-4)
+  (kf-code-vscode-0.2.0.vsix). CI `vscode` job. ADR-040. (P2-long-4)
 
 ## [0.3.1] - 2026-07-22
 
 ### Added
-- Task-benchmark harness (`crates/kirkforge-bench/`): TOML task definitions, `BenchRunner` headless execution, metrics collection (success/tokens/time/cost), `kirkforge bench` subcommand, CI bench job. 10 unit tests, 5 task TOML files. Documented in ADR-038. (P1-long-2)
-- Execution replay + time-travel (`src/session/replay.rs`): `TurnRecord` NDJSON traces alongside conversation logs. `TraceRecorder` appends one line per turn with prompt messages, model response, tool calls, outcome, token counts, and duration. `kirkforge replay <session-id>` subcommand with `--turn`, `--from`, `--to` range flags. `--no-trace` flag on `Run` to disable tracing. 4 unit tests. Documented in ADR-039. (P2-long-3)
+- Task-benchmark harness (`crates/kf-bench/`): TOML task definitions, `BenchRunner` headless execution, metrics collection (success/tokens/time/cost), `kf-code bench` subcommand, CI bench job. 10 unit tests, 5 task TOML files. Documented in ADR-038. (P1-long-2)
+- Execution replay + time-travel (`src/session/replay.rs`): `TurnRecord` NDJSON traces alongside conversation logs. `TraceRecorder` appends one line per turn with prompt messages, model response, tool calls, outcome, token counts, and duration. `kf-code replay <session-id>` subcommand with `--turn`, `--from`, `--to` range flags. `--no-trace` flag on `Run` to disable tracing. 4 unit tests. Documented in ADR-039. (P2-long-3)
 - `impl Default for ContextIndex` (clippy fix).
 
 ### Fixed
 - Removed duplicate `context_index` block in `src/main/mod.rs`.
-- `cargo fmt` fixes in `crates/kirkforge-context-index/src/lib.rs`.
+- `cargo fmt` fixes in `crates/kf-context-index/src/lib.rs`.
 
 ### Changed
 - Lowered `src/session` coverage threshold from 63.0% to 62.0% in CI. The bench harness's `run_task`/`run_all` need a live model and can't be unit-tested; 191 lines of integration-only code drag the ratio.
@@ -932,26 +948,26 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [0.3.0] - 2026-07-21
 
 ### Added
-- Restore plugin 1 bench harness (`bench/kirkforge-mini/` with 4 tasks × 9 workers, real measured results) and `tool-graphify` package (real import-graph with extension resolution) from the original KirkForge-Plugin repo. Re-wire `emitter-factory.ts` to import `GraphifyEmitter` from `@kirkforge/tool-graphify` again, replacing the inline regex-only `graph-emitter.ts`. Restore plugin 3's `size_budget.rs` (8MB release-binary cap), `build_spec_drift.rs`, and `readme_drift.rs` tests from the original KirkForge-Plugin3 repo. Documented in ADR-029 (plugin-restoration). (P0)
+- Restore plugin 1 bench harness (`bench/kf-mini/` with 4 tasks × 9 workers, real measured results) and `tool-graphify` package (real import-graph with extension resolution) from the original KirkForge-Plugin repo. Re-wire `emitter-factory.ts` to import `GraphifyEmitter` from `@kf-code/tool-graphify` again, replacing the inline regex-only `graph-emitter.ts`. Restore plugin 3's `size_budget.rs` (8MB release-binary cap), `build_spec_drift.rs`, and `readme_drift.rs` tests from the original KirkForge-Plugin3 repo. Documented in ADR-029 (plugin-restoration). (P0)
 - Add `build` (priority 3) and `test` (priority 5) verifier slots to the Rust runtime verifier bus: `build` runs `cargo build --message-format=json` and returns the first compiler error for the edited file; `test` runs targeted `cargo test <module-prefix>` and returns the failure output as a model-facing suggestion. Documented in ADR-031. (P2-1)
 - PlanReason trace events expose *why* planning decisions were made: new `MetricEvent::PlanReason` with `PlanDecisionKind` enum (ToolSelect, ContextTruncate, MemoryRetrieve, PromptFailure, CompactionTrigger, ModelSelect). Emitted after tool calls, on context truncation, memory retrieval, prompt-failure retries, and compaction triggers. Mapped to OTel attributes `plan.decision_kind`, `plan.reason`, `plan.confidence`, `plan.related_id`. Documented in ADR-032. (P2-2)
 - Exponential backoff on tool-call retries: `RetryTracker::wait_before_retry()` now sleeps using the shared `retry_backoff` helper before each parse-error retry, matching the existing model-request retry policy (1 s, 2 s, 4 s) with deterministic jitter. Documented in ADR-033. (P2-3)
 - Mid-batch tool-result checkpointing: `dispatch_tool_call_batch` now calls `conversation.checkpoint_async()` after each recorded tool result, so a crash mid-batch recovers the completed subset instead of losing the whole batch. Documented in ADR-034. (P2-4)
 - `--seed <u64>` deterministic mode: pins model temperature=0, passes seed to provider request bodies (OpenAI-compat `seed` field, Ollama `options.seed`), and forces sequential tool dispatch to eliminate nondeterminism from `tokio::spawn` scheduling. Best-effort determinism for regression testing. Documented in ADR-030. (P2-5)
-- Test-doctor prototype (`crates/kirkforge-testdoctor/`) for CI test partitioning: classifies tests by profile (fast/slow/flaky), suggests partition splits, and generates CI config. Documented in ADR-029. (infra)
+- Test-doctor prototype (`crates/kf-testdoctor/`) for CI test partitioning: classifies tests by profile (fast/slow/flaky), suggests partition splits, and generates CI config. Documented in ADR-029. (infra)
 - `--worktree` flag creates an isolated git worktree per session: `git worktree add --detach` on start, `git worktree remove --force` on session end. Sandbox redirected to worktree path. Documented in ADR-035. (P2-6)
 - `--docker` flag and `[docker]` config block routes bash tool execution through Docker containers with `--memory`, `--cpus`, and `--network=none` isolation. `DockerConfig` with configurable image/memory/cpus. Documented in ADR-036. (P2-6)
-- `crates/kirkforge-context-index/` scaffolded: `ContextIndex` with line-based symbol extraction (fn/struct/enum/impl/mod/use), `index_file`/`index_dir`/`symbols`/`retrieve` API, 3 tests. ADR-037 (Experimental). (P1-long-1 start)
+- `crates/kf-context-index/` scaffolded: `ContextIndex` with line-based symbol extraction (fn/struct/enum/impl/mod/use), `index_file`/`index_dir`/`symbols`/`retrieve` API, 3 tests. ADR-037 (Experimental). (P1-long-1 start)
 
 ### Fixed
 - `run_docker` task-orphaning: `out_handle`/`err_handle` now awaited with 1s timeout after `child.kill()` on timeout/cancellation paths.
 - Release workflow now verifies CI by waiting for each individual job check-run to succeed, instead of looking for a non-existent single `CI` check-run (#10, #11).
-- Release workflow now builds with `--workspace` so all bundled binaries (`kfd`, `plugin3`, `stratum`, `kirkforge-video`) are produced for every target (#12).
+- Release workflow now builds with `--workspace` so all bundled binaries (`kfd`, `kf-budget`, `stratum`, `kf-video`) are produced for every target (#12).
 - Release workflow Windows archive step now expands the archive name variable correctly so the zip artifact is produced (#13).
-- Plugin3 `readme_drift.rs` tests adapted to CLI workspace: reads `crates/plugin3-core/README.md` instead of workspace root README. Added State table with test count to `crates/plugin3-core/README.md`.
+- Plugin3 `readme_drift.rs` tests adapted to CLI workspace: reads `crates/kf-budget-core/README.md` instead of workspace root README. Added State table with test count to `crates/kf-budget-core/README.md`.
 - Plugin3 `size_budget.rs` adapted to CLI workspace release profile (`lto = true`, `strip = true` instead of `lto = "thin"`, `strip = "symbols"`).
 - Plugin3 `build_spec_drift.rs` (33 tests) marked `#[ignore]` — tests the original Plugin3 repo's build spec, not the CLI workspace's.
-- Tool-graphify added to root `tsconfig.json`, orchestrator `tsconfig.json`, and orchestrator `package.json` project references so `tsc --build` resolves `@kirkforge/tool-graphify`.
+- Tool-graphify added to root `tsconfig.json`, orchestrator `tsconfig.json`, and orchestrator `package.json` project references so `tsc --build` resolves `@kf-code/tool-graphify`.
 - Deterministic mode: fixed results being shadowed by a second `results` HashMap in the collect loop when `--seed` forces sequential dispatch.
 - Main branch syntax error from botched P2-4 merge resolved (dangling `})` + `];` in `tests/mod.rs`).
 
@@ -961,15 +977,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Version 0.2.0 release (#9).
 - Executor batch concurrency coverage (#7): non-file tool calls run in parallel; file tool calls remain sequential with the read-before-edit gate enforced before write/edit bodies run, while `[read_file(X), write_file(X)]` in the same batch now correctly passes the gate because reads are marked immediately after the read body completes.
 - Real parallel tool dispatch (WO-2) with three-phase `dispatch_tool_call_batch`: prepare/run/record. Non-file tools spawn concurrently via `tokio::spawn`; file tools run sequentially so the read-before-edit gate observes reads before edits in the same batch.
-- VS Code PTY wrapper extension (WO-1) under `editors/vscode/` — `extension.ts` spawns `kirkforge run` in the integrated terminal.
+- VS Code PTY wrapper extension (WO-1) under `editors/vscode/` — `extension.ts` spawns `kf-code run` in the integrated terminal.
 - `computer_use` tool (WO-3) via headless Chrome CDP for screenshot/click/type/scroll, SSRF-guarded via `DenyList`.
 - Anthropic Bedrock and Vertex adapters (WO-3) with SigV4 signing and Google OAuth2 respectively; both reuse the existing `parse_anthropic_stream` SSE parser.
-- Programmable JSON workflow engine (WO-4) in `crates/kirkforge-workflow/` with step dependency resolution, cycle detection, output propagation, and 3 built-in templates (`feature.json`, `bugfix.json`, `refactor.json`) plus `/workflow run`/`status`/`cancel` TUI commands.
+- Programmable JSON workflow engine (WO-4) in `crates/kf-workflow/` with step dependency resolution, cycle detection, output propagation, and 3 built-in templates (`feature.json`, `bugfix.json`, `refactor.json`) plus `/workflow run`/`status`/`cancel` TUI commands.
 - Native Kimi/Moonshot adapter (`src/adapters/kimi.rs`) supporting 256K context, native tool calls, and the `reasoning_content` thinking field.
-- Persistent cron-style scheduled jobs (`kirkforge jobd`) with Unix socket control, signal handling, bounded concurrency, and storage under `~/.local/share/kirkforge/jobs/<id>/`.
+- Persistent cron-style scheduled jobs (`kf-code jobd`) with Unix socket control, signal handling, bounded concurrency, and storage under `~/.local/share/kf-code/jobs/<id>/`.
 - Write-side minification / VFS envelope for file tools (`minify_write_side`).
-- `lsp_query` tool backed by `crates/kirkforge-lsp` for workspace symbol/type/diagnostic queries.
-- Plugin host path-validation module (`crates/kirkforge-plugin-host/src/paths.rs`) that drops capabilities whose command path is absolute, climbs out of the plugin root, or resolves outside it.
+- `lsp_query` tool backed by `crates/kf-lsp` for workspace symbol/type/diagnostic queries.
+- Plugin host path-validation module (`crates/kf-plugin-host/src/paths.rs`) that drops capabilities whose command path is absolute, climbs out of the plugin root, or resolves outside it.
 
 ### Changed
 - Established biweekly minor release cadence and documented SemVer policy in `README.md` and `docs/RELEASE.md` (ADR-024).
@@ -985,11 +1001,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `README.md`, `src/cli.rs`, `src/tui/commands/route.rs`, `src/tui/syntax/mod.rs`, and `src/session/prompt/summarizer.rs` updated to remove "potato hardware" and localhost-default language.
 
 ### Added
-- Persistent cron-style scheduled jobs (Session 3). New `kirkforge jobd` scheduler daemon with Unix socket control, signal handling, and bounded concurrency. Jobs are stored under `~/.local/share/kirkforge/jobs/<id>/` with `0o600` artifacts. Supports `@hourly`, `@daily`, `@weekly`, `@restart`, `@once <ISO-8601>`, and raw 5/6-field cron expressions. Bash jobs reuse the `bash_runner` safety gate and require either a permission rule or `scheduled_bash_auto_approve = true` to run unattended; skill jobs are accepted but record a "not yet implemented" failure.
+- Persistent cron-style scheduled jobs (Session 3). New `kf-code jobd` scheduler daemon with Unix socket control, signal handling, and bounded concurrency. Jobs are stored under `~/.local/share/kf-code/jobs/<id>/` with `0o600` artifacts. Supports `@hourly`, `@daily`, `@weekly`, `@restart`, `@once <ISO-8601>`, and raw 5/6-field cron expressions. Bash jobs reuse the `bash_runner` safety gate and require either a permission rule or `scheduled_bash_auto_approve = true` to run unattended; skill jobs are accepted but record a "not yet implemented" failure.
   - TUI slash commands: `/jobs schedule <spec> bash <command>`, `/jobs schedule <spec> skill <name> [args...]`, `/jobs scheduled list`, `/jobs scheduled cancel <id>`, `/jobs run-now <id>`, `/jobs logs <id>`.
   - New config fields `scheduled_bash_auto_approve` (default `false`) and `max_concurrent_scheduled_jobs` (default `4`) with env overrides.
   - New modules: `src/jobs/schedule.rs`, `src/jobs/store.rs`, `src/jobs/runner.rs`, `src/jobs/daemon.rs`, `src/jobs/client.rs`.
-- Write-side minification / VFS envelope for file tools. New config flag `minify_write_side` (default `false`, env `KIRKFORGE_MINIFY_WRITE_SIDE`, TOML `minify_write_side`). When enabled, `read_file` can wrap output in `<minified lang="...">...</minified>`, and `write_file`/`edit_file` expand that envelope back to readable, formatted source via external formatters (`rustfmt`, `black`, `prettier`, `deno fmt`, `gofmt`, etc.) before writing. A language-aware fallback is used when no formatter is available.
+- Write-side minification / VFS envelope for file tools. New config flag `minify_write_side` (default `false`, env `KF_CODE_MINIFY_WRITE_SIDE`, TOML `minify_write_side`). When enabled, `read_file` can wrap output in `<minified lang="...">...</minified>`, and `write_file`/`edit_file` expand that envelope back to readable, formatted source via external formatters (`rustfmt`, `black`, `prettier`, `deno fmt`, `gofmt`, etc.) before writing. A language-aware fallback is used when no formatter is available.
 - `src/shared/minify/expand.rs` with envelope parsing, wrapping, language mapping, and expansion helpers.
 
 ### Fixed (deep audit — Session 4: correctness C11–C27 + performance P4–P9)
@@ -1000,7 +1016,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - `src/session/bash_jobs.rs` background bash jobs now expand `~` in `workdir` the same way foreground bash commands do.
   - `src/tools/read_file.rs` no longer double-minifies whole-file output or poisons its line-cache; raw file content is cached and minification happens once at the prompt layer when enabled.
   - `src/adapters/tool_call_markup.rs` `parse_name_attr` now handles `\"` escapes and single-quoted DSML attributes.
-  - `crates/kirkforge-video/src/pipelines/animated_explainer.rs` `flite` filter graph arguments are escaped via `ffmpeg_escape`, so `:`, `\\`, `]`, and `,` in text are passed through correctly.
+  - `crates/kf-video/src/pipelines/animated_explainer.rs` `flite` filter graph arguments are escaped via `ffmpeg_escape`, so `:`, `\\`, `]`, and `,` in text are passed through correctly.
   - `src/daemon/server.rs` now binds the Unix socket before writing the PID file, so a failed bind never leaves a stale PID file behind.
   - `src/session/git_sanitation.rs` forbidden-substring checks now use word-boundary/line-anchored matching; `.env` no longer flags `.env.local`, and `=======` no longer matches `========`.
   - `src/session/memory/mod.rs` `parse_frontmatter` now parses YAML/TOML-like frontmatter with a small state machine and only treats `---` at line start as a delimiter, so URLs and colons in values are no longer truncated.
@@ -1015,63 +1031,63 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - `src/tools/edit_file.rs` added `test_fuzzy_fallback_crlf_via_whitespace_normalization`, a regression test where `old_string` only matches after fuzzy normalization on CRLF content, exercising the byte-offset mapping fix.
 
 ### Fixed (deep audit — eighth pass)
-- Restored accidentally deleted `npm/kirkforge-plugin/packages/tool-gitnexus` files (still a production dependency of the orchestrator) and fixed the compile error in `src/index.ts` where the git-repo branch referenced an undefined `paths` shorthand
+- Restored accidentally deleted `npm/kf-plugin/packages/tool-gitnexus` files (still a production dependency of the orchestrator) and fixed the compile error in `src/index.ts` where the git-repo branch referenced an undefined `paths` shorthand
 - `src/tui/keys.rs` `/help` no longer claims `!<command>` bypasses approval when `bang_requires_approval` is enabled; `split_bang_summary` is now a shared `pub(crate)` helper used by both the direct and approval-gated `!` paths
-- `npm/kirkforge-plugin/apps/cli/src/bootstrap.ts` now supports `allowMissingModel`; the `verify` and `health` commands use it so deterministic verification and health checks work without requiring `OLLAMA_BASE_URL` or provider API keys
-- `npm/kirkforge-plugin/packages/tool-pyright/package.json` now declares `pyright` as a runtime dependency so the verifier ships a guaranteed binary instead of relying on a global install
-- `plugins/kirkforge-plugin/tools/common.sh` `find_cli()` now resolves the JS entry point via `$KIRKFORGE_CLI_JS`, the source-layout sibling, or a global npm install of `@kirkforge/cli`; the unsafe PATH-installed `kirkforge` fallback is removed, and resolved paths are validated to end in `.js`/`.cjs`/`.mjs` before being passed to `node`
-- `plugins/kirkforge-draw/tools/edit.sh` removed; it was never exposed in the manifest and cannot work in a null-stdin/non-TTY host environment
-- `npm/kirkforge-plugin/packages/tool-tsc/src/index.ts` now resolves `tsc` from the bundled `typescript` dependency (or a local `node_modules/.bin` install) instead of `npx`, and accepts an optional `command` override for deterministic testing
+- `npm/kf-plugin/apps/cli/src/bootstrap.ts` now supports `allowMissingModel`; the `verify` and `health` commands use it so deterministic verification and health checks work without requiring `OLLAMA_BASE_URL` or provider API keys
+- `npm/kf-plugin/packages/tool-pyright/package.json` now declares `pyright` as a runtime dependency so the verifier ships a guaranteed binary instead of relying on a global install
+- `plugins/kf-plugin/tools/common.sh` `find_cli()` now resolves the JS entry point via `$KF_CODE_CLI_JS`, the source-layout sibling, or a global npm install of `@kf-code/cli`; the unsafe PATH-installed `kf-code` fallback is removed, and resolved paths are validated to end in `.js`/`.cjs`/`.mjs` before being passed to `node`
+- `plugins/kf-draw/tools/edit.sh` removed; it was never exposed in the manifest and cannot work in a null-stdin/non-TTY host environment
+- `npm/kf-plugin/packages/tool-tsc/src/index.ts` now resolves `tsc` from the bundled `typescript` dependency (or a local `node_modules/.bin` install) instead of `npx`, and accepts an optional `command` override for deterministic testing
 - `src/session/plugin_tools.rs` now prepends the bundled Node SDK's `node_modules/.bin` to the curated `PATH` passed to plugin tools, so `tsc`/`pyright`/etc. resolve without a global install
 - `scripts/install.sh` now warns when `node` is missing or older than Node 20, which is required by the bundled Node SDK plugin
 - `src/session/executor/tests/mod.rs` `test_cancelled_tool_batch_appends_placeholders` no longer races a 50 ms timer against executor batch scheduling; it waits for the first tool to start before setting cancellation, eliminating the observed flake
-- `npm/kirkforge-plugin/package.json` dev scripts `cli` and `self-verify` now point at the built `apps/cli/dist/index.js` instead of stripped source files
+- `npm/kf-plugin/package.json` dev scripts `cli` and `self-verify` now point at the built `apps/cli/dist/index.js` instead of stripped source files
 - `src/session/verifier/lint.rs` `test_clippy_warning_on_temp_project` is now `#[ignore]` because it spawns `cargo clippy`; it deadlocks under `cargo test --workspace` since the parent cargo holds the package cache lock
-- `src/session/undo.rs` tests now use a `DataDirGuard` under the shared `test_data_dir_lock` so each test gets a private `KIRKFORGE_DATA_DIR`; fixes the flaky `test_total_size_cap_evicts_oldest` failure caused by another test's temp data directory being deleted mid-test
+- `src/session/undo.rs` tests now use a `DataDirGuard` under the shared `test_data_dir_lock` so each test gets a private `KF_CODE_DATA_DIR`; fixes the flaky `test_total_size_cap_evicts_oldest` failure caused by another test's temp data directory being deleted mid-test
 - `.github/workflows/ci.yml` `integration` job now installs Ollama, caches `~/.ollama/models`, pulls `qwen2.5:0.5b`, and runs `cargo test --test integration_test -- --include-ignored`; the previous job ran the ignored test target without `--include-ignored`, so it executed zero tests and gave false confidence
 - `src/session/hooks.rs` `test_run_hook_with_env_vars` now yields to the runtime before polling and waits up to 5 seconds for the fire-and-forget hook to write its marker; fixes the flake where the spawned task had not yet scheduled under load
-- `src/session/executor/helpers.rs` `validate_args_against_schema` now supports `anyOf`/`oneOf` polymorphic schemas, and `plugins/kirkforge-plugin/kirkforge.toml` declares `plugin_verify_workspace.file` as `string | string[]`; fixes the runtime/schema mismatch where the wrapper accepted a single path but the host validator rejected it
+- `src/session/executor/helpers.rs` `validate_args_against_schema` now supports `anyOf`/`oneOf` polymorphic schemas, and `plugins/kf-plugin/kf-code.toml` declares `plugin_verify_workspace.file` as `string | string[]`; fixes the runtime/schema mismatch where the wrapper accepted a single path but the host validator rejected it
 - `src/session/executor/helpers.rs` `is_read_only_bash` now applies redirection, chaining, and command-substitution guards to every pipe segment, not just the first; closes the auto-approval bypass where a later segment could write files or execute arbitrary commands (`cat file | sort > out.txt`, `cat file | sort; rm file`, etc.)
 - `src/session/mod.rs` `data_dir()` now creates the canonical data directory (on first access per process) and sets its Unix permissions to `0o700` so conversation logs, session state, and undo history are not world-readable
-- `plugins/kirkforge-plugin/tools/common.sh` now provides `node_is_truthy()` and the `verify`, `doctor`, and `audit-verify` wrappers use it; boolean flags like `json` and `pretty` are now accepted as `true`, `1`, `yes`, `y`, or `on`, matching the other filesystem plugins
-- Bumped OpenTelemetry dependencies across `npm/kirkforge-plugin/package.json` and `packages/core-telemetry/package.json` to patched versions; `npm audit` now reports 0 vulnerabilities
+- `plugins/kf-plugin/tools/common.sh` now provides `node_is_truthy()` and the `verify`, `doctor`, and `audit-verify` wrappers use it; boolean flags like `json` and `pretty` are now accepted as `true`, `1`, `yes`, `y`, or `on`, matching the other filesystem plugins
+- Bumped OpenTelemetry dependencies across `npm/kf-plugin/package.json` and `packages/core-telemetry/package.json` to patched versions; `npm audit` now reports 0 vulnerabilities
 - `src/session/executor/helpers.rs` `is_read_only_bash` now auto-approves read-only `git` subcommands (`status`, `log`, `diff`, `show`, `ls-files`, `rev-parse`) while still requiring approval for mutating subcommands (`add`, `commit`, `push`, `checkout`, `reset`, etc.)
 - `src/session/executor/helpers.rs` `is_read_only_bash` now applies `find`/`git` command-specific guards to every pipe segment, closing the bypass where a read-only producer could hide a mutating `find` or `git` consumer (`cat list | find . -delete`, `cat list | git add file`, etc.)
-- `plugins/stratum/tools/common.sh` and `plugins/kirkforge-video/tools/video_common.sh` `json_get_bool` now accept common truthy values (`true`, `1`, `yes`, `y`, `on`) consistently with the Node SDK wrappers
+- `plugins/stratum/tools/common.sh` and `plugins/kf-video/tools/video_common.sh` `json_get_bool` now accept common truthy values (`true`, `1`, `yes`, `y`, `on`) consistently with the Node SDK wrappers
 - `tests/integration_test.rs` increased the shared reqwest timeout from 60 s to 120 s; the previous ceiling caused flaky timeouts when the 0.5b test model was slow to respond
-- `src/daemon/mod.rs` `DaemonState::refresh()` now re-scans the sessions directory instead of reusing the cached `.index.ndjson`, so `kirkforge sessions` and the daemon's recent-session list reflect newly appended messages
+- `src/daemon/mod.rs` `DaemonState::refresh()` now re-scans the sessions directory instead of reusing the cached `.index.ndjson`, so `kf-code sessions` and the daemon's recent-session list reflect newly appended messages
 - `src/daemon/server.rs` `daemonize()` now calls `setsid()` before spawning the foreground daemon, so the auto-started session daemon survives the closing of the spawning terminal/session instead of receiving SIGHUP and shutting down
 - Verified local `x86_64-unknown-linux-musl` release build after installing `musl-tools`; the resulting binary is a working static-pie executable. `aarch64-unknown-linux-musl` remains CI-verified via `cross` because the host lacks the aarch64 musl toolchain.
 - `src/shared/metrics.rs` `record()` now serializes the full event line into a single buffer and guards the rotate/open/write sequence with a global mutex, fixing concurrent metric writes that produced concatenated NDJSON lines and caused `read_events()` to drop events
-- `src/shared/mod.rs` default `enabled_plugins` now lists the five bundled plugins (`kirkforge-draw`, `kirkforge-video`, `stratum`, `kirkforge-plugin3`, `kirkforge-plugin`) so fresh configs and installed releases load them without manual toggling; `config.toml.example` reflects the new default
-- `plugins/kirkforge-draw/kirkforge.toml` `/draw` prompt now documents the real `.td.json` schema (`box`: `left`/`top`/`right`/`bottom`; `line`/`elbow`: `x1`/`y1`/`x2`/`y2`; `paint`: `points`/`brush`; `text`: `x`/`y`/`content`/`border`) instead of the incorrect `x`/`y`/`w`/`h`/`text` box fields; diagrams produced by the model now validate and render
-- `src/session/plugin_tools.rs` `curated_env()` now prepends the source-layout `npm/kirkforge-plugin/node_modules/.bin` to the plugin tool PATH in addition to the data-directory install, so source builds of kirkforge resolve `tsc`/`pyright` for Node SDK tools without a global install; added `npm_bin_dirs()` unit tests for both layouts
+- `src/shared/mod.rs` default `enabled_plugins` now lists the five bundled plugins (`kf-draw`, `kf-video`, `stratum`, `kf-budget`, `kf-plugin-sdk`) so fresh configs and installed releases load them without manual toggling; `config.toml.example` reflects the new default
+- `plugins/kf-draw/kf-code.toml` `/draw` prompt now documents the real `.td.json` schema (`box`: `left`/`top`/`right`/`bottom`; `line`/`elbow`: `x1`/`y1`/`x2`/`y2`; `paint`: `points`/`brush`; `text`: `x`/`y`/`content`/`border`) instead of the incorrect `x`/`y`/`w`/`h`/`text` box fields; diagrams produced by the model now validate and render
+- `src/session/plugin_tools.rs` `curated_env()` now prepends the source-layout `npm/kf-plugin/node_modules/.bin` to the plugin tool PATH in addition to the data-directory install, so source builds of kf-code resolve `tsc`/`pyright` for Node SDK tools without a global install; added `npm_bin_dirs()` unit tests for both layouts
 - `README.md` plugin section now states that the five bundled workspace plugins are enabled by default instead of disabled
-- `crates/kirkforge-plugin-host/src/paths.rs` is a new path-validation module; the plugin host now drops tool/hook/verifier capabilities whose declared command path is absolute or climbs out of the plugin root via `..`, emitting a load warning and preventing a malformed or malicious manifest from running arbitrary system commands
-- `crates/kirkforge-plugin-host/src/lib.rs` `filter_capabilities` now canonicalises the plugin root and each command path before containment checks; capabilities whose command file is missing, inaccessible, or a symlink that resolves outside the root are dropped at load time
-- `npm/kirkforge-plugin/packages/tool-lint-core/src/engine.ts` now preserves `severity` and `category` in `LintReport.details` and emits them on `verify.lint` events so diagnostics are no longer opaque
-- `npm/kirkforge-plugin/packages/tool-lint-core/src/engine.ts` now skips generated and dependency directories by default (`.git/`, `.gitnexus/`, `node_modules/`, `target/`, `dist/`, `.claude/`, `coverage/`), and reports only files that were actually scanned in `filesScanned`
+- `crates/kf-plugin-host/src/paths.rs` is a new path-validation module; the plugin host now drops tool/hook/verifier capabilities whose declared command path is absolute or climbs out of the plugin root via `..`, emitting a load warning and preventing a malformed or malicious manifest from running arbitrary system commands
+- `crates/kf-plugin-host/src/lib.rs` `filter_capabilities` now canonicalises the plugin root and each command path before containment checks; capabilities whose command file is missing, inaccessible, or a symlink that resolves outside the root are dropped at load time
+- `npm/kf-plugin/packages/tool-lint-core/src/engine.ts` now preserves `severity` and `category` in `LintReport.details` and emits them on `verify.lint` events so diagnostics are no longer opaque
+- `npm/kf-plugin/packages/tool-lint-core/src/engine.ts` now skips generated and dependency directories by default (`.git/`, `.gitnexus/`, `node_modules/`, `target/`, `dist/`, `.claude/`, `coverage/`), and reports only files that were actually scanned in `filesScanned`
 - `src/shared/metrics.rs` `test_concurrent_records_are_not_interleaved` now writes directly to the per-test file path instead of relying on the global `PATH_OVERRIDE`; fixes the rare flake where 101 events were read instead of 100 under parallel test load
-- `npm/kirkforge-plugin/packages/orchestrator/src/index.ts` `verify()` now defaults to a language-neutral profile (`text`) instead of assuming TypeScript; `verify` no longer returns `FAIL` on non-TypeScript workspaces just because there is no `tsconfig.json`
-- `npm/kirkforge-plugin/packages/orchestrator/src/reducer.ts` no longer downgrades the aggregate `verification.overall` to `warn` solely because of lint warnings; warnings are surfaced in counts but do not trigger a correction loop, so clean workspaces with style warnings report `PASS`
-- `npm/kirkforge-plugin/packages/plugin/src/index.ts` `doctor()` now resolves bundled tools from the nearest workspace `node_modules/.bin`, so the plugin wrapper reports `tsc`/`pyright`/`eslint` as available even when the host passes a curated PATH that excludes the workspace bin directory
-- `npm/kirkforge-plugin/packages/orchestrator/src/modes.ts` removed unused `isAbsolute` import so `npm run lint` passes cleanly again
-- `npm/kirkforge-plugin/apps/cli/src/shared.ts` `ALL_MODES` now includes `task-decompose`, matching the `DelegationMode` type in `@kirkforge/core-types`; the `observe`/`delegate`/`run` CLIs no longer reject valid task-decompose modes
-- `npm/kirkforge-plugin/apps/cli/src/bootstrap.ts` removed unused duplicate `ALL_MODES` export to avoid a stale, divergent copy of the mode list
-- `src/session/session_index.rs` `search_sessions` now searches message content in addition to id/date/count, so `kirkforge sessions --search <text>` finds conversations by what was actually said; added unit test `test_search_sessions_matches_content`; updated help text in `src/tui/commands/sessions.rs` and `src/main.rs`
-- `src/session/config.rs` `apply_env_overrides` now honors `KIRKFORGE_BANG_REQUIRES_APPROVAL`, `KIRKFORGE_JSON_MODE`, `KIRKFORGE_BASH_SANDBOX_WORKDIR`, `KIRKFORGE_BLOCK_GITIGNORED_DOTFILES`, `KIRKFORGE_MAX_OVERWRITE_SIZE`, `KIRKFORGE_SUMMARIZE_MODEL`, `KIRKFORGE_ROUTING_ENABLED`, `KIRKFORGE_ROUTER_MODEL`, `KIRKFORGE_COMMIT_MAX_FILE_SIZE`, `KIRKFORGE_PRESERVE_RECENT_MESSAGES`, `KIRKFORGE_MAX_TOOL_CALLS_PER_TURN`, `KIRKFORGE_MAX_PERSONA_TURNS`, `KIRKFORGE_TOOL_TIMEOUT_SECS`, `KIRKFORGE_AUDIT_LOG_PATH`, and `KIRKFORGE_HOOKS_DIR`; `merge_toml_into_config` partial-recovery path now covers the same fields plus `routing_model_map`; added tests for all new overrides
+- `npm/kf-plugin/packages/orchestrator/src/index.ts` `verify()` now defaults to a language-neutral profile (`text`) instead of assuming TypeScript; `verify` no longer returns `FAIL` on non-TypeScript workspaces just because there is no `tsconfig.json`
+- `npm/kf-plugin/packages/orchestrator/src/reducer.ts` no longer downgrades the aggregate `verification.overall` to `warn` solely because of lint warnings; warnings are surfaced in counts but do not trigger a correction loop, so clean workspaces with style warnings report `PASS`
+- `npm/kf-plugin/packages/plugin/src/index.ts` `doctor()` now resolves bundled tools from the nearest workspace `node_modules/.bin`, so the plugin wrapper reports `tsc`/`pyright`/`eslint` as available even when the host passes a curated PATH that excludes the workspace bin directory
+- `npm/kf-plugin/packages/orchestrator/src/modes.ts` removed unused `isAbsolute` import so `npm run lint` passes cleanly again
+- `npm/kf-plugin/apps/cli/src/shared.ts` `ALL_MODES` now includes `task-decompose`, matching the `DelegationMode` type in `@kf-code/core-types`; the `observe`/`delegate`/`run` CLIs no longer reject valid task-decompose modes
+- `npm/kf-plugin/apps/cli/src/bootstrap.ts` removed unused duplicate `ALL_MODES` export to avoid a stale, divergent copy of the mode list
+- `src/session/session_index.rs` `search_sessions` now searches message content in addition to id/date/count, so `kf-code sessions --search <text>` finds conversations by what was actually said; added unit test `test_search_sessions_matches_content`; updated help text in `src/tui/commands/sessions.rs` and `src/main.rs`
+- `src/session/config.rs` `apply_env_overrides` now honors `KF_CODE_BANG_REQUIRES_APPROVAL`, `KF_CODE_JSON_MODE`, `KF_CODE_BASH_SANDBOX_WORKDIR`, `KF_CODE_BLOCK_GITIGNORED_DOTFILES`, `KF_CODE_MAX_OVERWRITE_SIZE`, `KF_CODE_SUMMARIZE_MODEL`, `KF_CODE_ROUTING_ENABLED`, `KF_CODE_ROUTER_MODEL`, `KF_CODE_COMMIT_MAX_FILE_SIZE`, `KF_CODE_PRESERVE_RECENT_MESSAGES`, `KF_CODE_MAX_TOOL_CALLS_PER_TURN`, `KF_CODE_MAX_PERSONA_TURNS`, `KF_CODE_TOOL_TIMEOUT_SECS`, `KF_CODE_AUDIT_LOG_PATH`, and `KF_CODE_HOOKS_DIR`; `merge_toml_into_config` partial-recovery path now covers the same fields plus `routing_model_map`; added tests for all new overrides
 - `config.toml.example` now documents the missing security/observability knobs `block_gitignored_dotfiles`, `max_overwrite_size`, `preserve_recent_messages`, `max_tool_calls_per_turn`, `tool_timeout_secs`, `audit_log_path`, and `hooks_dir`
 - `src/tui/mod.rs` now initializes `state.fork_manager` when a TUI session starts; `src/tui/commands/fork.rs` `resume_conversation_log` now rebuilds the fork manager for the resumed session, so `/fork`, `/resume <fork-id>`, and persona commands actually work instead of returning "No fork manager available"
 - `src/session/session_fork.rs` `ForkManager::new` now loads existing forks from `forks/*/fork.json` metadata so forks survive restarts; `create_fork` now skips already-used ids and removes stale `conversation.ndjson` files so it never appends duplicate messages to an existing fork
-- `kirkforge-draw` skill prompts now tell the model to run `kfd --load <path> --render --fenced` and to create `./out/` before saving, so the `/draw` skill no longer launches the TUI in the null-stdin plugin host
-- `kirkforge-draw` `kfd` now requires `--render` for `--output`, `--fenced`, `--plain`, and `--ansi`, and requires `--validate` for `--json`; previously these flags were silently ignored and could launch the TUI unexpectedly
-- `kirkforge-draw` `kfd` now surfaces unknown-object validation warnings on the non-interactive render path and exits with a clear error when run without a TTY instead of a raw-mode OS error
-- `kirkforge-draw` `render.sh` no longer passes the mutually exclusive `--plain` flag alongside `--fenced`
-- `kirkforge-draw` event handling now treats Ctrl-Shift-Z (uppercase `Z`) as redo, matching terminal conventions
-- `plugins/stratum/tools/common.sh`, `plugins/kirkforge-video/tools/video_common.sh`, and `plugins/kirkforge-plugin3/tools/plugin3_common.sh` now consult `CARGO_TARGET_DIR` when locating their Rust binaries, so custom target directories resolve correctly
-- `plugins/stratum/tools/common.sh`, `plugins/kirkforge-video/tools/video_common.sh`, and `plugins/kirkforge-plugin3/tools/plugin3_common.sh` no longer use naive bash regex fallbacks to parse `KIRKFORGE_TOOL_ARGS_JSON`; jq or python3 is now required, preventing silent wrong answers for escaped quotes or substring key matches
-- `plugins/kirkforge-video/tools/video_doctor.sh` now passes `--json` explicitly and safely instead of relying on an unquoted expansion that could split
-- `plugins/kirkforge-video/tools/video_risk.sh` now guards the empty `kind_args` array expansion so `set -u` does not fail when `kinds` is empty
+- `kf-draw` skill prompts now tell the model to run `kfd --load <path> --render --fenced` and to create `./out/` before saving, so the `/draw` skill no longer launches the TUI in the null-stdin plugin host
+- `kf-draw` `kfd` now requires `--render` for `--output`, `--fenced`, `--plain`, and `--ansi`, and requires `--validate` for `--json`; previously these flags were silently ignored and could launch the TUI unexpectedly
+- `kf-draw` `kfd` now surfaces unknown-object validation warnings on the non-interactive render path and exits with a clear error when run without a TTY instead of a raw-mode OS error
+- `kf-draw` `render.sh` no longer passes the mutually exclusive `--plain` flag alongside `--fenced`
+- `kf-draw` event handling now treats Ctrl-Shift-Z (uppercase `Z`) as redo, matching terminal conventions
+- `plugins/stratum/tools/common.sh`, `plugins/kf-video/tools/video_common.sh`, and `plugins/kf-budget/tools/kf_budget_common.sh` now consult `CARGO_TARGET_DIR` when locating their Rust binaries, so custom target directories resolve correctly
+- `plugins/stratum/tools/common.sh`, `plugins/kf-video/tools/video_common.sh`, and `plugins/kf-budget/tools/kf_budget_common.sh` no longer use naive bash regex fallbacks to parse `KF_CODE_TOOL_ARGS_JSON`; jq or python3 is now required, preventing silent wrong answers for escaped quotes or substring key matches
+- `plugins/kf-video/tools/video_doctor.sh` now passes `--json` explicitly and safely instead of relying on an unquoted expansion that could split
+- `plugins/kf-video/tools/video_risk.sh` now guards the empty `kind_args` array expansion so `set -u` does not fail when `kinds` is empty
 - `review.md` updated to reflect that session forks persist across restarts and that fork/persona commands now work inside resumed TUI sessions
 
 ### Fixed (deep audit — seventh pass)
@@ -1079,24 +1095,24 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `src/main.rs` startup now prints MCP warnings to stderr so configured but unavailable MCP servers are visible instead of silently omitted
 
 ### Fixed (deep audit — sixth pass)
-- Unified the data-directory env-var mutation lock across all tests (`src/session/mod.rs::test_data_dir_lock`) so `session_index`, `plugin_tools`, `tui/commands/plugins`, and daemon tests no longer race on `KIRKFORGE_DATA_DIR`; fixes the flaky `test_search_sessions_filters_by_id_and_date` failure seen in full `cargo test --workspace` runs
+- Unified the data-directory env-var mutation lock across all tests (`src/session/mod.rs::test_data_dir_lock`) so `session_index`, `plugin_tools`, `tui/commands/plugins`, and daemon tests no longer race on `KF_CODE_DATA_DIR`; fixes the flaky `test_search_sessions_filters_by_id_and_date` failure seen in full `cargo test --workspace` runs
 - `src/session/plugin_tools.rs` async installed-layout tests now acquire the shared lock via an async guard instead of `blocking_lock()` inside the Tokio runtime
 - `src/session/mcp_client.rs` MCP server subprocesses now spawn with a sanitized PATH (same `bash_runner::sanitized_path` rules as model-driven bash and plugin tools) so a minimal or world-writable host PATH cannot shadow `npx`, `node`, or `bash`
 
 ### Fixed (deep audit — fifth pass)
 - `src/session/mcp_client.rs` reader task now caps the *accumulated* JSON-RPC line length against `MAX_LINE_LEN`; the previous per-chunk check let a server stream an unbounded line in `BufReader`-sized pieces
 - `src/session/bash_runner.rs` model-driven shell commands now resolve commands through a curated PATH that always includes standard system directories (`/usr/bin`, `/bin`, etc.) while still dropping relative and world-writable non-system entries; this fixes command resolution on hosts where a system directory happens to be world-writable
-- `src/session/plugin_tools.rs` plugin tool subprocesses now inherit the same curated PATH as model-driven bash, so wrappers can always locate `sh`, `python3`, `node`, and other standard interpreters even when kirkforge is launched with a minimal or untrusted PATH
+- `src/session/plugin_tools.rs` plugin tool subprocesses now inherit the same curated PATH as model-driven bash, so wrappers can always locate `sh`, `python3`, `node`, and other standard interpreters even when kf-code is launched with a minimal or untrusted PATH
 - `src/session/executor/helpers.rs` added lightweight dispatch-time schema validation (`validate_args_against_schema`) covering `required` fields and per-property JSON Schema types
 - `src/session/executor/dispatch.rs` now validates tool arguments against the tool's JSON Schema before permission/approval logic, so malformed calls fail early with a clear error instead of reaching the tool
 - `src/session/plugin_tools.rs` installed-layout stratum end-to-end test no longer mutates the global `PATH`; it copies the `stratum` binary next to the plugin script so the wrapper's sibling-binary discovery resolves it without racing other concurrent tests
 - `src/session/bash_runner.rs` PATH-sanitization unit tests no longer mutate the global `PATH`, removing another source of parallel-test flakiness
 - `build.rs` now propagates man-page render/write errors instead of panicking with `.expect`; a build-disk failure now produces a clean cargo error
-- `crates/kirkstratum-core/src/config.rs` `PipelineConfig::default()` no longer panics if the embedded `config/pipeline.toml` fails to parse; it constructs the default struct directly, and the existing drift test still enforces parity with the TOML
-- `crates/kirkforge-draw/src/render.rs` `format_validate_report_json` now returns `anyhow::Result<String>` instead of panicking on JSON serialization failure; `kfd --validate --json` propagates the error through the normal CLI failure path
-- `crates/plugin3-cli/src/main.rs` `plugin3 self-check` no longer panics on internal slicing, store, or serialization failures; it now returns a `Result` and exits 1 with a diagnostic message so the host tool sees a clean error instead of a process abort
-- `crates/kirkforge-video/src/pipelines/animated_explainer.rs` no longer panics if an asset or transcode plan entry is not a JSON object; the failure now propagates through the pipeline's `anyhow::Result` path
-- `crates/kirkforge-video/src/pipelines/brief.rs` no longer panics on regex construction failure; it returns `None` and lets the caller continue without the stat
+- `crates/kf-compress-core/src/config.rs` `PipelineConfig::default()` no longer panics if the embedded `config/pipeline.toml` fails to parse; it constructs the default struct directly, and the existing drift test still enforces parity with the TOML
+- `crates/kf-draw/src/render.rs` `format_validate_report_json` now returns `anyhow::Result<String>` instead of panicking on JSON serialization failure; `kfd --validate --json` propagates the error through the normal CLI failure path
+- `crates/kf-budget-cli/src/main.rs` `kf-budget self-check` no longer panics on internal slicing, store, or serialization failures; it now returns a `Result` and exits 1 with a diagnostic message so the host tool sees a clean error instead of a process abort
+- `crates/kf-video/src/pipelines/animated_explainer.rs` no longer panics if an asset or transcode plan entry is not a JSON object; the failure now propagates through the pipeline's `anyhow::Result` path
+- `crates/kf-video/src/pipelines/brief.rs` no longer panics on regex construction failure; it returns `None` and lets the caller continue without the stat
 
 ### Fixed (deep audit — fourth pass)
 - `src/session/mcp_client.rs` reader idle timeout reduced from 5 minutes to 10 seconds so a frozen MCP server is detected quickly instead of keeping a dead client alive
@@ -1114,18 +1130,18 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `src/session/config.rs` `load_config` now returns a parse-warning and `load_or_create_config` prints it to stderr so malformed `config.toml` is visible
 - `src/session/config.rs` now expands `~` in `sandbox_dir`, `cache_dir`, `plugin_public_key_path`, `plugin_sources`, `allowed_write_dirs`, and `deny_paths` from both env vars and TOML
 - `src/main.rs` now surfaces plugin-registry load failures and plugin warnings to stderr instead of leaving them in tracing logs only
-- `crates/kirkforge-plugin-host/src/lib.rs` now detects and reports duplicate tool/skill/verifier names that would otherwise silently shadow each other across plugins
+- `crates/kf-plugin-host/src/lib.rs` now detects and reports duplicate tool/skill/verifier names that would otherwise silently shadow each other across plugins
 - `src/tools/atomic_write.rs` now creates temp files with `O_EXCL` (`create_new`) and an unpredictable name (pid + nanosecond timestamp + counter) to block symlink-race attacks on the temp file
 - `src/session/access.rs` `is_gitignored` now runs `git check-ignore` in a bounded thread with a 2 s timeout instead of blocking indefinitely on a slow repo
 
 ### Fixed (deep audit — third pass)
-- `plugins/kirkforge-plugin3/tools/plugin3_common.sh` `json_get_integer` now preserves an explicitly empty default, so `budget_set.sh` can detect a missing `ceiling` argument instead of silently setting the budget to `0`
-- `plugins/kirkforge-draw/kirkforge.toml` no longer advertises the `draw_edit` TUI tool; the host runs tools with null stdin and no TTY, so an interactive editor cannot function
+- `plugins/kf-budget/tools/kf_budget_common.sh` `json_get_integer` now preserves an explicitly empty default, so `budget_set.sh` can detect a missing `ceiling` argument instead of silently setting the budget to `0`
+- `plugins/kf-draw/kf-code.toml` no longer advertises the `draw_edit` TUI tool; the host runs tools with null stdin and no TTY, so an interactive editor cannot function
 - `plugins/stratum/tools/common.sh` gained shared `stratum_args`, `json_get_string`, `json_get_integer`, `json_get_bool`, and `json_has_key` helpers with jq/python3/naive-bash fallbacks
 - `plugins/stratum/tools/{run,apply,mode,rules,config_validate}.sh` now use the shared helpers, normalise empty args to `{}`, and treat `{"input":""}` as a valid (empty) payload instead of a missing field
-- `plugins/kirkforge-plugin/tools/common.sh` now accepts a `KIRKFORGE_CLI_JS` override and falls back to a global npm install of `@kirkforge/cli`; shared `node_json_arg` / `node_json_file_arg` helpers catch invalid JSON and emit a clean tool error
-- `plugins/kirkforge-plugin/tools/{verify,audit-verify,doctor,verify-workspace}.sh` now use the shared JSON helpers; `verify-workspace` accepts `file` as either a single path or an array and no longer splits on spaces
-- `npm/kirkforge-plugin/apps/cli/package.json` now includes `"files": ["dist/"]` so `npm publish` ships the compiled entry points
+- `plugins/kf-plugin/tools/common.sh` now accepts a `KF_CODE_CLI_JS` override and falls back to a global npm install of `@kf-code/cli`; shared `node_json_arg` / `node_json_file_arg` helpers catch invalid JSON and emit a clean tool error
+- `plugins/kf-plugin/tools/{verify,audit-verify,doctor,verify-workspace}.sh` now use the shared JSON helpers; `verify-workspace` accepts `file` as either a single path or an array and no longer splits on spaces
+- `npm/kf-plugin/apps/cli/package.json` now includes `"files": ["dist/"]` so `npm publish` ships the compiled entry points
 
 ### Fixed (deep audit — second pass)
 - Executor→TUI `TurnEvent` channel is now bounded (10,000 events) with backpressure instead of unbounded growth
@@ -1133,55 +1149,55 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `notified_jobs` HashSet pruned each tick to registry-live IDs only — bounded at ≤64 entries instead of growing for the session lifetime
 - Toolset startup `panic!` replaced with `anyhow::Result` propagation so a plugin inconsistency produces a clean error instead of a process abort
 - `state.messages` display list capped at 2 000 entries; oldest 500 evicted when exceeded with index-based state (collapsed, expanded, search) remapped consistently
-- Plugin shell wrappers hardened (second pass): removed legacy `KIRKFORGE_TOOL_ARGS` fallback, added `node` dependency checks for the JS plugin tools, fixed JSON escaping in `die_json` and the draw `post-turn` hook, made stratum tools default to `{}` when no args are provided, and corrected the stratum `config_validate` command-line order
-- `kirkforge-video` `animated_explainer` pipeline no longer panics on I/O errors when writing artifact JSON; errors now propagate through the existing `Result` path
-- Plugin READMEs and the plugin-host crate doc comment now document the canonical `KIRKFORGE_TOOL_ARGS_JSON` env var instead of the legacy `KIRKFORGE_TOOL_ARGS` alias
+- Plugin shell wrappers hardened (second pass): removed legacy `KF_CODE_TOOL_ARGS` fallback, added `node` dependency checks for the JS plugin tools, fixed JSON escaping in `die_json` and the draw `post-turn` hook, made stratum tools default to `{}` when no args are provided, and corrected the stratum `config_validate` command-line order
+- `kf-video` `animated_explainer` pipeline no longer panics on I/O errors when writing artifact JSON; errors now propagate through the existing `Result` path
+- Plugin READMEs and the plugin-host crate doc comment now document the canonical `KF_CODE_TOOL_ARGS_JSON` env var instead of the legacy `KF_CODE_TOOL_ARGS` alias
 - Plugin tool working directory: empty/missing `sandbox_dir` now resolves to the user's current directory instead of the plugin installation root; `README.md` and `config.toml.example` updated to document the escape-hatch semantics
-- Pre-tool decision hooks and lifecycle hooks now receive `KF_EVENT` and `KF_SESSION_ID` so plugin3 hooks can distinguish KirkForge from Claude-Code runtime mode
-- Bundled plugin shell wrappers hardened: kirkforge-plugin no longer falls back to the Rust binary as a JS entry point, video/stratum optional flags are quoted, and `verify-workspace` safely splits space-separated file paths
-- Release packaging now ships all five Rust binaries (`kirkforge`, `kfd`, `plugin3`, `stratum`, `kirkforge-video`); `install.sh` installs the suite and refuses native Windows shells
+- Pre-tool decision hooks and lifecycle hooks now receive `KF_EVENT` and `KF_SESSION_ID` so kf-budget hooks can distinguish KirkForge from Claude-Code runtime mode
+- Bundled plugin shell wrappers hardened: kf-plugin no longer falls back to the Rust binary as a JS entry point, video/stratum optional flags are quoted, and `verify-workspace` safely splits space-separated file paths
+- Release packaging now ships all five Rust binaries (`kf-code`, `kfd`, `kf-budget`, `stratum`, `kf-video`); `install.sh` installs the suite and refuses native Windows shells
 - `scripts/bump-version.sh` no longer runs `cargo check --locked` after a version bump, which previously failed because the lockfile was stale
-- `plugin3-core` integration test `state_drift` now uses `EnvGuard` to prevent env-var leakage on panic
+- `kf-budget-core` integration test `state_drift` now uses `EnvGuard` to prevent env-var leakage on panic
 - Line-mode interactive editor no longer panics on concurrent `next_line` calls; returns a clean error instead
 - `bash_runner` exotic-target timeout fallback no longer panics if the fallback `sh` command fails to spawn; the error now propagates as a `ShellError::Spawn`
-- Release archives and `install.sh` now ship/install the bundled `plugins/` directory to `~/.local/share/kirkforge/plugins/`; workspace plugin sources fall back to the data directory when compile-time source paths are absent
-- All five bundled filesystem plugins load without warnings; plugin3 hooks are dual-mode and emit proper KirkForge no-op responses when `KF_EVENT` is set
-- `kirkforge-draw` render/edit tools use `--render` and correct argument handling for non-TTY execution
-- New regression test `crates/kirkforge-plugin-host/tests/load_bundled_plugins.rs` verifies all bundled plugins load cleanly
+- Release archives and `install.sh` now ship/install the bundled `plugins/` directory to `~/.local/share/kf-code/plugins/`; workspace plugin sources fall back to the data directory when compile-time source paths are absent
+- All five bundled filesystem plugins load without warnings; kf-budget hooks are dual-mode and emit proper KirkForge no-op responses when `KF_EVENT` is set
+- `kf-draw` render/edit tools use `--render` and correct argument handling for non-TTY execution
+- New regression test `crates/kf-plugin-host/tests/load_bundled_plugins.rs` verifies all bundled plugins load cleanly
 - Dependency hardening: `bincode` replaced with `serde_json`, `paste` removed, `ratatui` upgraded to 0.30, and vulnerable/deprecated crates (`crossbeam-epoch`, `quinn-proto`, `anyhow`, `lru`) refreshed
-- Flaky tests fixed in `plugin3-core` env guard and `shared::metrics` log rotation
-- Release archives and `install.sh` now ship/install the bundled `npm/kirkforge-plugin` Node SDK so `kirkforge-plugin` shell tools (`health`, `doctor`, `tools`, `verify`, ...) work from an installed layout
+- Flaky tests fixed in `kf-budget-core` env guard and `shared::metrics` log rotation
+- Release archives and `install.sh` now ship/install the bundled `npm/kf-plugin` Node SDK so `kf-plugin-sdk` shell tools (`health`, `doctor`, `tools`, `verify`, ...) work from an installed layout
 - Added regression test `bundled_plugins_load_from_data_dir` that exercises the installed-layout plugin loading path
-- Cleaned up `kirkforge-plugin` `find_cli` helper to only search the actual installed/repo layout (`npm/kirkforge-plugin` sibling to `plugins/` under the data directory) and removed misleading dead-path candidates; callers now report the real missing-Node-SDK reason
+- Cleaned up `kf-plugin-sdk` `find_cli` helper to only search the actual installed/repo layout (`npm/kf-plugin` sibling to `plugins/` under the data directory) and removed misleading dead-path candidates; callers now report the real missing-Node-SDK reason
 - Added installed-layout end-to-end regression tests that execute real bundled plugin tools through the host's `PluginToolWrapper`: `stratum_mode` (Rust-binary-backed) and `plugin_tools` (Node SDK-backed)
-- Plugin tool subprocesses and lifecycle hook subprocesses now run with a null stdin instead of inheriting the host's terminal stdin; prevents tools such as `stratum_run` or the `kirkforge-draw` `post-turn` hook from blocking on interactive input or consuming user keystrokes
-- `kirkforge-draw` `post-turn` hook only drains stdin when `KF_EVENT` is unset (Claude Code mode), so it no longer waits for terminal EOF under KirkForge
+- Plugin tool subprocesses and lifecycle hook subprocesses now run with a null stdin instead of inheriting the host's terminal stdin; prevents tools such as `stratum_run` or the `kf-draw` `post-turn` hook from blocking on interactive input or consuming user keystrokes
+- `kf-draw` `post-turn` hook only drains stdin when `KF_EVENT` is unset (Claude Code mode), so it no longer waits for terminal EOF under KirkForge
 - `draw_edit` now fails with a clear message when stdin is not a terminal, instead of launching `kfd` into a captured/non-interactive plugin subprocess
 - `stratum_run` schema and shell wrapper now accept an `input` field so inline context can be compressed without relying on the host to supply stdin; the `/stratum` skill prompt no longer claims the runtime pipes stdin
 - `stratum_run` now treats a missing `input` field as an error instead of silently compressing an empty stdin stream; the schema marks `input` as required
 - `stratum_apply` now requires a `file` field; it previously fell back to stdin which is empty under the host's null-stdin plugin execution, silently processing no input
-- `kirkforge-video` manifest no longer marks `path`/`check`/`command` as required when the corresponding shell wrapper supplies a sensible default
+- `kf-video` manifest no longer marks `path`/`check`/`command` as required when the corresponding shell wrapper supplies a sensible default
 - `src/session/plugin_tools.rs` now propagates plugin-directory read errors instead of silently defaulting to an empty warning list
 - `src/session/mcp_client.rs` reader task now enforces a 5-minute idle timeout and a 1 MiB per-line cap so a misbehaving MCP server cannot hang or exhaust memory
 - Bash tool and background job runners no longer hardcode `/bin/sh`; Unix keeps `/bin/sh`, Windows targets `bash` (Git for Windows / WSL) so the same safety gate applies
 - Session daemon client is now stubbed on Windows so the CLI compiles and degrades to file-based session discovery; the `daemon` subcommand returns a clear unsupported-platform error on Windows
 - Line-mode approval handler no longer assumes `/dev/tty` on Windows; it reads from stdin on Windows while Unix continues to use the controlling terminal
 - Hardened `bash_runner` deny-list against quoting/whitespace/escape evasions: commands are normalized (strip comments, quotes, collapse whitespace, lowercase), and redirections/teed writes to system paths are detected with a tokenizer that tolerates optional spaces, fd prefixes (`2>`), clobber form (`>|`), and Windows/Git-Bash path variants (`C:\Windows`, `/c/windows`, etc.)
-- `kirkforge-draw` and `stratum` shell helpers now look for their satellite binary next to the script (`<plugin>/tools/<bin>`) before the workspace target directory, so installed-layout plugin directories work when binaries are shipped alongside the wrappers
-- `kirkforge-draw` `render.sh` now uses the shared `json_get_string` helper (jq/python3/bash fallback) instead of sed-only parsing, matching the robustness of the other filesystem plugins
-- `kirkforge-draw` `edit.sh` now has a proper `#!/usr/bin/env bash` shebang and uses the shared JSON helper so it no longer relies on sed-only argument parsing
-- `kirkforge-plugin` `verify.sh`, `audit-verify.sh`, and `verify-workspace.sh` now default an empty/missing `KIRKFORGE_TOOL_ARGS_JSON` to `{}` instead of exiting, matching the other Node SDK tools
-- Extended the `clippy::unwrap_used` production lint to the satellite crates (`kirkforge-draw`, `kirkforge-video`, `plugin3`, `stratum`, and their core/host libraries) and fixed the resulting production unwrap sites.
-- Satellite binary discovery in `kirkforge-draw`, `kirkforge-video`, `stratum`, and `kirkforge-plugin3` now also accepts `<bin>.exe` candidates, so the Windows release archives (which ship `.exe` binaries) work under Git Bash / WSL without requiring a separate PATH entry.
+- `kf-draw` and `stratum` shell helpers now look for their satellite binary next to the script (`<plugin>/tools/<bin>`) before the workspace target directory, so installed-layout plugin directories work when binaries are shipped alongside the wrappers
+- `kf-draw` `render.sh` now uses the shared `json_get_string` helper (jq/python3/bash fallback) instead of sed-only parsing, matching the robustness of the other filesystem plugins
+- `kf-draw` `edit.sh` now has a proper `#!/usr/bin/env bash` shebang and uses the shared JSON helper so it no longer relies on sed-only argument parsing
+- `kf-plugin-sdk` `verify.sh`, `audit-verify.sh`, and `verify-workspace.sh` now default an empty/missing `KF_CODE_TOOL_ARGS_JSON` to `{}` instead of exiting, matching the other Node SDK tools
+- Extended the `clippy::unwrap_used` production lint to the satellite crates (`kf-draw`, `kf-video`, `kf-budget`, `stratum`, and their core/host libraries) and fixed the resulting production unwrap sites.
+- Satellite binary discovery in `kf-draw`, `kf-video`, `stratum`, and `kf-budget` now also accepts `<bin>.exe` candidates, so the Windows release archives (which ship `.exe` binaries) work under Git Bash / WSL without requiring a separate PATH entry.
 
 ### Added
 - `/plugins` slash-command family for runtime plugin mount/unmount: `list`, `enable <name>`, `disable <name>`, `reload`, `trust <name> <tier>`. The executor picks up the new registry snapshot on the next turn without restarting.
-- `--log-level` flag (default `warn`; env `KIRKFORGE_LOG_LEVEL`); `RUST_LOG` still overrides
-- `kirkforge completions <bash|zsh|fish|powershell>` — prints shell completion script
+- `--log-level` flag (default `warn`; env `KF_CODE_LOG_LEVEL`); `RUST_LOG` still overrides
+- kf-code completions <bash|zsh|fish|powershell>` — prints shell completion script
 - Cargo.toml metadata: `repository`, `license`, `keywords`, `categories`
-- Five built-in workspace plugin sources (`plugins/kirkforge-draw`, `plugins/kirkforge-video`, `plugins/stratum`, `plugins/kirkforge-plugin3`, `plugins/kirkforge-plugin`) are now registered by default and can be toggled on/off persistently with `/plugins toggle <name>`.
+- Five built-in workspace plugin sources (`plugins/kf-draw`, `plugins/kf-video`, `plugins/stratum`, `plugins/kf-budget`, `plugins/kf-plugin`) are now registered by default and can be toggled on/off persistently with `/plugins toggle <name>`.
 - `/plugins` slash-command family extended with `toggle <name>`, `sources`, `add <name> <path>`, `remove <name>`, and `setup` for managing workspace plugin sources.
-- Source-level unification of all five satellite projects into this repo: Rust satellites build as `crates/*` workspace members and the KirkForge-Plugin SDK is vendored under `npm/kirkforge-plugin/`. The CLI, all satellites, and the plugin-host crate now build from a single workspace.
+- Source-level unification of all five satellite projects into this repo: Rust satellites build as `crates/*` workspace members and the KirkForge-Plugin SDK is vendored under `npm/kf-plugin/`. The CLI, all satellites, and the plugin-host crate now build from a single workspace.
 
 ### Changed
 - Default model changed from `deepseek-v4-flash:cloud` to `qwen2.5:7b` so fresh Ollama installs work out of the box
@@ -1196,9 +1212,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Adapter-selection unit tests covering GLM/DeepSeek/Gemini/OpenAI-compat routing and override behavior.
 
 ### Fixed
-- Vendored Node SDK (`npm/kirkforge-plugin`): `tool-pyright` now resolves the local `pyright` install before falling back to PATH, fixing test failures under vitest fork workers; CLI test helper no longer spawns every command twice; missing `e2e/smoke.test.ts` added.
-- `kirkforge-video` integration tests skip when `ffmpeg`/`ffprobe`/`flite` are absent, and CI installs them so the suite stays green on stock Ubuntu runners.
-- Config file (`~/.local/share/kirkforge/config.toml`) now created with `0o600` permissions instead of world-readable `0644`; all three write paths covered (create, hot-reload, `save_config`)
+- Vendored Node SDK (`npm/kf-plugin`): `tool-pyright` now resolves the local `pyright` install before falling back to PATH, fixing test failures under vitest fork workers; CLI test helper no longer spawns every command twice; missing `e2e/smoke.test.ts` added.
+- `kf-video` integration tests skip when `ffmpeg`/`ffprobe`/`flite` are absent, and CI installs them so the suite stays green on stock Ubuntu runners.
+- Config file (`~/.local/share/kf-code/config.toml`) now created with `0o600` permissions instead of world-readable `0644`; all three write paths covered (create, hot-reload, `save_config`)
 - TUI exit no longer hangs for minutes when an Ollama HTTP call is in-flight:
   - cancel signal sent before channel drop
   - `handle.await` wrapped in a 3-second timeout

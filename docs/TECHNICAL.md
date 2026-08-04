@@ -19,72 +19,72 @@ synthesis with its own architectural contributions:
 | Concern | KirkForge's answer |
 |---|---|
 | Provider lock-in | One `ModelAdapter` trait, six concrete providers (Ollama, OpenAI-compat, Anthropic direct, Bedrock, Vertex, OpenCode-Zen). Model-name routing heuristics pick the adapter; config overrides win. |
-| Context quality | Tree-sitter symbol/import/call-graph index (`kirkforge-context-index`) gives the agent graph-grounded retrieval instead of plain-text search. Four languages: Rust, TypeScript, Python, Go. |
+| Context quality | Tree-sitter symbol/import/call-graph index (`kf-context-index`) gives the agent graph-grounded retrieval instead of plain-text search. Four languages: Rust, TypeScript, Python, Go. |
 | Context cost (input side) | Stratum compression pipeline classifies and compacts bloated tool outputs *before* they enter the context window. |
 | Context cost (output side) | Plugin3 budget guard tracks token spend against a ceiling and slices or compacts oversized tool results when the budget is approached. |
 | Execution reliability | A verifier bus runs build, test, lint, rustfmt, git-state, and security checks after file-modifying tool calls. A correction loop auto-applies formatter fixes and feeds unfixable errors back to the model as tool results. |
 | Reproducibility | Enforced plan mode (`/plan` then `/implement`), per-result checkpointing mid-batch, execution replay (ADR-039), and conversation logging. |
-| Extensibility | A manifest-based plugin system (`kirkforge.toml`) with trust tiers, minisign signature verification, and four capability kinds: skills, tools, hooks, verifiers. |
+| Extensibility | A manifest-based plugin system (`kf-code.toml`) with trust tiers, minisign signature verification, and four capability kinds: skills, tools, hooks, verifiers. |
 
 ---
 
 ## Workspace layout
 
-The workspace has one binary crate (`kirkforge`) and 16 satellite crates under
+The workspace has one binary crate (`kf-code`) and 16 satellite crates under
 `crates/`. The binary is the user-facing CLI; the satellites are libraries and
 standalone binaries.
 
 ```
-kirkforge (root bin)          ← the CLI the user runs
+kf-code (root bin)          ← the CLI the user runs
 ├── src/                       ← agent core (session, tools, TUI, adapters, verifiers)
 ├── crates/                    ← 16 satellite crates
-│   ├── kirkforge-plugin       ← plugin SDK: manifest types, trust tiers
-│   ├── kirkforge-plugin-host  ← plugin runtime: registry, dispatch, signatures
-│   ├── kirkforge-context-index← tree-sitter symbol/import/call-graph index
-│   ├── kirkforge-workflow     ← programmable JSON workflow engine
-│   ├── kirkforge-lsp          ← LSP client pool for symbol-aware navigation
-│   ├── kirkforge-bench        ← task-benchmark harness (types + verifier + reports)
-│   ├── kirkforge-draw-core    ← pure document model for KirkForge-Draw
-│   ├── kirkforge-draw         ← kfd: terminal diagram editor binary
-│   ├── kirkforge-video        ← instruction-driven video production binary
-│   ├── kirkstratum-core       ← context-compression pipeline library
-│   ├── kirkstratum-hosts      ← host-specific compression rules
-│   ├── kirkstratum-cli        ← stratum: compression CLI binary
-│   ├── plugin3-core           ← budget/orchestrator/slicing data model
-│   ├── plugin3-hosts          ← host-side budget adapters
-│   ├── plugin3-cli            ← plugin3: budget CLI binary
-│   └── kirkforge-testdoctor   ← test-performance doctor (workspace member; profile, profile-per-test, classify, partition, suggest, suggest-detailed, apply, gaps, diagnose, flaky)
+│   ├── kf-plugin-sdk     ← plugin SDK: manifest types, trust tiers
+│   ├── kf-plugin-host  ← plugin runtime: registry, dispatch, signatures
+│   ├── kf-context-index← tree-sitter symbol/import/call-graph index
+│   ├── kf-workflow     ← programmable JSON workflow engine
+│   ├── kf-lsp          ← LSP client pool for symbol-aware navigation
+│   ├── kf-bench        ← task-benchmark harness (types + verifier + reports)
+│   ├── kf-draw-core    ← pure document model for KirkForge-Draw
+│   ├── kf-draw         ← kfd: terminal diagram editor binary
+│   ├── kf-video        ← instruction-driven video production binary
+│   ├── kf-compress-core       ← context-compression pipeline library
+│   ├── kf-compress-hosts      ← host-specific compression rules
+│   ├── kf-compress-cli        ← stratum: compression CLI binary
+│   ├── kf-budget-core           ← budget/orchestrator/slicing data model
+│   ├── kf-budget-hosts          ← host-side budget adapters
+│   ├── kf-budget-cli            ← kf-budget: budget CLI binary
+│   └── kf-testdoctor   ← test-performance doctor (workspace member; profile, profile-per-test, classify, partition, suggest, suggest-detailed, apply, gaps, diagnose, flaky)
 ├── plugins/                   ← 5 plugin manifests + shell tool/hook scripts
-│   ├── kirkforge-plugin/      ← SDK self-plugin (Node-backed verification tools)
+│   ├── kf-plugin/      ← SDK self-plugin (Node-backed verification tools)
 │   ├── stratum/               ← compression plugin (5 tools, 2 hooks)
-│   ├── kirkforge-plugin3/     ← budget plugin (7 tools, 4 hooks)
-│   ├── kirkforge-draw/        ← diagram plugin (1 tool, 1 hook)
-│   └── kirkforge-video/       ← video plugin (8 tools)
+│   ├── kf-budget/     ← budget plugin (7 tools, 4 hooks)
+│   ├── kf-draw/        ← diagram plugin (1 tool, 1 hook)
+│   └── kf-video/       ← video plugin (8 tools)
 ├── benches/tasks/             ← 31 benchmark task definitions (TOML)
 └── docs/adr/                  ← 84 Architecture Decision Records
 ```
 
 The workspace has ~3,900 `#[test]` functions (~2,200 under `src/`,
 ~1,650 under `crates/`). The `crates/` count is pinned by the
-`readme_drift` test (`crates/plugin3-core/README.md` State table).
+`readme_drift` test (`crates/kf-budget-core/README.md` State table).
 
 ### Compiled-in vs satellite
 
-The root `kirkforge` binary directly depends on six crates:
+The root `kf-code` binary directly depends on six crates:
 
 | Crate | Role |
 |---|---|
-| `kirkforge-plugin` | Plugin manifest types and trust-tier logic |
-| `kirkforge-plugin-host` | Plugin registry, dispatch, in-process signature verification (ADR-057) |
-| `kirkforge-context-index` | Tree-sitter indexing and graph retrieval |
-| `kirkforge-workflow` | JSON workflow engine (reuses the `task` tool's spawner) |
-| `kirkforge-lsp` | LSP client pool |
-| `kirkforge-bench` | Benchmark task types, loader, verifier, report writers |
+| `kf-plugin-sdk` | Plugin manifest types and trust-tier logic |
+| `kf-plugin-host` | Plugin registry, dispatch, in-process signature verification (ADR-057) |
+| `kf-context-index` | Tree-sitter indexing and graph retrieval |
+| `kf-workflow` | JSON workflow engine (reuses the `task` tool's spawner) |
+| `kf-lsp` | LSP client pool |
+| `kf-bench` | Benchmark task types, loader, verifier, report writers |
 
 The remaining nine crates are **satellites**: they build as standalone binaries
-(`kfd`, `kirkforge-video`, `stratum`, `plugin3`) or support libraries. When
+(`kfd`, `kf-video`, `stratum`, `kf-budget`) or support libraries. When
 their feature flag is enabled, the core crate is linked directly into the
-`kirkforge` binary as a compiled-in module (ADR-046–049). When the feature is
+`kf-code` binary as a compiled-in module (ADR-046–049). When the feature is
 off, the shell plugin dir loads as a fallback (ADR-050).
 
 ---
@@ -107,7 +107,7 @@ The largest module (~30 submodules). It owns:
   shell script as a subprocess). Folded plugins (Stratum, Plugin3, Draw, Video)
   register as direct Rust `Tool` impls when their feature is on (ADR-050).
 - **Plugin ops** (`plugin_ops.rs`): shared plugin-ops layer used by both the
-  TUI `/plugins` slash-command family and the `kirkforge plugin` CLI
+  TUI `/plugins` slash-command family and the `kf-code plugin` CLI
   subcommand (`list`, `enable`, `disable`, `toggle`, `validate`, `reload`,
   `sources`, `add`, `remove`, `doctor`). Pure functions over `&Config` /
   `&mut Config`; the TUI keeps its `mpsc` reload plumbing, the CLI mutates
@@ -155,7 +155,7 @@ field selects the Anthropic cloud backend (direct, Bedrock, or Vertex).
 `atomic_write`, `bash`, `bash_cancel`, `bash_minify`, `bash_status`, `glob`,
 `grep`, `lsp_query`, `read_image`, `web_fetch`, `web_search`, `computer_use`,
 `notebook_edit`, `task`, `todo`, `workflow_run`. The `workflow_run` tool
-(WO 9.1) wraps the `kirkforge-workflow` crate's `WorkflowExecutor` so the
+(WO 9.1) wraps the `kf-workflow` crate's `WorkflowExecutor` so the
 agent loop and bench harness can invoke workflows via tool calls, reusing
 the same in-process `TaskSpawner` as the `task` tool. Plugin tools are
 registered alongside these at runtime.
@@ -334,7 +334,7 @@ After a tool execution event, the correction loop (up to 3 iterations):
 
 ## Context index
 
-`kirkforge-context-index` builds a tree-sitter-backed symbol, import, and
+`kf-context-index` builds a tree-sitter-backed symbol, import, and
 call-graph index. For a given symbol, the agent can retrieve:
 
 - The symbol's definition (file, line, kind)
@@ -342,7 +342,7 @@ call-graph index. For a given symbol, the agent can retrieve:
 - Call sites that invoke it (`called_by`)
 
 Four languages: Rust, TypeScript (including tsx), Python, Go. The index is
-cached as JSON at `.kirkforge/context-index/cache.json`, keyed on git HEAD for
+cached as JSON at `.kf-code/context-index/cache.json`, keyed on git HEAD for
 invalidation. This gives the agent graph-grounded context instead of relying on
 plain-text search.
 
@@ -411,7 +411,7 @@ approached or exceeded:
 The orchestrator (`SlicingOrchestrator`) classifies tool outputs, slices
 oversized ones with head/tail markers, and offloads the full content to a store.
 Cost reporting tracks per-turn usage. Plugin3 ships as a compiled-in module
-(when the `budget` feature is on, ADR-047) or as a standalone `plugin3` binary
+(when the `budget` feature is on, ADR-047) or as a standalone `kf-budget` binary
 (feature off, shell fallback).
 
 The 4 in-process hooks receive full `HookContext` with real tool result content
@@ -429,7 +429,7 @@ tool-result cycle uses more aggressive compression.
 ## Plugin system
 
 Plugins are manifest-based and dynamically loaded at runtime from the
-filesystem. The plugin SDK (`kirkforge-plugin`) and host (`kirkforge-plugin-host`)
+filesystem. The plugin SDK (`kf-plugin-sdk`) and host (`kf-plugin-host`)
 are compiled into the binary; plugin *functionality* arrives via one of two
 dispatch paths (ADR-050):
 
@@ -450,8 +450,8 @@ gates the compiled-in path: when a folded plugin name is absent from
 `enabled_plugins`, its tools and in-process hooks are not registered even
 when the compile-time feature is on. So `/plugins disable stratum` removes
 "stratum" from `enabled_plugins` and the Stratum tools/hooks stay live only
-on the next `kirkforge run` that re-registers them. `plugin_sources` is only
-needed for external/shell plugins. The `kirkforge-plugin` self-plugin (Node
+on the next `kf-code run` that re-registers them. `plugin_sources` is only
+needed for external/shell plugins. The `kf-plugin-sdk` self-plugin (Node
 SDK) is **not** folded; it stays an external shell-out under all
 configurations because its tools depend on the Node ecosystem (ESLint,
 TypeScript, Ruff, Pyright, Bandit).
@@ -459,7 +459,7 @@ TypeScript, Ruff, Pyright, Bandit).
 `/plugins list` shows the source (`compiled-in` / `external` /
 `external (feature off)`) and feature gate for each workspace plugin source.
 
-### Manifest format (`kirkforge.toml`)
+### Manifest format (`kf-code.toml`)
 
 ```toml
 name = "stratum"
@@ -508,7 +508,7 @@ triggers / tool names / verifier names within a single manifest.
 
 `read-only` < `shell` < `network` < `unsafe`. The host caps plugins at
 `max_plugin_trust` (config: default `shell`). Over-tier plugins are rejected or
-downgraded. Optional minisign detached-signature verification (`.kirkforge.sig`).
+downgraded. Optional minisign detached-signature verification (`.kf-code.sig`).
 
 ### Capability kinds
 
@@ -523,11 +523,11 @@ downgraded. Optional minisign detached-signature verification (`.kirkforge.sig`)
 
 | Plugin | Trust | Skills | Tools | Hooks | Source |
 |---|---|---|---|---|---|
-| `kirkforge-plugin` | shell | `/kirkforge` | 6 | 0 | External — Node SDK (`npm/kirkforge-plugin`), not folded |
+| `kf-plugin-sdk` | shell | `/kf-code` | 6 | 0 | External — Node SDK (`npm/kf-plugin`), not folded |
 | `stratum` | shell | `/stratum` | 5 | 2 | Compiled-in (`stratum` feature) or external (`stratum` binary) |
-| `kirkforge-plugin3` | shell | `/budget` | 7 | 4 | Compiled-in (`budget` feature) or external (`plugin3` binary) |
-| `kirkforge-draw` | shell | `/draw` | 1 | 1 | Compiled-in (`draw` feature) or external (`kfd` binary) |
-| `kirkforge-video` | shell | `/video` | 8 | 0 | Compiled-in (`video` feature) or external (`kirkforge-video` binary) |
+| `kf-budget` | shell | `/budget` | 7 | 4 | Compiled-in (`budget` feature) or external (`kf-budget` binary) |
+| `kf-draw` | shell | `/draw` | 1 | 1 | Compiled-in (`draw` feature) or external (`kfd` binary) |
+| `kf-video` | shell | `/video` | 8 | 0 | Compiled-in (`video` feature) or external (`kf-video` binary) |
 
 Runtime toggles: `enabled_plugins` (Vec) and `plugin_sources` (HashMap) in
 `ToolConfig`. The `/plugins` TUI command set: `list`, `enable`, `disable`,
@@ -540,7 +540,7 @@ Runtime toggles: `enabled_plugins` (Vec) and `plugin_sources` (HashMap) in
 ### Draw
 
 Draw is a terminal diagram editor (`kfd` binary) with a pure document model
-(`kirkforge-draw-core`). The model plans a diagram and emits a `.td.json` file;
+(`kf-draw-core`). The model plans a diagram and emits a `.td.json` file;
 the `draw_render` tool renders it to fenced markdown via `kfd --render --fenced`.
 A `post-turn` hook suggests rendering any new `.td.json` files. The document
 format is pinned in ADR-0003.
@@ -551,7 +551,7 @@ application for humans — it is an output renderer for agent-produced diagrams.
 
 ### Video
 
-Video is an instruction-driven video production pipeline (`kirkforge-video`
+Video is an instruction-driven video production pipeline (`kf-video`
 binary). The text LLM is the **director**: it writes a brief, selects a pipeline
 (`animated_explainer`, `cinematic`, `screen_demo`), plans scenes, and invokes
 the video binary to render via FFmpeg. The video model (if configured) generates
@@ -571,7 +571,7 @@ model executes.
 
 ### Workflow engine
 
-`kirkforge-workflow` is a programmable JSON workflow engine. Workflows are DAGs
+`kf-workflow` is a programmable JSON workflow engine. Workflows are DAGs
 of persona-driven steps (`explore`, `plan`, `coder`) with optional critique
 passes. Three built-in templates ship: `bugfix`, `feature`, `refactor`.
 Workflows reuse the `task` tool's in-process spawner, so they run as orchestrated
@@ -615,7 +615,7 @@ was asked to create). `bench verify-only` skips these and reports
 fixes the WO 9.0 anti-pattern where verify specs grepped setup content,
 passing `verify-only` trivially without validating the model's work.
 
-The harness (`kirkforge-bench` crate + `src/session/bench.rs`) spins up a
+The harness (`kf-bench` crate + `src/session/bench.rs`) spins up a
 headless agent session with a real model adapter, auto-approves all tool calls,
 runs the task, then verifies the result deterministically. Reports are written as
 JSON and markdown.
@@ -635,19 +635,19 @@ differentiator vs Claude Code / Vix / opencode.
 - **Runner**: `run_token_budget_challenge` in `src/session/bench.rs` runs the
   task once per ceiling in `BUDGET_CHALLENGE_CEILINGS = [131_072, 65_536,
   32_768, 16_384, 8_192]`. Each run clones the task with `budget_ceiling` set;
-  the runner exports `KIRKFORGE_BUDGET_CEILING=<n>` to the agent's env so the
+  the runner exports `KF_CODE_BUDGET_CEILING=<n>` to the agent's env so the
   budget guard enforces it for that run, then clears it after. `run_all`
   dispatches on the task name (`token_budget_challenge`) to the loop instead
   of the single-run path.
-- **Report**: `BudgetChallengeReport` (in `kirkforge-bench`) records the six
+- **Report**: `BudgetChallengeReport` (in `kf-bench`) records the six
   metrics per ceiling; `write_budget_challenge_report` emits the markdown
   scoreboard table (ceiling × success × prompt tokens × completion tokens ×
   compression passes × cost). `TaskResult` gained a serde-optional
   `compression_passes` field (counts `TurnEvent::CompactionReport`) for this.
 - **Budget env wiring**: `BenchTask::budget_ceiling: Option<usize>`
   (serde-optional, default `None`) is the task-side field. The
-  `KIRKFORGE_BUDGET_CEILING` env hook in `env_overrides.rs` (mirrors
-  `KIRKFORGE_MINIFY_ABOVE_BYTES` from WO 9.7) reads it into
+  `KF_CODE_BUDGET_CEILING` env hook in `env_overrides.rs` (mirrors
+  `KF_CODE_MINIFY_ABOVE_BYTES` from WO 9.7) reads it into
   `cfg.tools.budget_ceiling`; `init_from_config` applies it to the shared
   `TokenBudget`. No new budget code — reuses ADR-0005 / WO 7.5 / WO 8.6.
 
@@ -681,7 +681,7 @@ The bench CI loop has three jobs in `.github/workflows/bench-baseline.yml`:
 
 The `bench compare --fail-on-regression <pct>` CLI flag (WO 10.9) uses
 `compare_with_threshold(baseline, current, threshold)` in the
-`kirkforge-bench` crate. The threshold is a fraction (0.10 = 10
+`kf-bench` crate. The threshold is a fraction (0.10 = 10
 percentage points); the CLI flag takes a percentage (10). The
 regression is detected when `success_rate_delta < -threshold` (strict
 inequality: a drop of exactly the threshold is not a regression).
@@ -737,7 +737,7 @@ plugin path when it is off (graceful degradation). ADR-050 pins the
 two-path dispatch consolidation design. The `dep:` optional-dependency
 pattern is what makes per-plugin opt-in possible.
 
-ADR-0017's "no `[features]` section" rule is scoped to `crates/plugin3-core/`,
+ADR-0017's "no `[features]` section" rule is scoped to `crates/kf-budget-core/`,
 not the root binary.
 
 ---

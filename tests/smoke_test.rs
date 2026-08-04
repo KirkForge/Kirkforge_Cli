@@ -6,7 +6,7 @@
 
 use std::process::Command;
 
-/// Return the path to the built `kirkforge` binary.
+/// Return the path to the built `kf-code` binary.
 fn bin() -> std::path::PathBuf {
     env!("CARGO_BIN_EXE_kf-code").into()
 }
@@ -16,11 +16,11 @@ fn metrics_command_prints_summary() {
     let output = Command::new(bin())
         .arg("metrics")
         .output()
-        .expect("failed to run kirkforge metrics");
+        .expect("failed to run kf-code metrics");
 
     assert!(
         output.status.success(),
-        "kirkforge metrics failed: {}",
+        "kf-code metrics failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 
@@ -37,22 +37,22 @@ fn completions_command_outputs_script() {
     let output = Command::new(bin())
         .args(["completions", "bash"])
         .output()
-        .expect("failed to run kirkforge completions bash");
+        .expect("failed to run kf-code completions bash");
 
     assert!(
         output.status.success(),
-        "kirkforge completions bash failed: {}",
+        "kf-code completions bash failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("kirkforge"),
-        "completion script should mention kirkforge"
+        stdout.contains("kf-code"),
+        "completion script should mention kf-code"
     );
 }
 
-/// `kirkforge <subcommand> --help` must exit 0 and mention the subcommand
+/// `kf-code <subcommand> --help` must exit 0 and mention the subcommand
 /// name. Covers the subcommands not exercised by the tests above
 /// (metrics + completions). `--help` short-circuits before any required
 /// positional args or side effects, so it is safe for daemon/replay/etc.
@@ -65,16 +65,16 @@ fn help_flag_for_remaining_subcommands() {
         let output = Command::new(bin())
             .args([sub, "--help"])
             .output()
-            .unwrap_or_else(|e| panic!("failed to run kirkforge {sub} --help: {e}"));
+            .unwrap_or_else(|e| panic!("failed to run kf-code {sub} --help: {e}"));
         assert!(
             output.status.success(),
-            "kirkforge {sub} --help failed: {}",
+            "kf-code {sub} --help failed: {}",
             String::from_utf8_lossy(&output.stderr)
         );
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(
             stdout.contains(sub),
-            "kirkforge {sub} --help output should mention '{sub}':\n{stdout}"
+            "kf-code {sub} --help output should mention '{sub}':\n{stdout}"
         );
     }
 }

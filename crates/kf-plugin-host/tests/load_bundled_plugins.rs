@@ -42,8 +42,8 @@ fn all_bundled_plugins_load_without_warnings() {
 
     for expected in [
         "kf-draw",
-        "kf-plugin-sdk",
-        "kf-plugin-sdk3",
+        "kf-plugin",
+        "kf-budget",
         "kf-video",
         "stratum",
     ] {

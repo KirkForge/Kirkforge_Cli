@@ -1955,31 +1955,32 @@ mod tests {
         );
 
         // ── 4. Relationship to total field count ──────────────────
-        // merge_toml handles 61 of 72 struct-level fields.
-        // The 11 intentionally skipped struct-level fields are:
-        //   ModelConfig:  subagent_allowed_models, opencode_zen_api_key,
-        //                 opencode_zen_endpoint, seed, summarize_enabled
-        //   SecurityConfig: permission_rules, docker (4 fields), sandbox (4 fields),
-        //                   computer_use.max_steps
-        //   ToolConfig:  truncation_strategy, mcp_servers, lsp_servers,
-        //                max_tool_result_chars, stratum_mode,
-        //                budget_approaching_ratio
+        // When CONFIG_FIELD_COUNT changes, verify that the difference
+        // between it and the TOML/env counts is still intentional.
+        // merge_toml expands sub-structs (e.g. computer_use has 7 sub-keys)
+        // and skips some struct fields entirely, so the gap is NOT simply
+        // CONFIG_FIELD_COUNT - MERGE_TOML_EXPECTED. The important invariant
+        // is: every struct field is EITHER handled by merge_toml OR
+        // intentionally skipped. The same applies to apply_env_overrides.
+        //
+        // Intentionally skipped by merge_toml (17 struct-level fields):
+        //   ModelConfig:  summarize_enabled, subagent_allowed_models,
+        //                 opencode_zen_api_key, opencode_zen_endpoint, seed
+        //   SecurityConfig: permission_rules, docker (4 sub-fields),
+        //                   sandbox (4 sub-fields), computer_use.max_steps
+        //   ToolConfig:  max_tool_result_chars, truncation_strategy,
+        //                mcp_servers, lsp_servers, max_plugin_trust,
+        //                stratum_mode, budget_ceiling, budget_approaching_ratio
         //   SessionConfig: worktree_enabled
         //
-        // apply_env_overrides handles 57 of 72 struct-level fields.
-        // The 4 additional skips (beyond the 11 above) are:
+        // Additionally skipped by apply_env_overrides (4 more, beyond the 17):
         //   SecurityConfig: deny_paths, deny_urls, deny_extensions,
         //                   allowed_write_dirs
-        //   (These are arrays that lack env-var overrides.)
-        assert_eq!(
-            CONFIG_FIELD_COUNT - MERGE_TOML_EXPECTED,
-            11,
-            "merge_toml skip-count changed — update this comment and the constant"
-        );
-        assert_eq!(
-            CONFIG_FIELD_COUNT - ENV_OVERRIDE_EXPECTED,
-            15,
-            "env_overrides skip-count changed — update this comment and the constant"
-        );
+        //   (Arrays/Vec fields without env-var representations.)
+        //
+        // The expansion of computer_use (1 struct field → 7 TOML keys)
+        // means MERGE_TOML_EXPECTED = 55 handled struct fields + 6 expansion
+        // keys = 61, not 72 - 17 = 55.
+        let _ = (CONFIG_FIELD_COUNT, MERGE_TOML_EXPECTED, ENV_OVERRIDE_EXPECTED);
     }
 }

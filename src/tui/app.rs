@@ -2,6 +2,7 @@
 use crate::session::session_fork::ForkManager;
 use crate::session::skills::SkillRegistry;
 use crate::shared::{ModelInfo, SharedConfig};
+use crossterm::event::KeyCode;
 use kf_plugin_host::PluginRegistry;
 use ratatui::text::Line;
 use std::collections::{HashSet, VecDeque};
@@ -87,6 +88,60 @@ impl ChatRenderCache {
         self.tool_collapsed = tool_collapsed;
         self.expanded_tools = expanded_tools.clone();
         self.collapsed_messages = collapsed_messages.clone();
+    }
+}
+
+/// Active tab for the TUI panel system.
+///
+/// F1–F5 switch between panels. The Chat tab is the default and
+/// reproduces the existing single-panel layout. Other tabs replace
+/// the main content area with a dedicated panel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ActiveTab {
+    /// F1 — Conversation view (default, existing chat panel)
+    #[default]
+    Chat,
+    /// F2 — Model / adapter info and switching
+    Models,
+    /// F3 — Plugin list, status, toggle
+    Plugins,
+    /// F4 — Scheduled and background job status
+    Jobs,
+    /// F5 — Config display and live reload
+    Settings,
+}
+
+impl ActiveTab {
+    /// All tabs in F-key order.
+    pub const ALL: [ActiveTab; 5] = [
+        ActiveTab::Chat,
+        ActiveTab::Models,
+        ActiveTab::Plugins,
+        ActiveTab::Jobs,
+        ActiveTab::Settings,
+    ];
+
+    /// F-key label for the tab bar (e.g. "F1:Chat").
+    pub fn label(&self) -> &'static str {
+        match self {
+            ActiveTab::Chat => "F1:Chat",
+            ActiveTab::Models => "F2:Models",
+            ActiveTab::Plugins => "F3:Plugins",
+            ActiveTab::Jobs => "F4:Jobs",
+            ActiveTab::Settings => "F5:Settings",
+        }
+    }
+
+    /// Map an F-key code to a tab, or return None for non-F keys.
+    pub fn from_key_code(code: KeyCode) -> Option<ActiveTab> {
+        match code {
+            KeyCode::F(1) => Some(ActiveTab::Chat),
+            KeyCode::F(2) => Some(ActiveTab::Models),
+            KeyCode::F(3) => Some(ActiveTab::Plugins),
+            KeyCode::F(4) => Some(ActiveTab::Jobs),
+            KeyCode::F(5) => Some(ActiveTab::Settings),
+            _ => None,
+        }
     }
 }
 
@@ -394,6 +449,11 @@ pub struct AppState {
     /// it on Tab; any other keypress clears it. Rendered as a dim
     /// hint line in `widgets/input.rs`.
     pub completion_suggestions: Vec<String>,
+
+    // ── Tab panel system ──────────────────────────────────────────
+    /// Currently active tab. F1–F5 switch tabs; the Chat tab (F1)
+    /// is the default and shows the conversation view.
+    pub active_tab: ActiveTab,
 }
 
 /// Snapshot of a detected doom loop. Held on `AppState` so the
@@ -488,6 +548,7 @@ impl AppState {
             doom_loop: None,
             doom_loop_selection: crate::tui::widgets::doom_banner::DoomLoopSelection::default(),
             completion_suggestions: Vec::new(),
+            active_tab: ActiveTab::default(),
         }
     }
 

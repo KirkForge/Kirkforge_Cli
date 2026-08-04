@@ -842,7 +842,31 @@ async fn run_event_loop(
                 ])
                 .split(size);
 
-            render_chat(f, chunks[0], state);
+            // Render main content area based on active tab.
+            // Chat (F1) shows the conversation; other tabs show their
+            // own panel content in the same area.
+            use crate::tui::app::ActiveTab;
+            match state.active_tab {
+                ActiveTab::Chat => {
+                    render_chat(f, chunks[0], state);
+                }
+                ActiveTab::Models => {
+                    crate::tui::widgets::tabs::render_models(f, chunks[0], state);
+                }
+                ActiveTab::Plugins => {
+                    crate::tui::widgets::tabs::render_plugins(f, chunks[0], state);
+                }
+                ActiveTab::Jobs => {
+                    crate::tui::widgets::tabs::render_jobs(f, chunks[0], state);
+                }
+                ActiveTab::Settings => {
+                    crate::tui::widgets::tabs::render_settings(f, chunks[0], state);
+                }
+            }
+
+            // Show input and status for all tabs; the main content area
+            // already rendered above (Chat shows the conversation,
+            // other tabs show their own panel content).
             render_input(f, chunks[1], state);
             render_status(f, chunks[2], state);
 

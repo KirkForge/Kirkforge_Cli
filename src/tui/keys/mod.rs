@@ -12,6 +12,7 @@ use crate::session::conversation::ConversationLog;
 use crate::session::executor::TurnEvent;
 use crate::session::prompt::CompactRequest;
 use crate::shared::Config;
+use crate::tui::app::ActiveTab;
 use crate::tui::app::{AppState, ConversationEntry};
 use crate::tui::commands::PersonaResult;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -333,6 +334,13 @@ pub(crate) async fn handle_input_key(
         state.completion_suggestions.clear();
     }
     match key.code {
+        // ── F-key tab switching ───────────────────────────────────
+        // F1–F5 switch between Chat, Models, Plugins, Jobs, Settings.
+        // Esc returns to Chat from any non-Chat tab.
+        k if ActiveTab::from_key_code(k).is_some() => {
+            state.active_tab = ActiveTab::from_key_code(k).unwrap();
+            state.mark_dirty();
+        }
         KeyCode::Char(c) => {
             // Ctrl+Shift+C: copy the last assistant message to the
             // system clipboard. The SHIFT-included modifier check

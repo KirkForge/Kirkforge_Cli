@@ -17,27 +17,24 @@ use ratatui::{
     Frame,
 };
 
-/// Render a centered, scrollable approval dialog over the main content.
+/// Render a full-width, scrollable approval panel over the main content.
+///
+/// The panel uses the full terminal width so long args, diffs, and
+/// side-by-side diff views have maximum readability. It takes up to
+/// 75% of the terminal height, leaving a sliver of chat visible
+/// above and below for context.
 pub fn render_approval_dialog(
     f: &mut Frame,
     area: Rect,
     approval: &PendingApproval,
     state: &mut AppState,
 ) {
-    // Dialog box — up to 60 cols wide, up to 75% of terminal height.
-    // (A 12-line fixed dialog truncated the args preview to 4 lines,
-    // which made it impossible to read a 200-char `edit_file` argument
-    // before approving it.)
-    // When side-by-side diff is requested and the terminal is wide
-    // enough, expand to 80 cols so the two panes are readable.
-    let use_side_by_side = state.approval_diff_side_by_side && area.width >= 80;
-    let dialog_width = if use_side_by_side {
-        area.width.min(80)
-    } else {
-        area.width.min(60)
-    };
+    // Full-width panel — uses the entire terminal width for maximum
+    // readability of args, diffs, and side-by-side views. Up to 75%
+    // of terminal height, leaving conversation visible above/below.
+    let dialog_width = area.width;
     let dialog_height = (area.height * 3 / 4).clamp(10, area.height);
-    let x = (area.width.saturating_sub(dialog_width)) / 2;
+    let x = 0;
     let y = (area.height.saturating_sub(dialog_height)) / 2;
 
     let dialog_area = Rect::new(x, y, dialog_width, dialog_height);
@@ -64,6 +61,10 @@ pub fn render_approval_dialog(
     //   [2] scroll indicator (if truncated)    (1 line, only when scrolled)
     //   [3] instructions                       (1 line)
     let args_window_height = inner.height.saturating_sub(4) as usize;
+
+    // Side-by-side diff: available whenever the terminal is at least 80
+    // cols. The full-width panel makes this practical on most terminals.
+    let use_side_by_side = state.approval_diff_side_by_side && area.width >= 80;
 
     // Build the full flat line list of the preview. For
     // `edit_file` / `write_file` approvals we append a unified

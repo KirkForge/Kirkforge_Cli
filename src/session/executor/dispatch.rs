@@ -158,7 +158,7 @@ impl Executor {
             if let Some(ref bus_lock) = self.verifier_bus {
                 let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
                 let ctx = crate::session::verifier::bus::VerifyContext {
-                    sandbox_dir: self.path_guard.sandbox_dir.clone().unwrap_or_default(),
+                    sandbox_dir: self.sandbox.path_guard.sandbox_dir.clone().unwrap_or_default(),
                     changed_files: vec![std::path::PathBuf::from(path)],
                 };
                 if let Ok(mut bus) = bus_lock.lock() {

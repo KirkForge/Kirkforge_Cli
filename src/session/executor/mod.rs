@@ -1,9 +1,7 @@
 //! Session executor — runs model turns, dispatches tools, handles approvals.
 
 use crate::adapters::ModelAdapter;
-use crate::session::access::{
-    access_from_config, warn_if_unsandboxed, DenyList, PathGuard, ReadGate,
-};
+use crate::session::access::{access_from_config, warn_if_unsandboxed};
 use crate::session::adapter_swap::AdapterSwap;
 use crate::session::carryover::CarryoverProfile;
 use crate::session::config::config_diff_summary;
@@ -26,6 +24,7 @@ pub(crate) mod cost_tracking;
 pub(crate) mod dispatch;
 pub(crate) mod helpers;
 pub(crate) mod loop_;
+pub(crate) mod sandbox;
 pub(crate) mod scout;
 #[cfg(test)]
 pub(crate) mod tests;
@@ -47,9 +46,7 @@ pub struct Executor {
     config: SharedConfig,
     cost: cost_tracking::CostTracker,
     model_name: String,
-    deny_list: DenyList,
-    path_guard: PathGuard,
-    read_gate: ReadGate,
+    sandbox: sandbox::SandboxEnforcer,
     event_bus: EventBus,
     audit_log: Arc<AuditLog>,
     correction_loop: Option<CorrectionLoop>,
@@ -144,6 +141,11 @@ impl Executor {
         let cfg = read_shared_config(&config_for_startup);
         let (deny_list, path_guard, read_gate) = access_from_config(&cfg);
         warn_if_unsandboxed(&path_guard);
+        let sandbox = sandbox::SandboxEnforcer {
+            path_guard,
+            deny_list,
+            read_gate,
+        };
 
         let audit_log_path = cfg
             .security
@@ -254,9 +256,7 @@ impl Executor {
             config,
             cost,
             model_name,
-            deny_list,
-            path_guard,
-            read_gate,
+            sandbox,
             event_bus,
             audit_log,
             correction_loop: None,
@@ -352,9 +352,11 @@ impl Executor {
             new
         };
         let (deny_list, path_guard, read_gate) = access_from_config(&fresh);
-        self.deny_list = deny_list;
-        self.path_guard = path_guard;
-        self.read_gate = read_gate;
+        self.sandbox = sandbox::SandboxEnforcer {
+            path_guard,
+            deny_list,
+            read_gate,
+        };
         // JSON-mode changes are applied to the running adapter too.
         self.adapter.set_json_mode(fresh.model.json_mode);
         config_diff_summary(&old, &fresh)
@@ -506,7 +508,7 @@ impl Executor {
             }
         }
 
-        let handler = Arc::new(VerifierHandler::new(slots, self.path_guard.clone()));
+        let handler = Arc::new(VerifierHandler::new(slots, self.sandbox.path_guard.clone()));
         let bus = self.event_bus.clone();
         let h = handler.clone();
         match tokio::runtime::Handle::try_current() {

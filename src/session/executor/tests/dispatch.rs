@@ -324,7 +324,7 @@ async fn test_edit_event_diff_carries_real_diff_not_old_string() {
     // The read-before-edit gate would otherwise deny the edit
     // before the tool runs (and before the EditEvent is emitted).
     // Mark the path as already read so we exercise the diff path.
-    exe.read_gate
+    exe.sandbox
         .mark_read(&std::path::PathBuf::from("/tmp/edit_event_diff_test.txt"));
 
     let _events = exe

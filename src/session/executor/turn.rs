@@ -568,7 +568,7 @@ impl Executor {
             }
         }
 
-        if let Some(denied) = check_url_in_args(&tc.arguments, &self.deny_list) {
+        if let Some(denied) = check_url_in_args(&tc.arguments, &self.sandbox.deny_list) {
             return Ok(PreRunVerdict::Skip {
                 events: vec![TurnEvent::ToolResult {
                     name: tc.name.clone(),
@@ -579,7 +579,7 @@ impl Executor {
             });
         }
 
-        if let Some(denied) = check_deny_list(&self.deny_list, &tc.name, &tc.arguments) {
+        if let Some(denied) = check_deny_list(&self.sandbox.deny_list, &tc.name, &tc.arguments) {
             return Ok(PreRunVerdict::Skip {
                 events: vec![TurnEvent::ToolResult {
                     name: tc.name.clone(),
@@ -603,8 +603,8 @@ impl Executor {
             if let Some(denied) = check_bash_command_str(
                 bash_cmd,
                 bash_workdir,
-                &self.deny_list,
-                &self.path_guard,
+                &self.sandbox.deny_list,
+                &self.sandbox.path_guard,
                 bash_sandbox_workdir,
             ) {
                 return Ok(PreRunVerdict::Skip {
@@ -632,7 +632,7 @@ impl Executor {
                     .unwrap_or("."),
             };
             let path = std::path::Path::new(path_str);
-            if let GuardVerdict::Denied(msg) = check_search_path(&self.path_guard, path) {
+            if let GuardVerdict::Denied(msg) = check_search_path(&self.sandbox.path_guard, path) {
                 return Ok(PreRunVerdict::Skip {
                     events: vec![TurnEvent::ToolResult {
                         name: tc.name.clone(),
@@ -658,9 +658,9 @@ impl Executor {
                 .unwrap_or("");
             let path = std::path::Path::new(path_str);
             let verdict = if tc.name == "read_file" || tc.name == "read_image" {
-                self.path_guard.check_read(path)
+                self.sandbox.check_read(path)
             } else {
-                self.path_guard.check_write(path).await
+                self.sandbox.check_write(path).await
             };
             match verdict {
                 GuardVerdict::Allowed(resolved) => {
@@ -749,9 +749,9 @@ impl Executor {
                         .unwrap_or("");
                     let path = std::path::Path::new(path_str);
                     let verdict = if tc.name == "read_file" || tc.name == "read_image" {
-                        self.path_guard.check_read(path)
+                        self.sandbox.check_read(path)
                     } else {
-                        self.path_guard.check_write(path).await
+                        self.sandbox.check_write(path).await
                     };
                     match verdict {
                         GuardVerdict::Allowed(r) => r,
@@ -799,7 +799,7 @@ impl Executor {
             let needs_read_gate =
                 tc.name == "edit_file" || (tc.name == "write_file" && path.exists());
             if needs_read_gate {
-                if let GuardVerdict::Denied(msg) = self.read_gate.check_edit(path, &resolved) {
+                if let GuardVerdict::Denied(msg) = self.sandbox.check_edit(path, &resolved) {
                     let denied = format!("🔒 Access denied: {msg}");
                     if is_destructive {
                         self.audit_log.log_destructive(
@@ -887,7 +887,7 @@ impl Executor {
             );
 
             if matches!(tc.name.as_str(), "read_file" | "read_image") {
-                self.read_gate.mark_read(&resolved);
+                self.sandbox.mark_read(&resolved);
             }
 
             let tool_start = Instant::now();
@@ -1219,7 +1219,7 @@ impl Executor {
             let needs_read_gate = name == "edit_file" || (name == "write_file" && path.exists());
             if needs_read_gate {
                 if let GuardVerdict::Denied(msg) = self
-                    .read_gate
+                    .sandbox
                     .check_edit(std::path::Path::new(path_arg), &path)
                 {
                     let denied = format!("🔒 Access denied: {msg}");
@@ -1244,7 +1244,7 @@ impl Executor {
                 // Mark reads immediately so later writes in the same batch
                 // see them when their read-before-edit gate runs.
                 if name == "read_file" || name == "read_image" {
-                    self.read_gate.mark_read(&path);
+                    self.sandbox.mark_read(&path);
                 }
                 results.insert(idx, (invocation, o.clone(), Some(path.clone())));
             }

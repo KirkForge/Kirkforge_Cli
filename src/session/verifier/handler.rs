@@ -1,15 +1,12 @@
 use super::slots::VerifierSlots;
 use super::types::{FixSuggestion, Verdict, Verifier};
-use crate::session::event_bus::{BusEvent, EventHandler, EventKind, HandlerResult};
+use crate::session::verifier::types::{BusEvent, EventKind};
 use crate::shared::metrics::{record, MetricEvent};
 use std::sync::Arc;
 
-// ── EventBus integration ────────────────────────────────────────────────
-
-/// Wraps a [`VerifierSlots`] as an [`EventHandler`] for the event bus.
+/// Wraps a [`VerifierSlots`] and runs verification on tool events.
 ///
-/// This bridges the verifier system onto the event bus so that verifiers
-/// get triggered automatically when tool events fire.
+/// Called directly by the dispatch layer — no intermediate pub/sub bus.
 pub struct VerifierHandler {
     slots: Arc<std::sync::RwLock<VerifierSlots>>,
     /// Correction results that verifiers produced — consumed by correction loop.
@@ -45,10 +42,6 @@ impl VerifierHandler {
     /// verifier's name (used by the correction loop so the model sees
     /// `verifier:lint` instead of the useless `verifier:verifier`).
     pub async fn verify_event(&self, event: &BusEvent) -> (Verdict, String) {
-        // Short-circuit ToolError events: no built-in verifier acts on a
-        // tool-error payload (they all return Skipped), so fanning the
-        // event out to every verifier is wasted work. Skip the fan-out
-        // entirely. (bucketlist 3.25)
         if event.kind() == EventKind::ToolError {
             record(MetricEvent::Verifier {
                 name: "aggregate".to_string(),
@@ -60,7 +53,6 @@ impl VerifierHandler {
                 "aggregate".to_string(),
             );
         }
-        // Extract verifiers from the lock to avoid holding it across .await
         let verifiers: Vec<Arc<dyn Verifier>> = {
             let slots = self.slots.read().unwrap_or_else(|e| e.into_inner());
             if slots.is_empty() {
@@ -74,7 +66,6 @@ impl VerifierHandler {
             slots.all_verifiers()
         };
 
-        // Run truth-model precedence: first non-clean, non-skipped wins
         let (verdict, decisive_name) = {
             let mut verdict = Verdict::Clean;
             let mut name = "aggregate".to_string();
@@ -104,47 +95,11 @@ impl VerifierHandler {
             source: "built-in".to_string(),
         });
 
-        // Collect fixable suggestions
         if let Verdict::Fixable(ref fix) = verdict {
             let mut pending = self.pending_corrections.lock().await;
             pending.push(fix.clone());
         }
 
         (verdict, decisive_name)
-    }
-}
-
-#[async_trait::async_trait]
-impl EventHandler for VerifierHandler {
-    fn id(&self) -> &str {
-        "verifier"
-    }
-
-    fn subscribed_kinds(&self) -> Vec<EventKind> {
-        vec![
-            EventKind::Edit,
-            EventKind::FileWrite,
-            EventKind::BashExec,
-            EventKind::GitOperation,
-            EventKind::ToolError,
-        ]
-    }
-
-    async fn handle(&self, event: &BusEvent) -> HandlerResult {
-        let (verdict, _decisive_name) = self.verify_event(event).await;
-        let msg = match &verdict {
-            Verdict::Clean => "All verifiers passed".into(),
-            Verdict::Fixable(f) => format!("Fixable: {} ({})", f.description, f.severity),
-            Verdict::Unfixable(e) => format!("Unfixable: {} — {}", e.description, e.details),
-            Verdict::Skipped(reason) => format!("Skipped: {reason}"),
-        };
-        HandlerResult {
-            handler_id: "verifier".into(),
-            success: matches!(
-                verdict,
-                Verdict::Clean | Verdict::Skipped(_) | Verdict::Fixable(_)
-            ),
-            message: msg,
-        }
     }
 }

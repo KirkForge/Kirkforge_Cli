@@ -4,8 +4,9 @@ pub mod git;
 mod helpers;
 /// Verifier slots — deterministic post-execution checks and correction loop.
 ///
-/// Verifiers sit on the event bus and react to tool execution events.
-/// Unlike model-based tool calling, verifiers run deterministic checks:
+/// Verifiers receive tool events directly from the dispatch layer
+/// and react to specific tool outcomes. Unlike model-based tool calling,
+/// verifiers run deterministic checks:
 ///
 /// - **Build verifier**: runs `cargo build` on edited Rust files
 /// - **Lint verifier**: runs linter on edited files
@@ -40,7 +41,11 @@ pub use bus::{BusVerifier, Severity, VerdictEntry, VerifierBus, VerifierSource, 
 pub use correction::{CorrectionLoop, CorrectionResult};
 pub use handler::VerifierHandler;
 pub use slots::VerifierSlots;
-pub use types::{FixSuggestion, Verdict, VerificationError, Verifier};
+pub use types::{
+    BashExecEvent, BusEvent, EditEvent, EventKind, FileReadEvent, FileWriteEvent, FixSuggestion,
+    GitOperationEvent, LintFinding, LintRunEvent, SecurityIssue, SecurityScanEvent, ToolErrorEvent,
+    TypeCheckEvent, Verdict, VerificationError, Verifier,
+};
 
 #[cfg(test)]
 mod tests;

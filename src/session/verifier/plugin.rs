@@ -38,7 +38,7 @@
 //! async `Verifier` trait and the synchronous plugin verifier.
 
 use super::{Verdict, VerificationError, Verifier};
-use crate::session::event_bus::BusEvent;
+use crate::session::verifier::types::BusEvent;
 use kf_plugin_host::{PluginVerifier, VerifierVerdict};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -180,7 +180,7 @@ pub fn register_plugin_verifiers_into_bus(
 mod tests {
     use super::*;
     #[cfg(unix)]
-    use crate::session::event_bus::FileReadEvent;
+    use crate::session::verifier::types::FileReadEvent;
     use kf_plugin_host::{PluginRegistry, TrustPolicy};
     use std::path::PathBuf;
 

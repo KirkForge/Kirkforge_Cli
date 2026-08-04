@@ -249,40 +249,36 @@ async fn test_tool_call_loop_capped() {
 /// consumers (verifiers, correction loop, log replay). After the
 /// fix, it should carry the rendered diff that the tool returned
 /// in `ToolOutcome::FileEdit { diff, .. }`. This test wires up a
-/// real `edit_file` tool call, returns a `FileEdit` outcome with a
-/// distinctive diff string, and asserts the dispatched event
-/// matches.
+/// verifier that captures the diff from the event and asserts it
+/// matches the rendered diff.
 #[tokio::test]
 async fn test_edit_event_diff_carries_real_diff_not_old_string() {
-    use crate::session::event_bus::{EditEvent, EventHandler, EventKind, HandlerResult};
+    use crate::session::verifier::types::{BusEvent, EditEvent, Verdict, Verifier};
 
-    struct Capture {
-        last: Mutex<Option<String>>,
+    struct CaptureVerifier {
+        last_diff: std::sync::Mutex<Option<String>>,
     }
     #[async_trait::async_trait]
-    impl EventHandler for Capture {
-        fn id(&self) -> &str {
+    impl Verifier for CaptureVerifier {
+        fn name(&self) -> &str {
             "capture"
         }
-        fn subscribed_kinds(&self) -> Vec<EventKind> {
-            vec![EventKind::Edit]
+        fn priority(&self) -> u8 {
+            1
         }
-        async fn handle(&self, event: &BusEvent) -> HandlerResult {
+        async fn verify(&self, event: &BusEvent) -> Verdict {
             if let BusEvent::Edit(EditEvent { diff, .. }) = event {
-                *self.last.lock().unwrap() = Some(diff.clone());
+                *self.last_diff.lock().unwrap() = Some(diff.clone());
             }
-            HandlerResult {
-                handler_id: "capture".into(),
-                success: true,
-                message: String::new(),
-            }
+            Verdict::Clean
         }
     }
 
-    let captured: Arc<Capture> = Arc::new(Capture {
-        last: Mutex::new(None),
+    let captured: Arc<CaptureVerifier> = Arc::new(CaptureVerifier {
+        last_diff: std::sync::Mutex::new(None),
     });
 
+    // Wire the capture verifier into the executor's correction loop.
     let tool = MockTool {
         def: ToolDef {
             name: "edit_file",
@@ -317,10 +313,18 @@ async fn test_edit_event_diff_carries_real_diff_not_old_string() {
 
     let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
     let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(true));
-    exe.event_bus
-        .register(captured.clone() as Arc<dyn EventHandler>)
-        .await
-        .unwrap();
+
+    // Register the capture verifier in the executor's verifier slots.
+    {
+        let handler = exe
+            .correction_loop
+            .as_ref()
+            .expect("correction_loop")
+            .verifier_handler();
+        let mut slots = handler.slots().write().unwrap();
+        slots.register(captured).unwrap();
+    }
+
     // The read-before-edit gate would otherwise deny the edit
     // before the tool runs (and before the EditEvent is emitted).
     // Mark the path as already read so we exercise the diff path.
@@ -332,8 +336,8 @@ async fn test_edit_event_diff_carries_real_diff_not_old_string() {
         .await
         .unwrap();
 
-    let last = captured.last.lock().unwrap().clone();
-    let got = last.expect("EditEvent should have been dispatched");
+    let last = captured.last_diff.lock().unwrap().clone();
+    let got = last.expect("EditEvent should have been dispatched to verifier");
     assert!(
         got.contains("--- a")
             && got.contains("+++ b")

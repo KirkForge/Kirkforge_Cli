@@ -8,11 +8,10 @@ use crate::session::adapter_swap::AdapterSwap;
 use crate::session::carryover::CarryoverProfile;
 use crate::session::config::config_diff_summary;
 use crate::session::conversation::ConversationLog;
-use crate::session::event_bus::BusEvent;
-use crate::session::event_bus::EventBus;
 use crate::session::hooks::HookRunner;
 use crate::session::prompt::cache_stem::CacheStemTracker;
 use crate::session::prompt::PromptBuilder;
+use crate::session::verifier::types::BusEvent;
 use crate::session::verifier::{
     CorrectionLoop, CorrectionResult, VerifierBus, VerifierHandler, VerifierSlots,
 };
@@ -53,7 +52,6 @@ pub struct Executor {
     deny_list: DenyList,
     path_guard: PathGuard,
     read_gate: ReadGate,
-    event_bus: EventBus,
     audit_log: Arc<AuditLog>,
     correction_loop: Option<CorrectionLoop>,
 
@@ -260,8 +258,6 @@ impl Executor {
             }
         }
 
-        let event_bus = EventBus::new();
-
         let carryover_enabled = cfg.session.carryover_enabled;
         let carryover = if carryover_enabled {
             crate::session::carryover::load_carryover()
@@ -282,7 +278,6 @@ impl Executor {
             deny_list,
             path_guard,
             read_gate,
-            event_bus,
             audit_log,
             correction_loop: None,
             verifier_bus: None,
@@ -537,32 +532,9 @@ impl Executor {
         }
 
         let handler = Arc::new(VerifierHandler::new(slots, self.path_guard.clone()));
-        let bus = self.event_bus.clone();
-        let h = handler.clone();
+        self.correction_loop = Some(CorrectionLoop::new(handler));
         match tokio::runtime::Handle::try_current() {
-            Ok(rt) => {
-                // The constructor is sync and is called from inside
-                // #[tokio::test] current-thread workers (and from
-                // main), so `Handle::block_on` would panic ("Cannot
-                // block the current thread from within a runtime") and
-                // building a nested runtime is forbidden too. The
-                // registration is therefore fire-and-forget by
-                // necessity: it is spawned on the ambient runtime and
-                // its result is logged (at `error!` on failure so a
-                // dropped handler is visible). `count` does NOT
-                // include this handler (it counts only slot verifiers
-                // above), so the returned count is honest regardless of
-                // the async registration outcome (WO 15.11). A failed
-                // registration leaves `correction_loop` pointing at a
-                // handler that never receives events; this is a
-                // degraded mode, not a silent overclaim — the
-                // `error!` log surfaces it.
-                rt.spawn(async move {
-                    if let Err(e) = bus.register(h).await {
-                        tracing::error!(error = %e, "failed to register verifier handler on event bus; correction loop will not receive events");
-                    }
-                });
-                self.correction_loop = Some(CorrectionLoop::new(handler));
+            Ok(_) => {
                 let mut vbus = super::verifier::bus::default_verifier_bus();
                 if let Some(registry) = plugin_registry {
                     let n = crate::session::verifier::plugin::register_plugin_verifiers_into_bus(

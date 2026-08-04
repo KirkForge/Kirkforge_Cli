@@ -1,6 +1,6 @@
 use super::handler::VerifierHandler;
+use super::types::BusEvent;
 use super::types::{FixSuggestion, Verdict};
-use crate::session::event_bus::BusEvent;
 use std::sync::Arc;
 
 // ── Correction Loop ─────────────────────────────────────────────────────
@@ -484,8 +484,8 @@ mod tests {
             crate::session::access::PathGuard::default(),
         ));
         let loop_ = CorrectionLoop::new(handler);
-        let event = crate::session::event_bus::BusEvent::FileRead(
-            crate::session::event_bus::FileReadEvent {
+        let event = crate::session::verifier::types::BusEvent::FileRead(
+            crate::session::verifier::types::FileReadEvent {
                 path: std::path::PathBuf::from("x.rs"),
                 size_bytes: 1,
                 truncated: false,
@@ -505,8 +505,8 @@ mod tests {
             crate::session::access::PathGuard::default(),
         ));
         let loop_ = CorrectionLoop::new(handler).with_max_iterations(0);
-        let event = crate::session::event_bus::BusEvent::FileRead(
-            crate::session::event_bus::FileReadEvent {
+        let event = crate::session::verifier::types::BusEvent::FileRead(
+            crate::session::verifier::types::FileReadEvent {
                 path: std::path::PathBuf::from("x.rs"),
                 size_bytes: 1,
                 truncated: false,
@@ -578,11 +578,12 @@ mod tests {
             crate::session::access::PathGuard::default(),
         ));
         let loop_ = CorrectionLoop::new(handler).with_max_iterations(1);
-        let event =
-            crate::session::event_bus::BusEvent::Edit(crate::session::event_bus::EditEvent {
+        let event = crate::session::verifier::types::BusEvent::Edit(
+            crate::session::verifier::types::EditEvent {
                 path: PathBuf::from("/tmp/none.rs"),
                 diff: "@@ -1 +1 @@\n-use foo;\n+".into(),
-            });
+            },
+        );
         let results = loop_.run(&event).await;
         assert_eq!(results.len(), 1);
         assert_eq!(

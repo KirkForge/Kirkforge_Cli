@@ -1,6 +1,6 @@
 use crate::session::error_recovery;
-use crate::session::event_bus::{BusEvent, EditEvent, FileWriteEvent};
 use crate::session::verifier::helpers::find_cargo_root;
+use crate::session::verifier::types::{BusEvent, EditEvent, FileWriteEvent};
 /// Build verifier — runs `cargo build` on Rust files and reports compiler errors.
 ///
 /// This verifier subscribes to `Edit` and `FileWrite` events. When a Rust file
@@ -122,7 +122,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_skips_non_edit_events() {
-        let event = BusEvent::BashExec(crate::session::event_bus::BashExecEvent {
+        let event = BusEvent::BashExec(crate::session::verifier::types::BashExecEvent {
             command: "echo hi".into(),
             exit_code: 0,
             stdout_len: 3,

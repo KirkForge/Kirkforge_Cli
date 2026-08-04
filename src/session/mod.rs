@@ -7,7 +7,6 @@ pub mod carryover;
 pub mod config;
 pub mod conversation;
 pub mod error_recovery;
-pub mod event_bus;
 pub mod executor;
 pub mod git_sanitation;
 pub mod hooks;

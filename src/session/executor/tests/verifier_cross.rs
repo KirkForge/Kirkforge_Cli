@@ -6,10 +6,10 @@
 //! event through both and asserts non-conflicting verdicts.
 
 use crate::session::access::PathGuard;
-use crate::session::event_bus::{BusEvent, FileWriteEvent};
 use crate::session::verifier::bus::{BusVerifier, VerdictEntry, VerifierBus, VerifyContext};
 use crate::session::verifier::handler::VerifierHandler;
 use crate::session::verifier::slots::VerifierSlots;
+use crate::session::verifier::types::{BusEvent, FileWriteEvent};
 use crate::session::verifier::{Verdict, Verifier};
 use std::path::PathBuf;
 use std::sync::Arc;

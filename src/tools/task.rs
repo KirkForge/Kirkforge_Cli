@@ -312,6 +312,7 @@ impl TaskSpawner for InProcessTaskSpawner {
                 self.config.model.request_timeout_secs,
                 &self.config.model.opencode_zen_endpoint,
                 self.config.model.opencode_zen_api_key.as_deref(),
+                Some(&self.config.model.adapter_routing),
             ),
             &self.config,
         );

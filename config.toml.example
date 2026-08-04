@@ -208,6 +208,26 @@
 # summarize_model = ""
 
 # ---------------------------------------------------------------------------
+# Adapter routing overrides
+# ---------------------------------------------------------------------------
+
+# Override the built-in model→adapter routing table. Each entry maps a
+# model-name prefix to an AdapterKind. Longest-prefix match wins. When
+# this section is absent (the default), hardcoded prefix rules are used.
+#
+# Example: route "grok-" models through the OpenAI-compatible adapter and
+# remap "deepseek" from Ollama to OpenAI-compat:
+#
+# [adapter_routing]
+# "grok-" = "OpenAiCompat"
+# "deepseek" = "OpenAiCompat"
+
+# Env override: KF_CODE_ADAPTER_ROUTING
+# Comma-separated prefix=Kind pairs, e.g.:
+#   KF_CODE_ADAPTER_ROUTING="grok-=OpenAiCompat,my-llm=Ollama"
+# This replaces the TOML [adapter_routing] section entirely when set.
+
+# ---------------------------------------------------------------------------
 # Smart routing (experimental)
 # ---------------------------------------------------------------------------
 

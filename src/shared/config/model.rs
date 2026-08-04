@@ -68,6 +68,14 @@ pub struct ModelConfig {
     pub seed: Option<u64>,
     #[serde(default)]
     pub json_mode: bool,
+    /// User-supplied model→adapter routing overrides. Maps model-name
+    /// prefixes (e.g. `"claude-"`) to [`AdapterKind`](super::adapters::AdapterKind)
+    /// variant names (e.g. `"Anthropic"`). Checked by
+    /// [`adapter_kind_for_routed`] before the hardcoded defaults; longest
+    /// prefix match wins. Empty by default, so existing configs with no
+    /// `[adapter_routing]` section continue to work identically.
+    #[serde(default)]
+    pub adapter_routing: HashMap<String, String>,
 }
 
 impl Default for ModelConfig {
@@ -94,6 +102,7 @@ impl Default for ModelConfig {
             cache_dir: None,
             seed: None,
             json_mode: false,
+            adapter_routing: HashMap::new(),
         }
     }
 }

@@ -81,6 +81,7 @@ impl AdapterSwap {
                 self.timeout_secs,
                 &config.model.opencode_zen_endpoint,
                 config.model.opencode_zen_api_key.as_deref(),
+                Some(&config.model.adapter_routing),
             ),
         );
 
@@ -117,6 +118,7 @@ impl AdapterSwap {
                 self.timeout_secs,
                 &config.model.opencode_zen_endpoint,
                 config.model.opencode_zen_api_key.as_deref(),
+                Some(&config.model.adapter_routing),
             ),
         );
         let _old = std::mem::replace(adapter, new_adapter);

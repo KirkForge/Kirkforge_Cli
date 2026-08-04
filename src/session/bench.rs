@@ -182,6 +182,7 @@ pub async fn run_task(
         request_timeout,
         &zen_endpoint,
         zen_api_key.as_deref(),
+        None,
     );
 
     // Open conversation log in sandbox.

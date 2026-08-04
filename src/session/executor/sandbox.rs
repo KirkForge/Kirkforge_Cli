@@ -22,7 +22,11 @@ impl SandboxEnforcer {
         self.read_gate.mark_read(path);
     }
 
-    pub(crate) fn check_edit(&self, path: &std::path::Path, resolved: &std::path::Path) -> GuardVerdict {
+    pub(crate) fn check_edit(
+        &self,
+        path: &std::path::Path,
+        resolved: &std::path::Path,
+    ) -> GuardVerdict {
         self.read_gate.check_edit(path, resolved)
     }
 }

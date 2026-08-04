@@ -1490,7 +1490,9 @@ impl Executor {
                 confidence: 1.0,
             });
         }
-        self.cost.cache_stem.record_prefix_hash(&messages, prefix_len);
+        self.cost
+            .cache_stem
+            .record_prefix_hash(&messages, prefix_len);
 
         // Snapshot the stable prompt-cache stem size for this turn so we
         // can verify KV-cache reuse against the adapter usage stats.

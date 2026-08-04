@@ -214,30 +214,69 @@ pub fn render_plugins(f: &mut Frame, area: Rect, state: &AppState) {
 
 /// Render the Jobs tab (F4).
 ///
-/// Shows background and scheduled job status.
-pub fn render_jobs(f: &mut Frame, area: Rect, _state: &AppState) {
-    let lines = vec![
-        Line::from(Span::styled(
-            " Jobs",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        )),
-        Line::from(""),
-        Line::from(Span::styled(
-            "  No active jobs",
+/// Shows background and scheduled job status. Uses the notification
+/// state from AppState (already updated by the event loop) for
+/// completed jobs, and the global registry for a live snapshot of
+/// running jobs.
+pub fn render_jobs(f: &mut Frame, area: Rect, state: &AppState) {
+    let mut lines = Vec::new();
+
+    lines.push(Line::from(Span::styled(
+        " Jobs",
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    )));
+    lines.push(Line::from(""));
+
+    // Background jobs section
+    lines.push(Line::from(Span::styled(
+        " Background Jobs",
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
+    )));
+
+    let notified_count = state.notified_jobs.len();
+    let scheduled_count = state.notified_scheduled_runs.len();
+
+    if notified_count == 0 && scheduled_count == 0 {
+        lines.push(Line::from(Span::styled(
+            "  No active or completed jobs",
             Style::default().fg(Color::DarkGray),
-        )),
-        Line::from(""),
-        Line::from(Span::styled(
-            " Use /jobs to list scheduled jobs",
-            Style::default().fg(Color::DarkGray),
-        )),
-        Line::from(Span::styled(
-            " Use /jobs schedule <cron> <prompt> to create one",
-            Style::default().fg(Color::DarkGray),
-        )),
-    ];
+        )));
+    } else {
+        if notified_count > 0 {
+            lines.push(Line::from(format!(
+                "  {notified_count} completed background job(s) this session"
+            )));
+        }
+        if scheduled_count > 0 {
+            lines.push(Line::from(format!(
+                "  {scheduled_count} completed scheduled run(s) this session"
+            )));
+        }
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        " Scheduled Jobs",
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
+    )));
+    lines.push(Line::from(Span::styled(
+        "  Use /jobs schedule <cron> <prompt> to create a scheduled job",
+        Style::default().fg(Color::DarkGray),
+    )));
+    lines.push(Line::from(Span::styled(
+        "  Use /jobs list to see all scheduled jobs",
+        Style::default().fg(Color::DarkGray),
+    )));
+    lines.push(Line::from(Span::styled(
+        "  Use /jobs status to check running jobs",
+        Style::default().fg(Color::DarkGray),
+    )));
 
     let paragraph = Paragraph::new(lines).wrap(Wrap { trim: true });
     f.render_widget(paragraph, area);

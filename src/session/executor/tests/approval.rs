@@ -631,7 +631,7 @@ async fn test_write_file_overwrite_allowed_after_read() {
     let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
     let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(true));
     // Mark as read first — the gate now permits the overwrite.
-    exe.read_gate.mark_read(&tmp);
+    exe.sandbox.mark_read(&tmp);
 
     let events = exe
         .run_turn_collecting("overwrite", &approval_tx, never_cancelled())

@@ -4,7 +4,7 @@
 
 use super::super::*;
 use super::common::*;
-use crate::shared::metrics::{read_events, PlanDecisionKind};
+use crate::shared::metrics::{read_events, MetricEvent, PlanDecisionKind};
 use crate::shared::permission::PermissionAction;
 use crate::shared::test_util::remove_test_file;
 use crate::shared::{FinishReason, StreamEvent, ToolDef, ToolError, ToolOutcome};

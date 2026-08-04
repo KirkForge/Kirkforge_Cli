@@ -1,9 +1,7 @@
 //! Session executor — runs model turns, dispatches tools, handles approvals.
 
 use crate::adapters::ModelAdapter;
-use crate::session::access::{
-    access_from_config, warn_if_unsandboxed, DenyList, PathGuard, ReadGate,
-};
+use crate::session::access::{access_from_config, warn_if_unsandboxed};
 use crate::session::adapter_swap::AdapterSwap;
 use crate::session::carryover::CarryoverProfile;
 use crate::session::config::config_diff_summary;
@@ -11,24 +9,22 @@ use crate::session::conversation::ConversationLog;
 use crate::session::event_bus::BusEvent;
 use crate::session::event_bus::EventBus;
 use crate::session::hooks::HookRunner;
-use crate::session::prompt::cache_stem::CacheStemTracker;
 use crate::session::prompt::PromptBuilder;
 use crate::session::verifier::{
     CorrectionLoop, CorrectionResult, VerifierBus, VerifierHandler, VerifierSlots,
 };
 use crate::shared::audit::AuditLog;
-use crate::shared::metrics::{record, MetricEvent};
 use crate::shared::{read_shared_config, Config, Message, Role, SharedConfig, ToolInvocation};
 use crate::tools::UndoStackRef;
 use std::sync::Arc;
-
-use helpers::tool_outcome_success;
 use tokio::sync::mpsc;
 
 pub(crate) mod approval;
+pub(crate) mod cost_tracking;
 pub(crate) mod dispatch;
 pub(crate) mod helpers;
 pub(crate) mod loop_;
+pub(crate) mod sandbox;
 pub(crate) mod scout;
 #[cfg(test)]
 pub(crate) mod tests;
@@ -48,11 +44,9 @@ pub struct Executor {
     prompt_builder: PromptBuilder,
     tools: crate::session::toolset::CompositeToolset,
     config: SharedConfig,
-    cost_tracking: crate::shared::CostTracking,
+    cost: cost_tracking::CostTracker,
     model_name: String,
-    deny_list: DenyList,
-    path_guard: PathGuard,
-    read_gate: ReadGate,
+    sandbox: sandbox::SandboxEnforcer,
     event_bus: EventBus,
     audit_log: Arc<AuditLog>,
     correction_loop: Option<CorrectionLoop>,
@@ -60,12 +54,6 @@ pub struct Executor {
     /// Unified verifier bus — collects structured VerdictEntrys from all
     /// registered BusVerifiers after each file-modifying tool call.
     verifier_bus: Option<std::sync::Mutex<VerifierBus>>,
-
-    carryover: CarryoverProfile,
-
-    carryover_enabled: bool,
-
-    carryover_target: Option<std::sync::Arc<std::sync::Mutex<CarryoverProfile>>>,
 
     /// Optional per-session undo stack. Held here so `/undo` can pop
     /// via a control channel without touching the tools directly.
@@ -94,19 +82,6 @@ pub struct Executor {
     /// Optional turn-trace recorder. When present, each completed turn
     /// is serialized as a `TurnRecord` and appended to the trace file.
     trace: Option<std::sync::Mutex<crate::session::replay::TraceRecorder>>,
-
-    /// Sliding-window detector for repeated tool errors (doom loop).
-    /// Updated on every tool outcome; when the threshold is hit, the
-    /// executor emits a `TurnEvent::DoomLoopDetected` and a
-    /// `MetricEvent::DoomLoop` so the TUI can warn the user and the
-    /// metrics log can record the incident.
-    doom_loop_tracker: DoomLoopTracker,
-
-    /// Client-side prompt-cache stem-reuse tracker (ADR-052). Records
-    /// the hash of the prefix messages each turn and emits a
-    /// `PlanReason::CacheStemReuse` metric event when the stem is
-    /// byte-for-byte stable across turns. Wired in WO 10.2.
-    cache_stem: CacheStemTracker,
 }
 
 impl Executor {
@@ -166,6 +141,11 @@ impl Executor {
         let cfg = read_shared_config(&config_for_startup);
         let (deny_list, path_guard, read_gate) = access_from_config(&cfg);
         warn_if_unsandboxed(&path_guard);
+        let sandbox = sandbox::SandboxEnforcer {
+            path_guard,
+            deny_list,
+            read_gate,
+        };
 
         let audit_log_path = cfg
             .security
@@ -263,11 +243,8 @@ impl Executor {
         let event_bus = EventBus::new();
 
         let carryover_enabled = cfg.session.carryover_enabled;
-        let carryover = if carryover_enabled {
-            crate::session::carryover::load_carryover()
-        } else {
-            CarryoverProfile::default()
-        };
+        let mut cost = cost_tracking::CostTracker::new(carryover_enabled);
+        cost.carryover_target = carryover_target;
 
         let mut this = Self {
             adapter,
@@ -277,26 +254,19 @@ impl Executor {
             prompt_builder: PromptBuilder::new(),
             tools,
             config,
-            cost_tracking: crate::shared::CostTracking::default(),
+            cost,
             model_name,
-            deny_list,
-            path_guard,
-            read_gate,
+            sandbox,
             event_bus,
             audit_log,
             correction_loop: None,
             verifier_bus: None,
-            carryover,
-            carryover_enabled,
-            carryover_target,
             undo_stack,
             plan_mode: false,
             recovered_messages: None,
             session_id: String::new(),
             task_spawner: None,
             trace: None,
-            doom_loop_tracker: DoomLoopTracker::new(),
-            cache_stem: CacheStemTracker::new(),
         };
         this.init_default_verifiers(plugin_registry);
         this.build_task_spawner();
@@ -382,9 +352,11 @@ impl Executor {
             new
         };
         let (deny_list, path_guard, read_gate) = access_from_config(&fresh);
-        self.deny_list = deny_list;
-        self.path_guard = path_guard;
-        self.read_gate = read_gate;
+        self.sandbox = sandbox::SandboxEnforcer {
+            path_guard,
+            deny_list,
+            read_gate,
+        };
         // JSON-mode changes are applied to the running adapter too.
         self.adapter.set_json_mode(fresh.model.json_mode);
         config_diff_summary(&old, &fresh)
@@ -536,7 +508,7 @@ impl Executor {
             }
         }
 
-        let handler = Arc::new(VerifierHandler::new(slots, self.path_guard.clone()));
+        let handler = Arc::new(VerifierHandler::new(slots, self.sandbox.path_guard.clone()));
         let bus = self.event_bus.clone();
         let h = handler.clone();
         match tokio::runtime::Handle::try_current() {
@@ -727,52 +699,7 @@ impl Executor {
         outcome: &crate::shared::ToolOutcome,
         event_tx: &mpsc::Sender<TurnEvent>,
     ) {
-        // Only error outcomes count. A successful tool call also
-        // resets the tracker so the next failure starts a fresh run.
-        let is_error = !tool_outcome_success(outcome);
-        let error_text = if is_error {
-            // `ToolOutcome::Error` and `ToolOutcome::Failure` both
-            // have user-readable messages. For successful outcomes we
-            // skip and just reset the tracker.
-            let mut s = String::new();
-            match outcome {
-                crate::shared::ToolOutcome::Error { message } => {
-                    s.push_str(message);
-                }
-                crate::shared::ToolOutcome::Failure(err) => {
-                    s.push_str(&err.to_user_message());
-                }
-                _ => {
-                    // Defensive: a non-error outcome here means
-                    // `is_error` was incorrectly true; reset and
-                    // bail.
-                    self.doom_loop_tracker.reset();
-                    return;
-                }
-            }
-            s
-        } else {
-            self.doom_loop_tracker.reset();
-            return;
-        };
-
-        if let Some(hit) = self.doom_loop_tracker.observe(tool, &error_text) {
-            record(MetricEvent::DoomLoop {
-                count: hit.count,
-                tool: hit.tool.clone(),
-                last_error: hit.last_error.clone(),
-            });
-            // Best-effort TUI notification. The TUI uses this to show
-            // the warning banner; if the receiver is gone the metric
-            // is the source of truth.
-            if let Err(e) = event_tx.try_send(TurnEvent::DoomLoopDetected {
-                count: hit.count,
-                tool: hit.tool,
-                last_error: hit.last_error,
-            }) {
-                tracing::warn!(error = %e, "failed to send DoomLoopDetected to TUI");
-            }
-        }
+        self.cost.observe_tool_outcome(tool, outcome, event_tx);
     }
 
     /// Install a full system-prompt override (e.g. from `--system`).
@@ -928,47 +855,10 @@ impl Executor {
     }
 
     fn flush_carryover(&mut self) {
-        if self.carryover_enabled {
-            self.carryover.session_count += 1;
-            self.carryover.last_session_time =
-                chrono::Local::now().format("%Y-%m-%d %H:%M").to_string();
-            self.carryover.refresh_patterns();
-            if let Some(ref target) = self.carryover_target {
-                if let Ok(mut guard) = target.lock() {
-                    *guard = self.carryover.clone();
-                }
-            }
-        }
+        self.cost.flush_carryover();
     }
 
     fn collect_carryover(&mut self, tc: &ToolInvocation, crs: &[CorrectionResult]) {
-        if !self.carryover_enabled {
-            return;
-        }
-        self.carryover.record_tool_call(&tc.name);
-
-        if let Some(path) = tc.arguments.get("path").and_then(|v| v.as_str()) {
-            if !path.is_empty() {
-                self.carryover.record_path(path);
-            }
-        }
-
-        if tc.name == "bash" {
-            if let Some(cmd) = tc.arguments.get("command").and_then(|v| v.as_str()) {
-                if cmd.contains("cargo test")
-                    || cmd.contains("cargo check")
-                    || cmd.contains("go test")
-                    || cmd.contains("npm test")
-                    || cmd.contains("pytest")
-                    || cmd.contains("make test")
-                {
-                    self.carryover.record_test_after_change();
-                }
-            }
-        }
-
-        for cr in crs {
-            self.carryover.record_verifier_warning(&cr.message);
-        }
+        self.cost.collect_carryover(tc, crs);
     }
 }

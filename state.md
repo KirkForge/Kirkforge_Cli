@@ -1,392 +1,101 @@
-# KirkForge-Cli Production-Readiness State
+# kf-code Repo State — After Modularization Sprint
 
-## Current baseline: v0.3.6 (2026-07-25)
+*Current-state-only. Resolved-issue archaeology lives in `git log`.*
 
-**`dev` at HEAD, `main` at 30b55ee.** Phase 5 complete (4 languages). Phase 6 complete (import + call-graph edges). Phase 7 complete (embeddings + graph-walk retrieval). 31 bench tasks. 84 ADRs. Workorders 7.1–7.9 all Done. Workorders 8.0–8.9 all Done (8.3 partial — 2 items deferred: plugin toolset extension, 11 pre-existing broken verify specs; see WO 8.3 Notes — the `use_workflow_run` task shipped in WO 9.1). Workorders 9.0–9.9 all Done. WO 9.3 shipped: `Cargo.toml` bumped to `0.3.6`, tag `v0.3.6` created; the v0.3.6 release was re-shipped in WO 10.1 (re-tagged to the Windows-fix commit `4cbcfc3`, release run `30239782875` published 6 platform binaries + SHA256SUMS + cosign sig). Series 10 (this session): WO 10.0 Done (Windows env_guard race fixed, `EnvGuard::prior()` accessor added, windows CI green), WO 10.1 Done (v0.3.6 release artifacts published), WO 10.3 Done (state.md main-SHA + ADR-count sync), WO 10.4 Done (8 stale wo/8.* branches + 7 stale worktrees cleaned up), WO 10.5 Done (replay sync_all batched every N turns + Drop flush), WO 10.6 Done (minify stale allow(dead_code) removed, dead `minify_rust` wrapper deleted, comment style fixed). Series 11 (plugin hardening): WO 11.0 Done (kf-code plugin CLI subcommand + shared plugin_ops layer, ADR-056), WO 11.1 Done (in-process signature verification via minisign-verify, ADR-057), WO 11.2 Done (manifest depends_on + topological load order, ADR-058), WO 11.3 Done (surface trust-tier downgrades in /plugins list), WO 11.4 Done (plugin hot-reload via notify-debouncer-mini file watcher, ADR-059), WO 11.5 Done (per-plugin resource limits via SandboxConfig merge, ADR-060), WO 11.6 Done (plugin hook fail-open audit log, ADR-061), WO 11.7 Done (/verify panel + source field on MetricEvent::Verifier, ADR-062), WO 11.8 Done (plugin init scaffolding command, ADR-063), WO 11.9 Done (plugin system e2e integration test, ADR-064). Series 12 (test infrastructure + coverage): WO 12.0 Done (tarpaulin flake root cause — `session_index::save()` re-creates parent dir before rename), WO 12.1/12.2/12.3 Done (intermediate coverage thresholds 68/65/70), WO 12.4 Done (kf-code doctor` CLI), WO 12.5 Done (per-test timings + flaky detection), WO 12.7 Done (coverage-gap report `kf-code doctor gaps`), WO 12.8 Done (144 new tests closing coverage toward 75%), WO 12.9 Done (12-series finale, ADR-065). Series 14 (polish / quality / stability): WO 14.0 Done (bench baseline `ollama pull` self-healing 3-attempt retry + `/api/tags` health check, so a transient registry redirect no longer reds the scheduled bench badge), WO 14.1 Done (first-run onboarding banner — `load_or_create_config` prints a stdout banner naming the config path + a concrete `-m` model hint on first run), WO 14.2 Done (grouped `/help` — six fixed-order groups via a `GROUPS` const + filled empty usage strings for `/memory` `/metrics` `/verify` `/gh` `/init` `/plugins`), WO 14.3 Done (KirkForgeError::hint() per-variant actionable suggestions + top-level `hint:` printer line; From<anyhow::Error> downcast migration started — kf_plugin_sdk::ManifestError -> ConfigParse, kf_plugin_host::ToolError -> AccessDenied; string matcher retained as fallback; ModelUnreachable still on strings pending a typed model-connection error in the adapter layer), WO 14.4 Done (status bar graceful degradation on narrow terminals — low-value spans drop before overlapping; elapsed/cost/`⚠️ UNSANDBOXED` stay at all widths), WO 14.7 Done (KIRK-BENCH spec + signature Token Budget Challenge — `benches/tasks/token_budget_challenge.toml` runs the same task 5× under descending ceilings 128k→8k; ADR-066), WO 14.8 Done (dead-code + `#[allow(...)]` audit — 17 dead items removed from `src/session/mod.rs`, 3 from `src/shared/mod.rs`; 740-line dead `dispatch_tool_call` deleted; module-wide allows replaced with targeted `#[cfg(test)]`). WO 14.5 (`/permissions` revoke) and 14.6 (slash/`@`-mention autocomplete) are in progress in separate worktrees at write time. 84 ADRs.
+## Branch
 
-### What shipped (sessions 6.1–7.9)
+**`dev2`** at commit `b1bfeb9` — all completed work merged. The `refactor/kf-code-rename-and-modularize` branch has the same content but `dev2` is the clean integration point.
 
-| Item | What |
-|---|---|
-| WO 6.1: Bench harness realism | Replaced `CompositeToolset::empty()` with `build_bench_toolset()`. Fixed `add_adr` verify path. Updated ADR-038. |
-| WO 6.2: Bench delta comparison | `DeltaReport`, `TaskDelta`, `compare_reports()`, `write_markdown_delta()`, `bench compare` CLI. 3 unit tests. |
-| WO 6.3: Bench CI wiring | CI bench job with `if: always()` (runs when quality fails), path filters, baseline download, PR comments, artifact uploads. `bench-baseline.yml` scheduled workflow. **Bug fix**: corrected `if` condition and artifact name mismatch. |
-| WO 6.4: Bench list and verify-only | `bench list` and `bench verify-only` subcommands. `TaskInfo`, `list_tasks()`, `verify_only()`. |
-| WO 6.5: Bench eval ADR | ADR-045 (continuous eval pipeline). ADR-038 updated. |
-| WO 6.6: Fold Stratum | `stratum` feature flag (default on). 5 tool wrappers. 2 in-process hooks (`StratumSessionStartHook`, `StratumPreToolBashHook`). ADR-046. `stratum_mode` config field shipped in WO 7.5. |
-| WO 6.7: Fold Plugin3 | `budget` feature flag (default on). 7 tool wrappers. 4 in-process hooks with full event context (`SessionStartHook`, `PostToolBashHook`, `PostToolWriteFileHook`, `PreCompactHook`); lossy canned-JSON shim eliminated; shared `TokenBudget` via `OnceLock`. ADR-047. Budget config fields shipped in WO 7.5. |
-| WO 6.8: Fold Draw | `draw` feature flag (default on). `draw_render` tool. 1 in-process hook (`DrawPostTurnHook`). ADR-048. |
-| WO 6.9: Fold Video | `video` feature flag (non-default). 8 tool wrappers. ADR-049. Dev build delta ~14.4 MB. |
-| WO 7.0: Plugin system consolidation | Two-path dispatch (compiled-in vs external shell-out) unified behind a single `enabled_plugins` toggle. Folded plugins (Stratum, Plugin3, Draw, Video) with their feature ON are skipped by the shell loader and served compiled-in; with feature OFF they fall back to shell plugins (graceful degradation). Node SDK (`kf-plugin-sdk`) stays external. `/plugins list` shows source and feature gate. ADR-050 pinned. |
-| WO 7.7: KVB verifier bus bridge | Plugin-declared `Capability::Verifier` entries now register into the unified `VerifierBus` (ADR-043) via `VerifierBus::add_plugin_verifier` + `register_plugin_verifiers_into_bus`. Bus runs plugin verifiers through the host `PluginVerifier` env-cleared subprocess and tags results `VerifierSource::Plugin(name)`; error verdicts inject into the conversation. Live reload rebuilds bus plugin verifiers. Legacy `PluginVerifierAdapter` (event-driven) retained. ADR-028 status updated to Accepted in WO 9.6 (plugin-verifier bridge confirmed code-complete). |
-| WO 8.9: Context index edge cases | Fixed five tree-sitter extraction gaps: (1) TypeScript `export const foo = () => {}` arrow function assignments now extract `foo` as a Function symbol; (2) TypeScript interface merging (multiple `interface Foo {}` in one file) is deduped via a new `ContextIndex::dedup_interfaces()` pass keyed by `(name, file)`; (3) Python `@decorator` + `def` continues to extract the function name (the `decorated_definition` child-skip is unchanged — locked in by a regression test); (4) Python `if __name__ == "__main__":` blocks are detected and their bodies are skipped so no spurious symbols are produced; (5) Go method receivers (`func (s *Server) Start()`, both pointer and value) are now extracted as `Server.Start`. 7 new tests in `crates/kf-context-index/tests/edge_cases.rs` against 5 fixture files. |
-| WO 7.5: Budget and Stratum config fields | Added `stratum_mode` (Option<String>), `budget_ceiling` (usize, default 200_000), `budget_approaching_ratio` (f64, default 0.8) to `ToolConfig`. `shared_budget()` reads config defaults; `budget::init_from_config()` syncs the shared budget from the live config at executor build time. `StratumSessionStartHook` now carries a `SharedConfig` and resolves mode from config with `STRATUM_MODE` env-var override. `config.toml.example` documents the three fields. Deferred-items table cleared of the two config-field rows. |
-| WO 8.3: Bench task realism | Converted 5 real-repo tasks (add_adr, add_cli_flag, add_test_for_function, fix_clippy_warning, refactor_extract_function) to self-contained `setup_files` form. Added 4 new tasks that exercise plugin tools (use_stratum_compress, use_budget_check, use_draw_render, use_lsp_query). `use_workflow_run` deferred — no `Tool` impl exists for `kf-workflow`. `build_bench_toolset` not extended (verify-only does not invoke tools). 13/24 tasks pass `verify-only` after this WO (up from 5/20). 11 pre-existing tasks still fail due to a flaw in their file_contains verify specs — out of WO 8.3 scope. |
-| WO 8.6: Stratum + budget coordination | Wired the two folded subsystems through a sync registered-listener dispatch. `apply_budget_slice` emits a `BudgetSlicedEvent { original_size, sliced_size, key, sliced_display }` and the registered Stratum listener compresses the sliced display; the post-tool hook then records the post-compression size so `budget.used` reflects what the model actually sees. Auto-escalation: when the budget is `Approaching` (or a `pre-compact` fires under budget pressure), the Stratum session mode is escalated `Lite → Full` if currently `Lite`. New `SESSION_MODE` static in `stratum.rs` (separate from the config-derived `active_mode()`). 3 new budget tests, 4 new stratum tests, 1 new ADR-051. Wired at executor build time under `#[cfg(all(feature = "budget", feature = "stratum"))]`. |
-| WO 8.7: Error recovery — structured `ErrorHint` | New `ErrorHint` enum (`BorrowConflict`, `MissingImport`, `TypeMismatch`, `MissingMethod`) in `src/session/error_recovery.rs` plus regex-based classifiers (`classify_borrow_conflict`, `classify_missing_import`, `classify_type_mismatch`, `classify_missing_method`) that extract the relevant identifiers from rustc/clippy diagnostics. `render_hint(&ErrorHint) -> String` produces a stable, human-readable note. Build and lint verifiers append a "Hint: ..." line to `FixSuggestion` descriptions when the classifier matches. The executor's `handle_tool_outcome` calls `render_tool_error_with_hint` for `ToolOutcome::Error` and `ToolOutcome::Failure` so the model sees the raw error *and* the structured hint on the same `Role::Tool` message. 4 classifier unit tests, 4 verifier tests, 4 executor tests; 2 ignored end-to-end tests verify classifiers work on real `cargo build` output for a broken file. |
-| WO 9.5: Client-side prompt cache stem reuse | New `CacheStemTracker` in `src/session/prompt/cache_stem.rs` records the hash of the prefix messages (system + tools + first N turns) sent in the prior turn and reports `is_stable` when the current prefix matches. Uses `DefaultHasher` over the canonical JSON serialisation of each message — no new deps. New `PlanDecisionKind::CacheStemReuse` metric variant so the executor can emit a `PlanReason` event when the stem is reused (wiring into `Executor::turn` is a follow-up WO). 6 unit tests. ADR-052. The adapter `cache_control` markers are unchanged (the API needs full content even for cached messages; the useful client-side signal is the metric event, not an adapter log line). |
-| WO 9.7: Tree-sitter-backed VFS minification (read side) | `read_file` now auto-minifies files above `config.tools.minify_above_bytes` (default 4096) before sending to the model. Tri-state `minify` arg: `true` forces minify, `false` forces raw, omitted auto-minifies above the threshold (appends `[minified: N lines → M lines, use read_file with minify=false to see full content]`). The existing string/char-literal-aware minifier in `src/shared/minify/lang.rs` is reused — tree-sitter is NOT added to the read path (size-optimized binary; the lexical minifier already handles the WO contract across Rust/TS/Python/Go). `minify_above_bytes` config field (TOML + `KF_CODE_MINIFY_ABOVE_BYTES` env). 7 new tests (4 per-language minify contracts + 3 read_file threshold/override). ADR-053 pins the no-tree-sitter-in-read-path decision. `docs/ideas/vfs-minification.md` updated idea → implemented. |
-| WO 9.8: rlimit sandbox hardening (non-Docker bash path) | New `--harden` CLI flag and `SandboxConfig` in `SecurityConfig` (`harden`, `cpu_limit_secs`, `memory_limit_mb`, `filesize_limit_mb`). When `harden` is true and Docker is NOT enabled, the bash tool applies `RLIMIT_CPU` / `RLIMIT_AS` / `RLIMIT_FSIZE` to the child shell in a `pre_exec` hook (Unix only; Windows no-op with a one-shot warning). Ignored when `--docker` is set (Docker already enforces `--memory` and `--cpus`). seccomp deferred to future work (needs a BPF compiler too heavy for the size-optimized binary). 1 ignored test (`bash_harden_kills_cpu_burn_with_sigxcpu`). ADR-054. No new deps (`libc` was already a direct dep). |
-| WO 9.9: Bench task expansion — real-world shapes | 5 new multi-file/multi-turn task toml files (total 30, was 24): `multi_file_pattern` (read 3 handlers, add a 4th following the pattern), `test_fix_cycle` (run failing tests, fix the bug, confirm green), `pr_review` (review a PR with a subtle timing-safe-comparison bug), `refactor_trait_extraction_multi` (extract a trait from 3 duplicated repo structs, implement for all, update call sites), `debug_log_trace` (read a stack trace, find the panic line, fix the root cause). New `requires_model: bool` field on `BenchTask` (default false) — when true, `verify_only` skips the task and reports `[SKIP] skipped (requires model)`; `bench run` runs it normally. This fixes the WO 9.0 anti-pattern (verify specs that grepped setup content, passing `verify-only` trivially without validating model work): the 5 new tasks have verify specs that check *post-model* content (cargo build/test, grep for the new symbol), so they correctly fail on the unedited setup and pass after the model edits. `handle_bench_verify_only` now reports `{passed}/{total} tasks verified, {skipped} skipped (requires model)`. `bench verify-only` result: 25 PASS + 5 SKIP = 30. `bench list` shows 30 tasks. |
-| WO 10.2: CacheStemTracker executor wiring | The `CacheStemTracker` from WO 9.5 is now instantiated on `Executor` (`cache_stem` field) and called from `stream_iteration` (`turn.rs`) after `build_messages`. `prefix_len = 1` (system message only, per ADR-052 Future Work). When `is_stable` returns true, a `PlanReason::CacheStemReuse` metric event is emitted; `record_prefix_hash` advances the hash. Integration test `cache_stem_reuse_emitted_on_stable_turn` proves the event fires on turns 2-5, not turn 1, and a `set_system_override` change breaks stability on turn 6. The adapter short-circuit (content-omission) was NOT implemented — the Anthropic API requires full content every request (cache key computed from bytes). ADR-052 updated. WO 9.5 status corrected to "Done (partial — adapter wiring in WO 10.2)". New `set_test_path`/`clear_test_path` pub(crate) helpers in `metrics.rs` for async-friendly test isolation. |
-| WO 10.7: HTTP MCP session-id + resumable streams | The HTTP/SSE MCP transport (`http.rs`) now tracks the MCP session id (parsed from the `endpoint` SSE event's URL query param or the `Mcp-Session-Id` GET response header), sends `Mcp-Session-Id` on every POST when known (omitted when absent — backward-compatible), tracks the last SSE event id and sends `Last-Event-ID` on reconnect, and reconnects with backoff (1s, 2s, 5s, 10s, 30s, max 5 retries). The SSE parser was rewritten from a `data:`-only parser to a full `field: value` parser (event:, data:, id:, comments). ADR-055. 11 tests. |
-| WO 10.8: TS orchestrator → VerifierBus NDJSON bridge | The `TsOrchestratorBridgeVerifier` in `bus.rs` implements `BusVerifier` by shelling out to the TS orchestrator's bridge emitter (`bridge-emitter.ts`) and parsing NDJSON verdicts from stdout. Wire format: `{"verifier":"security","severity":"error","file":"...","line":N,"message":"...","rule":"..."}`. Malformed lines → `Severity::Warning` (never dropped). ADR-028 ponytail updated: "cross-language NDJSON wire bridge shipped in WO 10.8". `docs/TECHNICAL.md` verifier-bus section describes the unified bus. 5 Rust tests + 2 TS tests. `kf-plugin-host` `env` module made `pub`. |
-| WO 10.9: Bench leaderboard + regression gate | `compare_with_threshold(baseline, current, threshold) -> CompareResult` in `kf-bench` flags regression when `success_rate_delta < -threshold`. `bench compare --fail-on-regression <pct>` CLI flag exits non-zero on regression. `bench-pr-delta` CI job fails on regression (10pp threshold) while still posting the delta comment. New `bench-leaderboard` scheduled job runs `bench run-models`, commits `docs/bench/leaderboard.md` to `main` with `[skip ci]` (loop avoidance: commit message + `paths-ignore`). `docs/TECHNICAL.md` bench section documents the CI loop. 4 unit tests. |
-| WO 12.6: Testdoctor smart suggest + apply | `kf-code doctor suggest-detailed [--filter <substr>]` composes per-test timings with source-file pattern analysis (`std::process::Command`, `tokio::time::sleep`, `std::env::set_var`, `reqwest::`/`http::`, `std::fs::write`+tempdir) into specific `Suggestion` structs keyed by `SuggestionKind`. `kf-code doctor apply --suggestion <id> --test <path> [--yes]` does a text-based rewrite (no `syn` dep): adds `#[ignore = "slow: ..."]`, wraps `#[tokio::test(start_paused = true)]`, replaces `std::env::set_var(K,V)` with `EnvGuard::set(K,V)`. Always shows a hand-rolled unified diff first; requires `--yes` to write. The v1 `suggest` (binary-name string match) remains as fallback. 24 new `#[test]` under `crates/kf-testdoctor/` (testdoctor total 96). ADR-0029 status + body updated; TECHNICAL.md + kf-budget-core README test count (1615 → 1641) bumped. |
-| WO 12.9: Coverage-gate threshold policy (12-series finale) | ADR-065 pins the coverage-gate threshold + headroom policy. Measured (CI run `30333515698`): `src/session` 68.6%, `src/tools` 76.5%, `src/adapters` 84.1% — tools + adapters clear the 75% bar; session does not (remaining gap is async executor + MCP-HTTP code needing integration test work, not pure-helper unit tests). WO 12.9 added a focused batch of pure-helper unit tests (grep-output formatting, plugin-loader warning paths, fork-manager error branches, validate-args edges, config empty-path merging, verifier no-cargo-root skip) and raised the `src/session` threshold 68.0 → 68.5 (proven-green: the 68.6% green run clears 68.5; tools stays at 76.0 — stricter than 75, lowering it would weaken the gate). **75% for `src/session` is honestly deferred** to a follow-up WO (not faked). The `--skip test_build_fork_tree_nests_children` stays in CI as belt-and-suspenders pending a verified flake-free tarpaulin run. ADR-065. |
+Worktrees exist at `.worktrees/phase-{3..7}/` but are all merged into dev2. Phase 4 worktree was reset (broken macro code). Phase 3 worktree has the verifier bus commit.
 
-### What shipped (session 8.x)
+## What shipped this session
 
-| Item | What |
-|---|---|
-| WO 8.1: Multi-model bench leaderboard | `bench run-models` and `write_model_comparison` markdown table (Workorder 8.1, ADR-038). |
-| WO 8.4: Embedding quality | TF-IDF tokenizer + graph-walk ranking improvements; quality now measurable. |
-| WO 8.5: ADR index unification | `docs/adr/README.md` index table now covers all 68 ADRs across both series. |
-| WO 8.8: Plugin manifest validation | `PluginManifest::validate()` returns `Result<(), Vec<ValidationError>>` collecting every rule violation (name regex, semver, api_version, trust tier, tool/hook/skill/verifier constraints, no duplicate capability names/triggers). `load_one` runs it before the trust-policy check and surfaces every error as a load warning so the user sees all issues at once. 19 new unit tests in `kf-plugin-sdk` + 1 in `kf-plugin-host`. |
-| WO 9.6: Verifier bus code unification | Confirmed the Rust-side plugin-verifier bridge (ADR-028 / ADR-043) is already code-complete: `register_plugin_verifiers_into_bus` wires any `Capability::Verifier` into the unified `VerifierBus`, and `emit_tool_event_and_correct` (dispatch.rs:900-921) converts each `Severity::Error` `VerdictEntry` into a `CorrectionResult` — the same struct the correction loop emits — so a single correction path handles built-in and plugin verdicts. Added end-to-end integration test `plugin_verifier_triggers_correction_result` in `src/session/executor/tests/mod.rs` proving a mock plugin declaring a `security` verifier flows through the bus into a `CorrectionResult`. ADR-028 status updated from "Accepted (partially implemented)" to "Accepted" (header + README index row); ponytail revised to clarify the plugin-verifier bridge is complete while the cross-language NDJSON wire bridge remains future work. No `bus.rs` / `plugin.rs` code changes needed — the bridge was already shipped in WO 7.7. |
-| WO 15.2: plugin validate() on load_from_dir + post-tool-write_file in KNOWN_EVENTS | `PluginRegistry::load_from_dir` (production plugin-load path) now calls `PluginManifest::validate()` after the API-version check, surfaces every schema error as a warning, and skips the offending plugin — matching the `load_one` contract from WO 8.8. Previously the bulk-load path silently accepted bad names, bad semver, duplicate triggers, unknown hook events, and untrusted command paths. Also added `post-tool-write_file` to `KNOWN_EVENTS` (the runtime emits it via `budget.rs:664`; the validator allowlist was stale — masked by the missing `validate()` call). 2 new tests (`load_from_dir_surfaces_invalid_manifest_and_skips_plugin`, `known_events_includes_post_tool_write_file`); 1 pre-existing test (`registry_drops_capability_with_command_outside_root`) updated to assert the new stricter contract (whole plugin skipped, not just the escaping capability). Bucketlist items 1.3 + 2.20 fixed. Commit `c9f0854` on `wo/15.2-plugin-validate-known-events` (not pushed — user merging the worktree branch). |
-| WO 15.5: split executor tests/mod.rs | `src/session/executor/tests/mod.rs` (3,760 lines, 79 tests) split into feature-aligned sub-files: `common.rs` (shared `MockAdapter`/`MockTool`/`make_executor`/`make_info`/`make_config`/`never_cancelled`/`cfg`/`CleanupFile`/`temp_hooks_dir`/`SleepingTool`), `dispatch.rs` (11), `turn.rs` (10), `loop_.rs` (11), `approval.rs` (48), `scout.rs` (empty — no scout tests exist yet). `mod.rs` is now a 13-line router. Pure refactor: test bodies moved verbatim (sorted-line equivalence verified), no logic/assertion change, test count unchanged at 79. `#[cfg(unix)]` guards on `temp_hooks_dir` and the 4 hook tests + `plugin_verifier_triggers_correction_result` preserved. Closes bucketlist item 3.2. |
-| WO 15.11: computer_use lock + cache cap + Anthropic EOF + verifier reg + PluginTool rlimits | Closes bucketlist items 2.12, 2.16, 2.17, 2.18, 2.19. (2.12) `computer_use.rs` `run()` `_ =>` arm now holds a single `Mutex` guard across check + step + use (the stale-boolean triple-lock — peek / step / re-lock — is gone; the guard is block-scoped so it drops before the async single-shot tab fallback keeps the future `Send`). (2.16) `ResponseCache::get` checks `metadata().len()` before `std::fs::read`; files over 64 MiB log a warning and return `None` (cache miss) so a crafted/huge cache file can't OOM. (2.17) Anthropic `parse_anthropic_stream` EOF flush now emits a `ToolCall` with empty `{}` input when a `content_block_start` arrived but no `partial_json` followed (previously the truncated tool was silently dropped); `into_invocation` already maps `None → {}`. (2.18) `init_default_verifiers` bus-handler registration stays fire-and-forget (the sync constructor runs inside `#[tokio::test]` current-thread workers, so `Handle::block_on` and nested runtimes both panic — verified empirically); the failure log is upgraded `warn!` → `error!` and a code comment documents that `count` (slot verifiers only) is already honest regardless of the async registration outcome. (2.19) Host-crate `PluginTool::execute` now applies rlimits: new `crates/kf-plugin-host/src/rlimits.rs` mirrors `bash_runner::setup_rlimits`; `PluginTool` gains an optional `resource_limits: Option<ResourceLimits>` field + `with_resource_limits` builder, applied via `pre_exec` (Unix; Windows no-op); default `None` preserves today's uncapped behavior. ADR-060 Notes amended. 3 new tests (cache oversize, anthropic truncated tool, rlimit cpu-burn + uncapped sanity); `kf-budget-core/README.md` test count bumped 1649 → 1652. |
-
-### Deferred items (honest deferral)
-
-| Item | Why deferred |
-|---|---|
-| 75% coverage on `src/session` (WO 12.9) | Measured at 68.6% (CI run 30333515698); WO 12.8's ~75% estimate was optimistic. The remaining gap is async executor (`executor/dispatch.rs`, `loop_.rs`, `turn.rs`) + network (`mcp_client/http.rs`) code that needs integration test work, not pure-helper unit tests. Threshold raised 68.0 → 68.5 (proven-green by the 68.6% run); 75% deferred to a follow-up WO. ADR-065. |
-
-### Series 15.26 Batch D deferrals (WO 15.26)
-
-Batch D (docs + polish) shipped concrete fixes for 3.3, 3.19, 3.24,
-4.1+4.2, 4.3, 4.4, 4.5, 4.12 (commits on `wo/15.26-batch-d-docs-polish`).
-The rest resolve to honest deferral or were already done — per the WO
-done-condition ("fixed OR honestly deferred with a note in state.md"):
-
-- **3.13 ConnectionState::Connecting — already done.** Never
-  constructed, but `src/tui/app.rs:22-25` already carries the ceiling
-  comment ("Reserved for async connection transitions ... not currently
-  emitted") and 4 render paths match it; deletion is out of polish-scope.
-- **4.9 kf-budget-hosts stub modules — already done.** All four shims
-  (`aider`, `claude_code`, `cursor`, `kf-code`) carry `ponytail:
-  stub-only`; `canonical` is real schemas.
-- **4.18 kf-compress/kf-budget legacy weight — already done.**
-  `docs/TECHNICAL.md` already documents the ADR-050 two-path dispatch
-  (compiled-in when feature on, shell fallback when off) at L84/104/
-  430/441/732.
-- **4.6 / 3.53 ci.yml `--skip` name mismatch — deferred.** The coverage
-  job skips `test_build_fork_tree_nests_children` but the historical
-  tarpaulin flake was `test_build_fork_tree_orphan_fork_is_a_root`.
-  WO 12.0 fixed the root cause (`save()` re-create); reconciling or
-  removing the skip needs a verified tarpaulin run to confirm
-  flake-freeness — a separate verification step.
-- **4.7 architecture diagram — deferred.** Open-ended, low priority;
-  the ASCII tree + tables in `docs/TECHNICAL.md` are functional. A
-  mermaid diagram is a future docs WO.
-- **4.8 coverage-per-file metrics — deferred.** Needs real coverage-
-  closing work or soft-warning telemetry; not a polish item.
-- **4.10 m5_tests.rs sibling module — deferred (Batch A).** File is
-  `src/adapters/`; cosmetic fold, defer to an adapters WO.
-- **4.11 collect_carryover `cargo test` substring match — deferred
-  (Batch C).** Lives in `src/session/executor/mod.rs`.
-- **4.13 PostTurnHookGuard sync Drop — deferred (Batch C).**
-  `src/session/executor/turn.rs`.
-- **4.14 executor/loop_.rs detached cancel-watcher — deferred (Batch C).**
-- **4.15 scout.rs StubTool::run `unimplemented!` — deferred (Batch C).**
-- **4.16 bedrock_signing extract_payload literal match — deferred
-  (Batch A).** `src/adapters/bedrock_signing.rs`.
-- **4.17 crate-boundary audit — deferred.** Periodic, open-ended
-  ("would this still deserve its own crate?"); revisit per-crate.
-- **4.19 more execution metrics — deferred.** Extending the bench
-  report (retrieval count + verification retries) is a bench-harness WO.
-- **4.20 more semantic benchmarks — deferred.** New bench tasks
-  (context-index validation); separate bench WO.
-- **4.21 provider abstraction / capability detection — deferred.**
-  Long-term plan (Core abstraction → Capability detection → Provider-
-  specific enhancements); short-term fix is 3.20 (Batch A). Defer to a
-  providers WO.
-- **4.22 publish benchmark dashboards — deferred.** Requires verifying
-  the `bench-leaderboard` scheduled job is green and populating
-  `docs/bench/leaderboard.md`; separate WO.
-- **4.23 `--harden` rlimit test `#[ignore]` in CI — deferred.** Needs a
-  dedicated Linux CI job running the ignored security tests; CI-matrix work.
-- **4.24 Windows CI job — deferred.** Needs a Windows CI matrix running
-  the previously-flaky tests 3×; CI-matrix work.
-
-### Series 15.26 Batch A deferrals (WO 15.26)
-
-Batch A (config + adapters) shipped concrete fixes: 3.28 (bedrock
-non-ASCII header value → error instead of silent drop), 4.16 (bedrock
-event-stream frame parse via serde_json — picked up from Batch D's
-deferral), 3.48 (vertex key files must carry `"type": "service_account"`),
-3.29 (CacheKey switched DefaultHasher → sha256, sha256 already a dep).
-The rest resolve to documented ceilings or honest deferral — per the WO
-done-condition ("fixed OR honestly deferred with a note in state.md"):
-
-- **3.20 model-name prefix routing — deferred (ceiling documented).**
-  `adapter_kind_for` + `adapter_for_with_provider` route by hardcoded
-  prefix in `src/adapters/mod.rs`; a config-driven prefix→AdapterKind
-  table is the upgrade path (ceiling comment at the fn).
-- **3.21 OpenAiCompat vision/cache by model name — deferred (ceiling
-  documented).** `src/adapters/openai_compat/mod.rs::model_info`;
-  config-driven capability map is the upgrade path.
-- **3.22 Anthropic max_context_tokens flat 200_000 — deferred (ceiling
-  documented).** Model-specific sizing (3.7/4 windows) not hardcoded to
-  avoid citing unverified token counts; `src/adapters/anthropic.rs`.
-- **3.23 Anthropic max_tokens 8192 — deferred (ceiling documented).** A
-  Config field would touch every Config site (Default, test literals,
-  adapter_for wrappers); `src/adapters/anthropic.rs::build_anthropic_body`.
-- **3.36 Vertex token fetch no retry — deferred.** Moving the fetch
-  inside `send_with_retry` is a clean refactor but needs a failure-
-  injection test to prove the retry fires; separate adapters WO.
-- **3.1 Config field drift guard — deferred.** Config is deeply nested
-  (ModelConfig/SecurityConfig/ToolConfig/SessionConfig/DisplayConfig,
-  ~60 leaf fields), so a flat field-count assertion against
-  `merge_toml_into_config`/`apply_env_overrides`/`config_diff_summary`
-  is non-trivial and a brittle substring test would give false
-  confidence without catching real drift. Right fix is a derive macro
-  (long-term, per the WO); the human checklist in AGENTS.md §7 stands
-  until then.
-- **4.10 m5_tests.rs sibling module — deferred.** Cosmetic fold into
-  `mod.rs`'s `#[cfg(test)] mod tests`; low value, low priority.
-
-### Series 15.26 Batch C deferrals (WO 15.26)
-
-Batch C (tools + executor) shipped concrete fixes for 14 of the 15 safe
-items (one commit each on `wo/15.26-batch-c-tools-executor`, head
-`3342de9`); 3.47 verified already-done; 3.5 + 3.6 honestly deferred to a
-dedicated refactor WO. Per the WO done-condition ("fixed OR honestly
-deferred"):
-
-- **3.5 monolithic functions >200 loc — deferred.** `run_tui` (~442 loc,
-  `src/tui/mod.rs`), `run_event_loop` (~351 loc), and `turn.rs`
-  (`run_turn_inner`/`dispatch_tool_call_batch`/`record_tool_result`) need
-  behavior-preserving decomposition into named sub-methods. Too risky for
-  a catch-all batch — core async/TUI code where a subtle behavior change
-  is hard to catch. Needs a per-function dedicated WO with focused
-  verification.
-- **3.6 `AppState` 44-field God object — deferred.** Grouping into
-  `TuiState`/`SessionState`/`CompletionState`/`ConnectionState` sub-
-  structs is the same risk class as 3.5 (touches every construction +
-  field-access site across `src/tui/`). Dedicated refactor WO.
-- **3.47 `bash_jobs` watcher race — already done.** The cancel-race the
-  WO describes ("cancel removes child handle between spawn and watcher
-  registration → empty stdout") is ALREADY HANDLED by the watcher's
-  take-semantics at `src/session/bash_jobs.rs:182-197`: if `cancel()`
-  takes the child handle first, the watcher's `children.remove(&id)`
-  returns `None` and the `else` branch marks the job `Cancelled` (comment
-  at :188). Batch B's 3.32 watchdog covers watcher-panic. The residual
-  empty-stdout affects only intentionally-cancelled jobs (acceptable; the
-  job was killed before meaningful output). A "register watcher before
-  spawn" refactor is a risky concurrency rewrite for a benign residual —
-  not appropriate here. No commit (would be a no-op); noted as resolved.
-
-The 14 fixed items: 3.7 (extract `find_cargo_root` →
-`verifier/helpers.rs`), 3.8 (`run_decision` shared body →
-`run_decision_inner`), 3.14 (remove stale `#[allow(dead_code)]`), 3.15
-(dedup `ChromeTab` impl — delete `RealChromeTab`, drop dead fields), 3.17
-(surface stderr on successful bash), 3.18 (percent-encode `file://` URI
-via the already-present `url` crate), 3.26 (abort `CachingAdapter`
-forwarder on consumer drop via `select! closed()`), 3.27 (document
-`atomic_write` dir-fsync ceiling), 3.43 (`--help` smoke tests for 9
-subcommands), 3.45 (`.worktrees/locks/` coverage note), 3.46 (regression
-test for partial-stdout preservation on bash timeout — already flushed),
-3.49 (pair workflow batch results by name, detect partial results), 3.50
-(document `compare_reports` difficulty fallback as unreachable union
-invariant), 3.51 (pass curated `budget_env` to `verify_task`).
-
-### Series 15.26 Batch B deferrals (WO 15.26)
-
-Batch B (verifier + security) shipped concrete fixes/tests/docs for ALL
-15 items — **zero deferrals**. Per the WO done-condition ("fixed OR
-honestly deferred"), each item resolved to a small fix:
-
-- **3.11** fixed — cross-test firing `write_file` through both the
-  event-driven `Verifier` path and the `BusVerifier` path, asserting
-  non-conflicting verdicts (`src/session/executor/tests/verifier_cross.rs`).
-- **3.12** fixed — deleted dead `src/session/verifier/event_kinds.rs`
-  (`verifier_event_kinds()` had zero production callers; `VerifierHandler`
-  hardcodes its own subscription list) + the `pub use` re-export.
-- **3.25** fixed — `VerifierHandler::verify_event` short-circuits
-  `ToolError` events (no built-in verifier acts on the payload; all would
-  skip) so the fan-out is skipped entirely.
-- **3.30** fixed — documented the env-var contract divergence in
-  `bus.rs` + `plugin.rs`: the bus path passes `KF_CHANGED_FILES` (file
-  list), the legacy event-driven path passes `KF_EVENT_KIND` +
-  `KF_EVENT_JSON` (full event). Not unified (would change behaviour).
-- **3.31** fixed — documented that `apply_command_fix` runs verifier-
-  supplied commands in the user env (consistent with the trusted-verifier
-  threat model; built-in + signed plugins only).
-- **3.32** fixed — `bash_jobs` watcher now has a watchdog: if the watcher
-  task panics (`JoinHandle::await → Err`) before recording a terminal
-  status, a detached watchdog flips the still-`Running` job to `Failed`.
-- **3.33** fixed — expanded `ENTROPY_PREFIXES` with `xai-` + `hf_`;
-  `claude-`/`key-` intentionally excluded (false positives on model names
-  / generic word fragments — `claude-3-opus-20240229`'s tail clears the
-  entropy gate) with a `ceiling:` note.
-- **3.34** fixed — documented the `split_whitespace` ceiling
-  (`apply_command_fix` handles zero-arg / simple-arg formatter commands
-  only; `shlex` would add a dep the size-optimized binary doesn't need).
-- **3.37** fixed — `module_path_prefix` now returns the empty prefix
-  (full crate suite) ONLY for `main.rs`/`lib.rs` directly at the crate
-  root; nested `src/foo/main.rs` keeps a targeted filter (`foo::main`).
-- **3.39** fixed — added `PluginToolWrapper.run` `Cancelled`-path test.
-- **3.40** fixed — added `CorrectionLoop` max-iterations bound test
-  (always-Fixable verifier drives the loop to 3 then stops).
-- **3.41** fixed — **documented duplicate-name coexistence** on
-  `VerifierBus`. (Initial reject-by-name attempt broke the
-  `plugin_verifier_triggers_correction_result` integration test: the
-  built-in `SecurityBusVerifier`/`GitBusVerifier` stubs share their slot
-  name with plugin verifiers that augment the same slot, so duplicates
-  must coexist. This differs from `VerifierSlots::register`, which DOES
-  reject duplicates — the two systems have different policies by design.)
-- **3.42** fixed — added `ToolError`-through-`VerifierHandler` test
-  (validates the 3.25 short-circuit: a registered Unfixable verifier must
-  NOT run on a ToolError event).
-- **3.52** fixed — deleted the stale "Native KirkForge-Cli ADRs" prose
-  bullet list from `docs/adr/README.md` (it jumped 055→066, missing
-  056-065); the index TABLE is the single source of truth.
-  `adr_xref_drift` stays green.
-- **3.54** fixed — added `## Amendment (2026-07-31)` note to ADR-028
-  recording the promotion from "Accepted (partially implemented)" to
-  "Accepted" (WO 9.6 plugin-verifier bridge confirmed code-complete +
-  WO 10.8 NDJSON wire bridge).
-
-
-
-WO 15.14 Done (split kf-budget-cli/src/main.rs by feature): the
-7,706-line `crates/kf-budget-cli/src/main.rs` monolith split per
-ADR-0002 § Crate layout — pure refactor, no behaviour change. The
-~550 lines of production helpers moved to three feature modules:
-`budget_io.rs` (budget.toml/config.toml persistence layer:
-`budget_path`/`config_path`/`load_budget`/`save_budget`/`
-save_budget_at`/`load_budget_config_at`/`save_budget_config_at`/
-`load_budget_with_config`), `recent.rs` (`recent_outputs.jsonl`
-FIFO: `RecentEntry`/`RECENT_BOUND`/`load_recent_outputs`/`
-load_recent_outputs_at`/`append_recent`/`append_recent_at`/
-`empty_record`/`emit_compact_hint`), `helpers.rs` (`open_store`/
-`read_stdin_json`/cfg(test) `kf_budget_binary_path`). The ~7,150
-lines of inline `#[cfg(test)]` modules moved to four sibling
-files declared as direct children of the bin root
-(`tests_main.rs`, `tests_validate.rs`, `tests_adr_0015.rs`,
-`tests_recent.rs`) so each module's `use super::*;` keeps
-resolving against the crate root. `main.rs` is now a 468-line
-thin clap router (CLI def + `main()` + `self_check`) that
-re-exports the helper modules `pub(crate)`; test-only re-exports
-are `#[cfg(test)]`-gated to keep non-test builds from flagging
-them unused. Test count unchanged (141 unit + 53 integration);
-`#[test]` count under `crates/` unchanged (1674) so
-`kf-budget-core/README.md` not bumped. All 181 `ponytail:`
-annotations preserved verbatim (verified by whitespace-normalized
-diff). ADR-0002 Implementation notes amended with the split
-summary. Scope creep: `src/session/verifier/security.rs` — 6
-`FileWriteEvent` test sites (560/579/602/625/646/722) were
-missing the `content_hash` field added in an earlier WO, a
-pre-existing compile error on clean HEAD that blocked the
-workspace gate; added `content_hash: 0,` to each (matches the
-struct doc "tests may leave it 0" and the 11 already-updated
-sites). Commit on `wo/15.14-split-kf-budget-cli` (not pushed —
-user merging the worktree branch).
-
-WO 15.9 Done (TOCTOU + git staged + bash_minify path guard): closed
-bucketlist items 2.7, 2.10, 2.11. (2.7) Phase 3 `record_tool_result`
-now reuses the resolved path Phase 1 (`pre_run_verdict`) already
-sandbox-checked instead of re-running `PathGuard::check_write`/
-`check_read` for file tools — eliminates a second canonicalize +
-sandbox-contains + `git check-ignore` subprocess per edit and closes
-the TOCTOU window where a parallel tool could flip guard state between
-Phase 1 and Phase 3 (the `pre_run_verdict` docstring already claimed
-this; the impl now honours it). The resolved path is carried through
-the `results` map as a third tuple element from Phase 2.5 into Phase
-3. (2.10) The git worktree verifier now parses `git status --porcelain`
-XY status — staged-only files (`A  file.txt`) are no longer reported
-as `Unfixable` "Dirty worktree" (the model can commit them); genuine
-unstaged modifications (` M file.txt`) and untracked files (`??`) still
-fail. (2.11) `bash_minify::try_minify_bash_output` now takes a
-`&PathGuard` and routes the extracted file path through
-`PathGuard::check_read` before reading, so a symlink to
-`~/.ssh/id_rsa` or a path outside the sandbox is refused instead of
-followed with no recheck; the bash tool passes its existing
-`self.path_guard`. 3 new tests (git: 2, bash_minify: 1); 1 existing
-git test replaced. No architecture/feature-flag/tool-list/hook/
-verifier-bus/context-index surface changed, so `docs/TECHNICAL.md`
-not updated. Remaining bucketlist items still open pending their own
-workorders.
-
-WO 15.3 Done (security): closed bucketlist items 1.4 (`computer_use`
-`evaluate` SSRF via browser — Chrome now launches with
-`--host-resolver-rules` blocking all DNS except localhost), 1.5
-(`web_fetch` DNS rebinding — host is now resolved via the OS resolver
-and rejected if any resolved IP is internal; literal-IP hosts not
-re-resolved so no TOCTOU on a pinned literal), 1.6 (`bash` Docker
-bind-mount injection + missing `cmd` check — workdir canonicalized and
-rejected if its path contains `:`; `check_bash_command_str` now runs on
-the Docker path's `cmd` before spawn). 10 new tests. Residual ceiling:
-the `web_fetch` resolve→connect TOCTOU is not IP-pinned (reqwest has no
-per-request pinning without a custom resolver); the simple rebinding
-door is closed. `docs/TECHNICAL.md` `tools/` section updated. Remaining
-bucketlist Tier-1 items (1.1, 1.2, 1.3, 1.7) and Tier-2/3/4 items are
-still open pending their own workorders.
-
-WO 15.7 Done (cancel leak + double-record AccessDenied + enabled_plugins
-runtime gate): closed bucketlist items 2.3, 2.8, 5.1. (2.3)
-`dispatch_tool_call_batch` Phase 2 collect loop now aborts un-awaited
-`JoinHandle`s when cancellation fires mid-batch, so already-spawned
-tasks no longer run detached holding subprocess/network resources for
-up to `tool_timeout_secs`; `run_prepared_call` short-circuits when its
-token was already cancelled at spawn time. (2.8) Phase 3 no longer
-re-runs the path guard + read gate for a deferred file call already
-denied in Phase 2.5, so the model sees one "Access denied" result per
-failed edit instead of two. (5.1) Stratum/Budget tool + hook
-registration in `src/main/mod.rs` and `src/session/executor/mod.rs`
-now checks `cfg.tools.enabled_plugins` at runtime (config key
-`"stratum"` / `"kf-budget"`), so `/plugins disable stratum`
-actually removes the compiled-in tools/hooks on the next `kf-code
-run`, not just the `/plugins list` display. 2 new tests
-(`test_cancelled_batch_aborts_remaining_spawned_tasks`,
-`test_denied_edit_records_single_access_denied_result`); 148 executor
-tests pass. `docs/TECHNICAL.md` plugin section updated.
-
-WO 15.15 Done (split kf-draw-core state.rs): split the 4,863-line
-`crates/kf-draw-core/src/state.rs` (draw document model, 161
-tests) by state-domain into `state/` submodules — `mod.rs` (struct +
-constructors), `tool`, `history`, `selection`, `draft`, `resize`,
-`mutate`, `query`, `helpers`, `tests`. Pure refactor: every function
-moved verbatim, only edits are `pub(super)` visibility on private
-fields + cross-submodule helpers so sibling `impl DrawState` blocks can
-touch the struct. Test count unchanged (161). Also fixed 6
-`FileWriteEvent` literals in `src/session/verifier/security.rs` tests
-that WO 15.8 missed adding `content_hash: 0` to (pre-existing compile
-error on base branch fb334cb that blocked the workspace gate).
-
-### In-process hook infrastructure (shipped)
-
-The hooks for WO 6.6/6.7/6.8 are now in-process Rust handlers (no shell scripts) built on shared infrastructure:
-
-- `InProcessHook` trait in `src/session/hooks.rs`.
-- `HookContext` struct with `tool_result` and `compact_stats` fields (replaces the env-var shim with real event context).
-- `HookRunner.add_in_process_hook()` method.
-- `HookRunner.run_with_context()` and `run_decision_with_context()` methods.
-- `ToolOutcome.text_content()` helper in `src/shared/mod.rs`.
-- `Executor::run_hook_with_result()` method; it and `run_compact_hook` pass the full `HookContext` to in-process hooks.
-
-### Known CI issues
-
-- **Ollama model pull fails intermittently**: The `integration` CI job fails when `ollama pull` encounters a registry redirect. External service issue; re-running typically succeeds. The `Bench Baseline` workflow's `ollama pull` steps now self-heal via a 3-attempt retry loop with a 30s backoff plus an authoritative `/api/tags` health check (WO 14.0), so a transient redirect no longer reds the scheduled bench badge.
-- **Coverage (`tarpaulin`) flake on `test_build_fork_tree_orphan_fork_is_a_root`**: Under `cargo tarpaulin --lib`, this test in `src/session/session_index.rs` occasionally panicked with "No such file or directory" committing the `.index.ndjson` temp file (a tempdir/rename race exposed by tarpaulin's instrumentation). WO 12.0 fixed the root cause: `save()` now re-creates the parent dir immediately before the rename so a mid-write `/tmp` cleanup can't break the rename. The `--skip test_build_fork_tree_nests_children` is still in CI (`.github/workflows/ci.yml:334`) as belt-and-suspenders; removing it is a separate verification step that needs a tarpaulin run.
-- **Windows `test_cache_results` mtime race (resolved)**: `cache_contains` in `src/shared/minify/mod.rs` re-read disk mtime and looked up `(path, mtime_secs)`; on Windows a file written and re-stat'd across a second boundary produced a different `mtime_secs`, so the lookup missed the cached entry and `test_cache_results` FAILED intermittently. Commit `4bdc13f` (WO 14.0 follow-on) fixed the root cause: the cache is now scanned by `path` only — the tests ask "is there ANY entry for this path?", not "does the mtime match?". The REVIEW Pass-14 "main CI-red on Windows" claim was already stale when written (the env_guard race was fixed in WO 10.0); this was the real remaining flake.
-
-### Gates
-
-- `cargo test --locked --workspace --no-fail-fast` = all pass
-- `cargo clippy --all-targets -- -D warnings` = clean
-- `cargo fmt --check` = clean
-- `cargo check --workspace --all-targets` = clean
-- `cargo test -p kf-budget-core --test adr_xref_drift` = 3 passed
-- Feature-gated builds compile and pass
-
-### Remaining (long-term, path to A agent)
-
-| Item | Effort | Status |
+| Phase | What | Key commit(s) |
 |---|---|---|
-| P1-long-1 Phase 7 — Embeddings/graph-walk retrieval | 2-3 weeks | Done (2026-07-24) |
-| P1-long-2 follow-up (cont.) — Multi-model leaderboard | 1-2 weeks | Future |
-| More TUI parity | ongoing | Future |
+| 1+2 | Full `kirkforge` → `kf-code` rename + 16 crate renames | `ae0e37d` → `ccfbdb3` (6 commits) |
+| 3 | EventBus deleted (-1565 lines), direct verifier calls | `59a1a4a` |
+| 4 | Config drift guard: CONFIG_FIELD_COUNT + triple-copy test | `24417d1`, `13a355d`, `b1bfeb9` |
+| 5 | CostTracking + SandboxEnforcer extracted from Executor | `f638481`, `080c7e0`, `160210c` |
+| 6 | Data-driven model routing via `[adapter_routing]` config | `2e4d424` |
+| 7 | ToolRegistry builder replacing `all_tools()` factory | `02e96dd` |
+| Docs | AGENTS.md, CHANGELOG.md, TECHNICAL.md, state.md | `207dfe3` |
+| Plugin toggle | Runtime enable/disable of plugins via `/plugins toggle` | `a4474da` |
+
+**Net impact**: ~2400 lines deleted, ~1500 lines added.
+
+## What DID NOT ship
+
+| Item | Status | Why |
+|---|---|---|
+| Plugin simplification | Not started | Current architecture (feature-gated compilation + runtime toggle) is already close to what's needed |
+| TUI improvements | Not started | Vix analysis complete but no code changes made |
+
+## Gate status
+
+- `cargo check --workspace`: PASS
+- `cargo fmt --check`: PASS
+- `cargo clippy --all-targets -- -D warnings`: PASS
+- `cargo test -p kf-code --lib`: 2879 passed, 1 failed (`bundled_node_sdk_tool_executes_via_host` — requires Node.js, pre-existing)
+- `cargo test --workspace`: ~2910 passed across all crates
+
+## Config drift guard (Phase 4)
+
+The config system has a triple-copy pattern: struct fields, `merge_toml_into_config`, and `apply_env_overrides`. The drift guard catches mismatches:
+
+- `CONFIG_FIELD_COUNT = 73` (ModelConfig=22, SecurityConfig=18, ToolConfig=26, SessionConfig=4, DisplayConfig=3)
+- `MERGE_TOML_EXPECTED = 62` (55 top-level leaf keys + 7 `[computer_use]` sub-keys)
+- `ENV_OVERRIDE_EXPECTED = 58` (KF_CODE_* env vars)
+- 16 struct fields intentionally skipped by `merge_toml_into_config` (documented in test)
+- 4 additional fields skipped by `apply_env_overrides` (Vec/array types without env representations)
+
+## Sub-crate rename mapping (for reference)
+
+| Old name | New name | What it does |
+|---|---|---|
+| kirkforge (binary) | kf-code | Main CLI |
+| kirkforge-plugin | kf-plugin-sdk | Plugin SDK |
+| kirkforge-plugin-host | kf-plugin-host | Plugin host |
+| kirkforge-lsp | kf-lsp | LSP client |
+| kirkforge-workflow | kf-workflow | Workflow engine |
+| kirkforge-context-index | kf-context-index | Tree-sitter symbol index |
+| kirkforge-bench | kf-bench | Benchmark harness |
+| kirkforge-draw-core | kf-draw-core | Drawing core |
+| kirkforge-draw | kf-draw | Drawing TUI |
+| kirkstratum-core | kf-compress-core | Context compression |
+| kirkstratum-cli | kf-compress-cli | Compression CLI |
+| kirkstratum-hosts | kf-compress-hosts | Compression host rules |
+| kirkforge-video | kf-video | Video production |
+| kirkforge-testdoctor | kf-testdoctor | Test diagnosis |
+| plugin3-core | kf-budget-core | Token budget core |
+| plugin3-cli | kf-budget-cli | Budget CLI |
+| plugin3-hosts | kf-budget-hosts | Budget host schemas |
+
+## Env var mapping
+
+All `KIRKFORGE_*` env vars renamed to `KF_CODE_*`. Data dir is `~/.local/share/kf-code/`. Config dir is `.kf-code/`. Plugin manifests are `kf-code.toml`.
+
+## Vix TUI analysis (key takeaways for future TUI work)
+
+1. **Dual-buffer streaming**: vix uses raw text + rendered buffer, throttles markdown rendering to 100ms intervals. kf-code already does this.
+2. **Inline tool output**: vix uses one-line summaries for tool results with ID-matched insertion. kf-code shows more detail.
+3. **Permission flow**: vix uses a dedicated panel that replaces the input area. kf-code has approval dialogs but not a full panel.
+4. **Context indicator**: vix shows `◔ 128k/200k · 64%` in status bar, color-coded. kf-code already has this.
+5. **Multi-thread tabs**: vix has F1-F6 tabs for Threads/Chat/Models/MCP/Jobs/Settings. kf-code has no tab system.
+6. **Model switching**: vix has a full Models tab with provider grid. kf-code uses `/model` command.
+7. **Daemon protocol**: vix uses JSON-over-unix-socket with ThreadClient/InstanceClient. kf-code's daemon protocol is similar.
+
+## Next steps (prioritized)
+
+1. **TUI tabs**: Add F-key tab system (Threads, Chat, Models, Plugins, Jobs, Settings)
+2. **TUI permission panel**: Replace the inline approval flow with a dedicated panel
+3. **Plugin simplification**: Consider removing shell fallbacks and making all plugins always-compiled-in with runtime toggles
+4. **Stratum/compress plugin**: Consider absorbing the stratum compression into the main binary permanently (remove the feature flag, make it always-on)
+
+## Rust toolchain
+
+Rust 1.88.0 is installed at `~/.cargo/bin/`. Run `export PATH="$HOME/.cargo/bin:$PATH"` before any cargo commands.
+
+## Known issues
+
+- `bundled_node_sdk_tool_executes_via_host` test fails because Node.js and the kf-plugin SDK aren't built — this is pre-existing, not related to the rename
+- The `adr_0010_emission_site_block_uses_eprintln_for_errors` test in `kf-budget-core` fails — ADR vs impl drift, pre-existing

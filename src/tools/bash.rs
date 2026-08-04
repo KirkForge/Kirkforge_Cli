@@ -441,10 +441,7 @@ mod tests {
     #[tokio::test]
     async fn bash_tool_respects_cancellation_token() {
         let tmp = std::env::temp_dir();
-        let marker = tmp.join(format!(
-            "kf_code_bash_cancel_marker_{}",
-            std::process::id()
-        ));
+        let marker = tmp.join(format!("kf_code_bash_cancel_marker_{}", std::process::id()));
         let marker_str = marker.to_string_lossy().to_string();
         remove_test_file(&marker);
 
@@ -527,10 +524,7 @@ mod tests {
             crate::shared::SandboxConfig::default(),
         );
         let tmp = std::env::temp_dir();
-        let marker = tmp.join(format!(
-            "kf_code_bash_huge_timeout_{}",
-            std::process::id()
-        ));
+        let marker = tmp.join(format!("kf_code_bash_huge_timeout_{}", std::process::id()));
         let _ = std::fs::remove_file(&marker);
 
         let args = serde_json::json!({

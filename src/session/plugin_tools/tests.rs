@@ -1,8 +1,8 @@
 use super::*;
 use crate::shared::{Config, SharedConfig, ToolOutcome};
 use crate::tools::ToolContext;
-use kf_plugin_sdk::{Capability, Plugin, TrustTier};
 use kf_plugin_host::{PluginRegistry, TrustPolicy};
+use kf_plugin_sdk::{Capability, Plugin, TrustTier};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -519,12 +519,7 @@ fn bundled_plugins_load_from_data_dir() {
         .map(|p| p.plugin.manifest().name.clone())
         .collect();
     #[allow(unused_mut)]
-    let mut expected = vec![
-        "kf-draw",
-        "stratum",
-        "kf-budget",
-        "kf-plugin",
-    ];
+    let mut expected = vec!["kf-draw", "stratum", "kf-budget", "kf-plugin"];
     #[cfg(feature = "video")]
     expected.push("kf-video");
     for expected in expected {
@@ -683,12 +678,7 @@ async fn bundled_node_sdk_tool_executes_via_host() {
 /// The Node SDK plugin (`kf-plugin-sdk`) is always shell-loaded.
 #[test]
 fn default_plugin_sources_are_present_and_loadable() {
-    let mut all_expected = vec![
-        "kf-draw",
-        "stratum",
-        "kf-budget",
-        "kf-plugin",
-    ];
+    let mut all_expected = vec!["kf-draw", "stratum", "kf-budget", "kf-plugin"];
     #[cfg(feature = "video")]
     all_expected.push("kf-video");
     all_expected.sort();
@@ -741,12 +731,7 @@ fn default_plugin_sources_are_present_and_loadable() {
 /// Verify that folded plugins with feature OFF fall back to shell loading.
 #[test]
 fn folded_plugin_shell_fallback_when_feature_off() {
-    let folded_names = [
-        "stratum",
-        "kf-budget",
-        "kf-draw",
-        "kf-video",
-    ];
+    let folded_names = ["stratum", "kf-budget", "kf-draw", "kf-video"];
     let base = Config::default();
 
     // Only test plugins whose feature is NOT compiled in AND whose source dir
@@ -817,8 +802,8 @@ mod e2e {
     use crate::session::hooks::{HookDecision, HookRunner};
     use crate::shared::audit::{AuditEntry, AuditLog};
     use crate::shared::ToolError;
-    use kf_plugin_sdk::{Capability, Plugin, TrustTier};
     use kf_plugin_host::VerifierVerdict;
+    use kf_plugin_sdk::{Capability, Plugin, TrustTier};
     use std::os::unix::fs::PermissionsExt;
     use std::sync::Arc;
 

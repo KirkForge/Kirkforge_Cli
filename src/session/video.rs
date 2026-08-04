@@ -69,7 +69,8 @@ impl Tool for VideoDemos {
     fn def(&self) -> ToolDef {
         ToolDef {
             name: "video_demos",
-            description: "List demos, pipelines, render profiles, or internal tools available in kf-video.",
+            description:
+                "List demos, pipelines, render profiles, or internal tools available in kf-video.",
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -399,12 +400,8 @@ impl Tool for VideoValidate {
         let kinds: Vec<&str> = comp.scenes.iter().map(scene_kind_tag).collect();
         use kf_video::orchestrator::slideshow_risk;
         let risk = slideshow_risk::score_slideshow_risk(&kinds, comp.total_duration_s());
-        let filter_plan = kf_video::compose::build_filter_graph(
-            &comp.scenes,
-            comp.width,
-            comp.height,
-            comp.fps,
-        );
+        let filter_plan =
+            kf_video::compose::build_filter_graph(&comp.scenes, comp.width, comp.height, comp.fps);
 
         let mut issues: Vec<String> = Vec::new();
         for (i, s) in comp.scenes.iter().enumerate() {
@@ -673,10 +670,7 @@ impl Tool for VideoRisk {
                 return error("video_risk: provide project or kinds array");
             }
             let kinds_refs: Vec<&str> = kinds.iter().map(|s| s.as_str()).collect();
-            kf_video::orchestrator::slideshow_risk::score_slideshow_risk(
-                &kinds_refs,
-                duration_s,
-            )
+            kf_video::orchestrator::slideshow_risk::score_slideshow_risk(&kinds_refs, duration_s)
         };
 
         success(serde_json::to_string_pretty(&report).unwrap_or_default())

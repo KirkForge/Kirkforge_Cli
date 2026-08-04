@@ -1268,10 +1268,8 @@ async fn test_plan_mode_blocks_non_read_only_bash() {
 
 #[tokio::test]
 async fn test_plan_mode_allows_read_file() {
-    let tmp = std::env::temp_dir().join(format!(
-        "kf_code_plan_read_test_{}.txt",
-        std::process::id()
-    ));
+    let tmp =
+        std::env::temp_dir().join(format!("kf_code_plan_read_test_{}.txt", std::process::id()));
     std::fs::write(&tmp, "file contents").expect("write temp file");
     let _cleanup = CleanupFile(tmp.clone());
 

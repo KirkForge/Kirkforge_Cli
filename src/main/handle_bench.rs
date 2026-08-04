@@ -97,8 +97,7 @@ async fn handle_bench_run_models(
     let mut reports = Vec::new();
     for model in &models {
         eprintln!("→ model: {model}");
-        let report =
-            kf_code::session::bench::run_all(&bench_tasks, model, &config, timeout).await;
+        let report = kf_code::session::bench::run_all(&bench_tasks, model, &config, timeout).await;
         eprintln!(
             "  {}/{} tasks passed ({:.0}%)",
             report.summary.tasks_passed,
@@ -143,8 +142,7 @@ fn handle_bench_compare(
         // 10 = 10 percentage points); compare_with_threshold takes a
         // fraction (0.10).
         let threshold = threshold_pct / 100.0;
-        let result =
-            kf_bench::compare_with_threshold(&baseline_report, &current_report, threshold);
+        let result = kf_bench::compare_with_threshold(&baseline_report, &current_report, threshold);
         let delta = &result.delta;
         println!("Delta: {} → {}", delta.baseline_model, delta.current_model);
         println!(

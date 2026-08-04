@@ -327,10 +327,7 @@ mod tests {
 
     #[test]
     fn per_test_medium_test_is_medium() {
-        let p = per_test_profile(
-            vec![test_profile("m", "kf-code", 300, true, false)],
-            false,
-        );
+        let p = per_test_profile(vec![test_profile("m", "kf-code", 300, true, false)], false);
         let c = classify_per_test(&p);
         assert_eq!(c.tests[0].speed, Speed::Medium);
         assert_eq!(c.summary.medium, 1);
@@ -338,10 +335,7 @@ mod tests {
 
     #[test]
     fn per_test_ignored_test_is_ignored() {
-        let p = per_test_profile(
-            vec![test_profile("ign", "kf-code", 0, false, true)],
-            false,
-        );
+        let p = per_test_profile(vec![test_profile("ign", "kf-code", 0, false, true)], false);
         let c = classify_per_test(&p);
         assert_eq!(c.tests[0].speed, Speed::Ignored);
         assert_eq!(c.summary.ignored, 1);

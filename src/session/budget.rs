@@ -860,7 +860,8 @@ mod tests {
                 let stored = store.get(&key).expect("full content retrievable");
                 assert!(!stored.is_empty(), "middle must be offloaded");
                 assert!(
-                    parse_slice_marker(&display).is_some() || display.contains("<<kf-budget:slice:"),
+                    parse_slice_marker(&display).is_some()
+                        || display.contains("<<kf-budget:slice:"),
                     "display must carry a slice marker, got: {display:?}"
                 );
             }

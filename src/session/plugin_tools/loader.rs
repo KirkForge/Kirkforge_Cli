@@ -16,8 +16,8 @@
 
 use crate::shared::{Config, SharedConfig};
 use crate::tools::Tool;
-use kf_plugin_sdk::{Capability, Plugin};
 use kf_plugin_host::{PluginRegistry, TrustPolicy};
+use kf_plugin_sdk::{Capability, Plugin};
 use std::path::PathBuf;
 use std::sync::Arc;
 

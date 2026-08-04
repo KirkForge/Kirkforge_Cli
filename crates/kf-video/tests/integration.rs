@@ -1119,10 +1119,7 @@ async fn narration_stage_skipped_when_brief_has_no_narration() {
     let comp: Composition =
         serde_json::from_str(&std::fs::read_to_string(arts.join("composition.json")).unwrap())
             .expect("composition parses");
-    matches!(
-        comp.audio,
-        Some(kf_video::compose::AudioSpec::Silent)
-    );
+    matches!(comp.audio, Some(kf_video::compose::AudioSpec::Silent));
 }
 
 #[tokio::test]

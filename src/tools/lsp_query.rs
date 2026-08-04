@@ -585,11 +585,7 @@ impl LspQuery {
 }
 
 /// Render hierarchical document symbols as indented lines.
-fn render_document_symbols(
-    syms: &[kf_lsp::DocumentSymbol],
-    depth: usize,
-    out: &mut Vec<String>,
-) {
+fn render_document_symbols(syms: &[kf_lsp::DocumentSymbol], depth: usize, out: &mut Vec<String>) {
     for sym in syms {
         let indent = "  ".repeat(depth);
         out.push(format!(

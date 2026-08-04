@@ -1,23 +1,58 @@
 # Lessons — kf-code rename + modularization session
 
 ## What I learned about this codebase
-- **840 files changed** for the rename — every Rust source, every Cargo.toml, every shell script, every plugin manifest, every benchmark task. The kirkforge name was embedded in ~250+ files across env vars, crate names, binary names, directory paths, plugin manifests, serde renames, test fixtures, CI workflows, and npm packages.
-- **The `plugin3` naming was confusing on purpose** — it was a code name for what is actually a token budget system. Renaming to `kf-budget-*` makes the crate purpose immediately obvious.
-- **`kirkstratum` was similarly obscure** — it's a context compression pipeline. `kf-compress-*` is descriptive.
-- **The `Host` enum had `Host::KirkForge` with `#[serde(rename = "kirkforge")]`** — this is a wire-format concern. Changing to `Host::KfCode` with `#[serde(rename = "kf-code")]` is a breaking change for any existing serialized data, but since this is a rename of the entire project, it's consistent.
-- **The `KIRKFORGE_PLUGIN3` env var** for host detection was renamed to `KF_CODE_PLUGIN3` — but the ADR-0013 drift tests pin the old env var name. These tests will need updating.
-- **The `.kirkforge/` config directory** was renamed to `.kf-code/`. Users will need to migrate their config.
-- **Plugin manifests changed from `kirkforge.toml` to `kf-code.toml`** — this is a breaking change for any third-party plugins. The plugin loader in `kf-plugin-host` was updated to look for `kf-code.toml`.
-- **No Rust toolchain is installed on this machine** — can't run `cargo check` or `cargo test` to verify compilation. The gate verification will need to happen on a machine with Rust 1.88.0+.
-- **The `.kirkforge.sig` signature file** was renamed to `.kf-code.sig` in all code references. Plugin signature verification will look for the new filename.
-- **The `use kirkforge::` crate path** had to become `use kf_code::` (with underscore, since Rust crate names in `use` statements use underscores, while `Cargo.toml` package names use hyphens).
+
+### Rename scope was massive
+- 840 files changed for the initial rename commit, plus 3 fixup commits
+- Every category of name had different rules:
+  - Rust crate names in Cargo.toml: `kf-code` (hyphenated)
+  - Rust crate names in `use` statements: `kf_code` (underscored)
+  - Binary names: `kf-code` (hyphenated)
+  - Env vars: `KF_CODE_*` (uppercased, underscored)
+  - Directory names: `kf-code/`, `kf-budget/` (hyphenated)
+  - Plugin manifests: `kf-code.toml`
+  - Serde enum renames: `#[serde(rename = "kf-code")]`
+  - CARGO_BIN_EXE: uses hyphenated binary names
+  - Test function names: `kf_budget_hooks` (underscored, since they're Rust identifiers)
+
+### Cargo normalizes hyphens to underscores
+- In the `deps/` directory, cargo replaces hyphens with underscores in binary filenames
+- `kf-code` becomes `kf_code-<hash>` in `target/debug/deps/`
+- The testdoctor's `parse_binary_name` returns the filename form (`kf_code`), not the package form (`kf-code`)
+- Test assertions must use the filename form when comparing parsed binary names
+
+### Plugin names were the trickiest
+- The plugin3 → kf-budget rename touched:
+  - Crate names (plugin3-core → kf-budget-core, etc.)
+  - Plugin directory names (kirkforge-plugin3 → kf-budget)
+  - Plugin manifest names (kirkforge.toml → kf-code.toml)
+  - Tool names inside manifests (plugin3_budget_status → budget_status)
+  - FOLDED_PLUGINS mapping
+  - Env var KIRKFORGE_PLUGIN3 → KF_CODE_PLUGIN3 for host detection
+  - Slice markers <<plugin3:slice:>> → <<kf-budget:slice:>>
+  - Host::KirkForge → Host::KfCode (with serde rename)
+
+### No Rust toolchain was available initially
+- Had to install rustup and the 1.88.0 toolchain manually
+- The toolchain was partially installed (missing rustc binary) — had to uninstall and reinstall
+
+### Subagent coordination issues
+- Dispatched 4 subagents for the rename, but all were canceled before results could be retrieved
+- Had to redo the work manually with sed/find
+- Python was needed for one tricky nested-quote substitution that sed couldn't handle
 
 ## What I tried that didn't work
-- **The subagent approach for the rename was partially successful** — the first subagent (crate renames in Cargo.toml + Rust source) completed, but the other three were canceled when I asked for their output. The remaining work (env vars, plugin manifests, docs) I had to do manually with `sed` and `find`.
-- **Python was needed for the nested-quote serde assertion** — `sed` couldn't handle the `Host::KfCode, "\"kirkforge\""` pattern with escaped quotes inside a Rust string. Python's `str.replace()` handled it cleanly.
-- **`git mv .kirkforge .kf-code` failed** because the directory was empty-ish. Had to use `mv` + `git add` instead.
+- Using subagents for the rename — coordination problems when they touch overlapping files
+- Using sed for Rust identifier renames with hyphens — `kf-budget_binary_path` is not a valid Rust identifier, must be `kf_budget_binary_path`
+- Using sed for serde assertion `"\"kirkforge\""` — the nested quotes confused sed. Python `str.replace()` handled it.
 
 ## What I'd do differently
-- **Do the entire rename with a single comprehensive script** rather than dispatching subagents — the subagent approach creates coordination problems when they touch overlapping files.
-- **Verify compilation after each major rename category** (crates, env vars, plugins) rather than doing all changes and hoping for the best. Without a Rust toolchain, I'm flying blind on compilation correctness.
-- **The next phases (verifier bus unification, config macro, Executor decomposition) are architectural refactors** that should each be a separate commit with a passing gate. Don't batch them.
+- Use a single comprehensive sed script executed in the correct order (longest strings first) rather than incremental fixes
+- Run `cargo check` immediately after the first rename pass to catch hyphenated identifiers
+- The next phases (verifier bus unification, config macro, Executor decomposition) should each be a single focused commit with a passing gate
+
+## Gate status
+- `cargo check --workspace`: PASS
+- `cargo test --workspace --no-fail-fast`: 2910 passed, 1 failed (bundled_node_sdk_tool_executes_via_host — requires Node.js, pre-existing)
+- `cargo fmt --check`: Not yet run
+- `cargo clippy --all-targets`: Not yet run

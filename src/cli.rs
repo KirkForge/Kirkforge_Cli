@@ -29,12 +29,7 @@ pub enum OutputFormat {
 )]
 pub struct Cli {
     /// Log verbosity. Overridden by RUST_LOG if set.
-    #[arg(
-        long,
-        default_value = "warn",
-        env = "KF_CODE_LOG_LEVEL",
-        global = true
-    )]
+    #[arg(long, default_value = "warn", env = "KF_CODE_LOG_LEVEL", global = true)]
     pub log_level: String,
 
     #[command(subcommand)]
@@ -548,8 +543,7 @@ mod tests {
 
     #[test]
     fn plugin_enable_subcommand_parses() {
-        let cli =
-            Cli::try_parse_from(["kf-code", "plugin", "enable", "my-plugin"]).expect("parse");
+        let cli = Cli::try_parse_from(["kf-code", "plugin", "enable", "my-plugin"]).expect("parse");
         assert!(matches!(
             cli.command,
             Command::Plugin {
@@ -814,9 +808,8 @@ mod tests {
 
     #[test]
     fn plugin_add_parses() {
-        let cli =
-            Cli::try_parse_from(["kf-code", "plugin", "add", "my-plugin", "/tmp/my-plugin"])
-                .expect("parse");
+        let cli = Cli::try_parse_from(["kf-code", "plugin", "add", "my-plugin", "/tmp/my-plugin"])
+            .expect("parse");
         assert!(matches!(
             cli.command,
             Command::Plugin {
@@ -827,8 +820,7 @@ mod tests {
 
     #[test]
     fn plugin_remove_parses() {
-        let cli =
-            Cli::try_parse_from(["kf-code", "plugin", "remove", "my-plugin"]).expect("parse");
+        let cli = Cli::try_parse_from(["kf-code", "plugin", "remove", "my-plugin"]).expect("parse");
         assert!(matches!(
             cli.command,
             Command::Plugin {
@@ -839,8 +831,7 @@ mod tests {
 
     #[test]
     fn plugin_toggle_parses() {
-        let cli =
-            Cli::try_parse_from(["kf-code", "plugin", "toggle", "my-plugin"]).expect("parse");
+        let cli = Cli::try_parse_from(["kf-code", "plugin", "toggle", "my-plugin"]).expect("parse");
         assert!(matches!(
             cli.command,
             Command::Plugin {
@@ -851,15 +842,9 @@ mod tests {
 
     #[test]
     fn sessions_with_export_conflicts_with_search() {
-        let err = Cli::try_parse_from([
-            "kf-code",
-            "sessions",
-            "--export",
-            "json",
-            "--search",
-            "foo",
-        ])
-        .expect_err("should conflict");
+        let err =
+            Cli::try_parse_from(["kf-code", "sessions", "--export", "json", "--search", "foo"])
+                .expect_err("should conflict");
         assert!(err.kind() == clap::error::ErrorKind::ArgumentConflict);
     }
 
@@ -916,14 +901,9 @@ mod tests {
 
     #[test]
     fn doctor_suggest_detailed_with_filter_parses() {
-        let cli = Cli::try_parse_from([
-            "kf-code",
-            "doctor",
-            "suggest-detailed",
-            "--filter",
-            "sleep",
-        ])
-        .expect("parse");
+        let cli =
+            Cli::try_parse_from(["kf-code", "doctor", "suggest-detailed", "--filter", "sleep"])
+                .expect("parse");
         match cli.command {
             Command::Doctor {
                 command: DoctorCommand::SuggestDetailed { filter },

@@ -54,19 +54,10 @@ fn default_plugin_sources() -> HashMap<String, PathBuf> {
     let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     sources.insert("kf-draw".into(), base.join("plugins/kf-draw"));
     #[cfg(feature = "video")]
-    sources.insert(
-        "kf-video".into(),
-        base.join("plugins/kf-video"),
-    );
+    sources.insert("kf-video".into(), base.join("plugins/kf-video"));
     sources.insert("stratum".into(), base.join("plugins/stratum"));
-    sources.insert(
-        "kf-budget".into(),
-        base.join("plugins/kf-budget"),
-    );
-    sources.insert(
-        "kf-plugin".into(),
-        base.join("plugins/kf-plugin"),
-    );
+    sources.insert("kf-budget".into(), base.join("plugins/kf-budget"));
+    sources.insert("kf-plugin".into(), base.join("plugins/kf-plugin"));
     sources
 }
 

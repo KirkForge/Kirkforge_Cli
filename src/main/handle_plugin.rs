@@ -29,8 +29,7 @@ pub(super) fn handle_plugin_command(command: PluginCommand) -> anyhow::Result<()
         }
         PluginCommand::Reload => {
             // The CLI has no live registry; reload == re-load and report.
-            let (registry, warnings) =
-                kf_code::session::plugin_tools::load_plugin_registry(&cfg)?;
+            let (registry, warnings) = kf_code::session::plugin_tools::load_plugin_registry(&cfg)?;
             println!("Reloaded plugins: {} active.", registry.active_count());
             if !warnings.is_empty() {
                 println!("Warnings:");

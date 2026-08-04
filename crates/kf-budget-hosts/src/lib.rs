@@ -213,11 +213,7 @@ mod tests {
                 (&["CLAUDE_CODE"], Host::ClaudeCode, "CLAUDE_CODE only"),
                 (&["CURSOR_TRACE_ID"], Host::Cursor, "CURSOR_TRACE_ID only"),
                 (&["AIDER"], Host::Aider, "AIDER only"),
-                (
-                    &["KF_CODE_PLUGIN3"],
-                    Host::KfCode,
-                    "KF_CODE_PLUGIN3 only",
-                ),
+                (&["KF_CODE_PLUGIN3"], Host::KfCode, "KF_CODE_PLUGIN3 only"),
                 // Precedence: Claude Code beats Cursor when both set.
                 (
                     &["CLAUDE_CODE", "CURSOR_TRACE_ID"],
@@ -238,12 +234,7 @@ mod tests {
                 ),
                 // All set → Claude Code wins.
                 (
-                    &[
-                        "CLAUDE_CODE",
-                        "CURSOR_TRACE_ID",
-                        "AIDER",
-                        "KF_CODE_PLUGIN3",
-                    ],
+                    &["CLAUDE_CODE", "CURSOR_TRACE_ID", "AIDER", "KF_CODE_PLUGIN3"],
                     Host::ClaudeCode,
                     "CLAUDE_CODE beats all",
                 ),
@@ -287,10 +278,7 @@ mod tests {
             assert_eq!(detect_host_with(&env(&["CLAUDE_CODE"])), Host::ClaudeCode);
             assert_eq!(detect_host_with(&env(&["CURSOR_TRACE_ID"])), Host::Cursor);
             assert_eq!(detect_host_with(&env(&["AIDER"])), Host::Aider);
-            assert_eq!(
-                detect_host_with(&env(&["KF_CODE_PLUGIN3"])),
-                Host::KfCode
-            );
+            assert_eq!(detect_host_with(&env(&["KF_CODE_PLUGIN3"])), Host::KfCode);
             // Near-miss names: these do not match the canonical
             // spellings, so detection falls through to the
             // default (ClaudeCode per ADR-0013). A contributor who

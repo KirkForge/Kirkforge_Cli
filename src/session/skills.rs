@@ -1,3 +1,4 @@
+use kf_plugin_host::{PluginRegistry, TrustPolicy};
 /// Skills system — slash-command skill registry and loader.
 ///
 /// Skills are reusable capabilities defined in SKILL.md files with
@@ -21,7 +22,6 @@
 /// The body after the frontmatter is the system prompt that's injected
 /// when the skill is invoked.
 use kf_plugin_sdk::{Capability, TrustTier};
-use kf_plugin_host::{PluginRegistry, TrustPolicy};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 

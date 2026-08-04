@@ -449,9 +449,7 @@ fn render_inspector_panel(
 /// Build a scene sized to enclose every object's bounds with a 1-cell
 /// margin. Returns `None` when the document is empty — the caller
 /// falls back to a placeholder line.
-fn compose_scene_for(
-    objects: &[kf_draw_core::DrawObject],
-) -> Option<kf_draw_core::Scene> {
+fn compose_scene_for(objects: &[kf_draw_core::DrawObject]) -> Option<kf_draw_core::Scene> {
     let bounds: Option<Rect> = objects
         .iter()
         .filter_map(get_object_bounds)

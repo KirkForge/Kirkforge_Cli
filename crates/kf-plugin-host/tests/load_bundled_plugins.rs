@@ -6,8 +6,8 @@
 
 use std::path::PathBuf;
 
-use kf_plugin_sdk::Plugin;
 use kf_plugin_host::{PluginRegistry, TrustPolicy};
+use kf_plugin_sdk::Plugin;
 
 fn plugins_dir() -> PathBuf {
     // <crate>/crates/kf-plugin-host -> repo root -> plugins
@@ -40,13 +40,7 @@ fn all_bundled_plugins_load_without_warnings() {
         .map(|p| p.plugin.manifest().name.clone())
         .collect();
 
-    for expected in [
-        "kf-draw",
-        "kf-plugin",
-        "kf-budget",
-        "kf-video",
-        "stratum",
-    ] {
+    for expected in ["kf-draw", "kf-plugin", "kf-budget", "kf-video", "stratum"] {
         assert!(
             names.contains(&expected.to_string()),
             "expected bundled plugin {expected:?} to be active; got {names:?}"

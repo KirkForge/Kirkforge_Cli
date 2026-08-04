@@ -138,9 +138,7 @@ pub fn verifiers_from_registry(
     out
 }
 
-fn as_verifier_parts(
-    cap: &kf_plugin_sdk::Capability,
-) -> Option<(String, u8, std::path::PathBuf)> {
+fn as_verifier_parts(cap: &kf_plugin_sdk::Capability) -> Option<(String, u8, std::path::PathBuf)> {
     match cap {
         kf_plugin_sdk::Capability::Verifier {
             name,

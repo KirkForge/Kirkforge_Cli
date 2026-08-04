@@ -33,8 +33,8 @@ use crate::session::bash_runner::{
 use crate::session::process_group::{kill_process_group, reap_child, setup_process_group};
 use crate::shared::audit::AuditLog;
 use crate::shared::Config;
-use kf_plugin_sdk::Plugin;
 use kf_plugin_host::PluginRegistry;
+use kf_plugin_sdk::Plugin;
 use std::sync::Arc;
 
 /// Context passed to an in-process hook handler.

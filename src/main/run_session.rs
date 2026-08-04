@@ -283,30 +283,29 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     // lazily on the first `lsp_query` call for that language, so this is
     // cheap when no LSP-aware tool runs. The pool is wrapped in `Arc` and
     // shared with the `lsp_query` tool below.
-    let lsp_pool: Option<std::sync::Arc<kf_lsp::LspPool>> =
-        if config.tools.lsp_servers.is_empty() {
-            None
-        } else {
-            let language_configs: Vec<kf_lsp::LanguageConfig> = config
-                .tools
-                .lsp_servers
-                .iter()
-                .map(|e| kf_lsp::LanguageConfig {
-                    name: e.language.clone(),
-                    extensions: e.extensions.clone(),
-                    lsp: Some(kf_lsp::LspServerConfig {
-                        command: e.command.clone(),
-                        args: e.args.clone(),
-                    }),
-                })
-                .collect();
-            Some(std::sync::Arc::new(kf_lsp::LspPool::new(
-                std::env::current_dir()
-                    .map(|p| p.to_string_lossy().to_string())
-                    .unwrap_or_else(|_| ".".to_string()),
-                language_configs,
-            )))
-        };
+    let lsp_pool: Option<std::sync::Arc<kf_lsp::LspPool>> = if config.tools.lsp_servers.is_empty() {
+        None
+    } else {
+        let language_configs: Vec<kf_lsp::LanguageConfig> = config
+            .tools
+            .lsp_servers
+            .iter()
+            .map(|e| kf_lsp::LanguageConfig {
+                name: e.language.clone(),
+                extensions: e.extensions.clone(),
+                lsp: Some(kf_lsp::LspServerConfig {
+                    command: e.command.clone(),
+                    args: e.args.clone(),
+                }),
+            })
+            .collect();
+        Some(std::sync::Arc::new(kf_lsp::LspPool::new(
+            std::env::current_dir()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|_| ".".to_string()),
+            language_configs,
+        )))
+    };
 
     // ── Chrome tab for computer_use ──
     // Try to launch Chrome only when the tool is enabled. If the launch fails,

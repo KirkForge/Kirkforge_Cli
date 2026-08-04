@@ -57,14 +57,10 @@ impl From<anyhow::Error> for KirkForgeError {
         //   - kf_plugin_host::ToolError -> AccessDenied (NotFound = the
         //     tool command isn't present at the sandboxed plugin root, i.e. a
         //     path-availability outcome after the root-gating policy).
-        if e.downcast_ref::<kf_plugin_sdk::ManifestError>()
-            .is_some()
-        {
+        if e.downcast_ref::<kf_plugin_sdk::ManifestError>().is_some() {
             return KirkForgeError::ConfigParse(e);
         }
-        if e.downcast_ref::<kf_plugin_host::ToolError>()
-            .is_some()
-        {
+        if e.downcast_ref::<kf_plugin_host::ToolError>().is_some() {
             return KirkForgeError::AccessDenied(e);
         }
 

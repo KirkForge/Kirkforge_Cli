@@ -277,15 +277,9 @@ fn ctrl_alt_t_advances_text_border() {
     // should land on Single and surface the new name in
     // the status bar.
     let mut app = make_app();
-    assert_eq!(
-        app.state.text_border,
-        kf_draw_core::TextBorderMode::None
-    );
+    assert_eq!(app.state.text_border, kf_draw_core::TextBorderMode::None);
     handle_key(&mut app, key_ctrl_alt(KeyCode::Char('t')));
-    assert_eq!(
-        app.state.text_border,
-        kf_draw_core::TextBorderMode::Single
-    );
+    assert_eq!(app.state.text_border, kf_draw_core::TextBorderMode::Single);
     assert!(app.status.contains("single"), "got {:?}", app.status);
 }
 
@@ -316,10 +310,7 @@ fn ctrl_alt_t_wraps_from_underline_to_none() {
     // One more press returns to Single — the cycle is
     // closed and stable.
     handle_key(&mut app, key_ctrl_alt(KeyCode::Char('t')));
-    assert_eq!(
-        app.state.text_border,
-        kf_draw_core::TextBorderMode::Single
-    );
+    assert_eq!(app.state.text_border, kf_draw_core::TextBorderMode::Single);
 }
 
 #[test]

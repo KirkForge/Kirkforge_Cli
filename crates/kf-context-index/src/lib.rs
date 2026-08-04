@@ -1221,8 +1221,7 @@ mod tests {
 
     #[test]
     fn index_file_extracts_fn_and_struct() {
-        let tmp =
-            std::env::temp_dir().join(format!("kf-code-context-test-{}", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("kf-code-context-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&tmp);
         fs::create_dir_all(&tmp).unwrap();
 
@@ -1270,8 +1269,7 @@ mod tests {
 
     #[test]
     fn index_dir_walks_rs_files() {
-        let tmp =
-            std::env::temp_dir().join(format!("kf-code-context-dir-{}", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("kf-code-context-dir-{}", std::process::id()));
         let _ = fs::remove_dir_all(&tmp);
         fs::create_dir_all(&tmp).unwrap();
         fs::create_dir_all(tmp.join("sub")).unwrap();
@@ -1377,10 +1375,8 @@ mod tests {
 
     #[test]
     fn context_index_cache_miss_when_no_file() {
-        let dir = std::env::temp_dir().join(format!(
-            "kf-code-context-cache-miss-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("kf-code-context-cache-miss-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
 
@@ -1393,10 +1389,8 @@ mod tests {
 
     #[test]
     fn context_index_cache_hit_when_head_matches() {
-        let dir = std::env::temp_dir().join(format!(
-            "kf-code-context-cache-hit-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("kf-code-context-cache-hit-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
 
@@ -1702,10 +1696,8 @@ mod tests {
 
     #[test]
     fn index_file_extracts_go_struct() {
-        let tmp = std::env::temp_dir().join(format!(
-            "kf-code-context-go-struct-{}",
-            std::process::id()
-        ));
+        let tmp =
+            std::env::temp_dir().join(format!("kf-code-context-go-struct-{}", std::process::id()));
         let _ = fs::remove_dir_all(&tmp);
         fs::create_dir_all(&tmp).unwrap();
 
@@ -1728,10 +1720,8 @@ mod tests {
 
     #[test]
     fn index_file_extracts_go_method() {
-        let tmp = std::env::temp_dir().join(format!(
-            "kf-code-context-go-method-{}",
-            std::process::id()
-        ));
+        let tmp =
+            std::env::temp_dir().join(format!("kf-code-context-go-method-{}", std::process::id()));
         let _ = fs::remove_dir_all(&tmp);
         fs::create_dir_all(&tmp).unwrap();
 
@@ -1798,10 +1788,8 @@ mod tests {
 
     #[test]
     fn import_edge_rust_use_creates_edge() {
-        let tmp = std::env::temp_dir().join(format!(
-            "kf-code-context-import-rs-{}",
-            std::process::id()
-        ));
+        let tmp =
+            std::env::temp_dir().join(format!("kf-code-context-import-rs-{}", std::process::id()));
         let _ = fs::remove_dir_all(&tmp);
         fs::create_dir_all(&tmp).unwrap();
 
@@ -1831,10 +1819,8 @@ mod tests {
 
     #[test]
     fn import_edge_ts_relative_import() {
-        let tmp = std::env::temp_dir().join(format!(
-            "kf-code-context-import-ts-{}",
-            std::process::id()
-        ));
+        let tmp =
+            std::env::temp_dir().join(format!("kf-code-context-import-ts-{}", std::process::id()));
         let _ = fs::remove_dir_all(&tmp);
         fs::create_dir_all(&tmp).unwrap();
 
@@ -1861,10 +1847,8 @@ mod tests {
 
     #[test]
     fn import_edge_python_from_import() {
-        let tmp = std::env::temp_dir().join(format!(
-            "kf-code-context-import-py-{}",
-            std::process::id()
-        ));
+        let tmp =
+            std::env::temp_dir().join(format!("kf-code-context-import-py-{}", std::process::id()));
         let _ = fs::remove_dir_all(&tmp);
         fs::create_dir_all(&tmp).unwrap();
 

@@ -23,9 +23,7 @@ pub use tool::{PluginTool, ToolError, KF_CODE_TOOL_ARGS};
 pub use toolset::{CompositeToolset, PluginToolset, ToolInfo, Toolset};
 pub use verifier::{PluginVerifier, VerifierError, VerifierVerdict};
 
-use kf_plugin_sdk::{
-    Capability, LoadedPlugin, Plugin, PluginManifest, TrustTier, ValidationError,
-};
+use kf_plugin_sdk::{Capability, LoadedPlugin, Plugin, PluginManifest, TrustTier, ValidationError};
 use std::collections::HashMap;
 use std::path::Path;
 

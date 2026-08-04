@@ -27,9 +27,7 @@ use crossterm::event::KeyCode;
 /// content, so it's the one that exercises the
 /// `MatchField::Content` path.
 fn make_app_with_findable() -> App {
-    use kf_draw_core::{
-        BoxObject, BoxStyle, DrawObject, InkColor, TextBorderMode, TextObject,
-    };
+    use kf_draw_core::{BoxObject, BoxStyle, DrawObject, InkColor, TextBorderMode, TextObject};
     let mut app = make_app();
     app.state.document.objects.push(DrawObject::Box(BoxObject {
         id: "alpha".into(),

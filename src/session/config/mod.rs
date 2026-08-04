@@ -1722,10 +1722,7 @@ mod tests {
         // output avoids fragile in-process stdout capture while pinning the
         // exact user-visible wording.
         assert!(banner.contains("Config created"), "got: {banner}");
-        assert!(
-            banner.contains("/tmp/kf-code/config.toml"),
-            "got: {banner}"
-        );
+        assert!(banner.contains("/tmp/kf-code/config.toml"), "got: {banner}");
         assert!(banner.contains("-m qwen2.5:0.5b"), "got: {banner}");
     }
 
@@ -1740,8 +1737,7 @@ mod tests {
     fn first_run_banner_silent_on_second_run() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
-        let dir =
-            std::env::temp_dir().join(format!("kf_code_first_run_{}_0", std::process::id(),));
+        let dir = std::env::temp_dir().join(format!("kf_code_first_run_{}_0", std::process::id(),));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 

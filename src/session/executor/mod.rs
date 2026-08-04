@@ -592,10 +592,7 @@ impl Executor {
     /// built-in verifier slots intact.
     ///
     /// Returns the number of plugin verifiers now registered.
-    fn rebuild_plugin_verifiers(
-        &mut self,
-        registry: &kf_plugin_host::PluginRegistry,
-    ) -> usize {
+    fn rebuild_plugin_verifiers(&mut self, registry: &kf_plugin_host::PluginRegistry) -> usize {
         const BUILTIN_VERIFIERS: &[&str] = &["security", "lint", "build", "git", "rustfmt", "test"];
 
         let Some(ref correction_loop) = self.correction_loop else {
@@ -701,10 +698,7 @@ impl Executor {
     /// Re-register plugin verifiers on the `VerifierBus` while keeping the
     /// built-in bus verifiers (`security`, `git`) intact. Mirrors
     /// `rebuild_plugin_verifiers` for the event-driven path. ADR-028.
-    fn rebuild_bus_plugin_verifiers(
-        &mut self,
-        registry: &kf_plugin_host::PluginRegistry,
-    ) -> usize {
+    fn rebuild_bus_plugin_verifiers(&mut self, registry: &kf_plugin_host::PluginRegistry) -> usize {
         const BUILTIN_BUS_VERIFIERS: &[&str] = &["security", "git"];
         let Some(ref bus_lock) = self.verifier_bus else {
             return 0;

@@ -239,6 +239,7 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
             config.model.request_timeout_secs,
             &config.model.opencode_zen_endpoint,
             config.model.opencode_zen_api_key.as_deref(),
+            Some(&config.model.adapter_routing),
         ),
         &config,
     );

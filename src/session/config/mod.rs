@@ -356,6 +356,12 @@ fn merge_toml_into_config(cfg: &mut Config, table: toml::Table) {
             .filter_map(|(k, val)| val.as_str().map(|s| (k.clone(), s.to_string())))
             .collect();
     }
+    if let Some(Value::Table(v)) = table.get("adapter_routing") {
+        cfg.model.adapter_routing = v
+            .iter()
+            .filter_map(|(k, val)| val.as_str().map(|s| (k.clone(), s.to_string())))
+            .collect();
+    }
     if let Some(Value::Integer(v)) = table.get("commit_max_file_size") {
         if let Ok(n) = u64::try_from(*v) {
             cfg.security.commit_max_file_size = n;
@@ -1713,6 +1719,74 @@ mod tests {
     // the config path and give a concrete `-m` hint so a new user knows
     // what to do next. `first_run_banner` is the pure helper that
     // `load_or_create_config` prints to stdout on first run.
+    #[test]
+    fn test_env_adapter_routing_override() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut cfg = Config::default();
+        assert!(
+            cfg.model.adapter_routing.is_empty(),
+            "adapter_routing defaults to empty"
+        );
+
+        set_env(
+            "KF_CODE_ADAPTER_ROUTING",
+            Some("grok-=OpenAiCompat,my-llm=Ollama"),
+        );
+        apply_env_overrides(&mut cfg);
+        assert_eq!(cfg.model.adapter_routing.len(), 2);
+        assert_eq!(
+            cfg.model.adapter_routing.get("grok-"),
+            Some(&"OpenAiCompat".to_string())
+        );
+        assert_eq!(
+            cfg.model.adapter_routing.get("my-llm"),
+            Some(&"Ollama".to_string())
+        );
+        set_env("KF_CODE_ADAPTER_ROUTING", None);
+    }
+
+    #[test]
+    fn test_env_adapter_routing_empty_value_is_ignored() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut cfg = Config::default();
+
+        set_env("KF_CODE_ADAPTER_ROUTING", Some(""));
+        apply_env_overrides(&mut cfg);
+        assert!(
+            cfg.model.adapter_routing.is_empty(),
+            "empty env value should not populate adapter_routing"
+        );
+        set_env("KF_CODE_ADAPTER_ROUTING", None);
+    }
+
+    #[test]
+    fn test_merge_toml_adapter_routing() {
+        let mut cfg = Config::default();
+        assert!(cfg.model.adapter_routing.is_empty());
+        let table: toml::Table = r#"
+            [adapter_routing]
+            "claude-" = "Anthropic"
+            "deepseek" = "OpenAiCompat"
+            "glm" = "Ollama"
+        "#
+        .parse()
+        .unwrap();
+        merge_toml_into_config(&mut cfg, table);
+        assert_eq!(cfg.model.adapter_routing.len(), 3);
+        assert_eq!(
+            cfg.model.adapter_routing.get("claude-"),
+            Some(&"Anthropic".to_string())
+        );
+        assert_eq!(
+            cfg.model.adapter_routing.get("deepseek"),
+            Some(&"OpenAiCompat".to_string())
+        );
+        assert_eq!(
+            cfg.model.adapter_routing.get("glm"),
+            Some(&"Ollama".to_string())
+        );
+    }
+
     #[test]
     fn first_run_banner_printed_to_stdout() {
         let path = std::path::PathBuf::from("/tmp/kf-code/config.toml");

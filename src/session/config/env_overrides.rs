@@ -396,4 +396,30 @@ pub(super) fn apply_env_overrides(cfg: &mut Config) {
     // Clamp after all layers so a config file or env override cannot set an
     // unusable zero-second timeout.
     cfg.model.request_timeout_secs = cfg.model.request_timeout_secs.max(1);
+
+    // KF_CODE_ADAPTER_ROUTING
+    // Format: comma-separated prefix=Kind pairs, e.g.
+    //   "grok-=OpenAiCompat,my-llm=Ollama"
+    // Pairs without '=' are ignored. Overrides the [adapter_routing] TOML
+    // section entirely when set.
+    if let Ok(val) = std::env::var("KF_CODE_ADAPTER_ROUTING") {
+        if !val.is_empty() {
+            let mut map = std::collections::HashMap::new();
+            for entry in val.split(',') {
+                let entry = entry.trim();
+                if entry.is_empty() {
+                    continue;
+                }
+                let Some((prefix, kind)) = entry.split_once('=') else {
+                    continue;
+                };
+                let prefix = prefix.trim().to_string();
+                let kind = kind.trim().to_string();
+                if !prefix.is_empty() && !kind.is_empty() {
+                    map.insert(prefix, kind);
+                }
+            }
+            cfg.model.adapter_routing = map;
+        }
+    }
 }

@@ -13,6 +13,9 @@ pub mod openai_compat;
 pub mod tool_call_markup;
 pub mod vertex_auth;
 
+use std::collections::HashMap;
+use std::str::FromStr;
+
 use crate::shared::metrics::{record, MetricEvent, PlanDecisionKind};
 use crate::shared::{ContentPart, ModelInfo, Role, StreamEvent};
 use std::future::Future;
@@ -159,18 +162,41 @@ pub enum AdapterKind {
     OpenCodeZen,
 }
 
-/// Classify a model name (and optional type override) into an
-/// [`AdapterKind`]. This is the routing decision before we build the
-/// concrete adapter.
-///
-/// ceiling: routing is by hardcoded model-name prefix (`claude-`,
-/// `claude_`, `glm`, `chatglm`, `deepseek`, `gemini`, `kimi`,
-/// `moonshot`, `anthropic.claude-`, `claude-3`, `opencode/`). A new
-/// model family currently requires a code change here AND in
-/// `adapter_for_with_provider`. upgrade path: move the
-/// prefix→AdapterKind table into Config so new models route without a
-/// recompile (WO 15.26 3.20 deferred).
-pub fn adapter_kind_for(
+impl std::fmt::Display for AdapterKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AdapterKind::Ollama => write!(f, "Ollama"),
+            AdapterKind::OpenAiCompat => write!(f, "OpenAiCompat"),
+            AdapterKind::Anthropic => write!(f, "Anthropic"),
+            AdapterKind::AnthropicBedrock => write!(f, "AnthropicBedrock"),
+            AdapterKind::AnthropicVertex => write!(f, "AnthropicVertex"),
+            AdapterKind::OpenCodeZen => write!(f, "OpenCodeZen"),
+        }
+    }
+}
+
+impl FromStr for AdapterKind {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "Ollama" => Ok(AdapterKind::Ollama),
+            "OpenAiCompat" => Ok(AdapterKind::OpenAiCompat),
+            "Anthropic" => Ok(AdapterKind::Anthropic),
+            "AnthropicBedrock" => Ok(AdapterKind::AnthropicBedrock),
+            "AnthropicVertex" => Ok(AdapterKind::AnthropicVertex),
+            "OpenCodeZen" => Ok(AdapterKind::OpenCodeZen),
+            _ => Err(format!(
+                "unknown AdapterKind {:?}; expected one of Ollama, OpenAiCompat, Anthropic, AnthropicBedrock, AnthropicVertex, OpenCodeZen",
+                s
+            )),
+        }
+    }
+}
+
+/// Hardcoded default routing from model name prefix and provider to
+/// [`AdapterKind`]. This is the fallback used when no config-level
+/// routing table match is found.
+fn adapter_kind_for_default(
     model_name: &str,
     model_type_override: Option<&str>,
     provider: &str,
@@ -213,6 +239,59 @@ pub fn adapter_kind_for(
     } else {
         AdapterKind::OpenAiCompat
     }
+}
+
+/// Classify a model name (and optional type override) into an
+/// [`AdapterKind`]. Checks the config-provided routing table first;
+/// if no prefix matches, falls back to the hardcoded defaults.
+///
+/// The `adapter_routing` table maps model-name prefixes (e.g. `"claude-"`)
+/// to [`AdapterKind`] variant names (e.g. `"Anthropic"`). Longest-prefix
+/// match wins. When the table is empty (the default for existing configs
+/// with no `[adapter_routing]` section), the hardcoded defaults are used
+/// exclusively — preserving backward compatibility.
+pub fn adapter_kind_for(
+    model_name: &str,
+    model_type_override: Option<&str>,
+    provider: &str,
+) -> AdapterKind {
+    adapter_kind_for_routed(model_name, model_type_override, provider, None)
+}
+
+/// Data-driven version of [`adapter_kind_for`] that checks a user-supplied
+/// routing table before falling back to the hardcoded defaults.
+///
+/// The `adapter_routing` table maps model-name prefixes to adapter-kind
+/// strings (as parsed by [`AdapterKind::from_str`]). Longest-prefix match
+/// wins. Entries here override the hardcoded routing, so a user can remap
+/// `"deepseek"` from the default `Ollama` to `OpenAiCompat`, or add a
+/// new family like `"grok-"` → `OpenAiCompat` without a code change.
+pub fn adapter_kind_for_routed(
+    model_name: &str,
+    model_type_override: Option<&str>,
+    provider: &str,
+    adapter_routing: Option<&HashMap<String, String>>,
+) -> AdapterKind {
+    // Config routing table takes priority when present.
+    if let Some(table) = adapter_routing {
+        if !table.is_empty() {
+            // Find the longest matching prefix.
+            let mut best_prefix: &str = "";
+            let mut best_kind: Option<AdapterKind> = None;
+            for (prefix, kind_str) in table {
+                if model_name.starts_with(prefix) && prefix.len() > best_prefix.len() {
+                    if let Ok(kind) = AdapterKind::from_str(kind_str) {
+                        best_prefix = prefix;
+                        best_kind = Some(kind);
+                    }
+                }
+            }
+            if let Some(kind) = best_kind {
+                return kind;
+            }
+        }
+    }
+    adapter_kind_for_default(model_name, model_type_override, provider)
 }
 
 /// Every model adapter implements this.
@@ -264,6 +343,7 @@ pub fn adapter_for(
         timeout_secs,
         "https://opencode.ai/zen/v1/chat/completions",
         None,
+        None,
     )
 }
 
@@ -277,9 +357,15 @@ pub fn adapter_for_with_provider(
     timeout_secs: u64,
     opencode_zen_endpoint: &str,
     opencode_zen_api_key: Option<&str>,
+    adapter_routing: Option<&HashMap<String, String>>,
 ) -> Box<dyn ModelAdapter> {
     let override_lower = model_type_override.map(|s| s.to_lowercase());
-    match adapter_kind_for(model_name, model_type_override, anthropic_provider) {
+    match adapter_kind_for_routed(
+        model_name,
+        model_type_override,
+        anthropic_provider,
+        adapter_routing,
+    ) {
         AdapterKind::Ollama => {
             let lower = model_name.to_lowercase();
             // Respect the model_type_override when selecting the concrete
@@ -808,6 +894,7 @@ mod tests {
             30,
             "https://opencode.ai/zen/v1/chat/completions",
             None,
+            None,
         );
         assert_eq!(adapter.model_info().name, "anthropic.claude-3-5-sonnet");
         assert!(adapter.model_info().tool_call_format == crate::shared::ToolCallStyle::Anthropic);
@@ -945,6 +1032,7 @@ mod tests {
             30,
             "https://opencode.ai/zen/v1/chat/completions",
             None,
+            None,
         );
         assert_eq!(adapter.model_info().name, "claude-3-opus");
         assert_eq!(
@@ -963,6 +1051,7 @@ mod tests {
             30,
             "https://opencode.ai/zen/v1/chat/completions",
             None,
+            None,
         );
         assert_eq!(adapter.model_info().name, "claude-3-opus");
     }
@@ -977,6 +1066,7 @@ mod tests {
             30,
             "https://opencode.ai/zen/v1/chat/completions",
             Some("test-key"),
+            None,
         );
         assert_eq!(adapter.model_info().name, "big-pickle");
     }
@@ -990,6 +1080,7 @@ mod tests {
             "anthropic",
             30,
             "https://opencode.ai/zen/v1/chat/completions",
+            None,
             None,
         );
         assert_eq!(adapter.model_info().name, "big-pickle");
@@ -1005,6 +1096,7 @@ mod tests {
             30,
             "https://opencode.ai/zen/v1/chat/completions",
             None,
+            None,
         );
         assert!(adapter.model_info().supports_thinking);
     }
@@ -1018,6 +1110,7 @@ mod tests {
             "anthropic",
             30,
             "https://opencode.ai/zen/v1/chat/completions",
+            None,
             None,
         );
         assert!(adapter.model_info().supports_thinking);
@@ -1033,6 +1126,7 @@ mod tests {
             30,
             "https://opencode.ai/zen/v1/chat/completions",
             None,
+            None,
         );
         assert!(adapter.model_info().supports_images);
     }
@@ -1046,6 +1140,7 @@ mod tests {
             "anthropic",
             30,
             "https://opencode.ai/zen/v1/chat/completions",
+            None,
             None,
         );
         assert_eq!(adapter.model_info().name, "my-model");
@@ -1451,6 +1546,92 @@ mod tests {
         assert_eq!(
             adapter_kind_for("claude-3-opus", None, "vertex"),
             AdapterKind::AnthropicVertex
+        );
+    }
+
+    #[test]
+    fn adapter_kind_for_routed_custom_prefix_overrides_default() {
+        let routing: HashMap<String, String> = [
+            ("grok-".to_string(), "OpenAiCompat".to_string()),
+            ("deepseek".to_string(), "OpenAiCompat".to_string()),
+        ]
+        .into_iter()
+        .collect();
+
+        // "deepseek-v4" normally routes to Ollama, but the config override
+        // maps the "deepseek" prefix to OpenAiCompat.
+        assert_eq!(
+            adapter_kind_for_routed("deepseek-v4", None, "anthropic", Some(&routing)),
+            AdapterKind::OpenAiCompat
+        );
+
+        // Unknown prefix in routing table → grok- maps to OpenAiCompat.
+        assert_eq!(
+            adapter_kind_for_routed("grok-2", None, "anthropic", Some(&routing)),
+            AdapterKind::OpenAiCompat
+        );
+
+        // A model not matching any config prefix falls back to defaults.
+        assert_eq!(
+            adapter_kind_for_routed("claude-3-opus", None, "anthropic", Some(&routing)),
+            AdapterKind::Anthropic
+        );
+    }
+
+    #[test]
+    fn adapter_kind_for_routed_longest_prefix_wins() {
+        let routing: HashMap<String, String> = [
+            ("claude-".to_string(), "Anthropic".to_string()),
+            ("claude-3-".to_string(), "AnthropicBedrock".to_string()),
+        ]
+        .into_iter()
+        .collect();
+
+        // "claude-3-opus" matches both prefixes; longest ("claude-3-") wins.
+        assert_eq!(
+            adapter_kind_for_routed("claude-3-opus", None, "anthropic", Some(&routing)),
+            AdapterKind::AnthropicBedrock
+        );
+
+        // "claude-sonnet" matches only the shorter prefix.
+        assert_eq!(
+            adapter_kind_for_routed("claude-sonnet", None, "anthropic", Some(&routing)),
+            AdapterKind::Anthropic
+        );
+    }
+
+    #[test]
+    fn adapter_kind_for_routed_empty_table_falls_back() {
+        let routing: HashMap<String, String> = HashMap::new();
+        // With an empty routing table, hardcoded defaults apply.
+        assert_eq!(
+            adapter_kind_for_routed("glm-5", None, "anthropic", Some(&routing)),
+            AdapterKind::Ollama
+        );
+        assert_eq!(
+            adapter_kind_for_routed("qwen2.5:7b", None, "anthropic", Some(&routing)),
+            AdapterKind::OpenAiCompat
+        );
+    }
+
+    #[test]
+    fn adapter_kind_for_routed_none_table_falls_back() {
+        // With no routing table at all, hardcoded defaults apply.
+        assert_eq!(
+            adapter_kind_for_routed("deepseek-v4", None, "anthropic", None),
+            AdapterKind::Ollama
+        );
+    }
+
+    #[test]
+    fn adapter_kind_for_routed_unknown_kind_string_ignored() {
+        let routing: HashMap<String, String> = [("qwen".to_string(), "NoSuchAdapter".to_string())]
+            .into_iter()
+            .collect();
+        // Invalid kind string → no match → falls back to default.
+        assert_eq!(
+            adapter_kind_for_routed("qwen2.5:7b", None, "anthropic", Some(&routing)),
+            AdapterKind::OpenAiCompat
         );
     }
 }

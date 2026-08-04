@@ -474,7 +474,9 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     #[cfg(feature = "stratum")]
     {
         let cfg = kf_code::shared::read_shared_config(&shared_config);
-        if cfg.tools.enabled_plugins.iter().any(|n| n == "stratum") {
+        if cfg.tools.enabled_plugins.iter().any(|n| n == "stratum")
+            && !cfg.tools.disabled_plugins.contains("stratum")
+        {
             let stratum_tool_list = session::stratum::stratum_tools();
             let count = stratum_tool_list.len();
             toolset.add(Box::new(session::toolset::VecToolset::new(
@@ -491,13 +493,16 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     // the subprocess overhead of shelling out to the kfd binary.
     #[cfg(feature = "draw")]
     {
-        let draw_tool_list = session::draw::draw_tools();
-        let count = draw_tool_list.len();
-        toolset.add(Box::new(session::toolset::VecToolset::new(
-            "draw",
-            draw_tool_list,
-        )));
-        tracing::info!(count, "draw in-process tools registered");
+        let cfg = kf_code::shared::read_shared_config(&shared_config);
+        if !cfg.tools.disabled_plugins.contains("kf-draw") {
+            let draw_tool_list = session::draw::draw_tools();
+            let count = draw_tool_list.len();
+            toolset.add(Box::new(session::toolset::VecToolset::new(
+                "draw",
+                draw_tool_list,
+            )));
+            tracing::info!(count, "draw in-process tools registered");
+        }
     }
 
     // ── Video in-process tools (feature-gated) ──
@@ -505,13 +510,16 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     // kf_video directly, eliminating subprocess overhead.
     #[cfg(feature = "video")]
     {
-        let video_tool_list = session::video::video_tools();
-        let count = video_tool_list.len();
-        toolset.add(Box::new(session::toolset::VecToolset::new(
-            "video",
-            video_tool_list,
-        )));
-        tracing::info!(count, "video in-process tools registered");
+        let cfg = kf_code::shared::read_shared_config(&shared_config);
+        if !cfg.tools.disabled_plugins.contains("kf-video") {
+            let video_tool_list = session::video::video_tools();
+            let count = video_tool_list.len();
+            toolset.add(Box::new(session::toolset::VecToolset::new(
+                "video",
+                video_tool_list,
+            )));
+            tracing::info!(count, "video in-process tools registered");
+        }
     }
 
     // ── Budget in-process tools (feature-gated) ──
@@ -526,6 +534,7 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
             .enabled_plugins
             .iter()
             .any(|n| n == "kf-plugin-sdk3")
+            && !cfg.tools.disabled_plugins.contains("kf-plugin-sdk3")
         {
             let budget_tool_list = session::budget::all_budget_tools();
             let count = budget_tool_list.len();

@@ -12,6 +12,21 @@ pub use tools::ToolConfig;
 
 use serde::{Deserialize, Serialize};
 
+/// Total number of pub fields across all Config sub-structs.
+///
+/// When you add a field to ModelConfig, SecurityConfig, ToolConfig,
+/// SessionConfig, or DisplayConfig, **increment this constant** and add
+/// handling in both `merge_toml_into_config` and `apply_env_overrides`.
+/// If either site is missing the new field, the drift-guard test will fail.
+///
+/// Breakdown:
+///   ModelConfig    22
+///   SecurityConfig 18  (15 direct + 3 sub-struct handles)
+///   ToolConfig     25
+///   SessionConfig   4
+///   DisplayConfig   3
+pub const CONFIG_FIELD_COUNT: usize = 72;
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
     #[serde(flatten)]

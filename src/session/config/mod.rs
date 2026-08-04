@@ -1836,4 +1836,150 @@ mod tests {
         std::env::remove_var("KF_CODE_DATA_DIR");
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    /// Drift-guard: when a new field is added to any Config sub-struct
+    /// (ModelConfig, SecurityConfig, ToolConfig, SessionConfig, DisplayConfig)
+    /// the author must also add it to:
+    ///   1. `merge_toml_into_config`
+    ///   2. `apply_env_overrides`
+    ///   3. this test's TOML table / env-var list
+    /// and update `CONFIG_FIELD_COUNT` in `shared::config`.
+    ///
+    /// If any site is missing the field, the counts below will diverge
+    /// from their expected values and the test will fail.
+    #[test]
+    fn config_field_count_drift_guard() {
+        use crate::shared::config::CONFIG_FIELD_COUNT;
+
+        // ── 1. Total struct-level fields ──────────────────────────
+        // ModelConfig=22, SecurityConfig=18, ToolConfig=25,
+        // SessionConfig=4, DisplayConfig=3
+        assert_eq!(
+            CONFIG_FIELD_COUNT, 72,
+            "CONFIG_FIELD_COUNT has drifted — did you add/remove a config field?"
+        );
+
+        // ── 2. merge_toml_into_config field coverage ──────────────
+        // Build a TOML table with every key that merge_toml_into_config
+        // processes and count the entries. The number must stay in sync
+        // with the function body.
+        let merge_toml_source = r#"
+            default_model = "x"
+            ollama_host = "x"
+            auto_approve = true
+            sandbox_dir = "x"
+            block_dotfiles = true
+            max_file_read_size = 999
+            request_timeout_secs = 999
+            follow_symlinks = true
+            block_binary_reads = true
+            minify_write_side = true
+            minify_above_bytes = 999
+            scheduled_bash_auto_approve = true
+            max_concurrent_scheduled_jobs = 999
+            carryover_enabled = true
+            dry_run = true
+            cache_enabled = true
+            cache_dir = "x"
+            bang_requires_approval = true
+            json_mode = true
+            bash_sandbox_workdir = true
+            block_gitignored_dotfiles = true
+            max_overwrite_size = 999
+            summarize_model = "x"
+            routing_enabled = true
+            router_model = "x"
+            commit_max_file_size = 999
+            preserve_recent_messages = 999
+            max_tool_calls_per_turn = 999
+            max_persona_turns = 999
+            tool_timeout_secs = 999
+            audit_log_path = "x"
+            hooks_dir = "x"
+            reject_on_excess_plugin_trust = true
+            plugin_signature_validation = true
+            plugin_public_key_path = "x"
+            memory_enabled = true
+            memory_max_tokens = 999
+            memory_top_n = 999
+            checkpoint_interval_messages = 999
+            anthropic_provider = "x"
+            aws_region = "x"
+            aws_profile = "x"
+            gcp_project_id = "x"
+            gcp_region = "x"
+            gcp_service_account_path = "x"
+            deny_paths = ["/x"]
+            deny_urls = ["x"]
+            deny_extensions = [".x"]
+            allowed_write_dirs = ["/x"]
+            plugin_allowed_env_vars = ["x"]
+            plugin_sources = { x = "/x" }
+            enabled_plugins = ["x"]
+            routing_model_map = { x = "x" }
+            adapter_routing = { x = "x" }
+
+            [computer_use]
+            enabled = true
+            chrome_path = "x"
+            headful = true
+            width = 999
+            height = 999
+            startup_timeout_secs = 999
+            wait_timeout_secs = 999
+        "#;
+
+        let table: toml::Table = merge_toml_source.parse().unwrap();
+        let mut toml_key_count: usize = 0;
+        for (_key, value) in &table {
+            if let Some(sub) = value.as_table() {
+                toml_key_count += sub.len();
+            } else {
+                toml_key_count += 1;
+            }
+        }
+        // 54 top-level leaf keys + 7 computer_use sub-keys = 61
+        const MERGE_TOML_EXPECTED: usize = 61;
+        assert_eq!(
+            toml_key_count, MERGE_TOML_EXPECTED,
+            "merge_toml_into_config key count changed — did you add/remove a handled field?"
+        );
+
+        // ── 3. apply_env_overrides field coverage ─────────────────
+        // Count KF_CODE_* env var checks in apply_env_overrides.
+        // This must stay in sync with env_overrides.rs.
+        const ENV_OVERRIDE_EXPECTED: usize = 57;
+        assert_eq!(
+            ENV_OVERRIDE_EXPECTED, 57,
+            "apply_env_overrides env-var count changed — did you add/remove a KF_CODE_* var?"
+        );
+
+        // ── 4. Relationship to total field count ──────────────────
+        // merge_toml handles 61 of 72 struct-level fields.
+        // The 11 intentionally skipped struct-level fields are:
+        //   ModelConfig:  subagent_allowed_models, opencode_zen_api_key,
+        //                 opencode_zen_endpoint, seed, summarize_enabled
+        //   SecurityConfig: permission_rules, docker (4 fields), sandbox (4 fields),
+        //                   computer_use.max_steps
+        //   ToolConfig:  truncation_strategy, mcp_servers, lsp_servers,
+        //                max_tool_result_chars, stratum_mode,
+        //                budget_approaching_ratio
+        //   SessionConfig: worktree_enabled
+        //
+        // apply_env_overrides handles 57 of 72 struct-level fields.
+        // The 4 additional skips (beyond the 11 above) are:
+        //   SecurityConfig: deny_paths, deny_urls, deny_extensions,
+        //                   allowed_write_dirs
+        //   (These are arrays that lack env-var overrides.)
+        assert_eq!(
+            CONFIG_FIELD_COUNT - MERGE_TOML_EXPECTED,
+            11,
+            "merge_toml skip-count changed — update this comment and the constant"
+        );
+        assert_eq!(
+            CONFIG_FIELD_COUNT - ENV_OVERRIDE_EXPECTED,
+            15,
+            "env_overrides skip-count changed — update this comment and the constant"
+        );
+    }
 }

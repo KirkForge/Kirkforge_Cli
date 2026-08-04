@@ -177,6 +177,7 @@ impl SkillRegistry {
         ));
         self.plugin_warnings = warnings;
 
+        let disabled = &cfg.tools.disabled_plugins;
         let mut count = 0;
         let plugin_entries: Vec<(
             kf_plugin_sdk::PluginManifest,
@@ -193,6 +194,13 @@ impl SkillRegistry {
             })
             .collect();
         for (manifest, plugin_arc) in plugin_entries {
+            if disabled.contains(&manifest.name) {
+                tracing::debug!(
+                    plugin = %manifest.name,
+                    "skipping disabled plugin skills"
+                );
+                continue;
+            }
             let plugin = plugin_arc.as_ref() as &dyn kf_plugin_sdk::Plugin;
             count += self.add_plugin(&manifest, plugin);
         }

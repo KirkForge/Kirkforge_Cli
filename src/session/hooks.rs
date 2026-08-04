@@ -172,10 +172,21 @@ impl HookRunner {
     /// coexist; a plugin may add hooks for events the user did not define
     /// locally, or add additional checks for events that already have a
     /// built-in hook.
-    pub fn load_plugin_hooks(&mut self, registry: &PluginRegistry) {
+    pub fn load_plugin_hooks(
+        &mut self,
+        registry: &PluginRegistry,
+        disabled_plugins: &std::collections::HashSet<String>,
+    ) {
         for hosted in registry.active_plugins() {
             let plugin = &hosted.plugin;
             let plugin_name = plugin.manifest().name.clone();
+            if disabled_plugins.contains(&plugin_name) {
+                tracing::debug!(
+                    plugin = %plugin_name,
+                    "skipping disabled plugin hooks"
+                );
+                continue;
+            }
             let root = plugin.root();
             for cap in plugin.hooks() {
                 if let kf_plugin_sdk::Capability::Hook { event, command } = cap {
@@ -1041,7 +1052,7 @@ command = "hooks/post-turn.sh"
         let (_tmp2, hooks_dir) = temp_hooks_dir();
         let mut runner = HookRunner::new(hooks_dir);
         assert!(!runner.has("post-turn"));
-        runner.load_plugin_hooks(&registry);
+        runner.load_plugin_hooks(&registry, &std::collections::HashSet::new());
         assert!(runner.has("post-turn"));
     }
 
@@ -1093,7 +1104,7 @@ command = "hooks/post-turn.sh"
         );
 
         let mut runner = HookRunner::new(hooks_dir);
-        runner.load_plugin_hooks(&registry);
+        runner.load_plugin_hooks(&registry, &std::collections::HashSet::new());
 
         let decision = runner
             .run_decision("post-turn", &[], &default_config())
@@ -1243,7 +1254,7 @@ command = "hooks/pre-tool-bash.sh"
         let log = std::sync::Arc::new(AuditLog::new(Some(audit_path.clone())));
         let mut runner = HookRunner::new(hooks_dir);
         runner.set_audit_log(std::sync::Arc::clone(&log));
-        runner.load_plugin_hooks(&registry);
+        runner.load_plugin_hooks(&registry, &std::collections::HashSet::new());
 
         let decision = runner
             .run_decision("pre-tool-bash", &[], &default_config())

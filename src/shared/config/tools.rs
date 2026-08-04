@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use crate::shared::TruncationStrategy;
@@ -114,6 +114,8 @@ pub struct ToolConfig {
     #[serde(default = "default_enabled_plugins")]
     pub enabled_plugins: Vec<String>,
     #[serde(default)]
+    pub disabled_plugins: HashSet<String>,
+    #[serde(default)]
     pub stratum_mode: Option<String>,
     #[serde(default = "default_budget_ceiling")]
     pub budget_ceiling: usize,
@@ -150,6 +152,7 @@ impl Default for ToolConfig {
             plugin_allowed_env_vars: vec![],
             plugin_sources: default_plugin_sources(),
             enabled_plugins: default_enabled_plugins(),
+            disabled_plugins: HashSet::new(),
             stratum_mode: None,
             budget_ceiling: default_budget_ceiling(),
             budget_approaching_ratio: default_budget_approaching_ratio(),

@@ -183,6 +183,8 @@ fn list_plugins(state: &AppState) -> String {
     }
 
     let cfg = read_shared_config(&state.config);
+    let disabled: std::collections::HashSet<&String> = cfg.tools.disabled_plugins.iter().collect();
+
     if cfg.tools.plugin_sources.is_empty() {
         lines.push("Workspace plugin sources: none (use /plugins add <name> <path>)".to_string());
     } else {
@@ -197,6 +199,7 @@ fn list_plugins(state: &AppState) -> String {
             let is_compiled = crate::session::plugin_tools::folded_feature_enabled(name);
             let is_folded = crate::session::plugin_tools::is_folded(name);
             let feature_gate = crate::session::plugin_tools::folded_feature(name);
+            let is_disabled = disabled.contains(name);
 
             let source_label = if is_compiled {
                 "compiled-in"
@@ -216,7 +219,9 @@ fn list_plugins(state: &AppState) -> String {
                 String::new()
             };
 
-            let status = if enabled {
+            let status = if is_disabled {
+                "disabled"
+            } else if enabled {
                 if is_compiled {
                     "on (compiled-in)"
                 } else if active_names.contains(name) {
@@ -240,6 +245,15 @@ fn list_plugins(state: &AppState) -> String {
                 )
             };
             lines.push(line);
+        }
+    }
+
+    if !disabled.is_empty() {
+        let mut names: Vec<&&String> = disabled.iter().collect();
+        names.sort();
+        lines.push(format!("Runtime disabled plugins ({}):", disabled.len()));
+        for name in names {
+            lines.push(format!("  - {name}"));
         }
     }
 
@@ -529,29 +543,60 @@ fn plugin_status_summary(registry: &PluginRegistry, warnings: &[String]) -> Opti
     }
 }
 
-/// `toggle <name>` — persistently enable/disable a workspace plugin source.
+/// `toggle <name>` — persistently enable/disable a plugin at runtime.
+///
+/// For workspace plugin sources (those in `plugin_sources`), this toggles
+/// the `enabled_plugins` list AND the `disabled_plugins` set so the change
+/// takes effect both at the loader level and at the runtime filter level.
+///
+/// For compiled-in plugins (stratum, draw, budget, video), this toggles
+/// `disabled_plugins` only — the feature flag controls compilation, but
+/// the runtime toggle controls whether the compiled code is active.
 async fn toggle_plugin(
     name: &str,
     state: &mut AppState,
     plugin_reload_tx: &mpsc::UnboundedSender<PluginRegistry>,
 ) -> String {
+    let is_workspace_source = {
+        let cfg = read_shared_config(&state.config);
+        cfg.tools.plugin_sources.contains_key(name)
+    };
+
+    let was_disabled;
     {
         let mut cfg = write_shared_config(&state.config);
-        if !cfg.tools.plugin_sources.contains_key(name) {
-            return format!("❌ Unknown workspace plugin source '{name}'. Use /plugins sources to see configured sources, or /plugins add {name} <path>.");
-        }
-        let was_enabled = cfg.tools.enabled_plugins.iter().any(|n| n == name);
-        if was_enabled {
-            cfg.tools.enabled_plugins.retain(|n| n != name);
+
+        was_disabled = cfg.tools.disabled_plugins.contains(name);
+        if was_disabled {
+            cfg.tools.disabled_plugins.remove(name);
         } else {
-            cfg.tools.enabled_plugins.push(name.to_string());
+            cfg.tools.disabled_plugins.insert(name.to_string());
         }
+
+        if is_workspace_source {
+            let was_enabled = cfg.tools.enabled_plugins.iter().any(|n| n == name);
+            if was_enabled {
+                cfg.tools.enabled_plugins.retain(|n| n != name);
+            } else {
+                cfg.tools.enabled_plugins.push(name.to_string());
+            }
+        } else if !was_disabled {
+            // Disabling a non-workspace plugin: nothing else to do,
+            // `disabled_plugins` already contains the name.
+        } else {
+            // Enabling a non-workspace plugin: ensure it's not in disabled_plugins.
+            // (Already handled above by removing from disabled_plugins.)
+        }
+
         if let Err(e) = crate::session::config::save_config(&cfg) {
             return format!("❌ Failed to save config while toggling '{name}': {e}");
         }
     }
 
-    reload_plugins(state, plugin_reload_tx).await
+    let result = reload_plugins(state, plugin_reload_tx).await;
+
+    let status = if was_disabled { "enabled" } else { "disabled" };
+    format!("🔌 Plugin '{name}' is now {status}. {result}")
 }
 
 /// Mutable access to shared config, recovering from lock poisoning.

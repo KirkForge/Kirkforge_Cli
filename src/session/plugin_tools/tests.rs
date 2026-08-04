@@ -924,7 +924,7 @@ command = "verifiers/check.sh"
         // ── 3. Hook fires + verdict correct (Allow and Deny cases) ──
         assert!(!registry.hooks_for_event("pre-tool-bash").is_empty());
         let mut hook_runner = HookRunner::new(tmp.path().join("unused-hooks"));
-        hook_runner.load_plugin_hooks(&registry);
+        hook_runner.load_plugin_hooks(&registry, &std::collections::HashSet::new());
 
         // Allow case (no KF_DENY).
         let allow = hook_runner
@@ -999,7 +999,7 @@ command = "verifiers/check.sh"
         let log = Arc::new(AuditLog::new(Some(audit_path.clone())));
         let mut audited_runner = HookRunner::new(tmp.path().join("unused-hooks"));
         audited_runner.set_audit_log(log);
-        audited_runner.load_plugin_hooks(&registry);
+        audited_runner.load_plugin_hooks(&registry, &std::collections::HashSet::new());
         let _ = audited_runner
             .run_decision("pre-tool-bash", &[("KF_DENY", "1")], &Config::default())
             .await;

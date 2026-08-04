@@ -91,6 +91,18 @@ pub fn load_workspace_plugins(registry: &mut PluginRegistry, cfg: &Config) -> Ve
     let mut warnings = Vec::new();
 
     for name in &cfg.tools.enabled_plugins {
+        // Skip plugins that are disabled at runtime. This works alongside
+        // the `enabled_plugins` toggle: enabled_plugins controls which
+        // workspace sources are loaded; disabled_plugins controls whether
+        // an already-loaded or compiled-in plugin is active.
+        if cfg.tools.disabled_plugins.contains(name) {
+            tracing::debug!(
+                plugin = %name,
+                "skipping disabled workspace plugin (disabled_plugins)"
+            );
+            continue;
+        }
+
         // Folded plugins with feature ON are served by compiled-in Rust code
         // (registered in main/mod.rs). Skip the shell-plugin dir so the two
         // paths don't double-register the same tool names. When the feature is
@@ -159,18 +171,30 @@ pub fn load_plugin_registry(cfg: &Config) -> anyhow::Result<(PluginRegistry, Vec
 }
 
 /// Create `Tool` implementations for all active plugin tools in `registry`.
+///
+/// Plugins listed in `disabled_plugins` are excluded at runtime — their
+/// tools will not appear in the tool list even though the plugin is loaded
+/// in the registry.
 pub fn all_plugin_tools(
     registry: &PluginRegistry,
     shared_config: SharedConfig,
 ) -> Vec<Arc<dyn Tool>> {
     let mut tools: Vec<Arc<dyn Tool>> = Vec::new();
 
-    let global_sandbox = {
+    let (disabled, global_sandbox) = {
         let cfg = crate::shared::read_shared_config(&shared_config);
-        cfg.security.sandbox.clone()
+        let disabled = cfg.tools.disabled_plugins.clone();
+        let sandbox = cfg.security.sandbox.clone();
+        (disabled, sandbox)
     };
 
     for hosted in registry.active_plugins() {
+        let plugin_name = hosted.plugin.manifest.name.as_str();
+        if disabled.contains(plugin_name) {
+            tracing::debug!(plugin = plugin_name, "skipping disabled plugin tools");
+            continue;
+        }
+
         let root = hosted.plugin.root().to_path_buf();
         let per_plugin_sandbox =
             global_sandbox.merge_with(hosted.plugin.manifest().resource_limits.as_ref());

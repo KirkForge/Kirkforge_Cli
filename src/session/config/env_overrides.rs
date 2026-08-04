@@ -273,6 +273,15 @@ pub(super) fn apply_env_overrides(cfg: &mut Config) {
             .collect();
     }
 
+    // KF_CODE_DISABLED_PLUGINS
+    if let Ok(val) = std::env::var("KF_CODE_DISABLED_PLUGINS") {
+        cfg.tools.disabled_plugins = val
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+    }
+
     // KF_CODE_MEMORY_ENABLED
     if let Ok(val) = std::env::var("KF_CODE_MEMORY_ENABLED") {
         if let Some(v) = parse_bool_env(&val) {

@@ -1,5 +1,5 @@
 use super::*;
-use crate::session::verifier::types::{BusEvent, EditEvent, EventKind, ToolErrorEvent};
+use crate::session::verifier::types::{EditEvent, ToolErrorEvent};
 use crate::shared::test_util::remove_test_file;
 use std::path::PathBuf;
 use std::sync::Arc;

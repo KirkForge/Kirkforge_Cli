@@ -321,8 +321,9 @@ async fn test_edit_event_diff_carries_real_diff_not_old_string() {
             .as_ref()
             .expect("correction_loop")
             .verifier_handler();
-        let mut slots = handler.slots().write().unwrap();
-        slots.register(captured).unwrap();
+        let slots = handler.slots();
+        let mut guard = slots.write().unwrap();
+        guard.register(captured.clone()).unwrap();
     }
 
     // The read-before-edit gate would otherwise deny the edit

@@ -124,7 +124,9 @@ pub(crate) fn emit_usage_at(record: &UsageRecord, path: &std::path::Path) {
             return;
         }
     };
-    let _ = writeln!(file, "{line}");
+    if let Err(e) = writeln!(file, "{line}") {
+        eprintln!("kf-budget: usage.jsonl write failed ({e}); dropping record");
+    }
 }
 
 #[cfg(test)]

@@ -163,7 +163,10 @@ pub fn check_and_slice(
     };
     let output = match slicer.apply(result, store) {
         Ok(o) => o,
-        Err(_) => return BudgetAction::Keep(result.to_string()),
+        Err(e) => {
+            tracing::warn!("budget slicer error, keeping full result: {e}");
+            return BudgetAction::Keep(result.to_string());
+        }
     };
     let Some(marker) = output.offload_marker else {
         return BudgetAction::Keep(result.to_string());

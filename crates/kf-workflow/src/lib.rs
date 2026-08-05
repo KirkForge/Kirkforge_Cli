@@ -533,7 +533,10 @@ impl WorkflowExecutor {
             .await
         {
             Ok(status) => status.success(),
-            Err(_) => false,
+            Err(e) => {
+                tracing::warn!("condition eval failed for '{condition}': {e}");
+                false
+            }
         }
     }
 
@@ -796,7 +799,11 @@ impl WorkflowExecutor {
             return Err(error);
         }
         for task in tasks {
-            let step = workflow.steps.iter().find(|s| s.name == task.name).unwrap();
+            let step = workflow
+                .steps
+                .iter()
+                .find(|s| s.name == task.name)
+                .ok_or_else(|| anyhow::anyhow!("batch error step '{}' not found in workflow", task.name))?;
             outputs.insert(
                 task.name.clone(),
                 StepOutput {

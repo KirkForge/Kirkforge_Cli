@@ -140,7 +140,6 @@ impl ModelAdapter for OellamaAdapter {
     ) -> anyhow::Result<tokio::sync::mpsc::Receiver<StreamEvent>> {
         let body = super::build_ollama_chat_body(
             &self.model,
-            &self.model_info(),
             messages,
             tools,
             true,

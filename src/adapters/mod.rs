@@ -460,7 +460,6 @@ pub fn adapter_for_with_provider(
 /// is asked to constrain its output to well-formed JSON.
 fn build_ollama_chat_body(
     model: &str,
-    _model_info: &crate::shared::ModelInfo,
     messages: &[crate::shared::Message],
     tools: &[crate::shared::ToolDef],
     stream: bool,
@@ -1195,21 +1194,12 @@ mod tests {
 
     #[test]
     fn build_ollama_chat_body_basic_shape() {
-        let mi = crate::shared::ModelInfo {
-            name: "m".into(),
-            supports_thinking: false,
-            tool_call_format: crate::shared::ToolCallStyle::Native,
-            max_context_tokens: 4096,
-            recommended_temperature: 0.7,
-            supports_images: false,
-            supports_cache: false,
-        };
         let msgs = vec![crate::shared::Message {
             role: Role::User,
             content: "hi".into(),
             ..Default::default()
         }];
-        let body = build_ollama_chat_body("m", &mi, &msgs, &[], true, false, None);
+        let body = build_ollama_chat_body("m", &msgs, &[], true, false, None);
         assert_eq!(body["model"], "m");
         assert_eq!(body["stream"], true);
         assert_eq!(body["messages"][0]["role"], "user");
@@ -1218,21 +1208,12 @@ mod tests {
 
     #[test]
     fn build_ollama_chat_body_includes_tools() {
-        let mi = crate::shared::ModelInfo {
-            name: "m".into(),
-            supports_thinking: false,
-            tool_call_format: crate::shared::ToolCallStyle::Native,
-            max_context_tokens: 4096,
-            recommended_temperature: 0.7,
-            supports_images: false,
-            supports_cache: false,
-        };
         let tools = vec![crate::shared::ToolDef {
             name: "bash",
             description: "run a command",
             parameters: serde_json::json!({"type": "object"}),
         }];
-        let body = build_ollama_chat_body("m", &mi, &[], &tools, true, false, None);
+        let body = build_ollama_chat_body("m", &[], &tools, true, false, None);
         let tools_arr = body["tools"].as_array().unwrap();
         assert_eq!(tools_arr[0]["type"], "function");
         assert_eq!(tools_arr[0]["function"]["name"], "bash");
@@ -1240,88 +1221,43 @@ mod tests {
 
     #[test]
     fn build_ollama_chat_body_json_mode_adds_format() {
-        let mi = crate::shared::ModelInfo {
-            name: "m".into(),
-            supports_thinking: false,
-            tool_call_format: crate::shared::ToolCallStyle::Native,
-            max_context_tokens: 4096,
-            recommended_temperature: 0.7,
-            supports_images: false,
-            supports_cache: false,
-        };
-        let body = build_ollama_chat_body("m", &mi, &[], &[], true, true, None);
+        let body = build_ollama_chat_body("m", &[], &[], true, true, None);
         assert_eq!(body["format"], "json");
     }
 
     #[test]
     fn build_ollama_chat_body_seed_sets_options() {
-        let mi = crate::shared::ModelInfo {
-            name: "m".into(),
-            supports_thinking: false,
-            tool_call_format: crate::shared::ToolCallStyle::Native,
-            max_context_tokens: 4096,
-            recommended_temperature: 0.7,
-            supports_images: false,
-            supports_cache: false,
-        };
-        let body = build_ollama_chat_body("m", &mi, &[], &[], true, false, Some(42));
+        let body = build_ollama_chat_body("m", &[], &[], true, false, Some(42));
         assert_eq!(body["options"]["temperature"], 0);
         assert_eq!(body["options"]["seed"], 42);
     }
 
     #[test]
     fn build_ollama_chat_body_thinking_field_included() {
-        let mi = crate::shared::ModelInfo {
-            name: "m".into(),
-            supports_thinking: false,
-            tool_call_format: crate::shared::ToolCallStyle::Native,
-            max_context_tokens: 4096,
-            recommended_temperature: 0.7,
-            supports_images: false,
-            supports_cache: false,
-        };
         let msgs = vec![crate::shared::Message {
             role: Role::Assistant,
             content: "answer".into(),
             thinking: Some("reasoning".into()),
             ..Default::default()
         }];
-        let body = build_ollama_chat_body("m", &mi, &msgs, &[], true, false, None);
+        let body = build_ollama_chat_body("m", &msgs, &[], true, false, None);
         assert_eq!(body["messages"][0]["thinking"], "reasoning");
     }
 
     #[test]
     fn build_ollama_chat_body_tool_call_id_included() {
-        let mi = crate::shared::ModelInfo {
-            name: "m".into(),
-            supports_thinking: false,
-            tool_call_format: crate::shared::ToolCallStyle::Native,
-            max_context_tokens: 4096,
-            recommended_temperature: 0.7,
-            supports_images: false,
-            supports_cache: false,
-        };
         let msgs = vec![crate::shared::Message {
             role: Role::Tool,
             content: "result".into(),
             tool_call_id: Some("call_1".into()),
             ..Default::default()
         }];
-        let body = build_ollama_chat_body("m", &mi, &msgs, &[], true, false, None);
+        let body = build_ollama_chat_body("m", &msgs, &[], true, false, None);
         assert_eq!(body["messages"][0]["tool_call_id"], "call_1");
     }
 
     #[test]
     fn build_ollama_chat_body_multimodal_emits_images() {
-        let mi = crate::shared::ModelInfo {
-            name: "m".into(),
-            supports_thinking: false,
-            tool_call_format: crate::shared::ToolCallStyle::Native,
-            max_context_tokens: 4096,
-            recommended_temperature: 0.7,
-            supports_images: true,
-            supports_cache: false,
-        };
         let msgs = vec![crate::shared::Message {
             role: Role::User,
             content: String::new(),
@@ -1336,7 +1272,7 @@ mod tests {
             ]),
             ..Default::default()
         }];
-        let body = build_ollama_chat_body("m", &mi, &msgs, &[], true, false, None);
+        let body = build_ollama_chat_body("m", &msgs, &[], true, false, None);
         assert_eq!(body["messages"][0]["images"][0], "BASE64");
         assert!(body["messages"][0]["content"]
             .as_str()

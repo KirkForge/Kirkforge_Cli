@@ -216,9 +216,8 @@ fn openai_cache_mode_off_omits_cache_control() {
 // ── Ollama body builder ────────────────────────────────────────────
 
 fn ollama_body(msgs: &[Message], json_mode: bool) -> serde_json::Value {
-    let mi = dummy_model_info();
     let tools: Vec<ToolDef> = vec![];
-    build_ollama_chat_body("test-model", &mi, msgs, &tools, true, json_mode, None)
+    build_ollama_chat_body("test-model", msgs, &tools, true, json_mode, None)
 }
 
 #[test]

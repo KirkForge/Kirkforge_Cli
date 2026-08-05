@@ -313,6 +313,13 @@ impl TaskSpawner for InProcessTaskSpawner {
                 &self.config.model.opencode_zen_endpoint,
                 self.config.model.opencode_zen_api_key.as_deref(),
                 Some(&self.config.model.adapter_routing),
+                &adapters::ProviderApiKeys {
+                    anthropic: self.config.model.anthropic_api_key.clone(),
+                    openai: self.config.model.openai_api_key.clone(),
+                    deepseek: self.config.model.deepseek_api_key.clone(),
+                    gemini: self.config.model.gemini_api_key.clone(),
+                    kimi: self.config.model.kimi_api_key.clone(),
+                },
             ),
             &self.config,
         );

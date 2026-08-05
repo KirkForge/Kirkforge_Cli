@@ -13,7 +13,7 @@
 //!
 //! Scheduled-job sub-commands (new):
 //! - `/jobs schedule <spec> bash <command>`  → create a bash scheduled job
-//! - `/jobs schedule <spec> skill <name> [args...]` → create a skill job
+//! - `/jobs schedule <spec> workflow <name> [vars...]` → create a workflow job
 //! - `/jobs scheduled list`                    → list scheduled jobs
 //! - `/jobs scheduled cancel <id>`             → disable a scheduled job
 //! - `/jobs run-now <id>`                      → run a scheduled job now
@@ -119,11 +119,11 @@ fn format_schedule(schedule: &ScheduleSpec) -> String {
 fn format_kind(kind: &JobKind) -> String {
     match kind {
         JobKind::Bash { command } => format!("bash: {command}"),
-        JobKind::Skill { name, args } => {
-            if args.is_empty() {
-                format!("skill: {name}")
+        JobKind::Workflow { template, vars } => {
+            if vars.is_empty() {
+                format!("workflow: {template}")
             } else {
-                format!("skill: {name} {}", args.join(" "))
+                format!("workflow: {template} ({} vars)", vars.len())
             }
         }
     }
@@ -320,15 +320,15 @@ async fn handle_schedule_command(args: &str, _state: &mut AppState) -> String {
     let without_prefix = args.strip_prefix("schedule").unwrap_or(args).trim();
     let tokens = split_quoted(without_prefix);
     if tokens.is_empty() {
-        return "Usage: /jobs schedule <spec> bash <command>  or  /jobs schedule <spec> skill <name> [args...]".into();
+        return "Usage: /jobs schedule <spec> bash <command>  or  /jobs schedule <spec> workflow <template> [vars...]".into();
     }
 
-    // Find the "bash" / "skill" keyword that separates the schedule from the payload.
+    // Find the "bash" / "workflow" keyword that separates the schedule from the payload.
     let split_idx = tokens
         .iter()
-        .position(|t| t.eq_ignore_ascii_case("bash") || t.eq_ignore_ascii_case("skill"));
+        .position(|t| t.eq_ignore_ascii_case("bash") || t.eq_ignore_ascii_case("workflow"));
     let Some(idx) = split_idx else {
-        return "Usage: /jobs schedule <spec> bash <command>  or  /jobs schedule <spec> skill <name> [args...]\nCould not find 'bash' or 'skill' keyword.".into();
+        return "Usage: /jobs schedule <spec> bash <command>  or  /jobs schedule <spec> workflow <template> [vars...]\nCould not find 'bash' or 'workflow' keyword.".into();
     };
 
     let schedule_expr = tokens[..idx].join(" ");
@@ -349,16 +349,23 @@ async fn handle_schedule_command(args: &str, _state: &mut AppState) -> String {
                 command: rest.join(" "),
             }
         }
-        "skill" => {
+        "workflow" => {
             if rest.is_empty() {
-                return "Usage: /jobs schedule <spec> skill <name> [args...]".into();
+                return "Usage: /jobs schedule <spec> workflow <template> [key=value ...]".into();
             }
-            JobKind::Skill {
-                name: rest[0].clone(),
-                args: rest[1..].to_vec(),
-            }
+            let template = rest[0].clone();
+            let vars: std::collections::HashMap<String, String> = rest[1..]
+                .iter()
+                .filter_map(|t| {
+                    let (k, v) = t.split_once('=')?;
+                    Some((k.to_string(), v.to_string()))
+                })
+                .collect();
+            JobKind::Workflow { template, vars }
         }
-        _ => unreachable!(),
+        kind => {
+            return format!("Unknown job kind: '{kind}'. Use 'bash' or 'workflow'.").into();
+        }
     };
 
     let store = match job_store() {
@@ -372,7 +379,7 @@ async fn handle_schedule_command(args: &str, _state: &mut AppState) -> String {
     };
 
     let now = Utc::now();
-    let next_run = compute_next_run(&schedule, now);
+    let next_run = compute_next_run(&schedule, now, None);
     let job = ScheduledJob {
         id: id.clone(),
         created_at: now,
@@ -381,6 +388,12 @@ async fn handle_schedule_command(args: &str, _state: &mut AppState) -> String {
         enabled: true,
         last_run: None,
         next_run,
+        tz: None,
+        timeout: None,
+        skip_if_empty: false,
+        auto_write: false,
+        auto_dirs: Vec::new(),
+        files: Vec::new(),
     };
 
     if let Err(e) = store.save(&job) {
@@ -750,34 +763,6 @@ mod tests {
         assert_eq!(jobs.len(), 1);
         assert!(matches!(jobs[0].kind, JobKind::Bash { .. }));
         assert!(jobs[0].enabled);
-    }
-
-    #[tokio::test]
-    async fn schedule_skill_job_parses_and_saves() {
-        let _guard = scheduled_test_lock().lock().await;
-        let (_tmp, store) = tmp_jobs_dir();
-        let mut state = state();
-
-        let out = handle_jobs_command(
-            "schedule @daily skill summarize-prs owner=KirkForge",
-            &mut state,
-        )
-        .await;
-        assert!(out.starts_with("📅 Scheduled job created:"), "got: {out}");
-
-        let jobs = store.list();
-        assert_eq!(jobs.len(), 1);
-        assert!(
-            matches!(
-                &jobs[0].kind,
-                JobKind::Skill {
-                    name,
-                    args,
-                } if name == "summarize-prs" && *args == ["owner=KirkForge"]
-            ),
-            "got kind {:?}",
-            jobs[0].kind
-        );
     }
 
     #[tokio::test]

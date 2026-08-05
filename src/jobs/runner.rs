@@ -5,8 +5,8 @@
 //! require interactive approval are rejected unless the user has added a
 //! matching permission rule or enabled `scheduled_bash_auto_approve`.
 //!
-//! Skill jobs are accepted by the data model but are intentionally not
-//! executable yet; attempting to run one records a clear failure.
+//! Workflow jobs dispatch through `kf_workflow::WorkflowExecutor` using a
+//! `TaskSpawnerStepRunner`, the same path as the `WorkflowTool`.
 
 use crate::jobs::schedule::{JobKind, JobRunSummary, RunStatus, ScheduledJob};
 use crate::jobs::store::{JobStore, RunPaths};
@@ -15,9 +15,14 @@ use crate::session::bash_jobs::{global_registry, JobStatus};
 use crate::session::bash_runner::check_bash_command_str;
 use crate::shared::permission::{evaluate, PermissionAction};
 use crate::shared::Config;
+use crate::tools::task::InProcessTaskSpawner;
+use crate::tools::task::TaskSpawner;
+use crate::tools::workflow::TaskSpawnerStepRunner;
 use anyhow::{Context, Result};
 use chrono::Utc;
+use kf_workflow::WorkflowExecutor;
 use std::io::Write;
+use std::sync::Arc;
 use std::time::Duration;
 
 /// Run a single scheduled job, recording its stdout/stderr artifacts and
@@ -36,15 +41,9 @@ pub async fn run_job(
         JobKind::Bash { command } => {
             run_bash_job(job, store, config, &command, started_at, paths).await
         }
-        JobKind::Skill { name, .. } => record_failure(
-            job,
-            store,
-            started_at,
-            paths,
-            format!(
-                "Skill scheduled jobs are not yet implemented (skill={name}). Run with `/jobs run-now` once supported."
-            ),
-        ),
+        JobKind::Workflow { template, vars } => {
+            run_workflow_job(job, store, config, &template, &vars, started_at, paths).await
+        }
     }
 }
 
@@ -186,6 +185,89 @@ async fn run_bash_job(
     }
 }
 
+async fn run_workflow_job(
+    job: &mut ScheduledJob,
+    store: &JobStore,
+    config: &Config,
+    template: &str,
+    vars: &std::collections::HashMap<String, String>,
+    started_at: chrono::DateTime<Utc>,
+    paths: RunPaths,
+) -> Result<JobRunSummary> {
+    // 1. Resolve the workflow template file.
+    let wf_path = match kf_workflow::find_workflow_file(template) {
+        Some(p) => p,
+        None => {
+            return record_failure(
+                job,
+                store,
+                started_at,
+                paths,
+                format!("Workflow template '{template}' not found"),
+            );
+        }
+    };
+
+    // 2. Load and validate the workflow.
+    let mut workflow = match kf_workflow::Workflow::from_file(&wf_path) {
+        Ok(w) => w,
+        Err(e) => {
+            return record_failure(
+                job,
+                store,
+                started_at,
+                paths,
+                format!("Failed to load workflow '{template}': {e:#}"),
+            );
+        }
+    };
+
+    // 3. Interpolate vars (reuse the same logic as WorkflowTool).
+    crate::tools::workflow::interpolate_vars(&mut workflow, vars);
+
+    // 4. Build a StepRunner from an InProcessTaskSpawner (same path as WorkflowTool).
+    let spawner: Arc<dyn TaskSpawner> = Arc::new(InProcessTaskSpawner::new(
+        config.clone(),
+        config.model.default_model.clone(),
+        config.model.ollama_host.clone(),
+        None, // no undo stack for scheduled jobs
+        config.security.computer_use.enabled,
+    ));
+    let runner = TaskSpawnerStepRunner { spawner, toolset: None };
+
+    // 5. Execute.
+    let executor = WorkflowExecutor::new(workflow);
+    match executor.run(std::sync::Arc::new(runner), None).await {
+        Ok(summary) => {
+            let finished_at = Utc::now();
+            let stdout_content = crate::tools::workflow::summary_to_json(&summary);
+            write_artifact(&paths.stdout_path, &stdout_content)
+                .with_context(|| "writing workflow stdout")?;
+            write_artifact(&paths.stderr_path, "")
+                .with_context(|| "writing empty stderr for successful workflow run")?;
+            let run = JobRunSummary {
+                run_id: paths.run_id,
+                started_at,
+                finished_at,
+                status: RunStatus::Success,
+                exit_code: Some(0),
+                stdout_path: paths.stdout_path,
+                stderr_path: paths.stderr_path,
+                summary: format!("Workflow '{}' completed ({} steps)", summary.workflow_name, summary.outputs.len()),
+            };
+            store.record_run(job, &run)?;
+            Ok(run)
+        }
+        Err(e) => record_failure(
+            job,
+            store,
+            started_at,
+            paths,
+            format!("Workflow '{template}' failed: {e:#}"),
+        ),
+    }
+}
+
 fn write_artifact(path: &std::path::Path, content: &str) -> Result<()> {
     let mut file = std::fs::OpenOptions::new()
         .create(true)
@@ -221,6 +303,22 @@ fn record_failure(
         summary: message.clone(),
     };
     store.record_run(job, &run)?;
+
+    // Persist alert so the failure is reviewable later, not just
+    // ephemeral in the TUI notification.
+    let (kind, cmd) = match &job.kind {
+        JobKind::Bash { command } => ("bash", command.as_str()),
+        JobKind::Workflow { template, .. } => ("workflow", template.as_str()),
+    };
+    if let Err(e) = crate::session::session_index::append_alert(
+        &job.id,
+        kind,
+        cmd,
+        &message,
+    ) {
+        tracing::warn!(job_id = %job.id, error = %e, "failed to persist alert for scheduled job failure");
+    }
+
     Ok(run)
 }
 
@@ -249,6 +347,12 @@ mod tests {
             enabled: true,
             last_run: None,
             next_run: None,
+            tz: None,
+            timeout: None,
+            skip_if_empty: false,
+            auto_write: false,
+            auto_dirs: Vec::new(),
+            files: Vec::new(),
         }
     }
 
@@ -286,24 +390,4 @@ mod tests {
         assert!(run.summary.contains("Safety gate") || run.summary.contains("dangerous"));
     }
 
-    #[tokio::test]
-    async fn skill_job_records_not_implemented() {
-        let (_tmp, store) = tmp_store();
-        let mut job = ScheduledJob {
-            id: "job-test-002".into(),
-            created_at: Utc::now(),
-            schedule: ScheduleSpec::Once(Utc::now()),
-            kind: JobKind::Skill {
-                name: "summarize-prs".into(),
-                args: vec![],
-            },
-            enabled: true,
-            last_run: None,
-            next_run: None,
-        };
-        let config = Config::default();
-        let run = run_job(&mut job, &store, &config).await.unwrap();
-        assert_eq!(run.status, RunStatus::Failure);
-        assert!(run.summary.contains("not yet implemented"));
-    }
 }

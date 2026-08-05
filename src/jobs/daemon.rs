@@ -4,7 +4,7 @@
 //! - loads all persisted jobs on startup and recomputes their next run times,
 //! - sleeps until the nearest scheduled job,
 //! - wakes on `SIGINT`/`SIGTERM`/`SIGHUP` or a socket command (`ping`, `reload`, `shutdown`),
-//! - runs due bash jobs (skill jobs are stored but not executed yet),
+//! - runs due bash and workflow jobs,
 //! - records stdout/stderr artifacts and updates each job's `last_run` / `next_run`.
 //!
 //! Communication is line-delimited JSON over `~/.local/share/kf-code/jobd.sock`.
@@ -79,16 +79,24 @@ pub async fn run_job_daemon_at(socket_path: PathBuf, pid_path: PathBuf) -> Resul
     let socket_reload = reload.clone();
     tokio::spawn(async move {
         loop {
-            let shutdown = socket_shutdown.clone();
-            let reload = socket_reload.clone();
-            match listener.accept().await {
-                Ok((stream, _)) => {
-                    tokio::spawn(async move {
-                        handle_client(stream, shutdown, reload).await;
-                    });
+            tokio::select! {
+                _ = socket_shutdown.notified() => {
+                    tracing::info!("jobd accept loop shutting down");
+                    break;
                 }
-                Err(e) => {
-                    tracing::warn!(error = %e, "jobd accept failed");
+                accept_result = listener.accept() => {
+                    let shutdown = socket_shutdown.clone();
+                    let reload = socket_reload.clone();
+                    match accept_result {
+                        Ok((stream, _)) => {
+                            tokio::spawn(async move {
+                                handle_client(stream, shutdown, reload).await;
+                            });
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = %e, "jobd accept failed");
+                        }
+                    }
                 }
             }
         }
@@ -116,7 +124,9 @@ pub async fn run_job_daemon_at(socket_path: PathBuf, pid_path: PathBuf) -> Resul
         let due_jobs: Vec<ScheduledJob> = jobs
             .iter()
             .filter(|j| {
-                j.enabled && compute_next_run(&j.schedule, last_check).is_some_and(|t| t <= now)
+                j.enabled
+                    && compute_next_run(&j.schedule, last_check, j.tz.as_deref())
+                        .is_some_and(|t| t <= now)
             })
             .cloned()
             .collect();
@@ -149,7 +159,7 @@ pub async fn run_job_daemon_at(socket_path: PathBuf, pid_path: PathBuf) -> Resul
                     // restart jobs, disable after the first execution so they
                     // don't fire repeatedly.
                     let now = Utc::now();
-                    job.next_run = compute_next_run(&job.schedule, now);
+                    job.next_run = compute_next_run(&job.schedule, now, job.tz.as_deref());
                     if matches!(job.schedule, ScheduleSpec::Once(_) | ScheduleSpec::Restart) {
                         job.enabled = false;
                     }
@@ -165,6 +175,9 @@ pub async fn run_job_daemon_at(socket_path: PathBuf, pid_path: PathBuf) -> Resul
             for h in handles {
                 let _ = h.await;
             }
+            // Notify the session daemon that jobs changed so it can push
+            // `JobsChanged` to all connected TUI instances.
+            crate::daemon::client::try_notify_jobs_changed().await;
             last_check = now;
             continue;
         }
@@ -173,7 +186,7 @@ pub async fn run_job_daemon_at(socket_path: PathBuf, pid_path: PathBuf) -> Resul
         let next_time = jobs
             .iter()
             .filter(|j| j.enabled)
-            .filter_map(|j| compute_next_run(&j.schedule, now))
+            .filter_map(|j| compute_next_run(&j.schedule, now, j.tz.as_deref()))
             .min();
 
         let sleep_deadline = match next_time {
@@ -242,17 +255,28 @@ async fn handle_client(stream: UnixStream, shutdown: Arc<Notify>, reload: Arc<No
         };
 
         match req {
-            Request::Ping => {
+            Request::Ping { .. } => {
                 let _ = send_response(&mut stream, &Response::ok_empty()).await;
             }
-            Request::Shutdown => {
+            Request::Shutdown { .. } => {
                 let _ = send_response(&mut stream, &Response::ok_empty()).await;
                 shutdown.notify_one();
                 break;
             }
-            // Treat List/Resolve/Touch as reload requests (they are session-daemon
-            // requests and don't apply here) so the loop rescans jobs.
-            Request::List | Request::Resolve { .. } | Request::Touch { .. } => {
+            Request::QuitAll { .. } => {
+                let _ = send_response(&mut stream, &Response::ok_empty()).await;
+                shutdown.notify_one();
+                break;
+            }
+            // Treat List/Resolve/Touch/Claim/InstanceRegister as reload
+            // requests (they are session-daemon requests and don't apply
+            // here) so the loop rescans jobs.
+            Request::List { .. }
+            | Request::Resolve { .. }
+            | Request::Touch { .. }
+            | Request::Claim { .. }
+            | Request::InstanceRegister { .. }
+            | Request::NotifyJobsChanged { .. } => {
                 let _ = send_response(&mut stream, &Response::ok_empty()).await;
                 reload.notify_one();
             }

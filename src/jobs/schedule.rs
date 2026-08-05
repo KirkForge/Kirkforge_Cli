@@ -24,6 +24,29 @@ pub struct ScheduledJob {
     pub last_run: Option<JobRunSummary>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_run: Option<DateTime<Utc>>,
+    // ── Per-job policy fields (WO 17.7) ──────────────────────────
+    /// Timezone for cron scheduling. Defaults to UTC. Only affects
+    /// `ScheduleSpec::Cron`; `Once` and `Restart` are already absolute.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tz: Option<String>,
+    /// Maximum wall-clock time per run. On timeout the job is killed
+    /// and an alert entry is persisted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout: Option<std::time::Duration>,
+    /// Skip the run if the last run produced no changes (no files
+    /// modified, no stdout). Uses git-dirty / mtime heuristics.
+    #[serde(default)]
+    pub skip_if_empty: bool,
+    /// Auto-approve writes for this job without the approval panel.
+    #[serde(default)]
+    pub auto_write: bool,
+    /// Directories the job is allowed to write to without approval.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub auto_dirs: Vec<String>,
+    /// Declarative files to materialize into the job dir on save/load.
+    /// Each file has a relative path, content, and optional mode.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<SpecFile>,
 }
 
 fn default_enabled() -> bool {
@@ -55,9 +78,17 @@ pub enum JobKind {
     /// `bash` tool.
     #[serde(rename = "bash")]
     Bash { command: String },
-    /// Reserved for future work: invoke a built-in or plugin skill.
-    #[serde(rename = "skill")]
-    Skill { name: String, args: Vec<String> },
+    /// Run a kf-workflow template (inline or named). Dispatches through
+    /// the same `WorkflowTool` the TUI uses. (WO 17.7)
+    #[serde(rename = "workflow")]
+    Workflow {
+        /// Workflow template name (resolved from .kf-code/workflows/ or
+        /// the user share dir) or inline JSON template.
+        template: String,
+        /// Interpolation variables passed to the workflow.
+        #[serde(default)]
+        vars: std::collections::HashMap<String, String>,
+    },
 }
 
 /// Result of a single scheduled-job execution.
@@ -71,6 +102,35 @@ pub struct JobRunSummary {
     pub stdout_path: std::path::PathBuf,
     pub stderr_path: std::path::PathBuf,
     pub summary: String,
+}
+
+/// A declarative file to materialize into the job dir on save/load.
+/// Path-escape guard: `path` must be relative and must not contain `..`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SpecFile {
+    /// Relative path within the job dir (must not escape via `..`).
+    pub path: String,
+    /// File content to write.
+    pub content: String,
+    /// Optional Unix mode (e.g. `0o755`). Defaults to `0o644`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<u32>,
+}
+
+impl SpecFile {
+    /// Check that the path doesn't escape the job dir.
+    pub fn is_path_safe(&self) -> bool {
+        // Reject absolute paths and `..` components.
+        if self.path.starts_with('/') {
+            return false;
+        }
+        for component in self.path.split('/') {
+            if component == ".." {
+                return false;
+            }
+        }
+        true
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
@@ -197,7 +257,11 @@ fn normalise_cron_expression(expr: &str) -> String {
 }
 
 /// Compute the next run time at or after `after` for a given schedule.
-pub fn compute_next_run(schedule: &ScheduleSpec, after: DateTime<Utc>) -> Option<DateTime<Utc>> {
+pub fn compute_next_run(
+    schedule: &ScheduleSpec,
+    after: DateTime<Utc>,
+    tz: Option<&str>,
+) -> Option<DateTime<Utc>> {
     match schedule {
         ScheduleSpec::Once(t) => {
             if *t >= after {
@@ -209,7 +273,18 @@ pub fn compute_next_run(schedule: &ScheduleSpec, after: DateTime<Utc>) -> Option
         ScheduleSpec::Restart => Some(after),
         ScheduleSpec::Cron(expr) => {
             let schedule = cron::Schedule::from_str(expr).ok()?;
-            schedule.after(&after).next()
+            // When a timezone is specified, convert `after` to that timezone,
+            // evaluate the cron in local time, then convert back to UTC.
+            // This lets users write cron expressions like "0 9 * * *" and
+            // have them fire at 9am in their timezone, not UTC. (WO 17.7)
+            if let Some(tz_name) = tz {
+                let tz: chrono_tz::Tz = tz_name.parse().ok()?;
+                let local_after = after.with_timezone(&tz);
+                let next_local = schedule.after(&local_after).next()?;
+                Some(next_local.with_timezone(&chrono::Utc))
+            } else {
+                schedule.after(&after).next()
+            }
         }
     }
 }
@@ -303,7 +378,7 @@ mod tests {
     fn past_once_job_has_no_next_run() {
         let past = Utc::now() - Duration::hours(1);
         let spec = ScheduleSpec::Once(past);
-        assert!(compute_next_run(&spec, Utc::now()).is_none());
+        assert!(compute_next_run(&spec, Utc::now(), None).is_none());
     }
 
     #[test]
@@ -311,14 +386,14 @@ mod tests {
         let future = Utc::now() + Duration::hours(1);
         let future = future.with_nanosecond(0).unwrap();
         let spec = ScheduleSpec::Once(future);
-        assert_eq!(compute_next_run(&spec, Utc::now()).unwrap(), future);
+        assert_eq!(compute_next_run(&spec, Utc::now(), None).unwrap(), future);
     }
 
     #[test]
     fn daily_cron_next_run_is_tomorrow_midnight() {
         let now = Utc::now();
         let spec = parse_schedule("@daily").unwrap();
-        let next = compute_next_run(&spec, now).unwrap();
+        let next = compute_next_run(&spec, now, None).unwrap();
         let tomorrow = (now + Duration::days(1)).date_naive();
         assert_eq!(next.date_naive(), tomorrow);
         assert_eq!(next.hour(), 0);
@@ -329,7 +404,7 @@ mod tests {
     #[test]
     fn restart_next_run_is_now() {
         let now = Utc::now();
-        let next = compute_next_run(&ScheduleSpec::Restart, now).unwrap();
+        let next = compute_next_run(&ScheduleSpec::Restart, now, None).unwrap();
         // Restart means run immediately; allow a few seconds of clock drift.
         assert!((next - now).num_seconds().abs() < 2);
     }

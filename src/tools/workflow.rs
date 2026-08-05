@@ -13,10 +13,11 @@
 //! (e.g. inside a sandboxed bench run that does not wire up a spawner),
 //! the tool returns `ToolOutcome::Error` rather than silently no-op'ing.
 
+use crate::session::toolset::{CompositeToolset, Toolset};
 use crate::shared::{ToolDef, ToolError, ToolOutcome};
 use crate::tools::task::TaskSpawner;
 use crate::tools::{Tool, ToolContext};
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use kf_workflow::{StepOutput, StepRequest, StepRunner, Workflow, WorkflowExecutor};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -96,7 +97,7 @@ impl Tool for WorkflowTool {
             }
         };
 
-        match run_workflow(&template, &vars, spawner).await {
+        match run_workflow(&template, &vars, spawner, ctx.tools.clone()).await {
             Ok(json) => ToolOutcome::Success { content: json },
             Err(e) => ToolOutcome::Error {
                 message: format!("workflow '{template}' failed: {e}"),
@@ -109,6 +110,7 @@ async fn run_workflow(
     template: &str,
     vars: &HashMap<String, String>,
     spawner: Arc<dyn TaskSpawner>,
+    toolset: Option<Arc<CompositeToolset>>,
 ) -> Result<String> {
     let path = kf_workflow::find_workflow_file(template)
         .with_context(|| format!("workflow template '{template}' not found"))?;
@@ -117,22 +119,38 @@ async fn run_workflow(
     interpolate_vars(&mut workflow, vars);
 
     let executor = WorkflowExecutor::new(workflow);
-    let runner = TaskSpawnerStepRunner { spawner };
-    let summary = executor.run(&runner, None).await?;
+    let runner = TaskSpawnerStepRunner { spawner, toolset };
+    let summary = executor.run(std::sync::Arc::new(runner), None).await?;
     Ok(summary_to_json(&summary))
 }
 
-/// Replace `${name}` tokens in every step's `prompt` with the value from
-/// `vars`. Unknown tokens are left intact (so partial interpolation is a
-/// warning, not an error — the workflow can still run and the model will
-/// see the literal `${name}` in the prompt).
-fn interpolate_vars(workflow: &mut Workflow, vars: &HashMap<String, String>) {
+/// Replace `${name}` tokens in every step's `prompt`, `command`, and `over`
+/// fields with the value from `vars`. Unknown tokens are left intact (so
+/// partial interpolation is a warning, not an error — the workflow can still
+/// run and the model will see the literal `${name}` in the prompt).
+///
+/// `$(step_name.field)` references are NOT resolved here — they require runtime
+/// step outputs and are handled by `kf_workflow::resolve_step_refs` inside the
+/// executor.
+pub fn interpolate_vars(workflow: &mut Workflow, vars: &HashMap<String, String>) {
     if vars.is_empty() {
         return;
     }
     for step in &mut workflow.steps {
-        for (k, v) in vars {
-            step.prompt = step.prompt.replace(&format!("${{{k}}}"), v);
+        if let Some(ref mut prompt) = step.prompt {
+            for (k, v) in vars {
+                *prompt = prompt.replace(&format!("${{{k}}}"), v);
+            }
+        }
+        if let Some(ref mut command) = step.command {
+            for (k, v) in vars {
+                *command = command.replace(&format!("${{{k}}}"), v);
+            }
+        }
+        if let Some(ref mut over) = step.over {
+            for (k, v) in vars {
+                *over = over.replace(&format!("${{{k}}}"), v);
+            }
         }
     }
 }
@@ -143,7 +161,7 @@ fn interpolate_vars(workflow: &mut Workflow, vars: &HashMap<String, String>) {
 /// stable, comparable result. The crate does not expose the original
 /// declaration order on the summary, so alphabetical is the honest
 /// stable choice.
-fn summary_to_json(summary: &kf_workflow::WorkflowSummary) -> String {
+pub fn summary_to_json(summary: &kf_workflow::WorkflowSummary) -> String {
     let mut names: Vec<&String> = summary.outputs.keys().collect();
     names.sort();
     let steps: Vec<&StepOutput> = names
@@ -154,21 +172,25 @@ fn summary_to_json(summary: &kf_workflow::WorkflowSummary) -> String {
         "workflow": summary.workflow_name,
         "steps": steps.iter().map(|s| serde_json::json!({
             "name": s.name,
+            "kind": format!("{:?}", s.kind).to_lowercase(),
             "persona": s.persona,
             "summary": s.summary,
             "critique": s.critique,
+            "structured_output": s.structured_output,
         })).collect::<Vec<_>>()
     })
     .to_string()
 }
 
-/// Adapter that presents a `TaskSpawner` as a `StepRunner`. Each step
-/// becomes a `TaskRequest` with the step's persona; the spawner returns
-/// the subagent's final assistant summary, which becomes the step's
-/// `summary`. Critique passes (`with_critique = true`) spawn an extra
-/// `plan`-persona subagent over the just-produced summary.
-struct TaskSpawnerStepRunner {
-    spawner: Arc<dyn TaskSpawner>,
+/// Adapter that presents a `TaskSpawner` as a `StepRunner`. Each agent step
+/// becomes a `TaskRequest` with the step's persona; bash steps run via
+/// `tokio::process::Command`; tool steps are dispatched via the tool registry.
+/// `run_batch` fans out independent steps in parallel via `tokio::spawn`.
+pub struct TaskSpawnerStepRunner {
+    pub spawner: Arc<dyn TaskSpawner>,
+    /// Optional tool registry for dispatching `tool` steps by name.
+    /// When `None`, tool steps bail (bench/sandbox context).
+    pub toolset: Option<Arc<CompositeToolset>>,
 }
 
 #[async_trait::async_trait]
@@ -184,16 +206,189 @@ impl StepRunner for TaskSpawnerStepRunner {
             .map_err(|e| anyhow::anyhow!("step '{name}' failed: {e}"))
     }
 
+    async fn run_bash(&self, name: &str, command: &str) -> Result<String> {
+        let output = tokio::process::Command::new("sh")
+            .arg("-c")
+            .arg(command)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .await
+            .with_context(|| format!("step '{name}': failed to spawn bash for: {command}"))?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if !output.status.success() {
+            bail!(
+                "step '{name}': bash exited {} — stderr: {}",
+                output
+                    .status
+                    .code()
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| "signal".into()),
+                stderr.trim()
+            );
+        }
+        Ok(format!("{stdout}{stderr}").trim_end().to_string())
+    }
+
+    async fn run_tool(
+        &self,
+        name: &str,
+        tool_name: &str,
+        arguments: &serde_json::Value,
+    ) -> Result<String> {
+        let toolset = self
+            .toolset
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("step '{name}': tool steps require a tool registry, which is not available in this context (tool: '{tool_name}')"))?;
+        let tool = toolset
+            .resolve(tool_name)
+            .ok_or_else(|| anyhow::anyhow!("step '{name}': unknown tool '{tool_name}'"))?;
+        let ctx = ToolContext {
+            token: tokio_util::sync::CancellationToken::new(),
+            dry_run: false,
+            task_spawner: Some(self.spawner.clone()),
+            tools: Some(toolset.clone()),
+        };
+        match tool.run(&ctx, arguments.clone()).await {
+            ToolOutcome::Success { content } => Ok(content),
+            ToolOutcome::Failure(ToolError::InvalidArgs { message }) => {
+                Err(anyhow::anyhow!("step '{name}': tool '{tool_name}' invalid args: {message}"))
+            }
+            ToolOutcome::Error { message } => {
+                Err(anyhow::anyhow!("step '{name}': tool '{tool_name}' error: {message}"))
+            }
+            other => Err(anyhow::anyhow!(
+                "step '{name}': tool '{tool_name}' returned unexpected outcome: {:?}",
+                other
+            )),
+        }
+    }
+
     async fn run_batch(&self, steps: Vec<StepRequest>) -> Result<Vec<(String, String)>> {
-        // The TaskSpawner interface is serial (one run_task at a time);
-        // the spawner itself may spawn an isolated Executor per call, but
-        // we do not fan out here. The default StepRunner::run_batch does
-        // the same, but inlining keeps the critique pass on this runner
-        // so the extra plan-persona subagent reuses the same spawner.
-        let mut out = Vec::with_capacity(steps.len());
+        // Fan out independent steps in parallel. Each step is dispatched to
+        // its own tokio task so they run concurrently.
+        let mut handles = Vec::with_capacity(steps.len());
         for req in steps {
-            let summary = self.run_step(&req.name, &req.prompt, &req.persona).await?;
-            out.push((req.name, summary));
+            let spawner = self.spawner.clone();
+            let toolset = self.toolset.clone();
+            let handle = tokio::spawn(async move {
+                match req.kind {
+                    kf_workflow::StepKind::Agent => {
+                        let result = spawner
+                            .run_task(crate::tools::task::TaskRequest {
+                                prompt: req.prompt,
+                                persona: req.persona,
+                                model: None,
+                            })
+                            .await
+                            .map_err(|e| anyhow::anyhow!("step '{}' failed: {e}", req.name))?;
+                        Ok::<(String, String), anyhow::Error>((req.name, result))
+                    }
+                    kf_workflow::StepKind::Bash => {
+                        let output = tokio::process::Command::new("sh")
+                            .arg("-c")
+                            .arg(&req.command)
+                            .stdout(std::process::Stdio::piped())
+                            .stderr(std::process::Stdio::piped())
+                            .output()
+                            .await
+                            .with_context(|| {
+                                format!(
+                                    "step '{}': failed to spawn bash for: {}",
+                                    req.name, req.command
+                                )
+                            })?;
+                        let stdout = String::from_utf8_lossy(&output.stdout);
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        if !output.status.success() {
+                            bail!(
+                                "step '{}': bash exited {} — stderr: {}",
+                                req.name,
+                                output
+                                    .status
+                                    .code()
+                                    .map(|c| c.to_string())
+                                    .unwrap_or_else(|| "signal".into()),
+                                stderr.trim()
+                            );
+                        }
+                        Ok((req.name, format!("{stdout}{stderr}").trim_end().to_string()))
+                    }
+                    kf_workflow::StepKind::Tool => {
+                        let toolset = toolset.as_ref().ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "step '{}': tool steps require a tool registry, which is not available in this context (tool: '{}')",
+                                req.name, req.tool_name
+                            )
+                        })?;
+                        let tool = toolset.resolve(&req.tool_name).ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "step '{}': unknown tool '{}'",
+                                req.name, req.tool_name
+                            )
+                        })?;
+                        let ctx = ToolContext {
+                            token: tokio_util::sync::CancellationToken::new(),
+                            dry_run: false,
+                            task_spawner: Some(spawner),
+                            tools: Some(toolset.clone()),
+                        };
+                        match tool.run(&ctx, req.tool_arguments.clone()).await {
+                            ToolOutcome::Success { content } => {
+                                Ok((req.name, content))
+                            }
+                            ToolOutcome::FileContent { content, .. } => {
+                                Ok((req.name, content))
+                            }
+                            ToolOutcome::FileEdit { diff, .. } => {
+                                Ok((req.name, diff))
+                            }
+                            ToolOutcome::GrepMatches { total, .. } => {
+                                Ok((req.name, format!("{total} grep matches")))
+                            }
+                            ToolOutcome::Image { path, .. } => {
+                                Ok((req.name, format!("image: {}", path.display())))
+                            }
+                            ToolOutcome::Failure(ToolError::InvalidArgs { message }) => {
+                                Err(anyhow::anyhow!(
+                                    "step '{}': tool '{}' invalid args: {message}",
+                                    req.name, req.tool_name
+                                ))
+                            }
+                            ToolOutcome::Error { message } => {
+                                Err(anyhow::anyhow!(
+                                    "step '{}': tool '{}' error: {message}",
+                                    req.name, req.tool_name
+                                ))
+                            }
+                            _outcome => {
+                                Err(anyhow::anyhow!(
+                                    "step '{}': tool '{}' returned unexpected outcome",
+                                    req.name, req.tool_name
+                                ))
+                            }
+                        }
+                    }
+                    kf_workflow::StepKind::FanOut | kf_workflow::StepKind::FanIn => {
+                        // Fan-out/fan-in steps are expanded before execution;
+                        // they should not reach this match arm.
+                        bail!(
+                            "step '{}': fan-out/fan-in steps should be expanded before execution",
+                            req.name
+                        )
+                    }
+                }
+            });
+            handles.push(handle);
+        }
+
+        let mut out = Vec::with_capacity(handles.len());
+        for h in handles {
+            out.push(
+                h.await
+                    .map_err(|e| anyhow::anyhow!("batch task panicked: {e}"))??,
+            );
         }
         Ok(out)
     }
@@ -240,6 +435,27 @@ mod tests {
         let wf_dir = dir.join(".kf-code/workflows");
         std::fs::create_dir_all(&wf_dir).unwrap();
         std::fs::write(wf_dir.join(format!("{name}.json")), body).unwrap();
+    }
+
+    /// Helper to build an agent step with minimal fields.
+    fn agent_step(name: &str, prompt: &str, persona: &str) -> kf_workflow::Step {
+        kf_workflow::Step {
+            name: name.into(),
+            kind: kf_workflow::StepKind::Agent,
+            prompt: Some(prompt.into()),
+            persona: Some(persona.into()),
+            command: None,
+            tool_name: None,
+            tool_arguments: None,
+            depends_on: vec![],
+            critique: None,
+            condition: None,
+            on_error: None,
+            fork_from: None,
+            over: None,
+            as_name: None,
+            max_parallel: None,
+        }
     }
 
     #[test]
@@ -353,53 +569,38 @@ mod tests {
     fn interpolate_vars_replaces_known_tokens() {
         let mut wf = Workflow {
             name: "x".into(),
-            steps: vec![kf_workflow::Step {
-                name: "a".into(),
-                prompt: "do ${thing} and ${unknown}".into(),
-                persona: "explore".into(),
-                depends_on: vec![],
-                critique: None,
-            }],
+            steps: vec![agent_step("a", "do ${thing} and ${unknown}", "explore")],
+            budget: None,
         };
         let mut vars = HashMap::new();
         vars.insert("thing".to_string(), "X".to_string());
         interpolate_vars(&mut wf, &vars);
-        assert_eq!(wf.steps[0].prompt, "do X and ${unknown}");
+        assert_eq!(wf.steps[0].prompt.as_ref().unwrap(), "do X and ${unknown}");
     }
 
     #[test]
     fn interpolate_vars_empty_map_is_noop() {
         let mut wf = Workflow {
             name: "x".into(),
-            steps: vec![kf_workflow::Step {
-                name: "a".into(),
-                prompt: "do ${thing}".into(),
-                persona: "explore".into(),
-                depends_on: vec![],
-                critique: None,
-            }],
+            steps: vec![agent_step("a", "do ${thing}", "explore")],
+            budget: None,
         };
         interpolate_vars(&mut wf, &HashMap::new());
-        assert_eq!(wf.steps[0].prompt, "do ${thing}");
+        assert_eq!(wf.steps[0].prompt.as_ref().unwrap(), "do ${thing}");
     }
 
     #[test]
     fn interpolate_vars_replaces_multiple_known_tokens() {
         let mut wf = Workflow {
             name: "x".into(),
-            steps: vec![kf_workflow::Step {
-                name: "a".into(),
-                prompt: "do ${thing} then ${other}".into(),
-                persona: "explore".into(),
-                depends_on: vec![],
-                critique: None,
-            }],
+            steps: vec![agent_step("a", "do ${thing} then ${other}", "explore")],
+            budget: None,
         };
         let mut vars = HashMap::new();
         vars.insert("thing".to_string(), "X".to_string());
         vars.insert("other".to_string(), "Y".to_string());
         interpolate_vars(&mut wf, &vars);
-        assert_eq!(wf.steps[0].prompt, "do X then Y");
+        assert_eq!(wf.steps[0].prompt.as_ref().unwrap(), "do X then Y");
     }
 
     #[test]
@@ -407,45 +608,29 @@ mod tests {
         let mut wf = Workflow {
             name: "wf".into(),
             steps: vec![
-                kf_workflow::Step {
-                    name: "a".into(),
-                    prompt: "step a ${v}".into(),
-                    persona: "explore".into(),
-                    depends_on: vec![],
-                    critique: None,
-                },
-                kf_workflow::Step {
-                    name: "b".into(),
-                    prompt: "step b ${v}".into(),
-                    persona: "plan".into(),
-                    depends_on: vec![],
-                    critique: None,
-                },
+                agent_step("a", "step a ${v}", "explore"),
+                agent_step("b", "step b ${v}", "plan"),
             ],
+            budget: None,
         };
         let mut vars = HashMap::new();
         vars.insert("v".to_string(), "VALUE".to_string());
         interpolate_vars(&mut wf, &vars);
-        assert_eq!(wf.steps[0].prompt, "step a VALUE");
-        assert_eq!(wf.steps[1].prompt, "step b VALUE");
+        assert_eq!(wf.steps[0].prompt.as_ref().unwrap(), "step a VALUE");
+        assert_eq!(wf.steps[1].prompt.as_ref().unwrap(), "step b VALUE");
     }
 
     #[test]
     fn interpolate_vars_repeated_token_in_same_prompt_is_replaced_each_time() {
         let mut wf = Workflow {
             name: "x".into(),
-            steps: vec![kf_workflow::Step {
-                name: "a".into(),
-                prompt: "${x} and ${x} again".into(),
-                persona: "explore".into(),
-                depends_on: vec![],
-                critique: None,
-            }],
+            steps: vec![agent_step("a", "${x} and ${x} again", "explore")],
+            budget: None,
         };
         let mut vars = HashMap::new();
         vars.insert("x".to_string(), "V".to_string());
         interpolate_vars(&mut wf, &vars);
-        assert_eq!(wf.steps[0].prompt, "V and V again");
+        assert_eq!(wf.steps[0].prompt.as_ref().unwrap(), "V and V again");
     }
 
     #[test]
@@ -458,18 +643,22 @@ mod tests {
             "zebra".into(),
             kf_workflow::StepOutput {
                 name: "zebra".into(),
+                kind: kf_workflow::StepKind::Agent,
                 persona: "explore".into(),
                 summary: "z summary".into(),
                 critique: None,
+                structured_output: None,
             },
         );
         summary.outputs.insert(
             "apple".into(),
             kf_workflow::StepOutput {
                 name: "apple".into(),
+                kind: kf_workflow::StepKind::Agent,
                 persona: "plan".into(),
                 summary: "a summary".into(),
                 critique: None,
+                structured_output: None,
             },
         );
         let json = summary_to_json(&summary);
@@ -489,9 +678,11 @@ mod tests {
             "s".into(),
             kf_workflow::StepOutput {
                 name: "s".into(),
+                kind: kf_workflow::StepKind::Agent,
                 persona: "plan".into(),
                 summary: "summary".into(),
                 critique: Some("the critique".into()),
+                structured_output: None,
             },
         );
         let json = summary_to_json(&summary);
@@ -509,9 +700,11 @@ mod tests {
             "s".into(),
             kf_workflow::StepOutput {
                 name: "s".into(),
+                kind: kf_workflow::StepKind::Agent,
                 persona: "plan".into(),
                 summary: "summary".into(),
                 critique: None,
+                structured_output: None,
             },
         );
         let json = summary_to_json(&summary);

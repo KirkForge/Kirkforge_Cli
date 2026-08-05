@@ -47,6 +47,7 @@ tracing = "0.1"
 clap = { version = "4", features = ["derive", "env"] }
 async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
+chrono-tz = "0.10"
 thiserror = "1"
 toml = "0.8"
 tempfile = "3"
@@ -124,8 +125,18 @@ regex = "1"
 ignore = "0.4"
 shellexpand = "3"
 
-# Date/time for session IDs
+# Tree-sitter for AST-based minification (WO 17.4).
+tree-sitter = "0.25"
+tree-sitter-rust = "0.24"
+tree-sitter-go = "0.23"
+tree-sitter-python = "0.23"
+tree-sitter-typescript = "0.23"
+tree-sitter-javascript = "0.23"
+tree-sitter-bash = "0.23"
+
+# Date/time for session IDs and scheduled-job timezone support
 chrono.workspace = true
+chrono-tz.workspace = true
 
 # Cron expression parsing for scheduled jobs
 cron = "0.15"
@@ -138,6 +149,9 @@ pulldown-cmark = "0.13"
 
 # Base64 for image-attach (read_image tool / multimodal messages)
 base64 = "0.22"
+
+# Constant-time comparison for daemon auth token checks.
+subtle = "2"
 
 # Clipboard for Ctrl+Shift+C copy
 arboard = "3"
@@ -188,6 +202,10 @@ proptest = "1.6"
 criterion = { version = "0.5", features = ["async_tokio"] }
 # HTTP mock server for Ollama adapter integration tests without a live model.
 wiremock = "0.6"
+
+[[test]]
+name = "e2e"
+path = "tests/e2e/main.rs"
 
 [features]
 default = ["stratum", "draw", "budget"]

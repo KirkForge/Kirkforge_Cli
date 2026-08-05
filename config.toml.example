@@ -81,6 +81,18 @@
 # Options: "anthropic" (default), "bedrock", "vertex".
 # anthropic_provider = "anthropic"
 
+# API key for direct Anthropic access. When set, the Anthropic adapter
+# sends `x-api-key` with every request. Falls back to the
+# `ANTHROPIC_API_KEY` environment variable when omitted from config.
+# anthropic_api_key = ""
+
+# Per-provider API keys for other adapters. Each falls back to the
+# corresponding `*_API_KEY` environment variable when omitted.
+# openai_api_key = ""
+# deepseek_api_key = ""
+# gemini_api_key = ""
+# kimi_api_key = ""
+
 # AWS region for Bedrock inference. Default: "us-east-1".
 # aws_region = "us-east-1"
 

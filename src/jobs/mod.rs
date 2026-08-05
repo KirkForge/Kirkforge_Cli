@@ -1,6 +1,6 @@
 //! Scheduled jobs — cron/one-shot task runner and TUI integration.
 //!
-//! Session 3 lands persistent scheduled jobs for bash commands. Skill jobs are
+//! Session 3 lands persistent scheduled jobs for bash and workflow commands.
 //! accepted by the data model and scheduler but are intentionally not
 //! executable yet; they record a clear "not implemented" failure.
 //!

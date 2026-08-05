@@ -287,6 +287,12 @@ mod tests {
             enabled: true,
             last_run: None,
             next_run: None,
+            tz: None,
+            timeout: None,
+            skip_if_empty: false,
+            auto_write: false,
+            auto_dirs: Vec::new(),
+            files: Vec::new(),
         }
     }
 

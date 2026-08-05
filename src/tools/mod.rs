@@ -21,6 +21,7 @@ pub mod write_file;
 
 pub use registry::{ToolContextBuilder, ToolRegistry};
 
+use crate::session::toolset::CompositeToolset;
 use crate::shared::{ToolDef, ToolOutcome};
 use std::sync::{Arc, Mutex};
 use tokio_util::sync::CancellationToken;
@@ -44,6 +45,10 @@ pub struct ToolContext {
     /// this to run prompts in a separate executor context. When `None`,
     /// the tool reports that task spawning is unavailable.
     pub task_spawner: Option<Arc<dyn task::TaskSpawner>>,
+    /// Optional tool registry for dispatching tool calls by name.
+    /// Used by workflow tool steps to invoke other tools. When `None`,
+    /// tool steps bail (bench/sandbox context).
+    pub tools: Option<Arc<CompositeToolset>>,
 }
 
 impl std::fmt::Debug for ToolContext {
@@ -52,6 +57,7 @@ impl std::fmt::Debug for ToolContext {
             .field("token", &self.token)
             .field("dry_run", &self.dry_run)
             .field("task_spawner", &self.task_spawner.is_some())
+            .field("tools", &self.tools.is_some())
             .finish()
     }
 }
@@ -64,6 +70,7 @@ impl ToolContext {
             token: CancellationToken::new(),
             dry_run: false,
             task_spawner: None,
+            tools: None,
         }
     }
 
@@ -75,6 +82,7 @@ impl ToolContext {
             token: CancellationToken::new(),
             dry_run,
             task_spawner: None,
+            tools: None,
         }
     }
 
@@ -84,6 +92,7 @@ impl ToolContext {
             token: CancellationToken::new(),
             dry_run: false,
             task_spawner: Some(spawner),
+            tools: None,
         }
     }
 }

@@ -10,7 +10,7 @@ use tokio::net::UnixStream;
 
 /// Ask the daemon to shut down gracefully.
 pub async fn send_shutdown(socket_path: &Path) -> Result<()> {
-    send_command(socket_path, Request::Shutdown).await?;
+    send_command(socket_path, Request::Shutdown { auth_token: None }).await?;
     Ok(())
 }
 

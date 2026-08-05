@@ -21,6 +21,14 @@ fn error(message: impl Into<String>) -> ToolOutcome {
     }
 }
 
+fn ensure_parent_dir(path: &std::path::Path) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("cannot create directory {}: {e}", parent.display()))?;
+    }
+    Ok(())
+}
+
 fn json_get_string(args: &Value, key: &str) -> Option<String> {
     args.get(key)
         .and_then(|v| v.as_str())
@@ -192,8 +200,8 @@ impl Tool for VideoPipeline {
         };
 
         let project = resolve_path(&project_str);
-        if let Some(parent) = project.parent() {
-            let _ = std::fs::create_dir_all(parent);
+        if let Err(e) = ensure_parent_dir(&project) {
+            return error(e);
         }
 
         let reg = kf_video::tools::ToolRegistry::with_builtins();
@@ -202,8 +210,8 @@ impl Tool for VideoPipeline {
         if let Some(brief_str) = brief_str {
             let brief_path = resolve_path(&brief_str);
             let dst = project.join("brief.txt");
-            if let Some(parent) = dst.parent() {
-                let _ = std::fs::create_dir_all(parent);
+            if let Err(e) = ensure_parent_dir(&dst) {
+                return error(e);
             }
             if let Err(e) = std::fs::copy(&brief_path, &dst) {
                 return error(format!(
@@ -320,14 +328,19 @@ impl Tool for VideoRender {
         let kinds: Vec<&str> = comp.scenes.iter().map(scene_kind_tag).collect();
         let report = slideshow_risk::score_slideshow_risk(&kinds, comp.total_duration_s());
         let risk_path = arts.join("risk_report.json");
-        let _ = std::fs::write(
+        if let Err(e) = ensure_parent_dir(&risk_path) {
+            return error(format!("video_render: create risk report dir: {e}"));
+        }
+        if let Err(e) = std::fs::write(
             &risk_path,
             serde_json::to_string_pretty(&report).unwrap_or_default(),
-        );
+        ) {
+            return error(format!("video_render: write risk_report.json: {e}"));
+        }
 
         let out = project.join("render").join("final.mp4");
-        if let Some(parent) = out.parent() {
-            let _ = std::fs::create_dir_all(parent);
+        if let Err(e) = ensure_parent_dir(&out) {
+            return error(format!("video_render: create render dir: {e}"));
         }
 
         match kf_video::compose::render_composition(&comp, &out).await {
@@ -512,8 +525,8 @@ impl Tool for VideoFromBrief {
         let brief_path = resolve_path(&brief_str);
         let dst = project.join("brief.txt");
 
-        if let Some(parent) = dst.parent() {
-            let _ = std::fs::create_dir_all(parent);
+        if let Err(e) = ensure_parent_dir(&dst) {
+            return error(format!("video_from_brief: {e}"));
         }
         if brief_path != dst {
             if let Err(e) = std::fs::copy(&brief_path, &dst) {

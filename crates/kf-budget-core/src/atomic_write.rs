@@ -3,7 +3,7 @@
 //! leaves the previous file intact.
 //!
 //! ponytail: a thin wrapper around the stdlib/`tempfile` dance that
-//! `save_budget` and `save_budget_config_at` both perform. Eprintln
+//! `save_budget` and `save_budget_config_at` both perform. Tracing
 //! tagging moves out of the helper so the failure log reads the same
 //! whether it came from the budget file or a config file — a future
 //! contributor chasing a corrupt-budget report sees a single label
@@ -19,26 +19,26 @@ use std::path::Path;
 pub fn atomic_write_text(path: &Path, label: &str, body: &str) {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     if let Err(e) = std::fs::create_dir_all(parent) {
-        eprintln!("kf-budget: {label} dir create failed: {e}");
+        tracing::warn!("kf-budget: {label} dir create failed: {e}");
         return;
     }
     let mut tmp = match tempfile::NamedTempFile::new_in(parent) {
         Ok(t) => t,
         Err(e) => {
-            eprintln!("kf-budget: {label} tmpfile create failed: {e}");
+            tracing::warn!("kf-budget: {label} tmpfile create failed: {e}");
             return;
         }
     };
     if let Err(e) = tmp.write_all(body.as_bytes()) {
-        eprintln!("kf-budget: {label} tmpfile write failed: {e}");
+        tracing::warn!("kf-budget: {label} tmpfile write failed: {e}");
         return;
     }
     if let Err(e) = tmp.flush() {
-        eprintln!("kf-budget: {label} tmpfile flush failed: {e}");
+        tracing::warn!("kf-budget: {label} tmpfile flush failed: {e}");
         return;
     }
     if let Err(e) = tmp.persist(path).map_err(|e| e.error) {
-        eprintln!("kf-budget: {label} persist failed: {e}");
+        tracing::warn!("kf-budget: {label} persist failed: {e}");
     }
 }
 

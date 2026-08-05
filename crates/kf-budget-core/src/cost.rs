@@ -104,7 +104,7 @@ pub(crate) fn emit_usage_at(record: &UsageRecord, path: &std::path::Path) {
     let line = match serde_json::to_string(&record) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("kf-budget: failed to serialise usage record: {e}");
+            tracing::warn!("kf-budget: failed to serialise usage record: {e}");
             return;
         }
     };
@@ -120,12 +120,12 @@ pub(crate) fn emit_usage_at(record: &UsageRecord, path: &std::path::Path) {
     {
         Ok(f) => f,
         Err(e) => {
-            eprintln!("kf-budget: usage.jsonl open failed ({e}); dropping record");
+            tracing::warn!("kf-budget: usage.jsonl open failed ({e}); dropping record");
             return;
         }
     };
     if let Err(e) = writeln!(file, "{line}") {
-        eprintln!("kf-budget: usage.jsonl write failed ({e}); dropping record");
+        tracing::warn!("kf-budget: usage.jsonl write failed ({e}); dropping record");
     }
 }
 

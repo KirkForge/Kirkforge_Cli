@@ -523,21 +523,16 @@ impl WorkflowExecutor {
     /// Evaluate a shell condition string. Returns `true` if the condition is
     /// absent or evaluates to exit code 0, `false` otherwise.
     /// ponytail: sh -c eval — upgrade to expression parser if needed.
-    async fn eval_condition(condition: &str) -> bool {
-        match tokio::process::Command::new("sh")
+    async fn eval_condition(condition: &str) -> Result<bool> {
+        tokio::process::Command::new("sh")
             .arg("-c")
             .arg(condition)
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status()
             .await
-        {
-            Ok(status) => status.success(),
-            Err(e) => {
-                tracing::warn!("condition eval failed for '{condition}': {e}");
-                false
-            }
-        }
+            .map(|status| status.success())
+            .map_err(|e| anyhow::anyhow!("condition eval failed for '{condition}': {e}"))
     }
 
     /// Check budget limits (max_iterations, max_seconds). Returns `Ok(())`
@@ -803,7 +798,9 @@ impl WorkflowExecutor {
                 .steps
                 .iter()
                 .find(|s| s.name == task.name)
-                .ok_or_else(|| anyhow::anyhow!("batch error step '{}' not found in workflow", task.name))?;
+                .ok_or_else(|| {
+                    anyhow::anyhow!("batch error step '{}' not found in workflow", task.name)
+                })?;
             outputs.insert(
                 task.name.clone(),
                 StepOutput {
@@ -902,7 +899,7 @@ impl WorkflowExecutor {
                     .find(|s| &s.name == name)
                     .ok_or_else(|| anyhow!("missing step {name}"))?;
                 if let Some(ref cond) = step.condition {
-                    if !Self::eval_condition(cond).await {
+                    if !Self::eval_condition(cond).await? {
                         skipped.insert(name.clone());
                         continue;
                     }

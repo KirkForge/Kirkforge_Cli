@@ -60,21 +60,43 @@ impl VerifierSlots {
         self.verifiers.retain(|v| f(v));
     }
 
-    /// Run all verifiers against an event, applying truth model precedence.
+    /// Run all verifiers against an event, collecting all findings.
     ///
-    /// Returns the first definitive result:
-    /// - `Fixable`/`Unfixable` wins immediately (stop at first non-clean)
-    /// - `Skipped` is ignored (continue to next)
-    /// - If all return `Clean` or `Skipped`, returns `Clean`
-    pub async fn verify(&self, event: &BusEvent) -> Verdict {
+    /// Returns all non-Clean/Skipped verdicts with their verifier names.
+    /// Callers can pick the most severe or use all findings.
+    /// `Unfixable` is considered more severe than `Fixable`.
+    pub async fn verify_all(&self, event: &BusEvent) -> Vec<(String, Verdict)> {
+        let mut findings = Vec::new();
         for verifier in &self.verifiers {
             let verdict = verifier.verify(event).await;
             match &verdict {
                 Verdict::Clean | Verdict::Skipped(_) => continue,
-                Verdict::Fixable(_) | Verdict::Unfixable(_) => return verdict,
+                Verdict::Fixable(_) | Verdict::Unfixable(_) => {
+                    findings.push((verifier.name().to_string(), verdict));
+                }
             }
         }
-        Verdict::Clean
+        findings
+    }
+
+    /// Run all verifiers and return the most severe verdict.
+    ///
+    /// `Unfixable` takes priority over `Fixable`. If no findings, returns `Clean`.
+    pub async fn verify(&self, event: &BusEvent) -> Verdict {
+        let findings = self.verify_all(event).await;
+        // ponytail: prefer Unfixable over Fixable; first-seen among equal severity
+        for (_, v) in &findings {
+            if matches!(v, Verdict::Unfixable(_)) {
+                return v.clone();
+            }
+        }
+        findings
+            .into_iter()
+            .find_map(|(_, v)| match v {
+                Verdict::Fixable(_) => Some(v),
+                _ => None,
+            })
+            .unwrap_or(Verdict::Clean)
     }
 
     /// Number of registered verifiers.

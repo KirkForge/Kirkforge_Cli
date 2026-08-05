@@ -29,12 +29,85 @@ use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
 use std::time::SystemTime;
 
-/// Thread-safe VFS minification cache.
-static VFS_CACHE: LazyLock<Mutex<HashMap<(PathBuf, u64), String>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
-
 /// Cache capacity — limits memory growth.
 const CACHE_CAPACITY: usize = 200;
+
+/// Simple LRU cache: HashMap for O(1) lookup + VecDeque for recency order.
+/// Back = most recently used, front = least recently used.
+struct LruCache<K, V> {
+    map: HashMap<K, V>,
+    order: std::collections::VecDeque<K>,
+    capacity: usize,
+}
+
+impl<K, V> LruCache<K, V>
+where
+    K: std::hash::Hash + Eq + Clone,
+{
+    fn new(capacity: usize) -> Self {
+        Self {
+            map: HashMap::with_capacity(capacity),
+            order: std::collections::VecDeque::with_capacity(capacity),
+            capacity,
+        }
+    }
+
+    fn get(&mut self, key: &K) -> Option<&V> {
+        if self.map.contains_key(key) {
+            // Move to back (most recently used)
+            self.order.retain(|k| k != key);
+            self.order.push_back(key.clone());
+            self.map.get(key)
+        } else {
+            None
+        }
+    }
+
+    fn insert(&mut self, key: K, value: V) {
+        if self.map.contains_key(&key) {
+            // Update existing — move to back
+            self.order.retain(|k| k != &key);
+            self.order.push_back(key.clone());
+            self.map.insert(key, value);
+            return;
+        }
+        // Evict LRU if at capacity
+        while self.map.len() >= self.capacity {
+            if let Some(lru_key) = self.order.pop_front() {
+                self.map.remove(&lru_key);
+            } else {
+                break;
+            }
+        }
+        self.order.push_back(key.clone());
+        self.map.insert(key, value);
+    }
+
+    #[allow(dead_code)] // used via test-only wrapper functions
+    fn len(&self) -> usize {
+        self.map.len()
+    }
+
+    #[allow(dead_code)] // used via test-only wrapper functions
+    fn clear(&mut self) {
+        self.map.clear();
+        self.order.clear();
+    }
+
+    #[allow(dead_code)] // used via test-only wrapper functions
+    fn retain<F>(&mut self, mut f: F)
+    where
+        F: FnMut(&K, &V) -> bool,
+    {
+        self.map.retain(|k, v| f(k, v));
+        // ponytail: O(n) re-sync; fine for a 200-entry cache.
+        self.order.retain(|k| self.map.contains_key(k));
+    }
+}
+
+/// Thread-safe VFS minification cache (LRU).
+static VFS_CACHE: LazyLock<Mutex<LruCache<(PathBuf, u64), String>>> =
+    LazyLock::new(|| Mutex::new(LruCache::new(CACHE_CAPACITY)));
 
 /// Minify source code for a given language.
 ///
@@ -72,7 +145,7 @@ fn minify_source_impl(path: &Path, content: &str, preserve_tests: bool) -> Strin
 
     // Check cache
     {
-        let cache = VFS_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        let mut cache = VFS_CACHE.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(cached) = cache.get(&(path.to_path_buf(), mtime)) {
             return cached.clone();
         }
@@ -86,13 +159,6 @@ fn minify_source_impl(path: &Path, content: &str, preserve_tests: bool) -> Strin
     if !preserve_tests {
         let mut cache = VFS_CACHE.lock().unwrap_or_else(|e| e.into_inner());
         cache.insert((path.to_path_buf(), mtime), result.clone());
-        if cache.len() > CACHE_CAPACITY {
-            let target = CACHE_CAPACITY / 2;
-            let keys: Vec<_> = cache.keys().take(target).cloned().collect();
-            for k in &keys {
-                cache.remove(k);
-            }
-        }
     }
 
     result
@@ -123,7 +189,8 @@ pub fn minify_cache_size() -> usize {
 #[cfg(test)]
 pub fn cache_contains(path: &Path) -> bool {
     let cache = VFS_CACHE.lock().unwrap_or_else(|e| e.into_inner());
-    cache.keys().any(|(p, _)| p == path)
+    // ponytail: O(n) scan on a 200-entry cache; fine for tests only.
+    cache.map.keys().any(|(p, _)| p == path)
 }
 
 /// Estimate token savings from minification. 1 token ≈ 4 chars for code.

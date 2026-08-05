@@ -215,6 +215,7 @@ pub fn all_plugin_tools(
                     cmd,
                     shared_config.clone(),
                     per_plugin_sandbox.clone(),
+                    hosted.effective_trust,
                 );
                 let wrapper = match &audit_log {
                     Some(log) => wrapper.with_audit_log(std::sync::Arc::clone(log)),

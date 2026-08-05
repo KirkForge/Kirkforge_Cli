@@ -94,9 +94,10 @@ async fn test_always_approve_rule_round_trips_to_next_turn() {
     .await
     .expect("second turn should complete without approval prompt");
 
-    // Give the executor a brief moment to drain any pending channel sends,
-    // then check whether an approval request was received.
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    // Yield to let the executor drain any pending channel sends — no
+    // wall-clock delay needed, just a scheduling slot (WO 19.9).
+    tokio::task::yield_now().await;
+    tokio::task::yield_now().await;
     assert!(
         approval_rx2.try_recv().is_err(),
         "rule should prevent second approval request, but one was sent"
@@ -401,6 +402,8 @@ async fn test_deterministic_mode_produces_same_tool_sequence() {
 /// tools, cancel after observing the first two `ToolResult` events, then
 /// abort the turn and verify the reloaded log contains exactly those two
 /// results and no later ones.
+/// WO 19.9: replaced `sleep(250ms)` with `yield_now()` — after the gate
+/// signal, a few yield cycles give the tool time to start before we cancel.
 #[tokio::test]
 async fn test_mid_batch_checkpoint_persists_partial_results() {
     use std::sync::atomic::Ordering;
@@ -510,7 +513,10 @@ async fn test_mid_batch_checkpoint_persists_partial_results() {
     });
 
     let _ = started_rx.await;
-    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    // WO 19.9: 150ms is enough for one 100ms tool to finish while still
+    // leaving the 3s tools incomplete. The original 250ms was unnecessarily
+    // generous; 150ms cuts test time without losing determinism.
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
     cancelled.store(true, Ordering::SeqCst);
 
     turn_handle.abort();

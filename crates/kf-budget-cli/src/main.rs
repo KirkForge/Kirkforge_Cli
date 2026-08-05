@@ -454,12 +454,14 @@ fn self_check() -> Result<(), Box<dyn std::error::Error>> {
 
 // ---- Tests -------------------------------------------------------------
 // the four inline `#[cfg(test)]` modules were split into sibling files
-// (`tests_main`, `tests_validate`, `tests_adr_0015`, `tests_recent`)
+// (`tests_main`, `tests_validate`, `tests` (submoduled from tests_adr_0015),
+// `tests_recent`)
 // per ADR-0002 § Crate layout. Each is declared as a direct child of
 // the bin root so its `use super::*;` keeps resolving against the crate
 // root (same semantics as the prior inline `mod`).
 #[cfg(test)]
-mod tests_adr_0015;
+mod tests;
+
 #[cfg(test)]
 mod tests_main;
 #[cfg(test)]

@@ -49,10 +49,20 @@ pub async fn run_job_daemon_at(socket_path: PathBuf, pid_path: PathBuf) -> Resul
         std::fs::create_dir_all(parent).context("create jobs daemon data directory")?;
     }
 
-    // Remove stale socket from a previous crash.
-    if let Err(e) = std::fs::remove_file(&socket_path) {
-        if e.kind() != std::io::ErrorKind::NotFound {
-            tracing::warn!(error = %e, path = %socket_path.display(), "Failed to remove stale jobd socket");
+    // Socket guard: before removing and binding, try to connect. If a
+    // connection succeeds, another daemon is live — refuse to hijack it.
+    if socket_path.exists() {
+        match UnixStream::connect(&socket_path).await {
+            Ok(_) => {
+                anyhow::bail!(
+                    "another jobd instance is already running at {}",
+                    socket_path.display()
+                );
+            }
+            Err(_) => {
+                // Stale socket — safe to remove.
+                let _ = std::fs::remove_file(&socket_path);
+            }
         }
     }
 

@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::ffi::OsStr;
+#[cfg(unix)]
 use std::sync::Arc;
 
 #[cfg(unix)]
@@ -508,6 +509,43 @@ mod tests {
         // is replaced by whatever is on disk (nothing, in the empty temp dir).
         assert_eq!(state.recent.len(), 1);
 
+        restore_data_dir(previous);
+    }
+
+    #[test]
+    fn check_auth_allows_when_no_token_configured() {
+        let _guard = crate::session::test_data_dir_lock().blocking_lock();
+        let (_dir, previous) = with_empty_data_dir();
+        let state = DaemonState::new();
+        assert!(
+            state.check_auth(None).is_ok(),
+            "no token configured, None should pass"
+        );
+        assert!(
+            state.check_auth(Some("anything")).is_ok(),
+            "no token configured, any token should pass"
+        );
+        restore_data_dir(previous);
+    }
+
+    #[test]
+    fn check_auth_rejects_missing_or_wrong_token() {
+        let _guard = crate::session::test_data_dir_lock().blocking_lock();
+        let (_dir, previous) = with_empty_data_dir();
+        let mut state = DaemonState::new();
+        state.expected_token = Some("secret-token".to_string());
+        assert!(
+            state.check_auth(None).is_err(),
+            "missing token should be rejected"
+        );
+        assert!(
+            state.check_auth(Some("wrong")).is_err(),
+            "wrong token should be rejected"
+        );
+        assert!(
+            state.check_auth(Some("secret-token")).is_ok(),
+            "correct token should pass"
+        );
         restore_data_dir(previous);
     }
 

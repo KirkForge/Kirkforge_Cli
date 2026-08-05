@@ -129,6 +129,11 @@ impl PromptBuilder {
         self.system_override = override_prompt;
     }
 
+    /// Returns the current system override, if any.
+    pub fn system_override(&self) -> Option<&str> {
+        self.system_override.as_deref()
+    }
+
     // reason: build params mirror SystemStemKey::new; heterogeneous types, no obvious struct.
     #[allow(clippy::too_many_arguments)]
     pub fn build(

@@ -596,7 +596,12 @@ async fn toggle_plugin(
     let result = reload_plugins(state, plugin_reload_tx).await;
 
     let status = if was_disabled { "enabled" } else { "disabled" };
-    format!("🔌 Plugin '{name}' is now {status}. {result}")
+    let restart_notice = if crate::session::plugin_tools::folded_feature_enabled(name) {
+        " (takes effect on next launch for compiled-in tools)"
+    } else {
+        ""
+    };
+    format!("🔌 Plugin '{name}' is now {status}.{restart_notice} {result}")
 }
 
 /// Mutable access to shared config, recovering from lock poisoning.

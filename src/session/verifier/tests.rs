@@ -38,7 +38,7 @@ async fn test_empty_slots_return_clean() {
 }
 
 #[tokio::test]
-async fn test_fixable_verdict_stops_at_first() {
+async fn test_fixable_verdict_collects_all_findings() {
     let mut slots = VerifierSlots::new();
     slots
         .register(Arc::new(MockVerifier {
@@ -66,13 +66,17 @@ async fn test_fixable_verdict_stops_at_first() {
         }))
         .unwrap();
 
+    // verify() returns the most severe (Unfixable > Fixable)
     let verdict = slots.verify(&make_edit_event()).await;
-    // Should stop at lint (priority 1) even though security would also fire
-    assert!(matches!(verdict, Verdict::Fixable(_)));
+    assert!(matches!(verdict, Verdict::Unfixable(_)));
+
+    // verify_all() collects every finding
+    let all = slots.verify_all(&make_edit_event()).await;
+    assert_eq!(all.len(), 2, "both verifiers should report findings");
 }
 
 #[tokio::test]
-async fn test_unfixable_stops_chain() {
+async fn test_unfixable_is_most_severe() {
     let mut slots = VerifierSlots::new();
     slots
         .register(Arc::new(MockVerifier {

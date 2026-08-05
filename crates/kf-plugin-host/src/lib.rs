@@ -176,9 +176,9 @@ impl PluginRegistry {
                         continue;
                     }
 
-                    // WO 15.2: surface every manifest validation error as a
-                    // warning and skip the plugin, matching the load_one
-                    // contract (WO 8.8 "show every issue at once"). Before
+                    // WO 15.2 / M10: reject invalid manifests. Both
+                    // load_from_dir and load_one now return errors on
+                    // validation failure, consistent behaviour. Before
                     // this, load_from_dir silently accepted bad names, bad
                     // semver, duplicate triggers, unknown hook events, and
                     // untrusted command paths on the production load path.
@@ -328,13 +328,16 @@ impl PluginRegistry {
             .validate_api_version()
             .map_err(|e| anyhow::anyhow!("{}: {}", plugin_dir.display(), e))?;
 
-        // Surface manifest-level validation errors as warnings (do not
-        // reject the plugin — let the user see every issue at once so they
-        // can fix the manifest in one pass instead of playing whack-a-mole).
-        let mut warnings: Vec<String> = match plugin.manifest().validate() {
-            Ok(()) => Vec::new(),
-            Err(errs) => validation_warnings(&plugin, &errs),
-        };
+        // Reject the plugin on manifest validation errors, matching
+        // load_from_dir behaviour (M10). Previously load_one loaded the
+        // plugin with warnings while load_from_dir skipped it — the
+        // asymmetry meant an invalid manifest could be loaded one way but
+        // not the other.
+        if let Err(errs) = plugin.manifest().validate() {
+            let messages = validation_warnings(&plugin, &errs);
+            anyhow::bail!("{}", messages.join("; "));
+        }
+        let mut warnings: Vec<String> = Vec::new();
 
         if policy.verify_signatures {
             verify_plugin_signature(plugin_dir, policy.signature_key_path.as_deref()).map_err(
@@ -820,12 +823,8 @@ command = "hooks/post-turn.sh"
         // WO 15.2: load_from_dir now calls validate() before indexing.
         // validate() rejects the `../evil.sh` command path (parent-dir
         // segment), so the whole plugin is skipped with a validation
-        // warning — stricter than the old behavior (which loaded the
-        // plugin and dropped only the escaping capability via
-        // filter_capabilities). The stratum-escape behavior is still
-        // covered by load_one_warns_when_capability_command_escapes_root
-        // (which uses an absolute path that validate() also rejects,
-        // but load_one keeps the plugin and surfaces warnings).
+        // warning. Both load_from_dir and load_one reject invalid
+        // manifests (M10).
         let tmp = tempfile::tempdir().unwrap();
         let plugins = tmp.path().join("plugins");
         let plugin_dir = plugins.join("bad");
@@ -893,7 +892,9 @@ command = "tools/ok.sh"
 
     #[cfg(unix)]
     #[test]
-    fn load_one_warns_when_capability_command_escapes_root() {
+    fn load_one_rejects_capability_with_absolute_command() {
+        // M10: validate() rejects absolute command paths; load_one now
+        // returns Err instead of loading with warnings.
         let tmp = tempfile::tempdir().unwrap();
         let plugin_dir = tmp.path().join("bad");
         std::fs::create_dir_all(&plugin_dir).unwrap();
@@ -915,16 +916,13 @@ command = "/bin/sh"
         .unwrap();
 
         let mut reg = PluginRegistry::new();
-        let (_name, warnings) = reg
+        let err = reg
             .load_one(&plugin_dir, TrustPolicy::up_to(TrustTier::Shell))
-            .unwrap();
+            .unwrap_err();
         assert!(
-            warnings
-                .iter()
-                .any(|w| w.contains("resolves outside plugin root")),
-            "expected command-escape warning, got: {warnings:?}"
+            err.to_string().contains("manifest validation"),
+            "expected manifest validation error, got: {err}"
         );
-        assert!(reg.tool_by_name("bad/escape").is_none());
     }
 
     #[test]
@@ -1097,11 +1095,10 @@ command = "tools/escape.sh"
     }
 
     #[test]
-    fn load_one_surfaces_manifest_validation_errors_as_warnings() {
-        // Manifest with several schema problems: bad name, bad version,
-        // a tool with an absolute command, and a duplicate skill trigger.
-        // The plugin must still load (per WO 8.8: don't reject — show all
-        // issues at once) but every problem must appear in the warnings.
+    fn load_one_rejects_invalid_manifest() {
+        // M10: load_one must reject invalid manifests, matching
+        // load_from_dir. Previously load_one loaded the plugin with
+        // warnings while load_from_dir skipped it.
         let tmp = tempfile::tempdir().unwrap();
         let plugin_dir = tmp.path().join("bad-valid8");
         std::fs::create_dir_all(&plugin_dir).unwrap();
@@ -1132,30 +1129,25 @@ prompt = "second"
         .unwrap();
 
         let mut reg = PluginRegistry::new();
-        let (_name, warnings) = reg
+        let err = reg
             .load_one(&plugin_dir, TrustPolicy::up_to(TrustTier::Shell))
-            .unwrap();
-        let joined = warnings.join("\n");
+            .unwrap_err();
+        let msg = err.to_string();
         assert!(
-            joined.contains("manifest validation"),
-            "expected manifest validation warnings, got: {warnings:?}"
+            msg.contains("manifest validation"),
+            "expected manifest validation error, got: {msg}"
         );
-        assert!(joined.contains("name"), "warnings: {warnings:?}");
-        assert!(joined.contains("version"), "warnings: {warnings:?}");
-        assert!(
-            joined.contains("capabilities[0].command"),
-            "warnings: {warnings:?}"
-        );
-        assert!(
-            joined.contains("capabilities[2].trigger"),
-            "warnings: {warnings:?}"
-        );
+        assert!(msg.contains("name"), "error: {msg}");
+        assert!(msg.contains("version"), "error: {msg}");
+        assert!(msg.contains("capabilities[0].command"), "error: {msg}");
+        assert!(msg.contains("capabilities[2].trigger"), "error: {msg}");
     }
 
     #[test]
     fn load_from_dir_surfaces_invalid_manifest_and_skips_plugin() {
-        // WO 15.2: load_from_dir must call validate() and skip the plugin
-        // on error, matching load_one. Before this fix the bulk-load path
+        // WO 15.2 / M10: load_from_dir must call validate() and skip the
+        // plugin on error. Both load_from_dir and load_one reject invalid
+        // manifests consistently. Before this fix the bulk-load path
         // silently accepted a bad name. Uses a bad name (`Bad Name!`) so
         // the only validation error is the name check; the path prefix
         // and the "name" path must both appear in the warnings.

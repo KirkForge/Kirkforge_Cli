@@ -244,9 +244,27 @@ async fn run_workflow_job(
         dry_run: false,
     };
 
-    // 5. Execute.
+    // 5. Execute with optional timeout (same pattern as run_bash_job).
     let executor = WorkflowExecutor::new(workflow);
-    match executor.run(std::sync::Arc::new(runner), None).await {
+    let cancel_token = runner.cancel_token.clone();
+    let run_future = executor.run(std::sync::Arc::new(runner), None);
+    let result = match job.timeout {
+        Some(dur) => match tokio::time::timeout(dur, run_future).await {
+            Ok(r) => r,
+            Err(_) => {
+                cancel_token.cancel();
+                return record_failure(
+                    job,
+                    store,
+                    started_at,
+                    paths,
+                    format!("Workflow '{}' timed out after {}s", template, dur.as_secs()),
+                );
+            }
+        },
+        None => run_future.await,
+    };
+    match result {
         Ok(summary) => {
             let finished_at = Utc::now();
             let stdout_content = crate::tools::workflow::summary_to_json(&summary);
@@ -396,5 +414,78 @@ mod tests {
         let run = run_job(&mut job, &store, &config).await.unwrap();
         assert_eq!(run.status, RunStatus::Failure);
         assert!(run.summary.contains("Safety gate") || run.summary.contains("dangerous"));
+    }
+
+    /// A bash job with a timeout must not run longer than the timeout.
+    /// Regression test for H6: timeout was None even when job.timeout was set.
+    #[tokio::test]
+    async fn bash_job_timeout_is_enforced() {
+        let (_tmp, store) = tmp_store();
+        let mut job = bash_job("sleep 30");
+        job.timeout = Some(std::time::Duration::from_secs(2));
+        let mut config = Config::default();
+        config.tools.scheduled_bash_auto_approve = true;
+        let start = std::time::Instant::now();
+        let run = run_job(&mut job, &store, &config).await.unwrap();
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed < std::time::Duration::from_secs(10),
+            "job should be killed by timeout, ran for {elapsed:?}"
+        );
+        assert_eq!(run.status, RunStatus::Failure);
+        assert!(
+            run.summary.to_lowercase().contains("timeout")
+                || run.summary.to_lowercase().contains("timed out"),
+            "summary should mention timeout: {}",
+            run.summary
+        );
+    }
+
+    // WO 19.5: jobs lifecycle — exit code and stdout are captured correctly.
+    #[tokio::test]
+    async fn bash_job_captures_exit_code_and_output() {
+        let (_tmp, store) = tmp_store();
+        let mut job = bash_job("echo lifecycle-test && exit 42");
+        let mut config = Config::default();
+        config.tools.scheduled_bash_auto_approve = true;
+        let run = run_job(&mut job, &store, &config).await.unwrap();
+        assert_eq!(run.exit_code, Some(42), "exit code should be captured");
+        let stdout = std::fs::read_to_string(&run.stdout_path).unwrap();
+        assert!(
+            stdout.contains("lifecycle-test"),
+            "stdout should contain output: {stdout}"
+        );
+    }
+
+    // WO 19.5: workflow job with nonexistent template is rejected.
+    #[tokio::test]
+    async fn workflow_job_rejects_missing_template() {
+        let (_tmp, store) = tmp_store();
+        let mut job = ScheduledJob {
+            id: "job-wf-missing".into(),
+            created_at: Utc::now(),
+            schedule: ScheduleSpec::Once(Utc::now()),
+            kind: JobKind::Workflow {
+                template: "nonexistent_workflow".into(),
+                vars: std::collections::HashMap::new(),
+            },
+            enabled: true,
+            last_run: None,
+            next_run: None,
+            tz: None,
+            timeout: None,
+            skip_if_empty: false,
+            auto_write: false,
+            auto_dirs: Vec::new(),
+            files: Vec::new(),
+        };
+        let config = Config::default();
+        let run = run_job(&mut job, &store, &config).await.unwrap();
+        assert_eq!(run.status, RunStatus::Failure);
+        assert!(
+            run.summary.contains("not found"),
+            "summary should mention missing template: {}",
+            run.summary
+        );
     }
 }

@@ -537,6 +537,307 @@ impl WorkflowExecutor {
         }
     }
 
+    /// Check budget limits (max_iterations, max_seconds). Returns `Ok(())`
+    /// if within budget, or `Err` with a budget-exceeded message.
+    /// Inserts an `on_exceeded` step output if one is configured.
+    fn check_budget(
+        budget: &Budget,
+        iterations: u64,
+        start: std::time::Instant,
+        completed: &mut HashSet<String>,
+        skipped: &HashSet<String>,
+        outputs: &mut HashMap<String, StepOutput>,
+    ) -> Result<()> {
+        if let Some(max_iter) = budget.max_iterations {
+            if iterations >= max_iter {
+                if let Some(ref on_exceeded) = budget.on_exceeded {
+                    if !completed.contains(on_exceeded) && !skipped.contains(on_exceeded) {
+                        completed.insert(on_exceeded.clone());
+                        outputs.insert(
+                            on_exceeded.clone(),
+                            StepOutput {
+                                name: on_exceeded.clone(),
+                                kind: StepKind::Agent,
+                                persona: String::new(),
+                                summary: format!("budget exceeded: max_iterations ({max_iter})"),
+                                critique: None,
+                                structured_output: None,
+                            },
+                        );
+                    }
+                }
+                bail!("workflow budget exceeded: max_iterations ({max_iter})");
+            }
+        }
+        if let Some(max_secs) = budget.max_seconds {
+            if start.elapsed().as_secs() >= max_secs {
+                if let Some(ref on_exceeded) = budget.on_exceeded {
+                    if !completed.contains(on_exceeded) && !skipped.contains(on_exceeded) {
+                        completed.insert(on_exceeded.clone());
+                        outputs.insert(
+                            on_exceeded.clone(),
+                            StepOutput {
+                                name: on_exceeded.clone(),
+                                kind: StepKind::Agent,
+                                persona: String::new(),
+                                summary: format!("budget exceeded: max_seconds ({max_secs})"),
+                                critique: None,
+                                structured_output: None,
+                            },
+                        );
+                    }
+                }
+                bail!("workflow budget exceeded: max_seconds ({max_secs})");
+            }
+        }
+        Ok(())
+    }
+
+    /// Build the prompt for an Agent step by prepending fork_from context
+    /// and appending dependency context.
+    fn build_agent_prompt(step: &Step, outputs: &HashMap<String, StepOutput>) -> Result<String> {
+        let mut prompt = step.prompt.clone().unwrap_or_default();
+
+        if let Some(ref fork) = step.fork_from {
+            if let Some(fork_out) = outputs.get(fork) {
+                prompt = format!(
+                    "Context from forked step '{}':\n{}\n\n---\n\n{}",
+                    fork, fork_out.summary, prompt
+                );
+            }
+        }
+
+        if !step.depends_on.is_empty() {
+            prompt.push_str("\n\nContext from previous steps:\n");
+            for dep in &step.depends_on {
+                let dep_out = outputs
+                    .get(dep)
+                    .ok_or_else(|| anyhow!("missing output for dependency {dep}"))?;
+                prompt.push_str(&format!(
+                    "\n## {} ({}):\n{}",
+                    dep, dep_out.persona, dep_out.summary
+                ));
+                if let Some(critique) = &dep_out.critique {
+                    prompt.push_str(&format!("\n\nCritique of {dep}:\n{critique}"));
+                }
+            }
+        }
+
+        Ok(resolve_step_refs(&prompt, outputs))
+    }
+
+    /// Execute a FanOut step: spawn concurrent sub-agents, collect results.
+    async fn run_fan_out(
+        step: &Step,
+        outputs: &mut HashMap<String, StepOutput>,
+        runner: &Arc<dyn StepRunner>,
+        completed: &mut HashSet<String>,
+    ) -> Result<Option<StepOutput>> {
+        let over_expr = step
+            .over
+            .as_ref()
+            .ok_or_else(|| anyhow!("fan_out step '{}' requires 'over'", step.name))?;
+        let as_name = step
+            .as_name
+            .as_ref()
+            .ok_or_else(|| anyhow!("fan_out step '{}' requires 'as_name'", step.name))?;
+        let resolved_over = resolve_step_refs(over_expr, outputs);
+        let items: Vec<serde_json::Value> =
+            serde_json::from_str(&resolved_over).with_context(|| {
+                format!(
+                    "fan_out step '{}': 'over' must resolve to a JSON array, got: {}",
+                    step.name, resolved_over
+                )
+            })?;
+        let prompt_template = step.prompt.clone().unwrap_or_default();
+        let persona = step.persona.clone().unwrap_or_else(|| "coder".to_string());
+
+        let max_permits = step.max_parallel.unwrap_or(items.len());
+        let semaphore = Arc::new(tokio::sync::Semaphore::new(max_permits));
+        let mut join_set = tokio::task::JoinSet::new();
+        for (i, item) in items.iter().enumerate() {
+            let item_str = match item {
+                serde_json::Value::String(s) => s.clone(),
+                other => other.to_string(),
+            };
+            let child_prompt = resolve_step_refs(&prompt_template, outputs)
+                .replace(&format!("${{{as_name}}}"), &item_str);
+            let child_name = format!("{}_{}", step.name, i);
+            let sem = semaphore.clone();
+            let item_clone = item.clone();
+            let runner_clone = runner.clone();
+            let persona_clone = persona.clone();
+            join_set.spawn(async move {
+                let _permit = sem.acquire().await.unwrap();
+                let summary = runner_clone
+                    .run_step(&child_name, &child_prompt, &persona_clone)
+                    .await?;
+                Ok::<(usize, serde_json::Value, String), anyhow::Error>((i, item_clone, summary))
+            });
+        }
+        let mut child_summaries = Vec::with_capacity(items.len());
+        let mut child_structured = Vec::with_capacity(items.len());
+        let mut results: Vec<(usize, serde_json::Value, String)> = Vec::with_capacity(items.len());
+        let mut fan_out_err: Option<anyhow::Error> = None;
+        while let Some(res) = join_set.join_next().await {
+            match res {
+                Ok(Ok(tuple)) => results.push(tuple),
+                Ok(Err(e)) => {
+                    if fan_out_err.is_none() {
+                        fan_out_err = Some(e);
+                    }
+                }
+                Err(e) => {
+                    if fan_out_err.is_none() {
+                        fan_out_err = Some(anyhow!("fan-out task panicked: {e}"));
+                    }
+                }
+            }
+        }
+        if let Some(e) = fan_out_err {
+            if let Some(ref on_error) = step.on_error {
+                completed.insert(step.name.clone());
+                // ponytail: on_error fan-out routing — single error handler step,
+                // not per-item. Upgrade to per-item handlers if needed.
+                let step_output = StepOutput {
+                    name: step.name.clone(),
+                    kind: StepKind::FanOut,
+                    persona: persona.clone(),
+                    summary: format!("fan-out failed: {e}"),
+                    critique: None,
+                    structured_output: None,
+                };
+                completed.insert(on_error.clone());
+                let error_output = StepOutput {
+                    name: on_error.clone(),
+                    kind: StepKind::Agent,
+                    persona: String::new(),
+                    summary: format!("error handler triggered by: {e}"),
+                    critique: None,
+                    structured_output: None,
+                };
+                outputs.insert(step.name.clone(), step_output);
+                outputs.insert(on_error.clone(), error_output);
+                return Ok(None);
+            }
+            return Err(e);
+        }
+        results.sort_by_key(|(i, _, _)| *i);
+        for (i, item_clone, summary) in results {
+            let child_structured_val = serde_json::from_str::<serde_json::Value>(&summary).ok();
+            let child_name = format!("{}_{}", step.name, i);
+            child_summaries.push(format!("## {} (item {}):\n{}", child_name, i, summary));
+            child_structured.push(serde_json::json!({
+                "index": i,
+                "item": item_clone,
+                "summary": summary,
+                "structured_output": child_structured_val,
+            }));
+        }
+
+        let combined_summary = child_summaries.join("\n\n");
+        let combined_structured = serde_json::Value::Array(child_structured);
+        completed.insert(step.name.clone());
+        Ok(Some(StepOutput {
+            name: step.name.clone(),
+            kind: StepKind::FanOut,
+            persona,
+            summary: combined_summary,
+            critique: None,
+            structured_output: Some(combined_structured),
+        }))
+    }
+
+    /// Execute a FanIn step: aggregate outputs from fan-out dependencies.
+    fn run_fan_in(
+        step: &Step,
+        outputs: &HashMap<String, StepOutput>,
+        completed: &mut HashSet<String>,
+    ) -> StepOutput {
+        let mut combined = String::new();
+        for dep in &step.depends_on {
+            if let Some(dep_out) = outputs.get(dep) {
+                combined.push_str(&format!("## {}:\n{}\n\n", dep, dep_out.summary));
+            }
+        }
+        completed.insert(step.name.clone());
+        StepOutput {
+            name: step.name.clone(),
+            kind: StepKind::FanIn,
+            persona: String::new(),
+            summary: if combined.is_empty() {
+                "no fan-out results".to_string()
+            } else {
+                combined.trim_end().to_string()
+            },
+            critique: None,
+            structured_output: None,
+        }
+    }
+
+    /// Handle a batch-level error: check for on_error routes, mark failed
+    /// steps, and return Ok(()) to continue or Err(e) to abort.
+    fn handle_batch_error(
+        tasks: &[StepRequest],
+        workflow: &Workflow,
+        error: anyhow::Error,
+        completed: &mut HashSet<String>,
+        outputs: &mut HashMap<String, StepOutput>,
+    ) -> Result<()> {
+        let has_error_route = tasks.iter().any(|t| {
+            workflow
+                .steps
+                .iter()
+                .find(|s| s.name == t.name)
+                .and_then(|s| s.on_error.clone())
+                .is_some()
+        });
+        if !has_error_route {
+            return Err(error);
+        }
+        for task in tasks {
+            let step = workflow.steps.iter().find(|s| s.name == task.name).unwrap();
+            outputs.insert(
+                task.name.clone(),
+                StepOutput {
+                    name: task.name.clone(),
+                    kind: step.kind.clone(),
+                    persona: step.persona.clone().unwrap_or_default(),
+                    summary: format!("step failed: {error}"),
+                    critique: None,
+                    structured_output: None,
+                },
+            );
+            completed.insert(task.name.clone());
+        }
+        // Route to the first on_error step found.
+        if let Some(on_error) = tasks
+            .iter()
+            .filter_map(|t| {
+                workflow
+                    .steps
+                    .iter()
+                    .find(|s| s.name == t.name)
+                    .and_then(|s| s.on_error.clone())
+            })
+            .next()
+        {
+            completed.insert(on_error.clone());
+            outputs.insert(
+                on_error.clone(),
+                StepOutput {
+                    name: on_error.clone(),
+                    kind: StepKind::Agent,
+                    persona: String::new(),
+                    summary: format!("error handler triggered by: {error}"),
+                    critique: None,
+                    structured_output: None,
+                },
+            );
+        }
+        Ok(())
+    }
+
     /// Run the workflow to completion, invoking `runner` for each step.
     ///
     /// The runner receives the step prompt concatenated with the human-readable
@@ -565,53 +866,14 @@ impl WorkflowExecutor {
 
             // Budget checks.
             if let Some(ref budget) = self.workflow.budget {
-                if let Some(max_iter) = budget.max_iterations {
-                    if iterations >= max_iter {
-                        if let Some(ref on_exceeded) = budget.on_exceeded {
-                            // Route to the on_exceeded step instead of aborting.
-                            if !completed.contains(on_exceeded) && !skipped.contains(on_exceeded) {
-                                completed.insert(on_exceeded.clone());
-                                outputs.insert(
-                                    on_exceeded.clone(),
-                                    StepOutput {
-                                        name: on_exceeded.clone(),
-                                        kind: StepKind::Agent,
-                                        persona: String::new(),
-                                        summary: format!(
-                                            "budget exceeded: max_iterations ({max_iter})"
-                                        ),
-                                        critique: None,
-                                        structured_output: None,
-                                    },
-                                );
-                            }
-                        }
-                        bail!("workflow budget exceeded: max_iterations ({max_iter})");
-                    }
-                }
-                if let Some(max_secs) = budget.max_seconds {
-                    if start.elapsed().as_secs() >= max_secs {
-                        if let Some(ref on_exceeded) = budget.on_exceeded {
-                            if !completed.contains(on_exceeded) && !skipped.contains(on_exceeded) {
-                                completed.insert(on_exceeded.clone());
-                                outputs.insert(
-                                    on_exceeded.clone(),
-                                    StepOutput {
-                                        name: on_exceeded.clone(),
-                                        kind: StepKind::Agent,
-                                        persona: String::new(),
-                                        summary: format!(
-                                            "budget exceeded: max_seconds ({max_secs})"
-                                        ),
-                                        critique: None,
-                                        structured_output: None,
-                                    },
-                                );
-                            }
-                        }
-                        bail!("workflow budget exceeded: max_seconds ({max_secs})");
-                    }
-                }
+                Self::check_budget(
+                    budget,
+                    iterations,
+                    start,
+                    &mut completed,
+                    &skipped,
+                    &mut outputs,
+                )?;
             }
 
             // Also consider skipped steps as "done" for dependency resolution.
@@ -658,38 +920,7 @@ impl WorkflowExecutor {
 
                 match step.kind {
                     StepKind::Agent => {
-                        let mut prompt = step.prompt.clone().unwrap_or_default();
-
-                        // Prepend fork_from context if set.
-                        if let Some(ref fork) = step.fork_from {
-                            if let Some(fork_out) = outputs.get(fork) {
-                                prompt = format!(
-                                    "Context from forked step '{}':\n{}\n\n---\n\n{}",
-                                    fork, fork_out.summary, prompt
-                                );
-                            }
-                        }
-
-                        // Append dependency context.
-                        if !step.depends_on.is_empty() {
-                            prompt.push_str("\n\nContext from previous steps:\n");
-                            for dep in &step.depends_on {
-                                let dep_out = outputs.get(dep).ok_or_else(|| {
-                                    anyhow!("missing output for dependency {dep}")
-                                })?;
-                                prompt.push_str(&format!(
-                                    "\n## {} ({}):\n{}",
-                                    dep, dep_out.persona, dep_out.summary
-                                ));
-                                if let Some(critique) = &dep_out.critique {
-                                    prompt.push_str(&format!("\n\nCritique of {dep}:\n{critique}"));
-                                }
-                            }
-                        }
-
-                        // Resolve $(step_name.field) references.
-                        prompt = resolve_step_refs(&prompt, &outputs);
-
+                        let prompt = Self::build_agent_prompt(step, &outputs)?;
                         tasks.push(StepRequest {
                             name: step.name.clone(),
                             kind: StepKind::Agent,
@@ -735,152 +966,19 @@ impl WorkflowExecutor {
                         });
                     }
                     StepKind::FanOut => {
-                        let over_expr = step.over.as_ref().ok_or_else(|| {
-                            anyhow!("fan_out step '{}' requires 'over'", step.name)
-                        })?;
-                        let as_name = step.as_name.as_ref().ok_or_else(|| {
-                            anyhow!("fan_out step '{}' requires 'as_name'", step.name)
-                        })?;
-                        let resolved_over = resolve_step_refs(over_expr, &outputs);
-                        let items: Vec<serde_json::Value> = serde_json::from_str(&resolved_over)
-                            .with_context(|| {
-                                format!(
-                                    "fan_out step '{}': 'over' must resolve to a JSON array, got: {}",
-                                    step.name, resolved_over
-                                )
-                            })?;
-                        let prompt_template = step.prompt.clone().unwrap_or_default();
-                        let persona = step.persona.clone().unwrap_or_else(|| "coder".to_string());
-
-                        let max_permits = step.max_parallel.unwrap_or(items.len());
-                        let semaphore = Arc::new(tokio::sync::Semaphore::new(max_permits));
-                        let mut join_set = tokio::task::JoinSet::new();
-                        for (i, item) in items.iter().enumerate() {
-                            let item_str = match item {
-                                serde_json::Value::String(s) => s.clone(),
-                                other => other.to_string(),
-                            };
-                            let child_prompt = resolve_step_refs(&prompt_template, &outputs)
-                                .replace(&format!("${{{as_name}}}"), &item_str);
-                            let child_name = format!("{}_{}", step.name, i);
-                            let sem = semaphore.clone();
-                            let item_clone = item.clone();
-                            let runner_clone = runner.clone();
-                            let persona_clone = persona.clone();
-                            join_set.spawn(async move {
-                                let _permit = sem.acquire().await.unwrap();
-                                let summary = runner_clone
-                                    .run_step(&child_name, &child_prompt, &persona_clone)
-                                    .await?;
-                                Ok::<(usize, serde_json::Value, String), anyhow::Error>((
-                                    i, item_clone, summary,
-                                ))
-                            });
+                        let result =
+                            Self::run_fan_out(step, &mut outputs, &runner, &mut completed).await?;
+                        if let Some(output) = result {
+                            outputs.insert(step.name.clone(), output);
                         }
-                        let mut child_summaries = Vec::with_capacity(items.len());
-                        let mut child_structured = Vec::with_capacity(items.len());
-                        let mut results: Vec<(usize, serde_json::Value, String)> =
-                            Vec::with_capacity(items.len());
-                        let mut fan_out_err: Option<anyhow::Error> = None;
-                        while let Some(res) = join_set.join_next().await {
-                            match res {
-                                Ok(Ok(tuple)) => results.push(tuple),
-                                Ok(Err(e)) => {
-                                    if fan_out_err.is_none() {
-                                        fan_out_err = Some(e);
-                                    }
-                                }
-                                Err(e) => {
-                                    if fan_out_err.is_none() {
-                                        fan_out_err = Some(anyhow!("fan-out task panicked: {e}"));
-                                    }
-                                }
-                            }
-                        }
-                        if let Some(e) = fan_out_err {
-                            if let Some(ref on_error) = step.on_error {
-                                completed.insert(step.name.clone());
-                                outputs.insert(
-                                    step.name.clone(),
-                                    StepOutput {
-                                        name: step.name.clone(),
-                                        kind: StepKind::FanOut,
-                                        persona: persona.clone(),
-                                        summary: format!("fan-out failed: {e}"),
-                                        critique: None,
-                                        structured_output: None,
-                                    },
-                                );
-                                completed.insert(on_error.clone());
-                                outputs.insert(
-                                    on_error.clone(),
-                                    StepOutput {
-                                        name: on_error.clone(),
-                                        kind: StepKind::Agent,
-                                        persona: String::new(),
-                                        summary: format!("error handler triggered by: {e}"),
-                                        critique: None,
-                                        structured_output: None,
-                                    },
-                                );
-                                continue;
-                            }
-                            return Err(e);
-                        }
-                        results.sort_by_key(|(i, _, _)| *i);
-                        for (i, item_clone, summary) in results {
-                            let child_structured_val =
-                                serde_json::from_str::<serde_json::Value>(&summary).ok();
-                            let child_name = format!("{}_{}", step.name, i);
-                            child_summaries
-                                .push(format!("## {} (item {}):\n{}", child_name, i, summary));
-                            child_structured.push(serde_json::json!({
-                                "index": i,
-                                "item": item_clone,
-                                "summary": summary,
-                                "structured_output": child_structured_val,
-                            }));
-                        }
-
-                        let combined_summary = child_summaries.join("\n\n");
-                        let combined_structured = serde_json::Value::Array(child_structured);
-                        completed.insert(step.name.clone());
-                        outputs.insert(
-                            step.name.clone(),
-                            StepOutput {
-                                name: step.name.clone(),
-                                kind: StepKind::FanOut,
-                                persona,
-                                summary: combined_summary,
-                                critique: None,
-                                structured_output: Some(combined_structured),
-                            },
-                        );
+                        // run_fan_out already handled on_error routing if it
+                        // returned Ok(None); continue to next step.
+                        continue;
                     }
                     StepKind::FanIn => {
-                        // FanIn is a join point — aggregate outputs from fan-out deps.
-                        let mut combined = String::new();
-                        for dep in &step.depends_on {
-                            if let Some(dep_out) = outputs.get(dep) {
-                                combined.push_str(&format!("## {}:\n{}\n\n", dep, dep_out.summary));
-                            }
-                        }
-                        completed.insert(step.name.clone());
-                        outputs.insert(
-                            step.name.clone(),
-                            StepOutput {
-                                name: step.name.clone(),
-                                kind: StepKind::FanIn,
-                                persona: String::new(),
-                                summary: if combined.is_empty() {
-                                    "no fan-out results".to_string()
-                                } else {
-                                    combined.trim_end().to_string()
-                                },
-                                critique: None,
-                                structured_output: None,
-                            },
-                        );
+                        let output = Self::run_fan_in(step, &outputs, &mut completed);
+                        outputs.insert(step.name.clone(), output);
+                        continue;
                     }
                 }
             }
@@ -895,69 +993,13 @@ impl WorkflowExecutor {
             let results = match batch_result {
                 Ok(r) => r,
                 Err(e) => {
-                    // Check if any failed step has an on_error route.
-                    // ponytail: batch-level error → check all steps in batch for on_error.
-                    // If none have on_error, propagate the error.
-                    let has_error_route = tasks.iter().any(|t| {
-                        self.workflow
-                            .steps
-                            .iter()
-                            .find(|s| s.name == t.name)
-                            .and_then(|s| s.on_error.clone())
-                            .is_some()
-                    });
-                    if !has_error_route {
-                        return Err(e);
-                    }
-                    // Mark all steps in the batch as completed with error summaries
-                    // and route to on_error steps.
-                    let mut error_outputs: HashMap<String, StepOutput> = HashMap::new();
-                    for task in &tasks {
-                        let step = self
-                            .workflow
-                            .steps
-                            .iter()
-                            .find(|s| s.name == task.name)
-                            .unwrap();
-                        error_outputs.insert(
-                            task.name.clone(),
-                            StepOutput {
-                                name: task.name.clone(),
-                                kind: step.kind.clone(),
-                                persona: step.persona.clone().unwrap_or_default(),
-                                summary: format!("step failed: {e}"),
-                                critique: None,
-                                structured_output: None,
-                            },
-                        );
-                        completed.insert(task.name.clone());
-                    }
-                    outputs.extend(error_outputs);
-                    // Route to the first on_error step found.
-                    if let Some(on_error) = tasks
-                        .iter()
-                        .filter_map(|t| {
-                            self.workflow
-                                .steps
-                                .iter()
-                                .find(|s| s.name == t.name)
-                                .and_then(|s| s.on_error.clone())
-                        })
-                        .next()
-                    {
-                        completed.insert(on_error.clone());
-                        outputs.insert(
-                            on_error.clone(),
-                            StepOutput {
-                                name: on_error.clone(),
-                                kind: StepKind::Agent,
-                                persona: String::new(),
-                                summary: format!("error handler triggered by: {e}"),
-                                critique: None,
-                                structured_output: None,
-                            },
-                        );
-                    }
+                    Self::handle_batch_error(
+                        &tasks,
+                        &self.workflow,
+                        e,
+                        &mut completed,
+                        &mut outputs,
+                    )?;
                     continue;
                 }
             };

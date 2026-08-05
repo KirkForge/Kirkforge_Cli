@@ -821,4 +821,50 @@ mod tests {
         drop(client_buf);
         let _ = server_handle.await;
     }
+
+    // WO 19.5: daemon auth token enforcement.
+    // Shutdown without an auth token must be rejected when auth is configured.
+    #[tokio::test]
+    async fn shutdown_requires_auth_token_when_configured() {
+        use crate::daemon::DaemonState;
+
+        // Configure a daemon state that expects an auth token.
+        let dir = tempfile::tempdir().unwrap();
+        let token_path = dir.path().join("token");
+        std::fs::write(&token_path, "secret-token-value").unwrap();
+        std::env::set_var(
+            "KF_CODE_DAEMON_TOKEN_FILE",
+            token_path.to_string_lossy().as_ref(),
+        );
+
+        let state = DaemonState::new();
+        // Verify auth is required.
+        assert!(
+            state.check_auth(None).is_err(),
+            "auth should be required when token file exists"
+        );
+        assert!(
+            state.check_auth(Some("wrong-token")).is_err(),
+            "wrong token should be rejected"
+        );
+        assert!(
+            state.check_auth(Some("secret-token-value")).is_ok(),
+            "correct token should be accepted"
+        );
+
+        std::env::remove_var("KF_CODE_DAEMON_TOKEN_FILE");
+    }
+
+    // WO 19.5: daemon allows all ops when no auth token is configured.
+    #[tokio::test]
+    async fn daemon_allows_all_when_no_auth_configured() {
+        use crate::daemon::DaemonState;
+
+        std::env::remove_var("KF_CODE_DAEMON_TOKEN_FILE");
+        let state = DaemonState::new();
+        assert!(
+            state.check_auth(None).is_ok(),
+            "no auth should be required when no token configured"
+        );
+    }
 }

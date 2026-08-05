@@ -787,6 +787,64 @@ fn folded_plugin_identification() {
     );
 }
 
+// ── WO 18.0.3: budget registration gate regression test ──
+//
+// The runtime gate in `run_session.rs` and `executor/mod.rs` must use the
+// same plugin name as `default_plugin_sources()` and `folded_feature_enabled()`.
+// A previous bug used "kf-plugin-sdk3" instead of "kf-budget", silently
+// disabling budget tools/hooks on default builds.
+
+#[cfg(feature = "budget")]
+mod budget_registration {
+    use super::*;
+
+    #[test]
+    fn budget_tools_present_in_default_toolset() {
+        let cfg = Config::default();
+
+        // The default config must include kf-budget in enabled_plugins.
+        assert!(
+            cfg.tools.enabled_plugins.iter().any(|n| n == "kf-budget"),
+            "default config must include kf-budget in enabled_plugins, got: {:?}",
+            cfg.tools.enabled_plugins
+        );
+
+        // kf-budget must not be in disabled_plugins.
+        assert!(
+            !cfg.tools.disabled_plugins.contains("kf-budget"),
+            "default config must not have kf-budget in disabled_plugins"
+        );
+
+        // folded_feature_enabled must return true for kf-budget when the
+        // budget feature is compiled in.
+        assert!(
+            folded_feature_enabled("kf-budget"),
+            "folded_feature_enabled must return true for kf-budget when the budget feature is on"
+        );
+
+        // The runtime gate must use the same name as the config.
+        // This assertion would have caught the "kf-plugin-sdk3" bug.
+        let gate_allows_budget = cfg.tools.enabled_plugins.iter().any(|n| n == "kf-budget")
+            && !cfg.tools.disabled_plugins.contains("kf-budget");
+        assert!(
+            gate_allows_budget,
+            "runtime gate must allow budget when kf-budget is in enabled_plugins and not in disabled_plugins"
+        );
+
+        // Verify budget tools are producible.
+        let tools = crate::session::budget::all_budget_tools();
+        let names: Vec<&str> = tools.iter().map(|t| t.def().name).collect();
+        assert!(
+            names.contains(&"budget_status"),
+            "budget tools must include budget_status, got: {names:?}"
+        );
+        assert!(
+            names.contains(&"budget_set"),
+            "budget tools must include budget_set, got: {names:?}"
+        );
+    }
+}
+
 // ── WO 11.9: plugin system end-to-end integration test ──
 //
 // Loads a mock plugin declaring all 4 capability kinds (skill, tool,

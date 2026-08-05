@@ -347,10 +347,10 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
         };
 
     // ── Toolset assembly (Phase 2.2) ──
-    // Compose built-in, MCP, and plugin tools into a single source-aware
-    // collection. The executor receives the flattened vector, but order and
-    // duplicate-name resolution are controlled here: built-ins win over MCP,
-    // and MCP wins over plugins.
+    // Compose built-in, MCP, plugin (shell), and folded (in-process) tools
+    // into a single source-aware collection. Resolution order (first match
+    // wins): builtin > MCP > plugin > stratum > draw > video > budget.
+    // ADR-050 prevents name collisions between shell and folded plugins.
     let tool_ctx = tools::ToolContextBuilder {
         undo_stack: undo_stack.clone(),
         supports_images: adapter.model_info().supports_images,
@@ -457,6 +457,10 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
                 (kf_plugin_host::PluginRegistry::new(), vec![])
             }
         };
+    // H3: `None` means no audit logging at startup (the executor attaches
+    // its own log later). Resource limits from plugin manifests still flow
+    // into PluginToolWrapper via `SandboxConfig::merge_with` inside
+    // `all_plugin_tools`, so rlimits are applied regardless of audit_log.
     let plugin_tools =
         session::plugin_tools::all_plugin_tools(&plugin_registry, shared_config.clone(), None);
     if !plugin_tools.is_empty() {
@@ -536,12 +540,8 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     #[cfg(feature = "budget")]
     {
         let cfg = kf_code::shared::read_shared_config(&shared_config);
-        if cfg
-            .tools
-            .enabled_plugins
-            .iter()
-            .any(|n| n == "kf-plugin-sdk3")
-            && !cfg.tools.disabled_plugins.contains("kf-plugin-sdk3")
+        if cfg.tools.enabled_plugins.iter().any(|n| n == "kf-budget")
+            && !cfg.tools.disabled_plugins.contains("kf-budget")
         {
             let budget_tool_list = session::budget::all_budget_tools();
             let count = budget_tool_list.len();

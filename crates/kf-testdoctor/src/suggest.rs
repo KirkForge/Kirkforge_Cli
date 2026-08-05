@@ -146,6 +146,99 @@ fn suggestions_for_test(t: &TestProfile) -> Vec<String> {
     out
 }
 
+/// Build a map from binary name → source directory by reading the workspace
+/// Cargo.toml and each crate's Cargo.toml. This is deterministic and avoids
+/// guessing paths.
+fn build_binary_map(root: &Path) -> std::collections::HashMap<String, String> {
+    let mut map = std::collections::HashMap::new();
+    // Read workspace Cargo.toml to find members.
+    let workspace_toml = root.join("Cargo.toml");
+    let Ok(content) = std::fs::read_to_string(&workspace_toml) else {
+        return map;
+    };
+    // Parse members list from `[workspace]` section.
+    // Format: members = ["crate1", "crates/kf-foo", ...]
+    let members = extract_toml_array(&content, "members");
+    for member in &members {
+        let member_path = root.join(member);
+        let cargo_toml = member_path.join("Cargo.toml");
+        let Ok(member_content) = std::fs::read_to_string(&cargo_toml) else {
+            continue;
+        };
+        // Extract [[bin]] targets and [lib] name.
+        let bins = extract_toml_array(&member_content, "name");
+        for name in &bins {
+            map.insert(name.clone(), member_path.to_string_lossy().to_string());
+        }
+        // Also map the crate name from [package].name to the source dir.
+        if let Some(pkg_name) = extract_toml_value(&member_content, "name") {
+            map.insert(pkg_name, member_path.to_string_lossy().to_string());
+        }
+    }
+    // Also map the root binary (kf-code → src/main/).
+    let root_src = root.join("src");
+    if root_src.is_dir() {
+        if let Ok(entries) = std::fs::read_dir(&root_src) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().map(|e| e == "rs").unwrap_or(false) {
+                    // Map "kf-code" to the root src dir.
+                    map.insert(
+                        "kf-code".to_string(),
+                        root_src.to_string_lossy().to_string(),
+                    );
+                    break;
+                }
+            }
+        }
+    }
+    map
+}
+
+/// Extract a TOML array value for a key like "members" or "name".
+/// Handles `key = ["a", "b"]` format.
+fn extract_toml_array(content: &str, key: &str) -> Vec<String> {
+    let mut results = Vec::new();
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with(&format!("{key} =")) || trimmed.starts_with(&format!("{key}=")) {
+            // Extract strings between quotes.
+            let start = match trimmed.find('[') {
+                Some(i) => i,
+                None => continue,
+            };
+            let array_str = &trimmed[start..];
+            for part in array_str.split(',') {
+                let part = part
+                    .trim()
+                    .trim_start_matches(&['[', ' '])
+                    .trim_end_matches(&[']', ' ', ',']);
+                let part = part.trim_matches('"').trim_matches('\'');
+                if !part.is_empty() {
+                    results.push(part.to_string());
+                }
+            }
+            return results;
+        }
+    }
+    results
+}
+
+/// Extract a single TOML string value like `name = "kf-code"`.
+fn extract_toml_value(content: &str, key: &str) -> Option<String> {
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with(&format!("{key} =")) || trimmed.starts_with(&format!("{key}=")) {
+            let value = trimmed.split('=').nth(1)?.trim();
+            let value = value.trim_matches('"').trim_matches('\'');
+            if !value.is_empty() {
+                return Some(value.to_string());
+            }
+        }
+    }
+    None
+}
+
 fn suggestions_for(binary: &str, suite: &str) -> Vec<String> {
     let mut out = Vec::new();
 
@@ -366,18 +459,20 @@ pub fn run_suggest_detailed(per: &PerTestProfile, filter: Option<&str>) -> Resul
     for t in slow {
         let p = &t.profile;
         println!("── {} ({} — {}ms) ──", p.name, p.binary, p.duration_ms);
-        // Resolve a candidate source path. The per-test profile carries
-        // the binary name, not the source path; the caller is expected
-        // to run from the workspace root. We try the obvious `tests/`
-        // and `src/` locations; if none exist, fall back to v1 text.
-        let tried = [
-            format!("tests/{}.rs", p.binary),
-            format!("src/{}.rs", p.binary),
-            format!("crates/{}/src/lib.rs", p.binary),
-        ];
-        let found = tried.iter().map(Path::new).find(|p| p.exists());
-        let suggestions = match found {
-            Some(path) => suggestions_from_source(path, p),
+        // Resolve a candidate source path. Build a binary→path map
+        // from Cargo.toml so we don't have to guess. Fall back to
+        // heuristics if the map doesn't cover this binary.
+        let binary_map = build_binary_map(std::path::Path::new("."));
+        let found_path: Option<String> = binary_map.get(&p.binary).cloned().or_else(|| {
+            let tried = [
+                format!("tests/{}.rs", p.binary),
+                format!("src/{}.rs", p.binary),
+                format!("crates/{}/src/lib.rs", p.binary),
+            ];
+            tried.into_iter().find(|p| Path::new(p).exists())
+        });
+        let suggestions = match found_path {
+            Some(path) => suggestions_from_source(Path::new(&path), p),
             None => Vec::new(),
         };
         if suggestions.is_empty() {

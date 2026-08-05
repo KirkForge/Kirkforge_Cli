@@ -43,20 +43,20 @@ pub(crate) fn read_stdin_json<T: for<'de> Deserialize<'de>>() -> Option<T> {
 #[cfg(test)]
 pub(crate) fn kf_budget_binary_path() -> std::path::PathBuf {
     // CARGO_BIN_EXE_<name> is set when the test is run via the
-    // cargo test runner. When the binary path is unknown, fall
-    // back to a sibling of the running test executable
-    // (target/debug/deps/kf-budget-<hash> -> target/debug/kf-budget).
+    // cargo test runner with --bin. When unset (e.g. `cargo test -p`
+    // without --bin), fall back to locating the binary next to the
+    // test executable.
     if let Ok(p) = std::env::var("CARGO_BIN_EXE_kf-budget-cli") {
         return std::path::PathBuf::from(p);
     }
+    // ponytail: look for the binary by name in the parent directory
+    // of the deps/ folder, instead of trying to parse the test hash.
+    // This handles multi-segment binary names like kf-budget-cli.
     let exe = std::env::current_exe().expect("current_exe");
-    // exe is target/debug/deps/kf-budget-<hash>; the binary lives
-    // one level up under the same name without the hash.
-    let stem = exe.file_name().unwrap().to_string_lossy();
-    let without_hash = stem.split('-').next().unwrap();
+    let bin_name = "kf-budget-cli";
     exe.parent()
         .unwrap() // deps/
         .parent()
         .unwrap() // debug/
-        .join(without_hash)
+        .join(bin_name)
 }

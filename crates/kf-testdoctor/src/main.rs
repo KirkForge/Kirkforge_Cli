@@ -79,6 +79,12 @@ enum Cmd {
         /// Project root to scan (default: current directory).
         #[arg(long, default_value = ".")]
         root: PathBuf,
+        /// Comma-separated list of directories to scan (default: all source dirs).
+        #[arg(long)]
+        dirs: Option<String>,
+        /// Cross-reference with Cobertura XML coverage data.
+        #[arg(long)]
+        with_coverage: Option<PathBuf>,
     },
     /// Detect a flaky test by running it N times (WO 12.5). Slow dev tool.
     Flaky {
@@ -180,9 +186,22 @@ fn main() -> Result<()> {
             gaps::print_report(&gaps);
             Ok(())
         }
-        Cmd::Diagnose { root } => {
-            let report = diagnose::diagnose(&root)?;
+        Cmd::Diagnose {
+            root,
+            dirs,
+            with_coverage,
+        } => {
+            let report = if let Some(dirs_str) = dirs {
+                let dirs: Vec<&str> = dirs_str.split(',').map(|s| s.trim()).collect();
+                diagnose::diagnose_with_dirs(&root, &dirs)?
+            } else {
+                diagnose::diagnose(&root)?
+            };
             diagnose::print_report(&report);
+            if let Some(xml) = with_coverage {
+                let gaps = gaps::analyze_gaps(&xml)?;
+                diagnose::print_coverage_crossref(&report, &gaps);
+            }
             Ok(())
         }
         Cmd::Flaky { runs, filter } => {

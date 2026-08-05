@@ -183,41 +183,6 @@ async fn test_compact_hooks_fire_pre_and_post() {
 // ── executor/mod.rs direct method tests (WO 12-series coverage) ────────
 
 #[tokio::test]
-async fn set_recovered_messages_stores_count() {
-    let mut exe = make_executor(
-        Box::new(MockAdapter::new(vec![], make_info())),
-        vec![],
-        make_config(false),
-    );
-    exe.set_recovered_messages(5);
-    // The count is emitted on the next turn; here we just verify it was
-    // stored (non-panic + no crash).
-}
-
-#[tokio::test]
-async fn set_session_id_updates_field() {
-    let mut exe = make_executor(
-        Box::new(MockAdapter::new(vec![], make_info())),
-        vec![],
-        make_config(false),
-    );
-    exe.set_session_id("test-session-42".into());
-    // No getter; verified by non-panic. The id is forwarded to hooks.
-}
-
-#[tokio::test]
-async fn set_plan_mode_toggles() {
-    let mut exe = make_executor(
-        Box::new(MockAdapter::new(vec![], make_info())),
-        vec![],
-        make_config(false),
-    );
-    exe.set_plan_mode(true);
-    exe.set_plan_mode(false);
-    // No getter; verified by non-panic + exit_plan_mode below.
-}
-
-#[tokio::test]
 async fn exit_plan_mode_appends_system_message() {
     let mut exe = make_executor(
         Box::new(MockAdapter::new(vec![], make_info())),
@@ -282,12 +247,14 @@ async fn replace_conversation_swaps_log() {
 }
 
 #[tokio::test]
-async fn set_system_override_does_not_panic() {
+async fn set_system_override_stores_and_clears() {
     let mut exe = make_executor(
         Box::new(MockAdapter::new(vec![], make_info())),
         vec![],
         make_config(false),
     );
     exe.set_system_override(Some("custom prompt".into()));
+    assert_eq!(exe.system_override(), Some("custom prompt"));
     exe.set_system_override(None);
+    assert_eq!(exe.system_override(), None);
 }

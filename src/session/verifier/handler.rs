@@ -67,22 +67,41 @@ impl VerifierHandler {
         };
 
         let (verdict, decisive_name) = {
-            let mut verdict = Verdict::Clean;
-            let mut name = "aggregate".to_string();
+            let mut all_findings: Vec<(String, Verdict)> = Vec::new();
             for verifier in &verifiers {
                 let v = verifier.verify(event).await;
                 match &v {
                     Verdict::Clean | Verdict::Skipped(_) => continue,
                     Verdict::Fixable(_) | Verdict::Unfixable(_) => {
-                        // Truth model: first verifier to report a finding wins,
-                        // subsequent verifiers are skipped for that event.
-                        name = verifier.name().to_string();
-                        verdict = v;
-                        break;
+                        // Collect all findings — every verifier runs, none are
+                        // skipped just because an earlier one flagged something.
+                        all_findings.push((verifier.name().to_string(), v));
                     }
                 }
             }
-            (verdict, name)
+            // Pick the most severe: Unfixable > Fixable, first-seen among equals.
+            let decisive = all_findings
+                .iter()
+                .find(|(_, v)| matches!(v, Verdict::Unfixable(_)))
+                .or_else(|| {
+                    all_findings
+                        .iter()
+                        .find(|(_, v)| matches!(v, Verdict::Fixable(_)))
+                });
+            match decisive {
+                Some((name, v)) => {
+                    // Push ALL FixSuggestion entries so downstream can act on
+                    // every finding, not just the decisive one.
+                    let mut pending = self.pending_corrections.lock().await;
+                    for (_, verdict) in &all_findings {
+                        if let Verdict::Fixable(fix) = verdict {
+                            pending.push(fix.clone());
+                        }
+                    }
+                    (v.clone(), name.clone())
+                }
+                None => (Verdict::Clean, "aggregate".to_string()),
+            }
         };
 
         let verdict_label = match &verdict {
@@ -96,11 +115,6 @@ impl VerifierHandler {
             verdict: verdict_label.to_string(),
             source: "built-in".to_string(),
         });
-
-        if let Verdict::Fixable(ref fix) = verdict {
-            let mut pending = self.pending_corrections.lock().await;
-            pending.push(fix.clone());
-        }
 
         (verdict, decisive_name)
     }

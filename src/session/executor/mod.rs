@@ -227,15 +227,10 @@ impl Executor {
         #[cfg(feature = "budget")]
         {
             // Runtime `enabled_plugins` gate (WO 15.7 5.1): the config key
-            // for the folded budget plugin is `"kf-plugin-sdk3"` (per
-            // `default_plugin_sources` in `shared/config/tools.rs`). Skip
+            // for the folded budget plugin is `"kf-budget"`. Skip
             // hooks when disabled at runtime.
-            if cfg
-                .tools
-                .enabled_plugins
-                .iter()
-                .any(|n| n == "kf-plugin-sdk3")
-                && !cfg.tools.disabled_plugins.contains("kf-plugin-sdk3")
+            if cfg.tools.enabled_plugins.iter().any(|n| n == "kf-budget")
+                && !cfg.tools.disabled_plugins.contains("kf-budget")
             {
                 crate::session::budget::init_from_config(&cfg);
                 for hook in crate::session::budget::all_budget_hooks() {
@@ -628,13 +623,9 @@ impl Executor {
         #[cfg(feature = "budget")]
         {
             // Runtime `enabled_plugins` gate (WO 15.7 5.1): config key is
-            // `"kf-plugin-sdk3"` for the folded budget plugin.
-            if cfg
-                .tools
-                .enabled_plugins
-                .iter()
-                .any(|n| n == "kf-plugin-sdk3")
-                && !cfg.tools.disabled_plugins.contains("kf-plugin-sdk3")
+            // `"kf-budget"` for the folded budget plugin.
+            if cfg.tools.enabled_plugins.iter().any(|n| n == "kf-budget")
+                && !cfg.tools.disabled_plugins.contains("kf-budget")
             {
                 crate::session::budget::init_from_config(&cfg);
                 for hook in crate::session::budget::all_budget_hooks() {
@@ -701,6 +692,11 @@ impl Executor {
     /// override, not append).
     pub fn set_system_override(&mut self, override_prompt: Option<String>) {
         self.prompt_builder.set_system_override(override_prompt);
+    }
+
+    /// Returns the current system override prompt, if any.
+    pub fn system_override(&self) -> Option<&str> {
+        self.prompt_builder.system_override()
     }
 
     /// Enable or disable plan mode. When enabled, only read-only

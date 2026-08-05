@@ -38,10 +38,23 @@ impl PostTurnHookGuard {
 
 impl Drop for PostTurnHookGuard {
     fn drop(&mut self) {
-        // No-op if the hook script doesn't exist; otherwise spawns
-        // a tokio task that runs `bash <hooks_dir>/post-turn.sh`
-        // with a 5s timeout. Drop completes in microseconds.
-        self.runner.run("post-turn", &[], &self.config);
+        // Spawn the hook asynchronously so Drop returns immediately.
+        // Inside the spawned task, shell hooks are already fire-and-forget
+        // via tokio::spawn; in-process hooks (e.g. DrawPostTurnHook) run
+        // as fast Rust calls inside the task, not on the Drop path.
+        let runner = self.runner.clone();
+        let config = self.config.clone();
+        match tokio::runtime::Handle::try_current() {
+            Ok(rt) => {
+                rt.spawn(async move {
+                    runner.run("post-turn", &[], &config);
+                });
+            }
+            Err(_) => {
+                // ponytail: no runtime → skip. Post-turn hooks are best-effort.
+                tracing::debug!("no Tokio runtime at Drop; post-turn hook skipped");
+            }
+        }
     }
 }
 

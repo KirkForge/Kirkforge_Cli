@@ -1,19 +1,9 @@
-//! Self-diagnosis: scan the project's own source files to find public
-//! functions/types that have no co-located tests, and suggest test targets.
+//! Self-diagnosis: scan source files for untested public API surface.
 //!
-//! This is the "self-diagnosis" evolution of the testdoctor: instead of
-//! just profiling test *time*, it analyzes the *structure* of the codebase
-//! to find untested code. It works by:
-//!
-//! 1. Scanning `.rs` files in the given directories for `pub fn`, `pub async fn`,
-//!    `pub struct`, `pub enum`, `pub trait`.
-//! 2. Checking whether the file (or its parent module's test block) has any
-//!    `#[test]` or `#[tokio::test]` attributes.
-//! 3. Reporting files with public items but zero or few tests, ranked by
-//!    "test ROI" = line_count × (1 - test_density).
-//!
-//! The analysis is static (no compilation needed) — it's a heuristic that
-//! helps developers find the highest-impact files to add tests to.
+//! Counts `pub` items (fn, struct, enum, trait, const, type) plus `impl`
+//! method signatures, excluding `pub(crate)`/`pub(super)`. The `api_surface`
+//! metric replaces raw line count for density and ROI: files with many public
+//! APIs but few tests float to the top.
 
 use anyhow::Result;
 use serde::Serialize;
@@ -24,8 +14,12 @@ pub struct FileDiagnosis {
     pub path: String,
     pub lines: usize,
     pub pub_items: usize,
+    /// Public API surface: pub items + impl methods, excluding pub(crate)/pub(super).
+    pub api_surface: usize,
     pub test_count: usize,
+    /// test_count / api_surface × 100 (falls back to lines-based if api_surface == 0).
     pub test_density: f64,
+    /// ROI = api_surface × (1 - test_density/100). Higher = more untested API.
     pub roi: f64,
 }
 
@@ -44,13 +38,24 @@ pub struct DirDiagnosis {
     pub avg_test_density: f64,
 }
 
-/// Directories to scan by default.
-const DEFAULT_DIRS: &[&str] = &["src/session", "src/tools", "src/adapters"];
+/// Directories to scan by default. Covers all source directories
+/// in the workspace, not just the 3 CI originally scanned.
+const DEFAULT_DIRS: &[&str] = &[
+    "src/session",
+    "src/tools",
+    "src/adapters",
+    "src/tui",
+    "src/daemon",
+    "src/jobs",
+    "src/main",
+    "src/shared",
+    "crates",
+];
 
-pub fn diagnose(root: &Path) -> Result<DiagnosisReport> {
+pub fn diagnose_with_dirs(root: &Path, dirs: &[&str]) -> Result<DiagnosisReport> {
     let mut all_files: Vec<FileDiagnosis> = Vec::new();
 
-    for dir in DEFAULT_DIRS {
+    for dir in dirs {
         let dir_path = root.join(dir);
         if !dir_path.is_dir() {
             continue;
@@ -69,7 +74,7 @@ pub fn diagnose(root: &Path) -> Result<DiagnosisReport> {
             .unwrap_or(std::cmp::Ordering::Equal)
     });
 
-    let per_dir = DEFAULT_DIRS
+    let per_dir = dirs
         .iter()
         .filter_map(|dir| {
             let files_in_dir: Vec<&FileDiagnosis> = all_files
@@ -104,6 +109,11 @@ pub fn diagnose(root: &Path) -> Result<DiagnosisReport> {
     })
 }
 
+/// Diagnose with default directories.
+pub fn diagnose(root: &Path) -> Result<DiagnosisReport> {
+    diagnose_with_dirs(root, DEFAULT_DIRS)
+}
+
 fn collect_rs_files(dir: &Path) -> Result<Vec<PathBuf>> {
     let mut files = Vec::new();
     collect_rs_files_recursive(dir, &mut files)?;
@@ -130,17 +140,25 @@ fn analyze_file(path: &Path, root: &Path) -> Option<FileDiagnosis> {
         return None;
     }
 
-    let pub_items = count_pub_items(&text);
+    let (pub_items, impl_methods) = count_api_items(&text);
+    let api_surface = pub_items + impl_methods;
     let test_count = count_tests(&text);
-    let test_density = if lines > 0 {
+    // Use api_surface for density if non-zero, otherwise fall back to lines.
+    let test_density = if api_surface > 0 {
+        test_count as f64 / api_surface as f64 * 100.0
+    } else if lines > 0 {
         test_count as f64 / lines as f64 * 100.0
     } else {
         0.0
     };
 
-    // ROI = lines × (1 - test_density/100) — higher for large files
-    // with few tests.
-    let roi = lines as f64 * (1.0 - test_density / 100.0);
+    // ROI = api_surface × (1 - test_density/100) — higher for files
+    // with many public APIs and few tests.
+    let roi = if api_surface > 0 {
+        api_surface as f64 * (1.0 - test_density / 100.0)
+    } else {
+        lines as f64 * (1.0 - test_density / 100.0)
+    };
 
     let rel_path = path
         .strip_prefix(root)
@@ -152,26 +170,90 @@ fn analyze_file(path: &Path, root: &Path) -> Option<FileDiagnosis> {
         path: rel_path,
         lines,
         pub_items,
+        api_surface,
         test_count,
         test_density,
         roi,
     })
 }
 
-fn count_pub_items(text: &str) -> usize {
-    let mut count = 0;
+/// Count top-level pub items and impl methods in a single pass.
+/// Returns (pub_items, impl_methods) where pub_items excludes methods
+/// inside `impl` blocks (to avoid double-counting).
+fn count_api_items(text: &str) -> (usize, usize) {
+    let mut pub_items = 0;
+    let mut impl_methods = 0;
+    let mut in_impl = false;
+    let mut brace_depth: i32 = 0;
+
     for line in text.lines() {
         let trimmed = line.trim();
-        if trimmed.starts_with("pub fn ")
-            || trimmed.starts_with("pub async fn ")
-            || trimmed.starts_with("pub struct ")
-            || trimmed.starts_with("pub enum ")
-            || trimmed.starts_with("pub trait ")
-        {
-            count += 1;
+        // Skip pub(crate) and pub(super) — not public API.
+        if trimmed.starts_with("pub(crate)") || trimmed.starts_with("pub(super)") {
+            // Track braces even for restricted-visibility lines.
+            if in_impl {
+                for ch in trimmed.chars() {
+                    match ch {
+                        '{' => brace_depth += 1,
+                        '}' => {
+                            brace_depth -= 1;
+                            if brace_depth <= 0 {
+                                in_impl = false;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            continue;
+        }
+        if !in_impl {
+            if trimmed.starts_with("impl ") && trimmed.contains('{') {
+                in_impl = true;
+                for ch in trimmed.chars() {
+                    match ch {
+                        '{' => brace_depth += 1,
+                        '}' => brace_depth -= 1,
+                        _ => {}
+                    }
+                }
+                if brace_depth == 0 {
+                    in_impl = false;
+                }
+            } else if trimmed.starts_with("pub fn ")
+                || trimmed.starts_with("pub async fn ")
+                || trimmed.starts_with("pub struct ")
+                || trimmed.starts_with("pub enum ")
+                || trimmed.starts_with("pub trait ")
+            {
+                pub_items += 1;
+            }
+        } else {
+            // Inside impl: count pub fn/async fn as impl methods.
+            if trimmed.starts_with("pub fn ") || trimmed.starts_with("pub async fn ") {
+                impl_methods += 1;
+            }
+            for ch in trimmed.chars() {
+                match ch {
+                    '{' => brace_depth += 1,
+                    '}' => {
+                        brace_depth -= 1;
+                        if brace_depth <= 0 {
+                            in_impl = false;
+                        }
+                    }
+                    _ => {}
+                }
+            }
         }
     }
-    count
+    (pub_items, impl_methods)
+}
+
+/// Shorthand for just the pub_items count (top-level only).
+#[cfg(test)]
+fn count_pub_items(text: &str) -> usize {
+    count_api_items(text).0
 }
 
 fn count_tests(text: &str) -> usize {
@@ -181,6 +263,56 @@ fn count_tests(text: &str) -> usize {
             t == "#[test]" || t == "#[tokio::test]" || t.starts_with("#[tokio::test(")
         })
         .count()
+}
+
+/// Cross-reference diagnosis with coverage gaps: files that are both
+/// low-test-density AND low-coverage are the highest ROI targets.
+pub fn print_coverage_crossref(report: &DiagnosisReport, gaps: &crate::gaps::CoverageGaps) {
+    use std::collections::HashMap;
+    let cov_map: HashMap<&str, f64> = gaps
+        .per_file
+        .iter()
+        .map(|f| (f.path.as_str(), f.rate))
+        .collect();
+
+    let mut cross: Vec<(&FileDiagnosis, f64)> = report
+        .top_targets
+        .iter()
+        .filter_map(|f| {
+            let rate = cov_map.get(f.path.as_str())?;
+            Some((f, *rate))
+        })
+        .collect();
+
+    if cross.is_empty() {
+        println!("\nNo overlap between diagnose targets and coverage data.");
+        return;
+    }
+
+    cross.sort_by(|a, b| {
+        let sa = a.1 + a.0.test_density;
+        let sb = b.1 + b.0.test_density;
+        sa.partial_cmp(&sb).unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    println!("\nCross-reference: low-coverage + low-test-density (highest ROI):");
+    println!(
+        "  {path:<50} {cov:>7}  {density:>7}  {roi:>5}",
+        path = "file",
+        cov = "cov%",
+        density = "test%",
+        roi = "ROI"
+    );
+    for (f, cov) in &cross {
+        println!(
+            "  {path:<50} {api:>3} api {cov:>6.1}% {density:>6.1}%  {roi:>5.0}",
+            path = f.path,
+            api = f.api_surface,
+            cov = cov,
+            density = f.test_density,
+            roi = f.roi
+        );
+    }
 }
 
 pub fn print_report(report: &DiagnosisReport) {
@@ -198,14 +330,15 @@ pub fn print_report(report: &DiagnosisReport) {
     }
     println!();
 
-    println!("Top 25 test ROI targets (lines × untestedness):");
+    println!("Top 25 test ROI targets (api_surface × untestedness):");
     for f in &report.top_targets {
         println!(
-            "  {path:<55} {lines:>5}L  {pubs:>3} pub  {tests:>3} tests  ROI={roi:.0}",
+            "  {path:<55} {lines:>5}L  {api:>3} api  {tests:>3} tests  density={density:.0}%  ROI={roi:.0}",
             path = f.path,
             lines = f.lines,
-            pubs = f.pub_items,
+            api = f.api_surface,
             tests = f.test_count,
+            density = f.test_density,
             roi = f.roi,
         );
     }
@@ -244,6 +377,58 @@ mod tests {
     fn count_ignores_private() {
         assert_eq!(count_pub_items("fn foo() {}"), 0);
         assert_eq!(count_pub_items("struct Foo;"), 0);
+    }
+
+    #[test]
+    fn count_ignores_pub_crate() {
+        assert_eq!(count_pub_items("pub(crate) fn foo() {}"), 0);
+        assert_eq!(count_pub_items("pub(crate) struct Foo;"), 0);
+    }
+
+    #[test]
+    fn count_ignores_pub_super() {
+        assert_eq!(count_pub_items("pub(super) fn bar() {}"), 0);
+    }
+
+    #[test]
+    fn count_impl_methods_simple() {
+        let text = "impl Foo {\n    pub fn bar(&self) {}\n    pub fn baz(&self) {}\n    fn private(&self) {}\n}\n";
+        let (_, impl_methods) = count_api_items(text);
+        assert_eq!(impl_methods, 2);
+    }
+
+    #[test]
+    fn count_impl_methods_async() {
+        let text = "impl Foo {\n    pub async fn fetch(&self) {}\n}\n";
+        let (_, impl_methods) = count_api_items(text);
+        assert_eq!(impl_methods, 1);
+    }
+
+    #[test]
+    fn count_impl_methods_ignores_pub_crate() {
+        let text =
+            "impl Foo {\n    pub(crate) fn internal(&self) {}\n    pub fn visible(&self) {}\n}\n";
+        let (_, impl_methods) = count_api_items(text);
+        assert_eq!(impl_methods, 1);
+    }
+
+    #[test]
+    fn count_impl_methods_trait_impl() {
+        let text = "impl Display for Foo {\n    pub fn fmt(&self) {}\n}\n";
+        let (_, impl_methods) = count_api_items(text);
+        assert_eq!(impl_methods, 1);
+    }
+
+    #[test]
+    fn api_surface_includes_impl_methods() {
+        let tmp = std::env::temp_dir().join("testdoctor-api-surface.rs");
+        let content =
+            "pub struct Foo;\nimpl Foo {\n    pub fn bar(&self) {}\n    pub fn baz(&self) {}\n}\n";
+        std::fs::write(&tmp, content).unwrap();
+        let diag = analyze_file(&tmp, &std::env::temp_dir()).unwrap();
+        assert_eq!(diag.pub_items, 1); // pub struct
+        assert_eq!(diag.api_surface, 3); // 1 pub struct + 2 pub fn in impl
+        std::fs::remove_file(&tmp).unwrap();
     }
 
     #[test]

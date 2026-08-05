@@ -1892,7 +1892,7 @@ mod tests {
         use crate::shared::config::CONFIG_FIELD_COUNT;
 
         // ── 1. Total struct-level fields ──────────────────────────
-        // ModelConfig=22, SecurityConfig=18, ToolConfig=26,
+        // ModelConfig=27, SecurityConfig=18, ToolConfig=26,
         // SessionConfig=8, DisplayConfig=3
         assert_eq!(
             CONFIG_FIELD_COUNT, 82,
@@ -2035,6 +2035,24 @@ mod tests {
             CONFIG_FIELD_COUNT,
             MERGE_TOML_EXPECTED,
             ENV_OVERRIDE_EXPECTED,
+        );
+
+        // ── 5. Serde field count vs CONFIG_FIELD_COUNT ──────────
+        // Serialize a default Config to JSON and count top-level keys.
+        // This catches the case where someone adds a field to a sub-struct
+        // but forgets to update CONFIG_FIELD_COUNT. Fields with
+        // #[serde(skip_serializing)] are not counted by serde but ARE
+        // config fields, so we add them back.
+        let default_config = crate::shared::config::Config::default();
+        let json = serde_json::to_value(&default_config).unwrap();
+        let obj = json.as_object().unwrap();
+        // Fields that exist in the struct but are skipped during serialization.
+        const SKIP_SERIALIZING_FIELDS: usize = 1; // seed (ModelConfig)
+        let serde_field_count = obj.len() + SKIP_SERIALIZING_FIELDS;
+        assert_eq!(
+            CONFIG_FIELD_COUNT, serde_field_count,
+            "CONFIG_FIELD_COUNT ({CONFIG_FIELD_COUNT}) != serde field count ({serde_field_count}) \
+             — did you add/remove a config field without updating CONFIG_FIELD_COUNT?"
         );
     }
 }

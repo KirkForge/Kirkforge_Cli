@@ -74,9 +74,13 @@ impl Toolset for VecToolset {
 
 /// A toolset that composes multiple inner toolsets in order.
 ///
-/// Order matters: the first inner set that contains a tool wins during
-/// resolution. This lets built-in tools keep their names even if a plugin
-/// or MCP server advertises a tool with the same name.
+/// Resolution order (first match wins):
+///   builtin > MCP > plugin (shell) > stratum > draw > video > budget
+///
+/// "Folded" in-process tools (stratum, draw, video, budget) are added after
+/// shell plugins, so a shell plugin with the same name would shadow the
+/// in-process version.  ADR-050 prevents this collision by skipping shell
+/// plugin dirs for folded plugins when the feature is enabled.
 pub struct CompositeToolset {
     toolsets: Vec<Box<dyn Toolset>>,
 }

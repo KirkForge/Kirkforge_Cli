@@ -15,6 +15,7 @@ use crate::shared::{
 };
 use crate::tools::{Tool, ToolContext};
 use kf_plugin_host::KF_CODE_TOOL_ARGS;
+use kf_plugin_sdk::TrustTier;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
@@ -83,6 +84,9 @@ pub struct PluginToolWrapper {
     /// manifest's `resource_limits` override, WO 11.5). Applied via
     /// `setup_rlimits` in the spawn path (Unix only).
     sandbox: SandboxConfig,
+    /// Effective trust tier for the owning plugin (M11). Tools from
+    /// ReadOnly plugins are blocked at dispatch time.
+    trust: TrustTier,
     /// Optional audit log for recording plugin tool invocations (H4).
     audit_log: Option<std::sync::Arc<AuditLog>>,
 }
@@ -97,6 +101,7 @@ impl PluginToolWrapper {
         command: PathBuf,
         shared_config: SharedConfig,
         sandbox: SandboxConfig,
+        trust: TrustTier,
     ) -> Self {
         // ToolDef requires 'static strings; intern so /reload plugins (which
         // rebuilds every wrapper) does not leak a fresh allocation each time.
@@ -112,6 +117,7 @@ impl PluginToolWrapper {
             command,
             shared_config,
             sandbox,
+            trust,
             audit_log: None,
         }
     }
@@ -212,6 +218,23 @@ impl Tool for PluginToolWrapper {
                     "plugin tool arguments exceed {} bytes ({} bytes); pass smaller payloads",
                     Self::MAX_ENV_ARGS_BYTES,
                     args_json.len()
+                ),
+            });
+        }
+
+        // M11: enforce trust tier at dispatch time. A ReadOnly plugin may not
+        // execute tool commands — its Skill prompts can only produce
+        // read-only model output.
+        if self.trust == TrustTier::ReadOnly {
+            tracing::warn!(
+                tool = %self.def.name,
+                trust = %self.trust,
+                "plugin tool blocked: ReadOnly trust tier does not allow execution"
+            );
+            return ToolOutcome::Failure(ToolError::AccessDenied {
+                message: format!(
+                    "plugin tool '{}' blocked: ReadOnly trust tier does not allow execution",
+                    self.def.name
                 ),
             });
         }
@@ -404,6 +427,7 @@ mod wrapper_tests {
             PathBuf::from("tool.sh"),
             cfg,
             SandboxConfig::default(),
+            TrustTier::Shell,
         )
     }
 
@@ -441,6 +465,37 @@ mod wrapper_tests {
         // with InvalidArgs — that guard is before the spawn.
         if let ToolOutcome::Failure(ToolError::InvalidArgs { .. }) = outcome {
             panic!("small args should not trigger InvalidArgs guard");
+        }
+    }
+
+    /// M11: a ReadOnly trust tier blocks tool execution at dispatch time.
+    #[tokio::test]
+    async fn run_blocks_readonly_trust_tier() {
+        let cfg = Arc::new(std::sync::RwLock::new(Config::default()));
+        let wrapper = PluginToolWrapper::new(
+            "blocked_tool".into(),
+            "should be blocked".into(),
+            serde_json::json!({"type": "object"}),
+            PathBuf::from("/tmp/test-plugin"),
+            PathBuf::from("tool.sh"),
+            cfg,
+            SandboxConfig::default(),
+            TrustTier::ReadOnly,
+        );
+        let ctx = make_ctx();
+        let outcome = wrapper.run(&ctx, serde_json::json!({"x": 1})).await;
+        match outcome {
+            ToolOutcome::Failure(ToolError::AccessDenied { message }) => {
+                assert!(
+                    message.contains("ReadOnly"),
+                    "message should mention ReadOnly, got: {message}"
+                );
+                assert!(
+                    message.contains("blocked_tool"),
+                    "message should mention tool name, got: {message}"
+                );
+            }
+            _ => panic!("expected AccessDenied failure, got {outcome:?}"),
         }
     }
 
@@ -579,6 +634,7 @@ mod wrapper_tests {
             PathBuf::from("sleep.sh"),
             cfg,
             SandboxConfig::default(),
+            TrustTier::Shell,
         );
 
         let ctx = make_ctx();

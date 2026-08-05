@@ -96,6 +96,28 @@ impl Bash {
                 )));
             }
         };
+        // M20: verify the canonical workdir is within the project root.
+        // Without this check, a symlink inside workdir pointing to /etc
+        // would canonicalize to /etc and get mounted read-write.
+        if let Some(ref sandbox) = self.path_guard.sandbox_dir {
+            let canonical_root = match sandbox.canonicalize() {
+                Ok(p) => p,
+                Err(e) => {
+                    return Err(ShellError::Spawn(format!(
+                        "cannot canonicalize project root '{}': {e}",
+                        sandbox.display()
+                    )));
+                }
+            };
+            if !resolved_workdir.starts_with(&canonical_root) {
+                return Err(ShellError::Spawn(format!(
+                    "Docker workdir escapes project root: {} is outside {}",
+                    resolved_workdir.display(),
+                    canonical_root.display()
+                )));
+            }
+        }
+
         let workdir_str = resolved_workdir.to_string_lossy();
         if workdir_str.contains(':') {
             return Err(ShellError::Spawn(format!(
@@ -775,6 +797,59 @@ mod tests {
                 "expected colon-injection guard message, got {message}"
             ),
             other => panic!("expected Execution failure for ':' workdir, got {other:?}"),
+        }
+    }
+
+    // M20: a symlink inside the project workdir pointing outside the project
+    // root must be rejected — without this check it would canonicalize to
+    // e.g. /etc and get mounted read-write into the container.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn bash_docker_path_rejects_symlink_escape() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Create a real directory for the sandbox root.
+        let sandbox = tmp.path().join("project");
+        std::fs::create_dir(&sandbox).unwrap();
+        // Create a symlink inside the sandbox that points outside.
+        let link = sandbox.join("escape_link");
+        std::os::unix::fs::symlink("/etc", &link).unwrap();
+
+        let docker_cfg = DockerConfig {
+            enabled: true,
+            image: "alpine:latest".into(),
+            memory: "512m".into(),
+            cpus: "1".into(),
+        };
+        let guard = PathGuard {
+            sandbox_dir: Some(sandbox.clone()),
+            ..PathGuard::default()
+        };
+        let tool = Bash::new(
+            DenyList::default(),
+            guard,
+            false,
+            Some(docker_cfg),
+            crate::shared::SandboxConfig::default(),
+        );
+        let ctx = crate::tools::ToolContext::new();
+        let outcome = tool
+            .run(
+                &ctx,
+                serde_json::json!({
+                    "command": "echo hello",
+                    "workdir": link.to_string_lossy(),
+                }),
+            )
+            .await;
+        match outcome {
+            crate::shared::ToolOutcome::Failure(crate::shared::ToolError::Execution {
+                message,
+                ..
+            }) => assert!(
+                message.contains("escapes project root") || message.contains("outside"),
+                "expected symlink-escape guard message, got {message}"
+            ),
+            other => panic!("expected Execution failure for symlink escape, got {other:?}"),
         }
     }
 

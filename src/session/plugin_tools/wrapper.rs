@@ -8,6 +8,7 @@ use crate::session::bash_runner::{
     cap_to_string, drain_capped, setup_rlimits, MAX_BASH_OUTPUT_BYTES,
 };
 use crate::session::process_group::{kill_process_group, reap_child, setup_process_group};
+use crate::shared::audit::AuditLog;
 use crate::shared::{
     intern_static_str, read_shared_config, Config, SandboxConfig, SharedConfig, ToolDef, ToolError,
     ToolOutcome,
@@ -82,6 +83,8 @@ pub struct PluginToolWrapper {
     /// manifest's `resource_limits` override, WO 11.5). Applied via
     /// `setup_rlimits` in the spawn path (Unix only).
     sandbox: SandboxConfig,
+    /// Optional audit log for recording plugin tool invocations (H4).
+    audit_log: Option<std::sync::Arc<AuditLog>>,
 }
 
 impl PluginToolWrapper {
@@ -109,7 +112,14 @@ impl PluginToolWrapper {
             command,
             shared_config,
             sandbox,
+            audit_log: None,
         }
+    }
+
+    /// Attach an audit log for recording plugin tool invocations (H4).
+    pub fn with_audit_log(mut self, log: std::sync::Arc<AuditLog>) -> Self {
+        self.audit_log = Some(log);
+        self
     }
 
     /// Resolve the working directory for the plugin tool subprocess.
@@ -206,6 +216,8 @@ impl Tool for PluginToolWrapper {
             });
         }
 
+        let start = std::time::Instant::now();
+        let args_summary: String = args_json.chars().take(200).collect();
         let cfg = read_shared_config(&self.shared_config).clone();
         let cmd_path = self.plugin_root.join(&self.command);
         let cwd = self.sandbox_dir(&cfg);
@@ -221,8 +233,8 @@ impl Tool for PluginToolWrapper {
             .kill_on_drop(true)
             .env_clear();
         setup_process_group(&mut command);
-        // WO 11.5: apply rlimits when the per-plugin sandbox harden flag
-        // is true (Unix only; Windows no-op with a one-shot warning).
+        // WO 11.5 / H3: rlimits are always applied (the harden flag
+        // controls only bash sandbox settings, not resource limits).
         setup_rlimits(&mut command, &self.sandbox);
 
         for (k, v) in self.curated_env(&cfg, &args) {
@@ -273,7 +285,7 @@ impl Tool for PluginToolWrapper {
             _ = ctx.token.cancelled() => Finish::Cancelled,
         };
 
-        match finish {
+        let outcome = match finish {
             Finish::Status(Ok(status)) => {
                 let (raw_stdout, stdout_dropped) =
                     match join_plugin_drain(drain_stdout, "stdout").await {
@@ -339,7 +351,23 @@ impl Tool for PluginToolWrapper {
                 reap_child(&mut child, Duration::from_secs(2)).await;
                 ToolOutcome::Failure(ToolError::Cancelled)
             }
+        };
+
+        // H4: audit-log plugin tool invocations when an audit log is attached.
+        if let Some(ref audit) = self.audit_log {
+            let exit_code = match &outcome {
+                ToolOutcome::Failure(ToolError::Execution { exit_code, .. }) => *exit_code,
+                _ => None,
+            };
+            audit.log_plugin_tool(
+                self.def.name,
+                &args_summary,
+                exit_code,
+                start.elapsed().as_millis() as u64,
+            );
         }
+
+        outcome
     }
 }
 

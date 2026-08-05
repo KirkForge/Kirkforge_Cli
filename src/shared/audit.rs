@@ -50,6 +50,20 @@ pub enum AuditEntry {
         #[serde(skip_serializing_if = "Option::is_none")]
         session_id: Option<String>,
     },
+    /// A plugin tool invocation (H4).
+    PluginTool {
+        /// RFC 3339 UTC timestamp.
+        timestamp: String,
+        /// Plugin tool name.
+        name: String,
+        /// First 200 chars of the tool arguments.
+        args_summary: String,
+        /// Exit code of the subprocess, if available.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        exit_code: Option<i32>,
+        /// Wall-clock duration in milliseconds.
+        duration_ms: u64,
+    },
 }
 
 impl AuditEntry {
@@ -79,6 +93,22 @@ impl AuditEntry {
             verdict: verdict.to_string(),
             reason: reason.map(|s| s.to_string()),
             session_id: None,
+        }
+    }
+
+    /// Construct a `PluginTool` variant (H4).
+    pub fn plugin_tool(
+        name: &str,
+        args_summary: &str,
+        exit_code: Option<i32>,
+        duration_ms: u64,
+    ) -> Self {
+        Self::PluginTool {
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            name: name.to_string(),
+            args_summary: args_summary.to_string(),
+            exit_code,
+            duration_ms,
         }
     }
 }
@@ -152,6 +182,18 @@ impl AuditLog {
     /// Best-effort: I/O failures are logged but never surfaced.
     pub fn log_hook(&self, event: &str, plugin: Option<&str>, verdict: &str, reason: Option<&str>) {
         let entry = AuditEntry::hook(event, plugin, verdict, reason);
+        self.write_entry(&entry);
+    }
+
+    /// Record a plugin tool invocation (H4). Best-effort.
+    pub fn log_plugin_tool(
+        &self,
+        name: &str,
+        args_summary: &str,
+        exit_code: Option<i32>,
+        duration_ms: u64,
+    ) {
+        let entry = AuditEntry::plugin_tool(name, args_summary, exit_code, duration_ms);
         self.write_entry(&entry);
     }
 

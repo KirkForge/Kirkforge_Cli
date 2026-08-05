@@ -42,7 +42,15 @@ pub enum ToolError {
 
 impl PluginTool {
     /// Build a `PluginTool` from a tool capability.
-    pub fn from_capability(cap: &Capability, plugin_root: &Path) -> Option<Self> {
+    ///
+    /// `resource_limits` should come from the plugin manifest's
+    /// `resource_limits` field. Previously hard-coded to `None`, which
+    /// silently ignored declared limits (H3).
+    pub fn from_capability(
+        cap: &Capability,
+        plugin_root: &Path,
+        resource_limits: Option<ResourceLimits>,
+    ) -> Option<Self> {
         match cap {
             Capability::Tool {
                 name,
@@ -60,7 +68,7 @@ impl PluginTool {
                     schema: schema.clone(),
                     command,
                     plugin_root: plugin_root.to_path_buf(),
-                    resource_limits: None,
+                    resource_limits,
                 })
             }
             _ => None,

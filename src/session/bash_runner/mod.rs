@@ -107,13 +107,11 @@ pub(crate) fn shell_program() -> &'static str {
 ///
 /// On Windows this is a no-op: rlimits are a Unix-only concept, and
 /// Windows job objects are a separate API surface (out of scope for
-/// this WO). When `harden` is false, the function returns without
-/// touching the command.
+/// this WO). Rlimits are always applied when present — the `harden`
+/// flag controls only bash sandbox settings (network, workdir), not
+/// resource limits (H3).
 #[cfg(unix)]
 pub(crate) fn setup_rlimits(cmd: &mut Command, cfg: &SandboxConfig) {
-    if !cfg.harden {
-        return;
-    }
     use std::os::unix::process::CommandExt;
 
     let cpu_secs = cfg.cpu_limit_secs;

@@ -51,7 +51,7 @@ command = "greet.sh"
 #[tokio::test]
 async fn wrapper_for_plugin_tool() {
     let (_tmp, reg, cfg) = make_greet_plugin();
-    let tools = all_plugin_tools(&reg, cfg);
+    let tools = all_plugin_tools(&reg, cfg, None);
     assert_eq!(tools.len(), 1);
     assert_eq!(tools[0].def().name, "demo/greet");
 
@@ -94,7 +94,7 @@ async fn sandbox_uses_configured_sandbox_dir() {
         std::fs::set_permissions(plugin_dir.join("greet.sh"), perms).unwrap();
     }
 
-    let tools = all_plugin_tools(&reg, cfg);
+    let tools = all_plugin_tools(&reg, cfg, None);
     assert_eq!(tools.len(), 1);
 
     let outcome = tools[0]
@@ -142,7 +142,7 @@ async fn sandbox_uses_current_dir_when_sandbox_dir_empty() {
         std::fs::set_permissions(plugin_dir.join("greet.sh"), perms).unwrap();
     }
 
-    let tools = all_plugin_tools(&reg, cfg);
+    let tools = all_plugin_tools(&reg, cfg, None);
     let outcome = tools[0]
         .run(&ToolContext::new(), serde_json::Value::Null)
         .await;
@@ -193,7 +193,7 @@ async fn curated_env_blocks_unlisted_vars() {
     }
 
     std::env::set_var("KF_CODE_SECRET_VAR", "leaked");
-    let tools = all_plugin_tools(&reg, cfg);
+    let tools = all_plugin_tools(&reg, cfg, None);
     let outcome = tools[0]
         .run(&ToolContext::new(), serde_json::Value::Null)
         .await;
@@ -257,7 +257,7 @@ async fn curated_env_sanitizes_path_for_plugin_tools() {
     }
 
     let _guard = PathGuard::set("/tmp/evil");
-    let tools = all_plugin_tools(&reg, cfg);
+    let tools = all_plugin_tools(&reg, cfg, None);
     let outcome = tools[0]
         .run(&ToolContext::new(), serde_json::Value::Null)
         .await;
@@ -602,6 +602,7 @@ async fn bundled_stratum_mode_tool_executes_via_host() {
     let tools = all_plugin_tools(
         &registry,
         Arc::new(std::sync::RwLock::new(Config::default())),
+        None,
     );
     let tool = tools
         .iter()
@@ -658,6 +659,7 @@ async fn bundled_node_sdk_tool_executes_via_host() {
     let tools = all_plugin_tools(
         &registry,
         Arc::new(std::sync::RwLock::new(Config::default())),
+        None,
     );
     let tool = tools
         .iter()
@@ -906,7 +908,7 @@ command = "verifiers/check.sh"
         // ── 2. Tool registered + callable ──
         assert!(registry.tool_by_name("e2e/echo").is_some());
         let cfg = Arc::new(std::sync::RwLock::new(Config::default()));
-        let tools = all_plugin_tools(&registry, cfg);
+        let tools = all_plugin_tools(&registry, cfg, None);
         assert_eq!(tools.len(), 1, "expected 1 plugin tool");
         let outcome = tools[0]
             .run(&ToolContext::new(), serde_json::json!({"arg": "world"}))
@@ -1080,7 +1082,7 @@ cpu_secs = {cpu_secs}
     #[tokio::test]
     async fn plugin_tool_resource_limit_kills_cpu_burn_with_sigxcpu() {
         let (_tmp, reg, cfg) = make_cpu_burn_plugin(2);
-        let tools = all_plugin_tools(&reg, cfg);
+        let tools = all_plugin_tools(&reg, cfg, None);
         assert_eq!(tools.len(), 1, "expected 1 plugin tool");
 
         let start = std::time::Instant::now();

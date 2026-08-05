@@ -41,7 +41,7 @@ pub fn folded_feature_enabled(name: &str) -> bool {
         #[cfg(feature = "stratum")]
         "stratum" => true,
         #[cfg(feature = "budget")]
-        "kf-plugin-sdk3" => true,
+        "kf-budget" => true,
         #[cfg(feature = "draw")]
         "kf-draw" => true,
         #[cfg(feature = "video")]
@@ -178,6 +178,7 @@ pub fn load_plugin_registry(cfg: &Config) -> anyhow::Result<(PluginRegistry, Vec
 pub fn all_plugin_tools(
     registry: &PluginRegistry,
     shared_config: SharedConfig,
+    audit_log: Option<std::sync::Arc<crate::shared::audit::AuditLog>>,
 ) -> Vec<Arc<dyn Tool>> {
     let mut tools: Vec<Arc<dyn Tool>> = Vec::new();
 
@@ -215,6 +216,10 @@ pub fn all_plugin_tools(
                     shared_config.clone(),
                     per_plugin_sandbox.clone(),
                 );
+                let wrapper = match &audit_log {
+                    Some(log) => wrapper.with_audit_log(std::sync::Arc::clone(log)),
+                    None => wrapper,
+                };
                 tools.push(Arc::new(wrapper));
             }
         }

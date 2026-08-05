@@ -458,7 +458,7 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
             }
         };
     let plugin_tools =
-        session::plugin_tools::all_plugin_tools(&plugin_registry, shared_config.clone());
+        session::plugin_tools::all_plugin_tools(&plugin_registry, shared_config.clone(), None);
     if !plugin_tools.is_empty() {
         toolset.add(Box::new(session::toolset::VecToolset::new(
             "plugin",

@@ -18,21 +18,6 @@ pub enum EventKind {
 }
 
 impl EventKind {
-    /// All known kinds.
-    pub fn all() -> &'static [EventKind] {
-        &[
-            EventKind::FileRead,
-            EventKind::FileWrite,
-            EventKind::Edit,
-            EventKind::BashExec,
-            EventKind::GitOperation,
-            EventKind::LintRun,
-            EventKind::TypeCheck,
-            EventKind::SecurityScan,
-            EventKind::ToolError,
-        ]
-    }
-
     /// Human-readable label.
     pub fn label(self) -> &'static str {
         match self {

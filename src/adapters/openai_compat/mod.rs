@@ -10,7 +10,7 @@
 use crate::shared::{FinishReason, Message, ModelInfo, StreamEvent, TokenUsage, ToolCallStyle};
 use tokio_stream::StreamExt;
 
-use super::ModelAdapter;
+use super::{find_subseq, trim_ascii_whitespace, ModelAdapter};
 
 mod tool_call;
 use tool_call::ToolCallAccumulator;
@@ -52,25 +52,7 @@ async fn send_done_once(
 const MAX_SSE_BUFFER_BYTES: usize = 8 * 1024 * 1024;
 
 /// Find the first occurrence of `needle` in `haystack`.
-fn find_subseq(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack
-        .windows(needle.len())
-        .position(|window| window == needle)
-}
 
-/// Trim ASCII whitespace from both ends of a byte slice.
-fn trim_ascii_whitespace(bytes: &[u8]) -> &[u8] {
-    let start = bytes
-        .iter()
-        .position(|&b| !b.is_ascii_whitespace())
-        .unwrap_or(bytes.len());
-    let end = bytes
-        .iter()
-        .rposition(|&b| !b.is_ascii_whitespace())
-        .map(|i| i + 1)
-        .unwrap_or(bytes.len());
-    &bytes[start..end]
-}
 
 pub(crate) async fn parse_openai_compat_stream<B, E, S>(
     tx: tokio::sync::mpsc::Sender<StreamEvent>,

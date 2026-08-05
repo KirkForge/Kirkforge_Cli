@@ -52,13 +52,6 @@ impl VerifierSlots {
         Ok(())
     }
 
-    /// Unregister a verifier by name.
-    pub fn unregister(&mut self, name: &str) -> bool {
-        let len_before = self.verifiers.len();
-        self.verifiers.retain(|v| v.name() != name);
-        self.verifiers.len() < len_before
-    }
-
     /// Retain only verifiers that satisfy the predicate.
     pub fn retain<F>(&mut self, mut f: F)
     where

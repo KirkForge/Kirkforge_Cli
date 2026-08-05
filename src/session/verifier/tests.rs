@@ -163,22 +163,6 @@ async fn test_duplicate_registration_rejected() {
 }
 
 #[tokio::test]
-async fn test_unregister_by_name() {
-    let mut slots = VerifierSlots::new();
-    slots
-        .register(Arc::new(MockVerifier {
-            name: "lint".into(),
-            prio: 1,
-            verdict: Verdict::Clean,
-        }))
-        .unwrap();
-    assert_eq!(slots.len(), 1);
-    assert!(slots.unregister("lint"));
-    assert_eq!(slots.len(), 0);
-    assert!(!slots.unregister("nonexistent"));
-}
-
-#[tokio::test]
 async fn test_correction_loop_returns_suggestion_when_no_fix_available() {
     let slots = Arc::new(std::sync::RwLock::new(VerifierSlots::new()));
     let handler = Arc::new(VerifierHandler::new(

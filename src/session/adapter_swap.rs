@@ -14,8 +14,7 @@
 //!   any in-flight connections from the previous adapter.
 //! - A swap event is emitted as a TurnEvent token so the user sees the switch.
 
-use crate::adapters::cache::ResponseCache;
-use crate::adapters::{self, caching::CachingAdapter, ModelAdapter};
+use crate::adapters::{self, ModelAdapter};
 use crate::session::router;
 use crate::shared::Config;
 
@@ -130,12 +129,7 @@ impl AdapterSwap {
     /// Wrap a freshly-constructed adapter in the response cache when
     /// caching is enabled, preserving the config's `json_mode` flag.
     fn wrap_cached(config: &Config, adapter: Box<dyn ModelAdapter>) -> Box<dyn ModelAdapter> {
-        if config.model.cache_enabled {
-            let cache = ResponseCache::new(true, config.model.cache_dir.clone());
-            Box::new(CachingAdapter::new(adapter, cache, config.model.json_mode))
-        } else {
-            adapter
-        }
+        crate::adapters::caching::maybe_wrap_cached(adapter, config)
     }
 }
 

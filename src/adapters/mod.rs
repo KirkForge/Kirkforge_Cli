@@ -705,6 +705,27 @@ fn build_openai_compat_body(
     body
 }
 
+/// Find the first occurrence of `needle` in `haystack` (byte-level substring search).
+pub(crate) fn find_subseq(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
+}
+
+/// Trim ASCII whitespace from both ends of a byte slice.
+pub(crate) fn trim_ascii_whitespace(bytes: &[u8]) -> &[u8] {
+    let start = bytes
+        .iter()
+        .position(|&b| !b.is_ascii_whitespace())
+        .unwrap_or(bytes.len());
+    let end = bytes
+        .iter()
+        .rposition(|&b| !b.is_ascii_whitespace())
+        .map(|i| i + 1)
+        .unwrap_or(bytes.len());
+    &bytes[start..end]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

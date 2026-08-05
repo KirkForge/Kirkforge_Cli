@@ -16,7 +16,7 @@ use crate::shared::{
 };
 use tokio_stream::StreamExt;
 
-use super::ModelAdapter;
+use super::{find_subseq, trim_ascii_whitespace, ModelAdapter};
 
 /// Maximum bytes the SSE parser will accumulate while waiting for a complete
 /// `data: ...\n\n` frame.
@@ -498,7 +498,7 @@ async fn handle_content_block_start(
             // Anthropic streams `input: {}` at block start and then sends the
             // real JSON via `partial_json` deltas. Treat an empty object as no
             // initial input so accumulation starts from a clean string.
-            let input = block.get("input").cloned().filter(|v| !is_empty_object(v));
+            let input = block.get("input").cloned().filter(|v| !(v.as_object().map(|o| o.is_empty()).unwrap_or(false)));
             *pending = Some(PendingToolUse { id, name, input });
         }
         "text" => {
@@ -590,10 +590,6 @@ impl PendingToolUse {
     }
 }
 
-fn is_empty_object(v: &serde_json::Value) -> bool {
-    v.as_object().map(|o| o.is_empty()).unwrap_or(false)
-}
-
 fn parse_usage(u: &serde_json::Value) -> TokenUsage {
     let prompt_tokens = u
         .get("input_tokens")
@@ -638,25 +634,6 @@ async fn send_done(
     } else {
         false
     }
-}
-
-fn find_subseq(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack
-        .windows(needle.len())
-        .position(|window| window == needle)
-}
-
-fn trim_ascii_whitespace(bytes: &[u8]) -> &[u8] {
-    let start = bytes
-        .iter()
-        .position(|&b| !b.is_ascii_whitespace())
-        .unwrap_or(bytes.len());
-    let end = bytes
-        .iter()
-        .rposition(|&b| !b.is_ascii_whitespace())
-        .map(|i| i + 1)
-        .unwrap_or(bytes.len());
-    &bytes[start..end]
 }
 
 #[cfg(test)]
@@ -1631,25 +1608,19 @@ mod tests {
 
     #[test]
     fn find_subseq_locates_needle() {
-        assert_eq!(find_subseq(b"hello world", b"world"), Some(6));
-        assert_eq!(find_subseq(b"hello", b"xyz"), None);
-        assert_eq!(find_subseq(b"", b"x"), None);
+        assert_eq!(super::find_subseq(b"hello world", b"world"), Some(6));
+        assert_eq!(super::find_subseq(b"hello", b"xyz"), None);
+        assert_eq!(super::find_subseq(b"", b"x"), None);
     }
 
     #[test]
     fn trim_ascii_whitespace_strips_both_ends() {
-        assert_eq!(trim_ascii_whitespace(b"  hi  "), b"hi");
-        assert_eq!(trim_ascii_whitespace(b"\n\tdata\r\n"), b"data");
+        assert_eq!(super::trim_ascii_whitespace(b"  hi  "), b"hi");
+        assert_eq!(super::trim_ascii_whitespace(b"\n\tdata\r\n"), b"data");
         assert_eq!(trim_ascii_whitespace(b"   "), b"");
     }
 
-    #[test]
-    fn is_empty_object_detects_empty_objects() {
-        assert!(is_empty_object(&json!({})));
-        assert!(!is_empty_object(&json!({"a": 1})));
-        assert!(!is_empty_object(&json!("string")));
-        assert!(!is_empty_object(&json!([])));
-    }
+
 
     #[test]
     fn parse_usage_extracts_all_token_fields() {

@@ -10,6 +10,17 @@ use super::{expand_tilde_str, parse_bool_env, parse_plugin_sources_env};
 
 /// Apply environment variable overrides to a Config.
 pub(super) fn apply_env_overrides(cfg: &mut Config) {
+    // Helper for the repeated bool-override pattern: read a KF_CODE_*
+    // env var, parse it as a bool, and write it to a config field.
+    macro_rules! env_bool {
+        ($var:literal, $field:expr) => {
+            if let Ok(val) = std::env::var($var) {
+                if let Some(v) = parse_bool_env(&val) {
+                    $field = v;
+                }
+            }
+        };
+    }
     // KF_CODE_MODEL
     if let Ok(val) = std::env::var("KF_CODE_MODEL") {
         if !val.is_empty() {
@@ -25,11 +36,7 @@ pub(super) fn apply_env_overrides(cfg: &mut Config) {
     }
 
     // KF_CODE_AUTO_APPROVE
-    if let Ok(val) = std::env::var("KF_CODE_AUTO_APPROVE") {
-        if let Some(v) = parse_bool_env(&val) {
-            cfg.security.auto_approve = v;
-        }
-    }
+    env_bool!("KF_CODE_AUTO_APPROVE", cfg.security.auto_approve);
 
     // KF_CODE_SANDBOX_DIR
     if let Ok(val) = std::env::var("KF_CODE_SANDBOX_DIR") {
@@ -41,11 +48,7 @@ pub(super) fn apply_env_overrides(cfg: &mut Config) {
     }
 
     // KF_CODE_BLOCK_DOTFILES
-    if let Ok(val) = std::env::var("KF_CODE_BLOCK_DOTFILES") {
-        if let Some(v) = parse_bool_env(&val) {
-            cfg.security.block_dotfiles = v;
-        }
-    }
+    env_bool!("KF_CODE_BLOCK_DOTFILES", cfg.security.block_dotfiles);
 
     // KF_CODE_MAX_READ_SIZE
     if let Ok(val) = std::env::var("KF_CODE_MAX_READ_SIZE") {
@@ -55,25 +58,13 @@ pub(super) fn apply_env_overrides(cfg: &mut Config) {
     }
 
     // KF_CODE_FOLLOW_SYMLINKS
-    if let Ok(val) = std::env::var("KF_CODE_FOLLOW_SYMLINKS") {
-        if let Some(v) = parse_bool_env(&val) {
-            cfg.tools.follow_symlinks = v;
-        }
-    }
+    env_bool!("KF_CODE_FOLLOW_SYMLINKS", cfg.tools.follow_symlinks);
 
     // KF_CODE_BLOCK_BINARY
-    if let Ok(val) = std::env::var("KF_CODE_BLOCK_BINARY") {
-        if let Some(v) = parse_bool_env(&val) {
-            cfg.tools.block_binary_reads = v;
-        }
-    }
+    env_bool!("KF_CODE_BLOCK_BINARY", cfg.tools.block_binary_reads);
 
     // KF_CODE_MINIFY_WRITE_SIDE
-    if let Ok(val) = std::env::var("KF_CODE_MINIFY_WRITE_SIDE") {
-        if let Some(v) = parse_bool_env(&val) {
-            cfg.tools.minify_write_side = v;
-        }
-    }
+    env_bool!("KF_CODE_MINIFY_WRITE_SIDE", cfg.tools.minify_write_side);
 
     // KF_CODE_MINIFY_ABOVE_BYTES
     if let Ok(val) = std::env::var("KF_CODE_MINIFY_ABOVE_BYTES") {
@@ -94,24 +85,12 @@ pub(super) fn apply_env_overrides(cfg: &mut Config) {
     }
 
     // KF_CODE_CARRYOVER_ENABLED
-    if let Ok(val) = std::env::var("KF_CODE_CARRYOVER_ENABLED") {
-        if let Some(v) = parse_bool_env(&val) {
-            cfg.session.carryover_enabled = v;
-        }
-    }
+    env_bool!("KF_CODE_CARRYOVER_ENABLED", cfg.session.carryover_enabled);
     // KF_CODE_DRY_RUN
-    if let Ok(val) = std::env::var("KF_CODE_DRY_RUN") {
-        if let Some(v) = parse_bool_env(&val) {
-            cfg.tools.dry_run = v;
-        }
-    }
+    env_bool!("KF_CODE_DRY_RUN", cfg.tools.dry_run);
 
     // KF_CODE_CACHE_ENABLED
-    if let Ok(val) = std::env::var("KF_CODE_CACHE_ENABLED") {
-        if let Some(v) = parse_bool_env(&val) {
-            cfg.model.cache_enabled = v;
-        }
-    }
+    env_bool!("KF_CODE_CACHE_ENABLED", cfg.model.cache_enabled);
 
     // KF_CODE_CACHE_DIR
     if let Ok(val) = std::env::var("KF_CODE_CACHE_DIR") {
@@ -119,32 +98,25 @@ pub(super) fn apply_env_overrides(cfg: &mut Config) {
     }
 
     // KF_CODE_BANG_REQUIRES_APPROVAL
-    if let Ok(val) = std::env::var("KF_CODE_BANG_REQUIRES_APPROVAL") {
-        if let Some(v) = parse_bool_env(&val) {
-            cfg.security.bang_requires_approval = v;
-        }
-    }
+    env_bool!(
+        "KF_CODE_BANG_REQUIRES_APPROVAL",
+        cfg.security.bang_requires_approval
+    );
 
     // KF_CODE_JSON_MODE
-    if let Ok(val) = std::env::var("KF_CODE_JSON_MODE") {
-        if let Some(v) = parse_bool_env(&val) {
-            cfg.model.json_mode = v;
-        }
-    }
+    env_bool!("KF_CODE_JSON_MODE", cfg.model.json_mode);
 
     // KF_CODE_BASH_SANDBOX_WORKDIR
-    if let Ok(val) = std::env::var("KF_CODE_BASH_SANDBOX_WORKDIR") {
-        if let Some(v) = parse_bool_env(&val) {
-            cfg.security.bash_sandbox_workdir = v;
-        }
-    }
+    env_bool!(
+        "KF_CODE_BASH_SANDBOX_WORKDIR",
+        cfg.security.bash_sandbox_workdir
+    );
 
     // KF_CODE_BLOCK_GITIGNORED_DOTFILES
-    if let Ok(val) = std::env::var("KF_CODE_BLOCK_GITIGNORED_DOTFILES") {
-        if let Some(v) = parse_bool_env(&val) {
-            cfg.security.block_gitignored_dotfiles = v;
-        }
-    }
+    env_bool!(
+        "KF_CODE_BLOCK_GITIGNORED_DOTFILES",
+        cfg.security.block_gitignored_dotfiles
+    );
 
     // KF_CODE_MAX_OVERWRITE_SIZE
     if let Ok(val) = std::env::var("KF_CODE_MAX_OVERWRITE_SIZE") {
@@ -161,11 +133,7 @@ pub(super) fn apply_env_overrides(cfg: &mut Config) {
     }
 
     // KF_CODE_ROUTING_ENABLED
-    if let Ok(val) = std::env::var("KF_CODE_ROUTING_ENABLED") {
-        if let Some(v) = parse_bool_env(&val) {
-            cfg.model.routing_enabled = v;
-        }
-    }
+    env_bool!("KF_CODE_ROUTING_ENABLED", cfg.model.routing_enabled);
 
     // KF_CODE_ROUTER_MODEL
     if let Ok(val) = std::env::var("KF_CODE_ROUTER_MODEL") {
@@ -228,18 +196,16 @@ pub(super) fn apply_env_overrides(cfg: &mut Config) {
     }
 
     // KF_CODE_REJECT_ON_EXCESS_PLUGIN_TRUST
-    if let Ok(val) = std::env::var("KF_CODE_REJECT_ON_EXCESS_PLUGIN_TRUST") {
-        if let Some(v) = parse_bool_env(&val) {
-            cfg.tools.reject_on_excess_plugin_trust = v;
-        }
-    }
+    env_bool!(
+        "KF_CODE_REJECT_ON_EXCESS_PLUGIN_TRUST",
+        cfg.tools.reject_on_excess_plugin_trust
+    );
 
     // KF_CODE_PLUGIN_SIGNATURE_VALIDATION
-    if let Ok(val) = std::env::var("KF_CODE_PLUGIN_SIGNATURE_VALIDATION") {
-        if let Some(v) = parse_bool_env(&val) {
-            cfg.tools.plugin_signature_validation = v;
-        }
-    }
+    env_bool!(
+        "KF_CODE_PLUGIN_SIGNATURE_VALIDATION",
+        cfg.tools.plugin_signature_validation
+    );
 
     // KF_CODE_PLUGIN_PUBLIC_KEY_PATH
     if let Ok(val) = std::env::var("KF_CODE_PLUGIN_PUBLIC_KEY_PATH") {
@@ -283,11 +249,7 @@ pub(super) fn apply_env_overrides(cfg: &mut Config) {
     }
 
     // KF_CODE_MEMORY_ENABLED
-    if let Ok(val) = std::env::var("KF_CODE_MEMORY_ENABLED") {
-        if let Some(v) = parse_bool_env(&val) {
-            cfg.display.memory_enabled = v;
-        }
-    }
+    env_bool!("KF_CODE_MEMORY_ENABLED", cfg.display.memory_enabled);
 
     // KF_CODE_MEMORY_MAX_TOKENS
     if let Ok(val) = std::env::var("KF_CODE_MEMORY_MAX_TOKENS") {
@@ -318,11 +280,10 @@ pub(super) fn apply_env_overrides(cfg: &mut Config) {
     }
 
     // KF_CODE_SCHEDULED_BASH_AUTO_APPROVE
-    if let Ok(val) = std::env::var("KF_CODE_SCHEDULED_BASH_AUTO_APPROVE") {
-        if let Some(v) = parse_bool_env(&val) {
-            cfg.tools.scheduled_bash_auto_approve = v;
-        }
-    }
+    env_bool!(
+        "KF_CODE_SCHEDULED_BASH_AUTO_APPROVE",
+        cfg.tools.scheduled_bash_auto_approve
+    );
 
     // KF_CODE_MAX_CONCURRENT_SCHEDULED_JOBS
     if let Ok(val) = std::env::var("KF_CODE_MAX_CONCURRENT_SCHEDULED_JOBS") {
@@ -364,11 +325,10 @@ pub(super) fn apply_env_overrides(cfg: &mut Config) {
     }
 
     // Computer-use tool config
-    if let Ok(val) = std::env::var("KF_CODE_COMPUTER_USE_ENABLED") {
-        if let Some(v) = parse_bool_env(&val) {
-            cfg.security.computer_use.enabled = v;
-        }
-    }
+    env_bool!(
+        "KF_CODE_COMPUTER_USE_ENABLED",
+        cfg.security.computer_use.enabled
+    );
     if let Ok(val) = std::env::var("KF_CODE_COMPUTER_USE_CHROME_PATH") {
         cfg.security.computer_use.chrome_path = if val.is_empty() {
             None
@@ -376,11 +336,10 @@ pub(super) fn apply_env_overrides(cfg: &mut Config) {
             Some(PathBuf::from(expand_tilde_str(&val)))
         };
     }
-    if let Ok(val) = std::env::var("KF_CODE_COMPUTER_USE_HEADFUL") {
-        if let Some(v) = parse_bool_env(&val) {
-            cfg.security.computer_use.headful = v;
-        }
-    }
+    env_bool!(
+        "KF_CODE_COMPUTER_USE_HEADFUL",
+        cfg.security.computer_use.headful
+    );
     if let Ok(val) = std::env::var("KF_CODE_COMPUTER_USE_WIDTH") {
         if let Ok(n) = val.parse::<u32>() {
             cfg.security.computer_use.width = n.max(1);

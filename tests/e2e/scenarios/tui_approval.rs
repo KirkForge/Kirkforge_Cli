@@ -1,8 +1,13 @@
 //! Scenario: TUI tool-approval round-trip.
 //!
 //! WO 19.6 Phase 2: prove the approval dialog renders, accepts 'y' to
-//! approve, and the tool result flows back to the model. Marked
-//! `#[ignore]` because it requires tmux and a display server.
+//! approve, and the tool result flows back to the model.
+//!
+//! **Note:** like `tui_chat_full_tui_round_trip`, this test requires a
+//! display server and interactive terminal and is `#[ignore]` by default.
+//! It cannot run reliably inside `cargo test` because crossterm does not
+//! initialise the alternate screen buffer when the parent is the test
+//! runner.
 
 use std::time::Duration;
 
@@ -15,7 +20,7 @@ use crate::harness::IsolatedEnv;
 /// and verify the model's second response appears. Exercises the full
 /// approval dialog → keypress → executor → second-turn loop.
 #[tokio::test]
-#[ignore = "requires tmux and display server"]
+#[ignore = "requires tmux, display server, and interactive terminal"]
 async fn tui_tool_approval_approve_flow() {
     if !tmux_available() {
         eprintln!("skipping: tmux not available");
@@ -41,13 +46,14 @@ async fn tui_tool_approval_approve_flow() {
         &[
             ("KF_CODE_DATA_DIR", env.data_dir().to_str().unwrap()),
             ("HOME", env.root_path().to_str().unwrap()),
+            ("TERM", "xterm-256color"),
         ],
     )
     .expect("e2e: start tmux session");
 
-    // Wait for the TUI to render.
-    ui.wait_for_contains(">", Duration::from_secs(10), Duration::from_millis(500))
-        .expect("e2e: TUI did not render within 10s");
+    // Wait for the TUI to render the input box.
+    ui.wait_for_contains("Type a message", Duration::from_secs(15), Duration::from_millis(500))
+        .expect("e2e: TUI did not render within 15s");
 
     // Type a prompt that triggers the tool call.
     ui.send_keys("Run echo hello").expect("e2e: send_keys");

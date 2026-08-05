@@ -157,6 +157,17 @@ impl MockProvider {
             .mount(&server)
             .await;
 
+        // Ollama /api/tags — the TUI polls this on startup to verify
+        // connectivity and list available models.  Return a minimal
+        // response so the TUI doesn't show a connection error.
+        Mock::given(method("GET"))
+            .and(path("/api/tags"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "models": [{"name": "e2e-test-model", "size": 0}]
+            })))
+            .mount(&server)
+            .await;
+
         Self { server, state }
     }
 

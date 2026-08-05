@@ -34,6 +34,9 @@ impl TmuxDriver {
         let mut cmd = Command::new("tmux");
         cmd.arg("-S").arg(&self.socket_path);
         cmd.args(["new-session", "-d", "-s", &self.session_name]);
+        // Set a reasonable terminal size for detached sessions that may
+        // not inherit a controlling terminal (e.g. from cargo test).
+        cmd.args(["-x", "120", "-y", "40"]);
 
         // Set env vars before the command
         for (key, val) in env_vars {
@@ -86,7 +89,26 @@ impl TmuxDriver {
     }
 
     /// Capture the visible pane content as a string.
+    /// Tries the alternate screen first (the TUI renders on the alternate
+    /// screen buffer via `EnterAlternateScreen`), falls back to the
+    /// primary screen if no alternate screen exists yet.
     pub fn capture_pane(&self) -> std::io::Result<String> {
+        // Try alternate screen first (TUI content is here).
+        let alt = Command::new("tmux")
+            .args([
+                "-S",
+                &self.socket_path.to_string_lossy(),
+                "capture-pane",
+                "-a",  // alternate screen
+                "-p",
+                "-t",
+                &self.session_name,
+            ])
+            .output()?;
+        if alt.status.success() {
+            return Ok(String::from_utf8_lossy(&alt.stdout).to_string());
+        }
+        // Fall back to primary screen (before TUI switches to alternate).
         let output = Command::new("tmux")
             .args([
                 "-S",

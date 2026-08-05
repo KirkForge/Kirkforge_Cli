@@ -4,10 +4,7 @@ pub mod anthropic_vertex;
 pub mod bedrock_signing;
 pub mod cache;
 pub mod caching;
-pub mod deepseek;
-pub mod gemini;
-pub mod glm;
-pub mod kimi;
+pub mod oellama;
 pub mod ollama_ndjson;
 pub mod openai_compat;
 pub mod tool_call_markup;
@@ -376,16 +373,16 @@ pub fn adapter_for_with_provider(
                 || lower.starts_with("glm")
                 || lower.contains("chatglm")
             {
-                Box::new(glm::GlmAdapter::new(ollama_host, model_name, timeout_secs))
+                Box::new(oellama::OellamaAdapter::glm(ollama_host, model_name, timeout_secs))
             } else if override_lower.as_deref() == Some("deepseek") || lower.starts_with("deepseek")
             {
-                Box::new(deepseek::DeepSeekAdapter::new(
+                Box::new(oellama::OellamaAdapter::deepseek(
                     ollama_host,
                     model_name,
                     timeout_secs,
                 ))
             } else if override_lower.as_deref() == Some("gemini") || lower.starts_with("gemini") {
-                Box::new(gemini::GeminiAdapter::new(
+                Box::new(oellama::OellamaAdapter::gemini(
                     ollama_host,
                     model_name,
                     timeout_secs,
@@ -395,7 +392,7 @@ pub fn adapter_for_with_provider(
                 || lower.starts_with("kimi")
                 || lower.starts_with("moonshot")
             {
-                Box::new(kimi::KimiAdapter::new(
+                Box::new(oellama::OellamaAdapter::kimi(
                     ollama_host,
                     model_name,
                     timeout_secs,

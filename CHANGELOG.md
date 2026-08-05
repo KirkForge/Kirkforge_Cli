@@ -39,6 +39,37 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Fix: `STEM_FILE_CAP` const (4096) and `Config::stem_file_cap` default (4096) cross-referenced with `ceiling:` note (M14).
 - Fix: alerts file moved from `<data_dir>/.alerts.ndjson` to `<data_dir>/sessions/.alerts.ndjson` (M16).
 - Fix: Clippy useless `.into()` conversions removed (6 instances) (L11).
+- Fix: all 4 `"kf-plugin-sdk3"` runtime gates replaced with `"kf-budget"` — budget tools/hooks now register on default builds (WO 18.0.1).
+- Fix: `VerifierHandler::verify_event` collects all verifier findings instead of short-circuiting on first; most severe wins (M5).
+- Fix: `load_one` rejects invalid manifests, matching `load_from_dir` behaviour (M10).
+- Fix: `WorkflowExecutor::run` decomposed into named sub-methods (M13).
+- Fix: config serde field count assertion cross-checks `CONFIG_FIELD_COUNT` against `serde_json::to_value` key count (M15).
+- Fix: `CompositeToolset` resolution order documented in code comment (M9).
+- Fix: Docker bind-mount source validated against canonical project root — symlink escape blocked (M20).
+- Fix: `jobd` stale-socket guard — connects before removing, refuses to hijack a live socket (M6).
+- Fix: trust tier enforced at plugin tool dispatch time — ReadOnly plugin tools return `AccessDenied` (M11).
+- Fix: `PostTurnHookGuard::drop` spawns hook asynchronously via `tokio::spawn` instead of blocking on Drop (L2).
+- Fix: minify cache replaced with proper `LruCache` (HashMap + VecDeque, true LRU eviction) (L7).
+- Fix: `/plugins toggle` shows restart-required notice for compiled-in plugins (WO 18.0.2).
+- Fix: `budget.rs` module doc updated from stale `plugins/kf-plugin-sdk3/tools/` to `plugins/kf-budget/tools/` (WO 18.0.4).
+- Fix: `ScheduledJob.timeout` enforced for workflow jobs via `tokio::time::timeout` (H6 complete).
+- Fix: `Arc` import gated behind `cfg(unix)` in `daemon/mod.rs` — unblocks Windows CI.
+
+### Added (test debt WO 19)
+- WO 19.1: testdoctor `diagnose` now scans all source directories (`src/tui`, `src/daemon`, `src/jobs`, `src/main`, `src/shared`); `--dirs` and `--with-coverage` CLI flags.
+- WO 19.2: testdoctor public API surface metric — `api_surface` counts `pub` items + `impl` methods (excluding `pub(crate)`/`pub(super)`), `test_density` and `roi` use API surface instead of line count.
+- WO 19.3: test monolith surgery — `tests_adr_0015.rs` (5,183 lines) split into 8 focused files; `kf-draw-core` state tests split into 4 files; `approval.rs` split into `auto`/`deny`/`timeout`.
+- WO 19.4: no-assertion tests upgraded — hooks, process group, budget helpers now assert actual behavior instead of "does not panic".
+- WO 19.5: integration tests for daemon auth token enforcement, budget registration gate (regression test for 18.0.1), and job lifecycle timeout.
+- WO 19.8: testdoctor `suggest-detailed` uses a binary-to-path map built from workspace Cargo.toml files instead of path guessing.
+- WO 19.9: flaky test stabilization — `yield_now` + `try_recv` replaces `sleep`/`timeout`; assertions on actual outcomes instead of "did not hang".
+- WO 18.0.3: `budget_tools_present_in_default_toolset` integration test asserts budget tools appear under default config.
+
+### Changed (test debt WO 19)
+- WO 19.3: `kf-budget-cli` `tests_adr_0015.rs` monolith replaced with `tests/{budget,budget_compact,config,report,report_filters,report_summary}.rs`.
+- WO 19.3: `kf-draw-core` state tests split from `tests.rs` into `tests/{active,error,initial,mod}.rs`.
+- WO 19.3: `approval.rs` split into `approval/{auto,deny,timeout,mod}.rs`.
+- `CONFIG_FIELD_COUNT` updated from 73 to 82 (ModelConfig 22→27, SessionConfig 4→8).
 
 ### Removed (dead code / over-engineering audit)
 - Collapsed four identical Oellama adapters (deepseek, gemini, glm, kimi) into one `OellamaAdapter` + profile table (−298 lines).

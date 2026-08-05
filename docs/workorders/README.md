@@ -357,6 +357,52 @@ It is the single-source backlog for Series 15.
   count, KIRK-BENCH arithmetic, test counts, leaderboard stub, crate
   audit, more metrics, more semantic benchmarks. Polish.
 
+### Series 17 — vix-Parity
+
+A seven-way parallel comparison of `kf-code` (Rust) against `vix-main` (Go),
+the reference agent. Each dimension (token efficiency, daemon arch,
+auth/providers, whiteboard/workflow/jobs, testing, update/telemetry/packaging,
+TUI UX) was audited by reading the actual code in both repos. The full gap
+inventory, with deferred-to-Series-18 items, is [WO 17.0](17.0-vix-parity-gap-inventory.md).
+
+| # | Workorder | Status | Priority | Depends on |
+|---|---|---|---|---|
+| 17.0 | [vix-parity gap inventory](17.0-vix-parity-gap-inventory.md) | Done | — | — |
+| 17.1 | [Anthropic auth + per-provider env resolution](17.1-anthropic-auth-per-provider-env.md) | Done | P0 | — |
+| 17.2 | [Daemon instance control channel + event broadcast](17.2-daemon-instance-channel-broadcast.md) | Done | High | — |
+| 17.3 | [Daemon hardening: socket guard, auth, version, ownership, quit](17.3-daemon-hardening.md) | Done | High | 17.2 |
+| 17.4 | [AST minification + surgical edit position map + revalidation](17.4-ast-minify-surgical-edit.md) | Done | High | — |
+| 17.5 | [Stem-agents: shared cached context + top-N files + cache breakpoints](17.5-stem-agents-cache-context.md) | Done | High | — |
+| 17.6 | [Workflow engine parity: bash/tool/if/fan_out/fork_from/on_error/budget](17.6-workflow-engine-parity.md) | Done | Medium | — |
+| 17.7 | [Jobs↔workflow integration + alert persistence + per-job policy](17.7-jobs-workflow-alerts-policy.md) | Done | Medium | 17.6 |
+| 17.8 | [E2E test harness: binary driver + mock provider + PTY + regression catalog](17.8-e2e-test-harness.md) | Done | High | — |
+| 17.9 | [TUI parity: top tab bar, threads overview, interactive tabs, slash/file popups, welcome](17.9-tui-parity-pass.md) | Done | Medium | 17.2 |
+
+### Priority rationale (Series 17)
+
+- **17.1 (P0)**: The plain Anthropic adapter sends no auth header and reads
+  no `ANTHROPIC_API_KEY` — it is non-functional against `api.anthropic.com`
+  today. Defect fix, not parity; ships first.
+- **17.2 / 17.3 (High)**: vix's daemon owns a per-instance control channel
+  with broadcast fanout, auth, version gate, and exclusive session ownership;
+  KirkForge's is an unauthenticated, blind-`remove_file` metadata cache.
+- **17.4 / 17.5 (High)**: vix's headline 20–50% token reduction — AST
+  minification with a surgical edit position map (17.4) and enforced
+  cross-phase cache-stem reuse (17.5).
+- **17.8 (High)**: vix has a real binary-driving e2e harness with a mock
+  provider and tmux TUI driver; KirkForge tests the executor in-process only.
+  The safety net for the rest of the series.
+- **17.6 / 17.7 / 17.9 (Medium)**: Programmable workflows, self-evolving
+  jobs, and TUI basics — real parity wins, not blocking.
+
+Deferred to Series 18: OS keychain + `kf-code auth` OAuth/PKCE/device-code
+CLI, OpenAI Codex / OpenRouter / Bedrock-chain adapters, data-driven
+provider catalog, whiteboard mode (Mermaid + voice), self-update, crash
+reporting, remote analytics, headless stream-json polish, Homebrew/Docker/
+cosign packaging, command palette, attachment panel, QuestionPanel, central
+theming, per-language minify annotators, formatter-gated write-back. See WO
+17.0 for the full deferred list with reasons.
+
 ## Conventions
 
 - Each workorder is a single markdown file named `<number>-<slug>.md`.

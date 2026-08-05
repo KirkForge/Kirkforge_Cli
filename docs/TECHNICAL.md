@@ -149,6 +149,14 @@ prefix heuristics (`claude-*` → Anthropic, `glm*`/`deepseek*`/`gemini*`/`kimi*
 → Ollama-kind, `opencode/` → OpenCode-Zen, else → OpenAI-compat). The `provider`
 field selects the Anthropic cloud backend (direct, Bedrock, or Vertex).
 
+**Per-provider API key resolution** (`adapters/auth.rs`): each adapter resolves
+its API key via `resolve_api_key(provider, config_key)`, which returns the first
+non-empty value from: (1) the config field (`[model].anthropic_api_key`, etc.),
+(2) the standard env var (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, etc.), (3)
+keychain (stubbed to `None`; Series 18). The Anthropic adapter sends the key as
+`x-api-key` and returns a clear error before any HTTP request if no key is
+available. Keychain/OAuth expansion is planned for Series 18.
+
 ### `tools/` — built-in tools
 
 19 tools implementing the `Tool` trait: `read_file`, `write_file`, `edit_file`,

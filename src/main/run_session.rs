@@ -240,6 +240,13 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
             &config.model.opencode_zen_endpoint,
             config.model.opencode_zen_api_key.as_deref(),
             Some(&config.model.adapter_routing),
+            &adapters::ProviderApiKeys {
+                anthropic: config.model.anthropic_api_key.clone(),
+                openai: config.model.openai_api_key.clone(),
+                deepseek: config.model.deepseek_api_key.clone(),
+                gemini: config.model.gemini_api_key.clone(),
+                kimi: config.model.kimi_api_key.clone(),
+            },
         ),
         &config,
     );

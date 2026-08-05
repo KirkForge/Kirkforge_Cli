@@ -35,6 +35,8 @@ pub mod transcript;
 pub mod widgets;
 
 mod connection;
+#[cfg(unix)]
+mod daemon_events;
 
 use crate::session::carryover::CarryoverProfile;
 use crate::session::conversation::ConversationLog;
@@ -493,6 +495,36 @@ pub async fn run_tui(
         std::time::Duration::from_secs(30),
     ));
 
+    // ── Daemon push-event reader (WO 17.2) ─────────────────────
+    // Opens a persistent instance channel to the session daemon and
+    // sets `sessions_dirty` / `jobs_dirty` flags on the TUI's
+    // `AppState`. The draw loop checks these flags and re-lists
+    // sessions or re-reads jobs as needed, without blocking the
+    // event loop on a synchronous daemon RPC per frame.
+    #[cfg(unix)]
+    {
+        let daemon_flags = std::sync::Arc::new(std::sync::Mutex::new(
+            crate::tui::daemon_events::DaemonEventFlags::default(),
+        ));
+        state.daemon_flags = Some(daemon_flags.clone());
+        match crate::tui::daemon_events::spawn_daemon_event_reader(daemon_flags).await {
+            Ok(Some(handle)) => {
+                tracing::debug!("daemon instance channel connected");
+                // Keep the handle alive so the task is not cancelled prematurely.
+                // It will be dropped (and aborted) when the TUI exits.
+                tokio::spawn(async move {
+                    let _ = handle.await;
+                });
+            }
+            Ok(None) => {
+                tracing::debug!("daemon not running; instance channel not opened");
+            }
+            Err(e) => {
+                tracing::debug!(error = %e, "failed to open daemon instance channel");
+            }
+        }
+    }
+
     let res = run_event_loop(
         &mut terminal,
         &mut state,
@@ -535,10 +567,16 @@ pub async fn run_tui(
         persona_tx,
         plugin_reload_tx,
     ));
-    // ponytail: 3s timeout so a hung Ollama HTTP call doesn't freeze the
-    // terminal. Dropping a tokio JoinHandle detaches the task and lets it
-    // keep running in the background, so explicitly abort and await it.
-    if tokio::time::timeout(std::time::Duration::from_secs(3), &mut handle)
+    // ponytail: 3s default, configurable via shutdown_timeout_secs — so a hung
+    // Ollama HTTP call doesn't freeze the terminal. Dropping a tokio JoinHandle
+    // detaches the task and lets it keep running in the background, so
+    // explicitly abort and await it.
+    const DEFAULT_SHUTDOWN_TIMEOUT_SECS: u64 = 3;
+    let shutdown_secs = crate::shared::read_shared_config(&shared_config)
+        .session
+        .shutdown_timeout_secs
+        .unwrap_or(DEFAULT_SHUTDOWN_TIMEOUT_SECS);
+    if tokio::time::timeout(std::time::Duration::from_secs(shutdown_secs), &mut handle)
         .await
         .is_err()
     {
@@ -723,6 +761,36 @@ async fn run_event_loop(
                 state.mark_dirty();
             }
         }
+
+        // ── Daemon push events (WO 17.2) ────────────────────────
+        // Drain the shared flags set by the daemon event reader into
+        // the local AppState. The reader sets the flags; we clear
+        // them after mirroring so we never miss an event.
+        #[cfg(unix)]
+        {
+            let (sessions_flag, jobs_flag) = if let Some(ref flags) = state.daemon_flags {
+                if let Ok(mut f) = flags.lock() {
+                    let s = f.sessions_dirty;
+                    let j = f.jobs_dirty;
+                    f.sessions_dirty = false;
+                    f.jobs_dirty = false;
+                    (s, j)
+                } else {
+                    (false, false)
+                }
+            } else {
+                (false, false)
+            };
+            if sessions_flag {
+                state.sessions_dirty = true;
+                state.mark_dirty();
+            }
+            if jobs_flag {
+                state.jobs_dirty = true;
+                state.mark_dirty();
+            }
+        }
+
         // Jobs and kb events are also work that may have been
         // waiting. We always drain jobs (cheap) and process any
         // kb event we just got. If nothing happened, none of this
@@ -836,11 +904,15 @@ async fn run_event_loop(
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
-                    Constraint::Min(1),
+                    Constraint::Length(1), // tab bar
+                    Constraint::Min(1),    // main content
                     Constraint::Length(input_height),
-                    Constraint::Length(1),
+                    Constraint::Length(1), // status bar
                 ])
                 .split(size);
+
+            // ── Top tab bar: F1–F6 labels, active tab highlighted ──
+            crate::tui::widgets::tabs::render_tab_bar(f, chunks[0], state);
 
             // Render main content area based on active tab.
             // Chat (F1) shows the conversation; other tabs show their
@@ -848,27 +920,44 @@ async fn run_event_loop(
             use crate::tui::app::ActiveTab;
             match state.active_tab {
                 ActiveTab::Chat => {
-                    render_chat(f, chunks[0], state);
+                    // Welcome screen when no messages and no input
+                    if state.messages.is_empty() && state.input.is_empty() {
+                        crate::tui::widgets::welcome::render_welcome(f, chunks[1], state);
+                    } else {
+                        render_chat(f, chunks[1], state);
+                    }
                 }
                 ActiveTab::Models => {
-                    crate::tui::widgets::tabs::render_models(f, chunks[0], state);
+                    crate::tui::widgets::tabs::render_models(f, chunks[1], state);
                 }
                 ActiveTab::Plugins => {
-                    crate::tui::widgets::tabs::render_plugins(f, chunks[0], state);
+                    crate::tui::widgets::tabs::render_plugins(f, chunks[1], state);
                 }
                 ActiveTab::Jobs => {
-                    crate::tui::widgets::tabs::render_jobs(f, chunks[0], state);
+                    crate::tui::widgets::tabs::render_jobs(f, chunks[1], state);
                 }
                 ActiveTab::Settings => {
-                    crate::tui::widgets::tabs::render_settings(f, chunks[0], state);
+                    crate::tui::widgets::tabs::render_settings(f, chunks[1], state);
+                }
+                ActiveTab::Threads => {
+                    crate::tui::widgets::tabs::render_threads(f, chunks[1], state);
                 }
             }
 
+            // ── Slash menu popup (above input) ──
+            if let Some(ref menu) = state.slash_menu {
+                crate::tui::widgets::slash_menu::render_slash_menu(f, chunks[2], menu);
+            }
+
+            // ── File completer popup (above input) ──
+            if let Some(ref completer) = state.file_completer {
+                crate::tui::widgets::file_completer::render_file_completer(f, chunks[2], completer);
+            }
+
             // Show input and status for all tabs; the main content area
-            // already rendered above (Chat shows the conversation,
-            // other tabs show their own panel content).
-            render_input(f, chunks[1], state);
-            render_status(f, chunks[2], state);
+            // already rendered above.
+            render_input(f, chunks[2], state);
+            render_status(f, chunks[3], state);
 
             // Session picker overlay (daemon follow-up). Shown when the
             // user invokes `/resume` with no arguments, or at startup
@@ -880,6 +969,10 @@ async fn run_event_loop(
                     picker.render(f, size);
                 }
             }
+
+            // Directory picker overlay (Ctrl+O) is rendered by the
+            // file_completer above — it uses FileCompleter with
+            // pick_directory=true instead of a separate widget.
 
             // Approval dialog overlay.
             //

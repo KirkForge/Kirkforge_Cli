@@ -1,5 +1,5 @@
 /// Status bar — model info, token counts, connection state.
-use crate::tui::app::{ActiveTab, AppState, ConnectionState};
+use crate::tui::app::{AppState, ConnectionState};
 use crate::tui::rendering::{format_budget_indicator, format_duration, format_token_count};
 use ratatui::{
     layout::Rect,
@@ -11,27 +11,9 @@ use ratatui::{
 
 /// Render the status bar at the bottom of the screen.
 ///
-/// When on a non-Chat tab, shows the tab label so the user knows
-/// which panel is active. The F1 key always returns to Chat.
+/// The tab indicator has been moved to the top tab bar (WO 17.9);
+/// the status bar now shows only connection, token, and time info.
 pub fn render_status(f: &mut Frame, area: Rect, state: &AppState) {
-    // ── Tab indicator ────────────────────────────────────────────
-    // Show active tab label on the left side of the status bar.
-    // Chat is the default (no label shown); other tabs get a tag
-    // like " F2:Models │" to orient the user.
-    let tab_indicator: Vec<Span> = if state.active_tab == ActiveTab::Chat {
-        vec![Span::raw(String::new())]
-    } else {
-        vec![
-            Span::styled(
-                format!(" {} ", state.active_tab.label()),
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled("│", Style::default().fg(Color::DarkGray)),
-        ]
-    };
-
     let left_info = match &state.connection {
         ConnectionState::Disconnected => {
             Span::styled(" ⚡ Disconnected ", Style::default().fg(Color::Red))
@@ -159,11 +141,7 @@ pub fn render_status(f: &mut Frame, area: Rect, state: &AppState) {
         }
     };
 
-    let tab_indicator_width: usize = tab_indicator
-        .iter()
-        .map(|s| s.content.chars().count())
-        .sum();
-    let left_len = tab_indicator_width + span_width(&left_info);
+    let left_len = span_width(&left_info);
 
     // Right-side spans in render order. The drop loop below mutates a
     // visibility mask over these. Never-drop spans are excluded from
@@ -215,8 +193,7 @@ pub fn render_status(f: &mut Frame, area: Rect, state: &AppState) {
 
     let spacing = " ".repeat(space);
 
-    let mut line_spans = tab_indicator;
-    line_spans.push(left_info);
+    let mut line_spans = vec![left_info];
     line_spans.push(Span::styled(spacing, Style::default()));
     line_spans.extend(right);
 

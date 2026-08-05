@@ -93,9 +93,10 @@ impl ChatRenderCache {
 
 /// Active tab for the TUI panel system.
 ///
-/// F1–F5 switch between panels. The Chat tab is the default and
-/// reproduces the existing single-panel layout. Other tabs replace
-/// the main content area with a dedicated panel.
+/// F1–F5 switch between panels. F6 opens the Threads view.
+/// The Chat tab is the default and reproduces the existing
+/// single-panel layout. Other tabs replace the main content area
+/// with a dedicated panel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ActiveTab {
     /// F1 — Conversation view (default, existing chat panel)
@@ -109,16 +110,19 @@ pub enum ActiveTab {
     Jobs,
     /// F5 — Config display and live reload
     Settings,
+    /// F6 — Threads overview (forks + sessions)
+    Threads,
 }
 
 impl ActiveTab {
     /// All tabs in F-key order.
-    pub const ALL: [ActiveTab; 5] = [
+    pub const ALL: [ActiveTab; 6] = [
         ActiveTab::Chat,
         ActiveTab::Models,
         ActiveTab::Plugins,
         ActiveTab::Jobs,
         ActiveTab::Settings,
+        ActiveTab::Threads,
     ];
 
     /// F-key label for the tab bar (e.g. "F1:Chat").
@@ -129,6 +133,7 @@ impl ActiveTab {
             ActiveTab::Plugins => "F3:Plugins",
             ActiveTab::Jobs => "F4:Jobs",
             ActiveTab::Settings => "F5:Settings",
+            ActiveTab::Threads => "F6:Threads",
         }
     }
 
@@ -140,9 +145,38 @@ impl ActiveTab {
             KeyCode::F(3) => Some(ActiveTab::Plugins),
             KeyCode::F(4) => Some(ActiveTab::Jobs),
             KeyCode::F(5) => Some(ActiveTab::Settings),
+            KeyCode::F(6) => Some(ActiveTab::Threads),
             _ => None,
         }
     }
+}
+
+/// Slash-command popup filter state.
+///
+/// When the user types `/` and the popup is active, `query` holds the
+/// filter text after the `/`. Arrow keys move `selected`; Enter inserts
+/// the selected command into the input buffer.
+#[derive(Debug, Clone, Default)]
+pub struct SlashMenu {
+    pub query: String,
+    pub selected: usize,
+}
+
+/// File-completer popup state for @-mention path browsing.
+///
+/// `dir` is the currently-browsed directory, `entries` are its filtered
+/// children, `selected` is the highlight row, and `query` is the
+/// text after `@` up to the cursor.
+#[derive(Debug, Clone, Default)]
+pub struct FileCompleter {
+    pub dir: std::path::PathBuf,
+    pub entries: Vec<String>,
+    pub selected: usize,
+    pub query: String,
+    /// When true, Enter on a directory confirms it as the new cwd
+    /// (Ctrl+O directory-pick mode) instead of inserting the path
+    /// into the input buffer.
+    pub pick_directory: bool,
 }
 
 /// Application state — single source of truth for the TUI.
@@ -451,9 +485,41 @@ pub struct AppState {
     pub completion_suggestions: Vec<String>,
 
     // ── Tab panel system ──────────────────────────────────────────
-    /// Currently active tab. F1–F5 switch tabs; the Chat tab (F1)
+    /// Currently active tab. F1–F6 switch tabs; the Chat tab (F1)
     /// is the default and shows the conversation view.
     pub active_tab: ActiveTab,
+
+    /// Row selection state for the active tab panel (Models, Plugins,
+    /// Jobs, Settings, Threads). `None` for Chat (no selectable rows).
+    pub tab_list_state: Option<usize>,
+
+    // ── Daemon push events (WO 17.2) ───────────────────────────────
+    /// When true, the daemon pushed `ThreadsChanged` and the TUI should
+    /// re-list recent sessions on the next draw tick instead of polling.
+    pub sessions_dirty: bool,
+    /// When true, the daemon pushed `JobsChanged` and the Jobs tab should
+    /// re-read scheduled jobs on the next draw tick.
+    pub jobs_dirty: bool,
+    /// Shared flags set by the daemon event reader task. The TUI event
+    /// loop drains these into the local `sessions_dirty` / `jobs_dirty`
+    /// fields on each iteration so the render path never blocks.
+    #[cfg(unix)]
+    pub daemon_flags:
+        Option<std::sync::Arc<std::sync::Mutex<crate::tui::daemon_events::DaemonEventFlags>>>,
+
+    // ── Slash-command popup ──────────────────────────────────────────
+    /// When `Some`, a filterable popup listing slash commands is shown
+    /// above the input bar. Filled when the user types `/`; dismissed
+    /// on Esc, Enter, or loss of focus.
+    pub slash_menu: Option<SlashMenu>,
+
+    // ── @-mention file completer popup ───────────────────────────────
+    /// When `Some`, a directory-browsing popup for @-mentions is shown
+    /// above the input bar. Dismissed on Esc or loss of focus.
+    pub file_completer: Option<FileCompleter>,
+
+    /// Current working directory. Updated by Ctrl+O directory picker.
+    pub cwd: std::path::PathBuf,
 }
 
 /// Snapshot of a detected doom loop. Held on `AppState` so the
@@ -549,6 +615,14 @@ impl AppState {
             doom_loop_selection: crate::tui::widgets::doom_banner::DoomLoopSelection::default(),
             completion_suggestions: Vec::new(),
             active_tab: ActiveTab::default(),
+            tab_list_state: None,
+            sessions_dirty: false,
+            jobs_dirty: false,
+            #[cfg(unix)]
+            daemon_flags: None,
+            slash_menu: None,
+            file_completer: None,
+            cwd: std::env::current_dir().unwrap_or_default(),
         }
     }
 

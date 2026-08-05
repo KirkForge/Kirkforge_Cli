@@ -194,7 +194,7 @@ pub(super) async fn run_line_mode(
                                     undo_stack: None,
                                 };
                                 let result = kf_workflow::WorkflowExecutor::new(workflow)
-                                    .run(&runner, Some(&cancel))
+                                    .run(std::sync::Arc::new(runner), Some(&cancel))
                                     .await;
                                 match result {
                                     Ok(summary) => {

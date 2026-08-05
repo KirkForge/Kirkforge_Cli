@@ -1,22 +1,65 @@
-//! Tab panel renderers for F1–F5 views.
+//! Tab panel renderers for F1–F6 views and the top tab bar.
 //!
 //! Each tab renders its content into the main content area (the top
-//! chunk of the vertical layout). The status bar at the bottom shows
-//! which tab is active.
+//! chunk of the vertical layout). A persistent tab bar at the very top
+//! shows F1–F6 labels with the active one highlighted.
 
-use crate::tui::app::AppState;
+use crate::tui::app::{ActiveTab, AppState};
 use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Paragraph, Wrap},
+    widgets::{List, ListItem, ListState, Paragraph},
     Frame,
 };
+
+/// Render the top tab bar — a one-line strip showing F1–F6 labels.
+/// The active tab is highlighted; inactive tabs are dim.
+pub fn render_tab_bar(f: &mut Frame, area: Rect, state: &AppState) {
+    let mut spans: Vec<Span> = Vec::new();
+    for (i, tab) in ActiveTab::ALL.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::styled(" │ ", Style::default().fg(Color::DarkGray)));
+        }
+        let label = tab.label();
+        let is_active = tab == &state.active_tab;
+        let style = if is_active {
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+        spans.push(Span::styled(format!(" {label} "), style));
+    }
+    let paragraph = Paragraph::new(Line::from(spans)).style(Style::default().bg(Color::Black));
+    f.render_widget(paragraph, area);
+}
+
+/// Render a List widget from lines with optional interactive selection.
+/// When `state.tab_list_state` is `Some(idx)`, the list is rendered with
+/// a highlight on the selected row; ↑/↓ navigation and Enter/Space
+/// invocation are handled by the key handler in `keys/mod.rs`.
+fn render_interactive(f: &mut Frame, area: Rect, lines: Vec<Line<'_>>, state: &AppState) {
+    let items: Vec<ListItem> = lines.into_iter().map(ListItem::new).collect();
+    let count = items.len();
+    let list = List::new(items).highlight_style(
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
+    );
+    let mut list_state = ListState::default();
+    if let Some(sel) = state.tab_list_state {
+        list_state.select(Some(sel.min(count.saturating_sub(1))));
+    }
+    f.render_stateful_widget(list, area, &mut list_state);
+}
 
 /// Render the Models tab (F2).
 ///
 /// Shows the current model name, provider, context window, and
-/// adapter routing configuration.
+/// adapter routing configuration. Interactive when the tab has focus:
+/// ↑/↓ moves selection, Enter/Space on a model row runs `/model <name>`.
 pub fn render_models(f: &mut Frame, area: Rect, state: &AppState) {
     let mut lines = Vec::new();
 
@@ -121,13 +164,13 @@ pub fn render_models(f: &mut Frame, area: Rect, state: &AppState) {
         )));
     }
 
-    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: true });
-    f.render_widget(paragraph, area);
+    render_interactive(f, area, lines, state);
 }
 
 /// Render the Plugins tab (F3).
 ///
-/// Shows loaded plugins with their trust tier and status.
+/// Shows loaded plugins with their trust tier and status. Interactive:
+/// ↑/↓ selects a plugin row, Enter/Space toggles it via `/plugins toggle`.
 pub fn render_plugins(f: &mut Frame, area: Rect, state: &AppState) {
     let mut lines = Vec::new();
 
@@ -172,26 +215,13 @@ pub fn render_plugins(f: &mut Frame, area: Rect, state: &AppState) {
         }
     }
 
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        " Use /plugins toggle <name> to enable/disable at runtime",
-        Style::default().fg(Color::DarkGray),
-    )));
-    lines.push(Line::from(Span::styled(
-        " Use /plugins list for full details",
-        Style::default().fg(Color::DarkGray),
-    )));
-
-    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: true });
-    f.render_widget(paragraph, area);
+    render_interactive(f, area, lines, state);
 }
 
 /// Render the Jobs tab (F4).
 ///
-/// Shows background and scheduled job status. Uses the notification
-/// state from AppState (already updated by the event loop) for
-/// completed jobs, and the global registry for a live snapshot of
-/// running jobs.
+/// Shows background and scheduled job status. Interactive: ↑/↓ selects
+/// rows, Enter/Space on a hint row runs the corresponding `/jobs` command.
 pub fn render_jobs(f: &mut Frame, area: Rect, state: &AppState) {
     let mut lines = Vec::new();
 
@@ -240,25 +270,25 @@ pub fn render_jobs(f: &mut Frame, area: Rect, state: &AppState) {
             .add_modifier(Modifier::BOLD),
     )));
     lines.push(Line::from(Span::styled(
-        "  Use /jobs schedule <cron> <prompt> to create a scheduled job",
+        "  /jobs schedule <cron> <prompt>",
         Style::default().fg(Color::DarkGray),
     )));
     lines.push(Line::from(Span::styled(
-        "  Use /jobs list to see all scheduled jobs",
+        "  /jobs list",
         Style::default().fg(Color::DarkGray),
     )));
     lines.push(Line::from(Span::styled(
-        "  Use /jobs status to check running jobs",
+        "  /jobs status",
         Style::default().fg(Color::DarkGray),
     )));
 
-    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: true });
-    f.render_widget(paragraph, area);
+    render_interactive(f, area, lines, state);
 }
 
 /// Render the Settings tab (F5).
 ///
-/// Shows key configuration values from the loaded config.
+/// Shows key configuration values from the loaded config. Interactive:
+/// ↑/↓ selects rows, Enter/Space on the /reload hint invokes it.
 pub fn render_settings(f: &mut Frame, area: Rect, state: &AppState) {
     let mut lines = Vec::new();
 
@@ -361,10 +391,64 @@ pub fn render_settings(f: &mut Frame, area: Rect, state: &AppState) {
 
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        " Use /reload to apply config changes after editing .kf-code/config.toml",
+        " /reload to apply config changes",
         Style::default().fg(Color::DarkGray),
     )));
 
-    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: true });
-    f.render_widget(paragraph, area);
+    render_interactive(f, area, lines, state);
+}
+
+/// Render the Threads tab (F6).
+///
+/// Shows active forks/sessions with status columns. Fed by the
+/// daemon's `ThreadsChanged` push events (WO 17.2/17.9).
+pub fn render_threads(f: &mut Frame, area: Rect, state: &AppState) {
+    let mut lines = Vec::new();
+
+    lines.push(Line::from(Span::styled(
+        " Threads",
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    )));
+    lines.push(Line::from(""));
+
+    // Session list from the session picker data
+    if let Some(ref picker) = state.session_picker {
+        let count = picker.len();
+        if count == 0 {
+            lines.push(Line::from(Span::styled(
+                " No active sessions",
+                Style::default().fg(Color::DarkGray),
+            )));
+        } else {
+            lines.push(Line::from(Span::raw(format!(" {count} session(s)"))));
+            lines.push(Line::from(""));
+            // Show up to 20 sessions with status indicators
+            for entry in picker.entries().iter().take(20) {
+                let status = if entry.path.exists() {
+                    Span::styled("●", Style::default().fg(Color::Green))
+                } else {
+                    Span::styled("○", Style::default().fg(Color::DarkGray))
+                };
+                lines.push(Line::from(vec![
+                    status,
+                    Span::raw(format!(" {}", entry.id)),
+                ]));
+            }
+        }
+    } else {
+        lines.push(Line::from(Span::styled(
+            " No session data loaded",
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        " /resume <id> to switch to a session",
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    render_interactive(f, area, lines, state);
 }

@@ -66,6 +66,21 @@ impl SessionPicker {
         self.sessions.get(self.selected).map(|e| e.path.clone())
     }
 
+    /// Number of sessions in the picker.
+    pub fn len(&self) -> usize {
+        self.sessions.len()
+    }
+
+    /// Whether the picker has no sessions.
+    pub fn is_empty(&self) -> bool {
+        self.sessions.is_empty()
+    }
+
+    /// Access the session entries (for rendering).
+    pub fn entries(&self) -> &[SessionEntry] {
+        &self.sessions
+    }
+
     /// Handle a key event while the picker is active. Returns `true` if
     /// the key was consumed by the picker.
     pub fn handle_key(&mut self, key: KeyEvent) -> bool {

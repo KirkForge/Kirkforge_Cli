@@ -19,7 +19,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use kf_plugin_host::PluginRegistry;
 use tokio::sync::mpsc;
 
-mod slash_commands;
+pub(crate) mod slash_commands;
 mod text;
 
 use slash_commands::{complete_command, dispatch_slash_command, SlashContext};
@@ -167,6 +167,190 @@ pub(crate) async fn handle_input_key(
                 _ => {} // ignore other keys while the banner is up
             }
             return Ok(());
+        }
+    }
+
+    // ── Slash menu interceptor ──────────────────────────────
+    // When the slash command popup is active, intercept ↑/↓/Enter/Esc.
+    // Typing filters; Esc dismisses; Enter inserts the selected command.
+    if let Some(ref mut menu) = state.slash_menu {
+        match key.code {
+            KeyCode::Up => {
+                if menu.selected > 0 {
+                    menu.selected -= 1;
+                }
+                state.mark_dirty();
+                return Ok(());
+            }
+            KeyCode::Down => {
+                // Clamp below; we don't know the filtered count here so
+                // we allow moving down — the renderer clamps visually.
+                menu.selected += 1;
+                state.mark_dirty();
+                return Ok(());
+            }
+            KeyCode::Enter => {
+                // Insert the selected command into the input buffer.
+                let commands = complete_command(&menu.query);
+                if menu.selected < commands.len() {
+                    state.input = commands[menu.selected].to_string();
+                    state.cursor_position = state.input.chars().count();
+                }
+                state.slash_menu = None;
+                state.mark_dirty();
+                return Ok(());
+            }
+            KeyCode::Esc => {
+                state.slash_menu = None;
+                state.mark_dirty();
+                return Ok(());
+            }
+            KeyCode::Backspace => {
+                menu.query.pop();
+                menu.selected = 0;
+                if menu.query.is_empty() {
+                    // Dismiss if the filter is empty (user backspaced past
+                    // the slash that opened it).
+                    state.slash_menu = None;
+                }
+                state.mark_dirty();
+                return Ok(());
+            }
+            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                menu.query.push(c);
+                menu.selected = 0;
+                state.mark_dirty();
+                return Ok(());
+            }
+            _ => {}
+        }
+    }
+
+    // ── File completer interceptor ───────────────────────────
+    // When the @-mention file browser popup is active, intercept
+    // ↑/↓/Enter/Esc/Backspace. ↓/Enter descend into directories;
+    // Backspace goes up to the parent.
+    if let Some(ref mut completer) = state.file_completer {
+        match key.code {
+            KeyCode::Up => {
+                if completer.selected > 0 {
+                    completer.selected -= 1;
+                }
+                state.mark_dirty();
+                return Ok(());
+            }
+            KeyCode::Down => {
+                completer.selected += 1;
+                // Clamp: renderer will wrap or clamp.
+                if !completer.entries.is_empty() {
+                    completer.selected = completer.selected.min(completer.entries.len() - 1);
+                }
+                state.mark_dirty();
+                return Ok(());
+            }
+            KeyCode::Enter => {
+                // In directory-pick mode (Ctrl+O), Enter on a directory
+                // confirms it as the new cwd and closes the picker.
+                // In file mode (@-mention), Enter on a directory descends;
+                // Enter on a file inserts the path.
+                if !completer.entries.is_empty() && completer.selected < completer.entries.len() {
+                    let entry = completer.entries[completer.selected].clone();
+                    let path = completer.dir.join(&entry);
+                    if path.is_dir() {
+                        if completer.pick_directory {
+                            // Confirm: chdir and close.
+                            if std::env::set_current_dir(&path).is_ok() {
+                                state.cwd = path.clone();
+                            }
+                            state.file_completer = None;
+                        } else {
+                            // Descend: reload completer with the new dir.
+                            let mut new_entries = Vec::new();
+                            if let Ok(rd) = std::fs::read_dir(&path) {
+                                for de in rd.flatten() {
+                                    if let Some(name) = de.file_name().to_str() {
+                                        new_entries.push(name.to_string());
+                                    }
+                                }
+                            }
+                            new_entries.sort();
+                            completer.dir = path;
+                            completer.entries = new_entries;
+                            completer.selected = 0;
+                            completer.query.clear();
+                        }
+                    } else if !completer.pick_directory {
+                        // Insert the selected file path into the input.
+                        let rel = format!("@{}", completer.dir.join(&entry).display());
+                        state.input = rel;
+                        state.cursor_position = state.input.chars().count();
+                        state.file_completer = None;
+                    }
+                    // In pick_directory mode, Enter on a non-directory is a no-op.
+                }
+                state.mark_dirty();
+                return Ok(());
+            }
+            KeyCode::Esc => {
+                state.file_completer = None;
+                state.mark_dirty();
+                return Ok(());
+            }
+            KeyCode::Backspace => {
+                // Go to parent directory.
+                if let Some(parent) = completer.dir.parent() {
+                    if parent != completer.dir {
+                        let mut new_entries = Vec::new();
+                        if let Ok(rd) = std::fs::read_dir(parent) {
+                            for de in rd.flatten() {
+                                if let Some(name) = de.file_name().to_str() {
+                                    new_entries.push(name.to_string());
+                                }
+                            }
+                        }
+                        new_entries.sort();
+                        completer.dir = parent.to_path_buf();
+                        completer.entries = new_entries;
+                        completer.selected = 0;
+                        completer.query.clear();
+                    }
+                }
+                state.mark_dirty();
+                return Ok(());
+            }
+            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                completer.query.push(c);
+                // Filter entries by the new query.
+                let filtered: Vec<String> = completer
+                    .entries
+                    .iter()
+                    .filter(|e| {
+                        e.to_lowercase()
+                            .starts_with(&completer.query.to_lowercase())
+                    })
+                    .cloned()
+                    .collect();
+                completer.entries = if filtered.is_empty() {
+                    // If filter yields nothing, show all and clear the query char.
+                    completer.query.pop();
+                    let mut all = Vec::new();
+                    if let Ok(rd) = std::fs::read_dir(&completer.dir) {
+                        for de in rd.flatten() {
+                            if let Some(name) = de.file_name().to_str() {
+                                all.push(name.to_string());
+                            }
+                        }
+                    }
+                    all.sort();
+                    all
+                } else {
+                    filtered
+                };
+                completer.selected = 0;
+                state.mark_dirty();
+                return Ok(());
+            }
+            _ => {}
         }
     }
 
@@ -335,10 +519,20 @@ pub(crate) async fn handle_input_key(
     }
     match key.code {
         // ── F-key tab switching ───────────────────────────────────
-        // F1–F5 switch between Chat, Models, Plugins, Jobs, Settings.
+        // F1–F6 switch between Chat, Models, Plugins, Jobs, Settings, Threads.
         // Esc returns to Chat from any non-Chat tab.
         k if ActiveTab::from_key_code(k).is_some() => {
-            state.active_tab = ActiveTab::from_key_code(k).unwrap();
+            let new_tab = ActiveTab::from_key_code(k).unwrap();
+            // Reset list state when switching tabs so the highlight
+            // doesn't carry over from a previous tab.
+            if new_tab != state.active_tab {
+                state.tab_list_state = if new_tab == ActiveTab::Chat {
+                    None
+                } else {
+                    Some(0)
+                };
+            }
+            state.active_tab = new_tab;
             state.mark_dirty();
         }
         KeyCode::Char(c) => {
@@ -509,12 +703,70 @@ pub(crate) async fn handle_input_key(
                             state.expanded_tools.clear();
                         }
                     }
+                    'o' => {
+                        // Ctrl+O: open directory picker (file completer in
+                        // directory-pick mode). Only directories confirm;
+                        // Enter on a directory chdirs and closes the picker.
+                        let cwd = state.cwd.clone();
+                        let mut entries = Vec::new();
+                        if let Ok(rd) = std::fs::read_dir(&cwd) {
+                            for de in rd.flatten() {
+                                if let Some(name) = de.file_name().to_str() {
+                                    entries.push(name.to_string());
+                                }
+                            }
+                        }
+                        entries.sort();
+                        state.file_completer = Some(crate::tui::app::FileCompleter {
+                            dir: cwd,
+                            entries,
+                            selected: 0,
+                            query: String::new(),
+                            pick_directory: true,
+                        });
+                    }
                     _ => {}
                 }
             } else {
                 let byte_pos = state.cursor_byte();
                 state.input.insert(byte_pos, c);
                 state.cursor_position += 1;
+                // ── Slash menu: open when `/` is the first character ──
+                if c == '/' && state.input.starts_with('/') && state.input.chars().count() == 1 {
+                    state.slash_menu = Some(crate::tui::app::SlashMenu {
+                        query: String::new(),
+                        selected: 0,
+                    });
+                } else if let Some(ref mut menu) = state.slash_menu {
+                    // Append to the filter query while the popup is open.
+                    menu.query.push(c);
+                    menu.selected = 0;
+                }
+                // ── File completer: open when `@` is typed ──
+                if c == '@' && state.input.starts_with('@') && state.input.chars().count() == 1 {
+                    let cwd = std::env::current_dir().unwrap_or_default();
+                    let mut entries = Vec::new();
+                    if let Ok(rd) = std::fs::read_dir(&cwd) {
+                        for de in rd.flatten() {
+                            if let Some(name) = de.file_name().to_str() {
+                                entries.push(name.to_string());
+                            }
+                        }
+                    }
+                    entries.sort();
+                    state.file_completer = Some(crate::tui::app::FileCompleter {
+                        dir: cwd,
+                        entries,
+                        selected: 0,
+                        query: String::new(),
+                        pick_directory: false,
+                    });
+                } else if let Some(ref mut completer) = state.file_completer {
+                    if c != '/' {
+                        completer.query.push(c);
+                        completer.selected = 0;
+                    }
+                }
             }
         }
         KeyCode::Tab => {
@@ -789,11 +1041,30 @@ pub(crate) async fn handle_input_key(
             }
         }
         KeyCode::Esc => {
-            // Toggle thinking panel
-            state.thinking_panel_visible = !state.thinking_panel_visible;
+            // On non-Chat tabs, Esc returns to Chat. Otherwise toggle
+            // the thinking panel (the original behavior).
+            if state.active_tab != ActiveTab::Chat {
+                state.active_tab = ActiveTab::Chat;
+                state.tab_list_state = None;
+            } else {
+                state.thinking_panel_visible = !state.thinking_panel_visible;
+            }
+            // Also dismiss any slash menu or file completer popup.
+            if state.slash_menu.is_some() {
+                state.slash_menu = None;
+            }
+            if state.file_completer.is_some() {
+                state.file_completer = None;
+            }
         }
         KeyCode::Up => {
-            if state.input.contains('\n') {
+            // On non-Chat tabs with list state, move selection up.
+            if state.active_tab != ActiveTab::Chat {
+                if let Some(idx) = state.tab_list_state {
+                    state.tab_list_state = Some(idx.saturating_sub(1));
+                    state.mark_dirty();
+                }
+            } else if state.input.contains('\n') {
                 let (line, col) = state.cursor_line_col();
                 if line > 0 {
                     let lines: Vec<&str> = state.input.split('\n').collect();
@@ -808,7 +1079,13 @@ pub(crate) async fn handle_input_key(
             }
         }
         KeyCode::Down => {
-            if state.input.contains('\n') {
+            // On non-Chat tabs with list state, move selection down.
+            if state.active_tab != ActiveTab::Chat {
+                if let Some(idx) = state.tab_list_state {
+                    state.tab_list_state = Some(idx + 1);
+                    state.mark_dirty();
+                }
+            } else if state.input.contains('\n') {
                 let (line, col) = state.cursor_line_col();
                 let lines: Vec<&str> = state.input.split('\n').collect();
                 if line + 1 < lines.len() {

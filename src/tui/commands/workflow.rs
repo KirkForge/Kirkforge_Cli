@@ -191,7 +191,7 @@ async fn handle_run(
             })),
         };
         let executor = WorkflowExecutor::new(workflow);
-        let result = executor.run(&runner, Some(&cancel)).await;
+        let result = executor.run(std::sync::Arc::new(runner), Some(&cancel)).await;
 
         let (success, summary, error) = match result {
             Ok(s) => {
@@ -275,9 +275,11 @@ impl StepRunner for TuiStepRunner {
                 name.to_string(),
                 StepOutput {
                     name: name.to_string(),
+                    kind: kf_workflow::StepKind::Agent,
                     persona: persona.to_string(),
                     summary: summary.clone(),
                     critique: None,
+                    structured_output: None,
                 },
             );
         }

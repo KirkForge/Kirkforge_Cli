@@ -225,6 +225,35 @@ pub async fn run_job_daemon_at(socket_path: PathBuf, pid_path: PathBuf) -> Resul
     Ok(())
 }
 
+/// Read the auth token from the `KF_CODE_DAEMON_TOKEN_FILE` env var.
+/// Returns `None` if the env var is not set or the file cannot be read.
+fn read_auth_token() -> Option<String> {
+    std::env::var("KF_CODE_DAEMON_TOKEN_FILE")
+        .ok()
+        .and_then(|path| std::fs::read_to_string(&path).ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// Check auth for the jobs daemon. Returns `Ok(())` if no token is configured
+/// (allowing all requests) or if the supplied token matches.
+fn check_auth(supplied: Option<&str>) -> Result<(), String> {
+    let expected = match read_auth_token() {
+        Some(t) => t,
+        None => return Ok(()),
+    };
+    match supplied {
+        None => Err("authentication required".to_string()),
+        Some(given) => {
+            if subtle::ConstantTimeEq::ct_eq(expected.as_bytes(), given.as_bytes()).into() {
+                Ok(())
+            } else {
+                Err("authentication failed".to_string())
+            }
+        }
+    }
+}
+
 /// Handle one socket client.
 async fn handle_client(stream: UnixStream, shutdown: Arc<Notify>, reload: Arc<Notify>) {
     let mut stream = tokio::io::BufStream::new(stream);
@@ -255,15 +284,27 @@ async fn handle_client(stream: UnixStream, shutdown: Arc<Notify>, reload: Arc<No
         };
 
         match req {
-            Request::Ping { .. } => {
+            Request::Ping { auth_token, .. } => {
+                if let Err(e) = check_auth(auth_token.as_deref()) {
+                    let _ = send_response(&mut stream, &Response::error(e)).await;
+                    continue;
+                }
                 let _ = send_response(&mut stream, &Response::ok_empty()).await;
             }
-            Request::Shutdown { .. } => {
+            Request::Shutdown { auth_token, .. } => {
+                if let Err(e) = check_auth(auth_token.as_deref()) {
+                    let _ = send_response(&mut stream, &Response::error(e)).await;
+                    continue;
+                }
                 let _ = send_response(&mut stream, &Response::ok_empty()).await;
                 shutdown.notify_one();
                 break;
             }
-            Request::QuitAll { .. } => {
+            Request::QuitAll { auth_token, .. } => {
+                if let Err(e) = check_auth(auth_token.as_deref()) {
+                    let _ = send_response(&mut stream, &Response::error(e)).await;
+                    continue;
+                }
                 let _ = send_response(&mut stream, &Response::ok_empty()).await;
                 shutdown.notify_one();
                 break;
@@ -271,12 +312,16 @@ async fn handle_client(stream: UnixStream, shutdown: Arc<Notify>, reload: Arc<No
             // Treat List/Resolve/Touch/Claim/InstanceRegister as reload
             // requests (they are session-daemon requests and don't apply
             // here) so the loop rescans jobs.
-            Request::List { .. }
-            | Request::Resolve { .. }
-            | Request::Touch { .. }
-            | Request::Claim { .. }
-            | Request::InstanceRegister { .. }
-            | Request::NotifyJobsChanged { .. } => {
+            Request::List { auth_token, .. }
+            | Request::Resolve { auth_token, .. }
+            | Request::Touch { auth_token, .. }
+            | Request::Claim { auth_token, .. }
+            | Request::InstanceRegister { auth_token, .. }
+            | Request::NotifyJobsChanged { auth_token, .. } => {
+                if let Err(e) = check_auth(auth_token.as_deref()) {
+                    let _ = send_response(&mut stream, &Response::error(e)).await;
+                    continue;
+                }
                 let _ = send_response(&mut stream, &Response::ok_empty()).await;
                 reload.notify_one();
             }

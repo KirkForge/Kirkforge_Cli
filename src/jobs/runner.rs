@@ -108,7 +108,7 @@ async fn run_bash_job(
         .spawn(
             command,
             None,
-            None, // no timeout for scheduled jobs
+            job.timeout.map(|d| d.as_secs()),
             &deny_list,
             &path_guard,
             config.security.bash_sandbox_workdir,
@@ -233,7 +233,16 @@ async fn run_workflow_job(
         None, // no undo stack for scheduled jobs
         config.security.computer_use.enabled,
     ));
-    let runner = TaskSpawnerStepRunner { spawner, toolset: None };
+    let (deny_list, path_guard, _read_gate) = crate::session::access::access_from_config(config);
+    let runner = TaskSpawnerStepRunner {
+        spawner,
+        toolset: None,
+        deny_list,
+        path_guard,
+        bash_sandbox_workdir: config.security.bash_sandbox_workdir,
+        cancel_token: tokio_util::sync::CancellationToken::new(),
+        dry_run: false,
+    };
 
     // 5. Execute.
     let executor = WorkflowExecutor::new(workflow);

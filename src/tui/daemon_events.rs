@@ -58,7 +58,7 @@ pub async fn spawn_daemon_event_reader(
     // Send the InstanceRegister request.
     let req = serde_json::to_string(&Request::InstanceRegister {
         version: Some(env!("CARGO_PKG_VERSION").to_string()),
-        auth_token: None,
+        auth_token: crate::daemon::client::read_auth_token(),
     })
     .context("serialise InstanceRegister")?;
     stream

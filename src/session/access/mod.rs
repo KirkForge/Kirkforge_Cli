@@ -453,15 +453,24 @@ impl Default for PathGuard {
 /// The read-before-edit gate requires that a file be explicitly read
 /// (via the read_file tool) before it can be edited. This prevents
 /// the model from blindly patching files it hasn't inspected.
+///
+/// Access counts are also exposed via `top_files(n)` to support the
+/// shared context stem's top-N file injection — the files the model
+/// re-reads every turn are the cache's hottest content, and injecting
+/// their minified bodies into the stem eliminates redundant re-reads.
 #[derive(Debug, Clone, Default)]
 pub struct ReadGate {
     read_files: HashSet<PathBuf>,
+    /// Per-path access count (number of times `mark_read` was called).
+    /// Used by `top_files` to return the most frequently accessed files.
+    access_counts: std::collections::HashMap<PathBuf, usize>,
 }
 
 impl ReadGate {
     pub fn new() -> Self {
         Self {
             read_files: HashSet::new(),
+            access_counts: std::collections::HashMap::new(),
         }
     }
 
@@ -473,7 +482,8 @@ impl ReadGate {
     pub fn mark_read(&mut self, path: &Path) {
         // Canonicalize if possible for consistent matching
         let key = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-        self.read_files.insert(key);
+        self.read_files.insert(key.clone());
+        *self.access_counts.entry(key).or_insert(0) += 1;
     }
 
     /// Returns true if `path` was previously read this session.
@@ -504,9 +514,24 @@ impl ReadGate {
         }
     }
 
-    /// Clear all read marks (e.g. for a new session).
+    /// Return the top `n` most frequently accessed file paths, sorted
+    /// by access count descending. Used by the shared context stem to
+    /// inject hot file bodies into the cached prefix so Anthropic's
+    /// prompt cache covers the files the model re-reads every turn.
+    pub fn top_files(&self, n: usize) -> Vec<PathBuf> {
+        let mut entries: Vec<_> = self.access_counts.iter().collect();
+        entries.sort_by(|a, b| b.1.cmp(a.1));
+        entries
+            .into_iter()
+            .take(n)
+            .map(|(p, _)| p.clone())
+            .collect()
+    }
+
+    /// Clear all read marks and access counts (e.g. for a new session).
     pub fn clear(&mut self) {
         self.read_files.clear();
+        self.access_counts.clear();
     }
 }
 
@@ -1336,5 +1361,49 @@ mod tests {
         config.tools.follow_symlinks = true;
         let (_deny, guard, _gate) = access_from_config(&config);
         assert!(guard.follow_symlinks);
+    }
+
+    // ── ReadGate top_files ──────────────────────────────────────────────
+
+    #[test]
+    fn top_files_returns_paths_sorted_by_access_count() {
+        let mut gate = ReadGate::new();
+        let a = PathBuf::from("/tmp/a.rs");
+        let b = PathBuf::from("/tmp/b.rs");
+        let c = PathBuf::from("/tmp/c.rs");
+        gate.mark_read(&a);
+        gate.mark_read(&b);
+        gate.mark_read(&b);
+        gate.mark_read(&c);
+        gate.mark_read(&c);
+        gate.mark_read(&c);
+        let top = gate.top_files(2);
+        assert_eq!(top.len(), 2);
+        assert_eq!(top[0], c, "c was accessed 3 times, should be first");
+        assert_eq!(top[1], b, "b was accessed 2 times, should be second");
+    }
+
+    #[test]
+    fn top_files_returns_all_when_n_exceeds_count() {
+        let mut gate = ReadGate::new();
+        gate.mark_read(Path::new("/tmp/x.rs"));
+        let top = gate.top_files(10);
+        assert_eq!(top.len(), 1);
+    }
+
+    #[test]
+    fn top_files_returns_empty_when_no_reads() {
+        let gate = ReadGate::new();
+        assert!(gate.top_files(5).is_empty());
+    }
+
+    #[test]
+    fn top_files_clear_resets_access_counts() {
+        let mut gate = ReadGate::new();
+        gate.mark_read(Path::new("/tmp/a.rs"));
+        gate.mark_read(Path::new("/tmp/a.rs"));
+        assert_eq!(gate.top_files(1).len(), 1);
+        gate.clear();
+        assert!(gate.top_files(1).is_empty());
     }
 }

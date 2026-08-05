@@ -56,6 +56,18 @@ pub struct ModelConfig {
     pub subagent_allowed_models: Option<Vec<String>>,
     #[serde(default)]
     pub opencode_zen_api_key: Option<String>,
+    /// Per-provider API keys, resolved in order: config field →
+    /// `<PROVIDER>_API_KEY` env → keychain (Series 18).
+    #[serde(default)]
+    pub anthropic_api_key: Option<String>,
+    #[serde(default)]
+    pub openai_api_key: Option<String>,
+    #[serde(default)]
+    pub deepseek_api_key: Option<String>,
+    #[serde(default)]
+    pub gemini_api_key: Option<String>,
+    #[serde(default)]
+    pub kimi_api_key: Option<String>,
     #[serde(default = "default_zen_endpoint")]
     pub opencode_zen_endpoint: String,
     #[serde(default = "default_request_timeout_secs")]
@@ -96,6 +108,11 @@ impl Default for ModelConfig {
             gcp_region: default_gcp_region(),
             subagent_allowed_models: None,
             opencode_zen_api_key: None,
+            anthropic_api_key: None,
+            openai_api_key: None,
+            deepseek_api_key: None,
+            gemini_api_key: None,
+            kimi_api_key: None,
             opencode_zen_endpoint: default_zen_endpoint(),
             request_timeout_secs: default_request_timeout_secs(),
             cache_enabled: false,

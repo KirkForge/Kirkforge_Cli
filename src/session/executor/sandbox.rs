@@ -2,6 +2,7 @@
 //! into a single sub-struct owned by [`super::Executor`].
 
 use crate::session::access::{DenyList, GuardVerdict, PathGuard, ReadGate};
+use std::path::PathBuf;
 
 pub(crate) struct SandboxEnforcer {
     pub(crate) path_guard: PathGuard,
@@ -28,5 +29,13 @@ impl SandboxEnforcer {
         resolved: &std::path::Path,
     ) -> GuardVerdict {
         self.read_gate.check_edit(path, resolved)
+    }
+
+    /// Return the top `n` most frequently accessed file paths, sorted by
+    /// access count descending. Used by the shared context stem to inject
+    /// hot file bodies into the cached prefix so Anthropic's prompt cache
+    /// covers the files the model re-reads every turn (WO 17.5).
+    pub(crate) fn top_files(&self, n: usize) -> Vec<PathBuf> {
+        self.read_gate.top_files(n)
     }
 }

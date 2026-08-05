@@ -20,12 +20,12 @@ use serde::{Deserialize, Serialize};
 /// If either site is missing the new field, the drift-guard test will fail.
 ///
 /// Breakdown:
-///   ModelConfig    22
+///   ModelConfig    27
 ///   SecurityConfig 18  (15 direct + 3 sub-struct handles)
 ///   ToolConfig     26
-///   SessionConfig   4
+///   SessionConfig   4 + 2 (stem_file_cap, shutdown_timeout_secs)
 ///   DisplayConfig   3
-pub const CONFIG_FIELD_COUNT: usize = 73;
+pub const CONFIG_FIELD_COUNT: usize = 82;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {

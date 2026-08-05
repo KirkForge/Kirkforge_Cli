@@ -8,6 +8,7 @@ use crate::shared::{Message, Role};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+pub use cache_stem::{shared_context_stem, CacheStemTracker, DEFAULT_TOP_N_FILES};
 pub use compaction::CompactRequest;
 pub(crate) use compaction::{compact_to_budget, estimate_tokens};
 
@@ -292,12 +293,90 @@ impl PromptBuilder {
         }
     }
 
+    /// Build the system message with top-N frequently-accessed file
+    /// bodies injected into the cached stem.
+    ///
+    /// This is the WO 17.5 shared cached context mechanism: the
+    /// frequently-accessed files (from the read gate's access stats)
+    /// are minified and appended to the system prompt as a stable block.
+    /// Because they're part of the shared stem, Anthropic's prompt cache
+    /// covers them — the model stops re-reading the same files every turn.
+    ///
+    /// `top_files` is a list of `(path, content)` pairs, sorted by
+    /// access count descending. The content strings are already
+    /// minified by the caller (using WO 17.4's minifier).
+    #[allow(clippy::too_many_arguments)]
+    pub fn build_with_top_files(
+        &mut self,
+        model_name: &str,
+        model_supports_thinking: bool,
+        tool_names: &[&str],
+        carryover_block: Option<&str>,
+        memory_context: Option<&str>,
+        memory_enabled: bool,
+        memory_max_tokens: usize,
+        memory_top_n: usize,
+        top_files: &[(PathBuf, String)],
+    ) -> Message {
+        let mut msg = self.build(
+            model_name,
+            model_supports_thinking,
+            tool_names,
+            carryover_block,
+            memory_context,
+            memory_enabled,
+            memory_max_tokens,
+            memory_top_n,
+        );
+
+        // Inject top-N file bodies into the system message. These go
+        // after the existing content so they're part of the stem that
+        // Anthropic caches. The content is already minified.
+        if !top_files.is_empty() {
+            let mut file_block = String::from("\n\nFrequently accessed files:\n");
+            for (path, body) in top_files {
+                file_block.push_str(&format!("--- {} ---\n{}\n", path.display(), body));
+            }
+            msg.content.push_str(&file_block);
+
+            // Invalidate cached system since the content changed.
+            self.cached_system = None;
+        }
+
+        msg
+    }
+
     pub fn build_messages(
         &mut self,
         system: Message,
         history: &[Message],
         model_max_tokens: usize,
         tool_results: &[Message],
+    ) -> Vec<Message> {
+        self.build_messages_with_compaction(
+            system,
+            history,
+            model_max_tokens,
+            tool_results,
+            false,
+            0.5,
+        )
+    }
+
+    /// Build the full message list with configurable compaction.
+    ///
+    /// When `use_llm` is true, microcompaction tries the LLM summarizer when
+    /// the heuristic drops more than `drop_threshold` fraction of content.
+    /// When `use_llm` is false (the default), the heuristic summary is always
+    /// used. This is the WO 17.5 wiring point for `compaction.use_llm`.
+    pub fn build_messages_with_compaction(
+        &mut self,
+        system: Message,
+        history: &[Message],
+        model_max_tokens: usize,
+        tool_results: &[Message],
+        use_llm: bool,
+        drop_threshold: f64,
     ) -> Vec<Message> {
         let mut messages = Self::assemble_messages(system, history, tool_results);
 
@@ -389,9 +468,13 @@ impl PromptBuilder {
         // message while preserving the last few turns verbatim. This is
         // P3-6's middle-compression strategy — distinct from the `/compact`
         // log rewrite because it happens on the fly at request-build time.
-        if let Some(result) =
-            microcompaction::maybe_microcompact(&messages, budget, DEFAULT_MICROCOMPACT_KEEP_TAIL)
-        {
+        if let Some(result) = microcompaction::maybe_microcompact(
+            &messages,
+            budget,
+            DEFAULT_MICROCOMPACT_KEEP_TAIL,
+            use_llm,
+            drop_threshold,
+        ) {
             if result.tokens_after <= budget {
                 return result.messages;
             }
@@ -1572,5 +1655,93 @@ mod tests {
     #[test]
     fn synthetic_extension_for_returns_txt_when_braces_present_without_fn() {
         assert_eq!(synthetic_extension_for("just { braces }"), "txt");
+    }
+
+    /// WO 17.5: `build_messages_with_compaction` passes `use_llm` and
+    /// `drop_threshold` through to microcompaction. When `use_llm=false`
+    /// (the default), the heuristic summary is always used.
+    #[test]
+    fn build_messages_with_compaction_default_uses_heuristic() {
+        let mut builder = PromptBuilder::new();
+        let system = Message {
+            role: Role::System,
+            content: "S".into(),
+            ..Default::default()
+        };
+        // Build a history long enough to trigger compaction (budget = 0).
+        let mut history = Vec::new();
+        for i in 0..20 {
+            history.push(Message {
+                role: Role::User,
+                content: format!("Message {i}"),
+                ..Default::default()
+            });
+        }
+        let result = builder.build_messages_with_compaction(
+            system,
+            &history,
+            0, // budget = 0 forces compaction
+            &[],
+            false, // use_llm = false (heuristic)
+            0.5,   // drop_threshold
+        );
+        // Should have compacted; the result is shorter than the input.
+        assert!(result.len() < history.len() + 1);
+    }
+
+    /// WO 17.5: `build_with_top_files` injects file bodies into the system
+    /// message so they become part of the cached stem.
+    #[test]
+    fn build_with_top_files_injects_files_into_system_message() {
+        let mut builder = PromptBuilder::new();
+        let top_files = vec![
+            (
+                std::path::PathBuf::from("src/main.rs"),
+                "fn main() {}".to_string(),
+            ),
+            (
+                std::path::PathBuf::from("src/lib.rs"),
+                "pub fn lib() {}".to_string(),
+            ),
+        ];
+        let msg = builder.build_with_top_files(
+            "test-model",
+            false,
+            &["bash"],
+            None,
+            None,
+            false,
+            0,
+            0,
+            &top_files,
+        );
+        assert_eq!(msg.role, Role::System);
+        assert!(msg.content.contains("src/main.rs"));
+        assert!(msg.content.contains("fn main()"));
+        assert!(msg.content.contains("src/lib.rs"));
+        assert!(msg.content.contains("pub fn lib()"));
+        assert!(msg.content.contains("Frequently accessed files"));
+    }
+
+    /// WO 17.5: `build_with_top_files` with no files falls back to
+    /// `build()` unchanged — no "Frequently accessed files" block.
+    #[test]
+    fn build_with_top_files_no_files_falls_back_to_build() {
+        let mut builder = PromptBuilder::new();
+        let msg_without = builder.build_with_top_files(
+            "test-model",
+            false,
+            &["bash"],
+            None,
+            None,
+            false,
+            0,
+            0,
+            &[],
+        );
+        let mut builder2 = PromptBuilder::new();
+        let msg_plain = builder2.build("test-model", false, &["bash"], None, None, false, 0, 0);
+        assert_eq!(msg_without.content, msg_plain.content);
+        assert!(!msg_without.content.contains("Frequently accessed files"));
     }
 }

@@ -315,6 +315,22 @@ fn merge_toml_into_config(cfg: &mut Config, table: toml::Table) {
     if let Some(Value::Boolean(v)) = table.get("carryover_enabled") {
         cfg.session.carryover_enabled = *v;
     }
+    if let Some(Value::Boolean(v)) = table.get("compaction_use_llm") {
+        cfg.session.compaction_use_llm = *v;
+    }
+    if let Some(Value::Float(v)) = table.get("compaction_drop_threshold") {
+        cfg.session.compaction_drop_threshold = *v;
+    }
+    if let Some(Value::Integer(v)) = table.get("stem_file_cap") {
+        if let Ok(n) = usize::try_from(*v) {
+            cfg.session.stem_file_cap = Some(n);
+        }
+    }
+    if let Some(Value::Integer(v)) = table.get("shutdown_timeout_secs") {
+        if let Ok(n) = u64::try_from(*v) {
+            cfg.session.shutdown_timeout_secs = Some(n);
+        }
+    }
     if let Some(Value::Boolean(v)) = table.get("dry_run") {
         cfg.tools.dry_run = *v;
     }
@@ -473,6 +489,23 @@ fn merge_toml_into_config(cfg: &mut Config, table: toml::Table) {
         } else {
             Some(PathBuf::from(expand_tilde_str(v)))
         };
+    }
+
+    // Per-provider API keys
+    if let Some(Value::String(v)) = table.get("anthropic_api_key") {
+        cfg.model.anthropic_api_key = if v.is_empty() { None } else { Some(v.clone()) };
+    }
+    if let Some(Value::String(v)) = table.get("openai_api_key") {
+        cfg.model.openai_api_key = if v.is_empty() { None } else { Some(v.clone()) };
+    }
+    if let Some(Value::String(v)) = table.get("deepseek_api_key") {
+        cfg.model.deepseek_api_key = if v.is_empty() { None } else { Some(v.clone()) };
+    }
+    if let Some(Value::String(v)) = table.get("gemini_api_key") {
+        cfg.model.gemini_api_key = if v.is_empty() { None } else { Some(v.clone()) };
+    }
+    if let Some(Value::String(v)) = table.get("kimi_api_key") {
+        cfg.model.kimi_api_key = if v.is_empty() { None } else { Some(v.clone()) };
     }
 
     // Computer-use tool config
@@ -1860,9 +1893,9 @@ mod tests {
 
         // ── 1. Total struct-level fields ──────────────────────────
         // ModelConfig=22, SecurityConfig=18, ToolConfig=26,
-        // SessionConfig=4, DisplayConfig=3
+        // SessionConfig=8, DisplayConfig=3
         assert_eq!(
-            CONFIG_FIELD_COUNT, 73,
+            CONFIG_FIELD_COUNT, 82,
             "CONFIG_FIELD_COUNT has drifted — did you add/remove a config field?"
         );
 
@@ -1885,6 +1918,10 @@ mod tests {
             scheduled_bash_auto_approve = true
             max_concurrent_scheduled_jobs = 999
             carryover_enabled = true
+            compaction_use_llm = true
+            compaction_drop_threshold = 0.5
+            stem_file_cap = 999
+            shutdown_timeout_secs = 999
             dry_run = true
             cache_enabled = true
             cache_dir = "x"
@@ -1916,6 +1953,11 @@ mod tests {
             gcp_project_id = "x"
             gcp_region = "x"
             gcp_service_account_path = "x"
+            anthropic_api_key = "x"
+            openai_api_key = "x"
+            deepseek_api_key = "x"
+            gemini_api_key = "x"
+            kimi_api_key = "x"
             deny_paths = ["/x"]
             deny_urls = ["x"]
             deny_extensions = [".x"]
@@ -1946,8 +1988,8 @@ mod tests {
                 toml_key_count += 1;
             }
         }
-        // 55 top-level leaf keys + 7 computer_use sub-keys = 62
-        const MERGE_TOML_EXPECTED: usize = 62;
+        // 64 top-level leaf keys + 7 computer_use sub-keys = 71
+        const MERGE_TOML_EXPECTED: usize = 71;
         assert_eq!(
             toml_key_count, MERGE_TOML_EXPECTED,
             "merge_toml_into_config key count changed — did you add/remove a handled field?"
@@ -1956,9 +1998,9 @@ mod tests {
         // ── 3. apply_env_overrides field coverage ─────────────────
         // Count KF_CODE_* env var checks in apply_env_overrides.
         // This must stay in sync with env_overrides.rs.
-        const ENV_OVERRIDE_EXPECTED: usize = 58;
+        const ENV_OVERRIDE_EXPECTED: usize = 67;
         assert_eq!(
-            ENV_OVERRIDE_EXPECTED, 58,
+            ENV_OVERRIDE_EXPECTED, 67,
             "apply_env_overrides env-var count changed — did you add/remove a KF_CODE_* var?"
         );
 
@@ -1987,8 +2029,8 @@ mod tests {
         //   (Arrays/Vec fields without env-var representations.)
         //
         // The expansion of computer_use (1 struct field → 7 TOML keys)
-        // means MERGE_TOML_EXPECTED = 56 handled struct fields + 6 expansion
-        // keys = 62, not 73 - 16 = 57.
+        // means MERGE_TOML_EXPECTED = 64 handled struct fields + 7 expansion
+        // keys = 71, not 82 - 16 = 66.
         let _ = (
             CONFIG_FIELD_COUNT,
             MERGE_TOML_EXPECTED,

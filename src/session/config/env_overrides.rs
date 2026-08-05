@@ -86,6 +86,26 @@ pub(super) fn apply_env_overrides(cfg: &mut Config) {
 
     // KF_CODE_CARRYOVER_ENABLED
     env_bool!("KF_CODE_CARRYOVER_ENABLED", cfg.session.carryover_enabled);
+    // KF_CODE_COMPACTION_USE_LLM
+    env_bool!("KF_CODE_COMPACTION_USE_LLM", cfg.session.compaction_use_llm);
+    // KF_CODE_COMPACTION_DROP_THRESHOLD
+    if let Ok(val) = std::env::var("KF_CODE_COMPACTION_DROP_THRESHOLD") {
+        if let Ok(v) = val.parse::<f64>() {
+            cfg.session.compaction_drop_threshold = v;
+        }
+    }
+    // KF_CODE_STEM_FILE_CAP
+    if let Ok(val) = std::env::var("KF_CODE_STEM_FILE_CAP") {
+        if let Ok(n) = val.parse::<usize>() {
+            cfg.session.stem_file_cap = Some(n);
+        }
+    }
+    // KF_CODE_SHUTDOWN_TIMEOUT_SECS
+    if let Ok(val) = std::env::var("KF_CODE_SHUTDOWN_TIMEOUT_SECS") {
+        if let Ok(n) = val.parse::<u64>() {
+            cfg.session.shutdown_timeout_secs = Some(n);
+        }
+    }
     // KF_CODE_DRY_RUN
     env_bool!("KF_CODE_DRY_RUN", cfg.tools.dry_run);
 
@@ -296,6 +316,34 @@ pub(super) fn apply_env_overrides(cfg: &mut Config) {
     if let Ok(val) = std::env::var("KF_CODE_ANTHROPIC_PROVIDER") {
         if !val.is_empty() {
             cfg.model.anthropic_provider = val;
+        }
+    }
+
+    // Per-provider API keys (env layer — these supplement the config
+    // fields and are resolved by `adapters::auth::resolve_api_key`).
+    if let Ok(val) = std::env::var("ANTHROPIC_API_KEY") {
+        if !val.is_empty() {
+            cfg.model.anthropic_api_key = Some(val);
+        }
+    }
+    if let Ok(val) = std::env::var("OPENAI_API_KEY") {
+        if !val.is_empty() {
+            cfg.model.openai_api_key = Some(val);
+        }
+    }
+    if let Ok(val) = std::env::var("DEEPSEEK_API_KEY") {
+        if !val.is_empty() {
+            cfg.model.deepseek_api_key = Some(val);
+        }
+    }
+    if let Ok(val) = std::env::var("GEMINI_API_KEY") {
+        if !val.is_empty() {
+            cfg.model.gemini_api_key = Some(val);
+        }
+    }
+    if let Ok(val) = std::env::var("KIMI_API_KEY") {
+        if !val.is_empty() {
+            cfg.model.kimi_api_key = Some(val);
         }
     }
     if let Ok(val) = std::env::var("KF_CODE_AWS_REGION") {

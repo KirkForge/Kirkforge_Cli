@@ -1,6 +1,10 @@
 //! Prompt-time source minification: strip comments, collapse whitespace,
 //! and shorten local identifiers in languages where that is safe. Files on
 //! disk are never modified; minification is applied at prompt-build time.
+//!
+//! WO 17.4: AST-based minification with byte-position map for surgical
+//! edits. The old char-scan path is kept as fallback for languages
+//! without a tree-sitter grammar.
 
 mod expand;
 mod lang;
@@ -9,6 +13,7 @@ pub use expand::{
     expand_minified, extract_minified_envelope, has_minified_envelope, lang_name_for_ext,
     wrap_minified_envelope,
 };
+pub use lang::{minify_with_map, revalidate, surgical_edit, Minified, Span};
 
 /// Language-aware source minification for prompt compression.
 ///

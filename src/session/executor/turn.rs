@@ -1410,14 +1410,25 @@ impl Executor {
             None
         };
 
-        // Snapshot memory knobs so we don't hold the config lock across
-        // the prompt-builder memory lookup.
-        let (memory_enabled, memory_max_tokens, memory_top_n) = {
+        // Snapshot memory knobs and compaction knobs so we don't hold the
+        // config lock across the prompt-builder memory lookup or the
+        // microcompaction call.
+        let (
+            memory_enabled,
+            memory_max_tokens,
+            memory_top_n,
+            compaction_use_llm,
+            compaction_drop_threshold,
+            stem_file_cap,
+        ) = {
             let cfg = read_shared_config(&self.config);
             (
                 cfg.display.memory_enabled,
                 cfg.display.memory_max_tokens,
                 cfg.display.memory_top_n,
+                cfg.session.compaction_use_llm,
+                cfg.session.compaction_drop_threshold,
+                cfg.session.stem_file_cap,
             )
         };
 
@@ -1441,25 +1452,77 @@ impl Executor {
             }
         };
 
-        let system = self.prompt_builder.build(
-            &model_info.name,
-            model_info.supports_thinking,
-            &tool_names,
-            carryover_block.as_deref(),
-            memory_context.as_deref(),
-            memory_enabled,
-            memory_max_tokens,
-            memory_top_n,
-        );
+        // WO 17.5: inject top-N frequently-accessed file bodies into the
+        // cached stem so the model stops re-reading the same files every
+        // turn. The files come from the read gate's access stats; their
+        // contents are minified to keep the stem small.
+        let top_file_paths = self
+            .sandbox
+            .top_files(crate::session::prompt::cache_stem::DEFAULT_TOP_N_FILES);
+        let top_files: Vec<(std::path::PathBuf, String)> = top_file_paths
+            .iter()
+            .filter_map(|p| {
+                let content = std::fs::read_to_string(p).ok()?;
+                // ponytail: minify each file to keep the stem small; if
+                // minification fails or inflates, use the raw content as a
+                // fallback so the file is still present in the stem.
+                let minified = crate::shared::minify::minify_source_safe(p, &content);
+                if minified.len() < content.len() {
+                    Some((p.clone(), minified))
+                } else {
+                    // Minification didn't help; use a truncated version of
+                    // the raw content to keep the stem bounded.
+                    // ponytail: truncate at 4 KiB default, configurable via stem_file_cap —
+                    // enough for context, small enough for cache.
+                    const STEM_FILE_CAP: usize = 4096;
+                    let cap = stem_file_cap.unwrap_or(STEM_FILE_CAP);
+                    if content.len() > cap {
+                        Some((
+                            p.clone(),
+                            format!("{} [...truncated]", &content[..cap]),
+                        ))
+                    } else {
+                        Some((p.clone(), content))
+                    }
+                }
+            })
+            .collect();
+
+        let system = if top_files.is_empty() {
+            self.prompt_builder.build(
+                &model_info.name,
+                model_info.supports_thinking,
+                &tool_names,
+                carryover_block.as_deref(),
+                memory_context.as_deref(),
+                memory_enabled,
+                memory_max_tokens,
+                memory_top_n,
+            )
+        } else {
+            self.prompt_builder.build_with_top_files(
+                &model_info.name,
+                model_info.supports_thinking,
+                &tool_names,
+                carryover_block.as_deref(),
+                memory_context.as_deref(),
+                memory_enabled,
+                memory_max_tokens,
+                memory_top_n,
+                &top_files,
+            )
+        };
 
         let history = self.conversation.all();
         let tool_results: Vec<Message> = Vec::new(); // sent as part of history
 
-        let messages = self.prompt_builder.build_messages(
+        let messages = self.prompt_builder.build_messages_with_compaction(
             system,
             history,
             model_info.max_context_tokens,
             &tool_results,
+            compaction_use_llm,
+            compaction_drop_threshold,
         );
 
         // WO 10.2: prompt-cache stem-reuse detection (ADR-052). The
@@ -1757,6 +1820,7 @@ async fn run_prepared_call(prep: PreparedCall) -> Option<(ToolInvocation, ToolOu
         token: prep.cancel_token,
         dry_run: false,
         task_spawner: None,
+        tools: None,
     };
     let outcome = tokio::time::timeout(
         prep.timeout,

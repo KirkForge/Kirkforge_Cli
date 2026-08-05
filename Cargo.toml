@@ -188,6 +188,7 @@ yup-oauth2 = { version = "12", default-features = false, features = ["hyper-rust
 # Re-exported by reqwest but also used directly for SigV4 request signing.
 http = "1"
 url = "2"
+percent-encoding = "2"
 # Cache serialization uses serde_json (already a dependency) instead of
 # the unmaintained bincode crate.
 # Temp directory creation for benchmark harness.

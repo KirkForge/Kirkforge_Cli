@@ -2128,6 +2128,7 @@ dependencies = [
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
+ "percent-encoding",
  "proptest",
  "pulldown-cmark",
  "ratatui",

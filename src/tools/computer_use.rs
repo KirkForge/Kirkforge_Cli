@@ -20,6 +20,14 @@ use base64::Engine as _;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+/// JS preamble injected before `evaluate` expressions to block network requests.
+/// This prevents SSRF via `fetch` or `XMLHttpRequest` to internal/metadata IPs.
+/// ponytail: blocks all network in evaluate mode; open/navigate use different
+/// code paths and are unaffected. WebSocket/EventSource not blocked — add if needed.
+const EVALUATE_SAFETY_PREAMBLE: &str = r#"
+(() => { window.fetch = async (url, opts) => { throw new Error('fetch blocked in evaluate mode'); }; XMLHttpRequest.prototype.open = function(method, url) { throw new Error('XHR blocked in evaluate mode'); }; })();
+"#;
+
 /// Pinned, boxed future returned by [`SessionLauncher`].
 pub type SessionFuture =
     std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<Arc<dyn ChromeTab>>> + Send>>;
@@ -373,7 +381,8 @@ async fn run_on_tab(
         }
         "evaluate" => {
             let expression = args["expression"].as_str().unwrap_or("");
-            tab.evaluate(expression)
+            let safe_expression = format!("{EVALUATE_SAFETY_PREAMBLE}{expression}");
+            tab.evaluate(&safe_expression)
         }
         "screenshot" => {
             return match tab.screenshot() {
@@ -454,7 +463,8 @@ fn run_on_session_sync(
         }
         "evaluate" => {
             let expression = args["expression"].as_str().unwrap_or("");
-            session.evaluate(expression)
+            let safe_expression = format!("{EVALUATE_SAFETY_PREAMBLE}{expression}");
+            session.evaluate(&safe_expression)
         }
         "screenshot" => {
             return match session.screenshot() {

@@ -1,7 +1,8 @@
 use crate::session::access::DenyList;
 use crate::shared::{ToolDef, ToolError, ToolOutcome};
 use crate::tools::{Tool, ToolContext};
-use std::net::ToSocketAddrs;
+use percent_encoding::percent_decode_str;
+use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 use std::time::Duration;
 
 /// Maximum response body we will accept (1 MiB). This caps both memory usage
@@ -95,19 +96,21 @@ impl Tool for WebFetch {
             });
         }
 
-        // WO 15.3: DNS-rebinding check. A public hostname whose A record
-        // resolves to 127.0.0.1 / 169.254.169.254 / RFC1918 defeats the
-        // literal-IP gate above. Resolve the host and reject if any
-        // resolved address is internal. Literal-IP hosts already went
-        // through `host_is_literal_internal_ip` and are not re-resolved
-        // (no TOCTOU — they're pinned to the literal in the URL).
-        if host_resolves_to_internal_ip(trimmed) {
-            return ToolOutcome::Failure(ToolError::AccessDenied {
-                message: "URL host resolves to a private/internal IP (DNS-rebinding guard)".into(),
-            });
-        }
+        // DNS-rebinding guard: resolve the host once, check for internal
+        // IPs, and pin DNS to the resolved address so the TCP connect uses
+        // the same IP we checked. ponytail: builds a new reqwest::Client
+        // per hostname request; cache pinned clients if throughput matters.
+        let client = match resolve_and_pin_dns(trimmed) {
+            Ok(Some(c)) => c,
+            Ok(None) => self.client.clone(),
+            Err(()) => {
+                return ToolOutcome::Failure(ToolError::AccessDenied {
+                    message: "URL host resolves to a private/internal IP (DNS-rebinding guard)".into(),
+                });
+            }
+        };
 
-        let request = match self.client.get(trimmed).build() {
+        let request = match client.get(trimmed).build() {
             Ok(r) => r,
             Err(e) => {
                 return ToolOutcome::Failure(ToolError::Internal {
@@ -116,7 +119,7 @@ impl Tool for WebFetch {
             }
         };
 
-        let response = match self.client.execute(request).await {
+        let response = match client.execute(request).await {
             Ok(r) => r,
             Err(e) => {
                 return ToolOutcome::Failure(ToolError::Internal {
@@ -219,6 +222,7 @@ pub(crate) fn host_is_literal_internal_ip(url: &str) -> bool {
 // reqwest client (tests) rather than the system resolver. The rebinding
 // threat requires the attacker's hostname to actually resolve to an
 // internal IP, which this guard catches.
+#[allow(dead_code)]
 pub(crate) fn host_resolves_to_internal_ip(url: &str) -> bool {
     let Some(host) = extract_host(url) else {
         return true; // malformed -> fail closed
@@ -293,7 +297,61 @@ fn extract_host(url: &str) -> Option<String> {
     if host.is_empty() {
         return None;
     }
+    // Decode percent-encoded host to prevent bypassing the internal-IP
+    // check via encoded addresses (e.g., %31%32%37%2e%30%2e%30%2e%31 = 127.0.0.1).
+    let host = percent_decode_str(&host)
+        .decode_utf8_lossy()
+        .into_owned();
     Some(host)
+}
+
+/// Extract the port from a URL, defaulting to 80 for http and 443 for https.
+fn extract_port_from_url(url: &str) -> u16 {
+    url::Url::parse(url)
+        .ok()
+        .and_then(|u| u.port_or_known_default())
+        .unwrap_or(80)
+}
+
+/// Resolve the URL's host, check for internal IPs, and return a `reqwest::Client`
+/// with DNS pinned to the resolved address. This prevents DNS rebinding between
+/// the check and the TCP connect.
+///
+/// Returns:
+/// - `Ok(Some(client))` for hostnames that resolve to public IPs (pinned client)
+/// - `Ok(None)` for literal-IP URLs (no rebinding risk) or resolution failures
+/// - `Err(())` if the host resolves to an internal IP (deny the request)
+fn resolve_and_pin_dns(url: &str) -> Result<Option<reqwest::Client>, ()> {
+    let host = extract_host(url).ok_or(())?;
+    // Literal IPs are already pinned in the URL; no rebinding risk.
+    if host.parse::<IpAddr>().is_ok() {
+        return Ok(None);
+    }
+    let port = extract_port_from_url(url);
+    let probe = format!("{host}:{port}");
+    let addrs: Vec<SocketAddr> = match probe.to_socket_addrs() {
+        Ok(a) => a.collect(),
+        Err(_) => return Ok(None), // resolution failure — let request fail later
+    };
+    if addrs.is_empty() {
+        return Ok(None);
+    }
+    for addr in &addrs {
+        if is_internal_addr(&addr.ip()) {
+            return Err(()); // deny: resolves to internal IP
+        }
+    }
+    // Pin to the first resolved address.
+    // ponytail: only pins one IP; if that IP is down, the request fails
+    // instead of trying alternates. Acceptable for SSRF prevention.
+    let pin_addr = addrs[0];
+    let client = reqwest::Client::builder()
+        .timeout(FETCH_TIMEOUT)
+        .user_agent(USER_AGENT)
+        .resolve(&host, pin_addr)
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
+    Ok(Some(client))
 }
 
 fn looks_like_html(body: &str) -> bool {
@@ -831,6 +889,22 @@ mod tests {
         assert!(host_is_literal_internal_ip("http://[::1]/x"));
         assert!(host_is_literal_internal_ip("http://[fe80::1]/x"));
         assert!(host_is_literal_internal_ip("http://[fd00::1]/x"));
+    }
+
+    #[test]
+    fn host_is_literal_internal_ip_percent_encoded_is_true() {
+        // Percent-encoded 127.0.0.1: %31%32%37%2e%30%2e%30%2e%31
+        assert!(host_is_literal_internal_ip(
+            "http://%31%32%37%2e%30%2e%30%2e%31/x"
+        ));
+        // Percent-encoded 10.0.0.1: %31%30%2e%30%2e%30%2e%31
+        assert!(host_is_literal_internal_ip(
+            "http://%31%30%2e%30%2e%30%2e%31/x"
+        ));
+        // Percent-encoded 169.254.169.254: %31%36%39%2e%32%35%34%2e%31%36%39%2e%32%35%34
+        assert!(host_is_literal_internal_ip(
+            "http://%31%36%39%2e%32%35%34%2e%31%36%39%2e%32%35%34/"
+        ));
     }
 
     #[test]

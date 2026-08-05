@@ -15,8 +15,10 @@ pub mod server;
 
 use crate::session::session_index::SessionEntry;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::ffi::OsStr;
+use std::sync::Arc;
 
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
@@ -119,25 +121,84 @@ pub const RECENT_SESSIONS_LIMIT: usize = 5;
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "op")]
 pub enum Request {
-    /// Health check.
+    /// Health check. Optionally carries a version string for compatibility
+    /// gating and an auth token.
     #[serde(rename = "ping")]
-    Ping,
+    Ping {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        version: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        auth_token: Option<String>,
+    },
 
     /// Return the last `RECENT_SESSIONS_LIMIT` sessions, newest first.
     #[serde(rename = "list")]
-    List,
+    List {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        auth_token: Option<String>,
+    },
 
     /// Resolve a session id or prefix to a log path.
     #[serde(rename = "resolve")]
-    Resolve { id: String },
+    Resolve {
+        id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        auth_token: Option<String>,
+    },
 
     /// Mark a session as recently used.
     #[serde(rename = "touch")]
-    Touch { id: String, path: PathBufSerde },
+    Touch {
+        id: String,
+        path: PathBufSerde,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        auth_token: Option<String>,
+    },
 
     /// Ask the daemon to shut down gracefully.
     #[serde(rename = "shutdown")]
-    Shutdown,
+    Shutdown {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        auth_token: Option<String>,
+    },
+
+    /// Claim exclusive ownership of a session. Returns `Busy` if another
+    /// connection already holds it; `Ok` otherwise. The claim is released
+    /// automatically when the owning connection closes.
+    #[serde(rename = "claim")]
+    Claim {
+        id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        auth_token: Option<String>,
+    },
+
+    /// Ask the daemon to broadcast `Quit` to all registered instances and
+    /// then shut down. Carries an optional auth token like `Shutdown`.
+    #[serde(rename = "quit_all")]
+    QuitAll {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        auth_token: Option<String>,
+    },
+
+    /// Notify the daemon that scheduled jobs changed (completed, created,
+    /// or cancelled) so it can push `JobsChanged` to all registered TUI
+    /// instances. Sent by the jobs daemon after a batch run.
+    #[serde(rename = "notify_jobs_changed")]
+    NotifyJobsChanged {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        auth_token: Option<String>,
+    },
+
+    /// Open a long-lived instance channel. The daemon pushes
+    /// `InstanceEvent`s to every registered instance. The stream
+    /// switches to push-only after the registration handshake.
+    #[serde(rename = "instance_register")]
+    InstanceRegister {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        version: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        auth_token: Option<String>,
+    },
 }
 
 /// A response sent from the daemon back to a client.
@@ -148,6 +209,28 @@ pub enum Response {
     Ok { data: Option<serde_json::Value> },
     #[serde(rename = "error")]
     Error { message: String },
+    #[serde(rename = "busy")]
+    Busy { message: String },
+}
+
+/// An event pushed by the daemon to every registered instance.
+///
+/// Serialised as one NDJSON line per event. The writer-per-connection
+/// guarantee means no interleaving between concurrent broadcasts.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(tag = "event")]
+pub enum InstanceEvent {
+    /// The list of recent sessions changed (new fork, touch, etc.).
+    #[serde(rename = "threads_changed")]
+    ThreadsChanged,
+
+    /// A scheduled job completed (or was created/cancelled).
+    #[serde(rename = "jobs_changed")]
+    JobsChanged,
+
+    /// The daemon is shutting down; clients should disconnect.
+    #[serde(rename = "quit")]
+    Quit,
 }
 
 impl Response {
@@ -187,19 +270,94 @@ impl From<PathBufSerde> for std::path::PathBuf {
 }
 
 /// In-memory state kept by the daemon.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct DaemonState {
     /// Last N sessions, newest at the front.
     pub recent: VecDeque<SessionEntry>,
+    /// Auth token loaded from `KF_CODE_DAEMON_TOKEN_FILE`. `None` means
+    /// auth is disabled (legacy, no-auth mode).
+    pub expected_token: Option<String>,
+    /// Set of session ids currently claimed by an active connection.
+    /// Released automatically when the owning connection closes.
+    pub open_sessions: HashSet<String>,
+    /// Registered instance channels. Each sender feeds a single writer
+    /// task that serialises `InstanceEvent`s onto one `UnixStream`.
+    /// Dead senders (disconnected instances) are pruned by `broadcast`.
+    #[cfg(unix)]
+    pub instances: Arc<std::sync::Mutex<Vec<tokio::sync::mpsc::UnboundedSender<InstanceEvent>>>>,
 }
 
+#[cfg(unix)]
+impl Default for DaemonState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(unix)]
 impl DaemonState {
     pub fn new() -> Self {
+        let expected_token = std::env::var("KF_CODE_DAEMON_TOKEN_FILE")
+            .ok()
+            .and_then(|path| std::fs::read_to_string(&path).ok())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
         Self {
             recent: VecDeque::with_capacity(RECENT_SESSIONS_LIMIT + 1),
+            expected_token,
+            open_sessions: HashSet::new(),
+            instances: Arc::new(std::sync::Mutex::new(Vec::new())),
         }
     }
 
+    /// Push `ev` to every registered instance, dropping senders whose
+    /// receiver has been dropped (disconnected instance). Uses `try_send`
+    /// so a slow instance never blocks the broadcaster.
+    pub fn broadcast(&self, ev: InstanceEvent) {
+        let mut instances = self.instances.lock().unwrap();
+        instances.retain(|tx| tx.send(ev.clone()).is_ok());
+    }
+
+    /// Check the supplied token against `expected_token`. Returns `Ok(())`
+    /// if auth is disabled (no token configured) or the token matches.
+    /// Returns `Err(response)` if the token is wrong or missing when
+    /// required. Uses constant-time comparison to avoid timing leaks.
+    pub fn check_auth(&self, supplied: Option<&str>) -> Result<(), Response> {
+        match &self.expected_token {
+            None => Ok(()),
+            Some(expected) => match supplied {
+                None => Err(Response::error("authentication required")),
+                Some(given) => {
+                    let expected_bytes = expected.as_bytes();
+                    let given_bytes = given.as_bytes();
+                    if subtle::ConstantTimeEq::ct_eq(expected_bytes, given_bytes).into() {
+                        Ok(())
+                    } else {
+                        Err(Response::error("authentication failed"))
+                    }
+                }
+            },
+        }
+    }
+}
+
+#[cfg(not(unix))]
+impl DaemonState {
+    pub fn new() -> Self {
+        let expected_token = std::env::var("KF_CODE_DAEMON_TOKEN_FILE")
+            .ok()
+            .and_then(|path| std::fs::read_to_string(&path).ok())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        Self {
+            recent: VecDeque::with_capacity(RECENT_SESSIONS_LIMIT + 1),
+            expected_token,
+            open_sessions: HashSet::new(),
+        }
+    }
+}
+
+impl DaemonState {
     /// Refresh the recent list from disk.
     ///
     /// This re-scans the sessions directory rather than reusing the

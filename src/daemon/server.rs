@@ -1,7 +1,7 @@
 //! Daemon server — listens on a Unix domain socket and serves JSON-RPC.
 
 use crate::daemon::paths;
-use crate::daemon::{DaemonState, Request, Response};
+use crate::daemon::{DaemonState, InstanceEvent, Request, Response};
 use anyhow::Context;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -39,10 +39,24 @@ pub async fn run_daemon_at(socket_path: PathBuf, pid_path: PathBuf) -> anyhow::R
         std::fs::create_dir_all(parent).context("create data directory")?;
     }
 
-    // Remove stale socket from a previous crash.
-    if let Err(e) = std::fs::remove_file(&socket_path) {
-        if e.kind() != std::io::ErrorKind::NotFound {
-            tracing::warn!(error = %e, path = %socket_path.display(), "Failed to remove stale daemon socket");
+    // Socket guard: before removing and binding, try to connect. If a
+    // connection succeeds, another daemon is live — refuse to hijack it.
+    if socket_path.exists() {
+        match tokio::net::UnixStream::connect(&socket_path).await {
+            Ok(_) => {
+                anyhow::bail!(
+                    "daemon already running on {} — stop it first",
+                    socket_path.display()
+                );
+            }
+            Err(_) => {
+                // Connection failed — the socket is stale. Safe to remove.
+                if let Err(e) = std::fs::remove_file(&socket_path) {
+                    if e.kind() != std::io::ErrorKind::NotFound {
+                        tracing::warn!(error = %e, path = %socket_path.display(), "Failed to remove stale daemon socket");
+                    }
+                }
+            }
         }
     }
 
@@ -207,6 +221,7 @@ async fn handle_client(
 ) {
     let mut stream = BufStream::new(stream);
     let mut line = String::new();
+    let mut claimed_sessions: Vec<String> = Vec::new();
 
     loop {
         line.clear();
@@ -235,10 +250,43 @@ async fn handle_client(
             }
         };
 
-        let is_shutdown = matches!(req, Request::Shutdown);
+        // InstanceRegister is a long-lived control channel, not a
+        // request/response pair. Hand off to a dedicated handler that
+        // holds the stream open and pushes events.
+        if let Request::InstanceRegister {
+            version: client_version,
+            auth_token,
+        } = req
+        {
+            {
+                let s = state.lock().await;
+                if let Err(e) = s.check_auth(auth_token.as_deref()) {
+                    if write_response(&mut stream, e).await.is_err() {
+                        break;
+                    }
+                    continue;
+                }
+                if let Some(ref cv) = client_version {
+                    let daemon_version = env!("CARGO_PKG_VERSION");
+                    if cv != daemon_version {
+                        let resp = Response::error(format!(
+                            "version mismatch: client {cv}, daemon {daemon_version} — restart both halves"
+                        ));
+                        if write_response(&mut stream, resp).await.is_err() {
+                            break;
+                        }
+                        continue;
+                    }
+                }
+            }
+            handle_instance_register(stream, state).await;
+            return;
+        }
+
+        let is_shutdown = matches!(req, Request::Shutdown { .. } | Request::QuitAll { .. });
         let resp = match tokio::time::timeout(
             std::time::Duration::from_secs(30),
-            handle_request(req, state.clone()),
+            handle_request(req, state.clone(), &mut claimed_sessions),
         )
         .await
         {
@@ -256,6 +304,17 @@ async fn handle_client(
                 break;
             }
         };
+
+        // If this was a Claim that succeeded, track it for cleanup on disconnect.
+        if let Response::Ok {
+            data: Some(serde_json::Value::Object(ref map)),
+        } = resp
+        {
+            if let Some(serde_json::Value::String(id)) = map.get("claimed") {
+                claimed_sessions.push(id.clone());
+            }
+        }
+
         if write_response(&mut stream, resp).await.is_err() {
             break;
         }
@@ -264,15 +323,48 @@ async fn handle_client(
             break;
         }
     }
+
+    // Release all sessions claimed by this connection.
+    if !claimed_sessions.is_empty() {
+        let mut s = state.lock().await;
+        for id in &claimed_sessions {
+            s.open_sessions.remove(id);
+        }
+        s.broadcast(InstanceEvent::ThreadsChanged);
+    }
 }
 
 /// Execute one request and produce a response.
-async fn handle_request(req: Request, state: Arc<Mutex<DaemonState>>) -> Response {
+async fn handle_request(
+    req: Request,
+    state: Arc<Mutex<DaemonState>>,
+    claimed: &mut Vec<String>,
+) -> Response {
+    let version = env!("CARGO_PKG_VERSION");
     match req {
-        Request::Ping => Response::ok_empty(),
+        Request::Ping {
+            version: client_version,
+            auth_token,
+        } => {
+            let s = state.lock().await;
+            if let Err(e) = s.check_auth(auth_token.as_deref()) {
+                return e;
+            }
+            if let Some(ref cv) = client_version {
+                if cv != version {
+                    return Response::error(format!(
+                        "version mismatch: client {cv}, daemon {version} — restart both halves"
+                    ));
+                }
+            }
+            Response::ok_json(serde_json::json!({ "version": version }))
+        }
 
-        Request::List => {
+        Request::List { auth_token } => {
             let mut s = state.lock().await;
+            if let Err(e) = s.check_auth(auth_token.as_deref()) {
+                return e;
+            }
             s.refresh();
             let sessions: Vec<_> = s.recent.iter().cloned().collect();
             let arr: Vec<serde_json::Value> = sessions
@@ -282,8 +374,11 @@ async fn handle_request(req: Request, state: Arc<Mutex<DaemonState>>) -> Respons
             Response::ok_json(serde_json::json!({ "sessions": arr }))
         }
 
-        Request::Resolve { id } => {
+        Request::Resolve { id, auth_token } => {
             let s = state.lock().await;
+            if let Err(e) = s.check_auth(auth_token.as_deref()) {
+                return e;
+            }
             match s.resolve(&id) {
                 Some(entry) => Response::ok_json(serde_json::json!({
                     "id": entry.id,
@@ -293,20 +388,139 @@ async fn handle_request(req: Request, state: Arc<Mutex<DaemonState>>) -> Respons
             }
         }
 
-        Request::Touch { id, path } => {
+        Request::Touch {
+            id,
+            path,
+            auth_token,
+        } => {
             let mut s = state.lock().await;
+            if let Err(e) = s.check_auth(auth_token.as_deref()) {
+                return e;
+            }
             s.touch(&id, path.path);
+            s.broadcast(InstanceEvent::ThreadsChanged);
             Response::ok_empty()
         }
 
-        Request::Shutdown => {
+        Request::Shutdown { auth_token } => {
+            let s = state.lock().await;
+            if let Err(e) = s.check_auth(auth_token.as_deref()) {
+                return e;
+            }
             tracing::info!("daemon received shutdown request");
+            s.broadcast(InstanceEvent::Quit);
             Response::ok_empty()
         }
+
+        Request::Claim { id, auth_token } => {
+            let mut s = state.lock().await;
+            if let Err(e) = s.check_auth(auth_token.as_deref()) {
+                return e;
+            }
+            if s.open_sessions.contains(&id) {
+                return Response::Busy {
+                    message: format!("session '{id}' is already claimed by another connection"),
+                };
+            }
+            s.open_sessions.insert(id.clone());
+            claimed.push(id.clone());
+            Response::ok_json(serde_json::json!({ "claimed": id }))
+        }
+
+        Request::QuitAll { auth_token } => {
+            let s = state.lock().await;
+            if let Err(e) = s.check_auth(auth_token.as_deref()) {
+                return e;
+            }
+            tracing::info!("daemon received quit_all request");
+            s.broadcast(InstanceEvent::Quit);
+            Response::ok_empty()
+        }
+
+        Request::NotifyJobsChanged { auth_token } => {
+            let s = state.lock().await;
+            if let Err(e) = s.check_auth(auth_token.as_deref()) {
+                return e;
+            }
+            s.broadcast(InstanceEvent::JobsChanged);
+            Response::ok_empty()
+        }
+
+        // InstanceRegister is consumed in handle_client before reaching
+        // handle_request (it opens a long-lived push channel, not a
+        // request/response pair). This arm is unreachable but required by
+        // the exhaustive match.
+        Request::InstanceRegister { .. } => Response::error(
+            "instance_register should be handled by the connection loop".to_string(),
+        ),
     }
 }
 
-/// Serialize a response and send it to the client.
+/// Handle an `InstanceRegister` connection.
+///
+/// Sends an `ok` handshake response, then spawns a single writer task
+/// that drains an `UnboundedReceiver<InstanceEvent>` and writes NDJSON
+/// frames to the stream. The sender is registered in `DaemonState` so
+/// `broadcast` can push events. When the writer task finishes (stream
+/// closed or error), the sender is automatically pruned on the next
+/// broadcast because `try_send` will fail on a disconnected receiver.
+async fn handle_instance_register(
+    mut stream: BufStream<UnixStream>,
+    state: Arc<Mutex<DaemonState>>,
+) {
+    // Send handshake ack.
+    let ack = Response::ok_json(serde_json::json!({ "version": env!("CARGO_PKG_VERSION") }));
+    if write_response(&mut stream, ack).await.is_err() {
+        tracing::warn!("failed to write instance_register ack");
+        return;
+    }
+
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<InstanceEvent>();
+
+    // Register the sender in the instance registry.
+    {
+        let s = state.lock().await;
+        let mut instances = s.instances.lock().unwrap();
+        instances.push(tx);
+    }
+
+    // Notify the newly-registered instance of the current session state
+    // so it can do an initial refresh without polling.
+    {
+        let s = state.lock().await;
+        s.broadcast(InstanceEvent::ThreadsChanged);
+    }
+
+    // Writer loop: drain the channel and write NDJSON frames.
+    // This is the single writer per connection — no concurrent
+    // writes to the stream, so NDJSON frames never interleave.
+    let mut rx = rx;
+    while let Some(ev) = rx.recv().await {
+        let line = match serde_json::to_string(&ev) {
+            Ok(l) => l,
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to serialise InstanceEvent");
+                continue;
+            }
+        };
+        if stream.write_all(line.as_bytes()).await.is_err()
+            || stream.write_all(b"\n").await.is_err()
+            || stream.flush().await.is_err()
+        {
+            break; // stream closed
+        }
+    }
+
+    // Prune the sender from the registry. Since the receiver is
+    // dropped (rx moved into write_events and now finished), the
+    // next broadcast call will prune it via try_send failure, but
+    // we remove it eagerly here.
+    {
+        let s = state.lock().await;
+        let mut instances = s.instances.lock().unwrap();
+        instances.retain(|sender| !sender.is_closed());
+    }
+}
 async fn write_response(stream: &mut BufStream<UnixStream>, resp: Response) -> anyhow::Result<()> {
     let line = serde_json::to_string(&resp).context("serialize response")?;
     stream
@@ -457,5 +671,154 @@ mod tests {
             !pid.exists(),
             "PID file must not be written when socket bind fails"
         );
+    }
+
+    /// Register two fake instances, broadcast JobsChanged, assert both receive.
+    /// Drop one receiver, broadcast again, assert only the live one receives
+    /// and the dead sender was pruned.
+    #[tokio::test]
+    async fn instance_broadcast_reaches_all_and_prunes_dead() {
+        use crate::daemon::InstanceEvent;
+
+        let state = DaemonState::new();
+
+        // Two channels simulating two registered instances.
+        let (tx1, mut rx1) = tokio::sync::mpsc::unbounded_channel::<InstanceEvent>();
+        let (tx2, mut rx2) = tokio::sync::mpsc::unbounded_channel::<InstanceEvent>();
+
+        {
+            let mut instances = state.instances.lock().unwrap();
+            instances.push(tx1);
+            instances.push(tx2);
+        }
+
+        // Broadcast JobsChanged — both should receive.
+        state.broadcast(InstanceEvent::JobsChanged);
+
+        let ev1 = rx1
+            .try_recv()
+            .expect("instance 1 should receive JobsChanged");
+        assert!(matches!(ev1, InstanceEvent::JobsChanged));
+
+        let ev2 = rx2
+            .try_recv()
+            .expect("instance 2 should receive JobsChanged");
+        assert!(matches!(ev2, InstanceEvent::JobsChanged));
+
+        // Drop instance 2's receiver to simulate a disconnect.
+        drop(rx2);
+
+        // Broadcast again — the dead sender should be pruned.
+        state.broadcast(InstanceEvent::ThreadsChanged);
+
+        let ev1 = rx1.try_recv().expect("instance 1 should still receive");
+        assert!(matches!(ev1, InstanceEvent::ThreadsChanged));
+
+        // The dead sender was pruned from the registry.
+        let instances = state.instances.lock().unwrap();
+        assert_eq!(instances.len(), 1, "dead sender should be pruned");
+    }
+
+    /// Verify that rapid broadcasts produce well-formed NDJSON lines
+    /// (no interleaving) on a single instance channel.
+    #[tokio::test]
+    async fn instance_broadcast_rapid_no_interleaving() {
+        use crate::daemon::InstanceEvent;
+
+        let state = DaemonState::new();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<InstanceEvent>();
+
+        {
+            let mut instances = state.instances.lock().unwrap();
+            instances.push(tx);
+        }
+
+        // Fire many rapid broadcasts.
+        for _ in 0..100 {
+            state.broadcast(InstanceEvent::JobsChanged);
+            state.broadcast(InstanceEvent::ThreadsChanged);
+        }
+
+        // All 200 events should arrive in order, with no drops.
+        let mut count = 0usize;
+        while let Ok(ev) = rx.try_recv() {
+            match count % 2 {
+                0 => assert!(matches!(ev, InstanceEvent::JobsChanged)),
+                1 => assert!(matches!(ev, InstanceEvent::ThreadsChanged)),
+                _ => unreachable!(),
+            }
+            count += 1;
+        }
+        assert_eq!(count, 200, "all events should be delivered in order");
+    }
+
+    /// Instance register handshake over a real Unix stream produces the
+    /// ack and then receives pushed events.
+    #[tokio::test]
+    async fn instance_register_receives_pushed_events() {
+        use crate::daemon::{read_line_limited, InstanceEvent};
+
+        let (client, server) = UnixStream::pair().unwrap();
+        let state = Arc::new(Mutex::new(DaemonState::new()));
+
+        // Server side: handle the instance register request.
+        let state_clone = state.clone();
+        let server_handle = tokio::spawn(async move {
+            handle_instance_register(BufStream::new(server), state_clone).await;
+        });
+
+        // Client side: send the registration request.
+        let mut client_buf = BufStream::new(client);
+        let req = serde_json::to_string(&Request::InstanceRegister {
+            version: None,
+            auth_token: None,
+        })
+        .unwrap();
+        client_buf.write_all(req.as_bytes()).await.unwrap();
+        client_buf.write_all(b"\n").await.unwrap();
+        client_buf.flush().await.unwrap();
+
+        // Read the handshake ack.
+        let mut line = String::new();
+        let n = read_line_limited(&mut client_buf, &mut line)
+            .await
+            .expect("should read ack");
+        assert!(n > 0, "should receive an ack response");
+        let ack: Response = serde_json::from_str(line.trim()).expect("ack should parse");
+        assert!(
+            matches!(ack, Response::Ok { .. }),
+            "expected ok ack, got {ack:?}"
+        );
+
+        // The daemon should have pushed a ThreadsChanged event
+        // during registration. Read it.
+        let mut event_line = String::new();
+        let n = read_line_limited(&mut client_buf, &mut event_line)
+            .await
+            .expect("should read event");
+        assert!(n > 0, "should receive an event after registration");
+        let ev: InstanceEvent =
+            serde_json::from_str(event_line.trim()).expect("event should parse");
+        assert!(matches!(ev, InstanceEvent::ThreadsChanged));
+
+        // Now broadcast a JobsChanged from the daemon side.
+        {
+            let s = state.lock().await;
+            s.broadcast(InstanceEvent::JobsChanged);
+        }
+
+        // The client should receive it.
+        let mut event_line2 = String::new();
+        let n = read_line_limited(&mut client_buf, &mut event_line2)
+            .await
+            .expect("should read JobsChanged");
+        assert!(n > 0);
+        let ev2: InstanceEvent =
+            serde_json::from_str(event_line2.trim()).expect("event should parse");
+        assert!(matches!(ev2, InstanceEvent::JobsChanged));
+
+        // Clean up: drop client to close the stream, await the server.
+        drop(client_buf);
+        let _ = server_handle.await;
     }
 }

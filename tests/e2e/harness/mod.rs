@@ -4,11 +4,9 @@
 
 #[allow(dead_code)]
 pub mod artifact;
-#[allow(dead_code)]
 pub mod confirm;
 pub mod mock;
 pub mod shard;
-#[allow(dead_code)]
 pub mod ui;
 
 use std::path::PathBuf;

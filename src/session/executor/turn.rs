@@ -1478,10 +1478,7 @@ impl Executor {
                     const STEM_FILE_CAP: usize = 4096;
                     let cap = stem_file_cap.unwrap_or(STEM_FILE_CAP);
                     if content.len() > cap {
-                        Some((
-                            p.clone(),
-                            format!("{} [...truncated]", &content[..cap]),
-                        ))
+                        Some((p.clone(), format!("{} [...truncated]", &content[..cap])))
                     } else {
                         Some((p.clone(), content))
                     }

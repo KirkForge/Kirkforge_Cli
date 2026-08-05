@@ -108,7 +108,19 @@ impl Tool for WorkflowTool {
             }
         };
 
-        match run_workflow(&template, &vars, spawner, ctx.tools.clone(), ctx.token.clone(), ctx.dry_run, &self.deny_list, &self.path_guard, self.bash_sandbox_workdir).await {
+        match run_workflow(
+            &template,
+            &vars,
+            spawner,
+            ctx.tools.clone(),
+            ctx.token.clone(),
+            ctx.dry_run,
+            &self.deny_list,
+            &self.path_guard,
+            self.bash_sandbox_workdir,
+        )
+        .await
+        {
             Ok(json) => ToolOutcome::Success { content: json },
             Err(e) => ToolOutcome::Error {
                 message: format!("workflow '{template}' failed: {e}"),
@@ -290,12 +302,12 @@ impl StepRunner for TaskSpawnerStepRunner {
         };
         match tool.run(&ctx, arguments.clone()).await {
             ToolOutcome::Success { content } => Ok(content),
-            ToolOutcome::Failure(ToolError::InvalidArgs { message }) => {
-                Err(anyhow::anyhow!("step '{name}': tool '{tool_name}' invalid args: {message}"))
-            }
-            ToolOutcome::Error { message } => {
-                Err(anyhow::anyhow!("step '{name}': tool '{tool_name}' error: {message}"))
-            }
+            ToolOutcome::Failure(ToolError::InvalidArgs { message }) => Err(anyhow::anyhow!(
+                "step '{name}': tool '{tool_name}' invalid args: {message}"
+            )),
+            ToolOutcome::Error { message } => Err(anyhow::anyhow!(
+                "step '{name}': tool '{tool_name}' error: {message}"
+            )),
             other => Err(anyhow::anyhow!(
                 "step '{name}': tool '{tool_name}' returned unexpected outcome: {:?}",
                 other
@@ -375,10 +387,7 @@ impl StepRunner for TaskSpawnerStepRunner {
                             )
                         })?;
                         let tool = toolset.resolve(&req.tool_name).ok_or_else(|| {
-                            anyhow::anyhow!(
-                                "step '{}': unknown tool '{}'",
-                                req.name, req.tool_name
-                            )
+                            anyhow::anyhow!("step '{}': unknown tool '{}'", req.name, req.tool_name)
                         })?;
                         let ctx = ToolContext {
                             token: cancel_token,
@@ -387,15 +396,9 @@ impl StepRunner for TaskSpawnerStepRunner {
                             tools: Some(toolset.clone()),
                         };
                         match tool.run(&ctx, req.tool_arguments.clone()).await {
-                            ToolOutcome::Success { content } => {
-                                Ok((req.name, content))
-                            }
-                            ToolOutcome::FileContent { content, .. } => {
-                                Ok((req.name, content))
-                            }
-                            ToolOutcome::FileEdit { diff, .. } => {
-                                Ok((req.name, diff))
-                            }
+                            ToolOutcome::Success { content } => Ok((req.name, content)),
+                            ToolOutcome::FileContent { content, .. } => Ok((req.name, content)),
+                            ToolOutcome::FileEdit { diff, .. } => Ok((req.name, diff)),
                             ToolOutcome::GrepMatches { total, .. } => {
                                 Ok((req.name, format!("{total} grep matches")))
                             }
@@ -405,21 +408,20 @@ impl StepRunner for TaskSpawnerStepRunner {
                             ToolOutcome::Failure(ToolError::InvalidArgs { message }) => {
                                 Err(anyhow::anyhow!(
                                     "step '{}': tool '{}' invalid args: {message}",
-                                    req.name, req.tool_name
+                                    req.name,
+                                    req.tool_name
                                 ))
                             }
-                            ToolOutcome::Error { message } => {
-                                Err(anyhow::anyhow!(
-                                    "step '{}': tool '{}' error: {message}",
-                                    req.name, req.tool_name
-                                ))
-                            }
-                            _outcome => {
-                                Err(anyhow::anyhow!(
-                                    "step '{}': tool '{}' returned unexpected outcome",
-                                    req.name, req.tool_name
-                                ))
-                            }
+                            ToolOutcome::Error { message } => Err(anyhow::anyhow!(
+                                "step '{}': tool '{}' error: {message}",
+                                req.name,
+                                req.tool_name
+                            )),
+                            _outcome => Err(anyhow::anyhow!(
+                                "step '{}': tool '{}' returned unexpected outcome",
+                                req.name,
+                                req.tool_name
+                            )),
                         }
                     }
                     kf_workflow::StepKind::FanOut | kf_workflow::StepKind::FanIn => {

@@ -34,8 +34,8 @@ use crate::session::conversation::ConversationLog;
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use std::io::BufRead;
-use std::path::PathBuf;
 use std::io::Write;
+use std::path::PathBuf;
 
 /// One row in the sessions listing. Display-only — the `id` is the
 /// filename stem, `path` is the absolute path (for `--continue` or

@@ -99,8 +99,12 @@ impl Toolset for PluginToolset<'_> {
                 _ => false,
             })
             .ok_or_else(|| anyhow::anyhow!("plugin tool {name} disappeared"))?;
-        let tool = PluginTool::from_capability(&cap, plugin.root(), plugin.manifest().resource_limits.clone())
-            .ok_or_else(|| anyhow::anyhow!("plugin tool {name} has no command"))?;
+        let tool = PluginTool::from_capability(
+            &cap,
+            plugin.root(),
+            plugin.manifest().resource_limits.clone(),
+        )
+        .ok_or_else(|| anyhow::anyhow!("plugin tool {name} has no command"))?;
 
         tool.execute(args).map_err(|e| anyhow::anyhow!("{e}"))
     }

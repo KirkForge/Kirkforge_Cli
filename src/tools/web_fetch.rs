@@ -105,7 +105,8 @@ impl Tool for WebFetch {
             Ok(None) => self.client.clone(),
             Err(()) => {
                 return ToolOutcome::Failure(ToolError::AccessDenied {
-                    message: "URL host resolves to a private/internal IP (DNS-rebinding guard)".into(),
+                    message: "URL host resolves to a private/internal IP (DNS-rebinding guard)"
+                        .into(),
                 });
             }
         };
@@ -299,9 +300,7 @@ fn extract_host(url: &str) -> Option<String> {
     }
     // Decode percent-encoded host to prevent bypassing the internal-IP
     // check via encoded addresses (e.g., %31%32%37%2e%30%2e%30%2e%31 = 127.0.0.1).
-    let host = percent_decode_str(&host)
-        .decode_utf8_lossy()
-        .into_owned();
+    let host = percent_decode_str(&host).decode_utf8_lossy().into_owned();
     Some(host)
 }
 

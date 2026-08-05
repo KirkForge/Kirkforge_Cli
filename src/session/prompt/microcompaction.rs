@@ -439,9 +439,9 @@ mod tests {
         ];
         let res = maybe_microcompact(&msgs, 0, 1, false, 0.5).unwrap();
         assert_eq!(res.messages.len(), 3); // system + summary + tail user
-        // With very short inputs the summary can be slightly longer than the
-        // originals; the important invariant is that the middle was collapsed
-        // and the tail preserved.
+                                           // With very short inputs the summary can be slightly longer than the
+                                           // originals; the important invariant is that the middle was collapsed
+                                           // and the tail preserved.
         assert!(res.messages[1].content.contains("read_file"));
         assert!(res.messages[1].content.contains("src/main.rs"));
         assert_eq!(res.messages[2].content, "new ask");

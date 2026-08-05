@@ -198,7 +198,10 @@ impl Workflow {
                         bail!("step '{}' is a fan_out step but has no 'over'", step.name);
                     }
                     if step.as_name.as_ref().is_none_or(|s| s.is_empty()) {
-                        bail!("step '{}' is a fan_out step but has no 'as_name'", step.name);
+                        bail!(
+                            "step '{}' is a fan_out step but has no 'as_name'",
+                            step.name
+                        );
                     }
                 }
                 StepKind::FanIn => {
@@ -445,8 +448,7 @@ pub fn resolve_step_refs(text: &str, outputs: &HashMap<String, StepOutput>) -> S
                 result.push('$');
                 continue;
             }
-            let content =
-                std::str::from_utf8(&bytes[start..end]).unwrap_or("");
+            let content = std::str::from_utf8(&bytes[start..end]).unwrap_or("");
             // Split into step_name.field.path
             let mut parts = content.splitn(2, '.');
             let step_name = parts.next().unwrap_or("");
@@ -716,10 +718,8 @@ impl WorkflowExecutor {
                         });
                     }
                     StepKind::Tool => {
-                        let prompt = resolve_step_refs(
-                            step.prompt.as_deref().unwrap_or_default(),
-                            &outputs,
-                        );
+                        let prompt =
+                            resolve_step_refs(step.prompt.as_deref().unwrap_or_default(), &outputs);
                         tasks.push(StepRequest {
                             name: step.name.clone(),
                             kind: StepKind::Tool,
@@ -750,10 +750,7 @@ impl WorkflowExecutor {
                                 )
                             })?;
                         let prompt_template = step.prompt.clone().unwrap_or_default();
-                        let persona = step
-                            .persona
-                            .clone()
-                            .unwrap_or_else(|| "coder".to_string());
+                        let persona = step.persona.clone().unwrap_or_else(|| "coder".to_string());
 
                         let max_permits = step.max_parallel.unwrap_or(items.len());
                         let semaphore = Arc::new(tokio::sync::Semaphore::new(max_permits));
@@ -763,9 +760,8 @@ impl WorkflowExecutor {
                                 serde_json::Value::String(s) => s.clone(),
                                 other => other.to_string(),
                             };
-                            let child_prompt =
-                                resolve_step_refs(&prompt_template, &outputs)
-                                    .replace(&format!("${{{as_name}}}"), &item_str);
+                            let child_prompt = resolve_step_refs(&prompt_template, &outputs)
+                                .replace(&format!("${{{as_name}}}"), &item_str);
                             let child_name = format!("{}_{}", step.name, i);
                             let sem = semaphore.clone();
                             let item_clone = item.clone();
@@ -777,9 +773,7 @@ impl WorkflowExecutor {
                                     .run_step(&child_name, &child_prompt, &persona_clone)
                                     .await?;
                                 Ok::<(usize, serde_json::Value, String), anyhow::Error>((
-                                    i,
-                                    item_clone,
-                                    summary,
+                                    i, item_clone, summary,
                                 ))
                             });
                         }
@@ -849,8 +843,7 @@ impl WorkflowExecutor {
                         }
 
                         let combined_summary = child_summaries.join("\n\n");
-                        let combined_structured =
-                            serde_json::Value::Array(child_structured);
+                        let combined_structured = serde_json::Value::Array(child_structured);
                         completed.insert(step.name.clone());
                         outputs.insert(
                             step.name.clone(),
@@ -869,10 +862,7 @@ impl WorkflowExecutor {
                         let mut combined = String::new();
                         for dep in &step.depends_on {
                             if let Some(dep_out) = outputs.get(dep) {
-                                combined.push_str(&format!(
-                                    "## {}:\n{}\n\n",
-                                    dep, dep_out.summary
-                                ));
+                                combined.push_str(&format!("## {}:\n{}\n\n", dep, dep_out.summary));
                             }
                         }
                         completed.insert(step.name.clone());
@@ -1000,7 +990,8 @@ impl WorkflowExecutor {
                     .persona
                     .clone()
                     .unwrap_or_else(|| format!("{:?}", step.kind).to_lowercase());
-                let structured_output: Option<serde_json::Value> = serde_json::from_str(summary).ok();
+                let structured_output: Option<serde_json::Value> =
+                    serde_json::from_str(summary).ok();
                 completed.insert(task.name.clone());
                 outputs.insert(
                     task.name.clone(),
@@ -1872,18 +1863,32 @@ mod tests {
     #[async_trait::async_trait]
     impl StepRunner for ConcurrencyTrackingRunner {
         async fn run_step(&self, name: &str, _prompt: &str, persona: &str) -> Result<String> {
-            let prev = self.active.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let prev = self
+                .active
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             // Track the maximum number of concurrently active steps.
             loop {
                 let cur = self.max_active.load(std::sync::atomic::Ordering::SeqCst);
                 let observed = prev + 1;
-                if observed <= cur || self.max_active.compare_exchange(cur, observed, std::sync::atomic::Ordering::SeqCst, std::sync::atomic::Ordering::SeqCst).is_ok() {
+                if observed <= cur
+                    || self
+                        .max_active
+                        .compare_exchange(
+                            cur,
+                            observed,
+                            std::sync::atomic::Ordering::SeqCst,
+                            std::sync::atomic::Ordering::SeqCst,
+                        )
+                        .is_ok()
+                {
                     break;
                 }
             }
-            self.starts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.starts
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             tokio::time::sleep(tokio::time::Duration::from_millis(self.sleep_ms)).await;
-            self.active.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            self.active
+                .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
             Ok(format!("{persona}:{name}:done"))
         }
     }

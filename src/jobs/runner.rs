@@ -262,7 +262,11 @@ async fn run_workflow_job(
                 exit_code: Some(0),
                 stdout_path: paths.stdout_path,
                 stderr_path: paths.stderr_path,
-                summary: format!("Workflow '{}' completed ({} steps)", summary.workflow_name, summary.outputs.len()),
+                summary: format!(
+                    "Workflow '{}' completed ({} steps)",
+                    summary.workflow_name,
+                    summary.outputs.len()
+                ),
             };
             store.record_run(job, &run)?;
             Ok(run)
@@ -319,12 +323,7 @@ fn record_failure(
         JobKind::Bash { command } => ("bash", command.as_str()),
         JobKind::Workflow { template, .. } => ("workflow", template.as_str()),
     };
-    if let Err(e) = crate::session::session_index::append_alert(
-        &job.id,
-        kind,
-        cmd,
-        &message,
-    ) {
+    if let Err(e) = crate::session::session_index::append_alert(&job.id, kind, cmd, &message) {
         tracing::warn!(job_id = %job.id, error = %e, "failed to persist alert for scheduled job failure");
     }
 
@@ -398,5 +397,4 @@ mod tests {
         assert_eq!(run.status, RunStatus::Failure);
         assert!(run.summary.contains("Safety gate") || run.summary.contains("dangerous"));
     }
-
 }

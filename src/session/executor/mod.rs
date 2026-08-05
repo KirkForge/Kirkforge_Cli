@@ -578,8 +578,11 @@ impl Executor {
         let cfg = read_shared_config(&self.config).clone();
 
         // 1. Replace the plugin toolset.
-        let plugin_tools =
-            crate::session::plugin_tools::all_plugin_tools(registry, self.config.clone(), Some(std::sync::Arc::clone(&self.audit_log)));
+        let plugin_tools = crate::session::plugin_tools::all_plugin_tools(
+            registry,
+            self.config.clone(),
+            Some(std::sync::Arc::clone(&self.audit_log)),
+        );
         let plugin_tool_count = plugin_tools.len();
         let plugin_set = Box::new(crate::session::toolset::VecToolset::new(
             "plugin",

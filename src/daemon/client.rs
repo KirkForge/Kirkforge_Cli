@@ -7,15 +7,15 @@
 #[cfg(unix)]
 mod unix_imp {
 
-/// Read the auth token from the `KF_CODE_DAEMON_TOKEN_FILE` env var.
-/// Returns `None` if the env var is not set or the file cannot be read.
-pub fn read_auth_token() -> Option<String> {
-    std::env::var("KF_CODE_DAEMON_TOKEN_FILE")
-        .ok()
-        .and_then(|path| std::fs::read_to_string(&path).ok())
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-}
+    /// Read the auth token from the `KF_CODE_DAEMON_TOKEN_FILE` env var.
+    /// Returns `None` if the env var is not set or the file cannot be read.
+    pub fn read_auth_token() -> Option<String> {
+        std::env::var("KF_CODE_DAEMON_TOKEN_FILE")
+            .ok()
+            .and_then(|path| std::fs::read_to_string(&path).ok())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    }
     use crate::daemon::{paths, read_line_limited, InstanceEvent, Request, Response};
     use crate::session::session_index::SessionEntry;
     use anyhow::Context;
@@ -127,7 +127,12 @@ pub fn read_auth_token() -> Option<String> {
 
         /// Return the daemon's recent sessions list.
         pub async fn list_recent(&mut self) -> anyhow::Result<Vec<SessionEntry>> {
-            match self.call(Request::List { auth_token: read_auth_token() }).await? {
+            match self
+                .call(Request::List {
+                    auth_token: read_auth_token(),
+                })
+                .await?
+            {
                 Response::Ok {
                     data: Some(serde_json::Value::Object(mut map)),
                 } => {
@@ -192,7 +197,12 @@ pub fn read_auth_token() -> Option<String> {
 
         /// Ask the daemon to shut down.
         pub async fn shutdown(&mut self) -> anyhow::Result<()> {
-            match self.call(Request::Shutdown { auth_token: read_auth_token() }).await? {
+            match self
+                .call(Request::Shutdown {
+                    auth_token: read_auth_token(),
+                })
+                .await?
+            {
                 Response::Ok { .. } => Ok(()),
                 Response::Error { message } => {
                     anyhow::bail!("daemon shutdown failed: {message}")
@@ -219,7 +229,12 @@ pub fn read_auth_token() -> Option<String> {
 
         /// Ask the daemon to broadcast Quit to all connected TUIs and shut down.
         pub async fn quit_all(&mut self) -> anyhow::Result<()> {
-            match self.call(Request::QuitAll { auth_token: read_auth_token() }).await? {
+            match self
+                .call(Request::QuitAll {
+                    auth_token: read_auth_token(),
+                })
+                .await?
+            {
                 Response::Ok { .. } => Ok(()),
                 Response::Error { message } => {
                     anyhow::bail!("daemon quit_all failed: {message}")
@@ -232,7 +247,9 @@ pub fn read_auth_token() -> Option<String> {
         /// `JobsChanged` to all registered TUI instances.
         pub async fn notify_jobs_changed(&mut self) -> anyhow::Result<()> {
             match self
-                .call(Request::NotifyJobsChanged { auth_token: read_auth_token() })
+                .call(Request::NotifyJobsChanged {
+                    auth_token: read_auth_token(),
+                })
                 .await?
             {
                 Response::Ok { .. } => Ok(()),

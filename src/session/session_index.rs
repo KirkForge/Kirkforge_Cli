@@ -312,7 +312,7 @@ pub fn append_alert(
     message: &str,
 ) -> anyhow::Result<()> {
     let data_dir = crate::session::data_dir()?;
-    let alerts_path = data_dir.join(".alerts.ndjson");
+    let alerts_path = data_dir.join("sessions").join(".alerts.ndjson");
     let mut file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)

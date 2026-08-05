@@ -13,6 +13,8 @@
 //! (e.g. inside a sandboxed bench run that does not wire up a spawner),
 //! the tool returns `ToolOutcome::Error` rather than silently no-op'ing.
 
+use crate::session::access::{DenyList, PathGuard};
+use crate::session::bash_runner::check_bash_command_str;
 use crate::session::toolset::{CompositeToolset, Toolset};
 use crate::shared::{ToolDef, ToolError, ToolOutcome};
 use crate::tools::task::TaskSpawner;
@@ -21,16 +23,25 @@ use anyhow::{bail, Context, Result};
 use kf_workflow::{StepOutput, StepRequest, StepRunner, Workflow, WorkflowExecutor};
 use std::collections::HashMap;
 use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
 
 /// `workflow_run` tool. Stateless: every invocation resolves a template
 /// by name, interpolates `${var}` tokens into step prompts, and runs the
 /// workflow via the `StepRunner` adapted from `ctx.task_spawner`.
-pub struct WorkflowTool;
+pub struct WorkflowTool {
+    deny_list: DenyList,
+    path_guard: PathGuard,
+    bash_sandbox_workdir: bool,
+}
 
 #[allow(clippy::new_without_default)]
 impl WorkflowTool {
-    pub fn new() -> Self {
-        Self
+    pub fn new(deny_list: DenyList, path_guard: PathGuard, bash_sandbox_workdir: bool) -> Self {
+        Self {
+            deny_list,
+            path_guard,
+            bash_sandbox_workdir,
+        }
     }
 }
 
@@ -97,7 +108,7 @@ impl Tool for WorkflowTool {
             }
         };
 
-        match run_workflow(&template, &vars, spawner, ctx.tools.clone()).await {
+        match run_workflow(&template, &vars, spawner, ctx.tools.clone(), ctx.token.clone(), ctx.dry_run, &self.deny_list, &self.path_guard, self.bash_sandbox_workdir).await {
             Ok(json) => ToolOutcome::Success { content: json },
             Err(e) => ToolOutcome::Error {
                 message: format!("workflow '{template}' failed: {e}"),
@@ -111,6 +122,11 @@ async fn run_workflow(
     vars: &HashMap<String, String>,
     spawner: Arc<dyn TaskSpawner>,
     toolset: Option<Arc<CompositeToolset>>,
+    cancel_token: CancellationToken,
+    dry_run: bool,
+    deny_list: &DenyList,
+    path_guard: &PathGuard,
+    bash_sandbox_workdir: bool,
 ) -> Result<String> {
     let path = kf_workflow::find_workflow_file(template)
         .with_context(|| format!("workflow template '{template}' not found"))?;
@@ -119,7 +135,15 @@ async fn run_workflow(
     interpolate_vars(&mut workflow, vars);
 
     let executor = WorkflowExecutor::new(workflow);
-    let runner = TaskSpawnerStepRunner { spawner, toolset };
+    let runner = TaskSpawnerStepRunner {
+        spawner,
+        toolset,
+        deny_list: deny_list.clone(),
+        path_guard: path_guard.clone(),
+        bash_sandbox_workdir,
+        cancel_token,
+        dry_run,
+    };
     let summary = executor.run(std::sync::Arc::new(runner), None).await?;
     Ok(summary_to_json(&summary))
 }
@@ -191,6 +215,11 @@ pub struct TaskSpawnerStepRunner {
     /// Optional tool registry for dispatching `tool` steps by name.
     /// When `None`, tool steps bail (bench/sandbox context).
     pub toolset: Option<Arc<CompositeToolset>>,
+    pub deny_list: DenyList,
+    pub path_guard: PathGuard,
+    pub bash_sandbox_workdir: bool,
+    pub cancel_token: CancellationToken,
+    pub dry_run: bool,
 }
 
 #[async_trait::async_trait]
@@ -207,6 +236,15 @@ impl StepRunner for TaskSpawnerStepRunner {
     }
 
     async fn run_bash(&self, name: &str, command: &str) -> Result<String> {
+        if let Some(denied) = check_bash_command_str(
+            command,
+            None,
+            &self.deny_list,
+            &self.path_guard,
+            self.bash_sandbox_workdir,
+        ) {
+            bail!("step '{name}': bash command denied: {denied}");
+        }
         let output = tokio::process::Command::new("sh")
             .arg("-c")
             .arg(command)
@@ -245,8 +283,8 @@ impl StepRunner for TaskSpawnerStepRunner {
             .resolve(tool_name)
             .ok_or_else(|| anyhow::anyhow!("step '{name}': unknown tool '{tool_name}'"))?;
         let ctx = ToolContext {
-            token: tokio_util::sync::CancellationToken::new(),
-            dry_run: false,
+            token: self.cancel_token.child_token(),
+            dry_run: self.dry_run,
             task_spawner: Some(self.spawner.clone()),
             tools: Some(toolset.clone()),
         };
@@ -272,6 +310,11 @@ impl StepRunner for TaskSpawnerStepRunner {
         for req in steps {
             let spawner = self.spawner.clone();
             let toolset = self.toolset.clone();
+            let cancel_token = self.cancel_token.child_token();
+            let dry_run = self.dry_run;
+            let deny_list = self.deny_list.clone();
+            let path_guard = self.path_guard.clone();
+            let bash_sandbox_workdir = self.bash_sandbox_workdir;
             let handle = tokio::spawn(async move {
                 match req.kind {
                     kf_workflow::StepKind::Agent => {
@@ -286,6 +329,15 @@ impl StepRunner for TaskSpawnerStepRunner {
                         Ok::<(String, String), anyhow::Error>((req.name, result))
                     }
                     kf_workflow::StepKind::Bash => {
+                        if let Some(denied) = check_bash_command_str(
+                            &req.command,
+                            None,
+                            &deny_list,
+                            &path_guard,
+                            bash_sandbox_workdir,
+                        ) {
+                            bail!("step '{}': bash command denied: {denied}", req.name);
+                        }
                         let output = tokio::process::Command::new("sh")
                             .arg("-c")
                             .arg(&req.command)
@@ -329,8 +381,8 @@ impl StepRunner for TaskSpawnerStepRunner {
                             )
                         })?;
                         let ctx = ToolContext {
-                            token: tokio_util::sync::CancellationToken::new(),
-                            dry_run: false,
+                            token: cancel_token,
+                            dry_run,
                             task_spawner: Some(spawner),
                             tools: Some(toolset.clone()),
                         };
@@ -460,7 +512,7 @@ mod tests {
 
     #[test]
     fn def_name_and_required_template() {
-        let t = WorkflowTool::new();
+        let t = WorkflowTool::new(DenyList::default(), PathGuard::default(), false);
         let def = t.def();
         assert_eq!(def.name, "workflow_run");
         let required = def
@@ -473,7 +525,7 @@ mod tests {
 
     #[tokio::test]
     async fn missing_template_arg_is_failure() {
-        let t = WorkflowTool::new();
+        let t = WorkflowTool::new(DenyList::default(), PathGuard::default(), false);
         let ctx = ToolContext::new();
         let out = t.run(&ctx, serde_json::json!({})).await;
         assert!(
@@ -484,7 +536,7 @@ mod tests {
 
     #[tokio::test]
     async fn no_spawner_is_error() {
-        let t = WorkflowTool::new();
+        let t = WorkflowTool::new(DenyList::default(), PathGuard::default(), false);
         let ctx = ToolContext::new();
         let out = t
             .run(&ctx, serde_json::json!({"template": "feature"}))
@@ -513,7 +565,7 @@ mod tests {
         });
         let ctx = ToolContext::with_spawner(spawner);
 
-        let t = WorkflowTool::new();
+        let t = WorkflowTool::new(DenyList::default(), PathGuard::default(), false);
         let out = t
             .run(
                 &ctx,
@@ -555,7 +607,7 @@ mod tests {
             calls: Arc::new(StdMutex::new(Vec::new())),
         });
         let ctx = ToolContext::with_spawner(spawner);
-        let out = WorkflowTool::new()
+        let out = WorkflowTool::new(DenyList::default(), PathGuard::default(), false)
             .run(&ctx, serde_json::json!({"template": "nope"}))
             .await;
         std::env::set_current_dir(cwd).unwrap();
@@ -726,7 +778,7 @@ mod tests {
 
     #[tokio::test]
     async fn empty_template_arg_is_failure() {
-        let t = WorkflowTool::new();
+        let t = WorkflowTool::new(DenyList::default(), PathGuard::default(), false);
         let ctx = ToolContext::new();
         let out = t.run(&ctx, serde_json::json!({"template": "  "})).await;
         assert!(
@@ -737,7 +789,7 @@ mod tests {
 
     #[tokio::test]
     async fn missing_template_key_is_failure() {
-        let t = WorkflowTool::new();
+        let t = WorkflowTool::new(DenyList::default(), PathGuard::default(), false);
         let ctx = ToolContext::new();
         let out = t.run(&ctx, serde_json::json!({"vars": {"x": "y"}})).await;
         assert!(
@@ -748,7 +800,7 @@ mod tests {
 
     #[tokio::test]
     async fn vars_with_non_string_values_are_filtered_out() {
-        let t = WorkflowTool::new();
+        let t = WorkflowTool::new(DenyList::default(), PathGuard::default(), false);
         let ctx = ToolContext::new();
         let out = t
             .run(
@@ -764,7 +816,7 @@ mod tests {
 
     #[tokio::test]
     async fn default_impl_produces_workflow_tool() {
-        let tool = WorkflowTool;
+        let tool = WorkflowTool::new(DenyList::default(), PathGuard::default(), false);
         assert_eq!(tool.def().name, "workflow_run");
     }
 }

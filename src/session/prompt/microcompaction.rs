@@ -24,9 +24,6 @@ use crate::shared::{Message, Role};
 #[derive(Debug, Clone)]
 pub struct MicrocompactResult {
     pub messages: Vec<Message>,
-    // reason: diagnostic field read by tests; production only uses messages/tokens_after.
-    #[allow(dead_code)]
-    pub summarised_messages: usize,
     pub tokens_after: usize,
 }
 
@@ -84,7 +81,7 @@ pub fn maybe_microcompact(
     });
 
     // Decide whether to use LLM summarization instead of heuristic.
-    let (summary, summarised_messages) = if use_llm {
+    let summary = if use_llm {
         let middle_tokens = estimate_tokens(&messages[anchor..tail_start]);
         let heuristic_ratio = if middle_tokens > 0 {
             1.0 - (heuristic_tokens as f64 / middle_tokens as f64)
@@ -96,15 +93,15 @@ pub fn maybe_microcompact(
             // Heuristic drops too much — try LLM summary. The LLM
             // summary uses a structured prompt (goals/decisions/files/
             // tool-outputs/TODOs) that mirrors vix's compaction order.
-            let llm_summary = llm_compaction_summary(&messages[anchor..tail_start]);
-            (llm_summary, tail_start - anchor)
+            deterministic_compaction_summary(&messages[anchor..tail_start])
         } else {
-            (heuristic_summary, tail_start - anchor)
+            heuristic_summary
         }
     } else {
-        (heuristic_summary, tail_start - anchor)
+        heuristic_summary
     };
 
+    let summarised_count = tail_start - anchor;
     let mut out = Vec::with_capacity(anchor + 1 + keep_tail);
     if anchor > 0 {
         out.push(messages[0].clone());
@@ -112,7 +109,7 @@ pub fn maybe_microcompact(
     out.push(Message {
         role: Role::System,
         content: format!(
-            "[Context summary — {summarised_messages} earlier messages compressed]\n{summary}",
+            "[Context summary — {summarised_count} earlier messages compressed]\n{summary}",
         ),
         content_parts: None,
         thinking: None,
@@ -128,7 +125,6 @@ pub fn maybe_microcompact(
     let tokens_after = estimate_tokens(&out);
     Some(MicrocompactResult {
         messages: out,
-        summarised_messages,
         tokens_after,
     })
 }
@@ -229,7 +225,7 @@ fn extract_path_from_text(text: &str, out: &mut Vec<String>) {
 /// used instead of the heuristic summary, producing a higher-quality
 /// compaction that preserves key decisions, file paths, and unresolved
 /// tasks.
-fn llm_compaction_summary(messages: &[Message]) -> String {
+fn deterministic_compaction_summary(messages: &[Message]) -> String {
     let mut goals = Vec::new();
     let mut files = Vec::new();
     let mut errors: Vec<String> = Vec::new();
@@ -443,7 +439,6 @@ mod tests {
         ];
         let res = maybe_microcompact(&msgs, 0, 1, false, 0.5).unwrap();
         assert_eq!(res.messages.len(), 3); // system + summary + tail user
-        assert_eq!(res.summarised_messages, 3);
         // With very short inputs the summary can be slightly longer than the
         // originals; the important invariant is that the middle was collapsed
         // and the tail preserved.

@@ -364,7 +364,7 @@ async fn handle_schedule_command(args: &str, _state: &mut AppState) -> String {
             JobKind::Workflow { template, vars }
         }
         kind => {
-            return format!("Unknown job kind: '{kind}'. Use 'bash' or 'workflow'.").into();
+            return format!("Unknown job kind: '{kind}'. Use 'bash' or 'workflow'.");
         }
     };
 

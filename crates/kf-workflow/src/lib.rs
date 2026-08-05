@@ -415,20 +415,25 @@ pub struct StepRequest {
 /// summary. `$(step_name.field)` extracts `field` (and nested paths via `.`)
 /// from the step's structured output; falls back to the summary if no
 /// structured output is available. Unknown step names are left as-is.
+///
+/// The `$(...)` reference syntax uses ASCII `$`, `(`, `)` so byte-level
+/// matching is correct for references. Surrounding text is emitted
+/// character-by-character so multi-byte UTF-8 is preserved.
 pub fn resolve_step_refs(text: &str, outputs: &HashMap<String, StepOutput>) -> String {
     let mut result = String::with_capacity(text.len());
-    let chars = text.as_bytes();
-    let mut i = 0;
-    while i < chars.len() {
-        if chars[i] == b'$' && i + 1 < chars.len() && chars[i + 1] == b'(' {
-            // Find the closing ')'.
-            let start = i + 2;
+    let bytes = text.as_bytes();
+    let mut char_indices = text.char_indices().peekable();
+    while let Some((byte_pos, ch)) = char_indices.next() {
+        if ch == '$' && char_indices.peek().is_some_and(|(_, c)| *c == '(') {
+            // Find the closing ')' using byte offsets (all reference
+            // chars are ASCII, so byte scanning is correct here).
+            let start = byte_pos + 2; // skip past "$("
             let mut depth = 1;
             let mut end = start;
-            while end < chars.len() && depth > 0 {
-                if chars[end] == b'(' {
+            while end < bytes.len() && depth > 0 {
+                if bytes[end] == b'(' {
                     depth += 1;
-                } else if chars[end] == b')' {
+                } else if bytes[end] == b')' {
                     depth -= 1;
                 }
                 if depth > 0 {
@@ -438,11 +443,10 @@ pub fn resolve_step_refs(text: &str, outputs: &HashMap<String, StepOutput>) -> S
             if depth != 0 {
                 // Unmatched paren — leave as-is.
                 result.push('$');
-                i += 1;
                 continue;
             }
             let content =
-                std::str::from_utf8(&chars[start..end]).unwrap_or("");
+                std::str::from_utf8(&bytes[start..end]).unwrap_or("");
             // Split into step_name.field.path
             let mut parts = content.splitn(2, '.');
             let step_name = parts.next().unwrap_or("");
@@ -461,10 +465,16 @@ pub fn resolve_step_refs(text: &str, outputs: &HashMap<String, StepOutput>) -> S
                 // Unknown step — leave as-is.
                 result.push_str(&format!("$({content})"));
             }
-            i = end + 1; // skip past ')'
+            // Advance the character iterator past the reference.
+            while let Some((pos, _)) = char_indices.peek() {
+                if *pos <= end {
+                    char_indices.next();
+                } else {
+                    break;
+                }
+            }
         } else {
-            result.push(chars[i] as char);
-            i += 1;
+            result.push(ch);
         }
     }
     result

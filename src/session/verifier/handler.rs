@@ -74,6 +74,8 @@ impl VerifierHandler {
                 match &v {
                     Verdict::Clean | Verdict::Skipped(_) => continue,
                     Verdict::Fixable(_) | Verdict::Unfixable(_) => {
+                        // Truth model: first verifier to report a finding wins,
+                        // subsequent verifiers are skipped for that event.
                         name = verifier.name().to_string();
                         verdict = v;
                         break;

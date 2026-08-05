@@ -1474,6 +1474,7 @@ impl Executor {
                     // the raw content to keep the stem bounded.
                     // ponytail: truncate at 4 KiB default, configurable via stem_file_cap —
                     // enough for context, small enough for cache.
+                    // Keep in sync with Config::default().compaction.stem_file_cap
                     const STEM_FILE_CAP: usize = 4096;
                     let cap = stem_file_cap.unwrap_or(STEM_FILE_CAP);
                     if content.len() > cap {

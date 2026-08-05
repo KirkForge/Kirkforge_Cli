@@ -204,13 +204,8 @@ pub fn format_verdict_report(verdicts: &[VerdictEntry]) -> String {
             _ => "—".to_string(),
         };
         let file_line_display = if file_line.len() > 24 {
-            // Walk back to the nearest UTF-8 char boundary so a multi-byte
-            // char at byte 22 (e.g. `café.txt`) doesn't panic the slice.
-            let mut boundary = 23;
-            while !file_line.is_char_boundary(boundary) {
-                boundary -= 1;
-            }
-            format!("{}…", &file_line[..boundary])
+            let truncated: String = file_line.char_indices().take(23).map(|(_, c)| c).collect();
+            format!("{truncated}…")
         } else {
             file_line
         };
@@ -246,44 +241,14 @@ impl Default for VerifierBus {
 
 // ── Built-in bus verifier adapters ──────────────────────────────────────
 //
-// These adapters are stubs that register on the bus. The existing
-// event-driven verifier system (VerifierHandler + CorrectionLoop)
-// already handles async verification via BusEvents. The bus collects
+// The built-in bus verifier stubs (SecurityBusVerifier, GitBusVerifier) have
+// been removed. The event-driven verifier system (VerifierHandler +
+// CorrectionLoop) handles async verification via BusEvents. The bus collects
 // structured findings from BusVerifiers that don't need async I/O.
 // Async verifiers continue to operate through the event bus.
-//
-// Future work: migrate the async verifiers to implement BusVerifier
-// once the bus supports async verification.
-
-/// Adapter: security verifier stub on the bus.
-///
-/// The full async security verifier runs via the event bus. This stub
-/// registers on the bus so it's counted in `verifier_bus.verifiers()`
-/// and can be extended later.
-pub struct SecurityBusVerifier;
-
-impl BusVerifier for SecurityBusVerifier {
-    fn name(&self) -> &str {
-        "security"
-    }
-
-    fn verify(&self, _ctx: &VerifyContext) -> Vec<VerdictEntry> {
-        Vec::new()
-    }
-}
-
-/// Adapter: git verifier stub on the bus.
-pub struct GitBusVerifier;
-
-impl BusVerifier for GitBusVerifier {
-    fn name(&self) -> &str {
-        "git"
-    }
-
-    fn verify(&self, _ctx: &VerifyContext) -> Vec<VerdictEntry> {
-        Vec::new()
-    }
-}
+// Plugin verifiers and the TS orchestrator bridge register on the bus
+// independently; the bus starts empty and only contains what the host
+// explicitly registers.
 
 /// Adapter: a plugin-declared verifier on the bus.
 ///
@@ -347,12 +312,10 @@ impl BusVerifier for PluginBusVerifier {
     }
 }
 
-/// Build a VerifierBus with all built-in verifiers registered.
+/// Build a VerifierBus with no built-in stubs registered.
+/// Plugin verifiers and the TS orchestrator bridge register independently.
 pub fn default_verifier_bus() -> VerifierBus {
-    let mut bus = VerifierBus::new();
-    bus.register(Box::new(SecurityBusVerifier));
-    bus.register(Box::new(GitBusVerifier));
-    bus
+    VerifierBus::new()
 }
 
 // ── WO 10.8: TS orchestrator NDJSON bridge ─────────────────────────────
@@ -1115,9 +1078,9 @@ mod tests {
     }
 
     #[test]
-    fn default_verifier_bus_registers_two_built_in_verifiers() {
+    fn default_verifier_bus_is_empty() {
         let bus = default_verifier_bus();
-        assert_eq!(bus.verifier_count(), 2);
+        assert_eq!(bus.verifier_count(), 0);
     }
 
     #[test]

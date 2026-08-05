@@ -42,7 +42,8 @@ pub struct SessionConfig {
     #[serde(default = "default_compaction_drop_threshold")]
     pub compaction_drop_threshold: f64,
     /// Maximum number of file stems included in the system prompt context.
-    /// Files exceeding `stem_file_cap` bytes are truncated. Defaults to 4096.
+    /// Files exceeding `stem_file_cap` bytes are truncated. Defaults to 4096
+    /// when `None` (see `STEM_FILE_CAP` in `session/executor/turn.rs`).
     #[serde(default)]
     pub stem_file_cap: Option<usize>,
     /// Seconds to wait for the executor task to shut down gracefully before

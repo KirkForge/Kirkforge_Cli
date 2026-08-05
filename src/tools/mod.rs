@@ -176,7 +176,11 @@ pub fn all_tools(ctx: &ToolContextBuilder) -> Vec<Arc<dyn Tool>> {
     registry.register(Arc::new(WebSearch::new()));
     registry.register(Arc::new(Task::with_manager(task_manager.clone())));
     registry.register(Arc::new(TaskOutput::new(task_manager)));
-    registry.register(Arc::new(WorkflowTool::new()));
+    registry.register(Arc::new(WorkflowTool::new(
+        ctx.deny_list.clone(),
+        ctx.path_guard.clone(),
+        ctx.bash_sandbox_workdir,
+    )));
     registry.register(Arc::new(TodoWrite::new(todo_state.clone())));
     registry.register(Arc::new(TodoRead::new(todo_state)));
 

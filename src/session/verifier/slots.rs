@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 /// Registry of verifiers with priority-based dispatch.
 ///
-/// Holds up to 4 verifier slots (lint, type_check, git, security).
+/// Holds up to 8 verifier slots (6 built-in + plugin slots).
 /// When an event arrives, verifiers run in priority order. The first
 /// non-`Clean` verdict that isn't `Skipped` wins (truth model).
 #[derive(Default)]
@@ -15,11 +15,11 @@ pub struct VerifierSlots {
 }
 
 impl VerifierSlots {
-    /// Create a new slot registry (default 4 slots).
+    /// Create a new slot registry (default 8 slots).
     pub fn new() -> Self {
         Self {
             verifiers: Vec::new(),
-            max_slots: 4,
+            max_slots: 8,
         }
     }
 

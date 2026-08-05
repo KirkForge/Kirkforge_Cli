@@ -270,7 +270,7 @@ pub fn revalidate(ext: &str, minified_text: &str) -> Result<(), String> {
         Lang::Go => tree_sitter_go::LANGUAGE.into(),
         Lang::Python => tree_sitter_python::LANGUAGE.into(),
         Lang::TypeScript => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
-        Lang::JavaScript => tree_sitter_typescript::LANGUAGE_TSX.into(),
+        Lang::JavaScript => tree_sitter_javascript::LANGUAGE.into(),
         Lang::Bash => tree_sitter_bash::LANGUAGE.into(),
     };
 

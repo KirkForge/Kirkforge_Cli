@@ -37,11 +37,11 @@ pub struct ToolContextBuilder {
 ///     .register(Arc::new(Bash::new(...)))
 ///     .build();
 /// ```
-#[allow(clippy::new_without_default)]
 pub struct ToolRegistry {
     tools: Vec<Arc<dyn Tool>>,
 }
 
+#[allow(clippy::new_without_default)]
 impl ToolRegistry {
     pub fn new() -> Self {
         Self { tools: Vec::new() }

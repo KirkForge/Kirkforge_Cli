@@ -24,9 +24,9 @@ use std::sync::Arc;
 /// `workflow_run` tool. Stateless: every invocation resolves a template
 /// by name, interpolates `${var}` tokens into step prompts, and runs the
 /// workflow via the `StepRunner` adapted from `ctx.task_spawner`.
-#[allow(clippy::new_without_default)]
 pub struct WorkflowTool;
 
+#[allow(clippy::new_without_default)]
 impl WorkflowTool {
     pub fn new() -> Self {
         Self

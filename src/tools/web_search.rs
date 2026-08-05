@@ -5,11 +5,11 @@ use crate::tools::{Tool, ToolContext};
 ///
 /// Requires a `BRAVE_SEARCH_API_KEY` environment variable. If the key is not
 /// configured the tool returns a clear failure — it never fabricates results.
-#[allow(clippy::new_without_default)]
 pub struct WebSearch {
     api_key: Option<String>,
 }
 
+#[allow(clippy::new_without_default)]
 impl WebSearch {
     pub fn new() -> Self {
         Self {

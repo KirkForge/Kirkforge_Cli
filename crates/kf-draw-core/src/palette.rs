@@ -67,7 +67,7 @@ pub enum PaletteAction {
 /// (the filter lowercases both sides); keep the canonical form here
 /// lowercase so the displayed name and the input match.
 ///
-/// ponytail: hard-coded table, not a registration system. Eighteen
+/// ponytail: hard-coded table, not a registration system, upgrade to registration system if custom brand colors needed. Eighteen
 /// actions today; under thirty tomorrow; an `Enum + const slice`
 /// is the right scaling story. If the bin ever wants to inject
 /// commands at runtime, we revisit — until then, one less moving
@@ -103,7 +103,7 @@ pub const PALETTE_ACTIONS: &[(&str, PaletteAction)] = &[
 /// the shortest wins), then substring matches in source order.
 /// Empty query returns the full table in source order.
 ///
-/// ponytail: substring + prefix sort, not a real fuzzy ranker
+/// ponytail: substring + prefix sort, not a real fuzzy ranker, upgrade to fuzzy-matcher if palette exceeds 50 entries
 /// (Levenshtein, word-boundary, abbreviation). Six entries today;
 /// a real fuzzy pass becomes worth it when the table crosses ~50.
 /// The current ranking reads naturally for the kinds of queries a

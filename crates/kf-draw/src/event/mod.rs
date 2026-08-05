@@ -2151,7 +2151,7 @@ fn cycle_text_border(app: &mut App) {
 /// increasing density. Custom brushes (any other string the
 /// user might have typed into the field) cycle back to the
 /// start so the loop is always closed.
-/// ponytail: hardcoded list, not an enum. `brush: String`
+/// ponytail: hardcoded list, not an enum, upgrade to dynamic registry if extensible brushes needed. `brush: String`
 /// on `DrawState` is intentionally untyped so the user can
 /// type a single-cell character; a future "brush picker"
 /// tick can replace this list with the same shape (or grow

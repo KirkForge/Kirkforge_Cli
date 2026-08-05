@@ -35,6 +35,7 @@ use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use std::io::BufRead;
 use std::path::PathBuf;
+use std::io::Write;
 
 /// One row in the sessions listing. Display-only — the `id` is the
 /// filename stem, `path` is the absolute path (for `--continue` or
@@ -291,6 +292,41 @@ pub fn touch_session(id: &str, path: &std::path::Path) {
             tracing::warn!(error = %e, "failed to update session index after touch");
         }
     }
+}
+
+/// Append a job-failure alert to the session's `.alerts.ndjson` file.
+///
+/// Each alert is a single JSON line with: job_id, kind, command (or
+/// template), failure message, and an ISO-8601 timestamp.  The file is
+/// created on first write; later writes append, so earlier alerts are
+/// never lost.
+///
+/// ponytail: append-only file, no index. A full scan is fine for the
+/// expected alert volume (single-digit per session). Add a structured
+/// index if the TUI needs to paginate thousands of alerts, upgrade to
+/// indexed lookup if alerts exceed 10k per session.
+pub fn append_alert(
+    job_id: &str,
+    kind: &str,
+    command_or_template: &str,
+    message: &str,
+) -> anyhow::Result<()> {
+    let data_dir = crate::session::data_dir()?;
+    let alerts_path = data_dir.join(".alerts.ndjson");
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&alerts_path)
+        .with_context(|| format!("opening alerts file {}", alerts_path.display()))?;
+    let entry = serde_json::json!({
+        "job_id": job_id,
+        "kind": kind,
+        "command": command_or_template,
+        "message": message,
+        "timestamp": chrono::Utc::now().to_rfc3339(),
+    });
+    writeln!(file, "{entry}")?;
+    Ok(())
 }
 
 /// Read a single session file and produce a `SessionEntry`.
@@ -1263,6 +1299,38 @@ mod tests {
             .expect("should resolve");
         assert_eq!(log.len(), 1);
         assert_eq!(log.all()[0].content, "hello");
+        match previous {
+            Some(v) => std::env::set_var("KF_CODE_DATA_DIR", v),
+            None => std::env::remove_var("KF_CODE_DATA_DIR"),
+        }
+    }
+
+    #[test]
+    fn test_append_alert_writes_ndjson() {
+        let _guard = crate::session::test_data_dir_lock().blocking_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let previous = std::env::var("KF_CODE_DATA_DIR").ok();
+        std::env::set_var("KF_CODE_DATA_DIR", dir.path());
+
+        append_alert("job-001", "bash", "echo hi", "exit code 1").unwrap();
+        append_alert("job-002", "workflow", "deploy.yml", "template not found").unwrap();
+
+        let alerts_path = dir.path().join(".alerts.ndjson");
+        let content = std::fs::read_to_string(&alerts_path).unwrap();
+        let lines: Vec<&str> = content.lines().filter(|l| !l.trim().is_empty()).collect();
+        assert_eq!(lines.len(), 2, "expected 2 alert lines, got {lines:?}");
+
+        let first: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+        assert_eq!(first["job_id"], "job-001");
+        assert_eq!(first["kind"], "bash");
+        assert_eq!(first["command"], "echo hi");
+        assert_eq!(first["message"], "exit code 1");
+        assert!(first["timestamp"].as_str().unwrap().starts_with("20"));
+
+        let second: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
+        assert_eq!(second["job_id"], "job-002");
+        assert_eq!(second["kind"], "workflow");
+
         match previous {
             Some(v) => std::env::set_var("KF_CODE_DATA_DIR", v),
             None => std::env::remove_var("KF_CODE_DATA_DIR"),

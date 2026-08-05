@@ -72,7 +72,8 @@ async fn verify_git_operation(args: &[String], _output: &str, success: bool) -> 
 /// strings, and `sudo -E git` (a flag between sudo and git) are not parsed.
 /// This is a post-condition verifier, not a shell parser; under-detection
 /// only skips a best-effort `git status`, and over-detection only runs an
-/// extra one, so the trade-off is safe.
+/// extra one, so the trade-off is safe, upgrade to libgit2 if shell-out
+/// latency or PATH fragility matters.
 fn git_subcommands_in(command: &str) -> Vec<String> {
     let mut out = Vec::new();
     for segment in command.split(['&', '|', ';', '\n']) {

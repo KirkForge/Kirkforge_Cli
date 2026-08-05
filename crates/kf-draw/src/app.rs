@@ -201,7 +201,7 @@ pub struct TextEditState {
     pub dirty: bool,
     /// Byte offset into `buffer` for the next insert / delete.
     /// 0 = before the first char; `buffer.len()` = end of buffer.
-    /// ponytail: byte index, not grapheme. ASCII inserts and
+    /// ponytail: byte index, not grapheme, upgrade to grapheme offsets if non-ASCII editing needed. ASCII inserts and
     /// deletes are 1-byte splices. Multi-byte graphemes (CJK,
     /// emoji) are 3–4 bytes each — a Left/Right arrow press
     /// steps the offset by 1 byte, which lands mid-grapheme

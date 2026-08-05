@@ -120,7 +120,7 @@ impl DrawState {
     /// upgrade (hashmap) touches one method instead of twelve
     /// scattered `iter().position(...)` call sites.
     ///
-    /// ponytail: O(n) is fine because normal documents hold a few
+    /// ponytail: O(n) is fine because normal documents hold a few, upgrade to HashMap index if layer count exceeds 100
     /// dozen objects — adding a `HashMap<String, usize>` would
     /// buy nothing at this scale and would force a parallel-write
     /// discipline on every insert / remove.

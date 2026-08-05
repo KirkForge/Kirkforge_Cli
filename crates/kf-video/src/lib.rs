@@ -378,7 +378,7 @@ pub async fn run(cmd: Cmd) -> anyhow::Result<()> {
             since_s,
             category,
         } => {
-            // ponytail: decision_log.jsonl is append-only. Read tail, filter,
+            // ponytail: decision_log.jsonl is append-only, upgrade to seek-based tail if log exceeds 10 MB. Read tail, filter,
             // print. No mutation.
             let log = project.join("artifacts").join("decision_log.jsonl");
             if !log.exists() {
@@ -442,7 +442,7 @@ pub async fn run(cmd: Cmd) -> anyhow::Result<()> {
         }
         Cmd::Doctor { op } => match op {
             DoctorOp::Ffmpeg { ffmpeg_path, json } => {
-                // ponytail: shell out, parse, emit. Exit code matters —
+                // ponytail: shell out, upgrade to libav FFI if shell-out latency matters, parse, emit. Exit code matters —
                 // CI can gate on it. Use std::process::exit because the
                 // anyhow::Result<()> path here would always return Ok
                 // and the runner would mask the failure.

@@ -36,7 +36,7 @@ impl DoctorReport {
     }
 }
 
-/// ponytail: shell out to ffmpeg and run a single subcommand. Returns
+/// ponytail: shell out to ffmpeg, upgrade to libav FFI if shell-out latency matters, and run a single subcommand. Returns
 /// stdout as a String (lossy). On failure (binary missing, nonzero
 /// exit) returns None — the caller decides whether that's a fatal
 /// error or a single failed check.

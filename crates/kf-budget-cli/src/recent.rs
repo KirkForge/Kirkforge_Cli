@@ -45,8 +45,7 @@ pub(crate) fn load_recent_outputs_at(path: &std::path::Path) -> VecDeque<(String
 pub(crate) const RECENT_BOUND: usize = 32;
 
 // ponytail: rewrite the whole file on every append — bounded at 32
-// entries, so O(N) is fine. Switch to append-with-rollover when
-// the bound grows. Atomic via `atomic_write_text` (NamedTempFile +
+// entries, so O(N) is fine, upgrade to append-with-rollover if RECENT_BOUND exceeds 100. Atomic via `atomic_write_text` (NamedTempFile +
 // persist); failures eprintln so a host's stderr captures a
 // missing-recent-file warning without breaking the slice path.
 pub(crate) fn append_recent(key: &str, size: usize) {

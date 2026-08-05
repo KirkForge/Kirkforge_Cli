@@ -124,7 +124,7 @@ pub fn get_text_content_origin(text: &TextObject) -> Point {
 /// Width is the widest `\n`-separated line; height is the line count,
 /// plus the border's overhead row(s) for `Single`/`Double`.
 ///
-/// ponytail: ceil-only line stacking. The editor doesn't auto
+/// ponytail: ceil-only line stacking, upgrade to word-wrap if multi-line text editing needed. The editor doesn't auto
 /// word-wrap a long line into the next row — the user inserts
 /// `\n` (Shift+Enter) themselves. Auto-wrap is a future tick.
 pub fn get_text_render_rect(text: &TextObject) -> Rect {
@@ -174,7 +174,7 @@ pub fn get_text_selection_bounds(text: &TextObject) -> Rect {
 /// suffix after the last `\n` is the slice whose cell-width
 /// is the column.
 ///
-/// ponytail: byte index, not grapheme index. Inserting or
+/// ponytail: byte index, not grapheme index, upgrade to grapheme offsets if CJK input needed. Inserting or
 /// removing a single ASCII char is a 1-byte splice (the
 /// editor's text_edit_insert / text_edit_backspace use the
 /// same units). Multi-byte UTF-8 sequences (CJK, emoji) are
@@ -209,7 +209,7 @@ pub fn text_edit_cursor_position(text: &TextObject, buffer: &str, cursor_offset:
 /// Down at the last line), so the caller can leave the
 /// offset untouched without checking direction.
 ///
-/// ponytail: byte index, not cell index. The column is
+/// ponytail: byte index, not cell index, upgrade to cell offsets if wide characters needed. The column is
 /// measured in bytes (one ASCII char = one byte; CJK
 /// ideographs and emoji are 3–4 bytes). Pressing Down from
 /// column 5 in "abcde" to a shorter line "ab" puts the

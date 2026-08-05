@@ -53,7 +53,6 @@ const MAX_SSE_BUFFER_BYTES: usize = 8 * 1024 * 1024;
 
 /// Find the first occurrence of `needle` in `haystack`.
 
-
 pub(crate) async fn parse_openai_compat_stream<B, E, S>(
     tx: tokio::sync::mpsc::Sender<StreamEvent>,
     mut stream: S,

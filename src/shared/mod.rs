@@ -715,7 +715,11 @@ pub fn calculate_cost(model: &str, usage: &TokenUsage) -> f64 {
     let p = PRICING_TABLE
         .iter()
         .find(|p| !p.model_prefix.is_empty() && model.starts_with(p.model_prefix))
-        .unwrap_or_else(|| PRICING_TABLE.last().expect("PRICING_TABLE must not be empty"));
+        .unwrap_or_else(|| {
+            PRICING_TABLE
+                .last()
+                .expect("PRICING_TABLE must not be empty")
+        });
 
     // Cached tokens are billed at the discounted read rate; the rest of
     // the prompt at the regular input rate. Servers that don't

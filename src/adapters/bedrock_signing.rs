@@ -28,11 +28,7 @@ pub struct SignedRequest {
 }
 
 /// Sign a Bedrock InvokeModelWithResponseStream request.
-pub fn sign_request(
-    url: &str,
-    body: &[u8],
-    region: &str,
-) -> anyhow::Result<SignedRequest> {
+pub fn sign_request(url: &str, body: &[u8], region: &str) -> anyhow::Result<SignedRequest> {
     let creds = resolve_credentials()?;
     let session_token = creds.session_token().map(|s| s.to_string());
     let identity: Identity = creds.into();

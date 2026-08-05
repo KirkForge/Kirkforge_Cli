@@ -263,8 +263,6 @@ fn create_private_file(path: &Path) -> Result<()> {
     Ok(())
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;

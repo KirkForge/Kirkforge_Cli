@@ -498,7 +498,10 @@ async fn handle_content_block_start(
             // Anthropic streams `input: {}` at block start and then sends the
             // real JSON via `partial_json` deltas. Treat an empty object as no
             // initial input so accumulation starts from a clean string.
-            let input = block.get("input").cloned().filter(|v| !(v.as_object().map(|o| o.is_empty()).unwrap_or(false)));
+            let input = block
+                .get("input")
+                .cloned()
+                .filter(|v| !(v.as_object().map(|o| o.is_empty()).unwrap_or(false)));
             *pending = Some(PendingToolUse { id, name, input });
         }
         "text" => {
@@ -1619,8 +1622,6 @@ mod tests {
         assert_eq!(super::trim_ascii_whitespace(b"\n\tdata\r\n"), b"data");
         assert_eq!(trim_ascii_whitespace(b"   "), b"");
     }
-
-
 
     #[test]
     fn parse_usage_extracts_all_token_fields() {

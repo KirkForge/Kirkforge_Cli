@@ -208,20 +208,64 @@ mod tests {
         };
         // (label, ctor, expected name, thinking, tool_fmt, max_ctx, images)
         let cases: &[(&str, Ctor, &str, bool, ToolCallStyle, usize, bool)] = &[
-            ("glm", Ctor::Glm, "glm-5.1", true, ToolCallStyle::Native, 128_000, false),
-            ("deepseek", Ctor::Deepseek, "deepseek-v4", true, ToolCallStyle::Native, 64_000, false),
-            ("kimi", Ctor::Kimi, "kimi-2.7k-coder:cloud", true, ToolCallStyle::Native, 256_000, false),
-            ("gemini", Ctor::Gemini, "gemini-3.0-flash", false, ToolCallStyle::OpenAiCompat, 1_000_000, true),
+            (
+                "glm",
+                Ctor::Glm,
+                "glm-5.1",
+                true,
+                ToolCallStyle::Native,
+                128_000,
+                false,
+            ),
+            (
+                "deepseek",
+                Ctor::Deepseek,
+                "deepseek-v4",
+                true,
+                ToolCallStyle::Native,
+                64_000,
+                false,
+            ),
+            (
+                "kimi",
+                Ctor::Kimi,
+                "kimi-2.7k-coder:cloud",
+                true,
+                ToolCallStyle::Native,
+                256_000,
+                false,
+            ),
+            (
+                "gemini",
+                Ctor::Gemini,
+                "gemini-3.0-flash",
+                false,
+                ToolCallStyle::OpenAiCompat,
+                1_000_000,
+                true,
+            ),
         ];
 
         for (label, ctor, model, thinking, tool_fmt, max_ctx, images) in cases {
             let adapter = make(*ctor);
             let info = adapter.model_info();
             assert_eq!(info.name, *model, "{label}: name mismatch");
-            assert_eq!(info.supports_thinking, *thinking, "{label}: thinking mismatch");
-            assert_eq!(info.tool_call_format, *tool_fmt, "{label}: tool_call_format mismatch");
-            assert_eq!(info.max_context_tokens, *max_ctx, "{label}: max_context_tokens mismatch");
-            assert_eq!(info.supports_images, *images, "{label}: supports_images mismatch");
+            assert_eq!(
+                info.supports_thinking, *thinking,
+                "{label}: thinking mismatch"
+            );
+            assert_eq!(
+                info.tool_call_format, *tool_fmt,
+                "{label}: tool_call_format mismatch"
+            );
+            assert_eq!(
+                info.max_context_tokens, *max_ctx,
+                "{label}: max_context_tokens mismatch"
+            );
+            assert_eq!(
+                info.supports_images, *images,
+                "{label}: supports_images mismatch"
+            );
             assert!(!info.supports_cache, "{label}: supports_cache mismatch");
         }
     }

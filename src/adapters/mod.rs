@@ -373,7 +373,11 @@ pub fn adapter_for_with_provider(
                 || lower.starts_with("glm")
                 || lower.contains("chatglm")
             {
-                Box::new(oellama::OellamaAdapter::glm(ollama_host, model_name, timeout_secs))
+                Box::new(oellama::OellamaAdapter::glm(
+                    ollama_host,
+                    model_name,
+                    timeout_secs,
+                ))
             } else if override_lower.as_deref() == Some("deepseek") || lower.starts_with("deepseek")
             {
                 Box::new(oellama::OellamaAdapter::deepseek(

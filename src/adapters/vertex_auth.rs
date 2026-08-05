@@ -10,7 +10,6 @@
 
 use anyhow::Context;
 
-
 /// Request an access token for the configured service account.
 ///
 /// `service_account_path` is the user-configured path; if `None`, the

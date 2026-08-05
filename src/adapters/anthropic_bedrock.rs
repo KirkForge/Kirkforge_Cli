@@ -88,8 +88,7 @@ impl ModelAdapter for AnthropicBedrockAdapter {
         let body_bytes = serde_json::to_vec(&body)?;
         let url = self.endpoint();
 
-        let signed_request =
-            super::bedrock_signing::sign_request(&url, &body_bytes, &self.region)?;
+        let signed_request = super::bedrock_signing::sign_request(&url, &body_bytes, &self.region)?;
 
         let response = super::send_with_retry(|| async {
             self.client

@@ -5,6 +5,21 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Removed (dead code / over-engineering audit)
+- Collapsed four identical Oellama adapters (deepseek, gemini, glm, kimi) into one `OellamaAdapter` + profile table (−298 lines).
+- Deleted `key_file_looks_valid` + 7 tests from `vertex_auth` (zero non-test callers, −65 lines).
+- Deleted `EventKind::all()`, `VerifierSlots::unregister` + test, `send_reload` from jobs/client, `JobListEntry` + `From` impl, `tab_bar_spans`/`tab_bar_line`, 3 unused `impl Default`, `PRICING_FALLBACK` constant.
+- Inlined `is_empty_object` (1 caller) in `anthropic.rs`.
+- Promoted `find_subseq` + `trim_ascii_whitespace` from private copies in `anthropic.rs` and `openai_compat/mod.rs` to `pub(crate)` in `adapters/mod.rs`.
+- Deduplicated `wrap_cached` in `adapter_swap.rs` → calls `caching::maybe_wrap_cached`.
+- Eliminated `session_token()` in `bedrock_signing.rs` — reads from credentials instead of re-reading env var.
+- Dropped unused `_profile` param from `sign_request`, `profile` field from `AnthropicBedrockAdapter`.
+- Dropped unused `_model_info` param from `build_ollama_chat_body`.
+- Collapsed 20 bool env-override blocks into `env_bool!` macro (−41 lines).
+- Gated 5 test-only minify functions with `#[cfg(test)]`.
+- Inlined `register_if` (1 caller) in tool registry.
+- Skipped: `extract_host` → `url` crate (security-sensitive, behavior differences).
+
 ### Changed
 - Renamed the binary from `kf-code` to `kf-code`. All CLI invocations,
   env var prefixes (`KIRKFORGE_` → `KF_CODE_`), config/data directory

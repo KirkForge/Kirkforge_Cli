@@ -10,6 +10,16 @@
 
 | Phase | What | Key commit(s) |
 |---|---|---|
+| Audit | Collapsed 4 Oellama adapters into OellamaAdapter + profile table | `bd2db8a` |
+| Audit | Deleted key_file_looks_valid + 7 tests (dead code) | `43de4a6` |
+| Audit | env_bool! macro for 20 bool override blocks | `6408d26` |
+| Audit | Dropped _model_info param from build_ollama_chat_body | `9107c1f` |
+| Audit | Dedup find_subseq/trim_ascii_whitespace, inline is_empty_object, delete dead code | `cb56d8c` |
+| Audit | Batch: bedrock session_token, AnthropicBedrock profile, EventKind::all, unregister, send_reload, JobListEntry, tab_bar, Default impls, PRICING_FALLBACK, register_if, minify test gates | `d093c96` |
+| Audit | Clippy lint fixes | `0533319` |
+
+| Phase | What | Key commit(s) |
+|---|---|---|
 | 1+2 | Full `kirkforge` → `kf-code` rename + 16 crate renames | `ae0e37d` → `ccfbdb3` (6 commits) |
 | 3 | EventBus deleted (-1565 lines), direct verifier calls | `59a1a4a` |
 | 4 | Config drift guard: CONFIG_FIELD_COUNT + triple-copy test | `24417d1`, `13a355d`, `b1bfeb9` |

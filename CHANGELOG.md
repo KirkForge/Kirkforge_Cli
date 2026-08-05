@@ -5,6 +5,41 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- WO 17.1: per-provider API key resolution (`resolve_api_key` with config → env → keychain order) and Anthropic auth headers (`x-api-key` + `anthropic-version`).
+- WO 17.2: daemon instance channel (broadcast, auth, version gate). `DaemonServer` registers instances and broadcasts state changes over the Unix socket; `DaemonClient` authenticates with a token read from `KF_CODE_DAEMON_TOKEN_FILE`.
+- WO 17.3: daemon hardening — socket guard (refuses to hijack a live socket), auth token check on every request, version gate (rejects mismatched client versions), ownership check (socket must be owned by current UID), clean `QuitAll` + `Shutdown`.
+- WO 17.4: AST minification + surgical edit position map. JS files now use the dedicated `tree_sitter_javascript::LANGUAGE` grammar for minification and revalidation (not TSX). `MinifyCache` tracks byte-offset mappings so `edit_file` applies to original line numbers correctly after minification.
+- WO 17.5: stem-agents, shared cached context, cache breakpoints. `CacheStemTracker` reuses stable prompt prefixes across turns; LLM compaction config (`llm_compaction_model`, `llm_compaction_prompt`) for model-driven summarisation. `STEM_FILE_CAP` const and `Config::stem_file_cap` cross-referenced.
+- WO 17.6: workflow engine parity — `FanOut` parallel step execution with semaphore, `ForkFrom` for branching, typed variables, `run_bash` deny-list check, `ToolContext` cancellation + dry_run propagation.
+- WO 17.7: E2E test harness (`tests/e2e/`) with mock provider, `IsolatedEnv` sandbox, and per-task test runner. Session index alert persistence moved to `<data_dir>/sessions/`.
+- WO 17.8: jobs workflow integration — scheduled jobs can run workflow JSON steps; alert persistence writes to `<data_dir>/sessions/.alerts.ndjson`.
+- WO 17.9: TUI parity pass — top tab bar (Sessions, Jobs, Alerts tabs), interactive tab switching, `/` slash-command popup, `@` file-mention popup, welcome screen on first run.
+
+### Fixed (review-4)
+- Fix: `folded_feature_enabled` name mismatch — `"kf-plugin-sdk3"` → `"kf-budget"` (C1).
+- Fix: `computer_use` `evaluate` action now runs Chrome with `--proxy-server` blocking RFC1918/link-local and `--host-resolver-rules` mapping `*` to `~NOTFOUND` (C2).
+- Fix: `web_fetch` DNS rebinding — pin resolved IP and recheck after connect; percent-decode host before IP check (H1, H2).
+- Fix: per-plugin rlimits always applied regardless of `harden` flag; `PluginTool::from_capability()` populates `resource_limits` from manifest (H3).
+- Fix: `PluginTool` audit logging — `AuditEntry::PluginTool { name, args, exit_code, duration }` (H4).
+- Fix: jobs daemon auth token check on every request via `check_auth` (H5).
+- Fix: daemon client reads auth token from `KF_CODE_DAEMON_TOKEN_FILE`; `InstanceRegister` in TUI event reader sends the token (H7).
+- Fix: `ScheduledJob.timeout` enforcement — `registry.spawn` now passes `j.timeout` (H6).
+- Fix: Bedrock `envelope_buffer` capped at 8 MiB; multi-event chunks drain fully, not just the first frame (H9 — already fixed in WO 15.6, confirmed).
+- Fix: Vertex `service_account_token` returns error on empty token instead of sending `Authorization: Bearer ` (H22 — already fixed in WO 15.6, confirmed).
+- Fix: workflow `run_bash` routes through `check_bash_command_str` and `SandboxConfig` (M7).
+- Fix: workflow `ToolContext` propagates parent `CancellationToken` and `dry_run` (M8).
+- Fix: `VerifierSlots` max raised from 4 to 8 (M4).
+- Fix: verifier bus stubs removed — `SecurityBusVerifier` and `GitBusVerifier` deleted (M3).
+- Fix: `resolve_step_refs` uses char-aware indexing, not byte offsets (M12).
+- Fix: `format_verdict_report` slices at UTF-8 char boundary, not byte 23 (L1).
+- Fix: JS revalidation uses `tree_sitter_javascript::LANGUAGE` instead of TSX (L8).
+- Fix: `llm_compaction_summary` renamed to `deterministic_compaction_summary` (M1).
+- Fix: `MicrocompactResult::summarised_messages` dead-code `#[allow]` removed (M2).
+- Fix: `STEM_FILE_CAP` const (4096) and `Config::stem_file_cap` default (4096) cross-referenced with `ceiling:` note (M14).
+- Fix: alerts file moved from `<data_dir>/.alerts.ndjson` to `<data_dir>/sessions/.alerts.ndjson` (M16).
+- Fix: Clippy useless `.into()` conversions removed (6 instances) (L11).
+
 ### Removed (dead code / over-engineering audit)
 - Collapsed four identical Oellama adapters (deepseek, gemini, glm, kimi) into one `OellamaAdapter` + profile table (−298 lines).
 - Deleted `key_file_looks_valid` + 7 tests from `vertex_auth` (zero non-test callers, −65 lines).

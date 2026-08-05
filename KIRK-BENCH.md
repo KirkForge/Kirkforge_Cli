@@ -1,6 +1,6 @@
 # KIRK-BENCH
 
-KirkForge's benchmark spec. Eight categories, 40 tasks, one universal
+KirkForge's benchmark spec. Eight categories, 31 implemented tasks across 40 spec slots, one universal
 scoring format, 10 hero benchmarks, and one signature challenge — the
 **Token Budget Challenge** — that showcases the tree-sitter context
 index, Stratum compression, and the Plugin3 budget guard.
@@ -110,6 +110,29 @@ These are where commercial agents shine.
 38. **Time** — end-to-end latency.
 39. **Retry Count** — lower is better.
 40. **Human Intervention** — did the user need to step in?
+
+## Task TOML format
+
+Each task file in `benches/tasks/` is a TOML file. The required fields
+are `name` and `difficulty`; the `category` field maps the task to the
+spec categories above:
+
+```toml
+name = "fix_clippy_naming"
+difficulty = "easy"
+category = "C"            # A–H, matching the spec categories
+requires_model = false    # true = skipped by bench verify-only
+
+[setup]
+"Cargo.toml" = """..."""
+
+[verify]
+type = "command_exits_zero"
+command = "grep -q 'pub fn first' src/lib.rs"
+```
+
+The `category` field enables automated reporting by category. Tasks
+without a `category` field are reported under "Uncategorised".
 
 ## Universal scoring
 
@@ -259,4 +282,6 @@ workorder; the note names the feature it exercises.
 Honest deferral: the spec documents 40 tasks; this workorder (WO 14.7)
 builds the signature one (`token_budget_challenge`) and maps the
 existing 31 task files (covering 18 of 40 spec slots). The remaining
-19 spec tasks are future WOs; 3 more have no mapping yet.
+22 spec slots are not yet implemented (19 planned as future WOs + 3
+with no mapping: Fix Compilation Error, Fix Integration Test, Implement
+Missing Trait).

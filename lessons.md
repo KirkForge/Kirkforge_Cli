@@ -29,6 +29,6 @@
 - The main branch (dev2) has all completed work merged cleanly
 
 ## Git state
-- Main work is on branch `dev2` at commit a4474da
+- Main work is on branch `dev2` at commit 8e116f9
 - Phase 4 (config) worktree was reset due to broken macro code
 - All other phases are merged

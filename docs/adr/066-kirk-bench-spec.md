@@ -7,12 +7,12 @@
 
 The bench harness (ADR-038) was built incrementally (WO 6.1 → 9.9)
 by adding tasks that exercised specific features (plugin tools,
-multi-file patterns, PR review). It grew to 30 ad-hoc tasks but
+multi-file patterns, PR review). It grew to 31 ad-hoc tasks but
 never adopted a *spec*: no `KIRK-BENCH.md` defining the category
 taxonomy, the universal scoring format, or a signature challenge.
 
 The Pass-14 REVIEW gave KirkForge an "A" on Bench/Measurement — the
-only product of the four with a published bench (30 tasks,
+only product of the four with a published bench (31 tasks,
 multi-model leaderboard, PR-delta CI gate). But the differentiator
 benchmark the architecture was built for — one that showcases the
 tree-sitter context index + Stratum compression + Plugin3 budget
@@ -28,8 +28,7 @@ you'll have something more compelling than 'we support more providers.'"
    Repository Understanding, B Refactoring, C Bug Fixes, D New
    Features, E Verification, F Context Intelligence, G Real
    Engineering, H Cost), 40 numbered tasks, one universal scoring
-   block, 10 hero benchmarks. The 30 pre-existing tasks (31 once the
-   signature challenge below ships) are mapped to the spec categories
+   block, 10 hero benchmarks. The 31 pre-existing tasks are mapped to the spec categories
    in a table — many-to-one, so they cover a subset of the 40 slots;
    19 spec tasks have no existing implementation and are listed as
    "planned" (honest deferral — they are future WOs, not built here).
@@ -61,7 +60,7 @@ you'll have something more compelling than 'we support more providers.'"
    `BenchReport`; the dedicated `BudgetChallengeReport` (markdown
    table) is the public scoreboard artifact.
 
-5. **Do NOT gate the 30 existing tasks on the new spec.** They keep
+5. **Do NOT gate the 31 existing tasks on the new spec.** They keep
    their current verify specs. The spec is organization, not a
    rewrite mandate.
 
@@ -69,7 +68,7 @@ you'll have something more compelling than 'we support more providers.'"
 
 - `KIRK-BENCH.md` is the durable spec artifact; the task
   implementations come after. This WO builds the signature one +
-  maps the existing 30.
+  maps the existing 31.
 - `BenchTask` gains a serde-optional `budget_ceiling` field; existing
   task TOML files parse unchanged (default `None`).
 - `TaskResult` gains a serde-optional `compression_passes` field

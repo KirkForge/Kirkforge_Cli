@@ -23,7 +23,7 @@ async fn tui_chat_sends_message_and_sees_response() {
     }
 
     let mock = MockProvider::start(vec![Reply::text("Hello from mock!")]).await;
-    let mut env = IsolatedEnv::new(&mock.url(), "e2e-test-model");
+    let env = IsolatedEnv::new(&mock.url(), "e2e-test-model");
     fixtures::seed_config_auto_approve(&env.data_dir(), &mock.url(), "e2e-test-model");
 
     let socket = env.data_dir().join("e2e-tui.sock");
@@ -40,8 +40,7 @@ async fn tui_chat_sends_message_and_sees_response() {
     .expect("e2e: start tmux session");
 
     // Wait for the TUI to render a prompt indicator.
-    let pane = ui
-        .wait_for_contains(">", Duration::from_secs(10), Duration::from_millis(500))
+    ui.wait_for_contains(">", Duration::from_secs(10), Duration::from_millis(500))
         .expect("e2e: TUI did not render within 10s");
 
     // The mock sends "Hello from mock!" when it receives any chat message.

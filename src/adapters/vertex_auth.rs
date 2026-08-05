@@ -9,7 +9,7 @@
 //! Credentials) flow is an extension point for a future iteration.
 
 use anyhow::Context;
-use std::path::Path;
+
 
 /// Request an access token for the configured service account.
 ///
@@ -47,73 +47,9 @@ pub async fn service_account_token(
         .to_string())
 }
 
-/// Verify that a service-account key file is readable JSON with the GCP
-/// service-account discriminator (`"type": "service_account"`). Rejects
-/// arbitrary JSON (arrays, objects without the type, etc.) so a misplaced
-/// non-key file doesn't silently flow into the authenticator.
-pub fn key_file_looks_valid(path: &Path) -> bool {
-    let Ok(content) = std::fs::read_to_string(path) else {
-        return false;
-    };
-    let Ok(serde_json::Value::Object(map)) = serde_json::from_str::<serde_json::Value>(&content)
-    else {
-        return false;
-    };
-    map.get("type").and_then(|v| v.as_str()) == Some("service_account")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
-
-    #[test]
-    fn key_file_looks_valid_accepts_real_json() {
-        let mut tmp = tempfile::NamedTempFile::new().unwrap();
-        tmp.write_all(b"{\"type\":\"service_account\"}").unwrap();
-        assert!(key_file_looks_valid(tmp.path()));
-    }
-
-    #[test]
-    fn key_file_looks_valid_rejects_garbage() {
-        let mut tmp = tempfile::NamedTempFile::new().unwrap();
-        tmp.write_all(b"not json").unwrap();
-        assert!(!key_file_looks_valid(tmp.path()));
-    }
-
-    #[test]
-    fn key_file_looks_valid_rejects_missing_file() {
-        let path = std::path::PathBuf::from("/tmp/definitely-does-not-exist-key.json");
-        assert!(!key_file_looks_valid(&path));
-    }
-
-    #[test]
-    fn key_file_looks_valid_rejects_array_json() {
-        let mut tmp = tempfile::NamedTempFile::new().unwrap();
-        tmp.write_all(b"[1, 2, 3]").unwrap();
-        assert!(!key_file_looks_valid(tmp.path()));
-    }
-
-    #[test]
-    fn key_file_looks_valid_rejects_empty_object() {
-        let mut tmp = tempfile::NamedTempFile::new().unwrap();
-        tmp.write_all(b"{}").unwrap();
-        assert!(!key_file_looks_valid(tmp.path()));
-    }
-
-    #[test]
-    fn key_file_looks_valid_rejects_wrong_type() {
-        let mut tmp = tempfile::NamedTempFile::new().unwrap();
-        tmp.write_all(b"{\"type\":\"authorized_user\"}").unwrap();
-        assert!(!key_file_looks_valid(tmp.path()));
-    }
-
-    #[test]
-    fn key_file_looks_valid_rejects_empty_file() {
-        let mut tmp = tempfile::NamedTempFile::new().unwrap();
-        tmp.write_all(b"").unwrap();
-        assert!(!key_file_looks_valid(tmp.path()));
-    }
 
     #[tokio::test]
     async fn service_account_token_fails_without_path_or_env() {

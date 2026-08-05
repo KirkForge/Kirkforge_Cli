@@ -172,10 +172,9 @@ pub fn all_tools(ctx: &ToolContextBuilder) -> Vec<Arc<dyn Tool>> {
     registry.register(Arc::new(TodoRead::new(todo_state)));
 
     // Conditionally registered tools.
-    registry.register_if(
-        ctx.supports_images,
-        Arc::new(ReadImage::new(ctx.path_guard.clone())),
-    );
+    if ctx.supports_images {
+        registry.register(Arc::new(ReadImage::new(ctx.path_guard.clone())));
+    }
 
     if let Some(pool) = ctx.lsp_pool.clone() {
         registry.register(Arc::new(LspQuery::new(pool, ctx.path_guard.clone())));

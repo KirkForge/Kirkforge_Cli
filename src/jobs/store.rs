@@ -10,7 +10,6 @@
 use crate::jobs::schedule::{JobRunSummary, ScheduledJob};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::Write;
 #[cfg(unix)]
@@ -264,40 +263,7 @@ fn create_private_file(path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// A serialisable, disk-friendly summary of a scheduled job used for the
-/// store's top-level list. This mirrors most of [`ScheduledJob`] but omits
-/// internal state not needed for quick listing.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct JobListEntry {
-    pub id: String,
-    pub created_at: DateTime<Utc>,
-    pub schedule_kind: String,
-    pub kind: String,
-    pub enabled: bool,
-    pub next_run: Option<DateTime<Utc>>,
-    pub last_run_status: Option<String>,
-}
 
-impl From<&ScheduledJob> for JobListEntry {
-    fn from(job: &ScheduledJob) -> Self {
-        Self {
-            id: job.id.clone(),
-            created_at: job.created_at,
-            schedule_kind: match job.schedule {
-                crate::jobs::schedule::ScheduleSpec::Cron(_) => "cron".into(),
-                crate::jobs::schedule::ScheduleSpec::Once(_) => "once".into(),
-                crate::jobs::schedule::ScheduleSpec::Restart => "restart".into(),
-            },
-            kind: match job.kind {
-                crate::jobs::schedule::JobKind::Bash { .. } => "bash".into(),
-                crate::jobs::schedule::JobKind::Skill { .. } => "skill".into(),
-            },
-            enabled: job.enabled,
-            next_run: job.next_run,
-            last_run_status: job.last_run.as_ref().map(|r| r.status.label().to_string()),
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {

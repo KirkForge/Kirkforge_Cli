@@ -23,7 +23,6 @@ use super::ModelAdapter;
 pub struct AnthropicBedrockAdapter {
     model_id: String,
     region: String,
-    profile: String,
     client: reqwest::Client,
     json_mode: bool,
     seed: Option<u64>,
@@ -31,11 +30,10 @@ pub struct AnthropicBedrockAdapter {
 }
 
 impl AnthropicBedrockAdapter {
-    pub fn new(model_id: &str, region: &str, profile: &str, timeout_secs: u64) -> Self {
+    pub fn new(model_id: &str, region: &str, timeout_secs: u64) -> Self {
         Self {
             model_id: model_id.to_string(),
             region: region.to_string(),
-            profile: profile.to_string(),
             client: super::build_reqwest_client(),
             json_mode: false,
             seed: None,
@@ -91,7 +89,7 @@ impl ModelAdapter for AnthropicBedrockAdapter {
         let url = self.endpoint();
 
         let signed_request =
-            super::bedrock_signing::sign_request(&url, &body_bytes, &self.region, &self.profile)?;
+            super::bedrock_signing::sign_request(&url, &body_bytes, &self.region)?;
 
         let response = super::send_with_retry(|| async {
             self.client
@@ -209,7 +207,7 @@ mod tests {
 
     #[test]
     fn endpoint_includes_region_and_model() {
-        let a = AnthropicBedrockAdapter::new("anthropic.claude-3-5-sonnet-v1", "us-west-2", "", 30);
+        let a = AnthropicBedrockAdapter::new("anthropic.claude-3-5-sonnet-v1", "us-west-2", 30);
         assert_eq!(
             a.endpoint(),
             "https://bedrock-runtime.us-west-2.amazonaws.com/model/anthropic.claude-3-5-sonnet-v1/invoke-with-response-stream"
@@ -218,13 +216,13 @@ mod tests {
 
     #[test]
     fn model_info_reports_image_support_for_claude3() {
-        let a = AnthropicBedrockAdapter::new("anthropic.claude-3-opus-v1", "us-east-1", "", 30);
+        let a = AnthropicBedrockAdapter::new("anthropic.claude-3-opus-v1", "us-east-1", 30);
         assert!(a.model_info().supports_images);
     }
 
     #[test]
     fn model_info_reports_no_images_for_unknown() {
-        let a = AnthropicBedrockAdapter::new("my-model", "us-east-1", "", 30);
+        let a = AnthropicBedrockAdapter::new("my-model", "us-east-1", 30);
         assert!(!a.model_info().supports_images);
     }
 
@@ -242,13 +240,13 @@ mod tests {
 
     #[test]
     fn endpoint_includes_invoke_with_response_stream_path() {
-        let a = AnthropicBedrockAdapter::new("anthropic.claude-3-opus", "eu-west-1", "", 30);
+        let a = AnthropicBedrockAdapter::new("anthropic.claude-3-opus", "eu-west-1", 30);
         assert!(a.endpoint().ends_with("/invoke-with-response-stream"));
     }
 
     #[test]
     fn endpoint_for_us_east_1_region() {
-        let a = AnthropicBedrockAdapter::new("anthropic.claude-3-5-sonnet", "us-east-1", "", 30);
+        let a = AnthropicBedrockAdapter::new("anthropic.claude-3-5-sonnet", "us-east-1", 30);
         assert!(a
             .endpoint()
             .contains("bedrock-runtime.us-east-1.amazonaws.com"));
@@ -256,43 +254,43 @@ mod tests {
 
     #[test]
     fn model_info_reasoning_for_claude_3_7() {
-        let a = AnthropicBedrockAdapter::new("anthropic.claude-3-7-sonnet", "us-east-1", "", 30);
+        let a = AnthropicBedrockAdapter::new("anthropic.claude-3-7-sonnet", "us-east-1", 30);
         assert!(a.model_info().supports_thinking);
     }
 
     #[test]
     fn model_info_reasoning_for_claude_4() {
-        let a = AnthropicBedrockAdapter::new("anthropic.claude-4-opus", "us-east-1", "", 30);
+        let a = AnthropicBedrockAdapter::new("anthropic.claude-4-opus", "us-east-1", 30);
         assert!(a.model_info().supports_thinking);
     }
 
     #[test]
     fn model_info_no_thinking_for_claude_3_5() {
-        let a = AnthropicBedrockAdapter::new("anthropic.claude-3-5-sonnet", "us-east-1", "", 30);
+        let a = AnthropicBedrockAdapter::new("anthropic.claude-3-5-sonnet", "us-east-1", 30);
         assert!(!a.model_info().supports_thinking);
     }
 
     #[test]
     fn model_info_anthropic_tool_call_format() {
-        let a = AnthropicBedrockAdapter::new("anthropic.claude-3-opus", "us-east-1", "", 30);
+        let a = AnthropicBedrockAdapter::new("anthropic.claude-3-opus", "us-east-1", 30);
         assert_eq!(a.model_info().tool_call_format, ToolCallStyle::Anthropic);
     }
 
     #[test]
     fn model_info_supports_cache() {
-        let a = AnthropicBedrockAdapter::new("anthropic.claude-3-opus", "us-east-1", "", 30);
+        let a = AnthropicBedrockAdapter::new("anthropic.claude-3-opus", "us-east-1", 30);
         assert!(a.model_info().supports_cache);
     }
 
     #[test]
     fn model_info_max_context_tokens() {
-        let a = AnthropicBedrockAdapter::new("anthropic.claude-3-opus", "us-east-1", "", 30);
+        let a = AnthropicBedrockAdapter::new("anthropic.claude-3-opus", "us-east-1", 30);
         assert_eq!(a.model_info().max_context_tokens, 200_000);
     }
 
     #[test]
     fn set_json_mode_toggles_flag() {
-        let mut a = AnthropicBedrockAdapter::new("anthropic.claude-3-opus", "us-east-1", "", 30);
+        let mut a = AnthropicBedrockAdapter::new("anthropic.claude-3-opus", "us-east-1", 30);
         assert!(!a.json_mode);
         a.set_json_mode(true);
         assert!(a.json_mode);
@@ -300,7 +298,7 @@ mod tests {
 
     #[test]
     fn set_seed_sets_value() {
-        let mut a = AnthropicBedrockAdapter::new("anthropic.claude-3-opus", "us-east-1", "", 30);
+        let mut a = AnthropicBedrockAdapter::new("anthropic.claude-3-opus", "us-east-1", 30);
         assert!(a.seed.is_none());
         a.set_seed(Some(99));
         assert_eq!(a.seed, Some(99));

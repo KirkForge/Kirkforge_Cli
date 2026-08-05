@@ -18,4 +18,4 @@ pub mod store;
 #[cfg(unix)]
 pub use daemon::run_job_daemon;
 pub use schedule::*;
-pub use store::{JobListEntry, JobStore, RunPaths};
+pub use store::{JobStore, RunPaths};

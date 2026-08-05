@@ -94,39 +94,35 @@ fn minify_source_impl(path: &Path, content: &str, preserve_tests: bool) -> Strin
 }
 
 /// Clear the VFS minification cache.
+#[cfg(test)]
 pub fn clear_minify_cache() {
     let mut cache = VFS_CACHE.lock().unwrap_or_else(|e| e.into_inner());
     cache.clear();
 }
 
 /// Remove cache entries for a specific file path.
+#[cfg(test)]
 pub fn invalidate_minify_cache(path: &Path) {
     let mut cache = VFS_CACHE.lock().unwrap_or_else(|e| e.into_inner());
     cache.retain(|(p, _), _| p != path);
 }
 
 /// Get current cache size.
+#[cfg(test)]
 pub fn minify_cache_size() -> usize {
     let cache = VFS_CACHE.lock().unwrap_or_else(|e| e.into_inner());
     cache.len()
 }
 
 /// Check whether the cache contains an entry for `path`.
-///
-/// Scans the cache by path only (not mtime) so the check is robust
-/// against mtime resolution races: on Windows a file written and then
-/// re-stat'd within the same second can report the same mtime, but a
-/// check that straddles a second boundary sees a different mtime and
-/// misses the entry. The path-only scan is the deterministic contract
-/// the tests rely on ("is there ANY cache entry for this path?").
-///
-/// Returns `false` if no entry exists for the path.
+#[cfg(test)]
 pub fn cache_contains(path: &Path) -> bool {
     let cache = VFS_CACHE.lock().unwrap_or_else(|e| e.into_inner());
     cache.keys().any(|(p, _)| p == path)
 }
 
 /// Estimate token savings from minification. 1 token ≈ 4 chars for code.
+#[cfg(test)]
 pub fn savings_estimate(original: &str, minified: &str) -> (usize, f64) {
     let orig_chars = original.len();
     let min_chars = minified.len();

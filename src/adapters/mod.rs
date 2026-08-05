@@ -423,7 +423,6 @@ pub fn adapter_for_with_provider(
             Box::new(anthropic_bedrock::AnthropicBedrockAdapter::new(
                 model_name,
                 "us-east-1",
-                "",
                 timeout_secs,
             ))
         }

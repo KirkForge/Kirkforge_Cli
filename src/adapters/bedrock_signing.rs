@@ -32,9 +32,9 @@ pub fn sign_request(
     url: &str,
     body: &[u8],
     region: &str,
-    _profile: &str,
 ) -> anyhow::Result<SignedRequest> {
     let creds = resolve_credentials()?;
+    let session_token = creds.session_token().map(|s| s.to_string());
     let identity: Identity = creds.into();
     let signing_params = v4::SigningParams::builder()
         .identity(&identity)
@@ -52,7 +52,7 @@ pub fn sign_request(
         .header("content-type", "application/json")
         .header("x-amz-content-sha256", sha256_hex(body));
 
-    if let Some(token) = session_token() {
+    if let Some(token) = session_token {
         request_builder = request_builder.header("x-amz-security-token", token);
     }
 
@@ -134,10 +134,6 @@ fn resolve_credentials() -> anyhow::Result<AwsCredentials> {
     ))
 }
 
-fn session_token() -> Option<String> {
-    std::env::var("AWS_SESSION_TOKEN").ok()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -198,31 +194,6 @@ mod tests {
     #[test]
     fn host_header_fails_for_url_without_host() {
         assert!(host_header("file:///local/path").is_err());
-    }
-
-    #[test]
-    fn session_token_reads_from_env() {
-        let _guard = env_lock().lock().unwrap();
-        let key = "AWS_SESSION_TOKEN";
-        let prev = std::env::var(key).ok();
-        std::env::set_var(key, "test-token-value");
-        assert_eq!(session_token(), Some("test-token-value".to_string()));
-        match prev {
-            Some(v) => std::env::set_var(key, v),
-            None => std::env::remove_var(key),
-        }
-    }
-
-    #[test]
-    fn session_token_returns_none_when_unset() {
-        let _guard = env_lock().lock().unwrap();
-        let key = "AWS_SESSION_TOKEN";
-        let prev = std::env::var(key).ok();
-        std::env::remove_var(key);
-        assert_eq!(session_token(), None);
-        if let Some(v) = prev {
-            std::env::set_var(key, v)
-        }
     }
 
     #[test]
@@ -299,7 +270,7 @@ mod tests {
         std::env::remove_var(session_key);
         let url = "https://bedrock-runtime.us-east-1.amazonaws.com/model/test/invoke-with-response-stream";
         let body = b"{\"hello\":\"world\"}";
-        let signed = sign_request(url, body, "us-east-1", "").unwrap();
+        let signed = sign_request(url, body, "us-east-1").unwrap();
         assert_eq!(signed.method, reqwest::Method::POST);
         assert_eq!(signed.url, url);
         assert!(signed.headers.contains_key("authorization"));
@@ -333,7 +304,7 @@ mod tests {
         std::env::set_var(session_key, "mysessiontoken");
         let url =
             "https://bedrock-runtime.us-east-1.amazonaws.com/model/x/invoke-with-response-stream";
-        let signed = sign_request(url, b"{}", "us-east-1", "").unwrap();
+        let signed = sign_request(url, b"{}", "us-east-1").unwrap();
         assert!(signed.headers.contains_key("x-amz-security-token"));
         match prev_access {
             Some(v) => std::env::set_var(access_key, v),
@@ -358,7 +329,7 @@ mod tests {
         let prev_secret = std::env::var(secret_key).ok();
         std::env::set_var(access_key, "AKIATEST");
         std::env::set_var(secret_key, "secretkey");
-        assert!(sign_request("not a url", b"{}", "us-east-1", "").is_err());
+        assert!(sign_request("not a url", b"{}", "us-east-1").is_err());
         match prev_access {
             Some(v) => std::env::set_var(access_key, v),
             None => std::env::remove_var(access_key),

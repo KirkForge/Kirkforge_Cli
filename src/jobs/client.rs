@@ -14,12 +14,6 @@ pub async fn send_shutdown(socket_path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Ask the daemon to reload jobs from disk.
-pub async fn send_reload(socket_path: &Path) -> Result<()> {
-    send_command(socket_path, Request::List).await?;
-    Ok(())
-}
-
 /// Send a control command and wait for a one-line response.
 async fn send_command(socket_path: &Path, request: Request) -> Result<Response> {
     let stream = UnixStream::connect(socket_path)

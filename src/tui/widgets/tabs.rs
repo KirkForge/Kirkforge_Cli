@@ -4,7 +4,7 @@
 //! chunk of the vertical layout). The status bar at the bottom shows
 //! which tab is active.
 
-use crate::tui::app::{ActiveTab, AppState};
+use crate::tui::app::AppState;
 use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
@@ -12,32 +12,6 @@ use ratatui::{
     widgets::{Paragraph, Wrap},
     Frame,
 };
-
-/// Render the tab bar into the status line, showing F1–F5 labels
-/// with the active tab highlighted.
-fn tab_bar_spans(active: ActiveTab) -> Vec<Span<'static>> {
-    let mut spans = Vec::new();
-    for (i, tab) in ActiveTab::ALL.iter().enumerate() {
-        if i > 0 {
-            spans.push(Span::styled(" ", Style::default()));
-        }
-        let label = tab.label();
-        let style = if *tab == active {
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Color::DarkGray)
-        };
-        spans.push(Span::styled(label, style));
-    }
-    spans
-}
-
-/// Return the tab bar as a `Line` for embedding in the status bar.
-pub fn tab_bar_line(active: ActiveTab) -> Line<'static> {
-    Line::from(tab_bar_spans(active))
-}
 
 /// Render the Models tab (F2).
 ///

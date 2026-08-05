@@ -37,6 +37,7 @@ pub struct ToolContextBuilder {
 ///     .register(Arc::new(Bash::new(...)))
 ///     .build();
 /// ```
+#[allow(clippy::new_without_default)]
 pub struct ToolRegistry {
     tools: Vec<Arc<dyn Tool>>,
 }
@@ -51,22 +52,7 @@ impl ToolRegistry {
         self
     }
 
-    /// Conditionally register a tool, returning `&mut Self` for chaining.
-    /// If `condition` is false, the tool is silently skipped.
-    pub fn register_if(&mut self, condition: bool, tool: Arc<dyn Tool>) -> &mut Self {
-        if condition {
-            self.tools.push(tool);
-        }
-        self
-    }
-
     pub fn build(self) -> Vec<Arc<dyn Tool>> {
         self.tools
-    }
-}
-
-impl Default for ToolRegistry {
-    fn default() -> Self {
-        Self::new()
     }
 }

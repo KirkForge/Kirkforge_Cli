@@ -1,6 +1,7 @@
 pub mod anthropic;
 pub mod anthropic_bedrock;
 pub mod anthropic_vertex;
+pub mod auth;
 pub mod bedrock_signing;
 pub mod cache;
 pub mod caching;
@@ -324,6 +325,17 @@ pub trait ModelAdapter: Send + Sync {
 #[cfg(test)]
 mod m5_tests;
 
+/// Per-provider API keys resolved from config, passed to
+/// [`adapter_for_with_provider`] so each adapter can authenticate.
+#[derive(Debug, Clone, Default)]
+pub struct ProviderApiKeys {
+    pub anthropic: Option<String>,
+    pub openai: Option<String>,
+    pub deepseek: Option<String>,
+    pub gemini: Option<String>,
+    pub kimi: Option<String>,
+}
+
 /// Build the right adapter from a model name string.
 pub fn adapter_for(
     model_name: &str,
@@ -340,6 +352,7 @@ pub fn adapter_for(
         "https://opencode.ai/zen/v1/chat/completions",
         None,
         None,
+        &ProviderApiKeys::default(),
     )
 }
 
@@ -355,6 +368,7 @@ pub fn adapter_for_with_provider(
     opencode_zen_endpoint: &str,
     opencode_zen_api_key: Option<&str>,
     adapter_routing: Option<&HashMap<String, String>>,
+    api_keys: &ProviderApiKeys,
 ) -> Box<dyn ModelAdapter> {
     let override_lower = model_type_override.map(|s| s.to_lowercase());
     match adapter_kind_for_routed(
@@ -421,6 +435,7 @@ pub fn adapter_for_with_provider(
             ollama_host,
             model_name,
             timeout_secs,
+            api_keys.anthropic.clone(),
         )),
         AdapterKind::AnthropicBedrock => {
             // Bedrock credentials come from env at request time, not here.
@@ -599,17 +614,26 @@ fn build_openai_compat_body(
     // last 2 of the prefix — Anthropic-style and OpenAI's
     // `gpt-4o`/`gpt-5` series both accept the marker, and a small
     // breakpoint at the tail covers the longest stable stretch.
+    //
+    // WO 17.5: we also add a tail breakpoint on the last user message
+    // so the growing conversation tail is cached for the next turn,
+    // and a system+tools breakpoint on the first message (system) if
+    // it's a system message.
     let mut cache_marker_indices: std::collections::HashSet<usize> =
         std::collections::HashSet::new();
     if model_info.supports_cache && messages.len() > 1 {
-        // Skip the last message (the user turn) and the system
-        // message (index 0 after assembly — but here we just have the
-        // `messages` slice as passed in, so "all but the last"). Mark
-        // the last 2 of that range.
+        // System+tools breakpoint: mark the first message (system prompt)
+        // so the static prefix is cached.
+        if !messages.is_empty() && matches!(messages[0].role, crate::shared::Role::System) {
+            cache_marker_indices.insert(0);
+        }
+        // Last 2 of the prefix (excluding trailing user turn).
         let prefix_end = messages.len() - 1;
         for i in prefix_end.saturating_sub(2)..prefix_end {
             cache_marker_indices.insert(i);
         }
+        // Tail breakpoint: last user message (WO 17.5).
+        cache_marker_indices.insert(messages.len() - 1);
     }
 
     let oai_messages: Vec<serde_json::Value> = messages
@@ -915,6 +939,7 @@ mod tests {
             "https://opencode.ai/zen/v1/chat/completions",
             None,
             None,
+            &ProviderApiKeys::default(),
         );
         assert_eq!(adapter.model_info().name, "anthropic.claude-3-5-sonnet");
         assert!(adapter.model_info().tool_call_format == crate::shared::ToolCallStyle::Anthropic);
@@ -1053,6 +1078,7 @@ mod tests {
             "https://opencode.ai/zen/v1/chat/completions",
             None,
             None,
+            &ProviderApiKeys::default(),
         );
         assert_eq!(adapter.model_info().name, "claude-3-opus");
         assert_eq!(
@@ -1072,6 +1098,7 @@ mod tests {
             "https://opencode.ai/zen/v1/chat/completions",
             None,
             None,
+            &ProviderApiKeys::default(),
         );
         assert_eq!(adapter.model_info().name, "claude-3-opus");
     }
@@ -1087,6 +1114,7 @@ mod tests {
             "https://opencode.ai/zen/v1/chat/completions",
             Some("test-key"),
             None,
+            &ProviderApiKeys::default(),
         );
         assert_eq!(adapter.model_info().name, "big-pickle");
     }
@@ -1102,6 +1130,7 @@ mod tests {
             "https://opencode.ai/zen/v1/chat/completions",
             None,
             None,
+            &ProviderApiKeys::default(),
         );
         assert_eq!(adapter.model_info().name, "big-pickle");
     }
@@ -1117,6 +1146,7 @@ mod tests {
             "https://opencode.ai/zen/v1/chat/completions",
             None,
             None,
+            &ProviderApiKeys::default(),
         );
         assert!(adapter.model_info().supports_thinking);
     }
@@ -1132,6 +1162,7 @@ mod tests {
             "https://opencode.ai/zen/v1/chat/completions",
             None,
             None,
+            &ProviderApiKeys::default(),
         );
         assert!(adapter.model_info().supports_thinking);
     }
@@ -1147,6 +1178,7 @@ mod tests {
             "https://opencode.ai/zen/v1/chat/completions",
             None,
             None,
+            &ProviderApiKeys::default(),
         );
         assert!(adapter.model_info().supports_images);
     }
@@ -1162,6 +1194,7 @@ mod tests {
             "https://opencode.ai/zen/v1/chat/completions",
             None,
             None,
+            &ProviderApiKeys::default(),
         );
         assert_eq!(adapter.model_info().name, "my-model");
     }
@@ -1467,6 +1500,57 @@ mod tests {
             None,
         );
         assert!(body["messages"][0].get("cache_control").is_none());
+    }
+
+    /// WO 17.5: OpenAI compat adapter adds a tail breakpoint on the
+    /// last user message and a system breakpoint on the first message.
+    #[test]
+    fn build_openai_compat_body_system_and_tail_breakpoints() {
+        let mi = crate::shared::ModelInfo {
+            name: "m".into(),
+            supports_thinking: false,
+            tool_call_format: crate::shared::ToolCallStyle::OpenAiCompat,
+            max_context_tokens: 4096,
+            recommended_temperature: 0.7,
+            supports_images: false,
+            supports_cache: true,
+        };
+        let messages = vec![
+            crate::shared::Message {
+                role: Role::System,
+                content: "sys".into(),
+                ..Default::default()
+            },
+            crate::shared::Message {
+                role: Role::User,
+                content: "ask".into(),
+                ..Default::default()
+            },
+            crate::shared::Message {
+                role: Role::Assistant,
+                content: "reply".into(),
+                ..Default::default()
+            },
+            crate::shared::Message {
+                role: Role::User,
+                content: "followup".into(),
+                ..Default::default()
+            },
+        ];
+        let body = build_openai_compat_body("m", &mi, &messages, &[], false, None);
+        let msgs = body["messages"].as_array().unwrap();
+        // System message (index 0) should have cache_control (system+tools breakpoint).
+        assert_eq!(
+            msgs[0]["cache_control"],
+            serde_json::json!({"type": "ephemeral"}),
+            "system message must have cache breakpoint (WO 17.5)"
+        );
+        // Last user message (index 3) should have cache_control (tail breakpoint).
+        assert_eq!(
+            msgs[3]["cache_control"],
+            serde_json::json!({"type": "ephemeral"}),
+            "last user message must have tail breakpoint (WO 17.5)"
+        );
     }
 
     #[test]

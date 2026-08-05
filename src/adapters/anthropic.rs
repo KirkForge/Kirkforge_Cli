@@ -28,6 +28,7 @@ const ANTHROPIC_VERSION: &str = "2023-06-01";
 pub struct AnthropicAdapter {
     model: String,
     api_base: String,
+    api_key: Option<String>,
     client: reqwest::Client,
     json_mode: bool,
     seed: Option<u64>,
@@ -35,10 +36,11 @@ pub struct AnthropicAdapter {
 }
 
 impl AnthropicAdapter {
-    pub fn new(api_base: &str, model: &str, timeout_secs: u64) -> Self {
+    pub fn new(api_base: &str, model: &str, timeout_secs: u64, api_key: Option<String>) -> Self {
         Self {
             model: model.to_string(),
             api_base: api_base.trim_end_matches('/').to_string(),
+            api_key,
             client: super::build_reqwest_client(),
             json_mode: false,
             seed: None,
@@ -81,12 +83,19 @@ impl ModelAdapter for AnthropicAdapter {
         messages: &[Message],
         tools: &[crate::shared::ToolDef],
     ) -> anyhow::Result<tokio::sync::mpsc::Receiver<StreamEvent>> {
+        let api_key = super::auth::resolve_api_key("anthropic", self.api_key.as_deref())
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "no Anthropic API key set (ANTHROPIC_API_KEY or [model].anthropic_api_key)"
+                )
+            })?;
         let body = build_anthropic_body(&self.model, messages, tools, self.json_mode, self.seed);
         let url = format!("{}/v1/messages", self.api_base);
 
         let response = super::send_with_retry(|| async {
             self.client
                 .post(&url)
+                .header("x-api-key", &api_key)
                 .header("anthropic-version", ANTHROPIC_VERSION)
                 .header("content-type", "application/json")
                 .json(&body)
@@ -179,11 +188,16 @@ pub(crate) fn build_anthropic_body(
         anthropic_messages.push(content);
     }
 
-    // Apply cache breakpoints to the last two prefix messages.
-    // The trailing user turn changes every time; don't cache it.
-    // Anthropic allows `cache_control` on the *last* block of a message's
-    // `content` array. We also skip the very first user message to keep the
-    // prefix stable at the natural boundary after the system prompt.
+    // Apply cache breakpoints:
+    // 1. System+tools breakpoint: the last system block already has
+    //    cache_control (set above). We also add cache_control to the
+    //    last tool definition so the entire system+tools prefix is
+    //    cached as a single unit (WO 17.5).
+    // 2. Last two prefix messages: existing markers preserved for
+    //    mid-conversation cache hits.
+    // 3. Tail breakpoint: the last user message's last content block
+    //    gets cache_control so the growing conversation tail is cached
+    //    for the next turn (WO 17.5).
     if anthropic_messages.len() > 2 {
         let prefix_end = anthropic_messages.len() - 1;
         for msg in anthropic_messages.iter_mut().take(prefix_end).skip(1) {
@@ -191,6 +205,25 @@ pub(crate) fn build_anthropic_body(
                 if let Some(arr) = content.as_array_mut() {
                     if let Some(last_block) = arr.last_mut() {
                         last_block["cache_control"] = serde_json::json!({"type": "ephemeral"});
+                    }
+                }
+            }
+        }
+    }
+
+    // Tail breakpoint: mark the last user message's last content block
+    // with cache_control: ephemeral so the conversation tail is cached
+    // for the next turn (WO 17.5).
+    if !anthropic_messages.is_empty() {
+        if let Some(last_msg) = anthropic_messages.last_mut() {
+            if let Some(content) = last_msg.get_mut("content") {
+                if let Some(arr) = content.as_array_mut() {
+                    if let Some(last_block) = arr.last_mut() {
+                        // Only add if not already present (prefix markers
+                        // may have added it for short conversations).
+                        if last_block.get("cache_control").is_none() {
+                            last_block["cache_control"] = serde_json::json!({"type": "ephemeral"});
+                        }
                     }
                 }
             }
@@ -217,7 +250,7 @@ pub(crate) fn build_anthropic_body(
     }
 
     if !tools.is_empty() {
-        let tool_defs: Vec<serde_json::Value> = tools
+        let mut tool_defs: Vec<serde_json::Value> = tools
             .iter()
             .map(|t| {
                 serde_json::json!({
@@ -227,6 +260,11 @@ pub(crate) fn build_anthropic_body(
                 })
             })
             .collect();
+        // WO 17.5: cache breakpoint on the last tool definition so the
+        // entire system+tools prefix is cached as a single unit.
+        if let Some(last_tool) = tool_defs.last_mut() {
+            last_tool["cache_control"] = serde_json::json!({"type": "ephemeral"});
+        }
         body["tools"] = serde_json::Value::Array(tool_defs);
     }
 
@@ -724,6 +762,7 @@ mod tests {
         ];
         let body = build_anthropic_body("claude-sonnet-4", &messages, &[], false, None);
         let msgs = body["messages"].as_array().unwrap();
+        // First user message (prefix) is skipped for cache markers.
         assert!(msgs[0]
             .get("content")
             .unwrap()
@@ -733,19 +772,16 @@ mod tests {
             .unwrap()
             .get("cache_control")
             .is_none());
+        // Assistant message (second prefix) gets a cache marker.
         assert_eq!(
             msgs[1]["content"].as_array().unwrap().last().unwrap()["cache_control"],
             json!({"type":"ephemeral"})
         );
-        assert!(msgs[2]
-            .get("content")
-            .unwrap()
-            .as_array()
-            .unwrap()
-            .last()
-            .unwrap()
-            .get("cache_control")
-            .is_none());
+        // Last user message gets a tail breakpoint (WO 17.5).
+        assert_eq!(
+            msgs[2]["content"].as_array().unwrap().last().unwrap()["cache_control"],
+            json!({"type":"ephemeral"})
+        );
     }
 
     #[tokio::test]
@@ -869,7 +905,7 @@ mod tests {
 
     #[test]
     fn model_info_reasoning_for_claude_3_7() {
-        let a = AnthropicAdapter::new("https://api.anthropic.com", "claude-3-7-sonnet", 30);
+        let a = AnthropicAdapter::new("https://api.anthropic.com", "claude-3-7-sonnet", 30, None);
         let info = a.model_info();
         assert!(info.supports_thinking);
         assert_eq!(info.tool_call_format, ToolCallStyle::Anthropic);
@@ -879,37 +915,37 @@ mod tests {
 
     #[test]
     fn model_info_reasoning_for_claude_4() {
-        let a = AnthropicAdapter::new("https://api.anthropic.com", "claude-4-opus", 30);
+        let a = AnthropicAdapter::new("https://api.anthropic.com", "claude-4-opus", 30, None);
         assert!(a.model_info().supports_thinking);
     }
 
     #[test]
     fn model_info_no_thinking_for_claude_3_5() {
-        let a = AnthropicAdapter::new("https://api.anthropic.com", "claude-3-5-sonnet", 30);
+        let a = AnthropicAdapter::new("https://api.anthropic.com", "claude-3-5-sonnet", 30, None);
         assert!(!a.model_info().supports_thinking);
     }
 
     #[test]
     fn model_info_images_for_claude_3() {
-        let a = AnthropicAdapter::new("https://api.anthropic.com", "claude-3-opus", 30);
+        let a = AnthropicAdapter::new("https://api.anthropic.com", "claude-3-opus", 30, None);
         assert!(a.model_info().supports_images);
     }
 
     #[test]
     fn model_info_no_images_for_claude_4() {
-        let a = AnthropicAdapter::new("https://api.anthropic.com", "claude-4-opus", 30);
+        let a = AnthropicAdapter::new("https://api.anthropic.com", "claude-4-opus", 30, None);
         assert!(!a.model_info().supports_images);
     }
 
     #[test]
     fn new_strips_trailing_slash_from_api_base() {
-        let a = AnthropicAdapter::new("https://api.anthropic.com/", "claude-4", 30);
+        let a = AnthropicAdapter::new("https://api.anthropic.com/", "claude-4", 30, None);
         assert_eq!(a.api_base, "https://api.anthropic.com");
     }
 
     #[test]
     fn set_json_mode_toggles_flag() {
-        let mut a = AnthropicAdapter::new("https://api.anthropic.com", "claude-4", 30);
+        let mut a = AnthropicAdapter::new("https://api.anthropic.com", "claude-4", 30, None);
         assert!(!a.json_mode);
         a.set_json_mode(true);
         assert!(a.json_mode);
@@ -917,7 +953,7 @@ mod tests {
 
     #[test]
     fn set_seed_sets_value() {
-        let mut a = AnthropicAdapter::new("https://api.anthropic.com", "claude-4", 30);
+        let mut a = AnthropicAdapter::new("https://api.anthropic.com", "claude-4", 30, None);
         assert!(a.seed.is_none());
         a.set_seed(Some(42));
         assert_eq!(a.seed, Some(42));
@@ -1152,7 +1188,7 @@ mod tests {
     }
 
     #[test]
-    fn body_short_conversation_skips_cache_markers() {
+    fn body_short_conversation_has_tail_breakpoint() {
         let messages = vec![
             Message {
                 role: Role::User,
@@ -1166,13 +1202,90 @@ mod tests {
             },
         ];
         let body = build_anthropic_body("claude-4", &messages, &[], false, None);
-        for m in body["messages"].as_array().unwrap() {
-            if let Some(content) = m.get("content").and_then(|c| c.as_array()) {
-                for block in content {
-                    assert!(block.get("cache_control").is_none());
-                }
-            }
-        }
+        // Short conversations: no prefix markers, but the tail breakpoint
+        // should still be present on the last user message (WO 17.5).
+        let msgs = body["messages"].as_array().unwrap();
+        let last_msg = msgs.last().unwrap();
+        let last_block = last_msg["content"].as_array().unwrap().last().unwrap();
+        assert_eq!(
+            last_block["cache_control"],
+            json!({"type": "ephemeral"}),
+            "tail breakpoint must be present on last user message"
+        );
+    }
+
+    /// WO 17.5: the last tool definition carries cache_control: ephemeral
+    /// so the system+tools block is cached as a single unit.
+    #[test]
+    fn body_tools_block_has_cache_control_on_last_tool() {
+        let messages = vec![Message {
+            role: Role::User,
+            content: "hi".into(),
+            ..Default::default()
+        }];
+        let tools = vec![
+            crate::shared::ToolDef {
+                name: "read_file".into(),
+                description: "read a file".into(),
+                parameters: serde_json::json!({"type": "object"}),
+            },
+            crate::shared::ToolDef {
+                name: "bash".into(),
+                description: "run a command".into(),
+                parameters: serde_json::json!({"type": "object"}),
+            },
+        ];
+        let body = build_anthropic_body("claude-sonnet-4", &messages, &tools, false, None);
+        let tools_arr = body["tools"].as_array().unwrap();
+        // First tool has no cache_control.
+        assert!(
+            tools_arr[0].get("cache_control").is_none(),
+            "first tool should not have cache_control"
+        );
+        // Last tool has cache_control: ephemeral (WO 17.5 system+tools breakpoint).
+        assert_eq!(
+            tools_arr[1]["cache_control"],
+            json!({"type": "ephemeral"}),
+            "last tool must carry cache_control for system+tools breakpoint"
+        );
+    }
+
+    /// WO 17.5: the last user message's last content block carries
+    /// cache_control: ephemeral (the tail breakpoint for cross-turn cache).
+    #[test]
+    fn body_tail_breakpoint_on_last_user_message() {
+        let messages = vec![
+            Message {
+                role: Role::System,
+                content: "sys".into(),
+                ..Default::default()
+            },
+            Message {
+                role: Role::User,
+                content: "ask1".into(),
+                ..Default::default()
+            },
+            Message {
+                role: Role::Assistant,
+                content: "reply1".into(),
+                ..Default::default()
+            },
+            Message {
+                role: Role::User,
+                content: "ask2".into(),
+                ..Default::default()
+            },
+        ];
+        let body = build_anthropic_body("claude-sonnet-4", &messages, &[], false, None);
+        let msgs = body["messages"].as_array().unwrap();
+        // The last message is the trailing user turn.
+        let last_msg = msgs.last().unwrap();
+        let last_block = last_msg["content"].as_array().unwrap().last().unwrap();
+        assert_eq!(
+            last_block["cache_control"],
+            json!({"type": "ephemeral"}),
+            "last user message must have tail cache_control (WO 17.5)"
+        );
     }
 
     #[test]
@@ -1639,5 +1752,67 @@ mod tests {
         assert_eq!(t.prompt_tokens, None);
         assert_eq!(t.completion_tokens, None);
         assert_eq!(t.cached_tokens, None);
+    }
+
+    #[test]
+    fn stream_returns_error_when_no_api_key() {
+        // With no key configured and no env var, stream should fail
+        // with a clear error message.
+        std::env::remove_var("ANTHROPIC_API_KEY");
+        let a = AnthropicAdapter::new("https://api.anthropic.com", "claude-4", 30, None);
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt.block_on(a.stream(&[], &[]));
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("no Anthropic API key"),
+            "expected 'no Anthropic API key' error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn stream_returns_error_when_empty_api_key() {
+        // An empty config key should still fall through to env,
+        // and if env is also missing, produce the error.
+        std::env::remove_var("ANTHROPIC_API_KEY");
+        let a = AnthropicAdapter::new(
+            "https://api.anthropic.com",
+            "claude-4",
+            30,
+            Some(String::new()),
+        );
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt.block_on(a.stream(&[], &[]));
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("no Anthropic API key"),
+            "expected 'no Anthropic API key' error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn config_key_takes_priority_over_env() {
+        // When both config and env are set, config wins.
+        std::env::set_var("ANTHROPIC_API_KEY", "env-key");
+        let key = super::super::auth::resolve_api_key("anthropic", Some("config-key"));
+        assert_eq!(key, Some("config-key".to_string()));
+        std::env::remove_var("ANTHROPIC_API_KEY");
+    }
+
+    #[test]
+    fn env_key_used_when_no_config() {
+        // When config is None, env key is used.
+        std::env::set_var("ANTHROPIC_API_KEY", "env-key");
+        let key = super::super::auth::resolve_api_key("anthropic", None);
+        assert_eq!(key, Some("env-key".to_string()));
+        std::env::remove_var("ANTHROPIC_API_KEY");
+    }
+
+    #[test]
+    fn none_when_both_missing() {
+        std::env::remove_var("ANTHROPIC_API_KEY");
+        let key = super::super::auth::resolve_api_key("anthropic", None);
+        assert!(key.is_none());
     }
 }

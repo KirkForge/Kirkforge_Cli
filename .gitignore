@@ -36,3 +36,4 @@ benches/baselines/
 build_rs_cov.profraw
 # Covers .worktrees/ and its locks subdir (.worktrees/locks/) intentionally.
 .worktrees/
+.vix/

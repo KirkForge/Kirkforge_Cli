@@ -203,6 +203,9 @@ impl Workflow {
                             step.name
                         );
                     }
+                    if step.max_parallel == Some(0) {
+                        bail!("step '{}' has max_parallel=0 which would deadlock", step.name);
+                    }
                 }
                 StepKind::FanIn => {
                     // FanIn is a join point — no extra required fields.
@@ -1746,6 +1749,16 @@ mod tests {
         let json = br#"{"name":"bad","steps":[{"name":"fan","kind":"fan_out","over":"$(x)"}]}"#;
         let err = Workflow::from_json(json).unwrap_err().to_string();
         assert!(err.contains("no 'as_name'"), "got: {err}");
+    }
+
+    #[test]
+    fn fan_out_zero_max_parallel_is_rejected() {
+        let json = br#"{"name":"bad","steps":[{"name":"fan","kind":"fan_out","over":"$(x)","as_name":"item","max_parallel":0}]}"#;
+        let err = Workflow::from_json(json).unwrap_err().to_string();
+        assert!(
+            err.contains("max_parallel=0"),
+            "got: {err}"
+        );
     }
 
     #[tokio::test]

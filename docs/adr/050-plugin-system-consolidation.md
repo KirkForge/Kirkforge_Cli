@@ -9,7 +9,7 @@ Workorders 6.6–6.9 folded four satellite plugins (Stratum, Plugin3, Draw,
 Video) into the core binary behind feature flags. Each fold-in registered
 in-process Rust tools in `main/mod.rs` and in-process hooks in the executor.
 However, the shell-plugin loader (`load_workspace_plugins`) continued to load
-the same plugin names from `plugins/*/kirkforge.toml`, causing duplicate
+the same plugin names from `plugins/*/kf-code.toml`, causing duplicate
 tool registrations. The `CompositeToolset` deduplicates by first-set-wins, so
 the shell "plugin" toolset (added first) shadowed the in-process toolset.
 

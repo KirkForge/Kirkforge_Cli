@@ -195,10 +195,10 @@ pub(crate) fn build_anthropic_body(
     // 3. Tail breakpoint: the last user message's last content block.
     if anthropic_messages.len() > 2 {
         let prefix_end = anthropic_messages.len() - 1;
-        // ponytail: skip from start so only the last 3 prefix messages
+        // ponytail: skip from start so only the last 2 prefix messages
         // (after system) get cache_control, keeping total breakpoints
-        // at most 4 (system + 3 prefix + tail).
-        let skip_from_start = prefix_end.saturating_sub(3 + 1);
+        // at most 4 (system + 2 prefix + tail).
+        let skip_from_start = prefix_end.saturating_sub(2 + 1);
         for msg in anthropic_messages
             .iter_mut()
             .take(prefix_end)
@@ -784,6 +784,42 @@ mod tests {
         assert_eq!(
             msgs[2]["content"].as_array().unwrap().last().unwrap()["cache_control"],
             json!({"type":"ephemeral"})
+        );
+    }
+
+    #[test]
+    fn cache_breakpoint_cap_30_messages() {
+        let mut messages = vec![Message {
+            role: Role::System,
+            content: "sys".into(),
+            ..Default::default()
+        }];
+        for i in 0..29 {
+            messages.push(Message {
+                role: if i % 2 == 0 { Role::User } else { Role::Assistant },
+                content: format!("msg{i}"),
+                ..Default::default()
+            });
+        }
+        let body = build_anthropic_body("claude-sonnet-4", &messages, &[], false, None);
+        let mut count = 0;
+        if let Some(arr) = body["system"].get("cache_control") {
+            if arr.is_object() { count += 1; }
+        }
+        for msg in body["messages"].as_array().unwrap() {
+            if let Some(content) = msg.get("content") {
+                if let Some(blocks) = content.as_array() {
+                    for block in blocks {
+                        if block.get("cache_control").is_some() {
+                            count += 1;
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            count <= 4,
+            "expected at most 4 cache breakpoints, got {count}"
         );
     }
 

@@ -29,10 +29,10 @@ The crate is zero-dependency, pure-Rust, verify-only (no signing), and
 adds only Ed25519 verification code to the binary.
 
 The new `verify_plugin_signature`:
-1. Reads `.kirkforge.sig` (if missing → error with a clear message).
+    1. Reads `.kf-code.sig` (if missing → error with a clear message).
 2. Loads the public key via `minisign_verify::PublicKey::from_file`.
 3. Loads the signature via `minisign_verify::Signature::from_file`.
-4. Reads `kirkforge.toml` bytes.
+    4. Reads `kf-code.toml` bytes.
 5. Verifies the Ed25519 signature with
    `public_key.verify(&manifest_bytes, &signature, true)` (the third
    arg `allow_legacy = true` accepts both standard and legacy
@@ -65,7 +65,7 @@ zero-dependency property makes the estimate conservative.)
 - The `verify_signatures` / `signature_key_path` config fields and the
   `TrustPolicy::with_verify_signatures` API are unchanged (public
   contract preserved).
-- The `.kirkforge.sig` file format and the `kirkforge.toml` signing
+- The `.kf-code.sig` file format and the `kf-code.toml` signing
   contract are unchanged — only the verification backend changes.
 
 ## Why `minisign-verify` over `ed25519-dalek` + hand-rolled header parsing

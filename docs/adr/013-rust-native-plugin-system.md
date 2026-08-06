@@ -20,16 +20,15 @@ adds a new capability.
 ## Decision
 
 Introduce a Rust-native plugin system, **vendored in-repo** since Phase-6
-under `crates/plugin3-*` (`plugin3-core`, `plugin3-hosts`, `plugin3-cli`),
-not a separate repository consumed as path dependencies. The npm-side
-orchestrator and tool packages live under `npm/kirkforge-plugin/` in the
-same repo. A prior framing — "a separate repository `KirkForge-Plugin`
-consumed by `KirkForge-Cli` as path dependencies" — is superseded; both
+under `crates/kf-budget-core` (budget tools, hooks, slicing, offload
+store), not a separate repository consumed as path dependencies. A prior
+framing — "a separate repository `KirkForge-Plugin`
+consumed by `KirkForge-Cli` as path dependencies" — is superseded; all
 halves now ship from this single repository.
 
 A plugin is a directory containing:
 
-- `kirkforge.toml` — manifest with name, version, description, trust tier,
+- `kf-code.toml` — manifest with name, version, description, trust tier,
   and capability declarations.
 - Optional `SKILL.md` — skill prompt for slash-command capabilities.
 - Optional hook/verifier/tool scripts — invoked by the host runtime.
@@ -41,7 +40,7 @@ Trust tiers:
 - `network` — may fetch URLs or talk to network services.
 - `unsafe` — blocked by default; reserved for future native/WASM plugins.
 
-The host (`kirkforge-plugin-host`) provides:
+The host provides:
 
 - `PluginRegistry` — load, index, and filter plugins by trust policy.
 - `SandboxPolicy` — map each capability kind to the minimum required tier.
@@ -52,11 +51,12 @@ The host (`kirkforge-plugin-host`) provides:
 - Compatibility loader — existing `.claude/skills/<name>/SKILL.md` directories
   are treated as read-only plugins with a single skill capability.
 
-A standalone CLI, `kirkforge-plugin`, ships in-repo at `crates/plugin3-cli`:
+The plugin CLI ships as the `kf-code` binary itself (subcommands for
+plugin management):
 
-- `kirkforge-plugin init <name>` — scaffold a new plugin directory.
-- `kirkforge-plugin check <dir>` — validate a plugin manifest.
-- `kirkforge-plugin list [--dir <dir>]` — list installed plugins and warnings.
+- `kf-code plugin init <name>` — scaffold a new plugin directory.
+- `kf-code plugin check <dir>` — validate a plugin manifest.
+- `kf-code plugin list [--dir <dir>]` — list installed plugins and warnings.
 
 ## Consequences
 

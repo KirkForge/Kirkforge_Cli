@@ -20,7 +20,6 @@ pub async fn handle_status_command(_args: &str, state: &AppState) -> String {
     let model = match &state.connection {
         ConnectionState::Connected { model, .. } => model.clone(),
         ConnectionState::Disconnected => "(disconnected)".to_string(),
-        ConnectionState::Connecting => "(connecting)".to_string(),
         ConnectionState::Error(e) => format!("(error: {e})"),
     };
 

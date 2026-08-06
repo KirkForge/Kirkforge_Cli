@@ -727,7 +727,7 @@ impl WorkflowExecutor {
         for (i, item_clone, summary) in results {
             let child_structured_val = serde_json::from_str::<serde_json::Value>(&summary).ok();
             let child_name = format!("{}_{}", step.name, i);
-            child_summaries.push(format!("## {} (item {}):\n{}", child_name, i, summary));
+            child_summaries.push(format!("## {child_name} (item {i}):\n{summary}"));
             child_structured.push(serde_json::json!({
                 "index": i,
                 "item": item_clone,

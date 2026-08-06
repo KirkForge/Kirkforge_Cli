@@ -266,7 +266,7 @@ fn respond_ollama(req: &wiremock::Request, state: &Arc<Mutex<MockState>>) -> Res
         }));
     }
 
-    let ndjson: String = lines.iter().map(|l| format!("{}\n", l)).collect();
+    let ndjson: String = lines.iter().map(|l| format!("{l}\n")).collect();
     ResponseTemplate::new(200).set_body_raw(ndjson.as_bytes().to_vec(), "application/x-ndjson")
 }
 
@@ -302,7 +302,7 @@ fn respond_openai_compat(
     });
 
     let mut sse_lines = Vec::new();
-    let id = format!("chatcmpl-e2e-{}", request_index);
+    let id = format!("chatcmpl-e2e-{request_index}");
 
     // Thinking (OpenAI-compat doesn't have a standard thinking field,
     // but we emit it as a delta content chunk for compatibility).

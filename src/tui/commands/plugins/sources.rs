@@ -5,11 +5,8 @@
 //! and drive a registry reload; `write_shared_config` stays in the parent
 //! because `toggle_plugin` shares it.
 
-use super::{
-    active_plugin_names, blocked_warnings, plugin_status_summary, reload_plugins,
-    write_shared_config,
-};
-use crate::shared::read_shared_config;
+use super::{active_plugin_names, blocked_warnings, plugin_status_summary, reload_plugins};
+use crate::shared::{read_shared_config, write_shared_config};
 use crate::tui::app::AppState;
 use kf_plugin_host::PluginRegistry;
 use std::path::PathBuf;

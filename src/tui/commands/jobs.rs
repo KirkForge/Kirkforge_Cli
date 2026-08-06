@@ -521,7 +521,7 @@ async fn handle_run_now_command(args: &str, state: &mut AppState) -> String {
         Err(e) => return format!("Failed to load scheduled job {id}: {e:#}"),
     };
 
-    let config = state.config.read().unwrap().clone();
+    let config = crate::shared::read_shared_config(&state.config).clone();
     match run_job(&mut job, &store, &config).await {
         Ok(run) => format!(
             "▶️ Scheduled job {id} ran now: {} — {} (exit {:?})\n  stdout: {}\n  stderr: {}",

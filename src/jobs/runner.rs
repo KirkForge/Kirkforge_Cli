@@ -226,8 +226,10 @@ async fn run_workflow_job(
     crate::tools::workflow::interpolate_vars(&mut workflow, vars);
 
     // 4. Build a StepRunner from an InProcessTaskSpawner (same path as WorkflowTool).
+    let shared_cfg: crate::shared::SharedConfig =
+        std::sync::Arc::new(std::sync::RwLock::new(config.clone()));
     let spawner: Arc<dyn TaskSpawner> = Arc::new(InProcessTaskSpawner::new(
-        config.clone(),
+        shared_cfg,
         config.model.default_model.clone(),
         config.model.ollama_host.clone(),
         None, // no undo stack for scheduled jobs

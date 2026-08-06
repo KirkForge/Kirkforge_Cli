@@ -39,6 +39,7 @@ pub fn reject(ui: &TmuxDriver, timeout: std::time::Duration) -> std::io::Result<
 }
 
 /// Check whether the tmux pane currently shows the approval modal.
+#[allow(dead_code)] // wired when a visibility-assert scenario lands
 pub fn is_approval_visible(ui: &TmuxDriver) -> bool {
     ui.capture_pane()
         .map(|p| p.contains(APPROVAL_TITLE) || p.contains(APPROVAL_YES))

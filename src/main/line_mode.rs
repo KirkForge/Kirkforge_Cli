@@ -175,10 +175,12 @@ pub(super) async fn run_line_mode(
                         match kf_workflow::Workflow::from_file(&path) {
                             Ok(workflow) => {
                                 let cfg = kf_code::shared::read_shared_config(&config).clone();
-                                let ollama_host = cfg.model.ollama_host.clone();
-                                let supports_images = cfg.model.ollama_host.contains("localhost")
-                                    || cfg.model.ollama_host.contains("127.0.0.1")
-                                    || cfg.model.ollama_host.contains("[::1]");
+                                let shared_cfg = std::sync::Arc::new(std::sync::RwLock::new(cfg));
+                                let ollama_host =
+                                    shared_cfg.read().unwrap().model.ollama_host.clone();
+                                let supports_images = ollama_host.contains("localhost")
+                                    || ollama_host.contains("127.0.0.1")
+                                    || ollama_host.contains("[::1]");
                                 let cancel =
                                     std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
                                 let workflow_name = workflow.name.clone();
@@ -189,7 +191,7 @@ pub(super) async fn run_line_mode(
                                 let runner = kf_code::tui::commands::workflow::LineStepRunner {
                                     model_name: model_name.clone(),
                                     ollama_host,
-                                    config: cfg,
+                                    config: shared_cfg,
                                     supports_images,
                                     undo_stack: None,
                                 };

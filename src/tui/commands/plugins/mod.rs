@@ -7,7 +7,7 @@
 //! - `reload` — full rescan of the plugins directory.
 //! - `trust <name> <tier>` — session-only re-enable with a specific trust tier.
 
-use crate::shared::{read_shared_config, SharedConfig};
+use crate::shared::{read_shared_config, write_shared_config};
 use crate::tui::app::AppState;
 use kf_plugin_host::{PluginRegistry, TrustPolicy};
 use kf_plugin_sdk::TrustTier;
@@ -604,13 +604,6 @@ async fn toggle_plugin(
     format!("🔌 Plugin '{name}' is now {status}.{restart_notice} {result}")
 }
 
-/// Mutable access to shared config, recovering from lock poisoning.
-fn write_shared_config(
-    cfg: &SharedConfig,
-) -> std::sync::RwLockWriteGuard<'_, crate::shared::Config> {
-    cfg.write().unwrap_or_else(|e| e.into_inner())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -825,7 +818,7 @@ prompt = "Demo skill"
         // by default, then verify that `/plugins trust` overrides it for the
         // current session.
         {
-            let mut cfg = state.config.write().unwrap();
+            let mut cfg = state.config.write().unwrap_or_else(|e| e.into_inner());
             cfg.tools.max_plugin_trust = TrustTier::ReadOnly;
         }
         let tx = dummy_reload_tx();
@@ -950,7 +943,7 @@ command = "hooks/post-turn.sh"
         // Clamp host max to ReadOnly + reject_on_excess=false so the shell
         // plugin is downgraded (not rejected) and its tool+hook filtered.
         {
-            let mut cfg = state.config.write().unwrap();
+            let mut cfg = state.config.write().unwrap_or_else(|e| e.into_inner());
             cfg.tools.max_plugin_trust = TrustTier::ReadOnly;
             cfg.tools.reject_on_excess_plugin_trust = false;
         }

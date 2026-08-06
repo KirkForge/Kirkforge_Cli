@@ -41,7 +41,7 @@ impl TmuxDriver {
         // Set env vars before the command
         for (key, val) in env_vars {
             cmd.arg("-e");
-            cmd.arg(format!("{}={}", key, val));
+            cmd.arg(format!("{key}={val}"));
         }
 
         // The command to run inside tmux
@@ -50,10 +50,9 @@ impl TmuxDriver {
 
         let status = cmd.status()?;
         if !status.success() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("tmux new-session failed: {:?}", status),
-            ));
+            return Err(std::io::Error::other(format!(
+                "tmux new-session failed: {status:?}"
+            )));
         }
 
         // Give the TUI a moment to render.
@@ -74,10 +73,9 @@ impl TmuxDriver {
             ])
             .status()?;
         if !status.success() {
-            Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("tmux send-keys failed: {:?}", status),
-            ))
+            Err(std::io::Error::other(format!(
+                "tmux send-keys failed: {status:?}"
+            )))
         } else {
             Ok(())
         }
@@ -120,13 +118,10 @@ impl TmuxDriver {
             ])
             .output()?;
         if !output.status.success() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!(
-                    "tmux capture-pane failed: {:?}",
-                    String::from_utf8_lossy(&output.stderr)
-                ),
-            ));
+            return Err(std::io::Error::other(format!(
+                "tmux capture-pane failed: {:?}",
+                String::from_utf8_lossy(&output.stderr)
+            )));
         }
         Ok(String::from_utf8_lossy(&output.stdout).to_string())
     }
@@ -149,8 +144,7 @@ impl TmuxDriver {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::TimedOut,
                     format!(
-                        "timed out waiting for {:?} in tmux pane. Last pane content:\n{}",
-                        expected, pane
+                        "timed out waiting for {expected:?} in tmux pane. Last pane content:\n{pane}"
                     ),
                 ));
             }

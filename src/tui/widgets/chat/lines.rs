@@ -322,15 +322,6 @@ pub(super) fn build_chat_lines(
             ]));
             lines.push(Line::from(""));
         }
-        ConnectionState::Connecting => {
-            lines.push(Line::from(vec![Span::styled(
-                " ⟳ Connecting... ",
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            )]));
-            lines.push(Line::from(""));
-        }
         ConnectionState::Error(e) => {
             lines.push(Line::from(vec![
                 Span::styled(

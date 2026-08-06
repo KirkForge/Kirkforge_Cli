@@ -326,12 +326,14 @@ impl Executor {
     /// config, and sandboxing state. Called once at construction.
     fn build_task_spawner(&mut self) {
         let cfg = read_shared_config(&self.config).clone();
+        let shared_cfg: crate::shared::SharedConfig =
+            std::sync::Arc::new(std::sync::RwLock::new(cfg));
         let model_name = self.model_name.clone();
-        let ollama_host = cfg.model.ollama_host.clone();
+        let ollama_host = shared_cfg.read().unwrap().model.ollama_host.clone();
         let undo_stack = self.undo_stack.clone();
         let supports_images = self.adapter.model_info().supports_images;
         self.task_spawner = Some(Arc::new(crate::tools::task::InProcessTaskSpawner::new(
-            cfg,
+            shared_cfg,
             model_name,
             ollama_host,
             undo_stack,
@@ -346,12 +348,9 @@ impl Executor {
         // Update the shared lock. If it is poisoned we still apply the
         // new config locally so this executor keeps running with the
         // fresh rules.
-        let fresh = if let Ok(mut cfg) = self.config.write() {
-            *cfg = new.clone();
-            new
-        } else {
-            new
-        };
+        let mut cfg = crate::shared::write_shared_config(&self.config);
+        *cfg = new.clone();
+        let fresh = new;
         let (deny_list, path_guard, read_gate) = access_from_config(&fresh);
         self.sandbox = sandbox::SandboxEnforcer {
             path_guard,

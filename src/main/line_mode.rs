@@ -65,7 +65,7 @@ pub(super) async fn run_line_mode(
         None,
         None,
         Some(plugin_registry),
-    );
+    )?;
     executor.set_session_id(session_id);
     if let session::conversation::OpenOutcome::Restored(messages) = open_outcome {
         executor.set_recovered_messages(messages);

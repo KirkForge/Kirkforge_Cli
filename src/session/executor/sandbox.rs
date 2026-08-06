@@ -1,5 +1,12 @@
 //! Sandbox enforcement — groups path, deny-list, and read-gate checks
 //! into a single sub-struct owned by [`super::Executor`].
+//!
+//! ponytail: not a sandbox. This is path-based access control (read/write
+//! scoping + deny list). Real sandboxing requires seccomp (syscall
+//! allow-list) or landlock (file-level bind mount) — see ADR-054
+//! "Future work" section. Upgrade path: add `setup_seccomp` alongside
+//! `setup_rlimits` in `bash_runner/mod.rs` when a BPF compiler is
+//! available without a C FFI dep.
 
 use crate::session::access::{DenyList, GuardVerdict, PathGuard, ReadGate};
 use std::path::PathBuf;

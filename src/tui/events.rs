@@ -286,6 +286,13 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
 /// Local best-effort token estimate for a message list. Mirrors the
 /// logic in `session::prompt::estimate_tokens` (B1.6): content
 /// counted as bytes/4, tool_calls JSON-serialised and divided by 4.
+///
+/// ponytail: bytes/4 is not a tokenizer. It overestimates for English
+/// (real ratio ~3-4 chars/token) and underestimates for CJK/emoji
+/// (~1-2 chars/token). `tiktoken-rs` would give per-model-accurate
+/// counts but is not a dep; the error is bounded and the next
+/// `TurnEvent::CostStats` provides the canonical value.
+///
 /// Falls back to a small per-call constant if serialisation fails
 /// (which would be a `serde_json` bug, but never panic in TUI code).
 ///

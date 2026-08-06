@@ -45,7 +45,7 @@ async fn test_pre_tool_hook_timeout_allows_and_warns() {
 
     let mut config = make_config(true);
     config.tools.hooks_dir = Some(hooks_dir);
-    let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], config);
+    let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], config).unwrap();
 
     let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
     let _events = exe

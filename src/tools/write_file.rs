@@ -20,14 +20,21 @@ pub struct WriteFile {
     undo: Option<UndoStackRef>,
     path_guard: PathGuard,
     minify_write_side: bool,
+    block_edits: bool,
 }
 
 impl WriteFile {
-    pub fn new(undo: Option<UndoStackRef>, path_guard: PathGuard, minify_write_side: bool) -> Self {
+    pub fn new(
+        undo: Option<UndoStackRef>,
+        path_guard: PathGuard,
+        minify_write_side: bool,
+        block_edits: bool,
+    ) -> Self {
         Self {
             undo,
             path_guard,
             minify_write_side,
+            block_edits,
         }
     }
 }
@@ -48,6 +55,10 @@ impl Tool for WriteFile {
                     "content": {
                         "type": "string",
                         "description": "Full content to write to the file"
+                    },
+                    "block_edits": {
+                        "type": "boolean",
+                        "description": "Override: if true, block this write (no-op diagnostic). Ignored unless --harden is active."
                     }
                 },
                 "required": ["path", "content"]
@@ -130,6 +141,27 @@ impl Tool for WriteFile {
             Vec::new()
         };
 
+        if self.block_edits {
+            let msg = if prev_existed {
+                format!(
+                    "BLOCK_EDITS: write to {} is blocked (--harden mode). \
+                     Edit not applied.",
+                    path.display()
+                )
+            } else {
+                format!(
+                    "BLOCK_EDITS: write to {} is blocked (--harden mode). \
+                     New file not created.",
+                    path.display()
+                )
+            };
+            return ToolOutcome::Failure(ToolError::Execution {
+                message: msg,
+                exit_code: None,
+                stderr: String::new(),
+            });
+        }
+
         match crate::tools::atomic_write::atomic_write(&path, &content) {
             Ok(_) => match snapshot_for_undo(&self.undo, &path, prev_existed, &prev_bytes) {
                 Ok(()) => {
@@ -194,7 +226,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("dry_run.txt");
 
-        let tool = WriteFile::new(None, crate::session::access::PathGuard::default(), false);
+        let tool = WriteFile::new(
+            None,
+            crate::session::access::PathGuard::default(),
+            false,
+            false,
+        );
         let ctx = ToolContext::with_dry_run(true);
         let out = tool
             .run(&ctx, args(&path.display().to_string(), "hello"))
@@ -212,7 +249,12 @@ mod tests {
         let path = dir.path().join("existing.txt");
         std::fs::write(&path, "original").unwrap();
 
-        let tool = WriteFile::new(None, crate::session::access::PathGuard::default(), false);
+        let tool = WriteFile::new(
+            None,
+            crate::session::access::PathGuard::default(),
+            false,
+            false,
+        );
         let ctx = ToolContext::with_dry_run(true);
         let out = tool
             .run(&ctx, args(&path.display().to_string(), "new content"))
@@ -235,7 +277,7 @@ mod tests {
             deny_list: crate::session::access::DenyList::new(vec![], vec![]),
             ..Default::default()
         };
-        let tool = WriteFile::new(None, guard, false);
+        let tool = WriteFile::new(None, guard, false, false);
         let ctx = ToolContext::new();
         let out = tool
             .run(
@@ -266,7 +308,7 @@ mod tests {
             max_overwrite_size: 1024,
             ..Default::default()
         };
-        let tool = WriteFile::new(None, guard, false);
+        let tool = WriteFile::new(None, guard, false, false);
         let ctx = ToolContext::new();
         let out = tool
             .run(&ctx, args(&path.display().to_string(), "small"))
@@ -297,7 +339,12 @@ mod tests {
         perms.set_readonly(true);
         std::fs::set_permissions(path.parent().unwrap(), perms.clone()).unwrap();
 
-        let tool = WriteFile::new(None, crate::session::access::PathGuard::default(), false);
+        let tool = WriteFile::new(
+            None,
+            crate::session::access::PathGuard::default(),
+            false,
+            false,
+        );
         let ctx = ToolContext::new();
         let out = tool
             .run(&ctx, args(&path.display().to_string(), "new content"))
@@ -328,7 +375,12 @@ mod tests {
         let minified =
             crate::shared::minify::wrap_minified_envelope("rust", "fn main(){println!(\"hi\");}");
 
-        let tool = WriteFile::new(None, crate::session::access::PathGuard::default(), true);
+        let tool = WriteFile::new(
+            None,
+            crate::session::access::PathGuard::default(),
+            true,
+            false,
+        );
         let ctx = ToolContext::new();
         let out = tool
             .run(&ctx, args(&path.display().to_string(), &minified))
@@ -363,7 +415,12 @@ mod tests {
         let minified =
             crate::shared::minify::wrap_minified_envelope("rust", "fn main(){println!(\"hi\");}");
 
-        let tool = WriteFile::new(None, crate::session::access::PathGuard::default(), false);
+        let tool = WriteFile::new(
+            None,
+            crate::session::access::PathGuard::default(),
+            false,
+            false,
+        );
         let ctx = ToolContext::new();
         let out = tool
             .run(&ctx, args(&path.display().to_string(), &minified))
@@ -391,7 +448,12 @@ mod tests {
         let minified =
             crate::shared::minify::wrap_minified_envelope("rust", "fn main(){println!(\"hi\");}");
 
-        let tool = WriteFile::new(None, crate::session::access::PathGuard::default(), true);
+        let tool = WriteFile::new(
+            None,
+            crate::session::access::PathGuard::default(),
+            true,
+            false,
+        );
         let ctx = ToolContext::with_dry_run(true);
         let out = tool
             .run(&ctx, args(&path.display().to_string(), &minified))
@@ -406,7 +468,12 @@ mod tests {
 
     #[tokio::test]
     async fn missing_path_arg_is_invalid_args() {
-        let tool = WriteFile::new(None, crate::session::access::PathGuard::default(), false);
+        let tool = WriteFile::new(
+            None,
+            crate::session::access::PathGuard::default(),
+            false,
+            false,
+        );
         let out = tool
             .run(&ToolContext::new(), serde_json::json!({"content": "x"}))
             .await;
@@ -423,7 +490,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("f.txt");
         std::fs::write(&path, "old").unwrap();
-        let tool = WriteFile::new(None, crate::session::access::PathGuard::default(), false);
+        let tool = WriteFile::new(
+            None,
+            crate::session::access::PathGuard::default(),
+            false,
+            false,
+        );
         let out = tool
             .run(
                 &ToolContext::new(),
@@ -443,7 +515,12 @@ mod tests {
     async fn write_file_creates_parent_directories() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("nested/deep/file.txt");
-        let tool = WriteFile::new(None, crate::session::access::PathGuard::default(), false);
+        let tool = WriteFile::new(
+            None,
+            crate::session::access::PathGuard::default(),
+            false,
+            false,
+        );
         let out = tool
             .run(
                 &ToolContext::new(),
@@ -460,7 +537,12 @@ mod tests {
         let path = dir.path().join("main.rs");
         let minified =
             crate::shared::minify::wrap_minified_envelope("rust", "fn main(){println!(\"hi\");}");
-        let tool = WriteFile::new(None, crate::session::access::PathGuard::default(), true);
+        let tool = WriteFile::new(
+            None,
+            crate::session::access::PathGuard::default(),
+            true,
+            false,
+        );
         let out = tool
             .run(
                 &ToolContext::new(),
@@ -495,6 +577,7 @@ mod tests {
             Some(stack.clone()),
             crate::session::access::PathGuard::default(),
             false,
+            false,
         );
         let out = tool
             .run(
@@ -520,7 +603,12 @@ mod tests {
 
     #[tokio::test]
     async fn def_has_correct_name_and_required_args() {
-        let tool = WriteFile::new(None, crate::session::access::PathGuard::default(), false);
+        let tool = WriteFile::new(
+            None,
+            crate::session::access::PathGuard::default(),
+            false,
+            false,
+        );
         let def = tool.def();
         assert_eq!(def.name, "write_file");
         let required = def

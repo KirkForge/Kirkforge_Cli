@@ -353,6 +353,7 @@ impl TaskSpawner for InProcessTaskSpawner {
             session_launcher: None,
             docker_config: Some(cfg.security.docker.clone()),
             sandbox_config: cfg.security.sandbox.clone(),
+            block_edits: cfg.security.sandbox.block_edits,
         });
         let tools: Vec<Arc<dyn Tool>> = match request.persona.as_str() {
             "explore" => all
@@ -410,7 +411,8 @@ impl TaskSpawner for InProcessTaskSpawner {
             conversation,
             None,
             self.undo_stack.clone(),
-        );
+        )
+        .map_err(|e| e.to_string())?;
 
         if request.persona == "explore" {
             executor.set_plan_mode(true);

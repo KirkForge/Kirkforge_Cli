@@ -137,6 +137,8 @@ pub async fn main() {
             worktree,
             docker,
             harden,
+            no_network,
+            block_edits,
             no_trace,
         } => {
             run_session(RunArgs {
@@ -158,6 +160,8 @@ pub async fn main() {
                 worktree,
                 docker,
                 harden,
+                no_network,
+                block_edits,
                 no_trace,
             })
             .await

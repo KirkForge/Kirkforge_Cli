@@ -6,6 +6,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- WO 20.3.0: `--no-network` flag (Linux, requires `--harden`) — isolates bash commands in empty network namespace via `unshare(CLONE_NEWNET)`.
+- WO 20.3.0: `--confirm-edits` flag (requires `--harden`) — `edit_file` and `write_file` return diff preview instead of applying.
+- WO 20.3.0: `--harden` mode refuses to start without sandbox config (`sandbox_dir` or `allowed_write_dirs`).
 - WO 17.1: per-provider API key resolution (`resolve_api_key` with config → env → keychain order) and Anthropic auth headers (`x-api-key` + `anthropic-version`).
 - WO 17.2: daemon instance channel (broadcast, auth, version gate). `DaemonServer` registers instances and broadcasts state changes over the Unix socket; `DaemonClient` authenticates with a token read from `KF_CODE_DAEMON_TOKEN_FILE`.
 - WO 17.3: daemon hardening — socket guard (refuses to hijack a live socket), auth token check on every request, version gate (rejects mismatched client versions), ownership check (socket must be owned by current UID), clean `QuitAll` + `Shutdown`.

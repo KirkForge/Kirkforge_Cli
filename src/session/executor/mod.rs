@@ -1,7 +1,7 @@
 //! Session executor — runs model turns, dispatches tools, handles approvals.
 
 use crate::adapters::ModelAdapter;
-use crate::session::access::{access_from_config, warn_if_unsandboxed};
+use crate::session::access::{access_from_config, refuse_if_unsandboxed, warn_if_unsandboxed};
 use crate::session::adapter_swap::AdapterSwap;
 use crate::session::carryover::CarryoverProfile;
 use crate::session::config::config_diff_summary;
@@ -89,7 +89,7 @@ impl Executor {
         config: Config,
         conversation: ConversationLog,
         carryover_target: Option<std::sync::Arc<std::sync::Mutex<CarryoverProfile>>>,
-    ) -> Self {
+    ) -> anyhow::Result<Self> {
         Self::with_log_and_undo(
             adapter,
             tools,
@@ -111,7 +111,7 @@ impl Executor {
         conversation: ConversationLog,
         carryover_target: Option<std::sync::Arc<std::sync::Mutex<CarryoverProfile>>>,
         undo_stack: Option<UndoStackRef>,
-    ) -> Self {
+    ) -> anyhow::Result<Self> {
         Self::with_log_and_undo_and_plugins(
             adapter,
             tools,
@@ -133,12 +133,15 @@ impl Executor {
         carryover_target: Option<std::sync::Arc<std::sync::Mutex<CarryoverProfile>>>,
         undo_stack: Option<UndoStackRef>,
         plugin_registry: Option<&kf_plugin_host::PluginRegistry>,
-    ) -> Self {
+    ) -> anyhow::Result<Self> {
         let model_name = adapter.model_info().name.clone();
         let config_for_startup = config.clone();
         let cfg = read_shared_config(&config_for_startup);
         let (deny_list, path_guard, read_gate) = access_from_config(&cfg);
         warn_if_unsandboxed(&path_guard);
+        if cfg.security.sandbox.harden {
+            refuse_if_unsandboxed(&path_guard)?;
+        }
         let sandbox = sandbox::SandboxEnforcer {
             path_guard,
             deny_list,
@@ -271,7 +274,7 @@ impl Executor {
         };
         this.init_default_verifiers(plugin_registry);
         this.build_task_spawner();
-        this
+        Ok(this)
     }
 
     /// Record that the conversation log was restored from a checkpoint.

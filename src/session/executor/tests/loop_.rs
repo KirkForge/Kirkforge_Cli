@@ -64,7 +64,8 @@ async fn test_always_approve_rule_round_trips_to_next_turn() {
         let _ = req.response.send(ApprovalResponse::AlwaysApprove);
     });
 
-    let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(false));
+    let mut exe =
+        make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(false)).unwrap();
     let _events = exe
         .run_turn_collecting("run tests", &approval_tx, never_cancelled())
         .await
@@ -148,7 +149,8 @@ async fn test_cancelled_tool_batch_appends_placeholders() {
     );
 
     let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
-    let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(true));
+    let mut exe =
+        make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(true)).unwrap();
 
     let cancelled = Arc::new(AtomicBool::new(false));
     let cancelled_flag = cancelled.clone();
@@ -269,7 +271,8 @@ async fn test_parallel_tool_batch_runs_concurrently() {
         Box::new(adapter),
         vec![Arc::new(tool_one), Arc::new(tool_two)],
         make_config(true),
-    );
+    )
+    .unwrap();
 
     let start = tokio::time::Instant::now();
     let events = exe
@@ -354,7 +357,8 @@ async fn test_deterministic_mode_produces_same_tool_sequence() {
         Box::new(MockAdapter::new(events.clone(), make_info())),
         make_tools(),
         cfg.clone(),
-    );
+    )
+    .unwrap();
     let events1 = exe1
         .run_turn_collecting("run with seed 42", &approval_tx, never_cancelled())
         .await
@@ -364,7 +368,8 @@ async fn test_deterministic_mode_produces_same_tool_sequence() {
         Box::new(MockAdapter::new(events, make_info())),
         make_tools(),
         cfg,
-    );
+    )
+    .unwrap();
     let events2 = exe2
         .run_turn_collecting("run with seed 42 again", &approval_tx, never_cancelled())
         .await
@@ -501,7 +506,8 @@ async fn test_mid_batch_checkpoint_persists_partial_results() {
         make_config(true),
         conversation,
         None,
-    );
+    )
+    .unwrap();
 
     let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
     let cancelled = Arc::new(AtomicBool::new(false));
@@ -574,7 +580,7 @@ async fn cache_stem_reuse_emitted_on_stable_turn() {
     );
 
     let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
-    let mut exe = make_executor(Box::new(adapter), vec![], make_config(true));
+    let mut exe = make_executor(Box::new(adapter), vec![], make_config(true)).unwrap();
 
     // Run 5 turns with the same model/tools/system prompt. The cache
     // stem (the system message, prefix_len=1) is stable across all
@@ -652,7 +658,8 @@ async fn observe_tool_outcome_success_resets_tracker() {
         Box::new(MockAdapter::new(vec![], make_info())),
         vec![],
         make_config(false),
-    );
+    )
+    .unwrap();
     let (tx, _rx) = mpsc::channel::<TurnEvent>(64);
     exe.observe_tool_outcome(
         "bash",
@@ -670,7 +677,8 @@ async fn observe_tool_outcome_doom_after_threshold() {
         Box::new(MockAdapter::new(vec![], make_info())),
         vec![],
         make_config(false),
-    );
+    )
+    .unwrap();
     let (tx, mut rx) = mpsc::channel::<TurnEvent>(64);
     let err_outcome = ToolOutcome::Error {
         message: "file not found".into(),
@@ -700,7 +708,8 @@ async fn observe_tool_outcome_failure_error_text_extracted() {
         Box::new(MockAdapter::new(vec![], make_info())),
         vec![],
         make_config(false),
-    );
+    )
+    .unwrap();
     let (tx, mut rx) = mpsc::channel::<TurnEvent>(64);
     let fail_outcome = ToolOutcome::Failure(ToolError::InvalidArgs {
         message: "bad args".into(),
@@ -718,7 +727,8 @@ async fn observe_tool_outcome_different_tool_resets_run() {
         Box::new(MockAdapter::new(vec![], make_info())),
         vec![],
         make_config(false),
-    );
+    )
+    .unwrap();
     let (tx, _rx) = mpsc::channel::<TurnEvent>(64);
     let err = ToolOutcome::Error {
         message: "err".into(),
@@ -790,7 +800,8 @@ async fn test_cancelled_batch_aborts_remaining_spawned_tasks() {
         Box::new(adapter),
         vec![Arc::new(tool_one), Arc::new(tool_two)],
         make_config(true),
-    );
+    )
+    .unwrap();
 
     let cancelled = Arc::new(AtomicBool::new(false));
     let cancelled_flag = cancelled.clone();

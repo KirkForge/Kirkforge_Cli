@@ -49,7 +49,8 @@ async fn test_approval_required_for_destructive_bash() {
         let _ = req.response.send(ApprovalResponse::Approved);
     });
 
-    let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(false));
+    let mut exe =
+        make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(false)).unwrap();
     let events = exe
         .run_turn_collecting("run command", &approval_tx, never_cancelled())
         .await
@@ -98,7 +99,8 @@ async fn test_read_only_bash_auto_approved() {
 
     let (approval_tx, mut approval_rx) = mpsc::unbounded_channel();
 
-    let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(false));
+    let mut exe =
+        make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(false)).unwrap();
     let events = exe
         .run_turn_collecting("run command", &approval_tx, never_cancelled())
         .await
@@ -160,7 +162,7 @@ async fn test_always_approve_pushes_permission_rule_not_auto_approve() {
     assert!(config.security.permission_rules.is_empty());
     assert!(!config.security.auto_approve);
 
-    let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], config);
+    let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], config).unwrap();
     let _events = exe
         .run_turn_collecting("run tests", &approval_tx, never_cancelled())
         .await
@@ -240,7 +242,7 @@ async fn test_always_approve_dedups_repeated_calls() {
         });
     assert_eq!(config.security.permission_rules.len(), 1);
 
-    let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], config);
+    let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], config).unwrap();
     let _events = exe
         .run_turn_collecting("list", &approval_tx, never_cancelled())
         .await
@@ -292,7 +294,8 @@ async fn test_auto_approve_does_not_skip_approval_for_non_read_only_bash() {
         let _ = req.response.send(ApprovalResponse::Approved);
     });
 
-    let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(true));
+    let mut exe =
+        make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(true)).unwrap();
     let _events = exe
         .run_turn_collecting("build", &approval_tx, never_cancelled())
         .await
@@ -350,7 +353,7 @@ async fn test_explicit_allow_rule_honored_under_auto_approve_bash() {
             action: PermissionAction::Allow,
         });
 
-    let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], config);
+    let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], config).unwrap();
     let events = exe
         .run_turn_collecting("build", &approval_tx, never_cancelled())
         .await
@@ -416,7 +419,8 @@ async fn test_write_file_overwrite_allowed_after_read() {
     );
 
     let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
-    let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(true));
+    let mut exe =
+        make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(true)).unwrap();
     // Mark as read first — the gate now permits the overwrite.
     exe.sandbox.mark_read(&tmp);
 
@@ -488,7 +492,8 @@ async fn test_write_file_new_file_allowed_without_read() {
     );
 
     let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
-    let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(true));
+    let mut exe =
+        make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(true)).unwrap();
     let events = exe
         .run_turn_collecting("create", &approval_tx, never_cancelled())
         .await
@@ -542,7 +547,8 @@ async fn test_find_without_destructive_flags_auto_approved() {
 
     let (approval_tx, mut approval_rx) = mpsc::unbounded_channel();
 
-    let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(false));
+    let mut exe =
+        make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(false)).unwrap();
     let events = exe
         .run_turn_collecting("search files", &approval_tx, never_cancelled())
         .await
@@ -599,7 +605,8 @@ async fn test_find_delete_requires_approval() {
         let _ = req.response.send(ApprovalResponse::Approved);
     });
 
-    let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(false));
+    let mut exe =
+        make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(false)).unwrap();
     let events = exe
         .run_turn_collecting("delete temp files", &approval_tx, never_cancelled())
         .await
@@ -822,7 +829,8 @@ async fn test_plan_mode_allows_read_file() {
     );
 
     let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
-    let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(true));
+    let mut exe =
+        make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(true)).unwrap();
     exe.set_plan_mode(true);
 
     let events = exe
@@ -878,7 +886,8 @@ async fn test_plan_mode_allows_read_only_bash() {
     );
 
     let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
-    let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(true));
+    let mut exe =
+        make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(true)).unwrap();
     exe.set_plan_mode(true);
 
     let events = exe
@@ -934,7 +943,8 @@ async fn test_plan_mode_allows_bash_status() {
     );
 
     let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
-    let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(true));
+    let mut exe =
+        make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(true)).unwrap();
     exe.set_plan_mode(true);
 
     let events = exe
@@ -996,7 +1006,8 @@ async fn test_plan_mode_allows_bash_cancel_for_read_only_query() {
     );
 
     let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
-    let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(true));
+    let mut exe =
+        make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(true)).unwrap();
     exe.set_plan_mode(true);
 
     let events = exe
@@ -1063,7 +1074,7 @@ async fn test_pre_tool_hook_exit_one_allows_and_warns() {
 
     let mut config = make_config(true);
     config.tools.hooks_dir = Some(hooks_dir);
-    let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], config);
+    let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], config).unwrap();
 
     let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
     let _events = exe

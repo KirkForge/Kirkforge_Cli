@@ -543,7 +543,13 @@ fn spawn_executor(
         carryover_target,
         undo_stack,
         Some(plugin_registry),
-    );
+    )
+    .expect("executor construction failed");
+    // ponytail: wo/20.3.0 changed Executor::new/with_log_and_undo_and_plugins
+    // to return Result for sandbox-config validation. spawn_executor returns
+    // JoinHandle<()>, so we expect() here instead of propagating. Upgrade path:
+    // change spawn_executor to return Result<JoinHandle<()>> and propagate
+    // through run_tui (the audit's X1/X4 sandbox refusal surface).
     exe.set_session_id(state.session_id.clone());
     exe.set_system_override(system);
     if let Some(idx) = context_index {

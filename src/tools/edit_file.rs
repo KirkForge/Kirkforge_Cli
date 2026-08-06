@@ -19,14 +19,21 @@ pub struct EditFile {
     undo: Option<UndoStackRef>,
     path_guard: PathGuard,
     minify_write_side: bool,
+    block_edits: bool,
 }
 
 impl EditFile {
-    pub fn new(undo: Option<UndoStackRef>, path_guard: PathGuard, minify_write_side: bool) -> Self {
+    pub fn new(
+        undo: Option<UndoStackRef>,
+        path_guard: PathGuard,
+        minify_write_side: bool,
+        block_edits: bool,
+    ) -> Self {
         Self {
             undo,
             path_guard,
             minify_write_side,
+            block_edits,
         }
     }
 }
@@ -51,6 +58,10 @@ impl Tool for EditFile {
                     "new_string": {
                         "type": "string",
                         "description": "Replacement string"
+                    },
+                    "block_edits": {
+                        "type": "boolean",
+                        "description": "Override: if true, block this edit (no-op diagnostic). Ignored unless --harden is active."
                     }
                 },
                 "required": ["path", "old_string", "new_string"]
@@ -350,6 +361,18 @@ impl Tool for EditFile {
         let new_content = content.replacen(&old, &new, 1);
         let diff = render_diff(&content, &new_content);
 
+        if self.block_edits && !ctx.dry_run {
+            return ToolOutcome::Failure(ToolError::Execution {
+                message: format!(
+                    "BLOCK_EDITS: edit to {} is blocked (--harden mode). Diff:\n{}",
+                    path.display(),
+                    diff
+                ),
+                exit_code: None,
+                stderr: String::new(),
+            });
+        }
+
         match crate::tools::atomic_write::atomic_write(&path, &new_content) {
             Ok(_) => match snapshot_for_undo(
                 &self.undo,
@@ -429,7 +452,12 @@ mod tests {
         let path = dir.join("kf_code_edit_fuzzy.txt");
         std::fs::write(&path, content).unwrap();
 
-        let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false);
+        let tool = EditFile::new(
+            None,
+            crate::session::access::PathGuard::default(),
+            false,
+            false,
+        );
         let ctx = ToolContext::new();
         let args = serde_json::json!({
             "path": path.to_string_lossy(),
@@ -466,7 +494,12 @@ mod tests {
         let path = dir.join("kf_code_edit_fuzzy_crlf.txt");
         std::fs::write(&path, content).unwrap();
 
-        let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false);
+        let tool = EditFile::new(
+            None,
+            crate::session::access::PathGuard::default(),
+            false,
+            false,
+        );
         let ctx = ToolContext::new();
         let args = serde_json::json!({
             "path": path.to_string_lossy(),
@@ -516,7 +549,12 @@ mod tests {
         let path = dir.join("kf_code_edit_fuzzy_crlf_norm.txt");
         std::fs::write(&path, content).unwrap();
 
-        let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false);
+        let tool = EditFile::new(
+            None,
+            crate::session::access::PathGuard::default(),
+            false,
+            false,
+        );
         let ctx = ToolContext::new();
         let args = serde_json::json!({
             "path": path.to_string_lossy(),
@@ -571,6 +609,7 @@ mod tests {
             Some(stack.clone()),
             crate::session::access::PathGuard::default(),
             false,
+            false,
         );
         let ctx = ToolContext::new();
         let args = serde_json::json!({
@@ -602,7 +641,12 @@ mod tests {
         let path = dir.join("kf_code_edit_ambiguous.txt");
         std::fs::write(&path, "fn foo() {}\nfn bar() {}\nfn foo() {}\n").unwrap();
 
-        let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false);
+        let tool = EditFile::new(
+            None,
+            crate::session::access::PathGuard::default(),
+            false,
+            false,
+        );
         let ctx = ToolContext::new();
         let args = serde_json::json!({
             "path": path.to_string_lossy(),
@@ -627,7 +671,12 @@ mod tests {
         // once after normalization.
         std::fs::write(&path, "fn main() {\n\n}\n").unwrap();
 
-        let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false);
+        let tool = EditFile::new(
+            None,
+            crate::session::access::PathGuard::default(),
+            false,
+            false,
+        );
         let ctx = ToolContext::new();
         let args = serde_json::json!({
             "path": path.to_string_lossy(),
@@ -650,7 +699,12 @@ mod tests {
         // Same line twice with differing trailing whitespace.
         std::fs::write(&path, "let x = 1;    \nlet y = 2;\nlet x = 1;\n").unwrap();
 
-        let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false);
+        let tool = EditFile::new(
+            None,
+            crate::session::access::PathGuard::default(),
+            false,
+            false,
+        );
         let ctx = ToolContext::new();
         let args = serde_json::json!({
             "path": path.to_string_lossy(),
@@ -671,7 +725,12 @@ mod tests {
         let path = dir.path().join("dry_run_edit.txt");
         std::fs::write(&path, "fn old() {}\n").unwrap();
 
-        let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false);
+        let tool = EditFile::new(
+            None,
+            crate::session::access::PathGuard::default(),
+            false,
+            false,
+        );
         let ctx = ToolContext::with_dry_run(true);
         let args = serde_json::json!({
             "path": path.to_string_lossy(),
@@ -701,7 +760,12 @@ mod tests {
 
         std::fs::write(&path, &original_minified).unwrap();
 
-        let tool = EditFile::new(None, crate::session::access::PathGuard::default(), true);
+        let tool = EditFile::new(
+            None,
+            crate::session::access::PathGuard::default(),
+            true,
+            false,
+        );
         let ctx = ToolContext::new();
         let args = serde_json::json!({
             "path": path.to_string_lossy(),
@@ -743,7 +807,12 @@ mod tests {
 
         std::fs::write(&path, &original_minified).unwrap();
 
-        let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false);
+        let tool = EditFile::new(
+            None,
+            crate::session::access::PathGuard::default(),
+            false,
+            false,
+        );
         let ctx = ToolContext::new();
         let args = serde_json::json!({
             "path": path.to_string_lossy(),
@@ -777,7 +846,12 @@ mod tests {
 
         std::fs::write(&path, &original_minified).unwrap();
 
-        let tool = EditFile::new(None, crate::session::access::PathGuard::default(), true);
+        let tool = EditFile::new(
+            None,
+            crate::session::access::PathGuard::default(),
+            true,
+            false,
+        );
         let ctx = ToolContext::with_dry_run(true);
         let args = serde_json::json!({
             "path": path.to_string_lossy(),
@@ -808,7 +882,7 @@ mod tests {
             block_dotfiles: true,
             ..Default::default()
         };
-        let tool = EditFile::new(None, guard, false);
+        let tool = EditFile::new(None, guard, false, false);
         let ctx = ToolContext::new();
         let args = serde_json::json!({
             "path": path.to_string_lossy(),
@@ -838,7 +912,7 @@ mod tests {
             max_overwrite_size: 1024,
             ..Default::default()
         };
-        let tool = EditFile::new(None, guard, false);
+        let tool = EditFile::new(None, guard, false, false);
         let ctx = ToolContext::new();
         let args = serde_json::json!({
             "path": path.to_string_lossy(),
@@ -873,7 +947,12 @@ mod tests {
         perms.set_readonly(true);
         std::fs::set_permissions(path.parent().unwrap(), perms.clone()).unwrap();
 
-        let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false);
+        let tool = EditFile::new(
+            None,
+            crate::session::access::PathGuard::default(),
+            false,
+            false,
+        );
         let ctx = ToolContext::new();
         let args = serde_json::json!({
             "path": path.to_string_lossy(),
@@ -905,7 +984,12 @@ mod tests {
         let path = dir.join("kf_code_edit_exact_match.txt");
         std::fs::write(&path, content).unwrap();
 
-        let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false);
+        let tool = EditFile::new(
+            None,
+            crate::session::access::PathGuard::default(),
+            false,
+            false,
+        );
         let ctx = ToolContext::new();
         let args = serde_json::json!({
             "path": path.to_string_lossy(),
@@ -937,7 +1021,12 @@ mod tests {
         let path = dir.join("kf_code_edit_whitespace.txt");
         std::fs::write(&path, content).unwrap();
 
-        let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false);
+        let tool = EditFile::new(
+            None,
+            crate::session::access::PathGuard::default(),
+            false,
+            false,
+        );
         let ctx = ToolContext::new();
         // old_string has no trailing whitespace — fuzzy match should find it
         let args = serde_json::json!({
@@ -966,7 +1055,12 @@ mod tests {
         let path = dir.join("kf_code_edit_no_match.txt");
         std::fs::write(&path, content).unwrap();
 
-        let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false);
+        let tool = EditFile::new(
+            None,
+            crate::session::access::PathGuard::default(),
+            false,
+            false,
+        );
         let ctx = ToolContext::new();
         let args = serde_json::json!({
             "path": path.to_string_lossy(),
@@ -992,7 +1086,12 @@ mod tests {
         let path = dir.join("kf_code_edit_partial_match.txt");
         std::fs::write(&path, content).unwrap();
 
-        let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false);
+        let tool = EditFile::new(
+            None,
+            crate::session::access::PathGuard::default(),
+            false,
+            false,
+        );
         let ctx = ToolContext::new();
         // "let x" is a substring of "let x = 1;" — partial match, not exact
         let args = serde_json::json!({
@@ -1036,7 +1135,7 @@ mod tests {
                 let path = dir.path().join("edit.txt");
                 std::fs::write(&path, content.as_bytes()).unwrap();
 
-                let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false);
+                let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false, false);
                 let ctx = ToolContext::new();
                 let args = serde_json::json!({
                     "path": path.to_string_lossy(),
@@ -1073,7 +1172,7 @@ mod tests {
                 let path = dir.path().join("edit.txt");
                 std::fs::write(&path, content.as_bytes()).unwrap();
 
-                let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false);
+                let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false, false);
                 let ctx = ToolContext::new();
                 let args = serde_json::json!({
                     "path": path.to_string_lossy(),
@@ -1119,7 +1218,7 @@ mod tests {
                 let path = dir.path().join("edit.txt");
                 std::fs::write(&path, content.as_bytes()).unwrap();
 
-                let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false);
+                let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false, false);
                 let ctx = ToolContext::new();
                 let args = serde_json::json!({
                     "path": path.to_string_lossy(),
@@ -1145,7 +1244,12 @@ mod tests {
 
     #[tokio::test]
     async fn missing_path_arg_is_invalid_args() {
-        let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false);
+        let tool = EditFile::new(
+            None,
+            crate::session::access::PathGuard::default(),
+            false,
+            false,
+        );
         let outcome = tool
             .run(
                 &ToolContext::new(),
@@ -1163,7 +1267,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("f.txt");
         std::fs::write(&path, "content").unwrap();
-        let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false);
+        let tool = EditFile::new(
+            None,
+            crate::session::access::PathGuard::default(),
+            false,
+            false,
+        );
         let outcome = tool
             .run(
                 &ToolContext::new(),
@@ -1181,7 +1290,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("f.txt");
         std::fs::write(&path, "content").unwrap();
-        let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false);
+        let tool = EditFile::new(
+            None,
+            crate::session::access::PathGuard::default(),
+            false,
+            false,
+        );
         let outcome = tool
             .run(
                 &ToolContext::new(),
@@ -1199,7 +1313,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("bin.dat");
         std::fs::write(&path, b"\xff\xfe invalid utf8").unwrap();
-        let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false);
+        let tool = EditFile::new(
+            None,
+            crate::session::access::PathGuard::default(),
+            false,
+            false,
+        );
         let outcome = tool
             .run(
                 &ToolContext::new(),
@@ -1219,7 +1338,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("f.txt");
         std::fs::write(&path, "existing content\n").unwrap();
-        let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false);
+        let tool = EditFile::new(
+            None,
+            crate::session::access::PathGuard::default(),
+            false,
+            false,
+        );
         let outcome = tool
             .run(
                 &ToolContext::with_dry_run(true),
@@ -1246,7 +1370,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("f.txt");
         std::fs::write(&path, "dup\ndup\ndup\n").unwrap();
-        let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false);
+        let tool = EditFile::new(
+            None,
+            crate::session::access::PathGuard::default(),
+            false,
+            false,
+        );
         let outcome = tool
             .run(
                 &ToolContext::with_dry_run(true),
@@ -1273,7 +1402,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("f.txt");
         std::fs::write(&path, "line one\nline two\n").unwrap();
-        let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false);
+        let tool = EditFile::new(
+            None,
+            crate::session::access::PathGuard::default(),
+            false,
+            false,
+        );
         let outcome = tool
             .run(
                 &ToolContext::new(),
@@ -1301,7 +1435,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("f.txt");
         std::fs::write(&path, "content\n").unwrap();
-        let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false);
+        let tool = EditFile::new(
+            None,
+            crate::session::access::PathGuard::default(),
+            false,
+            false,
+        );
         let outcome = tool
             .run(
                 &ToolContext::new(),
@@ -1378,6 +1517,7 @@ mod tests {
             Some(stack.clone()),
             crate::session::access::PathGuard::default(),
             false,
+            false,
         );
         let outcome = tool
             .run(
@@ -1401,7 +1541,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("dry_ok.txt");
         std::fs::write(&path, "fn old() {}\n").unwrap();
-        let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false);
+        let tool = EditFile::new(
+            None,
+            crate::session::access::PathGuard::default(),
+            false,
+            false,
+        );
         let outcome = tool
             .run(
                 &ToolContext::with_dry_run(true),
@@ -1436,7 +1581,12 @@ mod tests {
 
     #[test]
     fn def_has_correct_name_and_required_args() {
-        let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false);
+        let tool = EditFile::new(
+            None,
+            crate::session::access::PathGuard::default(),
+            false,
+            false,
+        );
         let def = tool.def();
         assert_eq!(def.name, "edit_file");
         let required = def

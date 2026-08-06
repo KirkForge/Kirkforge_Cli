@@ -16,7 +16,6 @@ members = [
     "crates/kf-budget-hosts",
     "crates/kf-compress-cli",
     "crates/kf-compress-core",
-    "crates/kf-compress-hosts",
     "crates/kf-context-index",
     "crates/kf-draw-core",
     "crates/kf-draw",

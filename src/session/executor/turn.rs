@@ -52,7 +52,7 @@ impl Drop for PostTurnHookGuard {
             }
             Err(_) => {
                 // ponytail: no runtime → skip. Post-turn hooks are best-effort.
-                tracing::debug!("no Tokio runtime at Drop; post-turn hook skipped");
+                tracing::trace!("no Tokio runtime at Drop; post-turn hook skipped");
             }
         }
     }
@@ -1309,7 +1309,7 @@ impl Executor {
             let has_result = results.contains_key(&idx);
             let has_skip = skipped.iter().any(|(i, _, _, _)| *i == idx);
             if !has_result && !has_skip && cancelled.load(Ordering::SeqCst) {
-                tracing::debug!("tool batch short-circuited by cancellation at record phase");
+                tracing::trace!("tool batch short-circuited by cancellation at record phase");
                 return Ok(idx);
             }
 

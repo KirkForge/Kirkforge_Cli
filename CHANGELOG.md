@@ -14,11 +14,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - WO 20.0.9: Bench tasks (draw/workflow/budget/stratum/lsp) now require model; verify agent output.
 - WO 20.0.9: TECHNICAL.md Stratum section downgraded to match reality; `compaction_use_llm` naming documented.
 - WO 20.0.9: `SandboxEnforcer` and `DocLookup` annotated with `ponytail:` honest-doc comments.
+- WO 20.8.0: `cargo audit` now blocks on critical/unmaintained/unsound advisories (CI). Cosign signing now blocks on release. 28 hot-path `tracing::debug!` calls converted to `tracing::trace!` (47→19).
 
 ### Added
 - WO 20.3.0: `--no-network` flag (Linux, requires `--harden`) — isolates bash commands in empty network namespace via `unshare(CLONE_NEWNET)`.
 - WO 20.3.0: `--confirm-edits` flag (requires `--harden`) — `edit_file` and `write_file` return diff preview instead of applying.
 - WO 20.3.0: `--harden` mode refuses to start without sandbox config (`sandbox_dir` or `allowed_write_dirs`).
+- WO 20.8.0: Added fuzz targets (minify_rust, minify_revalidate, ndjson_parse) and CI fuzz job. Added ADR-067 documenting TUI/daemon coverage exclusion.
 - WO 17.1: per-provider API key resolution (`resolve_api_key` with config → env → keychain order) and Anthropic auth headers (`x-api-key` + `anthropic-version`).
 - WO 17.2: daemon instance channel (broadcast, auth, version gate). `DaemonServer` registers instances and broadcasts state changes over the Unix socket; `DaemonClient` authenticates with a token read from `KF_CODE_DAEMON_TOKEN_FILE`.
 - WO 17.3: daemon hardening — socket guard (refuses to hijack a live socket), auth token check on every request, version gate (rejects mismatched client versions), ownership check (socket must be owned by current UID), clean `QuitAll` + `Shutdown`.

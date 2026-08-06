@@ -284,7 +284,7 @@ impl ModelAdapter for CachingAdapter {
                     &events,
                 );
             } else {
-                tracing::debug!(
+                tracing::trace!(
                     model = %model_name,
                     event_count = events.len(),
                     "Stream incomplete; skipping cache write"

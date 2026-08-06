@@ -182,7 +182,7 @@ impl HookRunner {
             let plugin = &hosted.plugin;
             let plugin_name = plugin.manifest().name.clone();
             if disabled_plugins.contains(&plugin_name) {
-                tracing::debug!(
+                tracing::trace!(
                     plugin = %plugin_name,
                     "skipping disabled plugin hooks"
                 );
@@ -682,7 +682,7 @@ async fn run_hook_script(
                     stderr_info
                 ));
             } else if stdout_dropped > 0 || stderr_dropped > 0 {
-                tracing::debug!(
+                tracing::trace!(
                     script = %script.display(),
                     stdout_dropped,
                     stderr_dropped,
@@ -690,7 +690,7 @@ async fn run_hook_script(
                 );
             }
             if !stderr_text.is_empty() {
-                tracing::debug!(
+                tracing::trace!(
                     script = %script.display(),
                     stderr = %stderr_text,
                     "Hook stderr"
@@ -714,7 +714,7 @@ async fn run_hook_script(
             let (raw_stderr, stderr_dropped) = join_hook_drain(drain_stderr, "stderr").await?;
             let stderr_text = cap_to_string(raw_stderr, stderr_dropped);
             if !stderr_text.is_empty() {
-                tracing::debug!(
+                tracing::trace!(
                     script = %script.display(),
                     stderr = %stderr_text,
                     "Hook stderr on timeout"

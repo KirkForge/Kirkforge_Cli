@@ -601,7 +601,7 @@ pub(crate) async fn handle_input_key(
                                 // shutting down. Treat the key as a
                                 // quit signal instead of leaving the
                                 // user stuck in a dead loop.
-                                tracing::debug!(
+                                tracing::trace!(
                                     "cancel_tx receiver dropped on Ctrl+C; executor already gone"
                                 );
                                 state.should_exit = true;

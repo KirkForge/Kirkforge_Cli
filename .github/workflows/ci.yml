@@ -395,7 +395,7 @@ jobs:
         run: cargo install cargo-audit --locked
 
       - name: Audit dependencies
-        run: cargo audit --deny warnings
+        run: cargo audit --deny warnings --deny unmaintained --deny unsound --deny rustsec-version
 
   # Build and test the vendored KirkForge-Plugin Node SDK. The local CI
   # script (scripts/ci-local.sh) already covers this; run it in CI too so
@@ -452,3 +452,29 @@ jobs:
         with:
           name: kf-code-vscode-extension
           path: editors/vscode/*.vsix
+
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust nightly toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: fuzz-nightly
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+
+      - name: Fuzz minify_rust (60s)
+        run: cargo +nightly fuzz run minify_rust -- -max_total_time=60
+
+      - name: Fuzz minify_revalidate (60s)
+        run: cargo +nightly fuzz run minify_revalidate -- -max_total_time=60
+
+      - name: Fuzz ndjson_parse (60s)
+        run: cargo +nightly fuzz run ndjson_parse -- -max_total_time=60

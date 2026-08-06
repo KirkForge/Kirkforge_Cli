@@ -1,0 +1,22 @@
+[package]
+name = "kf-code-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+kf-code = { path = ".." }
+
+[[bin]]
+name = "minify_rust"
+path = "fuzz_targets/minify_rust.rs"
+
+[[bin]]
+name = "minify_revalidate"
+path = "fuzz_targets/minify_revalidate.rs"
+
+[[bin]]
+name = "ndjson_parse"
+path = "fuzz_targets/ndjson_parse.rs"

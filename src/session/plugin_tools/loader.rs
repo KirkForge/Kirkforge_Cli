@@ -96,7 +96,7 @@ pub fn load_workspace_plugins(registry: &mut PluginRegistry, cfg: &Config) -> Ve
         // workspace sources are loaded; disabled_plugins controls whether
         // an already-loaded or compiled-in plugin is active.
         if cfg.tools.disabled_plugins.contains(name) {
-            tracing::debug!(
+            tracing::trace!(
                 plugin = %name,
                 "skipping disabled workspace plugin (disabled_plugins)"
             );
@@ -108,7 +108,7 @@ pub fn load_workspace_plugins(registry: &mut PluginRegistry, cfg: &Config) -> Ve
         // paths don't double-register the same tool names. When the feature is
         // OFF, fall through to the shell-plugin path (graceful degradation).
         if folded_feature_enabled(name) {
-            tracing::debug!(
+            tracing::trace!(
                 plugin = %name,
                 "folded plugin feature is on — skipping shell-plugin load (compiled-in)"
             );
@@ -192,7 +192,7 @@ pub fn all_plugin_tools(
     for hosted in registry.active_plugins() {
         let plugin_name = hosted.plugin.manifest.name.as_str();
         if disabled.contains(plugin_name) {
-            tracing::debug!(plugin = plugin_name, "skipping disabled plugin tools");
+            tracing::trace!(plugin = plugin_name, "skipping disabled plugin tools");
             continue;
         }
 
@@ -273,7 +273,7 @@ pub fn spawn_plugin_watcher(
             let events = match result {
                 Ok(events) => events,
                 Err(e) => {
-                    tracing::debug!(error = %e, "plugin watcher debounce error");
+                    tracing::trace!(error = %e, "plugin watcher debounce error");
                     continue;
                 }
             };
@@ -290,7 +290,7 @@ pub fn spawn_plugin_watcher(
                         .and_then(|n| n.to_str())
                         .is_some_and(|n| n == "kf-code.toml");
                 if relevant {
-                    tracing::debug!(
+                    tracing::trace!(
                         path = %path.display(),
                         "plugin file changed; triggering reload"
                     );

@@ -25,6 +25,95 @@ use tokio_stream::StreamExt;
 /// otherwise grow the buffer without bound.
 const MAX_NDJSON_BUFFER_BYTES: usize = 8 * 1024 * 1024;
 
+/// Synchronous NDJSON line parser — extracts the same fields as
+/// [`parse_ollama_ndjson_stream`] but returns a `Vec` instead of
+/// sending over a channel. Used by the fuzz target and unit tests.
+pub fn parse_ndjson_lines(
+    input: &str,
+    config: &OllamaNdjsonConfig,
+) -> Vec<StreamEvent> {
+    let mut events = Vec::new();
+    let mut tool_calls_buffer: Vec<ToolInvocation> = Vec::new();
+
+    for raw_line in input.split('\n') {
+        let line = raw_line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let json = match serde_json::from_str::<serde_json::Value>(line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        if let Some(err) = json.get("error") {
+            let msg = err
+                .get("message")
+                .and_then(|m| m.as_str())
+                .or_else(|| err.as_str())
+                .map(String::from)
+                .unwrap_or_else(|| err.to_string());
+            events.push(StreamEvent::Error(msg));
+            continue;
+        }
+
+        if let Some(field) = config.thinking_field {
+            if let Some(thinking) = json.get("message").and_then(|m| m.get(field)) {
+                if let Some(t) = thinking.as_str() {
+                    if !t.is_empty() {
+                        events.push(StreamEvent::Thinking(t.to_string()));
+                    }
+                }
+            }
+        }
+
+        if let Some(content) = json.get("message").and_then(|m| m.get("content")) {
+            if let Some(c) = content.as_str() {
+                if !c.is_empty() {
+                    events.push(StreamEvent::Text(c.to_string()));
+                }
+            }
+        }
+
+        if let Some(tcs) = json.get("message").and_then(|m| m.get("tool_calls")) {
+            if let Some(calls) = tcs.as_array() {
+                for tc in calls {
+                    if let (Some(name), Some(args)) = (
+                        tc.get("function").and_then(|f| f.get("name")).and_then(|n| n.as_str()),
+                        tc.get("function").and_then(|f| f.get("arguments")),
+                    ) {
+                        tool_calls_buffer.push(ToolInvocation {
+                            id: tc.get("id").and_then(|id| id.as_str()).unwrap_or("").to_string(),
+                            name: name.to_string(),
+                            arguments: args.clone(),
+                        });
+                    }
+                }
+            }
+        }
+
+        if json.get("done").and_then(|d| d.as_bool()).unwrap_or(false) {
+            for tc in tool_calls_buffer.drain(..) {
+                events.push(StreamEvent::ToolCall(tc));
+            }
+            let usage = json.get("usage").map(parse_token_usage);
+            let reason = json.get("done_reason").and_then(|r| r.as_str()).unwrap_or("stop");
+            let finish_reason = match reason {
+                "length" => FinishReason::Length,
+                "tool_calls" => FinishReason::ToolCalls,
+                "error" => FinishReason::Error,
+                _ => FinishReason::Stop,
+            };
+            events.push(StreamEvent::Done { finish_reason, usage });
+        }
+    }
+
+    for tc in tool_calls_buffer.drain(..) {
+        events.push(StreamEvent::ToolCall(tc));
+    }
+
+    events
+}
+
 /// Per-adapter knobs for [`parse_ollama_ndjson_stream`].
 #[derive(Clone)]
 pub struct OllamaNdjsonConfig {

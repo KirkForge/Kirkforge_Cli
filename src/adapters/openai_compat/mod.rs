@@ -638,7 +638,8 @@ mod tests {
         // at the payload boundary, no `\n\n` yet. The drain range is
         // exclusive and only consumes the terminator when present.
         let mut buffer = b"data: {\"x\":1}".to_vec();
-        let start = find_subseq(&buffer, b"data: ").expect("data: prefix must exist in test buffer");
+        let start =
+            find_subseq(&buffer, b"data: ").expect("data: prefix must exist in test buffer");
         let after_data = &buffer[start + 6..];
         let end = find_subseq(after_data, b"\n\n").unwrap_or(after_data.len());
         let drain_to = start
@@ -765,7 +766,11 @@ mod tests {
 
     /// SSE frames are: `data: <json>\n\n`. Build one from a JSON value.
     fn sse_data(value: serde_json::Value) -> Vec<u8> {
-        format!("data: {}\n\n", serde_json::to_string(&value).expect("test json must serialize")).into_bytes()
+        format!(
+            "data: {}\n\n",
+            serde_json::to_string(&value).expect("test json must serialize")
+        )
+        .into_bytes()
     }
 
     fn sse_done() -> Vec<u8> {

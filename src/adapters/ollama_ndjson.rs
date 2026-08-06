@@ -989,7 +989,9 @@ mod tests {
         let events = run(&[r#"{"message":{"content":"hi"},"done":true,"done_reason":"stop","usage":{"prompt_eval_count":3,"eval_count":5}}"#]).await;
         match events.last() {
             Some(StreamEvent::Done { usage, .. }) => {
-                let u = usage.as_ref().expect("usage should be present for done event with usage field");
+                let u = usage
+                    .as_ref()
+                    .expect("usage should be present for done event with usage field");
                 assert_eq!(u.prompt_tokens, Some(3));
                 assert_eq!(u.completion_tokens, Some(5));
             }
@@ -1002,7 +1004,9 @@ mod tests {
         let events = run(&[r#"{"message":{"content":"hi"},"done":true,"done_reason":"stop","usage":{"prompt_tokens":10,"completion_tokens":20,"cached_count":8}}"#]).await;
         match events.last() {
             Some(StreamEvent::Done { usage, .. }) => {
-                let u = usage.as_ref().expect("usage should be present for done event with usage field");
+                let u = usage
+                    .as_ref()
+                    .expect("usage should be present for done event with usage field");
                 assert_eq!(u.cached_tokens, Some(8));
             }
             other => panic!("expected Done, got {other:?}"),

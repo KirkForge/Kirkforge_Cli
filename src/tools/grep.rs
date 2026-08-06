@@ -3,12 +3,6 @@ use crate::shared::{Match as SearchMatch, ToolDef, ToolError, ToolOutcome};
 use crate::tools::{Tool, ToolContext};
 use std::path::PathBuf;
 
-/// Quick check whether a string looks like it contains regex metacharacters.
-/// If not, we can use the much faster `str::contains` path.
-fn looks_like_regex(pattern: &str) -> bool {
-    pattern.contains(|c: char| ".|^$*+?()[]{}\\|".contains(c))
-}
-
 /// Maximum file size in bytes we'll attempt to read for grep (10 MB).
 const MAX_GREP_FILE_SIZE: u64 = 10 * 1024 * 1024;
 
@@ -86,16 +80,13 @@ impl Tool for Grep {
             .get("max_matches")
             .and_then(|m| m.as_u64())
             .unwrap_or(50) as usize;
-        let force_regex = args.get("regex").and_then(|r| r.as_bool()).unwrap_or(false);
-        let use_regex = force_regex || looks_like_regex(&pattern);
-
         let use_regex = args.get("regex").and_then(|r| r.as_bool()).unwrap_or(false);
 
         if use_regex {
             let re = match regex::Regex::new(&pattern) {
                 Ok(r) => r,
                 Err(e) => {
-                    return ToolOutcome::Failure(ToolError::invalid_args(&format!(
+                    return ToolOutcome::Failure(ToolError::invalid_args(format!(
                         "Invalid regex pattern: {e}"
                     )));
                 }

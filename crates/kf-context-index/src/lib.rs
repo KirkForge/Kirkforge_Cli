@@ -1156,10 +1156,7 @@ impl ContextIndex {
     /// Incremental rebuild: diff changed files since the cached HEAD,
     /// remove stale symbols/edges for those files, and re-index only
     /// the changed files.
-    pub fn incremental_rebuild(
-        cached: CachedIndex,
-        repo_root: &std::path::Path,
-    ) -> (Self, usize) {
+    pub fn incremental_rebuild(cached: CachedIndex, repo_root: &std::path::Path) -> (Self, usize) {
         let changed_files = git_diff_files(&cached.head, repo_root);
         let changed_count = changed_files.len();
         if changed_files.is_empty() {
@@ -1183,15 +1180,13 @@ impl ContextIndex {
             .retain(|s| !changed_set.contains(&s.file.to_string_lossy().to_string()));
         idx.edges.retain(|e| {
             !changed_set.contains(&e.source_file.to_string_lossy().to_string())
-                && e
-                    .resolved_file
+                && e.resolved_file
                     .as_ref()
                     .is_none_or(|rf| !changed_set.contains(&rf.to_string_lossy().to_string()))
         });
         idx.call_edges.retain(|e| {
             !changed_set.contains(&e.caller_file.to_string_lossy().to_string())
-                && e
-                    .callee_file
+                && e.callee_file
                     .as_ref()
                     .is_none_or(|cf| !changed_set.contains(&cf.to_string_lossy().to_string()))
         });

@@ -345,6 +345,138 @@ impl McpHttpTransport {
         }
     }
 
+    pub(super) async fn list_resources(&self) -> Vec<super::McpResource> {
+        let req = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "resources/list",
+            "params": {}
+        });
+        let resp = match self.send_request(&req).await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!(server = %self.config.name, error = %e, "MCP HTTP resources/list failed");
+                return vec![];
+            }
+        };
+        let resources = match resp.get("result").and_then(|r| r.get("resources")) {
+            Some(serde_json::Value::Array(arr)) => arr.clone(),
+            _ => return vec![],
+        };
+        resources
+            .into_iter()
+            .filter_map(|r| {
+                let uri = r.get("uri")?.as_str()?.to_string();
+                let name = r
+                    .get("name")
+                    .and_then(|n| n.as_str())
+                    .unwrap_or(&uri)
+                    .to_string();
+                let description = r
+                    .get("description")
+                    .and_then(|d| d.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let mime_type = r
+                    .get("mimeType")
+                    .and_then(|m| m.as_str())
+                    .map(|s| s.to_string());
+                Some(super::McpResource {
+                    uri,
+                    name,
+                    description,
+                    mime_type,
+                })
+            })
+            .collect()
+    }
+
+    pub(super) async fn read_resource(&self, uri: &str) -> Result<serde_json::Value, McpError> {
+        let req = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "resources/read",
+            "params": { "uri": uri }
+        });
+        self.send_request(&req).await.map(|r| r)
+    }
+
+    pub(super) async fn list_prompts(&self) -> Vec<super::McpPrompt> {
+        let req = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "prompts/list",
+            "params": {}
+        });
+        let resp = match self.send_request(&req).await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!(
+                    server = %self.config.name,
+                    error = %e,
+                    "MCP HTTP prompts/list failed"
+                );
+                return vec![];
+            }
+        };
+        let prompts = match resp.get("result").and_then(|r| r.get("prompts")) {
+            Some(serde_json::Value::Array(arr)) => arr.clone(),
+            _ => return vec![],
+        };
+        prompts
+            .into_iter()
+            .filter_map(|p| {
+                let name = p.get("name")?.as_str()?.to_string();
+                let description = p
+                    .get("description")
+                    .and_then(|d| d.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let arguments = p
+                    .get("arguments")
+                    .and_then(|a| a.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|arg| {
+                                Some(super::McpPromptArg {
+                                    name: arg.get("name")?.as_str()?.to_string(),
+                                    description: arg
+                                        .get("description")
+                                        .and_then(|d| d.as_str())
+                                        .unwrap_or("")
+                                        .to_string(),
+                                    required: arg
+                                        .get("required")
+                                        .and_then(|r| r.as_bool())
+                                        .unwrap_or(false),
+                                })
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                Some(super::McpPrompt {
+                    name,
+                    description,
+                    arguments,
+                })
+            })
+            .collect()
+    }
+
+    pub(super) async fn get_prompt(
+        &self,
+        name: &str,
+        args: Option<serde_json::Value>,
+    ) -> Result<serde_json::Value, McpError> {
+        let params = match args {
+            Some(a) => serde_json::json!({ "name": name, "arguments": a }),
+            None => serde_json::json!({ "name": name }),
+        };
+        let req = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "prompts/get",
+            "params": params
+        });
+        self.send_request(&req).await.map(|r| r)
+    }
+
     fn tool_result_from_content(
         result: &serde_json::Value,
         tool_name: &str,

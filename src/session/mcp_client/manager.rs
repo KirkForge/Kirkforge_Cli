@@ -67,8 +67,26 @@ impl McpClientManager {
                         },
                     );
                 }
-                clients.push(Arc::new(tokio::sync::RwLock::new(client)));
+                clients.push(Arc::new(tokio::sync::RwLock::new(client.clone())));
                 configs.push(config.clone());
+
+                let resources = client.list_resources().await;
+                if !resources.is_empty() {
+                    warnings.push(format!(
+                        "MCP server '{}' advertises {} resource(s) (not yet consumed by tools)",
+                        config.name,
+                        resources.len()
+                    ));
+                }
+                let prompts = client.list_prompts().await;
+                if !prompts.is_empty() {
+                    warnings.push(format!(
+                        "MCP server '{}' advertises {} prompt(s) (not yet consumed by tools)",
+                        config.name,
+                        prompts.len()
+                    ));
+                }
+
                 tracing::info!(
                     server = %config.name,
                     tool_count = server_tools.len(),

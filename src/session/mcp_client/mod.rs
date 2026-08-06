@@ -400,7 +400,7 @@ impl McpClient {
     }
 
     /// Call `resources/list` and return the resource definitions.
-    async fn list_resources(&self) -> Vec<McpResource> {
+    pub async fn list_resources(&self) -> Vec<McpResource> {
         match self {
             McpClient::Stdio(c) => c.stdio_list_resources().await,
             McpClient::Http(c) => c.list_resources().await,
@@ -408,7 +408,7 @@ impl McpClient {
     }
 
     /// Call `resources/read` and return the resource contents.
-    async fn read_resource(&self, uri: &str) -> Result<serde_json::Value, McpError> {
+    pub async fn read_resource(&self, uri: &str) -> Result<serde_json::Value, McpError> {
         match self {
             McpClient::Stdio(c) => c.stdio_read_resource(uri).await,
             McpClient::Http(c) => c.read_resource(uri).await,
@@ -416,7 +416,7 @@ impl McpClient {
     }
 
     /// Call `prompts/list` and return the prompt definitions.
-    async fn list_prompts(&self) -> Vec<McpPrompt> {
+    pub async fn list_prompts(&self) -> Vec<McpPrompt> {
         match self {
             McpClient::Stdio(c) => c.stdio_list_prompts().await,
             McpClient::Http(c) => c.list_prompts().await,
@@ -424,7 +424,7 @@ impl McpClient {
     }
 
     /// Call `prompts/get` and return the prompt content.
-    async fn get_prompt(
+    pub async fn get_prompt(
         &self,
         name: &str,
         args: Option<serde_json::Value>,

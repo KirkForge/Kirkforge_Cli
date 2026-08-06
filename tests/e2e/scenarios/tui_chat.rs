@@ -114,8 +114,12 @@ async fn tui_chat_full_tui_round_trip() {
     .expect("e2e: start tmux session");
 
     // Wait for the TUI to render the input box.
-    ui.wait_for_contains("Type a message", Duration::from_secs(15), Duration::from_millis(500))
-        .expect("e2e: TUI did not render within 15s");
+    ui.wait_for_contains(
+        "Type a message",
+        Duration::from_secs(15),
+        Duration::from_millis(500),
+    )
+    .expect("e2e: TUI did not render within 15s");
 
     // Type the message and press Enter.
     ui.send_keys("Hello").expect("e2e: send_keys");

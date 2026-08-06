@@ -7,16 +7,9 @@
 #[cfg(unix)]
 mod unix_imp {
 
-    /// Read the auth token from the `KF_CODE_DAEMON_TOKEN_FILE` env var.
-    /// Returns `None` if the env var is not set or the file cannot be read.
-    pub fn read_auth_token() -> Option<String> {
-        std::env::var("KF_CODE_DAEMON_TOKEN_FILE")
-            .ok()
-            .and_then(|path| std::fs::read_to_string(&path).ok())
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-    }
-    use crate::daemon::{paths, read_line_limited, InstanceEvent, Request, Response};
+    use crate::daemon::{
+        paths, read_auth_token, read_line_limited, InstanceEvent, Request, Response,
+    };
     use crate::session::session_index::SessionEntry;
     use anyhow::Context;
     use std::path::PathBuf;

@@ -342,14 +342,13 @@ pub fn format_summary(name: &str, summary: &kf_workflow::WorkflowSummary) -> Str
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shared::Config;
+    use crate::shared::test_util::app_state;
     use crate::tui::app::AppState;
     use crate::tui::commands::PersonaResult;
-    use std::sync::{Arc, RwLock};
     use tokio::sync::mpsc;
 
     fn empty_state() -> AppState {
-        AppState::new(Arc::new(RwLock::new(Config::default())))
+        app_state()
     }
 
     #[test]

@@ -10,7 +10,7 @@
 //! - https://docs.anthropic.com/en/api/claude-on-amazon-bedrock
 
 use crate::adapters::anthropic;
-use crate::shared::{Message, ModelInfo, StreamEvent, ToolCallStyle};
+use crate::shared::{Message, ModelInfo, StreamEvent};
 use futures_util::StreamExt;
 
 use super::ModelAdapter;
@@ -52,17 +52,7 @@ impl AnthropicBedrockAdapter {
 #[async_trait::async_trait]
 impl ModelAdapter for AnthropicBedrockAdapter {
     fn model_info(&self) -> ModelInfo {
-        let lower = self.model_id.to_lowercase();
-        let is_reasoning = lower.contains("claude-3-7-sonnet") || lower.contains("claude-4");
-        ModelInfo {
-            name: self.model_id.clone(),
-            supports_thinking: is_reasoning,
-            tool_call_format: ToolCallStyle::Anthropic,
-            max_context_tokens: 200_000,
-            recommended_temperature: 1.0,
-            supports_images: lower.starts_with("anthropic.claude-3"),
-            supports_cache: true,
-        }
+        super::anthropic_model_info(&self.model_id, "anthropic.claude-3")
     }
 
     fn set_json_mode(&mut self, json_mode: bool) {
@@ -202,6 +192,7 @@ fn extract_payload(envelope: &[u8]) -> Option<(String, usize)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shared::ToolCallStyle;
     use serde_json::json;
 
     #[test]

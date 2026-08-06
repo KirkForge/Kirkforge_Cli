@@ -10,7 +10,7 @@
 //! - https://cloud.google.com/vertex-ai/docs/reference/rest
 
 use crate::adapters::anthropic;
-use crate::shared::{Message, ModelInfo, StreamEvent, ToolCallStyle};
+use crate::shared::{Message, ModelInfo, StreamEvent};
 
 use super::ModelAdapter;
 
@@ -71,17 +71,7 @@ impl AnthropicVertexAdapter {
 #[async_trait::async_trait]
 impl ModelAdapter for AnthropicVertexAdapter {
     fn model_info(&self) -> ModelInfo {
-        let lower = self.model_id.to_lowercase();
-        let is_reasoning = lower.contains("claude-3-7-sonnet") || lower.contains("claude-4");
-        ModelInfo {
-            name: self.model_id.clone(),
-            supports_thinking: is_reasoning,
-            tool_call_format: ToolCallStyle::Anthropic,
-            max_context_tokens: 200_000,
-            recommended_temperature: 1.0,
-            supports_images: lower.starts_with("claude-3"),
-            supports_cache: true,
-        }
+        super::anthropic_model_info(&self.model_id, "claude-3")
     }
 
     fn set_json_mode(&mut self, json_mode: bool) {
@@ -131,6 +121,7 @@ impl ModelAdapter for AnthropicVertexAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shared::ToolCallStyle;
 
     #[test]
     fn endpoint_includes_project_region_and_model() {

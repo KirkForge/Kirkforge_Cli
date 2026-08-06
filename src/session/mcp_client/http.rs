@@ -12,6 +12,7 @@
 
 use super::error::McpError;
 use super::{json_id_to_string, McpClient, PendingMap, REQUEST_TIMEOUT};
+use crate::adapters::MAX_SSE_BUFFER_BYTES;
 use crate::shared::McpServerConfig;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -22,10 +23,6 @@ use tokio_stream::StreamExt;
 fn reqwest_to_io(e: reqwest::Error) -> std::io::Error {
     std::io::Error::other(e.to_string())
 }
-
-/// Maximum bytes the SSE parser will accumulate while waiting for a complete
-/// `data: ...\n\n` frame.
-const MAX_SSE_BUFFER_BYTES: usize = 8 * 1024 * 1024;
 
 /// Maximum length of a single SSE `data:` payload accepted from the server.
 const MAX_SSE_DATA_LEN: usize = 1 << 20;

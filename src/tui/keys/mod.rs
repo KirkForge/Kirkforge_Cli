@@ -1317,11 +1317,11 @@ mod tests {
     use super::{char_index_for_line_col, handle_input_key, HandleInputContext};
     use crate::session::conversation::ConversationLog;
     use crate::session::executor::TurnEvent;
+    use crate::shared::test_util::app_state;
     use crate::shared::Config;
     use crate::tui::app::AppState;
     use crate::tui::commands::PersonaResult;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-    use std::sync::{Arc, RwLock};
     use tokio::sync::mpsc;
 
     fn key(c: char, mods: KeyModifiers) -> KeyEvent {
@@ -1373,7 +1373,7 @@ mod tests {
 
     #[tokio::test]
     async fn shift_enter_inserts_newline_without_sending() {
-        let mut state = AppState::new(Arc::new(RwLock::new(Config::default())));
+        let mut state = app_state();
         state.input = "hello".into();
         state.cursor_position = 5;
 
@@ -1418,7 +1418,7 @@ mod tests {
 
     #[tokio::test]
     async fn arrow_keys_move_across_input_lines() {
-        let mut state = AppState::new(Arc::new(RwLock::new(Config::default())));
+        let mut state = app_state();
         state.input = "ab\ncd".into();
         // Start at end: line 1, col 2 (char index 4).
         state.cursor_position = 4;
@@ -1489,7 +1489,7 @@ mod tests {
 
     #[tokio::test]
     async fn enter_runs_plugins_command_and_pushes_system_message() {
-        let mut state = AppState::new(Arc::new(RwLock::new(Config::default())));
+        let mut state = app_state();
         state.input = "/plugins list".into();
 
         let (input_tx, _input_rx) = mpsc::unbounded_channel();
@@ -1615,7 +1615,7 @@ mod tests {
     #[tokio::test]
     async fn tab_completes_slash_command_single_match() {
         // "/he" + Tab → "/help" (single match replaces the buffer).
-        let mut state = AppState::new(Arc::new(RwLock::new(Config::default())));
+        let mut state = app_state();
         state.input = "/he".into();
         state.cursor_position = 3; // end of "/he"
 
@@ -1633,7 +1633,7 @@ mod tests {
     async fn tab_completes_slash_command_multiple_matches_shows_suggestions() {
         // "/p" + Tab → multiple matches (e.g. /plan, /plugins). The
         // buffer is unchanged; suggestions are populated.
-        let mut state = AppState::new(Arc::new(RwLock::new(Config::default())));
+        let mut state = app_state();
         state.input = "/p".into();
         state.cursor_position = 2;
 
@@ -1665,7 +1665,7 @@ mod tests {
         std::fs::create_dir_all(&tmp).unwrap();
         std::fs::write(tmp.join("tmpfile.txt"), "x").unwrap();
 
-        let mut state = AppState::new(Arc::new(RwLock::new(Config::default())));
+        let mut state = app_state();
         // Type "@<tmp>/tmpfile" — the absolute path prefix. Use the
         // OS-native path so Windows backslashes parse correctly.
         let typed = format!(
@@ -1696,7 +1696,7 @@ mod tests {
     async fn tab_preserves_expand_collapse_on_empty_input() {
         // Tab on empty input must still toggle expand/collapse on the
         // last message (the legacy behavior — don't break it).
-        let mut state = AppState::new(Arc::new(RwLock::new(Config::default())));
+        let mut state = app_state();
         state.input.clear();
         state.cursor_position = 0;
         state
@@ -1720,7 +1720,7 @@ mod tests {
     #[tokio::test]
     async fn tab_no_match_on_unknown_slash_is_noop() {
         // "/zzz" + Tab → no matches, buffer unchanged, no suggestions.
-        let mut state = AppState::new(Arc::new(RwLock::new(Config::default())));
+        let mut state = app_state();
         state.input = "/zzz".into();
         state.cursor_position = 4;
 
@@ -1737,7 +1737,7 @@ mod tests {
     async fn typing_clears_completion_suggestions() {
         // After Tab shows suggestions, pressing any non-Tab key clears
         // them so the hint doesn't linger.
-        let mut state = AppState::new(Arc::new(RwLock::new(Config::default())));
+        let mut state = app_state();
         state.input = "/p".into();
         state.cursor_position = 2;
         state.completion_suggestions = vec!["/plan".into(), "/plugins".into()];

@@ -27,10 +27,7 @@ pub(super) async fn probe_ollama_connection_with_timeout(
     let model = model.to_string();
     let since = Instant::now();
 
-    let client = match reqwest::Client::builder().timeout(timeout).build() {
-        Ok(c) => c,
-        Err(e) => return ConnectionState::Error(format!("client build failed: {e}")),
-    };
+    let client = crate::shared::build_reqwest_client(Some(timeout));
 
     match client.get(&url).send().await {
         Ok(resp) if resp.status().is_success() => ConnectionState::Connected { model, since },

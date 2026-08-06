@@ -80,52 +80,8 @@ pub async fn run_daemon_at(socket_path: PathBuf, pid_path: PathBuf) -> anyhow::R
         s.refresh();
     }
 
-    // Signal handlers: SIGINT, plus SIGHUP and SIGTERM on Unix.
-    // All route to the same shutdown Notify so the daemon exits cleanly
-    // whether the user presses Ctrl+C, their terminal session ends, or a
-    // service manager sends SIGTERM.
-    let shutdown_clone = shutdown.clone();
-    tokio::spawn(async move {
-        if tokio::signal::ctrl_c().await.is_ok() {
-            tracing::info!("daemon received SIGINT; shutting down");
-            shutdown_clone.notify_one();
-        }
-    });
-
-    #[cfg(unix)]
-    {
-        use tokio::signal::unix::{signal, SignalKind};
-
-        let hup_shutdown = shutdown.clone();
-        tokio::spawn(async move {
-            match signal(SignalKind::hangup()) {
-                Ok(mut hup) => {
-                    if hup.recv().await.is_some() {
-                        tracing::info!("daemon received SIGHUP; shutting down");
-                        hup_shutdown.notify_one();
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!(error = %e, "could not install SIGHUP handler");
-                }
-            }
-        });
-
-        let term_shutdown = shutdown.clone();
-        tokio::spawn(async move {
-            match signal(SignalKind::terminate()) {
-                Ok(mut term) => {
-                    if term.recv().await.is_some() {
-                        tracing::info!("daemon received SIGTERM; shutting down");
-                        term_shutdown.notify_one();
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!(error = %e, "could not install SIGTERM handler");
-                }
-            }
-        });
-    }
+    // Signal handlers: shared SIGINT/SIGHUP/SIGTERM → shutdown Notify.
+    crate::daemon::spawn_shutdown_signal_handlers(shutdown.clone());
 
     tracing::info!(
         socket = %socket_path.display(),
@@ -522,14 +478,7 @@ async fn handle_instance_register(
     }
 }
 async fn write_response(stream: &mut BufStream<UnixStream>, resp: Response) -> anyhow::Result<()> {
-    let line = serde_json::to_string(&resp).context("serialize response")?;
-    stream
-        .write_all(line.as_bytes())
-        .await
-        .context("write response")?;
-    stream.write_all(b"\n").await.context("write newline")?;
-    stream.flush().await.context("flush response")?;
-    Ok(())
+    crate::daemon::write_ndjson_response(stream, &resp).await
 }
 
 #[cfg(all(test, unix))]

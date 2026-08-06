@@ -11,6 +11,17 @@ macro_rules! send_or_warn {
     };
 }
 
+pub fn build_reqwest_client(timeout: Option<std::time::Duration>) -> reqwest::Client {
+    let mut builder = reqwest::Client::builder().tcp_nodelay(true);
+    if let Some(t) = timeout {
+        builder = builder.timeout(t);
+    }
+    builder.build().unwrap_or_else(|e| {
+        tracing::warn!(error = %e, "failed to build reqwest client; falling back to default");
+        reqwest::Client::new()
+    })
+}
+
 pub mod audit;
 pub mod metrics;
 pub mod minify;

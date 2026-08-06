@@ -11,16 +11,11 @@
 //! [`parse_anthropic_stream`]; no other module needs to know the wire format.
 
 use crate::shared::{
-    ContentPart, FinishReason, Message, ModelInfo, Role, StreamEvent, TokenUsage, ToolCallStyle,
-    ToolInvocation,
+    ContentPart, FinishReason, Message, ModelInfo, Role, StreamEvent, TokenUsage, ToolInvocation,
 };
 use tokio_stream::StreamExt;
 
-use super::{find_subseq, trim_ascii_whitespace, ModelAdapter};
-
-/// Maximum bytes the SSE parser will accumulate while waiting for a complete
-/// `data: ...\n\n` frame.
-const MAX_SSE_BUFFER_BYTES: usize = 8 * 1024 * 1024;
+use super::{find_subseq, trim_ascii_whitespace, ModelAdapter, MAX_SSE_BUFFER_BYTES};
 
 /// Anthropic Messages API version we target.
 const ANTHROPIC_VERSION: &str = "2023-06-01";
@@ -52,22 +47,7 @@ impl AnthropicAdapter {
 #[async_trait::async_trait]
 impl ModelAdapter for AnthropicAdapter {
     fn model_info(&self) -> ModelInfo {
-        let lower = self.model.to_lowercase();
-        let is_reasoning = lower.contains("claude-3-7-sonnet") || lower.contains("claude-4");
-        ModelInfo {
-            name: self.model.clone(),
-            supports_thinking: is_reasoning,
-            tool_call_format: ToolCallStyle::Anthropic,
-            // ceiling: flat 200_000 for every claude model; model-specific
-            // context sizing is deferred rather than guessed (real windows
-            // vary by model/beta and citing an unverified number would be
-            // a false claim). upgrade path: branch on model id or make it
-            // config-driven (WO 15.26 3.22 deferred).
-            max_context_tokens: 200_000,
-            recommended_temperature: 1.0,
-            supports_images: lower.starts_with("claude-3"),
-            supports_cache: true,
-        }
+        super::anthropic_model_info(&self.model, "claude-3")
     }
 
     fn set_json_mode(&mut self, json_mode: bool) {
@@ -686,6 +666,7 @@ async fn send_done(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shared::ToolCallStyle;
     use serde_json::json;
 
     fn line(s: &str) -> Vec<u8> {

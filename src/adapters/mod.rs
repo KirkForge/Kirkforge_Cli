@@ -14,8 +14,33 @@ use std::collections::HashMap;
 use std::str::FromStr;
 
 use crate::shared::metrics::{record, MetricEvent, PlanDecisionKind};
-use crate::shared::{ContentPart, ModelInfo, Role, StreamEvent};
+use crate::shared::{ContentPart, ModelInfo, Role, StreamEvent, ToolCallStyle};
 use std::future::Future;
+
+/// Maximum bytes the SSE parser will accumulate while waiting for a complete
+/// `data: ...\n\n` frame. Shared across Anthropic, Bedrock, OpenAI-compat,
+/// and MCP HTTP transports.
+pub(crate) const MAX_SSE_BUFFER_BYTES: usize = 8 * 1024 * 1024;
+
+/// Build `ModelInfo` for any Anthropic-family model (first-party, Bedrock,
+/// or Vertex). `image_prefix` is the model-id prefix that signals vision
+/// support — `"claude-3"` for first-party/Vertex, `"anthropic.claude-3"` for
+/// Bedrock.
+pub(crate) fn anthropic_model_info(model_id: &str, image_prefix: &str) -> ModelInfo {
+    let lower = model_id.to_lowercase();
+    let is_reasoning = lower.contains("claude-3-7-sonnet") || lower.contains("claude-4");
+    ModelInfo {
+        name: model_id.to_string(),
+        supports_thinking: is_reasoning,
+        tool_call_format: ToolCallStyle::Anthropic,
+        // ceiling: flat 200_000 for every claude model; model-specific
+        // context sizing is deferred (WO 15.26 3.22 deferred).
+        max_context_tokens: 200_000,
+        recommended_temperature: 1.0,
+        supports_images: lower.starts_with(image_prefix),
+        supports_cache: true,
+    }
+}
 
 /// Build a shared `reqwest::Client` for model adapters.
 ///

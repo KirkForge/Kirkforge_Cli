@@ -9,7 +9,7 @@
 //!
 //! Communication is line-delimited JSON over `~/.local/share/kf-code/jobd.sock`.
 
-use crate::daemon::{read_line_limited, Request, Response};
+use crate::daemon::{read_line_limited, write_ndjson_response, Request, Response};
 use crate::jobs::runner::run_job;
 use crate::jobs::schedule::{compute_next_run, ScheduleSpec, ScheduledJob};
 use crate::jobs::store::JobStore;
@@ -18,7 +18,6 @@ use anyhow::{Context, Result};
 use chrono::Utc;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::io::AsyncWriteExt;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{Mutex, Notify, Semaphore};
 use tokio::time::{sleep_until, Instant};
@@ -82,7 +81,7 @@ pub async fn run_job_daemon_at(socket_path: PathBuf, pid_path: PathBuf) -> Resul
     let reload = Arc::new(Notify::new());
 
     // Signal handlers.
-    spawn_signal_handlers(shutdown.clone());
+    crate::daemon::spawn_shutdown_signal_handlers(shutdown.clone());
 
     // Socket command handler.
     let socket_shutdown = shutdown.clone();
@@ -235,20 +234,10 @@ pub async fn run_job_daemon_at(socket_path: PathBuf, pid_path: PathBuf) -> Resul
     Ok(())
 }
 
-/// Read the auth token from the `KF_CODE_DAEMON_TOKEN_FILE` env var.
-/// Returns `None` if the env var is not set or the file cannot be read.
-fn read_auth_token() -> Option<String> {
-    std::env::var("KF_CODE_DAEMON_TOKEN_FILE")
-        .ok()
-        .and_then(|path| std::fs::read_to_string(&path).ok())
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-}
-
 /// Check auth for the jobs daemon. Returns `Ok(())` if no token is configured
 /// (allowing all requests) or if the supplied token matches.
 fn check_auth(supplied: Option<&str>) -> Result<(), String> {
-    let expected = match read_auth_token() {
+    let expected = match crate::daemon::read_auth_token() {
         Some(t) => t,
         None => return Ok(()),
     };
@@ -343,56 +332,7 @@ async fn send_response(
     stream: &mut tokio::io::BufStream<UnixStream>,
     resp: &Response,
 ) -> Result<()> {
-    let line = serde_json::to_string(resp).context("serialise response")?;
-    stream.write_all(line.as_bytes()).await?;
-    stream.write_all(b"\n").await?;
-    stream.flush().await?;
-    Ok(())
-}
-
-fn spawn_signal_handlers(shutdown: Arc<Notify>) {
-    let ctrl_c_shutdown = shutdown.clone();
-    tokio::spawn(async move {
-        if tokio::signal::ctrl_c().await.is_ok() {
-            tracing::info!("jobd received SIGINT; shutting down");
-            ctrl_c_shutdown.notify_one();
-        }
-    });
-
-    #[cfg(unix)]
-    {
-        use tokio::signal::unix::{signal, SignalKind};
-
-        let hup_shutdown = shutdown.clone();
-        tokio::spawn(async move {
-            match signal(SignalKind::hangup()) {
-                Ok(mut hup) => {
-                    if hup.recv().await.is_some() {
-                        tracing::info!("jobd received SIGHUP; shutting down");
-                        hup_shutdown.notify_one();
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!(error = %e, "could not install SIGHUP handler");
-                }
-            }
-        });
-
-        let term_shutdown = shutdown.clone();
-        tokio::spawn(async move {
-            match signal(SignalKind::terminate()) {
-                Ok(mut term) => {
-                    if term.recv().await.is_some() {
-                        tracing::info!("jobd received SIGTERM; shutting down");
-                        term_shutdown.notify_one();
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!(error = %e, "could not install SIGTERM handler");
-                }
-            }
-        });
-    }
+    write_ndjson_response(stream, resp).await
 }
 
 async fn stop_job_daemon(socket_path: &std::path::Path, pid_path: &std::path::Path) -> Result<()> {

@@ -10,7 +10,7 @@
 use crate::shared::{FinishReason, Message, ModelInfo, StreamEvent, TokenUsage, ToolCallStyle};
 use tokio_stream::StreamExt;
 
-use super::{find_subseq, trim_ascii_whitespace, ModelAdapter};
+use super::{find_subseq, trim_ascii_whitespace, ModelAdapter, MAX_SSE_BUFFER_BYTES};
 
 mod tool_call;
 use tool_call::ToolCallAccumulator;
@@ -46,11 +46,6 @@ async fn send_done_once(
 /// incremental tool-call accumulation, concatenated argument objects,
 /// duplicate id de-duplication, and `[DONE]` suppression as the public
 /// adapter.
-/// Maximum bytes the SSE parser will accumulate while waiting for a complete
-/// `data: ...\n\n` frame. A misbehaving server that never emits a frame
-/// terminator would otherwise grow the buffer without bound.
-const MAX_SSE_BUFFER_BYTES: usize = 8 * 1024 * 1024;
-
 /// Find the first occurrence of `needle` in `haystack`.
 pub(crate) async fn parse_openai_compat_stream<B, E, S>(
     tx: tokio::sync::mpsc::Sender<StreamEvent>,

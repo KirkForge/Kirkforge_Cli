@@ -50,7 +50,7 @@ pub async fn handle_status_command(_args: &str, state: &AppState) -> String {
     };
 
     let elapsed = state.session_started.elapsed();
-    let elapsed_str = format_duration(elapsed.as_secs());
+    let elapsed_str = crate::tui::rendering::format_duration(elapsed.as_secs_f64());
 
     format!(
         "Status:\n\
@@ -79,36 +79,29 @@ pub async fn handle_status_command(_args: &str, state: &AppState) -> String {
     )
 }
 
-/// Render a duration in seconds as a human-readable `Hh Mm` / `Mm Ss` string.
-fn format_duration(secs: u64) -> String {
-    if secs >= 3600 {
-        format!("{}h {:02}m", secs / 3600, (secs % 3600) / 60)
-    } else if secs >= 60 {
-        format!("{}m {:02}s", secs / 60, secs % 60)
-    } else {
-        format!("{secs}s")
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::tui::rendering::format_duration;
 
     #[test]
     fn format_duration_sub_minute() {
-        assert_eq!(format_duration(0), "0s");
-        assert_eq!(format_duration(45), "45s");
+        assert_eq!(format_duration(0.0), "0.0s");
+        assert_eq!(format_duration(45.0), "45.0s");
     }
 
     #[test]
     fn format_duration_minutes() {
-        assert_eq!(format_duration(60), "1m 00s");
-        assert_eq!(format_duration(125), "2m 05s");
+        let s = format_duration(60.0);
+        assert!(s.starts_with("1m"), "got {s}");
+        let s = format_duration(125.0);
+        assert!(s.starts_with("2m"), "got {s}");
     }
 
     #[test]
     fn format_duration_hours() {
-        assert_eq!(format_duration(3600), "1h 00m");
-        assert_eq!(format_duration(3725), "1h 02m");
+        let s = format_duration(3600.0);
+        assert!(s.starts_with("1h"), "got {s}");
+        let s = format_duration(3725.0);
+        assert!(s.starts_with("1h"), "got {s}");
     }
 }

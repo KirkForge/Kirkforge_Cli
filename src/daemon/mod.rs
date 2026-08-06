@@ -27,6 +27,89 @@ use std::os::unix::process::CommandExt;
 #[cfg(unix)]
 use anyhow::Context;
 
+/// Read the auth token from the `KF_CODE_DAEMON_TOKEN_FILE` env var.
+/// Returns `None` if the env var is not set or the file cannot be read.
+pub fn read_auth_token() -> Option<String> {
+    std::env::var("KF_CODE_DAEMON_TOKEN_FILE")
+        .ok()
+        .and_then(|path| std::fs::read_to_string(&path).ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// Spawn SIGINT/SIGHUP/SIGTERM handlers that all notify the same `shutdown`
+/// handle. Used by both the session daemon and the jobs daemon.
+#[cfg(unix)]
+pub fn spawn_shutdown_signal_handlers(shutdown: Arc<tokio::sync::Notify>) {
+    let ctrl_c_shutdown = shutdown.clone();
+    tokio::spawn(async move {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            tracing::info!("received SIGINT; shutting down");
+            ctrl_c_shutdown.notify_one();
+        }
+    });
+
+    use tokio::signal::unix::{signal, SignalKind};
+
+    let hup_shutdown = shutdown.clone();
+    tokio::spawn(async move {
+        match signal(SignalKind::hangup()) {
+            Ok(mut hup) => {
+                if hup.recv().await.is_some() {
+                    tracing::info!("received SIGHUP; shutting down");
+                    hup_shutdown.notify_one();
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "could not install SIGHUP handler");
+            }
+        }
+    });
+
+    let term_shutdown = shutdown.clone();
+    tokio::spawn(async move {
+        match signal(SignalKind::terminate()) {
+            Ok(mut term) => {
+                if term.recv().await.is_some() {
+                    tracing::info!("received SIGTERM; shutting down");
+                    term_shutdown.notify_one();
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "could not install SIGTERM handler");
+            }
+        }
+    });
+}
+
+#[cfg(not(unix))]
+pub fn spawn_shutdown_signal_handlers(shutdown: Arc<tokio::sync::Notify>) {
+    let ctrl_c_shutdown = shutdown;
+    tokio::spawn(async move {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            tracing::info!("received SIGINT; shutting down");
+            ctrl_c_shutdown.notify_one();
+        }
+    });
+}
+
+/// Write one NDJSON line to a stream: serialize `resp`, append `\n`, flush.
+/// Shared by the session daemon server and the jobs daemon client handler.
+pub async fn write_ndjson_response<W, T>(stream: &mut W, resp: &T) -> anyhow::Result<()>
+where
+    W: tokio::io::AsyncWriteExt + Unpin,
+    T: serde::Serialize,
+{
+    let line = serde_json::to_string(resp).context("serialize response")?;
+    stream
+        .write_all(line.as_bytes())
+        .await
+        .context("write response")?;
+    stream.write_all(b"\n").await.context("write newline")?;
+    stream.flush().await.context("flush response")?;
+    Ok(())
+}
+
 /// Detach the current process into the background by re-executing the same
 /// binary with `args` in a new session.
 ///

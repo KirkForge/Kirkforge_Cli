@@ -210,10 +210,9 @@ pub async fn summarize_conversation(
     let body = build_summarize_request(&config.model, &prompt, config.max_summary_tokens);
     let url = format!("{}/api/chat", ollama_host.trim_end_matches('/'));
 
-    match reqwest::Client::new()
+    match crate::shared::build_reqwest_client(Some(std::time::Duration::from_secs(30)))
         .post(&url)
         .json(&body)
-        .timeout(std::time::Duration::from_secs(30))
         .send()
         .await
     {

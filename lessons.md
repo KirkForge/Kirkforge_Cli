@@ -18,7 +18,8 @@
 
 ## Key learnings
 - The kf-code codebase's TUI already has most vix-style features: context indicator with color coding, streaming token display, tool output summarization
-- The main TUI improvements from vix that kf-code is MISSING: multi-thread tabs (F1-F6), dedicated permission panel replacing input area, and model grid tab
+- F1-F6 tabs are shipped (Chat, Models, Plugins, Jobs, Settings, Sessions); the "Threads" tab was renamed to "Sessions" (WO 20.6.0)
+- Mouse scroll support added for chat view (WO 20.6.0)
 - Plugins are already feature-gated at compile time; the runtime toggle adds the ability to enable/disable without rebuild
 - The EventBus deletion was clean — it was only used by the verifier handler and removing it simplified the dispatch path
 

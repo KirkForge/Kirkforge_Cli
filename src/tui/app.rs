@@ -130,7 +130,7 @@ impl ActiveTab {
             ActiveTab::Plugins => "F3:Plugins",
             ActiveTab::Jobs => "F4:Jobs",
             ActiveTab::Settings => "F5:Settings",
-            ActiveTab::Threads => "F6:Threads",
+            ActiveTab::Threads => "F6:Sessions",
         }
     }
 
@@ -177,6 +177,20 @@ pub struct FileCompleter {
 }
 
 /// Application state — single source of truth for the TUI.
+///
+/// # ponytail: deferred — AppState decomposition (WO 20.6.0 U1)
+///
+/// This struct has ~55 fields. Splitting into sub-structs (ApprovalState,
+/// SearchState, DaemonState, RenderCache, GenerationState) would improve
+/// readability and reduce borrow-checker workarounds in the render path.
+/// However, the fields are accessed across 15+ files (keys, events,
+/// approval_keys, components, commands) and the borrow patterns are tightly
+/// coupled (e.g. `state.pending_approval.take()` + `state.approval_scroll`
+/// in the same closure). A safe decomposition requires auditing every
+/// access pattern — too coupled for a single session. Upgrade path:
+/// start with `RenderCache` (already a separate struct) and `SearchState`
+/// (self-contained fields, few cross-concern accesses), then progressively
+/// extract the others.
 pub struct AppState {
     /// Conversation messages
     pub messages: VecDeque<ConversationEntry>,

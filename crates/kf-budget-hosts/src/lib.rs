@@ -13,11 +13,8 @@
 //! second host. `detect_host` defaults to Claude Code because that is the
 //! only host with CLI hook support today.
 
-pub mod aider;
 pub mod canonical;
 pub mod claude_code;
-pub mod cursor;
-pub mod kf_code_host;
 
 pub use canonical::{
     PostToolUsePayload, PostToolUseResponse, PreCompactPayload, PreCompactResponse, Turn,

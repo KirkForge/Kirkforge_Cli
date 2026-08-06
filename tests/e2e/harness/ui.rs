@@ -99,7 +99,7 @@ impl TmuxDriver {
                 "-S",
                 &self.socket_path.to_string_lossy(),
                 "capture-pane",
-                "-a",  // alternate screen
+                "-a", // alternate screen
                 "-p",
                 "-t",
                 &self.session_name,

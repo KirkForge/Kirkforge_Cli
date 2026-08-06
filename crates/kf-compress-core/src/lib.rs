@@ -19,5 +19,7 @@ pub mod content;
 pub mod mode;
 /// [`CompressionPipeline`](pipeline::CompressionPipeline) and [`CompressionContext`](pipeline::CompressionContext).
 pub mod pipeline;
+/// Ruleset filtering by [`Mode`](mode::Mode).
+pub mod rules;
 /// Pluggable [`OffloadStore`](store::OffloadStore) backends.
 pub mod store;

@@ -209,7 +209,7 @@ name = "e2e"
 path = "tests/e2e/main.rs"
 
 [features]
-default = ["stratum", "draw", "budget"]
+default = ["stratum", "budget"]
 stratum = ["dep:kf-compress-core"]
 draw = ["dep:kf-draw-core"]
 budget = ["dep:kf-budget-core"]

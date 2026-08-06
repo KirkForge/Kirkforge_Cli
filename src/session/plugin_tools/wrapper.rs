@@ -92,7 +92,7 @@ pub struct PluginToolWrapper {
 }
 
 impl PluginToolWrapper {
-    /// Create a new wrapper for a single plugin tool.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         name: String,
         description: String,

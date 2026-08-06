@@ -2075,6 +2075,7 @@ dependencies = [
  "tempfile",
  "thiserror 1.0.69",
  "toml",
+ "tracing",
 ]
 
 [[package]]
@@ -2171,7 +2172,6 @@ dependencies = [
  "clap",
  "clap_complete",
  "kf-compress-core",
- "kf-compress-hosts",
  "predicates",
  "serde",
  "serde_json",
@@ -2192,13 +2192,6 @@ dependencies = [
  "thiserror 1.0.69",
  "toml",
  "tracing",
-]
-
-[[package]]
-name = "kf-compress-hosts"
-version = "0.2.0"
-dependencies = [
- "kf-compress-core",
 ]
 
 [[package]]

@@ -1,7 +1,8 @@
 name = "use_stratum_compress"
 difficulty = "medium"
+requires_model = true
 
-prompt = "The file data/big.txt contains a large tool result (~22KB). Use the stratum_run tool with mode=full to compress it inline. The compression should produce output shorter than the input — stratum's Full mode uses transforms and offloading for content above the bloat threshold."
+prompt = "The file data/big.txt contains a large tool output (~22KB). Use the stratum_run tool with mode=full to compress it inline. Write the compressed output to data/compressed.txt."
 
 [setup]
 "Cargo.toml" = """[package]
@@ -22,5 +23,5 @@ Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor i
 
 [verify]
 type = "file_contains"
-path = "data/big.txt"
-contains = "Large tool output"
+path = "data/compressed.txt"
+contains = "Large"

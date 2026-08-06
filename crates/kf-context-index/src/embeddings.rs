@@ -13,10 +13,9 @@
 
 use crate::{ContextIndex, Symbol, SymbolKind};
 
-/// Optional doc-comment lookup: given a symbol, return its doc text.
-/// The current `ContextIndex` does not carry doc comments, so callers
-/// pass `None`; the slot exists for a future Phase that extracts
-/// `///`/`//`/`#` comments via tree-sitter.
+// ponytail: DocLookup slot exists for a future Phase that extracts
+// `///`/`//`/`#` comments via tree-sitter. Symbol has no `doc` field
+// yet; callers pass `None`. Upgrade path: tree-sitter doc extraction.
 pub type DocLookup<'a> = Option<&'a dyn Fn(&Symbol) -> Option<String>>;
 
 /// A sparse vector dimension → weight pair. Vectors are kept sorted

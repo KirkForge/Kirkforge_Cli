@@ -1225,13 +1225,13 @@ mod tests {
         }];
         let tools = vec![
             crate::shared::ToolDef {
-                name: "read_file".into(),
-                description: "read a file".into(),
+                name: "read_file",
+                description: "read a file",
                 parameters: serde_json::json!({"type": "object"}),
             },
             crate::shared::ToolDef {
-                name: "bash".into(),
-                description: "run a command".into(),
+                name: "bash",
+                description: "run a command",
                 parameters: serde_json::json!({"type": "object"}),
             },
         ];

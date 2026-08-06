@@ -1,5 +1,6 @@
 name = "use_draw_render"
 difficulty = "easy"
+requires_model = true
 
 prompt = "The file diagram.td.json contains a small .td.json scene with one box labeled 'Hello'. Use the draw_render tool to render it as plain text. The plain-text render should be saved to diagram.txt."
 
@@ -27,10 +28,8 @@ edition = "2021"
   }
 }
 """
-"diagram.txt" = """Hello
-"""
 
 [verify]
 type = "file_contains"
-path = "diagram.td.json"
-contains = "\"version\": 1"
+path = "diagram.txt"
+contains = "Hello"

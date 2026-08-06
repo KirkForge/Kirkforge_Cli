@@ -220,7 +220,6 @@ jobs:
 
       - name: Sign checksums
         shell: bash
-        continue-on-error: true
         run: |
           cd dist
           cosign sign-blob --yes \

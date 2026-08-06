@@ -395,8 +395,7 @@ jobs:
         run: cargo install cargo-audit --locked
 
       - name: Audit dependencies
-        continue-on-error: true
-        run: cargo audit
+        run: cargo audit --deny warnings
 
   # Build and test the vendored KirkForge-Plugin Node SDK. The local CI
   # script (scripts/ci-local.sh) already covers this; run it in CI too so

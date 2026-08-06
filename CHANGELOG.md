@@ -5,6 +5,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+- WO 20.0.9: `draw` feature now non-default (opt in via `--features draw`).
+- WO 20.0.9: `kf-compress-hosts` crate collapsed into `kf-compress-core` (rules module).
+- WO 20.0.9: Removed Cursor/Aider/KfCode stub modules from `kf-budget-hosts`.
+- WO 20.0.9: `cargo audit` now blocking in CI (`--deny warnings`, no `continue-on-error`).
+- WO 20.0.9: Cosign signing now blocking in release workflow.
+- WO 20.0.9: Bench tasks (draw/workflow/budget/stratum/lsp) now require model; verify agent output.
+- WO 20.0.9: TECHNICAL.md Stratum section downgraded to match reality; `compaction_use_llm` naming documented.
+- WO 20.0.9: `SandboxEnforcer` and `DocLookup` annotated with `ponytail:` honest-doc comments.
+
 ### Added
 - WO 17.1: per-provider API key resolution (`resolve_api_key` with config → env → keychain order) and Anthropic auth headers (`x-api-key` + `anthropic-version`).
 - WO 17.2: daemon instance channel (broadcast, auth, version gate). `DaemonServer` registers instances and broadcasts state changes over the Unix socket; `DaemonClient` authenticates with a token read from `KF_CODE_DAEMON_TOKEN_FILE`.

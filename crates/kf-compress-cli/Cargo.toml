@@ -9,13 +9,8 @@ description = "CLI for the Stratum context-compression pipeline"
 keywords = ["compression", "llm", "context", "prompt"]
 categories = ["command-line-utilities", "development-tools"]
 
-[[bin]]
-name = "kf-compress"
-path = "src/main.rs"
-
 [dependencies]
 kf-compress-core = { path = "../kf-compress-core" }
-kf-compress-hosts = { path = "../kf-compress-hosts" }
 clap.workspace = true
 anyhow.workspace = true
 tracing.workspace = true

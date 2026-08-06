@@ -6,6 +6,12 @@
 //! provider.  Isolated envs ensure tests don't collide with each other or
 //! with the user's real config.
 
+#![allow(clippy::len_zero)]
+#![allow(clippy::uninlined_format_args)]
+#![allow(clippy::useless_conversion)]
+#![allow(clippy::io_other_error)]
+#![allow(dead_code)]
+
 mod fixtures;
 mod harness;
 

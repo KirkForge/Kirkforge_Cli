@@ -1,7 +1,8 @@
 name = "use_lsp_query"
 difficulty = "medium"
+requires_model = true
 
-prompt = "The file src/lib.rs contains a Rust function `greet` that takes a name and returns a String. Use the lsp_query tool with operation=document_symbols on src/lib.rs to discover the symbol. The lsp_query tool requires an LSP server configured for Rust (e.g. rust-analyzer) in config.toml; without one, the tool will return an error rather than fake results. The symbol list should include 'greet' as a function."
+prompt = "The file src/lib.rs contains a Rust function `greet` that takes a name and returns a String. Use the lsp_query tool with operation=document_symbols on src/lib.rs to discover the symbol. Then write the symbol name to symbols.txt."
 
 [setup]
 "Cargo.toml" = """[package]
@@ -19,5 +20,5 @@ path = "src/lib.rs"
 
 [verify]
 type = "file_contains"
-path = "src/lib.rs"
-contains = "pub fn greet"
+path = "symbols.txt"
+contains = "greet"

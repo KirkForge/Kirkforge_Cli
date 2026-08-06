@@ -12,6 +12,24 @@ categories = ["command-line-utilities", "development-tools"]
 members = ["crates/*"]
 resolver = "2"
 
+# kf-video not built by default `cargo build --workspace`.
+default-members = [
+    "crates/kf-bench",
+    "crates/kf-budget-cli",
+    "crates/kf-budget-core",
+    "crates/kf-budget-hosts",
+    "crates/kf-compress-cli",
+    "crates/kf-compress-core",
+    "crates/kf-context-index",
+    "crates/kf-draw",
+    "crates/kf-draw-core",
+    "crates/kf-lsp",
+    "crates/kf-plugin-host",
+    "crates/kf-plugin-sdk",
+    "crates/kf-testdoctor",
+    "crates/kf-workflow",
+]
+
 # Binary root lives at `src/main/mod.rs` (split into submodules for the
 # event-emission / path-resolution seam). Cargo auto-detects `src/main.rs`
 # but not the dir form, so point the `kf-code` bin at it explicitly.
@@ -210,7 +228,7 @@ name = "e2e"
 path = "tests/e2e/main.rs"
 
 [features]
-default = ["stratum", "draw", "budget"]
+default = ["stratum", "budget"]
 stratum = ["dep:kf-compress-core"]
 draw = ["dep:kf-draw-core"]
 budget = ["dep:kf-budget-core"]

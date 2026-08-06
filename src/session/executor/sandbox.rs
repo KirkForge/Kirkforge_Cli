@@ -11,6 +11,7 @@
 use crate::session::access::{DenyList, GuardVerdict, PathGuard, ReadGate};
 use std::path::PathBuf;
 
+// ponytail: not a sandbox, upgrade path: seccomp/landlock
 pub(crate) struct SandboxEnforcer {
     pub(crate) path_guard: PathGuard,
     pub(crate) deny_list: DenyList,

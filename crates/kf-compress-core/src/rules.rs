@@ -1,4 +1,4 @@
-use kf_compress_core::mode::Mode;
+use crate::mode::Mode;
 
 /// Filter a source containing `<!-- stratum:mode:... -->` directives to only
 /// the sections active for `mode`.
@@ -12,7 +12,7 @@ use kf_compress_core::mode::Mode;
 ///
 /// ```
 /// use kf_compress_core::mode::Mode;
-/// use kf_compress_hosts::rules::filter_by_mode;
+/// use kf_compress_core::rules::filter_by_mode;
 ///
 /// let source = "# Rules\n<!-- stratum:mode:all -->\ncommon\n<!-- stratum:mode:full,ultra -->\nadvanced\n";
 /// let out = filter_by_mode(source, Mode::Off);
@@ -82,8 +82,6 @@ mod tests {
 
     #[test]
     fn malformed_directive_falls_back_to_keep() {
-        // A line that looks like a directive but lacks a known mode list
-        // should be treated as a non-directive (keep continues).
         let input = "keep\n<!-- stratum:mode: -->\nhidden\n";
         let out = filter_by_mode(input, Mode::Full);
         assert!(out.contains("keep"));
@@ -92,8 +90,6 @@ mod tests {
 
     #[test]
     fn unclosed_directive_is_ignored() {
-        // A directive line without closing marker is still parsed as a directive
-        // (strip_suffix returns the original rest), so it switches state.
         let input = "before\n<!-- stratum:mode:all\nafter\n";
         let out = filter_by_mode(input, Mode::Full);
         assert!(out.contains("before"));

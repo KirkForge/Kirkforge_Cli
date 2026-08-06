@@ -30,10 +30,10 @@ pub struct SessionConfig {
     pub checkpoint_interval_messages: usize,
     #[serde(default)]
     pub worktree_enabled: bool,
-    /// When `true`, microcompaction uses the LLM summarizer when the
-    /// heuristic would drop more than `compaction_drop_threshold` of
-    /// the content. When `false` (the default), the heuristic summary
-    /// is always used.
+    // ponytail: compaction_use_llm name is a misnomer — the actual impl is
+    // heuristic keyword extraction, not LLM summarization. The LLM path is
+    // gated behind this flag but the default is false. Rename to
+    // compaction_use_heuristic when the LLM path ships.
     #[serde(default = "default_compaction_use_llm")]
     pub compaction_use_llm: bool,
     /// Fraction of content that must be dropped by the heuristic before

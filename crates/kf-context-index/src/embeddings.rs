@@ -551,7 +551,7 @@ mod tests {
         let sim_other = cosine_similarity(&q, &other);
         assert!(
             sim_target > sim_other,
-            "query 'user profile' should rank Profile (with doc comment) above parse_config ({sim_target} vs {sim_other})"
+            "query 'user profile' should rank Profile above parse_config ({sim_target} vs {sim_other})"
         );
         assert!(
             sim_target > 0.3,

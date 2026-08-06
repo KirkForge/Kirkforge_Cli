@@ -9,7 +9,38 @@ keywords = ["ai", "cli", "coding-agent", "ollama", "tui"]
 categories = ["command-line-utilities", "development-tools"]
 
 [workspace]
-members = ["crates/*"]
+members = [
+    "crates/kf-bench",
+    "crates/kf-budget-cli",
+    "crates/kf-budget-core",
+    "crates/kf-budget-hosts",
+    "crates/kf-compress-cli",
+    "crates/kf-compress-core",
+    "crates/kf-compress-hosts",
+    "crates/kf-context-index",
+    "crates/kf-draw-core",
+    "crates/kf-draw",
+    "crates/kf-lsp",
+    "crates/kf-plugin-host",
+    "crates/kf-plugin-sdk",
+    "crates/kf-testdoctor",
+    "crates/kf-video",
+    "crates/kf-workflow",
+]
+default-members = [
+    "crates/kf-bench",
+    "crates/kf-budget-core",
+    "crates/kf-budget-hosts",
+    "crates/kf-compress-core",
+    "crates/kf-context-index",
+    "crates/kf-draw-core",
+    "crates/kf-lsp",
+    "crates/kf-plugin-host",
+    "crates/kf-plugin-sdk",
+    "crates/kf-testdoctor",
+    "crates/kf-workflow",
+    ".",
+]
 resolver = "2"
 
 # Binary root lives at `src/main/mod.rs` (split into submodules for the
@@ -209,7 +240,7 @@ name = "e2e"
 path = "tests/e2e/main.rs"
 
 [features]
-default = ["stratum", "draw", "budget"]
+default = ["stratum", "budget"]
 stratum = ["dep:kf-compress-core"]
 draw = ["dep:kf-draw-core"]
 budget = ["dep:kf-budget-core"]

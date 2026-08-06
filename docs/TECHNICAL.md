@@ -30,14 +30,15 @@ synthesis with its own architectural contributions:
 
 ## Workspace layout
 
-The workspace has one binary crate (`kf-code`) and 16 satellite crates under
-`crates/`. The binary is the user-facing CLI; the satellites are libraries and
-standalone binaries.
+The workspace has one binary crate (`kf-code`) and 12 active satellite crates
+under `crates/`. Four additional crates are excluded from the default build
+(`kf-video`, `kf-compress-hosts`, `kf-compress-cli`, `kf-budget-cli`) — they
+exist on disk and can be built explicitly with `-p`.
 
 ```
 kf-code (root bin)          ← the CLI the user runs
 ├── src/                       ← agent core (session, tools, TUI, adapters, verifiers)
-├── crates/                    ← 16 satellite crates
+├── crates/                    ← 12 active + 4 excluded satellite crates
 │   ├── kf-plugin-sdk     ← plugin SDK: manifest types, trust tiers
 │   ├── kf-plugin-host  ← plugin runtime: registry, dispatch, signatures
 │   ├── kf-context-index← tree-sitter symbol/import/call-graph index
@@ -45,15 +46,12 @@ kf-code (root bin)          ← the CLI the user runs
 │   ├── kf-lsp          ← LSP client pool for symbol-aware navigation
 │   ├── kf-bench        ← task-benchmark harness (types + verifier + reports)
 │   ├── kf-draw-core    ← pure document model for KirkForge-Draw
-│   ├── kf-draw         ← kfd: terminal diagram editor binary
-│   ├── kf-video        ← instruction-driven video production binary
+│   ├── kf-draw         ← kfd: terminal diagram editor binary (default-OFF)
 │   ├── kf-compress-core       ← context-compression pipeline library
-│   ├── kf-compress-hosts      ← host-specific compression rules
-│   ├── kf-compress-cli        ← stratum: compression CLI binary
 │   ├── kf-budget-core           ← budget/orchestrator/slicing data model
 │   ├── kf-budget-hosts          ← host-side budget adapters
-│   ├── kf-budget-cli            ← kf-budget: budget CLI binary
-│   └── kf-testdoctor   ← test-performance doctor (workspace member; profile, profile-per-test, classify, partition, suggest, suggest-detailed, apply, gaps, diagnose, flaky)
+│   └── kf-testdoctor   ← test-performance doctor
+│   (excluded: kf-video, kf-compress-hosts, kf-compress-cli, kf-budget-cli)
 ├── plugins/                   ← 5 plugin manifests + shell tool/hook scripts
 │   ├── kf-plugin/      ← SDK self-plugin (Node-backed verification tools)
 │   ├── stratum/               ← compression plugin (5 tools, 2 hooks)
@@ -81,11 +79,10 @@ The root `kf-code` binary directly depends on six crates:
 | `kf-lsp` | LSP client pool |
 | `kf-bench` | Benchmark task types, loader, verifier, report writers |
 
-The remaining nine crates are **satellites**: they build as standalone binaries
-(`kfd`, `kf-video`, `stratum`, `kf-budget`) or support libraries. When
-their feature flag is enabled, the core crate is linked directly into the
-`kf-code` binary as a compiled-in module (ADR-046–049). When the feature is
-off, the shell plugin dir loads as a fallback (ADR-050).
+Three more crates link in when their feature flag is enabled
+(`stratum` → `kf-compress-core`, `budget` → `kf-budget-core`,
+`draw` → `kf-draw-core`). The remaining crates are excluded from
+the workspace or are satellite binaries.
 
 ---
 
@@ -383,10 +380,9 @@ The walker also handles five non-trivial syntax patterns (WO 8.9):
 ## Context compression (Stratum)
 
 Stratum is the **input-side** context cost system. It classifies tool outputs
-by content type and compacts bloated payloads *before* they enter the context
-window. Four modes: `off`, `lite`, `full`, `ultra`. The pipeline applies
-content-type-specific transforms with offload storage and query-based relevance
-filtering.
+by content type and applies minification plus head/tail truncation with
+bloat offload *before* they enter the context window. Four modes: `off`,
+`lite`, `full`, `ultra`.
 
 Stratum ships as a compiled-in module (when the `stratum` feature is on,
 ADR-046) or as a standalone `stratum` binary (feature off, shell fallback).
@@ -729,21 +725,22 @@ The root `Cargo.toml` exposes these features:
 
 - `stratum` (default) — folds the Stratum context-compression plugin in as
   direct Rust calls (ADR-046).
-- `draw` (default) — folds the Draw diagram plugin in as direct Rust calls
-  (ADR-048).
 - `budget` (default) — folds the Plugin3 token-budget guard in as direct
   Rust calls with full in-process event context (ADR-047).
+- `draw` (non-default) — folds the Draw diagram plugin in as direct Rust calls
+  (ADR-048). Off by default (22K LOC, zero external consumers).
 - `video` (non-default) — folds the Video plugin in as direct Rust calls.
   Off by default because it pulls `serde_yaml`, `strum`, and `which` (new
   transitive deps); users who want agent-driven video editing opt in via
-  `--features video` (ADR-049).
+  `--features video` (ADR-049). Crate also excluded from workspace.
 - `otel` (non-default) — OpenTelemetry export.
 
-Four plugins are therefore feature-gated compiled-in modules, served as
+Three plugins are feature-gated compiled-in modules, served as
 direct Rust calls when their feature is on and falling back to the shell
-plugin path when it is off (graceful degradation). ADR-050 pins the
-two-path dispatch consolidation design. The `dep:` optional-dependency
-pattern is what makes per-plugin opt-in possible.
+plugin path when it is off (graceful degradation). Video is additionally
+excluded from the workspace (build with `-p kf-video --features video`).
+ADR-050 pins the two-path dispatch consolidation design. The `dep:` optional-
+dependency pattern is what makes per-plugin opt-in possible.
 
 ADR-0017's "no `[features]` section" rule is scoped to `crates/kf-budget-core/`,
 not the root binary.
@@ -762,6 +759,32 @@ ADR file headers and the README index table agree.
 Conventions: `ponytail:` annotations pin spec literals (if a ponytail test
 fails, the spec and impl drifted, not the test). `ceiling:` and `upgrade path:`
 document known limitations. Removing these is a regression.
+
+---
+
+## Crate map
+
+| Crate | Status | Purpose | Public API | Consumers |
+|---|---|---|---|---|
+| `kf-plugin-sdk` | Active | Plugin manifest types, trust tiers | `PluginManifest`, `TrustTier` | `kf-plugin-host`, root binary |
+| `kf-plugin-host` | Active | Plugin registry, dispatch, signatures | `PluginHost`, `PluginToolWrapper` | root binary |
+| `kf-context-index` | Active | Tree-sitter symbol/import/call-graph index | `ContextIndex`, `CachedIndex` | root binary |
+| `kf-workflow` | Active | JSON workflow engine (DAG of persona steps) | `WorkflowExecutor`, `WorkflowTemplate` | root binary |
+| `kf-lsp` | Active | LSP client pool for symbol-aware navigation | `LspPool` | root binary |
+| `kf-bench` | Active | Benchmark task types, loader, verifier, reports | `BenchTask`, `TaskResult` | root binary, bench CI |
+| `kf-draw-core` | Active | Pure document model for KirkForge-Draw | `DrawState`, `DrawDocument` | `kf-draw`, root binary (via `draw` feature) |
+| `kf-draw` | Default-OFF | `kfd` terminal diagram editor binary | `kfd --render/--validate` | root binary (via `draw` feature, optional) |
+| `kf-compress-core` | Active | Context-compression pipeline library | `CompressionPipeline`, `Mode`, `rules::build_rules` | root binary (via `stratum` feature) |
+| `kf-budget-core` | Active | Budget/orchestrator/slicing data model | `TokenBudget`, `SlicingOrchestrator` | root binary (via `budget` feature) |
+| `kf-budget-hosts` | Active | Host detection, canonical payload schemas | `Host`, `detect_host`, canonical types | `kf-budget-cli` (excluded) |
+| `kf-testdoctor` | Active | Test-performance diagnostics | `doctor` CLI | root binary (`kf-code doctor`) |
+| `kf-video` | Excluded | Instruction-driven video production binary | `kf-video` CLI | root binary (via `video` feature, optional) |
+| `kf-compress-hosts` | Excluded | ~~Host-specific compression rules~~ (collapsed into `kf-compress-core`) | — | — |
+| `kf-compress-cli` | Excluded | `stratum` compression CLI binary | `stratum` CLI | — |
+| `kf-budget-cli` | Excluded | `kf-budget` budget CLI binary | `kf-budget` CLI | — |
+
+"Excluded" crates exist on disk but are not built by default (`cargo build
+--workspace`). They can be built explicitly with `-p <crate-name>`.
 
 ---
 

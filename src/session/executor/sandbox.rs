@@ -1,5 +1,7 @@
 //! Sandbox enforcement — groups path, deny-list, and read-gate checks
 //! into a single sub-struct owned by [`super::Executor`].
+//!
+// ponytail: not a sandbox, upgrade path: seccomp/landlock
 
 use crate::session::access::{DenyList, GuardVerdict, PathGuard, ReadGate};
 use std::path::PathBuf;

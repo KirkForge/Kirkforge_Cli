@@ -15,7 +15,6 @@ path = "src/main.rs"
 
 [dependencies]
 kf-compress-core = { path = "../kf-compress-core" }
-kf-compress-hosts = { path = "../kf-compress-hosts" }
 clap.workspace = true
 anyhow.workspace = true
 tracing.workspace = true

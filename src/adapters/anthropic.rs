@@ -28,6 +28,8 @@ pub struct AnthropicAdapter {
     json_mode: bool,
     seed: Option<u64>,
     timeout_secs: u64,
+    extended_thinking: bool,
+    budget_tokens: usize,
 }
 
 impl AnthropicAdapter {
@@ -40,6 +42,8 @@ impl AnthropicAdapter {
             json_mode: false,
             seed: None,
             timeout_secs,
+            extended_thinking: true,
+            budget_tokens: 10_000,
         }
     }
 }
@@ -58,6 +62,14 @@ impl ModelAdapter for AnthropicAdapter {
         self.seed = seed;
     }
 
+    fn set_extended_thinking(&mut self, enabled: bool) {
+        self.extended_thinking = enabled;
+    }
+
+    fn set_budget_tokens(&mut self, budget: usize) {
+        self.budget_tokens = budget;
+    }
+
     async fn stream(
         &self,
         messages: &[Message],
@@ -69,7 +81,15 @@ impl ModelAdapter for AnthropicAdapter {
                     "no Anthropic API key set (ANTHROPIC_API_KEY or [model].anthropic_api_key)"
                 )
             })?;
-        let body = build_anthropic_body(&self.model, messages, tools, self.json_mode, self.seed);
+        let body = build_anthropic_body(
+            &self.model,
+            messages,
+            tools,
+            self.json_mode,
+            self.seed,
+            self.extended_thinking,
+            self.budget_tokens,
+        );
         let url = format!("{}/v1/messages", self.api_base);
 
         let response = super::send_with_retry(|| async {
@@ -106,7 +126,12 @@ pub(crate) fn build_anthropic_body(
     tools: &[crate::shared::ToolDef],
     json_mode: bool,
     seed: Option<u64>,
+    extended_thinking: bool,
+    budget_tokens: usize,
 ) -> serde_json::Value {
+    let lower = model.to_lowercase();
+    let supports_thinking = lower.contains("claude-3-7-sonnet") || lower.contains("claude-4");
+
     let mut system_blocks: Vec<serde_json::Value> = Vec::new();
     let mut anthropic_messages: Vec<serde_json::Value> = Vec::new();
 
@@ -226,6 +251,13 @@ pub(crate) fn build_anthropic_body(
         "messages": anthropic_messages,
         "stream": true,
     });
+
+    if extended_thinking && supports_thinking {
+        body["thinking"] = serde_json::json!({
+            "type": "enabled",
+            "budget_tokens": budget_tokens
+        });
+    }
 
     if !system_blocks.is_empty() {
         if system_blocks.len() == 1 {
@@ -707,7 +739,15 @@ mod tests {
                 ..Default::default()
             },
         ];
-        let body = build_anthropic_body("claude-sonnet-4", &messages, &[], false, None);
+        let body = build_anthropic_body(
+            "claude-sonnet-4",
+            &messages,
+            &[],
+            false,
+            None,
+            false,
+            10_000,
+        );
         assert!(body
             .get("messages")
             .unwrap()
@@ -742,7 +782,15 @@ mod tests {
                 ..Default::default()
             },
         ];
-        let body = build_anthropic_body("claude-sonnet-4", &messages, &[], false, None);
+        let body = build_anthropic_body(
+            "claude-sonnet-4",
+            &messages,
+            &[],
+            false,
+            None,
+            false,
+            10_000,
+        );
         let msgs = body["messages"].as_array().unwrap();
         // First user message (prefix) is skipped for cache markers.
         assert!(msgs[0]
@@ -1021,7 +1069,7 @@ mod tests {
             description: "read a file",
             parameters: json!({"type": "object"}),
         }];
-        let body = build_anthropic_body("claude-4", &messages, &tools, false, None);
+        let body = build_anthropic_body("claude-4", &messages, &tools, false, None, false, 10_000);
         let tools_arr = body["tools"].as_array().unwrap();
         assert_eq!(tools_arr.len(), 1);
         assert_eq!(tools_arr[0]["name"], "read_file");
@@ -1035,7 +1083,7 @@ mod tests {
             content: "hi".into(),
             ..Default::default()
         }];
-        let body = build_anthropic_body("claude-4", &messages, &[], false, None);
+        let body = build_anthropic_body("claude-4", &messages, &[], false, None, false, 10_000);
         assert!(body.get("tools").is_none());
     }
 
@@ -1046,7 +1094,7 @@ mod tests {
             content: "hi".into(),
             ..Default::default()
         }];
-        let body = build_anthropic_body("claude-4", &messages, &[], false, Some(7));
+        let body = build_anthropic_body("claude-4", &messages, &[], false, Some(7), false, 10_000);
         assert_eq!(body["temperature"], json!(0.0));
     }
 
@@ -1057,7 +1105,7 @@ mod tests {
             content: "hi".into(),
             ..Default::default()
         }];
-        let body = build_anthropic_body("claude-4", &messages, &[], false, None);
+        let body = build_anthropic_body("claude-4", &messages, &[], false, None, false, 10_000);
         assert!(body.get("temperature").is_none());
     }
 
@@ -1069,7 +1117,7 @@ mod tests {
             tool_call_id: Some("tu_1".into()),
             ..Default::default()
         }];
-        let body = build_anthropic_body("claude-4", &messages, &[], false, None);
+        let body = build_anthropic_body("claude-4", &messages, &[], false, None, false, 10_000);
         let msg = &body["messages"][0];
         assert_eq!(msg["role"], "user");
         let block = &msg["content"][0];
@@ -1085,7 +1133,7 @@ mod tests {
             content: "x".into(),
             ..Default::default()
         }];
-        let body = build_anthropic_body("claude-4", &messages, &[], false, None);
+        let body = build_anthropic_body("claude-4", &messages, &[], false, None, false, 10_000);
         assert_eq!(body["messages"][0]["content"][0]["tool_use_id"], "");
     }
 
@@ -1101,7 +1149,7 @@ mod tests {
             }]),
             ..Default::default()
         }];
-        let body = build_anthropic_body("claude-4", &messages, &[], false, None);
+        let body = build_anthropic_body("claude-4", &messages, &[], false, None, false, 10_000);
         let blocks = body["messages"][0]["content"].as_array().unwrap();
         assert_eq!(blocks.len(), 2);
         assert_eq!(blocks[0]["type"], "text");
@@ -1124,7 +1172,7 @@ mod tests {
             }]),
             ..Default::default()
         }];
-        let body = build_anthropic_body("claude-4", &messages, &[], false, None);
+        let body = build_anthropic_body("claude-4", &messages, &[], false, None, false, 10_000);
         let blocks = body["messages"][0]["content"].as_array().unwrap();
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0]["type"], "tool_use");
@@ -1141,7 +1189,8 @@ mod tests {
             }]),
             ..Default::default()
         }];
-        let body = build_anthropic_body("claude-3-opus", &messages, &[], false, None);
+        let body =
+            build_anthropic_body("claude-3-opus", &messages, &[], false, None, false, 10_000);
         let block = &body["messages"][0]["content"][0];
         assert_eq!(block["type"], "image");
         assert_eq!(block["source"]["type"], "base64");
@@ -1159,7 +1208,8 @@ mod tests {
             }]),
             ..Default::default()
         }];
-        let body = build_anthropic_body("claude-3-opus", &messages, &[], false, None);
+        let body =
+            build_anthropic_body("claude-3-opus", &messages, &[], false, None, false, 10_000);
         let block = &body["messages"][0]["content"][0];
         assert_eq!(block["type"], "text");
         assert_eq!(block["text"], "just text");
@@ -1180,7 +1230,8 @@ mod tests {
             ]),
             ..Default::default()
         }];
-        let body = build_anthropic_body("claude-3-opus", &messages, &[], false, None);
+        let body =
+            build_anthropic_body("claude-3-opus", &messages, &[], false, None, false, 10_000);
         let block = &body["messages"][0]["content"][0];
         assert_eq!(block["type"], "text");
         assert_eq!(block["text"], "a[image]b");
@@ -1193,7 +1244,7 @@ mod tests {
             content: "sys".into(),
             ..Default::default()
         }];
-        let body = build_anthropic_body("claude-4", &messages, &[], false, None);
+        let body = build_anthropic_body("claude-4", &messages, &[], false, None, false, 10_000);
         assert!(body["system"].is_object());
         assert!(!body["system"].is_array());
         assert_eq!(body["system"]["text"], "sys");
@@ -1217,7 +1268,7 @@ mod tests {
                 ..Default::default()
             },
         ];
-        let body = build_anthropic_body("claude-4", &messages, &[], false, None);
+        let body = build_anthropic_body("claude-4", &messages, &[], false, None, false, 10_000);
         let arr = body["system"].as_array().unwrap();
         assert_eq!(arr.len(), 2);
         assert_eq!(arr[0]["text"], "sys1");
@@ -1233,7 +1284,7 @@ mod tests {
             content: "hi".into(),
             ..Default::default()
         }];
-        let body = build_anthropic_body("claude-4", &messages, &[], false, None);
+        let body = build_anthropic_body("claude-4", &messages, &[], false, None, false, 10_000);
         assert!(body.get("system").is_none());
     }
 
@@ -1251,7 +1302,7 @@ mod tests {
                 ..Default::default()
             },
         ];
-        let body = build_anthropic_body("claude-4", &messages, &[], false, None);
+        let body = build_anthropic_body("claude-4", &messages, &[], false, None, false, 10_000);
         // Short conversations: no prefix markers, but the tail breakpoint
         // should still be present on the last user message (WO 17.5).
         let msgs = body["messages"].as_array().unwrap();
@@ -1285,7 +1336,15 @@ mod tests {
                 parameters: serde_json::json!({"type": "object"}),
             },
         ];
-        let body = build_anthropic_body("claude-sonnet-4", &messages, &tools, false, None);
+        let body = build_anthropic_body(
+            "claude-sonnet-4",
+            &messages,
+            &tools,
+            false,
+            None,
+            false,
+            10_000,
+        );
         let tools_arr = body["tools"].as_array().unwrap();
         // First tool has no cache_control.
         assert!(
@@ -1326,7 +1385,15 @@ mod tests {
                 ..Default::default()
             },
         ];
-        let body = build_anthropic_body("claude-sonnet-4", &messages, &[], false, None);
+        let body = build_anthropic_body(
+            "claude-sonnet-4",
+            &messages,
+            &[],
+            false,
+            None,
+            false,
+            10_000,
+        );
         let msgs = body["messages"].as_array().unwrap();
         // The last message is the trailing user turn.
         let last_msg = msgs.last().unwrap();
@@ -1348,7 +1415,7 @@ mod tests {
             }]),
             ..Default::default()
         }];
-        let body = build_anthropic_body("claude-4", &messages, &[], false, None);
+        let body = build_anthropic_body("claude-4", &messages, &[], false, None, false, 10_000);
         assert_eq!(body["system"]["type"], "text");
         assert_eq!(body["system"]["text"], "system text");
     }
@@ -1360,7 +1427,7 @@ mod tests {
             content: "hi".into(),
             ..Default::default()
         }];
-        let body = build_anthropic_body("claude-4", &messages, &[], false, None);
+        let body = build_anthropic_body("claude-4", &messages, &[], false, None, false, 10_000);
         assert_eq!(body["max_tokens"], 8192);
     }
 
@@ -1371,7 +1438,7 @@ mod tests {
             content: "hi".into(),
             ..Default::default()
         }];
-        let body = build_anthropic_body("claude-4", &messages, &[], false, None);
+        let body = build_anthropic_body("claude-4", &messages, &[], false, None, false, 10_000);
         assert_eq!(body["stream"], true);
     }
 

@@ -59,6 +59,11 @@ impl Tool for EditFile {
                         "type": "string",
                         "description": "Replacement string"
                     },
+                    "replace_all": {
+                        "type": "boolean",
+                        "description": "Replace all occurrences of old_string (default: false, requires unique match)",
+                        "default": false
+                    },
                     "block_edits": {
                         "type": "boolean",
                         "description": "Override: if true, block this edit (no-op diagnostic). Ignored unless --harden is active."
@@ -103,6 +108,11 @@ impl Tool for EditFile {
                 ));
             }
         };
+
+        let replace_all = args
+            .get("replace_all")
+            .and_then(|r| r.as_bool())
+            .unwrap_or(false);
 
         // Snapshot pre-edit bytes BEFORE the destructive write, so
         // the user can `/undo` even if the write succeeds. We
@@ -180,10 +190,10 @@ impl Tool for EditFile {
                 });
             }
             let occurrences = content.matches(&old).count();
-            if occurrences > 1 {
+            if occurrences > 1 && !replace_all {
                 return ToolOutcome::Failure(ToolError::Execution {
                     message: format!(
-                        "Dry run: old_string matches {} times in {}; edit_file requires a unique match",
+                        "Dry run: old_string matches {} times in {}; edit_file requires a unique match (set replace_all: true to replace all)",
                         occurrences,
                         path.display()
                     ),
@@ -191,7 +201,11 @@ impl Tool for EditFile {
                     stderr: String::new(),
                 });
             }
-            let new_content = content.replacen(&old, &new, 1);
+            let new_content = if replace_all {
+                content.replace(&old, &new)
+            } else {
+                content.replacen(&old, &new, 1)
+            };
             let diff = render_diff(&content, &new_content);
             let note = if any_expanded {
                 " (expanded from minified envelope)"
@@ -346,10 +360,10 @@ impl Tool for EditFile {
         // once, replacing the first occurrence silently would be
         // surprising. Force the model to include more context.
         let occurrences = content.matches(&old).count();
-        if occurrences > 1 {
+        if occurrences > 1 && !replace_all {
             return ToolOutcome::Failure(ToolError::Execution {
                 message: format!(
-                    "old_string matches {} times in {}; edit_file requires a unique match",
+                    "old_string matches {} times in {}; edit_file requires a unique match (set replace_all: true to replace all)",
                     occurrences,
                     path.display()
                 ),
@@ -358,7 +372,11 @@ impl Tool for EditFile {
             });
         }
 
-        let new_content = content.replacen(&old, &new, 1);
+        let new_content = if replace_all {
+            content.replace(&old, &new)
+        } else {
+            content.replacen(&old, &new, 1)
+        };
         let diff = render_diff(&content, &new_content);
 
         if self.block_edits && !ctx.dry_run {
@@ -1597,5 +1615,48 @@ mod tests {
         assert!(required.iter().any(|v| v.as_str() == Some("path")));
         assert!(required.iter().any(|v| v.as_str() == Some("old_string")));
         assert!(required.iter().any(|v| v.as_str() == Some("new_string")));
+    }
+
+    #[tokio::test]
+    async fn replace_all_replaces_every_occurrence() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("f.txt");
+        std::fs::write(&path, "foo\nbar\nfoo\nbaz\nfoo\n").unwrap();
+
+        let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false);
+        let ctx = ToolContext::new();
+        let args = serde_json::json!({
+            "path": path.to_string_lossy(),
+            "old_string": "foo",
+            "new_string": "qux",
+            "replace_all": true,
+        });
+        let result = tool.run(&ctx, args).await;
+        assert!(
+            matches!(result, ToolOutcome::FileEdit { .. }),
+            "expected FileEdit, got {result:?}"
+        );
+        let got = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(got, "qux\nbar\nqux\nbaz\nqux\n");
+    }
+
+    #[tokio::test]
+    async fn replace_all_false_rejects_ambiguous() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("f.txt");
+        std::fs::write(&path, "foo\nfoo\n").unwrap();
+
+        let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false);
+        let ctx = ToolContext::new();
+        let args = serde_json::json!({
+            "path": path.to_string_lossy(),
+            "old_string": "foo",
+            "new_string": "bar",
+        });
+        let result = tool.run(&ctx, args).await;
+        assert!(
+            matches!(result, ToolOutcome::Failure(ToolError::Execution { ref message, .. }) if message.contains("matches 2 times")),
+            "expected ambiguous-match error, got {result:?}"
+        );
     }
 }

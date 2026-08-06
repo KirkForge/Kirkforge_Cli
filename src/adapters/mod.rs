@@ -339,6 +339,13 @@ pub trait ModelAdapter: Send + Sync {
     /// executor with `config.model.seed`.
     fn set_seed(&mut self, _seed: Option<u64>) {}
 
+    /// Enable/disable extended thinking. Default no-op; adapters that
+    /// support thinking blocks (e.g. Anthropic) override this.
+    fn set_extended_thinking(&mut self, _enabled: bool) {}
+
+    /// Set the budget_tokens for extended thinking. Default no-op.
+    fn set_budget_tokens(&mut self, _budget: usize) {}
+
     async fn stream(
         &self,
         messages: &[crate::shared::Message],

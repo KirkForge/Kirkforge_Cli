@@ -22,6 +22,14 @@ fn default_request_timeout_secs() -> u64 {
     120
 }
 
+fn default_true() -> bool {
+    true
+}
+
+fn default_budget_tokens() -> usize {
+    10_000
+}
+
 fn default_summarize_model() -> String {
     String::new()
 }
@@ -80,6 +88,14 @@ pub struct ModelConfig {
     pub seed: Option<u64>,
     #[serde(default)]
     pub json_mode: bool,
+    /// Enable extended thinking for models that support it (e.g. Claude
+    /// 3.7 Sonnet, Claude 4). When false, thinking blocks are omitted
+    /// even if the model supports them.
+    #[serde(default = "default_true")]
+    pub extended_thinking: bool,
+    /// Budget tokens for extended thinking. Default 10000.
+    #[serde(default = "default_budget_tokens")]
+    pub budget_tokens: usize,
     /// User-supplied model→adapter routing overrides. Maps model-name
     /// prefixes (e.g. `"claude-"`) to [`AdapterKind`](super::adapters::AdapterKind)
     /// variant names (e.g. `"Anthropic"`). Checked by
@@ -119,6 +135,8 @@ impl Default for ModelConfig {
             cache_dir: None,
             seed: None,
             json_mode: false,
+            extended_thinking: true,
+            budget_tokens: default_budget_tokens(),
             adapter_routing: HashMap::new(),
         }
     }

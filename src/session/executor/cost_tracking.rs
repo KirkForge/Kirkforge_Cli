@@ -43,13 +43,14 @@ impl CostTracker {
 
     /// Feed a tool outcome to the doom-loop detector. If the threshold is
     /// crossed, emit a `TurnEvent::DoomLoopDetected` on `event_tx` and
-    /// a `MetricEvent::DoomLoop` to the metrics log.
+    /// a `MetricEvent::DoomLoop` to the metrics log. Returns `Some(hint)`
+    /// to inject into the conversation so the model changes strategy.
     pub(crate) fn observe_tool_outcome(
         &mut self,
         tool: &str,
         outcome: &ToolOutcome,
         event_tx: &mpsc::Sender<TurnEvent>,
-    ) {
+    ) -> Option<String> {
         let is_error = !tool_outcome_success(outcome);
         let error_text = if is_error {
             let mut s = String::new();
@@ -62,13 +63,13 @@ impl CostTracker {
                 }
                 _ => {
                     self.doom_loop_tracker.reset();
-                    return;
+                    return None;
                 }
             }
             s
         } else {
             self.doom_loop_tracker.reset();
-            return;
+            return None;
         };
 
         if let Some(hit) = self.doom_loop_tracker.observe(tool, &error_text) {
@@ -79,12 +80,17 @@ impl CostTracker {
             });
             if let Err(e) = event_tx.try_send(TurnEvent::DoomLoopDetected {
                 count: hit.count,
-                tool: hit.tool,
-                last_error: hit.last_error,
+                tool: hit.tool.clone(),
+                last_error: hit.last_error.clone(),
             }) {
                 tracing::warn!(error = %e, "failed to send DoomLoopDetected to TUI");
             }
+            return Some(format!(
+                "[System: tool '{}' has failed {} times with the same error. Try a different approach or ask the user for help.]",
+                hit.tool, hit.count
+            ));
         }
+        None
     }
 
     /// Flush the carryover profile to disk (if enabled) and push it to

@@ -216,6 +216,14 @@ impl ModelAdapter for CachingAdapter {
         self.inner.set_json_mode(json_mode);
     }
 
+    fn set_extended_thinking(&mut self, enabled: bool) {
+        self.inner.set_extended_thinking(enabled);
+    }
+
+    fn set_budget_tokens(&mut self, budget: usize) {
+        self.inner.set_budget_tokens(budget);
+    }
+
     async fn stream(
         &self,
         messages: &[Message],

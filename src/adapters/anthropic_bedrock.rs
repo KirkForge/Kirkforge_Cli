@@ -27,6 +27,8 @@ pub struct AnthropicBedrockAdapter {
     json_mode: bool,
     seed: Option<u64>,
     timeout_secs: u64,
+    extended_thinking: bool,
+    budget_tokens: usize,
 }
 
 impl AnthropicBedrockAdapter {
@@ -38,6 +40,8 @@ impl AnthropicBedrockAdapter {
             json_mode: false,
             seed: None,
             timeout_secs,
+            extended_thinking: true,
+            budget_tokens: 10_000,
         }
     }
 
@@ -63,6 +67,13 @@ impl ModelAdapter for AnthropicBedrockAdapter {
         self.seed = seed;
     }
 
+    fn set_extended_thinking(&mut self, enabled: bool) {
+        self.extended_thinking = enabled;
+    }
+
+    fn set_budget_tokens(&mut self, budget: usize) {
+        self.budget_tokens = budget;
+    }
     async fn stream(
         &self,
         messages: &[Message],
@@ -74,6 +85,8 @@ impl ModelAdapter for AnthropicBedrockAdapter {
             tools,
             self.json_mode,
             self.seed,
+            self.extended_thinking,
+            self.budget_tokens,
         );
         let body_bytes = serde_json::to_vec(&body)?;
         let url = self.endpoint();

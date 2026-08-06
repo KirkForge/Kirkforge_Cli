@@ -307,6 +307,18 @@ impl Executor {
 
             match outcome {
                 IterationOutcome::Finished(finish_reason) => {
+                    if matches!(finish_reason, crate::shared::FinishReason::Length) {
+                        crate::send_or_warn!(
+                            event_tx
+                                .send(TurnEvent::Error(
+                                    "Model output was truncated (finish_reason: length). \
+                                     The response may be incomplete. Consider increasing max_tokens or simplifying the request."
+                                        .into(),
+                                ))
+                                .await,
+                            "TurnEvent receiver dropped; discarding event"
+                        );
+                    }
                     record_turn_metric(
                         &self.model_name,
                         turn_start,
@@ -916,7 +928,15 @@ impl Executor {
             let outcome_for_emit = outcome.clone();
             let edit_diff =
                 handle_tool_outcome(outcome, tc, event_tx, &mut self.conversation).await?;
-            self.observe_tool_outcome(&tc.name, &outcome_for_emit, event_tx);
+            if let Some(hint) = self.observe_tool_outcome(&tc.name, &outcome_for_emit, event_tx) {
+                self.conversation
+                    .append_async(Message {
+                        role: Role::User,
+                        content: hint,
+                        ..Default::default()
+                    })
+                    .await?;
+            }
             record(MetricEvent::ToolCall {
                 name: tc.name.clone(),
                 success: tool_outcome_success(&outcome_for_emit),
@@ -984,7 +1004,15 @@ impl Executor {
                 None,
             );
         }
-        self.observe_tool_outcome(&tc.name, &outcome_for_emit, event_tx);
+        if let Some(hint) = self.observe_tool_outcome(&tc.name, &outcome_for_emit, event_tx) {
+            self.conversation
+                .append_async(Message {
+                    role: Role::User,
+                    content: hint,
+                    ..Default::default()
+                })
+                .await?;
+        }
         record(MetricEvent::ToolCall {
             name: tc.name.clone(),
             success: tool_outcome_success(&outcome_for_emit),

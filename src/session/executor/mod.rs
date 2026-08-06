@@ -169,6 +169,10 @@ impl Executor {
         // Push the deterministic-mode seed down to the active adapter.
         adapter.set_seed(cfg.model.seed);
 
+        // Push extended-thinking config down to adapters that support it.
+        adapter.set_extended_thinking(cfg.model.extended_thinking);
+        adapter.set_budget_tokens(cfg.model.budget_tokens);
+
         let adapter_swap = AdapterSwap::new(
             model_name.clone(),
             cfg.model.ollama_host.clone(),
@@ -362,6 +366,9 @@ impl Executor {
         };
         // JSON-mode changes are applied to the running adapter too.
         self.adapter.set_json_mode(fresh.model.json_mode);
+        self.adapter
+            .set_extended_thinking(fresh.model.extended_thinking);
+        self.adapter.set_budget_tokens(fresh.model.budget_tokens);
         config_diff_summary(&old, &fresh)
     }
 
@@ -677,15 +684,14 @@ impl Executor {
     /// Feed a tool outcome to the doom-loop detector. If the
     /// threshold is crossed, also emit a `TurnEvent::DoomLoopDetected`
     /// on `event_tx` and a `MetricEvent::DoomLoop` to the metrics
-    /// log. Best-effort: a dropped `event_tx` is logged and
-    /// swallowed (the metric still records the hit).
+    /// log. Returns `Some(hint)` to inject into the conversation.
     pub fn observe_tool_outcome(
         &mut self,
         tool: &str,
         outcome: &crate::shared::ToolOutcome,
         event_tx: &mpsc::Sender<TurnEvent>,
-    ) {
-        self.cost.observe_tool_outcome(tool, outcome, event_tx);
+    ) -> Option<String> {
+        self.cost.observe_tool_outcome(tool, outcome, event_tx)
     }
 
     /// Install a full system-prompt override (e.g. from `--system`).

@@ -118,7 +118,7 @@ fn tools_for_persona(
         session_launcher: None,
         docker_config: Some(config.security.docker.clone()),
         sandbox_config: config.security.sandbox.clone(),
-        confirm_edits: config.security.sandbox.confirm_edits,
+        block_edits: config.security.sandbox.block_edits,
     };
     let all = crate::tools::all_tools(&ctx);
     match kind {
@@ -176,7 +176,7 @@ pub fn tools_for_scout(
         session_launcher: None,
         docker_config: Some(config.security.docker.clone()),
         sandbox_config: config.security.sandbox.clone(),
-        confirm_edits: config.security.sandbox.confirm_edits,
+        block_edits: config.security.sandbox.block_edits,
     };
     let all = crate::tools::all_tools(&ctx);
     crate::session::executor::ScoutSubagent::new().filter_tools(all)

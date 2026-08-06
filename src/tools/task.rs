@@ -341,7 +341,7 @@ impl TaskSpawner for InProcessTaskSpawner {
             session_launcher: None,
             docker_config: Some(self.config.security.docker.clone()),
             sandbox_config: self.config.security.sandbox.clone(),
-            confirm_edits: self.config.security.sandbox.confirm_edits,
+            block_edits: self.config.security.sandbox.block_edits,
         });
         let tools: Vec<Arc<dyn Tool>> = match request.persona.as_str() {
             "explore" => all

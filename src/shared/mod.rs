@@ -285,12 +285,10 @@ pub struct SandboxConfig {
     #[serde(default)]
     pub no_network: bool,
 
-    /// Require user confirmation before applying file edits (edit_file
-    /// and write_file tools). When true, the tool returns a diff preview
-    /// and the user must approve in the TUI before the write proceeds.
-    /// Ignored in dry-run mode (already preview-only).
+    /// Block file edits in --harden mode. When true, edit_file and
+    /// write_file return Failure instead of applying the edit.
     #[serde(default)]
-    pub confirm_edits: bool,
+    pub block_edits: bool,
 
     /// CPU time limit in seconds. Default 300 (5 min). When the child
     /// exceeds this *wall-clock CPU* (not elapsed time), the kernel
@@ -326,7 +324,7 @@ impl SandboxConfig {
         Self {
             harden: self.harden,
             no_network: self.no_network,
-            confirm_edits: self.confirm_edits,
+            block_edits: self.block_edits,
             cpu_limit_secs: limits.cpu_secs.unwrap_or(self.cpu_limit_secs),
             memory_limit_mb: limits.memory_mb.unwrap_or(self.memory_limit_mb),
             filesize_limit_mb: limits.filesize_mb.unwrap_or(self.filesize_limit_mb),

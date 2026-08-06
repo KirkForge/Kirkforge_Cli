@@ -104,7 +104,7 @@ fn build_bench_toolset(sandbox_path: &Path) -> super::toolset::CompositeToolset 
         session_launcher: None,
         docker_config: None,
         sandbox_config: crate::shared::SandboxConfig::default(),
-        confirm_edits: false,
+        block_edits: false,
     };
     let tools = crate::tools::all_tools(&ctx);
 

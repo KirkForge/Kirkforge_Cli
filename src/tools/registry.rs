@@ -26,7 +26,7 @@ pub struct ToolContextBuilder {
     pub session_launcher: Option<SessionLauncher>,
     pub docker_config: Option<DockerConfig>,
     pub sandbox_config: SandboxConfig,
-    pub confirm_edits: bool,
+    pub block_edits: bool,
 }
 
 /// A builder that collects tools and produces the final tool list.

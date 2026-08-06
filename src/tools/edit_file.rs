@@ -19,7 +19,7 @@ pub struct EditFile {
     undo: Option<UndoStackRef>,
     path_guard: PathGuard,
     minify_write_side: bool,
-    confirm_edits: bool,
+    block_edits: bool,
 }
 
 impl EditFile {
@@ -27,13 +27,13 @@ impl EditFile {
         undo: Option<UndoStackRef>,
         path_guard: PathGuard,
         minify_write_side: bool,
-        confirm_edits: bool,
+    block_edits: bool,
     ) -> Self {
         Self {
             undo,
             path_guard,
             minify_write_side,
-            confirm_edits,
+            block_edits,
         }
     }
 }
@@ -58,6 +58,10 @@ impl Tool for EditFile {
                     "new_string": {
                         "type": "string",
                         "description": "Replacement string"
+                    },
+                    "block_edits": {
+                        "type": "boolean",
+                        "description": "Override: if true, block this edit (no-op diagnostic). Ignored unless --harden is active."
                     }
                 },
                 "required": ["path", "old_string", "new_string"]
@@ -357,15 +361,16 @@ impl Tool for EditFile {
         let new_content = content.replacen(&old, &new, 1);
         let diff = render_diff(&content, &new_content);
 
-        if self.confirm_edits && !ctx.dry_run {
-            return ToolOutcome::Success {
-                content: format!(
-                    "CONFIRM_EDITS: edit to {} requires approval. Diff:\n{}\n\
-                     Re-run with `confirm_edits: false` override or disable --confirm-edits.",
+        if self.block_edits && !ctx.dry_run {
+            return ToolOutcome::Failure(ToolError::Execution {
+                message: format!(
+                    "BLOCK_EDITS: edit to {} is blocked (--harden mode). Diff:\n{}",
                     path.display(),
                     diff
                 ),
-            };
+                exit_code: None,
+                stderr: String::new(),
+            });
         }
 
         match crate::tools::atomic_write::atomic_write(&path, &new_content) {

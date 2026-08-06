@@ -151,13 +151,13 @@ pub fn all_tools(ctx: &ToolContextBuilder) -> Vec<Arc<dyn Tool>> {
         ctx.undo_stack.clone(),
         ctx.path_guard.clone(),
         ctx.minify_write_side,
-        ctx.confirm_edits,
+        ctx.block_edits,
     )));
     registry.register(Arc::new(EditFile::new(
         ctx.undo_stack.clone(),
         ctx.path_guard.clone(),
         ctx.minify_write_side,
-        ctx.confirm_edits,
+        ctx.block_edits,
     )));
     registry.register(Arc::new(NotebookEdit::new(
         ctx.undo_stack.clone(),
@@ -262,7 +262,7 @@ mod tests {
             session_launcher: None,
             docker_config: None,
             sandbox_config: crate::shared::SandboxConfig::default(),
-            confirm_edits: false,
+            block_edits: false,
         };
         let tools = all_tools(&ctx);
         let names: Vec<String> = tools.iter().map(|t| t.def().name.to_string()).collect();
@@ -313,7 +313,7 @@ mod tests {
             session_launcher: None,
             docker_config: None,
             sandbox_config: crate::shared::SandboxConfig::default(),
-            confirm_edits: false,
+            block_edits: false,
         };
         let tools = all_tools(&ctx);
         let names: Vec<String> = tools.iter().map(|t| t.def().name.to_string()).collect();
@@ -347,7 +347,7 @@ mod tests {
             session_launcher: None,
             docker_config: None,
             sandbox_config: crate::shared::SandboxConfig::default(),
-            confirm_edits: false,
+            block_edits: false,
         };
         let tools = all_tools(&ctx);
         let names: Vec<String> = tools.iter().map(|t| t.def().name.to_string()).collect();

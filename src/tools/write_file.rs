@@ -20,7 +20,7 @@ pub struct WriteFile {
     undo: Option<UndoStackRef>,
     path_guard: PathGuard,
     minify_write_side: bool,
-    confirm_edits: bool,
+    block_edits: bool,
 }
 
 impl WriteFile {
@@ -28,13 +28,13 @@ impl WriteFile {
         undo: Option<UndoStackRef>,
         path_guard: PathGuard,
         minify_write_side: bool,
-        confirm_edits: bool,
+    block_edits: bool,
     ) -> Self {
         Self {
             undo,
             path_guard,
             minify_write_side,
-            confirm_edits,
+            block_edits,
         }
     }
 }
@@ -55,6 +55,10 @@ impl Tool for WriteFile {
                     "content": {
                         "type": "string",
                         "description": "Full content to write to the file"
+                    },
+                    "block_edits": {
+                        "type": "boolean",
+                        "description": "Override: if true, block this write (no-op diagnostic). Ignored unless --harden is active."
                     }
                 },
                 "required": ["path", "content"]
@@ -137,30 +141,25 @@ impl Tool for WriteFile {
             Vec::new()
         };
 
-        if self.confirm_edits {
-            let preview = if prev_existed {
-                let old_text = String::from_utf8_lossy(&prev_bytes);
-                let diff_lines: usize = old_text
-                    .lines()
-                    .zip(content.lines())
-                    .filter(|(a, b)| a != b)
-                    .count()
-                    + old_text.lines().count().abs_diff(content.lines().count());
+        if self.block_edits {
+            let msg = if prev_existed {
                 format!(
-                    "CONFIRM_EDITS: write to {} requires approval ({} lines changed). \
-                     Re-run with `confirm_edits: false` override or disable --confirm-edits.",
-                    path.display(),
-                    diff_lines
+                    "BLOCK_EDITS: write to {} is blocked (--harden mode). \
+                     Edit not applied.",
+                    path.display()
                 )
             } else {
                 format!(
-                    "CONFIRM_EDITS: write to {} requires approval ({} bytes, new file). \
-                     Re-run with `confirm_edits: false` override or disable --confirm-edits.",
-                    path.display(),
-                    content.len()
+                    "BLOCK_EDITS: write to {} is blocked (--harden mode). \
+                     New file not created.",
+                    path.display()
                 )
             };
-            return ToolOutcome::Success { content: preview };
+            return ToolOutcome::Failure(ToolError::Execution {
+                message: msg,
+                exit_code: None,
+                stderr: String::new(),
+            });
         }
 
         match crate::tools::atomic_write::atomic_write(&path, &content) {

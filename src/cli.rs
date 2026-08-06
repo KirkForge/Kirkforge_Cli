@@ -132,10 +132,10 @@ pub enum Command {
         #[arg(long, requires = "harden")]
         no_network: bool,
 
-        /// Require user confirmation before applying file edits (--harden mode).
-        /// edit_file and write_file will show a diff preview and wait for approval.
+        /// Block file edits outright in --harden mode.
+        /// edit_file and write_file will return failure instead of applying.
         #[arg(long, requires = "harden")]
-        confirm_edits: bool,
+        block_edits: bool,
 
         /// Disable turn tracing. By default every turn is recorded to
         /// `<data-dir>/<session-id>.trace.ndjson` for later replay.

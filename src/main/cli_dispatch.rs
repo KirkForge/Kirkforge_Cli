@@ -138,7 +138,7 @@ pub async fn main() {
             docker,
             harden,
             no_network,
-            confirm_edits,
+            block_edits,
             no_trace,
         } => {
             run_session(RunArgs {
@@ -161,7 +161,7 @@ pub async fn main() {
                 docker,
                 harden,
                 no_network,
-                confirm_edits,
+                block_edits,
                 no_trace,
             })
             .await

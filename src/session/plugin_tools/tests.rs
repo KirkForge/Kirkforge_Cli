@@ -1227,7 +1227,7 @@ cpu_secs = {cpu_secs}
         let global = SandboxConfig {
             harden: true,
             no_network: false,
-            confirm_edits: false,
+            block_edits: false,
             cpu_limit_secs: 300,
             memory_limit_mb: 2048,
             filesize_limit_mb: 512,
@@ -1249,7 +1249,7 @@ cpu_secs = {cpu_secs}
         let global = SandboxConfig {
             harden: true,
             no_network: false,
-            confirm_edits: false,
+            block_edits: false,
             cpu_limit_secs: 300,
             memory_limit_mb: 2048,
             filesize_limit_mb: 512,

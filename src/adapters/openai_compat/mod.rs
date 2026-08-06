@@ -638,7 +638,7 @@ mod tests {
         // at the payload boundary, no `\n\n` yet. The drain range is
         // exclusive and only consumes the terminator when present.
         let mut buffer = b"data: {\"x\":1}".to_vec();
-        let start = find_subseq(&buffer, b"data: ").unwrap();
+        let start = find_subseq(&buffer, b"data: ").expect("data: prefix must exist in test buffer");
         let after_data = &buffer[start + 6..];
         let end = find_subseq(after_data, b"\n\n").unwrap_or(after_data.len());
         let drain_to = start
@@ -765,7 +765,7 @@ mod tests {
 
     /// SSE frames are: `data: <json>\n\n`. Build one from a JSON value.
     fn sse_data(value: serde_json::Value) -> Vec<u8> {
-        format!("data: {}\n\n", serde_json::to_string(&value).unwrap()).into_bytes()
+        format!("data: {}\n\n", serde_json::to_string(&value).expect("test json must serialize")).into_bytes()
     }
 
     fn sse_done() -> Vec<u8> {
@@ -1014,7 +1014,7 @@ mod tests {
         let events = run_sse(vec![sse_data(json!({"choices": [{"delta": {"content": "x"}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 100, "completion_tokens": 50, "prompt_tokens_details": {"cached_tokens": 30}}}))]).await;
         match events.last() {
             Some(StreamEvent::Done { usage, .. }) => {
-                let u = usage.as_ref().unwrap();
+                let u = usage.as_ref().expect("usage should be present");
                 assert_eq!(u.prompt_tokens, Some(100));
                 assert_eq!(u.completion_tokens, Some(50));
                 assert_eq!(u.cached_tokens, Some(30));
@@ -1028,7 +1028,7 @@ mod tests {
         let events = run_sse(vec![sse_data(json!({"choices": [{"delta": {"content": "x"}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 100, "completion_tokens": 50, "cache_read_input_tokens": 25}}))]).await;
         match events.last() {
             Some(StreamEvent::Done { usage, .. }) => {
-                let u = usage.as_ref().unwrap();
+                let u = usage.as_ref().expect("usage should be present");
                 assert_eq!(u.cached_tokens, Some(25));
             }
             other => panic!("expected Done with usage, got {other:?}"),
@@ -1040,7 +1040,7 @@ mod tests {
         let events = run_sse(vec![sse_data(json!({"choices": [{"delta": {"content": "x"}, "finish_reason": "stop"}], "usage": {"prompt_eval_count": 8, "eval_count": 12}}))]).await;
         match events.last() {
             Some(StreamEvent::Done { usage, .. }) => {
-                let u = usage.as_ref().unwrap();
+                let u = usage.as_ref().expect("usage should be present");
                 assert_eq!(u.prompt_tokens, Some(8));
                 assert_eq!(u.completion_tokens, Some(12));
             }

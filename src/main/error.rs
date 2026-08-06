@@ -10,38 +10,20 @@
 /// such as "path is outside the allowed area" or "operation not permitted".
 /// Centralising the classification in an enum makes the exit-code contract
 /// explicit and easier to extend as more error sources become typed.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub(super) enum KirkForgeError {
     /// Model/host unreachable or DNS/connection failure.
-    ModelUnreachable(anyhow::Error),
+    #[error("{0:#}")]
+    ModelUnreachable(#[source] anyhow::Error),
     /// Permission denied, sandbox violation, or path blocked by policy.
-    AccessDenied(anyhow::Error),
+    #[error("{0:#}")]
+    AccessDenied(#[source] anyhow::Error),
     /// Configuration file parsing or validation failure.
-    ConfigParse(anyhow::Error),
+    #[error("{0:#}")]
+    ConfigParse(#[source] anyhow::Error),
     /// Any other failure.
-    General(anyhow::Error),
-}
-
-impl std::fmt::Display for KirkForgeError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            KirkForgeError::ModelUnreachable(e)
-            | KirkForgeError::AccessDenied(e)
-            | KirkForgeError::ConfigParse(e)
-            | KirkForgeError::General(e) => write!(f, "{e:#}"),
-        }
-    }
-}
-
-impl std::error::Error for KirkForgeError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            KirkForgeError::ModelUnreachable(e)
-            | KirkForgeError::AccessDenied(e)
-            | KirkForgeError::ConfigParse(e)
-            | KirkForgeError::General(e) => Some(e.as_ref()),
-        }
-    }
+    #[error("{0:#}")]
+    General(#[source] anyhow::Error),
 }
 
 impl From<anyhow::Error> for KirkForgeError {

@@ -261,7 +261,7 @@ pub(crate) fn build_anthropic_body(
 
     if !system_blocks.is_empty() {
         if system_blocks.len() == 1 {
-            body["system"] = system_blocks.into_iter().next().unwrap();
+            body["system"] = system_blocks.into_iter().next().expect("len==1 checked above");
         } else {
             body["system"] = serde_json::Value::Array(system_blocks);
         }

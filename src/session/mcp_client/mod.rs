@@ -831,7 +831,7 @@ impl StdioMcpClient {
             "method": "resources/read",
             "params": { "uri": uri }
         });
-        self.stdio_send_request(&req).await.map(|r| r)
+        self.stdio_send_request(&req).await
     }
 
     async fn stdio_list_prompts(&self) -> Vec<McpPrompt> {
@@ -905,7 +905,7 @@ impl StdioMcpClient {
             "method": "prompts/get",
             "params": params
         });
-        self.stdio_send_request(&req).await.map(|r| r)
+        self.stdio_send_request(&req).await
     }
 
     /// Gracefully disconnect from the child-process server.

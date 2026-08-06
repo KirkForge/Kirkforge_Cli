@@ -385,7 +385,7 @@ impl McpHttpTransport {
             "method": "resources/read",
             "params": { "uri": uri }
         });
-        self.send_request(&req).await.map(|r| r)
+        self.send_request(&req).await
     }
 
     pub(super) async fn list_prompts(&self) -> Vec<super::McpPrompt> {
@@ -463,7 +463,7 @@ impl McpHttpTransport {
             "method": "prompts/get",
             "params": params
         });
-        self.send_request(&req).await.map(|r| r)
+        self.send_request(&req).await
     }
 
     fn tool_result_from_content(

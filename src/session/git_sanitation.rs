@@ -147,7 +147,7 @@ pub fn check_worktree(
         let content = match read_limited(&path, SCAN_CAP_BYTES) {
             Some(c) => c,
             None => {
-                tracing::debug!(path = %path.display(), "Skipped git-sanitation content scan (unreadable or non-UTF8 file)");
+                tracing::trace!(path = %path.display(), "Skipped git-sanitation content scan (unreadable or non-UTF8 file)");
                 continue;
             }
         };

@@ -392,13 +392,13 @@ impl McpClient {
                 tokio::select! {
                     biased;
                     _ = &mut shutdown => {
-                        tracing::debug!(server = %server_name, "MCP reader shutting down");
+                        tracing::trace!(server = %server_name, "MCP reader shutting down");
                         break;
                     }
                     result = tokio::time::timeout(READER_IDLE_TIMEOUT, read_fut) => {
                         match result {
                             Ok(Ok(0)) => {
-                                tracing::debug!(server = %server_name, "MCP stdout closed");
+                                tracing::trace!(server = %server_name, "MCP stdout closed");
                                 break;
                             }
                             Ok(Ok(_)) if buf.len() > MAX_LINE_LEN => {
@@ -430,13 +430,13 @@ impl McpClient {
                     continue;
                 }
                 let Ok(resp) = serde_json::from_str::<serde_json::Value>(trimmed) else {
-                    tracing::debug!(server = %server_name, line = %trimmed, "MCP non-JSON stdout line");
+                    tracing::trace!(server = %server_name, line = %trimmed, "MCP non-JSON stdout line");
                     continue;
                 };
 
                 let Some(id) = resp.get("id").and_then(json_id_to_string) else {
                     // Notifications have no id (or id is null); ignore.
-                    tracing::debug!(server = %server_name, response = %resp, "MCP notification");
+                    tracing::trace!(server = %server_name, response = %resp, "MCP notification");
                     continue;
                 };
 
@@ -494,10 +494,10 @@ impl McpClient {
         };
         if let Some(sender) = sender {
             if sender.send(to_send).is_err() {
-                tracing::debug!(id = %id, "MCP response receiver dropped");
+                tracing::trace!(id = %id, "MCP response receiver dropped");
             }
         } else {
-            tracing::debug!(server = %server_name, id = %id, "MCP response for unknown or timed-out request");
+            tracing::trace!(server = %server_name, id = %id, "MCP response for unknown or timed-out request");
         }
     }
 
@@ -536,7 +536,7 @@ impl StdioMcpClient {
 
         let line = serde_json::to_string(&req_with_id)
             .map_err(|e| McpError::Io(std::io::Error::other(e.to_string())))?;
-        tracing::debug!(id = %id, request = %line, "MCP request");
+        tracing::trace!(id = %id, request = %line, "MCP request");
 
         let (tx, rx) = oneshot::channel();
         {

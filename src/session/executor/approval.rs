@@ -68,7 +68,7 @@ impl Drop for ApprovalResponder {
                 ))
                 .is_err()
             {
-                tracing::debug!("approval fallback response receiver already dropped");
+                tracing::trace!("approval fallback response receiver already dropped");
             }
         }
     }

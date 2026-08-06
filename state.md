@@ -90,11 +90,12 @@ Two-path dispatch (ADR-050). Folded plugins (stratum, kf-budget, kf-draw, kf-vid
 
 ## Next steps (prioritized)
 
-1. **WO 19.6**: E2E TUI scenarios via TmuxDriver harness.
-2. **WO 19.7**: Shared test support module (de-duplicate 6 test helpers).
-3. **H8**: Extract shared `parse_sse_frames` from Anthropic + OpenAI adapters.
-4. **H10**: Optimize Bedrock `extract_payload` to avoid O(n*m) backtracking.
-5. **Stratum absorption**: Remove `stratum` feature flag, make always-on.
+1. **WO 20.8.0 C3**: `src/session` coverage from 68.6% toward 75% — needs async executor + MCP-HTTP tests.
+2. **WO 19.6**: E2E TUI scenarios via TmuxDriver harness.
+3. **WO 19.7**: Shared test support module (de-duplicate 6 test helpers).
+4. **H8**: Extract shared `parse_sse_frames` from Anthropic + OpenAI adapters.
+5. **H10**: Optimize Bedrock `extract_payload` to avoid O(n*m) backtracking.
+6. **Stratum absorption**: Remove `stratum` feature flag, make always-on.
 
 ## Rust toolchain
 

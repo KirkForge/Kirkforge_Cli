@@ -217,7 +217,7 @@ impl McpHttpTransport {
         }
         let body = serde_json::to_string(&req_with_id)
             .map_err(|e| McpError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e)))?;
-        tracing::debug!(id = %id, request = %body, "MCP HTTP request");
+        tracing::trace!(id = %id, request = %body, "MCP HTTP request");
 
         let (tx, rx) = oneshot::channel();
         {
@@ -503,7 +503,7 @@ async fn run_sse_reader(
             let chunk_result = tokio::select! {
                 biased;
                 _ = &mut *shutdown => {
-                    tracing::debug!("MCP HTTP reader shutting down");
+                    tracing::trace!("MCP HTTP reader shutting down");
                     McpClient::fail_all_pending(pending.clone()).await;
                     alive.store(false, Ordering::SeqCst);
                     return;
@@ -518,7 +518,7 @@ async fn run_sse_reader(
                     break;
                 }
                 None => {
-                    tracing::debug!(url = %url, "MCP SSE stream closed");
+                    tracing::trace!(url = %url, "MCP SSE stream closed");
                     break;
                 }
             };
@@ -580,12 +580,12 @@ async fn run_sse_reader(
                         }
 
                         let Ok(resp) = serde_json::from_str::<serde_json::Value>(&data) else {
-                            tracing::debug!(line = %data, "MCP SSE non-JSON data line");
+                            tracing::trace!(line = %data, "MCP SSE non-JSON data line");
                             continue;
                         };
 
                         let Some(id) = resp.get("id").and_then(json_id_to_string) else {
-                            tracing::debug!(response = %resp, "MCP SSE notification without id");
+                            tracing::trace!(response = %resp, "MCP SSE notification without id");
                             continue;
                         };
 

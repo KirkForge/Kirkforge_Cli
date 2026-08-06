@@ -5,7 +5,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-### Added
+### Changed
+- WO 20.8.0: `cargo audit` now blocks on critical/unmaintained/unsound advisories (CI). Cosign signing now blocks on release. 28 hot-path `tracing::debug!` calls converted to `tracing::trace!` (47→19).
+- WO 20.8.0: Added fuzz targets (minify_rust, minify_revalidate, ndjson_parse) and CI fuzz job. Added ADR-067 documenting TUI/daemon coverage exclusion.
 - WO 17.1: per-provider API key resolution (`resolve_api_key` with config → env → keychain order) and Anthropic auth headers (`x-api-key` + `anthropic-version`).
 - WO 17.2: daemon instance channel (broadcast, auth, version gate). `DaemonServer` registers instances and broadcasts state changes over the Unix socket; `DaemonClient` authenticates with a token read from `KF_CODE_DAEMON_TOKEN_FILE`.
 - WO 17.3: daemon hardening — socket guard (refuses to hijack a live socket), auth token check on every request, version gate (rejects mismatched client versions), ownership check (socket must be owned by current UID), clean `QuitAll` + `Shutdown`.

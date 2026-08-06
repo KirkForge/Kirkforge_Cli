@@ -195,7 +195,7 @@ impl SkillRegistry {
             .collect();
         for (manifest, plugin_arc) in plugin_entries {
             if disabled.contains(&manifest.name) {
-                tracing::debug!(
+                tracing::trace!(
                     plugin = %manifest.name,
                     "skipping disabled plugin skills"
                 );

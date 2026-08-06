@@ -124,6 +124,228 @@ fn run_session_picker_sync(
     }
 }
 
+async fn init_app_state(
+    shared_config: &crate::shared::SharedConfig,
+    cfg: &Config,
+    active_model: &str,
+    conversation_log_path: &std::path::PathBuf,
+    undo_stack: &Option<crate::tools::UndoStackRef>,
+) -> AppState {
+    let mut state = AppState::new(shared_config.clone());
+    state.undo_stack = undo_stack.clone();
+    state.session_started = Instant::now();
+    state.log_path = Some(conversation_log_path.clone());
+    state.session_id = conversation_log_path
+        .file_stem()
+        .and_then(|f| f.to_str())
+        .map(|s| s.trim_end_matches(".conv").to_string())
+        .unwrap_or_else(|| "unknown-session".to_string());
+    state.fork_manager = Some(crate::session::session_fork::ForkManager::new(
+        &state.session_id,
+        conversation_log_path,
+    ));
+    state.connection = probe_ollama_connection(cfg, active_model).await;
+    {
+        let (_, path_guard, _) = crate::session::access::access_from_config(cfg);
+        state.unsandboxed = !path_guard.is_sandboxed();
+    }
+    if state.unsandboxed {
+        state.messages.push_back(ConversationEntry::new(
+            "system",
+            "⚠️  PathGuard is unsandboxed: no `sandbox_dir` or `allowed_write_dirs` configured. \
+             Model-driven writes are not restricted to a directory tree. Set `sandbox_dir` in config.toml or via KF_CODE_SANDBOX_DIR, or list `allowed_write_dirs`.",
+        ));
+    }
+    state
+}
+
+fn spawn_kb_reader(kb_tx: mpsc::UnboundedSender<Event>, shutdown: Arc<Notify>) {
+    std::thread::spawn(move || {
+        loop {
+            match event::read() {
+                Ok(ev) => {
+                    if kb_tx.send(ev).is_err() {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    tracing::info!(
+                        error = ?e,
+                        "keyboard reader thread exiting; signalling TUI shutdown"
+                    );
+                    shutdown.notify_one();
+                    break;
+                }
+            }
+        }
+    });
+}
+
+#[cfg(unix)]
+fn install_signal_handlers(
+    shared_config: &crate::shared::SharedConfig,
+    config_tx: &mpsc::UnboundedSender<Config>,
+    shutdown: Arc<Notify>,
+) {
+    use tokio::signal::unix::{signal, SignalKind};
+
+    match signal(SignalKind::hangup()) {
+        Ok(mut hup) => {
+            let reload_config_tx = config_tx.clone();
+            let reload_shared_config = shared_config.clone();
+            tokio::spawn(async move {
+                while hup.recv().await.is_some() {
+                    let (fresh, _warning) = crate::session::config::load_config();
+                    if let Ok(mut cfg) = reload_shared_config.write() {
+                        *cfg = fresh.clone();
+                    }
+                    crate::send_or_warn!(
+                        reload_config_tx.send(fresh),
+                        "config reload channel receiver dropped"
+                    );
+                }
+            });
+        }
+        Err(e) => {
+            tracing::warn!("Could not install SIGHUP handler: {}", e);
+        }
+    }
+
+    let shutdown_for_signal = shutdown.clone();
+    tokio::spawn(async move {
+        let ctrl_c = tokio::signal::ctrl_c();
+        let term = async {
+            if let Ok(mut s) = signal(SignalKind::terminate()) {
+                let _ = s.recv().await;
+            } else {
+                std::future::pending::<()>().await;
+            }
+        };
+        tokio::select! {
+            biased;
+            _ = ctrl_c => {
+                tracing::info!("SIGINT received; signalling graceful TUI shutdown");
+                shutdown_for_signal.notify_one();
+            }
+            _ = term => {
+                tracing::info!("SIGTERM received; signalling graceful TUI shutdown");
+                shutdown_for_signal.notify_one();
+            }
+        }
+    });
+}
+
+#[cfg(not(unix))]
+fn spawn_ctrl_c_handler(shutdown: Arc<Notify>) {
+    tokio::spawn(async move {
+        let _ = tokio::signal::ctrl_c().await;
+        tracing::info!("SIGINT received; signalling graceful TUI shutdown");
+        shutdown.notify_one();
+    });
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn teardown(
+    shared_config: &crate::shared::SharedConfig,
+    saved_profile: &Option<Arc<Mutex<CarryoverProfile>>>,
+    cancel_tx: mpsc::UnboundedSender<()>,
+    input_tx: mpsc::UnboundedSender<String>,
+    resume_tx: mpsc::UnboundedSender<ConversationLog>,
+    compact_tx: mpsc::UnboundedSender<CompactRequest>,
+    model_tx: mpsc::UnboundedSender<String>,
+    undo_tx: mpsc::UnboundedSender<()>,
+    plan_tx: mpsc::UnboundedSender<bool>,
+    persona_tx: mpsc::UnboundedSender<PersonaResult>,
+    plugin_reload_tx: mpsc::UnboundedSender<kf_plugin_host::PluginRegistry>,
+    handle: &mut tokio::task::JoinHandle<()>,
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+) {
+    crate::send_or_warn!(cancel_tx.send(()), "cancel channel receiver dropped");
+    drop((
+        input_tx,
+        cancel_tx,
+        resume_tx,
+        compact_tx,
+        model_tx,
+        undo_tx,
+        plan_tx,
+        persona_tx,
+        plugin_reload_tx,
+    ));
+    const DEFAULT_SHUTDOWN_TIMEOUT_SECS: u64 = 3;
+    let shutdown_secs = crate::shared::read_shared_config(shared_config)
+        .session
+        .shutdown_timeout_secs
+        .unwrap_or(DEFAULT_SHUTDOWN_TIMEOUT_SECS);
+    if tokio::time::timeout(std::time::Duration::from_secs(shutdown_secs), &mut *handle)
+        .await
+        .is_err()
+    {
+        tracing::warn!("executor task did not shut down within 3 s; aborting");
+        handle.abort();
+        let _ = handle.await;
+    }
+    if let Some(ref target) = saved_profile {
+        if let Ok(guard) = target.lock() {
+            crate::session::carryover::save_carryover(&guard);
+        }
+    }
+    if let Err(e) = disable_raw_mode() {
+        tracing::debug!(error = %e, "failed to disable raw mode during TUI shutdown");
+    }
+    if let Err(e) = execute!(terminal.backend_mut(), LeaveAlternateScreen) {
+        tracing::debug!(error = %e, "failed to leave alternate screen during TUI shutdown");
+     }
+ }
+
+fn spawn_plugin_watcher(
+    shared_config: &crate::shared::SharedConfig,
+    reload_tx: mpsc::UnboundedSender<kf_plugin_host::PluginRegistry>,
+) {
+    let (watch_tx, mut watch_rx) = mpsc::unbounded_channel::<()>();
+    let plugins_dir = crate::session::plugin_tools::plugins_dir();
+    let _watcher = crate::session::plugin_tools::spawn_plugin_watcher(plugins_dir, watch_tx);
+    let watch_cfg = shared_config.clone();
+    tokio::spawn(async move {
+        while watch_rx.recv().await.is_some() {
+            let cfg = crate::shared::read_shared_config(&watch_cfg).clone();
+            match crate::session::plugin_tools::load_plugin_registry(&cfg) {
+                Ok((registry, warnings)) => {
+                    for w in &warnings {
+                        tracing::warn!(warning = %w, "plugin hot-reload warning");
+                    }
+                    let _ = reload_tx.send(registry);
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "plugin hot-reload failed");
+                }
+            }
+        }
+    });
+}
+
+#[cfg(unix)]
+async fn spawn_daemon_reader(state: &mut AppState) {
+    let daemon_flags = std::sync::Arc::new(std::sync::Mutex::new(
+        crate::tui::daemon_events::DaemonEventFlags::default(),
+    ));
+    state.daemon_flags = Some(daemon_flags.clone());
+    match crate::tui::daemon_events::spawn_daemon_event_reader(daemon_flags).await {
+        Ok(Some(handle)) => {
+            tracing::debug!("daemon instance channel connected");
+            tokio::spawn(async move {
+                let _ = handle.await;
+            });
+        }
+        Ok(None) => {
+            tracing::debug!("daemon not running; instance channel not opened");
+        }
+        Err(e) => {
+            tracing::debug!(error = %e, "failed to open daemon instance channel");
+        }
+    }
+}
+
 /// Run the TUI event loop.
 // reason: entry point; each arg is an independent session resource that the loop owns.
 #[allow(clippy::too_many_arguments)]
@@ -149,71 +371,24 @@ pub async fn run_tui(
     let cfg_for_startup = crate::shared::read_shared_config(&shared_config).clone();
     let active_model = adapter.model_info().name.clone();
 
-    // ── AppState ──
-    let mut state = AppState::new(shared_config.clone());
-    state.undo_stack = undo_stack.clone();
-    state.session_started = Instant::now();
-    // Capture the session identity from the conversation log before it
-    // moves into the executor. This lets the TUI report the session id
-    // and write transcript files to a predictable path.
-    let conversation_log_path = conversation.0.path().clone();
-    state.log_path = Some(conversation_log_path.clone());
-    state.session_id = conversation_log_path
-        .file_stem()
-        .and_then(|f| f.to_str())
-        .map(|s| s.trim_end_matches(".conv").to_string())
-        .unwrap_or_else(|| "unknown-session".to_string());
-    state.fork_manager = Some(crate::session::session_fork::ForkManager::new(
-        &state.session_id,
-        &conversation_log_path,
-    ));
-    // Hook for sessions that need a connection indicator.
-    //
-    // Probes Ollama at startup so the status bar reflects reality
-    // instead of lying on `Disconnected` for the entire session
-    // (2026-06-11 incident — the original code set `Disconnected`
-    // once at construction and never updated it, so the status
-    // bar said "Disconnected" even on a fully-working install).
-    //
-    // One-shot probe: doesn't poll. If Ollama goes down mid-session,
-    // the bar will continue to show the last-known state. A v2
-    // improvement would be a periodic background probe driven by
-    // the SIGHUP / reconnect signal path.
-    state.connection = probe_ollama_connection(&cfg_for_startup, &active_model).await;
+    let mut state = init_app_state(
+        &shared_config,
+        &cfg_for_startup,
+        &active_model,
+        conversation.0.path(),
+        &undo_stack,
+    ).await;
 
-    // Surface PathGuard sandbox posture in the TUI. `freeze_launch_sandbox`
-    // already set `sandbox_dir` to the cwd by default, so `unsandboxed`
-    // only becomes true if the operator explicitly cleared it or set an
-    // empty `allowed_write_dirs` with no sandbox.
-    {
-        let cfg_for_guard = crate::shared::read_shared_config(&shared_config);
-        let (_, path_guard, _) = crate::session::access::access_from_config(&cfg_for_guard);
-        state.unsandboxed = !path_guard.is_sandboxed();
-    }
-    if state.unsandboxed {
-        state.messages.push_back(crate::tui::app::ConversationEntry::new(
-            "system",
-            "⚠️  PathGuard is unsandboxed: no `sandbox_dir` or `allowed_write_dirs` configured. \
-             Model-driven writes are not restricted to a directory tree. Set `sandbox_dir` in config.toml or via KF_CODE_SANDBOX_DIR, or list `allowed_write_dirs`.",
-        ));
-    }
-
-    // Skills — load project-local SKILL.md files and plugin directories,
-    // then layer the built-in skills on top. (Missing dirs are silently skipped,
-    // so an empty project is fine.)
     let max_trust = cfg_for_startup.tools.max_plugin_trust;
     state.skill_registry.set_max_plugin_trust(max_trust);
     if let Err(e) = state.skill_registry.scan_and_load(&cfg_for_startup) {
         tracing::warn!("Skill scan error: {}", e);
     }
-    // Always register built-in skills
     for skill in crate::session::skills::builtin_skills() {
         state.skill_registry.register(skill);
     }
-    // Surface plugin trust tiers in the status bar (Phase 2.3).
     state.plugin_status = state.skill_registry.plugin_status_summary();
 
-    // ── Carryover profile (shared between executor and save) ──
     let carryover_target: Option<Arc<Mutex<CarryoverProfile>>> =
         if cfg_for_startup.session.carryover_enabled {
             Some(Arc::new(Mutex::new(CarryoverProfile::default())))
@@ -222,272 +397,70 @@ pub async fn run_tui(
         };
     let saved_profile = carryover_target.clone();
 
-    // ── Channels ──
-    // User input: TUI → Executor
     let (input_tx, input_rx) = mpsc::unbounded_channel::<String>();
-    // Stream events: Executor → TUI
     let (event_tx, mut event_rx) = mpsc::channel::<executor::TurnEvent>(10_000);
-    // Approval requests: Executor → TUI
     let (approval_tx, mut approval_rx) = mpsc::unbounded_channel::<ApprovalRequest>();
-    // Cancellation: TUI → Executor (sends () to cancel current turn)
     let (cancel_tx, cancel_rx) = mpsc::unbounded_channel::<()>();
-    // Resume: TUI → Executor (sends a ConversationLog to swap in for fork resumption)
     let (resume_tx, resume_rx) = mpsc::unbounded_channel::<ConversationLog>();
-    // Compact: TUI → Executor (sends CompactRequest to trigger a /compact pass)
     let (compact_tx, compact_rx) = mpsc::unbounded_channel::<CompactRequest>();
-    // Model swap: TUI → Executor (sends a model name to install mid-session)
-    // Review.md gap #5. Mirror of the other control channels. The
-    // TUI owns the sender (passed into `keys::handle_input_key`); the
-    // executor's `run` loop receives the name and calls
-    // `AdapterSwap::force_swap`.
     let (model_tx, model_rx) = mpsc::unbounded_channel::<String>();
-    // Undo: TUI → Executor (signals a pop of the undo stack).
-    // Review.md gap #7. `()` payload because the only operation is
-    // "pop the most recent edit"; the result comes back as a token.
     let (undo_tx, undo_rx) = mpsc::unbounded_channel::<()>();
-    // Config reload: TUI → Executor (sends a new Config snapshot).
-    // The TUI owns the sender (driven by SIGHUP or `/reload`); the
-    // executor replaces its shared config and rebuilds access control.
     let (config_tx, config_rx) = mpsc::unbounded_channel::<Config>();
-    // Plan mode: TUI → Executor (sends bool to enter/exit plan mode).
-    // After the fork-isolated `/plan` persona merges its result, the
-    // main executor is placed in plan mode so `/implement` remains the
-    // approval gesture.
     let (plan_tx, plan_rx) = mpsc::unbounded_channel::<bool>();
-    // Plugin reload: TUI → Executor (sends a fresh PluginRegistry).
-    // `/reload plugins` re-scans the plugins directory and asks the
-    // executor to swap the plugin toolset, hooks, and verifiers.
     let (plugin_reload_tx, plugin_reload_rx) =
         mpsc::unbounded_channel::<kf_plugin_host::PluginRegistry>();
 
-    // ── Plugin hot-reload watcher (WO 11.4, ADR-059) ──
-    // Watch the plugins directory for changes; on a debounced event,
-    // reload the registry and forward it to the executor via the same
-    // `plugin_reload_tx` channel that `/plugins reload` uses.
-    let (watch_tx, mut watch_rx) = mpsc::unbounded_channel::<()>();
-    let _watcher = {
-        let plugins_dir = crate::session::plugin_tools::plugins_dir();
-        crate::session::plugin_tools::spawn_plugin_watcher(plugins_dir, watch_tx)
-    };
-    let watch_cfg = shared_config.clone();
-    let watch_reload_tx = plugin_reload_tx.clone();
-    tokio::spawn(async move {
-        while watch_rx.recv().await.is_some() {
-            let cfg = crate::shared::read_shared_config(&watch_cfg).clone();
-            match crate::session::plugin_tools::load_plugin_registry(&cfg) {
-                Ok((registry, warnings)) => {
-                    for w in &warnings {
-                        tracing::warn!(warning = %w, "plugin hot-reload warning");
-                    }
-                    let _ = watch_reload_tx.send(registry);
-                }
-                Err(e) => {
-                    tracing::warn!(error = %e, "plugin hot-reload failed");
-                }
-            }
-        }
-    });
-    // Persona completion: background task → TUI event loop.
-    // `/explore`, `/plan`, and `/coder` spawn fork-isolated subagents;
-    // the result is merged back into the parent conversation here.
+    spawn_plugin_watcher(&shared_config, plugin_reload_tx.clone());
+
     let (persona_tx, mut persona_rx) = mpsc::unbounded_channel::<PersonaResult>();
-    // Keyboard events: background reader thread → TUI event loop
     let (kb_tx, mut kb_rx) = mpsc::unbounded_channel::<Event>();
 
-    // Shutdown signal: a one-shot notify that any of the exit paths
-    // (SIGHUP, kb-reader thread EOF when the pty closes, future
-    // SIGTERM/SIGINT) can fire. The event loop `select!`s on it and
-    // sets `state.should_exit = true` when it fires.
-    //
-    // Bug this fixes: previously, when the controlling terminal went
-    // away (wezterm pane close, SSH disconnect, dropped SSH session),
-    // the TUI event loop had no way to observe it. The SIGHUP handler
-    // was wired only to config hot-reload; the kb-reader thread
-    // silently exited on `event::read()` Err but the TUI kept waiting
-    // on the (now-empty) keyboard channel forever. The process became
-    // an orphan: pty gone, stdin/stdout `(deleted)`, but the event
-    // loop pinned a core at low CPU for the lifetime of the OS.
     let shutdown = Arc::new(Notify::new());
     let shutdown_for_loop = shutdown.clone();
-    let shutdown_for_kb = shutdown.clone();
+    spawn_kb_reader(kb_tx, shutdown.clone());
 
-    // Spawn a dedicated thread to read crossterm events without blocking
-    // the async event loop. This eliminates the 50ms poll latency floor.
-    //
-    // 2026-06-12: when the pty closes (terminal multiplexer pane close,
-    // SSH disconnect, etc.) `event::read()` returns `Err`. The
-    // pre-fix code silently dropped the thread here, leaving the
-    // TUI event loop waiting on `kb_rx` for events that would never
-    // arrive. The fix fires `shutdown` so the TUI loop wakes up,
-    // sets `state.should_exit = true`, and runs the same graceful
-    // shutdown path as `/exit` (terminal mode restored, carryover
-    // profile saved, executor flushed).
-    std::thread::spawn(move || {
-        loop {
-            match event::read() {
-                Ok(ev) => {
-                    if kb_tx.send(ev).is_err() {
-                        break; // receiver dropped (TUI exited)
-                    }
-                }
-                Err(e) => {
-                    // pty is gone (or some other fatal read error).
-                    // Signal the event loop to exit. We don't try to
-                    // distinguish EINTR / UnexpectedEof / other
-                    // variants — the cost of a false positive is one
-                    // extra `/exit`, which is harmless.
-                    tracing::info!(
-                        error = ?e,
-                        "keyboard reader thread exiting; signalling TUI shutdown"
-                    );
-                    shutdown_for_kb.notify_one();
-                    break;
-                }
-            }
-        }
-    });
-
-    // SIGHUP config hot-reload (review.md gap #5).
-    // On Unix, the conventional "reload config" signal is SIGHUP.
-    // When we receive one, re-read `config.toml`, update the shared
-    // config in place, and forward a snapshot to the executor so it
-    // rebuilds deny lists, path guards, and approval state. The
-    // executor emits the user-visible confirmation token.
     #[cfg(unix)]
-    {
-        use tokio::signal::unix::{signal, SignalKind};
-        match signal(SignalKind::hangup()) {
-            Ok(mut hup) => {
-                let reload_config_tx = config_tx.clone();
-                let reload_shared_config = shared_config.clone();
-                tokio::spawn(async move {
-                    while hup.recv().await.is_some() {
-                        let (fresh, _warning) = crate::session::config::load_config();
-                        if let Ok(mut cfg) = reload_shared_config.write() {
-                            *cfg = fresh.clone();
-                        }
-                        // Forward the new snapshot to the executor,
-                        // which owns the access-control rebuild. If the
-                        // executor is gone (TUI exited) we drop it.
-                        crate::send_or_warn!(
-                            reload_config_tx.send(fresh),
-                            "config reload channel receiver dropped"
-                        );
-                    }
-                });
-            }
-            Err(e) => {
-                tracing::warn!("Could not install SIGHUP handler: {}", e);
-            }
-        }
-    }
-
-    // SIGINT / SIGTERM graceful shutdown.
-    // Drives the same `shutdown` Notify used by the keyboard reader thread
-    // when the pty closes, so Ctrl-C or a termination signal restores the
-    // terminal, saves carryover profile, and flushes the executor instead of
-    // killing the process outright.
-    let shutdown_for_signal = shutdown.clone();
-    tokio::spawn(async move {
-        let ctrl_c = tokio::signal::ctrl_c();
-
-        #[cfg(unix)]
-        let term = async {
-            use tokio::signal::unix::{signal, SignalKind};
-            if let Ok(mut s) = signal(SignalKind::terminate()) {
-                let _ = s.recv().await;
-            } else {
-                std::future::pending::<()>().await;
-            }
-        };
-        #[cfg(not(unix))]
-        let term = std::future::pending::<()>();
-
-        tokio::select! {
-            biased;
-            _ = ctrl_c => {
-                tracing::info!("SIGINT received; signalling graceful TUI shutdown");
-                shutdown_for_signal.notify_one();
-            }
-            _ = term => {
-                tracing::info!("SIGTERM received; signalling graceful TUI shutdown");
-                shutdown_for_signal.notify_one();
-            }
-        }
-    });
+    install_signal_handlers(
+        &shared_config,
+        &config_tx,
+        shutdown.clone(),
+    );
+    #[cfg(not(unix))]
+    spawn_ctrl_c_handler(shutdown.clone());
 
     // Spawn the executor on a background task
     let (conversation_log, open_outcome) = conversation;
-    let mut exe = executor::Executor::with_log_and_undo_and_plugins(
+    let event_tx_for_commands = event_tx.clone();
+    let mut handle = spawn_executor(
         adapter,
         tools,
         shared_config.clone(),
         conversation_log,
+        open_outcome,
         carryover_target,
         undo_stack,
-        Some(plugin_registry),
+        plugin_registry,
+        &state,
+        system,
+        context_index,
+        trace_recorder,
+        input_rx,
+        event_tx,
+        approval_tx,
+        cancel_rx,
+        resume_rx,
+        compact_rx,
+        model_rx,
+        undo_rx,
+        config_rx,
+        plan_rx,
+        plugin_reload_rx,
     );
-    exe.set_session_id(state.session_id.clone());
-    // Apply --system override before the executor starts processing
-    // input. Without this, --system is silently dropped (was GPT 5.5
-    // review finding #2).
-    exe.set_system_override(system);
-    if let Some(idx) = context_index {
-        exe.set_context_index(idx);
-    }
-    if let crate::session::conversation::OpenOutcome::Restored(messages) = open_outcome {
-        exe.set_recovered_messages(messages);
-    }
-    if let Some(recorder) = trace_recorder {
-        exe.set_trace(recorder);
-    }
-    // Keep a sender clone for slash-commands (e.g. /model pull progress)
-    // that need to inject TurnEvent tokens into the TUI event stream.
-    let event_tx_for_commands = event_tx.clone();
 
-    let mut handle = tokio::spawn(async move {
-        if let Err(e) = exe
-            .run(
-                input_rx,
-                event_tx,
-                approval_tx,
-                cancel_rx,
-                resume_rx,
-                compact_rx,
-                model_rx,
-                undo_rx,
-                config_rx,
-                plan_rx,
-                plugin_reload_rx,
-            )
-            .await
-        {
-            tracing::error!(error = %e, "executor task exited with an error");
-        }
-    });
-
-    // Event loop
-    // Slow-tick: drives time-based UI elements (spinner, the
-    // 8Hz refresh of the status bar's elapsed-time display).
-    // 125ms = 8Hz, which keeps the 12-frame spinner animation
-    // visually smooth (full cycle every 1.5s) at a cost of
-    // ~8 redraws/sec when idle. This replaces the earlier
-    // 4Hz / 250ms tick (5b9909a) — the 4Hz version was
-    // visibly less smooth and users noticed.
-    //
-    // For a quiet session this is 8 redraws/sec of the same
-    // frame; ratatui's diffing + the terminal's lack of
-    // damage tracking means most of these redraws are cheap
-    // (the cost is dominated by the layout split + the chat
-    // line build, both O(n_lines) in the visible message
-    // count, which doesn't grow on idle).
+    // Slow-tick: drives time-based UI elements (spinner, 8Hz status bar).
     let mut slow_tick = tokio::time::interval(std::time::Duration::from_millis(125));
     slow_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
-    // Periodic connection health probe. A 30 s interval is frequent enough
-    // to surface a host/model outage quickly while keeping request volume
-    // negligible against a local Ollama endpoint. The probe runs on its own
-    // task so a 1 s probe timeout never blocks the executor or UI.
     let (conn_probe_tx, mut conn_probe_rx) = mpsc::channel::<ConnectionState>(1);
     tokio::spawn(connection_probe_task(
         shared_config.clone(),
@@ -495,35 +468,8 @@ pub async fn run_tui(
         std::time::Duration::from_secs(30),
     ));
 
-    // ── Daemon push-event reader (WO 17.2) ─────────────────────
-    // Opens a persistent instance channel to the session daemon and
-    // sets `sessions_dirty` / `jobs_dirty` flags on the TUI's
-    // `AppState`. The draw loop checks these flags and re-lists
-    // sessions or re-reads jobs as needed, without blocking the
-    // event loop on a synchronous daemon RPC per frame.
     #[cfg(unix)]
-    {
-        let daemon_flags = std::sync::Arc::new(std::sync::Mutex::new(
-            crate::tui::daemon_events::DaemonEventFlags::default(),
-        ));
-        state.daemon_flags = Some(daemon_flags.clone());
-        match crate::tui::daemon_events::spawn_daemon_event_reader(daemon_flags).await {
-            Ok(Some(handle)) => {
-                tracing::debug!("daemon instance channel connected");
-                // Keep the handle alive so the task is not cancelled prematurely.
-                // It will be dropped (and aborted) when the TUI exits.
-                tokio::spawn(async move {
-                    let _ = handle.await;
-                });
-            }
-            Ok(None) => {
-                tracing::debug!("daemon not running; instance channel not opened");
-            }
-            Err(e) => {
-                tracing::debug!(error = %e, "failed to open daemon instance channel");
-            }
-        }
-    }
+    spawn_daemon_reader(&mut state).await;
 
     let res = run_event_loop(
         &mut terminal,
@@ -549,16 +495,11 @@ pub async fn run_tui(
     )
     .await;
 
-    // Signal any in-flight model call to abort before dropping channels.
-    crate::send_or_warn!(cancel_tx.send(()), "cancel channel receiver dropped");
-    // Drop all control senders so every receiver in the executor's
-    // `tokio::select!` closes. The executor only breaks on the
-    // `else => break` arm once *all* receivers are closed; dropping
-    // only `input_tx` left the others alive and caused the TUI to hang
-    // on `handle.await` after `run_event_loop` returned.
-    drop((
-        input_tx,
+    teardown(
+        &shared_config,
+        &saved_profile,
         cancel_tx,
+        input_tx,
         resume_tx,
         compact_tx,
         model_tx,
@@ -566,41 +507,80 @@ pub async fn run_tui(
         plan_tx,
         persona_tx,
         plugin_reload_tx,
-    ));
-    // ponytail: 3s default, configurable via shutdown_timeout_secs — so a hung
-    // Ollama HTTP call doesn't freeze the terminal. Dropping a tokio JoinHandle
-    // detaches the task and lets it keep running in the background, so
-    // explicitly abort and await it.
-    const DEFAULT_SHUTDOWN_TIMEOUT_SECS: u64 = 3;
-    let shutdown_secs = crate::shared::read_shared_config(&shared_config)
-        .session
-        .shutdown_timeout_secs
-        .unwrap_or(DEFAULT_SHUTDOWN_TIMEOUT_SECS);
-    if tokio::time::timeout(std::time::Duration::from_secs(shutdown_secs), &mut handle)
-        .await
-        .is_err()
-    {
-        tracing::warn!("executor task did not shut down within 3 s; aborting");
-        handle.abort();
-        let _ = handle.await;
-    }
-
-    // Save carryover profile
-    if let Some(ref target) = saved_profile {
-        if let Ok(guard) = target.lock() {
-            crate::session::carryover::save_carryover(&guard);
-        }
-    }
-
-    // Cleanup
-    if let Err(e) = disable_raw_mode() {
-        tracing::debug!(error = %e, "failed to disable raw mode during TUI shutdown");
-    }
-    if let Err(e) = execute!(terminal.backend_mut(), LeaveAlternateScreen) {
-        tracing::debug!(error = %e, "failed to leave alternate screen during TUI shutdown");
-    }
+        &mut handle,
+        &mut terminal,
+    )
+    .await;
 
     res
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_executor(
+    adapter: Box<dyn crate::adapters::ModelAdapter>,
+    tools: crate::session::toolset::CompositeToolset,
+    shared_config: crate::shared::SharedConfig,
+    conversation_log: ConversationLog,
+    open_outcome: crate::session::conversation::OpenOutcome,
+    carryover_target: Option<Arc<Mutex<CarryoverProfile>>>,
+    undo_stack: Option<crate::tools::UndoStackRef>,
+    plugin_registry: &kf_plugin_host::PluginRegistry,
+    state: &AppState,
+    system: Option<String>,
+    context_index: Option<kf_context_index::ContextIndex>,
+    trace_recorder: Option<crate::session::replay::TraceRecorder>,
+    input_rx: mpsc::UnboundedReceiver<String>,
+    event_tx: mpsc::Sender<executor::TurnEvent>,
+    approval_tx: mpsc::UnboundedSender<ApprovalRequest>,
+    cancel_rx: mpsc::UnboundedReceiver<()>,
+    resume_rx: mpsc::UnboundedReceiver<ConversationLog>,
+    compact_rx: mpsc::UnboundedReceiver<CompactRequest>,
+    model_rx: mpsc::UnboundedReceiver<String>,
+    undo_rx: mpsc::UnboundedReceiver<()>,
+    config_rx: mpsc::UnboundedReceiver<Config>,
+    plan_rx: mpsc::UnboundedReceiver<bool>,
+    plugin_reload_rx: mpsc::UnboundedReceiver<kf_plugin_host::PluginRegistry>,
+) -> tokio::task::JoinHandle<()> {
+    let mut exe = executor::Executor::with_log_and_undo_and_plugins(
+        adapter,
+        tools,
+        shared_config,
+        conversation_log,
+        carryover_target,
+        undo_stack,
+        Some(plugin_registry),
+    );
+    exe.set_session_id(state.session_id.clone());
+    exe.set_system_override(system);
+    if let Some(idx) = context_index {
+        exe.set_context_index(idx);
+    }
+    if let crate::session::conversation::OpenOutcome::Restored(messages) = open_outcome {
+        exe.set_recovered_messages(messages);
+    }
+    if let Some(recorder) = trace_recorder {
+        exe.set_trace(recorder);
+    }
+    tokio::spawn(async move {
+        if let Err(e) = exe
+            .run(
+                input_rx,
+                event_tx,
+                approval_tx,
+                cancel_rx,
+                resume_rx,
+                compact_rx,
+                model_rx,
+                undo_rx,
+                config_rx,
+                plan_rx,
+                plugin_reload_rx,
+            )
+            .await
+        {
+            tracing::error!(error = %e, "executor task exited with an error");
+        }
+    })
 }
 
 // reason: each arg is a distinct mpsc channel end; grouping would obscure the wiring.
@@ -762,45 +742,11 @@ async fn run_event_loop(
             }
         }
 
-        // ── Daemon push events (WO 17.2) ────────────────────────
-        // Drain the shared flags set by the daemon event reader into
-        // the local AppState. The reader sets the flags; we clear
-        // them after mirroring so we never miss an event.
-        #[cfg(unix)]
-        {
-            let (sessions_flag, jobs_flag) = if let Some(ref flags) = state.daemon_flags {
-                if let Ok(mut f) = flags.lock() {
-                    let s = f.sessions_dirty;
-                    let j = f.jobs_dirty;
-                    f.sessions_dirty = false;
-                    f.jobs_dirty = false;
-                    (s, j)
-                } else {
-                    (false, false)
-                }
-            } else {
-                (false, false)
-            };
-            if sessions_flag {
-                state.sessions_dirty = true;
-                state.mark_dirty();
-            }
-            if jobs_flag {
-                state.jobs_dirty = true;
-                state.mark_dirty();
-            }
-        }
-
         // Jobs and kb events are also work that may have been
         // waiting. We always drain jobs (cheap) and process any
         // kb event we just got. If nothing happened, none of this
         // marks the state dirty.
-
-        // notify_completed_jobs mutates state when it pushes a
-        // notification, and is cheap (O(n) in jobs, single lock).
-        // It returns `true` only when it actually pushed something;
-        // we use that to set the dirty flag (so a no-op
-        // notification pass doesn't schedule an unnecessary redraw).
+        drain_daemon_flags(state);
         if notify_completed_jobs(state).await {
             state.mark_dirty();
         }
@@ -808,58 +754,7 @@ async fn run_event_loop(
             state.mark_dirty();
         }
 
-        // Process the kb event (if any). The handlers
-        // (`handle_input_key` / `handle_approval_key` /
-        // `handle_bang_approval_key`) call `state.mark_dirty()`
-        // internally via their state mutations, but we also
-        // explicitly mark dirty here because a no-op key event
-        // (e.g. Shift held down) shouldn't redraw, and the
-        // explicit mark ensures the redraw still happens on the
-        // first key event regardless of which handler ran.
-        if let Some(ev) = kb_event {
-            match ev {
-                Event::Key(key) => {
-                    // Order matters: the bang-approval gate (review.md
-                    // arch concern #1) takes priority over the model
-                    // approval because its response is purely local.
-                    if state.pending_bang.is_some() {
-                        approval_keys::handle_bang_approval_key(key, state).await;
-                    } else if state.pending_approval.is_some() {
-                        approval_keys::handle_approval_key(key, state);
-                    } else {
-                        keys::handle_input_key(key, state, &key_ctx).await?;
-                    }
-                }
-                Event::Resize(_w, _h) => {
-                    // Terminal size changed — the layout has to
-                    // recompute. Mark dirty so the next render
-                    // uses the new size even if no other state
-                    // changed.
-                    state.mark_dirty();
-                }
-                _ => {}
-            }
-        }
-
-        // Also drain any other kb events that arrived in the same
-        // burst (e.g. a paste that's multiple key events). These
-        // were already there in the v1 loop; we keep the
-        // try_recv loop for them.
-        while let Ok(ev) = kb_rx.try_recv() {
-            match ev {
-                Event::Key(key) => {
-                    if state.pending_bang.is_some() {
-                        approval_keys::handle_bang_approval_key(key, state).await;
-                    } else if state.pending_approval.is_some() {
-                        approval_keys::handle_approval_key(key, state);
-                    } else {
-                        keys::handle_input_key(key, state, &key_ctx).await?;
-                    }
-                }
-                Event::Resize(_w, _h) => state.mark_dirty(),
-                _ => {}
-            }
-        }
+        dispatch_kb_events(state, &key_ctx, kb_event, kb_rx).await?;
 
         // ── Approval dialog appeared mid-iteration ─────────────
         // The drain functions above set `state.pending_approval` /
@@ -898,132 +793,210 @@ async fn run_event_loop(
         }
         state.dirty = false;
 
-        terminal.draw(|f| {
-            let size = f.area();
-            let input_height = state.input_visible_height(5);
-            let chunks = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([
-                    Constraint::Length(1), // tab bar
-                    Constraint::Min(1),    // main content
-                    Constraint::Length(input_height),
-                    Constraint::Length(1), // status bar
-                ])
-                .split(size);
-
-            // ── Top tab bar: F1–F6 labels, active tab highlighted ──
-            crate::tui::widgets::tabs::render_tab_bar(f, chunks[0], state);
-
-            // Render main content area based on active tab.
-            // Chat (F1) shows the conversation; other tabs show their
-            // own panel content in the same area.
-            use crate::tui::app::ActiveTab;
-            match state.active_tab {
-                ActiveTab::Chat => {
-                    // Welcome screen when no messages and no input
-                    if state.messages.is_empty() && state.input.is_empty() {
-                        crate::tui::widgets::welcome::render_welcome(f, chunks[1], state);
-                    } else {
-                        render_chat(f, chunks[1], state);
-                    }
-                }
-                ActiveTab::Models => {
-                    crate::tui::widgets::tabs::render_models(f, chunks[1], state);
-                }
-                ActiveTab::Plugins => {
-                    crate::tui::widgets::tabs::render_plugins(f, chunks[1], state);
-                }
-                ActiveTab::Jobs => {
-                    crate::tui::widgets::tabs::render_jobs(f, chunks[1], state);
-                }
-                ActiveTab::Settings => {
-                    crate::tui::widgets::tabs::render_settings(f, chunks[1], state);
-                }
-                ActiveTab::Threads => {
-                    crate::tui::widgets::tabs::render_threads(f, chunks[1], state);
-                }
-            }
-
-            // ── Slash menu popup (above input) ──
-            if let Some(ref menu) = state.slash_menu {
-                crate::tui::widgets::slash_menu::render_slash_menu(f, chunks[2], menu);
-            }
-
-            // ── File completer popup (above input) ──
-            if let Some(ref completer) = state.file_completer {
-                crate::tui::widgets::file_completer::render_file_completer(f, chunks[2], completer);
-            }
-
-            // Show input and status for all tabs; the main content area
-            // already rendered above.
-            render_input(f, chunks[2], state);
-            render_status(f, chunks[3], state);
-
-            // Session picker overlay (daemon follow-up). Shown when the
-            // user invokes `/resume` with no arguments, or at startup
-            // before the main event loop. The approval dialog takes
-            // precedence if both are somehow active — approvals are
-            // system-initiated and require immediate attention.
-            if state.pending_approval.is_none() && state.pending_bang.is_none() {
-                if let Some(ref picker) = state.session_picker {
-                    picker.render(f, size);
-                }
-            }
-
-            // Directory picker overlay (Ctrl+O) is rendered by the
-            // file_completer above — it uses FileCompleter with
-            // pick_directory=true instead of a separate widget.
-
-            // Approval dialog overlay.
-            //
-            // `render_approval_dialog` needs both a `&PendingApproval` (to
-            // display the args preview) and `&mut state` (to clamp
-            // `state.approval_scroll` / `state.approval_max_scroll`). We
-            // can't hold both borrows simultaneously because the immutable
-            // borrow of `state.pending_approval` would extend through the
-            // call site and conflict with the mutable borrow.
-            //
-            // The fix is `std::mem::take`: swap the `Option<PendingApproval>`
-            // out for `None` (replacing the contained value with a sentinel
-            // `None` via `mem::replace`), pass the owned approval by ref to
-            // the renderer, then put it back. The closure is the cleanest
-            // way to scope the `&mut state` borrow tightly.
-            //
-            // `std::mem::take` is sound here because:
-            //   1. `pending_approval` is `Option<PendingApproval>`, and
-            //      `None` is a valid value for it.
-            //   2. We immediately restore the original value after the call.
-            //   3. The dialog is the only consumer of `pending_approval`,
-            //      and we're already inside the render path so no other
-            //      code can observe the temporary `None`.
-            //
-            // The bang-approval gate (review.md arch concern #1) uses
-            // the same dialog shape via `pending_bang`. We render it
-            // identically — only the key handler knows the difference
-            // (see `approval_keys::handle_bang_approval_key`).
-            let pending_taken = state.pending_approval.take();
-            if let Some(ref approval) = pending_taken {
-                render_approval_dialog(f, size, approval, state);
-            } else if let Some(ref bang) = state.pending_bang {
-                // Synthesize a transient `PendingApproval` view of the
-                // bang command so the dialog renders the same way. The
-                // `responder` is `None` because bang is a local flow
-                // (no executor oneshot).
-                let synthetic = crate::tui::app::PendingApproval {
-                    tool_name: "!bash".into(),
-                    args: serde_json::json!({ "command": bang.cmd }),
-                    responder: None,
-                };
-                render_approval_dialog(f, size, &synthetic, state);
-            }
-            state.pending_approval = pending_taken;
-
-            // Doom-loop warning banner. Renders last so it sits on top
-            // of any other overlay. Skipped when acknowledged or when
-            // the underlying state hasn't crossed the threshold.
-            crate::tui::widgets::doom_banner::render_if_active(f, size, state);
-        })?;
+        render_frame(terminal, state)?;
     }
+}
+
+async fn dispatch_kb_events<'a>(
+    state: &mut AppState,
+    key_ctx: &keys::HandleInputContext<'a>,
+    first: Option<Event>,
+    kb_rx: &mut mpsc::UnboundedReceiver<Event>,
+) -> anyhow::Result<()> {
+    async fn dispatch_one<'a>(
+        state: &mut AppState,
+        key: event::KeyEvent,
+        key_ctx: &keys::HandleInputContext<'a>,
+    ) -> anyhow::Result<()> {
+        if state.pending_bang.is_some() {
+            approval_keys::handle_bang_approval_key(key, state).await;
+        } else if state.pending_approval.is_some() {
+            approval_keys::handle_approval_key(key, state);
+        } else {
+            keys::handle_input_key(key, state, key_ctx).await?;
+        }
+        Ok(())
+    }
+
+    if let Some(ev) = first {
+        match ev {
+            Event::Key(key) => dispatch_one(state, key, key_ctx).await?,
+            Event::Resize(_w, _h) => state.mark_dirty(),
+            _ => {}
+        }
+    }
+
+    while let Ok(ev) = kb_rx.try_recv() {
+        match ev {
+            Event::Key(key) => dispatch_one(state, key, key_ctx).await?,
+            Event::Resize(_w, _h) => state.mark_dirty(),
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn drain_daemon_flags(state: &mut AppState) {
+    // Drain the shared flags set by the daemon event reader into
+    // the local AppState. The reader sets the flags; we clear
+    // them after mirroring so we never miss an event.
+    let (sessions_flag, jobs_flag) = if let Some(ref flags) = state.daemon_flags {
+        if let Ok(mut f) = flags.lock() {
+            let s = f.sessions_dirty;
+            let j = f.jobs_dirty;
+            f.sessions_dirty = false;
+            f.jobs_dirty = false;
+            (s, j)
+        } else {
+            (false, false)
+        }
+    } else {
+        (false, false)
+    };
+    if sessions_flag {
+        state.sessions_dirty = true;
+        state.mark_dirty();
+    }
+    if jobs_flag {
+        state.jobs_dirty = true;
+        state.mark_dirty();
+    }
+}
+
+#[cfg(not(unix))]
+fn drain_daemon_flags(_state: &mut AppState) {}
+
+fn render_frame(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    state: &mut AppState,
+) -> anyhow::Result<()> {
+    terminal.draw(|f| {
+        let size = f.area();
+        let input_height = state.input_visible_height(5);
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(1), // tab bar
+                Constraint::Min(1),    // main content
+                Constraint::Length(input_height),
+                Constraint::Length(1), // status bar
+            ])
+            .split(size);
+
+        // ── Top tab bar: F1–F6 labels, active tab highlighted ──
+        crate::tui::widgets::tabs::render_tab_bar(f, chunks[0], state);
+
+        // Render main content area based on active tab.
+        // Chat (F1) shows the conversation; other tabs show their
+        // own panel content in the same area.
+        use crate::tui::app::ActiveTab;
+        match state.active_tab {
+            ActiveTab::Chat => {
+                // Welcome screen when no messages and no input
+                if state.messages.is_empty() && state.input.is_empty() {
+                    crate::tui::widgets::welcome::render_welcome(f, chunks[1], state);
+                } else {
+                    render_chat(f, chunks[1], state);
+                }
+            }
+            ActiveTab::Models => {
+                crate::tui::widgets::tabs::render_models(f, chunks[1], state);
+            }
+            ActiveTab::Plugins => {
+                crate::tui::widgets::tabs::render_plugins(f, chunks[1], state);
+            }
+            ActiveTab::Jobs => {
+                crate::tui::widgets::tabs::render_jobs(f, chunks[1], state);
+            }
+            ActiveTab::Settings => {
+                crate::tui::widgets::tabs::render_settings(f, chunks[1], state);
+            }
+            ActiveTab::Threads => {
+                crate::tui::widgets::tabs::render_threads(f, chunks[1], state);
+            }
+        }
+
+        // ── Slash menu popup (above input) ──
+        if let Some(ref menu) = state.slash_menu {
+            crate::tui::widgets::slash_menu::render_slash_menu(f, chunks[2], menu);
+        }
+
+        // ── File completer popup (above input) ──
+        if let Some(ref completer) = state.file_completer {
+            crate::tui::widgets::file_completer::render_file_completer(f, chunks[2], completer);
+        }
+
+        // Show input and status for all tabs; the main content area
+        // already rendered above.
+        render_input(f, chunks[2], state);
+        render_status(f, chunks[3], state);
+
+        // Session picker overlay (daemon follow-up). Shown when the
+        // user invokes `/resume` with no arguments, or at startup
+        // before the main event loop. The approval dialog takes
+        // precedence if both are somehow active — approvals are
+        // system-initiated and require immediate attention.
+        if state.pending_approval.is_none() && state.pending_bang.is_none() {
+            if let Some(ref picker) = state.session_picker {
+                picker.render(f, size);
+            }
+        }
+
+        // Directory picker overlay (Ctrl+O) is rendered by the
+        // file_completer above — it uses FileCompleter with
+        // pick_directory=true instead of a separate widget.
+
+        // Approval dialog overlay.
+        //
+        // `render_approval_dialog` needs both a `&PendingApproval` (to
+        // display the args preview) and `&mut state` (to clamp
+        // `state.approval_scroll` / `state.approval_max_scroll`). We
+        // can't hold both borrows simultaneously because the immutable
+        // borrow of `state.pending_approval` would extend through the
+        // call site and conflict with the mutable borrow.
+        //
+        // The fix is `std::mem::take`: swap the `Option<PendingApproval>`
+        // out for `None` (replacing the contained value with a sentinel
+        // `None` via `mem::replace`), pass the owned approval by ref to
+        // the renderer, then put it back. The closure is the cleanest
+        // way to scope the `&mut state` borrow tightly.
+        //
+        // `std::mem::take` is sound here because:
+        //   1. `pending_approval` is `Option<PendingApproval>`, and
+        //      `None` is a valid value for it.
+        //   2. We immediately restore the original value after the call.
+        //   3. The dialog is the only consumer of `pending_approval`,
+        //      and we're already inside the render path so no other
+        //      code can observe the temporary `None`.
+        //
+        // The bang-approval gate (review.md arch concern #1) uses
+        // the same dialog shape via `pending_bang`. We render it
+        // identically — only the key handler knows the difference
+        // (see `approval_keys::handle_bang_approval_key`).
+        let pending_taken = state.pending_approval.take();
+        if let Some(ref approval) = pending_taken {
+            render_approval_dialog(f, size, approval, state);
+        } else if let Some(ref bang) = state.pending_bang {
+            // Synthesize a transient `PendingApproval` view of the
+            // bang command so the dialog renders the same way. The
+            // `responder` is `None` because bang is a local flow
+            // (no executor oneshot).
+            let synthetic = crate::tui::app::PendingApproval {
+                tool_name: "!bash".into(),
+                args: serde_json::json!({ "command": bang.cmd }),
+                responder: None,
+            };
+            render_approval_dialog(f, size, &synthetic, state);
+        }
+        state.pending_approval = pending_taken;
+
+        // Doom-loop warning banner. Renders last so it sits on top
+        // of any other overlay. Skipped when acknowledged or when
+        // the underlying state hasn't crossed the threshold.
+        crate::tui::widgets::doom_banner::render_if_active(f, size, state);
+    })?;
+    Ok(())
 }
 
 /// Merge a completed persona result back into the parent session.

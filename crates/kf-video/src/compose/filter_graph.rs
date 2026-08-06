@@ -121,13 +121,13 @@ pub fn build_filter_graph(scenes: &[Scene], width: u32, height: u32, fps: u32) -
 /// `<project>/brand.json`). 99% of callers can use the 4-arg wrapper
 /// above; render.rs is the one place that actually threads the project
 /// brand through.
-pub fn build_filter_graph_with_brand(
+fn build_all_scene_chains(
     scenes: &[Scene],
     width: u32,
     height: u32,
     fps: u32,
     brand: &BrandTheme,
-) -> FilterPlan {
+) -> (Vec<String>, Vec<String>) {
     let mut chains = Vec::new();
     let mut inputs: Vec<String> = Vec::new();
     let mut input_idx = 0u32;
@@ -1194,6 +1194,17 @@ pub fn build_filter_graph_with_brand(
         }
         chains.push(chain);
     }
+    (chains, inputs)
+}
+
+pub fn build_filter_graph_with_brand(
+    scenes: &[Scene],
+    width: u32,
+    height: u32,
+    fps: u32,
+    brand: &BrandTheme,
+) -> FilterPlan {
+    let (chains, inputs) = build_all_scene_chains(scenes, width, height, fps, brand);
 
     // ponytail: if any scene declares a transition, replace the final
     // concat with an xfade chain. Each scene that has shot.transition is

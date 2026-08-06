@@ -122,186 +122,121 @@ async fn handle_doom_action(
     }
 }
 
-/// Handle a single key event in the regular input mode.
-///
-/// Returns `Ok(())` after a single event. Only errors on I/O failure
-/// (e.g. terminal draw failure bubbling up from the event loop — in
-/// practice this function itself does no I/O, so `Ok(())` is the only
-/// realistic outcome, but we keep `Result` for symmetry with the caller).
-pub(crate) async fn handle_input_key(
+async fn handle_doom_loop_keys(
     key: KeyEvent,
     state: &mut AppState,
     ctx: &HandleInputContext<'_>,
-) -> anyhow::Result<()> {
-    // ── Doom-loop banner interceptor ──────────────────────────
-    // When the banner is active (state present, count >= THRESHOLD,
-    // not acknowledged), consume all key events for the banner.
-    // Left/Right move the highlight; Enter commits the selected
-    // action (break / plan / continue) and sets acknowledged = true.
-    if let Some(ref dl) = state.doom_loop {
-        if dl.count >= crate::session::executor::DoomLoopTracker::THRESHOLD && !dl.acknowledged {
-            use crate::tui::widgets::doom_banner::DoomLoopAction;
-            match key.code {
-                KeyCode::Left => {
-                    let cur = state.doom_loop_selection.index;
-                    let len = DoomLoopAction::ALL.len();
-                    state.doom_loop_selection.index = (cur + len - 1) % len;
-                    state.mark_dirty();
-                }
-                KeyCode::Right => {
-                    let cur = state.doom_loop_selection.index;
-                    let len = DoomLoopAction::ALL.len();
-                    state.doom_loop_selection.index = (cur + 1) % len;
-                    state.mark_dirty();
-                }
-                KeyCode::Enter => {
-                    let action = state.doom_loop_selection.selected();
-                    handle_doom_action(action, state, ctx).await;
-                }
-                KeyCode::Esc => {
-                    // Esc is the universal "dismiss" — treat it as
-                    // Continue so the user has a panic-out without
-                    // thinking about left/right.
-                    handle_doom_action(DoomLoopAction::Continue, state, ctx).await;
-                }
-                _ => {} // ignore other keys while the banner is up
-            }
-            return Ok(());
-        }
+) -> Option<anyhow::Result<()>> {
+    let dl = state.doom_loop.as_ref()?;
+    if dl.count < crate::session::executor::DoomLoopTracker::THRESHOLD || dl.acknowledged {
+        return None;
     }
-
-    // ── Slash menu interceptor ──────────────────────────────
-    // When the slash command popup is active, intercept ↑/↓/Enter/Esc.
-    // Typing filters; Esc dismisses; Enter inserts the selected command.
-    if let Some(ref mut menu) = state.slash_menu {
-        match key.code {
-            KeyCode::Up => {
-                if menu.selected > 0 {
-                    menu.selected -= 1;
-                }
-                state.mark_dirty();
-                return Ok(());
-            }
-            KeyCode::Down => {
-                // Clamp below; we don't know the filtered count here so
-                // we allow moving down — the renderer clamps visually.
-                menu.selected += 1;
-                state.mark_dirty();
-                return Ok(());
-            }
-            KeyCode::Enter => {
-                // Insert the selected command into the input buffer.
-                let commands = complete_command(&menu.query);
-                if menu.selected < commands.len() {
-                    state.input = commands[menu.selected].to_string();
-                    state.cursor_position = state.input.chars().count();
-                }
-                state.slash_menu = None;
-                state.mark_dirty();
-                return Ok(());
-            }
-            KeyCode::Esc => {
-                state.slash_menu = None;
-                state.mark_dirty();
-                return Ok(());
-            }
-            KeyCode::Backspace => {
-                menu.query.pop();
-                menu.selected = 0;
-                if menu.query.is_empty() {
-                    // Dismiss if the filter is empty (user backspaced past
-                    // the slash that opened it).
-                    state.slash_menu = None;
-                }
-                state.mark_dirty();
-                return Ok(());
-            }
-            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                menu.query.push(c);
-                menu.selected = 0;
-                state.mark_dirty();
-                return Ok(());
-            }
-            _ => {}
+    use crate::tui::widgets::doom_banner::DoomLoopAction;
+    match key.code {
+        KeyCode::Left => {
+            let cur = state.doom_loop_selection.index;
+            let len = DoomLoopAction::ALL.len();
+            state.doom_loop_selection.index = (cur + len - 1) % len;
+            state.mark_dirty();
         }
+        KeyCode::Right => {
+            let cur = state.doom_loop_selection.index;
+            let len = DoomLoopAction::ALL.len();
+            state.doom_loop_selection.index = (cur + 1) % len;
+            state.mark_dirty();
+        }
+        KeyCode::Enter => {
+            let action = state.doom_loop_selection.selected();
+            handle_doom_action(action, state, ctx).await;
+        }
+        KeyCode::Esc => {
+            handle_doom_action(DoomLoopAction::Continue, state, ctx).await;
+        }
+        _ => {}
     }
+    Some(Ok(()))
+}
 
-    // ── File completer interceptor ───────────────────────────
-    // When the @-mention file browser popup is active, intercept
-    // ↑/↓/Enter/Esc/Backspace. ↓/Enter descend into directories;
-    // Backspace goes up to the parent.
-    if let Some(ref mut completer) = state.file_completer {
-        match key.code {
-            KeyCode::Up => {
-                if completer.selected > 0 {
-                    completer.selected -= 1;
-                }
-                state.mark_dirty();
-                return Ok(());
+fn handle_slash_menu_keys(key: KeyEvent, state: &mut AppState) -> Option<anyhow::Result<()>> {
+    let menu = state.slash_menu.as_mut()?;
+    match key.code {
+        KeyCode::Up => {
+            if menu.selected > 0 {
+                menu.selected -= 1;
             }
-            KeyCode::Down => {
-                completer.selected += 1;
-                // Clamp: renderer will wrap or clamp.
-                if !completer.entries.is_empty() {
-                    completer.selected = completer.selected.min(completer.entries.len() - 1);
-                }
-                state.mark_dirty();
-                return Ok(());
+            state.mark_dirty();
+            Some(Ok(()))
+        }
+        KeyCode::Down => {
+            menu.selected += 1;
+            state.mark_dirty();
+            Some(Ok(()))
+        }
+        KeyCode::Enter => {
+            let commands = complete_command(&menu.query);
+            if menu.selected < commands.len() {
+                state.input = commands[menu.selected].to_string();
+                state.cursor_position = state.input.chars().count();
             }
-            KeyCode::Enter => {
-                // In directory-pick mode (Ctrl+O), Enter on a directory
-                // confirms it as the new cwd and closes the picker.
-                // In file mode (@-mention), Enter on a directory descends;
-                // Enter on a file inserts the path.
-                if !completer.entries.is_empty() && completer.selected < completer.entries.len() {
-                    let entry = completer.entries[completer.selected].clone();
-                    let path = completer.dir.join(&entry);
-                    if path.is_dir() {
-                        if completer.pick_directory {
-                            // Confirm: chdir and close.
-                            if std::env::set_current_dir(&path).is_ok() {
-                                state.cwd = path.clone();
-                            }
-                            state.file_completer = None;
-                        } else {
-                            // Descend: reload completer with the new dir.
-                            let mut new_entries = Vec::new();
-                            if let Ok(rd) = std::fs::read_dir(&path) {
-                                for de in rd.flatten() {
-                                    if let Some(name) = de.file_name().to_str() {
-                                        new_entries.push(name.to_string());
-                                    }
-                                }
-                            }
-                            new_entries.sort();
-                            completer.dir = path;
-                            completer.entries = new_entries;
-                            completer.selected = 0;
-                            completer.query.clear();
+            state.slash_menu = None;
+            state.mark_dirty();
+            Some(Ok(()))
+        }
+        KeyCode::Esc => {
+            state.slash_menu = None;
+            state.mark_dirty();
+            Some(Ok(()))
+        }
+        KeyCode::Backspace => {
+            menu.query.pop();
+            menu.selected = 0;
+            if menu.query.is_empty() {
+                state.slash_menu = None;
+            }
+            state.mark_dirty();
+            Some(Ok(()))
+        }
+        KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            menu.query.push(c);
+            menu.selected = 0;
+            state.mark_dirty();
+            Some(Ok(()))
+        }
+        _ => None,
+    }
+}
+
+fn handle_file_completer_keys(key: KeyEvent, state: &mut AppState) -> Option<anyhow::Result<()>> {
+    let completer = state.file_completer.as_mut()?;
+    match key.code {
+        KeyCode::Up => {
+            if completer.selected > 0 {
+                completer.selected -= 1;
+            }
+            state.mark_dirty();
+            Some(Ok(()))
+        }
+        KeyCode::Down => {
+            completer.selected += 1;
+            if !completer.entries.is_empty() {
+                completer.selected = completer.selected.min(completer.entries.len() - 1);
+            }
+            state.mark_dirty();
+            Some(Ok(()))
+        }
+        KeyCode::Enter => {
+            if !completer.entries.is_empty() && completer.selected < completer.entries.len() {
+                let entry = completer.entries[completer.selected].clone();
+                let path = completer.dir.join(&entry);
+                if path.is_dir() {
+                    if completer.pick_directory {
+                        if std::env::set_current_dir(&path).is_ok() {
+                            state.cwd = path.clone();
                         }
-                    } else if !completer.pick_directory {
-                        // Insert the selected file path into the input.
-                        let rel = format!("@{}", completer.dir.join(&entry).display());
-                        state.input = rel;
-                        state.cursor_position = state.input.chars().count();
                         state.file_completer = None;
-                    }
-                    // In pick_directory mode, Enter on a non-directory is a no-op.
-                }
-                state.mark_dirty();
-                return Ok(());
-            }
-            KeyCode::Esc => {
-                state.file_completer = None;
-                state.mark_dirty();
-                return Ok(());
-            }
-            KeyCode::Backspace => {
-                // Go to parent directory.
-                if let Some(parent) = completer.dir.parent() {
-                    if parent != completer.dir {
+                    } else {
                         let mut new_entries = Vec::new();
-                        if let Ok(rd) = std::fs::read_dir(parent) {
+                        if let Ok(rd) = std::fs::read_dir(&path) {
                             for de in rd.flatten() {
                                 if let Some(name) = de.file_name().to_str() {
                                     new_entries.push(name.to_string());
@@ -309,211 +244,231 @@ pub(crate) async fn handle_input_key(
                             }
                         }
                         new_entries.sort();
-                        completer.dir = parent.to_path_buf();
+                        completer.dir = path;
                         completer.entries = new_entries;
                         completer.selected = 0;
                         completer.query.clear();
                     }
+                } else if !completer.pick_directory {
+                    let rel = format!("@{}", completer.dir.join(&entry).display());
+                    state.input = rel;
+                    state.cursor_position = state.input.chars().count();
+                    state.file_completer = None;
                 }
-                state.mark_dirty();
-                return Ok(());
             }
-            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                completer.query.push(c);
-                // Filter entries by the new query.
-                let filtered: Vec<String> = completer
-                    .entries
-                    .iter()
-                    .filter(|e| {
-                        e.to_lowercase()
-                            .starts_with(&completer.query.to_lowercase())
-                    })
-                    .cloned()
-                    .collect();
-                completer.entries = if filtered.is_empty() {
-                    // If filter yields nothing, show all and clear the query char.
-                    completer.query.pop();
-                    let mut all = Vec::new();
-                    if let Ok(rd) = std::fs::read_dir(&completer.dir) {
+            state.mark_dirty();
+            Some(Ok(()))
+        }
+        KeyCode::Esc => {
+            state.file_completer = None;
+            state.mark_dirty();
+            Some(Ok(()))
+        }
+        KeyCode::Backspace => {
+            if let Some(parent) = completer.dir.parent() {
+                if parent != completer.dir {
+                    let mut new_entries = Vec::new();
+                    if let Ok(rd) = std::fs::read_dir(parent) {
                         for de in rd.flatten() {
                             if let Some(name) = de.file_name().to_str() {
-                                all.push(name.to_string());
+                                new_entries.push(name.to_string());
                             }
                         }
                     }
-                    all.sort();
-                    all
-                } else {
-                    filtered
-                };
-                completer.selected = 0;
-                state.mark_dirty();
-                return Ok(());
-            }
-            _ => {}
-        }
-    }
-
-    // ── Session picker interceptor ─────────────────────────
-    // When the recent-session picker overlay is active, all keys route
-    // to it. Enter confirms the selection and resumes the session;
-    // Esc/q cancels. The overlay is cleared once a choice is made.
-    //
-    // We `take()` the picker out of AppState while handling it so the
-    // mutable borrow of `state.session_picker` does not conflict with
-    // the mutable borrow of `state` passed to `resume_conversation_log`.
-    if let Some(mut picker) = state.session_picker.take() {
-        let consumed = picker.handle_key(key);
-        if consumed && picker.is_confirmed() {
-            if let Some(path) = picker.selected_path() {
-                match crate::session::conversation::ConversationLog::open_async(path).await {
-                    Ok((log, _outcome)) => {
-                        let msg = crate::tui::commands::resume_conversation_log(
-                            log,
-                            state,
-                            ctx.resume_tx,
-                        )
-                        .await;
-                        state
-                            .messages
-                            .push_back(ConversationEntry::new("system", msg));
-                    }
-                    Err(e) => {
-                        state.messages.push_back(ConversationEntry::new(
-                            "system",
-                            format!("Error resuming session: {e}"),
-                        ));
-                    }
+                    new_entries.sort();
+                    completer.dir = parent.to_path_buf();
+                    completer.entries = new_entries;
+                    completer.selected = 0;
+                    completer.query.clear();
                 }
             }
-            // Picker is consumed: don't restore it.
-            return Ok(());
+            state.mark_dirty();
+            Some(Ok(()))
         }
-        if consumed && picker.is_cancelled() {
-            // Picker is consumed: don't restore it.
-            return Ok(());
+        KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            completer.query.push(c);
+            let filtered: Vec<String> = completer
+                .entries
+                .iter()
+                .filter(|e| {
+                    e.to_lowercase()
+                        .starts_with(&completer.query.to_lowercase())
+                })
+                .cloned()
+                .collect();
+            completer.entries = if filtered.is_empty() {
+                completer.query.pop();
+                let mut all = Vec::new();
+                if let Ok(rd) = std::fs::read_dir(&completer.dir) {
+                    for de in rd.flatten() {
+                        if let Some(name) = de.file_name().to_str() {
+                            all.push(name.to_string());
+                        }
+                    }
+                }
+                all.sort();
+                all
+            } else {
+                filtered
+            };
+            completer.selected = 0;
+            state.mark_dirty();
+            Some(Ok(()))
         }
-        // Ctrl+C always exits, even from the picker.
-        if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
-            state.should_exit = true;
-            return Ok(());
-        }
-        // Key did not finalize the picker and was not a global shortcut:
-        // cancel the overlay and fall through so the key is handled as
-        // normal input. This lets slash commands such as `/exit` work even
-        // when the startup picker is showing — the first character dismisses
-        // the picker and is typed into the input box, and the rest of the
-        // command follows. Navigation keys (arrows, j/k, Enter, Esc, q) are
-        // consumed above.
+        _ => None,
     }
+}
 
-    // ── Search mode interceptor ─────────────────────────────
-    // When search_mode is on, the input box is acting as a search
-    // bar. We intercept Enter, Esc, Backspace, and any printable
-    // char here so the regular input handling doesn't fire. `n`
-    // / `N` (navigate next/prev match) are handled below the
-    // search-mode branch — they're only meaningful AFTER a search
-    // has been committed, not while typing a new query.
-    if state.search_mode {
-        match key.code {
-            KeyCode::Esc => {
+async fn handle_session_picker_keys(
+    key: KeyEvent,
+    state: &mut AppState,
+    ctx: &HandleInputContext<'_>,
+) -> Option<anyhow::Result<()>> {
+    let mut picker = state.session_picker.take()?;
+    let consumed = picker.handle_key(key);
+    if consumed && picker.is_confirmed() {
+        if let Some(path) = picker.selected_path() {
+            match crate::session::conversation::ConversationLog::open_async(path).await {
+                Ok((log, _outcome)) => {
+                    let msg =
+                        crate::tui::commands::resume_conversation_log(log, state, ctx.resume_tx)
+                            .await;
+                    state
+                        .messages
+                        .push_back(ConversationEntry::new("system", msg));
+                }
+                Err(e) => {
+                    state.messages.push_back(ConversationEntry::new(
+                        "system",
+                        format!("Error resuming session: {e}"),
+                    ));
+                }
+            }
+        }
+        return Some(Ok(()));
+    }
+    if consumed && picker.is_cancelled() {
+        return Some(Ok(()));
+    }
+    if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        state.should_exit = true;
+        return Some(Ok(()));
+    }
+    None
+}
+
+fn handle_search_mode_keys(key: KeyEvent, state: &mut AppState) -> Option<anyhow::Result<()>> {
+    if !state.search_mode {
+        return None;
+    }
+    match key.code {
+        KeyCode::Esc => {
+            state.search_mode = false;
+            state.search_query.clear();
+            state.search_matches.clear();
+            state.search_match_idx = 0;
+        }
+        KeyCode::Enter => {
+            let matches = crate::tui::search::compute_matches(
+                state.messages.make_contiguous(),
+                &state.search_query,
+            );
+            state.search_matches = matches;
+            state.search_match_idx = 0;
+            if !state.search_matches.is_empty() {
+                state.search_mode = false;
+                if let Some(offset) = crate::tui::widgets::chat::scroll_offset_for_search_match(
+                    state,
+                    state.last_content_width,
+                ) {
+                    state.auto_scroll = false;
+                    state.scroll_offset = offset;
+                }
+            }
+        }
+        KeyCode::Backspace => {
+            state.search_query.pop();
+        }
+        KeyCode::Char(c) => {
+            if !key.modifiers.contains(KeyModifiers::CONTROL) {
+                state.search_query.push(c);
+            } else if c == 'c' {
                 state.search_mode = false;
                 state.search_query.clear();
                 state.search_matches.clear();
                 state.search_match_idx = 0;
-                return Ok(());
+                state.input.clear();
+                state.cursor_position = 0;
             }
-            KeyCode::Enter => {
-                // Commit the search. The matches are computed
-                // from the current query; the renderer can now
-                // highlight them. If there are matches we leave
-                // search mode (so `n` / `N` can cycle) and jump to
-                // the first one, expanding any collapsed tool card
-                // that contains the match.
-                let matches = crate::tui::search::compute_matches(
-                    state.messages.make_contiguous(),
-                    &state.search_query,
-                );
-                state.search_matches = matches;
-                state.search_match_idx = 0;
-                if !state.search_matches.is_empty() {
-                    state.search_mode = false;
-                    if let Some(offset) = crate::tui::widgets::chat::scroll_offset_for_search_match(
-                        state,
-                        state.last_content_width,
-                    ) {
-                        state.auto_scroll = false;
-                        state.scroll_offset = offset;
-                    }
-                }
-                return Ok(());
-            }
-            KeyCode::Backspace => {
-                state.search_query.pop();
-                return Ok(());
-            }
-            KeyCode::Char(c) => {
-                if !key.modifiers.contains(KeyModifiers::CONTROL) {
-                    state.search_query.push(c);
-                    return Ok(());
-                }
-                // Ctrl+C in search mode = cancel and exit.
-                if c == 'c' {
-                    state.search_mode = false;
-                    state.search_query.clear();
-                    state.search_matches.clear();
-                    state.search_match_idx = 0;
-                    state.input.clear();
-                    state.cursor_position = 0;
-                    return Ok(());
-                }
-            }
-            _ => {}
         }
+        _ => return None,
     }
-    // ── Post-search navigation (n / Shift+N) ─────────────
-    // Only active when a search is committed (matches is
-    // non-empty). Falls through to regular handling otherwise.
-    if !state.search_matches.is_empty() && !state.search_mode {
-        match search_nav_direction(&key) {
-            Some(SearchDirection::Next) => {
-                if let Some(idx) = crate::tui::search::navigate_next(
-                    state.search_match_idx,
-                    state.search_matches.len(),
+    Some(Ok(()))
+}
+
+fn handle_search_nav_keys(key: KeyEvent, state: &mut AppState) -> Option<anyhow::Result<()>> {
+    if state.search_matches.is_empty() || state.search_mode {
+        return None;
+    }
+    match search_nav_direction(&key) {
+        Some(SearchDirection::Next) => {
+            if let Some(idx) = crate::tui::search::navigate_next(
+                state.search_match_idx,
+                state.search_matches.len(),
+            ) {
+                state.search_match_idx = idx;
+                if let Some(offset) = crate::tui::widgets::chat::scroll_offset_for_search_match(
+                    state,
+                    state.last_content_width,
                 ) {
-                    state.search_match_idx = idx;
-                    if let Some(offset) = crate::tui::widgets::chat::scroll_offset_for_search_match(
-                        state,
-                        state.last_content_width,
-                    ) {
-                        state.auto_scroll = false;
-                        state.scroll_offset = offset;
-                    }
+                    state.auto_scroll = false;
+                    state.scroll_offset = offset;
                 }
-                return Ok(());
             }
-            Some(SearchDirection::Prev) => {
-                if let Some(idx) = crate::tui::search::navigate_prev(
-                    state.search_match_idx,
-                    state.search_matches.len(),
-                ) {
-                    state.search_match_idx = idx;
-                    if let Some(offset) = crate::tui::widgets::chat::scroll_offset_for_search_match(
-                        state,
-                        state.last_content_width,
-                    ) {
-                        state.auto_scroll = false;
-                        state.scroll_offset = offset;
-                    }
-                }
-                return Ok(());
-            }
-            None => {}
         }
+        Some(SearchDirection::Prev) => {
+            if let Some(idx) = crate::tui::search::navigate_prev(
+                state.search_match_idx,
+                state.search_matches.len(),
+            ) {
+                state.search_match_idx = idx;
+                if let Some(offset) = crate::tui::widgets::chat::scroll_offset_for_search_match(
+                    state,
+                    state.last_content_width,
+                ) {
+                    state.auto_scroll = false;
+                    state.scroll_offset = offset;
+                }
+            }
+        }
+        None => return None,
     }
-    // Any key except Tab dismisses the one-line completion list (the
-    // user resumed typing / moved the cursor). Tab itself manages the
-    // suggestions field in `try_completion`.
+    Some(Ok(()))
+}
+
+pub(crate) async fn handle_input_key(
+    key: KeyEvent,
+    state: &mut AppState,
+    ctx: &HandleInputContext<'_>,
+) -> anyhow::Result<()> {
+    if let Some(result) = handle_doom_loop_keys(key, state, ctx).await {
+        return result;
+    }
+    if let Some(result) = handle_slash_menu_keys(key, state) {
+        return result;
+    }
+    if let Some(result) = handle_file_completer_keys(key, state) {
+        return result;
+    }
+    if let Some(result) = handle_session_picker_keys(key, state, ctx).await {
+        return result;
+    }
+    if let Some(result) = handle_search_mode_keys(key, state) {
+        return result;
+    }
+    if let Some(result) = handle_search_nav_keys(key, state) {
+        return result;
+    }
     if key.code != KeyCode::Tab {
         state.completion_suggestions.clear();
     }

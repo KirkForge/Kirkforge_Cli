@@ -240,215 +240,164 @@ fn scroll_app_pages(app: &mut App, dy: i32) {
     app.scroll_y = (app.scroll_y + delta).max(0);
 }
 
+fn handle_quit_confirm(app: &mut App, key: KeyEvent) -> bool {
+    if !app.pending_quit_confirm {
+        return false;
+    }
+    match key.code {
+        KeyCode::Char('y') | KeyCode::Char('Y') => {
+            app.pending_quit_confirm = false;
+            if app.source_path.is_none() {
+                app.begin_save_as();
+            } else {
+                match save_app(app) {
+                    Ok(()) => {
+                        app.status = format!("saved {}", app.source_path.as_deref().unwrap_or("?"));
+                        app.should_quit = true;
+                    }
+                    Err(e) => {
+                        app.status = format!("save failed: {e}");
+                    }
+                }
+            }
+        }
+        KeyCode::Char('n') | KeyCode::Char('N') => {
+            app.quit_confirm_no();
+        }
+        KeyCode::Esc => {
+            app.quit_confirm_cancel();
+        }
+        _ => {}
+    }
+    true
+}
+
+fn handle_palette_keys(app: &mut App, key: KeyEvent) -> bool {
+    if app.palette.is_none() {
+        return false;
+    }
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    let alt = key.modifiers.contains(KeyModifiers::ALT);
+    match key.code {
+        KeyCode::Esc => app.cancel_palette(),
+        KeyCode::Enter => commit_palette(app),
+        KeyCode::Backspace => app.palette_backspace(),
+        KeyCode::Char('c') if ctrl => app.cancel_palette(),
+        KeyCode::Char('u') if ctrl => app.palette_clear(),
+        KeyCode::Char(ch) if !ctrl && !alt => {
+            app.palette_insert(ch);
+        }
+        _ => {}
+    }
+    true
+}
+
+fn handle_text_edit_keys(app: &mut App, key: KeyEvent) -> bool {
+    if app.text_edit.is_none() {
+        return false;
+    }
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+    match key.code {
+        KeyCode::Esc => app.cancel_text_edit(),
+        KeyCode::Enter if shift => {
+            app.text_edit_insert('\n');
+        }
+        KeyCode::Enter => {
+            app.commit_text_edit();
+        }
+        KeyCode::Backspace => app.text_edit_backspace(),
+        KeyCode::Delete => app.text_edit_delete(),
+        KeyCode::Left => app.text_edit_cursor_left(),
+        KeyCode::Right => app.text_edit_cursor_right(),
+        KeyCode::Home => app.text_edit_cursor_home(),
+        KeyCode::End => app.text_edit_cursor_end(),
+        KeyCode::Up => app.text_edit_cursor_up(),
+        KeyCode::Down => app.text_edit_cursor_down(),
+        KeyCode::Char('c') if ctrl => app.cancel_text_edit(),
+        KeyCode::Char(ch) if !ctrl => {
+            app.text_edit_insert(ch);
+        }
+        _ => {}
+    }
+    true
+}
+
+fn handle_find_keys(app: &mut App, key: KeyEvent) -> bool {
+    if app.find.is_none() {
+        return false;
+    }
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    let alt = key.modifiers.contains(KeyModifiers::ALT);
+    match key.code {
+        KeyCode::Esc => app.cancel_find(),
+        KeyCode::Enter => app.cycle_find(),
+        KeyCode::Backspace => app.find_backspace(),
+        KeyCode::Char('c') if ctrl => app.cancel_find(),
+        KeyCode::Char(ch) if !ctrl && !alt => {
+            app.find_insert(ch);
+        }
+        _ => {}
+    }
+    true
+}
+
+fn handle_save_as_keys(app: &mut App, key: KeyEvent) -> bool {
+    if app.save_as.is_none() {
+        return false;
+    }
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    let alt = key.modifiers.contains(KeyModifiers::ALT);
+    match key.code {
+        KeyCode::Esc => app.cancel_save_as(),
+        KeyCode::Enter => {
+            let prior_source = app.source_path.clone();
+            if let Some(path) = app.commit_save_as() {
+                let path_for_revert = path.clone();
+                match save_app(app) {
+                    Ok(()) => {
+                        app.status = format!("saved as → {path}");
+                    }
+                    Err(e) => {
+                        app.revert_save_as(prior_source, path_for_revert);
+                        app.status = format!("save as failed: {e}");
+                    }
+                }
+            }
+        }
+        KeyCode::Backspace => app.save_as_backspace(),
+        KeyCode::Char('c') if ctrl => app.cancel_save_as(),
+        KeyCode::Char(ch) if !ctrl && !alt => {
+            app.save_as_insert(ch);
+        }
+        _ => {}
+    }
+    true
+}
+
 fn handle_key(app: &mut App, key: KeyEvent) {
+    if handle_quit_confirm(app, key) {
+        return;
+    }
+    if handle_palette_keys(app, key) {
+        return;
+    }
+    if handle_text_edit_keys(app, key) {
+        return;
+    }
+    if handle_find_keys(app, key) {
+        return;
+    }
+    if handle_save_as_keys(app, key) {
+        return;
+    }
+    dispatch_main_keymap(app, key);
+}
+
+fn dispatch_main_keymap(app: &mut App, key: KeyEvent) {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     let shift = key.modifiers.contains(KeyModifiers::SHIFT);
     let alt = key.modifiers.contains(KeyModifiers::ALT);
-    // Quit-confirm hijack wins over palette / find / text-edit /
-    // main keymap. The user is in the middle of "do I want to
-    // lose my changes?"; their next key is the answer, not
-    // anything else. Esc clears the prompt rather than clearing
-    // the selection or quitting — same key, but its meaning
-    // changes when the confirm is showing.
-    if app.pending_quit_confirm {
-        match key.code {
-            KeyCode::Char('y') | KeyCode::Char('Y') => {
-                // Save then quit. `save_app` already handles
-                // the validate_path_arg guard, atomic write,
-                // and dirty-bit flip on failure. We forward
-                // the status message unchanged on Ok; on Err
-                // we keep the editor open and drop the confirm
-                // so the user can fix the problem and try
-                // again.
-                //
-                // Fresh doc (no source_path): Ctrl-S / :save
-                // both already open save-as in this situation
-                // (ticks 42 / 43). Mirror them here — the
-                // user answered the prompt with intent to save,
-                // so let them name the file. They can re-fire
-                // `q` after the save-as commits if they still
-                // want out.
-                app.pending_quit_confirm = false;
-                if app.source_path.is_none() {
-                    app.begin_save_as();
-                } else {
-                    match save_app(app) {
-                        Ok(()) => {
-                            app.status =
-                                format!("saved {}", app.source_path.as_deref().unwrap_or("?"));
-                            app.should_quit = true;
-                        }
-                        Err(e) => {
-                            app.status = format!("save failed: {e}");
-                            // Stay in editor; user can fix and
-                            // try quit again.
-                        }
-                    }
-                }
-            }
-            KeyCode::Char('n') | KeyCode::Char('N') => {
-                app.quit_confirm_no();
-            }
-            KeyCode::Esc => {
-                app.quit_confirm_cancel();
-            }
-            _ => {
-                // Swallow everything else. The prompt is modal
-                // and the only valid answers are y / n / Esc;
-                // letting a stray key (e.g. Backspace, Enter,
-                // an arrow) through would either edit the
-                // status line or trigger an action the user
-                // didn't mean to take.
-            }
-        }
-        return;
-    }
-    // Command-palette mode hijacks the key stream ahead of both the
-    // text-edit hijack and the normal key dispatch — when the user
-    // has `:` pressed they're committed to typing into the palette.
-    // Printable chars append, Enter dispatches, Esc cancels,
-    // Backspace pops. We reject Ctrl-anything except Ctrl-C so the
-    // global quit chord still works for "give up".
-    if app.palette.is_some() {
-        match key.code {
-            KeyCode::Esc => app.cancel_palette(),
-            KeyCode::Enter => commit_palette(app),
-            KeyCode::Backspace => app.palette_backspace(),
-            KeyCode::Char('c') if ctrl => app.cancel_palette(),
-            KeyCode::Char('u') if ctrl => app.palette_clear(),
-            KeyCode::Char(ch) if !ctrl && !alt => {
-                app.palette_insert(ch);
-            }
-            _ => {}
-        }
-        return;
-    }
-    // Text-entry mode hijacks the key stream: printable chars append
-    // to the buffer at the cursor, Enter commits, Shift+Enter inserts
-    // a newline (multi-line text), Esc cancels, Backspace pops the
-    // byte before the cursor, Delete removes the byte at the cursor.
-    // Left / Right step the cursor one byte (no-op at the buffer
-    // edges); Home / End jump to the buffer start / end; Up / Down
-    // move the cursor to the prior / next line (preserving the
-    // column, clamped to the target line's length; no-op at the
-    // buffer's first / last line). Ctrl-C still aborts the edit
-    // (mirrors Ctrl-C as the universal "give up" key) — bound to
-    // cancel_text_edit below.
-    if app.text_edit.is_some() {
-        match key.code {
-            KeyCode::Esc => app.cancel_text_edit(),
-            KeyCode::Enter if shift => {
-                // ponytail: Shift+Enter is the line-break chord
-                // because bare Enter commits — a deliberate
-                // trade-off so the commit gesture stays one key.
-                // Wrapping the buffer to fit a width is a future
-                // tick; today the user inserts `\n` themselves.
-                app.text_edit_insert('\n');
-            }
-            KeyCode::Enter => {
-                app.commit_text_edit();
-            }
-            KeyCode::Backspace => app.text_edit_backspace(),
-            KeyCode::Delete => app.text_edit_delete(),
-            KeyCode::Left => app.text_edit_cursor_left(),
-            KeyCode::Right => app.text_edit_cursor_right(),
-            KeyCode::Home => app.text_edit_cursor_home(),
-            KeyCode::End => app.text_edit_cursor_end(),
-            KeyCode::Up => app.text_edit_cursor_up(),
-            KeyCode::Down => app.text_edit_cursor_down(),
-            KeyCode::Char('c') if ctrl => app.cancel_text_edit(),
-            KeyCode::Char(ch) if !ctrl => {
-                // Insert every printable char (crossterm already gave
-                // us the Unicode scalar value for unicode chars).
-                app.text_edit_insert(ch);
-            }
-            _ => {}
-        }
-        return;
-    }
-    // Find mode hijacks the key stream ahead of the normal
-    // keymap — when the user has Ctrl-F pressed they're
-    // committed to typing into the find buffer. Printable
-    // chars append, Enter selects the current match (or
-    // reports "no match for 'X'" and closes the session when
-    // the query produced nothing), Backspace pops, Esc
-    // cancels. Ctrl-C still aborts — same "give up" key as
-    // the palette and text-edit modes.
-    //
-    // ponytail: the Enter arm commits + closes in one
-    // keystroke. A "stay-in-find" mode where Enter cycles
-    // through matches without closing is the natural next
-    // tick (the `index` field on FindState is already
-    // plumbed for it). Today's "select first match and
-    // close" matches the Figma-find-in-canvas convention.
-    if app.find.is_some() {
-        match key.code {
-            KeyCode::Esc => app.cancel_find(),
-            KeyCode::Enter => app.cycle_find(),
-            KeyCode::Backspace => app.find_backspace(),
-            KeyCode::Char('c') if ctrl => app.cancel_find(),
-            KeyCode::Char(ch) if !ctrl && !alt => {
-                app.find_insert(ch);
-            }
-            _ => {}
-        }
-        return;
-    }
-    // Save-As mode hijack — same shape as find: printable
-    // chars append, Backspace pops, Enter commits, Esc
-    // cancels. Ctrl-C is the universal "give up" key so it
-    // cancels the modal (matches palette / find). Sits
-    // after find so a stray Ctrl-F mid-save-as opens the
-    // find modal — but `begin_save_as` already refuses when
-    // find is open, so this is just a defense-in-depth
-    // ordering. ponytail: re-uses the find pattern instead
-    // of inventing a generic modal registry.
-    if app.save_as.is_some() {
-        match key.code {
-            KeyCode::Esc => app.cancel_save_as(),
-            KeyCode::Enter => {
-                // Capture prior source_path BEFORE
-                // commit_save_as flips it — otherwise we'd
-                // snapshot the new (possibly bad) path as
-                // "prior" and the revert would be a no-op.
-                let prior_source = app.source_path.clone();
-                if let Some(path) = app.commit_save_as() {
-                    // Mirror the Ctrl-S save flow: hand off
-                    // to save_app so atomic-write +
-                    // missing-source-path bail! + mark_saved
-                    // stay in one place. source_path was
-                    // already updated by commit_save_as —
-                    // on Err we roll it back via
-                    // revert_save_as so the user's next
-                    // Ctrl-S lands where they came from.
-                    let path_for_revert = path.clone();
-                    match save_app(app) {
-                        Ok(()) => {
-                            app.status = format!("saved as → {path}");
-                        }
-                        Err(e) => {
-                            // Roll source_path back to where
-                            // the user came from and re-open
-                            // the modal pre-populated with
-                            // the path that failed. The user
-                            // sees the failure, can edit the
-                            // path, and try again — without
-                            // losing the prior source_path.
-                            app.revert_save_as(prior_source, path_for_revert);
-                            app.status = format!("save as failed: {e}");
-                        }
-                    }
-                }
-            }
-            KeyCode::Backspace => app.save_as_backspace(),
-            KeyCode::Char('c') if ctrl => app.cancel_save_as(),
-            KeyCode::Char(ch) if !ctrl && !alt => {
-                app.save_as_insert(ch);
-            }
-            _ => {}
-        }
-        return;
-    }
     match key.code {
         KeyCode::Char('q') => app.request_quit(),
         // Ctrl-C: copy to clipboard when there's a selection; fall

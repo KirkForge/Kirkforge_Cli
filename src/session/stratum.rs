@@ -423,7 +423,14 @@ impl Tool for StratumConfigValidate {
             let issues_str = if issues.is_empty() {
                 String::new()
             } else {
-                format!("\nissues:\n{}", issues.iter().map(|i| format!("  - {i}")).collect::<Vec<_>>().join("\n"))
+                format!(
+                    "\nissues:\n{}",
+                    issues
+                        .iter()
+                        .map(|i| format!("  - {i}"))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                )
             };
             success_json(format!(
                 "valid={valid}\n{issues_str}bloat_threshold={}\nreformat_target_ratio={}\noffload_fallback_ratio={}\ntransform_timeout_ms={}\nper_domain_count={}",

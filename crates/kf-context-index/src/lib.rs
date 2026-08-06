@@ -48,6 +48,10 @@ pub struct Symbol {
     pub file: PathBuf,
     pub line: u32,
     pub end_line: u32,
+    /// Doc comment text extracted from `///` or `/** */` above the symbol.
+    /// `None` when no doc comment is present.
+    #[serde(default)]
+    pub doc: Option<String>,
 }
 
 /// An import edge: file A imports symbol/module from file B (or an external package).
@@ -111,6 +115,9 @@ pub struct CachedIndex {
     /// for caches written before Phase 7 (serde default).
     #[serde(default)]
     pub embeddings: Vec<SymbolEmbedding>,
+    /// File modification times (seconds since epoch) at index time.
+    #[serde(default)]
+    pub file_mtimes: std::collections::HashMap<String, u64>,
 }
 
 /// A tree-sitter-backed index of source-code symbols and import edges.
@@ -572,12 +579,14 @@ impl ContextIndex {
                         if !name.is_empty() {
                             let start_line = node.start_position().row as u32 + 1;
                             let end_line = node.end_position().row as u32 + 1;
+                            let doc = Self::extract_doc_comment(source, start_line, lang);
                             self.symbols.push(Symbol {
                                 name,
                                 kind: symbol_kind,
                                 file: path.to_path_buf(),
                                 line: start_line,
                                 end_line,
+                                doc,
                             });
                         }
                     }
@@ -646,6 +655,7 @@ impl ContextIndex {
             file: path.to_path_buf(),
             line: start_line,
             end_line,
+            doc: Self::extract_doc_comment(source, start_line, Language::TypeScript),
         })
     }
 
@@ -724,6 +734,7 @@ impl ContextIndex {
             file: path.to_path_buf(),
             line: start_line,
             end_line,
+            doc: Self::extract_doc_comment(source, start_line, Language::Go),
         })
     }
 
@@ -769,6 +780,74 @@ impl ContextIndex {
             }
         }
         None
+    }
+
+    /// Extract doc comments preceding `start_line` from `source`.
+    fn extract_doc_comment(source: &str, start_line: u32, _lang: Language) -> Option<String> {
+        let lines: Vec<&str> = source.lines().collect();
+        if start_line < 2 {
+            return None;
+        }
+        let mut doc_lines: Vec<String> = Vec::new();
+        let mut i = (start_line as usize).saturating_sub(2);
+        let mut found_doc = false;
+
+        while let Some(line) = lines.get(i) {
+            let trimmed = line.trim();
+            if let Some(rest) = trimmed.strip_prefix("///") {
+                doc_lines.push(rest.trim().to_string());
+                found_doc = true;
+            } else if let Some(rest) = trimmed.strip_prefix("/**") {
+                let rest = rest.trim();
+                if let Some(pos) = rest.find("*/") {
+                    doc_lines.push(rest[..pos].trim().to_string());
+                } else {
+                    doc_lines.push(rest.to_string());
+                }
+                found_doc = true;
+                break;
+            } else if trimmed == "*/" {
+                found_doc = true;
+            } else if found_doc && trimmed.starts_with('*') {
+                let c = trimmed[1..].trim();
+                if !c.is_empty() {
+                    doc_lines.push(c.to_string());
+                }
+            } else if found_doc && !trimmed.is_empty() && !trimmed.starts_with("*/") {
+                break;
+            } else if trimmed.starts_with("#")
+                && trimmed.len() > 1
+                && trimmed.chars().nth(1) == Some(' ')
+            {
+                let py_line = i + 1;
+                if py_line < lines.len()
+                    && (lines[py_line].trim().starts_with("def ")
+                        || lines[py_line].trim().starts_with("class "))
+                {
+                    let c = trimmed[2..].trim();
+                    doc_lines.push(c.to_string());
+                    found_doc = true;
+                } else {
+                    break;
+                }
+            } else if !trimmed.is_empty() {
+                break;
+            }
+            if i == 0 {
+                break;
+            }
+            i -= 1;
+        }
+        if !found_doc {
+            return None;
+        }
+        doc_lines.reverse();
+        let joined = doc_lines.join(" ").trim().to_string();
+        if joined.is_empty() {
+            None
+        } else {
+            Some(joined)
+        }
     }
 
     /// Remove duplicate `Interface` symbols that share the same
@@ -971,7 +1050,7 @@ impl ContextIndex {
                 .collect();
         }
 
-        let vocab = build_vocabulary(&self.symbols, None);
+        let vocab = build_vocabulary(&self.symbols);
         if !vocab.is_empty() {
             let qvec = embed_query(query, &vocab);
             if !qvec.is_empty() {
@@ -979,7 +1058,7 @@ impl ContextIndex {
                     .symbols
                     .iter()
                     .map(|s| {
-                        let v = embed_symbol(s, &vocab, None);
+                        let v = embed_symbol(s, &vocab, s.doc.as_deref());
                         (cosine_similarity(&qvec, &v), s)
                     })
                     .collect();
@@ -1024,15 +1103,30 @@ impl ContextIndex {
         }
     }
 
-    /// Save the index to a JSON file, along with the current git HEAD.
+    /// Save the index to a JSON file, along with the current git HEAD
+    /// and file modification times.
     pub fn save(&self, path: &std::path::Path, head: &str) -> anyhow::Result<()> {
-        let embeddings = build_embeddings(self, None);
+        let embeddings = build_embeddings(self);
+        let mut file_mtimes = std::collections::HashMap::new();
+        for sym in &self.symbols {
+            if let Ok(meta) = std::fs::metadata(&sym.file) {
+                if let Ok(mtime) = meta.modified() {
+                    let key = sym.file.to_string_lossy().to_string();
+                    let ts = mtime
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+                    file_mtimes.entry(key).or_insert(ts);
+                }
+            }
+        }
         let cached = CachedIndex {
             head: head.to_string(),
             symbols: self.symbols.clone(),
             edges: self.edges.clone(),
             call_edges: self.call_edges.clone(),
             embeddings,
+            file_mtimes,
         };
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -1057,6 +1151,62 @@ impl ContextIndex {
             Some(head) => head == cached.head,
             None => false,
         }
+    }
+
+    /// Incremental rebuild: diff changed files since the cached HEAD,
+    /// remove stale symbols/edges for those files, and re-index only
+    /// the changed files.
+    pub fn incremental_rebuild(
+        cached: CachedIndex,
+        repo_root: &std::path::Path,
+    ) -> (Self, usize) {
+        let changed_files = git_diff_files(&cached.head, repo_root);
+        let changed_count = changed_files.len();
+        if changed_files.is_empty() {
+            let idx = Self::from_symbols_and_edges_and_calls(
+                cached.symbols,
+                cached.edges,
+                cached.call_edges,
+            );
+            return (idx, 0);
+        }
+
+        let changed_set: std::collections::HashSet<String> = changed_files
+            .iter()
+            .map(|p| p.to_string_lossy().to_string())
+            .collect();
+
+        let mut idx =
+            Self::from_symbols_and_edges_and_calls(cached.symbols, cached.edges, cached.call_edges);
+
+        idx.symbols
+            .retain(|s| !changed_set.contains(&s.file.to_string_lossy().to_string()));
+        idx.edges.retain(|e| {
+            !changed_set.contains(&e.source_file.to_string_lossy().to_string())
+                && e
+                    .resolved_file
+                    .as_ref()
+                    .is_none_or(|rf| !changed_set.contains(&rf.to_string_lossy().to_string()))
+        });
+        idx.call_edges.retain(|e| {
+            !changed_set.contains(&e.caller_file.to_string_lossy().to_string())
+                && e
+                    .callee_file
+                    .as_ref()
+                    .is_none_or(|cf| !changed_set.contains(&cf.to_string_lossy().to_string()))
+        });
+
+        for path in &changed_files {
+            if path.is_file() {
+                if let Ok(content) = std::fs::read_to_string(path) {
+                    let _ = idx.index_file(path, &content);
+                }
+            }
+        }
+
+        idx.resolve_imports(repo_root);
+        idx.resolve_call_edges();
+        (idx, changed_count)
     }
 }
 
@@ -1088,6 +1238,31 @@ pub fn current_head(repo_root: &std::path::Path) -> Option<String> {
         .ok()
         .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+}
+
+/// Get files changed between `old_head` and current HEAD that are
+/// indexable source files.
+fn git_diff_files(old_head: &str, repo_root: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let output = std::process::Command::new("git")
+        .args(["diff", "--name-only", old_head, "HEAD"])
+        .current_dir(repo_root)
+        .output();
+    let output = match output {
+        Ok(o) if o.status.success() => o,
+        _ => return Vec::new(),
+    };
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter(|l| !l.is_empty())
+        .filter_map(|l| {
+            let p = repo_root.join(l);
+            if p.is_file() && detect_language(&p).is_some() {
+                Some(p)
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 /// Extract a quoted string from text, handling both single and double quotes.
@@ -1440,6 +1615,7 @@ mod tests {
             edges: loaded.edges,
             call_edges: loaded.call_edges,
             embeddings: loaded.embeddings,
+            file_mtimes: loaded.file_mtimes,
         };
         // is_current checks real git HEAD, which won't match "old_head_sha"
         // in a temp dir (not a git repo) → returns false
@@ -1456,10 +1632,75 @@ mod tests {
             file: PathBuf::from("src/lib.rs"),
             line: 1,
             end_line: 5,
+            doc: None,
         }];
         let idx = ContextIndex::from_symbols(symbols);
         assert_eq!(idx.symbols().len(), 1);
         assert_eq!(idx.symbols()[0].name, "foo");
+    }
+
+    #[test]
+    fn doc_comments_extracted_from_rust_function() {
+        let tmp =
+            std::env::temp_dir().join(format!("kf-code-context-doc-rs-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+
+        let src = tmp.join("lib.rs");
+        fs::write(
+            &src,
+            "/// Authenticates a user by token.\nfn auth(token: &str) -> bool {\n    true\n}\nstruct NoDoc;\n",
+        )
+        .unwrap();
+
+        let mut idx = ContextIndex::new();
+        idx.index_file(&src, &fs::read_to_string(&src).unwrap())
+            .unwrap();
+
+        let syms = idx.symbols();
+        let auth = syms.iter().find(|s| s.name == "auth").unwrap();
+        assert_eq!(
+            auth.doc.as_deref(),
+            Some("Authenticates a user by token."),
+            "expected doc comment on auth, got {:?}",
+            auth.doc
+        );
+        let no_doc = syms.iter().find(|s| s.name == "NoDoc").unwrap();
+        assert!(no_doc.doc.is_none(), "NoDoc should have no doc comment");
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn block_doc_comments_extracted() {
+        let tmp =
+            std::env::temp_dir().join(format!("kf-code-context-doc-block-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+
+        let src = tmp.join("lib.rs");
+        fs::write(
+            &src,
+            "/**\n * A configuration holder.\n * Stores all settings.\n */\nstruct Config {\n    x: i32,\n}\n",
+        )
+        .unwrap();
+
+        let mut idx = ContextIndex::new();
+        idx.index_file(&src, &fs::read_to_string(&src).unwrap())
+            .unwrap();
+
+        let syms = idx.symbols();
+        let config = syms.iter().find(|s| s.name == "Config").unwrap();
+        assert!(
+            config
+                .doc
+                .as_ref()
+                .is_some_and(|d| d.contains("configuration holder")),
+            "expected block doc on Config, got {:?}",
+            config.doc
+        );
+
+        let _ = fs::remove_dir_all(&tmp);
     }
 
     #[test]

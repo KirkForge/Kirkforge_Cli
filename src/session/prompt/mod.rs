@@ -453,6 +453,9 @@ impl PromptBuilder {
                             }
                             content.push(')');
                         }
+                        if let Some(ref doc) = sym.doc {
+                            content.push_str(&format!(" // {doc}"));
+                        }
                         content.push('\n');
                     }
                     content.push_str("</relevant_symbols>");

@@ -30,7 +30,12 @@ impl Tool for Grep {
                 "properties": {
                     "pattern": {
                         "type": "string",
-                        "description": "Literal substring to search for (not a regex)"
+                        "description": "Pattern to search for. Treated as literal substring unless `regex` is true."
+                    },
+                    "regex": {
+                        "type": "boolean",
+                        "description": "Treat pattern as a regular expression (default: false)",
+                        "default": false
                     },
                     "path": {
                         "type": "string",
@@ -70,6 +75,105 @@ impl Tool for Grep {
             .get("max_matches")
             .and_then(|m| m.as_u64())
             .unwrap_or(50) as usize;
+
+        let use_regex = args.get("regex").and_then(|r| r.as_bool()).unwrap_or(false);
+
+        if use_regex {
+            let re = match regex::Regex::new(&pattern) {
+                Ok(r) => r,
+                Err(e) => {
+                    return ToolOutcome::Failure(ToolError::invalid_args(&format!(
+                        "Invalid regex pattern: {e}"
+                    )));
+                }
+            };
+            let search_path = PathBuf::from(shellexpand::tilde(path).as_ref());
+
+            let mut results = Vec::new();
+            let mut total = 0usize;
+
+            if search_path.is_dir() {
+                let walker = ignore::WalkBuilder::new(&search_path)
+                    .git_ignore(true)
+                    .git_global(true)
+                    .git_exclude(true)
+                    .build();
+
+                for entry in walker.flatten() {
+                    if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
+                        continue;
+                    }
+                    let file_path = entry.path();
+                    if is_binary_by_ext(file_path) {
+                        continue;
+                    }
+                    if let Ok(meta) = std::fs::metadata(file_path) {
+                        if meta.len() > MAX_GREP_FILE_SIZE {
+                            continue;
+                        }
+                    }
+                    if is_binary_content(file_path) {
+                        continue;
+                    }
+                    if let GuardVerdict::Denied(_) = self.path_guard.check_read(file_path) {
+                        continue;
+                    }
+                    if let Ok(content) = std::fs::read_to_string(file_path) {
+                        let matches = find_regex_matches(&content, &re, file_path, context_lines);
+                        let count = matches.len();
+                        if count > 0 {
+                            total += count;
+                            results.extend(matches);
+                        }
+                    }
+                }
+            } else if search_path.is_file() {
+                if let Ok(meta) = std::fs::metadata(&search_path) {
+                    if meta.len() > MAX_GREP_FILE_SIZE {
+                        return ToolOutcome::Failure(ToolError::Internal {
+                            message: format!(
+                                "File too large to search ({} bytes): {}",
+                                meta.len(),
+                                search_path.display()
+                            ),
+                        });
+                    }
+                }
+                if is_binary_content(&search_path) {
+                    return ToolOutcome::Failure(ToolError::Internal {
+                        message: format!("Cannot search binary file: {}", search_path.display()),
+                    });
+                }
+                if let GuardVerdict::Denied(msg) = self.path_guard.check_read(&search_path) {
+                    return ToolOutcome::Failure(ToolError::AccessDenied { message: msg });
+                }
+                if let Ok(content) = std::fs::read_to_string(&search_path) {
+                    let matches = find_regex_matches(&content, &re, &search_path, context_lines);
+                    total = matches.len();
+                    results = matches;
+                }
+            } else {
+                return ToolOutcome::Failure(ToolError::Internal {
+                    message: format!("Path not found: {}", search_path.display()),
+                });
+            }
+
+            if results.len() > max_matches {
+                results.truncate(max_matches);
+            }
+
+            if results.is_empty() {
+                return ToolOutcome::Success {
+                    content: format!("No matches found for regex: {pattern}"),
+                };
+            }
+
+            return ToolOutcome::GrepMatches {
+                path: search_path,
+                matches: results,
+                total,
+            };
+        }
 
         let search_path = PathBuf::from(shellexpand::tilde(path).as_ref());
 
@@ -185,6 +289,44 @@ fn find_matches(
     for (i, line) in lines.iter().enumerate() {
         if line.contains(pattern) {
             // Capture context before
+            let before_start = i.saturating_sub(context);
+            let context_before: Vec<String> = lines[before_start..i]
+                .iter()
+                .enumerate()
+                .map(|(j, l)| format!("{}:{}", before_start + j + 1, l))
+                .collect();
+
+            let context_after: Vec<String> = lines
+                .iter()
+                .skip(i + 1)
+                .take(context)
+                .enumerate()
+                .map(|(j, l)| format!("{}:{}", i + j + 2, l))
+                .collect();
+
+            results.push(SearchMatch {
+                line_number: i + 1,
+                line: line.to_string(),
+                context_before,
+                context_after,
+            });
+        }
+    }
+
+    results
+}
+
+fn find_regex_matches(
+    content: &str,
+    pattern: &regex::Regex,
+    _file_path: &std::path::Path,
+    context: usize,
+) -> Vec<SearchMatch> {
+    let mut results = Vec::new();
+    let lines: Vec<&str> = content.lines().collect();
+
+    for (i, line) in lines.iter().enumerate() {
+        if pattern.is_match(line) {
             let before_start = i.saturating_sub(context);
             let context_before: Vec<String> = lines[before_start..i]
                 .iter()
@@ -618,5 +760,52 @@ mod tests {
         }
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn grep_regex_matches_pattern() {
+        let dir = std::env::temp_dir().join("kf_code_grep_regex_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.txt"), "foo123bar\nhello\nworld\n").unwrap();
+
+        let grep = Grep::new(PathGuard::default());
+        let args = serde_json::json!({
+            "pattern": r"\d+",
+            "regex": true,
+            "path": dir.to_string_lossy(),
+        });
+        let outcome = grep.run(&ToolContext::default(), args).await;
+        match outcome {
+            ToolOutcome::GrepMatches { matches, total, .. } => {
+                assert_eq!(total, 1);
+                assert_eq!(matches.len(), 1);
+                assert!(matches[0].line.contains("foo123bar"));
+            }
+            other => panic!("expected GrepMatches, got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn grep_invalid_regex_returns_invalid_args() {
+        let grep = Grep::new(PathGuard::default());
+        let args = serde_json::json!({
+            "pattern": "[invalid",
+            "regex": true,
+        });
+        let outcome = grep.run(&ToolContext::default(), args).await;
+        assert!(
+            matches!(outcome, ToolOutcome::Failure(ToolError::InvalidArgs { .. })),
+            "got {outcome:?}"
+        );
+    }
+
+    #[test]
+    fn find_regex_matches_works() {
+        let content = "fn foo() {}\nfn bar() {}\nfn baz() {}\n";
+        let re = regex::Regex::new(r"fn \w+\(\)").unwrap();
+        let matches = find_regex_matches(content, &re, std::path::Path::new("t.rs"), 0);
+        assert_eq!(matches.len(), 3);
     }
 }

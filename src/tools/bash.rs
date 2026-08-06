@@ -10,6 +10,12 @@ use std::path::PathBuf;
 use std::process::Stdio;
 use tokio::io::AsyncReadExt;
 
+// ponytail: PTY support (portable-pty) deferred — adds ~2 MB to the
+// release binary. Current pipe-based stdout/stderr capture is sufficient
+// for all non-interactive commands. Add PTY behind an `--interactive` flag
+// when interactive terminal programs (vim, top, python REPL) are needed.
+// Upgrade path: `portable-pty` crate, gated behind `cfg(feature = "pty")`.
+
 /// Maximum bash timeout in seconds. Clamped to prevent Duration/Instant
 /// overflow when a model passes an enormous value.
 const MAX_BASH_TIMEOUT_SECS: u64 = 24 * 60 * 60; // 24 hours

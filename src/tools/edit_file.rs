@@ -51,6 +51,11 @@ impl Tool for EditFile {
                     "new_string": {
                         "type": "string",
                         "description": "Replacement string"
+                    },
+                    "replace_all": {
+                        "type": "boolean",
+                        "description": "Replace all occurrences instead of requiring a unique match (default: false)",
+                        "default": false
                     }
                 },
                 "required": ["path", "old_string", "new_string"]
@@ -92,6 +97,11 @@ impl Tool for EditFile {
                 ));
             }
         };
+
+        let replace_all = args
+            .get("replace_all")
+            .and_then(|r| r.as_bool())
+            .unwrap_or(false);
 
         // Snapshot pre-edit bytes BEFORE the destructive write, so
         // the user can `/undo` even if the write succeeds. We
@@ -168,19 +178,25 @@ impl Tool for EditFile {
                     stderr: String::new(),
                 });
             }
-            let occurrences = content.matches(&old).count();
-            if occurrences > 1 {
-                return ToolOutcome::Failure(ToolError::Execution {
-                    message: format!(
-                        "Dry run: old_string matches {} times in {}; edit_file requires a unique match",
-                        occurrences,
-                        path.display()
-                    ),
-                    exit_code: None,
-                    stderr: String::new(),
-                });
+            if !replace_all {
+                let occurrences = content.matches(&old).count();
+                if occurrences > 1 {
+                    return ToolOutcome::Failure(ToolError::Execution {
+                        message: format!(
+                            "Dry run: old_string matches {} times in {}; edit_file requires a unique match (set replace_all=true to replace all)",
+                            occurrences,
+                            path.display()
+                        ),
+                        exit_code: None,
+                        stderr: String::new(),
+                    });
+                }
             }
-            let new_content = content.replacen(&old, &new, 1);
+            let new_content = if replace_all {
+                content.replace(&old, &new)
+            } else {
+                content.replacen(&old, &new, 1)
+            };
             let diff = render_diff(&content, &new_content);
             let note = if any_expanded {
                 " (expanded from minified envelope)"
@@ -332,22 +348,29 @@ impl Tool for EditFile {
         }
 
         // Ambiguous exact match guard: if old_string appears more than
-        // once, replacing the first occurrence silently would be
-        // surprising. Force the model to include more context.
-        let occurrences = content.matches(&old).count();
-        if occurrences > 1 {
-            return ToolOutcome::Failure(ToolError::Execution {
-                message: format!(
-                    "old_string matches {} times in {}; edit_file requires a unique match",
-                    occurrences,
-                    path.display()
-                ),
-                exit_code: None,
-                stderr: String::new(),
-            });
+        // once and replace_all is false, replacing the first occurrence
+        // silently would be surprising. Force the model to include more
+        // context or set replace_all=true.
+        if !replace_all {
+            let occurrences = content.matches(&old).count();
+            if occurrences > 1 {
+                return ToolOutcome::Failure(ToolError::Execution {
+                    message: format!(
+                        "old_string matches {} times in {}; edit_file requires a unique match (set replace_all=true to replace all)",
+                        occurrences,
+                        path.display()
+                    ),
+                    exit_code: None,
+                    stderr: String::new(),
+                });
+            }
         }
 
-        let new_content = content.replacen(&old, &new, 1);
+        let new_content = if replace_all {
+            content.replace(&old, &new)
+        } else {
+            content.replacen(&old, &new, 1)
+        };
         let diff = render_diff(&content, &new_content);
 
         match crate::tools::atomic_write::atomic_write(&path, &new_content) {
@@ -1447,5 +1470,48 @@ mod tests {
         assert!(required.iter().any(|v| v.as_str() == Some("path")));
         assert!(required.iter().any(|v| v.as_str() == Some("old_string")));
         assert!(required.iter().any(|v| v.as_str() == Some("new_string")));
+    }
+
+    #[tokio::test]
+    async fn edit_file_replace_all_replaces_every_occurrence() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("replace_all.txt");
+        std::fs::write(&path, "foo\nbar\nfoo\nbaz\nfoo\n").unwrap();
+
+        let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false);
+        let ctx = ToolContext::new();
+        let args = serde_json::json!({
+            "path": path.to_string_lossy(),
+            "old_string": "foo",
+            "new_string": "qux",
+            "replace_all": true
+        });
+        let result = tool.run(&ctx, args).await;
+        assert!(
+            matches!(result, ToolOutcome::FileEdit { .. }),
+            "replace_all should produce FileEdit, got {result:?}"
+        );
+        let got = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(got, "qux\nbar\nqux\nbaz\nqux\n");
+    }
+
+    #[tokio::test]
+    async fn edit_file_replace_all_false_rejects_ambiguous() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("no_replace_all.txt");
+        std::fs::write(&path, "foo\nbar\nfoo\n").unwrap();
+
+        let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false);
+        let ctx = ToolContext::new();
+        let args = serde_json::json!({
+            "path": path.to_string_lossy(),
+            "old_string": "foo",
+            "new_string": "qux"
+        });
+        let result = tool.run(&ctx, args).await;
+        assert!(
+            matches!(result, ToolOutcome::Failure(ToolError::Execution { ref message, .. }) if message.contains("replace_all=true")),
+            "expected ambiguous-match error mentioning replace_all, got {result:?}"
+        );
     }
 }

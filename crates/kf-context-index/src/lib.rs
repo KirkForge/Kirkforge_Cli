@@ -971,7 +971,7 @@ impl ContextIndex {
                 .collect();
         }
 
-        let vocab = build_vocabulary(&self.symbols, None);
+        let vocab = build_vocabulary(&self.symbols);
         if !vocab.is_empty() {
             let qvec = embed_query(query, &vocab);
             if !qvec.is_empty() {
@@ -1026,7 +1026,7 @@ impl ContextIndex {
 
     /// Save the index to a JSON file, along with the current git HEAD.
     pub fn save(&self, path: &std::path::Path, head: &str) -> anyhow::Result<()> {
-        let embeddings = build_embeddings(self, None);
+        let embeddings = build_embeddings(self);
         let cached = CachedIndex {
             head: head.to_string(),
             symbols: self.symbols.clone(),

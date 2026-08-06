@@ -86,6 +86,28 @@ their feature flag is enabled, the core crate is linked directly into the
 `kf-code` binary as a compiled-in module (ADR-046–049). When the feature is
 off, the shell plugin dir loads as a fallback (ADR-050).
 
+### Crate map
+
+| Crate | Owner | Purpose | Status |
+|-------|-------|---------|--------|
+| `kf-plugin-sdk` | session | Plugin manifest types, trust tiers | Active |
+| `kf-plugin-host` | session | Plugin registry, dispatch, signatures | Active |
+| `kf-context-index` | session | Tree-sitter symbol/import/call-graph index | Active |
+| `kf-workflow` | session | JSON workflow engine (DAG of persona steps) | Active |
+| `kf-lsp` | tools | LSP client pool for symbol-aware navigation | Active |
+| `kf-bench` | session | Benchmark task types, loader, verifier, reports | Active |
+| `kf-draw-core` | tools | Pure document model for KirkForge-Draw | Active |
+| `kf-draw` | tools | `kfd` terminal diagram editor binary | Active |
+| `kf-video` | tools | Instruction-driven video production binary | Excluded |
+| `kf-compress-core` | session | Context-compression pipeline library + rules | Active |
+| `kf-compress-cli` | tools | `stratum` compression CLI binary | Excluded |
+| `kf-budget-core` | session | Budget/orchestrator/slicing data model | Active |
+| `kf-budget-hosts` | session | Host detection, canonical payload schemas | Active |
+| `kf-budget-cli` | tools | `kf-budget` budget CLI binary | Excluded |
+| `kf-testdoctor` | quality | Test-performance diagnostics | Active |
+
+"Excluded" crates exist on disk but are not built by default.
+
 ---
 
 ## The agent core (`src/`)

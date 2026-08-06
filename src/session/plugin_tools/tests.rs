@@ -617,11 +617,12 @@ async fn bundled_stratum_mode_tool_executes_via_host() {
 }
 
 /// End-to-end installed-layout regression for the Node SDK plugin: the
-/// bundled `npm/kf-plugin` tree must be reachable from the plugin
-/// scripts so that `plugin_tools` can list verification engines through the
-/// host's `PluginToolWrapper`. Skipped when node or the built SDK is not
-/// available (e.g. a bare `cargo test -p kf-code` without `npm ci`).
+/// Skipped when node or the built SDK is not available (e.g. a bare
+/// `cargo test -p kf-code` without `npm ci`). Marked #[ignore]
+/// because without the SDK build step the test silently no-ops and
+/// provides no coverage.
 #[tokio::test]
+#[ignore]
 async fn bundled_node_sdk_tool_executes_via_host() {
     fn which_node() -> Option<PathBuf> {
         std::env::var("PATH").ok().and_then(|path| {

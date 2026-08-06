@@ -650,7 +650,7 @@ impl WorkflowExecutor {
         let prompt_template = step.prompt.clone().unwrap_or_default();
         let persona = step.persona.clone().unwrap_or_else(|| "coder".to_string());
 
-        let max_permits = step.max_parallel.unwrap_or(items.len());
+        let max_permits = step.max_parallel.unwrap_or(items.len()).max(1);
         let semaphore = Arc::new(tokio::sync::Semaphore::new(max_permits));
         let mut join_set = tokio::task::JoinSet::new();
         for (i, item) in items.iter().enumerate() {

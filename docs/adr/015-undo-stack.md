@@ -56,4 +56,4 @@ Snapshots live in `~/.local/share/kirkforge/undo/<session_id>/<seq>.snap`. Each 
 - `src/session/undo.rs` — `UndoStack`, `UndoOp`, `UndoKind`, `UndoSummary`.
 - `src/tools/edit_file.rs` and `src/tools/write_file.rs` — snapshot before write, push to stack.
 - `src/tui/commands/undo.rs` — `/undo`, `/undo list`, `/undo count` handlers.
-- `src/session/executor.rs` — builds the shared `UndoStack` at session start and passes it to the file tools.
+- `src/session/executor/mod.rs` — builds the shared `UndoStack` at session start and passes it to the file tools.

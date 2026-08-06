@@ -19,7 +19,7 @@ mod verifier;
 pub use compat::{load_skill_dir, load_skills_dir};
 pub use hook::{HookError, HookVerdict, PluginHook};
 pub use sandbox::SandboxPolicy;
-pub use tool::{PluginTool, ToolError, KF_CODE_TOOL_ARGS};
+pub use tool::{PluginTool, ToolError, KF_CODE_TOOL_ARGS, KF_CODE_TOOL_ARGS_JSON};
 pub use toolset::{CompositeToolset, PluginToolset, ToolInfo, Toolset};
 pub use verifier::{PluginVerifier, VerifierError, VerifierVerdict};
 

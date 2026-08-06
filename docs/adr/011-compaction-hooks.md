@@ -74,9 +74,9 @@ Field meanings:
 
 ## Implementation
 
-- `src/session/executor.rs`:
+- `src/session/executor/mod.rs`:
   - `CompactHookStats` struct bundles the metadata.
   - `Executor::run_compact_hook` serializes the struct and calls `run_hook`.
   - `compact_rx` arm calls `run_compact_hook("pre-compact", ...)` before work and `run_compact_hook("post-compact", ...)` after work.
 - `src/session/hooks.rs`: module docs updated to list the new events and the JSON payload.
-- `src/session/executor.rs` tests: `test_compact_hooks_fire_pre_and_post` verifies both events write expected JSON.
+- `src/session/executor/mod.rs` tests: `test_compact_hooks_fire_pre_and_post` verifies both events write expected JSON.

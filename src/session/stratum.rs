@@ -18,6 +18,14 @@ use serde_json::Value;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 
+static SESSION_OFFLOAD_STORE: OnceLock<Arc<InMemoryOffloadStore>> = OnceLock::new();
+
+fn session_offload_store() -> Arc<InMemoryOffloadStore> {
+    SESSION_OFFLOAD_STORE
+        .get_or_init(|| Arc::new(InMemoryOffloadStore::new()))
+        .clone()
+}
+
 // ── Sliced-event coordination (WO 8.6) ─────────────────────────────────
 //
 // The budget guard's `apply_budget_slice` dispatches a
@@ -58,10 +66,10 @@ pub fn set_session_mode(mode: Mode) {
 /// want to run the pipeline outside the in-process tool path.
 pub fn compress_for_budget(content: &str, mode: Mode) -> String {
     let pipeline = CompressionPipeline::new();
-    let store = InMemoryOffloadStore::new();
+    let store = session_offload_store();
     let cfg = PipelineConfig::default();
     let ctx = CompressionContext::default().with_token_budget(4096);
-    pipeline.run(content, ContentType::PlainText, &ctx, &store, &cfg, mode)
+    pipeline.run(content, ContentType::PlainText, &ctx, &*store, &cfg, mode)
 }
 
 /// Default `BudgetSlicedEvent` listener: compresses the sliced
@@ -189,9 +197,9 @@ impl Tool for StratumRun {
         };
 
         let pipeline = CompressionPipeline::new();
-        let store = InMemoryOffloadStore::new();
+        let store = session_offload_store();
         let cfg = PipelineConfig::default();
-        let result = pipeline.run(&input, content_type, &ctx, &store, &cfg, mode);
+        let result = pipeline.run(&input, content_type, &ctx, &*store, &cfg, mode);
 
         if json_out {
             let out = serde_json::json!({
@@ -266,9 +274,9 @@ impl Tool for StratumApply {
         let ctx = CompressionContext::default().with_token_budget(token_budget.unwrap_or(4096));
 
         let pipeline = CompressionPipeline::new();
-        let store = InMemoryOffloadStore::new();
+        let store = session_offload_store();
         let cfg = PipelineConfig::default();
-        let result = pipeline.run(&content, content_type, &ctx, &store, &cfg, mode);
+        let result = pipeline.run(&content, content_type, &ctx, &*store, &cfg, mode);
 
         if json_out {
             let out = serde_json::json!({
@@ -423,7 +431,14 @@ impl Tool for StratumConfigValidate {
             let issues_str = if issues.is_empty() {
                 String::new()
             } else {
-                format!("\nissues:\n{}", issues.iter().map(|i| format!("  - {i}")).collect::<Vec<_>>().join("\n"))
+                format!(
+                    "\nissues:\n{}",
+                    issues
+                        .iter()
+                        .map(|i| format!("  - {i}"))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                )
             };
             success_json(format!(
                 "valid={valid}\n{issues_str}bloat_threshold={}\nreformat_target_ratio={}\noffload_fallback_ratio={}\ntransform_timeout_ms={}\nper_domain_count={}",

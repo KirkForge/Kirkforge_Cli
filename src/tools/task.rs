@@ -320,6 +320,18 @@ impl TaskSpawner for InProcessTaskSpawner {
                     gemini: self.config.model.gemini_api_key.clone(),
                     kimi: self.config.model.kimi_api_key.clone(),
                 },
+                Some(&self.config.model.aws_region),
+                if self.config.model.gcp_project_id.is_empty() {
+                    None
+                } else {
+                    Some(self.config.model.gcp_project_id.as_str())
+                },
+                if self.config.model.gcp_region.is_empty() {
+                    None
+                } else {
+                    Some(self.config.model.gcp_region.as_str())
+                },
+                self.config.model.gcp_service_account_path.clone(),
             ),
             &self.config,
         );

@@ -81,4 +81,4 @@ Config field `max_persona_turns` (default 10) guards against runaway subagent lo
 - `src/tui/keys.rs` — `/explore`, `/plan`, `/coder` dispatch and Ctrl+C cancellation.
 - `src/tui/mod.rs` — `persona_tx`/`persona_rx` channels, `handle_persona_complete`.
 - `src/shared/mod.rs` — `max_persona_turns: usize` config field with serde default 10.
-- `src/session/executor.rs` — `max_persona_turns` included in test config helper.
+- `src/session/executor/mod.rs` — `max_persona_turns` included in test config helper.

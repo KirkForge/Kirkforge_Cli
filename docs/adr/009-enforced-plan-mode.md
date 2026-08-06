@@ -76,7 +76,7 @@ This is intentionally conservative. If a command is questionable, plan mode bloc
 
 ## Implementation
 
-- `src/session/executor.rs` — `plan_mode` field, `set_plan_mode`, `exit_plan_mode`, enforcement inside `execute_tool_call`, `is_read_only_bash` helper.
+- `src/session/executor/mod.rs` — `plan_mode` field, `set_plan_mode`, `exit_plan_mode`, enforcement inside `execute_tool_call`, `is_read_only_bash` helper.
 - `src/tui/commands/mod.rs` + keys dispatch — `/plan` and `/implement` handlers.
 - `src/tui/mod.rs` — `TurnEvent::PlanComplete` handling and user prompt.
 - Tests: `test_plan_mode_blocks_write_file`, `test_plan_mode_blocks_non_read_only_bash`, `test_plan_mode_allows_read_file`, `test_plan_mode_allows_read_only_bash`.

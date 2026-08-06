@@ -47,7 +47,7 @@ The same fold-in pattern established by ADR-046 (Stratum) applies: link the crat
 ### Negative
 
 - `plugin3-core` becomes a compile-time dependency of the default build. Before this change it was only linked transitively through `plugin3-cli`.
-- The hooks observe and report budget usage but do not yet slice/compact tool results before they enter the conversation. The budget check records usage and warns; it does not mutate the turn output.
+- The hooks observe budget usage and, via `HeadTailSlicer`, slice oversized tool results before they enter the conversation (head+tail retained, middle offloaded to the process-global store and retrievable via `store_get`).
 
 ## Upgrade path
 

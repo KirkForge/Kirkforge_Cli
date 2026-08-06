@@ -241,7 +241,7 @@ impl Tool for Bash {
                     },
                     "background": {
                         "type": "boolean",
-                        "description": "Run in background. Use bash_status to check and bash_output to retrieve results.",
+                        "description": "Run in background. Use bash_status to check status.",
                         "default": false
                     }
                 },
@@ -315,7 +315,9 @@ impl Tool for Bash {
                 .await
             {
                 Ok(id) => ToolOutcome::Success {
-                    content: format!("Background job #{id} started. Use bash_status(id={id}) or bash_output(id={id}) to check results."),
+                    content: format!(
+                        "Background job #{id} started. Use bash_status(id={id}) to check status."
+                    ),
                 },
                 Err(e) => ToolOutcome::Failure(crate::shared::ToolError::internal(format!(
                     "Failed to start background job: {e}"

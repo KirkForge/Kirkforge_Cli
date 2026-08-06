@@ -188,19 +188,22 @@ pub(crate) fn build_anthropic_body(
         anthropic_messages.push(content);
     }
 
-    // Apply cache breakpoints:
+    // Apply cache breakpoints (Anthropic limit: 4 per request).
     // 1. System+tools breakpoint: the last system block already has
-    //    cache_control (set above). We also add cache_control to the
-    //    last tool definition so the entire system+tools prefix is
-    //    cached as a single unit (WO 17.5).
-    // 2. Last two prefix messages: existing markers preserved for
-    //    mid-conversation cache hits.
-    // 3. Tail breakpoint: the last user message's last content block
-    //    gets cache_control so the growing conversation tail is cached
-    //    for the next turn (WO 17.5).
+    //    cache_control (set above).
+    // 2. Up to 3 prefix messages near the tail: mid-conversation cache hits.
+    // 3. Tail breakpoint: the last user message's last content block.
     if anthropic_messages.len() > 2 {
         let prefix_end = anthropic_messages.len() - 1;
-        for msg in anthropic_messages.iter_mut().take(prefix_end).skip(1) {
+        // ponytail: skip from start so only the last 3 prefix messages
+        // (after system) get cache_control, keeping total breakpoints
+        // at most 4 (system + 3 prefix + tail).
+        let skip_from_start = prefix_end.saturating_sub(3 + 1);
+        for msg in anthropic_messages
+            .iter_mut()
+            .take(prefix_end)
+            .skip(1 + skip_from_start)
+        {
             if let Some(content) = msg.get_mut("content") {
                 if let Some(arr) = content.as_array_mut() {
                     if let Some(last_block) = arr.last_mut() {

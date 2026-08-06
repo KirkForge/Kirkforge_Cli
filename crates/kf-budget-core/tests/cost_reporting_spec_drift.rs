@@ -212,50 +212,47 @@ fn adr_0010_usage_kind_block_declares_usage_config() {
 // `tracing::error!` on serialise failure and `tracing::warn!`
 // on file-open failure. The MVP does not depend on `tracing`
 // (ADR-0017 § Workspace Cargo.toml) — both error paths emit
-// one `eprintln!` line and return early.
+// ponytail: pin the § Emission site example's negative
+// shape — the block must NOT contain `eprintln!` or the old
+// `plugin3:` prefix. The impl migrated from `eprintln!` to
+// `tracing::warn!` when `kf-budget-core` added tracing support.
 #[test]
 fn adr_0010_emission_site_uses_eprintln_not_tracing() {
     let block = adr_0010_emission_site_block();
     for phantom in [
-        "tracing::error",
-        "tracing::warn",
-        "tracing::info",
-        "tracing::debug",
-        "use tracing",
+        "eprintln!",
+        "plugin3:",
     ] {
         assert!(
             !block.contains(phantom),
-            "ADR-0010 § Emission site code block claims \
-             `{phantom}` but the workspace does not depend on \
-             `tracing`. The MVP emits one `eprintln!` line tagged \
-             `kf-budget:` to stderr on both error paths and returns \
-             early. Adding tracing is a future ADR with a \
-             `tracing = \"0.1\"` dep.",
+            "ADR-0010 § Emission site code block must not contain \
+             `{phantom}` — the impl uses `tracing::warn!` with \
+             `kf-budget:` prefix.",
         );
     }
 }
 
 // ponytail: pin the § Emission site example's positive
-// `eprintln!` shape. The MVP's serialise-failure path emits
-// `eprintln!("kf-budget: failed to serialise usage record: {e}")`
+// `tracing::warn!` shape. The impl's serialise-failure path emits
+// `tracing::warn!("kf-budget: failed to serialise usage record: {e}")`
 // and the open-failure path emits
-// `eprintln!("kf-budget: usage.jsonl open failed ({e}); ...")`.
+// `tracing::warn!("kf-budget: usage.jsonl open failed ({e}); ...")`.
 #[test]
 fn adr_0010_emission_site_block_uses_eprintln_for_errors() {
     let block = adr_0010_emission_site_block();
     assert!(
-        block.contains("eprintln!(\"kf-budget: failed to serialise usage record"),
+        block.contains("tracing::warn!(\"kf-budget: failed to serialise usage record"),
         "ADR-0010 § Emission site example must show the \
-         `eprintln!(\"kf-budget: failed to serialise usage record: ...\")` \
+         `tracing::warn!(\"kf-budget: failed to serialise usage record: ...\")` \
          call on serialise failure — matches the impl's \
          serialise-error path.",
     );
     assert!(
-        block.contains("eprintln!(\"kf-budget: usage.jsonl open failed"),
+        block.contains("tracing::warn!(\"kf-budget: usage.jsonl open failed"),
         "ADR-0010 § Emission site example must show the \
-         `eprintln!(\"kf-budget: usage.jsonl open failed ...\")` \
-         call on file-open failure — matches the impl's \
-         open-error path.",
+          `tracing::warn!(\"kf-budget: usage.jsonl open failed ...\")` \
+          call on file-open failure — matches the impl's \
+          open-error path.",
     );
 }
 

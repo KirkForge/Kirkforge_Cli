@@ -353,6 +353,10 @@ pub fn adapter_for(
         None,
         None,
         &ProviderApiKeys::default(),
+        None,
+        None,
+        None,
+        None,
     )
 }
 
@@ -369,6 +373,10 @@ pub fn adapter_for_with_provider(
     opencode_zen_api_key: Option<&str>,
     adapter_routing: Option<&HashMap<String, String>>,
     api_keys: &ProviderApiKeys,
+    bedrock_region: Option<&str>,
+    vertex_project_id: Option<&str>,
+    vertex_region: Option<&str>,
+    vertex_service_account_path: Option<std::path::PathBuf>,
 ) -> Box<dyn ModelAdapter> {
     let override_lower = model_type_override.map(|s| s.to_lowercase());
     match adapter_kind_for_routed(
@@ -437,24 +445,18 @@ pub fn adapter_for_with_provider(
             timeout_secs,
             api_keys.anthropic.clone(),
         )),
-        AdapterKind::AnthropicBedrock => {
-            // Bedrock credentials come from env at request time, not here.
-            Box::new(anthropic_bedrock::AnthropicBedrockAdapter::new(
-                model_name,
-                "us-east-1",
-                timeout_secs,
-            ))
-        }
-        AdapterKind::AnthropicVertex => {
-            // Vertex project/region/credentials are also resolved from config at request time.
-            Box::new(anthropic_vertex::AnthropicVertexAdapter::new(
-                model_name,
-                "",
-                "us-central1",
-                None,
-                timeout_secs,
-            ))
-        }
+        AdapterKind::AnthropicBedrock => Box::new(anthropic_bedrock::AnthropicBedrockAdapter::new(
+            model_name,
+            bedrock_region.unwrap_or("us-east-1"),
+            timeout_secs,
+        )),
+        AdapterKind::AnthropicVertex => Box::new(anthropic_vertex::AnthropicVertexAdapter::new(
+            model_name,
+            vertex_project_id.unwrap_or(""),
+            vertex_region.unwrap_or("us-central1"),
+            vertex_service_account_path,
+            timeout_secs,
+        )),
         AdapterKind::OpenCodeZen => {
             // Strip the "opencode/" prefix to get the actual model name.
             let zen_model = model_name.strip_prefix("opencode/").unwrap_or(model_name);
@@ -940,6 +942,10 @@ mod tests {
             None,
             None,
             &ProviderApiKeys::default(),
+            Some("us-west-2"),
+            Some("test-project"),
+            Some("us-east5"),
+            None,
         );
         assert_eq!(adapter.model_info().name, "anthropic.claude-3-5-sonnet");
         assert!(adapter.model_info().tool_call_format == crate::shared::ToolCallStyle::Anthropic);
@@ -1079,6 +1085,10 @@ mod tests {
             None,
             None,
             &ProviderApiKeys::default(),
+            None,
+            Some("my-gcp-project"),
+            Some("europe-west4"),
+            None,
         );
         assert_eq!(adapter.model_info().name, "claude-3-opus");
         assert_eq!(
@@ -1099,6 +1109,10 @@ mod tests {
             None,
             None,
             &ProviderApiKeys::default(),
+            None,
+            None,
+            None,
+            None,
         );
         assert_eq!(adapter.model_info().name, "claude-3-opus");
     }
@@ -1115,6 +1129,10 @@ mod tests {
             Some("test-key"),
             None,
             &ProviderApiKeys::default(),
+            None,
+            None,
+            None,
+            None,
         );
         assert_eq!(adapter.model_info().name, "big-pickle");
     }
@@ -1131,6 +1149,10 @@ mod tests {
             None,
             None,
             &ProviderApiKeys::default(),
+            None,
+            None,
+            None,
+            None,
         );
         assert_eq!(adapter.model_info().name, "big-pickle");
     }
@@ -1147,6 +1169,10 @@ mod tests {
             None,
             None,
             &ProviderApiKeys::default(),
+            None,
+            None,
+            None,
+            None,
         );
         assert!(adapter.model_info().supports_thinking);
     }
@@ -1163,6 +1189,10 @@ mod tests {
             None,
             None,
             &ProviderApiKeys::default(),
+            None,
+            None,
+            None,
+            None,
         );
         assert!(adapter.model_info().supports_thinking);
     }
@@ -1179,6 +1209,10 @@ mod tests {
             None,
             None,
             &ProviderApiKeys::default(),
+            None,
+            None,
+            None,
+            None,
         );
         assert!(adapter.model_info().supports_images);
     }
@@ -1195,6 +1229,10 @@ mod tests {
             None,
             None,
             &ProviderApiKeys::default(),
+            None,
+            None,
+            None,
+            None,
         );
         assert_eq!(adapter.model_info().name, "my-model");
     }

@@ -194,7 +194,10 @@ impl PluginToolWrapper {
             }
         }
         env.push((KF_CODE_TOOL_ARGS.to_string(), args.to_string()));
-        env.push(("KF_CODE_TOOL_ARGS_JSON".to_string(), args.to_string()));
+        env.push((
+            kf_plugin_host::KF_CODE_TOOL_ARGS_JSON.to_string(),
+            args.to_string(),
+        ));
         env
     }
 
@@ -556,8 +559,8 @@ mod wrapper_tests {
             .iter()
             .any(|(k, v)| k == "KF_CODE_TOOL_ARGS" && v == r#"{"x":1}"#);
         assert!(has_args, "KF_CODE_TOOL_ARGS must be set, got {env:?}");
-        let has_args_json = env.iter().any(|(k, _)| k == "KF_CODE_TOOL_ARGS_JSON");
-        assert!(has_args_json, "KF_CODE_TOOL_ARGS_JSON must be set");
+        let has_args_json = env.iter().any(|(k, _)| k == "KIRKFORGE_TOOL_ARGS_JSON");
+        assert!(has_args_json, "KIRKFORGE_TOOL_ARGS_JSON must be set");
     }
 
     #[test]

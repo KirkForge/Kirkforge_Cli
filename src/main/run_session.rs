@@ -247,6 +247,18 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
                 gemini: config.model.gemini_api_key.clone(),
                 kimi: config.model.kimi_api_key.clone(),
             },
+            Some(&config.model.aws_region),
+            if config.model.gcp_project_id.is_empty() {
+                None
+            } else {
+                Some(config.model.gcp_project_id.as_str())
+            },
+            if config.model.gcp_region.is_empty() {
+                None
+            } else {
+                Some(config.model.gcp_region.as_str())
+            },
+            config.model.gcp_service_account_path.clone(),
         ),
         &config,
     );

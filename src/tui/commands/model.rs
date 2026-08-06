@@ -90,7 +90,7 @@ pub async fn handle_model_command(
             }
         }
         AdapterKind::Ollama => {
-            let client = reqwest::Client::new();
+            let client = crate::shared::build_reqwest_client(None);
             let ollama_host = read_shared_config(&state.config).model.ollama_host.clone();
             let validation = validate_ollama_model(&client, &ollama_host, name).await;
             match validation {
@@ -339,23 +339,7 @@ pub async fn run_ollama_pull(
     switch_tx: &mpsc::UnboundedSender<String>,
 ) {
     let url = format!("{}/api/pull", ollama_host.trim_end_matches('/'));
-    let client = match reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(300))
-        .build()
-    {
-        Ok(c) => c,
-        Err(e) => {
-            crate::send_or_warn!(
-                event_tx
-                    .send(TurnEvent::Token(format!(
-                        "❌ Could not start pull for {model}: {e}"
-                    )))
-                    .await,
-                "TUI dropped pull-error event"
-            );
-            return;
-        }
-    };
+    let client = crate::shared::build_reqwest_client(Some(std::time::Duration::from_secs(300)));
 
     let body = serde_json::json!({"model": model, "stream": true});
     let response = match client.post(&url).json(&body).send().await {

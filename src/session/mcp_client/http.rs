@@ -61,14 +61,7 @@ impl McpHttpTransport {
             return None;
         }
 
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(60))
-            .tcp_nodelay(true)
-            .build()
-            .unwrap_or_else(|e| {
-                tracing::warn!(error = %e, "failed to build custom MCP HTTP client; falling back");
-                reqwest::Client::new()
-            });
+        let client = crate::shared::build_reqwest_client(Some(Duration::from_secs(60)));
 
         let alive = Arc::new(AtomicBool::new(true));
         let pending: PendingMap =

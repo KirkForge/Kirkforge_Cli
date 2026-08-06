@@ -7,7 +7,7 @@
 //! - `reload` — full rescan of the plugins directory.
 //! - `trust <name> <tier>` — session-only re-enable with a specific trust tier.
 
-use crate::shared::{read_shared_config, SharedConfig};
+use crate::shared::{read_shared_config, write_shared_config};
 use crate::tui::app::AppState;
 use kf_plugin_host::{PluginRegistry, TrustPolicy};
 use kf_plugin_sdk::TrustTier;
@@ -602,13 +602,6 @@ async fn toggle_plugin(
         ""
     };
     format!("🔌 Plugin '{name}' is now {status}.{restart_notice} {result}")
-}
-
-/// Mutable access to shared config, recovering from lock poisoning.
-fn write_shared_config(
-    cfg: &SharedConfig,
-) -> std::sync::RwLockWriteGuard<'_, crate::shared::Config> {
-    cfg.write().unwrap_or_else(|e| e.into_inner())
 }
 
 #[cfg(test)]

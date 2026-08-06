@@ -95,6 +95,11 @@ impl Tool for WebFetch {
                 message: "URL resolves to a private/internal IP by literal host".into(),
             });
         }
+        if host_resolves_to_internal_ip(trimmed) {
+            return ToolOutcome::Failure(ToolError::AccessDenied {
+                message: "URL host resolves to a private/internal IP".into(),
+            });
+        }
 
         // DNS-rebinding guard: resolve the host once, check for internal
         // IPs, and pin DNS to the resolved address so the TCP connect uses
@@ -223,7 +228,6 @@ pub(crate) fn host_is_literal_internal_ip(url: &str) -> bool {
 // reqwest client (tests) rather than the system resolver. The rebinding
 // threat requires the attacker's hostname to actually resolve to an
 // internal IP, which this guard catches.
-#[cfg(test)]
 pub(crate) fn host_resolves_to_internal_ip(url: &str) -> bool {
     let Some(host) = extract_host(url) else {
         return true; // malformed -> fail closed

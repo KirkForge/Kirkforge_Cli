@@ -37,7 +37,9 @@
 //!   reader/stderr tasks to finish, and reaps the child process. `Drop`
 //!   calls `disconnect()` synchronously as a best-effort fallback.
 
-use crate::session::process_group::{kill_process_group, reap_child, setup_process_group};
+use crate::session::process_group::{kill_process_group, setup_process_group};
+#[cfg(test)]
+use crate::session::process_group::reap_child;
 use crate::shared::{McpServerConfig, ToolError, ToolOutcome};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -123,11 +125,9 @@ struct StdioMcpClient {
     reader_shutdown_tx: Option<oneshot::Sender<()>>,
     stderr_shutdown_tx: Option<oneshot::Sender<()>>,
     /// Background task handles, kept so `disconnect()` can await them.
-    // reason: read only by disconnect(), a lifecycle API used by tests.
-    #[allow(dead_code)]
-    reader_task: Option<tokio::task::JoinHandle<()>>,
-    #[allow(dead_code)]
-    stderr_drain: Option<tokio::task::JoinHandle<()>>,
+    // reason: held for Drop semantics; read only by #[cfg(test)] disconnect().
+    _reader_task: Option<tokio::task::JoinHandle<()>>,
+    _stderr_drain: Option<tokio::task::JoinHandle<()>>,
 }
 
 /// Convert MCP content blocks into a `ToolOutcome::Success` string.
@@ -248,8 +248,8 @@ impl McpClient {
             alive,
             reader_shutdown_tx: Some(reader_shutdown_tx),
             stderr_shutdown_tx: Some(stderr_shutdown_tx),
-            reader_task: Some(reader_task),
-            stderr_drain: Some(stderr_drain),
+            _reader_task: Some(reader_task),
+            _stderr_drain: Some(stderr_drain),
         };
 
         // MCP handshake: initialize → handle response
@@ -326,8 +326,8 @@ impl McpClient {
             alive,
             reader_shutdown_tx: Some(reader_shutdown_tx),
             stderr_shutdown_tx: Some(stderr_shutdown_tx),
-            reader_task: Some(reader_task),
-            stderr_drain: Some(stderr_drain),
+            _reader_task: Some(reader_task),
+            _stderr_drain: Some(stderr_drain),
         };
         Self::Stdio(inner)
     }
@@ -506,7 +506,7 @@ impl McpClient {
     /// Explicit async disconnect is test-only; wiring it into the manager's
     /// reconnect path would require an async Drop equivalent.
     // reason: lifecycle API used by tests; production relies on Drop fallback.
-    #[allow(dead_code)]
+    #[cfg(test)]
     async fn disconnect(&mut self) {
         match self {
             McpClient::Stdio(c) => c.disconnect().await,
@@ -699,7 +699,7 @@ impl StdioMcpClient {
 
     /// Gracefully disconnect from the child-process server.
     // reason: lifecycle API used by tests; production relies on Drop fallback.
-    #[allow(dead_code)]
+    #[cfg(test)]
     async fn disconnect(&mut self) {
         // Signal the background tasks to stop.
         if let Some(tx) = self.reader_shutdown_tx.take() {
@@ -724,10 +724,10 @@ impl StdioMcpClient {
         // Wait for the background tasks to finish (best-effort).
         #[allow(unused_must_use)]
         {
-            if let Some(handle) = self.reader_task.take() {
+            if let Some(handle) = self._reader_task.take() {
                 tokio::time::timeout(Duration::from_secs(2), handle).await;
             }
-            if let Some(handle) = self.stderr_drain.take() {
+            if let Some(handle) = self._stderr_drain.take() {
                 tokio::time::timeout(Duration::from_secs(2), handle).await;
             }
         }

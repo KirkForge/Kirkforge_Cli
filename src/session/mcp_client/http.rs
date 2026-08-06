@@ -39,13 +39,10 @@ pub(super) struct McpHttpTransport {
     /// Channel used to inject outbound requests so the SSE reader task can
     /// keep reading while requests are in flight.
     request_tx: mpsc::UnboundedSender<HttpRequestEnvelope>,
-    // reason: read only by disconnect(), a lifecycle API used by tests.
-    #[allow(dead_code)]
-    reader_task: tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
-    #[allow(dead_code)]
-    poster_task: tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
-    #[allow(dead_code)]
-    shutdown_tx: Option<oneshot::Sender<()>>,
+    // reason: held for Drop semantics; read only by #[cfg(test)] disconnect().
+    _reader_task: tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
+    _poster_task: tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
+    _shutdown_tx: Option<oneshot::Sender<()>>,
 }
 
 struct HttpRequestEnvelope {
@@ -142,9 +139,9 @@ impl McpHttpTransport {
             next_id,
             alive,
             request_tx,
-            reader_task: tokio::sync::Mutex::new(Some(reader_task)),
-            poster_task: tokio::sync::Mutex::new(Some(poster_task)),
-            shutdown_tx: Some(shutdown_tx),
+            _reader_task: tokio::sync::Mutex::new(Some(reader_task)),
+            _poster_task: tokio::sync::Mutex::new(Some(poster_task)),
+            _shutdown_tx: Some(shutdown_tx),
         };
 
         let init_req = serde_json::json!({
@@ -381,18 +378,18 @@ impl McpHttpTransport {
     /// ponytail: production relies on Drop for cleanup; explicit disconnect
     /// is test-only.
     // reason: lifecycle API used by tests; production relies on Drop fallback.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(super) async fn disconnect(&mut self) {
         self.alive.store(false, Ordering::SeqCst);
-        if let Some(tx) = self.shutdown_tx.take() {
+        if let Some(tx) = self._shutdown_tx.take() {
             let _ = tx.send(());
         }
         #[allow(unused_must_use)]
         {
-            if let Some(t) = self.reader_task.lock().await.take() {
+            if let Some(t) = self._reader_task.lock().await.take() {
                 tokio::time::timeout(Duration::from_secs(2), t).await;
             }
-            if let Some(t) = self.poster_task.lock().await.take() {
+            if let Some(t) = self._poster_task.lock().await.take() {
                 tokio::time::timeout(Duration::from_secs(2), t).await;
             }
         }

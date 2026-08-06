@@ -363,9 +363,8 @@ pub async fn run_tui(
                 tokio::spawn(async move {
                     while hup.recv().await.is_some() {
                         let (fresh, _warning) = crate::session::config::load_config();
-                        if let Ok(mut cfg) = reload_shared_config.write() {
-                            *cfg = fresh.clone();
-                        }
+                        let mut cfg = crate::shared::write_shared_config(&reload_shared_config);
+                        *cfg = fresh.clone();
                         // Forward the new snapshot to the executor,
                         // which owns the access-control rebuild. If the
                         // executor is gone (TUI exited) we drop it.

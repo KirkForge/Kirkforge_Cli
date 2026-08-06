@@ -348,12 +348,9 @@ impl Executor {
         // Update the shared lock. If it is poisoned we still apply the
         // new config locally so this executor keeps running with the
         // fresh rules.
-        let fresh = if let Ok(mut cfg) = self.config.write() {
-            *cfg = new.clone();
-            new
-        } else {
-            new
-        };
+        let mut cfg = crate::shared::write_shared_config(&self.config);
+        *cfg = new.clone();
+        let fresh = new;
         let (deny_list, path_guard, read_gate) = access_from_config(&fresh);
         self.sandbox = sandbox::SandboxEnforcer {
             path_guard,

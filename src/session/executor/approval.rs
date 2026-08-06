@@ -110,9 +110,8 @@ impl Executor {
             }
             Ok(Ok(ApprovalResponse::AlwaysApprove)) => {
                 let rule = crate::shared::permission::suggest_rule(&tc.name, &tc.arguments);
-                if let Ok(mut cfg) = self.config.write() {
-                    push_rule_unique(&mut cfg.security.permission_rules, rule);
-                }
+                let mut cfg = crate::shared::write_shared_config(&self.config);
+                push_rule_unique(&mut cfg.security.permission_rules, rule);
                 ApprovalDecision::AlwaysApproved
             }
             Ok(Err(_)) => ApprovalDecision::Denied {

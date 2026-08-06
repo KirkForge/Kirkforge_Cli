@@ -20,7 +20,12 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 static SESSION_OFFLOAD_STORE: OnceLock<Arc<InMemoryOffloadStore>> = OnceLock::new();
 
-fn session_offload_store() -> Arc<InMemoryOffloadStore> {
+/// Process-global Stratum offload store. Pub so the budget `store_get`
+/// tool can consult it as a fallback when a marker isn't in the budget
+/// store (WO 20.11.0 CRIT-2): both the budget `HeadTailSlicer` and the
+/// Stratum `CompressionPipeline` can emit offload markers, and the model
+/// must be able to retrieve either kind via `store_get`.
+pub fn session_offload_store() -> Arc<InMemoryOffloadStore> {
     SESSION_OFFLOAD_STORE
         .get_or_init(|| Arc::new(InMemoryOffloadStore::new()))
         .clone()

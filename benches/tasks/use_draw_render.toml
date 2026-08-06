@@ -4,6 +4,8 @@ requires_model = true
 
 prompt = "The file diagram.td.json contains a small .td.json scene with one box labeled 'Hello'. Use the draw_render tool to render it as plain text. The plain-text render should be saved to diagram.txt."
 
+requires_model = true
+
 [setup]
 "Cargo.toml" = """[package]
 name = "use_draw_render"
@@ -30,6 +32,15 @@ edition = "2021"
 """
 
 [verify]
+<<<<<<< HEAD
 type = "file_contains"
 path = "diagram.txt"
 contains = "Hello"
+||||||| 9d003b5
+type = "file_contains"
+path = "diagram.td.json"
+contains = "\"version\": 1"
+=======
+type = "output_contains"
+pattern = "Hello"
+>>>>>>> wo/20.7.0

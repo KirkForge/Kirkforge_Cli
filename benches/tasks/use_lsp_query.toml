@@ -4,6 +4,8 @@ requires_model = true
 
 prompt = "The file src/lib.rs contains a Rust function `greet` that takes a name and returns a String. Use the lsp_query tool with operation=document_symbols on src/lib.rs to discover the symbol. Then write the symbol name to symbols.txt."
 
+requires_model = true
+
 [setup]
 "Cargo.toml" = """[package]
 name = "use_lsp_query"
@@ -19,6 +21,15 @@ path = "src/lib.rs"
 """
 
 [verify]
+<<<<<<< HEAD
 type = "file_contains"
 path = "symbols.txt"
 contains = "greet"
+||||||| 9d003b5
+type = "file_contains"
+path = "src/lib.rs"
+contains = "pub fn greet"
+=======
+type = "output_contains"
+pattern = "greet"
+>>>>>>> wo/20.7.0

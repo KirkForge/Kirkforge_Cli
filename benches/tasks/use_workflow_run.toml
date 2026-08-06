@@ -4,6 +4,8 @@ requires_model = true
 
 prompt = "A workflow template lives at .kf-code/workflows/feature.json (already in the sandbox). Use the workflow_run tool with template='feature' and vars={feature: 'auth'} to run it. The tool should return JSON with a 'steps' array; each step has a 'summary' field. After running, write the step summaries to workflow_output.txt, one per line."
 
+requires_model = true
+
 [setup]
 "Cargo.toml" = """[package]
 name = "use_workflow_run"
@@ -20,6 +22,5 @@ edition = "2021"
 """
 
 [verify]
-type = "file_contains"
-path = "workflow_output.txt"
-contains = "explore"
+type = "output_contains"
+pattern = "steps"

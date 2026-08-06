@@ -51,7 +51,7 @@ use commands::{
 use components::approval::render_approval_dialog;
 use connection::{connection_probe_task, probe_ollama_connection};
 use crossterm::{
-    event::{self, Event},
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -78,6 +78,9 @@ impl Drop for TerminalGuard {
             tracing::debug!(error = %e, "failed to disable raw mode in terminal guard");
         }
         let mut stdout = io::stdout();
+        if let Err(e) = execute!(stdout, DisableMouseCapture) {
+            tracing::debug!(error = %e, "failed to disable mouse capture in terminal guard");
+        }
         if let Err(e) = execute!(stdout, LeaveAlternateScreen) {
             tracing::debug!(error = %e, "failed to leave alternate screen in terminal guard");
         }
@@ -291,6 +294,9 @@ async fn teardown(
     if let Err(e) = disable_raw_mode() {
         tracing::debug!(error = %e, "failed to disable raw mode during TUI shutdown");
     }
+    if let Err(e) = execute!(terminal.backend_mut(), DisableMouseCapture) {
+        tracing::debug!(error = %e, "failed to disable mouse capture during TUI shutdown");
+    }
     if let Err(e) = execute!(terminal.backend_mut(), LeaveAlternateScreen) {
         tracing::debug!(error = %e, "failed to leave alternate screen during TUI shutdown");
     }
@@ -362,6 +368,7 @@ pub async fn run_tui(
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
+    execute!(stdout, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
     let _guard = TerminalGuard;
@@ -818,9 +825,25 @@ async fn dispatch_kb_events<'a>(
         Ok(())
     }
 
+    fn handle_mouse(state: &mut AppState, mouse: event::MouseEvent) {
+        use crossterm::event::MouseEventKind;
+        match mouse.kind {
+            MouseEventKind::ScrollUp => {
+                state.auto_scroll = false;
+                state.scroll_offset = state.scroll_offset.saturating_sub(3);
+            }
+            MouseEventKind::ScrollDown => {
+                state.scroll_offset = (state.scroll_offset + 3).min(state.max_scroll);
+            }
+            _ => {}
+        }
+        state.mark_dirty();
+    }
+
     if let Some(ev) = first {
         match ev {
             Event::Key(key) => dispatch_one(state, key, key_ctx).await?,
+            Event::Mouse(mouse) => handle_mouse(state, mouse),
             Event::Resize(_w, _h) => state.mark_dirty(),
             _ => {}
         }
@@ -829,6 +852,7 @@ async fn dispatch_kb_events<'a>(
     while let Ok(ev) = kb_rx.try_recv() {
         match ev {
             Event::Key(key) => dispatch_one(state, key, key_ctx).await?,
+            Event::Mouse(mouse) => handle_mouse(state, mouse),
             Event::Resize(_w, _h) => state.mark_dirty(),
             _ => {}
         }

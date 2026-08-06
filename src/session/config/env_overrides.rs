@@ -126,6 +126,19 @@ pub(super) fn apply_env_overrides(cfg: &mut Config) {
     // KF_CODE_JSON_MODE
     env_bool!("KF_CODE_JSON_MODE", cfg.model.json_mode);
 
+    // KF_CODE_EXTENDED_THINKING
+    env_bool!(
+        "KF_CODE_EXTENDED_THINKING",
+        cfg.model.extended_thinking
+    );
+
+    // KF_CODE_BUDGET_TOKENS
+    if let Ok(val) = std::env::var("KF_CODE_BUDGET_TOKENS") {
+        if let Ok(n) = val.parse::<usize>() {
+            cfg.model.budget_tokens = n.max(1);
+        }
+    }
+
     // KF_CODE_BASH_SANDBOX_WORKDIR
     env_bool!(
         "KF_CODE_BASH_SANDBOX_WORKDIR",

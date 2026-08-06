@@ -166,6 +166,10 @@ impl Executor {
         // Push the deterministic-mode seed down to the active adapter.
         adapter.set_seed(cfg.model.seed);
 
+        // Push extended-thinking config down to adapters that support it.
+        adapter.set_extended_thinking(cfg.model.extended_thinking);
+        adapter.set_budget_tokens(cfg.model.budget_tokens);
+
         let adapter_swap = AdapterSwap::new(
             model_name.clone(),
             cfg.model.ollama_host.clone(),
@@ -360,6 +364,8 @@ impl Executor {
         };
         // JSON-mode changes are applied to the running adapter too.
         self.adapter.set_json_mode(fresh.model.json_mode);
+        self.adapter.set_extended_thinking(fresh.model.extended_thinking);
+        self.adapter.set_budget_tokens(fresh.model.budget_tokens);
         config_diff_summary(&old, &fresh)
     }
 

@@ -29,6 +29,8 @@ pub struct AnthropicVertexAdapter {
     json_mode: bool,
     seed: Option<u64>,
     timeout_secs: u64,
+    extended_thinking: bool,
+    budget_tokens: usize,
 }
 
 impl AnthropicVertexAdapter {
@@ -48,6 +50,8 @@ impl AnthropicVertexAdapter {
             json_mode: false,
             seed: None,
             timeout_secs,
+            extended_thinking: true,
+            budget_tokens: 10_000,
         }
     }
 
@@ -92,6 +96,14 @@ impl ModelAdapter for AnthropicVertexAdapter {
         self.seed = seed;
     }
 
+    fn set_extended_thinking(&mut self, enabled: bool) {
+        self.extended_thinking = enabled;
+    }
+
+    fn set_budget_tokens(&mut self, budget: usize) {
+        self.budget_tokens = budget;
+    }
+
     async fn stream(
         &self,
         messages: &[Message],
@@ -103,6 +115,8 @@ impl ModelAdapter for AnthropicVertexAdapter {
             tools,
             self.json_mode,
             self.seed,
+            self.extended_thinking,
+            self.budget_tokens,
         );
         let url = self.endpoint();
         let token = self.access_token().await?;

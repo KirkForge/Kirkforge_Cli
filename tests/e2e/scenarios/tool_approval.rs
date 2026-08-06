@@ -51,7 +51,7 @@ async fn tool_approval_auto_approve_round_trip() {
     // At least the first request should have been made (the model call).
     let log = mock.request_log();
     assert!(
-        log.len() >= 1,
+        !log.is_empty(),
         "tool_approval: expected ≥1 request, got {}.\n\
          stdout: {}\nstderr: {}",
         log.len(),

@@ -10,6 +10,7 @@ use super::ui::TmuxDriver;
 /// in the tmux pane.  These come from `render_approval_dialog` in
 /// `src/tui/components/approval.rs`.
 const APPROVAL_TITLE: &str = "Approval Required";
+#[allow(dead_code)] // used by future reject/no scenarios
 const APPROVAL_YES: &str = "[Y]es";
 
 /// Detect an approval modal in the tmux pane and send 'y' to approve.
@@ -27,6 +28,7 @@ pub fn approve(ui: &TmuxDriver, timeout: std::time::Duration) -> std::io::Result
 }
 
 /// Detect an approval modal and send 'n' to reject.
+#[allow(dead_code)] // wired when a reject-scenario test lands
 pub fn reject(ui: &TmuxDriver, timeout: std::time::Duration) -> std::io::Result<String> {
     let pane = ui.wait_for_contains(
         APPROVAL_TITLE,

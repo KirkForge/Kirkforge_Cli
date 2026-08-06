@@ -796,7 +796,11 @@ mod tests {
         }];
         for i in 0..29 {
             messages.push(Message {
-                role: if i % 2 == 0 { Role::User } else { Role::Assistant },
+                role: if i % 2 == 0 {
+                    Role::User
+                } else {
+                    Role::Assistant
+                },
                 content: format!("msg{i}"),
                 ..Default::default()
             });
@@ -804,7 +808,9 @@ mod tests {
         let body = build_anthropic_body("claude-sonnet-4", &messages, &[], false, None);
         let mut count = 0;
         if let Some(arr) = body["system"].get("cache_control") {
-            if arr.is_object() { count += 1; }
+            if arr.is_object() {
+                count += 1;
+            }
         }
         for msg in body["messages"].as_array().unwrap() {
             if let Some(content) = msg.get("content") {
@@ -1264,13 +1270,13 @@ mod tests {
         }];
         let tools = vec![
             crate::shared::ToolDef {
-                name: "read_file".into(),
-                description: "read a file".into(),
+                name: "read_file",
+                description: "read a file",
                 parameters: serde_json::json!({"type": "object"}),
             },
             crate::shared::ToolDef {
-                name: "bash".into(),
-                description: "run a command".into(),
+                name: "bash",
+                description: "run a command",
                 parameters: serde_json::json!({"type": "object"}),
             },
         ];

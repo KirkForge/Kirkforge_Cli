@@ -42,7 +42,7 @@ async fn openai_compat_model_hits_chat_completions() {
     // /v1/chat/completions or /api/chat.  We just check that a request
     // was made.
     assert!(
-        log.len() >= 1,
+        !log.is_empty(),
         "openai_compat_model: expected ≥1 request, got {}.\n\
          stdout: {}\nstderr: {}",
         log.len(),

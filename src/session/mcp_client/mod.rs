@@ -37,9 +37,9 @@
 //!   reader/stderr tasks to finish, and reaps the child process. `Drop`
 //!   calls `disconnect()` synchronously as a best-effort fallback.
 
-use crate::session::process_group::{kill_process_group, setup_process_group};
 #[cfg(test)]
 use crate::session::process_group::reap_child;
+use crate::session::process_group::{kill_process_group, setup_process_group};
 use crate::shared::{McpServerConfig, ToolError, ToolOutcome};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};

@@ -219,10 +219,7 @@ fn adr_0010_usage_kind_block_declares_usage_config() {
 #[test]
 fn adr_0010_emission_site_uses_eprintln_not_tracing() {
     let block = adr_0010_emission_site_block();
-    for phantom in [
-        "eprintln!",
-        "plugin3:",
-    ] {
+    for phantom in ["eprintln!", "plugin3:"] {
         assert!(
             !block.contains(phantom),
             "ADR-0010 § Emission site code block must not contain \

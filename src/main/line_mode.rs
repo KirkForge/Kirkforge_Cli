@@ -175,9 +175,8 @@ pub(super) async fn run_line_mode(
                         match kf_workflow::Workflow::from_file(&path) {
                             Ok(workflow) => {
                                 let cfg = kf_code::shared::read_shared_config(&config).clone();
+                                let ollama_host = cfg.model.ollama_host.clone();
                                 let shared_cfg = std::sync::Arc::new(std::sync::RwLock::new(cfg));
-                                let ollama_host =
-                                    shared_cfg.read().unwrap().model.ollama_host.clone();
                                 let supports_images = ollama_host.contains("localhost")
                                     || ollama_host.contains("127.0.0.1")
                                     || ollama_host.contains("[::1]");

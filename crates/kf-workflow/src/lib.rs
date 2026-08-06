@@ -204,7 +204,10 @@ impl Workflow {
                         );
                     }
                     if step.max_parallel == Some(0) {
-                        bail!("step '{}' has max_parallel=0 which would deadlock", step.name);
+                        bail!(
+                            "step '{}' has max_parallel=0 which would deadlock",
+                            step.name
+                        );
                     }
                 }
                 StepKind::FanIn => {
@@ -1131,6 +1134,7 @@ mod tests {
         }
     }
 
+    #[allow(clippy::type_complexity)]
     fn make_runner() -> (MockRunner, Arc<Mutex<Vec<(String, String, String)>>>) {
         let log = Arc::new(Mutex::new(Vec::new()));
         (MockRunner { log: log.clone() }, log)
@@ -1755,10 +1759,7 @@ mod tests {
     fn fan_out_zero_max_parallel_is_rejected() {
         let json = br#"{"name":"bad","steps":[{"name":"fan","kind":"fan_out","over":"$(x)","as_name":"item","max_parallel":0}]}"#;
         let err = Workflow::from_json(json).unwrap_err().to_string();
-        assert!(
-            err.contains("max_parallel=0"),
-            "got: {err}"
-        );
+        assert!(err.contains("max_parallel=0"), "got: {err}");
     }
 
     #[tokio::test]

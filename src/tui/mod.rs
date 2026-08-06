@@ -128,13 +128,13 @@ async fn init_app_state(
     shared_config: &crate::shared::SharedConfig,
     cfg: &Config,
     active_model: &str,
-    conversation_log_path: &std::path::PathBuf,
+    conversation_log_path: &std::path::Path,
     undo_stack: &Option<crate::tools::UndoStackRef>,
 ) -> AppState {
     let mut state = AppState::new(shared_config.clone());
     state.undo_stack = undo_stack.clone();
     state.session_started = Instant::now();
-    state.log_path = Some(conversation_log_path.clone());
+    state.log_path = Some(conversation_log_path.to_path_buf());
     state.session_id = conversation_log_path
         .file_stem()
         .and_then(|f| f.to_str())
@@ -160,22 +160,20 @@ async fn init_app_state(
 }
 
 fn spawn_kb_reader(kb_tx: mpsc::UnboundedSender<Event>, shutdown: Arc<Notify>) {
-    std::thread::spawn(move || {
-        loop {
-            match event::read() {
-                Ok(ev) => {
-                    if kb_tx.send(ev).is_err() {
-                        break;
-                    }
-                }
-                Err(e) => {
-                    tracing::info!(
-                        error = ?e,
-                        "keyboard reader thread exiting; signalling TUI shutdown"
-                    );
-                    shutdown.notify_one();
+    std::thread::spawn(move || loop {
+        match event::read() {
+            Ok(ev) => {
+                if kb_tx.send(ev).is_err() {
                     break;
                 }
+            }
+            Err(e) => {
+                tracing::info!(
+                    error = ?e,
+                    "keyboard reader thread exiting; signalling TUI shutdown"
+                );
+                shutdown.notify_one();
+                break;
             }
         }
     });
@@ -295,8 +293,8 @@ async fn teardown(
     }
     if let Err(e) = execute!(terminal.backend_mut(), LeaveAlternateScreen) {
         tracing::debug!(error = %e, "failed to leave alternate screen during TUI shutdown");
-     }
- }
+    }
+}
 
 fn spawn_plugin_watcher(
     shared_config: &crate::shared::SharedConfig,
@@ -377,7 +375,8 @@ pub async fn run_tui(
         &active_model,
         conversation.0.path(),
         &undo_stack,
-    ).await;
+    )
+    .await;
 
     let max_trust = cfg_for_startup.tools.max_plugin_trust;
     state.skill_registry.set_max_plugin_trust(max_trust);
@@ -419,11 +418,7 @@ pub async fn run_tui(
     let shutdown_for_loop = shutdown.clone();
     spawn_kb_reader(kb_tx, shutdown.clone());
 
-    install_signal_handlers(
-        &shared_config,
-        &config_tx,
-        shutdown.clone(),
-    );
+    install_signal_handlers(&shared_config, &config_tx, shutdown.clone());
     #[cfg(not(unix))]
     spawn_ctrl_c_handler(shutdown.clone());
 

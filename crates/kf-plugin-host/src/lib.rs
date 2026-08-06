@@ -1352,7 +1352,7 @@ mod load_order_tests {
         let dep_str = if deps.is_empty() {
             String::new()
         } else {
-            format!("\ndepends_on = {deps:?}", deps = deps)
+            format!("\ndepends_on = {deps:?}")
         };
         std::fs::write(
             root.join("kf-code.toml"),

@@ -154,12 +154,25 @@ pub async fn run_task(
 
     let shared_config: SharedConfig = std::sync::Arc::new(std::sync::RwLock::new(task_config));
 
-    let ollama_host = crate::shared::read_shared_config(&shared_config).model.ollama_host.clone();
-    let anthropic_provider =
-        crate::shared::read_shared_config(&shared_config).model.anthropic_provider.clone();
-    let request_timeout = crate::shared::read_shared_config(&shared_config).model.request_timeout_secs;
-    let zen_endpoint = crate::shared::read_shared_config(&shared_config).model.opencode_zen_endpoint.clone();
-    let zen_api_key = crate::shared::read_shared_config(&shared_config).model.opencode_zen_api_key.clone();
+    let ollama_host = crate::shared::read_shared_config(&shared_config)
+        .model
+        .ollama_host
+        .clone();
+    let anthropic_provider = crate::shared::read_shared_config(&shared_config)
+        .model
+        .anthropic_provider
+        .clone();
+    let request_timeout = crate::shared::read_shared_config(&shared_config)
+        .model
+        .request_timeout_secs;
+    let zen_endpoint = crate::shared::read_shared_config(&shared_config)
+        .model
+        .opencode_zen_endpoint
+        .clone();
+    let zen_api_key = crate::shared::read_shared_config(&shared_config)
+        .model
+        .opencode_zen_api_key
+        .clone();
 
     // Create adapter.
     let adapter = crate::adapters::adapter_for_with_provider(

@@ -42,9 +42,7 @@ pub fn read_shared_config(cfg: &SharedConfig) -> std::sync::RwLockReadGuard<'_, 
     cfg.read().unwrap_or_else(|e| e.into_inner())
 }
 
-pub fn write_shared_config(
-    cfg: &SharedConfig,
-) -> std::sync::RwLockWriteGuard<'_, Config> {
+pub fn write_shared_config(cfg: &SharedConfig) -> std::sync::RwLockWriteGuard<'_, Config> {
     cfg.write().unwrap_or_else(|e| e.into_inner())
 }
 

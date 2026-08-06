@@ -129,6 +129,7 @@ impl Tool for WorkflowTool {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_workflow(
     template: &str,
     vars: &HashMap<String, String>,
@@ -309,8 +310,7 @@ impl StepRunner for TaskSpawnerStepRunner {
                 "step '{name}': tool '{tool_name}' error: {message}"
             )),
             other => Err(anyhow::anyhow!(
-                "step '{name}': tool '{tool_name}' returned unexpected outcome: {:?}",
-                other
+                "step '{name}': tool '{tool_name}' returned unexpected outcome: {other:?}",
             )),
         }
     }

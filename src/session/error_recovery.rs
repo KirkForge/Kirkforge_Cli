@@ -821,6 +821,7 @@ mod hint_tests {
     }
 
     #[test]
+    #[allow(deprecated)] // testing the deprecated shim for backwards-compat
     fn build_recovery_message_returns_user_message() {
         let hint = RecoveryHint {
             error_summary: "explosion".into(),

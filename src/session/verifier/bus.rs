@@ -1096,12 +1096,14 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn default_verifier_bus_is_empty() {
         let bus = default_verifier_bus();
         assert_eq!(bus.verifier_count(), 0);
     }
 
     #[test]
+    #[allow(deprecated)]
     fn default_verifier_bus_verifies_without_errors_on_empty_changed_files() {
         let mut bus = default_verifier_bus();
         let ctx = VerifyContext {
@@ -1150,6 +1152,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn verifier_bus_plugin_verifier_coexists_with_builtin_stub() {
         // bucketlist 3.41: a plugin verifier named "security" (the slot
         // the built-in SecurityBusVerifier stub occupies) coexists with

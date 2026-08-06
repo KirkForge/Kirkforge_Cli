@@ -224,6 +224,12 @@ pub(crate) const COMMANDS: &[SlashCommand] = &[
         usage: "/workflow run <name>, /workflow status, /workflow cancel",
         group: "Workflow",
     },
+    SlashCommand {
+        triggers: &["/mcp"],
+        description: "Show connected MCP server status and warnings",
+        usage: "/mcp shows configured servers, tool counts, and resource/prompt warnings",
+        group: "Diagnostics",
+    },
 ];
 
 /// Return the primary trigger (first alias) of every command whose
@@ -586,6 +592,25 @@ pub(crate) async fn dispatch_slash_command(
             state
                 .messages
                 .push_back(ConversationEntry::new("system", msg));
+            Ok(true)
+        }
+        "/mcp" => {
+            let cfg = crate::shared::read_shared_config(&state.config);
+            let servers = &cfg.tools.mcp_servers;
+            if servers.is_empty() {
+                state.messages.push_back(ConversationEntry::new(
+                    "system",
+                    "No MCP servers configured.".to_string(),
+                ));
+            } else {
+                let mut lines = vec![format!("{} MCP server(s) configured:", servers.len())];
+                for s in servers {
+                    lines.push(format!("  {} ({})", s.name, s.transport));
+                }
+                state
+                    .messages
+                    .push_back(ConversationEntry::new("system", lines.join("\n")));
+            }
             Ok(true)
         }
         _ => Ok(false),

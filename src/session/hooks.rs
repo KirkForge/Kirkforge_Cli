@@ -9,6 +9,7 @@
 //! - `KF_EVENT` — the event name (e.g., "post-turn")
 //! - `KF_TOOL_NAME` — the tool being called (tool events only)
 //! - `KF_TOOL_ARGS_JSON` — JSON-serialised tool arguments (tool events only)
+//! - `KF_TOOL_RESULT` — tool result content (post-tool events only)
 //! - `KF_SESSION_ID` — the session identifier
 //!
 //! Compaction hooks (`pre-compact` / `post-compact`) receive a JSON object
@@ -515,6 +516,9 @@ fn ctx_to_env_vars(ctx: &HookContext) -> Vec<(&str, String)> {
     if let Some(ref json) = ctx.tool_args_json {
         vars.push(("KF_TOOL_ARGS_JSON", json.clone()));
     }
+    if let Some(ref result) = ctx.tool_result {
+        vars.push(("KF_TOOL_RESULT", result.clone()));
+    }
     vars
 }
 
@@ -529,6 +533,7 @@ fn env_vars_to_ctx(event_name: &str, env_vars: &[(&str, &str)]) -> HookContext {
             "KF_SESSION_ID" => ctx.session_id = v.to_string(),
             "KF_TOOL_NAME" => ctx.tool_name = Some(v.to_string()),
             "KF_TOOL_ARGS_JSON" => ctx.tool_args_json = Some(v.to_string()),
+            "KF_TOOL_RESULT" => ctx.tool_result = Some(v.to_string()),
             _ => {}
         }
     }

@@ -110,6 +110,31 @@ fn json_id_to_string(id: &serde_json::Value) -> Option<String> {
     }
 }
 
+/// A resource exposed by an MCP server.
+#[derive(Debug, Clone)]
+pub struct McpResource {
+    pub uri: String,
+    pub name: String,
+    pub description: String,
+    pub mime_type: Option<String>,
+}
+
+/// A prompt template exposed by an MCP server.
+#[derive(Debug, Clone)]
+pub struct McpPrompt {
+    pub name: String,
+    pub description: String,
+    pub arguments: Vec<McpPromptArg>,
+}
+
+/// An argument declaration for an MCP prompt template.
+#[derive(Debug, Clone)]
+pub struct McpPromptArg {
+    pub name: String,
+    pub description: String,
+    pub required: bool,
+}
+
 /// A single MCP server connection.
 ///
 /// Spawns the configured command, performs the `initialize`→`notifications/initialized`
@@ -393,6 +418,42 @@ impl McpClient {
         match self {
             McpClient::Stdio(c) => c.stdio_call_tool(tool_name, args).await,
             McpClient::Http(c) => c.call_tool(tool_name, args).await,
+        }
+    }
+
+    /// Call `resources/list` and return the resource definitions.
+    pub async fn list_resources(&self) -> Vec<McpResource> {
+        match self {
+            McpClient::Stdio(c) => c.stdio_list_resources().await,
+            McpClient::Http(c) => c.list_resources().await,
+        }
+    }
+
+    /// Call `resources/read` and return the resource contents.
+    pub async fn read_resource(&self, uri: &str) -> Result<serde_json::Value, McpError> {
+        match self {
+            McpClient::Stdio(c) => c.stdio_read_resource(uri).await,
+            McpClient::Http(c) => c.read_resource(uri).await,
+        }
+    }
+
+    /// Call `prompts/list` and return the prompt definitions.
+    pub async fn list_prompts(&self) -> Vec<McpPrompt> {
+        match self {
+            McpClient::Stdio(c) => c.stdio_list_prompts().await,
+            McpClient::Http(c) => c.list_prompts().await,
+        }
+    }
+
+    /// Call `prompts/get` and return the prompt content.
+    pub async fn get_prompt(
+        &self,
+        name: &str,
+        args: Option<serde_json::Value>,
+    ) -> Result<serde_json::Value, McpError> {
+        match self {
+            McpClient::Stdio(c) => c.stdio_get_prompt(name, args).await,
+            McpClient::Http(c) => c.get_prompt(name, args).await,
         }
     }
 
@@ -717,6 +778,134 @@ impl StdioMcpClient {
                 }),
             },
         }
+    }
+
+    async fn stdio_list_resources(&self) -> Vec<McpResource> {
+        let req = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "resources/list",
+            "params": {}
+        });
+        let resp = match self.stdio_send_request(&req).await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!(server = %self.config.name, error = %e, "MCP resources/list failed");
+                return vec![];
+            }
+        };
+        let resources = match resp.get("result").and_then(|r| r.get("resources")) {
+            Some(serde_json::Value::Array(arr)) => arr.clone(),
+            _ => return vec![],
+        };
+        resources
+            .into_iter()
+            .filter_map(|r| {
+                let uri = r.get("uri")?.as_str()?.to_string();
+                let name = r
+                    .get("name")
+                    .and_then(|n| n.as_str())
+                    .unwrap_or(&uri)
+                    .to_string();
+                let description = r
+                    .get("description")
+                    .and_then(|d| d.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let mime_type = r
+                    .get("mimeType")
+                    .and_then(|m| m.as_str())
+                    .map(|s| s.to_string());
+                Some(McpResource {
+                    uri,
+                    name,
+                    description,
+                    mime_type,
+                })
+            })
+            .collect()
+    }
+
+    async fn stdio_read_resource(&self, uri: &str) -> Result<serde_json::Value, McpError> {
+        let req = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "resources/read",
+            "params": { "uri": uri }
+        });
+        self.stdio_send_request(&req).await.map(|r| r)
+    }
+
+    async fn stdio_list_prompts(&self) -> Vec<McpPrompt> {
+        let req = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "prompts/list",
+            "params": {}
+        });
+        let resp = match self.stdio_send_request(&req).await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!(server = %self.config.name, error = %e, "MCP prompts/list failed");
+                return vec![];
+            }
+        };
+        let prompts = match resp.get("result").and_then(|r| r.get("prompts")) {
+            Some(serde_json::Value::Array(arr)) => arr.clone(),
+            _ => return vec![],
+        };
+        prompts
+            .into_iter()
+            .filter_map(|p| {
+                let name = p.get("name")?.as_str()?.to_string();
+                let description = p
+                    .get("description")
+                    .and_then(|d| d.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let arguments = p
+                    .get("arguments")
+                    .and_then(|a| a.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|arg| {
+                                Some(McpPromptArg {
+                                    name: arg.get("name")?.as_str()?.to_string(),
+                                    description: arg
+                                        .get("description")
+                                        .and_then(|d| d.as_str())
+                                        .unwrap_or("")
+                                        .to_string(),
+                                    required: arg
+                                        .get("required")
+                                        .and_then(|r| r.as_bool())
+                                        .unwrap_or(false),
+                                })
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                Some(McpPrompt {
+                    name,
+                    description,
+                    arguments,
+                })
+            })
+            .collect()
+    }
+
+    async fn stdio_get_prompt(
+        &self,
+        name: &str,
+        args: Option<serde_json::Value>,
+    ) -> Result<serde_json::Value, McpError> {
+        let params = match args {
+            Some(a) => serde_json::json!({ "name": name, "arguments": a }),
+            None => serde_json::json!({ "name": name }),
+        };
+        let req = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "prompts/get",
+            "params": params
+        });
+        self.stdio_send_request(&req).await.map(|r| r)
     }
 
     /// Gracefully disconnect from the child-process server.

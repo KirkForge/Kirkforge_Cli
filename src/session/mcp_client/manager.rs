@@ -67,8 +67,26 @@ impl McpClientManager {
                         },
                     );
                 }
-                clients.push(Arc::new(tokio::sync::RwLock::new(client)));
+                clients.push(Arc::new(tokio::sync::RwLock::new(client.clone())));
                 configs.push(config.clone());
+
+                let resources = client.list_resources().await;
+                if !resources.is_empty() {
+                    warnings.push(format!(
+                        "MCP server '{}' advertises {} resource(s) (not yet consumed by tools)",
+                        config.name,
+                        resources.len()
+                    ));
+                }
+                let prompts = client.list_prompts().await;
+                if !prompts.is_empty() {
+                    warnings.push(format!(
+                        "MCP server '{}' advertises {} prompt(s) (not yet consumed by tools)",
+                        config.name,
+                        prompts.len()
+                    ));
+                }
+
                 tracing::info!(
                     server = %config.name,
                     tool_count = server_tools.len(),
@@ -213,5 +231,99 @@ impl McpClientManager {
     /// Check whether a tool with the given full name exists.
     pub fn has_tool(&self, full_name: &str) -> bool {
         self.tools.contains_key(full_name)
+    }
+
+    /// List resources from all connected MCP servers.
+    ///
+    /// Returns `(server_name, resource)` pairs. Servers that fail or don't
+    /// support resources are silently skipped.
+    pub async fn list_resources(&self) -> Vec<(String, super::McpResource)> {
+        let mut out = Vec::new();
+        for (idx, slot) in self.clients.iter().enumerate() {
+            let name = self
+                .configs
+                .get(idx)
+                .map(|c| c.name.clone())
+                .unwrap_or_default();
+            let client = slot.read().await;
+            if !client.is_alive() {
+                continue;
+            }
+            for resource in client.list_resources().await {
+                out.push((name.clone(), resource));
+            }
+        }
+        out
+    }
+
+    /// Read a resource by URI, trying each connected server in turn.
+    ///
+    /// Returns the raw JSON-RPC result, or an error if no server has the
+    /// resource or the request fails.
+    pub async fn read_resource(&self, uri: &str) -> Result<serde_json::Value, String> {
+        for (idx, slot) in self.clients.iter().enumerate() {
+            let config = match self.configs.get(idx) {
+                Some(c) => c,
+                None => continue,
+            };
+            let client = slot.read().await;
+            if !client.is_alive() {
+                continue;
+            }
+            match client.read_resource(uri).await {
+                Ok(val) => return Ok(val),
+                Err(e) => {
+                    tracing::debug!(server = %config.name, uri = %uri, error = %e, "resources/read failed on this server; trying next");
+                }
+            }
+        }
+        Err(format!("resource '{uri}' not found on any MCP server"))
+    }
+
+    /// List prompt templates from all connected MCP servers.
+    ///
+    /// Returns `(server_name, prompt)` pairs.
+    pub async fn list_prompts(&self) -> Vec<(String, super::McpPrompt)> {
+        let mut out = Vec::new();
+        for (idx, slot) in self.clients.iter().enumerate() {
+            let name = self
+                .configs
+                .get(idx)
+                .map(|c| c.name.clone())
+                .unwrap_or_default();
+            let client = slot.read().await;
+            if !client.is_alive() {
+                continue;
+            }
+            for prompt in client.list_prompts().await {
+                out.push((name.clone(), prompt));
+            }
+        }
+        out
+    }
+
+    /// Get a prompt template by name, trying each connected server.
+    pub async fn get_prompt(
+        &self,
+        name: &str,
+        args: Option<serde_json::Value>,
+    ) -> Result<serde_json::Value, String> {
+        for (idx, slot) in self.clients.iter().enumerate() {
+            let config = match self.configs.get(idx) {
+                Some(c) => c,
+                None => continue,
+            };
+            let client = slot.read().await;
+            if !client.is_alive() {
+                continue;
+            }
+            match client.get_prompt(name, args.clone()).await {
+                Ok(val) => return Ok(val),
+                Err(e) => {
+                    tracing::debug!(server = %config.name, prompt = %name, error = %e, "prompts/get failed on this server; trying next");
+                }
+            }
+        }
+        Err(format!("prompt '{name}' not found on any MCP server"))
     }
 }

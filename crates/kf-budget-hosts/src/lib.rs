@@ -3,15 +3,11 @@
 //! kf-budget-hosts — host detection and canonical payload schemas.
 //! Per ADR-0013.
 //!
-//! ponytail: the per-host payload translation layer once planned as
-//! `emit_to(host, event, payload)` was removed (B3). The real CLI hook
-//! handlers in `kf-budget-cli::hooks` consume the canonical payload types
-//! directly and run the canonical logic themselves. This crate now
-//! exposes only `Host` detection and the canonical schemas so the host
-//! boundary stays isolated. Cursor, Aider, and KirkForge are stub modules
-//! that document the intended shape when a future contributor adds a
-//! second host. `detect_host` defaults to Claude Code because that is the
-//! only host with CLI hook support today.
+//! Only Claude Code has wired CLI hook handlers today. Cursor, Aider, and
+//! KirkForge are listed in the `Host` enum as placeholders; their shim
+//! modules are removed. When a contributor adds a second host, the
+//! module file should be created alongside the corresponding `detect_host`
+//! arm.
 
 pub mod canonical;
 pub mod claude_code;
@@ -81,16 +77,8 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    // ponytail: pin the Host enum's variants and their kebab-case
-    // wire spelling. ADR-0013 § Host enum defines the supported hosts;
-    // a contributor who adds a variant (e.g. `Host::Codex`) without
-    // updating `detect_host_with` surfaces here. The kebab-case
-    // spelling is load-bearing: a future hook config auto-generate
-    // script reads `Host::ClaudeCode` as `"claude-code"` from a JSON
-    // manifest; renaming the variant or the rename rule breaks the
-    // manifest.
     #[test]
-    fn host_enum_three_variants_kebab_case() {
+    fn host_enum_four_variants_kebab_case() {
         for (h, expected) in [
             (Host::ClaudeCode, "\"claude-code\""),
             (Host::Cursor, "\"cursor\""),

@@ -37,6 +37,24 @@ pub fn filter_by_mode(source: &str, mode: Mode) -> String {
     out
 }
 
+const CANONICAL: &str = include_str!("../docs/rules/CANONICAL.md");
+
+/// Return the canonical ruleset filtered for `mode`.
+///
+/// # Examples
+///
+/// ```
+/// use kf_compress_core::mode::Mode;
+/// use kf_compress_core::rules::build_rules;
+///
+/// let rules = build_rules(Mode::Off);
+/// assert!(rules.contains("Ship the smallest change"));
+/// ```
+#[must_use]
+pub fn build_rules(mode: Mode) -> String {
+    filter_by_mode(CANONICAL, mode)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -103,5 +121,12 @@ mod tests {
         assert!(out.contains('a'));
         assert!(!out.contains('b'));
         assert!(out.contains('c'));
+    }
+
+    #[test]
+    fn build_rules_returns_canonical_filtered() {
+        let rules = build_rules(Mode::Off);
+        assert!(rules.contains("Ship the smallest change"));
+        assert!(!rules.contains("Stdlib does it"));
     }
 }

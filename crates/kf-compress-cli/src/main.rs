@@ -18,14 +18,8 @@ use clap::{CommandFactory, Parser};
 use kf_compress_core::content::{detect_content_type, ContentType};
 use kf_compress_core::mode::Mode;
 use kf_compress_core::pipeline::{CompressionContext, CompressionPipeline};
-use kf_compress_core::rules::filter_by_mode;
+use kf_compress_core::rules::build_rules;
 use kf_compress_core::store::InMemoryOffloadStore;
-
-const CANONICAL: &str = include_str!("../docs/rules/CANONICAL.md");
-
-fn build_rules(mode: Mode) -> String {
-    filter_by_mode(CANONICAL, mode)
-}
 use std::path::PathBuf;
 use tracing::{debug, info, instrument};
 

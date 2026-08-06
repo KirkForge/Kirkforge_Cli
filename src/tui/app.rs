@@ -13,9 +13,6 @@ use std::time::Instant;
 
 pub use crate::tui::commands::{handle_workflow_command, WorkflowHandle};
 
-#[cfg(test)]
-use crate::shared::Config;
-
 /// Represents the connection state for the status bar.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ConnectionState {
@@ -787,7 +784,7 @@ pub struct PendingBangCommand {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::shared::test_util::app_state;
 
     /// A freshly-constructed `AppState` must start with `dirty = true`
     /// so the first frame draws the connection banner / status bar
@@ -798,7 +795,7 @@ mod tests {
     /// the user would see a blank screen until the slow-tick fired.
     #[test]
     fn new_state_starts_dirty() {
-        let s = AppState::new(Arc::new(std::sync::RwLock::new(Config::default())));
+        let s = app_state();
         assert!(
             s.dirty,
             "freshly-constructed state should be dirty for the first frame"
@@ -810,7 +807,7 @@ mod tests {
     /// safe to call from any mutation site.
     #[test]
     fn mark_dirty_is_idempotent() {
-        let mut s = AppState::new(Arc::new(std::sync::RwLock::new(Config::default())));
+        let mut s = app_state();
         s.dirty = false;
         s.mark_dirty();
         assert!(s.dirty);

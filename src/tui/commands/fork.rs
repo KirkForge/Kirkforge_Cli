@@ -220,13 +220,11 @@ async fn load_recent_sessions_for_picker(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shared::Config;
+    use crate::shared::test_util::app_state_with_log;
     use crate::tui::app::AppState;
-    use std::sync::Arc;
 
     fn test_state_with_log(log_path: std::path::PathBuf) -> AppState {
-        let mut state = AppState::new(Arc::new(std::sync::RwLock::new(Config::default())));
-        state.log_path = Some(log_path.clone());
+        let mut state = app_state_with_log(log_path.clone());
         state.session_id = "test-session".to_string();
         state.fork_manager = Some(crate::session::session_fork::ForkManager::new(
             "test-session",

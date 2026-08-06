@@ -98,7 +98,7 @@ pub fn slice_or_skip(
             // budget::Over (ADR-0005). Log the non-Skipped case so
             // a host's stderr captures the regression.
             if !matches!(e, TransformError::Skipped(_)) {
-                eprintln!("kf-budget: slicer failed; passing input through: {e}");
+                tracing::warn!("kf-budget: slicer failed; passing input through: {e}");
             }
             SlicedOutput {
                 head: input.to_string(),

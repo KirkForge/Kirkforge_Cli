@@ -1145,13 +1145,11 @@ async fn handle_persona_complete(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shared::Config;
+    use crate::shared::test_util::app_state_with_log;
     use std::path::PathBuf;
 
     fn test_state_with_log(log_path: PathBuf) -> AppState {
-        let mut state = AppState::new(Arc::new(std::sync::RwLock::new(Config::default())));
-        state.log_path = Some(log_path);
-        state
+        app_state_with_log(log_path)
     }
 
     // ── Shutdown-signal regression test ────────────────────────

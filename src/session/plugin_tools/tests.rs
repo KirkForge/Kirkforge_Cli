@@ -843,6 +843,58 @@ mod budget_registration {
             "budget tools must include budget_set, got: {names:?}"
         );
     }
+
+    #[test]
+    fn folded_feature_enabled_nonexistent_returns_false() {
+        assert!(
+            !folded_feature_enabled("nonexistent-plugin"),
+            "folded_feature_enabled must return false for a nonexistent plugin"
+        );
+    }
+
+    #[cfg(feature = "stratum")]
+    #[test]
+    fn stratum_tools_present_in_default_toolset() {
+        let cfg = Config::default();
+        assert!(
+            cfg.tools.enabled_plugins.iter().any(|n| n == "stratum"),
+            "default config must include stratum in enabled_plugins"
+        );
+        assert!(
+            folded_feature_enabled("stratum"),
+            "folded_feature_enabled must return true for stratum when the feature is on"
+        );
+        let tools = crate::session::stratum::stratum_tools();
+        let names: Vec<&str> = tools.iter().map(|t| t.def().name).collect();
+        assert!(
+            names.contains(&"stratum_run"),
+            "stratum tools must include stratum_run, got: {names:?}"
+        );
+        assert!(
+            names.contains(&"stratum_apply"),
+            "stratum tools must include stratum_apply, got: {names:?}"
+        );
+    }
+
+    #[cfg(feature = "draw")]
+    #[test]
+    fn draw_tools_present_in_default_toolset() {
+        let cfg = Config::default();
+        assert!(
+            cfg.tools.enabled_plugins.iter().any(|n| n == "kf-draw"),
+            "default config must include kf-draw in enabled_plugins"
+        );
+        assert!(
+            folded_feature_enabled("kf-draw"),
+            "folded_feature_enabled must return true for kf-draw when the feature is on"
+        );
+        let tools = crate::session::draw::draw_tools();
+        let names: Vec<&str> = tools.iter().map(|t| t.def().name).collect();
+        assert!(
+            names.contains(&"draw_render"),
+            "draw tools must include draw_render, got: {names:?}"
+        );
+    }
 }
 
 // ── WO 11.9: plugin system end-to-end integration test ──

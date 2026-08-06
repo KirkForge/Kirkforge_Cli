@@ -401,10 +401,15 @@ impl Tool for StratumConfigValidate {
 
     async fn run(&self, _ctx: &ToolContext, args: Value) -> ToolOutcome {
         let json_out = json_get_bool(&args, "json");
+        let (valid, issues) = match load_effective_config() {
+            Ok(_) => (true, Vec::new()),
+            Err(e) => (false, vec![e]),
+        };
         let cfg = PipelineConfig::default();
 
         let report = serde_json::json!({
-            "valid": true,
+            "valid": valid,
+            "issues": issues,
             "bloat_threshold": cfg.bloat_threshold.get(),
             "reformat_target_ratio": cfg.reformat_target_ratio.get(),
             "offload_fallback_ratio": cfg.offload_fallback_ratio.get(),
@@ -415,8 +420,13 @@ impl Tool for StratumConfigValidate {
         if json_out {
             success_json(serde_json::to_string_pretty(&report).unwrap_or_default())
         } else {
+            let issues_str = if issues.is_empty() {
+                String::new()
+            } else {
+                format!("\nissues:\n{}", issues.iter().map(|i| format!("  - {i}")).collect::<Vec<_>>().join("\n"))
+            };
             success_json(format!(
-                "valid=true\nbloat_threshold={}\nreformat_target_ratio={}\noffload_fallback_ratio={}\ntransform_timeout_ms={}\nper_domain_count={}",
+                "valid={valid}\n{issues_str}bloat_threshold={}\nreformat_target_ratio={}\noffload_fallback_ratio={}\ntransform_timeout_ms={}\nper_domain_count={}",
                 cfg.bloat_threshold.get(),
                 cfg.reformat_target_ratio.get(),
                 cfg.offload_fallback_ratio.get(),

@@ -614,8 +614,7 @@ fn write_shared_config(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shared::Config;
-    use std::sync::Arc;
+    use crate::shared::test_util::app_state;
 
     /// Sets `KF_CODE_DATA_DIR` to `dir` for the lifetime of the guard.
     /// Uses the crate-wide `test_data_dir_lock()` so every test that mutates
@@ -644,10 +643,6 @@ mod tests {
                 None => std::env::remove_var("KF_CODE_DATA_DIR"),
             }
         }
-    }
-
-    fn test_state() -> AppState {
-        AppState::new(Arc::new(std::sync::RwLock::new(Config::default())))
     }
 
     fn dummy_reload_tx() -> mpsc::UnboundedSender<PluginRegistry> {
@@ -738,7 +733,7 @@ mod tests {
     async fn list_plugins_shows_empty_directories() {
         let temp = tempfile::tempdir().unwrap();
         let _env = TempDataDir::new(temp.path()).await;
-        let mut state = test_state();
+        let mut state = app_state();
         let tx = dummy_reload_tx();
 
         let msg = handle_plugins_command("list", &mut state, &tx).await;
@@ -751,7 +746,7 @@ mod tests {
     async fn disable_inactive_plugin_returns_error() {
         let temp = tempfile::tempdir().unwrap();
         let _env = TempDataDir::new(temp.path()).await;
-        let mut state = test_state();
+        let mut state = app_state();
         let tx = dummy_reload_tx();
 
         let msg = handle_plugins_command("disable not-loaded", &mut state, &tx).await;
@@ -781,7 +776,7 @@ prompt = "Demo skill"
         .unwrap();
 
         let _env = TempDataDir::new(temp.path()).await;
-        let mut state = test_state();
+        let mut state = app_state();
         let tx = dummy_reload_tx();
 
         let enable_msg = handle_plugins_command("enable demo", &mut state, &tx).await;
@@ -825,7 +820,7 @@ prompt = "Demo skill"
         .unwrap();
 
         let _env = TempDataDir::new(temp.path()).await;
-        let mut state = test_state();
+        let mut state = app_state();
         // Clamp the host maximum to ReadOnly so the shell plugin is rejected
         // by default, then verify that `/plugins trust` overrides it for the
         // current session.
@@ -951,7 +946,7 @@ command = "hooks/post-turn.sh"
         }
 
         let _env = TempDataDir::new(temp.path()).await;
-        let mut state = test_state();
+        let mut state = app_state();
         // Clamp host max to ReadOnly + reject_on_excess=false so the shell
         // plugin is downgraded (not rejected) and its tool+hook filtered.
         {

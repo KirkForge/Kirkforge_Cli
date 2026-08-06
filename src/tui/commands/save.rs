@@ -91,13 +91,11 @@ fn resolve_save_path(args: &str, state: &AppState) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shared::Config;
+    use crate::shared::test_util::app_state_with_log;
     use crate::tui::app::AppState;
-    use std::sync::Arc;
 
     fn test_state_with_log(log_path: PathBuf) -> AppState {
-        let mut state = AppState::new(Arc::new(std::sync::RwLock::new(Config::default())));
-        state.log_path = Some(log_path);
+        let mut state = app_state_with_log(log_path);
         state.session_id = "2026-06-22-session-01".to_string();
         state
     }
@@ -123,7 +121,7 @@ mod tests {
     async fn save_writes_file_to_explicit_path() {
         let tmp = tempfile::tempdir().unwrap();
         let target = tmp.path().join("my-chat.md");
-        let mut state = AppState::new(Arc::new(std::sync::RwLock::new(Config::default())));
+        let mut state = crate::shared::test_util::app_state();
         let msg = handle_save_command(target.to_str().unwrap(), &mut state).await;
         assert!(msg.starts_with("💾 Saved transcript"));
         assert!(target.exists());

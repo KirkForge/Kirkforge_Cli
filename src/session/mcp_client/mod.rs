@@ -785,7 +785,7 @@ mod tests {
     use super::*;
     use crate::shared::ToolError;
 
-    fn make_config(name: &str, command: &str) -> McpServerConfig {
+    fn make_mcp_config(name: &str, command: &str) -> McpServerConfig {
         McpServerConfig {
             name: name.to_string(),
             command: command.to_string(),
@@ -807,7 +807,7 @@ mod tests {
     #[tokio::test]
     async fn test_manager_no_tools_for_failed_connect() {
         // Try connecting to a nonexistent command
-        let servers = vec![make_config("test", "/nonexistent/command/xyzzy")];
+        let servers = vec![make_mcp_config("test", "/nonexistent/command/xyzzy")];
         let mgr = McpClientManager::new(&servers).await;
         assert_eq!(mgr.server_count(), 0); // Failed to connect
         assert_eq!(mgr.tool_count(), 0);
@@ -815,7 +815,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_manager_collects_warning_for_failed_connect() {
-        let servers = vec![make_config("test", "/nonexistent/command/xyzzy")];
+        let servers = vec![make_mcp_config("test", "/nonexistent/command/xyzzy")];
         let mgr = McpClientManager::new(&servers).await;
         assert!(
             mgr.warnings()
@@ -931,7 +931,7 @@ mod tests {
         // Build a client from piped stdin/stdout; the stdout reader will
         // block forever because we never write anything, so we disconnect
         // explicitly to test the error path.
-        let config = make_config("disconnect-test", "true");
+        let config = make_mcp_config("disconnect-test", "true");
         let mut child = tokio::process::Command::new("cat")
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
@@ -1004,7 +1004,7 @@ mod tests {
     /// with the server message.
     #[tokio::test]
     async fn test_call_tool_maps_jsonrpc_error_to_failure() {
-        let config = make_config("error-test", "true");
+        let config = make_mcp_config("error-test", "true");
         let mut dummy_cmd = tokio::process::Command::new("cat");
         dummy_cmd.stdin(std::process::Stdio::piped());
         dummy_cmd.stdout(std::process::Stdio::piped());
@@ -1220,8 +1220,8 @@ mod tests {
     }
 
     #[test]
-    fn test_make_config_defaults() {
-        let cfg = make_config("test-server", "echo");
+    fn test_make_mcp_config_defaults() {
+        let cfg = make_mcp_config("test-server", "echo");
         assert_eq!(cfg.name, "test-server");
         assert_eq!(cfg.command, "echo");
         assert_eq!(cfg.transport, "stdio");
@@ -1233,8 +1233,8 @@ mod tests {
     #[tokio::test]
     async fn test_manager_server_count_for_multiple_failed_connects() {
         let servers = vec![
-            make_config("a", "/nonexistent/cmd-a"),
-            make_config("b", "/nonexistent/cmd-b"),
+            make_mcp_config("a", "/nonexistent/cmd-a"),
+            make_mcp_config("b", "/nonexistent/cmd-b"),
         ];
         let mgr = McpClientManager::new(&servers).await;
         assert_eq!(mgr.server_count(), 0);

@@ -442,15 +442,9 @@ pub fn drain_approval_requests(
 mod tests {
     use super::*;
     use crate::session::executor::ApprovalResponder;
-    use crate::shared::{Config, Message, Role};
-    use crate::tui::app::AppState;
+    use crate::shared::{Message, Role};
+    use crate::shared::test_util::app_state;
     use tokio::sync::mpsc;
-
-    fn make_state() -> AppState {
-        AppState::new(std::sync::Arc::new(std::sync::RwLock::new(
-            Config::default(),
-        )))
-    }
 
     /// Helper to build a minimal `Message` for the compaction test.
     /// `Message` has many `Option` fields with `skip_serializing_if` —
@@ -469,7 +463,7 @@ mod tests {
     /// `is_generating` so the spinner stops.
     #[test]
     fn token_on_empty_creates_assistant_entry() {
-        let mut s = make_state();
+        let mut s = app_state();
         assert!(!s.is_generating);
         dispatch_turn_event(&mut s, TurnEvent::Token("hi".into()));
         assert_eq!(s.messages.len(), 1);
@@ -483,7 +477,7 @@ mod tests {
     /// not a new entry per delta).
     #[test]
     fn token_appends_to_last_assistant_entry() {
-        let mut s = make_state();
+        let mut s = app_state();
         dispatch_turn_event(&mut s, TurnEvent::Token("foo".into()));
         dispatch_turn_event(&mut s, TurnEvent::Token("bar".into()));
         assert_eq!(s.messages.len(), 1);
@@ -495,7 +489,7 @@ mod tests {
     /// panel (Esc). One push per delta.
     #[test]
     fn thinking_appends_to_buffer() {
-        let mut s = make_state();
+        let mut s = app_state();
         dispatch_turn_event(&mut s, TurnEvent::Thinking("a".into()));
         dispatch_turn_event(&mut s, TurnEvent::Thinking("b".into()));
         assert_eq!(s.thinking_buffer, vec!["a".to_string(), "b".to_string()]);
@@ -505,7 +499,7 @@ mod tests {
     /// `is_generating` to false (the model has paused to call a tool).
     #[test]
     fn toolstart_creates_running_entry() {
-        let mut s = make_state();
+        let mut s = app_state();
         dispatch_turn_event(&mut s, TurnEvent::Token("hmm".into()));
         assert!(s.is_generating);
         dispatch_turn_event(
@@ -528,7 +522,7 @@ mod tests {
     /// control possible.
     #[test]
     fn toolresult_stores_full_output_in_sidecar() {
-        let mut s = make_state();
+        let mut s = app_state();
         let full = "line 1\nline 2\nline 3\n".to_string();
         dispatch_turn_event(
             &mut s,
@@ -554,7 +548,7 @@ mod tests {
     /// `success` flag differ.
     #[test]
     fn verification_prefixes_reflect_success() {
-        let mut s = make_state();
+        let mut s = app_state();
         dispatch_turn_event(
             &mut s,
             TurnEvent::Verification {
@@ -579,7 +573,7 @@ mod tests {
     /// saw a transport or parse failure and the turn ended.
     #[test]
     fn error_pushes_system_message_and_stops_generation() {
-        let mut s = make_state();
+        let mut s = app_state();
         dispatch_turn_event(&mut s, TurnEvent::Token("partial".into()));
         assert!(s.is_generating);
         dispatch_turn_event(&mut s, TurnEvent::Error("timeout".into()));
@@ -595,7 +589,7 @@ mod tests {
     /// context pressure.
     #[test]
     fn coststats_accumulates_and_mirrors_last_turn() {
-        let mut s = make_state();
+        let mut s = app_state();
         // First turn: 100 prompt, 50 completion, $0.001 / $0.001
         dispatch_turn_event(
             &mut s,
@@ -634,7 +628,7 @@ mod tests {
     /// are now meaningless), and resets scroll to the bottom.
     #[test]
     fn compaction_rebuilds_messages_and_resets_scroll() {
-        let mut s = make_state();
+        let mut s = app_state();
         // Pre-existing tool expansion that references index 0 —
         // must be cleared, not silently re-applied to the wrong
         // entry after the rebuild.
@@ -681,7 +675,7 @@ mod tests {
     /// old one.
     #[test]
     fn compaction_resets_last_turn_prompt_tokens_to_post_compact_estimate() {
-        let mut s = make_state();
+        let mut s = app_state();
         // Pre-compact: a 30K token context (the kind of pressure
         // /compact exists to relieve).
         s.last_turn_prompt_tokens = 30_000;
@@ -717,7 +711,7 @@ mod tests {
     #[test]
     fn compaction_estimate_counts_tool_calls() {
         use crate::shared::ToolInvocation;
-        let mut s = make_state();
+        let mut s = app_state();
         s.last_turn_prompt_tokens = 0;
         // An assistant message with a 4000-char tool call
         // (4k chars / 4 = 1k tokens for the call alone).
@@ -762,7 +756,7 @@ mod tests {
     /// expects to see the green/lower number, not the red one.
     #[test]
     fn compaction_estimate_uses_post_compact_size_not_pre() {
-        let mut s = make_state();
+        let mut s = app_state();
         // Pretend we were at 110K (deep red).
         s.last_turn_prompt_tokens = 110_000;
         // Post-compact: 4 messages, 200 chars each = ~200 tokens.
@@ -797,7 +791,7 @@ mod tests {
     /// applies each one. After the call the channel is empty.
     #[test]
     fn drain_turn_events_pulls_all() {
-        let mut s = make_state();
+        let mut s = app_state();
         let (tx, mut rx) = mpsc::channel::<TurnEvent>(10_000);
         tx.try_send(TurnEvent::Token("a".into())).unwrap();
         tx.try_send(TurnEvent::Token("b".into())).unwrap();
@@ -816,7 +810,7 @@ mod tests {
     /// sender hangs the executor forever.
     #[tokio::test]
     async fn drain_replaces_pending_and_denies_old() {
-        let mut s = make_state();
+        let mut s = app_state();
         let (approval_tx, mut approval_rx) = mpsc::unbounded_channel::<ApprovalRequest>();
 
         // First request: responder is the oneshot that the
@@ -855,7 +849,7 @@ mod tests {
     /// so the TUI re-renders the progress bar.
     #[test]
     fn pull_progress_updates_state_and_marks_dirty() {
-        let mut s = make_state();
+        let mut s = app_state();
         s.dirty = false;
         dispatch_turn_event(
             &mut s,
@@ -894,7 +888,7 @@ mod tests {
     /// the state here.
     #[test]
     fn doom_loop_detected_sets_state_and_marks_dirty() {
-        let mut s = make_state();
+        let mut s = app_state();
         s.dirty = false;
         assert!(s.doom_loop.is_none());
         dispatch_turn_event(
@@ -924,7 +918,7 @@ mod tests {
     /// the latest snapshot, not on the first one we ever saw.
     #[test]
     fn doom_loop_detected_overwrites_previous_state() {
-        let mut s = make_state();
+        let mut s = app_state();
         dispatch_turn_event(
             &mut s,
             TurnEvent::DoomLoopDetected {

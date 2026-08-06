@@ -317,14 +317,13 @@ pub fn render_chat(f: &mut Frame, area: Rect, state: &mut AppState) {
 mod tests {
     use super::lines::{message_header, role_badge, tool_card_lines};
     use super::*;
+    use crate::shared::test_util::app_state;
     use chrono::Timelike;
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
 
     fn make_state(connection: ConnectionState) -> AppState {
-        use std::sync::Arc;
-        let config = Arc::new(std::sync::RwLock::new(crate::shared::Config::default()));
-        let mut state = AppState::new(config);
+        let mut state = app_state();
         state.connection = connection;
         state.unsandboxed = false;
         state

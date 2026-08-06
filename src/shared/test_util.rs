@@ -37,3 +37,31 @@ pub fn remove_test_dir(path: &Path) {
         }
     }
 }
+
+// ── TUI test helpers (WO 19.7) ──────────────────────────────────────
+// Deduplicated from 8 inline copies across tui/ and tui/commands/.
+// Every `make_state` / `test_state` / `test_state_with_log` in the TUI
+// tests was building the same `AppState::new(Arc::new(RwLock::new(Config::default())))`
+// pattern. These two helpers capture the shared core; callers customize
+// with `.connection`, `.session_id`, etc.
+
+/// Construct a bare `AppState` with default config.
+/// Replaces the identical `make_state()` and `test_state()` helpers
+/// that were copy-pasted across 5 TUI test modules.
+#[cfg(test)]
+pub(crate) fn app_state() -> crate::tui::app::AppState {
+    use std::sync::{Arc, RwLock};
+    crate::tui::app::AppState::new(Arc::new(RwLock::new(crate::shared::Config::default())))
+}
+
+/// Construct an `AppState` with a `log_path` set.
+/// Replaces the 3 identical `test_state_with_log()` helpers across
+/// `tui/mod.rs`, `tui/commands/fork.rs`, and `tui/commands/save.rs`.
+/// Callers that need `session_id` or `fork_manager` can add them
+/// on top of the returned state.
+#[cfg(test)]
+pub(crate) fn app_state_with_log(log_path: std::path::PathBuf) -> crate::tui::app::AppState {
+    let mut state = app_state();
+    state.log_path = Some(log_path);
+    state
+}

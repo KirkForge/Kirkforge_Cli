@@ -527,7 +527,7 @@ mod tests {
         }
     }
 
-    fn make_ctx() -> VerifyContext {
+    fn make_verify_ctx() -> VerifyContext {
         VerifyContext {
             sandbox_dir: PathBuf::from("/tmp/test"),
             changed_files: vec![PathBuf::from("src/lib.rs")],
@@ -558,7 +558,7 @@ mod tests {
             }],
         }));
 
-        bus.run(&make_ctx());
+        bus.run(&make_verify_ctx());
         assert_eq!(
             bus.verdicts().len(),
             2,
@@ -580,7 +580,7 @@ mod tests {
             }],
         }));
 
-        bus.run(&make_ctx());
+        bus.run(&make_verify_ctx());
         assert!(bus.has_errors(), "should detect error verdicts");
     }
 
@@ -598,7 +598,7 @@ mod tests {
             }],
         }));
 
-        bus.run(&make_ctx());
+        bus.run(&make_verify_ctx());
         assert!(
             !bus.has_errors(),
             "no error verdicts → has_errors() is false"
@@ -619,7 +619,7 @@ mod tests {
             }],
         }));
 
-        bus.run(&make_ctx());
+        bus.run(&make_verify_ctx());
         assert!(!bus.verdicts().is_empty());
         bus.clear();
         assert!(bus.verdicts().is_empty(), "clear() should empty verdicts");
@@ -690,7 +690,7 @@ mod tests {
             tmp.path().to_path_buf(),
             PathBuf::from("pass.sh"),
         );
-        bus.run(&make_ctx());
+        bus.run(&make_verify_ctx());
         assert!(
             bus.verdicts().is_empty(),
             "passing verifier adds no verdicts"
@@ -710,7 +710,7 @@ mod tests {
             tmp.path().to_path_buf(),
             PathBuf::from("fail.sh"),
         );
-        bus.run(&make_ctx());
+        bus.run(&make_verify_ctx());
         assert_eq!(bus.verdicts().len(), 1);
         let v = &bus.verdicts()[0];
         assert_eq!(v.source, VerifierSource::Plugin("fail_v".into()));
@@ -728,7 +728,7 @@ mod tests {
             PathBuf::from("/nonexistent"),
             PathBuf::from("does-not-exist.sh"),
         );
-        bus.run(&make_ctx());
+        bus.run(&make_verify_ctx());
         assert_eq!(bus.verdicts().len(), 1);
         assert_eq!(bus.verdicts()[0].severity, Severity::Error);
         assert!(bus.has_errors());
@@ -765,7 +765,7 @@ mod tests {
             tmp.path().to_path_buf(),
         )));
 
-        bus.run(&make_ctx());
+        bus.run(&make_verify_ctx());
         assert_eq!(bus.verdicts().len(), 1, "one NDJSON line → one verdict");
         let v = &bus.verdicts()[0];
         assert_eq!(
@@ -818,7 +818,7 @@ mod tests {
             tmp.path().to_path_buf(),
         )));
 
-        bus.run(&make_ctx());
+        bus.run(&make_verify_ctx());
         assert_eq!(
             bus.verdicts().len(),
             2,
@@ -845,7 +845,7 @@ mod tests {
             tmp.path().to_path_buf(),
         )));
 
-        bus.run(&make_ctx());
+        bus.run(&make_verify_ctx());
         assert_eq!(bus.verdicts().len(), 2, "malformed + valid → 2 verdicts");
         assert_eq!(
             bus.verdicts()[0].severity,
@@ -874,7 +874,7 @@ mod tests {
             tmp.path().to_path_buf(),
         )));
 
-        bus.run(&make_ctx());
+        bus.run(&make_verify_ctx());
         assert_eq!(bus.verdicts().len(), 1);
         assert_eq!(bus.verdicts()[0].severity, Severity::Warning);
         assert!(
@@ -1123,7 +1123,7 @@ mod tests {
             }],
         }));
         assert_eq!(bus.verifier_count(), 2, "both same-name verifiers kept");
-        bus.run(&make_ctx());
+        bus.run(&make_verify_ctx());
         assert_eq!(
             bus.verdicts().len(),
             2,
@@ -1155,7 +1155,7 @@ mod tests {
             builtin_count + 1,
             "plugin 'security' verifier is registered alongside the built-in stub"
         );
-        bus.run(&make_ctx());
+        bus.run(&make_verify_ctx());
         assert!(
             bus.verdicts().iter().any(|v| v.message == "plugin finding"),
             "the plugin verifier's verdict survived alongside the stub"
@@ -1176,7 +1176,7 @@ mod tests {
         assert_eq!(bus.verifier_count(), 2);
         bus.retain_verifiers(|n| n == "keep_me");
         assert_eq!(bus.verifier_count(), 1);
-        bus.run(&make_ctx());
+        bus.run(&make_verify_ctx());
         assert!(bus.verdicts().is_empty());
     }
 
@@ -1193,10 +1193,10 @@ mod tests {
                 line: None,
             }],
         }));
-        bus.run(&make_ctx());
+        bus.run(&make_verify_ctx());
         assert_eq!(bus.verdicts().len(), 1);
         assert_eq!(bus.verdicts()[0].message, "first run");
-        bus.run(&make_ctx());
+        bus.run(&make_verify_ctx());
         assert_eq!(
             bus.verdicts().len(),
             1,
@@ -1212,7 +1212,7 @@ mod tests {
             PathBuf::from("bridge.sh"),
             PathBuf::from("/tmp"),
         );
-        assert!(v.parse_ndjson("", &make_ctx()).is_empty());
+        assert!(v.parse_ndjson("", &make_verify_ctx()).is_empty());
     }
 
     #[test]
@@ -1222,7 +1222,7 @@ mod tests {
             PathBuf::from("bridge.sh"),
             PathBuf::from("/tmp"),
         );
-        let entries = v.parse_ndjson("\n  \n\t\n", &make_ctx());
+        let entries = v.parse_ndjson("\n  \n\t\n", &make_verify_ctx());
         assert!(entries.is_empty(), "blank lines should be skipped");
     }
 
@@ -1235,7 +1235,7 @@ mod tests {
         );
         let stdout =
             "{\"verifier\":\"lint\",\"severity\":\"warning\",\"message\":\"unused import\"}";
-        let entries = v.parse_ndjson(stdout, &make_ctx());
+        let entries = v.parse_ndjson(stdout, &make_verify_ctx());
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].message, "unused import");
         assert!(!entries[0].message.contains("["));
@@ -1249,7 +1249,7 @@ mod tests {
             PathBuf::from("/tmp"),
         );
         let stdout = "{\"verifier\":\"x\",\"severity\":\"info\",\"message\":\"hi\"}";
-        let entries = v.parse_ndjson(stdout, &make_ctx());
+        let entries = v.parse_ndjson(stdout, &make_verify_ctx());
         assert_eq!(entries.len(), 1);
         assert!(entries[0].file.is_none());
         assert!(entries[0].line.is_none());
@@ -1263,7 +1263,7 @@ mod tests {
             PathBuf::from("/tmp"),
         );
         let stdout = "not valid json at all";
-        let entries = v.parse_ndjson(stdout, &make_ctx());
+        let entries = v.parse_ndjson(stdout, &make_verify_ctx());
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].severity, Severity::Warning);
         assert!(
@@ -1283,7 +1283,7 @@ mod tests {
         );
         let stdout =
             "{\"verifier\":\"ok\",\"severity\":\"info\",\"message\":\"good\"}\nbroken line";
-        let entries = v.parse_ndjson(stdout, &make_ctx());
+        let entries = v.parse_ndjson(stdout, &make_verify_ctx());
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[1].severity, Severity::Warning);
         assert!(
@@ -1302,7 +1302,7 @@ mod tests {
         );
         let stdout =
             "{\"verifier\":\"sec\",\"severity\":\"error\",\"message\":\"bad\",\"rule\":\"no-eval\"}";
-        let entries = v.parse_ndjson(stdout, &make_ctx());
+        let entries = v.parse_ndjson(stdout, &make_verify_ctx());
         assert_eq!(entries.len(), 1);
         assert!(
             entries[0].message.contains("[no-eval]"),
@@ -1320,7 +1320,7 @@ mod tests {
             PathBuf::from("/tmp"),
         );
         let stdout = "{\"verifier\":\"security\",\"severity\":\"info\",\"message\":\"x\"}";
-        let entries = v.parse_ndjson(stdout, &make_ctx());
+        let entries = v.parse_ndjson(stdout, &make_verify_ctx());
         assert!(matches!(
             entries[0].source,
             VerifierSource::Custom(ref s) if s == "ts:security"
@@ -1334,7 +1334,7 @@ mod tests {
             PathBuf::from("does-not-exist.sh"),
             PathBuf::from("/tmp/nonexistent-bridge-dir"),
         );
-        let result = v.run_bridge(&make_ctx());
+        let result = v.run_bridge(&make_verify_ctx());
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.contains("bridge command not found"), "got: {err}");

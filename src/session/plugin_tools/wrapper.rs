@@ -431,14 +431,14 @@ mod wrapper_tests {
         )
     }
 
-    fn make_ctx() -> ToolContext {
+    fn make_tool_ctx() -> ToolContext {
         ToolContext::new()
     }
 
     #[tokio::test]
     async fn run_rejects_args_over_64kb() {
         let wrapper = make_wrapper();
-        let ctx = make_ctx();
+        let ctx = make_tool_ctx();
         // Create args > 64KB
         let big_string = "x".repeat(70_000);
         let args = serde_json::json!({"data": big_string});
@@ -458,7 +458,7 @@ mod wrapper_tests {
     #[tokio::test]
     async fn run_accepts_small_args() {
         let wrapper = make_wrapper();
-        let ctx = make_ctx();
+        let ctx = make_tool_ctx();
         let args = serde_json::json!({"x": "small"});
         let outcome = wrapper.run(&ctx, args).await;
         // It will fail to spawn (no real script), but it should NOT fail
@@ -482,7 +482,7 @@ mod wrapper_tests {
             SandboxConfig::default(),
             TrustTier::ReadOnly,
         );
-        let ctx = make_ctx();
+        let ctx = make_tool_ctx();
         let outcome = wrapper.run(&ctx, serde_json::json!({"x": 1})).await;
         match outcome {
             ToolOutcome::Failure(ToolError::AccessDenied { message }) => {
@@ -637,7 +637,7 @@ mod wrapper_tests {
             TrustTier::Shell,
         );
 
-        let ctx = make_ctx();
+        let ctx = make_tool_ctx();
         // Cancel from a separate task after the child has spawned and
         // entered the select! wait (run() borrows ctx, so it cannot be
         // spawned itself).

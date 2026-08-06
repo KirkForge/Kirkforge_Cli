@@ -205,14 +205,13 @@ pub fn render_status(f: &mut Frame, area: Rect, state: &AppState) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shared::test_util::app_state;
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
     use std::time::{Duration, Instant};
 
     fn make_state() -> AppState {
-        use std::sync::Arc;
-        let config = Arc::new(std::sync::RwLock::new(crate::shared::Config::default()));
-        let mut state = AppState::new(config);
+        let mut state = app_state();
         state.connection = ConnectionState::Connected {
             model: "test".into(),
             since: Instant::now(),

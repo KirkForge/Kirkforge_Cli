@@ -3,6 +3,8 @@ difficulty = "medium"
 
 prompt = "This project uses the Plugin3 budget guard. A config.toml at the repo root pins the token budget ceiling to 1000 tokens (low for testing). Use the budget_status tool to confirm the current usage. If usage is at the approaching_ratio (0.8), the budget should be in the Approaching state. The config also pins the approaching_ratio to 0.5 so we hit Approaching at 500 used."
 
+requires_model = true
+
 [setup]
 "Cargo.toml" = """[package]
 name = "use_budget_check"
@@ -15,6 +17,5 @@ budget_approaching_ratio = 0.5
 """
 
 [verify]
-type = "file_contains"
-path = "config.toml"
-contains = "budget_ceiling = 1000"
+type = "output_contains"
+pattern = "budget"

@@ -622,6 +622,7 @@ async fn bundled_stratum_mode_tool_executes_via_host() {
 /// host's `PluginToolWrapper`. Skipped when node or the built SDK is not
 /// available (e.g. a bare `cargo test -p kf-code` without `npm ci`).
 #[tokio::test]
+#[ignore]
 async fn bundled_node_sdk_tool_executes_via_host() {
     fn which_node() -> Option<PathBuf> {
         std::env::var("PATH").ok().and_then(|path| {

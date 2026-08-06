@@ -244,16 +244,16 @@ fn adr_0010_emission_site_uses_eprintln_not_tracing() {
 fn adr_0010_emission_site_block_uses_eprintln_for_errors() {
     let block = adr_0010_emission_site_block();
     assert!(
-        block.contains("eprintln!(\"kf-budget: failed to serialise usage record"),
+        block.contains("eprintln!(\"plugin3: failed to serialise usage record"),
         "ADR-0010 § Emission site example must show the \
-         `eprintln!(\"kf-budget: failed to serialise usage record: ...\")` \
+         `eprintln!(\"plugin3: failed to serialise usage record: ...\")` \
          call on serialise failure — matches the impl's \
          serialise-error path.",
     );
     assert!(
-        block.contains("eprintln!(\"kf-budget: usage.jsonl open failed"),
+        block.contains("eprintln!(\"plugin3: usage.jsonl open failed"),
         "ADR-0010 § Emission site example must show the \
-         `eprintln!(\"kf-budget: usage.jsonl open failed ...\")` \
+         `eprintln!(\"plugin3: usage.jsonl open failed ...\")` \
          call on file-open failure — matches the impl's \
          open-error path.",
     );

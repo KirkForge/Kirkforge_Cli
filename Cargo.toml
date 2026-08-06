@@ -59,6 +59,7 @@ directories = "6"
 regex = "1"
 
 [dependencies]
+thiserror.workspace = true
 # Test doctor (WO 12.4) — workspace member, called from `kf-code doctor`.
 kf-testdoctor = { path = "crates/kf-testdoctor" }
 

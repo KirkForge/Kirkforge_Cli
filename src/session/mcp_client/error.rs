@@ -33,6 +33,18 @@ impl std::fmt::Display for McpError {
     }
 }
 
+impl std::error::Error for McpError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            McpError::Io(e) => Some(e),
+            McpError::Timeout
+            | McpError::JsonRpc { .. }
+            | McpError::ChannelClosed
+            | McpError::Disconnected => None,
+        }
+    }
+}
+
 impl From<std::io::Error> for McpError {
     fn from(err: std::io::Error) -> Self {
         McpError::Io(err)

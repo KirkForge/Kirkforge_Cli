@@ -2075,6 +2075,7 @@ dependencies = [
  "tempfile",
  "thiserror 1.0.69",
  "toml",
+ "tracing",
 ]
 
 [[package]]
@@ -2143,6 +2144,7 @@ dependencies = [
  "subtle",
  "tempfile",
  "textwrap",
+ "thiserror 1.0.69",
  "tokio",
  "tokio-stream",
  "tokio-util",

@@ -481,7 +481,9 @@ mod windows_imp {
         }
 
         pub async fn touch(&mut self, _id: &str, _path: PathBuf) -> anyhow::Result<()> {
-            Ok(())
+            Err(anyhow::anyhow!(
+                "session daemon is not supported on Windows"
+            ))
         }
 
         pub async fn shutdown(&mut self) -> anyhow::Result<()> {

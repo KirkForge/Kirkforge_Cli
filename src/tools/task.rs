@@ -2,7 +2,7 @@ use crate::adapters;
 use crate::session::conversation::ConversationLog;
 use crate::session::executor::{ApprovalRequest, ApprovalResponse, Executor};
 use crate::session::toolset::{CompositeToolset, VecToolset};
-use crate::shared::{Config, Role, SharedConfig};
+use crate::shared::{Role, SharedConfig};
 use crate::shared::{ToolDef, ToolError, ToolOutcome};
 use crate::tools::{Tool, ToolContext, UndoStackRef};
 use std::collections::HashMap;
@@ -264,7 +264,7 @@ impl Tool for TaskOutput {
 /// TUI's fork manager, so the `task` tool can run anywhere the executor
 /// exists.
 pub struct InProcessTaskSpawner {
-    config: Config,
+    config: SharedConfig,
     model_name: String,
     ollama_host: String,
     undo_stack: Option<UndoStackRef>,
@@ -273,7 +273,7 @@ pub struct InProcessTaskSpawner {
 
 impl InProcessTaskSpawner {
     pub fn new(
-        config: Config,
+        config: SharedConfig,
         model_name: String,
         ollama_host: String,
         undo_stack: Option<UndoStackRef>,
@@ -293,9 +293,10 @@ impl InProcessTaskSpawner {
 impl TaskSpawner for InProcessTaskSpawner {
     async fn run_task(&self, request: TaskRequest) -> Result<String, String> {
         let effective_model = request.model.as_deref().unwrap_or(&self.model_name);
+        let cfg = crate::shared::read_shared_config(&self.config).clone();
 
         // If subagent_allowed_models is set, enforce the allowlist.
-        if let Some(allowed) = &self.config.model.subagent_allowed_models {
+        if let Some(allowed) = &cfg.model.subagent_allowed_models {
             if !allowed.is_empty() && !allowed.iter().any(|m| m == effective_model) {
                 return Err(format!(
                     "model '{effective_model}' not in allowed subagent models list"
@@ -308,39 +309,38 @@ impl TaskSpawner for InProcessTaskSpawner {
                 effective_model,
                 &self.ollama_host,
                 None,
-                &self.config.model.anthropic_provider,
-                self.config.model.request_timeout_secs,
-                &self.config.model.opencode_zen_endpoint,
-                self.config.model.opencode_zen_api_key.as_deref(),
-                Some(&self.config.model.adapter_routing),
+                &cfg.model.anthropic_provider,
+                cfg.model.request_timeout_secs,
+                &cfg.model.opencode_zen_endpoint,
+                cfg.model.opencode_zen_api_key.as_deref(),
+                Some(&cfg.model.adapter_routing),
                 &adapters::ProviderApiKeys {
-                    anthropic: self.config.model.anthropic_api_key.clone(),
-                    openai: self.config.model.openai_api_key.clone(),
-                    deepseek: self.config.model.deepseek_api_key.clone(),
-                    gemini: self.config.model.gemini_api_key.clone(),
-                    kimi: self.config.model.kimi_api_key.clone(),
+                    anthropic: cfg.model.anthropic_api_key.clone(),
+                    openai: cfg.model.openai_api_key.clone(),
+                    deepseek: cfg.model.deepseek_api_key.clone(),
+                    gemini: cfg.model.gemini_api_key.clone(),
+                    kimi: cfg.model.kimi_api_key.clone(),
                 },
             ),
-            &self.config,
+            &cfg,
         );
 
-        let (deny_list, path_guard, _read_gate) =
-            crate::session::access::access_from_config(&self.config);
+        let (deny_list, path_guard, _read_gate) = crate::session::access::access_from_config(&cfg);
         let all = crate::tools::all_tools(&crate::tools::ToolContextBuilder {
             undo_stack: self.undo_stack.clone(),
             supports_images: self.supports_images,
             deny_list,
             path_guard,
-            bash_sandbox_workdir: self.config.security.bash_sandbox_workdir,
-            minify_write_side: self.config.tools.minify_write_side,
-            minify_above_bytes: self.config.tools.minify_above_bytes,
+            bash_sandbox_workdir: cfg.security.bash_sandbox_workdir,
+            minify_write_side: cfg.tools.minify_write_side,
+            minify_above_bytes: cfg.tools.minify_above_bytes,
             lsp_pool: None,
-            computer_use_enabled: self.config.security.computer_use.enabled,
-            computer_use_config: Some(self.config.security.computer_use.clone()),
+            computer_use_enabled: cfg.security.computer_use.enabled,
+            computer_use_config: Some(cfg.security.computer_use.clone()),
             chrome_tab: None,
             session_launcher: None,
-            docker_config: Some(self.config.security.docker.clone()),
-            sandbox_config: self.config.security.sandbox.clone(),
+            docker_config: Some(cfg.security.docker.clone()),
+            sandbox_config: cfg.security.sandbox.clone(),
         });
         let tools: Vec<Arc<dyn Tool>> = match request.persona.as_str() {
             "explore" => all
@@ -388,7 +388,7 @@ impl TaskSpawner for InProcessTaskSpawner {
             .map_err(|e| format!("failed to open task conversation log: {e}"))?
             .0;
 
-        let shared_config: SharedConfig = Arc::new(std::sync::RwLock::new(self.config.clone()));
+        let shared_config: SharedConfig = self.config.clone();
         let mut composite = CompositeToolset::empty();
         composite.add(Box::new(VecToolset::new("task", tools)));
         let mut executor = Executor::with_log_and_undo(

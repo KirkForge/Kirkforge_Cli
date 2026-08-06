@@ -150,12 +150,19 @@ async fn handle_run(
     };
 
     let cfg = read_shared_config(&state.config).clone();
+    let shared_cfg: crate::shared::SharedConfig = std::sync::Arc::new(std::sync::RwLock::new(cfg));
     let model_name = state
         .model_info
         .as_ref()
         .map(|m| m.name.clone())
-        .unwrap_or_else(|| cfg.model.default_model.clone());
-    let ollama_host = cfg.model.ollama_host.clone();
+        .unwrap_or_else(|| {
+            let c = crate::shared::read_shared_config(&shared_cfg);
+            c.model.default_model.clone()
+        });
+    let ollama_host = {
+        let c = crate::shared::read_shared_config(&shared_cfg);
+        c.model.ollama_host.clone()
+    };
     let supports_images = state
         .model_info
         .as_ref()
@@ -180,7 +187,7 @@ async fn handle_run(
         let runner = TuiStepRunner {
             model_name,
             ollama_host,
-            config: cfg,
+            config: shared_cfg,
             supports_images,
             undo_stack,
             handle: Arc::new(Mutex::new(WorkflowHandle {
@@ -246,7 +253,7 @@ fn ordered_names(summary: &kf_workflow::WorkflowSummary) -> Vec<String> {
 struct TuiStepRunner {
     model_name: String,
     ollama_host: String,
-    config: crate::shared::Config,
+    config: crate::shared::SharedConfig,
     supports_images: bool,
     undo_stack: Option<crate::tools::UndoStackRef>,
     handle: Arc<Mutex<WorkflowHandle>>,
@@ -294,7 +301,7 @@ impl StepRunner for TuiStepRunner {
 pub struct LineStepRunner {
     pub model_name: String,
     pub ollama_host: String,
-    pub config: crate::shared::Config,
+    pub config: crate::shared::SharedConfig,
     pub supports_images: bool,
     pub undo_stack: Option<crate::tools::UndoStackRef>,
 }

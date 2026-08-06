@@ -326,12 +326,14 @@ impl Executor {
     /// config, and sandboxing state. Called once at construction.
     fn build_task_spawner(&mut self) {
         let cfg = read_shared_config(&self.config).clone();
+        let shared_cfg: crate::shared::SharedConfig =
+            std::sync::Arc::new(std::sync::RwLock::new(cfg));
         let model_name = self.model_name.clone();
-        let ollama_host = cfg.model.ollama_host.clone();
+        let ollama_host = shared_cfg.read().unwrap().model.ollama_host.clone();
         let undo_stack = self.undo_stack.clone();
         let supports_images = self.adapter.model_info().supports_images;
         self.task_spawner = Some(Arc::new(crate::tools::task::InProcessTaskSpawner::new(
-            cfg,
+            shared_cfg,
             model_name,
             ollama_host,
             undo_stack,

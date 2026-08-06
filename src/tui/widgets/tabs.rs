@@ -90,12 +90,6 @@ pub fn render_models(f: &mut Frame, area: Rect, state: &AppState) {
                 Style::default().fg(Color::Red),
             )));
         }
-        crate::tui::app::ConnectionState::Connecting => {
-            lines.push(Line::from(Span::styled(
-                " ⟳ Connecting...",
-                Style::default().fg(Color::Yellow),
-            )));
-        }
         crate::tui::app::ConnectionState::Error(e) => {
             lines.push(Line::from(Span::styled(
                 format!(" ✗ {e}"),

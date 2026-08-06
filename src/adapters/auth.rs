@@ -3,7 +3,7 @@
 //! Resolves the first non-empty value from:
 //!   1. Config field (`[model].<provider>_api_key`)
 //!   2. Environment variable (`<PROVIDER>_API_KEY`)
-//!   3. Keychain (stubbed to `None`; Series 18)
+//!   3. Keychain (not yet implemented)
 
 /// Resolve an API key for the given provider.
 ///
@@ -11,7 +11,7 @@
 /// `config_key` is the value from the corresponding TOML config field
 /// (already loaded, may be `None`).
 ///
-/// Resolution order: config field → `<PROVIDER>_API_KEY` env → keychain (None).
+/// Resolution order: config field → `<PROVIDER>_API_KEY` env → keychain (not yet implemented).
 pub fn resolve_api_key(provider: &str, config_key: Option<&str>) -> Option<String> {
     // 1. Config field
     if let Some(key) = config_key {
@@ -28,8 +28,9 @@ pub fn resolve_api_key(provider: &str, config_key: Option<&str>) -> Option<Strin
         }
     }
 
-    // 3. Keychain — stubbed to None (Series 18), upgrade to keyring crate.
-    // TODO(Series 18): keyring::Entry integration.
+    // 3. Keychain: not yet implemented. Resolution stops here.
+    // ponytail: wire keyring::Entry when a provider needs headless auth;
+    // env vars cover all current use-cases.
     None
 }
 

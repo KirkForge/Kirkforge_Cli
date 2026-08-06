@@ -223,7 +223,7 @@ pub(crate) fn host_is_literal_internal_ip(url: &str) -> bool {
 // reqwest client (tests) rather than the system resolver. The rebinding
 // threat requires the attacker's hostname to actually resolve to an
 // internal IP, which this guard catches.
-#[allow(dead_code)]
+#[cfg(test)]
 pub(crate) fn host_resolves_to_internal_ip(url: &str) -> bool {
     let Some(host) = extract_host(url) else {
         return true; // malformed -> fail closed

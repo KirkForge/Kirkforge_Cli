@@ -18,9 +18,6 @@ pub fn render_status(f: &mut Frame, area: Rect, state: &AppState) {
         ConnectionState::Disconnected => {
             Span::styled(" ⚡ Disconnected ", Style::default().fg(Color::Red))
         }
-        ConnectionState::Connecting => {
-            Span::styled(" ⟳ Connecting... ", Style::default().fg(Color::Yellow))
-        }
         ConnectionState::Connected { model, .. } => {
             Span::styled(format!(" ◆ {model} "), Style::default().fg(Color::Green))
         }

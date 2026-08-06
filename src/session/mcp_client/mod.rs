@@ -502,6 +502,9 @@ impl McpClient {
     }
 
     /// Gracefully disconnect from the server.
+    /// ponytail: production relies on Drop for cleanup (synchronous, best-effort).
+    /// Explicit async disconnect is test-only; wiring it into the manager's
+    /// reconnect path would require an async Drop equivalent.
     // reason: lifecycle API used by tests; production relies on Drop fallback.
     #[allow(dead_code)]
     async fn disconnect(&mut self) {

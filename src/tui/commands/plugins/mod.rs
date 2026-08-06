@@ -825,7 +825,7 @@ prompt = "Demo skill"
         // by default, then verify that `/plugins trust` overrides it for the
         // current session.
         {
-            let mut cfg = state.config.write().unwrap();
+            let mut cfg = state.config.write().unwrap_or_else(|e| e.into_inner());
             cfg.tools.max_plugin_trust = TrustTier::ReadOnly;
         }
         let tx = dummy_reload_tx();
@@ -950,7 +950,7 @@ command = "hooks/post-turn.sh"
         // Clamp host max to ReadOnly + reject_on_excess=false so the shell
         // plugin is downgraded (not rejected) and its tool+hook filtered.
         {
-            let mut cfg = state.config.write().unwrap();
+            let mut cfg = state.config.write().unwrap_or_else(|e| e.into_inner());
             cfg.tools.max_plugin_trust = TrustTier::ReadOnly;
             cfg.tools.reject_on_excess_plugin_trust = false;
         }

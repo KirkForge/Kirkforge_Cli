@@ -378,6 +378,8 @@ impl McpHttpTransport {
     }
 
     /// Gracefully disconnect.
+    /// ponytail: production relies on Drop for cleanup; explicit disconnect
+    /// is test-only.
     // reason: lifecycle API used by tests; production relies on Drop fallback.
     #[allow(dead_code)]
     pub(super) async fn disconnect(&mut self) {

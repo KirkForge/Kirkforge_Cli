@@ -1226,6 +1226,8 @@ cpu_secs = {cpu_secs}
     fn sandbox_merge_with_overlays_per_plugin_limits() {
         let global = SandboxConfig {
             harden: true,
+            no_network: false,
+            confirm_edits: false,
             cpu_limit_secs: 300,
             memory_limit_mb: 2048,
             filesize_limit_mb: 512,
@@ -1246,6 +1248,8 @@ cpu_secs = {cpu_secs}
     fn sandbox_merge_with_none_returns_clone() {
         let global = SandboxConfig {
             harden: true,
+            no_network: false,
+            confirm_edits: false,
             cpu_limit_secs: 300,
             memory_limit_mb: 2048,
             filesize_limit_mb: 512,

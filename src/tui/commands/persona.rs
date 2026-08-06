@@ -118,6 +118,7 @@ fn tools_for_persona(
         session_launcher: None,
         docker_config: Some(config.security.docker.clone()),
         sandbox_config: config.security.sandbox.clone(),
+        confirm_edits: config.security.sandbox.confirm_edits,
     };
     let all = crate::tools::all_tools(&ctx);
     match kind {
@@ -175,6 +176,7 @@ pub fn tools_for_scout(
         session_launcher: None,
         docker_config: Some(config.security.docker.clone()),
         sandbox_config: config.security.sandbox.clone(),
+        confirm_edits: config.security.sandbox.confirm_edits,
     };
     let all = crate::tools::all_tools(&ctx);
     crate::session::executor::ScoutSubagent::new().filter_tools(all)
@@ -228,14 +230,26 @@ async fn run_persona_task(
     let shared_config: SharedConfig = Arc::new(std::sync::RwLock::new(config.clone()));
     let mut composite = CompositeToolset::empty();
     composite.add(Box::new(VecToolset::new("persona", tools)));
-    let mut executor = Executor::with_log_and_undo(
+    let mut executor = match Executor::with_log_and_undo(
         adapter,
         composite,
         shared_config,
         conversation,
         None,
         undo_stack.clone(),
-    );
+    ) {
+        Ok(e) => e,
+        Err(err) => {
+            return PersonaResult {
+                kind: kind.clone(),
+                task,
+                fork_path,
+                success: false,
+                summary: String::new(),
+                error: Some(format!("executor error: {err}")),
+            };
+        }
+    };
 
     // Explore reuses the executor-level plan-mode guard so bash is
     // restricted to read-only commands inside the fork.

@@ -126,6 +126,17 @@ pub enum Command {
         #[arg(long)]
         harden: bool,
 
+        /// Disable network access for bash commands (Linux only, requires --harden).
+        /// Places each bash child in an empty network namespace so curl, wget, etc.
+        /// cannot reach the network. No-op on non-Linux with a warning.
+        #[arg(long, requires = "harden")]
+        no_network: bool,
+
+        /// Require user confirmation before applying file edits (--harden mode).
+        /// edit_file and write_file will show a diff preview and wait for approval.
+        #[arg(long, requires = "harden")]
+        confirm_edits: bool,
+
         /// Disable turn tracing. By default every turn is recorded to
         /// `<data-dir>/<session-id>.trace.ndjson` for later replay.
         #[arg(long)]

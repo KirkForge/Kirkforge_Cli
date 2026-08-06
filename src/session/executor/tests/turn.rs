@@ -30,7 +30,7 @@ fn post_turn_guard_constructs_and_drops() {
 #[test]
 fn reload_config_rebuilds_and_reports_changes() {
     let adapter = MockAdapter::new(vec![], make_info());
-    let mut exe = make_executor(Box::new(adapter), vec![], make_config(false));
+    let mut exe = make_executor(Box::new(adapter), vec![], make_config(false)).unwrap();
 
     let mut new_config = make_config(false);
     new_config.model.default_model = "qwen2.5:14b".into();
@@ -68,7 +68,7 @@ async fn test_plan_complete_marker_emits_event() {
     );
 
     let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
-    let mut exe = make_executor(Box::new(adapter), vec![], make_config(false));
+    let mut exe = make_executor(Box::new(adapter), vec![], make_config(false)).unwrap();
     exe.set_plan_mode(true);
 
     let events = exe
@@ -112,7 +112,8 @@ async fn test_compact_hooks_fire_pre_and_post() {
         Box::new(MockAdapter::new(vec![], make_info())),
         vec![],
         config,
-    );
+    )
+    .unwrap();
 
     exe.run_compact_hook(
         "pre-compact",
@@ -188,7 +189,8 @@ async fn exit_plan_mode_appends_system_message() {
         Box::new(MockAdapter::new(vec![], make_info())),
         vec![],
         make_config(false),
-    );
+    )
+    .unwrap();
     exe.set_plan_mode(true);
     let msg = exe.exit_plan_mode().await.expect("exit plan mode");
     assert!(msg.contains("Plan mode exited"));
@@ -204,7 +206,8 @@ async fn replace_conversation_swaps_log() {
         Box::new(MockAdapter::new(vec![], make_info())),
         vec![],
         make_config(false),
-    );
+    )
+    .unwrap();
     // Add a message to the old log so we can verify the swap.
     exe.conversation
         .append_async(Message {
@@ -252,7 +255,8 @@ async fn set_system_override_stores_and_clears() {
         Box::new(MockAdapter::new(vec![], make_info())),
         vec![],
         make_config(false),
-    );
+    )
+    .unwrap();
     exe.set_system_override(Some("custom prompt".into()));
     assert_eq!(exe.system_override(), Some("custom prompt"));
     exe.set_system_override(None);

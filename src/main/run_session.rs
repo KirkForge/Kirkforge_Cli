@@ -26,6 +26,8 @@ pub(crate) struct RunArgs {
     pub(crate) worktree: bool,
     pub(crate) docker: bool,
     pub(crate) harden: bool,
+    pub(crate) no_network: bool,
+    pub(crate) confirm_edits: bool,
     pub(crate) no_trace: bool,
 }
 
@@ -49,6 +51,8 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
         worktree,
         docker,
         harden,
+        no_network,
+        confirm_edits,
         no_trace,
     } = args;
 
@@ -75,6 +79,12 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     }
     if harden {
         config.security.sandbox.harden = true;
+    }
+    if no_network {
+        config.security.sandbox.no_network = true;
+    }
+    if confirm_edits {
+        config.security.sandbox.confirm_edits = true;
     }
     let trace_enabled = !no_trace;
 
@@ -366,6 +376,7 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
         session_launcher,
         docker_config: Some(config.security.docker.clone()),
         sandbox_config: config.security.sandbox.clone(),
+        confirm_edits: config.security.sandbox.confirm_edits,
     };
     let mut toolset = session::toolset::CompositeToolset::empty();
     toolset.add(Box::new(session::toolset::VecToolset::new(

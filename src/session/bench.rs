@@ -104,6 +104,7 @@ fn build_bench_toolset(sandbox_path: &Path) -> super::toolset::CompositeToolset 
         session_launcher: None,
         docker_config: None,
         sandbox_config: crate::shared::SandboxConfig::default(),
+        confirm_edits: false,
     };
     let tools = crate::tools::all_tools(&ctx);
 
@@ -205,7 +206,7 @@ pub async fn run_task(
         conversation,
         None,
         None,
-    );
+    )?;
     executor.set_session_id(session_id.clone());
 
     // Approval channel: auto-approve all tool calls for bench runs.

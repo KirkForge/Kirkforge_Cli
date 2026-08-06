@@ -148,7 +148,7 @@ pub(super) fn make_executor(
     adapter: Box<dyn ModelAdapter>,
     tools: Vec<Arc<dyn Tool>>,
     config: Config,
-) -> Executor {
+) -> anyhow::Result<Executor> {
     use std::sync::atomic::{AtomicUsize, Ordering};
     static COUNTER: AtomicUsize = AtomicUsize::new(0);
     let temp_dir = std::env::temp_dir();

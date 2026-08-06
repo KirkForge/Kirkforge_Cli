@@ -278,6 +278,20 @@ pub struct SandboxConfig {
     #[serde(default)]
     pub harden: bool,
 
+    /// Disable network access for bash commands (Linux only). Uses
+    /// `unshare(CLONE_NEWNET)` to place the child in an empty network
+    /// namespace. No-op on non-Linux with a one-shot warning.
+    /// Requires `--harden` to be set; ignored otherwise.
+    #[serde(default)]
+    pub no_network: bool,
+
+    /// Require user confirmation before applying file edits (edit_file
+    /// and write_file tools). When true, the tool returns a diff preview
+    /// and the user must approve in the TUI before the write proceeds.
+    /// Ignored in dry-run mode (already preview-only).
+    #[serde(default)]
+    pub confirm_edits: bool,
+
     /// CPU time limit in seconds. Default 300 (5 min). When the child
     /// exceeds this *wall-clock CPU* (not elapsed time), the kernel
     /// sends SIGXCPU; if uncaught the process dies with SIGKILL after
@@ -311,6 +325,8 @@ impl SandboxConfig {
         };
         Self {
             harden: self.harden,
+            no_network: self.no_network,
+            confirm_edits: self.confirm_edits,
             cpu_limit_secs: limits.cpu_secs.unwrap_or(self.cpu_limit_secs),
             memory_limit_mb: limits.memory_mb.unwrap_or(self.memory_limit_mb),
             filesize_limit_mb: limits.filesize_mb.unwrap_or(self.filesize_limit_mb),

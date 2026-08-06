@@ -46,7 +46,8 @@ async fn test_approval_denied_for_destructive_tool() {
         let _ = req.response.send(ApprovalResponse::Denied);
     });
 
-    let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(false));
+    let mut exe =
+        make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(false)).unwrap();
     let events = exe
         .run_turn_collecting("run command", &approval_tx, never_cancelled())
         .await
@@ -113,7 +114,7 @@ async fn test_always_approve_does_not_overwrite_existing_deny() {
             action: PermissionAction::Deny,
         });
 
-    let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], config);
+    let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], config).unwrap();
     let _events = exe
         .run_turn_collecting("clean", &approval_tx, never_cancelled())
         .await
@@ -181,7 +182,7 @@ async fn test_deny_rule_blocks_bash_even_with_auto_approve() {
             action: PermissionAction::Deny,
         });
 
-    let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], config);
+    let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], config).unwrap();
     let events = exe
         .run_turn_collecting("clean build", &approval_tx, never_cancelled())
         .await
@@ -242,7 +243,7 @@ async fn test_deny_paths_blocks_write_file_even_with_auto_approve() {
     let mut config = make_config(true);
     config.security.deny_paths = vec!["secret/**".into()];
 
-    let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], config);
+    let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], config).unwrap();
     let events = exe
         .run_turn_collecting("save creds", &approval_tx, never_cancelled())
         .await
@@ -307,7 +308,7 @@ async fn test_deny_rule_blocks_read_file() {
             action: PermissionAction::Deny,
         });
 
-    let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], config);
+    let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], config).unwrap();
     let events = exe
         .run_turn_collecting("read secrets", &approval_tx, never_cancelled())
         .await
@@ -373,7 +374,8 @@ async fn test_write_file_overwrite_blocked_without_read() {
     );
 
     let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
-    let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(true));
+    let mut exe =
+        make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(true)).unwrap();
     let events = exe
         .run_turn_collecting("overwrite", &approval_tx, never_cancelled())
         .await
@@ -441,7 +443,7 @@ async fn test_dangerous_shell_blocked_even_with_allow_all_rule() {
             action: PermissionAction::Allow,
         });
 
-    let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], config);
+    let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], config).unwrap();
     let events = exe
         .run_turn_collecting("wipe disk", &approval_tx, never_cancelled())
         .await
@@ -510,7 +512,8 @@ async fn test_plan_mode_blocks_write_file() {
     );
 
     let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
-    let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(true));
+    let mut exe =
+        make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(true)).unwrap();
     exe.set_plan_mode(true);
 
     let events = exe
@@ -566,7 +569,8 @@ async fn test_plan_mode_blocks_non_read_only_bash() {
     );
 
     let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
-    let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(true));
+    let mut exe =
+        make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(true)).unwrap();
     exe.set_plan_mode(true);
 
     let events = exe
@@ -626,7 +630,7 @@ async fn test_pre_tool_hook_exit_two_blocks_bash() {
 
     let mut config = make_config(true);
     config.tools.hooks_dir = Some(hooks_dir);
-    let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], config);
+    let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], config).unwrap();
 
     let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
     let events = exe
@@ -688,7 +692,7 @@ async fn test_glob_base_dir_outside_sandbox_denied() {
     let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
     let mut config = make_config(false);
     config.security.sandbox_dir = Some(sandbox.to_string_lossy().to_string());
-    let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], config);
+    let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], config).unwrap();
     let events = exe
         .run_turn_collecting("list outside sandbox", &approval_tx, never_cancelled())
         .await

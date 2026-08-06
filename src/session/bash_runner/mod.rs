@@ -105,6 +105,13 @@ pub(crate) fn shell_program() -> &'static str {
 /// - `RLIMIT_FSIZE` — max file size in bytes. SIGXFSZ on write past the
 ///   cap.
 ///
+/// When `cfg.no_network` is also true, the child is placed in an empty
+/// network namespace via `unshare(CLONE_NEWNET)` (Linux only). This
+/// prevents any outbound network connections (curl, wget, etc.) without
+/// Docker overhead. ponytail: per-command namespace creation; if
+/// throughput matters, cache a persistent namespace via unshare(1)
+/// and bind-mount /proc/1/ns/net.
+///
 /// On Windows this is a no-op: rlimits are a Unix-only concept, and
 /// Windows job objects are a separate API surface (out of scope for
 /// this WO). Rlimits are always applied when present — the `harden`
@@ -117,15 +124,10 @@ pub(crate) fn setup_rlimits(cmd: &mut Command, cfg: &SandboxConfig) {
     let cpu_secs = cfg.cpu_limit_secs;
     let as_bytes: u64 = cfg.memory_limit_mb.saturating_mul(1024 * 1024);
     let fsize_bytes: u64 = cfg.filesize_limit_mb.saturating_mul(1024 * 1024);
+    let no_network = cfg.harden && cfg.no_network;
 
     unsafe {
         cmd.as_std_mut().pre_exec(move || {
-            // In a post-fork pre-exec hook we cannot call logging or
-            // allocation; setrlimit is async-signal-safe. Ignore
-            // failures: a failed setrlimit is a degraded sandbox, not a
-            // crash, and exec should still proceed so the user sees a
-            // clear error from the child rather than a silent spawn
-            // failure.
             #[allow(unused_must_use)]
             {
                 let cpu = libc::rlimit {
@@ -145,6 +147,12 @@ pub(crate) fn setup_rlimits(cmd: &mut Command, cfg: &SandboxConfig) {
                     rlim_max: fsize_bytes,
                 };
                 libc::setrlimit(libc::RLIMIT_FSIZE, &fsize);
+
+                if no_network {
+                    // CLONE_NEWNET: place child in empty network namespace.
+                    // Only effective on Linux; other Unixes ignore.
+                    libc::unshare(libc::CLONE_NEWNET);
+                }
             }
             Ok(())
         });
@@ -153,14 +161,12 @@ pub(crate) fn setup_rlimits(cmd: &mut Command, cfg: &SandboxConfig) {
 
 #[cfg(not(unix))]
 pub(crate) fn setup_rlimits(_cmd: &mut Command, cfg: &SandboxConfig) {
-    if cfg.harden {
-        // One-shot warning so a user who enables --harden on Windows
-        // knows it's a no-op, not a silent no-op.
+    if cfg.harden || cfg.no_network {
         use std::sync::OnceLock;
         static WARNED: OnceLock<()> = OnceLock::new();
         WARNED.get_or_init(|| {
             eprintln!(
-                "warning: --harden is a Unix-only feature (rlimits); \
+                "warning: --harden and --no-network are Unix-only features; \
                  ignored on this platform"
             );
         });

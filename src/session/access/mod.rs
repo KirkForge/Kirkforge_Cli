@@ -559,6 +559,22 @@ pub fn warn_if_unsandboxed(path_guard: &PathGuard) {
     }
 }
 
+/// Refuse to start when the path guard is unsandboxed and harden mode is on.
+///
+/// Returns `Err` with a descriptive message if the guard has no sandbox
+/// configured and `harden` is true. In non-harden mode this is a no-op
+/// (the warning in `warn_if_unsandboxed` is sufficient).
+pub fn refuse_if_unsandboxed(path_guard: &PathGuard) -> anyhow::Result<()> {
+    if path_guard.is_sandboxed() {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "Refused to start in --harden mode: no `sandbox_dir` and no `allowed_write_dirs` \
+         configured. Hardened mode requires an explicit write scope. Set `sandbox_dir` in \
+         config.toml or via KF_CODE_SANDBOX_DIR, or list `allowed_write_dirs`."
+    );
+}
+
 /// Build a [`DenyList`] and [`PathGuard`] from the user's config.
 ///
 /// Merges configured deny patterns with safe defaults so that .ssh, .git,

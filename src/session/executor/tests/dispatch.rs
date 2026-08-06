@@ -30,7 +30,7 @@ async fn test_basic_text_response() {
     );
 
     let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
-    let mut exe = make_executor(Box::new(adapter), vec![], make_config(false));
+    let mut exe = make_executor(Box::new(adapter), vec![], make_config(false)).unwrap();
     let events = exe
         .run_turn_collecting("hello", &approval_tx, never_cancelled())
         .await
@@ -86,7 +86,8 @@ async fn test_tool_call_dispatch() {
     );
 
     let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
-    let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(true));
+    let mut exe =
+        make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(true)).unwrap();
     let events = exe
         .run_turn_collecting("use echo", &approval_tx, never_cancelled())
         .await
@@ -126,7 +127,7 @@ async fn test_error_event_forwarded() {
     );
 
     let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
-    let mut exe = make_executor(Box::new(adapter), vec![], make_config(false));
+    let mut exe = make_executor(Box::new(adapter), vec![], make_config(false)).unwrap();
     let events = exe
         .run_turn_collecting("do it", &approval_tx, never_cancelled())
         .await
@@ -156,7 +157,7 @@ async fn test_unknown_tool_reported_as_error() {
     );
 
     let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
-    let mut exe = make_executor(Box::new(adapter), vec![], make_config(false));
+    let mut exe = make_executor(Box::new(adapter), vec![], make_config(false)).unwrap();
     let events = exe
         .run_turn_collecting("use unknown tool", &approval_tx, never_cancelled())
         .await
@@ -230,7 +231,7 @@ async fn test_tool_call_loop_capped() {
     let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
     let mut config = make_config(true);
     config.tools.max_tool_calls_per_turn = 5;
-    let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], config);
+    let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], config).unwrap();
     let _events = exe
         .run_turn_collecting("loop", &approval_tx, never_cancelled())
         .await
@@ -312,7 +313,8 @@ async fn test_edit_event_diff_carries_real_diff_not_old_string() {
     );
 
     let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
-    let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(true));
+    let mut exe =
+        make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(true)).unwrap();
 
     // Register the capture verifier in the executor's verifier slots.
     {
@@ -397,7 +399,8 @@ async fn test_read_image_honours_path_guard_size_limit() {
     );
 
     let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
-    let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(true));
+    let mut exe =
+        make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(true)).unwrap();
     let events = exe
         .run_turn_collecting("read image", &approval_tx, never_cancelled())
         .await
@@ -454,7 +457,7 @@ async fn test_max_tool_calls_per_turn_respected() {
     let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
     let mut config = make_config(true);
     config.tools.max_tool_calls_per_turn = 3;
-    let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], config);
+    let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], config).unwrap();
     let events = exe
         .run_turn_collecting("loop", &approval_tx, never_cancelled())
         .await
@@ -498,6 +501,7 @@ async fn test_read_then_write_in_same_batch_passes_read_gate() {
         None,
         crate::session::access::PathGuard::default(),
         false,
+        false,
     ));
 
     let adapter = MockAdapter::new(
@@ -528,7 +532,8 @@ async fn test_read_then_write_in_same_batch_passes_read_gate() {
         Box::new(adapter),
         vec![read_tool, write_tool],
         make_config(true),
-    );
+    )
+    .unwrap();
 
     let events = exe
         .run_turn_collecting("read then write", &approval_tx, never_cancelled())
@@ -584,7 +589,8 @@ async fn test_plan_reason_emitted_after_tool_call() {
     );
 
     let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
-    let mut exe = make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(true));
+    let mut exe =
+        make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(true)).unwrap();
     exe.run_turn_collecting("use echo", &approval_tx, never_cancelled())
         .await
         .unwrap();
@@ -690,7 +696,8 @@ command = "bin/check.sh"
         None,
         None,
         Some(&registry),
-    );
+    )
+    .expect("executor construction");
 
     // Sanity: the bus registered the plugin verifier.
     {
@@ -766,6 +773,7 @@ async fn test_denied_edit_records_single_access_denied_result() {
         None,
         crate::session::access::PathGuard::default(),
         false,
+        false,
     ));
 
     let adapter = MockAdapter::new(
@@ -788,7 +796,7 @@ async fn test_denied_edit_records_single_access_denied_result() {
     );
 
     let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
-    let mut exe = make_executor(Box::new(adapter), vec![edit_tool], make_config(true));
+    let mut exe = make_executor(Box::new(adapter), vec![edit_tool], make_config(true)).unwrap();
     // Deliberately do NOT mark_read — the edit must be denied by the
     // read-before-edit gate in Phase 2.5.
 

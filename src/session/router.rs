@@ -50,7 +50,7 @@ impl std::fmt::Display for ComplexityTier {
     }
 }
 
-/// Configuration for the task router.
+// ponytail: 2-field struct wrapping ModelConfig fields; inline if routing logic stays simple
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RouterConfig {
     /// Whether model routing is enabled.

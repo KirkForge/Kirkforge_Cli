@@ -29,6 +29,7 @@ pub struct TaskHandle {
 
 /// Trait for an object that can spawn isolated subagent tasks.
 #[async_trait::async_trait]
+// ponytail: single impl, dyn dispatch for test injection; inline if MockSpawner ever removed
 pub trait TaskSpawner: Send + Sync {
     /// Spawn and run a task synchronously, returning its summary.
     async fn run_task(&self, request: TaskRequest) -> Result<String, String>;

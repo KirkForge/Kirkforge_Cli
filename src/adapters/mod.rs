@@ -3,7 +3,6 @@ pub mod anthropic_bedrock;
 pub mod anthropic_vertex;
 pub mod auth;
 pub mod bedrock_signing;
-pub mod cache;
 pub mod caching;
 pub mod oellama;
 pub mod ollama_ndjson;
@@ -47,7 +46,7 @@ pub(crate) fn should_retry_status(status: u16) -> bool {
     status == 429 || (500..600).contains(&status)
 }
 
-pub use crate::shared::backoff::retry_backoff;
+pub use crate::shared::retry_backoff;
 
 /// Send a model request with retries for transient failures.
 ///

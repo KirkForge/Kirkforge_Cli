@@ -83,18 +83,18 @@ where
         self.map.insert(key, value);
     }
 
-    #[allow(dead_code)] // used via test-only wrapper functions
+    #[cfg(test)]
     fn len(&self) -> usize {
         self.map.len()
     }
 
-    #[allow(dead_code)] // used via test-only wrapper functions
+    #[cfg(test)]
     fn clear(&mut self) {
         self.map.clear();
         self.order.clear();
     }
 
-    #[allow(dead_code)] // used via test-only wrapper functions
+    #[cfg(test)]
     fn retain<F>(&mut self, mut f: F)
     where
         F: FnMut(&K, &V) -> bool,

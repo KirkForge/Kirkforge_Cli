@@ -686,11 +686,6 @@ mod tests {
         format!("data: {s}\n\n").into_bytes()
     }
 
-    #[allow(dead_code)]
-    fn chunk(s: &str) -> Vec<u8> {
-        s.bytes().collect()
-    }
-
     fn chunks(
         items: Vec<Vec<u8>>,
     ) -> impl tokio_stream::Stream<Item = Result<Vec<u8>, std::convert::Infallible>> {

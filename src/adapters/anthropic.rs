@@ -127,6 +127,9 @@ pub(crate) fn build_anthropic_body(
     json_mode: bool,
     seed: Option<u64>,
 ) -> serde_json::Value {
+    let lower = model.to_lowercase();
+    let is_reasoning = lower.contains("claude-3-7-sonnet") || lower.contains("claude-4");
+
     let mut system_blocks: Vec<serde_json::Value> = Vec::new();
     let mut anthropic_messages: Vec<serde_json::Value> = Vec::new();
 
@@ -240,6 +243,13 @@ pub(crate) fn build_anthropic_body(
         "messages": anthropic_messages,
         "stream": true,
     });
+
+    if is_reasoning {
+        body["thinking"] = serde_json::json!({
+            "type": "enabled",
+            "budget_tokens": 10000
+        });
+    }
 
     if !system_blocks.is_empty() {
         if system_blocks.len() == 1 {

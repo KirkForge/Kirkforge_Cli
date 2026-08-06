@@ -52,8 +52,12 @@ async fn tui_tool_approval_approve_flow() {
     .expect("e2e: start tmux session");
 
     // Wait for the TUI to render the input box.
-    ui.wait_for_contains("Type a message", Duration::from_secs(15), Duration::from_millis(500))
-        .expect("e2e: TUI did not render within 15s");
+    ui.wait_for_contains(
+        "Type a message",
+        Duration::from_secs(15),
+        Duration::from_millis(500),
+    )
+    .expect("e2e: TUI did not render within 15s");
 
     // Type a prompt that triggers the tool call.
     ui.send_keys("Run echo hello").expect("e2e: send_keys");

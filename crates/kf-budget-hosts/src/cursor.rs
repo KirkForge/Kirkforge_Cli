@@ -10,24 +10,12 @@ use crate::canonical::{PostToolUsePayload, PostToolUseResponse};
 /// Parse Cursor's PostToolUse stdin JSON into the canonical payload.
 /// Cursor's envelope nests the tool result: `result.content` and `result.id`.
 pub fn parse_post_tool_use(stdin: &str) -> Result<PostToolUsePayload, String> {
-    let v: Value = serde_json::from_str(stdin)
-        .map_err(|e| format!("cursor PostToolUse parse: {e}"))?;
-    let tool_name = v["tool_name"]
-        .as_str()
-        .unwrap_or("unknown")
-        .to_string();
-    let content = v["result"]["content"]
-        .as_str()
-        .unwrap_or("")
-        .to_string();
-    let tool_result_key = v["result"]["id"]
-        .as_str()
-        .unwrap_or("")
-        .to_string();
-    let session_id = v["session_id"]
-        .as_str()
-        .unwrap_or("")
-        .to_string();
+    let v: Value =
+        serde_json::from_str(stdin).map_err(|e| format!("cursor PostToolUse parse: {e}"))?;
+    let tool_name = v["tool_name"].as_str().unwrap_or("unknown").to_string();
+    let content = v["result"]["content"].as_str().unwrap_or("").to_string();
+    let tool_result_key = v["result"]["id"].as_str().unwrap_or("").to_string();
+    let session_id = v["session_id"].as_str().unwrap_or("").to_string();
     Ok(PostToolUsePayload {
         tool_name,
         tool_result_key,
@@ -49,7 +37,9 @@ pub fn format_post_tool_use(resp: &PostToolUseResponse) -> Value {
 
 /// Parse Cursor's UserPromptSubmit stdin JSON into the canonical payload.
 /// Cursor's envelope matches the canonical shape.
-pub fn parse_user_prompt_submit(stdin: &str) -> Result<crate::canonical::UserPromptSubmitPayload, String> {
+pub fn parse_user_prompt_submit(
+    stdin: &str,
+) -> Result<crate::canonical::UserPromptSubmitPayload, String> {
     serde_json::from_str(stdin).map_err(|e| format!("cursor UserPromptSubmit parse: {e}"))
 }
 

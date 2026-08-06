@@ -498,15 +498,26 @@ impl Tool for StoreGet {
                 }
             }
         };
-        match self.store.get(&marker) {
-            Ok(bytes) => {
-                let content = String::from_utf8(bytes)
-                    .unwrap_or_else(|e| format!("<binary data, utf8 error: {e}>"));
-                ToolOutcome::Success { content }
-            }
-            Err(e) => ToolOutcome::Error {
-                message: format!("store_get failed: {e}"),
-            },
+        // Primary: the budget HeadTailSlicer store.
+        if let Ok(bytes) = self.store.get(&marker) {
+            let content = String::from_utf8(bytes)
+                .unwrap_or_else(|e| format!("<binary data, utf8 error: {e}>"));
+            return ToolOutcome::Success { content };
+        }
+        // Fallback: the Stratum CompressionPipeline store. The model sees
+        // markers from both paths; both must resolve (WO 20.11.0 CRIT-2).
+        // ponytail: ceiling — only the in-process Stratum store is consulted.
+        // If a future FileOffloadStore or cross-process store is added, this
+        // lookup must learn about it too.
+        #[cfg(feature = "stratum")]
+        if let Some(content) = <kf_compress_core::store::InMemoryOffloadStore as kf_compress_core::store::OffloadStore>::get(
+            &*crate::session::stratum::session_offload_store(),
+            &marker,
+        ) {
+            return ToolOutcome::Success { content };
+        }
+        ToolOutcome::Error {
+            message: format!("store_get failed: marker '{marker}' not in any offload store"),
         }
     }
 }
@@ -1260,6 +1271,30 @@ mod tests {
         match out {
             ToolOutcome::Error { message } => assert!(message.contains("store_get")),
             other => panic!("expected Error, got {other:?}"),
+        }
+    }
+
+    /// Regression for WO 20.11.0 CRIT-2: a marker written by the Stratum
+    /// CompressionPipeline (kf_compress_core::store) must be retrievable
+    /// via `store_get`, which lives in the budget path. Previously the two
+    /// stores were disjoint, so Stratum-emitted markers were dead pointers.
+    #[tokio::test]
+    #[cfg(feature = "stratum")]
+    async fn test_store_get_resolves_stratum_offload_marker() {
+        use kf_compress_core::store::OffloadStore as _;
+        let payload = "stratum-offloaded payload body";
+        let key = crate::session::stratum::session_offload_store().put(payload);
+        let store_get = StoreGet {
+            def: store_get_def(),
+            store: shared_store(),
+        };
+        let ctx = ToolContext::new();
+        let out = store_get
+            .run(&ctx, serde_json::json!({"marker": key}))
+            .await;
+        match out {
+            ToolOutcome::Success { content } => assert_eq!(content, payload),
+            other => panic!("expected Success for stratum marker, got {other:?}"),
         }
     }
 

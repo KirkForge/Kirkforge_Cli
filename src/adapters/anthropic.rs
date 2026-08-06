@@ -188,17 +188,20 @@ pub(crate) fn build_anthropic_body(
         anthropic_messages.push(content);
     }
 
-    // Apply cache breakpoints (Anthropic limit: 4 per request).
-    // 1. System+tools breakpoint: the last system block already has
-    //    cache_control (set above).
-    // 2. Up to 3 prefix messages near the tail: mid-conversation cache hits.
-    // 3. Tail breakpoint: the last user message's last content block.
+    // Apply cache breakpoints (Anthropic hard limit: 4 per request).
+    // Budget allocation (4 total):
+    //   - System block:          1 (set above on last system block)
+    //   - Last tool definition:  1 (only when tools present — covers the
+    //                            system+tools prefix as one cached unit)
+    //   - Tail user message:     1 (set below; grows-with-conversation cache)
+    //   - Mid prefix messages:   1 when tools present, 2 when no tools
+    // ponytail: cap is 4 breakpoints total. With tools we get
+    // system(1) + tool(1) + 1 prefix + tail(1) = 4. Without tools,
+    // system(1) + 2 prefix + tail(1) = 4. Either way the cap holds.
     if anthropic_messages.len() > 2 {
         let prefix_end = anthropic_messages.len() - 1;
-        // ponytail: skip from start so only the last 2 prefix messages
-        // (after system) get cache_control, keeping total breakpoints
-        // at most 4 (system + 2 prefix + tail).
-        let skip_from_start = prefix_end.saturating_sub(2 + 1);
+        let prefix_budget = if tools.is_empty() { 2 } else { 1 };
+        let skip_from_start = prefix_end.saturating_sub(prefix_budget + 1);
         for msg in anthropic_messages
             .iter_mut()
             .take(prefix_end)
@@ -788,7 +791,24 @@ mod tests {
     }
 
     #[test]
-    fn cache_breakpoint_cap_30_messages() {
+    fn cache_breakpoint_cap_30_messages_no_tools() {
+        cache_breakpoint_cap_for_tools(&[]);
+    }
+
+    #[test]
+    fn cache_breakpoint_cap_30_messages_with_tools() {
+        // Regression: previously emitted 5 breakpoints when tools present
+        // (system + 2 prefix + tail + last tool), tripping Anthropic's
+        // hard limit of 4. CRIT-1 from WO 20.11.0 audit.
+        let tools = vec![crate::shared::ToolDef {
+            name: "echo",
+            description: "echo",
+            parameters: serde_json::json!({"type": "object", "properties": {}}),
+        }];
+        cache_breakpoint_cap_for_tools(&tools);
+    }
+
+    fn cache_breakpoint_cap_for_tools(tools: &[crate::shared::ToolDef]) {
         let mut messages = vec![Message {
             role: Role::System,
             content: "sys".into(),
@@ -805,12 +825,10 @@ mod tests {
                 ..Default::default()
             });
         }
-        let body = build_anthropic_body("claude-sonnet-4", &messages, &[], false, None);
+        let body = build_anthropic_body("claude-sonnet-4", &messages, tools, false, None);
         let mut count = 0;
-        if let Some(arr) = body["system"].get("cache_control") {
-            if arr.is_object() {
-                count += 1;
-            }
+        if body["system"].get("cache_control").is_some_and(|v| v.is_object()) {
+            count += 1;
         }
         for msg in body["messages"].as_array().unwrap() {
             if let Some(content) = msg.get("content") {
@@ -820,6 +838,14 @@ mod tests {
                             count += 1;
                         }
                     }
+                }
+            }
+        }
+        // Tools breakpoint: last tool definition carries cache_control.
+        if let Some(tools_arr) = body.get("tools").and_then(|t| t.as_array()) {
+            for tool in tools_arr {
+                if tool.get("cache_control").is_some() {
+                    count += 1;
                 }
             }
         }

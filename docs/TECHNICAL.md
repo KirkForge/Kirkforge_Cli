@@ -541,6 +541,48 @@ Runtime toggles: `enabled_plugins` (Vec) and `plugin_sources` (HashMap) in
 `ToolConfig`. The `/plugins` TUI command set: `list`, `enable`, `disable`,
 `toggle`, `reload`, `trust`, `sources`, `add`, `remove`, `setup`.
 
+### Tool integration strategy: MCP-first
+
+KirkForge has two mechanisms for adding tools:
+
+#### Bespoke plugin system (frozen for new tools)
+
+The manifest-based plugin system (`kf-code.toml`, trust tiers, minisign
+signatures, hook veto, verifier integration) is the original extensibility
+path. It is **frozen for new tool integrations** — existing plugins continue
+to work and are maintained, but new tools should not be added as bespoke
+plugins. This system is still the right choice for capabilities that require
+deep lifecycle integration (hooks, verifiers, skills, trust gating).
+
+#### MCP (primary path for new tool integrations)
+
+The MCP client (`src/session/mcp_client/`) speaks the Model Context Protocol
+over stdio and streamable-HTTP transports. It supports `tools/list` and
+`tools/call` — the subset needed to expose any MCP-compatible server as
+tools in the agent loop. Tools are prefixed `mcp/<server>/<tool>` and are
+resolved alongside built-in tools in `CompositeToolset` (priority: builtin >
+MCP > plugin).
+
+MCP is the **default choice** for new tool integrations because it is a
+standard protocol: any MCP server works without custom plugin manifests,
+trust-tier wiring, or minisign signatures. Servers that advertise
+unsupported capabilities (`resources`, `prompts`, `sampling`, `roots`) are
+logged as warnings at startup.
+
+#### When to use which
+
+| Need | Use |
+|---|---|
+| Expose a new tool to the agent | MCP server (stdio or HTTP) |
+| Lifecycle hooks (pre/post-tool, session events) | Bespoke plugin |
+| Verification checks in the bus | Bespoke plugin |
+| Slash-command skills with templated prompts | Bespoke plugin |
+| Trust-tier gating on untrusted code | Bespoke plugin |
+
+Both systems coexist. MCP does not replace hooks, verifiers, or skills —
+it replaces the `tool` capability kind for new tools. Existing bespoke
+plugins that expose tools continue to work unchanged.
+
 ---
 
 ## Specialized runtimes

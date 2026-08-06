@@ -51,7 +51,7 @@ async fn auto_approve_skips_approval() {
     // assertion is that the binary didn't hang waiting for user input.
     let log = mock.request_log();
     assert!(
-        log.len() >= 1,
+        !log.is_empty(),
         "auto_approve: expected ≥1 request, got {}.\n\
          stdout: {}\nstderr: {}",
         log.len(),

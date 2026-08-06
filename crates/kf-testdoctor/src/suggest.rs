@@ -211,8 +211,8 @@ fn extract_toml_array(content: &str, key: &str) -> Vec<String> {
             for part in array_str.split(',') {
                 let part = part
                     .trim()
-                    .trim_start_matches(&['[', ' '])
-                    .trim_end_matches(&[']', ' ', ',']);
+                    .trim_start_matches(['[', ' '])
+                    .trim_end_matches([']', ' ', ',']);
                 let part = part.trim_matches('"').trim_matches('\'');
                 if !part.is_empty() {
                     results.push(part.to_string());

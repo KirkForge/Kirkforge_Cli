@@ -61,7 +61,7 @@ impl Tool for EditFile {
                     },
                     "replace_all": {
                         "type": "boolean",
-                        "description": "Replace all occurrences of old_string (default: false, requires unique match)",
+                        "description": "Replace all occurrences instead of requiring a unique match (default: false)",
                         "default": false
                     },
                     "block_edits": {
@@ -357,19 +357,22 @@ impl Tool for EditFile {
         }
 
         // Ambiguous exact match guard: if old_string appears more than
-        // once, replacing the first occurrence silently would be
-        // surprising. Force the model to include more context.
-        let occurrences = content.matches(&old).count();
-        if occurrences > 1 && !replace_all {
-            return ToolOutcome::Failure(ToolError::Execution {
-                message: format!(
-                    "old_string matches {} times in {}; edit_file requires a unique match (set replace_all: true to replace all)",
-                    occurrences,
-                    path.display()
-                ),
-                exit_code: None,
-                stderr: String::new(),
-            });
+        // once and replace_all is false, replacing the first occurrence
+        // silently would be surprising. Force the model to include more
+        // context or set replace_all=true.
+        if !replace_all {
+            let occurrences = content.matches(&old).count();
+            if occurrences > 1 {
+                return ToolOutcome::Failure(ToolError::Execution {
+                    message: format!(
+                        "old_string matches {} times in {}; edit_file requires a unique match (set replace_all=true to replace all)",
+                        occurrences,
+                        path.display()
+                    ),
+                    exit_code: None,
+                    stderr: String::new(),
+                });
+            }
         }
 
         let new_content = if replace_all {

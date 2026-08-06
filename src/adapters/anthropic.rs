@@ -827,7 +827,10 @@ mod tests {
         }
         let body = build_anthropic_body("claude-sonnet-4", &messages, tools, false, None);
         let mut count = 0;
-        if body["system"].get("cache_control").is_some_and(|v| v.is_object()) {
+        if body["system"]
+            .get("cache_control")
+            .is_some_and(|v| v.is_object())
+        {
             count += 1;
         }
         for msg in body["messages"].as_array().unwrap() {

@@ -849,7 +849,7 @@ mod tests {
                 ..Default::default()
             });
         }
-        let body = build_anthropic_body("claude-sonnet-4", &messages, tools, false, None);
+        let body = build_anthropic_body("claude-sonnet-4", &messages, tools, false, None, false, 0);
         let mut count = 0;
         if body["system"]
             .get("cache_control")

@@ -1623,7 +1623,12 @@ mod tests {
         let path = dir.path().join("f.txt");
         std::fs::write(&path, "foo\nbar\nfoo\nbaz\nfoo\n").unwrap();
 
-        let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false);
+        let tool = EditFile::new(
+            None,
+            crate::session::access::PathGuard::default(),
+            false,
+            false,
+        );
         let ctx = ToolContext::new();
         let args = serde_json::json!({
             "path": path.to_string_lossy(),
@@ -1646,7 +1651,12 @@ mod tests {
         let path = dir.path().join("f.txt");
         std::fs::write(&path, "foo\nfoo\n").unwrap();
 
-        let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false);
+        let tool = EditFile::new(
+            None,
+            crate::session::access::PathGuard::default(),
+            false,
+            false,
+        );
         let ctx = ToolContext::new();
         let args = serde_json::json!({
             "path": path.to_string_lossy(),

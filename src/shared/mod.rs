@@ -180,7 +180,6 @@ pub enum ToolCallStyle {
     OpenAiCompat,
     /// Anthropic Messages API native `tool_use` / `tool_result` blocks.
     Anthropic,
-    None,
 }
 
 /// Headless Chrome configuration for the `computer_use` tool.
@@ -405,10 +404,8 @@ fn default_computer_use_max_steps() -> u32 {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub enum TruncationStrategy {
-    DropOldest,
     #[default]
     KeepToolOnly,
-    SummarizeMiddle,
 }
 
 #[derive(Debug, Clone)]

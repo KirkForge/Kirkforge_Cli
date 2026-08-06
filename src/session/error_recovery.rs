@@ -358,6 +358,8 @@ pub fn analyze_error(
 /// Build a recovery message to append to the conversation.
 ///
 /// This is sent as a user message so the model can read it and adjust.
+/// Prefer inlining at call sites — this function exists for backward compat.
+#[deprecated(note = "inline the Message construction at call sites instead")]
 pub fn build_recovery_message(hint: &RecoveryHint) -> Message {
     Message {
         role: Role::User,
@@ -445,6 +447,7 @@ mod retry_tests {
 
 #[cfg(test)]
 mod tests {
+    #![allow(deprecated)]
     use super::*;
 
     #[test]

@@ -155,7 +155,15 @@ pub(crate) async fn handle_tool_outcome(
             if let Some(hint) =
                 crate::session::error_recovery::analyze_error(&tc.name, &message, &tc.arguments)
             {
-                let recovery_msg = crate::session::error_recovery::build_recovery_message(&hint);
+                let recovery_msg = Message {
+                    role: Role::User,
+                    content: format!(
+                        "The previous action failed: {}\n\n{}\n\nPlease correct the issue and try again. \
+                         Do NOT repeat the same failing command — use the suggestions above.",
+                        hint.error_summary, hint.suggestion
+                    ),
+                    ..Default::default()
+                };
                 conversation.append(recovery_msg)?;
             }
         }
@@ -185,7 +193,15 @@ pub(crate) async fn handle_tool_outcome(
             if let Some(hint) =
                 crate::session::error_recovery::analyze_error(&tc.name, &message, &tc.arguments)
             {
-                let recovery_msg = crate::session::error_recovery::build_recovery_message(&hint);
+                let recovery_msg = Message {
+                    role: Role::User,
+                    content: format!(
+                        "The previous action failed: {}\n\n{}\n\nPlease correct the issue and try again. \
+                         Do NOT repeat the same failing command — use the suggestions above.",
+                        hint.error_summary, hint.suggestion
+                    ),
+                    ..Default::default()
+                };
                 conversation.append(recovery_msg)?;
             }
         }

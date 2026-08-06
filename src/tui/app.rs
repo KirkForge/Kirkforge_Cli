@@ -17,6 +17,10 @@ pub use crate::tui::commands::{handle_workflow_command, WorkflowHandle};
 #[derive(Debug, Clone, PartialEq)]
 pub enum ConnectionState {
     Disconnected,
+    // Reserved for async connection transitions; all rendering paths
+    // already handle it, so keep the variant even though it is not
+    // currently emitted.
+    Connecting,
     Connected { model: String, since: Instant },
     Error(String),
 }

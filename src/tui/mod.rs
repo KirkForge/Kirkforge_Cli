@@ -1215,7 +1215,6 @@ mod tests {
         let result = PersonaResult {
             kind: PersonaKind::Explore,
             task: "find auth".into(),
-            fork_path: tmp.path().join("fork.ndjson"),
             success: true,
             summary: "auth is in src/auth.rs".into(),
             error: None,
@@ -1251,7 +1250,6 @@ mod tests {
         let result = PersonaResult {
             kind: PersonaKind::Plan,
             task: "add dark mode".into(),
-            fork_path: tmp.path().join("fork.ndjson"),
             success: true,
             summary: "Plan summary".into(),
             error: None,
@@ -1293,7 +1291,6 @@ mod tests {
         let result = PersonaResult {
             kind: PersonaKind::Coder,
             task: "refactor".into(),
-            fork_path: tmp.path().join("fork.ndjson"),
             success: false,
             summary: String::new(),
             error: Some("fork log missing".into()),

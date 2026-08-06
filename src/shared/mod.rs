@@ -12,7 +12,6 @@ macro_rules! send_or_warn {
 }
 
 pub mod audit;
-pub mod backoff;
 pub mod metrics;
 pub mod minify;
 pub mod permission;
@@ -769,6 +768,19 @@ impl CostTracking {
 
 pub use crate::cli::OutputFormat;
 
+/// Compute the backoff for retry `attempt` (1-indexed).
+///
+/// Uses exponential backoff starting at 1 s with a small deterministic
+/// jitter (up to 250 ms per attempt, capped at 1 s). The jitter is
+/// computed from the attempt number rather than a random source so tests
+/// are stable and no new dependency is required.
+pub fn retry_backoff(attempt: u32) -> std::time::Duration {
+    let shift = (attempt - 1).min(63);
+    let base_s = 1u64 << shift;
+    let jitter_ms = (attempt as u64).saturating_mul(250).min(1000);
+    std::time::Duration::from_millis(base_s.saturating_mul(1000).saturating_add(jitter_ms))
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionSummary {
     pub version: String,
@@ -802,4 +814,27 @@ pub struct ToolCallRecord {
     pub result: String,
     pub success: bool,
     pub duration_ms: u64,
+}
+
+#[cfg(test)]
+mod backoff_tests {
+    use super::*;
+
+    #[test]
+    fn backoff_grows_with_capped_jitter() {
+        let b1 = retry_backoff(1);
+        let b2 = retry_backoff(2);
+        let b3 = retry_backoff(3);
+
+        assert!(b1 >= std::time::Duration::from_secs(1));
+        assert!(b1 <= std::time::Duration::from_millis(1250));
+
+        assert!(b2 >= std::time::Duration::from_secs(2));
+        assert!(b2 <= std::time::Duration::from_millis(2500));
+
+        assert!(b3 >= std::time::Duration::from_secs(4));
+        assert!(b3 <= std::time::Duration::from_millis(5000));
+
+        assert!(b3 > b2 && b2 > b1);
+    }
 }

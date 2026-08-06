@@ -60,8 +60,6 @@ pub struct PersonaHandle {
 pub struct PersonaResult {
     pub kind: PersonaKind,
     pub task: String,
-    #[allow(dead_code)]
-    pub fork_path: PathBuf,
     pub success: bool,
     /// Final assistant content to merge into the parent conversation.
     pub summary: String,
@@ -219,7 +217,6 @@ async fn run_persona_task(
             return PersonaResult {
                 kind,
                 task,
-                fork_path,
                 success: false,
                 summary: String::new(),
                 error: Some(format!("failed to open fork log: {e}")),
@@ -278,7 +275,6 @@ async fn run_persona_task(
         return PersonaResult {
             kind,
             task,
-            fork_path,
             success: false,
             summary: String::new(),
             error: Some("max_persona_turns is 0; personas are disabled".into()),
@@ -289,7 +285,6 @@ async fn run_persona_task(
         return PersonaResult {
             kind,
             task,
-            fork_path,
             success: false,
             summary: String::new(),
             error: Some("persona cancelled".into()),
@@ -304,7 +299,6 @@ async fn run_persona_task(
         return PersonaResult {
             kind,
             task,
-            fork_path,
             success: false,
             summary: String::new(),
             error: Some(format!("turn failed: {e}")),
@@ -323,7 +317,6 @@ async fn run_persona_task(
     PersonaResult {
         kind,
         task,
-        fork_path,
         success: true,
         summary,
         error: None,

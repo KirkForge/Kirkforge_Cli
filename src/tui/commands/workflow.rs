@@ -217,7 +217,6 @@ async fn handle_run(
             completion_tx.send(PersonaResult {
                 kind: crate::tui::commands::PersonaKind::Coder,
                 task: format!("workflow {name_for_spawn}"),
-                fork_path: std::path::PathBuf::new(),
                 success,
                 summary,
                 error,

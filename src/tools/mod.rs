@@ -1,8 +1,6 @@
 pub mod atomic_write;
 pub mod bash;
-pub mod bash_cancel;
 pub mod bash_minify;
-pub mod bash_status;
 pub mod computer_use;
 pub mod edit_file;
 pub mod glob;
@@ -129,7 +127,7 @@ pub type UndoStackRef = Arc<Mutex<crate::session::undo::UndoStack>>;
 /// flags in `ctx`.
 pub fn all_tools(ctx: &ToolContextBuilder) -> Vec<Arc<dyn Tool>> {
     use crate::tools::{
-        bash::Bash, bash_cancel::BashCancel, bash_status::BashStatus, computer_use::ComputerUse,
+        bash::Bash, bash::BashCancel, bash::BashStatus, computer_use::ComputerUse,
         edit_file::EditFile, glob::Glob, grep::Grep, lsp_query::LspQuery,
         notebook_edit::NotebookEdit, read_file::ReadFile, read_image::ReadImage, task::Task,
         task::TaskOutput, todo::TodoRead, todo::TodoWrite, web_fetch::WebFetch,

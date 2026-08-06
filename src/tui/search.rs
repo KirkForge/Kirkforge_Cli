@@ -128,7 +128,7 @@ pub fn compute_matches(messages: &[ConversationEntry], query: &str) -> Vec<Match
 /// Return the next match index, wrapping around at the end.
 /// Returns `None` when there are no matches, so callers cannot
 /// accidentally index an empty `search_matches` vector.
-pub fn navigate_next(current: usize, matches_len: usize) -> Option<usize> {
+pub(crate) fn navigate_next(current: usize, matches_len: usize) -> Option<usize> {
     if matches_len == 0 {
         return None;
     }
@@ -136,7 +136,7 @@ pub fn navigate_next(current: usize, matches_len: usize) -> Option<usize> {
 }
 
 /// Return the previous match index, wrapping around at 0.
-pub fn navigate_prev(current: usize, matches_len: usize) -> Option<usize> {
+pub(crate) fn navigate_prev(current: usize, matches_len: usize) -> Option<usize> {
     if matches_len == 0 {
         return None;
     }

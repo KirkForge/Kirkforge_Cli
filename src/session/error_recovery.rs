@@ -11,7 +11,7 @@
 //! - Each retry includes the specific error message and a targeted hint
 //! - The retry count is tracked per-turn, not per-tool
 
-use crate::shared::backoff::retry_backoff;
+use crate::shared::retry_backoff;
 use crate::shared::{Message, Role};
 use regex::Regex;
 

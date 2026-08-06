@@ -6,6 +6,23 @@
 //! a single `VerifierBus` struct. The executor queries the bus after
 //! file-modifying tool calls; error verdicts are injected into the
 //! conversation so the model sees them immediately.
+//!
+//! ## Why two verifier traits?
+//!
+//! The `Verifier` trait (in `types.rs`) is async and event-driven: verifiers
+//! receive a `BusEvent` and can do async I/O (run `cargo build`, spawn
+//! processes). It powers the correction loop (`CorrectionLoop`).
+//!
+//! The `BusVerifier` trait (here) is sync and context-based: verifiers
+//! receive a `VerifyContext` (changed files list) and return structured
+//! `VerdictEntry`s synchronously. It powers the structured verdict report
+//! (WO 11.7) and plugin verifiers that run via subprocess exit codes.
+//!
+//! Plugin verifiers use `BusVerifier` (via `PluginBusVerifier`) because the
+//! plugin host's `PluginVerifier` is synchronous (exit-code based). Migrating
+//! plugin verifiers to the async `Verifier` trait would require making the
+//! plugin host async or spawning blocking tasks — a larger change that's not
+//! justified today. Both traits serve different execution models.
 
 use kf_plugin_host::PluginVerifier;
 use std::collections::HashMap;
@@ -314,6 +331,7 @@ impl BusVerifier for PluginBusVerifier {
 
 /// Build a VerifierBus with no built-in stubs registered.
 /// Plugin verifiers and the TS orchestrator bridge register independently.
+#[deprecated(note = "use VerifierBus::new() directly")]
 pub fn default_verifier_bus() -> VerifierBus {
     VerifierBus::new()
 }

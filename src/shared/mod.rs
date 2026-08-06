@@ -194,7 +194,6 @@ pub enum ToolCallStyle {
     OpenAiCompat,
     /// Anthropic Messages API native `tool_use` / `tool_result` blocks.
     Anthropic,
-    None,
 }
 
 /// Headless Chrome configuration for the `computer_use` tool.
@@ -237,6 +236,7 @@ pub struct ComputerUseConfig {
     pub max_steps: u32,
 }
 
+// ponytail: fields serde-deserialized from config; replace with const when config schema stabilizes
 /// Docker execution configuration for the bash tool.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DockerConfig {
@@ -284,6 +284,7 @@ fn default_docker_cpus() -> String {
 /// On Windows `harden` is a no-op with a one-shot warning (rlimits are a
 /// Unix-only concept; Windows has job objects but they're a separate
 /// API surface and out of scope for this WO).
+// ponytail: fields serde-deserialized from config; replace with const when config schema stabilizes
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct SandboxConfig {
     /// Enable rlimit hardening for the non-Docker bash path. Default
@@ -433,10 +434,8 @@ fn default_computer_use_max_steps() -> u32 {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub enum TruncationStrategy {
-    DropOldest,
     #[default]
     KeepToolOnly,
-    SummarizeMiddle,
 }
 
 #[derive(Debug, Clone)]

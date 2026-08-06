@@ -39,7 +39,7 @@
 use crate::shared::{Message, Role};
 use serde::{Deserialize, Serialize};
 
-/// Configuration for the semantic summarizer.
+// ponytail: 4 fields always overridden at sole call site; pass params directly if call sites stay <3
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SummarizerConfig {
     /// Model name for the summarization API call (e.g., "qwen3:32b:cloud").

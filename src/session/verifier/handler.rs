@@ -4,6 +4,7 @@ use crate::session::verifier::types::{BusEvent, EventKind};
 use crate::shared::metrics::{record, MetricEvent};
 use std::sync::Arc;
 
+// ponytail: thin pass-through between CorrectionLoop and VerifierSlots; merge if handler gains no more logic
 /// Wraps a [`VerifierSlots`] and runs verification on tool events.
 ///
 /// Called directly by the dispatch layer — no intermediate pub/sub bus.

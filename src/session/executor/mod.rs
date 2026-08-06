@@ -515,7 +515,7 @@ impl Executor {
         self.correction_loop = Some(CorrectionLoop::new(handler));
         match tokio::runtime::Handle::try_current() {
             Ok(_) => {
-                let mut vbus = super::verifier::bus::default_verifier_bus();
+                let mut vbus = super::verifier::VerifierBus::new();
                 if let Some(registry) = plugin_registry {
                     let n = crate::session::verifier::plugin::register_plugin_verifiers_into_bus(
                         registry, &mut vbus,

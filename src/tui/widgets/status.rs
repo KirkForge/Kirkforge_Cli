@@ -15,7 +15,7 @@ use ratatui::{
 /// the status bar now shows only connection, token, and time info.
 pub fn render_status(f: &mut Frame, area: Rect, state: &AppState) {
     let left_info = match &state.connection {
-        ConnectionState::Disconnected => {
+        ConnectionState::Disconnected | ConnectionState::Connecting => {
             Span::styled(" ⚡ Disconnected ", Style::default().fg(Color::Red))
         }
         ConnectionState::Connected { model, .. } => {

@@ -76,7 +76,7 @@ pub fn render_chat(f: &mut Frame, area: Rect, state: &mut AppState) {
     // Connection banner at top (only when not connected, so the first
     // message starts at the top of the panel once we're online).
     match &state.connection {
-        ConnectionState::Connected { .. } => {}
+        ConnectionState::Connected { .. } | ConnectionState::Connecting => {}
         ConnectionState::Disconnected => {
             lines.push(Line::from(vec![
                 Span::styled(

@@ -240,7 +240,6 @@ async fn run_persona_task(
             return PersonaResult {
                 kind,
                 task,
-                fork_path,
                 success: false,
                 summary: String::new(),
                 error: Some(format!("executor error: {err}")),

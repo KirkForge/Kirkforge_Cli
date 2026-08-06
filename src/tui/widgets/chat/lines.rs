@@ -308,7 +308,7 @@ pub(super) fn build_chat_lines(
 
     // Connection banner at top.
     match &state.connection {
-        ConnectionState::Connected { .. } => {}
+        ConnectionState::Connected { .. } | ConnectionState::Connecting => {}
         ConnectionState::Disconnected => {
             lines.push(Line::from(vec![
                 Span::styled(

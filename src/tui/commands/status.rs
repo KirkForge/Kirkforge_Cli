@@ -19,7 +19,7 @@ use crate::tui::app::{AppState, ConnectionState};
 pub async fn handle_status_command(_args: &str, state: &AppState) -> String {
     let model = match &state.connection {
         ConnectionState::Connected { model, .. } => model.clone(),
-        ConnectionState::Disconnected => "(disconnected)".to_string(),
+        ConnectionState::Disconnected | ConnectionState::Connecting => "(disconnected)".to_string(),
         ConnectionState::Error(e) => format!("(error: {e})"),
     };
 

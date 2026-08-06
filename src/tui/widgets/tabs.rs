@@ -84,7 +84,8 @@ pub fn render_models(f: &mut Frame, area: Rect, state: &AppState) {
             lines.push(Line::from(Span::raw(format!("   Uptime: {duration}"))));
             let _ = since; // suppress unused warning
         }
-        crate::tui::app::ConnectionState::Disconnected => {
+        crate::tui::app::ConnectionState::Disconnected
+        | crate::tui::app::ConnectionState::Connecting => {
             lines.push(Line::from(Span::styled(
                 " ⚡ Disconnected",
                 Style::default().fg(Color::Red),

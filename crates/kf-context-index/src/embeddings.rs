@@ -3,21 +3,14 @@
 //! Pure Rust: no ML runtime, no sparse-vector crate. Vectors are
 //! `Vec<(usize, f32)>` (sorted by dimension). Tokenization is
 //! snake_case / camelCase splitting plus a kind token; doc comments
-//! are not yet captured by the index (the `Symbol` struct has no
-//! doc field), so the embedding is built from name + kind only — the
-//! plumbing for doc text is here so the index can grow into it.
+//! from `Symbol.doc` are weighted 2x so symbols with descriptive docs
+//! rank higher for semantic queries.
 //!
 //! ponytail: TF-IDF over code tokens. The upgrade path is a real
 //! embedding model, but that would pull in `candle`/`ort`/`ndarray`
 //! and blow the binary-size budget (see ADR-037 Phase 7).
 
 use crate::{ContextIndex, Symbol, SymbolKind};
-
-/// Optional doc-comment lookup: given a symbol, return its doc text.
-/// The current `ContextIndex` does not carry doc comments, so callers
-/// pass `None`; the slot exists for a future Phase that extracts
-/// `///`/`//`/`#` comments via tree-sitter.
-pub type DocLookup<'a> = Option<&'a dyn Fn(&Symbol) -> Option<String>>;
 
 /// A sparse vector dimension → weight pair. Vectors are kept sorted
 /// by dimension so cosine / dot-product is a linear merge.
@@ -179,16 +172,14 @@ fn split_doc(doc: &str) -> Vec<String> {
 
 /// Build a vocabulary across every symbol in the index.
 ///
-/// `doc` is an optional lookup from `(file, line)` → doc-comment text.
-/// The current `ContextIndex` does not carry doc comments, so callers
-/// pass `None`; the slot exists for a future Phase that extracts
-/// `///`/`//`/`#` comments via tree-sitter.
-pub fn build_vocabulary(symbols: &[Symbol], docs: DocLookup<'_>) -> Vocabulary {
+/// Doc comments from `Symbol.doc` are included in tokenization with
+/// double weight so symbols with descriptive docs rank higher for
+/// semantic queries.
+pub fn build_vocabulary(symbols: &[Symbol]) -> Vocabulary {
     let mut vocab = Vocabulary::default();
     for sym in symbols {
         let mut seen_in_doc: std::collections::HashSet<usize> = std::collections::HashSet::new();
-        let doc_text = docs.and_then(|f| f(sym));
-        for tok in tokenize_symbol(sym, doc_text.as_deref()) {
+        for tok in tokenize_symbol(sym, sym.doc.as_deref()) {
             let idx = vocab.intern(&tok);
             seen_in_doc.insert(idx);
         }
@@ -230,18 +221,15 @@ pub fn embed_symbol(symbol: &Symbol, vocab: &Vocabulary, doc: Option<&str>) -> S
 /// Build embeddings for every symbol in the index. The returned list
 /// is in the same order as `index.symbols()`, with `symbol_idx`
 /// matching that position.
-pub fn build_embeddings(index: &ContextIndex, docs: DocLookup<'_>) -> Vec<SymbolEmbedding> {
+pub fn build_embeddings(index: &ContextIndex) -> Vec<SymbolEmbedding> {
     let symbols = index.symbols();
-    let vocab = build_vocabulary(symbols, docs);
+    let vocab = build_vocabulary(symbols);
     symbols
         .iter()
         .enumerate()
-        .map(|(i, sym)| {
-            let doc_text = docs.and_then(|f| f(sym));
-            SymbolEmbedding {
-                symbol_idx: i,
-                vector: embed_symbol(sym, &vocab, doc_text.as_deref()),
-            }
+        .map(|(i, sym)| SymbolEmbedding {
+            symbol_idx: i,
+            vector: embed_symbol(sym, &vocab, sym.doc.as_deref()),
         })
         .collect()
 }
@@ -347,6 +335,7 @@ mod tests {
             file: PathBuf::from("src/lib.rs"),
             line: 1,
             end_line: 1,
+            doc: None,
         }
     }
 
@@ -355,7 +344,7 @@ mod tests {
         let a = sym("authenticate_user", SymbolKind::Function);
         let b = sym("authenticate_user", SymbolKind::Function);
         let syms = vec![a.clone(), b.clone()];
-        let vocab = build_vocabulary(&syms, None);
+        let vocab = build_vocabulary(&syms);
         let va = embed_symbol(&a, &vocab, None);
         let vb = embed_symbol(&b, &vocab, None);
         let sim = cosine_similarity(&va, &vb);
@@ -374,7 +363,7 @@ mod tests {
             .collect::<Vec<_>>();
         let mut syms = vec![a.clone(), b.clone()];
         syms.extend(filler);
-        let vocab = build_vocabulary(&syms, None);
+        let vocab = build_vocabulary(&syms);
         let va = embed_symbol(&a, &vocab, None);
         let vb = embed_symbol(&b, &vocab, None);
         let sim = cosine_similarity(&va, &vb);
@@ -387,7 +376,7 @@ mod tests {
     #[test]
     fn empty_index_does_not_crash() {
         let idx = ContextIndex::new();
-        let embs = build_embeddings(&idx, None);
+        let embs = build_embeddings(&idx);
         assert!(embs.is_empty());
     }
 
@@ -408,7 +397,7 @@ mod tests {
         let fn_sym = sym("Auth", SymbolKind::Function);
         let struct_sym = sym("Auth", SymbolKind::Struct);
         let syms = vec![fn_sym.clone(), struct_sym.clone()];
-        let vocab = build_vocabulary(&syms, None);
+        let vocab = build_vocabulary(&syms);
         let vfn = embed_symbol(&fn_sym, &vocab, None);
         let vstruct = embed_symbol(&struct_sym, &vocab, None);
         assert!(
@@ -424,7 +413,7 @@ mod tests {
             sym("parse_config", SymbolKind::Function),
             sym("read_file", SymbolKind::Function),
         ];
-        let vocab = build_vocabulary(&symbols, None);
+        let vocab = build_vocabulary(&symbols);
         let q = embed_query("auth user", &vocab);
         let target = embed_symbol(&symbols[0], &vocab, None);
         let other = embed_symbol(&symbols[1], &vocab, None);
@@ -513,7 +502,7 @@ mod tests {
         let a = sym("UserAccount", SymbolKind::Struct);
         let b = sym("UserAccount", SymbolKind::Struct);
         let syms = vec![a.clone(), b.clone()];
-        let vocab = build_vocabulary(&syms, None);
+        let vocab = build_vocabulary(&syms);
         let va = embed_symbol(&a, &vocab, None);
         let vb = embed_symbol(&b, &vocab, None);
         let sim = cosine_similarity(&va, &vb);
@@ -532,7 +521,7 @@ mod tests {
             .collect::<Vec<_>>();
         let mut syms = vec![a.clone(), b.clone()];
         syms.extend(filler);
-        let vocab = build_vocabulary(&syms, None);
+        let vocab = build_vocabulary(&syms);
         let va = embed_symbol(&a, &vocab, None);
         let vb = embed_symbol(&b, &vocab, None);
         let sim = cosine_similarity(&va, &vb);
@@ -550,24 +539,14 @@ mod tests {
             file: PathBuf::from("src/profile.rs"),
             line: 1,
             end_line: 10,
+            doc: Some("User profile data".to_string()),
         };
         let unrelated = sym("parse_config", SymbolKind::Function);
         let symbols = vec![profile.clone(), unrelated.clone()];
-        let mut docs: std::collections::HashMap<(String, u32), String> =
-            std::collections::HashMap::new();
-        docs.insert(
-            (profile.file.to_string_lossy().to_string(), profile.line),
-            "User profile data".to_string(),
-        );
-        let lookup = |s: &Symbol| {
-            docs.get(&(s.file.to_string_lossy().to_string(), s.line))
-                .cloned()
-        };
-        let doc_lookup: DocLookup<'_> = Some(&lookup);
-        let vocab = build_vocabulary(&symbols, doc_lookup);
+        let vocab = build_vocabulary(&symbols);
         let q = embed_query("user profile", &vocab);
-        let target = embed_symbol(&profile, &vocab, Some("User profile data"));
-        let other = embed_symbol(&unrelated, &vocab, None);
+        let target = embed_symbol(&profile, &vocab, profile.doc.as_deref());
+        let other = embed_symbol(&unrelated, &vocab, unrelated.doc.as_deref());
         let sim_target = cosine_similarity(&q, &target);
         let sim_other = cosine_similarity(&q, &other);
         assert!(

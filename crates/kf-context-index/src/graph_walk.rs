@@ -235,6 +235,7 @@ mod tests {
             file: PathBuf::from(file),
             line: 1,
             end_line: 1,
+            doc: None,
         }
     }
 

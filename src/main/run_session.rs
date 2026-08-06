@@ -426,7 +426,18 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
                         );
                         return Some(idx);
                     }
-                    tracing::info!("context index cache is stale (HEAD mismatch), rebuilding");
+                    tracing::info!("context index cache is stale (HEAD mismatch), performing incremental rebuild");
+                    let (idx, changed) = kf_context_index::ContextIndex::incremental_rebuild(cached, path);
+                    tracing::info!(
+                        symbol_count = idx.symbols().len(),
+                        changed_files = changed,
+                        "incrementally rebuilt repo-graph context index"
+                    );
+                    let head = kf_context_index::current_head(path).unwrap_or_default();
+                    if let Err(e) = idx.save(&cache_path, &head) {
+                        tracing::warn!(error = %e, "failed to save context index cache");
+                    }
+                    return Some(idx);
                 } else {
                     tracing::info!("context index cache is corrupt, rebuilding");
                 }

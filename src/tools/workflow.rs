@@ -242,6 +242,7 @@ impl StepRunner for TaskSpawnerStepRunner {
                 prompt: prompt.to_string(),
                 persona: persona.to_string(),
                 model: None,
+                max_turns: 1,
             })
             .await
             .map_err(|e| anyhow::anyhow!("step '{name}' failed: {e}"))
@@ -335,6 +336,7 @@ impl StepRunner for TaskSpawnerStepRunner {
                                 prompt: req.prompt,
                                 persona: req.persona,
                                 model: None,
+                                max_turns: 1,
                             })
                             .await
                             .map_err(|e| anyhow::anyhow!("step '{}' failed: {e}", req.name))?;

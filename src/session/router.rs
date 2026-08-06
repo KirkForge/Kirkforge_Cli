@@ -79,8 +79,6 @@ pub enum RouteMethod {
     Local,
     /// LLM-based classification.
     Llm,
-    /// Previous classification reused (cache hit).
-    Cached,
 }
 
 /// Classify a user message using local keyword heuristics.
@@ -525,13 +523,10 @@ mod tests {
     fn test_route_method_debug_format() {
         let local = RouteMethod::Local;
         let llm = RouteMethod::Llm;
-        let cached = RouteMethod::Cached;
         let s_local = format!("{local:?}");
         let s_llm = format!("{llm:?}");
-        let s_cached = format!("{cached:?}");
         assert!(s_local.contains("Local"));
         assert!(s_llm.contains("Llm"));
-        assert!(s_cached.contains("Cached"));
     }
 
     #[test]

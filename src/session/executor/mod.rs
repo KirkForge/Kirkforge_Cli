@@ -682,8 +682,22 @@ impl Executor {
         tool: &str,
         outcome: &crate::shared::ToolOutcome,
         event_tx: &mpsc::Sender<TurnEvent>,
-    ) {
-        self.cost.observe_tool_outcome(tool, outcome, event_tx);
+    ) -> bool {
+        let is_doom = self.cost.observe_tool_outcome(tool, outcome, event_tx);
+        if is_doom {
+            let hint = "[DOOM LOOP DETECTED] You are repeating the same failing action. Stop, reconsider your approach, and try a fundamentally different strategy.";
+            let _ = self.conversation.append(Message {
+                role: Role::System,
+                content: hint.to_string(),
+                content_parts: None,
+                thinking: None,
+                tool_calls: None,
+                tool_call_id: None,
+                tool_name: None,
+                token_count: None,
+            });
+        }
+        is_doom
     }
 
     /// Install a full system-prompt override (e.g. from `--system`).

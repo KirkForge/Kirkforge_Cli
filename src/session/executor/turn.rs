@@ -22,7 +22,7 @@ use super::{ApprovalRequest, Executor};
 
 type RunningTask = (
     usize,
-    tokio::task::JoinHandle<Option<(ToolInvocation, ToolOutcome)>>,
+    tokio::task::JoinHandle<Option<(ToolInvocation, ToolOutcome, u64)>>,
 );
 
 pub struct PostTurnHookGuard {
@@ -273,7 +273,6 @@ impl Executor {
         }
 
         let mut tool_calls: Vec<ToolInvocation> = Vec::new();
-        let mut already_retried_parse = false;
         let mut retry_tracker = RetryTracker::new();
         let turn_start = Instant::now();
 
@@ -307,6 +306,29 @@ impl Executor {
 
             match outcome {
                 IterationOutcome::Finished(finish_reason) => {
+                    if finish_reason == crate::shared::FinishReason::Length {
+                        crate::send_or_warn!(
+                            event_tx
+                                .send(TurnEvent::Token(
+                                    "\n\u{26a0} Response was truncated (max tokens). Continuing...\n".into()
+                                ))
+                                .await,
+                            "TurnEvent receiver dropped; discarding event"
+                        );
+                        self.conversation
+                            .append_async(Message {
+                                role: Role::User,
+                                content: "Your previous response was truncated due to length. Continue exactly where you left off, without repeating any content.".into(),
+                                content_parts: None,
+                                thinking: None,
+                                tool_calls: None,
+                                tool_call_id: None,
+                                tool_name: None,
+                                token_count: None,
+                            })
+                            .await?;
+                        continue;
+                    }
                     record_turn_metric(
                         &self.model_name,
                         turn_start,
@@ -376,9 +398,7 @@ impl Executor {
                     }
                 }
                 IterationOutcome::ParseError => {
-                    if !already_retried_parse {
-                        already_retried_parse = true;
-
+                    if retry_tracker.can_retry() {
                         retry_tracker.wait_before_retry().await;
                         retry_tracker.record_retry();
 
@@ -736,6 +756,7 @@ impl Executor {
         _invocation: &ToolInvocation,
         outcome: ToolOutcome,
         resolved_path: Option<&std::path::Path>,
+        duration_ms: u64,
         _approval_sender: &mpsc::UnboundedSender<ApprovalRequest>,
         _cancelled: &AtomicBool,
         event_tx: &mpsc::Sender<TurnEvent>,
@@ -903,15 +924,7 @@ impl Executor {
                 self.sandbox.mark_read(&resolved);
             }
 
-            let tool_start = Instant::now();
-            let outcome =
-                tokio::time::timeout(self.tool_call_timeout(), std::future::ready(outcome))
-                    .await
-                    .unwrap_or(ToolOutcome::Failure(crate::shared::ToolError::Timeout {
-                        after_secs: self.tool_call_timeout().as_secs(),
-                    }));
-            let tool_duration = tool_start.elapsed();
-
+            // ponytail: outcome already computed in Phase 2 (where timeout ran); no second timeout here.
             let outcome = apply_budget_slice(outcome);
             let outcome_for_emit = outcome.clone();
             let edit_diff =
@@ -920,7 +933,7 @@ impl Executor {
             record(MetricEvent::ToolCall {
                 name: tc.name.clone(),
                 success: tool_outcome_success(&outcome_for_emit),
-                duration_ms: tool_duration.as_millis() as u64,
+                duration_ms: 0,
                 error_kind: tool_error_kind(&outcome_for_emit).map(String::from),
             });
 
@@ -988,7 +1001,7 @@ impl Executor {
         record(MetricEvent::ToolCall {
             name: tc.name.clone(),
             success: tool_outcome_success(&outcome_for_emit),
-            duration_ms: 0, // body ran in Phase 2; duration recorded there via metrics proxy
+            duration_ms,
             error_kind: tool_error_kind(&outcome_for_emit).map(String::from),
         });
 
@@ -1102,7 +1115,7 @@ impl Executor {
         // Non-file tools store `None`.
         let mut results: std::collections::HashMap<
             usize,
-            (ToolInvocation, ToolOutcome, Option<std::path::PathBuf>),
+            (ToolInvocation, ToolOutcome, Option<std::path::PathBuf>, u64),
         > = std::collections::HashMap::with_capacity(prepared.len());
         let deterministic = self.is_deterministic();
         for prep in prepared {
@@ -1114,8 +1127,8 @@ impl Executor {
             if deterministic {
                 // Run sequentially — no tokio::spawn, no concurrency.
                 let outcome = run_prepared_call(prep).await;
-                if let Some((invocation, result)) = outcome {
-                    results.insert(idx, (invocation, result, None));
+                if let Some((invocation, result, ms)) = outcome {
+                    results.insert(idx, (invocation, result, None, ms));
                 }
             } else {
                 let handle = tokio::spawn(run_prepared_call(prep));
@@ -1172,12 +1185,13 @@ impl Executor {
                 continue;
             };
             let tc = &mut tcs[idx];
-            let (invocation, outcome) = pair;
+            let (invocation, outcome, duration_ms) = pair;
             self.record_tool_result(
                 tc,
                 &invocation,
                 outcome,
                 None,
+                duration_ms,
                 approval_sender,
                 cancelled,
                 event_tx,
@@ -1245,6 +1259,7 @@ impl Executor {
                                 message: denied,
                             }),
                             Some(path.clone()),
+                            0,
                         ),
                     );
                     continue;
@@ -1252,14 +1267,14 @@ impl Executor {
             }
 
             let invocation = prep.invocation.clone();
-            let outcome = run_prepared_call(prep).await.map(|(_, o)| o);
-            if let Some(ref o) = outcome {
+            let outcome = run_prepared_call(prep).await.map(|(_, o, ms)| (o, ms));
+            if let Some((ref o, ms)) = outcome {
                 // Mark reads immediately so later writes in the same batch
                 // see them when their read-before-edit gate runs.
                 if name == "read_file" || name == "read_image" {
                     self.sandbox.mark_read(&path);
                 }
-                results.insert(idx, (invocation, o.clone(), Some(path.clone())));
+                results.insert(idx, (invocation, o.clone(), Some(path.clone()), ms));
             }
         }
 
@@ -1302,7 +1317,8 @@ impl Executor {
                 continue;
             }
 
-            let Some((invocation, outcome, resolved_path)) = results.remove(&idx) else {
+            let Some((invocation, outcome, resolved_path, _duration_ms)) = results.remove(&idx)
+            else {
                 let err = format!("Tool call {} did not return an outcome", tc.id);
                 crate::send_or_warn!(
                     event_tx
@@ -1377,6 +1393,7 @@ impl Executor {
                 &invocation,
                 outcome,
                 resolved_path.as_deref(),
+                0,
                 approval_sender,
                 cancelled,
                 event_tx,
@@ -1818,13 +1835,14 @@ struct PreparedCall {
 /// their `JoinHandle` in the collect loop (WO 15.7 2.3) — a dropped
 /// `JoinHandle` detaches the task instead of stopping it, so the collect
 /// loop aborts the remaining un-awaited handles on cancellation.
-async fn run_prepared_call(prep: PreparedCall) -> Option<(ToolInvocation, ToolOutcome)> {
+async fn run_prepared_call(prep: PreparedCall) -> Option<(ToolInvocation, ToolOutcome, u64)> {
     // Short-circuit when the token was already cancelled at spawn time
     // (the `tool_cancel_token` helper snapshots the `cancelled` flag).
     if prep.cancel_token.is_cancelled() {
         return Some((
             prep.invocation,
             ToolOutcome::Failure(crate::shared::ToolError::Cancelled),
+            0,
         ));
     }
     let ctx = crate::tools::ToolContext {
@@ -1833,6 +1851,7 @@ async fn run_prepared_call(prep: PreparedCall) -> Option<(ToolInvocation, ToolOu
         task_spawner: None,
         tools: None,
     };
+    let start = Instant::now();
     let outcome = tokio::time::timeout(
         prep.timeout,
         prep.tool.run(&ctx, prep.invocation.arguments.clone()),
@@ -1841,5 +1860,6 @@ async fn run_prepared_call(prep: PreparedCall) -> Option<(ToolInvocation, ToolOu
     .unwrap_or(ToolOutcome::Failure(crate::shared::ToolError::Timeout {
         after_secs: prep.timeout.as_secs(),
     }));
-    Some((prep.invocation, outcome))
+    let duration_ms = start.elapsed().as_millis() as u64;
+    Some((prep.invocation, outcome, duration_ms))
 }

@@ -14,10 +14,9 @@ use tokio::sync::mpsc;
 #[derive(Debug, Clone)]
 pub struct TaskRequest {
     pub prompt: String,
-    /// Restrict the subagent toolset: "explore", "plan", or "coder".
     pub persona: String,
-    /// Model override for this subagent. None = use parent session model.
     pub model: Option<String>,
+    pub max_turns: usize,
 }
 
 /// Handle returned for a background task.
@@ -70,18 +69,21 @@ impl Default for TaskManager {
 /// return the final assistant summary.
 pub struct Task {
     task_manager: Arc<Mutex<TaskManager>>,
+    bg_semaphore: Arc<tokio::sync::Semaphore>,
 }
 
 impl Task {
     pub fn new() -> Self {
         Self {
             task_manager: Arc::new(Mutex::new(TaskManager::new())),
+            bg_semaphore: Arc::new(tokio::sync::Semaphore::new(4)),
         }
     }
 
     pub fn with_manager(manager: Arc<Mutex<TaskManager>>) -> Self {
         Self {
             task_manager: manager,
+            bg_semaphore: Arc::new(tokio::sync::Semaphore::new(4)),
         }
     }
 }
@@ -119,6 +121,11 @@ impl Tool for Task {
                     "model": {
                         "type": "string",
                         "description": "Model to use for this subagent (optional). If omitted, uses the parent session's model. Example: 'qwen2.5:0.5b' for a cheap read-only exploration, 'opencode/big-pickle' for a free subagent."
+                    },
+                    "max_turns": {
+                        "type": "integer",
+                        "default": 1,
+                        "description": "Maximum number of model turns for this subagent (1 = single turn, higher = multi-turn dialog). The subagent loops until FinishReason::Stop or max_turns reached."
                     }
                 },
                 "required": ["prompt"]
@@ -149,6 +156,11 @@ impl Tool for Task {
             .get("background")
             .and_then(|b| b.as_bool())
             .unwrap_or(false);
+        let max_turns = args
+            .get("max_turns")
+            .and_then(|m| m.as_u64())
+            .map(|m| (m as usize).max(1))
+            .unwrap_or(1);
 
         let spawner = match &ctx.task_spawner {
             Some(s) => s.clone(),
@@ -165,6 +177,7 @@ impl Tool for Task {
                 prompt: prompt.clone(),
                 persona: persona.clone(),
                 model: model.clone(),
+                max_turns,
             };
             let id = {
                 let mut guard = manager.lock().unwrap_or_else(|e| e.into_inner());
@@ -174,8 +187,17 @@ impl Tool for Task {
                 })
             };
             let id_for_spawn = id.clone();
+            let permit = match self.bg_semaphore.clone().try_acquire_owned() {
+                Ok(p) => p,
+                Err(_) => {
+                    return ToolOutcome::Error {
+                        message: "Background task limit reached (4 concurrent). Wait for existing tasks to finish, or retrieve results with task_output.".to_string(),
+                    };
+                }
+            };
             tokio::spawn(async move {
                 let result = spawner.run_task(request).await;
+                drop(permit);
                 let mut guard = manager.lock().unwrap_or_else(|e| e.into_inner());
                 if let Some(handle) = guard.tasks.get_mut(&id_for_spawn) {
                     match result {
@@ -194,6 +216,7 @@ impl Tool for Task {
                 prompt,
                 persona,
                 model,
+                max_turns,
             };
             match spawner.run_task(request).await {
                 Ok(summary) => ToolOutcome::Success { content: summary },
@@ -416,10 +439,33 @@ impl TaskSpawner for InProcessTaskSpawner {
 
         let cancelled = Arc::new(AtomicBool::new(false));
         let prompt = build_task_prompt(&request.persona, &request.prompt);
-        executor
-            .run_turn_collecting(&prompt, &approval_tx, &cancelled)
-            .await
-            .map_err(|e| format!("task turn failed: {e}"))?;
+
+        for turn_num in 0..request.max_turns {
+            executor
+                .run_turn_collecting(&prompt, &approval_tx, &cancelled)
+                .await
+                .map_err(|e| format!("task turn {turn_num} failed: {e}"))?;
+
+            if turn_num + 1 >= request.max_turns {
+                break;
+            }
+
+            let last = executor
+                .conversation_log()
+                .all()
+                .iter()
+                .rev()
+                .find(|m| matches!(m.role, Role::Assistant));
+            let finished = match last {
+                Some(m) => {
+                    m.tool_calls.is_none() || m.tool_calls.as_ref().is_none_or(|t| t.is_empty())
+                }
+                None => true,
+            };
+            if finished {
+                break;
+            }
+        }
 
         let summary = executor
             .conversation_log()
@@ -545,6 +591,7 @@ mod tests {
             prompt: "explore the codebase".to_string(),
             persona: "explorer".to_string(),
             model: Some("opencode/big-pickle".to_string()),
+            max_turns: 1,
         };
         assert_eq!(req.model.as_deref(), Some("opencode/big-pickle"));
     }
@@ -555,6 +602,7 @@ mod tests {
             prompt: "explore the codebase".to_string(),
             persona: "explorer".to_string(),
             model: None,
+            max_turns: 1,
         };
         assert!(req.model.is_none());
     }
@@ -693,6 +741,7 @@ mod tests {
             prompt: "p".into(),
             persona: "coder".into(),
             model: Some("m".into()),
+            max_turns: 3,
         };
         let s = format!("{req:?}");
         assert!(s.contains("coder") && s.contains("p") && s.contains("m"));

@@ -49,7 +49,7 @@ impl CostTracker {
         tool: &str,
         outcome: &ToolOutcome,
         event_tx: &mpsc::Sender<TurnEvent>,
-    ) {
+    ) -> bool {
         let is_error = !tool_outcome_success(outcome);
         let error_text = if is_error {
             let mut s = String::new();
@@ -62,13 +62,13 @@ impl CostTracker {
                 }
                 _ => {
                     self.doom_loop_tracker.reset();
-                    return;
+                    return false;
                 }
             }
             s
         } else {
             self.doom_loop_tracker.reset();
-            return;
+            return false;
         };
 
         if let Some(hit) = self.doom_loop_tracker.observe(tool, &error_text) {
@@ -84,7 +84,9 @@ impl CostTracker {
             }) {
                 tracing::warn!(error = %e, "failed to send DoomLoopDetected to TUI");
             }
+            return true;
         }
+        false
     }
 
     /// Flush the carryover profile to disk (if enabled) and push it to

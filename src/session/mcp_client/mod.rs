@@ -58,6 +58,26 @@ use error::McpError;
 pub use manager::{McpClientManager, McpToolDef};
 use spawn::{spawn_child_reap, spawn_stderr_drain};
 
+/// MCP server capabilities that kf-code does not yet support.
+const UNSUPPORTED_CAPABILITIES: &[&str] = &["resources", "prompts", "sampling", "roots"];
+
+/// Log a warning for each unsupported capability advertised by the server.
+fn warn_unsupported_capabilities(server_name: &str, init_result: &serde_json::Value) {
+    let caps = match init_result.get("capabilities").and_then(|c| c.as_object()) {
+        Some(c) => c,
+        None => return,
+    };
+    for &cap in UNSUPPORTED_CAPABILITIES {
+        if caps.contains_key(cap) {
+            tracing::warn!(
+                server = %server_name,
+                capability = cap,
+                "MCP server advertises unsupported capability"
+            );
+        }
+    }
+}
+
 /// Time budget for the MCP handshake (`initialize` request).
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -93,8 +113,8 @@ fn json_id_to_string(id: &serde_json::Value) -> Option<String> {
 /// A single MCP server connection.
 ///
 /// Spawns the configured command, performs the `initialize`→`notifications/initialized`
-/// handshake, discovers tools, and provides methods for calling tools and
-/// reading resources. For `transport = "http"`, this wraps the
+/// handshake, discovers tools, and provides methods for calling tools
+/// (`tools/list` + `tools/call`). For `transport = "http"`, this wraps the
 /// streamable-HTTP transport instead of a child process.
 enum McpClient {
     /// stdio child-process transport (original implementation).
@@ -285,6 +305,8 @@ impl McpClient {
             tracing::warn!(server = %config.name, response = %resp, "MCP initialize response missing result");
             return None;
         }
+
+        warn_unsupported_capabilities(&config.name, resp.get("result").unwrap());
 
         // Send initialized notification (no response expected)
         let init_done = serde_json::json!({

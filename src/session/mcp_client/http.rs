@@ -167,6 +167,8 @@ impl McpHttpTransport {
             return None;
         }
 
+        super::warn_unsupported_capabilities(&config.name, resp.get("result").unwrap());
+
         transport
             .send_notification(&serde_json::json!({
                 "jsonrpc": "2.0",

@@ -88,6 +88,12 @@ impl AdapterSwap {
                     gemini: config.model.gemini_api_key.clone(),
                     kimi: config.model.kimi_api_key.clone(),
                 },
+                &adapters::ProviderConfig {
+                    aws_region: config.model.aws_region.clone(),
+                    gcp_project_id: config.model.gcp_project_id.clone(),
+                    gcp_region: config.model.gcp_region.clone(),
+                    gcp_service_account_path: config.model.gcp_service_account_path.clone(),
+                },
             ),
         );
 
@@ -131,6 +137,12 @@ impl AdapterSwap {
                     deepseek: config.model.deepseek_api_key.clone(),
                     gemini: config.model.gemini_api_key.clone(),
                     kimi: config.model.kimi_api_key.clone(),
+                },
+                &adapters::ProviderConfig {
+                    aws_region: config.model.aws_region.clone(),
+                    gcp_project_id: config.model.gcp_project_id.clone(),
+                    gcp_region: config.model.gcp_region.clone(),
+                    gcp_service_account_path: config.model.gcp_service_account_path.clone(),
                 },
             ),
         );

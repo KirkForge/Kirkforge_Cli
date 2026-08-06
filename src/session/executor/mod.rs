@@ -166,6 +166,9 @@ impl Executor {
         // Push the deterministic-mode seed down to the active adapter.
         adapter.set_seed(cfg.model.seed);
 
+        adapter.set_max_tokens(cfg.model.max_tokens);
+        adapter.set_extended_thinking(cfg.model.extended_thinking);
+
         let adapter_swap = AdapterSwap::new(
             model_name.clone(),
             cfg.model.ollama_host.clone(),

@@ -442,8 +442,8 @@ pub fn drain_approval_requests(
 mod tests {
     use super::*;
     use crate::session::executor::ApprovalResponder;
-    use crate::shared::{Message, Role};
     use crate::shared::test_util::app_state;
+    use crate::shared::{Message, Role};
     use tokio::sync::mpsc;
 
     /// Helper to build a minimal `Message` for the compaction test.

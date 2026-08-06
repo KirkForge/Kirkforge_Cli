@@ -320,6 +320,12 @@ impl TaskSpawner for InProcessTaskSpawner {
                     gemini: self.config.model.gemini_api_key.clone(),
                     kimi: self.config.model.kimi_api_key.clone(),
                 },
+                &adapters::ProviderConfig {
+                    aws_region: self.config.model.aws_region.clone(),
+                    gcp_project_id: self.config.model.gcp_project_id.clone(),
+                    gcp_region: self.config.model.gcp_region.clone(),
+                    gcp_service_account_path: self.config.model.gcp_service_account_path.clone(),
+                },
             ),
             &self.config,
         );

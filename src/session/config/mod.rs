@@ -346,6 +346,14 @@ fn merge_toml_into_config(cfg: &mut Config, table: toml::Table) {
     if let Some(Value::Boolean(v)) = table.get("json_mode") {
         cfg.model.json_mode = *v;
     }
+    if let Some(Value::Integer(v)) = table.get("max_tokens") {
+        if let Ok(n) = u32::try_from(*v) {
+            cfg.model.max_tokens = n.max(1);
+        }
+    }
+    if let Some(Value::Boolean(v)) = table.get("extended_thinking") {
+        cfg.model.extended_thinking = *v;
+    }
     if let Some(Value::Boolean(v)) = table.get("bash_sandbox_workdir") {
         cfg.security.bash_sandbox_workdir = *v;
     }
@@ -1895,7 +1903,7 @@ mod tests {
         // ModelConfig=27, SecurityConfig=18, ToolConfig=26,
         // SessionConfig=8, DisplayConfig=3
         assert_eq!(
-            CONFIG_FIELD_COUNT, 82,
+            CONFIG_FIELD_COUNT, 84,
             "CONFIG_FIELD_COUNT has drifted — did you add/remove a config field?"
         );
 

@@ -22,6 +22,10 @@ fn default_request_timeout_secs() -> u64 {
     120
 }
 
+fn default_max_tokens() -> u32 {
+    8192
+}
+
 fn default_summarize_model() -> String {
     String::new()
 }
@@ -80,6 +84,10 @@ pub struct ModelConfig {
     pub seed: Option<u64>,
     #[serde(default)]
     pub json_mode: bool,
+    #[serde(default = "default_max_tokens")]
+    pub max_tokens: u32,
+    #[serde(default)]
+    pub extended_thinking: bool,
     /// User-supplied model→adapter routing overrides. Maps model-name
     /// prefixes (e.g. `"claude-"`) to [`AdapterKind`](super::adapters::AdapterKind)
     /// variant names (e.g. `"Anthropic"`). Checked by
@@ -119,6 +127,8 @@ impl Default for ModelConfig {
             cache_dir: None,
             seed: None,
             json_mode: false,
+            max_tokens: default_max_tokens(),
+            extended_thinking: false,
             adapter_routing: HashMap::new(),
         }
     }

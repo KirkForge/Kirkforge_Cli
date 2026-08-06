@@ -28,8 +28,9 @@ pub fn resolve_api_key(provider: &str, config_key: Option<&str>) -> Option<Strin
         }
     }
 
-    // 3. Keychain — stubbed to None (Series 18), upgrade to keyring crate.
-    // TODO(Series 18): keyring::Entry integration.
+    // ponytail: keychain integration not implemented. OS keychain lookup
+    // (keyring crate) is deferred until a user requests it. Env vars and
+    // config fields cover 99% of use-cases.
     None
 }
 

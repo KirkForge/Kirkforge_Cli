@@ -315,6 +315,12 @@ pub trait ModelAdapter: Send + Sync {
     /// executor with `config.model.seed`.
     fn set_seed(&mut self, _seed: Option<u64>) {}
 
+    fn set_max_tokens(&mut self, _max_tokens: u32) {}
+
+    fn set_extended_thinking(&mut self, _enabled: bool) {}
+
+    fn set_tool_choice(&mut self, _choice: Option<crate::shared::ToolChoice>) {}
+
     async fn stream(
         &self,
         messages: &[crate::shared::Message],
@@ -336,6 +342,16 @@ pub struct ProviderApiKeys {
     pub kimi: Option<String>,
 }
 
+/// Provider-specific configuration for Bedrock and Vertex adapters,
+/// resolved from config fields and passed to [`adapter_for_with_provider`].
+#[derive(Debug, Clone, Default)]
+pub struct ProviderConfig {
+    pub aws_region: String,
+    pub gcp_project_id: String,
+    pub gcp_region: String,
+    pub gcp_service_account_path: Option<std::path::PathBuf>,
+}
+
 /// Build the right adapter from a model name string.
 pub fn adapter_for(
     model_name: &str,
@@ -353,6 +369,7 @@ pub fn adapter_for(
         None,
         None,
         &ProviderApiKeys::default(),
+        &ProviderConfig::default(),
     )
 }
 
@@ -369,6 +386,7 @@ pub fn adapter_for_with_provider(
     opencode_zen_api_key: Option<&str>,
     adapter_routing: Option<&HashMap<String, String>>,
     api_keys: &ProviderApiKeys,
+    provider_config: &ProviderConfig,
 ) -> Box<dyn ModelAdapter> {
     let override_lower = model_type_override.map(|s| s.to_lowercase());
     match adapter_kind_for_routed(
@@ -437,24 +455,18 @@ pub fn adapter_for_with_provider(
             timeout_secs,
             api_keys.anthropic.clone(),
         )),
-        AdapterKind::AnthropicBedrock => {
-            // Bedrock credentials come from env at request time, not here.
-            Box::new(anthropic_bedrock::AnthropicBedrockAdapter::new(
-                model_name,
-                "us-east-1",
-                timeout_secs,
-            ))
-        }
-        AdapterKind::AnthropicVertex => {
-            // Vertex project/region/credentials are also resolved from config at request time.
-            Box::new(anthropic_vertex::AnthropicVertexAdapter::new(
-                model_name,
-                "",
-                "us-central1",
-                None,
-                timeout_secs,
-            ))
-        }
+        AdapterKind::AnthropicBedrock => Box::new(anthropic_bedrock::AnthropicBedrockAdapter::new(
+            model_name,
+            &provider_config.aws_region,
+            timeout_secs,
+        )),
+        AdapterKind::AnthropicVertex => Box::new(anthropic_vertex::AnthropicVertexAdapter::new(
+            model_name,
+            &provider_config.gcp_project_id,
+            &provider_config.gcp_region,
+            provider_config.gcp_service_account_path.clone(),
+            timeout_secs,
+        )),
         AdapterKind::OpenCodeZen => {
             // Strip the "opencode/" prefix to get the actual model name.
             let zen_model = model_name.strip_prefix("opencode/").unwrap_or(model_name);
@@ -606,6 +618,7 @@ fn build_openai_compat_body(
     tools: &[crate::shared::ToolDef],
     json_mode: bool,
     seed: Option<u64>,
+    tool_choice: Option<&crate::shared::ToolChoice>,
 ) -> serde_json::Value {
     // Pre-compute the indices of the prefix messages that get the
     // cache_control marker. The "prefix" is everything except the
@@ -719,6 +732,20 @@ fn build_openai_compat_body(
         body["response_format"] = serde_json::json!({"type": "json_object"});
         if !tools.is_empty() {
             body["tool_choice"] = serde_json::Value::String("auto".into());
+        }
+    }
+
+    if let Some(tc) = tool_choice {
+        match tc {
+            crate::shared::ToolChoice::Auto => {
+                body["tool_choice"] = serde_json::json!("auto");
+            }
+            crate::shared::ToolChoice::Specific(name) => {
+                body["tool_choice"] = serde_json::json!({
+                    "type": "function",
+                    "function": {"name": name}
+                });
+            }
         }
     }
 
@@ -940,6 +967,7 @@ mod tests {
             None,
             None,
             &ProviderApiKeys::default(),
+            &ProviderConfig::default(),
         );
         assert_eq!(adapter.model_info().name, "anthropic.claude-3-5-sonnet");
         assert!(adapter.model_info().tool_call_format == crate::shared::ToolCallStyle::Anthropic);
@@ -1079,6 +1107,7 @@ mod tests {
             None,
             None,
             &ProviderApiKeys::default(),
+            &ProviderConfig::default(),
         );
         assert_eq!(adapter.model_info().name, "claude-3-opus");
         assert_eq!(
@@ -1099,6 +1128,7 @@ mod tests {
             None,
             None,
             &ProviderApiKeys::default(),
+            &ProviderConfig::default(),
         );
         assert_eq!(adapter.model_info().name, "claude-3-opus");
     }
@@ -1115,6 +1145,7 @@ mod tests {
             Some("test-key"),
             None,
             &ProviderApiKeys::default(),
+            &ProviderConfig::default(),
         );
         assert_eq!(adapter.model_info().name, "big-pickle");
     }
@@ -1131,6 +1162,7 @@ mod tests {
             None,
             None,
             &ProviderApiKeys::default(),
+            &ProviderConfig::default(),
         );
         assert_eq!(adapter.model_info().name, "big-pickle");
     }
@@ -1147,6 +1179,7 @@ mod tests {
             None,
             None,
             &ProviderApiKeys::default(),
+            &ProviderConfig::default(),
         );
         assert!(adapter.model_info().supports_thinking);
     }
@@ -1163,6 +1196,7 @@ mod tests {
             None,
             None,
             &ProviderApiKeys::default(),
+            &ProviderConfig::default(),
         );
         assert!(adapter.model_info().supports_thinking);
     }
@@ -1179,6 +1213,7 @@ mod tests {
             None,
             None,
             &ProviderApiKeys::default(),
+            &ProviderConfig::default(),
         );
         assert!(adapter.model_info().supports_images);
     }
@@ -1195,8 +1230,52 @@ mod tests {
             None,
             None,
             &ProviderApiKeys::default(),
+            &ProviderConfig::default(),
         );
         assert_eq!(adapter.model_info().name, "my-model");
+    }
+
+    #[test]
+    fn adapter_for_with_provider_bedrock_uses_configured_region() {
+        let adapter = adapter_for_with_provider(
+            "anthropic.claude-3-5-sonnet",
+            "",
+            Some("anthropic-bedrock"),
+            "bedrock",
+            30,
+            "https://opencode.ai/zen/v1/chat/completions",
+            None,
+            None,
+            &ProviderApiKeys::default(),
+            &ProviderConfig {
+                aws_region: "eu-west-1".to_string(),
+                ..Default::default()
+            },
+        );
+        let info = adapter.model_info();
+        assert_eq!(info.name, "anthropic.claude-3-5-sonnet");
+    }
+
+    #[test]
+    fn adapter_for_with_provider_vertex_uses_configured_project_and_region() {
+        let adapter = adapter_for_with_provider(
+            "claude-3-opus",
+            "",
+            None,
+            "vertex",
+            30,
+            "https://opencode.ai/zen/v1/chat/completions",
+            None,
+            None,
+            &ProviderApiKeys::default(),
+            &ProviderConfig {
+                gcp_project_id: "my-project".to_string(),
+                gcp_region: "europe-west4".to_string(),
+                ..Default::default()
+            },
+        );
+        let info = adapter.model_info();
+        assert_eq!(info.name, "claude-3-opus");
     }
 
     #[test]
@@ -1354,7 +1433,7 @@ mod tests {
             tool_call_id: Some("call_1".into()),
             ..Default::default()
         }];
-        let body = build_openai_compat_body("m", &mi, &msgs, &[], false, None);
+        let body = build_openai_compat_body("m", &mi, &msgs, &[], false, None, None);
         assert_eq!(body["messages"][0]["role"], "tool");
         assert_eq!(body["messages"][0]["tool_call_id"], "call_1");
         assert_eq!(body["messages"][0]["content"], "result");
@@ -1381,7 +1460,7 @@ mod tests {
             }]),
             ..Default::default()
         }];
-        let body = build_openai_compat_body("m", &mi, &msgs, &[], false, None);
+        let body = build_openai_compat_body("m", &mi, &msgs, &[], false, None, None);
         assert_eq!(body["messages"][0]["role"], "assistant");
         let tcs = body["messages"][0]["tool_calls"].as_array().unwrap();
         assert_eq!(tcs[0]["id"], "call_1");
@@ -1410,6 +1489,7 @@ mod tests {
             &[],
             false,
             Some(7),
+            None,
         );
         assert_eq!(body["temperature"], 0.0);
         assert_eq!(body["seed"], 7);
@@ -1442,6 +1522,7 @@ mod tests {
             &tools,
             true,
             None,
+            None,
         );
         assert_eq!(
             body["response_format"],
@@ -1472,6 +1553,7 @@ mod tests {
             &[],
             true,
             None,
+            None,
         );
         assert!(body.get("tool_choice").is_none());
     }
@@ -1497,6 +1579,7 @@ mod tests {
             }],
             &[],
             false,
+            None,
             None,
         );
         assert!(body["messages"][0].get("cache_control").is_none());
@@ -1537,7 +1620,7 @@ mod tests {
                 ..Default::default()
             },
         ];
-        let body = build_openai_compat_body("m", &mi, &messages, &[], false, None);
+        let body = build_openai_compat_body("m", &mi, &messages, &[], false, None, None);
         let msgs = body["messages"].as_array().unwrap();
         // System message (index 0) should have cache_control (system+tools breakpoint).
         assert_eq!(

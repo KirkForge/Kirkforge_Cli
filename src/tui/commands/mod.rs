@@ -86,8 +86,8 @@ pub fn messages_to_entries(
 mod tests {
     use super::*;
     use crate::session::bash_jobs::{BashJob, JobStatus};
-    use crate::shared::{Message, Role};
     use crate::shared::test_util::app_state;
+    use crate::shared::{Message, Role};
 
     fn user_msg(content: &str) -> Message {
         Message {

@@ -183,6 +183,14 @@ pub enum ToolCallStyle {
     None,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ToolChoice {
+    #[default]
+    Auto,
+    Specific(String),
+}
+
 /// Headless Chrome configuration for the `computer_use` tool.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ComputerUseConfig {

@@ -25,6 +25,9 @@ const MAX_SSE_BUFFER_BYTES: usize = 8 * 1024 * 1024;
 /// Anthropic Messages API version we target.
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 
+/// Anthropic's cache_control breakpoint limit.
+const ANTHROPIC_CACHE_BREAKPOINT_LIMIT: usize = 4;
+
 pub struct AnthropicAdapter {
     model: String,
     api_base: String,
@@ -33,6 +36,9 @@ pub struct AnthropicAdapter {
     json_mode: bool,
     seed: Option<u64>,
     timeout_secs: u64,
+    extended_thinking: bool,
+    max_tokens: u32,
+    tool_choice: Option<crate::shared::ToolChoice>,
 }
 
 impl AnthropicAdapter {
@@ -45,7 +51,20 @@ impl AnthropicAdapter {
             json_mode: false,
             seed: None,
             timeout_secs,
+            extended_thinking: false,
+            max_tokens: 8192,
+            tool_choice: None,
         }
+    }
+
+    pub fn with_extended_thinking(mut self, enabled: bool) -> Self {
+        self.extended_thinking = enabled;
+        self
+    }
+
+    pub fn with_max_tokens(mut self, max_tokens: u32) -> Self {
+        self.max_tokens = max_tokens;
+        self
     }
 }
 
@@ -78,6 +97,18 @@ impl ModelAdapter for AnthropicAdapter {
         self.seed = seed;
     }
 
+    fn set_max_tokens(&mut self, max_tokens: u32) {
+        self.max_tokens = max_tokens;
+    }
+
+    fn set_extended_thinking(&mut self, enabled: bool) {
+        self.extended_thinking = enabled;
+    }
+
+    fn set_tool_choice(&mut self, choice: Option<crate::shared::ToolChoice>) {
+        self.tool_choice = choice;
+    }
+
     async fn stream(
         &self,
         messages: &[Message],
@@ -89,7 +120,16 @@ impl ModelAdapter for AnthropicAdapter {
                     "no Anthropic API key set (ANTHROPIC_API_KEY or [model].anthropic_api_key)"
                 )
             })?;
-        let body = build_anthropic_body(&self.model, messages, tools, self.json_mode, self.seed);
+        let body = build_anthropic_body(
+            &self.model,
+            messages,
+            tools,
+            self.json_mode,
+            self.seed,
+            self.extended_thinking,
+            self.max_tokens,
+            self.tool_choice.as_ref(),
+        );
         let url = format!("{}/v1/messages", self.api_base);
 
         let response = super::send_with_retry(|| async {
@@ -126,6 +166,9 @@ pub(crate) fn build_anthropic_body(
     tools: &[crate::shared::ToolDef],
     json_mode: bool,
     seed: Option<u64>,
+    extended_thinking: bool,
+    max_tokens: u32,
+    tool_choice: Option<&crate::shared::ToolChoice>,
 ) -> serde_json::Value {
     let mut system_blocks: Vec<serde_json::Value> = Vec::new();
     let mut anthropic_messages: Vec<serde_json::Value> = Vec::new();
@@ -188,20 +231,42 @@ pub(crate) fn build_anthropic_body(
         anthropic_messages.push(content);
     }
 
-    // Apply cache breakpoints:
-    // 1. System+tools breakpoint: the last system block already has
-    //    cache_control (set above). We also add cache_control to the
-    //    last tool definition so the entire system+tools prefix is
-    //    cached as a single unit (WO 17.5).
-    // 2. Last two prefix messages: existing markers preserved for
-    //    mid-conversation cache hits.
-    // 3. Tail breakpoint: the last user message's last content block
-    //    gets cache_control so the growing conversation tail is cached
-    //    for the next turn (WO 17.5).
-    if anthropic_messages.len() > 2 {
-        let prefix_end = anthropic_messages.len() - 1;
-        for msg in anthropic_messages.iter_mut().take(prefix_end).skip(1) {
-            if let Some(content) = msg.get_mut("content") {
+    // Apply cache breakpoints, capped at ANTHROPIC_CACHE_BREAKPOINT_LIMIT (4).
+    // Priority: system+tools breakpoint (last system block + last tool def),
+    // then last user messages (most recent first, up to remaining budget).
+    let has_tools = !tools.is_empty();
+    let mut breakpoint_count = 0;
+
+    if system_blocks
+        .iter()
+        .any(|b| b.get("cache_control").is_some())
+    {
+        breakpoint_count += 1;
+    }
+    if has_tools {
+        breakpoint_count += 1;
+    }
+
+    let remaining = ANTHROPIC_CACHE_BREAKPOINT_LIMIT.saturating_sub(breakpoint_count);
+
+    if remaining > 0 && !anthropic_messages.is_empty() {
+        let mut user_indices: Vec<usize> = anthropic_messages
+            .iter()
+            .enumerate()
+            .rev()
+            .filter_map(|(i, m)| {
+                if m.get("role").and_then(|r| r.as_str()) == Some("user") {
+                    Some(i)
+                } else {
+                    None
+                }
+            })
+            .take(remaining)
+            .collect();
+        user_indices.sort();
+
+        for idx in user_indices {
+            if let Some(content) = anthropic_messages[idx].get_mut("content") {
                 if let Some(arr) = content.as_array_mut() {
                     if let Some(last_block) = arr.last_mut() {
                         last_block["cache_control"] = serde_json::json!({"type": "ephemeral"});
@@ -211,35 +276,19 @@ pub(crate) fn build_anthropic_body(
         }
     }
 
-    // Tail breakpoint: mark the last user message's last content block
-    // with cache_control: ephemeral so the conversation tail is cached
-    // for the next turn (WO 17.5).
-    if !anthropic_messages.is_empty() {
-        if let Some(last_msg) = anthropic_messages.last_mut() {
-            if let Some(content) = last_msg.get_mut("content") {
-                if let Some(arr) = content.as_array_mut() {
-                    if let Some(last_block) = arr.last_mut() {
-                        // Only add if not already present (prefix markers
-                        // may have added it for short conversations).
-                        if last_block.get("cache_control").is_none() {
-                            last_block["cache_control"] = serde_json::json!({"type": "ephemeral"});
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // ceiling: max_tokens hardcoded to 8192; not configurable. Making it a
-    // Config field touches every Config site (Default impl, test literals
-    // across executor/tests, adapter_for wrappers) — out of polish-batch
-    // scope. upgrade path: Config field (WO 15.26 3.23 deferred).
     let mut body = serde_json::json!({
         "model": model,
-        "max_tokens": 8192,
+        "max_tokens": max_tokens,
         "messages": anthropic_messages,
         "stream": true,
     });
+
+    if extended_thinking {
+        body["thinking"] = serde_json::json!({
+            "type": "enabled",
+            "budget_tokens": max_tokens
+        });
+    }
 
     if !system_blocks.is_empty() {
         if system_blocks.len() == 1 {
@@ -266,6 +315,17 @@ pub(crate) fn build_anthropic_body(
             last_tool["cache_control"] = serde_json::json!({"type": "ephemeral"});
         }
         body["tools"] = serde_json::Value::Array(tool_defs);
+    }
+
+    if let Some(tc) = tool_choice {
+        match tc {
+            crate::shared::ToolChoice::Auto => {
+                body["tool_choice"] = serde_json::json!({"type": "auto"});
+            }
+            crate::shared::ToolChoice::Specific(name) => {
+                body["tool_choice"] = serde_json::json!({"type": "tool", "name": name});
+            }
+        }
     }
 
     if json_mode {
@@ -725,7 +785,8 @@ mod tests {
                 ..Default::default()
             },
         ];
-        let body = build_anthropic_body("claude-sonnet-4", &messages, &[], false, None);
+        let body =
+            build_anthropic_body("claude-sonnet-4", &messages, &[], false, None, false, 8192, None);
         assert!(body
             .get("messages")
             .unwrap()
@@ -737,7 +798,7 @@ mod tests {
     }
 
     #[test]
-    fn body_marks_last_two_prefix_messages_with_cache_control() {
+    fn body_marks_last_user_messages_with_cache_control() {
         let messages = vec![
             Message {
                 role: Role::System,
@@ -760,24 +821,23 @@ mod tests {
                 ..Default::default()
             },
         ];
-        let body = build_anthropic_body("claude-sonnet-4", &messages, &[], false, None);
+        let body =
+            build_anthropic_body("claude-sonnet-4", &messages, &[], false, None, false, 8192, None);
         let msgs = body["messages"].as_array().unwrap();
-        // First user message (prefix) is skipped for cache markers.
-        assert!(msgs[0]
-            .get("content")
-            .unwrap()
+        // First user message: has cache_control (budget allows it).
+        assert_eq!(
+            msgs[0]["content"].as_array().unwrap().last().unwrap()["cache_control"],
+            json!({"type":"ephemeral"})
+        );
+        // Assistant message: no cache_control (only user msgs get message-level markers).
+        assert!(msgs[1]["content"]
             .as_array()
             .unwrap()
             .last()
             .unwrap()
             .get("cache_control")
             .is_none());
-        // Assistant message (second prefix) gets a cache marker.
-        assert_eq!(
-            msgs[1]["content"].as_array().unwrap().last().unwrap()["cache_control"],
-            json!({"type":"ephemeral"})
-        );
-        // Last user message gets a tail breakpoint (WO 17.5).
+        // Last user message: has tail breakpoint.
         assert_eq!(
             msgs[2]["content"].as_array().unwrap().last().unwrap()["cache_control"],
             json!({"type":"ephemeral"})
@@ -971,7 +1031,7 @@ mod tests {
             description: "read a file",
             parameters: json!({"type": "object"}),
         }];
-        let body = build_anthropic_body("claude-4", &messages, &tools, false, None);
+        let body = build_anthropic_body("claude-4", &messages, &tools, false, None, false, 8192, None);
         let tools_arr = body["tools"].as_array().unwrap();
         assert_eq!(tools_arr.len(), 1);
         assert_eq!(tools_arr[0]["name"], "read_file");
@@ -985,7 +1045,7 @@ mod tests {
             content: "hi".into(),
             ..Default::default()
         }];
-        let body = build_anthropic_body("claude-4", &messages, &[], false, None);
+        let body = build_anthropic_body("claude-4", &messages, &[], false, None, false, 8192, None);
         assert!(body.get("tools").is_none());
     }
 
@@ -996,7 +1056,7 @@ mod tests {
             content: "hi".into(),
             ..Default::default()
         }];
-        let body = build_anthropic_body("claude-4", &messages, &[], false, Some(7));
+        let body = build_anthropic_body("claude-4", &messages, &[], false, Some(7), false, 8192, None);
         assert_eq!(body["temperature"], json!(0.0));
     }
 
@@ -1007,7 +1067,7 @@ mod tests {
             content: "hi".into(),
             ..Default::default()
         }];
-        let body = build_anthropic_body("claude-4", &messages, &[], false, None);
+        let body = build_anthropic_body("claude-4", &messages, &[], false, None, false, 8192, None);
         assert!(body.get("temperature").is_none());
     }
 
@@ -1019,7 +1079,7 @@ mod tests {
             tool_call_id: Some("tu_1".into()),
             ..Default::default()
         }];
-        let body = build_anthropic_body("claude-4", &messages, &[], false, None);
+        let body = build_anthropic_body("claude-4", &messages, &[], false, None, false, 8192, None);
         let msg = &body["messages"][0];
         assert_eq!(msg["role"], "user");
         let block = &msg["content"][0];
@@ -1035,7 +1095,7 @@ mod tests {
             content: "x".into(),
             ..Default::default()
         }];
-        let body = build_anthropic_body("claude-4", &messages, &[], false, None);
+        let body = build_anthropic_body("claude-4", &messages, &[], false, None, false, 8192, None);
         assert_eq!(body["messages"][0]["content"][0]["tool_use_id"], "");
     }
 
@@ -1051,7 +1111,7 @@ mod tests {
             }]),
             ..Default::default()
         }];
-        let body = build_anthropic_body("claude-4", &messages, &[], false, None);
+        let body = build_anthropic_body("claude-4", &messages, &[], false, None, false, 8192, None);
         let blocks = body["messages"][0]["content"].as_array().unwrap();
         assert_eq!(blocks.len(), 2);
         assert_eq!(blocks[0]["type"], "text");
@@ -1074,7 +1134,7 @@ mod tests {
             }]),
             ..Default::default()
         }];
-        let body = build_anthropic_body("claude-4", &messages, &[], false, None);
+        let body = build_anthropic_body("claude-4", &messages, &[], false, None, false, 8192, None);
         let blocks = body["messages"][0]["content"].as_array().unwrap();
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0]["type"], "tool_use");
@@ -1091,7 +1151,7 @@ mod tests {
             }]),
             ..Default::default()
         }];
-        let body = build_anthropic_body("claude-3-opus", &messages, &[], false, None);
+        let body = build_anthropic_body("claude-3-opus", &messages, &[], false, None, false, 8192, None);
         let block = &body["messages"][0]["content"][0];
         assert_eq!(block["type"], "image");
         assert_eq!(block["source"]["type"], "base64");
@@ -1109,7 +1169,7 @@ mod tests {
             }]),
             ..Default::default()
         }];
-        let body = build_anthropic_body("claude-3-opus", &messages, &[], false, None);
+        let body = build_anthropic_body("claude-3-opus", &messages, &[], false, None, false, 8192, None);
         let block = &body["messages"][0]["content"][0];
         assert_eq!(block["type"], "text");
         assert_eq!(block["text"], "just text");
@@ -1130,7 +1190,7 @@ mod tests {
             ]),
             ..Default::default()
         }];
-        let body = build_anthropic_body("claude-3-opus", &messages, &[], false, None);
+        let body = build_anthropic_body("claude-3-opus", &messages, &[], false, None, false, 8192, None);
         let block = &body["messages"][0]["content"][0];
         assert_eq!(block["type"], "text");
         assert_eq!(block["text"], "a[image]b");
@@ -1143,7 +1203,7 @@ mod tests {
             content: "sys".into(),
             ..Default::default()
         }];
-        let body = build_anthropic_body("claude-4", &messages, &[], false, None);
+        let body = build_anthropic_body("claude-4", &messages, &[], false, None, false, 8192, None);
         assert!(body["system"].is_object());
         assert!(!body["system"].is_array());
         assert_eq!(body["system"]["text"], "sys");
@@ -1167,7 +1227,7 @@ mod tests {
                 ..Default::default()
             },
         ];
-        let body = build_anthropic_body("claude-4", &messages, &[], false, None);
+        let body = build_anthropic_body("claude-4", &messages, &[], false, None, false, 8192, None);
         let arr = body["system"].as_array().unwrap();
         assert_eq!(arr.len(), 2);
         assert_eq!(arr[0]["text"], "sys1");
@@ -1183,7 +1243,7 @@ mod tests {
             content: "hi".into(),
             ..Default::default()
         }];
-        let body = build_anthropic_body("claude-4", &messages, &[], false, None);
+        let body = build_anthropic_body("claude-4", &messages, &[], false, None, false, 8192, None);
         assert!(body.get("system").is_none());
     }
 
@@ -1201,7 +1261,7 @@ mod tests {
                 ..Default::default()
             },
         ];
-        let body = build_anthropic_body("claude-4", &messages, &[], false, None);
+        let body = build_anthropic_body("claude-4", &messages, &[], false, None, false, 8192, None);
         // Short conversations: no prefix markers, but the tail breakpoint
         // should still be present on the last user message (WO 17.5).
         let msgs = body["messages"].as_array().unwrap();
@@ -1235,7 +1295,16 @@ mod tests {
                 parameters: serde_json::json!({"type": "object"}),
             },
         ];
-        let body = build_anthropic_body("claude-sonnet-4", &messages, &tools, false, None);
+        let body = build_anthropic_body(
+            "claude-sonnet-4",
+            &messages,
+            &tools,
+            false,
+            None,
+            false,
+            8192,
+            None,
+        );
         let tools_arr = body["tools"].as_array().unwrap();
         // First tool has no cache_control.
         assert!(
@@ -1276,7 +1345,8 @@ mod tests {
                 ..Default::default()
             },
         ];
-        let body = build_anthropic_body("claude-sonnet-4", &messages, &[], false, None);
+        let body =
+            build_anthropic_body("claude-sonnet-4", &messages, &[], false, None, false, 8192, None);
         let msgs = body["messages"].as_array().unwrap();
         // The last message is the trailing user turn.
         let last_msg = msgs.last().unwrap();
@@ -1285,6 +1355,86 @@ mod tests {
             last_block["cache_control"],
             json!({"type": "ephemeral"}),
             "last user message must have tail cache_control (WO 17.5)"
+        );
+    }
+
+    /// WO 20.2.0 P2: cache breakpoints must not exceed 4, even in long
+    /// conversations. With system + 2 user messages, we get: 1 system + 2
+    /// user = 3 breakpoints. Adding tools: +1 = 4 total.
+    #[test]
+    fn body_cache_breakpoints_capped_at_4() {
+        let mut messages = vec![Message {
+            role: Role::System,
+            content: "sys".into(),
+            ..Default::default()
+        }];
+        for i in 0..10 {
+            messages.push(Message {
+                role: Role::User,
+                content: format!("user-{i}"),
+                ..Default::default()
+            });
+            messages.push(Message {
+                role: Role::Assistant,
+                content: format!("reply-{i}"),
+                ..Default::default()
+            });
+        }
+        let tools = vec![crate::shared::ToolDef {
+            name: "bash".into(),
+            description: "x".into(),
+            parameters: serde_json::json!({"type": "object"}),
+        }];
+        let body = build_anthropic_body(
+            "claude-sonnet-4",
+            &messages,
+            &tools,
+            false,
+            None,
+            false,
+            8192,
+            None,
+        );
+
+        let mut count = 0;
+
+        // Count in system blocks
+        if let Some(sys) = body.get("system") {
+            if sys.is_object() {
+                if sys.get("cache_control").is_some() {
+                    count += 1;
+                }
+            } else if let Some(arr) = sys.as_array() {
+                count += arr
+                    .iter()
+                    .filter(|b| b.get("cache_control").is_some())
+                    .count();
+            }
+        }
+
+        // Count in tools
+        if let Some(tools_arr) = body.get("tools").and_then(|t| t.as_array()) {
+            count += tools_arr
+                .iter()
+                .filter(|t| t.get("cache_control").is_some())
+                .count();
+        }
+
+        // Count in messages
+        if let Some(msgs) = body.get("messages").and_then(|m| m.as_array()) {
+            for msg in msgs {
+                if let Some(content) = msg.get("content").and_then(|c| c.as_array()) {
+                    count += content
+                        .iter()
+                        .filter(|b| b.get("cache_control").is_some())
+                        .count();
+                }
+            }
+        }
+
+        assert_eq!(
+            count, 4,
+            "cache breakpoints must be capped at 4, got {count}"
         );
     }
 
@@ -1298,7 +1448,7 @@ mod tests {
             }]),
             ..Default::default()
         }];
-        let body = build_anthropic_body("claude-4", &messages, &[], false, None);
+        let body = build_anthropic_body("claude-4", &messages, &[], false, None, false, 8192, None);
         assert_eq!(body["system"]["type"], "text");
         assert_eq!(body["system"]["text"], "system text");
     }
@@ -1310,8 +1460,42 @@ mod tests {
             content: "hi".into(),
             ..Default::default()
         }];
-        let body = build_anthropic_body("claude-4", &messages, &[], false, None);
+        let body = build_anthropic_body("claude-4", &messages, &[], false, None, false, 8192, None);
         assert_eq!(body["max_tokens"], 8192);
+    }
+
+    #[test]
+    fn body_max_tokens_is_configurable() {
+        let messages = vec![Message {
+            role: Role::User,
+            content: "hi".into(),
+            ..Default::default()
+        }];
+        let body = build_anthropic_body("claude-4", &messages, &[], false, None, false, 16384, None);
+        assert_eq!(body["max_tokens"], 16384);
+    }
+
+    #[test]
+    fn body_extended_thinking_emits_thinking_param() {
+        let messages = vec![Message {
+            role: Role::User,
+            content: "hi".into(),
+            ..Default::default()
+        }];
+        let body = build_anthropic_body("claude-4", &messages, &[], false, None, true, 16384, None);
+        assert_eq!(body["thinking"]["type"], "enabled");
+        assert_eq!(body["thinking"]["budget_tokens"], 16384);
+    }
+
+    #[test]
+    fn body_no_extended_thinking_omits_thinking_param() {
+        let messages = vec![Message {
+            role: Role::User,
+            content: "hi".into(),
+            ..Default::default()
+        }];
+        let body = build_anthropic_body("claude-4", &messages, &[], false, None, false, 8192, None);
+        assert!(body.get("thinking").is_none());
     }
 
     #[test]
@@ -1321,7 +1505,7 @@ mod tests {
             content: "hi".into(),
             ..Default::default()
         }];
-        let body = build_anthropic_body("claude-4", &messages, &[], false, None);
+        let body = build_anthropic_body("claude-4", &messages, &[], false, None, false, 8192, None);
         assert_eq!(body["stream"], true);
     }
 

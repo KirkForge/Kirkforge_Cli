@@ -103,6 +103,9 @@ impl ModelAdapter for AnthropicVertexAdapter {
             tools,
             self.json_mode,
             self.seed,
+            false,
+            8192,
+            None,
         );
         let url = self.endpoint();
         let token = self.access_token().await?;

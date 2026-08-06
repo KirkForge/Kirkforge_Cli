@@ -84,6 +84,9 @@ impl ModelAdapter for AnthropicBedrockAdapter {
             tools,
             self.json_mode,
             self.seed,
+            false,
+            8192,
+            None,
         );
         let body_bytes = serde_json::to_vec(&body)?;
         let url = self.endpoint();

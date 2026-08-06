@@ -186,6 +186,7 @@ pub async fn run_task(
         zen_api_key.as_deref(),
         None,
         &crate::adapters::ProviderApiKeys::default(),
+        &crate::adapters::ProviderConfig::default(),
     );
 
     // Open conversation log in sandbox.

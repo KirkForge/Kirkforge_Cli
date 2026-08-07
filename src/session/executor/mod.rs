@@ -189,13 +189,6 @@ impl Executor {
         if let Some(registry) = plugin_registry {
             hook_runner.load_plugin_hooks(registry, &cfg.tools.disabled_plugins);
         }
-        #[cfg(feature = "draw")]
-        {
-            if !cfg.tools.disabled_plugins.contains("kf-draw") {
-                hook_runner.add_in_process_hook(Box::new(crate::session::draw::DrawPostTurnHook));
-                tracing::info!("draw post-turn hook registered");
-            }
-        }
         #[cfg(feature = "stratum")]
         {
             // Runtime `enabled_plugins` gate (WO 15.7 5.1): skip hooks when
@@ -601,12 +594,6 @@ impl Executor {
             None => HookRunner::default(),
         };
         hook_runner.load_plugin_hooks(registry, &cfg.tools.disabled_plugins);
-        #[cfg(feature = "draw")]
-        {
-            if !cfg.tools.disabled_plugins.contains("kf-draw") {
-                hook_runner.add_in_process_hook(Box::new(crate::session::draw::DrawPostTurnHook));
-            }
-        }
         #[cfg(feature = "stratum")]
         {
             // Runtime `enabled_plugins` gate (WO 15.7 5.1).

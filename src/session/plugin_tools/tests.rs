@@ -518,10 +518,7 @@ fn bundled_plugins_load_from_data_dir() {
         .iter()
         .map(|p| p.plugin.manifest().name.clone())
         .collect();
-    #[allow(unused_mut)]
-    let mut expected = vec!["kf-draw", "stratum", "kf-budget", "kf-plugin"];
-    #[cfg(feature = "video")]
-    expected.push("kf-video");
+    let expected = vec!["stratum", "kf-budget", "kf-plugin"];
     for expected in expected {
         assert!(
             names.contains(&expected.to_string()),
@@ -676,14 +673,12 @@ async fn bundled_node_sdk_tool_executes_via_host() {
 
 /// Verify the built-in workspace plugin sources are registered by default,
 /// exist on disk, and can be loaded by the plugin host under the default
-/// trust policy. Folded plugins (stratum, budget, draw, video) are skipped
-/// by the shell loader when their feature is ON — they're served compiled-in.
+/// trust policy. Folded plugins (stratum, budget) are skipped by the shell
+/// loader when their feature is ON — they're served compiled-in.
 /// The Node SDK plugin (`kf-plugin-sdk`) is always shell-loaded.
 #[test]
 fn default_plugin_sources_are_present_and_loadable() {
-    let mut all_expected = vec!["kf-draw", "stratum", "kf-budget", "kf-plugin"];
-    #[cfg(feature = "video")]
-    all_expected.push("kf-video");
+    let mut all_expected = vec!["stratum", "kf-budget", "kf-plugin"];
     all_expected.sort();
 
     let base = Config::default();
@@ -734,11 +729,11 @@ fn default_plugin_sources_are_present_and_loadable() {
 /// Verify that folded plugins with feature OFF fall back to shell loading.
 #[test]
 fn folded_plugin_shell_fallback_when_feature_off() {
-    let folded_names = ["stratum", "kf-budget", "kf-draw", "kf-video"];
+    let folded_names = ["stratum", "kf-budget"];
     let base = Config::default();
 
     // Only test plugins whose feature is NOT compiled in AND whose source dir
-    // exists in the config (video is cfg-gated out of plugin_sources when off).
+    // exists in the config.
     let off: Vec<&str> = folded_names
         .iter()
         .copied()
@@ -769,8 +764,6 @@ fn folded_plugin_shell_fallback_when_feature_off() {
 fn folded_plugin_identification() {
     assert!(crate::session::plugin_tools::is_folded("stratum"));
     assert!(crate::session::plugin_tools::is_folded("kf-budget"));
-    assert!(crate::session::plugin_tools::is_folded("kf-draw"));
-    assert!(crate::session::plugin_tools::is_folded("kf-video"));
     assert!(!crate::session::plugin_tools::is_folded("kf-plugin"));
     assert!(!crate::session::plugin_tools::is_folded("custom-plugin"));
 
@@ -874,26 +867,6 @@ mod budget_registration {
         assert!(
             names.contains(&"stratum_apply"),
             "stratum tools must include stratum_apply, got: {names:?}"
-        );
-    }
-
-    #[cfg(feature = "draw")]
-    #[test]
-    fn draw_tools_present_in_default_toolset() {
-        let cfg = Config::default();
-        assert!(
-            cfg.tools.enabled_plugins.iter().any(|n| n == "kf-draw"),
-            "default config must include kf-draw in enabled_plugins"
-        );
-        assert!(
-            folded_feature_enabled("kf-draw"),
-            "folded_feature_enabled must return true for kf-draw when the feature is on"
-        );
-        let tools = crate::session::draw::draw_tools();
-        let names: Vec<&str> = tools.iter().map(|t| t.def().name).collect();
-        assert!(
-            names.contains(&"draw_render"),
-            "draw tools must include draw_render, got: {names:?}"
         );
     }
 }

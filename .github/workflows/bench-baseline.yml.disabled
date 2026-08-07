@@ -1,3 +1,13 @@
+# DISABLED — intentionally left as .yml.disabled.
+# Reason: this workflow needs a live Ollama daemon + a network model pull,
+# which AGENTS.md flags as intermittently failing in CI
+# ("realm host ollama.com does not match original host registry.ollama.ai").
+# The bench results are also LLM-driven and therefore non-deterministic,
+# so a blocking gate would be noisy rather than a reliable regression
+# signal. The inline `bench` job has been removed from ci.yml for the same
+# reason. To re-enable: rename back to .yml and add `timeout-minutes` to
+# every job (do NOT re-enable as a required/blocking gate).
+
 name: Bench Baseline
 
 on:

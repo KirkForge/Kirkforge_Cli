@@ -33,12 +33,6 @@ pub mod budget;
 #[cfg(feature = "stratum")]
 pub mod stratum;
 
-#[cfg(feature = "video")]
-pub mod video;
-
-#[cfg(feature = "draw")]
-pub mod draw;
-
 use crate::shared::SessionId;
 use std::path::PathBuf;
 use std::sync::OnceLock;

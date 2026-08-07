@@ -6,7 +6,7 @@
 //!
 //! ## Two-path dispatch (ADR-050)
 //!
-//! Folded plugins (Stratum, Budget, Draw, Video) can run as either:
+//! Folded plugins (Stratum, Budget) can run as either:
 //! - **Compiled-in** (feature on): tools register as direct Rust calls in
 //!   `main/mod.rs`; the shell plugin dir is skipped here.
 //! - **External** (feature off): the shell plugin dir loads here as
@@ -28,12 +28,7 @@ use super::wrapper::PluginToolWrapper;
 /// When the corresponding feature is enabled, these are served by compiled-in
 /// Rust code and their shell plugin dirs are skipped during filesystem loading.
 /// When the feature is disabled, the shell plugin dir is loaded as fallback.
-const FOLDED_PLUGINS: &[(&str, &str)] = &[
-    ("stratum", "stratum"),
-    ("kf-budget", "budget"),
-    ("kf-draw", "draw"),
-    ("kf-video", "video"),
-];
+const FOLDED_PLUGINS: &[(&str, &str)] = &[("stratum", "stratum"), ("kf-budget", "budget")];
 
 /// Check if a plugin name is folded and whether its feature is compiled in.
 pub fn folded_feature_enabled(name: &str) -> bool {
@@ -42,10 +37,6 @@ pub fn folded_feature_enabled(name: &str) -> bool {
         "stratum" => true,
         #[cfg(feature = "budget")]
         "kf-budget" => true,
-        #[cfg(feature = "draw")]
-        "kf-draw" => true,
-        #[cfg(feature = "video")]
-        "kf-video" => true,
         _ => false,
     }
 }

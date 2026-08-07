@@ -17,13 +17,10 @@ members = [
     "crates/kf-compress-cli",
     "crates/kf-compress-core",
     "crates/kf-context-index",
-    "crates/kf-draw-core",
-    "crates/kf-draw",
     "crates/kf-lsp",
     "crates/kf-plugin-host",
     "crates/kf-plugin-sdk",
     "crates/kf-testdoctor",
-    "crates/kf-video",
     "crates/kf-workflow",
 ]
 default-members = [
@@ -32,7 +29,6 @@ default-members = [
     "crates/kf-budget-hosts",
     "crates/kf-compress-core",
     "crates/kf-context-index",
-    "crates/kf-draw-core",
     "crates/kf-lsp",
     "crates/kf-plugin-host",
     "crates/kf-plugin-sdk",
@@ -64,9 +60,7 @@ kf-lsp = { path = "crates/kf-lsp" }
 kf-workflow = { path = "crates/kf-workflow" }
 kf-context-index = { path = "crates/kf-context-index" }
 kf-bench = { path = "crates/kf-bench" }
-kf-draw-core = { path = "crates/kf-draw-core" }
 kf-compress-core = { path = "crates/kf-compress-core" }
-kf-video = { path = "crates/kf-video" }
 kf-testdoctor = { path = "crates/kf-testdoctor" }
 kf-budget-core = { path = "crates/kf-budget-core" }
 serde = { version = "1", features = ["derive"] }
@@ -198,12 +192,8 @@ kf-workflow = { workspace = true }
 kf-context-index = { workspace = true }
 # Task-benchmark harness (TOML tasks, headless runs, metrics collection).
 kf-bench = { workspace = true }
-# Terminal diagram rendering (optional, behind `draw` feature flag).
-kf-draw-core = { workspace = true, optional = true }
 # Stratum context compression (optional; default on).
 kf-compress-core = { workspace = true, optional = true }
-# Video editing tools (optional; off by default).
-kf-video = { workspace = true, optional = true }
 # Headless Chrome CDP driver for the computer_use tool.
 headless_chrome = { version = "1", default-features = false }
 # SigV4 signing for Anthropic-on-Bedrock requests.
@@ -242,9 +232,7 @@ path = "tests/e2e/main.rs"
 [features]
 default = ["stratum", "budget"]
 stratum = ["dep:kf-compress-core"]
-draw = ["dep:kf-draw-core"]
 budget = ["dep:kf-budget-core"]
-video = ["dep:kf-video"]
 # Enable OpenTelemetry span/metric export from the Rust runtime.
 otel = [
     "dep:opentelemetry",

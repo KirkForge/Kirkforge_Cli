@@ -118,13 +118,11 @@ jobs:
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             cargo nextest run --locked --lib --no-fail-fast \
               --config 'profile.default.timeout-period="60s"' \
-              --config 'profile.default.fail-timeout="10s"' \
-              -E 'not test(/tui::approval_keys::tests::test_always_approves_/)'
+              --config 'profile.default.fail-timeout="10s"'
           else
             cargo nextest run --locked --workspace --no-fail-fast \
               --config 'profile.default.timeout-period="60s"' \
-              --config 'profile.default.fail-timeout="10s"' \
-              -E 'not test(/tui::approval_keys::tests::test_always_approves_/)'
+              --config 'profile.default.fail-timeout="10s"'
             # Doctests are not collected by nextest by default. Run them
             # under plain cargo test, but with a hard wall-clock cap so a
             # hanging doctest cannot wedge the job (cargo test has no

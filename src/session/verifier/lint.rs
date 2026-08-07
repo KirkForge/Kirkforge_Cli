@@ -87,6 +87,7 @@ pub async fn verify_lint(event: &BusEvent) -> Verdict {
 
     // For now only Rust is fully supported
     if !matches!(target, LintTarget::Rust) {
+        // ponytail: non-Rust linting unimplemented; add per-language linters as needed
         return Verdict::Skipped(format!("lint verifier not yet implemented for {target:?}"));
     }
 

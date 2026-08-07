@@ -2,9 +2,13 @@
 // Split from the former single-file approval.rs (WO 19.3). Pure refactor:
 // test bodies are moved verbatim.
 
+#[cfg(unix)]
 use super::super::super::*;
+#[cfg(unix)]
 use super::super::common::*;
+#[cfg(unix)]
 use crate::shared::{FinishReason, StreamEvent, ToolDef, ToolOutcome};
+#[cfg(unix)]
 use std::sync::Mutex;
 
 #[cfg(unix)]

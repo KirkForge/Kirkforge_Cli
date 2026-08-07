@@ -6,8 +6,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Changed
-- WO 20.2.0: `tool_choice` + `max_tokens` config + adapter trait wiring (`set_tool_choice`, `set_max_tokens`). `build_anthropic_body` is now 9-arg; extended-thinking kept separate from completion `max_tokens` (dedicated `budget_tokens` + `supports_thinking` guard). CONFIG_FIELD_COUNT 84→85.
-- WO 20.0.7: cache breakpoint cap holds at 4 with tools (CRIT-1); `store_get` resolves Stratum offload markers (CRIT-2).
+- WO 20.2.0: `tool_choice` + `max_tokens` config + adapter trait wiring (`set_tool_choice`, `set_max_tokens`). `build_anthropic_body` is now 9-arg; extended-thinking kept separate from completion `max_tokens` (dedicated `budget_tokens` + `supports_thinking` guard). CONFIG_FIELD_COUNT 84→85. (#23)
+- WO 20.0.7: cache breakpoint cap holds at 4 with tools (CRIT-1); `store_get` resolves Stratum offload markers (CRIT-2). (#23)
 - WO 20.0.9: `draw` feature now non-default (opt in via `--features draw`).
 - WO 20.0.9: `kf-compress-hosts` crate collapsed into `kf-compress-core` (rules module).
 - WO 20.0.9: Removed Cursor/Aider/KfCode stub modules from `kf-budget-hosts`.

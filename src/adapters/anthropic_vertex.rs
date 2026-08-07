@@ -107,6 +107,8 @@ impl ModelAdapter for AnthropicVertexAdapter {
             self.seed,
             self.extended_thinking,
             self.budget_tokens,
+            8192,
+            None,
         );
         let url = self.endpoint();
         let token = self.access_token().await?;

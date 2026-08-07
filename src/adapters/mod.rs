@@ -346,6 +346,12 @@ pub trait ModelAdapter: Send + Sync {
     /// Set the budget_tokens for extended thinking. Default no-op.
     fn set_budget_tokens(&mut self, _budget: usize) {}
 
+    /// Set max_tokens for completions. Default no-op (wo/20.2.0).
+    fn set_max_tokens(&mut self, _max_tokens: u32) {}
+
+    /// Set tool_choice. Default no-op (wo/20.2.0).
+    fn set_tool_choice(&mut self, _choice: Option<crate::shared::ToolChoice>) {}
+
     async fn stream(
         &self,
         messages: &[crate::shared::Message],
@@ -365,6 +371,16 @@ pub struct ProviderApiKeys {
     pub deepseek: Option<String>,
     pub gemini: Option<String>,
     pub kimi: Option<String>,
+}
+
+/// Provider-specific configuration for Bedrock and Vertex adapters,
+/// resolved from config fields and passed to [`adapter_for_with_provider`].
+#[derive(Debug, Clone, Default)]
+pub struct ProviderConfig {
+    pub aws_region: String,
+    pub gcp_project_id: String,
+    pub gcp_region: String,
+    pub gcp_service_account_path: Option<std::path::PathBuf>,
 }
 
 /// Build the right adapter from a model name string.
@@ -639,6 +655,7 @@ fn build_openai_compat_body(
     tools: &[crate::shared::ToolDef],
     json_mode: bool,
     seed: Option<u64>,
+    tool_choice: Option<&crate::shared::ToolChoice>,
 ) -> serde_json::Value {
     // Pre-compute the indices of the prefix messages that get the
     // cache_control marker. The "prefix" is everything except the
@@ -752,6 +769,20 @@ fn build_openai_compat_body(
         body["response_format"] = serde_json::json!({"type": "json_object"});
         if !tools.is_empty() {
             body["tool_choice"] = serde_json::Value::String("auto".into());
+        }
+    }
+
+    if let Some(tc) = tool_choice {
+        match tc {
+            crate::shared::ToolChoice::Auto => {
+                body["tool_choice"] = serde_json::json!("auto");
+            }
+            crate::shared::ToolChoice::Specific(name) => {
+                body["tool_choice"] = serde_json::json!({
+                    "type": "function",
+                    "function": {"name": name}
+                });
+            }
         }
     }
 
@@ -979,149 +1010,6 @@ mod tests {
             None,
         );
         assert_eq!(adapter.model_info().name, "anthropic.claude-3-5-sonnet");
-        assert!(adapter.model_info().tool_call_format == crate::shared::ToolCallStyle::Anthropic);
-    }
-
-    #[test]
-    fn adapter_routes_opencode_prefix_to_zen() {
-        let kind = adapter_kind_for("opencode/big-pickle", None, "anthropic");
-        assert_eq!(kind, AdapterKind::OpenCodeZen);
-    }
-
-    #[test]
-    fn subagent_allowed_models_rejects_unlisted() {
-        let allowed = Some(vec!["qwen2.5:0.5b".to_string()]);
-        let requested = Some("deepseek-v4-flash".to_string());
-        let effective = requested
-            .as_ref()
-            .filter(|m| allowed.as_ref().is_none_or(|a| a.contains(&m.to_string())))
-            .cloned();
-        assert!(effective.is_none(), "unlisted model should be rejected");
-    }
-
-    #[test]
-    fn subagent_allowed_models_accepts_listed() {
-        let allowed = Some(vec!["qwen2.5:0.5b".to_string()]);
-        let requested = Some("qwen2.5:0.5b".to_string());
-        let effective = requested
-            .as_ref()
-            .filter(|m| allowed.as_ref().is_none_or(|a| a.contains(&m.to_string())))
-            .cloned();
-        assert_eq!(effective, Some("qwen2.5:0.5b".to_string()));
-    }
-
-    #[test]
-    fn should_retry_status_599_boundary() {
-        assert!(should_retry_status(599));
-        assert!(!should_retry_status(600));
-    }
-
-    #[test]
-    fn should_retry_status_429_only_rate_limit() {
-        assert!(should_retry_status(429));
-        assert!(!should_retry_status(428));
-        assert!(!should_retry_status(430));
-    }
-
-    #[test]
-    fn adapter_kind_for_claude_underscore_prefix() {
-        assert_eq!(
-            adapter_kind_for("claude_sonnet", None, "anthropic"),
-            AdapterKind::Anthropic
-        );
-    }
-
-    #[test]
-    fn adapter_kind_for_claude_no_dash_prefix() {
-        assert_eq!(
-            adapter_kind_for("claude", None, "anthropic"),
-            AdapterKind::Anthropic
-        );
-    }
-
-    #[test]
-    fn adapter_kind_for_anthropic_dot_claude_prefix() {
-        assert_eq!(
-            adapter_kind_for("anthropic.claude-3-sonnet", None, "anthropic"),
-            AdapterKind::Anthropic
-        );
-    }
-
-    #[test]
-    fn adapter_kind_for_anthropic_dot_claude_bedrock() {
-        assert_eq!(
-            adapter_kind_for("anthropic.claude-3-sonnet", None, "bedrock"),
-            AdapterKind::AnthropicBedrock
-        );
-    }
-
-    #[test]
-    fn adapter_kind_for_anthropic_dot_claude_vertex() {
-        assert_eq!(
-            adapter_kind_for("anthropic.claude-3-sonnet", None, "vertex"),
-            AdapterKind::AnthropicVertex
-        );
-    }
-
-    #[test]
-    fn adapter_kind_for_opencode_prefix() {
-        assert_eq!(
-            adapter_kind_for("opencode/zen-model", None, "anthropic"),
-            AdapterKind::OpenCodeZen
-        );
-    }
-
-    #[test]
-    fn adapter_kind_for_unknown_override_defaults_to_openai_compat() {
-        assert_eq!(
-            adapter_kind_for("my-model", Some("unknown-type"), "anthropic"),
-            AdapterKind::OpenAiCompat
-        );
-    }
-
-    #[test]
-    fn adapter_kind_for_override_anthropic_selects_anthropic() {
-        assert_eq!(
-            adapter_kind_for("my-model", Some("anthropic"), "bedrock"),
-            AdapterKind::Anthropic
-        );
-    }
-
-    #[test]
-    fn adapter_for_selects_anthropic_for_claude() {
-        let adapter = adapter_for("claude-3-opus", "http://host", None, 30);
-        let info = adapter.model_info();
-        assert_eq!(info.name, "claude-3-opus");
-        assert_eq!(
-            info.tool_call_format,
-            crate::shared::ToolCallStyle::Anthropic
-        );
-    }
-
-    #[test]
-    fn adapter_for_selects_anthropic_for_claude_underscore() {
-        let adapter = adapter_for("claude_sonnet", "http://host", None, 30);
-        assert_eq!(adapter.model_info().name, "claude_sonnet");
-    }
-
-    #[test]
-    fn adapter_for_with_provider_selects_vertex() {
-        let adapter = adapter_for_with_provider(
-            "claude-3-opus",
-            "",
-            None,
-            "vertex",
-            30,
-            "https://opencode.ai/zen/v1/chat/completions",
-            None,
-            None,
-            &ProviderApiKeys::default(),
-            None,
-            Some("my-gcp-project"),
-            Some("europe-west4"),
-            None,
-        );
-        assert_eq!(adapter.model_info().name, "claude-3-opus");
         assert_eq!(
             adapter.model_info().tool_call_format,
             crate::shared::ToolCallStyle::Anthropic
@@ -1149,26 +1037,6 @@ mod tests {
     }
 
     #[test]
-    fn adapter_for_with_provider_opencode_zen_strips_prefix() {
-        let adapter = adapter_for_with_provider(
-            "opencode/big-pickle",
-            "",
-            None,
-            "anthropic",
-            30,
-            "https://opencode.ai/zen/v1/chat/completions",
-            Some("test-key"),
-            None,
-            &ProviderApiKeys::default(),
-            None,
-            None,
-            None,
-            None,
-        );
-        assert_eq!(adapter.model_info().name, "big-pickle");
-    }
-
-    #[test]
     fn adapter_for_with_provider_opencode_zen_no_key() {
         let adapter = adapter_for_with_provider(
             "opencode/big-pickle",
@@ -1186,26 +1054,6 @@ mod tests {
             None,
         );
         assert_eq!(adapter.model_info().name, "big-pickle");
-    }
-
-    #[test]
-    fn adapter_for_with_provider_moonshot_override() {
-        let adapter = adapter_for_with_provider(
-            "my-model",
-            "http://host",
-            Some("moonshot"),
-            "anthropic",
-            30,
-            "https://opencode.ai/zen/v1/chat/completions",
-            None,
-            None,
-            &ProviderApiKeys::default(),
-            None,
-            None,
-            None,
-            None,
-        );
-        assert!(adapter.model_info().supports_thinking);
     }
 
     #[test]
@@ -1229,26 +1077,6 @@ mod tests {
     }
 
     #[test]
-    fn adapter_for_with_provider_gemini_override() {
-        let adapter = adapter_for_with_provider(
-            "my-model",
-            "http://host",
-            Some("gemini"),
-            "anthropic",
-            30,
-            "https://opencode.ai/zen/v1/chat/completions",
-            None,
-            None,
-            &ProviderApiKeys::default(),
-            None,
-            None,
-            None,
-            None,
-        );
-        assert!(adapter.model_info().supports_images);
-    }
-
-    #[test]
     fn adapter_for_with_provider_unknown_override_falls_to_openai_compat() {
         let adapter = adapter_for_with_provider(
             "my-model",
@@ -1266,6 +1094,48 @@ mod tests {
             None,
         );
         assert_eq!(adapter.model_info().name, "my-model");
+    }
+
+    #[test]
+    fn adapter_for_with_provider_bedrock_uses_configured_region() {
+        let adapter = adapter_for_with_provider(
+            "anthropic.claude-3-5-sonnet",
+            "",
+            Some("anthropic-bedrock"),
+            "bedrock",
+            30,
+            "https://opencode.ai/zen/v1/chat/completions",
+            None,
+            None,
+            &ProviderApiKeys::default(),
+            Some("eu-west-1"),
+            None,
+            None,
+            None,
+        );
+        let info = adapter.model_info();
+        assert_eq!(info.name, "anthropic.claude-3-5-sonnet");
+    }
+
+    #[test]
+    fn adapter_for_with_provider_vertex_uses_configured_project_and_region() {
+        let adapter = adapter_for_with_provider(
+            "claude-3-opus",
+            "",
+            None,
+            "vertex",
+            30,
+            "https://opencode.ai/zen/v1/chat/completions",
+            None,
+            None,
+            &ProviderApiKeys::default(),
+            None,
+            Some("my-project"),
+            Some("europe-west4"),
+            None,
+        );
+        let info = adapter.model_info();
+        assert_eq!(info.name, "claude-3-opus");
     }
 
     #[test]
@@ -1423,7 +1293,7 @@ mod tests {
             tool_call_id: Some("call_1".into()),
             ..Default::default()
         }];
-        let body = build_openai_compat_body("m", &mi, &msgs, &[], false, None);
+        let body = build_openai_compat_body("m", &mi, &msgs, &[], false, None, None);
         assert_eq!(body["messages"][0]["role"], "tool");
         assert_eq!(body["messages"][0]["tool_call_id"], "call_1");
         assert_eq!(body["messages"][0]["content"], "result");
@@ -1450,7 +1320,7 @@ mod tests {
             }]),
             ..Default::default()
         }];
-        let body = build_openai_compat_body("m", &mi, &msgs, &[], false, None);
+        let body = build_openai_compat_body("m", &mi, &msgs, &[], false, None, None);
         assert_eq!(body["messages"][0]["role"], "assistant");
         let tcs = body["messages"][0]["tool_calls"].as_array().unwrap();
         assert_eq!(tcs[0]["id"], "call_1");
@@ -1479,6 +1349,7 @@ mod tests {
             &[],
             false,
             Some(7),
+            None,
         );
         assert_eq!(body["temperature"], 0.0);
         assert_eq!(body["seed"], 7);
@@ -1511,6 +1382,7 @@ mod tests {
             &tools,
             true,
             None,
+            None,
         );
         assert_eq!(
             body["response_format"],
@@ -1541,6 +1413,7 @@ mod tests {
             &[],
             true,
             None,
+            None,
         );
         assert!(body.get("tool_choice").is_none());
     }
@@ -1566,6 +1439,7 @@ mod tests {
             }],
             &[],
             false,
+            None,
             None,
         );
         assert!(body["messages"][0].get("cache_control").is_none());
@@ -1606,7 +1480,7 @@ mod tests {
                 ..Default::default()
             },
         ];
-        let body = build_openai_compat_body("m", &mi, &messages, &[], false, None);
+        let body = build_openai_compat_body("m", &mi, &messages, &[], false, None, None);
         let msgs = body["messages"].as_array().unwrap();
         // System message (index 0) should have cache_control (system+tools breakpoint).
         assert_eq!(

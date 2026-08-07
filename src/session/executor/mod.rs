@@ -169,7 +169,8 @@ impl Executor {
         // Push the deterministic-mode seed down to the active adapter.
         adapter.set_seed(cfg.model.seed);
 
-        // Push extended-thinking config down to adapters that support it.
+        // Push max_tokens + extended-thinking config down to adapters.
+        adapter.set_max_tokens(cfg.model.max_tokens);
         adapter.set_extended_thinking(cfg.model.extended_thinking);
         adapter.set_budget_tokens(cfg.model.budget_tokens);
 

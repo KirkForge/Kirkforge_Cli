@@ -30,6 +30,10 @@ fn default_budget_tokens() -> usize {
     10_000
 }
 
+fn default_max_tokens() -> u32 {
+    8192
+}
+
 fn default_summarize_model() -> String {
     String::new()
 }
@@ -96,6 +100,9 @@ pub struct ModelConfig {
     /// Budget tokens for extended thinking. Default 10000.
     #[serde(default = "default_budget_tokens")]
     pub budget_tokens: usize,
+    /// Maximum tokens for completions (wo/20.2.0). Default 8192.
+    #[serde(default = "default_max_tokens")]
+    pub max_tokens: u32,
     /// User-supplied model→adapter routing overrides. Maps model-name
     /// prefixes (e.g. `"claude-"`) to [`AdapterKind`](super::adapters::AdapterKind)
     /// variant names (e.g. `"Anthropic"`). Checked by
@@ -137,6 +144,7 @@ impl Default for ModelConfig {
             json_mode: false,
             extended_thinking: true,
             budget_tokens: default_budget_tokens(),
+            max_tokens: default_max_tokens(),
             adapter_routing: HashMap::new(),
         }
     }

@@ -341,6 +341,7 @@ pub struct OpenAiCompatAdapter {
     json_mode: bool,
     seed: Option<u64>,
     timeout_secs: u64,
+    tool_choice: Option<crate::shared::ToolChoice>,
 }
 
 impl OpenAiCompatAdapter {
@@ -354,6 +355,7 @@ impl OpenAiCompatAdapter {
             json_mode: false,
             seed: None,
             timeout_secs,
+            tool_choice: None,
         }
     }
 
@@ -374,6 +376,7 @@ impl OpenAiCompatAdapter {
             json_mode: false,
             seed: None,
             timeout_secs,
+            tool_choice: None,
         }
     }
 }
@@ -425,6 +428,10 @@ impl ModelAdapter for OpenAiCompatAdapter {
         self.seed = seed;
     }
 
+    fn set_tool_choice(&mut self, choice: Option<crate::shared::ToolChoice>) {
+        self.tool_choice = choice;
+    }
+
     async fn stream(
         &self,
         messages: &[Message],
@@ -437,6 +444,7 @@ impl ModelAdapter for OpenAiCompatAdapter {
             tools,
             self.json_mode,
             self.seed,
+            self.tool_choice.as_ref(),
         );
         let url = format!("{}/v1/chat/completions", self.api_base);
 

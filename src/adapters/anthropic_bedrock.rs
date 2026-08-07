@@ -87,6 +87,8 @@ impl ModelAdapter for AnthropicBedrockAdapter {
             self.seed,
             self.extended_thinking,
             self.budget_tokens,
+            8192,
+            None,
         );
         let body_bytes = serde_json::to_vec(&body)?;
         let url = self.endpoint();

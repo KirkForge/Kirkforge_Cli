@@ -346,6 +346,11 @@ fn merge_toml_into_config(cfg: &mut Config, table: toml::Table) {
     if let Some(Value::Boolean(v)) = table.get("json_mode") {
         cfg.model.json_mode = *v;
     }
+    if let Some(Value::Integer(v)) = table.get("max_tokens") {
+        if let Ok(n) = u32::try_from(*v) {
+            cfg.model.max_tokens = n.max(1);
+        }
+    }
     if let Some(Value::Boolean(v)) = table.get("extended_thinking") {
         cfg.model.extended_thinking = *v;
     }
@@ -1900,10 +1905,10 @@ mod tests {
         use crate::shared::config::CONFIG_FIELD_COUNT;
 
         // ── 1. Total struct-level fields ──────────────────────────
-        // ModelConfig=29, SecurityConfig=18, ToolConfig=26,
+        // ModelConfig=30, SecurityConfig=18, ToolConfig=26,
         // SessionConfig=8, DisplayConfig=3
         assert_eq!(
-            CONFIG_FIELD_COUNT, 84,
+            CONFIG_FIELD_COUNT, 85,
             "CONFIG_FIELD_COUNT has drifted — did you add/remove a config field?"
         );
 
@@ -1937,6 +1942,7 @@ mod tests {
             json_mode = true
             extended_thinking = true
             budget_tokens = 999
+            max_tokens = 999
             bash_sandbox_workdir = true
             block_gitignored_dotfiles = true
             max_overwrite_size = 999
@@ -1998,8 +2004,8 @@ mod tests {
                 toml_key_count += 1;
             }
         }
-        // 66 top-level leaf keys + 7 computer_use sub-keys = 73
-        const MERGE_TOML_EXPECTED: usize = 73;
+        // 67 top-level leaf keys + 7 computer_use sub-keys = 74
+        const MERGE_TOML_EXPECTED: usize = 74;
         assert_eq!(
             toml_key_count, MERGE_TOML_EXPECTED,
             "merge_toml_into_config key count changed — did you add/remove a handled field?"
@@ -2008,9 +2014,9 @@ mod tests {
         // ── 3. apply_env_overrides field coverage ─────────────────
         // Count KF_CODE_* env var checks in apply_env_overrides.
         // This must stay in sync with env_overrides.rs.
-        const ENV_OVERRIDE_EXPECTED: usize = 69;
+        const ENV_OVERRIDE_EXPECTED: usize = 70;
         assert_eq!(
-            ENV_OVERRIDE_EXPECTED, 69,
+            ENV_OVERRIDE_EXPECTED, 70,
             "apply_env_overrides env-var count changed — did you add/remove a KF_CODE_* var?"
         );
 

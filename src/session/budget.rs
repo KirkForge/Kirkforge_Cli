@@ -1,10 +1,7 @@
 //! Budget tool wrappers — direct Rust calls to `kf_budget_core`.
 //!
-//! Enabled by the `budget` feature flag. When disabled, the plugin
-//! shell scripts in `plugins/kf-budget/tools/` remain the
-//! invocation path. This module eliminates the lossy shim by calling
-//! `kf_budget_core` functions in-process, giving budget logic full
-//! access to session state.
+//! This module calls `kf_budget_core` functions in-process, giving
+//! budget logic full access to session state.
 //!
 //! ADR-047 pins this decision.
 

@@ -52,8 +52,6 @@ fn default_budget_approaching_ratio() -> f64 {
 fn default_plugin_sources() -> HashMap<String, PathBuf> {
     let mut sources = HashMap::new();
     let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    sources.insert("stratum".into(), base.join("plugins/stratum"));
-    sources.insert("kf-budget".into(), base.join("plugins/kf-budget"));
     sources.insert("kf-plugin".into(), base.join("plugins/kf-plugin"));
     sources
 }

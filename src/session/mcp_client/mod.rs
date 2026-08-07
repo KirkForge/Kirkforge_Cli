@@ -1568,10 +1568,19 @@ mod tests {
             .expect("roots/list should return a response");
         assert_eq!(response["jsonrpc"], "2.0");
         assert_eq!(response["id"], 42);
-        let roots = response.get("result").unwrap().get("roots").unwrap().as_array().unwrap();
+        let roots = response
+            .get("result")
+            .unwrap()
+            .get("roots")
+            .unwrap()
+            .as_array()
+            .unwrap();
         assert_eq!(roots.len(), 1);
         let uri = roots[0].get("uri").unwrap().as_str().unwrap();
-        assert!(uri.starts_with("file://"), "expected file:// URI, got: {uri}");
+        assert!(
+            uri.starts_with("file://"),
+            "expected file:// URI, got: {uri}"
+        );
     }
 
     #[test]

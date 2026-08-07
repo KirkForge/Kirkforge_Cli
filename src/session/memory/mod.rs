@@ -54,7 +54,10 @@ impl MemoryStore {
     /// Open (or create) the memory store at the given directory.
     pub fn open(root: PathBuf) -> std::io::Result<Self> {
         std::fs::create_dir_all(&root)?;
-        Ok(Self { root, max_facts: 200 })
+        Ok(Self {
+            root,
+            max_facts: 200,
+        })
     }
 
     /// Default store at `~/.local/share/kf-code/memory/`.
@@ -742,12 +745,22 @@ mod tests {
 
         for i in 0..5 {
             store
-                .upsert(&format!("fact-{i}"), &format!("desc {i}"), "body", "project")
+                .upsert(
+                    &format!("fact-{i}"),
+                    &format!("desc {i}"),
+                    "body",
+                    "project",
+                )
                 .unwrap();
         }
 
         let facts = store.all();
-        assert_eq!(facts.len(), 3, "should evict down to max_facts=3, got {}", facts.len());
+        assert_eq!(
+            facts.len(),
+            3,
+            "should evict down to max_facts=3, got {}",
+            facts.len()
+        );
         assert_eq!(facts[0].name, "fact-2", "oldest evicted first");
     }
 

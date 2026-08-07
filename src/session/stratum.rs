@@ -1,9 +1,7 @@
 //! In-process Stratum tool wrappers.
 //!
-//! When the `stratum` feature is enabled, these structs implement the `Tool`
-//! trait and call `kf_compress_core` directly, eliminating subprocess overhead.
-//! When the feature is off, the shell-plugin path (`plugins/stratum/tools/*.sh`)
-//! remains as fallback.
+//! These structs implement the `Tool` trait and call `kf_compress_core`
+//! directly, eliminating subprocess overhead.
 
 use crate::session::budget::{BudgetSlicedEvent, BudgetSlicedListener};
 use crate::session::hooks::{HookContext, HookDecision, InProcessHook};
@@ -516,8 +514,7 @@ pub fn stratum_tools() -> Vec<Arc<dyn Tool>> {
 // ── session-start hook ─────────────────────────────────────────────────
 
 /// In-process `session-start` hook: emits the active compression ruleset so
-/// the model knows the compression contract at session start. Mirrors the
-/// shell hook in `plugins/stratum/hooks/session-start.sh`.
+/// the model knows the compression contract at session start.
 pub struct StratumSessionStartHook {
     pub config: crate::shared::SharedConfig,
 }
@@ -546,7 +543,6 @@ impl InProcessHook for StratumSessionStartHook {
 
 /// In-process `pre-tool-bash` hook: validates the effective stratum config
 /// before any bash tool is invoked so configuration drift is surfaced early.
-/// Mirrors the shell hook in `plugins/stratum/hooks/pre-tool-bash.sh`.
 ///
 /// Fail-open: an invalid config logs a warning but does not block the user.
 pub struct StratumPreToolBashHook;

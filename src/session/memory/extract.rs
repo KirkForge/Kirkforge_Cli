@@ -1,15 +1,45 @@
 //! Post-turn fact extraction from user/assistant messages.
 
-use super::{MemoryFact, slugify_description};
+use super::{slugify_description, MemoryFact};
 use std::collections::HashMap;
 
 const MIN_FACT_LEN: usize = 20;
 
 const CHAFF: &[&str] = &[
-    "ok", "okay", "thanks", "thank you", "yes", "no", "continue", "sure", "done", "got it",
-    "great", "cool", "nice", "sounds good", "right", "exactly", "perfect", "please continue",
-    "go on", "proceed", "hi", "hello", "hey", "bye", "goodbye", "morning", "afternoon",
-    "evening", "hmm", "um", "uh", "ah", "oh", "wow",
+    "ok",
+    "okay",
+    "thanks",
+    "thank you",
+    "yes",
+    "no",
+    "continue",
+    "sure",
+    "done",
+    "got it",
+    "great",
+    "cool",
+    "nice",
+    "sounds good",
+    "right",
+    "exactly",
+    "perfect",
+    "please continue",
+    "go on",
+    "proceed",
+    "hi",
+    "hello",
+    "hey",
+    "bye",
+    "goodbye",
+    "morning",
+    "afternoon",
+    "evening",
+    "hmm",
+    "um",
+    "uh",
+    "ah",
+    "oh",
+    "wow",
 ];
 
 const USER_PREFS: &[&str] = &[
@@ -236,7 +266,10 @@ mod tests {
     #[test]
     fn skips_short_facts() {
         let facts = extract_facts("I prefer X", "");
-        assert!(facts.is_empty(), "facts < 20 chars should be skipped: {facts:?}");
+        assert!(
+            facts.is_empty(),
+            "facts < 20 chars should be skipped: {facts:?}"
+        );
     }
 
     #[test]
@@ -257,7 +290,9 @@ mod tests {
             "I prefer clippy strict mode. Also, the build system uses cargo.",
             "The codebase is structured as a workspace with multiple crates.",
         );
-        assert!(facts.iter().any(|f| f.metadata.get("type").unwrap() == "user"));
+        assert!(facts
+            .iter()
+            .any(|f| f.metadata.get("type").unwrap() == "user"));
     }
 
     #[test]

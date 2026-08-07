@@ -3,6 +3,7 @@ use crate::content::ContentType;
 use crate::mode::Mode;
 use crate::store::OffloadStore;
 use std::fmt;
+use std::sync::Arc;
 
 /// Per-invocation context used by the bloat heuristic.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -74,12 +75,25 @@ impl CompressionContext {
     }
 }
 
+/// A content transform applied by the pipeline.
+///
+/// Implementations must be pure functions: same input → same output.
+pub trait Transform: Send + Sync + fmt::Debug + 'static {
+    /// Transform `content` and return the result.
+    fn apply(&self, content: &str, content_type: ContentType) -> String;
+}
+
+/// Boxed transform trait object.
+pub type BoxedTransform = Arc<dyn Transform>;
+
 /// Bloat-detection and offloading pipeline.
 ///
 /// Checks whether content exceeds the configured bloat threshold relative
 /// to a token budget, and offloads bloated content to the store.
-#[must_use]
-pub struct CompressionPipeline;
+/// Registered content transforms are applied before bloat checking.
+pub struct CompressionPipeline {
+    content_transforms: Vec<BoxedTransform>,
+}
 
 impl Default for CompressionPipeline {
     fn default() -> Self {
@@ -89,21 +103,30 @@ impl Default for CompressionPipeline {
 
 impl fmt::Debug for CompressionPipeline {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("CompressionPipeline").finish()
+        f.debug_struct("CompressionPipeline")
+            .field("content_transforms", &self.content_transforms.len())
+            .finish()
     }
 }
 
 impl CompressionPipeline {
-    /// Create a pipeline.
+    /// Create a pipeline with no transforms.
     pub fn new() -> Self {
-        Self
+        Self {
+            content_transforms: Vec::new(),
+        }
+    }
+
+    /// Register a content transform. Transforms are applied in registration order.
+    pub fn register_content_transform(&mut self, transform: BoxedTransform) {
+        self.content_transforms.push(transform);
     }
 
     /// Run the pipeline on `content`.
     ///
-    /// If `mode` disables transforms or the content is not bloated, the
-    /// input is returned unchanged. Otherwise bloated content is offloaded
-    /// to the store and replaced with a reference key.
+    /// Content transforms run first (if mode enables them), then bloat
+    /// detection. If the content is not bloated after transforms, the
+    /// transformed content is returned. Otherwise it is offloaded.
     ///
     /// # Examples
     ///
@@ -140,11 +163,18 @@ impl CompressionPipeline {
             return content.to_string();
         }
 
-        if ctx.is_bloated(content, content_type, cfg) {
-            let key = store.put(content);
+        let mut working = content.to_string();
+        if mode.runs_transforms() {
+            for transform in &self.content_transforms {
+                working = transform.apply(&working, content_type);
+            }
+        }
+
+        if ctx.is_bloated(&working, content_type, cfg) {
+            let key = store.put(&working);
             format!("[offloaded: {key}]")
         } else {
-            content.to_string()
+            working
         }
     }
 }
@@ -154,6 +184,7 @@ mod tests {
     use super::*;
     use crate::config::Ratio;
     use crate::store::InMemoryOffloadStore;
+    use std::sync::Arc;
 
     #[test]
     fn pipeline_stub_returns_input() {
@@ -359,5 +390,72 @@ mod tests {
         let pipeline = CompressionPipeline::new();
         let debug = format!("{pipeline:?}");
         assert!(debug.starts_with("CompressionPipeline"));
+    }
+
+    #[derive(Debug)]
+    struct StripCommentsTransform;
+
+    impl Transform for StripCommentsTransform {
+        fn apply(&self, content: &str, content_type: ContentType) -> String {
+            match content_type {
+                ContentType::SourceCode => content
+                    .lines()
+                    .filter(|l| !l.trim().starts_with("//"))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                _ => content.to_string(),
+            }
+        }
+    }
+
+    #[test]
+    fn pipeline_applies_content_transforms() {
+        let mut pipeline = CompressionPipeline::new();
+        pipeline.register_content_transform(Arc::new(StripCommentsTransform));
+        let store = InMemoryOffloadStore::new();
+        let input = "fn main() {\n    // comment\n    println!(\"hi\");\n}";
+        let out = pipeline.run(
+            input,
+            ContentType::SourceCode,
+            &CompressionContext::default(),
+            &store,
+            &PipelineConfig::default(),
+            Mode::Full,
+        );
+        assert!(!out.contains("// comment"));
+        assert!(out.contains("println"));
+    }
+
+    #[test]
+    fn pipeline_shrinkage_test_for_rust_source() {
+        let mut pipeline = CompressionPipeline::new();
+        pipeline.register_content_transform(Arc::new(StripCommentsTransform));
+        let store = InMemoryOffloadStore::new();
+
+        let mut src = String::new();
+        for i in 0..200 {
+            src.push_str(&format!(
+                "fn func_{i}() {{\n    // this is a comment for function {i}\n    let x = {i};\n}}\n"
+            ));
+        }
+
+        let out = pipeline.run(
+            &src,
+            ContentType::SourceCode,
+            &CompressionContext::default(),
+            &store,
+            &PipelineConfig::default(),
+            Mode::Full,
+        );
+
+        // ponytail: ≥5% shrinkage — if the real number drifts, update this literal.
+        let ratio = 1.0 - (out.len() as f64 / src.len() as f64);
+        assert!(
+            ratio >= 0.05,
+            "expected ≥5% shrinkage, got {:.1}% ({} → {})",
+            ratio * 100.0,
+            src.len(),
+            out.len(),
+        );
     }
 }

@@ -1472,7 +1472,7 @@ impl Executor {
                 cfg.display.memory_enabled,
                 cfg.display.memory_max_tokens,
                 cfg.display.memory_top_n,
-                cfg.session.compaction_use_llm,
+                cfg.session.compaction_use_heuristic,
                 cfg.session.compaction_drop_threshold,
                 cfg.session.stem_file_cap,
             )

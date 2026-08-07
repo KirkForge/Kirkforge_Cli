@@ -59,7 +59,7 @@ pub use manager::{McpClientManager, McpToolDef};
 use spawn::{spawn_child_reap, spawn_stderr_drain};
 
 /// MCP server capabilities that kf-code does not yet support.
-const UNSUPPORTED_CAPABILITIES: &[&str] = &["resources", "prompts", "sampling", "roots"];
+const UNSUPPORTED_CAPABILITIES: &[&str] = &["sampling", "roots"];
 
 /// Log a warning for each unsupported capability advertised by the server.
 fn warn_unsupported_capabilities(server_name: &str, init_result: &serde_json::Value) {

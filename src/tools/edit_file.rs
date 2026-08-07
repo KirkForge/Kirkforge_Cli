@@ -1672,4 +1672,82 @@ mod tests {
             "expected ambiguous-match error, got {result:?}"
         );
     }
+
+    #[tokio::test]
+    async fn replace_all_undo_restores_all() {
+        use crate::session::undo::UndoStack;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("f.txt");
+        std::fs::write(&path, "foo\nbar\nfoo\nbaz\nfoo\n").unwrap();
+
+        let id = format!(
+            "test-ra-undo-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let stack =
+            std::sync::Arc::new(std::sync::Mutex::new(UndoStack::for_session(&id).unwrap()));
+
+        let tool = EditFile::new(
+            Some(stack.clone()),
+            crate::session::access::PathGuard::default(),
+            false,
+            false,
+        );
+        let ctx = ToolContext::new();
+        let args = serde_json::json!({
+            "path": path.to_string_lossy(),
+            "old_string": "foo",
+            "new_string": "qux",
+            "replace_all": true,
+        });
+        let result = tool.run(&ctx, args).await;
+        assert!(matches!(result, ToolOutcome::FileEdit { .. }), "got {result:?}");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "qux\nbar\nqux\nbaz\nqux\n"
+        );
+
+        let restored = stack.lock().unwrap().pop().unwrap().unwrap();
+        assert_eq!(restored.path, path);
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "foo\nbar\nfoo\nbaz\nfoo\n",
+            "undo must restore all occurrences"
+        );
+    }
+
+    #[tokio::test]
+    async fn replace_all_zero_matches_returns_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("f.txt");
+        std::fs::write(&path, "abc\ndef\n").unwrap();
+
+        let tool = EditFile::new(
+            None,
+            crate::session::access::PathGuard::default(),
+            false,
+            false,
+        );
+        let ctx = ToolContext::new();
+        let args = serde_json::json!({
+            "path": path.to_string_lossy(),
+            "old_string": "xyz",
+            "new_string": "replacement",
+            "replace_all": true,
+        });
+        let result = tool.run(&ctx, args).await;
+        assert!(
+            matches!(result, ToolOutcome::Failure(_) | ToolOutcome::Error { .. }),
+            "replace_all with zero matches should error, got {result:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "abc\ndef\n",
+            "file should be unchanged"
+        );
+    }
 }

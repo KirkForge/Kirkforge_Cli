@@ -72,18 +72,25 @@ impl McpClientManager {
 
                 let resources = client.list_resources().await;
                 if !resources.is_empty() {
+                    let resource_names: Vec<String> = resources
+                        .iter()
+                        .map(|r| format!("{} ({})", r.name, r.uri))
+                        .collect();
                     warnings.push(format!(
-                        "MCP server '{}' advertises {} resource(s) (not yet consumed by tools)",
+                        "MCP server '{}' provides {} resource(s): {}",
                         config.name,
-                        resources.len()
+                        resources.len(),
+                        resource_names.join(", ")
                     ));
                 }
                 let prompts = client.list_prompts().await;
                 if !prompts.is_empty() {
+                    let prompt_names: Vec<String> = prompts.iter().map(|p| p.name.clone()).collect();
                     warnings.push(format!(
-                        "MCP server '{}' advertises {} prompt(s) (not yet consumed by tools)",
+                        "MCP server '{}' provides {} prompt(s): {}",
                         config.name,
-                        prompts.len()
+                        prompts.len(),
+                        prompt_names.join(", ")
                     ));
                 }
 

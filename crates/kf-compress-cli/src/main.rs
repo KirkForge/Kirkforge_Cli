@@ -17,10 +17,11 @@ use anyhow::Context;
 use clap::{CommandFactory, Parser};
 use kf_compress_core::content::{detect_content_type, ContentType};
 use kf_compress_core::mode::Mode;
-use kf_compress_core::pipeline::{CompressionContext, CompressionPipeline};
+use kf_compress_core::pipeline::{CompressionContext, CompressionPipeline, Transform};
 use kf_compress_core::rules::build_rules;
 use kf_compress_core::store::InMemoryOffloadStore;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tracing::{debug, info, instrument};
 
 use cli::{load_config, Cli, Command, ProcessEnv};
@@ -79,8 +80,6 @@ fn install_panic_hook() {
     }));
 }
 
-/// Print a panic message to stderr, ignoring `BrokenPipe` so that a panic in a
-/// pipeline context does not abort the process just because stderr was closed.
 fn print_panic_message(payload: &str) {
     use std::io::{self, Write};
     let mut stderr = io::stderr().lock();
@@ -126,8 +125,6 @@ fn main() {
     }
 }
 
-/// Emit a clap error to its intended stream, ignoring `BrokenPipe` so that
-/// shell pipelines like `stratum --help | head` exit cleanly instead of panicking.
 fn print_clap_error(e: &clap::Error) {
     use std::io::{self, Write};
     if let Err(err) = e.print() {
@@ -138,9 +135,6 @@ fn print_clap_error(e: &clap::Error) {
     }
 }
 
-/// Print the final error message to stderr, ignoring `BrokenPipe` so that
-/// pipelines like `stratum run 2>&1 | head` do not panic when the downstream
-/// reader closes early.
 fn print_error_message(e: &anyhow::Error) {
     use std::io::{self, Write};
     let mut stderr = io::stderr().lock();
@@ -181,6 +175,36 @@ fn compression_context(cli: &Cli) -> CompressionContext {
         ctx = ctx.with_token_budget(budget);
     }
     ctx
+}
+
+#[derive(Debug)]
+struct CollapseTransform;
+
+impl Transform for CollapseTransform {
+    fn apply(&self, content: &str, _content_type: ContentType) -> String {
+        let mut out = String::with_capacity(content.len());
+        let mut prev_blank = false;
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                if !prev_blank {
+                    out.push('\n');
+                    prev_blank = true;
+                }
+            } else {
+                out.push_str(trimmed);
+                out.push('\n');
+                prev_blank = false;
+            }
+        }
+        out
+    }
+}
+
+fn make_pipeline() -> CompressionPipeline {
+    let mut pipeline = CompressionPipeline::new();
+    pipeline.register_content_transform(Arc::new(CollapseTransform));
+    pipeline
 }
 
 #[instrument(skip(cli), fields(command = ?cli.command))]
@@ -296,7 +320,7 @@ fn execute_pipeline(
         let report = DryRunReport::new(&input, content_type, &ctx, &cfg, mode, max_size);
         emit_json_or_human(cli.json, &report.human(), &report.to_json())?;
     } else {
-        let pipeline = CompressionPipeline::new();
+        let pipeline = make_pipeline();
         let store = InMemoryOffloadStore::new();
         let output = pipeline.run(&input, content_type, &ctx, &store, &cfg, mode);
         write_stdout(&output).with_context(|| "failed to write pipeline output")?;

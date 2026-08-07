@@ -7,18 +7,65 @@
 
 use crate::session::budget::{BudgetSlicedEvent, BudgetSlicedListener};
 use crate::session::hooks::{HookContext, HookDecision, InProcessHook};
+use crate::shared::minify::minify_content_by_ext;
 use crate::shared::{ToolDef, ToolOutcome};
 use crate::tools::{Tool, ToolContext};
 use kf_compress_core::config::PipelineConfig;
-use kf_compress_core::content::ContentType;
+use kf_compress_core::content::{detect_content_type, ContentType};
 use kf_compress_core::mode::Mode;
-use kf_compress_core::pipeline::{CompressionContext, CompressionPipeline};
+use kf_compress_core::pipeline::{CompressionContext, CompressionPipeline, Transform};
+use kf_compress_core::rules::build_rules;
 use kf_compress_core::store::InMemoryOffloadStore;
 use serde_json::Value;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 
 static SESSION_OFFLOAD_STORE: OnceLock<Arc<InMemoryOffloadStore>> = OnceLock::new();
+
+#[derive(Debug)]
+struct MinifyTransform;
+
+impl Transform for MinifyTransform {
+    fn apply(&self, content: &str, content_type: ContentType) -> String {
+        match content_type {
+            ContentType::SourceCode => {
+                let ext = guess_ext(content);
+                minify_content_by_ext(content, ext, false)
+            }
+            _ => content.to_string(),
+        }
+    }
+}
+
+fn guess_ext(content: &str) -> &'static str {
+    let first = content.lines().next().unwrap_or("");
+    if first.contains("fn ")
+        || first.contains("pub ")
+        || first.contains("use ")
+        || content.contains("impl ")
+        || content.contains("struct ")
+    {
+        "rs"
+    } else if first.contains("def ")
+        || first.contains("import ")
+        || first.contains("from ")
+    {
+        "py"
+    } else if first.contains("function ")
+        || first.contains("const ")
+        || first.contains("let ")
+    {
+        "js"
+    } else {
+        "rs"
+    }
+}
+
+fn make_pipeline() -> CompressionPipeline {
+    let mut pipeline = CompressionPipeline::new();
+    pipeline.register_content_transform(Arc::new(MinifyTransform));
+    pipeline
+}
 
 /// Process-global Stratum offload store. Pub so the budget `store_get`
 /// tool can consult it as a fallback when a marker isn't in the budget
@@ -70,11 +117,12 @@ pub fn set_session_mode(mode: Mode) {
 /// the default budget-sliced listener; also useful for callers that
 /// want to run the pipeline outside the in-process tool path.
 pub fn compress_for_budget(content: &str, mode: Mode) -> String {
-    let pipeline = CompressionPipeline::new();
+    let pipeline = make_pipeline();
     let store = session_offload_store();
     let cfg = PipelineConfig::default();
     let ctx = CompressionContext::default().with_token_budget(4096);
-    pipeline.run(content, ContentType::PlainText, &ctx, &*store, &cfg, mode)
+    let content_type = detect_content_type(content);
+    pipeline.run(content, content_type, &ctx, &*store, &cfg, mode)
 }
 
 /// Default `BudgetSlicedEvent` listener: compresses the sliced
@@ -192,7 +240,10 @@ impl Tool for StratumRun {
             return success_json(serde_json::to_string_pretty(&result).unwrap_or_default());
         }
 
-        let content_type = parse_content_type(None);
+        let content_type = json_get_string(&args, "content_type")
+            .as_deref()
+            .map(|s| s.parse().unwrap_or(ContentType::PlainText))
+            .unwrap_or_else(|| detect_content_type(&input));
         let token_budget = json_get_u64(&args, "token_budget").map(|v| v as usize);
         let ctx = CompressionContext::default().with_token_budget(token_budget.unwrap_or(4096));
         let ctx = if let Some(query) = json_get_string(&args, "query") {
@@ -201,7 +252,7 @@ impl Tool for StratumRun {
             ctx
         };
 
-        let pipeline = CompressionPipeline::new();
+        let pipeline = make_pipeline();
         let store = session_offload_store();
         let cfg = PipelineConfig::default();
         let result = pipeline.run(&input, content_type, &ctx, &*store, &cfg, mode);
@@ -278,7 +329,7 @@ impl Tool for StratumApply {
         let token_budget = json_get_u64(&args, "token_budget").map(|v| v as usize);
         let ctx = CompressionContext::default().with_token_budget(token_budget.unwrap_or(4096));
 
-        let pipeline = CompressionPipeline::new();
+        let pipeline = make_pipeline();
         let store = session_offload_store();
         let cfg = PipelineConfig::default();
         let result = pipeline.run(&content, content_type, &ctx, &*store, &cfg, mode);
@@ -369,6 +420,7 @@ impl Tool for StratumRules {
         let json_out = json_get_bool(&args, "json");
         let mode_owned = json_get_string(&args, "mode");
         let mode = parse_mode(mode_owned.as_deref());
+        let canonical = build_rules(mode);
 
         let rules = serde_json::json!({
             "mode": mode.as_str(),
@@ -376,13 +428,14 @@ impl Tool for StratumRules {
             "offloads_bloat": mode.offloads_bloat(),
             "offload_threshold": mode.offload_threshold(),
             "description": mode_description(mode),
+            "canonical_rules": canonical,
         });
 
         if json_out {
             success_json(serde_json::to_string_pretty(&rules).unwrap_or_default())
         } else {
             success_json(format!(
-                "mode={}\nruns_transforms={}\noffloads_bloat={}\noffload_threshold={}",
+                "mode={}\nruns_transforms={}\noffloads_bloat={}\noffload_threshold={}\n\n{canonical}",
                 mode.as_str(),
                 mode.runs_transforms(),
                 mode.offloads_bloat(),
@@ -426,7 +479,6 @@ impl Tool for StratumConfigValidate {
             "bloat_threshold": cfg.bloat_threshold.get(),
             "reformat_target_ratio": cfg.reformat_target_ratio.get(),
             "offload_fallback_ratio": cfg.offload_fallback_ratio.get(),
-            "transform_timeout_ms": cfg.transform_timeout_ms(),
             "per_domain_count": cfg.per_domain.len(),
         });
 
@@ -446,11 +498,10 @@ impl Tool for StratumConfigValidate {
                 )
             };
             success_json(format!(
-                "valid={valid}\n{issues_str}bloat_threshold={}\nreformat_target_ratio={}\noffload_fallback_ratio={}\ntransform_timeout_ms={}\nper_domain_count={}",
+                "valid={valid}\n{issues_str}bloat_threshold={}\nreformat_target_ratio={}\noffload_fallback_ratio={}\nper_domain_count={}",
                 cfg.bloat_threshold.get(),
                 cfg.reformat_target_ratio.get(),
                 cfg.offload_fallback_ratio.get(),
-                cfg.transform_timeout_ms(),
                 cfg.per_domain.len(),
             ))
         }
@@ -609,6 +660,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_stratum_rules_emits_canonical_rules() {
+        let tool = StratumRules;
+        let ctx = ToolContext::new();
+        let out = tool.run(&ctx, serde_json::json!({"mode": "off", "json": true})).await;
+        match out {
+            ToolOutcome::Success { content } => {
+                assert!(
+                    content.contains("Ship the smallest change"),
+                    "StratumRules must include canonical rules, got: {content}"
+                );
+            }
+            other => panic!("StratumRules must return Success, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_stratum_run_detects_json_content_type() {
+        let tool = StratumRun;
+        let ctx = ToolContext::new();
+        let json_input = serde_json::to_string_pretty(&serde_json::json!({"key": "value"})).unwrap();
+        let out = tool.run(
+            &ctx,
+            serde_json::json!({
+                "input": json_input,
+                "json": true,
+                "token_budget": 100000,
+            }),
+        )
+        .await;
+        match out {
+            ToolOutcome::Success { content } => {
+                let v: serde_json::Value = serde_json::from_str(&content).unwrap();
+                assert_eq!(v["input_len"], json_input.len() as i64);
+            }
+            other => panic!("StratumRun must return Success, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn test_stratum_config_validate_returns_output() {
         let tool = StratumConfigValidate;
         let ctx = ToolContext::new();
@@ -703,20 +793,18 @@ mod tests {
         assert_eq!(current_session_mode(), Mode::Full);
         set_session_mode(Mode::Ultra);
         assert_eq!(current_session_mode(), Mode::Ultra);
-        // Reset to the default for downstream tests.
         set_session_mode(Mode::Full);
     }
 
     #[test]
     fn compress_for_budget_pipeline_runs() {
-        // The empty pipeline (no transforms registered) is
-        // identity: the input passes through unchanged for any
-        // non-Off mode. This pins that the helper actually
-        // reaches the pipeline and returns a `String`.
+        // The pipeline has MinifyTransform registered but it only
+        // applies to SourceCode. PlainText input passes through
+        // unchanged for non-Off modes.
         let input = "abcdefghij";
         for mode in [Mode::Lite, Mode::Full, Mode::Ultra] {
             let out = compress_for_budget(input, mode);
-            assert_eq!(out, input, "empty pipeline must be identity for {mode:?}");
+            assert_eq!(out, input, "pipeline must be identity for plain text in {mode:?}");
         }
     }
 
@@ -736,9 +824,6 @@ mod tests {
 
     #[test]
     fn register_default_budget_listener_appends_to_dispatcher() {
-        // The dispatcher lives in the budget module; verify that
-        // calling `register_default_budget_listener()` actually
-        // registers something by counting listeners.
         crate::session::budget::clear_sliced_listeners();
         assert_eq!(crate::session::budget::sliced_listener_count(), 0);
         register_default_budget_listener();
@@ -820,8 +905,6 @@ mod tests {
 
     #[test]
     fn parse_content_type_valid_parses() {
-        // Plaintext is the only guaranteed-stable variant; the rest
-        // must at least fall back to PlainText rather than panic.
         assert_eq!(parse_content_type(None), ContentType::PlainText);
         let _ = parse_content_type(Some("plaintext"));
     }
@@ -836,14 +919,8 @@ mod tests {
     fn mode_description_covers_all_known_modes() {
         for mode in [Mode::Off, Mode::Lite, Mode::Full, Mode::Ultra] {
             let desc = mode_description(mode);
-            assert!(
-                !desc.is_empty(),
-                "description for {mode:?} should not be empty"
-            );
-            assert_ne!(
-                desc, "Unknown mode",
-                "{mode:?} should have a real description"
-            );
+            assert!(!desc.is_empty(), "description for {mode:?} should not be empty");
+            assert_ne!(desc, "Unknown mode", "{mode:?} should have a real description");
         }
     }
 
@@ -880,8 +957,5 @@ mod tests {
             let path = xdg_config_path().expect("HOME set should resolve a path");
             assert!(path.ends_with("stratum/pipeline.toml"), "got {path:?}");
         }
-        // When neither XDG_CONFIG_HOME nor HOME is set, returns None.
-        // We can't safely unset HOME for other tests, so just assert
-        // the happy path above.
     }
 }

@@ -23,7 +23,7 @@ pub use lang::{minify_with_map, revalidate, surgical_edit, Minified, Span};
 ///
 /// Maintains a VFS cache keyed by (path, mtime) to avoid re-minifying
 /// the same file across multiple turns.
-use lang::minify_content_by_ext;
+pub use lang::minify_content_by_ext;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};

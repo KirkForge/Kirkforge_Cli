@@ -22,7 +22,7 @@ synthesis with its own architectural contributions:
 | Context quality | Tree-sitter symbol/import/call-graph index (`kf-context-index`) gives the agent graph-grounded retrieval instead of plain-text search. Four languages: Rust, TypeScript, Python, Go. |
 | Context cost (input side) | Stratum compression pipeline classifies and compacts bloated tool outputs *before* they enter the context window. |
 | Context cost (output side) | Plugin3 budget guard tracks token spend against a ceiling and slices or compacts oversized tool results when the budget is approached. |
-| Execution reliability | A verifier bus runs build, test, lint, rustfmt, git-state, and security checks after file-modifying tool calls. A correction loop auto-applies formatter fixes and feeds unfixable errors back to the model as tool results. |
+| Execution reliability | A verifier bus runs build, test, lint, rustfmt, git-state, and security checks after file-modifying tool calls. A correction loop auto-applies rustfmt fixes; build/lint/test findings are fed back to the model as tool-result suggestions. |
 | Reproducibility | Enforced plan mode (`/plan` then `/implement`), per-result checkpointing mid-batch, execution replay (ADR-039), and conversation logging. |
 | Extensibility | A manifest-based plugin system (`kf-code.toml`) with trust tiers, minisign signature verification, and four capability kinds: skills, tools, hooks, verifiers. |
 

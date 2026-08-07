@@ -5,7 +5,7 @@
 
 ## Context
 
-Plugin signature verification (`crates/kirkforge-plugin-host/src/lib.rs`)
+Plugin signature verification (`crates/kf-plugin-host/src/lib.rs`)
 shelled out to the `minisign` binary: `find_minisign_binary()` walked
 `PATH` looking for a `minisign` executable; if not found, verification
 failed with a hard error. This meant:

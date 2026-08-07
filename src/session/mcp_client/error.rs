@@ -45,6 +45,12 @@ impl std::error::Error for McpError {
     }
 }
 
+impl From<std::io::Error> for McpError {
+    fn from(err: std::io::Error) -> Self {
+        McpError::Io(err)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -55,7 +61,10 @@ mod tests {
         let io_err = std::io::Error::new(std::io::ErrorKind::BrokenPipe, "pipe broke");
         let mcp = McpError::Io(io_err);
         let msg = mcp.to_string();
-        assert!(msg.contains("pipe broke"), "display should include io error: {msg}");
+        assert!(
+            msg.contains("pipe broke"),
+            "display should include io error: {msg}"
+        );
         assert!(mcp.source().is_some(), "Io variant should have a source");
     }
 
@@ -69,7 +78,10 @@ mod tests {
 
     #[test]
     fn json_rpc_display() {
-        let mcp = McpError::JsonRpc { code: -32600, message: "invalid".into() };
+        let mcp = McpError::JsonRpc {
+            code: -32600,
+            message: "invalid".into(),
+        };
         let msg = mcp.to_string();
         assert!(msg.contains("-32600"), "display: {msg}");
         assert!(msg.contains("invalid"), "display: {msg}");
@@ -94,11 +106,5 @@ mod tests {
         let mcp: McpError = io_err.into();
         assert!(matches!(mcp, McpError::Io(_)));
         assert!(mcp.to_string().contains("not found"));
-    }
-}
-
-impl From<std::io::Error> for McpError {
-    fn from(err: std::io::Error) -> Self {
-        McpError::Io(err)
     }
 }

@@ -60,15 +60,29 @@ mod tests {
     fn bus_event_kind_matches_variant() {
         let path = PathBuf::from("/tmp/test.rs");
         assert_eq!(
-            BusEvent::FileRead(FileReadEvent { path: path.clone(), size_bytes: 10, truncated: false }).kind(),
+            BusEvent::FileRead(FileReadEvent {
+                path: path.clone(),
+                size_bytes: 10,
+                truncated: false
+            })
+            .kind(),
             EventKind::FileRead
         );
         assert_eq!(
-            BusEvent::FileWrite(FileWriteEvent { path: path.clone(), content_length: 5, content_hash: 0 }).kind(),
+            BusEvent::FileWrite(FileWriteEvent {
+                path: path.clone(),
+                content_length: 5,
+                content_hash: 0
+            })
+            .kind(),
             EventKind::FileWrite
         );
         assert_eq!(
-            BusEvent::Edit(EditEvent { path: path.clone(), diff: "-a\n+b".into() }).kind(),
+            BusEvent::Edit(EditEvent {
+                path: path.clone(),
+                diff: "-a\n+b".into()
+            })
+            .kind(),
             EventKind::Edit
         );
         assert_eq!(
@@ -78,27 +92,51 @@ mod tests {
                 stdout_len: 10,
                 stderr_len: 0,
                 workdir: None
-            }).kind(),
+            })
+            .kind(),
             EventKind::BashExec
         );
         assert_eq!(
-            BusEvent::GitOperation(GitOperationEvent { args: vec!["status".into()], output: "clean".into(), success: true }).kind(),
+            BusEvent::GitOperation(GitOperationEvent {
+                args: vec!["status".into()],
+                output: "clean".into(),
+                success: true
+            })
+            .kind(),
             EventKind::GitOperation
         );
         assert_eq!(
-            BusEvent::LintRun(LintRunEvent { tool: "clippy".into(), target: "main.rs".into(), findings: vec![] }).kind(),
+            BusEvent::LintRun(LintRunEvent {
+                tool: "clippy".into(),
+                target: "main.rs".into(),
+                findings: vec![]
+            })
+            .kind(),
             EventKind::LintRun
         );
         assert_eq!(
-            BusEvent::TypeCheck(TypeCheckEvent { target: "main.rs".into(), errors: vec![], success: true }).kind(),
+            BusEvent::TypeCheck(TypeCheckEvent {
+                target: "main.rs".into(),
+                errors: vec![],
+                success: true
+            })
+            .kind(),
             EventKind::TypeCheck
         );
         assert_eq!(
-            BusEvent::SecurityScan(SecurityScanEvent { target: ".".into(), issues: vec![] }).kind(),
+            BusEvent::SecurityScan(SecurityScanEvent {
+                target: ".".into(),
+                issues: vec![]
+            })
+            .kind(),
             EventKind::SecurityScan
         );
         assert_eq!(
-            BusEvent::ToolError(ToolErrorEvent { tool: "bash".into(), error: "fail".into() }).kind(),
+            BusEvent::ToolError(ToolErrorEvent {
+                tool: "bash".into(),
+                error: "fail".into()
+            })
+            .kind(),
             EventKind::ToolError
         );
     }

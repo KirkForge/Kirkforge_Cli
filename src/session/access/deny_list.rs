@@ -59,6 +59,35 @@ pub fn url_is_denied(url: &str, patterns: &[String]) -> bool {
     patterns.iter().any(|p| !p.is_empty() && url.starts_with(p))
 }
 
+impl Default for DenyList {
+    fn default() -> Self {
+        Self::new(
+            vec![
+                "**/.ssh/**".into(),
+                "**/.gnupg/**".into(),
+                "**/.aws/**".into(),
+                "**/.git/**".into(),
+                "**/__pycache__/**".into(),
+                "**/.env*".into(),
+                "**/*.pem".into(),
+                "**/*.key".into(),
+                "**/*.crt".into(),
+                "**/*.cert".into(),
+                "/etc/shadow".into(),
+                "/etc/sudoers".into(),
+                "/etc/passwd".into(),
+                "/etc/kubernetes/**".into(),
+            ],
+            vec![
+                // Cloud metadata endpoints — never let the model probe these
+                "http://169.254.169.254".into(),
+                "http://metadata.google.internal".into(),
+                "http://100.100.100.200".into(),
+            ],
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -122,10 +151,7 @@ mod tests {
 
     #[test]
     fn invalid_glob_patterns_are_skipped() {
-        let dl = DenyList::new(
-            vec!["[invalid".into(), "/valid/**".into()],
-            vec![],
-        );
+        let dl = DenyList::new(vec!["[invalid".into(), "/valid/**".into()], vec![]);
         assert!(!dl.is_path_denied(std::path::Path::new("[invalid")));
         assert!(dl.is_path_denied(std::path::Path::new("/valid/file")));
     }
@@ -155,34 +181,5 @@ mod tests {
         let patterns = vec!["/foo/**".into()];
         let dl = DenyList::new(patterns.clone(), vec![]);
         assert_eq!(dl.path_patterns, patterns);
-    }
-}
-
-impl Default for DenyList {
-    fn default() -> Self {
-        Self::new(
-            vec![
-                "**/.ssh/**".into(),
-                "**/.gnupg/**".into(),
-                "**/.aws/**".into(),
-                "**/.git/**".into(),
-                "**/__pycache__/**".into(),
-                "**/.env*".into(),
-                "**/*.pem".into(),
-                "**/*.key".into(),
-                "**/*.crt".into(),
-                "**/*.cert".into(),
-                "/etc/shadow".into(),
-                "/etc/sudoers".into(),
-                "/etc/passwd".into(),
-                "/etc/kubernetes/**".into(),
-            ],
-            vec![
-                // Cloud metadata endpoints — never let the model probe these
-                "http://169.254.169.254".into(),
-                "http://metadata.google.internal".into(),
-                "http://100.100.100.200".into(),
-            ],
-        )
     }
 }

@@ -191,11 +191,7 @@ impl Tool for McpPromptTool {
                         .arguments
                         .iter()
                         .map(|a| {
-                            format!(
-                                "{}{}",
-                                a.name,
-                                if a.required { " (required)" } else { "" }
-                            )
+                            format!("{}{}", a.name, if a.required { " (required)" } else { "" })
                         })
                         .collect();
                     lines.push(format!(

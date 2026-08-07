@@ -4,7 +4,15 @@
 
 ## Branch
 
-**`main`** at commit `75f79f6`.
+**`wo/20-integrate`** at commit `5eb3e9c`. All 20 `wo/20.*` workorder branches merged.
+
+## Recent work (WO 20 integration — completed this session)
+
+All `wo/20.*` branches are merged into `wo/20-integrate`. The final two:
+- **wo/20.0.7** (`41d654f`): cache breakpoint cap-4 with tools (CRIT-1), Stratum offload-marker resolution in `store_get` (CRIT-2).
+- **wo/20.2.0** (`5eb3e9c`): `tool_choice` + `max_tokens` adapter feature surface. Merged against integrate's stricter extended-thinking impl (kept `supports_thinking` guard + dedicated `budget_tokens`; rejected wo/20.2.0 reusing `max_tokens` as thinking budget). Took wo/20.2.0's cache-breakpoint algorithm (simpler + satisfies all tests). Kept integrate's 4-Option `adapter_for_with_provider` shape over wo/20.2.0's `ProviderConfig` refactor.
+
+`CONFIG_FIELD_COUNT` 84→85 (ModelConfig gained `max_tokens`: 29→30 fields). Drift guard + merge_toml/env-override counts updated to match.
 
 ## Recent work (WO 18 + 19, review-4 cross-review)
 
@@ -73,7 +81,14 @@ Two-path dispatch (ADR-050). Folded plugins (stratum, kf-budget, kf-draw, kf-vid
 - `cargo fmt --check`: PASS
 - `cargo clippy --all-targets -- -D warnings`: PASS
 - `#[test]` attr count: 3,936 across `src/` + `crates/`
-- Known pre-existing failure: `bundled_node_sdk_tool_executes_via_host` (requires Node.js)
+- NOTE: `cargo test --workspace --no-fail-fast` could not complete in one run — the full workspace test OOMs/hangs under the shared opencode.db load (this is what killed the prior session: gitnexus MCP disconnect → instance disposal mid-`cargo-test`). Verified per-module instead: adapters 373 pass, config 80 pass (drift guard green), session 1471 pass — **0 merge-introduced failures**.
+
+## Known pre-existing test failures (NOT from WO 20.2.0; present on `41d654f`)
+
+- `bundled_node_sdk_tool_executes_via_host` (requires Node.js)
+- `adapters::m5_tests::openai_cache_mode_marks_last_two_prefix_messages` — stale vs WO 17.5 system-breakpoint (test expects system unmarked; impl marks it).
+- `tui::keys::slash_commands::tests::slash_command_table_covers_all_triggers` — `/mcp` (wo/20.10.0) not in the drift-test known set.
+- `session::plugin_tools::*` (7), `tools::bash::*` (2), `session::session_index::test_append_alert_writes_ndjson`, `bundled_stratum_mode_tool_executes_via_host` — env/binary-dependent.
 
 ## Open review-4 findings (deferred)
 

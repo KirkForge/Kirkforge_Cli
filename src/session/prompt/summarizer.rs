@@ -226,7 +226,7 @@ pub async fn summarize_conversation(
                     .filter(|s| !s.is_empty()); // Treat empty string as None
 
                 if let Some(ref s) = summary {
-                    let tokens_after = s.len() / 4;
+                    let tokens_after = super::count_tokens(s);
                     if tokens_before == 0 {
                         return SummarizeResult {
                             summary: None,
@@ -259,7 +259,7 @@ pub async fn summarize_conversation(
 
                 let tokens_after = summary
                     .as_ref()
-                    .map(|s| s.len() / 4)
+                    .map(|s| super::count_tokens(s))
                     .unwrap_or(tokens_before);
                 let fell_back = summary.is_none();
 
@@ -297,12 +297,12 @@ fn estimate_token_count(messages: &[Message]) -> usize {
     messages
         .iter()
         .map(|m| {
-            let content = m.content.len() / 4;
-            let thinking = m.thinking.as_ref().map(|t| t.len() / 4).unwrap_or(0);
+            let content = super::count_tokens(&m.content);
+            let thinking = m.thinking.as_ref().map(|t| super::count_tokens(t)).unwrap_or(0);
             let tool_calls = m
                 .tool_calls
                 .as_ref()
-                .map(|c| serde_json::to_string(c).map(|s| s.len() / 4).unwrap_or(0))
+                .map(|c| serde_json::to_string(c).map(|s| super::count_tokens(&s)).unwrap_or(0))
                 .unwrap_or(0);
             content + thinking + tool_calls
         })

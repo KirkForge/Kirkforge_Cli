@@ -227,7 +227,7 @@ impl MemoryStore {
                 fact.name,
                 fact.description
             );
-            let est = line.len() / 4;
+            let est = crate::session::prompt::count_tokens(&line);
             if tokens_used + est > max_tokens && !selected.is_empty() {
                 break;
             }

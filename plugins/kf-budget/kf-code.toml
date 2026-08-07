@@ -1,5 +1,4 @@
-# Kf-Code-Plugin3 manifest.
-# The budget binary builds from crates/plugin3-cli in this workspace.
+# Kf-Code-Plugin manifest for kf-budget.
 
 name = "kf-budget"
 version = "0.2.0"

@@ -14,6 +14,18 @@ pub(crate) use compaction::{compact_to_budget, estimate_tokens};
 
 use kf_context_index::ContextIndex;
 
+/// Token counter — real cl100k_base when the `budget` feature is available,
+/// bytes/4 fallback otherwise.
+#[cfg(feature = "budget")]
+pub(crate) fn count_tokens(s: &str) -> usize {
+    kf_budget_core::estimate_tokens(s)
+}
+
+#[cfg(not(feature = "budget"))]
+pub(crate) fn count_tokens(s: &str) -> usize {
+    s.len() / 4
+}
+
 /// Number of trailing messages kept verbatim by automatic microcompaction.
 /// Mirrors `Config::preserve_recent_messages` semantics: the live user turn
 /// and the most recent assistant turn stay intact so the model does not lose
@@ -674,14 +686,14 @@ impl PromptBuilder {
     }
 
     fn estimate_message_tokens(m: &Message) -> usize {
-        let content_tokens = m.content.len() / 4;
-        let thinking_tokens = m.thinking.as_ref().map(|t| t.len() / 4).unwrap_or(0);
+        let content_tokens = count_tokens(&m.content);
+        let thinking_tokens = m.thinking.as_ref().map(|t| count_tokens(t)).unwrap_or(0);
         let tool_call_tokens = m
             .tool_calls
             .as_ref()
             .map(|calls| {
                 serde_json::to_string(calls)
-                    .map(|s| s.len() / 4)
+                    .map(|s| count_tokens(&s))
                     .unwrap_or(0)
             })
             .unwrap_or(0);

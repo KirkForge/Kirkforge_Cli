@@ -2,15 +2,10 @@
 
 //! kf-budget-hosts — host detection and canonical payload schemas.
 //! Per ADR-0013.
-//!
-//! Only Claude Code has wired CLI hook handlers today. Cursor, Aider, and
-//! KirkForge are listed in the `Host` enum as placeholders; their shim
-//! modules are removed. When a contributor adds a second host, the
-//! module file should be created alongside the corresponding `detect_host`
-//! arm.
 
 pub mod canonical;
 pub mod claude_code;
+pub mod cursor;
 
 pub use canonical::{
     PostToolUsePayload, PostToolUseResponse, PreCompactPayload, PreCompactResponse, Turn,
@@ -35,7 +30,7 @@ pub fn detect_host() -> Host {
     detect_host_with(&OsEnv)
 }
 
-// ponytail: env source seam mirroring `kf_budget_cli::precedence::EnvSource`.
+// ponytail: env source seam mirroring `canonical precedence detection`.
 // Production reads `std::env`; tests inject a fixed map so they
 // never race with parallel tests that mutate the process env.
 pub trait EnvSource {

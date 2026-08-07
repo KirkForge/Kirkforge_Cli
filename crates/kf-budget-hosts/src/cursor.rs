@@ -61,6 +61,16 @@ pub fn format_pre_compact(resp: &crate::canonical::PreCompactResponse) -> Value 
     })
 }
 
+/// Cursor hook configuration for `register_hooks`.
+/// Returns the full three-slot HookConfig matching ADR-0009.
+pub fn hook_config() -> serde_json::Value {
+    serde_json::json!({
+        "PostToolUse": [{"type": "command", "command": "kf-budget hook post-tool-use", "timeout": 5}],
+        "UserPromptSubmit": [{"type": "command", "command": "kf-budget hook user-prompt-submit", "timeout": 2}],
+        "PreCompact": [{"type": "command", "command": "kf-budget hook pre-compact", "timeout": 10}],
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -113,5 +123,55 @@ mod tests {
         };
         let v = format_post_tool_use(&resp);
         assert_eq!(v["patch"]["content"], "new content");
+    }
+
+    #[test]
+    fn parse_user_prompt_submit_round_trips() {
+        let json = r#"{"prompt":"hello cursor","session_id":"c1"}"#;
+        let payload = parse_user_prompt_submit(json).unwrap();
+        assert_eq!(payload.prompt, "hello cursor");
+    }
+
+    #[test]
+    fn format_user_prompt_submit_allow() {
+        let v = format_user_prompt_submit(
+            &crate::canonical::UserPromptSubmitResponse::Allow,
+        );
+        assert_eq!(v["kind"], "allow");
+    }
+
+    #[test]
+    fn format_user_prompt_submit_warn() {
+        let v = format_user_prompt_submit(
+            &crate::canonical::UserPromptSubmitResponse::Warn { remaining: 10 },
+        );
+        assert_eq!(v["kind"], "warn");
+        assert_eq!(v["remaining"], 10);
+    }
+
+    #[test]
+    fn parse_pre_compact_round_trips() {
+        let json = r#"{"history_turns":[{"index":0,"role":"user","content_preview":"hi"}]}"#;
+        let payload = parse_pre_compact(json).unwrap();
+        assert_eq!(payload.history_turns.len(), 1);
+        assert_eq!(payload.history_turns[0].role, "user");
+    }
+
+    #[test]
+    fn format_pre_compact_produces_expected_keys() {
+        let resp = crate::canonical::PreCompactResponse {
+            hint: serde_json::json!({"turns": 3}),
+        };
+        let v = format_pre_compact(&resp);
+        assert_eq!(v["hint"]["turns"], 3);
+        assert!(v.get("summary").is_some());
+    }
+
+    #[test]
+    fn hook_config_has_all_three_slots() {
+        let v = hook_config();
+        assert!(v.get("PostToolUse").is_some());
+        assert!(v.get("UserPromptSubmit").is_some());
+        assert!(v.get("PreCompact").is_some());
     }
 }

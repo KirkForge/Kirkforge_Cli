@@ -86,8 +86,16 @@ pub(super) fn apply_env_overrides(cfg: &mut Config) {
 
     // KF_CODE_CARRYOVER_ENABLED
     env_bool!("KF_CODE_CARRYOVER_ENABLED", cfg.session.carryover_enabled);
-    // KF_CODE_COMPACTION_USE_LLM
-    env_bool!("KF_CODE_COMPACTION_USE_LLM", cfg.session.compaction_use_llm);
+    // KF_CODE_COMPACTION_USE_HEURISTIC (backward compat: KF_CODE_COMPACTION_USE_LLM)
+    if let Ok(val) = std::env::var("KF_CODE_COMPACTION_USE_HEURISTIC") {
+        if let Ok(v) = val.parse::<bool>() {
+            cfg.session.compaction_use_heuristic = v;
+        }
+    } else if let Ok(val) = std::env::var("KF_CODE_COMPACTION_USE_LLM") {
+        if let Ok(v) = val.parse::<bool>() {
+            cfg.session.compaction_use_heuristic = v;
+        }
+    }
     // KF_CODE_COMPACTION_DROP_THRESHOLD
     if let Ok(val) = std::env::var("KF_CODE_COMPACTION_DROP_THRESHOLD") {
         if let Ok(v) = val.parse::<f64>() {

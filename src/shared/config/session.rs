@@ -12,7 +12,7 @@ fn default_checkpoint_interval_messages() -> usize {
     0
 }
 
-fn default_compaction_use_llm() -> bool {
+fn default_compaction_use_heuristic() -> bool {
     false
 }
 
@@ -30,15 +30,15 @@ pub struct SessionConfig {
     pub checkpoint_interval_messages: usize,
     #[serde(default)]
     pub worktree_enabled: bool,
-    // ponytail: compaction_use_llm name is a misnomer — the actual impl is
-    // heuristic keyword extraction, not LLM summarization. The LLM path is
-    // gated behind this flag but the default is false. Rename to
-    // compaction_use_heuristic when the LLM path ships.
-    #[serde(default = "default_compaction_use_llm")]
-    pub compaction_use_llm: bool,
+    // ponytail: renamed from compaction_use_llm in WO 21.6-R5 — the
+    // actual impl is heuristic keyword extraction, not LLM
+    // summarization. The serde alias preserves backward compat with
+    // existing configs that use the old name.
+    #[serde(default = "default_compaction_use_heuristic", alias = "compaction_use_llm")]
+    pub compaction_use_heuristic: bool,
     /// Fraction of content that must be dropped by the heuristic before
     /// the LLM summarizer is tried. Default 0.5 (50%). Only used when
-    /// `compaction_use_llm` is `true`.
+    /// `compaction_use_heuristic` is `true`.
     #[serde(default = "default_compaction_drop_threshold")]
     pub compaction_drop_threshold: f64,
     /// Maximum number of file stems included in the system prompt context.
@@ -59,7 +59,7 @@ impl Default for SessionConfig {
             preserve_recent_messages: default_preserve_recent_messages(),
             checkpoint_interval_messages: default_checkpoint_interval_messages(),
             worktree_enabled: false,
-            compaction_use_llm: default_compaction_use_llm(),
+            compaction_use_heuristic: default_compaction_use_heuristic(),
             compaction_drop_threshold: default_compaction_drop_threshold(),
             stem_file_cap: None,
             shutdown_timeout_secs: None,

@@ -237,3 +237,67 @@ fn go_method_receiver_included_in_name() {
         "bare `Stop` (without receiver prefix) must not appear, got {names:?}"
     );
 }
+
+#[test]
+fn mtime_rebuild_noop_is_cheap() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo_root = tmp.path();
+
+    let src_path = tmp.path().join("lib.rs");
+    std::fs::write(&src_path, "fn hello() {}\nfn world() {}\n").unwrap();
+
+    let mut idx = ContextIndex::new();
+    idx.index_dir(repo_root).unwrap();
+
+    let cache_path = tmp.path().join("cache.json");
+    let head = "0000000000000000000000000000000000000000".to_string();
+    idx.save(&cache_path, &head).unwrap();
+
+    let cached = ContextIndex::load(&cache_path).unwrap();
+    let start = std::time::Instant::now();
+    let (rebuilt, changed) = ContextIndex::mtime_rebuild(cached, repo_root);
+    let elapsed = start.elapsed();
+
+    assert_eq!(changed, 0, "no files changed, so changed count must be 0");
+    assert_eq!(rebuilt.symbols().len(), 2, "both symbols should survive no-op rebuild");
+    assert!(
+        elapsed.as_millis() < 100,
+        "no-op mtime rebuild should be <100ms, took {}ms",
+        elapsed.as_millis()
+    );
+}
+
+#[test]
+fn mtime_rebuild_single_file_change() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo_root = tmp.path();
+
+    let a_path = tmp.path().join("a.rs");
+    let b_path = tmp.path().join("b.rs");
+    std::fs::write(&a_path, "fn alpha() {}\n").unwrap();
+    std::fs::write(&b_path, "fn beta() {}\n").unwrap();
+
+    let mut idx = ContextIndex::new();
+    idx.index_dir(repo_root).unwrap();
+    assert_eq!(idx.symbols().len(), 2);
+
+    let cache_path = tmp.path().join("cache.json");
+    let head = "0000000000000000000000000000000000000000".to_string();
+    idx.save(&cache_path, &head).unwrap();
+
+    std::fs::write(&a_path, "fn alpha_v2() {}\nfn new_func() {}\n").unwrap();
+
+    // Ensure mtime actually changes (fs may round to second).
+    std::thread::sleep(std::time::Duration::from_secs(1));
+    std::fs::write(&a_path, "fn alpha_v2() {}\nfn new_func() {}\n").unwrap();
+
+    let cached = ContextIndex::load(&cache_path).unwrap();
+    let (rebuilt, changed) = ContextIndex::mtime_rebuild(cached, repo_root);
+
+    assert_eq!(changed, 1, "only a.rs changed");
+    let names: Vec<&str> = rebuilt.symbols().iter().map(|s| s.name.as_str()).collect();
+    assert!(names.contains(&"alpha_v2"), "updated function should appear, got {names:?}");
+    assert!(names.contains(&"new_func"), "new function should appear, got {names:?}");
+    assert!(names.contains(&"beta"), "unchanged file's symbol should survive, got {names:?}");
+    assert!(!names.contains(&"alpha"), "old function should be removed, got {names:?}");
+}

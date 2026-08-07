@@ -118,8 +118,6 @@ pub fn load_config() -> (Config, Option<String>) {
         }
     }
 
-    // Layer 2: environment variables
-    apply_env_overrides(&mut cfg);
 
     (cfg, warning)
 }
@@ -159,9 +157,21 @@ pub fn load_or_create_config() -> Config {
                     error = %e,
                     dir = %parent.display(),
                     "Failed to create config directory"
-                );
-            }
-        }
+         );
+     }
+
+    #[test]
+    fn compaction_use_llm_alias_backward_compat() {
+        let toml = "[session]\ncompaction_use_llm = true\n";
+        let table: toml::Table = toml.parse().expect("parse toml table");
+        let mut cfg = Config::default();
+        merge_toml_into_config(&mut cfg, table);
+        assert!(
+            cfg.session.compaction_use_heuristic,
+            "compaction_use_llm (old name) must map to compaction_use_heuristic"
+        );
+    }
+}
         if let Ok(content) = toml::to_string_pretty(&cfg) {
             if std::fs::write(&path, content).is_ok() {
                 #[cfg(unix)]
@@ -315,8 +325,11 @@ fn merge_toml_into_config(cfg: &mut Config, table: toml::Table) {
     if let Some(Value::Boolean(v)) = table.get("carryover_enabled") {
         cfg.session.carryover_enabled = *v;
     }
+    if let Some(Value::Boolean(v)) = table.get("compaction_use_heuristic") {
+        cfg.session.compaction_use_heuristic = *v;
+    }
     if let Some(Value::Boolean(v)) = table.get("compaction_use_llm") {
-        cfg.session.compaction_use_llm = *v;
+        cfg.session.compaction_use_heuristic = *v;
     }
     if let Some(Value::Float(v)) = table.get("compaction_drop_threshold") {
         cfg.session.compaction_drop_threshold = *v;
@@ -1931,7 +1944,7 @@ mod tests {
             scheduled_bash_auto_approve = true
             max_concurrent_scheduled_jobs = 999
             carryover_enabled = true
-            compaction_use_llm = true
+            compaction_use_heuristic = true
             compaction_drop_threshold = 0.5
             stem_file_cap = 999
             shutdown_timeout_secs = 999

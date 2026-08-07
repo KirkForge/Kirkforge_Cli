@@ -4,8 +4,6 @@ requires_model = true
 
 prompt = "This project uses the Plugin3 budget guard. A config.toml at the repo root pins the token budget ceiling to 1000 tokens (low for testing). Use the budget_status tool to check the current usage, then write the result to budget_report.txt."
 
-requires_model = true
-
 [setup]
 "Cargo.toml" = """[package]
 name = "use_budget_check"
@@ -18,15 +16,6 @@ budget_approaching_ratio = 0.5
 """
 
 [verify]
-<<<<<<< HEAD
 type = "file_contains"
 path = "budget_report.txt"
 contains = "budget"
-||||||| 9d003b5
-type = "file_contains"
-path = "config.toml"
-contains = "budget_ceiling = 1000"
-=======
-type = "output_contains"
-pattern = "budget"
->>>>>>> wo/20.7.0

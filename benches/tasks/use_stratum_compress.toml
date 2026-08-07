@@ -4,8 +4,6 @@ requires_model = true
 
 prompt = "The file data/big.txt contains a large tool output (~22KB). Use the stratum_run tool with mode=full to compress it inline. Write the compressed output to data/compressed.txt."
 
-requires_model = true
-
 [setup]
 "Cargo.toml" = """[package]
 name = "use_stratum_compress"
@@ -24,15 +22,6 @@ Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor i
 """
 
 [verify]
-<<<<<<< HEAD
 type = "file_contains"
 path = "data/compressed.txt"
 contains = "Large"
-||||||| 9d003b5
-type = "file_contains"
-path = "data/big.txt"
-contains = "Large tool output"
-=======
-type = "output_contains"
-pattern = "compress"
->>>>>>> wo/20.7.0

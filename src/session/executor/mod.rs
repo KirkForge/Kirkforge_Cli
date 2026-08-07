@@ -1,7 +1,10 @@
 //! Session executor — runs model turns, dispatches tools, handles approvals.
 
 use crate::adapters::ModelAdapter;
-use crate::session::access::{access_from_config, refuse_if_unsandboxed, warn_if_unsandboxed};
+use crate::session::access::{
+    access_from_config, refuse_if_production_unsandboxed, refuse_if_unsandboxed,
+    warn_if_unsandboxed,
+};
 use crate::session::adapter_swap::AdapterSwap;
 use crate::session::carryover::CarryoverProfile;
 use crate::session::config::config_diff_summary;
@@ -138,9 +141,12 @@ impl Executor {
         let config_for_startup = config.clone();
         let cfg = read_shared_config(&config_for_startup);
         let (deny_list, path_guard, read_gate) = access_from_config(&cfg);
-        warn_if_unsandboxed(&path_guard);
         if cfg.security.sandbox.harden {
             refuse_if_unsandboxed(&path_guard)?;
+        } else if cfg!(not(debug_assertions)) && !cfg.security.sandbox.accept_unsandboxed {
+            refuse_if_production_unsandboxed(&path_guard)?;
+        } else {
+            warn_if_unsandboxed(&path_guard);
         }
         let sandbox = sandbox::PathGuardTower {
             path_guard,

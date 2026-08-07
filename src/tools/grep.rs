@@ -985,7 +985,7 @@ mod tests {
         let outcome = grep.run(&ToolContext::default(), args).await;
         match outcome {
             ToolOutcome::GrepMatches { matches, .. } => {
-                assert!(matches.len() >= 2, "expected at least 2 fn matches, got {:?}", matches);
+                assert!(matches.len() >= 2, "expected at least 2 fn matches, got {matches:?}");
                 for m in &matches {
                     assert!(m.line.starts_with("fn "), "match should be fn decl: {}", m.line);
                 }

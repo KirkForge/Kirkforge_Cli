@@ -338,6 +338,7 @@ impl Tool for ComputerUse {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn dispatch_action(
     action: &str,
     args: &serde_json::Value,

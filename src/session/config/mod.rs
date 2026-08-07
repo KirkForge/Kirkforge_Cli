@@ -53,10 +53,10 @@
 use crate::shared::Config;
 use std::path::PathBuf;
 
+#[cfg_attr(not(test), allow(dead_code))]
 mod env_overrides;
 
-// Re-import so `load_config` and the in-file tests (which use
-// `use super::*`) keep seeing `apply_env_overrides` at the same path.
+#[cfg(test)]
 use env_overrides::apply_env_overrides;
 
 /// Expand a leading `~` in a path string using `$HOME` (or the equivalent
@@ -70,6 +70,7 @@ fn expand_tilde_str(s: &str) -> String {
 /// Treats "true", "1", "yes" (case-insensitive) as true,
 /// "false", "0", "no" (case-insensitive) as false, and any other value as
 /// `None` so the config default is preserved.
+#[cfg_attr(not(test), allow(dead_code))]
 fn parse_bool_env(val: &str) -> Option<bool> {
     if val.eq_ignore_ascii_case("true")
         || val.eq_ignore_ascii_case("1")
@@ -157,21 +158,9 @@ pub fn load_or_create_config() -> Config {
                     error = %e,
                     dir = %parent.display(),
                     "Failed to create config directory"
-         );
-     }
-
-    #[test]
-    fn compaction_use_llm_alias_backward_compat() {
-        let toml = "[session]\ncompaction_use_llm = true\n";
-        let table: toml::Table = toml.parse().expect("parse toml table");
-        let mut cfg = Config::default();
-        merge_toml_into_config(&mut cfg, table);
-        assert!(
-            cfg.session.compaction_use_heuristic,
-            "compaction_use_llm (old name) must map to compaction_use_heuristic"
-        );
-    }
-}
+                );
+            }
+        }
         if let Ok(content) = toml::to_string_pretty(&cfg) {
             if std::fs::write(&path, content).is_ok() {
                 #[cfg(unix)]
@@ -717,6 +706,7 @@ pub fn config_diff_summary(before: &Config, after: &Config) -> String {
 /// Format: comma-separated `name=path` entries. Entries without `=` are
 /// ignored. Paths are kept exactly as written; the loader canonicalizes
 /// them at use time.
+#[cfg_attr(not(test), allow(dead_code))]
 fn parse_plugin_sources_env(value: &str) -> std::collections::HashMap<String, PathBuf> {
     let mut out = std::collections::HashMap::new();
     for entry in value.split(',') {
@@ -1411,6 +1401,18 @@ mod tests {
         assert_eq!(parse_bool_env("no"), Some(false));
         assert_eq!(parse_bool_env("maybe"), None);
         assert_eq!(parse_bool_env(""), None);
+    }
+
+    #[test]
+    fn compaction_use_llm_alias_backward_compat() {
+        let toml = "[session]\ncompaction_use_llm = true\n";
+        let table: toml::Table = toml.parse().expect("parse toml table");
+        let mut cfg = Config::default();
+        merge_toml_into_config(&mut cfg, table);
+        assert!(
+            cfg.session.compaction_use_heuristic,
+            "compaction_use_llm (old name) must map to compaction_use_heuristic"
+        );
     }
 
     #[test]

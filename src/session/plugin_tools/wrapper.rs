@@ -228,7 +228,7 @@ impl Tool for PluginToolWrapper {
 
         // M11: enforce trust tier at dispatch time. A plugin's trust tier
         // must meet the minimum required for tool execution (Shell).
-        let required = kf_plugin_host::TrustTierPolicy::required_tier(
+        let required = kf_plugin_host::SandboxPolicy::required_tier(
             &kf_plugin_sdk::Capability::Tool {
                 name: self.def.name.into(),
                 description: self.def.description.into(),

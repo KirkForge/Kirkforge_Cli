@@ -1203,11 +1203,11 @@ mod tests {
     fn test_env_plugin_signature_validation() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
-        assert!(!cfg.tools.plugin_signature_validation);
-
-        set_env("KF_CODE_PLUGIN_SIGNATURE_VALIDATION", Some("true"));
-        apply_env_overrides(&mut cfg);
         assert!(cfg.tools.plugin_signature_validation);
+
+        set_env("KF_CODE_PLUGIN_SIGNATURE_VALIDATION", Some("false"));
+        apply_env_overrides(&mut cfg);
+        assert!(!cfg.tools.plugin_signature_validation);
         set_env("KF_CODE_PLUGIN_SIGNATURE_VALIDATION", None);
     }
 
@@ -1381,7 +1381,7 @@ mod tests {
         let a = Config::default();
         let mut b = Config::default();
         b.tools.reject_on_excess_plugin_trust = false;
-        b.tools.plugin_signature_validation = true;
+        b.tools.plugin_signature_validation = false;
         b.tools.plugin_public_key_path = Some("/tmp/key.pub".into());
         let s = config_diff_summary(&a, &b);
         assert!(s.contains("reject_on_excess_plugin_trust"), "got: {s}");

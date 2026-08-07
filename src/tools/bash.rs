@@ -1212,6 +1212,7 @@ mod tests {
             harden: true,
             no_network: false,
             block_edits: false,
+            accept_unsandboxed: false,
             cpu_limit_secs: 1,
             memory_limit_mb: 2048,
             filesize_limit_mb: 512,

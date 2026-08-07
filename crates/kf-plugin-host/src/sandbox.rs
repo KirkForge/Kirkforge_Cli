@@ -12,6 +12,7 @@ use kf_plugin_sdk::{Capability, TrustTier};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SandboxPolicy;
 
+// ponytail: rlimits + trust-tier only, no OS isolation (landlock/seccomp deferred per ADR-054). Upgrade path: ride 21.7-R1's landlock integration when available.
 impl SandboxPolicy {
     /// Minimum trust tier required to use a capability.
     pub fn required_tier(cap: &Capability) -> TrustTier {

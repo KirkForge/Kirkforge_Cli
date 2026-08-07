@@ -137,6 +137,11 @@ pub enum Command {
         #[arg(long, requires = "harden")]
         block_edits: bool,
 
+        /// Suppress the production-mode sandbox refusal when no sandbox
+        /// is configured (WO 21.7-R5). Use only in trusted environments.
+        #[arg(long)]
+        i_accept_unsandboxed: bool,
+
         /// Disable turn tracing. By default every turn is recorded to
         /// `<data-dir>/<session-id>.trace.ndjson` for later replay.
         #[arg(long)]

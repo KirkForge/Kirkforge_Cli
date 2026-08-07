@@ -475,15 +475,19 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
             eprintln!("MCP warning: {warning}");
             tracing::warn!(warning = %warning, "MCP startup warning");
         }
+        let mcp_mgr = std::sync::Arc::new(mcp_mgr);
         let mcp_tool_count = mcp_mgr.tool_count();
         if mcp_tool_count > 0 {
-            let mcp_mgr = std::sync::Arc::new(mcp_mgr);
             toolset.add(Box::new(session::toolset::VecToolset::new(
                 "mcp",
-                session::mcp_tools::all_mcp_tools(mcp_mgr),
+                session::mcp_tools::all_mcp_tools(mcp_mgr.clone()),
             )));
             tracing::info!(count = mcp_tool_count, "MCP tools registered");
         }
+        toolset.add(Box::new(session::toolset::VecToolset::new(
+            "mcp-resource",
+            session::mcp_resource_tools::all_mcp_resource_tools(mcp_mgr),
+        )));
     }
 
     // ── Plugin tools ──

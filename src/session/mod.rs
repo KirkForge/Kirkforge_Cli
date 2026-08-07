@@ -11,6 +11,7 @@ pub mod executor;
 pub mod git_sanitation;
 pub mod hooks;
 pub mod mcp_client;
+pub mod mcp_resource_tools;
 pub mod mcp_tools;
 pub mod memory;
 pub mod plugin_ops;

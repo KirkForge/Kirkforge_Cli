@@ -45,7 +45,7 @@ pub struct Executor {
     config: SharedConfig,
     cost: cost_tracking::CostTracker,
     model_name: String,
-    sandbox: sandbox::SandboxEnforcer,
+    sandbox: sandbox::PathGuardTower,
     audit_log: Arc<AuditLog>,
     correction_loop: Option<CorrectionLoop>,
 
@@ -142,7 +142,7 @@ impl Executor {
         if cfg.security.sandbox.harden {
             refuse_if_unsandboxed(&path_guard)?;
         }
-        let sandbox = sandbox::SandboxEnforcer {
+        let sandbox = sandbox::PathGuardTower {
             path_guard,
             deny_list,
             read_gate,
@@ -353,7 +353,7 @@ impl Executor {
         *cfg = new.clone();
         let fresh = new;
         let (deny_list, path_guard, read_gate) = access_from_config(&fresh);
-        self.sandbox = sandbox::SandboxEnforcer {
+        self.sandbox = sandbox::PathGuardTower {
             path_guard,
             deny_list,
             read_gate,

@@ -45,6 +45,58 @@ impl std::error::Error for McpError {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::error::Error;
+
+    #[test]
+    fn io_error_display_and_source() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::BrokenPipe, "pipe broke");
+        let mcp = McpError::Io(io_err);
+        let msg = mcp.to_string();
+        assert!(msg.contains("pipe broke"), "display should include io error: {msg}");
+        assert!(mcp.source().is_some(), "Io variant should have a source");
+    }
+
+    #[test]
+    fn timeout_display_no_source() {
+        let mcp = McpError::Timeout;
+        let msg = mcp.to_string();
+        assert!(msg.contains("timed out"), "display: {msg}");
+        assert!(mcp.source().is_none());
+    }
+
+    #[test]
+    fn json_rpc_display() {
+        let mcp = McpError::JsonRpc { code: -32600, message: "invalid".into() };
+        let msg = mcp.to_string();
+        assert!(msg.contains("-32600"), "display: {msg}");
+        assert!(msg.contains("invalid"), "display: {msg}");
+        assert!(mcp.source().is_none());
+    }
+
+    #[test]
+    fn channel_closed_display() {
+        let msg = McpError::ChannelClosed.to_string();
+        assert!(msg.contains("channel closed"), "display: {msg}");
+    }
+
+    #[test]
+    fn disconnected_display() {
+        let msg = McpError::Disconnected.to_string();
+        assert!(msg.contains("disconnected"), "display: {msg}");
+    }
+
+    #[test]
+    fn from_io_error() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "not found");
+        let mcp: McpError = io_err.into();
+        assert!(matches!(mcp, McpError::Io(_)));
+        assert!(mcp.to_string().contains("not found"));
+    }
+}
+
 impl From<std::io::Error> for McpError {
     fn from(err: std::io::Error) -> Self {
         McpError::Io(err)

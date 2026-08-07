@@ -2,6 +2,79 @@
 
 use crate::shared::ToolInvocation;
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plan_complete_marker_is_nonempty() {
+        assert!(!PLAN_COMPLETE_MARKER.is_empty());
+        assert!(PLAN_COMPLETE_MARKER.starts_with("## "));
+    }
+
+    #[test]
+    fn compact_hook_stats_fields() {
+        let stats = CompactHookStats {
+            message_count: 10,
+            preserve_recent: 2,
+            original_count: 20,
+            result_count: 8,
+            dropped_tool_results: 3,
+            condensed_assistant_turns: 1,
+            summarised_messages: 4,
+            strategy: "heuristic",
+        };
+        assert_eq!(stats.message_count, 10);
+        assert_eq!(stats.preserve_recent, 2);
+        assert_eq!(stats.original_count, 20);
+        assert_eq!(stats.result_count, 8);
+        assert_eq!(stats.dropped_tool_results, 3);
+        assert_eq!(stats.condensed_assistant_turns, 1);
+        assert_eq!(stats.summarised_messages, 4);
+        assert_eq!(stats.strategy, "heuristic");
+    }
+
+    #[test]
+    fn compact_hook_stats_is_copy() {
+        let stats = CompactHookStats {
+            message_count: 1,
+            preserve_recent: 0,
+            original_count: 1,
+            result_count: 1,
+            dropped_tool_results: 0,
+            condensed_assistant_turns: 0,
+            summarised_messages: 0,
+            strategy: "exact",
+        };
+        let _copy = stats;
+        let _copy2 = stats;
+    }
+
+    #[test]
+    fn iteration_outcome_variants() {
+        let tool_calls = IterationOutcome::ToolCalls(vec![]);
+        assert!(matches!(tool_calls, IterationOutcome::ToolCalls(_)));
+
+        let finished = IterationOutcome::Finished(crate::shared::FinishReason::Stop);
+        assert!(matches!(finished, IterationOutcome::Finished(_)));
+
+        let parse_err = IterationOutcome::ParseError;
+        assert!(matches!(parse_err, IterationOutcome::ParseError));
+    }
+
+    #[test]
+    fn approval_decision_variants() {
+        let approved = ApprovalDecision::Approved;
+        assert!(matches!(approved, ApprovalDecision::Approved));
+
+        let denied = ApprovalDecision::Denied { reason: "nope".into() };
+        assert!(matches!(denied, ApprovalDecision::Denied { .. }));
+
+        let always = ApprovalDecision::AlwaysApproved;
+        assert!(matches!(always, ApprovalDecision::AlwaysApproved));
+    }
+}
+
 pub(crate) enum IterationOutcome {
     ToolCalls(Vec<ToolInvocation>),
 

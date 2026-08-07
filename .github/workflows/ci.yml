@@ -468,7 +468,7 @@ jobs:
           key: fuzz-nightly
 
       - name: Install cargo-fuzz
-        run: cargo install cargo-fuzz --locked
+        run: cargo +nightly install cargo-fuzz --locked
 
       - name: Fuzz minify_rust (60s)
         run: cargo +nightly fuzz run minify_rust -- -max_total_time=60

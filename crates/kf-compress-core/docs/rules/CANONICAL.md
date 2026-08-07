@@ -1,8 +1,9 @@
 # Stratum — canonical ruleset
 
-This file is the single source of truth. Every per-host adapter copies the
-body of this file; the drift test in `crates/kirkstratum-hosts/tests/copy_drift.rs`
-enforces equality on the filtered body.
+This file is the single source of truth. The body of this file is used
+directly by the compression pipeline. Per-host adapters that previously
+copied this file have been consolidated into `kf-compress-core`
+(kirkstratum-hosts removed in WO 21.11).
 
 ## Core rule: minimum correct change
 

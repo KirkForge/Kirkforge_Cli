@@ -16,7 +16,7 @@ Two series live side by side in this directory:
   system, LSP, VS Code bridge, and the Stratum/Draw/Video fold-ins.
 
 The Index table below lists every ADR across both series, sorted by ADR
-number (ascending). The `adr_xref_drift` test in `crates/plugin3-core`
+number (ascending). The `adr_xref_drift` test in `crates/kf-budget-core`
 verifies the table and the file headers agree.
 
 ## Index

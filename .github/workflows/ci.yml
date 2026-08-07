@@ -254,7 +254,7 @@ jobs:
       - name: Run benchmark tasks
         if: steps.changes.outputs.run_bench == 'true'
         run: |
-          cargo run -- bench run --tasks benches/tasks/ --model "${BENCH_MODEL}" --output bench-report.json --summary bench-summary.md
+          cargo run --bin kf-code -- bench run --tasks benches/tasks/ --model "${BENCH_MODEL}" --output bench-report.json --summary bench-summary.md
 
       - name: Compare with baseline (if available)
         if: steps.changes.outputs.run_bench == 'true'
@@ -262,7 +262,7 @@ jobs:
         run: |
           BASELINE=$(ls benches/baselines/bench-report-*.json 2>/dev/null | head -1)
           if [ -n "$BASELINE" ] && [ -f "$BASELINE" ]; then
-            cargo run -- bench compare --baseline "$BASELINE" --current bench-report.json --summary bench-delta.md || echo "Baseline comparison failed (non-fatal)"
+            cargo run --bin kf-code -- bench compare --baseline "$BASELINE" --current bench-report.json --summary bench-delta.md || echo "Baseline comparison failed (non-fatal)"
           else
             echo "No baseline report found; skipping comparison"
           fi
@@ -395,7 +395,7 @@ jobs:
         run: cargo install cargo-audit --locked
 
       - name: Audit dependencies
-        run: cargo audit --deny warnings --deny unmaintained --deny unsound --deny rustsec-version
+        run: cargo audit --deny warnings --deny unmaintained --deny unsound
 
   # Build and test the vendored KirkForge-Plugin Node SDK. The local CI
   # script (scripts/ci-local.sh) already covers this; run it in CI too so
@@ -411,15 +411,15 @@ jobs:
         with:
           node-version: "24"
           cache: "npm"
-          cache-dependency-path: npm/kf-code-plugin/package-lock.json
+          cache-dependency-path: npm/kf-plugin/package-lock.json
 
       - name: Install Node SDK dependencies
         run: npm ci
-        working-directory: npm/kf-code-plugin
+        working-directory: npm/kf-plugin
 
       - name: Run Node SDK tests
         run: npm test
-        working-directory: npm/kf-code-plugin
+        working-directory: npm/kf-plugin
 
   # Build and test the VS Code extension. Produces a .vsix artifact on tag pushes.
   vscode:

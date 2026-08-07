@@ -1463,8 +1463,7 @@ impl Executor {
             memory_enabled,
             memory_max_tokens,
             memory_top_n,
-            compaction_use_llm,
-            compaction_drop_threshold,
+            compaction_use_heuristic,            compaction_drop_threshold,
             stem_file_cap,
         ) = {
             let cfg = read_shared_config(&self.config);
@@ -1472,7 +1471,7 @@ impl Executor {
                 cfg.display.memory_enabled,
                 cfg.display.memory_max_tokens,
                 cfg.display.memory_top_n,
-                cfg.session.compaction_use_llm,
+                cfg.session.compaction_use_heuristic,
                 cfg.session.compaction_drop_threshold,
                 cfg.session.stem_file_cap,
             )
@@ -1565,8 +1564,7 @@ impl Executor {
             history,
             model_info.max_context_tokens,
             &tool_results,
-            compaction_use_llm,
-            compaction_drop_threshold,
+            compaction_use_heuristic,            compaction_drop_threshold,
         );
 
         // WO 10.2: prompt-cache stem-reuse detection (ADR-052). The
@@ -1861,6 +1859,14 @@ async fn run_prepared_call(prep: PreparedCall) -> Option<(ToolInvocation, ToolOu
             0,
         ));
     }
+    if let Err(msg) = crate::tools::validate_tool_args(prep.tool.as_ref(), &prep.invocation.arguments) {
+        return Some((
+            prep.invocation,
+            ToolOutcome::Failure(crate::shared::ToolError::invalid_args(&msg)),
+            0,
+        ));
+    }
+
     let ctx = crate::tools::ToolContext {
         token: prep.cancel_token,
         dry_run: false,

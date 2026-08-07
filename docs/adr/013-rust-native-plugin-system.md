@@ -108,12 +108,10 @@ The TUI provides slash commands for runtime management:
 
 ## Implementation Notes
 
-- Plugin workspace members:
-  - `crates/kf-plugin-sdk` — SDK.
-  - `crates/kf-plugin-host` — runtime.
+- Plugin system crates (vendored in-repo):
+  - `crates/kf-plugin-sdk` — SDK types (manifest, trust tiers, capabilities).
+  - `crates/kf-plugin-host` — runtime (registry, sandbox policy, signature verification).
   - Plugin management via `kf-code plugin` subcommand.
-- `KirkForge-Cli/Cargo.toml` depends on both crates via
-  `path = "../KirkForge-Plugin/crates/..."`.
 - `src/session/skills.rs` wraps `PluginRegistry` and surfaces plugin trust
   tiers in the TUI status bar.
 - `src/session/plugin_tools.rs` loads workspace sources through

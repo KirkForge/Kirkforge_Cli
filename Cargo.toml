@@ -11,10 +11,8 @@ categories = ["command-line-utilities", "development-tools"]
 [workspace]
 members = [
     "crates/kf-bench",
-    "crates/kf-budget-cli",
     "crates/kf-budget-core",
     "crates/kf-budget-hosts",
-    "crates/kf-compress-cli",
     "crates/kf-compress-core",
     "crates/kf-context-index",
     "crates/kf-lsp",

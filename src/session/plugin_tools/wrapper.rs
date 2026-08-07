@@ -226,19 +226,27 @@ impl Tool for PluginToolWrapper {
             });
         }
 
-        // M11: enforce trust tier at dispatch time. A ReadOnly plugin may not
-        // execute tool commands — its Skill prompts can only produce
-        // read-only model output.
-        if self.trust == TrustTier::ReadOnly {
+        // M11: enforce trust tier at dispatch time. A plugin's trust tier
+        // must meet the minimum required for tool execution (Shell).
+        let required = kf_plugin_host::TrustTierPolicy::required_tier(
+            &kf_plugin_sdk::Capability::Tool {
+                name: self.def.name.into(),
+                description: self.def.description.into(),
+                schema: self.def.parameters.clone(),
+                command: None,
+            },
+        );
+        if !self.trust.permits(required) {
             tracing::warn!(
                 tool = %self.def.name,
                 trust = %self.trust,
-                "plugin tool blocked: ReadOnly trust tier does not allow execution"
+                required = %required,
+                "plugin tool blocked: trust tier does not permit required tier"
             );
             return ToolOutcome::Failure(ToolError::AccessDenied {
                 message: format!(
-                    "plugin tool '{}' blocked: ReadOnly trust tier does not allow execution",
-                    self.def.name
+                    "plugin tool '{}' blocked: trust tier {} does not permit required {}",
+                    self.def.name, self.trust, required,
                 ),
             });
         }
@@ -472,7 +480,8 @@ mod wrapper_tests {
         }
     }
 
-    /// M11: a ReadOnly trust tier blocks tool execution at dispatch time.
+    /// M11: a ReadOnly trust tier blocks tool execution at dispatch time
+    /// because Tool capability requires Shell tier.
     #[tokio::test]
     async fn run_blocks_readonly_trust_tier() {
         let cfg = Arc::new(std::sync::RwLock::new(Config::default()));
@@ -491,8 +500,8 @@ mod wrapper_tests {
         match outcome {
             ToolOutcome::Failure(ToolError::AccessDenied { message }) => {
                 assert!(
-                    message.contains("ReadOnly"),
-                    "message should mention ReadOnly, got: {message}"
+                    message.contains("read-only"),
+                    "message should mention read-only, got: {message}"
                 );
                 assert!(
                     message.contains("blocked_tool"),

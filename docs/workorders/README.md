@@ -429,8 +429,9 @@ not-triggered, evidenced by gate output on the closing commit.
 | 21.9 | [Engineering-discipline debt](21.9-discipline-debt.md) | Planned | High | — |
  | 21.10 | [MCP-first migration](21.10-mcp-first-migration.md) | Planned | High | 21.5-R3/R4 |
  | 21.11 | [Plugin real-rebuild (budget/stratum/sdk) + draw/video yeet](21.11-plugin-real-rebuild.md) | Planned | High | supersedes 21.1-R1/R2, voids 21.2-R2/R3 |
+ | 21.0.14 | [Deferred item tracker (all WO 21 series)](21.0.14-deferred-tracker.md) | In Progress | — | — |
  
- **11 sub-workorders, 72 items**, each with success + failure criteria. Highest-
+ **12 sub-workorders, 72 items**, each with success + failure criteria. Highest-
 leverage item: **21.9-R4** (test deadlock fix → re-enables CI, which gates
 honest verification of everything else). Full ordering/dependencies and the
 global done/fail + defer-disclosure rule are in [WO 21.0](21.0-wo21-overview.md).

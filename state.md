@@ -98,7 +98,7 @@ Two-path dispatch (ADR-050). Folded plugins (stratum, kf-budget, kf-draw, kf-vid
 | H10 | Bedrock `extract_payload` O(n*m) backtracking | 2 |
 | M17 | `kf-testdoctor::diagnose` hardcoded dirs (fixed in WO 19.1) | Done |
 | M21 | `computer_use` near-identical `run_on_tab`/`run_on_session_sync` | 3 |
-| L5 | `AppState` 44+ fields (God object) | 3 |
+| L5 | `AppState` 68 fields (God object) | 3 |
 | L6 | `m5_tests.rs` in wrong directory | 3 |
 | L9 | Ruby minifier strips only whole-line comments | 3 |
 | L10 | `is_path_safe` doesn't reject backslashes/colons | 3 |

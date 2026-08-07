@@ -88,7 +88,7 @@ verifies the table and the file headers agree.
 | [045](./045-continuous-eval-pipeline.md) | Continuous Evaluation Pipeline | Accepted | CLI |
 | [046](./046-stratum-fold-in.md) | Fold Stratum into Core | Accepted | CLI |
 | [0047](./0047-plugin3-fold-in.md) | Fold Plugin3 into Core | Accepted | Plugin3 |
-| [048](./048-draw-fold-in.md) | Draw Fold-In | Accepted | CLI |
+| [048](./048-draw-fold-in.md) | Draw Fold-In | Superseded (draw removed from workspace in 21.11-R0) | CLI |
 | [049](./049-video-fold-in.md) | Video Fold-In (Non-Default Feature) | Accepted | CLI |
 | [050](./050-plugin-system-consolidation.md) | Plugin System Consolidation | Accepted | CLI |
 | [051](./051-stratum-budget-coordination.md) | Stratum–Budget Coordination (slicing triggers compression, budget tracks compressed size) | Accepted | CLI |

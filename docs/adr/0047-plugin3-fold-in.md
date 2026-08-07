@@ -53,7 +53,7 @@ The same fold-in pattern established by ADR-046 (Stratum) applies: link the crat
 
 The hooks now receive full event context. The remaining follow-up is to act on it:
 
-- `post-tool-bash` and `post-tool-write_file` could slice oversized outputs before results enter the conversation (currently they record and warn only).
+- `post-tool-bash` and `post-tool-write_file` slice oversized outputs before results enter the conversation via `apply_budget_slice`.
 - `pre-compact` could suggest which turns to compact rather than just resetting the used counter.
 - `session-start` could initialize budget state from the session's persisted config rather than the hard-coded defaults.
 

@@ -168,8 +168,7 @@ jobs:
         run: |
           cargo nextest run --locked --workspace --no-fail-fast \
             --config 'profile.default.timeout-period="60s"' \
-            --config 'profile.default.fail-timeout="10s"' \
-            -E 'not test(/tui::approval_keys::tests::test_always_approves_/)'
+            --config 'profile.default.fail-timeout="10s"'
 
       - name: Build release binary on Windows
         run: cargo build --release --locked

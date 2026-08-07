@@ -108,10 +108,10 @@ The TUI provides slash commands for runtime management:
 
 ## Implementation Notes
 
-- `KirkForge-Plugin` workspace members:
-  - `crates/kirkforge-plugin` — SDK.
-  - `crates/kirkforge-plugin-host` — runtime.
-  - `apps/plugin-cli` — standalone binary.
+- Plugin workspace members:
+  - `crates/kf-plugin-sdk` — SDK.
+  - `crates/kf-plugin-host` — runtime.
+  - Plugin management via `kf-code plugin` subcommand.
 - `KirkForge-Cli/Cargo.toml` depends on both crates via
   `path = "../KirkForge-Plugin/crates/..."`.
 - `src/session/skills.rs` wraps `PluginRegistry` and surfaces plugin trust

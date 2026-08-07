@@ -100,7 +100,7 @@ pub struct ToolConfig {
     pub max_plugin_trust: kf_plugin_sdk::TrustTier,
     #[serde(default = "default_reject_on_excess_plugin_trust")]
     pub reject_on_excess_plugin_trust: bool,
-    #[serde(default)]
+    #[serde(default = "default_plugin_signature_validation")]
     pub plugin_signature_validation: bool,
     #[serde(default)]
     pub plugin_public_key_path: Option<String>,
@@ -120,9 +120,14 @@ pub struct ToolConfig {
     pub budget_approaching_ratio: f64,
 }
 
+fn default_plugin_signature_validation() -> bool {
+    true
+}
+
 fn default_max_plugin_trust() -> kf_plugin_sdk::TrustTier {
     kf_plugin_sdk::TrustTier::Shell
 }
+
 
 impl Default for ToolConfig {
     fn default() -> Self {
@@ -144,7 +149,7 @@ impl Default for ToolConfig {
             max_concurrent_scheduled_jobs: default_max_concurrent_scheduled_jobs(),
             max_plugin_trust: default_max_plugin_trust(),
             reject_on_excess_plugin_trust: default_reject_on_excess_plugin_trust(),
-            plugin_signature_validation: false,
+            plugin_signature_validation: true,
             plugin_public_key_path: None,
             plugin_allowed_env_vars: vec![],
             plugin_sources: default_plugin_sources(),
@@ -168,6 +173,7 @@ mod tests {
         assert!((cfg.budget_approaching_ratio - 0.8).abs() < f64::EPSILON);
         assert!(cfg.stratum_mode.is_none());
         assert_eq!(cfg.minify_above_bytes, 4096);
+        assert!(cfg.plugin_signature_validation, "R7: signature validation default-on");
     }
 
     #[test]
@@ -192,5 +198,6 @@ minify_above_bytes = 1024
         assert_eq!(cfg.budget_ceiling, 200_000);
         assert!((cfg.budget_approaching_ratio - 0.8).abs() < f64::EPSILON);
         assert!(cfg.stratum_mode.is_none());
+        assert!(cfg.plugin_signature_validation, "R7: serde default-on");
     }
 }

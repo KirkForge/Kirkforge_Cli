@@ -425,6 +425,7 @@ pub async fn run_tui(
     let shutdown_for_loop = shutdown.clone();
     spawn_kb_reader(kb_tx, shutdown.clone());
 
+    #[cfg(unix)]
     install_signal_handlers(&shared_config, &config_tx, shutdown.clone());
     #[cfg(not(unix))]
     spawn_ctrl_c_handler(shutdown.clone());

@@ -766,8 +766,16 @@ mod tests {
             serde_json::from_str(event_line2.trim()).expect("event should parse");
         assert!(matches!(ev2, InstanceEvent::JobsChanged));
 
-        // Clean up: drop client to close the stream, await the server.
+        // Drop the client so the server's next write fails on the closed
+        // stream. The writer loop parks on rx.recv() between events, so
+        // trigger one more broadcast to unblock it — handle_instance_register
+        // prunes the sender on the next broadcast after a disconnect
+        // (lazy-prune design, documented at the function).
         drop(client_buf);
+        {
+            let s = state.lock().await;
+            s.broadcast(InstanceEvent::JobsChanged);
+        }
         let _ = server_handle.await;
     }
 

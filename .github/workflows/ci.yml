@@ -307,6 +307,10 @@ jobs:
 
   coverage:
     runs-on: ubuntu-latest
+    # Fail fast on a tarpaulin hang instead of burning the 6h job
+    # max-execution-time. The per-test `--timeout` can't interrupt a
+    # deadlocked `await`, so this job-level wall clock is the trip wire.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 

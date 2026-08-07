@@ -18,13 +18,11 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::ffi::OsStr;
-#[cfg(unix)]
 use std::sync::Arc;
 
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 
-#[cfg(unix)]
 use anyhow::Context;
 
 /// Read the auth token from the `KF_CODE_DAEMON_TOKEN_FILE` env var.

@@ -79,6 +79,31 @@ impl Executor {
         let result = self
             .run_turn_inner(user_input, approval_sender, cancelled, event_tx)
             .await;
+
+        // WO 21.6: post-turn memory extraction (best-effort).
+        if let Some(ref store) = self.memory_store {
+            let history = self.conversation.all();
+            let last_user = history
+                .iter()
+                .rev()
+                .find(|m| matches!(m.role, Role::User));
+            let last_assistant = history
+                .iter()
+                .rev()
+                .find(|m| matches!(m.role, Role::Assistant) && !m.content.is_empty());
+            if let (Some(u), Some(a)) = (last_user, last_assistant) {
+                let facts = crate::session::memory::extract::extract_facts(
+                    &u.content,
+                    &a.content,
+                );
+                for f in facts {
+                    if let Err(e) = store.upsert(&f.name, &f.description, &f.body, f.metadata.get("type").map(|s| s.as_str()).unwrap_or("project")) {
+                        tracing::trace!(error = %e, name = %f.name, "memory extraction upsert failed");
+                    }
+                }
+            }
+        }
+
         if result.is_ok() {
             if let Err(e) = self.conversation.checkpoint_async().await {
                 tracing::warn!(error = %e, "post-turn checkpoint failed");

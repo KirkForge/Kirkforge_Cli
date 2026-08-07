@@ -83,6 +83,9 @@ pub struct Executor {
     /// Optional turn-trace recorder. When present, each completed turn
     /// is serialized as a `TurnRecord` and appended to the trace file.
     trace: Option<std::sync::Mutex<crate::session::replay::TraceRecorder>>,
+
+    /// Memory store for auto-populated facts from post-turn extraction.
+    memory_store: Option<crate::session::memory::MemoryStore>,
 }
 
 impl Executor {
@@ -275,6 +278,7 @@ impl Executor {
             session_id: String::new(),
             task_spawner: None,
             trace: None,
+            memory_store: crate::session::memory::MemoryStore::default_store().ok(),
         };
         this.init_default_verifiers(plugin_registry);
         this.build_task_spawner();

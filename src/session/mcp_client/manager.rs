@@ -85,7 +85,8 @@ impl McpClientManager {
                 }
                 let prompts = client.list_prompts().await;
                 if !prompts.is_empty() {
-                    let prompt_names: Vec<String> = prompts.iter().map(|p| p.name.clone()).collect();
+                    let prompt_names: Vec<String> =
+                        prompts.iter().map(|p| p.name.clone()).collect();
                     warnings.push(format!(
                         "MCP server '{}' provides {} prompt(s): {}",
                         config.name,

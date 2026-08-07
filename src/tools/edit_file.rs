@@ -1705,7 +1705,10 @@ mod tests {
             "replace_all": true,
         });
         let result = tool.run(&ctx, args).await;
-        assert!(matches!(result, ToolOutcome::FileEdit { .. }), "got {result:?}");
+        assert!(
+            matches!(result, ToolOutcome::FileEdit { .. }),
+            "got {result:?}"
+        );
         assert_eq!(
             std::fs::read_to_string(&path).unwrap(),
             "qux\nbar\nqux\nbaz\nqux\n"

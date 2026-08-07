@@ -34,7 +34,10 @@ pub struct SessionConfig {
     // actual impl is heuristic keyword extraction, not LLM
     // summarization. The serde alias preserves backward compat with
     // existing configs that use the old name.
-    #[serde(default = "default_compaction_use_heuristic", alias = "compaction_use_llm")]
+    #[serde(
+        default = "default_compaction_use_heuristic",
+        alias = "compaction_use_llm"
+    )]
     pub compaction_use_heuristic: bool,
     /// Fraction of content that must be dropped by the heuristic before
     /// the LLM summarizer is tried. Default 0.5 (50%). Only used when

@@ -128,7 +128,6 @@ fn default_max_plugin_trust() -> kf_plugin_sdk::TrustTier {
     kf_plugin_sdk::TrustTier::Shell
 }
 
-
 impl Default for ToolConfig {
     fn default() -> Self {
         Self {
@@ -173,7 +172,10 @@ mod tests {
         assert!((cfg.budget_approaching_ratio - 0.8).abs() < f64::EPSILON);
         assert!(cfg.stratum_mode.is_none());
         assert_eq!(cfg.minify_above_bytes, 4096);
-        assert!(cfg.plugin_signature_validation, "R7: signature validation default-on");
+        assert!(
+            cfg.plugin_signature_validation,
+            "R7: signature validation default-on"
+        );
     }
 
     #[test]

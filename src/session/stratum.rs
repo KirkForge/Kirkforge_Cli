@@ -46,15 +46,9 @@ fn guess_ext(content: &str) -> &'static str {
         || content.contains("struct ")
     {
         "rs"
-    } else if first.contains("def ")
-        || first.contains("import ")
-        || first.contains("from ")
-    {
+    } else if first.contains("def ") || first.contains("import ") || first.contains("from ") {
         "py"
-    } else if first.contains("function ")
-        || first.contains("const ")
-        || first.contains("let ")
-    {
+    } else if first.contains("function ") || first.contains("const ") || first.contains("let ") {
         "js"
     } else {
         "rs"
@@ -663,7 +657,9 @@ mod tests {
     async fn test_stratum_rules_emits_canonical_rules() {
         let tool = StratumRules;
         let ctx = ToolContext::new();
-        let out = tool.run(&ctx, serde_json::json!({"mode": "off", "json": true})).await;
+        let out = tool
+            .run(&ctx, serde_json::json!({"mode": "off", "json": true}))
+            .await;
         match out {
             ToolOutcome::Success { content } => {
                 assert!(
@@ -679,16 +675,18 @@ mod tests {
     async fn test_stratum_run_detects_json_content_type() {
         let tool = StratumRun;
         let ctx = ToolContext::new();
-        let json_input = serde_json::to_string_pretty(&serde_json::json!({"key": "value"})).unwrap();
-        let out = tool.run(
-            &ctx,
-            serde_json::json!({
-                "input": json_input,
-                "json": true,
-                "token_budget": 100000,
-            }),
-        )
-        .await;
+        let json_input =
+            serde_json::to_string_pretty(&serde_json::json!({"key": "value"})).unwrap();
+        let out = tool
+            .run(
+                &ctx,
+                serde_json::json!({
+                    "input": json_input,
+                    "json": true,
+                    "token_budget": 100000,
+                }),
+            )
+            .await;
         match out {
             ToolOutcome::Success { content } => {
                 let v: serde_json::Value = serde_json::from_str(&content).unwrap();
@@ -804,7 +802,10 @@ mod tests {
         let input = "abcdefghij";
         for mode in [Mode::Lite, Mode::Full, Mode::Ultra] {
             let out = compress_for_budget(input, mode);
-            assert_eq!(out, input, "pipeline must be identity for plain text in {mode:?}");
+            assert_eq!(
+                out, input,
+                "pipeline must be identity for plain text in {mode:?}"
+            );
         }
     }
 
@@ -919,8 +920,14 @@ mod tests {
     fn mode_description_covers_all_known_modes() {
         for mode in [Mode::Off, Mode::Lite, Mode::Full, Mode::Ultra] {
             let desc = mode_description(mode);
-            assert!(!desc.is_empty(), "description for {mode:?} should not be empty");
-            assert_ne!(desc, "Unknown mode", "{mode:?} should have a real description");
+            assert!(
+                !desc.is_empty(),
+                "description for {mode:?} should not be empty"
+            );
+            assert_ne!(
+                desc, "Unknown mode",
+                "{mode:?} should have a real description"
+            );
         }
     }
 

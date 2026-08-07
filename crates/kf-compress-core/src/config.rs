@@ -259,10 +259,7 @@ pub enum ConfigError {
     },
     /// A config value failed semantic validation.
     #[error("invalid value for config field `{field}`: {message}")]
-    Invalid {
-        field: String,
-        message: String,
-    },
+    Invalid { field: String, message: String },
 }
 
 impl ConfigError {

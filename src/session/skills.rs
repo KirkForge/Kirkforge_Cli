@@ -1,5 +1,5 @@
-use kf_plugin_host::PluginRegistry;
 use crate::session::plugin_tools::loader::trust_policy_from_config;
+use kf_plugin_host::PluginRegistry;
 /// Skills system — slash-command skill registry and loader.
 ///
 /// Skills are reusable capabilities defined in SKILL.md files with

@@ -371,8 +371,7 @@ fn dispatch_action(
         "type" => {
             let selector = args["selector"].as_str().unwrap_or("");
             let text = args["text"].as_str().unwrap_or("");
-            type_text(selector, text)
-                .map(|_| format!("Typed into {selector}"))
+            type_text(selector, text).map(|_| format!("Typed into {selector}"))
         }
         "keypress" => {
             let key = args["key"].as_str().unwrap_or("");
@@ -380,13 +379,11 @@ fn dispatch_action(
         }
         "scroll" => {
             let amount = args["amount"].as_i64().unwrap_or(0) as i32;
-            scroll(amount)
-                .map(|_| format!("Scrolled {amount} pixels"))
+            scroll(amount).map(|_| format!("Scrolled {amount} pixels"))
         }
         "wait_for" => {
             let selector = args["selector"].as_str().unwrap_or("");
-            wait_for(selector, wait)
-                .map(|_| format!("Element {selector} is present"))
+            wait_for(selector, wait).map(|_| format!("Element {selector} is present"))
         }
         "evaluate" => {
             let expression = args["expression"].as_str().unwrap_or("");
@@ -423,7 +420,9 @@ async fn run_on_tab(
     config: &ComputerUseConfig,
 ) -> ToolOutcome {
     dispatch_action(
-        action, args, config,
+        action,
+        args,
+        config,
         |url| tab.navigate(url),
         |sel| tab.click(sel),
         |x, y| tab.click_xy(x, y),
@@ -445,7 +444,9 @@ fn run_on_session_sync(
     config: &ComputerUseConfig,
 ) -> ToolOutcome {
     dispatch_action(
-        action, args, config,
+        action,
+        args,
+        config,
         |url| session.tab.navigate(url),
         |sel| session.click(sel),
         |x, y| session.tab.click_xy(x, y),

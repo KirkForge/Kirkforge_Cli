@@ -119,7 +119,6 @@ pub fn load_config() -> (Config, Option<String>) {
         }
     }
 
-
     (cfg, warning)
 }
 

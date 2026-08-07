@@ -134,17 +134,15 @@ mod tests {
 
     #[test]
     fn format_user_prompt_submit_allow() {
-        let v = format_user_prompt_submit(
-            &crate::canonical::UserPromptSubmitResponse::Allow,
-        );
+        let v = format_user_prompt_submit(&crate::canonical::UserPromptSubmitResponse::Allow);
         assert_eq!(v["kind"], "allow");
     }
 
     #[test]
     fn format_user_prompt_submit_warn() {
-        let v = format_user_prompt_submit(
-            &crate::canonical::UserPromptSubmitResponse::Warn { remaining: 10 },
-        );
+        let v = format_user_prompt_submit(&crate::canonical::UserPromptSubmitResponse::Warn {
+            remaining: 10,
+        });
         assert_eq!(v["kind"], "warn");
         assert_eq!(v["remaining"], 10);
     }

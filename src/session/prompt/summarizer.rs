@@ -298,11 +298,19 @@ fn estimate_token_count(messages: &[Message]) -> usize {
         .iter()
         .map(|m| {
             let content = super::count_tokens(&m.content);
-            let thinking = m.thinking.as_ref().map(|t| super::count_tokens(t)).unwrap_or(0);
+            let thinking = m
+                .thinking
+                .as_ref()
+                .map(|t| super::count_tokens(t))
+                .unwrap_or(0);
             let tool_calls = m
                 .tool_calls
                 .as_ref()
-                .map(|c| serde_json::to_string(c).map(|s| super::count_tokens(&s)).unwrap_or(0))
+                .map(|c| {
+                    serde_json::to_string(c)
+                        .map(|s| super::count_tokens(&s))
+                        .unwrap_or(0)
+                })
                 .unwrap_or(0);
             content + thinking + tool_calls
         })

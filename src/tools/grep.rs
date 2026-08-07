@@ -186,10 +186,15 @@ impl Tool for Grep {
             .get("max_matches")
             .and_then(|m| m.as_u64())
             .unwrap_or(50) as usize;
-        let use_literal = args.get("literal").and_then(|r| r.as_bool()).unwrap_or(false);
+        let use_literal = args
+            .get("literal")
+            .and_then(|r| r.as_bool())
+            .unwrap_or(false);
 
         if rg_available() && !use_literal {
-            return self.run_rg(&pattern, path, context_lines, max_matches).await;
+            return self
+                .run_rg(&pattern, path, context_lines, max_matches)
+                .await;
         }
 
         let use_regex = !use_literal;
@@ -985,9 +990,16 @@ mod tests {
         let outcome = grep.run(&ToolContext::default(), args).await;
         match outcome {
             ToolOutcome::GrepMatches { matches, .. } => {
-                assert!(matches.len() >= 2, "expected at least 2 fn matches, got {matches:?}");
+                assert!(
+                    matches.len() >= 2,
+                    "expected at least 2 fn matches, got {matches:?}"
+                );
                 for m in &matches {
-                    assert!(m.line.starts_with("fn "), "match should be fn decl: {}", m.line);
+                    assert!(
+                        m.line.starts_with("fn "),
+                        "match should be fn decl: {}",
+                        m.line
+                    );
                 }
             }
             ToolOutcome::Success { content } => {

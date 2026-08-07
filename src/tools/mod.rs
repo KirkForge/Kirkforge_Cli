@@ -60,7 +60,9 @@ pub fn validate_tool_args(tool: &dyn Tool, args: &serde_json::Value) -> Result<(
                     if !actual_matches && !val.is_null() {
                         return Err(format!(
                             "Argument '{}': expected type '{}', got '{}'",
-                            key, expected, value_type_name(val)
+                            key,
+                            expected,
+                            value_type_name(val)
                         ));
                     }
                 }
@@ -81,7 +83,6 @@ fn value_type_name(val: &serde_json::Value) -> &'static str {
         serde_json::Value::Object(_) => "object",
     }
 }
-
 
 use crate::session::toolset::CompositeToolset;
 use crate::shared::{ToolDef, ToolOutcome};

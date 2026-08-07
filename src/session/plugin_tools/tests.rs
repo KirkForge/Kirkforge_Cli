@@ -511,8 +511,8 @@ fn bundled_plugins_load_from_data_dir() {
     let _guard = DataDirGuard::set(&tmp.path().to_string_lossy());
     let mut cfg = Config::default();
     cfg.tools.plugin_signature_validation = false;
-    let (registry, warnings) = load_plugin_registry(&cfg)
-        .expect("loading installed plugins should not fail");
+    let (registry, warnings) =
+        load_plugin_registry(&cfg).expect("loading installed plugins should not fail");
     assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
 
     let names: Vec<_> = registry
@@ -542,8 +542,8 @@ fn bundled_plugin_tool_commands_exist_in_data_dir() {
     let _guard = DataDirGuard::set(&tmp.path().to_string_lossy());
     let mut cfg = Config::default();
     cfg.tools.plugin_signature_validation = false;
-    let (registry, warnings) = load_plugin_registry(&cfg)
-        .expect("loading installed plugins should not fail");
+    let (registry, warnings) =
+        load_plugin_registry(&cfg).expect("loading installed plugins should not fail");
     assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
 
     for hosted in registry.active_plugins() {
@@ -598,8 +598,8 @@ async fn bundled_stratum_mode_tool_executes_via_host() {
     let _data_guard = DataDirGuard::set_async(&tmp.path().to_string_lossy()).await;
     let mut cfg = Config::default();
     cfg.tools.plugin_signature_validation = false;
-    let (registry, warnings) = load_plugin_registry(&cfg)
-        .expect("loading installed plugins should not fail");
+    let (registry, warnings) =
+        load_plugin_registry(&cfg).expect("loading installed plugins should not fail");
     assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
 
     let tools = all_plugin_tools(
@@ -658,8 +658,8 @@ async fn bundled_node_sdk_tool_executes_via_host() {
     let _guard = DataDirGuard::set_async(&tmp.path().to_string_lossy()).await;
     let mut cfg = Config::default();
     cfg.tools.plugin_signature_validation = false;
-    let (registry, warnings) = load_plugin_registry(&cfg)
-        .expect("loading installed plugins should not fail");
+    let (registry, warnings) =
+        load_plugin_registry(&cfg).expect("loading installed plugins should not fail");
     assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
 
     let tools = all_plugin_tools(

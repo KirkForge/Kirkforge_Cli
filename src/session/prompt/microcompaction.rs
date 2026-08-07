@@ -345,7 +345,11 @@ fn deterministic_compaction_summary(messages: &[Message]) -> String {
 
 fn estimate_message_tokens(m: &Message) -> usize {
     let content = super::count_tokens(&m.content);
-    let thinking = m.thinking.as_ref().map(|t| super::count_tokens(t)).unwrap_or(0);
+    let thinking = m
+        .thinking
+        .as_ref()
+        .map(|t| super::count_tokens(t))
+        .unwrap_or(0);
     let tool_calls = m
         .tool_calls
         .as_ref()

@@ -259,7 +259,11 @@ fn mtime_rebuild_noop_is_cheap() {
     let elapsed = start.elapsed();
 
     assert_eq!(changed, 0, "no files changed, so changed count must be 0");
-    assert_eq!(rebuilt.symbols().len(), 2, "both symbols should survive no-op rebuild");
+    assert_eq!(
+        rebuilt.symbols().len(),
+        2,
+        "both symbols should survive no-op rebuild"
+    );
     assert!(
         elapsed.as_millis() < 100,
         "no-op mtime rebuild should be <100ms, took {}ms",
@@ -296,8 +300,20 @@ fn mtime_rebuild_single_file_change() {
 
     assert_eq!(changed, 1, "only a.rs changed");
     let names: Vec<&str> = rebuilt.symbols().iter().map(|s| s.name.as_str()).collect();
-    assert!(names.contains(&"alpha_v2"), "updated function should appear, got {names:?}");
-    assert!(names.contains(&"new_func"), "new function should appear, got {names:?}");
-    assert!(names.contains(&"beta"), "unchanged file's symbol should survive, got {names:?}");
-    assert!(!names.contains(&"alpha"), "old function should be removed, got {names:?}");
+    assert!(
+        names.contains(&"alpha_v2"),
+        "updated function should appear, got {names:?}"
+    );
+    assert!(
+        names.contains(&"new_func"),
+        "new function should appear, got {names:?}"
+    );
+    assert!(
+        names.contains(&"beta"),
+        "unchanged file's symbol should survive, got {names:?}"
+    );
+    assert!(
+        !names.contains(&"alpha"),
+        "old function should be removed, got {names:?}"
+    );
 }

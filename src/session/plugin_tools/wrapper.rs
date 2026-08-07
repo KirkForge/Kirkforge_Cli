@@ -228,14 +228,13 @@ impl Tool for PluginToolWrapper {
 
         // M11: enforce trust tier at dispatch time. A plugin's trust tier
         // must meet the minimum required for tool execution (Shell).
-        let required = kf_plugin_host::SandboxPolicy::required_tier(
-            &kf_plugin_sdk::Capability::Tool {
+        let required =
+            kf_plugin_host::SandboxPolicy::required_tier(&kf_plugin_sdk::Capability::Tool {
                 name: self.def.name.into(),
                 description: self.def.description.into(),
                 schema: self.def.parameters.clone(),
                 command: None,
-            },
-        );
+            });
         if !self.trust.permits(required) {
             tracing::warn!(
                 tool = %self.def.name,

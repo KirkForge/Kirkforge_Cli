@@ -57,8 +57,6 @@ pub struct ModelConfig {
     #[serde(default = "default_aws_region")]
     pub aws_region: String,
     #[serde(default)]
-    pub aws_profile: String,
-    #[serde(default)]
     pub gcp_service_account_path: Option<PathBuf>,
     #[serde(default)]
     pub gcp_project_id: String,
@@ -125,7 +123,6 @@ impl Default for ModelConfig {
             routing_model_map: HashMap::new(),
             anthropic_provider: default_anthropic_provider(),
             aws_region: default_aws_region(),
-            aws_profile: String::new(),
             gcp_service_account_path: None,
             gcp_project_id: String::new(),
             gcp_region: default_gcp_region(),

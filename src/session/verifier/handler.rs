@@ -2,6 +2,9 @@ use super::slots::VerifierSlots;
 use super::types::{FixSuggestion, Verdict, Verifier};
 use crate::session::verifier::types::{BusEvent, EventKind};
 use crate::shared::metrics::{record, MetricEvent};
+
+use futures_util::future::FutureExt;
+use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 
 // ponytail: thin pass-through between CorrectionLoop and VerifierSlots; merge if handler gains no more logic
@@ -70,7 +73,18 @@ impl VerifierHandler {
         let (verdict, decisive_name) = {
             let mut all_findings: Vec<(String, Verdict)> = Vec::new();
             for verifier in &verifiers {
-                let v = verifier.verify(event).await;
+                let v = match AssertUnwindSafe(verifier.verify(event)).catch_unwind().await {
+                    Ok(result) => result,
+                    Err(panic_payload) => {
+                        let msg = panic_payload
+                            .downcast_ref::<&str>()
+                            .map(|s| s.to_string())
+                            .or_else(|| panic_payload.downcast_ref::<String>().cloned())
+                            .unwrap_or_else(|| "unknown panic".to_string());
+                        tracing::warn!("verifier {} panicked: {msg}", verifier.name());
+                        Verdict::Skipped(format!("verifier panicked: {msg}"))
+                    }
+                };
                 match &v {
                     Verdict::Clean | Verdict::Skipped(_) => continue,
                     Verdict::Fixable(_) | Verdict::Unfixable(_) => {

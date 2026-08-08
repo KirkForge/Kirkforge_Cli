@@ -10,6 +10,7 @@ pub enum EventKind {
     FileWrite,
     Edit,
     BashExec,
+    // ponytail: GitOperationEvent never emitted; git verifier uses BashExec heuristic only
     GitOperation,
     LintRun,
     TypeCheck,
@@ -196,6 +197,7 @@ pub enum BusEvent {
     FileWrite(FileWriteEvent),
     Edit(EditEvent),
     BashExec(BashExecEvent),
+    // ponytail: GitOperationEvent never emitted; git verifier uses BashExec heuristic only
     GitOperation(GitOperationEvent),
     LintRun(LintRunEvent),
     TypeCheck(TypeCheckEvent),
@@ -251,6 +253,8 @@ pub struct BashExecEvent {
     pub workdir: Option<PathBuf>,
 }
 
+/// Git operation event data.
+/// ponytail: GitOperationEvent never emitted; git verifier uses BashExec heuristic only
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct GitOperationEvent {
     pub args: Vec<String>,

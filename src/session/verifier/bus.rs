@@ -26,6 +26,7 @@
 
 use kf_plugin_host::PluginVerifier;
 use std::collections::HashMap;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -163,7 +164,24 @@ impl VerifierBus {
     pub fn run(&mut self, ctx: &VerifyContext) {
         self.verdicts.clear();
         for verifier in &self.verifiers {
-            let entries = verifier.verify(ctx);
+            let entries = match catch_unwind(AssertUnwindSafe(|| verifier.verify(ctx))) {
+                Ok(entries) => entries,
+                Err(panic_payload) => {
+                    let msg = panic_payload
+                        .downcast_ref::<&str>()
+                        .map(|s| s.to_string())
+                        .or_else(|| panic_payload.downcast_ref::<String>().cloned())
+                        .unwrap_or_else(|| "unknown panic".to_string());
+                    tracing::warn!("verifier {} panicked: {msg}", verifier.name());
+                    vec![VerdictEntry {
+                        source: VerifierSource::Custom(verifier.name().to_string()),
+                        severity: Severity::Warning,
+                        message: format!("verifier panicked: {msg}"),
+                        file: None,
+                        line: None,
+                    }]
+                }
+            };
             self.verdicts.extend(entries);
         }
     }
@@ -203,7 +221,9 @@ impl VerifierBus {
 ///
 /// Columns: `Verifier | Source | Verdict | File:Line | Message`.
 /// Grouped by verifier name. Empty verdicts → a "no verdicts" line.
-pub fn format_verdict_report(verdicts: &[VerdictEntry]) -> String {
+// ponytail: kept for future TUI surface
+#[allow(dead_code)]
+pub(crate) fn format_verdict_report(verdicts: &[VerdictEntry]) -> String {
     if verdicts.is_empty() {
         return "No verifier verdicts from the last turn.".to_string();
     }

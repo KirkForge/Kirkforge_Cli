@@ -44,7 +44,18 @@ impl CorrectionLoop {
         for _iteration in 0..self.max_iterations {
             let (verdict, decisive_name) = self.verifier_handler.verify_event(event).await;
             match verdict {
-                Verdict::Clean | Verdict::Skipped(_) => break,
+                Verdict::Clean => break,
+                Verdict::Skipped(reason) => {
+                    results.push(CorrectionResult {
+                        verifier: decisive_name.clone(),
+                        success: true,
+                        message: format!("verification skipped: {reason}"),
+                        fix: None,
+                        file: None,
+                        line: None,
+                    });
+                    break;
+                }
                 Verdict::Fixable(fix) => {
                     // A fix with no concrete text replacement but with an
                     // external command is a formatter-style fix (e.g. rustfmt).
@@ -599,5 +610,52 @@ mod tests {
             results[0].verifier, "lint",
             "verifier name must be the decisive verifier's name(), not \"verifier\""
         );
+    }
+
+    /// WO 22.10-R1: Skipped verdicts must produce a CorrectionResult so the
+    /// model can see that verification was skipped.
+    #[tokio::test]
+    async fn correction_loop_skipped_verdict_produces_result() {
+        use super::super::types::{Verdict, Verifier};
+        struct StubSkippedVerifier;
+        #[async_trait::async_trait]
+        impl Verifier for StubSkippedVerifier {
+            fn name(&self) -> &str {
+                "skip-check"
+            }
+            fn priority(&self) -> u8 {
+                1
+            }
+            async fn verify(&self, _event: &BusEvent) -> Verdict {
+                Verdict::Skipped("tool not available".into())
+            }
+        }
+        let mut slots_inner = super::super::slots::VerifierSlots::new();
+        slots_inner
+            .register(std::sync::Arc::new(StubSkippedVerifier))
+            .unwrap();
+        let slots = std::sync::Arc::new(std::sync::RwLock::new(slots_inner));
+        let handler = std::sync::Arc::new(super::super::handler::VerifierHandler::new(
+            slots,
+            crate::session::access::PathGuard::default(),
+        ));
+        let loop_ = CorrectionLoop::new(handler).with_max_iterations(1);
+        let event = crate::session::verifier::types::BusEvent::Edit(
+            crate::session::verifier::types::EditEvent {
+                path: PathBuf::from("/tmp/none.rs"),
+                diff: "@@ -1 +1 @@\n-a\n+b".into(),
+            },
+        );
+        let results = loop_.run(&event).await;
+        assert_eq!(results.len(), 1, "Skipped verdict must produce one result");
+        assert_eq!(results[0].verifier, "skip-check");
+        assert!(results[0].success, "Skipped is not a failure");
+        assert_eq!(
+            results[0].message,
+            "verification skipped: tool not available"
+        );
+        assert!(results[0].fix.is_none());
+        assert!(results[0].file.is_none());
+        assert!(results[0].line.is_none());
     }
 }

@@ -68,8 +68,11 @@ zero-dependency property makes the estimate conservative.)
   `TrustPolicy::with_verify_signatures` API remain the public configuration
   surface. The signing model is minisign (Ed25519) with a single
   host-configured public key — not per-plugin keys.
-- The `.kf-code.sig` file format and the `kf-code.toml` signing
-  contract are unchanged — only the verification backend changes.
+- The `.kf-code.sig` file format is unchanged, but the signing **contract
+  changed**: the original model used per-plugin Ed25519-dalek keys with a
+  `public_key` field and a multi-key `trusted_public_keys` allowlist; the
+  current model uses minisign with a single host-configured key via
+  `plugin_public_key_path`. See "Contract changes" below.
 - The signing key model is minisign with a single host-configured public
   key, not per-plugin Ed25519 keys.
 
@@ -81,6 +84,19 @@ comment, trusted comment, base64 signature, global signature) that
 maintained by the minisign author, is zero-dependency, and is
 audit-friendly (~500 LOC). `ed25519-dalek` would be more work for the
 same result with no size advantage.
+
+## Contract changes
+
+The signing contract changed from the original plugin-signature design:
+
+| Aspect | Original | Current |
+|--------|----------|---------|
+| Crypto library | Ed25519-dalek | minisign (minisign-verify crate) |
+| Key scope | Per-plugin `public_key` field | Single host-configured `plugin_public_key_path` |
+| Key allowlist | Multi-key `trusted_public_keys` | Single key |
+
+The `.kf-code.sig` file format (minisign signature envelope) is unchanged,
+but the trust model shifted from per-plugin multi-key to a single host key.
 
 ## Notes
 

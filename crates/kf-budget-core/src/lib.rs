@@ -24,8 +24,7 @@ pub use budget::{
     Intervention, TokenBudget, UsageConfig,
 };
 pub use compaction::{
-    build_hint, local_summarise, CompactHint, CompactedOutput, CompactionTransform,
-    LocalSummaryCompactor, Turn,
+    build_hint, local_summarise, CompactHint, CompactedOutput, LocalSummaryCompactor, Turn,
 };
 pub use cost::{classify_kind, emit_usage, is_usage_enabled_at, UsageKind, UsageRecord};
 pub use detector::{detect, should_slice, Decision, ToolOutputKind};

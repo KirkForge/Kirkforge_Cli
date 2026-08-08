@@ -1,4 +1,4 @@
-# ADR-0003: SlicingTransform + CompactionTransform
+# ADR-0003: SlicingTransform + LocalSummaryCompactor
 
 - **Status:** Accepted
 - **Date:** 2026-06-24
@@ -19,13 +19,13 @@ Stratum's transforms are byte-level (Reformat) or pointer-level
 
 - **SlicingTransform** — lossy in the middle, exact at the
   edges. Reversible via the OffloadStore for the middle section.
-- **CompactionTransform** — lossy overall, not reversible.
+- **LocalSummaryCompactor** — lossy overall, not reversible.
 
 The two are distinct because:
 
 - A `SlicingTransform` can be undone by retrieving the offload
   marker. A user who needs the middle asks, and gets it back.
-- A `CompactionTransform` is irreversible. A user who needs
+- A compaction via `LocalSummaryCompactor` is irreversible. A user who needs
   detail that the summary elided is out of luck.
 
 Conflating them would mean "summarise, with a marker for the
@@ -143,16 +143,12 @@ The `HeadTailSlicer` is the only slicing transform in the MVP.
 A future contributor can add `RegionSlicer` (regex-delimited
 sections), `BinarySlicer` (offsets from a binary header), etc.
 
-### CompactionTransform trait
+### Compaction — LocalSummaryCompactor
+
+The compaction side uses `LocalSummaryCompactor` with inherent methods directly — no trait needed for a single implementation.
 
 ```rust
-// crates/plugin3-core/src/compaction.rs
-
-pub trait CompactionTransform: Send + Sync {
-    // removed
-
-    fn apply(&self, input: &str) -> Result<CompactedOutput, TransformError>;
-}
+// crates/kf-budget-core/src/compaction.rs
 
 pub struct CompactedOutput {
     /// The summary.
@@ -162,23 +158,15 @@ pub struct CompactedOutput {
     /// True if this compaction is lossless (None) or lossy.
     pub lossy: bool,
 }
-```
 
-### LocalSummaryCompactor — MVP impl
-
-The MVP CompactionTransform is the *local* summary — a
-heuristic, regex-driven extractor that pulls the first line of
-each paragraph, the headings, the JSON keys, the log levels.
-
-```rust
 pub struct LocalSummaryCompactor {
     pub max_output_bytes: usize,    // default: 8192
 }
 
-impl CompactionTransform for LocalSummaryCompactor {
-    fn name(&self) -> &'static str { "local_summary" }
+impl LocalSummaryCompactor {
+    pub fn name(&self) -> &'static str { "local_summary" }
 
-    fn apply(&self, input: &str) -> Result<CompactedOutput, TransformError> {
+    pub fn apply(&self, input: &str) -> Result<CompactedOutput, TransformError> {
         let summary = local_summarise(input, self.max_output_bytes);
         let lossy = summary.len() < input.len();
         Ok(CompactedOutput {
@@ -200,7 +188,7 @@ is a future ADR (compaction-via-LLM is a separate design).
 | Transform | Reversible | Use when |
 |-----------|-----------|----------|
 | `SlicingTransform` (head/tail) | Yes (offload marker) | Tool output with structure — keep the start (the command) and the end (the result), discard the noisy middle (the progress lines) |
-| `CompactionTransform` (local) | No | Conversation history — summarise old turns to fit a budget |
+| `LocalSummaryCompactor` (local) | No | Conversation history — summarise old turns to fit a budget |
 
 ### Error contract
 
@@ -211,15 +199,13 @@ returns `Ok` with `bytes_saved == 0` (no-op) or
 `TransformError::Skipped` (orchestrator may try another).
 
 A transform that panics is a bug. The no-panic property test
-(ADR-0016) covers both trait families.
+(ADR-0016) covers both the trait family and the inherent methods.
 
 ## Consequences
 
 Negative first:
 
-- Two traits instead of one is more API surface. A contributor
-  must pick the right trait. The convention: slicing keeps the
-  edges, compaction summarises.
+- One trait (`SlicingTransform`) for the slicing side plus inherent methods on `LocalSummaryCompactor` for the compaction side. A contributor must understand the convention: slicing keeps the edges, compaction summarises.
 - `LocalSummaryCompactor` is heuristic. A future LLM-based
   compactor will be better; the MVP is good-enough-for-now.
 - The middle section is offloaded but the user cannot

@@ -87,7 +87,7 @@ crates/
 │   └── src/
 │       ├── lib.rs
 │       ├── slicing.rs    # SlicingTransform trait + impls
-│       ├── compaction.rs # CompactionTransform trait + impls
+│       ├── compaction.rs # LocalSummaryCompactor + compaction helpers
 │       ├── budget.rs     # TokenBudget, three-state guard
 │       ├── detector.rs   # Tool output detection
 │       ├── orchestrator.rs # Parallel slicing runner
@@ -131,7 +131,7 @@ without updating the ADR surfaces here.
 
 | Crate | Responsibility | Public API |
 |-------|----------------|------------|
-| `plugin3-core` | Pure logic: transforms, budget, store, orchestrator. No I/O outside the OffloadStore. | `SlicingTransform`, `CompactionTransform`, `TokenBudget`, `OffloadStore`, `slice_orchestrator`, `emit_usage` |
+| `plugin3-core` | Pure logic: transforms, budget, store, orchestrator. No I/O outside the OffloadStore. | `SlicingTransform`, `LocalSummaryCompactor`, `TokenBudget`, `OffloadStore`, `slice_orchestrator`, `emit_usage` |
 | `plugin3-cli` | clap binary, hook handlers, XDG state, syscalls. | `main()` |
 | `plugin3-hosts` | Host detection and canonical payload types. Per-host output shims (`claude_code`, `cursor`, `aider`) are stubs today; the CLI's hook handlers consume the canonical payloads directly (ADR-0013). | `Host`, `detect_host`, `PostToolUsePayload`, `UserPromptSubmitPayload`, `PreCompactPayload` |
 

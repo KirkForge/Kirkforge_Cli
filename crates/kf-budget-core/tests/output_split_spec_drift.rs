@@ -1,6 +1,6 @@
-//! ADR-0003 (`SlicingTransform` + `CompactionTransform`) drift
+//! ADR-0003 (`SlicingTransform` + `LocalSummaryCompactor`) drift
 //! tests — pin the § `SlicingTransform` trait, § `HeadTailSlicer`,
-//! § `CompactionTransform` trait, and § Implementation notes
+//! § `LocalSummaryCompactor` inherent methods, and § Implementation notes
 //! `slice_or_skip` prose against the actual impl in
 //! `crates/kf-budget-core/src/slicing.rs` and `compaction.rs`.
 //! Companion to the unit tests inside those modules (which
@@ -70,8 +70,8 @@ fn adr_0003_head_tail_slicer_block() -> String {
         .find("### HeadTailSlicer")
         .expect("ADR-0003 must have a § HeadTailSlicer subsection");
     let section_end = adr[section_start..]
-        .find("### CompactionTransform trait")
-        .expect("ADR-0003 § HeadTailSlicer must precede § CompactionTransform trait");
+        .find("### Compaction — LocalSummaryCompactor")
+        .expect("ADR-0003 § HeadTailSlicer must precede § Compaction — LocalSummaryCompactor");
     let section = &adr[section_start..section_start + section_end];
 
     let fence_start = section

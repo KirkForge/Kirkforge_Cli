@@ -1911,10 +1911,10 @@ mod tests {
         use crate::shared::config::CONFIG_FIELD_COUNT;
 
         // ── 1. Total struct-level fields ──────────────────────────
-        // ModelConfig=29, SecurityConfig=18, ToolConfig=26,
+        // ModelConfig=29, SecurityConfig=18, ToolConfig=25,
         // SessionConfig=8, DisplayConfig=3
         assert_eq!(
-            CONFIG_FIELD_COUNT, 84,
+            CONFIG_FIELD_COUNT, 83,
             "CONFIG_FIELD_COUNT has drifted — did you add/remove a config field?"
         );
 
@@ -2034,24 +2034,24 @@ mod tests {
         // is: every struct field is EITHER handled by merge_toml OR
         // intentionally skipped. The same applies to apply_env_overrides.
         //
-        // Intentionally skipped by merge_toml (16 struct-level fields):
+        // Intentionally skipped by merge_toml (15 struct-level fields):
         //   ModelConfig:  summarize_enabled, subagent_allowed_models,
         //                 opencode_zen_api_key, opencode_zen_endpoint, seed
         //   SecurityConfig: permission_rules, docker (4 sub-fields),
         //                   sandbox (4 sub-fields), computer_use.max_steps
-        //   ToolConfig:  max_tool_result_chars, truncation_strategy,
+        //   ToolConfig:  max_tool_result_chars,
         //                mcp_servers, lsp_servers, max_plugin_trust,
         //                stratum_mode, budget_ceiling, budget_approaching_ratio
         //   SessionConfig: worktree_enabled
         //
-        // Additionally skipped by apply_env_overrides (4 more, beyond the 16):
+        // Additionally skipped by apply_env_overrides (4 more, beyond the 15):
         //   SecurityConfig: deny_paths, deny_urls, deny_extensions,
         //                   allowed_write_dirs
         //   (Arrays/Vec fields without env-var representations.)
         //
         // The expansion of computer_use (1 struct field → 7 TOML keys)
-        // means MERGE_TOML_EXPECTED = 64 handled struct fields + 7 expansion
-        // keys = 71, not 82 - 16 = 66.
+        // means MERGE_TOML_EXPECTED = 63 handled struct fields + 7 expansion
+        // keys = 70, not 83 - 15 = 68.
         let _ = (
             CONFIG_FIELD_COUNT,
             MERGE_TOML_EXPECTED,

@@ -185,10 +185,6 @@
 # Conversation context
 # ---------------------------------------------------------------------------
 
-# How the context window is shrunk when it grows too long.
-# Options: "KeepToolOnly" (default), "DropOldest", "SummarizeMiddle".
-# truncation_strategy = "KeepToolOnly"
-
 # When true, old turns are carried over into new sessions. Default: true.
 # carryover_enabled = true
 

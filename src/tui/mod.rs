@@ -1138,7 +1138,7 @@ async fn handle_persona_complete(
 ///
 /// We deliberately compare a small, *user-facing* subset of fields
 /// — not the full struct equality. Showing changes to internal
-/// knobs (truncation_strategy, deny_paths, etc.) would be noisy and
+/// knobs (deny_paths, etc.) would be noisy and
 /// could leak security-sensitive details in a chat pane. The
 /// high-impact fields the operator usually tweaks are: model,
 /// host, auto_approve, bang_requires_approval, sandbox_dir.

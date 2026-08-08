@@ -2,7 +2,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
-use crate::shared::TruncationStrategy;
 use crate::shared::{LspServerEntry, McpServerConfig};
 
 fn default_max_tool_calls_per_turn() -> usize {
@@ -58,6 +57,10 @@ fn default_plugin_sources() -> HashMap<String, PathBuf> {
 
 fn default_enabled_plugins() -> Vec<String> {
     let mut names: Vec<String> = default_plugin_sources().keys().cloned().collect();
+    #[cfg(feature = "stratum")]
+    names.push("stratum".into());
+    #[cfg(feature = "budget")]
+    names.push("kf-budget".into());
     names.sort();
     names
 }
@@ -66,8 +69,6 @@ fn default_enabled_plugins() -> Vec<String> {
 pub struct ToolConfig {
     #[serde(default = "default_max_tool_result_chars")]
     pub max_tool_result_chars: usize,
-    #[serde(default)]
-    pub truncation_strategy: TruncationStrategy,
     #[serde(default)]
     pub mcp_servers: Vec<McpServerConfig>,
     #[serde(default)]
@@ -130,7 +131,6 @@ impl Default for ToolConfig {
     fn default() -> Self {
         Self {
             max_tool_result_chars: default_max_tool_result_chars(),
-            truncation_strategy: TruncationStrategy::KeepToolOnly,
             mcp_servers: vec![],
             lsp_servers: vec![],
             tool_timeout_secs: default_tool_timeout_secs(),

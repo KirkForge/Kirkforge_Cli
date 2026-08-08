@@ -447,12 +447,6 @@ fn default_computer_use_max_steps() -> u32 {
     20
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub enum TruncationStrategy {
-    #[default]
-    KeepToolOnly,
-}
-
 #[derive(Debug, Clone)]
 pub struct ToolDef {
     pub name: &'static str,

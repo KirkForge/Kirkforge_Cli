@@ -39,7 +39,6 @@ Both reuse the existing `anthropic::build_anthropic_body` body builder and `anth
 
 - `anthropic_provider` (string, default `"anthropic"`)
 - `aws_region` (string, default `"us-east-1"`)
-- `aws_profile` (string, currently a placeholder for the AWS SDK profile chain)
 - `gcp_project_id` (string)
 - `gcp_region` (string, default `"us-central1"`)
 - `gcp_service_account_path` (optional path)
@@ -54,6 +53,5 @@ All fields have matching `KIRKFORGE_*` environment variables.
 
 ## Future work
 
-- Add a real AWS config profile resolver when `aws_profile` is set.
 - Support GCP Application Default Credentials (ADC) beyond service-account keys.
 - Cache GCP access tokens to avoid fetching a new token on every request.

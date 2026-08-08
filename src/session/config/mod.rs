@@ -488,9 +488,6 @@ fn merge_toml_into_config(cfg: &mut Config, table: toml::Table) {
     if let Some(Value::String(v)) = table.get("aws_region") {
         cfg.model.aws_region = v.clone();
     }
-    if let Some(Value::String(v)) = table.get("aws_profile") {
-        cfg.model.aws_profile = v.clone();
-    }
     if let Some(Value::String(v)) = table.get("gcp_project_id") {
         cfg.model.gcp_project_id = v.clone();
     }
@@ -1446,7 +1443,6 @@ mod tests {
         let table: toml::Table = r#"
             anthropic_provider = "bedrock"
             aws_region = "us-west-2"
-            aws_profile = "dev"
             gcp_project_id = "my-project"
             gcp_region = "us-east4"
             gcp_service_account_path = "/tmp/sa.json"
@@ -1465,7 +1461,6 @@ mod tests {
 
         assert_eq!(cfg.model.anthropic_provider, "bedrock");
         assert_eq!(cfg.model.aws_region, "us-west-2");
-        assert_eq!(cfg.model.aws_profile, "dev");
         assert_eq!(cfg.model.gcp_project_id, "my-project");
         assert_eq!(cfg.model.gcp_region, "us-east4");
         assert_eq!(
@@ -1491,7 +1486,6 @@ mod tests {
 
         set_env("KF_CODE_ANTHROPIC_PROVIDER", Some("vertex"));
         set_env("KF_CODE_AWS_REGION", Some("eu-west-1"));
-        set_env("KF_CODE_AWS_PROFILE", Some("prod"));
         set_env("KF_CODE_GCP_PROJECT_ID", Some("p2"));
         set_env("KF_CODE_GCP_REGION", Some("europe-west1"));
         set_env("KF_CODE_GCP_SERVICE_ACCOUNT_PATH", Some("/tmp/p2.json"));
@@ -1505,7 +1499,6 @@ mod tests {
 
         assert_eq!(cfg.model.anthropic_provider, "vertex");
         assert_eq!(cfg.model.aws_region, "eu-west-1");
-        assert_eq!(cfg.model.aws_profile, "prod");
         assert_eq!(cfg.model.gcp_project_id, "p2");
         assert_eq!(cfg.model.gcp_region, "europe-west1");
         assert_eq!(
@@ -1520,7 +1513,6 @@ mod tests {
 
         set_env("KF_CODE_ANTHROPIC_PROVIDER", None);
         set_env("KF_CODE_AWS_REGION", None);
-        set_env("KF_CODE_AWS_PROFILE", None);
         set_env("KF_CODE_GCP_PROJECT_ID", None);
         set_env("KF_CODE_GCP_REGION", None);
         set_env("KF_CODE_GCP_SERVICE_ACCOUNT_PATH", None);
@@ -1919,10 +1911,10 @@ mod tests {
         use crate::shared::config::CONFIG_FIELD_COUNT;
 
         // ── 1. Total struct-level fields ──────────────────────────
-        // ModelConfig=30, SecurityConfig=18, ToolConfig=26,
+        // ModelConfig=29, SecurityConfig=18, ToolConfig=26,
         // SessionConfig=8, DisplayConfig=3
         assert_eq!(
-            CONFIG_FIELD_COUNT, 85,
+            CONFIG_FIELD_COUNT, 84,
             "CONFIG_FIELD_COUNT has drifted — did you add/remove a config field?"
         );
 
@@ -1979,7 +1971,6 @@ mod tests {
             checkpoint_interval_messages = 999
             anthropic_provider = "x"
             aws_region = "x"
-            aws_profile = "x"
             gcp_project_id = "x"
             gcp_region = "x"
             gcp_service_account_path = "x"
@@ -2018,8 +2009,8 @@ mod tests {
                 toml_key_count += 1;
             }
         }
-        // 67 top-level leaf keys + 7 computer_use sub-keys = 74
-        const MERGE_TOML_EXPECTED: usize = 74;
+        // 66 top-level leaf keys + 7 computer_use sub-keys = 73
+        const MERGE_TOML_EXPECTED: usize = 73;
         assert_eq!(
             toml_key_count, MERGE_TOML_EXPECTED,
             "merge_toml_into_config key count changed — did you add/remove a handled field?"
@@ -2028,9 +2019,9 @@ mod tests {
         // ── 3. apply_env_overrides field coverage ─────────────────
         // Count KF_CODE_* env var checks in apply_env_overrides.
         // This must stay in sync with env_overrides.rs.
-        const ENV_OVERRIDE_EXPECTED: usize = 70;
+        const ENV_OVERRIDE_EXPECTED: usize = 69;
         assert_eq!(
-            ENV_OVERRIDE_EXPECTED, 70,
+            ENV_OVERRIDE_EXPECTED, 69,
             "apply_env_overrides env-var count changed — did you add/remove a KF_CODE_* var?"
         );
 

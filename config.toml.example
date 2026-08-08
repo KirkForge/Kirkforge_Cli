@@ -96,9 +96,6 @@
 # AWS region for Bedrock inference. Default: "us-east-1".
 # aws_region = "us-east-1"
 
-# AWS profile name. Not yet implemented; set via env for now. Default: "".
-# aws_profile = ""
-
 # GCP project id for Vertex AI. Required when anthropic_provider = "vertex".
 # gcp_project_id = ""
 

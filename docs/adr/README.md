@@ -27,7 +27,7 @@ verifies the table and the file headers agree.
 | [001](./001-native-ollama-cli-in-rust.md) | Native Ollama CLI in Rust | Accepted | CLI |
 | [0002](./0002-workspace.md) | Workspace layout | Accepted | Plugin3 |
 | [002](./002-tui-framework-and-rendering.md) | TUI Framework and Rendering | Accepted | CLI |
-| [0003](./0003-output-split.md) | SlicingTransform + CompactionTransform | Accepted | Plugin3 |
+| [0003](./0003-output-split.md) | SlicingTransform + LocalSummaryCompactor | Accepted | Plugin3 |
 | [003](./003-model-abstraction-layer.md) | Model Abstraction — Single Stream, Per-Model Adapters | Accepted | CLI |
 | [0004](./0004-offload-store.md) | OffloadStore reuse from Stratum | Accepted | Plugin3 |
 | [004](./004-tool-use-and-execution-sandbox.md) | Tool Use — Client-Side Tool Dispatch with Approval Gates | Accepted | CLI |

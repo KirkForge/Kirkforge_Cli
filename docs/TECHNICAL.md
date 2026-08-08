@@ -239,6 +239,14 @@ resets the tracker so the next failure starts a fresh run. The TUI is purely
 reactive: the executor owns the detector and emits a `TurnEvent::DoomLoopDetected`
 that the TUI's `dispatch_turn_event` translates into banner state.
 
+**Doom-loop circuit breaker** (WO 23.8): after N cumulative doom-loop hits
+(default 3, configured via `doom_loop_max_hits` / `KF_CODE_DOOM_LOOP_MAX_HITS`),
+the executor auto-switches to plan mode (emitting `TurnEvent::DoomLoopRemediation`
+with `action: "auto_plan_mode"`). If already in plan mode when the breaker fires,
+the turn is halted with an error message (`action: "halt"`). Setting
+`doom_loop_max_hits = 0` disables the circuit breaker entirely (pre-WO behavior).
+The cumulative hit counter persists across tool types within a session.
+
 `/permissions list | revoke <i> | clear` (WO 14.5) surfaces the permission
 rules created by the approval dialog's `[A]lways` key. The pure ops layer
 (`src/tui/commands/permissions.rs`) mutates `Config.security.permission_rules`

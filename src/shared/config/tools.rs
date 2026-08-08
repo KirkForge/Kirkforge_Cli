@@ -61,6 +61,10 @@ fn default_budget_approaching_ratio() -> f64 {
     0.8
 }
 
+fn default_doom_loop_max_hits() -> usize {
+    1
+}
+
 fn default_plugin_sources() -> HashMap<String, PathBuf> {
     let mut sources = HashMap::new();
     let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -139,6 +143,8 @@ pub struct ToolConfig {
     pub budget_ceiling: usize,
     #[serde(default = "default_budget_approaching_ratio")]
     pub budget_approaching_ratio: f64,
+    #[serde(default = "default_doom_loop_max_hits")]
+    pub doom_loop_max_hits: usize,
 }
 
 fn default_max_plugin_trust() -> kf_plugin_sdk::TrustTier {
@@ -177,6 +183,7 @@ impl Default for ToolConfig {
             stratum_mode: None,
             budget_ceiling: default_budget_ceiling(),
             budget_approaching_ratio: default_budget_approaching_ratio(),
+            doom_loop_max_hits: default_doom_loop_max_hits(),
         }
     }
 }
@@ -193,6 +200,7 @@ mod tests {
         assert!(cfg.stratum_mode.is_none());
         assert_eq!(cfg.minify_above_bytes, 4096);
         assert_eq!(cfg.max_continuation_rounds, 5);
+        assert_eq!(cfg.doom_loop_max_hits, 1);
     }
 
     #[test]

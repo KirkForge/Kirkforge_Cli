@@ -372,3 +372,10 @@ enabled_plugins = ["kf-code-draw", "kf-code-video", "stratum", "kf-code-plugin3"
 # Fraction of the ceiling at which the "approaching" state triggers and
 # slicing begins. Default: 0.8.
 # budget_approaching_ratio = 0.8  # ratio at which "approaching" state triggers (default: 0.8)
+
+# Maximum cumulative doom-loop detections before the circuit breaker fires.
+# When hit, the executor auto-switches to plan mode (or halts if already
+# in plan mode). Set to 0 to disable the circuit breaker. Default: 1
+# (fires on the first doom-loop detection, which requires 3 identical
+# consecutive tool errors).
+# doom_loop_max_hits = 1

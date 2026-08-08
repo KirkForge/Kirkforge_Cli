@@ -834,3 +834,100 @@ async fn test_cancelled_batch_aborts_remaining_spawned_tasks() {
         *call_count_two.lock().unwrap()
     );
 }
+
+#[tokio::test]
+async fn doom_loop_circuit_breaker_auto_plan_mode() {
+    let mut exe = make_executor(
+        Box::new(MockAdapter::new(vec![], make_info())),
+        vec![],
+        make_config(false),
+    )
+    .unwrap();
+    let (tx, mut rx) = mpsc::channel::<TurnEvent>(64);
+    let err = ToolOutcome::Error {
+        message: "boom".into(),
+    };
+    // Below threshold: no doom detection.
+    assert!(!exe.plan_mode, "should start in non-plan mode");
+    exe.observe_tool_outcome("bash", &err, &tx);
+    exe.observe_tool_outcome("bash", &err, &tx);
+    // Drain any events.
+    while rx.try_recv().is_ok() {}
+    assert!(
+        !exe.plan_mode,
+        "should still be in non-plan mode after 2 errors"
+    );
+    // Third identical error crosses the DoomLoopTracker threshold (3
+    // consecutive identical errors = 1 doom-loop detection). With the
+    // default doom_loop_max_hits=1, the circuit breaker fires immediately.
+    exe.observe_tool_outcome("bash", &err, &tx);
+    assert!(
+        exe.plan_mode,
+        "circuit breaker should auto-switch to plan mode after first doom-loop detection"
+    );
+    // Drain events and verify DoomLoopRemediation was emitted.
+    let mut saw_remediation = false;
+    while let Ok(ev) = rx.try_recv() {
+        if matches!(ev, TurnEvent::DoomLoopRemediation { .. }) {
+            saw_remediation = true;
+        }
+    }
+    assert!(saw_remediation, "should emit DoomLoopRemediation event");
+}
+
+#[tokio::test]
+async fn doom_loop_circuit_breaker_halts_in_plan_mode() {
+    let mut exe = make_executor(
+        Box::new(MockAdapter::new(vec![], make_info())),
+        vec![],
+        make_config(false),
+    )
+    .unwrap();
+    let (tx, _rx) = mpsc::channel::<TurnEvent>(64);
+    let err = ToolOutcome::Error {
+        message: "stuck".into(),
+    };
+    exe.set_plan_mode(true);
+    // Trigger a doom-loop detection while already in plan mode.
+    exe.observe_tool_outcome("bash", &err, &tx);
+    exe.observe_tool_outcome("bash", &err, &tx);
+    exe.observe_tool_outcome("bash", &err, &tx);
+    assert!(
+        exe.doom_loop_halt,
+        "circuit breaker should set doom_loop_halt when already in plan mode"
+    );
+}
+
+#[tokio::test]
+async fn doom_loop_circuit_breaker_disabled_when_zero() {
+    let mut exe = make_executor(
+        Box::new(MockAdapter::new(vec![], make_info())),
+        vec![],
+        make_config_with_doom_loop_max_hits(0),
+    )
+    .unwrap();
+    let (tx, mut rx) = mpsc::channel::<TurnEvent>(64);
+    let err = ToolOutcome::Error {
+        message: "boom".into(),
+    };
+    // With doom_loop_max_hits=0, the circuit breaker should be disabled.
+    // 5 errors should NOT trigger plan mode or halt.
+    for _ in 0..5 {
+        exe.observe_tool_outcome("bash", &err, &tx);
+    }
+    assert!(
+        !exe.plan_mode,
+        "circuit breaker disabled (max_hits=0) should not auto-switch to plan mode"
+    );
+    assert!(
+        !exe.doom_loop_halt,
+        "circuit breaker disabled (max_hits=0) should not halt"
+    );
+    // No DoomLoopRemediation events should have been emitted.
+    while let Ok(ev) = rx.try_recv() {
+        assert!(
+            !matches!(ev, TurnEvent::DoomLoopRemediation { .. }),
+            "no DoomLoopRemediation should be emitted when disabled"
+        );
+    }
+}

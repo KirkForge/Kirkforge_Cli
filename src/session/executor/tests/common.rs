@@ -144,6 +144,12 @@ pub(super) fn make_config(auto_approve: bool) -> Config {
     cfg
 }
 
+pub(super) fn make_config_with_doom_loop_max_hits(max_hits: usize) -> Config {
+    let mut cfg = make_config(false);
+    cfg.tools.doom_loop_max_hits = max_hits;
+    cfg
+}
+
 pub(super) fn make_executor(
     adapter: Box<dyn ModelAdapter>,
     tools: Vec<Arc<dyn Tool>>,

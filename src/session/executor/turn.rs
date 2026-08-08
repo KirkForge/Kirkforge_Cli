@@ -980,6 +980,17 @@ impl Executor {
                     })
                     .await?;
             }
+            if self.doom_loop_halt {
+                crate::send_or_warn!(
+                    event_tx
+                        .send(TurnEvent::Error(
+                            "Doom loop detected in plan mode. Halting turn.".into()
+                        ))
+                        .await,
+                    "TurnEvent receiver dropped; discarding event"
+                );
+                return Ok(());
+            }
             record(MetricEvent::ToolCall {
                 name: tc.name.clone(),
                 success: tool_outcome_success(&outcome_for_emit),
@@ -1055,6 +1066,17 @@ impl Executor {
                     ..Default::default()
                 })
                 .await?;
+        }
+        if self.doom_loop_halt {
+            crate::send_or_warn!(
+                event_tx
+                    .send(TurnEvent::Error(
+                        "Doom loop detected in plan mode. Halting turn.".into()
+                    ))
+                    .await,
+                "TurnEvent receiver dropped; discarding event"
+            );
+            return Ok(());
         }
         record(MetricEvent::ToolCall {
             name: tc.name.clone(),

@@ -410,6 +410,9 @@ fn merge_toml_into_config(cfg: &mut Config, table: toml::Table) {
     if let Some(Value::Integer(v)) = table.get("max_continuation_rounds") {
         cfg.tools.max_continuation_rounds = (*v).clamp(0, 50) as usize;
     }
+    if let Some(Value::Integer(v)) = table.get("doom_loop_max_hits") {
+        cfg.tools.doom_loop_max_hits = (*v).max(0) as usize;
+    }
     if let Some(Value::Integer(v)) = table.get("max_background_tasks") {
         cfg.tools.max_background_tasks = (*v as usize).clamp(1, 64);
     }
@@ -1996,10 +1999,10 @@ mod tests {
         use crate::shared::config::CONFIG_FIELD_COUNT;
 
         // ── 1. Total struct-level fields ──────────────────────────
-        // ModelConfig=30, SecurityConfig=18, ToolConfig=29,
+        // ModelConfig=30, SecurityConfig=18, ToolConfig=30,
         // SessionConfig=8, DisplayConfig=3
         assert_eq!(
-            CONFIG_FIELD_COUNT, 88,
+            CONFIG_FIELD_COUNT, 89,
             "CONFIG_FIELD_COUNT has drifted — did you add/remove a config field?"
         );
 
@@ -2047,6 +2050,7 @@ mod tests {
             max_continuation_rounds = 5
             max_background_tasks = 4
             task_concurrency_mode = "queue"
+            doom_loop_max_hits = 3
             tool_timeout_secs = 999
             audit_log_path = "x"
             hooks_dir = "x"
@@ -2098,8 +2102,8 @@ mod tests {
                 toml_key_count += 1;
             }
         }
-        // 67 top-level leaf keys + 3 tool keys + 7 computer_use sub-keys = 77
-        const MERGE_TOML_EXPECTED: usize = 77;
+        // 68 top-level leaf keys + 3 tool keys + 7 computer_use sub-keys = 78
+        const MERGE_TOML_EXPECTED: usize = 78;
         assert_eq!(
             toml_key_count, MERGE_TOML_EXPECTED,
             "merge_toml_into_config key count changed — did you add/remove a handled field?"
@@ -2108,9 +2112,9 @@ mod tests {
         // ── 3. apply_env_overrides field coverage ─────────────────
         // Count KF_CODE_* env var checks in apply_env_overrides.
         // This must stay in sync with env_overrides.rs.
-        const ENV_OVERRIDE_EXPECTED: usize = 75;
+        const ENV_OVERRIDE_EXPECTED: usize = 76;
         assert_eq!(
-            ENV_OVERRIDE_EXPECTED, 75,
+            ENV_OVERRIDE_EXPECTED, 76,
             "apply_env_overrides env-var count changed — did you add/remove a KF_CODE_* var?"
         );
 

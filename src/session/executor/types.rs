@@ -127,4 +127,13 @@ pub enum TurnEvent {
         /// Truncated text of the most recent error (for display).
         last_error: String,
     },
+
+    /// Emitted when the doom-loop circuit breaker fires — the
+    /// cumulative doom-loop hit count has reached `doom_loop_max_hits`.
+    /// `action` is either `"auto_plan_mode"` (switched to plan mode)
+    /// or `"halt"` (already in plan mode, turn halted).
+    DoomLoopRemediation {
+        action: String,
+        hits: usize,
+    },
 }

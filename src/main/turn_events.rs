@@ -243,6 +243,18 @@ pub(super) fn emit_turn_events(
                     print_json_line(&line);
                 }
             }
+            session::executor::TurnEvent::DoomLoopRemediation { action, hits } => {
+                if output == kf_code::shared::OutputFormat::Text {
+                    eprintln!("\n[doom-loop] Circuit breaker: {action} after {hits} hits");
+                } else if output == kf_code::shared::OutputFormat::StreamJson {
+                    let line = serde_json::json!({
+                        "type": "doom_loop_remediation",
+                        "action": action,
+                        "hits": hits,
+                    });
+                    print_json_line(&line);
+                }
+            }
         }
     }
 }

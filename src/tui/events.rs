@@ -280,6 +280,13 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
             ));
             state.mark_dirty();
         }
+        TurnEvent::DoomLoopRemediation { action, hits } => {
+            state.messages.push_back(ConversationEntry::new(
+                "system",
+                format!("⚠️ Doom-loop circuit breaker: {action} after {hits} hits"),
+            ));
+            state.mark_dirty();
+        }
     }
 }
 

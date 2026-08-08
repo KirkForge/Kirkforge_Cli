@@ -64,6 +64,11 @@ pub struct Executor {
     /// `/plan` and exited via `/implement` or user approval.
     plan_mode: bool,
 
+    /// Set to true when the doom-loop circuit breaker fires while
+    /// already in plan mode (R2 hard halt). The turn loop checks this
+    /// after each doom-loop observation and returns Ok(()) to halt.
+    doom_loop_halt: bool,
+
     /// If the conversation log was restored from a checkpoint on open,
     /// this holds the number of recovered messages. It is emitted once
     /// as a `TurnEvent::Recovered` at the start of the first turn so
@@ -272,6 +277,7 @@ impl Executor {
             verifier_bus: None,
             undo_stack,
             plan_mode: false,
+            doom_loop_halt: false,
             recovered_messages: None,
             session_id: String::new(),
             task_spawner: None,
@@ -686,13 +692,39 @@ impl Executor {
     /// threshold is crossed, also emit a `TurnEvent::DoomLoopDetected`
     /// on `event_tx` and a `MetricEvent::DoomLoop` to the metrics
     /// log. Returns `Some(hint)` to inject into the conversation.
+    /// When the circuit breaker fires (cumulative hits >= doom_loop_max_hits),
+    /// auto-switches to plan mode or halts the turn.
     pub fn observe_tool_outcome(
         &mut self,
         tool: &str,
         outcome: &crate::shared::ToolOutcome,
         event_tx: &mpsc::Sender<TurnEvent>,
     ) -> Option<String> {
-        self.cost.observe_tool_outcome(tool, outcome, event_tx)
+        let max_hits = crate::shared::read_shared_config(&self.config)
+            .tools
+            .doom_loop_max_hits;
+        let (hint, remediation) = self
+            .cost
+            .observe_tool_outcome(tool, outcome, event_tx, max_hits);
+        if let Some(rem) = remediation {
+            if self.plan_mode {
+                // R2: already in plan mode — hard halt. The turn loop
+                // will see `doom_loop_halt` and return Ok(()).
+                self.doom_loop_halt = true;
+                tracing::warn!(
+                    hits = rem.hits,
+                    "doom-loop circuit breaker: already in plan mode, halting turn"
+                );
+            } else {
+                // R1: auto-switch to plan mode.
+                self.set_plan_mode(true);
+                tracing::warn!(
+                    hits = rem.hits,
+                    "doom-loop circuit breaker: auto-switched to plan mode"
+                );
+            }
+        }
+        hint
     }
 
     /// Install a full system-prompt override (e.g. from `--system`).

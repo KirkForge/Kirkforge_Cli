@@ -221,6 +221,13 @@ pub(super) fn apply_env_overrides(cfg: &mut Config) {
         }
     }
 
+    // KF_CODE_DOOM_LOOP_ACTION
+    if let Ok(val) = std::env::var("KF_CODE_DOOM_LOOP_ACTION") {
+        if !val.is_empty() {
+            cfg.tools.doom_loop_action = val;
+        }
+    }
+
     // KF_CODE_MAX_BACKGROUND_TASKS
     if let Ok(val) = std::env::var("KF_CODE_MAX_BACKGROUND_TASKS") {
         if let Ok(n) = val.parse::<usize>() {

@@ -136,4 +136,13 @@ pub enum TurnEvent {
         action: String,
         hits: usize,
     },
+
+    /// Emitted when a `FinishReason::Length` continuation round starts.
+    /// `round` is 1-indexed (first continuation = 1), `max` is the
+    /// configured `max_continuation_rounds`. The TUI renders this as
+    /// "⟳ 3/5" in the status bar.
+    ContinuationRound {
+        round: usize,
+        max: usize,
+    },
 }

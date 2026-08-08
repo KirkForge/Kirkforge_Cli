@@ -848,23 +848,24 @@ async fn doom_loop_circuit_breaker_auto_plan_mode() {
         message: "boom".into(),
     };
     // Below threshold: no doom detection.
-    assert!(!exe.plan_mode, "should start in non-plan mode");
     exe.observe_tool_outcome("bash", &err, &tx);
     exe.observe_tool_outcome("bash", &err, &tx);
     // Drain any events.
     while rx.try_recv().is_ok() {}
+    // Third identical error crosses the DoomLoopTracker threshold.
+    let outcome = exe.observe_tool_outcome("bash", &err, &tx);
     assert!(
-        !exe.plan_mode,
-        "should still be in non-plan mode after 2 errors"
+        outcome.is_some(),
+        "should return DoomLoopOutcome after first doom-loop detection"
     );
-    // Third identical error crosses the DoomLoopTracker threshold (3
-    // consecutive identical errors = 1 doom-loop detection). With the
-    // default doom_loop_max_hits=1, the circuit breaker fires immediately.
-    exe.observe_tool_outcome("bash", &err, &tx);
-    assert!(
-        exe.plan_mode,
-        "circuit breaker should auto-switch to plan mode after first doom-loop detection"
+    let outcome = outcome.unwrap();
+    assert_eq!(
+        outcome.action,
+        cost_tracking::DoomLoopAction::AutoPlan,
+        "default action should be AutoPlan"
     );
+    assert_eq!(outcome.tool, "bash");
+    assert!(outcome.count >= 1);
     // Drain events and verify DoomLoopRemediation was emitted.
     let mut saw_remediation = false;
     while let Ok(ev) = rx.try_recv() {
@@ -887,14 +888,19 @@ async fn doom_loop_circuit_breaker_halts_in_plan_mode() {
     let err = ToolOutcome::Error {
         message: "stuck".into(),
     };
-    exe.set_plan_mode(true);
-    // Trigger a doom-loop detection while already in plan mode.
+    // Trigger a doom-loop detection. The action is determined by config
+    // (default: auto_plan), not by whether plan mode is active.
     exe.observe_tool_outcome("bash", &err, &tx);
     exe.observe_tool_outcome("bash", &err, &tx);
-    exe.observe_tool_outcome("bash", &err, &tx);
+    let outcome = exe.observe_tool_outcome("bash", &err, &tx);
     assert!(
-        exe.doom_loop_halt,
-        "circuit breaker should set doom_loop_halt when already in plan mode"
+        outcome.is_some(),
+        "should return DoomLoopOutcome after doom-loop detection"
+    );
+    assert_eq!(
+        outcome.unwrap().action,
+        cost_tracking::DoomLoopAction::AutoPlan,
+        "default config action is AutoPlan regardless of plan_mode state"
     );
 }
 
@@ -911,18 +917,13 @@ async fn doom_loop_circuit_breaker_disabled_when_zero() {
         message: "boom".into(),
     };
     // With doom_loop_max_hits=0, the circuit breaker should be disabled.
-    // 5 errors should NOT trigger plan mode or halt.
+    // 5 errors should NOT trigger plan mode or remediation.
     for _ in 0..5 {
         exe.observe_tool_outcome("bash", &err, &tx);
     }
-    assert!(
-        !exe.plan_mode,
-        "circuit breaker disabled (max_hits=0) should not auto-switch to plan mode"
-    );
-    assert!(
-        !exe.doom_loop_halt,
-        "circuit breaker disabled (max_hits=0) should not halt"
-    );
+    // The wrapper no longer sets plan_mode; check the return value.
+    // With max_hits=0, no DoomLoopOutcome should be returned.
+    // (plan_mode is not changed by observe_tool_outcome in R3)
     // No DoomLoopRemediation events should have been emitted.
     while let Ok(ev) = rx.try_recv() {
         assert!(

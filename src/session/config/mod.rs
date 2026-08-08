@@ -413,6 +413,9 @@ fn merge_toml_into_config(cfg: &mut Config, table: toml::Table) {
     if let Some(Value::Integer(v)) = table.get("doom_loop_max_hits") {
         cfg.tools.doom_loop_max_hits = (*v).max(0) as usize;
     }
+    if let Some(Value::String(v)) = table.get("doom_loop_action") {
+        cfg.tools.doom_loop_action = v.clone();
+    }
     if let Some(Value::Integer(v)) = table.get("max_background_tasks") {
         cfg.tools.max_background_tasks = (*v as usize).clamp(1, 64);
     }

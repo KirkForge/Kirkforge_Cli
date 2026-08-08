@@ -302,7 +302,9 @@ with a `"kind"` tag.
 `ToolConfig.max_continuation_rounds` (default 5, clamped 0–50) caps how many
 times the turn loop will continue after `FinishReason::Length`. When the cap
 is hit, the turn ends with a clear error message. Set to 0 to disable
-continuation entirely (treat `Length` as `Stop`). Env override:
+continuation entirely (treat `Length` as `Stop`). Each continuation round
+emits `TurnEvent::ContinuationRound { round, max }`, which the TUI surfaces
+as "⟳ round/max" in the status bar (WO 23.9-R3). Env override:
 `KF_CODE_MAX_CONTINUATION_ROUNDS`.
 
 `ToolConfig.max_background_tasks` (default 4, clamped 1–64) controls the

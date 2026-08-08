@@ -16,6 +16,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::mpsc;
 
+use super::cost_tracking;
 use super::helpers::*;
 use super::types::{ApprovalDecision, IterationOutcome, TurnEvent, PLAN_COMPLETE_MARKER};
 use super::{ApprovalRequest, Executor};
@@ -331,6 +332,15 @@ impl Executor {
                             return Ok(());
                         }
                         continuation_count += 1;
+                        crate::send_or_warn!(
+                            event_tx
+                                .send(TurnEvent::ContinuationRound {
+                                    round: continuation_count,
+                                    max: max_continuation_rounds,
+                                })
+                                .await,
+                            "TurnEvent receiver dropped; discarding event"
+                        );
                         if continuation_count > max_continuation_rounds {
                             let msg = format!(
                                 "Max continuation rounds reached ({max_continuation_rounds}). \
@@ -971,25 +981,31 @@ impl Executor {
             let outcome_for_emit = outcome.clone();
             let edit_diff =
                 handle_tool_outcome(outcome, tc, event_tx, &mut self.conversation).await?;
-            if let Some(hint) = self.observe_tool_outcome(&tc.name, &outcome_for_emit, event_tx) {
+            if let Some(outcome) = self.observe_tool_outcome(&tc.name, &outcome_for_emit, event_tx) {
                 self.conversation
                     .append_async(Message {
                         role: Role::User,
-                        content: hint,
+                        content: outcome.hint.clone(),
                         ..Default::default()
                     })
                     .await?;
-            }
-            if self.doom_loop_halt {
-                crate::send_or_warn!(
-                    event_tx
-                        .send(TurnEvent::Error(
-                            "Doom loop detected in plan mode. Halting turn.".into()
-                        ))
-                        .await,
-                    "TurnEvent receiver dropped; discarding event"
-                );
-                return Ok(());
+                match outcome.action {
+                    cost_tracking::DoomLoopAction::AutoPlan => {
+                        self.set_plan_mode(true);
+                        self.conversation.append_async(Message {
+                            role: Role::System,
+                            content: "[System: doom loop detected — switched to plan mode. Read-only tools only.]".into(),
+                            ..Default::default()
+                        }).await?;
+                    }
+                    cost_tracking::DoomLoopAction::Halt => {
+                        return Err(anyhow::anyhow!(
+                            "doom loop halted: '{}' failed {} times",
+                            outcome.tool, outcome.count
+                        ));
+                    }
+                    cost_tracking::DoomLoopAction::WarnOnly => {}
+                }
             }
             record(MetricEvent::ToolCall {
                 name: tc.name.clone(),
@@ -1058,25 +1074,31 @@ impl Executor {
                 None,
             );
         }
-        if let Some(hint) = self.observe_tool_outcome(&tc.name, &outcome_for_emit, event_tx) {
+        if let Some(outcome) = self.observe_tool_outcome(&tc.name, &outcome_for_emit, event_tx) {
             self.conversation
                 .append_async(Message {
                     role: Role::User,
-                    content: hint,
+                    content: outcome.hint.clone(),
                     ..Default::default()
                 })
                 .await?;
-        }
-        if self.doom_loop_halt {
-            crate::send_or_warn!(
-                event_tx
-                    .send(TurnEvent::Error(
-                        "Doom loop detected in plan mode. Halting turn.".into()
-                    ))
-                    .await,
-                "TurnEvent receiver dropped; discarding event"
-            );
-            return Ok(());
+            match outcome.action {
+                cost_tracking::DoomLoopAction::AutoPlan => {
+                    self.set_plan_mode(true);
+                    self.conversation.append_async(Message {
+                        role: Role::System,
+                        content: "[System: doom loop detected — switched to plan mode. Read-only tools only.]".into(),
+                        ..Default::default()
+                    }).await?;
+                }
+                cost_tracking::DoomLoopAction::Halt => {
+                    return Err(anyhow::anyhow!(
+                        "doom loop halted: '{}' failed {} times",
+                        outcome.tool, outcome.count
+                    ));
+                }
+                cost_tracking::DoomLoopAction::WarnOnly => {}
+            }
         }
         record(MetricEvent::ToolCall {
             name: tc.name.clone(),

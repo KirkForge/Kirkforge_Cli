@@ -31,6 +31,7 @@ pub(crate) mod turn;
 pub(crate) mod types;
 
 pub use approval::{ApprovalRequest, ApprovalResponder, ApprovalResponse};
+pub use cost_tracking::{DoomLoopAction, DoomLoopOutcome};
 pub use loop_::{DoomHit, DoomLoopTracker};
 pub use scout::{ScoutSubagent, SCOUT_TOOLS};
 pub use types::{CompactHookStats, TurnEvent};
@@ -63,11 +64,6 @@ pub struct Executor {
     /// cannot implement while it is still "thinking". Entered via
     /// `/plan` and exited via `/implement` or user approval.
     plan_mode: bool,
-
-    /// Set to true when the doom-loop circuit breaker fires while
-    /// already in plan mode (R2 hard halt). The turn loop checks this
-    /// after each doom-loop observation and returns Ok(()) to halt.
-    doom_loop_halt: bool,
 
     /// If the conversation log was restored from a checkpoint on open,
     /// this holds the number of recovered messages. It is emitted once
@@ -277,7 +273,6 @@ impl Executor {
             verifier_bus: None,
             undo_stack,
             plan_mode: false,
-            doom_loop_halt: false,
             recovered_messages: None,
             session_id: String::new(),
             task_spawner: None,
@@ -691,40 +686,23 @@ impl Executor {
     /// Feed a tool outcome to the doom-loop detector. If the
     /// threshold is crossed, also emit a `TurnEvent::DoomLoopDetected`
     /// on `event_tx` and a `MetricEvent::DoomLoop` to the metrics
-    /// log. Returns `Some(hint)` to inject into the conversation.
-    /// When the circuit breaker fires (cumulative hits >= doom_loop_max_hits),
-    /// auto-switches to plan mode or halts the turn.
+    /// log. Returns `Some(DoomLoopOutcome)` with the hint and
+    /// the configured remediation action when the circuit breaker fires.
     pub fn observe_tool_outcome(
         &mut self,
         tool: &str,
         outcome: &crate::shared::ToolOutcome,
         event_tx: &mpsc::Sender<TurnEvent>,
-    ) -> Option<String> {
-        let max_hits = crate::shared::read_shared_config(&self.config)
+    ) -> Option<DoomLoopOutcome> {
+        let cfg = crate::shared::read_shared_config(&self.config);
+        let action = cfg
             .tools
-            .doom_loop_max_hits;
-        let (hint, remediation) = self
-            .cost
-            .observe_tool_outcome(tool, outcome, event_tx, max_hits);
-        if let Some(rem) = remediation {
-            if self.plan_mode {
-                // R2: already in plan mode — hard halt. The turn loop
-                // will see `doom_loop_halt` and return Ok(()).
-                self.doom_loop_halt = true;
-                tracing::warn!(
-                    hits = rem.hits,
-                    "doom-loop circuit breaker: already in plan mode, halting turn"
-                );
-            } else {
-                // R1: auto-switch to plan mode.
-                self.set_plan_mode(true);
-                tracing::warn!(
-                    hits = rem.hits,
-                    "doom-loop circuit breaker: auto-switched to plan mode"
-                );
-            }
-        }
-        hint
+            .doom_loop_action
+            .parse::<DoomLoopAction>()
+            .unwrap_or(DoomLoopAction::AutoPlan);
+        let max_hits = cfg.tools.doom_loop_max_hits;
+        self.cost
+            .observe_tool_outcome(tool, outcome, event_tx, max_hits, action)
     }
 
     /// Install a full system-prompt override (e.g. from `--system`).

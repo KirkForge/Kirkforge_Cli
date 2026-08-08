@@ -65,6 +65,10 @@ fn default_doom_loop_max_hits() -> usize {
     1
 }
 
+fn default_doom_loop_action() -> String {
+    "auto_plan".to_string()
+}
+
 fn default_plugin_sources() -> HashMap<String, PathBuf> {
     let mut sources = HashMap::new();
     let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -145,6 +149,8 @@ pub struct ToolConfig {
     pub budget_approaching_ratio: f64,
     #[serde(default = "default_doom_loop_max_hits")]
     pub doom_loop_max_hits: usize,
+    #[serde(default = "default_doom_loop_action")]
+    pub doom_loop_action: String,
 }
 
 fn default_max_plugin_trust() -> kf_plugin_sdk::TrustTier {
@@ -184,6 +190,7 @@ impl Default for ToolConfig {
             budget_ceiling: default_budget_ceiling(),
             budget_approaching_ratio: default_budget_approaching_ratio(),
             doom_loop_max_hits: default_doom_loop_max_hits(),
+            doom_loop_action: default_doom_loop_action(),
         }
     }
 }
@@ -201,6 +208,7 @@ mod tests {
         assert_eq!(cfg.minify_above_bytes, 4096);
         assert_eq!(cfg.max_continuation_rounds, 5);
         assert_eq!(cfg.doom_loop_max_hits, 1);
+        assert_eq!(cfg.doom_loop_action, "auto_plan");
     }
 
     #[test]
@@ -210,12 +218,14 @@ stratum_mode = "lite"
 budget_ceiling = 50000
 budget_approaching_ratio = 0.9
 minify_above_bytes = 1024
+doom_loop_action = "halt"
 "#;
         let cfg: ToolConfig = toml::from_str(toml).expect("parse");
         assert_eq!(cfg.stratum_mode.as_deref(), Some("lite"));
         assert_eq!(cfg.budget_ceiling, 50_000);
         assert!((cfg.budget_approaching_ratio - 0.9).abs() < f64::EPSILON);
         assert_eq!(cfg.minify_above_bytes, 1024);
+        assert_eq!(cfg.doom_loop_action, "halt");
     }
 
     #[test]

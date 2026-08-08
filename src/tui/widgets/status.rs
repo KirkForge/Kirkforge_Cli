@@ -54,6 +54,18 @@ pub fn render_status(f: &mut Frame, area: Rect, state: &AppState) {
         Span::raw(String::new())
     };
 
+    // ── Continuation round indicator (WO 23.9-R3) ──────────────
+    // Active status info: "⟳ 3/5" during FinishReason::Length loops.
+    // Never-drop (like sandbox) so the user always sees continuation state.
+    let continuation_span: Span = if let Some((round, max)) = state.continuation {
+        Span::styled(
+            format!("⟳ {round}/{max} "),
+            Style::default().fg(Color::Yellow),
+        )
+    } else {
+        Span::raw(String::new())
+    };
+
     // ── Budget indicator (v1.2-p6) ─────────────────────────────────
     // If we have both a connected model and a non-zero per-turn
     // prompt size, show "↑12.4K/128K (10%)" with a color that tells
@@ -147,6 +159,7 @@ pub fn render_status(f: &mut Frame, area: Rect, state: &AppState) {
         collapse_span,
         sandbox_span,
         tool_calls_span,
+        continuation_span,
         skills_span,
         plugin_span,
         sent_span,
@@ -157,9 +170,9 @@ pub fn render_status(f: &mut Frame, area: Rect, state: &AppState) {
     ];
 
     // Drop order: drop first → last. Index into `right`.
-    // 4=plugin_span, 3=skills_span, 2=tool_calls_span, 0=collapse_span.
-    // Never-drop: 1=sandbox, 5=sent, 6=received, 7=cost, 8=separator, 9=elapsed.
-    let drop_order: [usize; 4] = [4, 3, 2, 0];
+    // 5=plugin_span, 4=skills_span, 2=tool_calls_span, 0=collapse_span.
+    // Never-drop: 1=sandbox, 3=continuation, 6=sent, 7=received, 8=cost, 9=separator, 10=elapsed.
+    let drop_order: [usize; 4] = [5, 4, 2, 0];
 
     let right_width = |right: &[Span]| right.iter().map(|s| span_width(s)).sum::<usize>();
     let fits = |right: &[Span]| area.width as usize >= left_len + right_width(right) + 2;

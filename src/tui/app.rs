@@ -200,7 +200,7 @@ pub struct SearchState {
 ///
 /// # ponytail: deferred — AppState decomposition (WO 20.6.0 U1)
 ///
-/// This struct has ~55 fields. Splitting into sub-structs (ApprovalState,
+/// This struct has ~66 fields. Splitting into sub-structs (ApprovalState,
 /// SearchState, DaemonState, RenderCache, GenerationState) would improve
 /// readability and reduce borrow-checker workarounds in the render path.
 /// However, the fields are accessed across 15+ files (keys, events,

@@ -1393,7 +1393,7 @@ impl Executor {
                 continue;
             }
 
-            let Some((invocation, outcome, resolved_path, _duration_ms)) = results.remove(&idx)
+            let Some((invocation, outcome, resolved_path, duration_ms)) = results.remove(&idx)
             else {
                 let err = format!("Tool call {} did not return an outcome", tc.id);
                 crate::send_or_warn!(
@@ -1469,7 +1469,7 @@ impl Executor {
                 &invocation,
                 outcome,
                 resolved_path.as_deref(),
-                0,
+                duration_ms,
                 approval_sender,
                 cancelled,
                 event_tx,

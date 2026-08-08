@@ -206,7 +206,7 @@ impl MemoryStore {
     /// terms. Ties are broken by fact name for determinism.
     ///
     /// Facts are selected greedily by score until the estimated token count
-    /// (chars / 4) reaches `max_tokens`. `top_n` caps how many facts are
+    /// reaches `max_tokens`. `top_n` caps how many facts are
     /// considered regardless of budget.
     pub fn select_for_context(
         &self,

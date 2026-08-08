@@ -8,7 +8,7 @@
 
 ## WO 22 series — nearly complete
 
-All critical fixes done. Remaining items are explicitly deferred in PONYTAIL-DEBT.md.
+All critical fixes done. Remaining items are explicitly deferred below.
 
 ### Per-workorder status (verified against code)
 
@@ -17,12 +17,12 @@ All critical fixes done. Remaining items are explicitly deferred in PONYTAIL-DEB
 | 22.1 | R1 (landlock ABI rewrite) | — | — | DONE |
 | 22.2 | R1 (default plugins: stratum+kf-budget) | — | — | DONE |
 | 22.3 | R1 (MCP URI validation), R2 (capabilities handshake) | — | — | DONE |
-| 22.4 | R1 (MAX_FACTS=3, FNV hash, rate limit) | — | R2(TUI visibility), R3(config flag), R4(cross-turn dedup) | PONYTAIL-DEBT |
-| 22.5 | R1(F2-F5 Enter handlers), R2(jobs_dirty refresh) | — | R3(GitOperationEvent documented), R4(file-tool duration) | PONYTAIL-DEBT |
-| 22.6 | R1(token estimation), R2(offload store per-session), R3(SearchState extraction), R4(PostHook split), R5(CorrectionResult file/line) | — | R6(compaction tail pinning) | PONYTAIL-DEBT |
+| 22.4 | R1 (MAX_FACTS=3, FNV hash, rate limit) | — | R2(TUI visibility), R3(config flag), R4(cross-turn dedup) | deferred |
+| 22.5 | R1(F2-F5 Enter handlers), R2(jobs_dirty refresh) | — | R3(GitOperationEvent documented), R4(file-tool duration) | deferred |
+| 22.6 | R1(token estimation), R2(offload store per-session), R3(SearchState extraction), R4(PostHook split), R5(CorrectionResult file/line) | — | R6(compaction tail pinning) | deferred |
 | 22.7 | R1-R6 (all done) | — | — | DONE |
 | 22.8 | R1-R18 (all doc fixes) | — | — | DONE |
-| 22.9 | R1(moot), R3(not a bug), R5(done=22.7-R4), R6(done=22.7-R1), R7(ADR-070), R8(ADR-070) | — | R2(JSON-schema), R4(Bedrock/Vertex tests) | PONYTAIL-DEBT |
+| 22.9 | R1(moot), R3(not a bug), R5(done=22.7-R4), R6(done=22.7-R1), R7(ADR-070), R8(ADR-070) | — | R2(JSON-schema), R4(Bedrock/Vertex tests) | deferred |
 | 22.10 | R1(Skipped→CorrectionResult), R4(=22.7-R5 done), R5(format_verdict_report documented) | — | R2(=22.6-R2 done), R3(=22.7-R3 done) | DONE |
 | 22.11 | R1-R4 (catch_unwind, Skipped, pub(crate)) | — | — | DONE |
 | 22.12 | R1 (28 ADRs updated, path literals fixed) | — | — | DONE |
@@ -48,7 +48,7 @@ All critical fixes done. Remaining items are explicitly deferred in PONYTAIL-DEB
 - `de4b5ee` fix(22.3): MCP URI validation + capabilities
 - `ce3518b` fix(22.12): ADR path literal drift
 
-## Remaining deferred items (all tracked in PONYTAIL-DEBT.md)
+## Remaining deferred items
 
 ### High priority
 

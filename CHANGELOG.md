@@ -6,6 +6,30 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Changed
+- Documentation audit: merged KIRK-BENCH.md spec content into docs/TECHNICAL.md Benchmarks section; deleted KIRK-BENCH.md from repo root (tech content belongs in the manual, not a standalone slop file).
+- Fixed stale env var: KIRKFORGE_BUDGET_CEILING → KF_CODE_BUDGET_CEILING in KIRK-BENCH.md (now TECHNICAL.md) and ADR-066.
+- Fixed stale feature list: README.md no longer lists deleted Draw/Video as compiled-in features.
+- Fixed stale test count: kf-budget-core README now shows actual count (175) instead of 679.
+- Fixed stale ponytail comment: TECHNICAL.md Stratum section no longer claims "no content-type-specific transforms" — MinifyTransform is registered.
+- Fixed stale ADR paths: 8 ADRs updated with current kf-* names (028, 007, 016, 019, 035, 040, 047, 058) replacing kirkforge-* references.
+- Fixed ADR-047: "process-global store" → "session store" (offload store is per-session, not process-global).
+- Fixed app.rs comment: "~55 fields" → "~63 fields" (actual count).
+- Deleted orphan bench task: use_draw_render.toml (references deleted draw_render tool).
+- Deleted docs/reviews/ (4 review files were never asked to be tracked in the repo).
+- Deleted PONYTAIL-DEBT.md from repo (not a tracked workflow — debts folded into state.md and ADRs).
+- Updated AGENTS.md doc-placement rule: removed PONYTAIL-DEBT.md exception and docs/reviews/ instruction.
+- Updated state.md: removed PONYTAIL-DEBT.md references; deferred items now tracked in state.md directly.
+- Updated ADR-070: replaced PONYTAIL-DEBT.md tracking references with state.md.
+
+### Removed
+- KIRK-BENCH.md (content merged into docs/TECHNICAL.md).
+- docs/reviews/ directory (4 review post-mortems not belonging in the codebase).
+- PONYTAIL-DEBT.md (debts tracked in state.md and ADRs).
+- benches/tasks/use_draw_render.toml (orphan referencing deleted draw_render tool).
+
+## [Unreleased]
+
+### Changed
 - WO 20.2.0: `tool_choice` + `max_tokens` config + adapter trait wiring (`set_tool_choice`, `set_max_tokens`). `build_anthropic_body` is now 9-arg; extended-thinking kept separate from completion `max_tokens` (dedicated `budget_tokens` + `supports_thinking` guard). CONFIG_FIELD_COUNT 84→85. (#23)
 - WO 20.0.7: cache breakpoint cap holds at 4 with tools (CRIT-1); `store_get` resolves Stratum offload markers (CRIT-2). (#23)
 - WO 20.0.9: `draw` feature now non-default (opt in via `--features draw`).

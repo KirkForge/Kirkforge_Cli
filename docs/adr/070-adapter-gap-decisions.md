@@ -65,7 +65,7 @@ parsing handles raw text. Needed for future reliability improvements.
   `RequestConfig`.
 - ADR documenting structured output decision and provider support matrix.
 
-**Tracking:** PONYTAIL-DEBT.md.
+**Tracking:** state.md "Remaining deferred items".
 
 ### R4: Bedrock/Vertex test hardening — DEFER-229-R4
 
@@ -80,7 +80,7 @@ routing. Signing correctness is validated in production.
 - Add `#[ignore]` integration tests for Vertex request signing with mock GCP
   credentials.
 
-**Tracking:** PONYTAIL-DEBT.md.
+**Tracking:** state.md "Remaining deferred items".
 
 ### R6: Keychain stub assessment — DEFER-229-R6
 
@@ -93,7 +93,7 @@ routing. Signing correctness is validated in production.
   without a consumer.
 - Remove `keyring` from `Cargo.toml` if unused.
 
-**Tracking:** PONYTAIL-DEBT.md.
+**Tracking:** state.md "Remaining deferred items".
 
 ### R7: Native provider decision — this ADR
 

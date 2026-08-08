@@ -392,9 +392,10 @@ by content type and compacts bloated payloads *before* they enter the context
 window. Four modes: `off`, `lite`, `full`, `ultra`. The pipeline classifies
 content and applies size-based truncation with optional offload storage.
 
-// ponytail: no content-type-specific transforms or query-based relevance
-// filtering yet; the pipeline is mode-gated truncation + offload.
-// Upgrade path: per-content-type transform stages, relevance scoring.
+// ponytail: MinifyTransform registered (source code minification);
+// query-based relevance filtering and additional content-type transforms
+// still deferred.
+// Upgrade path: query-based relevance scoring, per-content-type stages.
 
 Stratum ships as a compiled-in module (when the `stratum` feature is on,
 ADR-046) or as a standalone `stratum` binary (feature off, shell fallback).
@@ -605,39 +606,159 @@ lets the agent loop and bench harness run a named template via a tool call.
 
 ---
 
-## Benchmarks
+## Benchmarks (KIRK-BENCH)
 
-The benchmark system measures agent capability on coding tasks across three
-difficulty levels. The task set is organized against the [KIRK-BENCH](../KIRK-BENCH.md)
-spec: eight categories (Repository Understanding, Refactoring, Bug Fixes, New
-Features, Verification, Context Intelligence, Real Engineering, Cost), 40
-numbered tasks, one universal scoring format, 10 hero benchmarks, and one
-signature challenge — the **Token Budget Challenge** (WO 14.7, ADR-0066). The
-spec documents 40 tasks; 31 are implemented today and mapped to the categories
-in `KIRK-BENCH.md`'s mapping table; the remaining ~9 are listed as planned
-(honest deferral — each exercises a specific feature and is a future WO).
+The benchmark system measures agent capability on coding tasks. The spec
+defines eight categories (A–H), 40 numbered tasks, one universal scoring
+format, 10 hero benchmarks, and one signature challenge — the **Token Budget
+Challenge** (WO 14.7, ADR-0066).
 
-The 31 implemented tasks break down as follows: 20 are single-file coding-skills tasks
-(Rust refactors, bug fixes, doc/test additions), 4 are plugin-tool tasks
-(`use_stratum_compress`, `use_budget_check`,
-`use_lsp_query`) that exercise the Stratum, Plugin3, and LSP tool
-wrappers respectively, 1 is a workflow-tool task (`use_workflow_run`),
-5 are multi-file/multi-turn tasks (`multi_file_pattern`, `test_fix_cycle`,
-`pr_review`, `refactor_trait_extraction_multi`, `debug_log_trace`) added in
-WO 9.9 to exercise real agent skills (pattern-following, test-fix cycles,
-PR review, trait extraction, stack-trace debugging), and 1 is the signature
-challenge (`token_budget_challenge`, WO 14.7). Each task is a TOML
-file with a prompt, optional setup files, and a deterministic verify spec
-(`test_passes`, `file_contains`, or `command_exits_zero`). All tasks use
-synthetic `setup_files` so they do not depend on the live repo state.
+### Categories
 
-The 5 multi-file tasks use `requires_model = true` (a `BenchTask` field
-added in WO 9.9, default false) because their verify specs check
-*post-model* content (cargo build/test, grep for the new symbol the model
-was asked to create). `bench verify-only` skips these and reports
-`[SKIP] skipped (requires model)`; `bench run` runs them normally. This
-fixes the WO 9.0 anti-pattern where verify specs grepped setup content,
-passing `verify-only` trivially without validating the model's work.
+- **A — Repository Understanding** (5 tasks): Find Dead Code, Dependency
+  Graph Accuracy, Call Graph Generation, Explain Module, Cross-Repository
+  Search. *Metrics: precision, false positives, runtime.*
+- **B — Refactoring** (5 tasks): Rename Public API, Extract Trait, Extract
+  Module, Split Giant File, Remove Duplication.
+- **C — Bug Fixes** (6 tasks): Fix Compilation Error, Fix Clippy Lints, Fix
+  Unit Test, Fix Integration Test, Fix Panic, Resolve Borrow Checker Error.
+- **D — New Features** (5 tasks): Add CLI Flag, Add REST Endpoint, Add Config
+  Option, Implement Missing Trait, Implement TODO Stub.
+- **E — Verification** (5 tasks): Build Verification, Formatter Verification,
+  Lint Verification, Test Verification, Self Repair. *These are the
+  differentiators.*
+- **F — Context Intelligence** (4 tasks): Large Repository Navigation, Semantic
+  Retrieval, Context Compression, Budget Enforcement.
+- **G — Real Engineering** (5 tasks): Multi-file Feature, Large Refactor,
+  Merge Conflict Resolution, PR Review, Regression Detection.
+- **H — Cost** (5 tasks): Token Efficiency, Dollar Cost, Time, Retry Count,
+  Human Intervention.
+
+### Universal scoring
+
+Every benchmark emits the same metrics block:
+
+```
+Benchmark:          Rename Public API
+Success:            PASS
+Compilation:        PASS
+Tests:              PASS
+Lint:               PASS
+Verification:       PASS
+Retries:            1
+Elapsed:            19.4 s
+Input Tokens:       8,412
+Output Tokens:      1,153
+Compression Ratio:  63%
+Budget Violations:  0
+Provider:           GPT-5
+Cost:               £0.12
+```
+
+### Hero benchmarks
+
+The 10 hero benchmarks are the public scoreboard:
+
+1. Fix failing Rust build
+2. Rename API across workspace
+3. Implement missing feature
+4. Resolve merge conflicts
+5. Refactor 100-file workspace
+6. Explain unfamiliar codebase
+7. Reduce token usage on a large repository
+8. Review a pull request and identify defects
+9. Recover automatically from a failed verification step
+10. Complete an end-to-end feature (implementation, tests, docs, verification)
+
+### Task TOML format
+
+Each task file in `benches/tasks/` is a TOML file:
+
+```toml
+name = "fix_clippy_naming"
+difficulty = "easy"
+category = "C"            # A–H, matching the spec categories
+requires_model = false    # true = skipped by bench verify-only
+
+[setup]
+"Cargo.toml" = """..."""
+
+[verify]
+type = "command_exits_zero"
+command = "grep -q 'pub fn first' src/lib.rs"
+```
+
+The `category` field enables automated reporting by category. Tasks without a
+`category` field are reported under "Uncategorised".
+
+### Implemented task mapping (30 tasks)
+
+30 implemented tasks cover 18 of the 40 spec slots. 10 hero benchmarks
+cross-check the highest-value categories. 1 task (`use_draw_render`) was
+removed when the draw plugin was deleted; it is no longer in the task set.
+
+| Existing task | Spec task(s) | Category | Coverage |
+|---|---|---|---|
+| `add_cli_flag.toml` | 17 Add CLI Flag | D | full |
+| `add_doc_comment.toml` | 21 Implement TODO Stub | D | partial |
+| `add_enum_variant.toml` | 17 Add CLI Flag | D | partial |
+| `add_error_handling.toml` | 15 Fix Panic | C | partial |
+| `add_error_variant.toml` | 19 Add Config Option | D | partial |
+| `add_struct_field.toml` | 19 Add Config Option | D | partial |
+| `add_test_for_function.toml` | 25 Test Verification | E | partial |
+| `add_test_module.toml` | 25 Test Verification | E | partial |
+| `add_adr.toml` | 21 Implement TODO Stub | D | partial |
+| `debug_log_trace.toml` | 15 Fix Panic | C | full |
+| `extract_module.toml` | 8 Extract Module | B | full |
+| `extract_trait.toml` | 7 Extract Trait | B | full |
+| `fix_borrow_error.toml` | 16 Resolve Borrow Checker Error | C | full |
+| `fix_clippy_naming.toml` | 12 Fix Clippy Lints | C | full |
+| `fix_clippy_warning.toml` | 12 Fix Clippy Lints | C | full |
+| `fix_failing_test.toml` | 13 Fix Unit Test | C | full |
+| `fix_lifetime_error.toml` | 16 Resolve Borrow Checker Error | C | partial |
+| `inline_function.toml` | 10 Remove Duplication | B | partial |
+| `multi_file_pattern.toml` | 31 Multi-file Feature | G | full |
+| `pr_review.toml` | 34 PR Review | G | full |
+| `refactor_extract_function.toml` | 10 Remove Duplication | B | full |
+| `refactor_trait_extraction_multi.toml` | 7 Extract Trait | B | full |
+| `rename_function.toml` | 6 Rename Public API | B | full |
+| `rename_module.toml` | 6 Rename Public API | B | partial |
+| `test_fix_cycle.toml` | 26 Self Repair | E | full |
+| `use_budget_check.toml` | 30 Budget Enforcement | F | partial |
+| `use_lsp_query.toml` | 28 Semantic Retrieval | F | partial |
+| `use_stratum_compress.toml` | 29 Context Compression | F | full |
+| `use_workflow_run.toml` | 31 Multi-file Feature | G | partial |
+| `token_budget_challenge.toml` | 30 Budget Enforcement | F | full (signature) |
+
+### Planned tasks (honest deferral)
+
+18 spec tasks are not yet implemented. Each exercises a specific feature
+and is a future workorder.
+
+| Spec task | Category | Exercises |
+|---|---|---|
+| 1 Find Dead Code | A | tree-sitter symbol graph + unreferenced-symbol query |
+| 2 Dependency Graph Accuracy | A | crate-level dep graph generation |
+| 3 Call Graph Generation | A | per-symbol call graph |
+| 4 Explain Module | A | module summarisation without hallucination |
+| 5 Cross-Repository Search | A | trait-impl search across workspace |
+| 9 Split Giant File | B | 2500-line file split |
+| 18 Add REST Endpoint | D | non-Rust task setup |
+| 22 Build Verification | E | standalone build-verify task |
+| 23 Formatter Verification | E | standalone fmt-verify task |
+| 24 Lint Verification | E | standalone lint-verify task |
+| 27 Large Repository Navigation | F | context index at Linux-scale |
+| 32 Large Refactor | G | 50+ files |
+| 33 Merge Conflict Resolution | G | realistic conflict resolution |
+| 35 Regression Detection | G | PR regression prediction |
+| 36 Token Efficiency | H | standalone token-efficiency task |
+| 37 Dollar Cost | H | standalone cost task |
+| 38 Time | H | standalone latency task |
+| 39 Retry Count | H | standalone retry-count task |
+| 40 Human Intervention | H | standalone intervention task |
+
+3 spec tasks (Fix Compilation Error, Fix Integration Test, Implement Missing
+Trait) have no mapping yet — a known gap.
 
 The harness (`kf-bench` crate + `src/session/bench.rs`) spins up a
 headless agent session with a real model adapter, auto-approves all tool calls,

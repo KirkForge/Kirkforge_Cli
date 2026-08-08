@@ -31,7 +31,7 @@ The transcript renders as GitHub-flavored Markdown with:
 
 - If the user supplies a path, use it verbatim.
 - If no path is supplied, derive the filename from the session log path: replace the `.conv.ndjson` extension with `.md`.
-- If no session log is open, fall back to `kirkforge-transcript-YYYY-MM-DD-HHMMSS.md` in the current directory.
+- If no session log is open, fall back to `kf-code-transcript-YYYY-MM-DD-HHMMSS.md` in the current directory.
 
 ### Safety
 

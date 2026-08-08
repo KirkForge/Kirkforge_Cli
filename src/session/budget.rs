@@ -216,7 +216,7 @@ pub fn check_and_slice(
 /// replacement string if it returns one (WO 8.6).
 ///
 /// The post-tool hook (`record_tool_usage` in this module) records
-/// the `result.len() / 4` of whatever content the `ToolOutcome`
+/// the token count of whatever content the `ToolOutcome`
 /// carries. When a listener compresses the sliced display, the
 /// returned `ToolOutcome` already carries the compressed content, so
 /// the post-tool hook records the post-compression tokens
@@ -753,7 +753,7 @@ fn record_tool_usage(
     let Some(ref result) = ctx.tool_result else {
         return Ok(());
     };
-    let tokens = result.len() / 4;
+    let tokens = crate::session::prompt::count_tokens(result);
     let mut budget = budget.lock().expect("budget mutex poisoned");
     budget.record(tokens);
     let state = budget.state();

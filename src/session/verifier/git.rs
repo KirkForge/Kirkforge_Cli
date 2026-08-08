@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 /// Run the git verifier against an event.
 pub async fn verify_git(event: &BusEvent) -> Verdict {
     match event {
+        // ponytail: GitOperationEvent never emitted; this arm is dead code until dispatch produces it
         BusEvent::GitOperation(GitOperationEvent {
             args,
             output,

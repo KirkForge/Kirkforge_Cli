@@ -75,7 +75,7 @@ pub const DEFAULT_PRESERVE_RECENT: usize = 8;
 
 /// Estimate tokens for a single message.
 ///
-/// Uses the same `chars/4 + thinking + tool_calls JSON` heuristic as
+/// Uses the same `count_tokens` + thinking + tool_calls JSON heuristic as
 /// `PromptBuilder` so the compaction path reports numbers consistent
 /// with the budget checks in the request builder.
 fn estimate_message_tokens(m: &Message) -> usize {

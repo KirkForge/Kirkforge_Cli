@@ -5,17 +5,17 @@
 
 ## Context
 
-A plugin manifest (`kirkforge.toml`) declared `name`, `version`,
+A plugin manifest (`kf-code.toml`) declared `name`, `version`,
 `description`, `trust`, `api_version`, `capabilities`, `metadata` —
 but no `depends_on` field. There was no way for plugin B to declare "I
 require plugin A to be loaded first."
 
 Real example: the `stratum` plugin's `session-start` hook emits the
-active compression ruleset; the `kirkforge-plugin3` (budget) plugin's
+active compression ruleset; the `kf-plugin` (budget) plugin's
 hooks read the ruleset to decide when to compact. WO 8.6 wired the
 Stratum+Budget coordination at the executor level — but the manifest
 had no way to declare the dependency. If a user enables
-`kirkforge-plugin3` without `stratum`, the budget hooks run with no
+`kf-plugin` without `stratum`, the budget hooks run with no
 ruleset and silently degrade.
 
 ## Decision
@@ -39,7 +39,7 @@ ruleset and silently degrade.
    loaded set) produces a clear error naming the missing plugin. A
    cycle (A → B → A) produces a cycle-path error.
 
-4. **Real dependency: plugin3 → stratum.** `plugins/kirkforge-plugin3/kirkforge.toml`
+4. **Real dependency: plugin3 → stratum.** `plugins/kf-plugin/kf-code.toml`
    now declares `depends_on = ["stratum"]`, making the implicit WO 8.6
    dependency explicit in the manifest.
 

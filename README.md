@@ -35,7 +35,7 @@ Requires a running Ollama server (or set provider config for cloud models).
   for Rust, TypeScript, Python, and Go.
 - **Cost-aware** — Stratum compresses bloated inputs; Plugin3 guards token
   spend on outputs.
-- **Plugin system** — Stratum, Plugin3, Draw, and Video are compiled-in
+- **Plugin system** — Stratum and Plugin3 are compiled-in
   behind feature flags (or shell fallbacks). External plugins via
   `kf-code.toml` manifests with trust tiers and signature verification.
 - **Benchmarked** — 31 coding tasks organized against the

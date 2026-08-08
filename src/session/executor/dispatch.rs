@@ -137,6 +137,8 @@ impl Executor {
                                 success: false,
                                 message: format!("[{}] {}", entry.source, entry.message),
                                 fix: None,
+                                file: entry.file.clone(),
+                                line: entry.line,
                             });
                         }
                     }

@@ -104,11 +104,14 @@ impl CorrectionLoop {
                             )
                         };
 
+                    let file = fix.file.clone();
                     results.push(CorrectionResult {
                         verifier: decisive_name.clone(),
                         success: applied,
                         message,
                         fix: Some(fix),
+                        file: Some(file),
+                        line: None,
                     });
                     if !applied || is_suggestion {
                         break; // can't fix, or suggestion only → stop looping
@@ -123,6 +126,8 @@ impl CorrectionLoop {
                             err.description, err.details
                         ),
                         fix: None,
+                        file: err.file.clone(),
+                        line: None,
                     });
                     break; // unfixable → stop
                 }
@@ -144,6 +149,8 @@ pub struct CorrectionResult {
     pub success: bool,
     pub message: String,
     pub fix: Option<FixSuggestion>,
+    pub file: Option<std::path::PathBuf>,
+    pub line: Option<u32>,
 }
 
 /// Apply a text-based fix suggestion to the filesystem.
@@ -534,6 +541,8 @@ mod tests {
             success: true,
             message: "ok".into(),
             fix: Some(fix.clone()),
+            file: Some(fix.file.clone()),
+            line: None,
         };
         assert_eq!(cr.verifier, "v");
         assert!(cr.success);

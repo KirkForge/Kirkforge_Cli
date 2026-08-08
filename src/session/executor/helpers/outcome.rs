@@ -277,6 +277,8 @@ pub(crate) async fn emit_correction_results(
                 .send(TurnEvent::Verification {
                     message: cr.message.clone(),
                     success: cr.success,
+                    file: cr.file.clone(),
+                    line: cr.line,
                 })
                 .await,
             "TurnEvent receiver dropped; discarding event"

@@ -49,6 +49,8 @@ pub enum TurnEvent {
     Verification {
         message: String,
         success: bool,
+        file: Option<std::path::PathBuf>,
+        line: Option<u32>,
     },
     CostStats {
         prompt_tokens: usize,

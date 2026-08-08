@@ -96,11 +96,16 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
                 .messages
                 .push_back(ConversationEntry::tool(summary, output));
         }
-        TurnEvent::Verification { message, success } => {
+        TurnEvent::Verification { message, success, file, line } => {
             let prefix = if success { "🔍" } else { "⚠️" };
+            let loc = match (file, line) {
+                (Some(f), Some(l)) => format!(" {}:{}:", f.display(), l),
+                (Some(f), None) => format!(" {}:", f.display()),
+                _ => String::new(),
+            };
             state.messages.push_back(ConversationEntry::new(
                 "system",
-                format!("{prefix} {message}"),
+                format!("{prefix}{loc} {message}"),
             ));
         }
         TurnEvent::Error(e) => {
@@ -561,6 +566,8 @@ mod tests {
             TurnEvent::Verification {
                 message: "lint clean".into(),
                 success: true,
+                file: None,
+                line: None,
             },
         );
         dispatch_turn_event(
@@ -568,6 +575,8 @@ mod tests {
             TurnEvent::Verification {
                 message: "found 2 warnings".into(),
                 success: false,
+                file: None,
+                line: None,
             },
         );
         assert!(s.messages[0].content.starts_with("🔍"));

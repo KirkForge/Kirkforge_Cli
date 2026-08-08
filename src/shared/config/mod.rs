@@ -24,10 +24,10 @@ use serde::{Deserialize, Serialize};
 ///   SecurityConfig 18  (15 direct + 3 sub-struct handles)
 ///   ToolConfig     30
 ///   SessionConfig   8
-///   DisplayConfig   3
+///   DisplayConfig   4
 ///   Note: 1 field (seed) has #[serde(skip_serializing)], so serde
 ///   produces 88 keys. The drift-guard test accounts for this.
-pub const CONFIG_FIELD_COUNT: usize = 89;
+pub const CONFIG_FIELD_COUNT: usize = 90;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {

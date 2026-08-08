@@ -473,6 +473,9 @@ fn merge_toml_into_config(cfg: &mut Config, table: toml::Table) {
     if let Some(Value::Integer(v)) = table.get("memory_top_n") {
         cfg.display.memory_top_n = (*v).max(1) as usize;
     }
+    if let Some(Value::Boolean(v)) = table.get("memory_auto_populate") {
+        cfg.display.memory_auto_populate = *v;
+    }
     if let Some(Value::Integer(v)) = table.get("checkpoint_interval_messages") {
         cfg.session.checkpoint_interval_messages = (*v).max(0) as usize;
     }
@@ -687,6 +690,12 @@ pub fn config_diff_summary(before: &Config, after: &Config) -> String {
         diffs.push(format!(
             "memory_top_n: {} → {}",
             before.display.memory_top_n, after.display.memory_top_n
+        ));
+    }
+    if before.display.memory_auto_populate != after.display.memory_auto_populate {
+        diffs.push(format!(
+            "memory_auto_populate: {} → {}",
+            before.display.memory_auto_populate, after.display.memory_auto_populate
         ));
     }
     if before.session.checkpoint_interval_messages != after.session.checkpoint_interval_messages {
@@ -1330,12 +1339,24 @@ mod tests {
     }
 
     #[test]
+    fn test_env_memory_auto_populate() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut cfg = Config::default();
+        assert!(cfg.display.memory_auto_populate);
+        set_env("KF_CODE_MEMORY_AUTO_POPULATE", Some("false"));
+        apply_env_overrides(&mut cfg);
+        assert!(!cfg.display.memory_auto_populate);
+        set_env("KF_CODE_MEMORY_AUTO_POPULATE", None);
+    }
+
+    #[test]
     fn test_merge_toml_memory_knobs() {
         let mut cfg = Config::default();
         let table: toml::Table = r#"
             memory_enabled = false
             memory_max_tokens = 300
             memory_top_n = 3
+            memory_auto_populate = false
         "#
         .parse()
         .unwrap();
@@ -1344,6 +1365,7 @@ mod tests {
         assert!(!cfg.display.memory_enabled);
         assert_eq!(cfg.display.memory_max_tokens, 300);
         assert_eq!(cfg.display.memory_top_n, 3);
+        assert!(!cfg.display.memory_auto_populate);
     }
 
     #[test]
@@ -1353,10 +1375,12 @@ mod tests {
         b.display.memory_enabled = false;
         b.display.memory_max_tokens = 250;
         b.display.memory_top_n = 5;
+        b.display.memory_auto_populate = false;
         let s = config_diff_summary(&a, &b);
         assert!(s.contains("memory_enabled"), "got: {s}");
         assert!(s.contains("memory_max_tokens"), "got: {s}");
         assert!(s.contains("memory_top_n"), "got: {s}");
+        assert!(s.contains("memory_auto_populate"), "got: {s}");
     }
 
     #[test]
@@ -2000,9 +2024,9 @@ mod tests {
 
         // ── 1. Total struct-level fields ──────────────────────────
         // ModelConfig=30, SecurityConfig=18, ToolConfig=30,
-        // SessionConfig=8, DisplayConfig=3
+        // SessionConfig=8, DisplayConfig=4
         assert_eq!(
-            CONFIG_FIELD_COUNT, 89,
+            CONFIG_FIELD_COUNT, 90,
             "CONFIG_FIELD_COUNT has drifted — did you add/remove a config field?"
         );
 
@@ -2060,6 +2084,7 @@ mod tests {
             memory_enabled = true
             memory_max_tokens = 999
             memory_top_n = 999
+            memory_auto_populate = true
             checkpoint_interval_messages = 999
             anthropic_provider = "x"
             aws_region = "x"
@@ -2102,8 +2127,8 @@ mod tests {
                 toml_key_count += 1;
             }
         }
-        // 68 top-level leaf keys + 3 tool keys + 7 computer_use sub-keys = 78
-        const MERGE_TOML_EXPECTED: usize = 78;
+        // 69 top-level leaf keys + 3 tool keys + 7 computer_use sub-keys = 79
+        const MERGE_TOML_EXPECTED: usize = 79;
         assert_eq!(
             toml_key_count, MERGE_TOML_EXPECTED,
             "merge_toml_into_config key count changed — did you add/remove a handled field?"
@@ -2112,9 +2137,9 @@ mod tests {
         // ── 3. apply_env_overrides field coverage ─────────────────
         // Count KF_CODE_* env var checks in apply_env_overrides.
         // This must stay in sync with env_overrides.rs.
-        const ENV_OVERRIDE_EXPECTED: usize = 76;
+        const ENV_OVERRIDE_EXPECTED: usize = 77;
         assert_eq!(
-            ENV_OVERRIDE_EXPECTED, 76,
+            ENV_OVERRIDE_EXPECTED, 77,
             "apply_env_overrides env-var count changed — did you add/remove a KF_CODE_* var?"
         );
 

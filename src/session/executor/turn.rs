@@ -1527,6 +1527,7 @@ impl Executor {
             memory_enabled,
             memory_max_tokens,
             memory_top_n,
+            memory_auto_populate,
             compaction_use_llm,
             compaction_drop_threshold,
             stem_file_cap,
@@ -1536,6 +1537,7 @@ impl Executor {
                 cfg.display.memory_enabled,
                 cfg.display.memory_max_tokens,
                 cfg.display.memory_top_n,
+                cfg.display.memory_auto_populate,
                 cfg.session.compaction_use_llm,
                 cfg.session.compaction_drop_threshold,
                 cfg.session.stem_file_cap,
@@ -1544,7 +1546,8 @@ impl Executor {
 
         // Build a richer memory context from the current user turn plus
         // the most recent assistant message, if any.
-        let memory_context = {
+        // When memory_auto_populate is false, skip auto-extraction.
+        let memory_context = if memory_auto_populate {
             let history = self.conversation.all();
             let mut ctx = String::from(user_input);
             if let Some(last_assistant) = history
@@ -1560,6 +1563,8 @@ impl Executor {
             } else {
                 Some(ctx)
             }
+        } else {
+            None
         };
 
         // WO 17.5: inject top-N frequently-accessed file bodies into the

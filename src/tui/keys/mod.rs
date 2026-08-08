@@ -446,6 +446,145 @@ fn handle_search_nav_keys(key: KeyEvent, state: &mut AppState) -> Option<anyhow:
     Some(Ok(()))
 }
 
+/// Handle Enter on a non-Chat tab. Each tab gets a minimal action:
+/// - Models (F2): show model details in a status message
+/// - Plugins (F3): toggle the selected plugin on/off
+/// - Jobs (F4): list all jobs
+/// - Settings (F5): show the value of the selected config key
+/// - Threads (F6): no-op (session picker handles its own Enter)
+async fn handle_tab_enter(
+    state: &mut AppState,
+    ctx: &HandleInputContext<'_>,
+) -> anyhow::Result<()> {
+    let sel = match state.tab_list_state {
+        Some(i) => i,
+        None => {
+            state
+                .messages
+                .push_back(ConversationEntry::new("system", "No row selected."));
+            return Ok(());
+        }
+    };
+
+    match state.active_tab {
+        ActiveTab::Models => {
+            if let Some(ref info) = state.model_info {
+                let msg = format!(
+                    "Model: {} (context: {} tokens)",
+                    info.name,
+                    crate::tui::rendering::format_token_count(info.max_context_tokens)
+                );
+                state
+                    .messages
+                    .push_back(ConversationEntry::new("system", msg));
+            } else {
+                state
+                    .messages
+                    .push_back(ConversationEntry::new("system", "No model connected."));
+            }
+            state.mark_dirty();
+        }
+        ActiveTab::Plugins => {
+            let name = {
+                let config = crate::shared::read_shared_config(&state.config);
+                let names: Vec<String> = config.tools.plugin_sources.keys().cloned().collect();
+                // render_plugins has 2 header lines before data rows.
+                let idx = sel.saturating_sub(2);
+                match names.get(idx) {
+                    Some(n) => n.clone(),
+                    None => {
+                        state
+                            .messages
+                            .push_back(ConversationEntry::new("system", "No plugin at this row."));
+                        return Ok(());
+                    }
+                }
+            };
+            let slash_ctx = SlashContext {
+                cancel_tx: ctx.cancel_tx,
+                resume_tx: ctx.resume_tx,
+                compact_tx: ctx.compact_tx,
+                model_tx: ctx.model_tx,
+                undo_tx: ctx.undo_tx,
+                config_tx: ctx.config_tx,
+                plan_tx: ctx.plan_tx,
+                persona_tx: ctx.persona_tx,
+                event_tx: ctx.event_tx,
+                plugin_reload_tx: ctx.plugin_reload_tx,
+            };
+            dispatch_slash_command("/plugins", &format!("toggle {name}"), state, &slash_ctx)
+                .await?;
+            state.mark_dirty();
+        }
+        ActiveTab::Jobs => {
+            let msg = crate::tui::commands::handle_jobs_command("", state).await;
+            state
+                .messages
+                .push_back(ConversationEntry::new("system", msg));
+            state.mark_dirty();
+        }
+        ActiveTab::Settings => {
+            let line = {
+                let config = crate::shared::read_shared_config(&state.config);
+                let lines = settings_keys_and_values(&config);
+                // render_settings has 2 header lines before data rows.
+                let idx = sel.saturating_sub(2);
+                match lines.get(idx) {
+                    Some(l) => l.clone(),
+                    None => "No setting at this row.".to_string(),
+                }
+            };
+            state
+                .messages
+                .push_back(ConversationEntry::new("system", line));
+            state.mark_dirty();
+        }
+        ActiveTab::Threads | ActiveTab::Chat => {}
+    }
+    Ok(())
+}
+
+/// Collect Settings tab key=value lines in the same order as
+/// `render_settings`, so the Enter handler can look up the selected row.
+fn settings_keys_and_values(config: &Config) -> Vec<String> {
+    let mut lines = Vec::new();
+    lines.push(format!("default_model: {}", config.model.default_model));
+    lines.push(format!("ollama_host: {}", config.model.ollama_host));
+    lines.push(format!(
+        "anthropic_provider: {}",
+        config.model.anthropic_provider
+    ));
+    lines.push(format!("cache_enabled: {}", config.model.cache_enabled));
+    lines.push(format!("auto_approve: {}", config.security.auto_approve));
+    lines.push(format!(
+        "sandbox_dir: {}",
+        config.security.sandbox_dir.as_deref().unwrap_or("(none)")
+    ));
+    lines.push(format!(
+        "block_dotfiles: {}",
+        config.security.block_dotfiles
+    ));
+    lines.push(format!(
+        "bang_requires_approval: {}",
+        config.security.bang_requires_approval
+    ));
+    lines.push(format!("dry_run: {}", config.tools.dry_run));
+    lines.push(format!("follow_symlinks: {}", config.tools.follow_symlinks));
+    lines.push(format!(
+        "max_tool_calls_per_turn: {}",
+        config.tools.max_tool_calls_per_turn
+    ));
+    lines.push(format!(
+        "carryover_enabled: {}",
+        config.session.carryover_enabled
+    ));
+    lines.push(format!(
+        "worktree_enabled: {}",
+        config.session.worktree_enabled
+    ));
+    lines
+}
+
 pub(crate) async fn handle_input_key(
     key: KeyEvent,
     state: &mut AppState,
@@ -488,6 +627,9 @@ pub(crate) async fn handle_input_key(
                 };
             }
             state.active_tab = new_tab;
+            if new_tab == ActiveTab::Jobs && state.cached_jobs_output.is_none() {
+                state.jobs_dirty = true;
+            }
             state.mark_dirty();
         }
         KeyCode::Char(c) => {
@@ -809,6 +951,11 @@ pub(crate) async fn handle_input_key(
             state.cursor_position = char_index_for_line_col(&state.input, line, line_len);
         }
         KeyCode::Enter => {
+            // On non-Chat tabs, Enter invokes a tab-specific action.
+            if state.active_tab != ActiveTab::Chat {
+                handle_tab_enter(state, ctx).await?;
+                return Ok(());
+            }
             // Shift+Enter / Alt+Enter insert a literal newline instead of
             // submitting the input. This is the only way to type multi-line
             // prompts in the TUI input box.

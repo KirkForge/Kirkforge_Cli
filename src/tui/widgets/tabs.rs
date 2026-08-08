@@ -217,6 +217,8 @@ pub fn render_plugins(f: &mut Frame, area: Rect, state: &AppState) {
 ///
 /// Shows background and scheduled job status. Interactive: ↑/↓ selects
 /// rows, Enter/Space on a hint row runs the corresponding `/jobs` command.
+/// When `cached_jobs_output` is `Some`, its content is rendered directly;
+/// otherwise a placeholder is shown.
 pub fn render_jobs(f: &mut Frame, area: Rect, state: &AppState) {
     let mut lines = Vec::new();
 
@@ -228,52 +230,20 @@ pub fn render_jobs(f: &mut Frame, area: Rect, state: &AppState) {
     )));
     lines.push(Line::from(""));
 
-    // Background jobs section
-    lines.push(Line::from(Span::styled(
-        " Background Jobs",
-        Style::default()
-            .fg(Color::Yellow)
-            .add_modifier(Modifier::BOLD),
-    )));
-
-    let notified_count = state.notified_jobs.len();
-    let scheduled_count = state.notified_scheduled_runs.len();
-
-    if notified_count == 0 && scheduled_count == 0 {
+    if let Some(ref cached) = state.cached_jobs_output {
+        for line in cached.lines() {
+            lines.push(Line::from(Span::raw(format!(" {line}"))));
+        }
+    } else {
         lines.push(Line::from(Span::styled(
-            "  No active or completed jobs",
+            "  Press Enter or switch to this tab to load job status",
             Style::default().fg(Color::DarkGray),
         )));
-    } else {
-        if notified_count > 0 {
-            lines.push(Line::from(format!(
-                "  {notified_count} completed background job(s) this session"
-            )));
-        }
-        if scheduled_count > 0 {
-            lines.push(Line::from(format!(
-                "  {scheduled_count} completed scheduled run(s) this session"
-            )));
-        }
     }
 
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        " Scheduled Jobs",
-        Style::default()
-            .fg(Color::Yellow)
-            .add_modifier(Modifier::BOLD),
-    )));
-    lines.push(Line::from(Span::styled(
-        "  /jobs schedule <cron> <prompt>",
-        Style::default().fg(Color::DarkGray),
-    )));
-    lines.push(Line::from(Span::styled(
-        "  /jobs list",
-        Style::default().fg(Color::DarkGray),
-    )));
-    lines.push(Line::from(Span::styled(
-        "  /jobs status",
+        " /jobs <id> for detail  |  /jobs <id> cancel  |  /jobs clean",
         Style::default().fg(Color::DarkGray),
     )));
 

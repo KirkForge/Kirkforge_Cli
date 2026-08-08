@@ -16,7 +16,7 @@ Two series live side by side in this directory:
   system, LSP, VS Code bridge, and the Stratum/Draw/Video fold-ins.
 
 The Index table below lists every ADR across both series, sorted by ADR
-number (ascending). The `adr_xref_drift` test in `crates/plugin3-core`
+number (ascending). The `adr_xref_drift` test in `crates/kf-budget-core`
 verifies the table and the file headers agree.
 
 ## Index
@@ -27,7 +27,7 @@ verifies the table and the file headers agree.
 | [001](./001-native-ollama-cli-in-rust.md) | Native Ollama CLI in Rust | Accepted | CLI |
 | [0002](./0002-workspace.md) | Workspace layout | Accepted | Plugin3 |
 | [002](./002-tui-framework-and-rendering.md) | TUI Framework and Rendering | Accepted | CLI |
-| [0003](./0003-output-split.md) | SlicingTransform + CompactionTransform | Accepted | Plugin3 |
+| [0003](./0003-output-split.md) | SlicingTransform + LocalSummaryCompactor | Accepted | Plugin3 |
 | [003](./003-model-abstraction-layer.md) | Model Abstraction — Single Stream, Per-Model Adapters | Accepted | CLI |
 | [0004](./0004-offload-store.md) | OffloadStore reuse from Stratum | Accepted | Plugin3 |
 | [004](./004-tool-use-and-execution-sandbox.md) | Tool Use — Client-Side Tool Dispatch with Approval Gates | Accepted | CLI |
@@ -58,7 +58,7 @@ verifies the table and the file headers agree.
 | [0017](./0017-build-features.md) | Build profile and feature gating discipline | Accepted | Plugin3 |
 | [017](./017-plugin-api-version.md) | Plugin API version contract | Accepted | CLI |
 | [0018](./0018-scheduled-jobs.md) | Cron / scheduled jobs | Accepted | Plugin3 |
-| [018](./018-lsp-integration.md) | LSP integration — kirkforge-lsp crate + lsp_query tool | Accepted (2026-07-19) | CLI |
+| [018](./018-lsp-integration.md) | LSP integration — kf-lsp crate + lsp_query tool | Accepted (2026-07-19) | CLI |
 | [019](./019-vscode-extension.md) | VS Code extension — Option A PTY wrapper MVP | Accepted (2026-07-19) | CLI |
 | [0020](./0020-parallel-tool-dispatch.md) | Parallel Tool Dispatch | Accepted | Plugin3 |
 | [0021](./0021-computer-use-tool.md) | `computer_use` tool via headless Chrome CDP | Accepted | Plugin3 |
@@ -88,8 +88,8 @@ verifies the table and the file headers agree.
 | [045](./045-continuous-eval-pipeline.md) | Continuous Evaluation Pipeline | Accepted | CLI |
 | [046](./046-stratum-fold-in.md) | Fold Stratum into Core | Accepted | CLI |
 | [0047](./0047-plugin3-fold-in.md) | Fold Plugin3 into Core | Accepted | Plugin3 |
-| [048](./048-draw-fold-in.md) | Draw Fold-In | Accepted | CLI |
-| [049](./049-video-fold-in.md) | Video Fold-In (Non-Default Feature) | Accepted | CLI |
+| [048](./048-draw-fold-in.md) | Draw Fold-In | Superseded (draw removed from workspace in 21.11-R0) | CLI |
+| [049](./049-video-fold-in.md) | Video Fold-In (Non-Default Feature) | Superseded | CLI |
 | [050](./050-plugin-system-consolidation.md) | Plugin System Consolidation | Accepted | CLI |
 | [051](./051-stratum-budget-coordination.md) | Stratum–Budget Coordination (slicing triggers compression, budget tracks compressed size) | Accepted | CLI |
 | [052](./052-cache-stem-reuse.md) | Client-side prompt cache stem reuse | Accepted | CLI |
@@ -108,6 +108,9 @@ verifies the table and the file headers agree.
 | [065](./065-coverage-threshold-policy.md) | Coverage-gate threshold policy (75% target, headroom, `--skip` workaround) | Accepted | CLI |
 | [066](./066-kirk-bench-spec.md) | KIRK-BENCH spec + signature Token Budget Challenge | Accepted | CLI |
 | [067](./067-tui-daemon-coverage-exclusion.md) | TUI and daemon coverage exclusion rationale | Accepted | CLI |
+| [068](./068-cli-yeet-decision.md) | Remove Standalone Subsystem CLIs | Accepted | CLI |
+| [070](./070-adapter-gap-decisions.md) | Adapter-Gap Decisions and Deferrals | Accepted | CLI |
+| [071](./071-structured-output.md) | JSON-Schema Structured Output | Accepted | CLI |
 
 ## Cross-references
 

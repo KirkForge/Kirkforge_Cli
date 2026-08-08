@@ -217,7 +217,7 @@ fn adr_0010_usage_kind_block_declares_usage_config() {
 // `plugin3:` prefix. The impl migrated from `eprintln!` to
 // `tracing::warn!` when `kf-budget-core` added tracing support.
 #[test]
-fn adr_0010_emission_site_uses_eprintln_not_tracing() {
+fn adr_0010_emission_site_uses_tracing_not_eprintln() {
     let block = adr_0010_emission_site_block();
     for phantom in ["eprintln!", "plugin3:"] {
         assert!(
@@ -235,7 +235,7 @@ fn adr_0010_emission_site_uses_eprintln_not_tracing() {
 // and the open-failure path emits
 // `tracing::warn!("kf-budget: usage.jsonl open failed ({e}); ...")`.
 #[test]
-fn adr_0010_emission_site_block_uses_eprintln_for_errors() {
+fn adr_0010_emission_site_block_uses_tracing_for_errors() {
     let block = adr_0010_emission_site_block();
     assert!(
         block.contains("tracing::warn!(\"kf-budget: failed to serialise usage record"),

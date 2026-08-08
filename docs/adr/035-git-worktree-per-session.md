@@ -12,9 +12,9 @@ Without ephemeral workspaces, edits land directly in the user's working tree. A 
 
 Add a `--worktree` flag that creates an isolated git worktree for the session:
 
-1. On session start, `git worktree add --detach /tmp/kirkforge-session-<id> HEAD` creates a detached worktree at a temp path.
+1. On session start, `git worktree add --detach /tmp/kf-code-session-<id> HEAD` creates a detached worktree at a temp path.
 2. The sandbox directory is redirected to the worktree path, so all file tools operate inside the worktree.
-3. On session end (Drop), `git worktree remove --force /tmp/kirkforge-session-<id>` cleans up.
+3. On session end (Drop), `git worktree remove --force /tmp/kf-code-session-<id>` cleans up.
 
 ## Implementation
 

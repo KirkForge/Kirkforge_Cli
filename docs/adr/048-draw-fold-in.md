@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Superseded (draw removed from workspace in 21.11-R0)
 
 ## Context
 
@@ -10,7 +10,7 @@ Draw (terminal diagram model) is invoked via shell scripts calling the `kfd` bin
 
 ## Decision
 
-Fold `kirkforge-draw-core` into the main binary behind an optional `draw` feature flag (default: enabled). The `draw_render` tool is a direct Rust call and the `post-turn` hook is an in-process Rust handler (`DrawPostTurnHook`), which scans `./` and `./out/` for `.td.json` files and logs a suggestion if any are found. The hook is registered in `src/session/executor/mod.rs` under `#[cfg(feature = "draw")]`.
+Draw was removed from the workspace (YEETED in 21.11-R0). This ADR described the original fold-in plan; it is superseded by the removal decision.
 
 The standalone `kfd` binary remains for interactive TUI use.
 
@@ -26,8 +26,4 @@ The standalone `kfd` binary remains for interactive TUI use.
 
 ## Implementation notes
 
-- Feature flag: `draw` (default, optional dep on `kirkforge-draw-core`).
-- Only `kirkforge-draw-core` is linked (pure model), not `kirkforge-draw` (TUI binary).
-- `draw_render` tool registered under `#[cfg(feature = "draw")]`.
-- `DrawPostTurnHook` (post-turn) registered in `src/session/executor/mod.rs` under `#[cfg(feature = "draw")]`.
-- The `kfd` binary remains standalone.
+- Draw crate (`crates/kf-draw-core`) and `kfd` binary removed in 21.11-R0.

@@ -96,11 +96,27 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
                 .messages
                 .push_back(ConversationEntry::tool(summary, output));
         }
-        TurnEvent::Verification { message, success } => {
+        TurnEvent::Verification {
+            message,
+            success,
+            file,
+            line,
+        } => {
+            // ponytail: memory auto-populate indicator deferred — would need
+            // a MemoryExtracted event on the bus + a status bar widget. The
+            // server-side tracing::info!(count, ...) in turn.rs already
+            // provides observability; TUI visibility is M-sized work for a
+            // nice-to-have. Upgrade path: add TurnEvent::MemoryExtracted { count }
+            // in types.rs, emit from turn.rs after extraction, render here.
             let prefix = if success { "🔍" } else { "⚠️" };
+            let loc = match (file, line) {
+                (Some(f), Some(l)) => format!(" {}:{}:", f.display(), l),
+                (Some(f), None) => format!(" {}:", f.display()),
+                _ => String::new(),
+            };
             state.messages.push_back(ConversationEntry::new(
                 "system",
-                format!("{prefix} {message}"),
+                format!("{prefix}{loc} {message}"),
             ));
         }
         TurnEvent::Error(e) => {
@@ -237,8 +253,8 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
             // Search match indices are also tied to the old message
             // list; clear them so a committed search doesn't jump to
             // a stale or non-existent index after compaction.
-            state.search_matches.clear();
-            state.search_match_idx = 0;
+            state.search.matches.clear();
+            state.search.match_idx = 0;
             // Scroll back to the bottom so the user sees the
             // status message and the last few kept turns.
             state.auto_scroll = true;
@@ -386,8 +402,8 @@ fn prune_display_messages(state: &mut AppState) {
         .filter_map(|&i| remap(i))
         .collect();
     // Search indices reference old message positions — clear and let next search recompute.
-    state.search_matches.clear();
-    state.search_match_idx = 0;
+    state.search.matches.clear();
+    state.search.match_idx = 0;
 }
 
 /// Drain every approval request currently queued. If a new request
@@ -561,6 +577,8 @@ mod tests {
             TurnEvent::Verification {
                 message: "lint clean".into(),
                 success: true,
+                file: None,
+                line: None,
             },
         );
         dispatch_turn_event(
@@ -568,6 +586,8 @@ mod tests {
             TurnEvent::Verification {
                 message: "found 2 warnings".into(),
                 success: false,
+                file: None,
+                line: None,
             },
         );
         assert!(s.messages[0].content.starts_with("🔍"));

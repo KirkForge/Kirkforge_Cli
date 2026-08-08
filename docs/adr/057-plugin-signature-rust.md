@@ -5,7 +5,7 @@
 
 ## Context
 
-Plugin signature verification (`crates/kirkforge-plugin-host/src/lib.rs`)
+Plugin signature verification (`crates/kf-plugin-host/src/lib.rs`)
 shelled out to the `minisign` binary: `find_minisign_binary()` walked
 `PATH` looking for a `minisign` executable; if not found, verification
 failed with a hard error. This meant:
@@ -18,8 +18,10 @@ failed with a hard error. This meant:
 3. Windows friction — `minisign` is not commonly installed on Windows.
 
 The `TrustPolicy::with_verify_signatures` API and the config fields
-(`verify_signatures`, `signature_key_path`) are the public contract and
-are unchanged.
+(`verify_signatures`, `signature_key_path`) remain the public configuration
+surface. Internally, the signing model uses minisign (Ed25519) with a single
+host-configured public key (set via `plugin_public_key_path`), not per-plugin
+keys.
 
 ## Decision
 
@@ -63,10 +65,16 @@ zero-dependency property makes the estimate conservative.)
 - The error semantics are unchanged: missing sig file, malformed sig,
   wrong key, signature mismatch all produce the same error categories.
 - The `verify_signatures` / `signature_key_path` config fields and the
-  `TrustPolicy::with_verify_signatures` API are unchanged (public
-  contract preserved).
-- The `.kf-code.sig` file format and the `kf-code.toml` signing
-  contract are unchanged — only the verification backend changes.
+  `TrustPolicy::with_verify_signatures` API remain the public configuration
+  surface. The signing model is minisign (Ed25519) with a single
+  host-configured public key — not per-plugin keys.
+- The `.kf-code.sig` file format is unchanged, but the signing **contract
+  changed**: the original model used per-plugin Ed25519-dalek keys with a
+  `public_key` field and a multi-key `trusted_public_keys` allowlist; the
+  current model uses minisign with a single host-configured key via
+  `plugin_public_key_path`. See "Contract changes" below.
+- The signing key model is minisign with a single host-configured public
+  key, not per-plugin Ed25519 keys.
 
 ## Why `minisign-verify` over `ed25519-dalek` + hand-rolled header parsing
 
@@ -76,6 +84,19 @@ comment, trusted comment, base64 signature, global signature) that
 maintained by the minisign author, is zero-dependency, and is
 audit-friendly (~500 LOC). `ed25519-dalek` would be more work for the
 same result with no size advantage.
+
+## Contract changes
+
+The signing contract changed from the original plugin-signature design:
+
+| Aspect | Original | Current |
+|--------|----------|---------|
+| Crypto library | Ed25519-dalek | minisign (minisign-verify crate) |
+| Key scope | Per-plugin `public_key` field | Single host-configured `plugin_public_key_path` |
+| Key allowlist | Multi-key `trusted_public_keys` | Single key |
+
+The `.kf-code.sig` file format (minisign signature envelope) is unchanged,
+but the trust model shifted from per-plugin multi-key to a single host key.
 
 ## Notes
 

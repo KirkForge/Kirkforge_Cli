@@ -44,7 +44,7 @@ you'll have something more compelling than 'we support more providers.'"
 3. **Wire the budget ceiling via an env override, not new budget
    code.** `BenchTask::budget_ceiling: Option<usize>` (serde-optional,
    default `None`) is the task-side field. When set, the runner
-   exports `KIRKFORGE_BUDGET_CEILING=<n>` to the agent's env. The
+   exports `KF_CODE_BUDGET_CEILING=<n>` to the agent's env. The
    existing config env-override layer
    (`src/session/config/env_overrides.rs`) reads it into
    `cfg.tools.budget_ceiling`, and `init_from_config` applies it to
@@ -74,7 +74,7 @@ you'll have something more compelling than 'we support more providers.'"
 - `TaskResult` gains a serde-optional `compression_passes` field
   (counts `TurnEvent::CompactionReport`); existing serialized reports
   parse unchanged.
-- The `KIRKFORGE_BUDGET_CEILING` env hook is a 4-line addition to
+- The `KF_CODE_BUDGET_CEILING` env hook is a 4-line addition to
   `env_overrides.rs` mirroring `KIRKFORGE_MINIFY_ABOVE_BYTES` (WO 9.7).
 - The signature challenge requires a live model to run (the setup has
   a failing test the model must fix); `bench verify-only` skips it

@@ -1,14 +1,11 @@
 //! Budget tool wrappers — direct Rust calls to `kf_budget_core`.
 //!
-//! Enabled by the `budget` feature flag. When disabled, the plugin
-//! shell scripts in `plugins/kf-budget/tools/` remain the
-//! invocation path. This module eliminates the lossy shim by calling
-//! `kf_budget_core` functions in-process, giving budget logic full
-//! access to session state.
+//! This module calls `kf_budget_core` functions in-process, giving
+//! budget logic full access to session state.
 //!
 //! ADR-047 pins this decision.
 
-use crate::session::hooks::{HookContext, HookDecision, InProcessHook};
+use crate::session::hooks::{HookContext, PostHook};
 use crate::shared::{ToolDef, ToolOutcome};
 use crate::tools::Tool;
 use crate::tools::ToolContext;
@@ -19,11 +16,56 @@ use kf_budget_core::{
 };
 use std::sync::{Arc, Mutex, OnceLock};
 
-type SharedBudget = Arc<Mutex<TokenBudget>>;
-type SharedStore = Arc<dyn OffloadStore>;
+pub type SharedBudget = Arc<Mutex<TokenBudget>>;
+pub type SharedStore = Arc<dyn OffloadStore>;
 
+/// Per-session budget constructor (WO 22.6-R2).
+pub fn new_session_budget(cfg: &crate::shared::Config) -> SharedBudget {
+    Arc::new(Mutex::new(TokenBudget {
+        ceiling: cfg.tools.budget_ceiling,
+        approaching_ratio: cfg.tools.budget_approaching_ratio,
+        used: 0,
+    }))
+}
+
+/// Per-session offload store constructor with a cap of 1000 entries.
+// ponytail: per-session store, cap 1000 entries, evict FIFO if throughput matters
+pub fn new_session_store() -> SharedStore {
+    Arc::new(InMemoryOffloadStore::new_with_cap(1000)) as SharedStore
+}
+
+/// Initialize an existing budget from config.
+pub fn init_from_config(budget: &SharedBudget, cfg: &crate::shared::Config) {
+    let mut guard = budget.lock().expect("budget mutex poisoned");
+    guard.ceiling = cfg.tools.budget_ceiling;
+    guard.approaching_ratio = cfg.tools.budget_approaching_ratio;
+}
+
+#[cfg(test)]
 static SHARED_BUDGET: OnceLock<SharedBudget> = OnceLock::new();
+#[cfg(test)]
 static SHARED_STORE: OnceLock<SharedStore> = OnceLock::new();
+
+#[cfg(test)]
+fn shared_budget() -> SharedBudget {
+    SHARED_BUDGET
+        .get_or_init(|| {
+            let cfg = crate::shared::Config::default();
+            Arc::new(Mutex::new(TokenBudget {
+                ceiling: cfg.tools.budget_ceiling,
+                approaching_ratio: cfg.tools.budget_approaching_ratio,
+                used: 0,
+            }))
+        })
+        .clone()
+}
+
+#[cfg(test)]
+fn shared_store() -> SharedStore {
+    SHARED_STORE
+        .get_or_init(|| Arc::new(InMemoryOffloadStore::new()) as SharedStore)
+        .clone()
+}
 
 // ── Sliced-event coordination (WO 8.6) ─────────────────────────────────
 //
@@ -92,32 +134,6 @@ pub fn clear_sliced_listeners() {
         .lock()
         .expect("sliced listener mutex poisoned");
     guard.clear();
-}
-
-fn shared_budget() -> SharedBudget {
-    SHARED_BUDGET
-        .get_or_init(|| {
-            let cfg = crate::shared::Config::default();
-            Arc::new(Mutex::new(TokenBudget {
-                ceiling: cfg.tools.budget_ceiling,
-                approaching_ratio: cfg.tools.budget_approaching_ratio,
-                used: 0,
-            }))
-        })
-        .clone()
-}
-
-fn shared_store() -> SharedStore {
-    SHARED_STORE
-        .get_or_init(|| Arc::new(InMemoryOffloadStore::new()) as SharedStore)
-        .clone()
-}
-
-pub fn init_from_config(cfg: &crate::shared::Config) {
-    let budget = shared_budget();
-    let mut guard = budget.lock().expect("budget mutex poisoned");
-    guard.ceiling = cfg.tools.budget_ceiling;
-    guard.approaching_ratio = cfg.tools.budget_approaching_ratio;
 }
 
 /// Outcome of `check_and_slice`: keep the result verbatim, or replace it
@@ -200,7 +216,7 @@ pub fn check_and_slice(
 /// replacement string if it returns one (WO 8.6).
 ///
 /// The post-tool hook (`record_tool_usage` in this module) records
-/// the `result.len() / 4` of whatever content the `ToolOutcome`
+/// the token count of whatever content the `ToolOutcome`
 /// carries. When a listener compresses the sliced display, the
 /// returned `ToolOutcome` already carries the compressed content, so
 /// the post-tool hook records the post-compression tokens
@@ -208,9 +224,12 @@ pub fn check_and_slice(
 /// path. When the `stratum` feature is enabled, also calls into
 /// Stratum to auto-escalate `Lite → Full` when the budget is
 /// `Approaching`.
-pub fn apply_budget_slice(outcome: ToolOutcome) -> ToolOutcome {
+pub fn apply_budget_slice(
+    outcome: ToolOutcome,
+    budget: &SharedBudget,
+    store: &SharedStore,
+) -> ToolOutcome {
     let state = {
-        let budget = shared_budget();
         let guard = budget.lock().expect("budget mutex poisoned");
         guard.state()
     };
@@ -220,9 +239,7 @@ pub fn apply_budget_slice(outcome: ToolOutcome) -> ToolOutcome {
     if state == BudgetState::Approaching {
         maybe_escalate_stratum();
     }
-    let budget = shared_budget();
     let guard = budget.lock().expect("budget mutex poisoned");
-    let store = shared_store();
     match outcome {
         ToolOutcome::Success { content } => {
             let original_size = content.len();
@@ -478,6 +495,14 @@ fn store_get_def() -> ToolDef {
     }
 }
 
+#[cfg(feature = "stratum")]
+struct StoreGet {
+    def: ToolDef,
+    store: SharedStore,
+    stratum_store: Arc<kf_compress_core::store::InMemoryOffloadStore>,
+}
+
+#[cfg(not(feature = "stratum"))]
 struct StoreGet {
     def: ToolDef,
     store: SharedStore,
@@ -511,7 +536,7 @@ impl Tool for StoreGet {
         // lookup must learn about it too.
         #[cfg(feature = "stratum")]
         if let Some(content) = <kf_compress_core::store::InMemoryOffloadStore as kf_compress_core::store::OffloadStore>::get(
-            &*crate::session::stratum::session_offload_store(),
+            &*self.stratum_store,
             &marker,
         ) {
             return ToolOutcome::Success { content };
@@ -635,12 +660,12 @@ struct SessionStartHook {
     budget: SharedBudget,
 }
 
-impl InProcessHook for SessionStartHook {
+impl PostHook for SessionStartHook {
     fn event(&self) -> &str {
         "session-start"
     }
 
-    fn handle(&self, _ctx: &HookContext) -> HookDecision {
+    fn handle(&self, _ctx: &HookContext) -> Result<(), String> {
         let budget = self.budget.lock().expect("budget mutex poisoned");
         let state = budget.state();
         let remaining = budget.remaining();
@@ -651,7 +676,7 @@ impl InProcessHook for SessionStartHook {
             remaining,
             "Budget session-start: token budget initialized"
         );
-        HookDecision::Allow
+        Ok(())
     }
 }
 
@@ -659,12 +684,12 @@ struct PostToolBashHook {
     budget: SharedBudget,
 }
 
-impl InProcessHook for PostToolBashHook {
+impl PostHook for PostToolBashHook {
     fn event(&self) -> &str {
         "post-tool-bash"
     }
 
-    fn handle(&self, ctx: &HookContext) -> HookDecision {
+    fn handle(&self, ctx: &HookContext) -> Result<(), String> {
         record_tool_usage(&self.budget, ctx, "bash")
     }
 }
@@ -673,12 +698,12 @@ struct PostToolWriteFileHook {
     budget: SharedBudget,
 }
 
-impl InProcessHook for PostToolWriteFileHook {
+impl PostHook for PostToolWriteFileHook {
     fn event(&self) -> &str {
         "post-tool-write_file"
     }
 
-    fn handle(&self, ctx: &HookContext) -> HookDecision {
+    fn handle(&self, ctx: &HookContext) -> Result<(), String> {
         record_tool_usage(&self.budget, ctx, "write_file")
     }
 }
@@ -687,12 +712,12 @@ struct PreCompactHook {
     budget: SharedBudget,
 }
 
-impl InProcessHook for PreCompactHook {
+impl PostHook for PreCompactHook {
     fn event(&self) -> &str {
         "pre-compact"
     }
 
-    fn handle(&self, ctx: &HookContext) -> HookDecision {
+    fn handle(&self, ctx: &HookContext) -> Result<(), String> {
         let mut budget = self.budget.lock().expect("budget mutex poisoned");
         let state = budget.state();
         if state == BudgetState::Over || state == BudgetState::Approaching {
@@ -716,15 +741,19 @@ impl InProcessHook for PreCompactHook {
             // or Ultra is a no-op.
             maybe_escalate_stratum();
         }
-        HookDecision::Allow
+        Ok(())
     }
 }
 
-fn record_tool_usage(budget: &SharedBudget, ctx: &HookContext, tool_name: &str) -> HookDecision {
+fn record_tool_usage(
+    budget: &SharedBudget,
+    ctx: &HookContext,
+    tool_name: &str,
+) -> Result<(), String> {
     let Some(ref result) = ctx.tool_result else {
-        return HookDecision::Allow;
+        return Ok(());
     };
-    let tokens = result.len() / 4;
+    let tokens = crate::session::prompt::count_tokens(result);
     let mut budget = budget.lock().expect("budget mutex poisoned");
     budget.record(tokens);
     let state = budget.state();
@@ -750,7 +779,7 @@ fn record_tool_usage(budget: &SharedBudget, ctx: &HookContext, tool_name: &str) 
         }
         BudgetState::Under => {}
     }
-    HookDecision::Allow
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -764,10 +793,47 @@ fn record_tool_usage(budget: &SharedBudget, ctx: &HookContext, tool_name: &str) 
 /// budget check hooks. The offload store starts in-memory; a future
 /// upgrade can swap it for `FileOffloadStore` when persistence is
 /// needed.
-pub fn all_budget_tools() -> Vec<Arc<dyn Tool>> {
-    let budget = shared_budget();
-    let store = shared_store();
+#[cfg(all(feature = "budget", feature = "stratum"))]
+pub fn all_budget_tools(
+    budget: &SharedBudget,
+    store: &SharedStore,
+    stratum_store: Arc<kf_compress_core::store::InMemoryOffloadStore>,
+) -> Vec<Arc<dyn Tool>> {
+    vec![
+        Arc::new(BudgetStatus {
+            def: simple_tool_def("budget_status", "Show the current token budget status."),
+            budget: budget.clone(),
+        }) as Arc<dyn Tool>,
+        Arc::new(BudgetSet {
+            def: budget_set_def(),
+            budget: budget.clone(),
+        }),
+        Arc::new(BudgetCompact {
+            def: simple_tool_def(
+                "budget_compact",
+                "Compact the budget store, resetting the used counter.",
+            ),
+            budget: budget.clone(),
+        }),
+        Arc::new(StoreGet {
+            def: store_get_def(),
+            store: store.clone(),
+            stratum_store,
+        }),
+        Arc::new(ConfigValidate {
+            def: simple_tool_def("config_validate", "Validate the budget configuration."),
+        }),
+        Arc::new(Report {
+            def: simple_tool_def("report", "Print a spending report from usage logs."),
+        }),
+        Arc::new(SelfCheck {
+            def: simple_tool_def("self_check", "Run budget self-check diagnostics."),
+        }),
+    ]
+}
 
+#[cfg(all(feature = "budget", not(feature = "stratum")))]
+pub fn all_budget_tools(budget: &SharedBudget, store: &SharedStore) -> Vec<Arc<dyn Tool>> {
     vec![
         Arc::new(BudgetStatus {
             def: simple_tool_def("budget_status", "Show the current token budget status."),
@@ -800,10 +866,9 @@ pub fn all_budget_tools() -> Vec<Arc<dyn Tool>> {
     ]
 }
 
-/// Build all 4 budget in-process hooks, sharing the same `TokenBudget`
-/// as the tools via the process-global `SHARED_BUDGET`.
-pub fn all_budget_hooks() -> Vec<Box<dyn InProcessHook>> {
-    let budget = shared_budget();
+/// Budget in-process hooks (all observational/post-hooks), sharing the same
+/// `TokenBudget` as the tools.
+pub fn budget_hooks(budget: &SharedBudget) -> Vec<Box<dyn PostHook>> {
     vec![
         Box::new(SessionStartHook {
             budget: budget.clone(),
@@ -814,13 +879,20 @@ pub fn all_budget_hooks() -> Vec<Box<dyn InProcessHook>> {
         Box::new(PostToolWriteFileHook {
             budget: budget.clone(),
         }),
-        Box::new(PreCompactHook { budget }),
+        Box::new(PreCompactHook {
+            budget: budget.clone(),
+        }),
     ]
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::session::hooks::PostHook;
+
+    fn test_stratum_store() -> Arc<kf_compress_core::store::InMemoryOffloadStore> {
+        Arc::new(kf_compress_core::store::InMemoryOffloadStore::new())
+    }
 
     fn budget_with(used: usize, ceiling: usize) -> TokenBudget {
         TokenBudget {
@@ -935,7 +1007,7 @@ mod tests {
         }
         let big = "q".repeat(10_000);
         let outcome = ToolOutcome::Success { content: big };
-        let sliced = apply_budget_slice(outcome);
+        let sliced = apply_budget_slice(outcome, &shared_budget(), &shared_store());
         match sliced {
             ToolOutcome::Success { content } => {
                 assert!(
@@ -966,7 +1038,7 @@ mod tests {
         let outcome = ToolOutcome::Success {
             content: "hello".into(),
         };
-        let out = apply_budget_slice(outcome);
+        let out = apply_budget_slice(outcome, &shared_budget(), &shared_store());
         match out {
             ToolOutcome::Success { content } => assert_eq!(content, "hello"),
             other => panic!("under-budget Success must pass through, got {other:?}"),
@@ -1054,7 +1126,7 @@ mod tests {
             tool_result: Some("x".repeat(1000)),
             ..Default::default()
         };
-        assert_eq!(hook.handle(&ctx), HookDecision::Allow);
+        assert_eq!(hook.handle(&ctx), Ok(()));
         let used_before = 0usize;
         let used_after = {
             let budget = shared_budget();
@@ -1083,7 +1155,7 @@ mod tests {
             event: "pre-compact".into(),
             ..Default::default()
         };
-        assert_eq!(hook.handle(&ctx), HookDecision::Allow);
+        assert_eq!(hook.handle(&ctx), Ok(()));
         let used = {
             let budget = shared_budget();
             let guard = budget.lock().expect("budget mutex poisoned");
@@ -1093,7 +1165,7 @@ mod tests {
     }
 
     #[test]
-    fn test_session_start_hook_returns_allow() {
+    fn test_session_start_hook_returns_ok() {
         let _guard = shared_budget_test_lock().blocking_lock();
         reset_shared_budget(200_000, 0);
         let hook = SessionStartHook {
@@ -1103,7 +1175,7 @@ mod tests {
             event: "session-start".into(),
             ..Default::default()
         };
-        assert_eq!(hook.handle(&ctx), HookDecision::Allow);
+        assert_eq!(hook.handle(&ctx), Ok(()));
     }
 
     #[tokio::test]
@@ -1186,7 +1258,7 @@ mod tests {
         let mut cfg = crate::shared::Config::default();
         cfg.tools.budget_ceiling = 12_345;
         cfg.tools.budget_approaching_ratio = 0.9;
-        init_from_config(&cfg);
+        init_from_config(&shared_budget(), &cfg);
         let budget = shared_budget();
         let guard = budget.lock().expect("budget mutex poisoned");
         assert_eq!(guard.ceiling, 12_345);
@@ -1252,6 +1324,8 @@ mod tests {
         let store_get = StoreGet {
             def: store_get_def(),
             store: shared_store(),
+            #[cfg(feature = "stratum")]
+            stratum_store: test_stratum_store(),
         };
         let ctx = ToolContext::new();
         let out = store_get.run(&ctx, serde_json::json!({})).await;
@@ -1263,6 +1337,8 @@ mod tests {
         let store_get = StoreGet {
             def: store_get_def(),
             store: shared_store(),
+            #[cfg(feature = "stratum")]
+            stratum_store: test_stratum_store(),
         };
         let ctx = ToolContext::new();
         let out = store_get
@@ -1282,11 +1358,13 @@ mod tests {
     #[cfg(feature = "stratum")]
     async fn test_store_get_resolves_stratum_offload_marker() {
         use kf_compress_core::store::OffloadStore as _;
+        let stratum_store = test_stratum_store();
         let payload = "stratum-offloaded payload body";
-        let key = crate::session::stratum::session_offload_store().put(payload);
+        let key = stratum_store.put(payload);
         let store_get = StoreGet {
             def: store_get_def(),
             store: shared_store(),
+            stratum_store,
         };
         let ctx = ToolContext::new();
         let out = store_get
@@ -1340,7 +1418,7 @@ mod tests {
             ..Default::default()
         };
         let decision = record_tool_usage(&budget, &ctx, "bash");
-        assert_eq!(decision, HookDecision::Allow);
+        assert_eq!(decision, Ok(()));
         let guard = budget.lock().expect("budget mutex poisoned");
         assert_eq!(guard.used, 0, "no result should not record usage");
     }
@@ -1356,7 +1434,7 @@ mod tests {
             ..Default::default()
         };
         let decision = record_tool_usage(&budget, &ctx, "bash");
-        assert_eq!(decision, HookDecision::Allow);
+        assert_eq!(decision, Ok(()));
         let guard = budget.lock().expect("budget mutex poisoned");
         assert_eq!(guard.used, 0, "empty result records 0 tokens");
     }
@@ -1389,7 +1467,7 @@ mod tests {
             tool_result: Some("x".repeat(400)),
             ..Default::default()
         };
-        assert_eq!(hook.handle(&ctx), HookDecision::Allow);
+        assert_eq!(hook.handle(&ctx), Ok(()));
         let budget = shared_budget();
         let guard = budget.lock().expect("budget mutex poisoned");
         assert!(guard.used > 0, "write_file hook must record usage");
@@ -1451,7 +1529,7 @@ mod tests {
         let outcome = ToolOutcome::Error {
             message: "boom".into(),
         };
-        let result = apply_budget_slice(outcome);
+        let result = apply_budget_slice(outcome, &shared_budget(), &shared_store());
         match result {
             ToolOutcome::Error { message } => assert_eq!(message, "boom"),
             other => panic!("expected Error passthrough, got {other:?}"),
@@ -1464,7 +1542,7 @@ mod tests {
         let _guard = shared_budget_test_lock().lock().await;
         reset_shared_budget(1000, 950);
         let outcome = ToolOutcome::Failure(crate::shared::ToolError::Cancelled);
-        let result = apply_budget_slice(outcome);
+        let result = apply_budget_slice(outcome, &shared_budget(), &shared_store());
         assert!(matches!(result, ToolOutcome::Failure(_)));
         reset_shared_budget(200_000, 0);
     }
@@ -1480,7 +1558,7 @@ mod tests {
             content: big,
             truncated: false,
         };
-        let result = apply_budget_slice(outcome);
+        let result = apply_budget_slice(outcome, &shared_budget(), &shared_store());
         match result {
             ToolOutcome::FileContent {
                 content, truncated, ..
@@ -1503,7 +1581,7 @@ mod tests {
             content: "small".into(),
             truncated: false,
         };
-        let result = apply_budget_slice(outcome);
+        let result = apply_budget_slice(outcome, &shared_budget(), &shared_store());
         match result {
             ToolOutcome::FileContent {
                 content, truncated, ..
@@ -1517,7 +1595,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_all_budget_tools_returns_seven_tools() {
-        let tools = all_budget_tools();
+        let tools = all_budget_tools(&shared_budget(), &shared_store(), test_stratum_store());
         assert_eq!(tools.len(), 7);
         let names: Vec<&str> = tools.iter().map(|t| t.def().name).collect();
         assert!(names.contains(&"budget_status"));
@@ -1530,8 +1608,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_all_budget_hooks_returns_four_hooks() {
-        let hooks = all_budget_hooks();
+    async fn test_budget_hooks_returns_four_hooks() {
+        let hooks = budget_hooks(&shared_budget());
         assert_eq!(hooks.len(), 4);
         let events: Vec<&str> = hooks.iter().map(|h| h.event()).collect();
         assert!(events.contains(&"session-start"));
@@ -1565,7 +1643,7 @@ mod tests {
         }));
         let big = "q".repeat(10_000);
         let outcome = ToolOutcome::Success { content: big };
-        let sliced = apply_budget_slice(outcome);
+        let sliced = apply_budget_slice(outcome, &shared_budget(), &shared_store());
         match sliced {
             ToolOutcome::Success { content } => {
                 assert!(
@@ -1611,7 +1689,11 @@ mod tests {
         // Run a slice path. The result content doesn't matter
         // for escalation — it triggers on state == Approaching.
         let big = "x".repeat(10_000);
-        let _ = apply_budget_slice(ToolOutcome::Success { content: big });
+        let _ = apply_budget_slice(
+            ToolOutcome::Success { content: big },
+            &shared_budget(),
+            &shared_store(),
+        );
         assert_eq!(
             current_session_mode(),
             Mode::Full,
@@ -1654,7 +1736,7 @@ mod tests {
             }),
             ..Default::default()
         };
-        assert_eq!(hook.handle(&ctx), HookDecision::Allow);
+        assert_eq!(hook.handle(&ctx), Ok(()));
         assert_eq!(
             current_session_mode(),
             Mode::Full,
@@ -1662,7 +1744,7 @@ mod tests {
         );
         // Idempotent: a second PreCompactHook with budget still
         // Approaching must remain at Full.
-        assert_eq!(hook.handle(&ctx), HookDecision::Allow);
+        assert_eq!(hook.handle(&ctx), Ok(()));
         assert_eq!(current_session_mode(), Mode::Full);
 
         // Reset.

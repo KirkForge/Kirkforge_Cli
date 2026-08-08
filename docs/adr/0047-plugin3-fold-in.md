@@ -5,15 +5,15 @@
 
 ## Context
 
-Plugin3 (`crates/plugin3-core`) is the token-budget guard. It is invoked via shell scripts in `plugins/kirkforge-plugin3/tools/` with only environment variables, not full event context. Without the fold-in, the budget system cannot see real `post-tool-bash` results or `pre-compact` history — it only receives the tool name and output size via env vars, then emits canned JSON responses.
+Plugin3 (`crates/kf-budget-core`, formerly `crates/plugin3-core`) is the token-budget guard. It is invoked via shell scripts in `plugins/kf-plugin/tools/` with only environment variables, not full event context. Without the fold-in, the budget system cannot see real `post-tool-bash` results or `pre-compact` history — it only receives the tool name and output size via env vars, then emits canned JSON responses.
 
 The same fold-in pattern established by ADR-046 (Stratum) applies: link the crate as an optional dependency and register its tools as direct Rust calls behind a feature flag. In addition, the 4 hooks are converted to in-process handlers that receive the full event context, eliminating the lossy shim.
 
 ## Decision
 
-1. **Feature flag**: Add `budget = ["dep:plugin3-core"]` to the root `Cargo.toml`, included in `default`. The `plugin3-core` crate becomes an optional dependency of the main `kirkforge` binary.
+1. **Feature flag**: Add `budget = ["dep:kf-budget-core"]` to the root `Cargo.toml`, included in `default`. The `kf-budget-core` crate becomes an optional dependency of the main `kirkforge` binary.
 
-2. **Tool wrappers**: Create `src/session/budget.rs` gated behind `#[cfg(feature = "budget")]`. The module wraps `plugin3_core`'s public API into 7 `Tool` trait implementations matching the existing plugin shell scripts:
+2. **Tool wrappers**: Create `src/session/budget.rs` gated behind `#[cfg(feature = "budget")]`. The module wraps `kf_budget_core`'s public API into 7 `Tool` trait implementations matching the existing plugin shell scripts:
    - `budget_status` — show current token budget status
    - `budget_set` — set the token budget ceiling
    - `budget_compact` — compact the budget store (reset used counter)
@@ -41,19 +41,19 @@ The same fold-in pattern established by ADR-046 (Stratum) applies: link the crat
 - Budget tools are direct Rust calls — no subprocess overhead, no JSON marshalling, no env-var lossiness.
 - The budget system gains access to `TokenBudget` state that persists across tool calls within a session (shared `Arc<Mutex<TokenBudget>>`).
 - The 4 hooks are in-process and receive **real event context** (tool result content via `HookContext.tool_result`, compact stats via `HookContext.compact_stats`) instead of the lossy env-var shim. The canned-JSON shim is eliminated.
-- Binary size impact is small: `plugin3-core` adds `blake3` and `chrono`, both already transitive dependencies.
+- Binary size impact is small: `kf-budget-core` adds `blake3` and `chrono`, both already transitive dependencies.
 - The feature flag allows building without Plugin3 support (`--no-default-features`), keeping the dependency tree lean for minimal builds.
 
 ### Negative
 
-- `plugin3-core` becomes a compile-time dependency of the default build. Before this change it was only linked transitively through `plugin3-cli`.
-- The hooks observe budget usage and, via `HeadTailSlicer`, slice oversized tool results before they enter the conversation (head+tail retained, middle offloaded to the process-global store and retrievable via `store_get`).
+- `kf-budget-core` becomes a compile-time dependency of the default build. Before this change it was only linked transitively through `kf-plugin-cli`.
+- The hooks observe budget usage; oversized tool results are sliced via `apply_budget_slice` (backed by `HeadTailSlicer`) before they enter the conversation (head+tail retained, middle offloaded to the session store and retrievable via `store_get`).
 
 ## Upgrade path
 
 The hooks now receive full event context. The remaining follow-up is to act on it:
 
-- `post-tool-bash` and `post-tool-write_file` could slice oversized outputs before results enter the conversation (currently they record and warn only).
+- `post-tool-bash` and `post-tool-write_file` slice oversized outputs before results enter the conversation via `apply_budget_slice`.
 - `pre-compact` could suggest which turns to compact rather than just resetting the used counter.
 - `session-start` could initialize budget state from the session's persisted config rather than the hard-coded defaults.
 

@@ -25,6 +25,10 @@ fn default_commit_max_file_size() -> u64 {
     5 * 1024 * 1024
 }
 
+fn default_diff_review() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SecurityConfig {
     #[serde(default)]
@@ -63,6 +67,8 @@ pub struct SecurityConfig {
     /// (ADR-054). Ignored when `docker.enabled` is true.
     #[serde(default)]
     pub sandbox: SandboxConfig,
+    #[serde(default = "default_diff_review")]
+    pub diff_review: bool,
     #[serde(default)]
     pub audit_log_path: Option<PathBuf>,
 }
@@ -87,6 +93,7 @@ impl Default for SecurityConfig {
             computer_use: ComputerUseConfig::default(),
             docker: DockerConfig::default(),
             sandbox: SandboxConfig::default(),
+            diff_review: true,
             audit_log_path: None,
         }
     }

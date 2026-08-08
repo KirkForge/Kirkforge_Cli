@@ -958,6 +958,10 @@ impl ContextIndex {
         &self.call_edges
     }
 
+    pub fn call_edges_mut(&mut self) -> &mut [CallEdge] {
+        &mut self.call_edges
+    }
+
     /// Index all `.rs`, `.ts`/`.tsx`, `.py`, and `.go` files under a directory.
     pub fn index_dir(&mut self, root: &std::path::Path) -> anyhow::Result<()> {
         for entry in walkdir::WalkDir::new(root)
@@ -1202,6 +1206,96 @@ impl ContextIndex {
         idx.resolve_imports(repo_root);
         idx.resolve_call_edges();
         (idx, changed_count)
+    }
+
+    /// Mtime-based incremental rebuild: compares current file mtimes
+    /// against the cached mtime map. Only re-indexes files whose mtime
+    /// changed. Falls back to git-diff-based rebuild if no mtime data.
+    ///
+    /// Returns `(index, changed_file_count)`.
+    pub fn mtime_rebuild(cached: CachedIndex, repo_root: &std::path::Path) -> (Self, usize) {
+        if cached.file_mtimes.is_empty() {
+            let changed = git_diff_files(&cached.head, repo_root);
+            let count = changed.len();
+            let idx = if changed.is_empty() {
+                Self::from_symbols_and_edges_and_calls(
+                    cached.symbols,
+                    cached.edges,
+                    cached.call_edges,
+                )
+            } else {
+                let (idx, c) = Self::incremental_rebuild(cached, repo_root);
+                debug_assert_eq!(c, count);
+                idx
+            };
+            return (idx, count);
+        }
+
+        let mut changed_paths: Vec<std::path::PathBuf> = Vec::new();
+        for (file_str, cached_mtime) in &cached.file_mtimes {
+            let path = std::path::PathBuf::from(file_str);
+            if let Ok(meta) = std::fs::metadata(&path) {
+                if let Ok(mtime) = meta.modified() {
+                    let current_ts = mtime
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+                    if current_ts != *cached_mtime {
+                        changed_paths.push(path);
+                    }
+                } else {
+                    changed_paths.push(path);
+                }
+            } else {
+                changed_paths.push(path);
+            }
+        }
+
+        if changed_paths.is_empty() {
+            return (
+                Self::from_symbols_and_edges_and_calls(
+                    cached.symbols,
+                    cached.edges,
+                    cached.call_edges,
+                ),
+                0,
+            );
+        }
+
+        let changed_set: std::collections::HashSet<String> = changed_paths
+            .iter()
+            .map(|p| p.to_string_lossy().to_string())
+            .collect();
+
+        let mut idx =
+            Self::from_symbols_and_edges_and_calls(cached.symbols, cached.edges, cached.call_edges);
+
+        idx.symbols
+            .retain(|s| !changed_set.contains(&s.file.to_string_lossy().to_string()));
+        idx.edges.retain(|e| {
+            !changed_set.contains(&e.source_file.to_string_lossy().to_string())
+                && e.resolved_file
+                    .as_ref()
+                    .is_none_or(|rf| !changed_set.contains(&rf.to_string_lossy().to_string()))
+        });
+        idx.call_edges.retain(|e| {
+            !changed_set.contains(&e.caller_file.to_string_lossy().to_string())
+                && e.callee_file
+                    .as_ref()
+                    .is_none_or(|cf| !changed_set.contains(&cf.to_string_lossy().to_string()))
+        });
+
+        for path in &changed_paths {
+            if path.is_file() {
+                if let Ok(content) = std::fs::read_to_string(path) {
+                    let _ = idx.index_file(path, &content);
+                }
+            }
+        }
+
+        idx.resolve_imports(repo_root);
+        idx.resolve_call_edges();
+        (idx, changed_paths.len())
     }
 }
 

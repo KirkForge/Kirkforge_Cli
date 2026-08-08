@@ -365,37 +365,146 @@ fn looks_like_html(body: &str) -> bool {
         || lower.contains("<body")
 }
 
-/// Lightweight regex-only HTML-to-text converter.
+/// Lightweight regex-only HTML-to-markdown converter.
 ///
-/// ponytail: the project already uses regex for the graph-emitter's
-/// heuristics; a real parser (html5ever / scraper) is the obvious upgrade but
-/// adds a dependency and attack surface. Regex stripping is sufficient for
-/// model consumption and keeps the tool self-contained.
+/// Converts common HTML elements to markdown equivalents; unrecognized tags
+/// are stripped. Table content is not converted (regex breaks on nested HTML
+/// tables) — table tags are stripped and cell text passes through as plain
+/// text.
+///
+/// ponytail: a real parser (html5ever / scraper) adds a dependency and attack
+/// surface. Regex is sufficient for model consumption. Whitespace inside
+/// fenced code blocks is collapsed (same as the rest of the output); a real
+/// parser would preserve it.
 fn html_to_text(html: &str) -> String {
+    static HEAD_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     static SCRIPT_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     static STYLE_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    static CB_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    static PRE_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    static IC_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    static H_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    static LINK_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    static STRONG_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    static EM_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    static HR_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    static BR_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    static P_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    static LIST_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     static TAG_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     static WS_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
 
-    let script_re =
+    let head = HEAD_RE.get_or_init(|| regex::Regex::new(r"(?is)<head[^>]*>.*?</head>").unwrap());
+    let script =
         SCRIPT_RE.get_or_init(|| regex::Regex::new(r"(?is)<script[^>]*>.*?</script>").unwrap());
-    let style_re =
+    let style =
         STYLE_RE.get_or_init(|| regex::Regex::new(r"(?is)<style[^>]*>.*?</style>").unwrap());
-    let tag_re = TAG_RE.get_or_init(|| regex::Regex::new(r"<[^>]+>").unwrap());
-    let ws_re = WS_RE.get_or_init(|| regex::Regex::new(r"[ \t]+").unwrap());
 
-    let no_scripts = script_re.replace_all(html, " ");
-    let no_styles = style_re.replace_all(&no_scripts, " ");
-    let no_tags = tag_re.replace_all(&no_styles, " ");
-    let decoded = html_entities::decode(&no_tags);
-    // Normalize line-oriented whitespace without allocating many times.
-    let collapsed: String = decoded
-        .lines()
-        .map(|line| ws_re.replace_all(line, " ").trim().to_string())
-        .filter(|line| !line.is_empty())
+    let s = head.replace_all(html, "");
+    let s = script.replace_all(&s, " ");
+    let s = style.replace_all(&s, " ");
+
+    let cb = CB_RE.get_or_init(|| {
+        regex::Regex::new(r"(?is)<pre[^>]*>\s*<code[^>]*>(.*?)</code>\s*</pre>").unwrap()
+    });
+    let s = cb.replace_all(&s, |c: &regex::Captures| {
+        format!(
+            "\n```\n{}\n```\n",
+            c.get(1).map(|m| m.as_str()).unwrap_or("")
+        )
+    });
+
+    let pre = PRE_RE.get_or_init(|| regex::Regex::new(r"(?is)<pre[^>]*>(.*?)</pre>").unwrap());
+    let s = pre.replace_all(&s, |c: &regex::Captures| {
+        format!(
+            "\n```\n{}\n```\n",
+            c.get(1).map(|m| m.as_str()).unwrap_or("")
+        )
+    });
+
+    let ic = IC_RE.get_or_init(|| regex::Regex::new(r"(?i)<code\b[^>]*>(.*?)</code>").unwrap());
+    let s = ic.replace_all(&s, |c: &regex::Captures| {
+        format!("`{}`", c.get(1).map(|m| m.as_str()).unwrap_or(""))
+    });
+
+    let h = H_RE.get_or_init(|| regex::Regex::new(r"(?i)<h([1-6])[^>]*>(.*?)</h[1-6]>").unwrap());
+    let s = h.replace_all(&s, |c: &regex::Captures| {
+        let n = c
+            .get(1)
+            .and_then(|m| m.as_str().parse::<usize>().ok())
+            .unwrap_or(1);
+        format!(
+            "{} {}\n",
+            "#".repeat(n),
+            c.get(2).map(|m| m.as_str()).unwrap_or("").trim()
+        )
+    });
+
+    let link = LINK_RE.get_or_init(|| {
+        regex::Regex::new(r#"(?i)<a\b[^>]*href=["']([^"']+)["'][^>]*>(.*?)</a>"#).unwrap()
+    });
+    let s = link.replace_all(&s, "[$2]($1)");
+
+    let strong =
+        STRONG_RE.get_or_init(|| regex::Regex::new(r"(?i)</?(?:strong|b)\b[^>]*>").unwrap());
+    let s = strong.replace_all(&s, "**");
+
+    let em = EM_RE.get_or_init(|| regex::Regex::new(r"(?i)</?(?:em|i)\b[^>]*>").unwrap());
+    let s = em.replace_all(&s, "*");
+
+    let hr = HR_RE.get_or_init(|| regex::Regex::new(r"(?i)<hr\b\s*/?>").unwrap());
+    let s = hr.replace_all(&s, "\n---\n");
+
+    let br = BR_RE.get_or_init(|| regex::Regex::new(r"(?i)<br\b\s*/?>").unwrap());
+    let s = br.replace_all(&s, "\n");
+
+    let p = P_RE.get_or_init(|| regex::Regex::new(r"(?i)</?p\b[^>]*>").unwrap());
+    let s = p.replace_all(&s, "\n\n");
+
+    let list = LIST_RE
+        .get_or_init(|| regex::Regex::new(r"(?i)<(?:ul|ol|li)\b[^>]*>|</(?:ul|ol)\b>").unwrap());
+    let mut stack: Vec<bool> = Vec::new();
+    let s = list.replace_all(&s, |c: &regex::Captures| {
+        let t = c.get(0).unwrap().as_str().to_ascii_lowercase();
+        if t.starts_with("<ol") {
+            stack.push(true);
+            "\n".into()
+        } else if t.starts_with("<ul") {
+            stack.push(false);
+            "\n".into()
+        } else if t == "</ol>" || t == "</ul>" {
+            stack.pop();
+            "\n".into()
+        } else {
+            let indent = "  ".repeat(stack.len().saturating_sub(1));
+            let bullet = if stack.last().copied().unwrap_or(false) {
+                "1."
+            } else {
+                "-"
+            };
+            format!("\n{indent}{bullet} ")
+        }
+    });
+
+    let tag = TAG_RE.get_or_init(|| regex::Regex::new(r"<[^>]+>").unwrap());
+    let s = tag.replace_all(&s, " ");
+
+    let s = html_entities::decode(&s);
+
+    let ws = WS_RE.get_or_init(|| regex::Regex::new(r"[ \t]+").unwrap());
+    s.lines()
+        .map(|line| {
+            let leading = line.len() - line.trim_start().len();
+            let body = ws.replace_all(&line[leading..], " ").trim_end().to_string();
+            if body.is_empty() {
+                String::new()
+            } else {
+                format!("{}{body}", &line[..leading])
+            }
+        })
+        .filter(|line| !line.trim().is_empty())
         .collect::<Vec<_>>()
-        .join("\n");
-    collapsed
+        .join("\n")
 }
 
 // Minimal HTML entity decoder for the tokens most likely to appear in web pages.
@@ -1076,6 +1185,93 @@ mod tests {
         assert!(lines.iter().all(|l| !l.trim().is_empty()), "got: {out}");
         assert!(lines.iter().any(|l| l.contains("a")));
         assert!(lines.iter().any(|l| l.contains("b")));
+    }
+
+    #[test]
+    fn html_to_text_strips_head_content() {
+        let html = "<html><head><title>Hidden</title><meta charset='utf-8'></head><body>visible</body></html>";
+        let out = html_to_text(html);
+        assert!(out.contains("visible"), "body text missing: {out}");
+        assert!(!out.contains("Hidden"), "title should be stripped: {out}");
+    }
+
+    #[test]
+    fn html_to_text_converts_headings() {
+        let html = "<h1>One</h1><h2>Two</h2><h3>Three</h3><h6>Six</h6>";
+        let out = html_to_text(html);
+        assert!(out.contains("# One"), "h1: {out}");
+        assert!(out.contains("## Two"), "h2: {out}");
+        assert!(out.contains("### Three"), "h3: {out}");
+        assert!(out.contains("###### Six"), "h6: {out}");
+    }
+
+    #[test]
+    fn html_to_text_converts_unordered_list() {
+        let html = "<ul><li>alpha</li><li>beta</li></ul>";
+        let out = html_to_text(html);
+        assert!(out.contains("- alpha"), "bullet: {out}");
+        assert!(out.contains("- beta"), "bullet: {out}");
+    }
+
+    #[test]
+    fn html_to_text_converts_ordered_list() {
+        let html = "<ol><li>first</li><li>second</li></ol>";
+        let out = html_to_text(html);
+        assert!(out.contains("1. first"), "numbered: {out}");
+        assert!(out.contains("1. second"), "numbered: {out}");
+    }
+
+    #[test]
+    fn html_to_text_indents_nested_lists() {
+        let html = "<ul><li>top<ul><li>nested</li></ul></li></ul>";
+        let out = html_to_text(html);
+        assert!(out.contains("- top"), "top item: {out}");
+        assert!(out.contains("  - nested"), "nested indent: {out}");
+    }
+
+    #[test]
+    fn html_to_text_converts_code_blocks() {
+        let html = "<pre><code>fn main() {\n    println!(\"hi\");\n}</code></pre>";
+        let out = html_to_text(html);
+        assert!(out.contains("```"), "fenced: {out}");
+        assert!(out.contains("fn main()"), "code body: {out}");
+    }
+
+    #[test]
+    fn html_to_text_converts_inline_code() {
+        let html = "<p>use <code>std::fs</code> for files</p>";
+        let out = html_to_text(html);
+        assert!(out.contains("`std::fs`"), "backtick: {out}");
+    }
+
+    #[test]
+    fn html_to_text_converts_links() {
+        let html = r#"<a href="https://example.com">click here</a>"#;
+        let out = html_to_text(html);
+        assert!(
+            out.contains("[click here](https://example.com)"),
+            "link: {out}"
+        );
+    }
+
+    #[test]
+    fn html_to_text_converts_bold_and_italic() {
+        let html = "<p><strong>bold</strong> and <b>also bold</b>, <em>italic</em> and <i>also italic</i></p>";
+        let out = html_to_text(html);
+        assert!(out.contains("**bold**"), "strong: {out}");
+        assert!(out.contains("**also bold**"), "b: {out}");
+        assert!(out.contains("*italic*"), "em: {out}");
+        assert!(out.contains("*also italic*"), "i: {out}");
+    }
+
+    #[test]
+    fn html_to_text_converts_hr_and_br() {
+        let html = "<p>above</p><hr/><p>middle</p><p>line1<br>line2</p>";
+        let out = html_to_text(html);
+        assert!(out.contains("---"), "hr: {out}");
+        let lines: Vec<&str> = out.lines().collect();
+        let line_idx = lines.iter().position(|l| l.contains("line1")).unwrap();
+        assert_eq!(lines[line_idx + 1], "line2", "br split: {out}");
     }
 
     #[test]

@@ -139,6 +139,7 @@ pub async fn main() {
             harden,
             no_network,
             block_edits,
+            i_accept_unsandboxed,
             no_trace,
         } => {
             run_session(RunArgs {
@@ -162,6 +163,7 @@ pub async fn main() {
                 harden,
                 no_network,
                 block_edits,
+                i_accept_unsandboxed,
                 no_trace,
             })
             .await

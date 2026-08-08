@@ -7,6 +7,13 @@
 //!
 //! This module is intentionally small: the full ADC (Application Default
 //! Credentials) flow is an extension point for a future iteration.
+//!
+//! ponytail: unit-testing the `Authorization: Bearer <token>` header
+//! construction is not possible without mocking `yup_oauth2`'s async
+//! authenticator — the token fetch hits Google's OAuth server. The
+//! `anthropic_vertex.rs` integration test validates the header format
+//! end-to-end when credentials are present. Upgrade path: inject an
+//! `Authenticator` trait so tests can provide a fake token.
 
 use anyhow::Context;
 

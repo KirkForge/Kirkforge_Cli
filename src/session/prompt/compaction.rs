@@ -75,18 +75,22 @@ pub const DEFAULT_PRESERVE_RECENT: usize = 8;
 
 /// Estimate tokens for a single message.
 ///
-/// Uses the same `chars/4 + thinking + tool_calls JSON` heuristic as
+/// Uses the same `count_tokens` + thinking + tool_calls JSON heuristic as
 /// `PromptBuilder` so the compaction path reports numbers consistent
 /// with the budget checks in the request builder.
 fn estimate_message_tokens(m: &Message) -> usize {
-    let content = m.content.len() / 4;
-    let thinking = m.thinking.as_ref().map(|t| t.len() / 4).unwrap_or(0);
+    let content = super::count_tokens(&m.content);
+    let thinking = m
+        .thinking
+        .as_ref()
+        .map(|t| super::count_tokens(t))
+        .unwrap_or(0);
     let tool_calls = m
         .tool_calls
         .as_ref()
         .map(|calls| {
             serde_json::to_string(calls)
-                .map(|s| s.len() / 4)
+                .map(|s| super::count_tokens(&s))
                 .unwrap_or(0)
         })
         .unwrap_or(0);
@@ -230,6 +234,38 @@ pub fn compact_to_budget(
         tokens_before: original_tokens,
         tokens_after,
     }
+}
+
+/// Extract unresolved verifier findings from a message list for pinning
+/// in the compaction tail (WO 22.6-R6).
+///
+/// Scans for `Role::Tool` messages whose `tool_name` starts with
+/// `"verifier:"` and whose content indicates the issue was NOT resolved
+/// (`"Verification failed"`, `"Failed to auto-fix"`, `"Failed to run
+/// formatter"`). Returns a formatted summary string, or `None` if the
+/// history contains no unresolved findings.
+pub fn extract_unresolved_verifier_findings(messages: &[Message]) -> Option<String> {
+    let findings: Vec<&str> = messages
+        .iter()
+        .filter(|m| {
+            m.role == Role::Tool
+                && m.tool_name
+                    .as_ref()
+                    .is_some_and(|n| n.starts_with("verifier:"))
+                && (m.content.contains("Verification failed:")
+                    || m.content.contains("Failed to auto-fix:")
+                    || m.content.contains("Failed to run formatter:"))
+        })
+        .map(|m| m.content.trim())
+        .collect();
+
+    if findings.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "[Verifier findings from earlier turns — still unresolved]\n{}",
+        findings.join("\n")
+    ))
 }
 
 /// Backward-compatible naive compaction.
@@ -684,5 +720,95 @@ mod tests {
             .len()
             / 4;
         assert_eq!(estimate_message_tokens(&m), extra);
+    }
+
+    // ── extract_unresolved_verifier_findings ──
+
+    #[test]
+    fn no_findings_when_history_clean() {
+        let msgs = vec![user("q"), assistant("a"), tool_result("ok", "c1", "bash")];
+        assert!(extract_unresolved_verifier_findings(&msgs).is_none());
+    }
+
+    #[test]
+    fn extracts_verification_failed() {
+        let msgs = vec![
+            user("q"),
+            assistant("a"),
+            tool_result(
+                "Verification failed: unused import — use std::fs is unused",
+                "c1",
+                "verifier:lint",
+            ),
+        ];
+        let s = extract_unresolved_verifier_findings(&msgs).unwrap();
+        assert!(s.contains("[Verifier findings from earlier turns"));
+        assert!(s.contains("Verification failed:"));
+    }
+
+    #[test]
+    fn extracts_failed_auto_fix() {
+        let msgs = vec![tool_result(
+            "Failed to auto-fix: warning — mismatched braces",
+            "c2",
+            "verifier:rustfmt",
+        )];
+        let s = extract_unresolved_verifier_findings(&msgs).unwrap();
+        assert!(s.contains("Failed to auto-fix:"));
+    }
+
+    #[test]
+    fn skips_resolved_auto_fix() {
+        let msgs = vec![tool_result(
+            "Auto-fixed: warning — removed unused import",
+            "c3",
+            "verifier:lint",
+        )];
+        assert!(extract_unresolved_verifier_findings(&msgs).is_none());
+    }
+
+    #[test]
+    fn skips_skipped_verifier() {
+        let msgs = vec![tool_result(
+            "verification skipped: tool not available",
+            "c4",
+            "verifier:security",
+        )];
+        assert!(extract_unresolved_verifier_findings(&msgs).is_none());
+    }
+
+    #[test]
+    fn skips_non_verifier_tool_results() {
+        let msgs = vec![tool_result(
+            "Verification failed: something broke",
+            "c5",
+            "bash",
+        )];
+        assert!(extract_unresolved_verifier_findings(&msgs).is_none());
+    }
+
+    #[test]
+    fn combines_multiple_unresolved_findings() {
+        let msgs = vec![
+            tool_result(
+                "Verification failed: unused import — src/main.rs",
+                "c1",
+                "verifier:lint",
+            ),
+            tool_result(
+                "Failed to auto-fix: error — mismatched braces",
+                "c2",
+                "verifier:rustfmt",
+            ),
+            tool_result(
+                "Auto-fixed: warning — removed dead code",
+                "c3",
+                "verifier:lint",
+            ),
+        ];
+        let s = extract_unresolved_verifier_findings(&msgs).unwrap();
+        assert!(s.contains("Verification failed:"));
+        assert!(s.contains("Failed to auto-fix:"));
+        assert!(!s.contains("Auto-fixed:"));
     }
 }

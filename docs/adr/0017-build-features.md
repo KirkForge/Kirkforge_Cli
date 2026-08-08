@@ -25,7 +25,7 @@ one delta: Plugin3 does not ship a `yaml` feature gate
 [workspace]
 resolver = "2"
 members = [
-    "crates/plugin3-core",
+    "crates/kf-budget-core",
     "crates/plugin3-hosts",
     "crates/plugin3-cli",
 ]
@@ -42,7 +42,7 @@ license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
 # Internal
-plugin3-core = { path = "crates/plugin3-core", version = "0.1.0" }
+kf-budget-core = { path = "crates/kf-budget-core", version = "0.1.0" }
 plugin3-hosts = { path = "crates/plugin3-hosts", version = "0.1.0" }
 
 # External
@@ -185,7 +185,7 @@ contributor experience failure.
 
 - A single `tokio` runtime in a future ADR. Not now.
 - Native dependencies via the `bundled` feature (`rusqlite`).
-- `#[cfg(feature = "...")]` gating throughout `plugin3-core`
+- `#[cfg(feature = "...")]` gating throughout `kf-budget-core`
   to keep the minimum binary small.
 
 ## Consequences

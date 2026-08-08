@@ -249,6 +249,11 @@ impl Tool for Bash {
                         "type": "boolean",
                         "description": "Run in background. Use bash_status to check status.",
                         "default": false
+                    },
+                    "interactive": {
+                        "type": "boolean",
+                        "description": "Allocate a PTY for interactive commands (requires --features pty). Use for vim, top, REPLs. Ignored when PTY support is not compiled in.",
+                        "default": false
                     }
                 },
                 "required": ["command"]
@@ -330,6 +335,41 @@ impl Tool for Bash {
                 ))),
             }
         } else {
+            let interactive = args
+                .get("interactive")
+                .and_then(|i| i.as_bool())
+                .unwrap_or(false);
+
+            #[cfg(feature = "pty")]
+            if interactive {
+                use crate::session::bash_runner::pty::run_with_pty;
+                return match run_with_pty(&cmd, &workdir_path, 80, 24) {
+                    Ok(pty_result) => {
+                        let code = pty_result.exit_code.unwrap_or(-1);
+                        if code == 0 {
+                            ToolOutcome::Success {
+                                content: pty_result.stdout,
+                            }
+                        } else {
+                            ToolOutcome::Failure(ToolError::Execution {
+                                message: format!(
+                                    "PTY command exited with code {code}\n{}",
+                                    pty_result.stdout
+                                ),
+                                exit_code: Some(code),
+                                stderr: String::new(),
+                            })
+                        }
+                    }
+                    Err(e) => ToolOutcome::Failure(ToolError::Internal {
+                        message: format!("PTY allocation failed: {e}"),
+                    }),
+                };
+            }
+
+            #[cfg(not(feature = "pty"))]
+            let _ = interactive;
+
             // Normal foreground execution — use Docker if configured.
             let result = if self.docker_config.as_ref().map_or(false, |c| c.enabled) {
                 match self
@@ -1212,6 +1252,7 @@ mod tests {
             harden: true,
             no_network: false,
             block_edits: false,
+            accept_unsandboxed: false,
             cpu_limit_secs: 1,
             memory_limit_mb: 2048,
             filesize_limit_mb: 512,

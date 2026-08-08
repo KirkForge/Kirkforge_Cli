@@ -77,6 +77,7 @@ pub fn parse_slice_marker(s: &str) -> Option<&str> {
 
 pub struct InMemoryOffloadStore {
     map: Mutex<HashMap<String, Vec<u8>>>,
+    max_entries: Option<usize>,
 }
 
 impl Default for InMemoryOffloadStore {
@@ -90,6 +91,37 @@ impl InMemoryOffloadStore {
     pub fn new() -> Self {
         Self {
             map: Mutex::new(HashMap::new()),
+            max_entries: None,
+        }
+    }
+
+    /// Create a new in-memory store that evicts oldest entries whenever
+    /// it exceeds `max_entries`. Call [`Self::evict_if_over_cap`] after
+    /// inserts, or rely on the automatic eviction in [`OffloadStore::put`].
+    // ponytail: per-session store, cap 1000 entries, evict FIFO if throughput matters
+    #[must_use]
+    pub fn new_with_cap(max_entries: usize) -> Self {
+        Self {
+            map: Mutex::new(HashMap::new()),
+            max_entries: Some(max_entries),
+        }
+    }
+
+    /// Remove the oldest entries when the store exceeds its cap.
+    /// No-op when the store has no cap or is within limits.
+    pub fn evict_if_over_cap(&self) {
+        let max = match self.max_entries {
+            Some(m) => m,
+            None => return,
+        };
+        let mut guard = self.map.lock().unwrap_or_else(|e| e.into_inner());
+        let excess = guard.len().saturating_sub(max);
+        if excess == 0 {
+            return;
+        }
+        let keys_to_remove: Vec<String> = guard.keys().take(excess).cloned().collect();
+        for key in keys_to_remove {
+            guard.remove(&key);
         }
     }
 }
@@ -101,6 +133,7 @@ impl OffloadStore for InMemoryOffloadStore {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .insert(key.clone(), bytes.to_vec());
+        self.evict_if_over_cap();
         Ok(key)
     }
     fn get(&self, key: &str) -> Result<Vec<u8>, StoreError> {

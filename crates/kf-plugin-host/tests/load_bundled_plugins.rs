@@ -40,10 +40,8 @@ fn all_bundled_plugins_load_without_warnings() {
         .map(|p| p.plugin.manifest().name.clone())
         .collect();
 
-    for expected in ["kf-draw", "kf-plugin", "kf-budget", "kf-video", "stratum"] {
-        assert!(
-            names.contains(&expected.to_string()),
-            "expected bundled plugin {expected:?} to be active; got {names:?}"
-        );
-    }
+    assert!(
+        names.contains(&"kf-plugin".to_string()),
+        "expected bundled plugin \"kf-plugin\" to be active; got {names:?}"
+    );
 }

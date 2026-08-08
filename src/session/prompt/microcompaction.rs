@@ -344,14 +344,18 @@ fn deterministic_compaction_summary(messages: &[Message]) -> String {
 }
 
 fn estimate_message_tokens(m: &Message) -> usize {
-    let content = m.content.len() / 4;
-    let thinking = m.thinking.as_ref().map(|t| t.len() / 4).unwrap_or(0);
+    let content = super::count_tokens(&m.content);
+    let thinking = m
+        .thinking
+        .as_ref()
+        .map(|t| super::count_tokens(t))
+        .unwrap_or(0);
     let tool_calls = m
         .tool_calls
         .as_ref()
         .map(|calls| {
             serde_json::to_string(calls)
-                .map(|s| s.len() / 4)
+                .map(|s| super::count_tokens(&s))
                 .unwrap_or(0)
         })
         .unwrap_or(0);

@@ -24,7 +24,7 @@ Promote the VS Code extension to a shippable state with:
 
 6. **Pure utilities** (`format.ts`): Extracted `escapeHtml`, `truncate`, and `formatTodoHtml` into a module with no vscode dependency for testability.
 
-7. **`.vsix` packaging**: `@vscode/vsce` as a dev dependency. `npm run package:vsce` produces `kirkforge-vscode-0.2.0.vsix`. `.vscodeignore` excludes source, test, and dev files.
+7. **`.vsix` packaging**: `@vscode/vsce` as a dev dependency. `npm run package:vsce` produces `kf-vscode-0.2.0.vsix`. `.vscodeignore` excludes source, test, and dev files.
 
 8. **CI `vscode` job**: Builds, tests, and packages the extension on every PR. Uploads the `.vsix` as a build artifact.
 

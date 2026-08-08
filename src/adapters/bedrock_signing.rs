@@ -270,8 +270,19 @@ mod tests {
         assert_eq!(signed.method, reqwest::Method::POST);
         assert_eq!(signed.url, url);
         assert!(signed.headers.contains_key("authorization"));
+        let auth_val = signed
+            .headers
+            .get("authorization")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(
+            auth_val.starts_with("AWS4-HMAC-SHA256"),
+            "authorization header must start with AWS4-HMAC-SHA256, got: {auth_val}"
+        );
         assert!(signed.headers.contains_key("x-amz-content-sha256"));
         assert!(signed.headers.contains_key("host"));
+        assert!(signed.headers.contains_key("x-amz-date"));
         match prev_access {
             Some(v) => std::env::set_var(access_key, v),
             None => std::env::remove_var(access_key),

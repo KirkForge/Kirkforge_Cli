@@ -358,25 +358,25 @@ async fn handle_session_picker_keys(
 }
 
 fn handle_search_mode_keys(key: KeyEvent, state: &mut AppState) -> Option<anyhow::Result<()>> {
-    if !state.search_mode {
+    if !state.search.mode {
         return None;
     }
     match key.code {
         KeyCode::Esc => {
-            state.search_mode = false;
-            state.search_query.clear();
-            state.search_matches.clear();
-            state.search_match_idx = 0;
+            state.search.mode = false;
+            state.search.query.clear();
+            state.search.matches.clear();
+            state.search.match_idx = 0;
         }
         KeyCode::Enter => {
             let matches = crate::tui::search::compute_matches(
                 state.messages.make_contiguous(),
-                &state.search_query,
+                &state.search.query,
             );
-            state.search_matches = matches;
-            state.search_match_idx = 0;
-            if !state.search_matches.is_empty() {
-                state.search_mode = false;
+            state.search.matches = matches;
+            state.search.match_idx = 0;
+            if !state.search.matches.is_empty() {
+                state.search.mode = false;
                 if let Some(offset) = crate::tui::widgets::chat::scroll_offset_for_search_match(
                     state,
                     state.last_content_width,
@@ -387,16 +387,16 @@ fn handle_search_mode_keys(key: KeyEvent, state: &mut AppState) -> Option<anyhow
             }
         }
         KeyCode::Backspace => {
-            state.search_query.pop();
+            state.search.query.pop();
         }
         KeyCode::Char(c) => {
             if !key.modifiers.contains(KeyModifiers::CONTROL) {
-                state.search_query.push(c);
+                state.search.query.push(c);
             } else if c == 'c' {
-                state.search_mode = false;
-                state.search_query.clear();
-                state.search_matches.clear();
-                state.search_match_idx = 0;
+                state.search.mode = false;
+                state.search.query.clear();
+                state.search.matches.clear();
+                state.search.match_idx = 0;
                 state.input.clear();
                 state.cursor_position = 0;
             }
@@ -407,16 +407,16 @@ fn handle_search_mode_keys(key: KeyEvent, state: &mut AppState) -> Option<anyhow
 }
 
 fn handle_search_nav_keys(key: KeyEvent, state: &mut AppState) -> Option<anyhow::Result<()>> {
-    if state.search_matches.is_empty() || state.search_mode {
+    if state.search.matches.is_empty() || state.search.mode {
         return None;
     }
     match search_nav_direction(&key) {
         Some(SearchDirection::Next) => {
             if let Some(idx) = crate::tui::search::navigate_next(
-                state.search_match_idx,
-                state.search_matches.len(),
+                state.search.match_idx,
+                state.search.matches.len(),
             ) {
-                state.search_match_idx = idx;
+                state.search.match_idx = idx;
                 if let Some(offset) = crate::tui::widgets::chat::scroll_offset_for_search_match(
                     state,
                     state.last_content_width,
@@ -428,10 +428,10 @@ fn handle_search_nav_keys(key: KeyEvent, state: &mut AppState) -> Option<anyhow:
         }
         Some(SearchDirection::Prev) => {
             if let Some(idx) = crate::tui::search::navigate_prev(
-                state.search_match_idx,
-                state.search_matches.len(),
+                state.search.match_idx,
+                state.search.matches.len(),
             ) {
-                state.search_match_idx = idx;
+                state.search.match_idx = idx;
                 if let Some(offset) = crate::tui::widgets::chat::scroll_offset_for_search_match(
                     state,
                     state.last_content_width,
@@ -444,6 +444,145 @@ fn handle_search_nav_keys(key: KeyEvent, state: &mut AppState) -> Option<anyhow:
         None => return None,
     }
     Some(Ok(()))
+}
+
+/// Handle Enter on a non-Chat tab. Each tab gets a minimal action:
+/// - Models (F2): show model details in a status message
+/// - Plugins (F3): toggle the selected plugin on/off
+/// - Jobs (F4): list all jobs
+/// - Settings (F5): show the value of the selected config key
+/// - Threads (F6): no-op (session picker handles its own Enter)
+async fn handle_tab_enter(
+    state: &mut AppState,
+    ctx: &HandleInputContext<'_>,
+) -> anyhow::Result<()> {
+    let sel = match state.tab_list_state {
+        Some(i) => i,
+        None => {
+            state
+                .messages
+                .push_back(ConversationEntry::new("system", "No row selected."));
+            return Ok(());
+        }
+    };
+
+    match state.active_tab {
+        ActiveTab::Models => {
+            if let Some(ref info) = state.model_info {
+                let msg = format!(
+                    "Model: {} (context: {} tokens)",
+                    info.name,
+                    crate::tui::rendering::format_token_count(info.max_context_tokens)
+                );
+                state
+                    .messages
+                    .push_back(ConversationEntry::new("system", msg));
+            } else {
+                state
+                    .messages
+                    .push_back(ConversationEntry::new("system", "No model connected."));
+            }
+            state.mark_dirty();
+        }
+        ActiveTab::Plugins => {
+            let name = {
+                let config = crate::shared::read_shared_config(&state.config);
+                let names: Vec<String> = config.tools.plugin_sources.keys().cloned().collect();
+                // render_plugins has 2 header lines before data rows.
+                let idx = sel.saturating_sub(2);
+                match names.get(idx) {
+                    Some(n) => n.clone(),
+                    None => {
+                        state
+                            .messages
+                            .push_back(ConversationEntry::new("system", "No plugin at this row."));
+                        return Ok(());
+                    }
+                }
+            };
+            let slash_ctx = SlashContext {
+                cancel_tx: ctx.cancel_tx,
+                resume_tx: ctx.resume_tx,
+                compact_tx: ctx.compact_tx,
+                model_tx: ctx.model_tx,
+                undo_tx: ctx.undo_tx,
+                config_tx: ctx.config_tx,
+                plan_tx: ctx.plan_tx,
+                persona_tx: ctx.persona_tx,
+                event_tx: ctx.event_tx,
+                plugin_reload_tx: ctx.plugin_reload_tx,
+            };
+            dispatch_slash_command("/plugins", &format!("toggle {name}"), state, &slash_ctx)
+                .await?;
+            state.mark_dirty();
+        }
+        ActiveTab::Jobs => {
+            let msg = crate::tui::commands::handle_jobs_command("", state).await;
+            state
+                .messages
+                .push_back(ConversationEntry::new("system", msg));
+            state.mark_dirty();
+        }
+        ActiveTab::Settings => {
+            let line = {
+                let config = crate::shared::read_shared_config(&state.config);
+                let lines = settings_keys_and_values(&config);
+                // render_settings has 2 header lines before data rows.
+                let idx = sel.saturating_sub(2);
+                match lines.get(idx) {
+                    Some(l) => l.clone(),
+                    None => "No setting at this row.".to_string(),
+                }
+            };
+            state
+                .messages
+                .push_back(ConversationEntry::new("system", line));
+            state.mark_dirty();
+        }
+        ActiveTab::Threads | ActiveTab::Chat => {}
+    }
+    Ok(())
+}
+
+/// Collect Settings tab key=value lines in the same order as
+/// `render_settings`, so the Enter handler can look up the selected row.
+fn settings_keys_and_values(config: &Config) -> Vec<String> {
+    let mut lines = Vec::new();
+    lines.push(format!("default_model: {}", config.model.default_model));
+    lines.push(format!("ollama_host: {}", config.model.ollama_host));
+    lines.push(format!(
+        "anthropic_provider: {}",
+        config.model.anthropic_provider
+    ));
+    lines.push(format!("cache_enabled: {}", config.model.cache_enabled));
+    lines.push(format!("auto_approve: {}", config.security.auto_approve));
+    lines.push(format!(
+        "sandbox_dir: {}",
+        config.security.sandbox_dir.as_deref().unwrap_or("(none)")
+    ));
+    lines.push(format!(
+        "block_dotfiles: {}",
+        config.security.block_dotfiles
+    ));
+    lines.push(format!(
+        "bang_requires_approval: {}",
+        config.security.bang_requires_approval
+    ));
+    lines.push(format!("dry_run: {}", config.tools.dry_run));
+    lines.push(format!("follow_symlinks: {}", config.tools.follow_symlinks));
+    lines.push(format!(
+        "max_tool_calls_per_turn: {}",
+        config.tools.max_tool_calls_per_turn
+    ));
+    lines.push(format!(
+        "carryover_enabled: {}",
+        config.session.carryover_enabled
+    ));
+    lines.push(format!(
+        "worktree_enabled: {}",
+        config.session.worktree_enabled
+    ));
+    lines
 }
 
 pub(crate) async fn handle_input_key(
@@ -488,6 +627,9 @@ pub(crate) async fn handle_input_key(
                 };
             }
             state.active_tab = new_tab;
+            if new_tab == ActiveTab::Jobs && state.cached_jobs_output.is_none() {
+                state.jobs_dirty = true;
+            }
             state.mark_dirty();
         }
         KeyCode::Char(c) => {
@@ -569,11 +711,11 @@ pub(crate) async fn handle_input_key(
                 // Ctrl+F is a no-op while in search mode (the
                 // input box is the search box; we don't want to
                 // toggle out of it).
-                if c == 'f' && !state.search_mode {
-                    state.search_mode = true;
-                    state.search_query.clear();
-                    state.search_matches.clear();
-                    state.search_match_idx = 0;
+                if c == 'f' && !state.search.mode {
+                    state.search.mode = true;
+                    state.search.query.clear();
+                    state.search.matches.clear();
+                    state.search.match_idx = 0;
                     return Ok(());
                 }
                 match c {
@@ -809,6 +951,11 @@ pub(crate) async fn handle_input_key(
             state.cursor_position = char_index_for_line_col(&state.input, line, line_len);
         }
         KeyCode::Enter => {
+            // On non-Chat tabs, Enter invokes a tab-specific action.
+            if state.active_tab != ActiveTab::Chat {
+                handle_tab_enter(state, ctx).await?;
+                return Ok(());
+            }
             // Shift+Enter / Alt+Enter insert a literal newline instead of
             // submitting the input. This is the only way to type multi-line
             // prompts in the TUI input box.

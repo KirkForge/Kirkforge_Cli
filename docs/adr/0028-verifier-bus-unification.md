@@ -24,7 +24,7 @@ implementation record.
 KirkForge has two verifier systems that overlap rather than cooperate:
 
 1. **Rust runtime verifier bus** — `src/session/verifier/` with priority slots, a correction loop, and built-in security / lint / git / rustfmt / plugin verifiers. It is event-driven via `EventBus` and produces `Verdict::{Clean,Fixable,Unfixable,Skipped}`.
-2. **TypeScript plugin orchestrator verifier bus** — `npm/kirkforge-plugin/packages/orchestrator/src/` with emitters (`SecurityEmitter`, `GraphEmitter`, language-specific lint/type/import engines) that write KirkForge events to a shared event bus, a `truth-model.ts` final verdict, and an LLM-prompt-based correction loop.
+2. **TypeScript plugin orchestrator verifier bus** — `npm/kf-plugin/packages/orchestrator/src/` with emitters (`SecurityEmitter`, `GraphEmitter`, language-specific lint/type/import engines) that write KirkForge events to a shared event bus, a `truth-model.ts` final verdict, and an LLM-prompt-based correction loop.
 
 Both detect security issues, lint problems, and structural graph changes. Neither can see the other. A Rust-only session cannot benefit from the TS graph/import analysis; a TS-only plugin session cannot benefit from the Rust in-process clippy/rustfmt/security verifiers. This is the "merge" seam identified in ADR-007 and the workorder.
 
@@ -154,7 +154,7 @@ A `FixSuggestion` is the common fix representation:
 
 The bridge is a thin adapter in each host:
 
-- **Rust bridge** — a new `kirkforge-plugin-host` verifier adapter (or a small crate) that, when a TS orchestrator is configured as an MCP server, forwards Rust `BusEvent`s as KVB events over stdio and receives KVB events back.
+- **Rust bridge** — a new `kf-plugin-host` verifier adapter (or a small crate) that, when a TS orchestrator is configured as an MCP server, forwards Rust `BusEvent`s as KVB events over stdio and receives KVB events back.
 - **TS bridge** — a new package `@kirkforge/verifier-bridge` that receives KVB events from the Rust runtime (when invoked as a subprocess/MCP server) and emits them into the orchestrator's event bus.
 
 The wire format is NDJSON lines of KVB events. Both sides must ignore unknown event kinds (forward compatibility).
@@ -190,7 +190,7 @@ The wire format is NDJSON lines of KVB events. Both sides must ignore unknown ev
   shipped in WO 10.8. The Rust `TsOrchestratorBridgeVerifier`
   (`src/session/verifier/bus.rs`) implements `BusVerifier` by shelling
   out to the TS orchestrator's bridge emitter
-  (`npm/kirkforge-plugin/packages/orchestrator/src/bridge-emitter.ts`)
+   (`npm/kf-plugin/packages/orchestrator/src/bridge-emitter.ts`)
   and parsing NDJSON verdicts from stdout. The wire format is one JSON
   object per line:
   `{"verifier":"security","severity":"error","file":"src/foo.ts","line":42,"message":"...","rule":"no-eval"}`.
@@ -204,7 +204,7 @@ The wire format is NDJSON lines of KVB events. Both sides must ignore unknown ev
   `VerdictEntry { Severity::Error }` → `has_errors()`. The TS-side
   bridge emitter test (`bridge-emitter.test.ts`) verifies the
   event-to-NDJSON translation. The Node SDK plugin
-  (`kirkforge-plugin`) still runs its TS-based verifiers through the
+    (`kf-plugin`) still runs its TS-based verifiers through the
   legacy event-driven `Verifier` trait path
   (`PluginVerifierAdapter`), which is retained for backward
   compatibility.

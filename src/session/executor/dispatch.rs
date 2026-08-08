@@ -131,14 +131,29 @@ impl Executor {
                 if let Ok(mut bus) = bus_lock.lock() {
                     bus.run(&ctx);
                     for entry in bus.verdicts() {
-                        if entry.severity == crate::session::verifier::bus::Severity::Error {
-                            corrections.push(CorrectionResult {
-                                verifier: format!("{}", entry.source),
-                                success: false,
-                                message: format!("[{}] {}", entry.source, entry.message),
-                                fix: None,
-                            });
-                        }
+                        let is_error =
+                            entry.severity == crate::session::verifier::bus::Severity::Error;
+                        corrections.push(CorrectionResult {
+                            verifier: format!("{}", entry.source),
+                            success: !is_error,
+                            message: format!(
+                                "[{}] {}:{} {}",
+                                entry.severity,
+                                entry
+                                    .file
+                                    .as_ref()
+                                    .map(|f| f.display().to_string())
+                                    .unwrap_or_else(|| "—".to_string()),
+                                entry
+                                    .line
+                                    .map(|l| l.to_string())
+                                    .unwrap_or_else(|| "—".to_string()),
+                                entry.message
+                            ),
+                            fix: None,
+                            file: entry.file.clone(),
+                            line: entry.line,
+                        });
                     }
                     bus.clear();
                 }

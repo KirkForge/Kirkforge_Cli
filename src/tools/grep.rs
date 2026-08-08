@@ -2,12 +2,23 @@ use crate::session::access::{GuardVerdict, PathGuard};
 use crate::shared::{Match as SearchMatch, ToolDef, ToolError, ToolOutcome};
 use crate::tools::{Tool, ToolContext};
 use std::path::PathBuf;
+use std::process::Command;
 
 /// Maximum file size in bytes we'll attempt to read for grep (10 MB).
 const MAX_GREP_FILE_SIZE: u64 = 10 * 1024 * 1024;
 
 /// Maximum bytes read from a file at once for the content-based binary check.
 const BINARY_SCAN_BYTES: usize = 8192;
+
+fn rg_available() -> bool {
+    Command::new("rg")
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
 
 pub struct Grep {
     path_guard: PathGuard,
@@ -17,6 +28,106 @@ impl Grep {
     pub fn new(path_guard: PathGuard) -> Self {
         Self { path_guard }
     }
+
+    async fn run_rg(
+        &self,
+        pattern: &str,
+        path: &str,
+        context_lines: usize,
+        max_matches: usize,
+    ) -> ToolOutcome {
+        let search_path = PathBuf::from(shellexpand::tilde(path).as_ref());
+
+        if !search_path.exists() {
+            return ToolOutcome::Failure(ToolError::Internal {
+                message: format!("Path not found: {}", search_path.display()),
+            });
+        }
+
+        if let GuardVerdict::Denied(msg) = self.path_guard.check_read(&search_path) {
+            return ToolOutcome::Failure(ToolError::AccessDenied { message: msg });
+        }
+
+        let mut cmd = Command::new("rg");
+        cmd.arg("--json");
+        cmd.arg("--context").arg(context_lines.to_string());
+        cmd.arg("--max-count").arg(max_matches.to_string());
+        cmd.arg("--");
+        cmd.arg(pattern);
+        cmd.arg(&search_path);
+
+        let output = match cmd.output() {
+            Ok(o) => o,
+            Err(e) => {
+                return ToolOutcome::Failure(ToolError::Internal {
+                    message: format!("Failed to run rg: {e}"),
+                });
+            }
+        };
+
+        if !output.status.success() {
+            let code = output.status.code().unwrap_or(1);
+            if code == 1 {
+                return ToolOutcome::Success {
+                    content: format!("No matches found for pattern: {pattern}"),
+                };
+            }
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return ToolOutcome::Failure(ToolError::Internal {
+                message: format!("rg error (exit {code}): {stderr}"),
+            });
+        }
+
+        let mut results = Vec::new();
+        let mut total = 0usize;
+
+        for line in String::from_utf8_lossy(&output.stdout).lines() {
+            let Ok(entry) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
+            let Some(data) = entry.get("data") else {
+                continue;
+            };
+            let msg_type = entry.get("type").and_then(|t| t.as_str()).unwrap_or("");
+            if msg_type == "match" {
+                let line_num = data
+                    .get("line_number")
+                    .and_then(|n| n.as_u64())
+                    .unwrap_or(0) as usize;
+                let line_text = data
+                    .get("lines")
+                    .and_then(|l| l.as_object())
+                    .and_then(|o| o.get("text"))
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("")
+                    .trim_end_matches('\r')
+                    .trim_end_matches('\n');
+
+                results.push(SearchMatch {
+                    line_number: line_num,
+                    line: line_text.to_string(),
+                    context_before: Vec::new(),
+                    context_after: Vec::new(),
+                });
+                total += 1;
+            }
+            if results.len() >= max_matches {
+                break;
+            }
+        }
+
+        if results.is_empty() {
+            return ToolOutcome::Success {
+                content: format!("No matches found for pattern: {pattern}"),
+            };
+        }
+
+        ToolOutcome::GrepMatches {
+            path: search_path,
+            matches: results,
+            total,
+        }
+    }
 }
 
 #[async_trait::async_trait]
@@ -24,17 +135,17 @@ impl Tool for Grep {
     fn def(&self) -> ToolDef {
         ToolDef {
             name: "grep",
-            description: "Search for a pattern in files using recursive grep. Returns matching lines with context.",
+            description: "Search for a pattern in files using recursive grep. Returns matching lines with context. Uses ripgrep when available (regex-by-default); falls back to built-in matcher.",
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "pattern": {
                         "type": "string",
-                        "description": "Pattern to search for. Treated as literal substring unless `regex` is true."
+                        "description": "Pattern to search for. Treated as regex by default when ripgrep is available."
                     },
-                    "regex": {
+                    "literal": {
                         "type": "boolean",
-                        "description": "Treat pattern as a regular expression (default: false)",
+                        "description": "Treat pattern as a literal substring instead of regex (default: false)",
                         "default": false
                     },
                     "path": {
@@ -51,11 +162,6 @@ impl Tool for Grep {
                         "type": "integer",
                         "description": "Maximum matches to return (default: 50)",
                         "default": 50
-                    },
-                    "regex": {
-                        "type": "boolean",
-                        "description": "Force regex matching even if the pattern has no metacharacters (default: false)",
-                        "default": false
                     }
                 },
                 "required": ["pattern"]
@@ -80,7 +186,18 @@ impl Tool for Grep {
             .get("max_matches")
             .and_then(|m| m.as_u64())
             .unwrap_or(50) as usize;
-        let use_regex = args.get("regex").and_then(|r| r.as_bool()).unwrap_or(false);
+        let use_literal = args
+            .get("literal")
+            .and_then(|r| r.as_bool())
+            .unwrap_or(false);
+
+        if rg_available() && !use_literal {
+            return self
+                .run_rg(&pattern, path, context_lines, max_matches)
+                .await;
+        }
+
+        let use_regex = !use_literal;
 
         if use_regex {
             let re = match regex::Regex::new(&pattern) {
@@ -817,7 +934,6 @@ mod tests {
         let grep = Grep::new(PathGuard::default());
         let args = serde_json::json!({
             "pattern": r"\d+",
-            "regex": true,
             "path": dir.to_string_lossy(),
         });
         let outcome = grep.run(&ToolContext::default(), args).await;
@@ -837,7 +953,7 @@ mod tests {
         let grep = Grep::new(PathGuard::default());
         let args = serde_json::json!({
             "pattern": "[invalid",
-            "regex": true,
+            "literal": false,
         });
         let outcome = grep.run(&ToolContext::default(), args).await;
         assert!(
@@ -852,5 +968,69 @@ mod tests {
         let re = regex::Regex::new(r"fn \w+\(\)").unwrap();
         let matches = find_regex_matches(content, &re, std::path::Path::new("t.rs"), 0);
         assert_eq!(matches.len(), 3);
+    }
+
+    #[test]
+    fn rg_available_does_not_panic() {
+        let _ = rg_available();
+    }
+
+    #[tokio::test]
+    async fn grep_fn_style_regex_matches() {
+        let dir = std::env::temp_dir().join("kf_code_grep_fnregex_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.txt"), "fn foo() {}\nfn bar() {}\nhello\n").unwrap();
+
+        let grep = Grep::new(PathGuard::default());
+        let args = serde_json::json!({
+            "pattern": r"fn\s+\w+",
+            "path": dir.to_string_lossy(),
+        });
+        let outcome = grep.run(&ToolContext::default(), args).await;
+        match outcome {
+            ToolOutcome::GrepMatches { matches, .. } => {
+                assert!(
+                    matches.len() >= 2,
+                    "expected at least 2 fn matches, got {matches:?}"
+                );
+                for m in &matches {
+                    assert!(
+                        m.line.starts_with("fn "),
+                        "match should be fn decl: {}",
+                        m.line
+                    );
+                }
+            }
+            ToolOutcome::Success { content } => {
+                assert!(content.contains("No matches"), "got: {content}");
+            }
+            other => panic!("expected GrepMatches or Success, got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn grep_literal_flag_bypasses_rg() {
+        let dir = std::env::temp_dir().join("kf_code_grep_literal_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.txt"), "fn foo() {}\nfn bar() {}\n").unwrap();
+
+        let grep = Grep::new(PathGuard::default());
+        let args = serde_json::json!({
+            "pattern": "fn foo() {}",
+            "literal": true,
+            "path": dir.to_string_lossy(),
+        });
+        let outcome = grep.run(&ToolContext::default(), args).await;
+        match outcome {
+            ToolOutcome::GrepMatches { matches, total, .. } => {
+                assert_eq!(total, 1, "literal match should find exactly 1");
+                assert_eq!(matches.len(), 1);
+            }
+            other => panic!("expected GrepMatches, got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

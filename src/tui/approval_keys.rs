@@ -204,6 +204,7 @@ pub fn handle_approval_key(key: KeyEvent, state: &mut AppState) {
             let rule = crate::shared::permission::suggest_rule(&approval.tool_name, &approval.args);
             let mut cfg = crate::shared::write_shared_config(&state.config);
             push_rule_unique(&mut cfg.security.permission_rules, rule);
+            drop(cfg);
             let cfg = crate::shared::read_shared_config(&state.config);
             if let Err(e) = crate::session::config::save_config(&cfg) {
                 tracing::warn!(error = %e, "Failed to save auto-approve rule to config");

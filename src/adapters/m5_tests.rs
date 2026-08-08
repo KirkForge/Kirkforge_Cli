@@ -102,13 +102,18 @@ fn message_with_content_parts_serializes_compactly() {
 
 fn oai_body(msgs: &[Message], json_mode: bool) -> serde_json::Value {
     let mut mi = dummy_model_info();
-    mi.supports_cache = false; // tests focus on multimodal + json_mode
+    mi.supports_cache = false;
     let tools: Vec<ToolDef> = vec![ToolDef {
         name: "read_image",
         description: "x",
         parameters: json!({"type": "object", "properties": {}}),
     }];
-    build_openai_compat_body("test-model", &mi, msgs, &tools, json_mode, None, None)
+    let rf: Option<&crate::shared::ResponseFormat> = if json_mode {
+        Some(&crate::shared::ResponseFormat::JsonObject)
+    } else {
+        None
+    };
+    build_openai_compat_body("test-model", &mi, msgs, &tools, rf, None, None)
 }
 
 #[test]
@@ -186,7 +191,7 @@ fn openai_cache_mode_marks_last_two_prefix_messages() {
         },
         user_text("third (user)"),
     ];
-    let body = build_openai_compat_body("m", &mi, &msgs, &tools, false, None, None);
+    let body = build_openai_compat_body("m", &mi, &msgs, &tools, None, None, None);
     let oai_msgs = body["messages"].as_array().unwrap();
     // System message (idx 0): no marker (only the last 2 of the
     // prefix are marked, and the system is the head of the prefix
@@ -207,7 +212,7 @@ fn openai_cache_mode_off_omits_cache_control() {
     mi.supports_cache = false;
     let tools: Vec<ToolDef> = vec![];
     let msgs = vec![user_text("a"), user_text("b"), user_text("c")];
-    let body = build_openai_compat_body("m", &mi, &msgs, &tools, false, None, None);
+    let body = build_openai_compat_body("m", &mi, &msgs, &tools, None, None, None);
     for m in body["messages"].as_array().unwrap() {
         assert!(m.get("cache_control").is_none());
     }
@@ -217,7 +222,12 @@ fn openai_cache_mode_off_omits_cache_control() {
 
 fn ollama_body(msgs: &[Message], json_mode: bool) -> serde_json::Value {
     let tools: Vec<ToolDef> = vec![];
-    build_ollama_chat_body("test-model", msgs, &tools, true, json_mode, None)
+    let rf: Option<&crate::shared::ResponseFormat> = if json_mode {
+        Some(&crate::shared::ResponseFormat::JsonObject)
+    } else {
+        None
+    };
+    build_ollama_chat_body("test-model", msgs, &tools, true, rf, None)
 }
 
 #[test]

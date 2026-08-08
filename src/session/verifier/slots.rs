@@ -121,3 +121,149 @@ impl VerifierSlots {
         self.verifiers.clone()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::session::verifier::types::{BusEvent, EditEvent, Verdict};
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    struct NopVerifier {
+        name: String,
+        prio: u8,
+    }
+
+    #[async_trait::async_trait]
+    impl Verifier for NopVerifier {
+        fn name(&self) -> &str {
+            &self.name
+        }
+        fn priority(&self) -> u8 {
+            self.prio
+        }
+        async fn verify(&self, _event: &BusEvent) -> Verdict {
+            Verdict::Clean
+        }
+    }
+
+    fn make_event() -> BusEvent {
+        BusEvent::Edit(EditEvent {
+            path: PathBuf::from("/tmp/x.rs"),
+            diff: "-a\n+b".into(),
+        })
+    }
+
+    #[test]
+    fn new_slots_is_empty() {
+        let s = VerifierSlots::new();
+        assert!(s.is_empty());
+        assert_eq!(s.len(), 0);
+        assert!(s.names().is_empty());
+        assert!(s.all_verifiers().is_empty());
+    }
+
+    #[test]
+    fn default_slots_is_empty() {
+        let s = VerifierSlots::default();
+        assert!(s.is_empty());
+    }
+
+    #[tokio::test]
+    async fn retain_filters_verifiers() {
+        let mut s = VerifierSlots::new();
+        s.register(Arc::new(NopVerifier {
+            name: "keep".into(),
+            prio: 1,
+        }))
+        .unwrap();
+        s.register(Arc::new(NopVerifier {
+            name: "drop".into(),
+            prio: 2,
+        }))
+        .unwrap();
+        assert_eq!(s.len(), 2);
+        s.retain(|v| v.name() == "keep");
+        assert_eq!(s.len(), 1);
+        assert_eq!(s.names(), vec!["keep"]);
+    }
+
+    #[tokio::test]
+    async fn retain_all_keeps_all() {
+        let mut s = VerifierSlots::new();
+        s.register(Arc::new(NopVerifier {
+            name: "a".into(),
+            prio: 1,
+        }))
+        .unwrap();
+        s.retain(|_| true);
+        assert_eq!(s.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn retain_none_removes_all() {
+        let mut s = VerifierSlots::new();
+        s.register(Arc::new(NopVerifier {
+            name: "a".into(),
+            prio: 1,
+        }))
+        .unwrap();
+        s.retain(|_| false);
+        assert!(s.is_empty());
+    }
+
+    #[tokio::test]
+    async fn names_returns_priority_order() {
+        let mut s = VerifierSlots::new();
+        s.register(Arc::new(NopVerifier {
+            name: "low".into(),
+            prio: 10,
+        }))
+        .unwrap();
+        s.register(Arc::new(NopVerifier {
+            name: "high".into(),
+            prio: 1,
+        }))
+        .unwrap();
+        assert_eq!(s.names(), vec!["high", "low"]);
+    }
+
+    #[tokio::test]
+    async fn all_verifiers_returns_clones() {
+        let mut s = VerifierSlots::new();
+        s.register(Arc::new(NopVerifier {
+            name: "v1".into(),
+            prio: 1,
+        }))
+        .unwrap();
+        let all = s.all_verifiers();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].name(), "v1");
+    }
+
+    #[tokio::test]
+    async fn verify_empty_returns_clean() {
+        let s = VerifierSlots::new();
+        assert!(matches!(s.verify(&make_event()).await, Verdict::Clean));
+    }
+
+    #[test]
+    fn with_custom_max_slots_overflow() {
+        let mut s = VerifierSlots::with_max_slots(2);
+        s.register(Arc::new(NopVerifier {
+            name: "a".into(),
+            prio: 1,
+        }))
+        .unwrap();
+        s.register(Arc::new(NopVerifier {
+            name: "b".into(),
+            prio: 2,
+        }))
+        .unwrap();
+        let err = s.register(Arc::new(NopVerifier {
+            name: "c".into(),
+            prio: 3,
+        }));
+        assert!(err.is_err());
+    }
+}

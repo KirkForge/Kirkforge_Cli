@@ -25,6 +25,7 @@ pub struct AnthropicBedrockAdapter {
     region: String,
     client: reqwest::Client,
     json_mode: bool,
+    response_format: Option<crate::shared::ResponseFormat>,
     seed: Option<u64>,
     timeout_secs: u64,
     extended_thinking: bool,
@@ -38,6 +39,7 @@ impl AnthropicBedrockAdapter {
             region: region.to_string(),
             client: super::build_reqwest_client(),
             json_mode: false,
+            response_format: None,
             seed: None,
             timeout_secs,
             extended_thinking: true,
@@ -61,8 +63,13 @@ impl ModelAdapter for AnthropicBedrockAdapter {
 
     fn set_json_mode(&mut self, json_mode: bool) {
         self.json_mode = json_mode;
+        if json_mode {
+            self.response_format = Some(crate::shared::ResponseFormat::JsonObject);
+        }
     }
-
+    fn set_response_format(&mut self, format: crate::shared::ResponseFormat) {
+        self.response_format = Some(format);
+    }
     fn set_seed(&mut self, seed: Option<u64>) {
         self.seed = seed;
     }
@@ -83,7 +90,7 @@ impl ModelAdapter for AnthropicBedrockAdapter {
             &self.model_id,
             messages,
             tools,
-            self.json_mode,
+            self.response_format.as_ref(),
             self.seed,
             self.extended_thinking,
             self.budget_tokens,

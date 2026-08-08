@@ -67,6 +67,7 @@ impl Tool for WriteFile {
     }
 
     async fn run(&self, ctx: &ToolContext, args: serde_json::Value) -> ToolOutcome {
+        let start = std::time::Instant::now();
         let path = match args.get("path").and_then(|p| p.as_str()) {
             Some(p) => PathBuf::from(shellexpand::tilde(p).as_ref()),
             None => {
@@ -169,6 +170,7 @@ impl Tool for WriteFile {
                     if expanded_from_minified {
                         msg.push_str(" (expanded from minified envelope)");
                     }
+                    tracing::info!(tool = "write_file", duration_ms = start.elapsed().as_millis(), path = %path.display(), "file tool completed");
                     ToolOutcome::Success { content: msg }
                 }
                 Err(e) => ToolOutcome::Failure(ToolError::Internal {

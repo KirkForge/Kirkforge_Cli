@@ -30,7 +30,7 @@ Choose **Option A** for the MVP.
 
 ## Architecture
 
-1. **Vendored location:** `editors/vscode/` in the KirkForge-Cli repo, matching the `crates/*` and `npm/kirkforge-plugin/` vendored pattern.
+1. **Vendored location:** `editors/vscode/` in the KirkForge-Cli repo, matching the `crates/*` and `npm/kf-plugin/` vendored pattern.
 2. **Extension manifest (`package.json`):**
    - Engine: `vscode ^1.85`.
    - Command: `kirkforge.start` ("KirkForge: Start KirkForge").

@@ -26,7 +26,7 @@ A verifier-slot system with priority-based truth model and an auto-correction lo
 ### Verifier slots
 
 Five slots (`lint`, `types`, `security`, `graph`, `imports`), matching
-`SLOT_TO_SIGNAL` in `npm/kirkforge-plugin/packages/orchestrator/src/reducer.ts`
+`SLOT_TO_SIGNAL` in `npm/kf-plugin/packages/orchestrator/src/reducer.ts`
 and `VerifierSlot` in `packages/correction-core/src/types.ts`. The original
 design had four slots (`lint`, `type-check`, `git`, `security`); `git` was
 dropped (dirty-worktree checks moved out of the verifier loop) and `graph` +
@@ -136,7 +136,7 @@ unified bus. They overlap but do not unify:
   `src/session/verifier/` (`lint`, `security`, `git`, `rustfmt`) subscribe to
   these and emit `Verification` verdicts consumed by the correction loop in
   `src/session/verifier/mod.rs`.
-- **TS plugin orchestrator bus** (`npm/kirkforge-plugin/packages/orchestrator/`)
+- **TS plugin orchestrator bus** (`npm/kf-plugin/packages/orchestrator/`)
   has 5 verifier slots (`lint`, `types`, `security`, `graph`, `imports`) driven
   by `reducer.ts:38` `SLOT_TO_SIGNAL`. These emit events like
   `verify.security`, `verify.lint`, `state.graph`, etc., and are reduced to a
@@ -151,7 +151,7 @@ documented honestly here.
 
 ## Implementation
 
-- Files: `src/session/verifier/mod.rs` (~430 lines), `lint.rs` (~120 lines), `security.rs` (~185 lines); the `graph` and `imports` slots are implemented in the npm Orchestrator (`npm/kirkforge-plugin/packages/orchestrator/src/emitter-factory.ts`), not the Rust verifier module.
+- Files: `src/session/verifier/mod.rs` (~430 lines), `lint.rs` (~120 lines), `security.rs` (~185 lines); the `graph` and `imports` slots are implemented in the npm Orchestrator (`npm/kf-plugin/packages/orchestrator/src/emitter-factory.ts`), not the Rust verifier module.
 - `state.changes` is emitted by `ChangesEmitter` in the same file; it now computes real `insertions`/`deletions` via `git diff --numstat -- <paths>` and falls back to file count when git is unavailable.
 - 24 unit tests across all verifiers and the correction loop
 - `VerifierSlots` with configurable max (default 5)

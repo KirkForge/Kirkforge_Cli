@@ -204,6 +204,18 @@ pub enum ToolChoice {
     Specific(String),
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ResponseFormat {
+    #[default]
+    Text,
+    JsonObject,
+    JsonSchema {
+        name: String,
+        schema: serde_json::Value,
+    },
+}
+
 /// Headless Chrome configuration for the `computer_use` tool.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ComputerUseConfig {
@@ -313,6 +325,12 @@ pub struct SandboxConfig {
     #[serde(default)]
     pub block_edits: bool,
 
+    /// Escape hatch: when true, suppresses the production-mode refusal
+    /// for missing sandbox configuration (WO 21.7-R5). Set by
+    /// `--i-accept-unsandboxed`. Not persisted to config.toml.
+    #[serde(default)]
+    pub accept_unsandboxed: bool,
+
     /// CPU time limit in seconds. Default 300 (5 min). When the child
     /// exceeds this *wall-clock CPU* (not elapsed time), the kernel
     /// sends SIGXCPU; if uncaught the process dies with SIGKILL after
@@ -348,6 +366,7 @@ impl SandboxConfig {
             harden: self.harden,
             no_network: self.no_network,
             block_edits: self.block_edits,
+            accept_unsandboxed: self.accept_unsandboxed,
             cpu_limit_secs: limits.cpu_secs.unwrap_or(self.cpu_limit_secs),
             memory_limit_mb: limits.memory_mb.unwrap_or(self.memory_limit_mb),
             filesize_limit_mb: limits.filesize_mb.unwrap_or(self.filesize_limit_mb),
@@ -438,12 +457,6 @@ fn default_computer_use_wait_timeout() -> u64 {
 
 fn default_computer_use_max_steps() -> u32 {
     20
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub enum TruncationStrategy {
-    #[default]
-    KeepToolOnly,
 }
 
 #[derive(Debug, Clone)]

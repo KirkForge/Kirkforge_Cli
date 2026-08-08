@@ -509,8 +509,10 @@ fn bundled_plugins_load_from_data_dir() {
     copy_dir_all(&repo_plugins, &installed_plugins).unwrap();
 
     let _guard = DataDirGuard::set(&tmp.path().to_string_lossy());
-    let (registry, warnings) = load_plugin_registry(&Config::default())
-        .expect("loading installed plugins should not fail");
+    let mut cfg = Config::default();
+    cfg.tools.plugin_signature_validation = false;
+    let (registry, warnings) =
+        load_plugin_registry(&cfg).expect("loading installed plugins should not fail");
     assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
 
     let names: Vec<_> = registry
@@ -518,10 +520,7 @@ fn bundled_plugins_load_from_data_dir() {
         .iter()
         .map(|p| p.plugin.manifest().name.clone())
         .collect();
-    #[allow(unused_mut)]
-    let mut expected = vec!["kf-draw", "stratum", "kf-budget", "kf-plugin"];
-    #[cfg(feature = "video")]
-    expected.push("kf-video");
+    let expected = vec!["stratum", "kf-budget", "kf-plugin"];
     for expected in expected {
         assert!(
             names.contains(&expected.to_string()),
@@ -541,8 +540,10 @@ fn bundled_plugin_tool_commands_exist_in_data_dir() {
     copy_dir_all(&repo_plugins, &installed_plugins).unwrap();
 
     let _guard = DataDirGuard::set(&tmp.path().to_string_lossy());
-    let (registry, warnings) = load_plugin_registry(&Config::default())
-        .expect("loading installed plugins should not fail");
+    let mut cfg = Config::default();
+    cfg.tools.plugin_signature_validation = false;
+    let (registry, warnings) =
+        load_plugin_registry(&cfg).expect("loading installed plugins should not fail");
     assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
 
     for hosted in registry.active_plugins() {
@@ -595,8 +596,10 @@ async fn bundled_stratum_mode_tool_executes_via_host() {
     std::fs::copy(&stratum_bin, installed_stratum_tools.join("stratum")).unwrap();
 
     let _data_guard = DataDirGuard::set_async(&tmp.path().to_string_lossy()).await;
-    let (registry, warnings) = load_plugin_registry(&Config::default())
-        .expect("loading installed plugins should not fail");
+    let mut cfg = Config::default();
+    cfg.tools.plugin_signature_validation = false;
+    let (registry, warnings) =
+        load_plugin_registry(&cfg).expect("loading installed plugins should not fail");
     assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
 
     let tools = all_plugin_tools(
@@ -653,8 +656,10 @@ async fn bundled_node_sdk_tool_executes_via_host() {
     copy_dir_all(&repo_npm, &installed_npm).unwrap();
 
     let _guard = DataDirGuard::set_async(&tmp.path().to_string_lossy()).await;
-    let (registry, warnings) = load_plugin_registry(&Config::default())
-        .expect("loading installed plugins should not fail");
+    let mut cfg = Config::default();
+    cfg.tools.plugin_signature_validation = false;
+    let (registry, warnings) =
+        load_plugin_registry(&cfg).expect("loading installed plugins should not fail");
     assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
 
     let tools = all_plugin_tools(
@@ -676,14 +681,12 @@ async fn bundled_node_sdk_tool_executes_via_host() {
 
 /// Verify the built-in workspace plugin sources are registered by default,
 /// exist on disk, and can be loaded by the plugin host under the default
-/// trust policy. Folded plugins (stratum, budget, draw, video) are skipped
-/// by the shell loader when their feature is ON — they're served compiled-in.
+/// trust policy. Folded plugins (stratum, budget) are skipped by the shell
+/// loader when their feature is ON — they're served compiled-in.
 /// The Node SDK plugin (`kf-plugin-sdk`) is always shell-loaded.
 #[test]
 fn default_plugin_sources_are_present_and_loadable() {
-    let mut all_expected = vec!["kf-draw", "stratum", "kf-budget", "kf-plugin"];
-    #[cfg(feature = "video")]
-    all_expected.push("kf-video");
+    let mut all_expected = vec!["stratum", "kf-budget", "kf-plugin"];
     all_expected.sort();
 
     let base = Config::default();
@@ -734,11 +737,11 @@ fn default_plugin_sources_are_present_and_loadable() {
 /// Verify that folded plugins with feature OFF fall back to shell loading.
 #[test]
 fn folded_plugin_shell_fallback_when_feature_off() {
-    let folded_names = ["stratum", "kf-budget", "kf-draw", "kf-video"];
+    let folded_names = ["stratum", "kf-budget"];
     let base = Config::default();
 
     // Only test plugins whose feature is NOT compiled in AND whose source dir
-    // exists in the config (video is cfg-gated out of plugin_sources when off).
+    // exists in the config.
     let off: Vec<&str> = folded_names
         .iter()
         .copied()
@@ -769,8 +772,6 @@ fn folded_plugin_shell_fallback_when_feature_off() {
 fn folded_plugin_identification() {
     assert!(crate::session::plugin_tools::is_folded("stratum"));
     assert!(crate::session::plugin_tools::is_folded("kf-budget"));
-    assert!(crate::session::plugin_tools::is_folded("kf-draw"));
-    assert!(crate::session::plugin_tools::is_folded("kf-video"));
     assert!(!crate::session::plugin_tools::is_folded("kf-plugin"));
     assert!(!crate::session::plugin_tools::is_folded("custom-plugin"));
 
@@ -833,7 +834,13 @@ mod budget_registration {
         );
 
         // Verify budget tools are producible.
-        let tools = crate::session::budget::all_budget_tools();
+        let budget = crate::session::budget::new_session_budget(&cfg);
+        let store = crate::session::budget::new_session_store();
+        let tools = crate::session::budget::all_budget_tools(
+            &budget,
+            &store,
+            Arc::new(kf_compress_core::store::InMemoryOffloadStore::new()),
+        );
         let names: Vec<&str> = tools.iter().map(|t| t.def().name).collect();
         assert!(
             names.contains(&"budget_status"),
@@ -865,7 +872,9 @@ mod budget_registration {
             folded_feature_enabled("stratum"),
             "folded_feature_enabled must return true for stratum when the feature is on"
         );
-        let tools = crate::session::stratum::stratum_tools();
+        let tools = crate::session::stratum::stratum_tools(Arc::new(
+            kf_compress_core::store::InMemoryOffloadStore::new(),
+        ));
         let names: Vec<&str> = tools.iter().map(|t| t.def().name).collect();
         assert!(
             names.contains(&"stratum_run"),
@@ -874,26 +883,6 @@ mod budget_registration {
         assert!(
             names.contains(&"stratum_apply"),
             "stratum tools must include stratum_apply, got: {names:?}"
-        );
-    }
-
-    #[cfg(feature = "draw")]
-    #[test]
-    fn draw_tools_present_in_default_toolset() {
-        let cfg = Config::default();
-        assert!(
-            cfg.tools.enabled_plugins.iter().any(|n| n == "kf-draw"),
-            "default config must include kf-draw in enabled_plugins"
-        );
-        assert!(
-            folded_feature_enabled("kf-draw"),
-            "folded_feature_enabled must return true for kf-draw when the feature is on"
-        );
-        let tools = crate::session::draw::draw_tools();
-        let names: Vec<&str> = tools.iter().map(|t| t.def().name).collect();
-        assert!(
-            names.contains(&"draw_render"),
-            "draw tools must include draw_render, got: {names:?}"
         );
     }
 }
@@ -1229,6 +1218,7 @@ cpu_secs = {cpu_secs}
             harden: true,
             no_network: false,
             block_edits: false,
+            accept_unsandboxed: false,
             cpu_limit_secs: 300,
             memory_limit_mb: 2048,
             filesize_limit_mb: 512,
@@ -1251,6 +1241,7 @@ cpu_secs = {cpu_secs}
             harden: true,
             no_network: false,
             block_edits: false,
+            accept_unsandboxed: false,
             cpu_limit_secs: 300,
             memory_limit_mb: 2048,
             filesize_limit_mb: 512,

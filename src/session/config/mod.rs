@@ -34,6 +34,7 @@
 /// - `KF_CODE_MEMORY_ENABLED` — "true"/"false" to enable or disable memory injection
 /// - `KF_CODE_MEMORY_MAX_TOKENS` — token budget for injected memory facts
 /// - `KF_CODE_MEMORY_TOP_N` — maximum number of facts to consider per turn
+/// - `KF_CODE_MEMORY_AUTO_POPULATE` — "true"/"false" to enable or disable memory auto-extraction
 /// - `KF_CODE_REQUEST_TIMEOUT_SECS` — model request timeout (clamped to ≥1 s)
 /// - `KF_CODE_TOOL_TIMEOUT_SECS` — per-tool hard timeout (clamped to [1, 3600])
 /// - `KF_CODE_CHECKPOINT_INTERVAL_MESSAGES` — write a checkpoint every N messages
@@ -53,10 +54,10 @@
 use crate::shared::Config;
 use std::path::PathBuf;
 
+#[cfg_attr(not(test), allow(dead_code))]
 mod env_overrides;
 
-// Re-import so `load_config` and the in-file tests (which use
-// `use super::*`) keep seeing `apply_env_overrides` at the same path.
+#[cfg(test)]
 use env_overrides::apply_env_overrides;
 
 /// Expand a leading `~` in a path string using `$HOME` (or the equivalent
@@ -70,6 +71,7 @@ fn expand_tilde_str(s: &str) -> String {
 /// Treats "true", "1", "yes" (case-insensitive) as true,
 /// "false", "0", "no" (case-insensitive) as false, and any other value as
 /// `None` so the config default is preserved.
+#[cfg_attr(not(test), allow(dead_code))]
 fn parse_bool_env(val: &str) -> Option<bool> {
     if val.eq_ignore_ascii_case("true")
         || val.eq_ignore_ascii_case("1")
@@ -117,9 +119,6 @@ pub fn load_config() -> (Config, Option<String>) {
             }
         }
     }
-
-    // Layer 2: environment variables
-    apply_env_overrides(&mut cfg);
 
     (cfg, warning)
 }
@@ -315,8 +314,11 @@ fn merge_toml_into_config(cfg: &mut Config, table: toml::Table) {
     if let Some(Value::Boolean(v)) = table.get("carryover_enabled") {
         cfg.session.carryover_enabled = *v;
     }
+    if let Some(Value::Boolean(v)) = table.get("compaction_use_heuristic") {
+        cfg.session.compaction_use_heuristic = *v;
+    }
     if let Some(Value::Boolean(v)) = table.get("compaction_use_llm") {
-        cfg.session.compaction_use_llm = *v;
+        cfg.session.compaction_use_heuristic = *v;
     }
     if let Some(Value::Float(v)) = table.get("compaction_drop_threshold") {
         cfg.session.compaction_drop_threshold = *v;
@@ -417,6 +419,9 @@ fn merge_toml_into_config(cfg: &mut Config, table: toml::Table) {
             Some(PathBuf::from(expand_tilde_str(v)))
         };
     }
+    if let Some(Value::Boolean(v)) = table.get("diff_review") {
+        cfg.security.diff_review = *v;
+    }
     if let Some(Value::String(v)) = table.get("hooks_dir") {
         cfg.tools.hooks_dir = if v.is_empty() {
             None
@@ -456,6 +461,9 @@ fn merge_toml_into_config(cfg: &mut Config, table: toml::Table) {
     if let Some(Value::Integer(v)) = table.get("memory_top_n") {
         cfg.display.memory_top_n = (*v).max(1) as usize;
     }
+    if let Some(Value::Boolean(v)) = table.get("memory_auto_populate") {
+        cfg.tools.memory_auto_populate = *v;
+    }
     if let Some(Value::Integer(v)) = table.get("checkpoint_interval_messages") {
         cfg.session.checkpoint_interval_messages = (*v).max(0) as usize;
     }
@@ -486,9 +494,6 @@ fn merge_toml_into_config(cfg: &mut Config, table: toml::Table) {
     }
     if let Some(Value::String(v)) = table.get("aws_region") {
         cfg.model.aws_region = v.clone();
-    }
-    if let Some(Value::String(v)) = table.get("aws_profile") {
-        cfg.model.aws_profile = v.clone();
     }
     if let Some(Value::String(v)) = table.get("gcp_project_id") {
         cfg.model.gcp_project_id = v.clone();
@@ -704,6 +709,7 @@ pub fn config_diff_summary(before: &Config, after: &Config) -> String {
 /// Format: comma-separated `name=path` entries. Entries without `=` are
 /// ignored. Paths are kept exactly as written; the loader canonicalizes
 /// them at use time.
+#[cfg_attr(not(test), allow(dead_code))]
 fn parse_plugin_sources_env(value: &str) -> std::collections::HashMap<String, PathBuf> {
     let mut out = std::collections::HashMap::new();
     for entry in value.split(',') {
@@ -1200,11 +1206,11 @@ mod tests {
     fn test_env_plugin_signature_validation() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
-        assert!(!cfg.tools.plugin_signature_validation);
-
-        set_env("KF_CODE_PLUGIN_SIGNATURE_VALIDATION", Some("true"));
-        apply_env_overrides(&mut cfg);
         assert!(cfg.tools.plugin_signature_validation);
+
+        set_env("KF_CODE_PLUGIN_SIGNATURE_VALIDATION", Some("false"));
+        apply_env_overrides(&mut cfg);
+        assert!(!cfg.tools.plugin_signature_validation);
         set_env("KF_CODE_PLUGIN_SIGNATURE_VALIDATION", None);
     }
 
@@ -1378,7 +1384,7 @@ mod tests {
         let a = Config::default();
         let mut b = Config::default();
         b.tools.reject_on_excess_plugin_trust = false;
-        b.tools.plugin_signature_validation = true;
+        b.tools.plugin_signature_validation = false;
         b.tools.plugin_public_key_path = Some("/tmp/key.pub".into());
         let s = config_diff_summary(&a, &b);
         assert!(s.contains("reject_on_excess_plugin_trust"), "got: {s}");
@@ -1398,6 +1404,18 @@ mod tests {
         assert_eq!(parse_bool_env("no"), Some(false));
         assert_eq!(parse_bool_env("maybe"), None);
         assert_eq!(parse_bool_env(""), None);
+    }
+
+    #[test]
+    fn compaction_use_llm_alias_backward_compat() {
+        let toml = "[session]\ncompaction_use_llm = true\n";
+        let table: toml::Table = toml.parse().expect("parse toml table");
+        let mut cfg = Config::default();
+        merge_toml_into_config(&mut cfg, table);
+        assert!(
+            cfg.session.compaction_use_heuristic,
+            "compaction_use_llm (old name) must map to compaction_use_heuristic"
+        );
     }
 
     #[test]
@@ -1432,7 +1450,6 @@ mod tests {
         let table: toml::Table = r#"
             anthropic_provider = "bedrock"
             aws_region = "us-west-2"
-            aws_profile = "dev"
             gcp_project_id = "my-project"
             gcp_region = "us-east4"
             gcp_service_account_path = "/tmp/sa.json"
@@ -1451,7 +1468,6 @@ mod tests {
 
         assert_eq!(cfg.model.anthropic_provider, "bedrock");
         assert_eq!(cfg.model.aws_region, "us-west-2");
-        assert_eq!(cfg.model.aws_profile, "dev");
         assert_eq!(cfg.model.gcp_project_id, "my-project");
         assert_eq!(cfg.model.gcp_region, "us-east4");
         assert_eq!(
@@ -1477,7 +1493,6 @@ mod tests {
 
         set_env("KF_CODE_ANTHROPIC_PROVIDER", Some("vertex"));
         set_env("KF_CODE_AWS_REGION", Some("eu-west-1"));
-        set_env("KF_CODE_AWS_PROFILE", Some("prod"));
         set_env("KF_CODE_GCP_PROJECT_ID", Some("p2"));
         set_env("KF_CODE_GCP_REGION", Some("europe-west1"));
         set_env("KF_CODE_GCP_SERVICE_ACCOUNT_PATH", Some("/tmp/p2.json"));
@@ -1491,7 +1506,6 @@ mod tests {
 
         assert_eq!(cfg.model.anthropic_provider, "vertex");
         assert_eq!(cfg.model.aws_region, "eu-west-1");
-        assert_eq!(cfg.model.aws_profile, "prod");
         assert_eq!(cfg.model.gcp_project_id, "p2");
         assert_eq!(cfg.model.gcp_region, "europe-west1");
         assert_eq!(
@@ -1506,7 +1520,6 @@ mod tests {
 
         set_env("KF_CODE_ANTHROPIC_PROVIDER", None);
         set_env("KF_CODE_AWS_REGION", None);
-        set_env("KF_CODE_AWS_PROFILE", None);
         set_env("KF_CODE_GCP_PROJECT_ID", None);
         set_env("KF_CODE_GCP_REGION", None);
         set_env("KF_CODE_GCP_SERVICE_ACCOUNT_PATH", None);
@@ -1905,10 +1918,10 @@ mod tests {
         use crate::shared::config::CONFIG_FIELD_COUNT;
 
         // ── 1. Total struct-level fields ──────────────────────────
-        // ModelConfig=30, SecurityConfig=18, ToolConfig=26,
+        // ModelConfig=30, SecurityConfig=19, ToolConfig=26,
         // SessionConfig=8, DisplayConfig=3
         assert_eq!(
-            CONFIG_FIELD_COUNT, 85,
+            CONFIG_FIELD_COUNT, 87,
             "CONFIG_FIELD_COUNT has drifted — did you add/remove a config field?"
         );
 
@@ -1931,7 +1944,7 @@ mod tests {
             scheduled_bash_auto_approve = true
             max_concurrent_scheduled_jobs = 999
             carryover_enabled = true
-            compaction_use_llm = true
+            compaction_use_heuristic = true
             compaction_drop_threshold = 0.5
             stem_file_cap = 999
             shutdown_timeout_secs = 999
@@ -1955,6 +1968,7 @@ mod tests {
             max_persona_turns = 999
             tool_timeout_secs = 999
             audit_log_path = "x"
+            diff_review = false
             hooks_dir = "x"
             reject_on_excess_plugin_trust = true
             plugin_signature_validation = true
@@ -1962,10 +1976,10 @@ mod tests {
             memory_enabled = true
             memory_max_tokens = 999
             memory_top_n = 999
+            memory_auto_populate = true
             checkpoint_interval_messages = 999
             anthropic_provider = "x"
             aws_region = "x"
-            aws_profile = "x"
             gcp_project_id = "x"
             gcp_region = "x"
             gcp_service_account_path = "x"
@@ -2029,24 +2043,24 @@ mod tests {
         // is: every struct field is EITHER handled by merge_toml OR
         // intentionally skipped. The same applies to apply_env_overrides.
         //
-        // Intentionally skipped by merge_toml (16 struct-level fields):
+        // Intentionally skipped by merge_toml (15 struct-level fields):
         //   ModelConfig:  summarize_enabled, subagent_allowed_models,
         //                 opencode_zen_api_key, opencode_zen_endpoint, seed
         //   SecurityConfig: permission_rules, docker (4 sub-fields),
         //                   sandbox (4 sub-fields), computer_use.max_steps
-        //   ToolConfig:  max_tool_result_chars, truncation_strategy,
+        //   ToolConfig:  max_tool_result_chars,
         //                mcp_servers, lsp_servers, max_plugin_trust,
         //                stratum_mode, budget_ceiling, budget_approaching_ratio
         //   SessionConfig: worktree_enabled
         //
-        // Additionally skipped by apply_env_overrides (4 more, beyond the 16):
+        // Additionally skipped by apply_env_overrides (4 more, beyond the 15):
         //   SecurityConfig: deny_paths, deny_urls, deny_extensions,
         //                   allowed_write_dirs
         //   (Arrays/Vec fields without env-var representations.)
         //
         // The expansion of computer_use (1 struct field → 7 TOML keys)
-        // means MERGE_TOML_EXPECTED = 64 handled struct fields + 7 expansion
-        // keys = 71, not 82 - 16 = 66.
+        // means MERGE_TOML_EXPECTED = 63 handled struct fields + 7 expansion
+        // keys = 70, not 83 - 15 = 68.
         let _ = (
             CONFIG_FIELD_COUNT,
             MERGE_TOML_EXPECTED,

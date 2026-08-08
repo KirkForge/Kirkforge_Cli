@@ -1,37 +1,72 @@
 //! In-process Stratum tool wrappers.
 //!
-//! When the `stratum` feature is enabled, these structs implement the `Tool`
-//! trait and call `kf_compress_core` directly, eliminating subprocess overhead.
-//! When the feature is off, the shell-plugin path (`plugins/stratum/tools/*.sh`)
-//! remains as fallback.
+//! These structs implement the `Tool` trait and call `kf_compress_core`
+//! directly, eliminating subprocess overhead.
 
 use crate::session::budget::{BudgetSlicedEvent, BudgetSlicedListener};
-use crate::session::hooks::{HookContext, HookDecision, InProcessHook};
+use crate::session::hooks::{HookContext, HookDecision, InProcessHook, PostHook};
+use crate::shared::minify::minify_content_by_ext;
 use crate::shared::{ToolDef, ToolOutcome};
 use crate::tools::{Tool, ToolContext};
 use kf_compress_core::config::PipelineConfig;
-use kf_compress_core::content::ContentType;
+use kf_compress_core::content::{detect_content_type, ContentType};
 use kf_compress_core::mode::Mode;
-use kf_compress_core::pipeline::{CompressionContext, CompressionPipeline};
+use kf_compress_core::pipeline::{CompressionContext, CompressionPipeline, Transform};
+use kf_compress_core::rules::build_rules;
 use kf_compress_core::store::InMemoryOffloadStore;
 use serde_json::Value;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 
-static SESSION_OFFLOAD_STORE: OnceLock<Arc<InMemoryOffloadStore>> = OnceLock::new();
+#[derive(Debug)]
+struct MinifyTransform;
 
-/// Process-global Stratum offload store. Pub so the budget `store_get`
-/// tool can consult it as a fallback when a marker isn't in the budget
-/// store (WO 20.11.0 CRIT-2): both the budget `HeadTailSlicer` and the
-/// Stratum `CompressionPipeline` can emit offload markers, and the model
-/// must be able to retrieve either kind via `store_get`.
-pub fn session_offload_store() -> Arc<InMemoryOffloadStore> {
-    SESSION_OFFLOAD_STORE
-        .get_or_init(|| Arc::new(InMemoryOffloadStore::new()))
-        .clone()
+impl Transform for MinifyTransform {
+    fn apply(&self, content: &str, content_type: ContentType) -> String {
+        match content_type {
+            ContentType::SourceCode => {
+                let ext = guess_ext(content);
+                minify_content_by_ext(content, ext, false)
+            }
+            _ => content.to_string(),
+        }
+    }
 }
 
-// ── Sliced-event coordination (WO 8.6) ─────────────────────────────────
+fn guess_ext(content: &str) -> &'static str {
+    let first = content.lines().next().unwrap_or("");
+    if first.contains("fn ")
+        || first.contains("pub ")
+        || first.contains("use ")
+        || content.contains("impl ")
+        || content.contains("struct ")
+    {
+        "rs"
+    } else if first.contains("def ") || first.contains("import ") || first.contains("from ") {
+        "py"
+    } else if first.contains("function ") || first.contains("const ") || first.contains("let ") {
+        "js"
+    } else {
+        "rs"
+    }
+}
+
+fn make_pipeline() -> CompressionPipeline {
+    let mut pipeline = CompressionPipeline::new();
+    pipeline.register_content_transform(Arc::new(MinifyTransform));
+    pipeline
+}
+
+/// Compress `content` using the Stratum pipeline at `mode`. Used by
+/// the default budget-sliced listener; also useful for callers that
+/// want to run the pipeline outside the in-process tool path.
+pub fn compress_with_store(content: &str, mode: Mode, store: &InMemoryOffloadStore) -> String {
+    let pipeline = make_pipeline();
+    let cfg = PipelineConfig::default();
+    let ctx = CompressionContext::default().with_token_budget(4096);
+    let content_type = detect_content_type(content);
+    pipeline.run(content, content_type, &ctx, store, &cfg, mode)
+}
 //
 // The budget guard's `apply_budget_slice` dispatches a
 // `BudgetSlicedEvent` to registered listeners when it slices a tool
@@ -66,16 +101,7 @@ pub fn set_session_mode(mode: Mode) {
     *session_mode().lock().expect("session mode mutex poisoned") = mode;
 }
 
-/// Compress `content` using the Stratum pipeline at `mode`. Used by
-/// the default budget-sliced listener; also useful for callers that
-/// want to run the pipeline outside the in-process tool path.
-pub fn compress_for_budget(content: &str, mode: Mode) -> String {
-    let pipeline = CompressionPipeline::new();
-    let store = session_offload_store();
-    let cfg = PipelineConfig::default();
-    let ctx = CompressionContext::default().with_token_budget(4096);
-    pipeline.run(content, ContentType::PlainText, &ctx, &*store, &cfg, mode)
-}
+// ── Sliced-event coordination (WO 8.6) ─────────────────────────────────
 
 /// Default `BudgetSlicedEvent` listener: compresses the sliced
 /// display using the current session mode and returns the
@@ -83,10 +109,13 @@ pub fn compress_for_budget(content: &str, mode: Mode) -> String {
 /// the slice marker means the result is already as small as it can
 /// be (the listener still returns `Some` so the budget records the
 /// post-compression size even if compression is identity).
-pub fn default_budget_sliced_listener() -> BudgetSlicedListener {
-    Arc::new(|event: BudgetSlicedEvent| {
+///
+/// The `store` parameter is the per-session Stratum offload store,
+/// replacing the old process-global `OnceLock`.
+pub fn default_budget_sliced_listener(store: Arc<InMemoryOffloadStore>) -> BudgetSlicedListener {
+    Arc::new(move |event: BudgetSlicedEvent| {
         let mode = current_session_mode();
-        let compressed = compress_for_budget(&event.sliced_display, mode);
+        let compressed = compress_with_store(&event.sliced_display, mode, &store);
         Some(compressed)
     })
 }
@@ -95,8 +124,8 @@ pub fn default_budget_sliced_listener() -> BudgetSlicedListener {
 /// guard. Idempotent: repeated calls append another listener. Tests
 /// that want a clean slate should call
 /// `crate::session::budget::clear_sliced_listeners` first.
-pub fn register_default_budget_listener() {
-    crate::session::budget::register_sliced_listener(default_budget_sliced_listener());
+pub fn register_default_budget_listener(store: Arc<InMemoryOffloadStore>) {
+    crate::session::budget::register_sliced_listener(default_budget_sliced_listener(store));
 }
 
 fn json_get_string(args: &Value, key: &str) -> Option<String> {
@@ -149,7 +178,9 @@ fn error_json(message: impl Into<String>) -> ToolOutcome {
 
 // ── stratum_run ─────────────────────────────────────────────────────────
 
-pub struct StratumRun;
+pub struct StratumRun {
+    offload_store: Arc<InMemoryOffloadStore>,
+}
 
 #[async_trait::async_trait]
 impl Tool for StratumRun {
@@ -192,7 +223,10 @@ impl Tool for StratumRun {
             return success_json(serde_json::to_string_pretty(&result).unwrap_or_default());
         }
 
-        let content_type = parse_content_type(None);
+        let content_type = json_get_string(&args, "content_type")
+            .as_deref()
+            .map(|s| s.parse().unwrap_or(ContentType::PlainText))
+            .unwrap_or_else(|| detect_content_type(&input));
         let token_budget = json_get_u64(&args, "token_budget").map(|v| v as usize);
         let ctx = CompressionContext::default().with_token_budget(token_budget.unwrap_or(4096));
         let ctx = if let Some(query) = json_get_string(&args, "query") {
@@ -201,10 +235,9 @@ impl Tool for StratumRun {
             ctx
         };
 
-        let pipeline = CompressionPipeline::new();
-        let store = session_offload_store();
+        let pipeline = make_pipeline();
         let cfg = PipelineConfig::default();
-        let result = pipeline.run(&input, content_type, &ctx, &*store, &cfg, mode);
+        let result = pipeline.run(&input, content_type, &ctx, &*self.offload_store, &cfg, mode);
 
         if json_out {
             let out = serde_json::json!({
@@ -222,7 +255,9 @@ impl Tool for StratumRun {
 
 // ── stratum_apply ───────────────────────────────────────────────────────
 
-pub struct StratumApply;
+pub struct StratumApply {
+    offload_store: Arc<InMemoryOffloadStore>,
+}
 
 #[async_trait::async_trait]
 impl Tool for StratumApply {
@@ -278,10 +313,16 @@ impl Tool for StratumApply {
         let token_budget = json_get_u64(&args, "token_budget").map(|v| v as usize);
         let ctx = CompressionContext::default().with_token_budget(token_budget.unwrap_or(4096));
 
-        let pipeline = CompressionPipeline::new();
-        let store = session_offload_store();
+        let pipeline = make_pipeline();
         let cfg = PipelineConfig::default();
-        let result = pipeline.run(&content, content_type, &ctx, &*store, &cfg, mode);
+        let result = pipeline.run(
+            &content,
+            content_type,
+            &ctx,
+            &*self.offload_store,
+            &cfg,
+            mode,
+        );
 
         if json_out {
             let out = serde_json::json!({
@@ -369,6 +410,7 @@ impl Tool for StratumRules {
         let json_out = json_get_bool(&args, "json");
         let mode_owned = json_get_string(&args, "mode");
         let mode = parse_mode(mode_owned.as_deref());
+        let canonical = build_rules(mode);
 
         let rules = serde_json::json!({
             "mode": mode.as_str(),
@@ -376,13 +418,14 @@ impl Tool for StratumRules {
             "offloads_bloat": mode.offloads_bloat(),
             "offload_threshold": mode.offload_threshold(),
             "description": mode_description(mode),
+            "canonical_rules": canonical,
         });
 
         if json_out {
             success_json(serde_json::to_string_pretty(&rules).unwrap_or_default())
         } else {
             success_json(format!(
-                "mode={}\nruns_transforms={}\noffloads_bloat={}\noffload_threshold={}",
+                "mode={}\nruns_transforms={}\noffloads_bloat={}\noffload_threshold={}\n\n{canonical}",
                 mode.as_str(),
                 mode.runs_transforms(),
                 mode.offloads_bloat(),
@@ -426,7 +469,6 @@ impl Tool for StratumConfigValidate {
             "bloat_threshold": cfg.bloat_threshold.get(),
             "reformat_target_ratio": cfg.reformat_target_ratio.get(),
             "offload_fallback_ratio": cfg.offload_fallback_ratio.get(),
-            "transform_timeout_ms": cfg.transform_timeout_ms(),
             "per_domain_count": cfg.per_domain.len(),
         });
 
@@ -446,11 +488,10 @@ impl Tool for StratumConfigValidate {
                 )
             };
             success_json(format!(
-                "valid={valid}\n{issues_str}bloat_threshold={}\nreformat_target_ratio={}\noffload_fallback_ratio={}\ntransform_timeout_ms={}\nper_domain_count={}",
+                "valid={valid}\n{issues_str}bloat_threshold={}\nreformat_target_ratio={}\noffload_fallback_ratio={}\nper_domain_count={}",
                 cfg.bloat_threshold.get(),
                 cfg.reformat_target_ratio.get(),
                 cfg.offload_fallback_ratio.get(),
-                cfg.transform_timeout_ms(),
                 cfg.per_domain.len(),
             ))
         }
@@ -458,10 +499,15 @@ impl Tool for StratumConfigValidate {
 }
 
 /// Return all five stratum tools as trait objects.
-pub fn stratum_tools() -> Vec<Arc<dyn Tool>> {
+/// The `offload_store` is the per-session store shared by all stratum tools.
+pub fn stratum_tools(offload_store: Arc<InMemoryOffloadStore>) -> Vec<Arc<dyn Tool>> {
     vec![
-        Arc::new(StratumRun),
-        Arc::new(StratumApply),
+        Arc::new(StratumRun {
+            offload_store: offload_store.clone(),
+        }),
+        Arc::new(StratumApply {
+            offload_store: offload_store.clone(),
+        }),
         Arc::new(StratumMode),
         Arc::new(StratumRules),
         Arc::new(StratumConfigValidate),
@@ -471,18 +517,17 @@ pub fn stratum_tools() -> Vec<Arc<dyn Tool>> {
 // ── session-start hook ─────────────────────────────────────────────────
 
 /// In-process `session-start` hook: emits the active compression ruleset so
-/// the model knows the compression contract at session start. Mirrors the
-/// shell hook in `plugins/stratum/hooks/session-start.sh`.
+/// the model knows the compression contract at session start.
 pub struct StratumSessionStartHook {
     pub config: crate::shared::SharedConfig,
 }
 
-impl InProcessHook for StratumSessionStartHook {
+impl PostHook for StratumSessionStartHook {
     fn event(&self) -> &str {
         "session-start"
     }
 
-    fn handle(&self, _ctx: &HookContext) -> HookDecision {
+    fn handle(&self, _ctx: &HookContext) -> Result<(), String> {
         let mode = active_mode(Some(&self.config));
         let rules = format!(
             "mode={}\nruns_transforms={}\noffloads_bloat={}\noffload_threshold={}",
@@ -493,7 +538,7 @@ impl InProcessHook for StratumSessionStartHook {
                 .map_or("none".to_string(), |t| format!("{t:.2}")),
         );
         tracing::info!(event = "session-start", %rules, "stratum compression contract");
-        HookDecision::Allow
+        Ok(())
     }
 }
 
@@ -501,7 +546,6 @@ impl InProcessHook for StratumSessionStartHook {
 
 /// In-process `pre-tool-bash` hook: validates the effective stratum config
 /// before any bash tool is invoked so configuration drift is surfaced early.
-/// Mirrors the shell hook in `plugins/stratum/hooks/pre-tool-bash.sh`.
 ///
 /// Fail-open: an invalid config logs a warning but does not block the user.
 pub struct StratumPreToolBashHook;
@@ -585,7 +629,7 @@ fn xdg_config_path() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::hooks::{HookContext, HookDecision};
+    use crate::session::hooks::{HookContext, HookDecision, PostHook};
     use crate::tools::ToolContext;
 
     #[tokio::test]
@@ -605,6 +649,51 @@ mod tests {
                 );
             }
             other => panic!("StratumRules must return Success, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_stratum_rules_emits_canonical_rules() {
+        let tool = StratumRules;
+        let ctx = ToolContext::new();
+        let out = tool
+            .run(&ctx, serde_json::json!({"mode": "off", "json": true}))
+            .await;
+        match out {
+            ToolOutcome::Success { content } => {
+                assert!(
+                    content.contains("Ship the smallest change"),
+                    "StratumRules must include canonical rules, got: {content}"
+                );
+            }
+            other => panic!("StratumRules must return Success, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_stratum_run_detects_json_content_type() {
+        let tool = StratumRun {
+            offload_store: Arc::new(InMemoryOffloadStore::new()),
+        };
+        let ctx = ToolContext::new();
+        let json_input =
+            serde_json::to_string_pretty(&serde_json::json!({"key": "value"})).unwrap();
+        let out = tool
+            .run(
+                &ctx,
+                serde_json::json!({
+                    "input": json_input,
+                    "json": true,
+                    "token_budget": 100000,
+                }),
+            )
+            .await;
+        match out {
+            ToolOutcome::Success { content } => {
+                let v: serde_json::Value = serde_json::from_str(&content).unwrap();
+                assert_eq!(v["input_len"], json_input.len() as i64);
+            }
+            other => panic!("StratumRun must return Success, got {other:?}"),
         }
     }
 
@@ -629,7 +718,7 @@ mod tests {
     }
 
     #[test]
-    fn test_session_start_hook_returns_allow() {
+    fn test_session_start_hook_returns_ok() {
         let config: crate::shared::SharedConfig =
             Arc::new(std::sync::RwLock::new(crate::shared::Config::default()));
         let hook = StratumSessionStartHook { config };
@@ -637,7 +726,7 @@ mod tests {
             event: "session-start".into(),
             ..Default::default()
         };
-        assert_eq!(hook.handle(&ctx), HookDecision::Allow);
+        assert_eq!(hook.handle(&ctx), Ok(()));
     }
 
     #[test]
@@ -703,27 +792,27 @@ mod tests {
         assert_eq!(current_session_mode(), Mode::Full);
         set_session_mode(Mode::Ultra);
         assert_eq!(current_session_mode(), Mode::Ultra);
-        // Reset to the default for downstream tests.
         set_session_mode(Mode::Full);
     }
 
     #[test]
-    fn compress_for_budget_pipeline_runs() {
-        // The empty pipeline (no transforms registered) is
-        // identity: the input passes through unchanged for any
-        // non-Off mode. This pins that the helper actually
-        // reaches the pipeline and returns a `String`.
+    fn compress_with_store_pipeline_runs() {
+        let store = Arc::new(InMemoryOffloadStore::new());
         let input = "abcdefghij";
         for mode in [Mode::Lite, Mode::Full, Mode::Ultra] {
-            let out = compress_for_budget(input, mode);
-            assert_eq!(out, input, "empty pipeline must be identity for {mode:?}");
+            let out = compress_with_store(input, mode, &store);
+            assert_eq!(
+                out, input,
+                "pipeline must be identity for plain text in {mode:?}"
+            );
         }
     }
 
     #[test]
     fn default_budget_sliced_listener_returns_some() {
         set_session_mode(Mode::Full);
-        let listener = default_budget_sliced_listener();
+        let store = Arc::new(InMemoryOffloadStore::new());
+        let listener = default_budget_sliced_listener(store);
         let event = BudgetSlicedEvent {
             original_size: 10_000,
             sliced_size: 200,
@@ -736,12 +825,10 @@ mod tests {
 
     #[test]
     fn register_default_budget_listener_appends_to_dispatcher() {
-        // The dispatcher lives in the budget module; verify that
-        // calling `register_default_budget_listener()` actually
-        // registers something by counting listeners.
+        let store = Arc::new(InMemoryOffloadStore::new());
         crate::session::budget::clear_sliced_listeners();
         assert_eq!(crate::session::budget::sliced_listener_count(), 0);
-        register_default_budget_listener();
+        register_default_budget_listener(store);
         assert!(
             crate::session::budget::sliced_listener_count() >= 1,
             "register_default_budget_listener must add at least one listener"
@@ -820,8 +907,6 @@ mod tests {
 
     #[test]
     fn parse_content_type_valid_parses() {
-        // Plaintext is the only guaranteed-stable variant; the rest
-        // must at least fall back to PlainText rather than panic.
         assert_eq!(parse_content_type(None), ContentType::PlainText);
         let _ = parse_content_type(Some("plaintext"));
     }
@@ -880,8 +965,5 @@ mod tests {
             let path = xdg_config_path().expect("HOME set should resolve a path");
             assert!(path.ends_with("stratum/pipeline.toml"), "got {path:?}");
         }
-        // When neither XDG_CONFIG_HOME nor HOME is set, returns None.
-        // We can't safely unset HOME for other tests, so just assert
-        // the happy path above.
     }
 }

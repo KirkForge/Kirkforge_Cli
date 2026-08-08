@@ -98,7 +98,7 @@ impl CarryoverProfile {
 
     /// Estimated token count of the rendered block.
     pub fn estimated_tokens(&self) -> usize {
-        self.to_prompt_block().len() / 4
+        crate::session::prompt::count_tokens(&self.to_prompt_block())
     }
 
     // ── Collection methods ──────────────────────────────────────────

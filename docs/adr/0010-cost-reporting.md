@@ -29,7 +29,7 @@ Each line is a JSON object:
 ### UsageKind enum
 
 ```rust
-// crates/plugin3-core/src/cost.rs
+// crates/kf-budget-core/src/cost.rs
 
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -94,7 +94,7 @@ The `classify_kind` function translates `Intervention` (ADR-0005
 § Auto-intervention) to `Option<UsageKind>`:
 
 ```rust
-// crates/plugin3-core/src/cost.rs
+// crates/kf-budget-core/src/cost.rs
 
 pub fn classify_kind(intervention: &Intervention) -> Option<UsageKind> {
     match intervention {
@@ -122,7 +122,7 @@ match surfaces here.
 The `emit_usage` function is called from every hook handler:
 
 ```rust
-// crates/plugin3-core/src/cost.rs
+// crates/kf-budget-core/src/cost.rs
 
 pub fn emit_usage(record: &UsageRecord) {
     emit_usage_at(record, &usage_path());
@@ -299,7 +299,7 @@ Positive:
 ## Implementation notes
 
 The `cost` module lives at
-`crates/plugin3-core/src/cost.rs`. The `emit_usage` function
+`crates/kf-budget-core/src/cost.rs`. The `emit_usage` function
 is the only public API; the rest of the module is private
 helpers.
 

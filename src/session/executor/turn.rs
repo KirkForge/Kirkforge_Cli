@@ -79,6 +79,48 @@ impl Executor {
         let result = self
             .run_turn_inner(user_input, approval_sender, cancelled, event_tx)
             .await;
+
+        // WO 21.6: post-turn memory extraction (best-effort).
+        // Rate limit: extract every 3rd turn, or immediately when the
+        // user message contains preference/correction keywords.
+        const EXTRACT_EVERY_N_TURNS: u64 = 3;
+        self.turn_count += 1;
+        let should_extract = self.turn_count % EXTRACT_EVERY_N_TURNS == 0
+            || crate::session::memory::extract::is_preference_like(user_input);
+
+        if should_extract && read_shared_config(&self.config).tools.memory_auto_populate {
+            if let Some(ref store) = self.memory_store {
+                let history = self.conversation.all();
+                let last_user = history.iter().rev().find(|m| matches!(m.role, Role::User));
+                let last_assistant = history
+                    .iter()
+                    .rev()
+                    .find(|m| matches!(m.role, Role::Assistant) && !m.content.is_empty());
+                if let (Some(u), Some(a)) = (last_user, last_assistant) {
+                    let facts =
+                        crate::session::memory::extract::extract_facts(&u.content, &a.content);
+                    let count = facts.len();
+                    for f in &facts {
+                        if let Err(e) = store.upsert(
+                            &f.name,
+                            &f.description,
+                            &f.body,
+                            f.metadata
+                                .get("type")
+                                .map(|s| s.as_str())
+                                .unwrap_or("project"),
+                        ) {
+                            tracing::trace!(error = %e, name = %f.name, "memory extraction upsert failed");
+                        }
+                    }
+                    if count > 0 {
+                        let names: Vec<&str> = facts.iter().map(|f| f.name.as_str()).collect();
+                        tracing::info!(count, facts = ?names, "auto-remembered facts");
+                    }
+                }
+            }
+        }
+
         if result.is_ok() {
             if let Err(e) = self.conversation.checkpoint_async().await {
                 tracing::warn!(error = %e, "post-turn checkpoint failed");
@@ -925,7 +967,16 @@ impl Executor {
             }
 
             // ponytail: outcome already computed in Phase 2 (where timeout ran); no second timeout here.
-            let outcome = apply_budget_slice(outcome);
+            #[cfg(feature = "budget")]
+            let outcome = {
+                if let (Some(ref budget), Some(ref store)) = (&self.budget, &self.budget_store) {
+                    apply_budget_slice(outcome, budget, store)
+                } else {
+                    outcome
+                }
+            };
+            #[cfg(not(feature = "budget"))]
+            let outcome = outcome;
             let outcome_for_emit = outcome.clone();
             let edit_diff =
                 handle_tool_outcome(outcome, tc, event_tx, &mut self.conversation).await?;
@@ -994,7 +1045,16 @@ impl Executor {
         } else {
             outcome
         };
-        let outcome = apply_budget_slice(outcome);
+        #[cfg(feature = "budget")]
+        let outcome = {
+            if let (Some(ref budget), Some(ref store)) = (&self.budget, &self.budget_store) {
+                apply_budget_slice(outcome, budget, store)
+            } else {
+                outcome
+            }
+        };
+        #[cfg(not(feature = "budget"))]
+        let outcome = outcome;
         let outcome_for_emit = outcome.clone();
         let edit_diff = handle_tool_outcome(outcome, tc, event_tx, &mut self.conversation).await?;
         if is_destructive {
@@ -1107,6 +1167,9 @@ impl Executor {
                         cancel_token: tool_cancel_token(cancelled),
                         resolved_path: resolved,
                         timeout: self.tool_call_timeout(),
+                        diff_review: crate::shared::read_shared_config(&self.config)
+                            .security
+                            .diff_review,
                     });
                 }
                 PreRunVerdict::Skip { events, message } => {
@@ -1333,7 +1396,7 @@ impl Executor {
                 continue;
             }
 
-            let Some((invocation, outcome, resolved_path, _duration_ms)) = results.remove(&idx)
+            let Some((invocation, outcome, resolved_path, duration_ms)) = results.remove(&idx)
             else {
                 let err = format!("Tool call {} did not return an outcome", tc.id);
                 crate::send_or_warn!(
@@ -1409,7 +1472,7 @@ impl Executor {
                 &invocation,
                 outcome,
                 resolved_path.as_deref(),
-                0,
+                duration_ms,
                 approval_sender,
                 cancelled,
                 event_tx,
@@ -1463,7 +1526,7 @@ impl Executor {
             memory_enabled,
             memory_max_tokens,
             memory_top_n,
-            compaction_use_llm,
+            compaction_use_heuristic,
             compaction_drop_threshold,
             stem_file_cap,
         ) = {
@@ -1472,7 +1535,7 @@ impl Executor {
                 cfg.display.memory_enabled,
                 cfg.display.memory_max_tokens,
                 cfg.display.memory_top_n,
-                cfg.session.compaction_use_llm,
+                cfg.session.compaction_use_heuristic,
                 cfg.session.compaction_drop_threshold,
                 cfg.session.stem_file_cap,
             )
@@ -1565,7 +1628,7 @@ impl Executor {
             history,
             model_info.max_context_tokens,
             &tool_results,
-            compaction_use_llm,
+            compaction_use_heuristic,
             compaction_drop_threshold,
         );
 
@@ -1840,6 +1903,7 @@ struct PreparedCall {
     cancel_token: tokio_util::sync::CancellationToken,
     resolved_path: Option<std::path::PathBuf>,
     timeout: std::time::Duration,
+    diff_review: bool,
 }
 
 /// Run only the tool body for a prepared call, returning the original
@@ -1861,9 +1925,20 @@ async fn run_prepared_call(prep: PreparedCall) -> Option<(ToolInvocation, ToolOu
             0,
         ));
     }
+    if let Err(msg) =
+        crate::tools::validate_tool_args(prep.tool.as_ref(), &prep.invocation.arguments)
+    {
+        return Some((
+            prep.invocation,
+            ToolOutcome::Failure(crate::shared::ToolError::invalid_args(&msg)),
+            0,
+        ));
+    }
+
     let ctx = crate::tools::ToolContext {
         token: prep.cancel_token,
         dry_run: false,
+        diff_review: prep.diff_review,
         task_spawner: None,
         tools: None,
     };

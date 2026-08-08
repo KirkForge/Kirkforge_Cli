@@ -6,7 +6,7 @@
 //!
 //! ## Two-path dispatch (ADR-050)
 //!
-//! Folded plugins (Stratum, Budget, Draw, Video) can run as either:
+//! Folded plugins (Stratum, Budget) can run as either:
 //! - **Compiled-in** (feature on): tools register as direct Rust calls in
 //!   `main/mod.rs`; the shell plugin dir is skipped here.
 //! - **External** (feature off): the shell plugin dir loads here as
@@ -28,12 +28,7 @@ use super::wrapper::PluginToolWrapper;
 /// When the corresponding feature is enabled, these are served by compiled-in
 /// Rust code and their shell plugin dirs are skipped during filesystem loading.
 /// When the feature is disabled, the shell plugin dir is loaded as fallback.
-const FOLDED_PLUGINS: &[(&str, &str)] = &[
-    ("stratum", "stratum"),
-    ("kf-budget", "budget"),
-    ("kf-draw", "draw"),
-    ("kf-video", "video"),
-];
+const FOLDED_PLUGINS: &[(&str, &str)] = &[("stratum", "stratum"), ("kf-budget", "budget")];
 
 /// Check if a plugin name is folded and whether its feature is compiled in.
 pub fn folded_feature_enabled(name: &str) -> bool {
@@ -42,10 +37,6 @@ pub fn folded_feature_enabled(name: &str) -> bool {
         "stratum" => true,
         #[cfg(feature = "budget")]
         "kf-budget" => true,
-        #[cfg(feature = "draw")]
-        "kf-draw" => true,
-        #[cfg(feature = "video")]
-        "kf-video" => true,
         _ => false,
     }
 }
@@ -71,12 +62,31 @@ pub fn plugins_dir() -> PathBuf {
 }
 
 /// Build the host trust policy from the current config snapshot.
+///
+/// When signature validation is enabled, an info-level message is logged.
+/// Workspace plugins loaded via [`load_workspace_plugins`] automatically get
+/// `verify_signatures` set to `false` (local-trust bypass) since they are
+/// local development paths, not registry-issued artifacts.
 pub fn trust_policy_from_config(cfg: &Config) -> TrustPolicy {
+    if cfg.tools.plugin_signature_validation {
+        tracing::info!(
+            "plugin signature verification is enabled; set plugin_signature_validation = false to disable"
+        );
+    }
     TrustPolicy {
         max: cfg.tools.max_plugin_trust,
         reject_on_excess: cfg.tools.reject_on_excess_plugin_trust,
         verify_signatures: cfg.tools.plugin_signature_validation,
         signature_key_path: cfg.tools.plugin_public_key_path.as_ref().map(PathBuf::from),
+    }
+}
+
+/// Build a trust policy for local workspace plugins: same as the base policy
+/// but with signature verification disabled (local-trust bypass).
+fn local_trust_policy(base: &TrustPolicy) -> TrustPolicy {
+    TrustPolicy {
+        verify_signatures: false,
+        ..base.clone()
     }
 }
 
@@ -88,6 +98,7 @@ pub fn trust_policy_from_config(cfg: &Config) -> TrustPolicy {
 /// tiers; the plugin itself is not added to the registry if it fails to load.
 pub fn load_workspace_plugins(registry: &mut PluginRegistry, cfg: &Config) -> Vec<String> {
     let policy = trust_policy_from_config(cfg);
+    let ws_policy = local_trust_policy(&policy);
     let mut warnings = Vec::new();
 
     for name in &cfg.tools.enabled_plugins {
@@ -148,7 +159,7 @@ pub fn load_workspace_plugins(registry: &mut PluginRegistry, cfg: &Config) -> Ve
             ));
             continue;
         }
-        match registry.load_one(&resolved, policy.clone()) {
+        match registry.load_one(&resolved, ws_policy.clone()) {
             Ok((_, plugin_warnings)) => warnings.extend(plugin_warnings),
             Err(e) => warnings.push(format!("{name}: {e}")),
         }
@@ -318,7 +329,7 @@ mod loader_tests {
     fn trust_policy_from_config_defaults() {
         let cfg = Config::default();
         let policy = trust_policy_from_config(&cfg);
-        assert!(!policy.verify_signatures, "default should not verify sigs");
+        assert!(policy.verify_signatures, "default should verify sigs");
         assert!(policy.signature_key_path.is_none());
     }
 
@@ -471,5 +482,32 @@ mod loader_tests {
         );
         assert!(warnings.iter().any(|w| w.contains("never-built-plugin")));
         assert!(registry.active_plugins().is_empty());
+    }
+
+    #[test]
+    fn signature_validation_is_default_on() {
+        let cfg = Config::default();
+        assert!(
+            cfg.tools.plugin_signature_validation,
+            "plugin_signature_validation should default to true (R7)"
+        );
+    }
+
+    #[test]
+    fn local_trust_policy_bypasses_signature_verification() {
+        let base = TrustPolicy {
+            max: kf_plugin_sdk::TrustTier::Shell,
+            reject_on_excess: true,
+            verify_signatures: true,
+            signature_key_path: Some(PathBuf::from("/keys/pub.key")),
+        };
+        let local = local_trust_policy(&base);
+        assert!(
+            !local.verify_signatures,
+            "local-trust policy must disable signature verification"
+        );
+        assert_eq!(local.max, base.max, "other fields must be preserved");
+        assert_eq!(local.reject_on_excess, base.reject_on_excess);
+        assert_eq!(local.signature_key_path, base.signature_key_path);
     }
 }

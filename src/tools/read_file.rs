@@ -54,6 +54,7 @@ impl Tool for ReadFile {
     }
 
     async fn run(&self, _ctx: &ToolContext, args: serde_json::Value) -> ToolOutcome {
+        let start = std::time::Instant::now();
         let path = match args.get("path").and_then(|p| p.as_str()) {
             Some(p) => PathBuf::from(shellexpand::tilde(p).as_ref()),
             None => {
@@ -167,6 +168,7 @@ impl Tool for ReadFile {
             format!("{header}\n{sep}\n{body}", sep = "-".repeat(header.len()))
         };
 
+        tracing::info!(tool = "read_file", duration_ms = start.elapsed().as_millis(), path = %path.display(), "file tool completed");
         ToolOutcome::FileContent {
             path,
             content: display,

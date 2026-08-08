@@ -45,18 +45,6 @@ pub struct CompactedOutput {
     pub lossy: bool,
 }
 
-pub trait CompactionTransform: Send + Sync {
-    fn name(&self) -> &'static str;
-    /// Transform `input` into a compacted form.
-    ///
-    /// # Errors
-    ///
-    /// Returns `TransformError::InvalidInput` for malformed input and
-    /// `TransformError::Internal` for unexpected failures in the
-    /// transform implementation.
-    fn apply(&self, input: &str) -> Result<CompactedOutput, TransformError>;
-}
-
 /// Heuristic line filter — keeps the first non-empty short line of each
 /// "paragraph", drops noisy long lines. ADR-0008: intentional crudeness.
 #[must_use]
@@ -97,12 +85,12 @@ impl Default for LocalSummaryCompactor {
     }
 }
 
-impl CompactionTransform for LocalSummaryCompactor {
-    fn name(&self) -> &'static str {
+impl LocalSummaryCompactor {
+    pub fn name(&self) -> &'static str {
         "local_summary"
     }
 
-    fn apply(&self, input: &str) -> Result<CompactedOutput, TransformError> {
+    pub fn apply(&self, input: &str) -> Result<CompactedOutput, TransformError> {
         let summary = local_summarise(input, self.max_output_bytes);
         let lossy = summary.len() < input.len();
         Ok(CompactedOutput {
@@ -310,7 +298,7 @@ mod tests {
     #[test]
     fn local_summary_compactor_name_is_pinned() {
         let c = LocalSummaryCompactor::default();
-        assert_eq!(CompactionTransform::name(&c), "local_summary");
+        assert_eq!(c.name(), "local_summary");
     }
 
     #[test]
@@ -322,7 +310,7 @@ mod tests {
         let out = c.apply(&input).unwrap();
         assert!(out.lossy);
         assert!(out.bytes_saved > 0);
-        assert_eq!(CompactionTransform::name(&c), "local_summary");
+        assert_eq!(c.name(), "local_summary");
     }
 
     // ---- Property tests (ADR-0016) — no-panic on arbitrary inputs.

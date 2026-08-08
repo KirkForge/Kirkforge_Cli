@@ -44,12 +44,12 @@ impl ResponseCache {
         model: &str,
         messages: &[Message],
         tools: &[ToolDef],
-        json_mode: bool,
+        response_format: Option<&crate::shared::ResponseFormat>,
     ) -> Option<Vec<StreamEvent>> {
         if !self.enabled {
             return None;
         }
-        let key = CacheKey::new(model, messages, tools, json_mode);
+        let key = CacheKey::new(model, messages, tools, response_format);
 
         // 1. In-memory
         {
@@ -93,13 +93,13 @@ impl ResponseCache {
         model: &str,
         messages: &[Message],
         tools: &[ToolDef],
-        json_mode: bool,
+        response_format: Option<&crate::shared::ResponseFormat>,
         events: &[StreamEvent],
     ) {
         if !self.enabled {
             return;
         }
-        let key = CacheKey::new(model, messages, tools, json_mode);
+        let key = CacheKey::new(model, messages, tools, response_format);
 
         // Skip empty or error-only streams.
         if events.is_empty() {
@@ -151,7 +151,12 @@ struct CacheKey {
 }
 
 impl CacheKey {
-    fn new(model: &str, messages: &[Message], tools: &[ToolDef], json_mode: bool) -> Self {
+    fn new(
+        model: &str,
+        messages: &[Message],
+        tools: &[ToolDef],
+        response_format: Option<&crate::shared::ResponseFormat>,
+    ) -> Self {
         let mut hasher = Sha256::new();
         hasher.update(model.as_bytes());
 
@@ -166,7 +171,9 @@ impl CacheKey {
         ) {
             hasher.update(&bytes);
         }
-        hasher.update([json_mode as u8]);
+        if let Some(rf) = response_format {
+            hasher.update(serde_json::to_vec(rf).unwrap_or_default());
+        }
 
         Self {
             hash: hex::encode(hasher.finalize()),
@@ -192,6 +199,7 @@ pub struct CachingAdapter {
     inner: Box<dyn ModelAdapter>,
     cache: ResponseCache,
     json_mode: bool,
+    response_format: Option<crate::shared::ResponseFormat>,
 }
 
 impl CachingAdapter {
@@ -201,6 +209,11 @@ impl CachingAdapter {
             inner,
             cache,
             json_mode,
+            response_format: if json_mode {
+                Some(crate::shared::ResponseFormat::JsonObject)
+            } else {
+                None
+            },
         }
     }
 }
@@ -213,9 +226,15 @@ impl ModelAdapter for CachingAdapter {
 
     fn set_json_mode(&mut self, json_mode: bool) {
         self.json_mode = json_mode;
+        if json_mode {
+            self.response_format = Some(crate::shared::ResponseFormat::JsonObject);
+        }
         self.inner.set_json_mode(json_mode);
     }
-
+    fn set_response_format(&mut self, format: crate::shared::ResponseFormat) {
+        self.inner.set_response_format(format.clone());
+        self.response_format = Some(format);
+    }
     fn set_extended_thinking(&mut self, enabled: bool) {
         self.inner.set_extended_thinking(enabled);
     }
@@ -231,10 +250,12 @@ impl ModelAdapter for CachingAdapter {
     ) -> anyhow::Result<tokio::sync::mpsc::Receiver<StreamEvent>> {
         let model_info = self.inner.model_info();
 
-        if let Some(events) = self
-            .cache
-            .get(&model_info.name, messages, tools, self.json_mode)
-        {
+        if let Some(events) = self.cache.get(
+            &model_info.name,
+            messages,
+            tools,
+            self.response_format.as_ref(),
+        ) {
             let (tx, rx) = tokio::sync::mpsc::channel::<StreamEvent>(events.len().max(1));
             tokio::spawn(async move {
                 for ev in events {
@@ -251,7 +272,7 @@ impl ModelAdapter for CachingAdapter {
         let model_name = model_info.name.clone();
         let messages_owned = messages.to_vec();
         let tools_owned = tools.to_vec();
-        let json_mode = self.json_mode;
+        let response_format = self.response_format.clone();
 
         let (tx_out, rx_out) = tokio::sync::mpsc::channel::<StreamEvent>(4096);
         tokio::spawn(async move {
@@ -280,7 +301,7 @@ impl ModelAdapter for CachingAdapter {
                     &model_name,
                     &messages_owned,
                     &tools_owned,
-                    json_mode,
+                    response_format.as_ref(),
                     &events,
                 );
             } else {
@@ -318,7 +339,7 @@ mod tests {
             "test-model",
             &[message(crate::shared::Role::User, "hello")],
             &[],
-            false,
+            None,
         );
         assert!(result.is_none());
     }
@@ -343,7 +364,7 @@ mod tests {
             "test-model",
             &[message(crate::shared::Role::User, "hi")],
             &[],
-            false,
+            None,
             &events,
         );
 
@@ -352,7 +373,7 @@ mod tests {
                 "test-model",
                 &[message(crate::shared::Role::User, "hi")],
                 &[],
-                false,
+                None,
             )
             .expect("cache hit after put");
         assert_eq!(got, events);
@@ -366,7 +387,7 @@ mod tests {
             "test-model",
             &[message(crate::shared::Role::User, "hi")],
             &[],
-            false,
+            None,
             &[StreamEvent::Text("x".into())],
         );
         let entries: Vec<_> = std::fs::read_dir(dir.path())
@@ -385,7 +406,7 @@ mod tests {
                 "test-model",
                 &[message(crate::shared::Role::User, "hi")],
                 &[],
-                false
+                None
             )
             .is_none());
     }
@@ -398,7 +419,7 @@ mod tests {
             "test-model",
             &[message(crate::shared::Role::User, "hi")],
             &[],
-            false,
+            None,
             &[],
         );
         let entries: Vec<_> = std::fs::read_dir(dir.path())
@@ -416,7 +437,7 @@ mod tests {
             "test-model",
             &[message(crate::shared::Role::User, "hi")],
             &[],
-            false,
+            None,
             &[
                 StreamEvent::Error("boom".into()),
                 StreamEvent::Error("boom2".into()),
@@ -435,13 +456,13 @@ mod tests {
             "model",
             &[message(crate::shared::Role::User, "hi")],
             &[],
-            false,
+            None,
         );
         let k2 = CacheKey::new(
             "model",
             &[message(crate::shared::Role::User, "hi")],
             &[],
-            false,
+            None,
         );
         assert_eq!(k1, k2);
     }
@@ -452,13 +473,13 @@ mod tests {
             "model-a",
             &[message(crate::shared::Role::User, "hi")],
             &[],
-            false,
+            None,
         );
         let k2 = CacheKey::new(
             "model-b",
             &[message(crate::shared::Role::User, "hi")],
             &[],
-            false,
+            None,
         );
         assert_ne!(k1, k2);
     }
@@ -469,30 +490,31 @@ mod tests {
             "model",
             &[message(crate::shared::Role::User, "hi")],
             &[],
-            false,
+            None,
         );
         let k2 = CacheKey::new(
             "model",
             &[message(crate::shared::Role::User, "bye")],
             &[],
-            false,
+            None,
         );
         assert_ne!(k1, k2);
     }
 
     #[test]
-    fn cache_key_differs_for_different_json_mode() {
+    fn cache_key_differs_for_different_response_format() {
+        let rf = crate::shared::ResponseFormat::JsonObject;
         let k1 = CacheKey::new(
             "model",
             &[message(crate::shared::Role::User, "hi")],
             &[],
-            false,
+            None,
         );
         let k2 = CacheKey::new(
             "model",
             &[message(crate::shared::Role::User, "hi")],
             &[],
-            true,
+            Some(&rf),
         );
         assert_ne!(k1, k2);
     }
@@ -513,13 +535,13 @@ mod tests {
             "model",
             &[message(crate::shared::Role::User, "hi")],
             &[tool_a],
-            false,
+            None,
         );
         let k2 = CacheKey::new(
             "model",
             &[message(crate::shared::Role::User, "hi")],
             &[tool_b],
-            false,
+            None,
         );
         assert_ne!(k1, k2);
     }
@@ -530,7 +552,7 @@ mod tests {
             "model",
             &[message(crate::shared::Role::User, "hi")],
             &[],
-            false,
+            None,
         );
         assert!(k.hash.chars().all(|c| c.is_ascii_hexdigit()));
         assert_eq!(k.hash.len(), 64);
@@ -545,7 +567,7 @@ mod tests {
             "test-model",
             &[message(crate::shared::Role::User, "hi")],
             &[],
-            false,
+            None,
             &events,
         );
         let got = cache
@@ -553,7 +575,7 @@ mod tests {
                 "test-model",
                 &[message(crate::shared::Role::User, "hi")],
                 &[],
-                false,
+                None,
             )
             .expect("cache hit from memory");
         assert_eq!(got, events);
@@ -568,7 +590,7 @@ mod tests {
             "test-model",
             &[message(crate::shared::Role::User, "hi")],
             &[],
-            false,
+            None,
             &events,
         );
         let cache2 = ResponseCache::new(true, Some(dir.path().into()));
@@ -577,7 +599,7 @@ mod tests {
                 "test-model",
                 &[message(crate::shared::Role::User, "hi")],
                 &[],
-                false,
+                None,
             )
             .expect("cache hit from disk");
         assert_eq!(got, events);
@@ -591,7 +613,7 @@ mod tests {
             "model",
             &[message(crate::shared::Role::User, "hi")],
             &[],
-            false,
+            None,
         );
         let path = cache.path_for(&key);
         assert!(path.to_string_lossy().ends_with(".bin"));
@@ -606,7 +628,7 @@ mod tests {
             "model",
             &[message(crate::shared::Role::User, "hi")],
             &[],
-            false,
+            None,
         );
         let path = cache.path_for(&key);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -616,7 +638,7 @@ mod tests {
                 "model",
                 &[message(crate::shared::Role::User, "hi")],
                 &[],
-                false
+                None
             )
             .is_none());
     }
@@ -629,7 +651,7 @@ mod tests {
             "model",
             &[message(crate::shared::Role::User, "hi")],
             &[],
-            false,
+            None,
         );
         let path = cache.path_for(&key);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -652,7 +674,7 @@ mod tests {
                 "model",
                 &[message(crate::shared::Role::User, "hi")],
                 &[],
-                false
+                None
             )
             .is_none());
     }
@@ -798,7 +820,7 @@ mod tests {
         // must not be replayed on a later identical request.
         assert!(
             cache
-                .get(&wrapped.model_info().name, &messages, &tools, false)
+                .get(&wrapped.model_info().name, &messages, &tools, None)
                 .is_none(),
             "partial stream should not be cached"
         );
@@ -889,7 +911,7 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         assert!(
             cache
-                .get(&wrapped.model_info().name, &messages, &tools, false)
+                .get(&wrapped.model_info().name, &messages, &tools, None)
                 .is_none(),
             "stream without Done event should not be cached"
         );

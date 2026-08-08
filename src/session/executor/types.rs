@@ -43,19 +43,14 @@ pub enum TurnEvent {
     ToolResult {
         name: String,
         output: String,
-        /// Whether the tool call actually succeeded. `false` covers all
-        /// denial paths (path guard, deny list, read-before-edit gate,
-        /// approval-deny, dangerous-command block) as well as the tool
-        /// itself returning a `ToolOutcome::Error`. The non-interactive
-        /// JSON summary uses this to populate the `success` field on
-        /// `ToolCallRecord` truthfully (was hardcoded `vec![]` in the
-        /// previous implementation — see GPT 5.5 review finding #13).
         success: bool,
     },
     Error(String),
     Verification {
         message: String,
         success: bool,
+        file: Option<std::path::PathBuf>,
+        line: Option<u32>,
     },
     CostStats {
         prompt_tokens: usize,
@@ -64,15 +59,9 @@ pub enum TurnEvent {
         cumulative_cost: f64,
     },
 
-    /// Prompt-cache performance for the turn. Emitted when the adapter
-    /// reports cache-read tokens so the TUI/status bar can surface KV-cache
-    /// hit counts and verify that the prompt cache stem is actually being
-    /// reused by the provider.
     CacheStats {
         cached_tokens: usize,
         prompt_tokens: usize,
-        /// Estimated size of the stable prompt-cache stem (system prompt +
-        /// tool definitions) in tokens. Useful for tuning cache-hit rates.
         stem_tokens: usize,
     },
 
@@ -86,45 +75,95 @@ pub enum TurnEvent {
         tokens_after: usize,
     },
 
-    /// Emitted when the assistant's response contains the plan-complete
-    /// marker while plan mode is active. The TUI should prompt the user
-    /// to approve exiting plan mode (e.g. via `/implement`).
     PlanComplete,
 
-    /// Emitted when the conversation log was corrupt on open and the
-    /// executor recovered from the most recent intact checkpoint.
-    /// Carries the number of restored messages so the TUI can show a
-    /// concise status line.
     Recovered {
-        /// Number of messages restored from checkpoint.
         messages: usize,
     },
 
-    /// Progress of an asynchronous Ollama model pull triggered by
-    /// `/model <name>` when the model is missing locally. Rendered
-    /// in the TUI as a live progress bar.
     PullProgress {
-        /// Human-readable status string from the Ollama `/api/pull`
-        /// stream (e.g. "pulling manifest", "downloading").
         status: String,
-        /// Completed bytes so far; `None` when the server has not
-        /// reported a numeric value yet.
         completed: Option<u64>,
-        /// Total bytes to download; `None` when the total is unknown.
         total: Option<u64>,
     },
 
-    /// Emitted when the executor's doom-loop detector observes the
-    /// same tool failing with the same error for at least the
-    /// threshold count. The TUI surfaces this as a warning banner
-    /// with break/plan/continue actions so the user can escape the
-    /// loop without killing the session.
     DoomLoopDetected {
-        /// Number of consecutive identical tool errors so far.
         count: usize,
-        /// Name of the tool that kept failing.
         tool: String,
-        /// Truncated text of the most recent error (for display).
         last_error: String,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plan_complete_marker_is_nonempty() {
+        assert!(PLAN_COMPLETE_MARKER.starts_with("## "));
+    }
+
+    #[test]
+    fn compact_hook_stats_fields() {
+        let stats = CompactHookStats {
+            message_count: 10,
+            preserve_recent: 2,
+            original_count: 20,
+            result_count: 8,
+            dropped_tool_results: 3,
+            condensed_assistant_turns: 1,
+            summarised_messages: 4,
+            strategy: "heuristic",
+        };
+        assert_eq!(stats.message_count, 10);
+        assert_eq!(stats.preserve_recent, 2);
+        assert_eq!(stats.original_count, 20);
+        assert_eq!(stats.result_count, 8);
+        assert_eq!(stats.dropped_tool_results, 3);
+        assert_eq!(stats.condensed_assistant_turns, 1);
+        assert_eq!(stats.summarised_messages, 4);
+        assert_eq!(stats.strategy, "heuristic");
+    }
+
+    #[test]
+    fn compact_hook_stats_is_copy() {
+        let stats = CompactHookStats {
+            message_count: 1,
+            preserve_recent: 0,
+            original_count: 1,
+            result_count: 1,
+            dropped_tool_results: 0,
+            condensed_assistant_turns: 0,
+            summarised_messages: 0,
+            strategy: "exact",
+        };
+        let _copy = stats;
+        let _copy2 = stats;
+    }
+
+    #[test]
+    fn iteration_outcome_variants() {
+        let tool_calls = IterationOutcome::ToolCalls(vec![]);
+        assert!(matches!(tool_calls, IterationOutcome::ToolCalls(_)));
+
+        let finished = IterationOutcome::Finished(crate::shared::FinishReason::Stop);
+        assert!(matches!(finished, IterationOutcome::Finished(_)));
+
+        let parse_err = IterationOutcome::ParseError;
+        assert!(matches!(parse_err, IterationOutcome::ParseError));
+    }
+
+    #[test]
+    fn approval_decision_variants() {
+        let approved = ApprovalDecision::Approved;
+        assert!(matches!(approved, ApprovalDecision::Approved));
+
+        let denied = ApprovalDecision::Denied {
+            reason: "nope".into(),
+        };
+        assert!(matches!(denied, ApprovalDecision::Denied { .. }));
+
+        let always = ApprovalDecision::AlwaysApproved;
+        assert!(matches!(always, ApprovalDecision::AlwaysApproved));
+    }
 }

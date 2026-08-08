@@ -19,7 +19,7 @@ Stratum ADR-0014 (magic bytes → structural → shape heuristics).
 ### ToolOutputKind enum
 
 ```rust
-// crates/plugin3-core/src/detector.rs
+// crates/kf-budget-core/src/detector.rs
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ToolOutputKind {
@@ -45,7 +45,7 @@ pub enum ToolOutputKind {
 ### Layered detection
 
 ```rust
-// crates/plugin3-core/src/detector.rs
+// crates/kf-budget-core/src/detector.rs
 
 pub fn detect(input: &str, tool_name: Option<&str>) -> ToolOutputKind {
     // Layer 1: tool name hint.
@@ -121,7 +121,7 @@ nearest char boundary (CJK/emoji safety) and short-circuits
 the SearchResults check on the first line ≥ 200 bytes (no
 intermediate `Vec<&str>` allocation). Both refactors keep
 the same classification behaviour — the test fixture at
-`crates/plugin3-core/tests/fixtures/detector/` (and the
+`crates/kf-budget-core/tests/fixtures/detector/` (and the
 in-file tests `from_shape_*`) pins the per-kind output so
 the refactor doesn't regress detection.
 
@@ -169,7 +169,7 @@ BLAKE3 hash of the first 1024 char-boundary bytes of the
 input:
 
 ```rust
-// crates/plugin3-core/src/orchestrator.rs
+// crates/kf-budget-core/src/orchestrator.rs
 
 pub(crate) const DETECTOR_CACHE_CAP: usize = 64;
 
@@ -258,7 +258,7 @@ Positive:
 
 The detector module is stateless. The cache lives in the
 orchestrator module — `DetectorCache` in
-`crates/plugin3-core/src/orchestrator.rs` — not in a
+`crates/kf-budget-core/src/orchestrator.rs` — not in a
 detector submodule (the cache is per-call
 single-threaded and belongs with the orchestrator that owns
 it, ADR-0007). A fresh session starts with an empty cache;
@@ -270,4 +270,4 @@ orchestrator; the orchestrator decides whether to slice.
 
 A regression test (ADR-0016) pins the detector's output for a
 known corpus of `(tool_name, input)` pairs. The test fixture
-lives at `crates/plugin3-core/tests/fixtures/detector/`.
+lives at `crates/kf-budget-core/tests/fixtures/detector/`.

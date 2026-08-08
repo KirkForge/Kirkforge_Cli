@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use super::{expand_tilde_str, parse_bool_env, parse_plugin_sources_env};
 
 /// Apply environment variable overrides to a Config.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn apply_env_overrides(cfg: &mut Config) {
     // Helper for the repeated bool-override pattern: read a KF_CODE_*
     // env var, parse it as a bool, and write it to a config field.
@@ -86,8 +87,16 @@ pub(super) fn apply_env_overrides(cfg: &mut Config) {
 
     // KF_CODE_CARRYOVER_ENABLED
     env_bool!("KF_CODE_CARRYOVER_ENABLED", cfg.session.carryover_enabled);
-    // KF_CODE_COMPACTION_USE_LLM
-    env_bool!("KF_CODE_COMPACTION_USE_LLM", cfg.session.compaction_use_llm);
+    // KF_CODE_COMPACTION_USE_HEURISTIC (backward compat: KF_CODE_COMPACTION_USE_LLM)
+    if let Ok(val) = std::env::var("KF_CODE_COMPACTION_USE_HEURISTIC") {
+        if let Ok(v) = val.parse::<bool>() {
+            cfg.session.compaction_use_heuristic = v;
+        }
+    } else if let Ok(val) = std::env::var("KF_CODE_COMPACTION_USE_LLM") {
+        if let Ok(v) = val.parse::<bool>() {
+            cfg.session.compaction_use_heuristic = v;
+        }
+    }
     // KF_CODE_COMPACTION_DROP_THRESHOLD
     if let Ok(val) = std::env::var("KF_CODE_COMPACTION_DROP_THRESHOLD") {
         if let Ok(v) = val.parse::<f64>() {
@@ -288,6 +297,12 @@ pub(super) fn apply_env_overrides(cfg: &mut Config) {
     // KF_CODE_MEMORY_ENABLED
     env_bool!("KF_CODE_MEMORY_ENABLED", cfg.display.memory_enabled);
 
+    // KF_CODE_MEMORY_AUTO_POPULATE
+    env_bool!(
+        "KF_CODE_MEMORY_AUTO_POPULATE",
+        cfg.tools.memory_auto_populate
+    );
+
     // KF_CODE_MEMORY_MAX_TOKENS
     if let Ok(val) = std::env::var("KF_CODE_MEMORY_MAX_TOKENS") {
         if let Ok(n) = val.parse::<usize>() {
@@ -367,9 +382,6 @@ pub(super) fn apply_env_overrides(cfg: &mut Config) {
         if !val.is_empty() {
             cfg.model.aws_region = val;
         }
-    }
-    if let Ok(val) = std::env::var("KF_CODE_AWS_PROFILE") {
-        cfg.model.aws_profile = val;
     }
     if let Ok(val) = std::env::var("KF_CODE_GCP_PROJECT_ID") {
         if !val.is_empty() {

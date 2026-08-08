@@ -59,7 +59,7 @@ pub use manager::{McpClientManager, McpToolDef};
 use spawn::{spawn_child_reap, spawn_stderr_drain};
 
 /// MCP server capabilities that kf-code does not yet support.
-const UNSUPPORTED_CAPABILITIES: &[&str] = &["resources", "prompts", "sampling", "roots"];
+const UNSUPPORTED_CAPABILITIES: &[&str] = &["sampling"];
 
 /// Log a warning for each unsupported capability advertised by the server.
 fn warn_unsupported_capabilities(server_name: &str, init_result: &serde_json::Value) {
@@ -281,6 +281,7 @@ impl McpClient {
             config.name.clone(),
             alive.clone(),
             reader_shutdown_rx,
+            stdin.clone(),
         );
         let stderr_drain = spawn_stderr_drain(stderr, stderr_shutdown_rx);
 
@@ -304,7 +305,7 @@ impl McpClient {
             "method": "initialize",
             "params": {
                 "protocolVersion": "2024-11-05",
-                "capabilities": {},
+                "capabilities": {"resources": {}, "prompts": {}},
                 "clientInfo": {
                     "name": "kf-code",
                     "version": "0.1.0"
@@ -361,6 +362,7 @@ impl McpClient {
             config.name.clone(),
             alive.clone(),
             reader_shutdown_rx,
+            stdin.clone(),
         );
         let stderr_drain = spawn_stderr_drain(None, stderr_shutdown_rx);
 
@@ -457,14 +459,16 @@ impl McpClient {
         }
     }
 
-    /// Spawn a task that reads JSON-RPC responses from the server's
-    /// stdout and routes each one to the matching in-flight request.
+    /// Spawn a task that reads JSON-RPC messages from the server's
+    /// stdout, routes responses to in-flight requests, and handles
+    /// incoming server-to-client requests (e.g. `roots/list`).
     fn spawn_reader_task(
         stdout: ChildStdout,
         pending: PendingMap,
         server_name: String,
         alive: Arc<AtomicBool>,
         mut shutdown: oneshot::Receiver<()>,
+        stdin: Arc<Mutex<Option<ChildStdin>>>,
     ) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             let mut reader = BufReader::new(stdout);
@@ -512,22 +516,97 @@ impl McpClient {
                 if trimmed.is_empty() {
                     continue;
                 }
-                let Ok(resp) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+                let Ok(msg) = serde_json::from_str::<serde_json::Value>(trimmed) else {
                     tracing::trace!(server = %server_name, line = %trimmed, "MCP non-JSON stdout line");
                     continue;
                 };
 
-                let Some(id) = resp.get("id").and_then(json_id_to_string) else {
-                    // Notifications have no id (or id is null); ignore.
-                    tracing::trace!(server = %server_name, response = %resp, "MCP notification");
+                let id_str = msg.get("id").and_then(json_id_to_string);
+
+                if let Some(method) = msg.get("method").and_then(|m| m.as_str()) {
+                    if id_str.is_some() {
+                        // Server-to-client request (has method + id).
+                        if let Some(response) =
+                            Self::handle_server_request(method, &msg, &server_name)
+                        {
+                            Self::write_response(&stdin, &response, &server_name).await;
+                        }
+                        continue;
+                    }
+                    // Server-to-client notification (has method, no id).
+                    tracing::trace!(server = %server_name, method = %method, "MCP server notification");
+                    continue;
+                }
+
+                let Some(id) = id_str else {
+                    tracing::trace!(server = %server_name, response = %msg, "MCP message without id or method");
                     continue;
                 };
 
-                Self::dispatch_response(id, resp, &pending, &server_name).await;
+                Self::dispatch_response(id, msg, &pending, &server_name).await;
             }
             Self::fail_all_pending(pending).await;
             alive.store(false, Ordering::SeqCst);
         })
+    }
+
+    /// Handle an incoming request from the MCP server. Returns a
+    /// JSON-RPC response to send back, or `None` to ignore.
+    fn handle_server_request(
+        method: &str,
+        request: &serde_json::Value,
+        server_name: &str,
+    ) -> Option<serde_json::Value> {
+        match method {
+            "roots/list" => {
+                let id = request.get("id")?;
+                let root_uri = std::env::current_dir()
+                    .ok()
+                    .map(|p| format!("file://{}", p.display()))
+                    .unwrap_or_else(|| "file:///".to_string());
+                tracing::trace!(server = %server_name, root = %root_uri, "responding to roots/list");
+                Some(serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": {
+                        "roots": [{ "uri": root_uri }]
+                    }
+                }))
+            }
+            other => {
+                tracing::trace!(server = %server_name, method = %other, "unhandled server request");
+                None
+            }
+        }
+    }
+
+    /// Write a JSON-RPC response line to the server's stdin.
+    async fn write_response(
+        stdin: &Arc<Mutex<Option<ChildStdin>>>,
+        response: &serde_json::Value,
+        server_name: &str,
+    ) {
+        let line = match serde_json::to_string(response) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!(server = %server_name, error = %e, "failed to serialize server response");
+                return;
+            }
+        };
+        let mut guard = stdin.lock().await;
+        let Some(ref mut stdin) = *guard else {
+            tracing::trace!(server = %server_name, "stdin closed, cannot respond to server request");
+            return;
+        };
+        if let Err(e) = stdin.write_all(line.as_bytes()).await {
+            tracing::warn!(server = %server_name, error = %e, "failed to write server response");
+            return;
+        }
+        if let Err(e) = stdin.write_all(b"\n").await {
+            tracing::warn!(server = %server_name, error = %e, "failed to write server response newline");
+            return;
+        }
+        let _ = stdin.flush().await;
     }
 
     /// Wake every in-flight request with `error`. Called when the reader
@@ -1475,5 +1554,46 @@ mod tests {
             warnings: vec![],
         };
         assert!(!mgr.has_tool("anything"));
+    }
+
+    #[test]
+    fn test_handle_server_request_roots_list() {
+        let request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 42,
+            "method": "roots/list",
+            "params": {}
+        });
+        let response = McpClient::handle_server_request("roots/list", &request, "test")
+            .expect("roots/list should return a response");
+        assert_eq!(response["jsonrpc"], "2.0");
+        assert_eq!(response["id"], 42);
+        let roots = response
+            .get("result")
+            .unwrap()
+            .get("roots")
+            .unwrap()
+            .as_array()
+            .unwrap();
+        assert_eq!(roots.len(), 1);
+        let uri = roots[0].get("uri").unwrap().as_str().unwrap();
+        assert!(
+            uri.starts_with("file://"),
+            "expected file:// URI, got: {uri}"
+        );
+    }
+
+    #[test]
+    fn test_handle_server_request_unknown_method_returns_none() {
+        let request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "foo/bar",
+            "params": {}
+        });
+        assert!(
+            McpClient::handle_server_request("foo/bar", &request, "test").is_none(),
+            "unknown methods should return None"
+        );
     }
 }

@@ -549,7 +549,7 @@ fn plugin_status_summary(registry: &PluginRegistry, warnings: &[String]) -> Opti
 /// the `enabled_plugins` list AND the `disabled_plugins` set so the change
 /// takes effect both at the loader level and at the runtime filter level.
 ///
-/// For compiled-in plugins (stratum, draw, budget, video), this toggles
+/// For compiled-in plugins (stratum, budget), this toggles
 /// `disabled_plugins` only — the feature flag controls compilation, but
 /// the runtime toggle controls whether the compiled code is active.
 async fn toggle_plugin(

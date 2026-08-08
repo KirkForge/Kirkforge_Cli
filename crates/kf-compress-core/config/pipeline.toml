@@ -4,7 +4,6 @@
 reformat_target_ratio = 0.05
 bloat_threshold = 0.5
 offload_fallback_ratio = 0.85
-transform_timeout_ms = 30000
 
 [per_domain.json_object]
 bloat_threshold = 0.5

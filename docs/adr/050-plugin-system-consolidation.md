@@ -23,7 +23,7 @@ The plugin system now has two dispatch paths:
    `PluginToolWrapper` shell-outs (graceful degradation). The in-process
    tools and hooks are not registered.
 
-The `kirkforge-plugin` self-plugin (Node SDK) remains an external shell-out
+The `kf-plugin-sdk` self-plugin (Node SDK) remains an external shell-out
 under all configurations. Its 6 tools (`plugin_verify`,
 `plugin_verify_workspace`, `plugin_audit_verify`, `plugin_doctor`,
 `plugin_health`, `plugin_tools`) shell out to a Node CLI that probes for
@@ -43,7 +43,7 @@ external dependency.
 
 2. **Graceful degradation**: a user who builds without `--features video`
    still gets video support via the shell plugin (if the plugin dir and
-   `kirkforge-video` binary are available). A user who builds with
+    `kf-video` binary are available). A user who builds with
    `--features video` gets the compiled-in version with no subprocess
    overhead.
 
@@ -52,7 +52,7 @@ external dependency.
    compiled-in path (feature on) or the shell path (feature off).
    `plugin_sources` is only needed for external/shell plugins.
 
-4. **Node SDK**: kept as external shell-out. The `kirkforge-plugin` plugin
+4. **Node SDK**: kept as external shell-out. The `kf-plugin-sdk` plugin
    is not folded; its tools depend on the Node ecosystem (ESLint,
    TypeScript, Ruff, Pyright, Bandit). Porting to Rust would not eliminate
    the external dependency on those tools.
@@ -68,7 +68,7 @@ external dependency.
 - Users can mix: e.g., build with `--features stratum,budget` for
   compiled-in Stratum+Plugin3, while Draw and Video run as shell plugins.
 - The Node SDK remains an optional external dependency; users who don't
-  need verification tools can disable the `kirkforge-plugin` plugin.
+  need verification tools can disable the `kf-plugin-sdk` plugin.
 - `is_folded()` and `folded_feature()` are public so the TUI and tests
   can query the fold-in status.
 

@@ -395,7 +395,7 @@ fn project_min_to_src_end(map: &[Span], min_offset: usize) -> Option<usize> {
 /// Minify content based on file extension (no disk caching).
 /// Uses the proven char-scan path for text production; the AST path
 /// is available via `minify_with_map` for surgical edits.
-pub(super) fn minify_content_by_ext(content: &str, ext: &str, preserve_tests: bool) -> String {
+pub fn minify_content_by_ext(content: &str, ext: &str, preserve_tests: bool) -> String {
     match ext {
         "rs" => minify_rust_inner(content, preserve_tests),
         "py" => minify_python(content),

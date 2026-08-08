@@ -1,4 +1,4 @@
-use crate::session::verifier::types::{BashExecEvent, BusEvent, GitOperationEvent};
+use crate::session::verifier::types::{BashExecEvent, BusEvent};
 /// Git verifier — validates git state after operations.
 ///
 /// Checks for:
@@ -12,11 +12,6 @@ use std::path::{Path, PathBuf};
 /// Run the git verifier against an event.
 pub async fn verify_git(event: &BusEvent) -> Verdict {
     match event {
-        BusEvent::GitOperation(GitOperationEvent {
-            args,
-            output,
-            success,
-        }) => verify_git_operation(args, output, *success).await,
         BusEvent::BashExec(BashExecEvent {
             command,
             exit_code,
@@ -32,32 +27,6 @@ pub async fn verify_git(event: &BusEvent) -> Verdict {
             }
         }
         _ => Verdict::Skipped("not a git event".into()),
-    }
-}
-
-async fn verify_git_operation(args: &[String], _output: &str, success: bool) -> Verdict {
-    if success {
-        return Verdict::Clean;
-    }
-
-    let cmd = args.first().map(|s| s.as_str()).unwrap_or("");
-
-    match cmd {
-        "merge" | "rebase" | "cherry-pick" => {
-            // Check for merge conflicts
-            check_merge_conflicts(None).await
-        }
-        "commit" => Verdict::Unfixable(VerificationError {
-            description: "git commit failed".into(),
-            file: None,
-            details: "The commit operation failed. Check git status and try again.".into(),
-        }),
-        "push" => Verdict::Unfixable(VerificationError {
-            description: "git push failed".into(),
-            file: None,
-            details: "Push was rejected. You may need to pull first or check remote status.".into(),
-        }),
-        _ => Verdict::Clean,
     }
 }
 
@@ -274,17 +243,6 @@ mod tests {
         });
         let v = verify_git(&event).await;
         assert!(matches!(v, Verdict::Skipped(_)));
-    }
-
-    #[tokio::test]
-    async fn test_successful_git_op_returns_clean() {
-        let event = BusEvent::GitOperation(crate::session::verifier::types::GitOperationEvent {
-            args: vec!["status".into()],
-            output: "On branch main".into(),
-            success: true,
-        });
-        let v = verify_git(&event).await;
-        assert!(matches!(v, Verdict::Clean));
     }
 
     #[tokio::test]
@@ -566,42 +524,5 @@ mod tests {
         assert!(!is_conflict_prone_command("git log --oneline"));
         assert!(!is_conflict_prone_command("cargo build"));
         assert!(!is_conflict_prone_command(""));
-    }
-
-    #[tokio::test]
-    async fn test_verify_git_operation_commit_failure_is_unfixable() {
-        let v = verify_git_operation(&["commit".into()], "", false).await;
-        match v {
-            Verdict::Unfixable(err) => {
-                assert!(err.description.contains("commit failed"));
-            }
-            other => panic!("expected Unfixable, got {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn test_verify_git_operation_push_failure_is_unfixable() {
-        let v = verify_git_operation(&["push".into()], "", false).await;
-        match v {
-            Verdict::Unfixable(err) => {
-                assert!(err.description.contains("push failed"));
-            }
-            other => panic!("expected Unfixable, got {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn test_verify_git_operation_unknown_subcommand_failure_is_clean() {
-        let v = verify_git_operation(&["config".into()], "no-op", false).await;
-        assert!(
-            matches!(v, Verdict::Clean | Verdict::Unfixable(_)),
-            "unknown failed git subcommand should not crash"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_verify_git_operation_empty_args_failure_is_clean() {
-        let v = verify_git_operation(&[], "", false).await;
-        assert!(matches!(v, Verdict::Clean));
     }
 }

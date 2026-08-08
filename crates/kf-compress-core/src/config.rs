@@ -72,46 +72,21 @@ pub struct PipelineConfig {
     /// Per-domain overrides keyed by detected content type.
     #[serde(default)]
     pub per_domain: HashMap<ContentType, DomainOverrides>,
-    /// Maximum time, in milliseconds, that a single transform is allowed to run.
-    ///
-    /// A value of `0` disables the timeout and runs transforms synchronously.
-    /// The default is 30 seconds.
-    #[serde(default = "default_transform_timeout_ms")]
-    pub transform_timeout_ms: u64,
-}
-
-/// Default per-transform timeout: 30 seconds.
-fn default_transform_timeout_ms() -> u64 {
-    30_000
 }
 
 impl PipelineConfig {
     /// Return the per-domain overrides for `content_type`, if any.
-    ///
-    /// Convenience accessor that centralizes the lookup pattern used by the
-    /// pipeline and by report consumers.
     #[must_use]
     pub fn overrides_for(&self, content_type: ContentType) -> Option<&DomainOverrides> {
         self.per_domain.get(&content_type)
     }
 
     /// Return the effective bloat threshold for `content_type`.
-    ///
-    /// Falls back to the global `bloat_threshold` when no per-domain override is
-    /// configured.
     #[must_use]
     pub fn bloat_threshold_for(&self, content_type: ContentType) -> f64 {
         self.overrides_for(content_type)
             .and_then(|d| d.bloat_threshold)
             .map_or(self.bloat_threshold.get(), Ratio::get)
-    }
-
-    /// Return the effective per-transform timeout in milliseconds.
-    ///
-    /// A value of `0` disables the timeout.
-    #[must_use]
-    pub fn transform_timeout_ms(&self) -> u64 {
-        self.transform_timeout_ms
     }
 }
 
@@ -138,8 +113,6 @@ struct PartialPipelineConfig {
     offload_fallback_ratio: Option<Ratio>,
     #[serde(default)]
     per_domain: HashMap<ContentType, DomainOverrides>,
-    #[serde(default)]
-    transform_timeout_ms: Option<u64>,
 }
 
 impl Default for PipelineConfig {
@@ -187,7 +160,6 @@ impl Default for PipelineConfig {
             bloat_threshold: Ratio::new_unchecked(0.5),
             offload_fallback_ratio: Ratio::new_unchecked(0.85),
             per_domain,
-            transform_timeout_ms: 30_000,
         }
     }
 }
@@ -257,9 +229,6 @@ impl PipelineConfig {
         if let Some(v) = partial.offload_fallback_ratio {
             self.offload_fallback_ratio = v;
         }
-        if let Some(v) = partial.transform_timeout_ms {
-            self.transform_timeout_ms = v;
-        }
         for (ct, overrides) in &partial.per_domain {
             let entry = self.per_domain.entry(*ct).or_default();
             if let Some(v) = overrides.bloat_threshold {
@@ -279,31 +248,21 @@ pub enum ConfigError {
     /// Could not read the config file from disk.
     #[error("cannot read config file {}: {source}", path.display())]
     Io {
-        /// Path of the file that could not be read.
         path: std::path::PathBuf,
-        /// Underlying IO error.
         source: std::io::Error,
     },
     /// Could not parse the config file as TOML.
     #[error("cannot parse config file {}: {source}", path.display())]
     Parse {
-        /// Path of the file that could not be parsed.
         path: std::path::PathBuf,
-        /// Underlying TOML parse error.
         source: toml::de::Error,
     },
     /// A config value failed semantic validation.
     #[error("invalid value for config field `{field}`: {message}")]
-    Invalid {
-        /// Field or source that produced the error.
-        field: String,
-        /// Human-readable explanation of the problem.
-        message: String,
-    },
+    Invalid { field: String, message: String },
 }
 
 impl ConfigError {
-    /// Path of the file that could not be read, if this is an IO error.
     #[must_use]
     pub const fn io_path(&self) -> Option<&std::path::PathBuf> {
         match self {
@@ -312,7 +271,6 @@ impl ConfigError {
         }
     }
 
-    /// Underlying IO error, if this is an IO error.
     #[must_use]
     pub const fn io_source(&self) -> Option<&std::io::Error> {
         match self {
@@ -321,7 +279,6 @@ impl ConfigError {
         }
     }
 
-    /// Path of the file that could not be parsed, if this is a parse error.
     #[must_use]
     pub const fn parse_path(&self) -> Option<&std::path::PathBuf> {
         match self {
@@ -330,7 +287,6 @@ impl ConfigError {
         }
     }
 
-    /// Underlying TOML parse error, if this is a parse error.
     #[must_use]
     pub const fn parse_source(&self) -> Option<&toml::de::Error> {
         match self {
@@ -339,7 +295,6 @@ impl ConfigError {
         }
     }
 
-    /// Field or source that produced the error, if this is a semantic validation error.
     #[must_use]
     pub const fn invalid_field(&self) -> Option<&String> {
         match self {
@@ -348,7 +303,6 @@ impl ConfigError {
         }
     }
 
-    /// Human-readable explanation of the problem, if this is a semantic validation error.
     #[must_use]
     pub const fn invalid_message(&self) -> Option<&String> {
         match self {
@@ -366,9 +320,6 @@ mod tests {
 
     #[test]
     fn embedded_toml_matches_default_values() {
-        // This test guards against drift between `PipelineConfig::default()` and
-        // the embedded `config/pipeline.toml`. If a default field changes in the
-        // struct but not in the TOML, this assertion fails in CI.
         let from_default = PipelineConfig::default();
         let from_toml = PipelineConfig::from_toml(DEFAULT_TOML)
             .expect("embedded config/pipeline.toml must parse");
@@ -405,7 +356,6 @@ mod tests {
         assert!(serialized.contains("reformat_target_ratio = 0.05"));
         assert!(serialized.contains("bloat_threshold = 0.5"));
         assert!(serialized.contains("offload_fallback_ratio = 0.85"));
-        assert!(serialized.contains("transform_timeout_ms = 30000"));
     }
 
     #[test]
@@ -491,7 +441,6 @@ mod tests {
         let threshold = cfg.bloat_threshold_for(ContentType::PlainText);
         assert!((threshold - 0.1).abs() < f64::EPSILON);
 
-        // Other content types still fall back to the global threshold.
         assert!((cfg.bloat_threshold_for(ContentType::SourceCode) - 0.5).abs() < f64::EPSILON);
     }
 

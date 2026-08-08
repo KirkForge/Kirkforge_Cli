@@ -2,7 +2,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
-use crate::shared::TruncationStrategy;
 use crate::shared::{LspServerEntry, McpServerConfig};
 
 fn default_max_tool_calls_per_turn() -> usize {
@@ -49,20 +48,23 @@ fn default_budget_approaching_ratio() -> f64 {
     0.8
 }
 
+fn default_memory_auto_populate() -> bool {
+    true
+}
+
 fn default_plugin_sources() -> HashMap<String, PathBuf> {
     let mut sources = HashMap::new();
     let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    sources.insert("kf-draw".into(), base.join("plugins/kf-draw"));
-    #[cfg(feature = "video")]
-    sources.insert("kf-video".into(), base.join("plugins/kf-video"));
-    sources.insert("stratum".into(), base.join("plugins/stratum"));
-    sources.insert("kf-budget".into(), base.join("plugins/kf-budget"));
     sources.insert("kf-plugin".into(), base.join("plugins/kf-plugin"));
     sources
 }
 
 fn default_enabled_plugins() -> Vec<String> {
     let mut names: Vec<String> = default_plugin_sources().keys().cloned().collect();
+    #[cfg(feature = "stratum")]
+    names.push("stratum".into());
+    #[cfg(feature = "budget")]
+    names.push("kf-budget".into());
     names.sort();
     names
 }
@@ -71,8 +73,6 @@ fn default_enabled_plugins() -> Vec<String> {
 pub struct ToolConfig {
     #[serde(default = "default_max_tool_result_chars")]
     pub max_tool_result_chars: usize,
-    #[serde(default)]
-    pub truncation_strategy: TruncationStrategy,
     #[serde(default)]
     pub mcp_servers: Vec<McpServerConfig>,
     #[serde(default)]
@@ -103,7 +103,7 @@ pub struct ToolConfig {
     pub max_plugin_trust: kf_plugin_sdk::TrustTier,
     #[serde(default = "default_reject_on_excess_plugin_trust")]
     pub reject_on_excess_plugin_trust: bool,
-    #[serde(default)]
+    #[serde(default = "default_plugin_signature_validation")]
     pub plugin_signature_validation: bool,
     #[serde(default)]
     pub plugin_public_key_path: Option<String>,
@@ -121,6 +121,12 @@ pub struct ToolConfig {
     pub budget_ceiling: usize,
     #[serde(default = "default_budget_approaching_ratio")]
     pub budget_approaching_ratio: f64,
+    #[serde(default = "default_memory_auto_populate")]
+    pub memory_auto_populate: bool,
+}
+
+fn default_plugin_signature_validation() -> bool {
+    true
 }
 
 fn default_max_plugin_trust() -> kf_plugin_sdk::TrustTier {
@@ -131,7 +137,6 @@ impl Default for ToolConfig {
     fn default() -> Self {
         Self {
             max_tool_result_chars: default_max_tool_result_chars(),
-            truncation_strategy: TruncationStrategy::KeepToolOnly,
             mcp_servers: vec![],
             lsp_servers: vec![],
             tool_timeout_secs: default_tool_timeout_secs(),
@@ -147,7 +152,7 @@ impl Default for ToolConfig {
             max_concurrent_scheduled_jobs: default_max_concurrent_scheduled_jobs(),
             max_plugin_trust: default_max_plugin_trust(),
             reject_on_excess_plugin_trust: default_reject_on_excess_plugin_trust(),
-            plugin_signature_validation: false,
+            plugin_signature_validation: true,
             plugin_public_key_path: None,
             plugin_allowed_env_vars: vec![],
             plugin_sources: default_plugin_sources(),
@@ -156,6 +161,7 @@ impl Default for ToolConfig {
             stratum_mode: None,
             budget_ceiling: default_budget_ceiling(),
             budget_approaching_ratio: default_budget_approaching_ratio(),
+            memory_auto_populate: true,
         }
     }
 }
@@ -171,6 +177,10 @@ mod tests {
         assert!((cfg.budget_approaching_ratio - 0.8).abs() < f64::EPSILON);
         assert!(cfg.stratum_mode.is_none());
         assert_eq!(cfg.minify_above_bytes, 4096);
+        assert!(
+            cfg.plugin_signature_validation,
+            "R7: signature validation default-on"
+        );
     }
 
     #[test]
@@ -195,5 +205,6 @@ minify_above_bytes = 1024
         assert_eq!(cfg.budget_ceiling, 200_000);
         assert!((cfg.budget_approaching_ratio - 0.8).abs() < f64::EPSILON);
         assert!(cfg.stratum_mode.is_none());
+        assert!(cfg.plugin_signature_validation, "R7: serde default-on");
     }
 }

@@ -96,9 +96,6 @@
 # AWS region for Bedrock inference. Default: "us-east-1".
 # aws_region = "us-east-1"
 
-# AWS profile name. Not yet implemented; set via env for now. Default: "".
-# aws_profile = ""
-
 # GCP project id for Vertex AI. Required when anthropic_provider = "vertex".
 # gcp_project_id = ""
 
@@ -187,10 +184,6 @@
 # ---------------------------------------------------------------------------
 # Conversation context
 # ---------------------------------------------------------------------------
-
-# How the context window is shrunk when it grows too long.
-# Options: "KeepToolOnly" (default), "DropOldest", "SummarizeMiddle".
-# truncation_strategy = "KeepToolOnly"
 
 # When true, old turns are carried over into new sessions. Default: true.
 # carryover_enabled = true
@@ -324,7 +317,7 @@
 # Workspace plugin sources
 # ---------------------------------------------------------------------------
 #
-# The CLI ships with five built-in plugin sources under the `plugins/` directory.
+# The CLI ships with three built-in plugin sources under the `plugins/` directory.
 # They are enabled by default (in the order below) when the directories exist.
 # Disable individual plugins at runtime with `/plugins toggle <name>` or remove
 # them from `enabled_plugins`. Relative paths resolve against the current working
@@ -332,13 +325,11 @@
 # `~/.local/share/kf-code/plugins/<name>`.
 #
 # [plugin_sources]
-# kf-code-draw = "plugins/kf-code-draw"
-# kf-code-video = "plugins/kf-code-video"
 # stratum = "plugins/stratum"
 # kf-code-plugin3 = "plugins/kf-code-plugin3"
 # kf-code-plugin = "plugins/kf-code-plugin"
 #
-enabled_plugins = ["kf-code-draw", "kf-code-video", "stratum", "kf-code-plugin3", "kf-code-plugin"]
+enabled_plugins = ["stratum", "kf-code-plugin3", "kf-code-plugin"]
 
 # ---------------------------------------------------------------------------
 # Stratum compression and token budget

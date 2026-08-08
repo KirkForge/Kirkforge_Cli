@@ -338,54 +338,60 @@ impl Tool for ComputerUse {
     }
 }
 
-async fn run_on_tab(
-    tab: &dyn ChromeTab,
+#[allow(clippy::too_many_arguments)]
+fn dispatch_action(
     action: &str,
     args: &serde_json::Value,
     config: &ComputerUseConfig,
+    navigate: impl FnOnce(&str) -> anyhow::Result<()>,
+    click: impl FnOnce(&str) -> anyhow::Result<()>,
+    click_xy: impl FnOnce(f64, f64) -> anyhow::Result<()>,
+    type_text: impl FnOnce(&str, &str) -> anyhow::Result<()>,
+    keypress: impl FnOnce(&str) -> anyhow::Result<()>,
+    scroll: impl FnOnce(i32) -> anyhow::Result<()>,
+    wait_for: impl FnOnce(&str, Duration) -> anyhow::Result<()>,
+    evaluate: impl FnOnce(&str) -> anyhow::Result<String>,
+    screenshot: impl FnOnce() -> anyhow::Result<Vec<u8>>,
 ) -> ToolOutcome {
     let wait = Duration::from_secs(config.wait_timeout_secs);
     let result = match action {
         "navigate" => {
             let url = args["url"].as_str().unwrap_or("");
-            tab.navigate(url).map(|_| format!("Navigated to {url}"))
+            navigate(url).map(|_| format!("Navigated to {url}"))
         }
         "click" => {
             let selector = args["selector"].as_str().unwrap_or("");
-            tab.click(selector).map(|_| format!("Clicked {selector}"))
+            click(selector).map(|_| format!("Clicked {selector}"))
         }
         "click_xy" => {
             let x = args["x"].as_f64().unwrap_or(0.0);
             let y = args["y"].as_f64().unwrap_or(0.0);
-            tab.click_xy(x, y).map(|_| format!("Clicked at ({x}, {y})"))
+            click_xy(x, y).map(|_| format!("Clicked at ({x}, {y})"))
         }
         "type" => {
             let selector = args["selector"].as_str().unwrap_or("");
             let text = args["text"].as_str().unwrap_or("");
-            tab.type_text(selector, text)
-                .map(|_| format!("Typed into {selector}"))
+            type_text(selector, text).map(|_| format!("Typed into {selector}"))
         }
         "keypress" => {
             let key = args["key"].as_str().unwrap_or("");
-            tab.keypress(key).map(|_| format!("Pressed {key}"))
+            keypress(key).map(|_| format!("Pressed {key}"))
         }
         "scroll" => {
             let amount = args["amount"].as_i64().unwrap_or(0) as i32;
-            tab.scroll(amount)
-                .map(|_| format!("Scrolled {amount} pixels"))
+            scroll(amount).map(|_| format!("Scrolled {amount} pixels"))
         }
         "wait_for" => {
             let selector = args["selector"].as_str().unwrap_or("");
-            tab.wait_for(selector, wait)
-                .map(|_| format!("Element {selector} is present"))
+            wait_for(selector, wait).map(|_| format!("Element {selector} is present"))
         }
         "evaluate" => {
             let expression = args["expression"].as_str().unwrap_or("");
             let safe_expression = format!("{EVALUATE_SAFETY_PREAMBLE}{expression}");
-            tab.evaluate(&safe_expression)
+            evaluate(&safe_expression)
         }
         "screenshot" => {
-            return match tab.screenshot() {
+            return match screenshot() {
                 Ok(data) => ToolOutcome::Image {
                     path: std::path::PathBuf::from("screenshot.png"),
                     mime: "image/png".to_string(),
@@ -407,6 +413,28 @@ async fn run_on_tab(
     }
 }
 
+async fn run_on_tab(
+    tab: &dyn ChromeTab,
+    action: &str,
+    args: &serde_json::Value,
+    config: &ComputerUseConfig,
+) -> ToolOutcome {
+    dispatch_action(
+        action,
+        args,
+        config,
+        |url| tab.navigate(url),
+        |sel| tab.click(sel),
+        |x, y| tab.click_xy(x, y),
+        |sel, txt| tab.type_text(sel, txt),
+        |key| tab.keypress(key),
+        |amt| tab.scroll(amt),
+        |sel, wait| tab.wait_for(sel, wait),
+        |expr| tab.evaluate(expr),
+        || tab.screenshot(),
+    )
+}
+
 /// Synchronous runner for session actions. All BrowserSession methods
 /// are sync, so this avoids holding a MutexGuard across an await.
 fn run_on_session_sync(
@@ -415,78 +443,20 @@ fn run_on_session_sync(
     args: &serde_json::Value,
     config: &ComputerUseConfig,
 ) -> ToolOutcome {
-    let wait = Duration::from_secs(config.wait_timeout_secs);
-    let result = match action {
-        "navigate" => {
-            let url = args["url"].as_str().unwrap_or("");
-            session
-                .tab
-                .navigate(url)
-                .map(|_| format!("Navigated to {url}"))
-        }
-        "click" => {
-            let selector = args["selector"].as_str().unwrap_or("");
-            session
-                .click(selector)
-                .map(|_| format!("Clicked {selector}"))
-        }
-        "click_xy" => {
-            let x = args["x"].as_f64().unwrap_or(0.0);
-            let y = args["y"].as_f64().unwrap_or(0.0);
-            session
-                .tab
-                .click_xy(x, y)
-                .map(|_| format!("Clicked at ({x}, {y})"))
-        }
-        "type" => {
-            let selector = args["selector"].as_str().unwrap_or("");
-            let text = args["text"].as_str().unwrap_or("");
-            session
-                .type_text(selector, text)
-                .map(|_| format!("Typed into {selector}"))
-        }
-        "keypress" => {
-            let key = args["key"].as_str().unwrap_or("");
-            session.tab.keypress(key).map(|_| format!("Pressed {key}"))
-        }
-        "scroll" => {
-            let amount = args["amount"].as_i64().unwrap_or(0) as i32;
-            session
-                .scroll(amount)
-                .map(|_| format!("Scrolled {amount} pixels"))
-        }
-        "wait_for" => {
-            let selector = args["selector"].as_str().unwrap_or("");
-            session
-                .wait_for(selector, wait)
-                .map(|_| format!("Element {selector} is present"))
-        }
-        "evaluate" => {
-            let expression = args["expression"].as_str().unwrap_or("");
-            let safe_expression = format!("{EVALUATE_SAFETY_PREAMBLE}{expression}");
-            session.evaluate(&safe_expression)
-        }
-        "screenshot" => {
-            return match session.screenshot() {
-                Ok(data) => ToolOutcome::Image {
-                    path: std::path::PathBuf::from("screenshot.png"),
-                    mime: "image/png".to_string(),
-                    data_base64: base64::prelude::BASE64_STANDARD.encode(&data),
-                },
-                Err(e) => ToolOutcome::Failure(ToolError::Internal {
-                    message: format!("screenshot failed: {e:#}"),
-                }),
-            }
-        }
-        other => Err(anyhow::anyhow!("unknown action: {other}")),
-    };
-
-    match result {
-        Ok(content) => ToolOutcome::Success { content },
-        Err(e) => ToolOutcome::Failure(ToolError::Internal {
-            message: format!("{action} failed: {e:#}"),
-        }),
-    }
+    dispatch_action(
+        action,
+        args,
+        config,
+        |url| session.tab.navigate(url),
+        |sel| session.click(sel),
+        |x, y| session.tab.click_xy(x, y),
+        |sel, txt| session.type_text(sel, txt),
+        |key| session.tab.keypress(key),
+        |amt| session.scroll(amt),
+        |sel, wait| session.wait_for(sel, wait),
+        |expr| session.evaluate(expr),
+        || session.screenshot(),
+    )
 }
 
 #[cfg(test)]

@@ -70,6 +70,7 @@ pub struct OellamaAdapter {
     api_base: String,
     client: reqwest::Client,
     json_mode: bool,
+    response_format: Option<crate::shared::ResponseFormat>,
     seed: Option<u64>,
     timeout_secs: u64,
     profile: &'static OellamaProfile,
@@ -87,6 +88,7 @@ impl OellamaAdapter {
             api_base: ollama_host.trim_end_matches('/').to_string(),
             client: super::build_reqwest_client(),
             json_mode: false,
+            response_format: None,
             seed: None,
             timeout_secs,
             profile,
@@ -127,8 +129,13 @@ impl ModelAdapter for OellamaAdapter {
 
     fn set_json_mode(&mut self, json_mode: bool) {
         self.json_mode = json_mode;
+        if json_mode {
+            self.response_format = Some(crate::shared::ResponseFormat::JsonObject);
+        }
     }
-
+    fn set_response_format(&mut self, format: crate::shared::ResponseFormat) {
+        self.response_format = Some(format);
+    }
     fn set_seed(&mut self, seed: Option<u64>) {
         self.seed = seed;
     }
@@ -143,7 +150,7 @@ impl ModelAdapter for OellamaAdapter {
             messages,
             tools,
             true,
-            self.json_mode,
+            self.response_format.as_ref(),
             self.seed,
         );
         let url = format!("{}/api/chat", self.api_base);

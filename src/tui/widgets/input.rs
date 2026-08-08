@@ -19,15 +19,15 @@ pub fn render_input(f: &mut Frame, area: Rect, state: &AppState) {
     // Search mode overrides the normal input — the input box
     // becomes a search bar with a different border color and a
     // live match counter.
-    if state.search_mode {
+    if state.search.mode {
         render_search_bar(f, area, state);
         return;
     }
 
     let block = Block::default()
-        .title(if !state.search_matches.is_empty() {
-            let total = state.search_matches.len();
-            let cur = state.search_match_idx + 1;
+        .title(if !state.search.matches.is_empty() {
+            let total = state.search.matches.len();
+            let cur = state.search.match_idx + 1;
             format!(" Input  ({cur} / {total} matches) ")
         } else if state.input.contains('\n') {
             format!(" Input  ({} lines) ", state.input_line_count())
@@ -138,10 +138,10 @@ fn render_search_bar(f: &mut Frame, area: Rect, state: &AppState) {
         );
 
     // Match counter is shown in the corner: " 3 / 12 " or " 0 / 0 ".
-    let (cur, total) = if state.search_matches.is_empty() {
+    let (cur, total) = if state.search.matches.is_empty() {
         (0, 0)
     } else {
-        (state.search_match_idx + 1, state.search_matches.len())
+        (state.search.match_idx + 1, state.search.matches.len())
     };
     let counter = format!(" {cur} / {total} ");
 
@@ -153,7 +153,7 @@ fn render_search_bar(f: &mut Frame, area: Rect, state: &AppState) {
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            state.search_query.clone(),
+            state.search.query.clone(),
             Style::default().fg(Color::White),
         ),
         Span::styled("█", Style::default().fg(Color::Yellow)),

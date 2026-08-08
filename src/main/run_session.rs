@@ -28,6 +28,7 @@ pub(crate) struct RunArgs {
     pub(crate) harden: bool,
     pub(crate) no_network: bool,
     pub(crate) block_edits: bool,
+    pub(crate) i_accept_unsandboxed: bool,
     pub(crate) no_trace: bool,
 }
 
@@ -53,6 +54,7 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
         harden,
         no_network,
         block_edits,
+        i_accept_unsandboxed,
         no_trace,
     } = args;
 
@@ -85,6 +87,9 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     }
     if block_edits {
         config.security.sandbox.block_edits = true;
+    }
+    if i_accept_unsandboxed {
+        config.security.sandbox.accept_unsandboxed = true;
     }
     let trace_enabled = !no_trace;
 
@@ -408,7 +413,7 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     // ADR-037 Phase 4: disk caching at .kf-code/context-index/cache.json.
     // On subsequent runs, if the cached index matches the current git HEAD,
     // we load from disk instead of rebuilding.
-    let context_index = {
+    let mut context_index = {
         let cfg = kf_code::shared::read_shared_config(&shared_config);
         cfg.security.sandbox_dir.as_ref().and_then(|dir| {
             let path = std::path::Path::new(dir);
@@ -461,6 +466,14 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
         })
     };
 
+    // --- LSP federation: resolve call-edge callee_file via go_to_definition ---
+    // When both LSP and context index are available, resolve name-only call
+    // edges to actual file:line definitions. This disambiguates same-named
+    // methods across types (WO 21.6-R1 / WO 23.4-R1).
+    if let (Some(ref mut idx), Some(ref pool)) = (&mut context_index, &lsp_pool) {
+        federate_index_with_lsp(idx, pool).await;
+    }
+
     // --- MCP tools ---
     let cfg_for_mcp = kf_code::shared::read_shared_config(&shared_config).clone();
     if !cfg_for_mcp.tools.mcp_servers.is_empty() {
@@ -470,15 +483,19 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
             eprintln!("MCP warning: {warning}");
             tracing::warn!(warning = %warning, "MCP startup warning");
         }
+        let mcp_mgr = std::sync::Arc::new(mcp_mgr);
         let mcp_tool_count = mcp_mgr.tool_count();
         if mcp_tool_count > 0 {
-            let mcp_mgr = std::sync::Arc::new(mcp_mgr);
             toolset.add(Box::new(session::toolset::VecToolset::new(
                 "mcp",
-                session::mcp_tools::all_mcp_tools(mcp_mgr),
+                session::mcp_tools::all_mcp_tools(mcp_mgr.clone()),
             )));
             tracing::info!(count = mcp_tool_count, "MCP tools registered");
         }
+        toolset.add(Box::new(session::toolset::VecToolset::new(
+            "mcp-resource",
+            session::mcp_resource_tools::all_mcp_resource_tools(mcp_mgr),
+        )));
     }
 
     // ── Plugin tools ──
@@ -512,17 +529,47 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
         tracing::warn!(warning = %w, "plugin load warning");
     }
 
+    // ── Per-session stores (WO 22.6-R2) ──
+    // Create per-session budget and Stratum offload stores with LRU caps.
+    // These replace the old process-global OnceLock pattern.
+    #[cfg(feature = "budget")]
+    let session_stores = {
+        let cfg_stores = kf_code::shared::read_shared_config(&shared_config);
+        session::SessionStores {
+            budget: std::sync::Arc::new(std::sync::Mutex::new(kf_budget_core::TokenBudget {
+                ceiling: cfg_stores.tools.budget_ceiling,
+                approaching_ratio: cfg_stores.tools.budget_approaching_ratio,
+                used: 0,
+            })),
+            budget_store: std::sync::Arc::new(kf_budget_core::InMemoryOffloadStore::new_with_cap(
+                1000,
+            )),
+            #[cfg(feature = "stratum")]
+            stratum_store: std::sync::Arc::new(
+                kf_compress_core::store::InMemoryOffloadStore::new_with_cap(1000),
+            ),
+        }
+    };
+    #[cfg(all(not(feature = "budget"), feature = "stratum"))]
+    let session_stores = session::SessionStores {
+        stratum_store: std::sync::Arc::new(
+            kf_compress_core::store::InMemoryOffloadStore::new_with_cap(1000),
+        ),
+    };
+
     // ── Stratum in-process tools (feature-gated) ──
     // When the `stratum` feature is enabled, the five core Stratum tools
     // (run, apply, mode, rules, config_validate) are registered as direct
-    // Rust calls instead of shell-plugin subprocesses.
+    // Rust calls instead of shell-plugin subprocesses. Per-session offload
+    // store with LRU cap (WO 22.6-R2).
     #[cfg(feature = "stratum")]
     {
         let cfg = kf_code::shared::read_shared_config(&shared_config);
         if cfg.tools.enabled_plugins.iter().any(|n| n == "stratum")
             && !cfg.tools.disabled_plugins.contains("stratum")
         {
-            let stratum_tool_list = session::stratum::stratum_tools();
+            let stratum_tool_list =
+                session::stratum::stratum_tools(session_stores.stratum_store.clone());
             let count = stratum_tool_list.len();
             toolset.add(Box::new(session::toolset::VecToolset::new(
                 "stratum",
@@ -532,52 +579,27 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
         }
     }
 
-    // ── Draw in-process tool (feature-gated) ──
-    // When the `draw` feature is enabled, the draw_render tool loads and
-    // renders .td.json files using kf_draw_core directly, eliminating
-    // the subprocess overhead of shelling out to the kfd binary.
-    #[cfg(feature = "draw")]
-    {
-        let cfg = kf_code::shared::read_shared_config(&shared_config);
-        if !cfg.tools.disabled_plugins.contains("kf-draw") {
-            let draw_tool_list = session::draw::draw_tools();
-            let count = draw_tool_list.len();
-            toolset.add(Box::new(session::toolset::VecToolset::new(
-                "draw",
-                draw_tool_list,
-            )));
-            tracing::info!(count, "draw in-process tools registered");
-        }
-    }
-
-    // ── Video in-process tools (feature-gated) ──
-    // When the `video` feature is enabled, the eight video tools call
-    // kf_video directly, eliminating subprocess overhead.
-    #[cfg(feature = "video")]
-    {
-        let cfg = kf_code::shared::read_shared_config(&shared_config);
-        if !cfg.tools.disabled_plugins.contains("kf-video") {
-            let video_tool_list = session::video::video_tools();
-            let count = video_tool_list.len();
-            toolset.add(Box::new(session::toolset::VecToolset::new(
-                "video",
-                video_tool_list,
-            )));
-            tracing::info!(count, "video in-process tools registered");
-        }
-    }
-
     // ── Budget in-process tools (feature-gated) ──
     // When the `budget` feature is enabled, the 7 budget tools
     // are registered as direct Rust calls instead of shell-plugin
-    // subprocesses. ADR-047 pins this decision.
+    // subprocesses. Per-session stores with LRU cap (WO 22.6-R2).
     #[cfg(feature = "budget")]
     {
         let cfg = kf_code::shared::read_shared_config(&shared_config);
         if cfg.tools.enabled_plugins.iter().any(|n| n == "kf-budget")
             && !cfg.tools.disabled_plugins.contains("kf-budget")
         {
-            let budget_tool_list = session::budget::all_budget_tools();
+            #[cfg(feature = "stratum")]
+            let budget_tool_list = session::budget::all_budget_tools(
+                &session_stores.budget,
+                &session_stores.budget_store,
+                session_stores.stratum_store.clone(),
+            );
+            #[cfg(not(feature = "stratum"))]
+            let budget_tool_list = session::budget::all_budget_tools(
+                &session_stores.budget,
+                &session_stores.budget_store,
+            );
             let count = budget_tool_list.len();
             toolset.add(Box::new(session::toolset::VecToolset::new(
                 "budget",
@@ -630,6 +652,69 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
         )
         .await
     }
+}
+
+async fn federate_index_with_lsp(
+    idx: &mut kf_context_index::ContextIndex,
+    pool: &std::sync::Arc<kf_lsp::LspPool>,
+) {
+    let edges = idx.call_edges();
+    if edges.is_empty() {
+        return;
+    }
+
+    let lang = "rust";
+
+    let client =
+        match tokio::time::timeout(std::time::Duration::from_secs(10), pool.get_client(lang)).await
+        {
+            Ok(Ok(Some(c))) => c,
+            _ => {
+                tracing::info!("LSP client not available for federation (timeout or no server)");
+                return;
+            }
+        };
+
+    use std::collections::HashMap;
+    let mut resolved: HashMap<(std::path::PathBuf, u32), std::path::PathBuf> = HashMap::new();
+
+    for edge in edges.iter() {
+        if edge.callee_file.is_some() {
+            continue;
+        }
+        let key = (edge.caller_file.clone(), edge.caller_line);
+        if resolved.contains_key(&key) {
+            continue;
+        }
+        let uri = format!("file://{}", edge.caller_file.display());
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            client.definition(&uri, edge.caller_line - 1, 0),
+        )
+        .await;
+        if let Ok(Ok(locations)) = result {
+            if let Some(loc) = locations.first() {
+                if let Some(rest) = loc.uri.strip_prefix("file://") {
+                    resolved.insert(key, std::path::PathBuf::from(rest));
+                }
+            }
+        }
+    }
+
+    let edges_mut = idx.call_edges_mut();
+    for edge in edges_mut.iter_mut() {
+        let key = (edge.caller_file.clone(), edge.caller_line);
+        if let Some(def_file) = resolved.get(&key) {
+            edge.callee_file = Some(def_file.clone());
+        }
+    }
+
+    let resolved_count = edges_mut.iter().filter(|e| e.callee_file.is_some()).count();
+    tracing::info!(
+        resolved = resolved_count,
+        total = edges_mut.len(),
+        "LSP federation: resolved call-edge callee_files"
+    );
 }
 
 /// Print a hint listing recent sessions when running non-interactively

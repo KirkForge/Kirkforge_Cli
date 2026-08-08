@@ -11,7 +11,8 @@
 //! [`parse_anthropic_stream`]; no other module needs to know the wire format.
 
 use crate::shared::{
-    ContentPart, FinishReason, Message, ModelInfo, Role, StreamEvent, TokenUsage, ToolInvocation,
+    ContentPart, FinishReason, Message, ModelInfo, ResponseFormat, Role, StreamEvent, TokenUsage,
+    ToolInvocation,
 };
 use tokio_stream::StreamExt;
 
@@ -29,6 +30,7 @@ pub struct AnthropicAdapter {
     api_key: Option<String>,
     client: reqwest::Client,
     json_mode: bool,
+    response_format: Option<ResponseFormat>,
     seed: Option<u64>,
     timeout_secs: u64,
     extended_thinking: bool,
@@ -45,6 +47,7 @@ impl AnthropicAdapter {
             api_key,
             client: super::build_reqwest_client(),
             json_mode: false,
+            response_format: None,
             seed: None,
             timeout_secs,
             extended_thinking: true,
@@ -73,8 +76,13 @@ impl ModelAdapter for AnthropicAdapter {
 
     fn set_json_mode(&mut self, json_mode: bool) {
         self.json_mode = json_mode;
+        if json_mode {
+            self.response_format = Some(ResponseFormat::JsonObject);
+        }
     }
-
+    fn set_response_format(&mut self, format: crate::shared::ResponseFormat) {
+        self.response_format = Some(format);
+    }
     fn set_seed(&mut self, seed: Option<u64>) {
         self.seed = seed;
     }
@@ -110,7 +118,7 @@ impl ModelAdapter for AnthropicAdapter {
             &self.model,
             messages,
             tools,
-            self.json_mode,
+            self.response_format.as_ref(),
             self.seed,
             self.extended_thinking,
             self.budget_tokens,
@@ -152,7 +160,7 @@ pub(crate) fn build_anthropic_body(
     model: &str,
     messages: &[Message],
     tools: &[crate::shared::ToolDef],
-    json_mode: bool,
+    response_format: Option<&crate::shared::ResponseFormat>,
     seed: Option<u64>,
     extended_thinking: bool,
     budget_tokens: usize,
@@ -323,11 +331,26 @@ pub(crate) fn build_anthropic_body(
         }
     }
 
-    if json_mode {
-        // Anthropic supports JSON mode via explicit prefill / tool-free
-        // instructions rather than a response_format field. We do not add an
-        // unsupported top-level key; callers are expected to use a system
-        // prompt that asks for JSON.
+    match response_format {
+        Some(crate::shared::ResponseFormat::JsonObject) => {
+            // Anthropic JSON mode via system-prefill; no top-level response_format.
+        }
+        Some(crate::shared::ResponseFormat::JsonSchema { name, schema }) => {
+            let synth = serde_json::json!({
+                "name": format!("respond_with_{}", name),
+                "description": format!("Respond with JSON conforming to the schema for '{}'.", name),
+                "input_schema": schema
+            });
+            let arr = body.get_mut("tools").and_then(|v| v.as_array_mut());
+            if let Some(a) = arr {
+                a.push(synth);
+            } else {
+                body["tools"] = serde_json::json!([synth]);
+            }
+            body["tool_choice"] =
+                serde_json::json!({ "type": "tool", "name": format!("respond_with_{}", name) });
+        }
+        _ => {}
     }
 
     // Deterministic mode: pin temperature to 0. Anthropic does not
@@ -780,7 +803,7 @@ mod tests {
             "claude-sonnet-4",
             &messages,
             &[],
-            false,
+            None,
             None,
             false,
             10_000,
@@ -825,7 +848,7 @@ mod tests {
             "claude-sonnet-4",
             &messages,
             &[],
-            false,
+            None,
             None,
             false,
             10_000,
@@ -892,7 +915,7 @@ mod tests {
             "claude-sonnet-4",
             &messages,
             tools,
-            false,
+            None,
             None,
             false,
             0,
@@ -1119,7 +1142,7 @@ mod tests {
             parameters: json!({"type": "object"}),
         }];
         let body = build_anthropic_body(
-            "claude-4", &messages, &tools, false, None, false, 10_000, 8192, None,
+            "claude-4", &messages, &tools, None, None, false, 10_000, 8192, None,
         );
         let tools_arr = body["tools"].as_array().unwrap();
         assert_eq!(tools_arr.len(), 1);
@@ -1138,7 +1161,7 @@ mod tests {
             "claude-4",
             &messages,
             &[],
-            false,
+            None,
             None,
             false,
             10_000,
@@ -1159,7 +1182,7 @@ mod tests {
             "claude-4",
             &messages,
             &[],
-            false,
+            None,
             Some(7),
             false,
             10_000,
@@ -1180,7 +1203,7 @@ mod tests {
             "claude-4",
             &messages,
             &[],
-            false,
+            None,
             None,
             false,
             10_000,
@@ -1202,7 +1225,7 @@ mod tests {
             "claude-4",
             &messages,
             &[],
-            false,
+            None,
             None,
             false,
             10_000,
@@ -1228,7 +1251,7 @@ mod tests {
             "claude-4",
             &messages,
             &[],
-            false,
+            None,
             None,
             false,
             10_000,
@@ -1254,7 +1277,7 @@ mod tests {
             "claude-4",
             &messages,
             &[],
-            false,
+            None,
             None,
             false,
             10_000,
@@ -1287,7 +1310,7 @@ mod tests {
             "claude-4",
             &messages,
             &[],
-            false,
+            None,
             None,
             false,
             10_000,
@@ -1314,7 +1337,7 @@ mod tests {
             "claude-3-opus",
             &messages,
             &[],
-            false,
+            None,
             None,
             false,
             10_000,
@@ -1342,7 +1365,7 @@ mod tests {
             "claude-3-opus",
             &messages,
             &[],
-            false,
+            None,
             None,
             false,
             10_000,
@@ -1373,7 +1396,7 @@ mod tests {
             "claude-3-opus",
             &messages,
             &[],
-            false,
+            None,
             None,
             false,
             10_000,
@@ -1396,7 +1419,7 @@ mod tests {
             "claude-4",
             &messages,
             &[],
-            false,
+            None,
             None,
             false,
             10_000,
@@ -1430,7 +1453,7 @@ mod tests {
             "claude-4",
             &messages,
             &[],
-            false,
+            None,
             None,
             false,
             10_000,
@@ -1456,7 +1479,7 @@ mod tests {
             "claude-4",
             &messages,
             &[],
-            false,
+            None,
             None,
             false,
             10_000,
@@ -1484,7 +1507,7 @@ mod tests {
             "claude-4",
             &messages,
             &[],
-            false,
+            None,
             None,
             false,
             10_000,
@@ -1528,7 +1551,7 @@ mod tests {
             "claude-sonnet-4",
             &messages,
             &tools,
-            false,
+            None,
             None,
             false,
             10_000,
@@ -1579,7 +1602,7 @@ mod tests {
             "claude-sonnet-4",
             &messages,
             &[],
-            false,
+            None,
             None,
             false,
             10_000,
@@ -1628,7 +1651,7 @@ mod tests {
             "claude-sonnet-4",
             &messages,
             &tools,
-            false,
+            None,
             None,
             false,
             10_000,
@@ -1692,7 +1715,7 @@ mod tests {
             "claude-4",
             &messages,
             &[],
-            false,
+            None,
             None,
             false,
             10_000,
@@ -1714,7 +1737,7 @@ mod tests {
             "claude-4",
             &messages,
             &[],
-            false,
+            None,
             None,
             false,
             10_000,
@@ -1735,7 +1758,7 @@ mod tests {
             "claude-4",
             &messages,
             &[],
-            false,
+            None,
             None,
             false,
             10_000,
@@ -1756,7 +1779,7 @@ mod tests {
             "claude-4",
             &messages,
             &[],
-            false,
+            None,
             None,
             true,
             16384,
@@ -1778,7 +1801,7 @@ mod tests {
             "claude-4",
             &messages,
             &[],
-            false,
+            None,
             None,
             false,
             10_000,
@@ -1799,7 +1822,7 @@ mod tests {
             "claude-4",
             &messages,
             &[],
-            false,
+            None,
             None,
             false,
             10_000,

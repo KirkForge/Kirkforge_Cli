@@ -122,14 +122,25 @@ pub(super) fn emit_turn_events(
                 };
                 tool_records.push(record);
             }
-            session::executor::TurnEvent::Verification { message, success } => {
+            session::executor::TurnEvent::Verification {
+                message,
+                success,
+                file,
+                line,
+            } => {
                 if output == kf_code::shared::OutputFormat::StreamJson {
-                    let line = serde_json::json!({
+                    let mut v = serde_json::json!({
                         "type": "verification",
                         "message": message,
                         "success": success,
                     });
-                    print_json_line(&line);
+                    if let Some(f) = file {
+                        v["file"] = serde_json::Value::String(f.display().to_string());
+                    }
+                    if let Some(l) = line {
+                        v["line"] = serde_json::Value::Number((*l).into());
+                    }
+                    print_json_line(&v);
                 }
             }
             session::executor::TurnEvent::Error(e) => {

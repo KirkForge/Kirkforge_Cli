@@ -24,6 +24,8 @@
 //! for search. The `type` metadata controls where and how the fact is
 //! injected into prompts.
 
+pub(crate) mod extract;
+
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -45,19 +47,29 @@ pub struct MemoryFact {
 #[derive(Debug, Clone)]
 pub struct MemoryStore {
     root: PathBuf,
+    max_facts: usize,
 }
 
 impl MemoryStore {
     /// Open (or create) the memory store at the given directory.
     pub fn open(root: PathBuf) -> std::io::Result<Self> {
         std::fs::create_dir_all(&root)?;
-        Ok(Self { root })
+        Ok(Self {
+            root,
+            max_facts: 200,
+        })
     }
 
     /// Default store at `~/.local/share/kf-code/memory/`.
     pub fn default_store() -> std::io::Result<Self> {
         let data_dir = crate::session::data_dir().unwrap_or_else(|_| PathBuf::from(".kf-code"));
         Self::open(data_dir.join("memory"))
+    }
+
+    /// Set the maximum number of facts before eviction kicks in.
+    pub fn with_max_facts(mut self, cap: usize) -> Self {
+        self.max_facts = cap;
+        self
     }
 
     /// Read all facts from disk, sorted by name.
@@ -85,6 +97,11 @@ impl MemoryStore {
     }
 
     /// Add or update a fact. Returns the saved fact.
+    ///
+    /// When the total number of facts exceeds `max_facts` (default 200),
+    /// the oldest fact (first alphabetically) is evicted. ponytail: O(n)
+    /// scan; fine for 200 entries.
+    // ponytail: upsert overwrites on name match. The FNV hash suffix makes collisions extremely unlikely but not impossible. Upgrade: append turn number to slug for full disambiguation.
     pub fn upsert(
         &self,
         name: &str,
@@ -103,6 +120,14 @@ impl MemoryStore {
         };
 
         self.write_one(&fact)?;
+
+        let facts = self.all();
+        if facts.len() > self.max_facts {
+            if let Some(oldest) = facts.first() {
+                let _ = self.delete(&oldest.name);
+            }
+        }
+
         Ok(fact)
     }
 
@@ -182,7 +207,7 @@ impl MemoryStore {
     /// terms. Ties are broken by fact name for determinism.
     ///
     /// Facts are selected greedily by score until the estimated token count
-    /// (chars / 4) reaches `max_tokens`. `top_n` caps how many facts are
+    /// reaches `max_tokens`. `top_n` caps how many facts are
     /// considered regardless of budget.
     pub fn select_for_context(
         &self,
@@ -227,7 +252,7 @@ impl MemoryStore {
                 fact.name,
                 fact.description
             );
-            let est = line.len() / 4;
+            let est = crate::session::prompt::count_tokens(&line);
             if tokens_used + est > max_tokens && !selected.is_empty() {
                 break;
             }
@@ -710,6 +735,34 @@ mod tests {
         assert_eq!(facts.len(), 1);
         let mtype = facts[0].metadata.get("type").cloned().unwrap_or_default();
         assert_eq!(mtype, "user", "metadata: {:?}", facts[0].metadata);
+    }
+
+    #[test]
+    fn test_max_facts_eviction() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().to_path_buf();
+        std::mem::forget(tmp);
+        let store = MemoryStore::open(path).unwrap().with_max_facts(3);
+
+        for i in 0..5 {
+            store
+                .upsert(
+                    &format!("fact-{i}"),
+                    &format!("desc {i}"),
+                    "body",
+                    "project",
+                )
+                .unwrap();
+        }
+
+        let facts = store.all();
+        assert_eq!(
+            facts.len(),
+            3,
+            "should evict down to max_facts=3, got {}",
+            facts.len()
+        );
+        assert_eq!(facts[0].name, "fact-2", "oldest evicted first");
     }
 
     #[test]

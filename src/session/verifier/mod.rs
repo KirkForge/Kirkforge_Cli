@@ -43,8 +43,8 @@ pub use handler::VerifierHandler;
 pub use slots::VerifierSlots;
 pub use types::{
     BashExecEvent, BusEvent, EditEvent, EventKind, FileReadEvent, FileWriteEvent, FixSuggestion,
-    GitOperationEvent, LintFinding, LintRunEvent, SecurityIssue, SecurityScanEvent, ToolErrorEvent,
-    TypeCheckEvent, Verdict, VerificationError, Verifier,
+    LintFinding, LintRunEvent, SecurityIssue, SecurityScanEvent, ToolErrorEvent, TypeCheckEvent,
+    Verdict, VerificationError, Verifier,
 };
 
 #[cfg(test)]

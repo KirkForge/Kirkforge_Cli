@@ -83,8 +83,54 @@ This repo is a Rust CLI coding agent (`kf-code`). It uses `tokio`, `ratatui`, `c
 7. **Scope discipline**: touch only the files the task names. If you need to edit outside scope, note it in `lessons.md` as "scope creep: <file> because <reason>".
 8. **Honesty over claim**: paste gate output, never say "green" without the run ID + head SHA. An ADR that overclaims is a regression. A "CI green" citation for the wrong run ID is a regression.
 9. **Doc-sync discipline**: if your change alters the architecture, the plugin system, the feature-flag set, the tool list, the hook system, the verifier bus, or the context index, you MUST update `docs/TECHNICAL.md` in the same commit. If your change completes or defers a workorder, update the workorder's `## Status` line in the same commit. If your change adds or removes an ADR, update the ADR count in `docs/TECHNICAL.md` and `state.md` in the same commit. Leaving docs stale after a code change is a regression — the assessment found ARCHITECTURE.md stale in the same session it was written because this rule was not enforced.
-10. **Doc-placement rule**: new .md files go in the right directory on first write. Do not drop .md files in the repo root (exceptions: `README.md`, `CHANGELOG.md`, `CLAUDE.md`, `AGENTS.md`, `state.md`, `lessons.md`, `PONYTAIL-DEBT.md`). Place review post-mortems in `docs/reviews/`. When an idea becomes an ADR, move the idea file to `docs/archive/ideas/`. When a runbook or benchmark doc is superseded, move it to `docs/archive/`. The `docs/README.md` index is the source of truth for where things go — if you create a new directory under `docs/`, add it to the index.
+10. **Doc-placement rule**: new .md files go in the right directory on first write. Do not drop .md files in the repo root (exceptions: `README.md`, `CHANGELOG.md`, `CLAUDE.md`, `AGENTS.md`, `state.md`, `lessons.md`). When an idea becomes an ADR, move the idea file to `docs/archive/ideas/`. When a runbook or benchmark doc is superseded, move it to `docs/archive/`. The `docs/README.md` index is the source of truth for where things go — if you create a new directory under `docs/`, add it to the index.
 10. **README is a landing page, not a tech manual**: the README stays short — quick start, why, links to docs. Technical detail lives in `docs/TECHNICAL.md`. Do not expand the README with architecture sections, manifest formats, or feature-flag tables.
+11. **Defer-disclosure (no silent deferral)**: any work item NOT fully completed — kicked out, feature-gated off, stubbed, downscoped, or replaced with a smaller version than requested — MUST be explicitly disclosed. The disclosure MUST state: (a) **what** was deferred, (b) **why** (the concrete blocker/reason — not "later"), (c) the **exact remaining work** to finish it, and (d) **where it's tracked** (workorder ID / `state.md` "pending" / ADR). Silently disabling, gating off, or stubbing a requested feature to make a commit "pass" is a **REGRESSION**, not progress. Example — BAD: *"made kf-draw default-off"*. GOOD: *"made kf-draw default-off (DEFERRED: owner asked for full rust-native impl; deferred because [reason]; remaining: [X]; tracked in WO 21.x)"*. Deferrals go into `state.md` "pending" + a WO 21+ item, never into the void.
 
 ## Escalation
 If you are stuck after 3 attempts, say so. Write "ESCALATE: <root cause unknown>" in `lessons.md`. The brain (frontier model) takes over. This is not a failure — it's the design: the Fiat knows when to call the tow truck.
+
+<!-- gitnexus:start -->
+# GitNexus — Code Intelligence
+
+This project is indexed by GitNexus as **Kirkforge_Cli** (19267 symbols, 50689 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+
+> Index stale? Run `node .gitnexus/run.cjs analyze` from the project root — it auto-selects an available runner. No `.gitnexus/run.cjs` yet? `npx gitnexus analyze` (npm 11 crash → `npm i -g gitnexus`; #1939).
+
+## Always Do
+
+- **MUST run impact analysis before editing any symbol.** Before modifying a function, class, or method, run `impact({target: "symbolName", direction: "upstream"})` and report the blast radius (direct callers, affected processes, risk level) to the user.
+- **MUST run `detect_changes()` before committing** to verify your changes only affect expected symbols and execution flows. For regression review, compare against the default branch: `detect_changes({scope: "compare", base_ref: "main"})`.
+- **MUST warn the user** if impact analysis returns HIGH or CRITICAL risk before proceeding with edits.
+- When exploring unfamiliar code, use `query({search_query: "concept"})` to find execution flows instead of grepping. It returns process-grouped results ranked by relevance.
+- When you need full context on a specific symbol — callers, callees, which execution flows it participates in — use `context({name: "symbolName"})`.
+- For security review, `explain({target: "fileOrSymbol"})` lists taint findings (source→sink flows; needs `analyze --pdg`).
+
+## Never Do
+
+- NEVER edit a function, class, or method without first running `impact` on it.
+- NEVER ignore HIGH or CRITICAL risk warnings from impact analysis.
+- NEVER rename symbols with find-and-replace — use `rename` which understands the call graph.
+- NEVER commit changes without running `detect_changes()` to check affected scope.
+
+## Resources
+
+| Resource | Use for |
+|----------|---------|
+| `gitnexus://repo/Kirkforge_Cli/context` | Codebase overview, check index freshness |
+| `gitnexus://repo/Kirkforge_Cli/clusters` | All functional areas |
+| `gitnexus://repo/Kirkforge_Cli/processes` | All execution flows |
+| `gitnexus://repo/Kirkforge_Cli/process/{name}` | Step-by-step execution trace |
+
+## CLI
+
+| Task | Read this skill file |
+|------|---------------------|
+| Understand architecture / "How does X work?" | `.claude/skills/gitnexus/gitnexus-exploring/SKILL.md` |
+| Blast radius / "What breaks if I change X?" | `.claude/skills/gitnexus/gitnexus-impact-analysis/SKILL.md` |
+| Trace bugs / "Why is X failing?" | `.claude/skills/gitnexus/gitnexus-debugging/SKILL.md` |
+| Rename / extract / split / refactor | `.claude/skills/gitnexus/gitnexus-refactoring/SKILL.md` |
+| Tools, resources, schema reference | `.claude/skills/gitnexus/gitnexus-guide/SKILL.md` |
+| Index, status, clean, wiki CLI commands | `.claude/skills/gitnexus/gitnexus-cli/SKILL.md` |
+
+<!-- gitnexus:end -->

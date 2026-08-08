@@ -25,13 +25,17 @@ pub(crate) fn tool_outcome_success(outcome: &ToolOutcome) -> bool {
 /// the conversation. When the `budget` feature is enabled and the
 /// shared budget is `Approaching` or `Over`, oversized `Success` and
 /// `FileContent` results are sliced (head + tail + offload marker) and
-/// the full middle is stored in the process-global offload store,
+/// the full middle is stored in the per-session offload store,
 /// retrievable via `store_get`. When the feature is disabled this is a
 /// no-op pass-through.
-pub(crate) fn apply_budget_slice(outcome: ToolOutcome) -> ToolOutcome {
+pub(crate) fn apply_budget_slice(
+    outcome: ToolOutcome,
+    #[cfg(feature = "budget")] budget: &crate::session::budget::SharedBudget,
+    #[cfg(feature = "budget")] store: &std::sync::Arc<dyn kf_budget_core::OffloadStore>,
+) -> ToolOutcome {
     #[cfg(feature = "budget")]
     {
-        crate::session::budget::apply_budget_slice(outcome)
+        crate::session::budget::apply_budget_slice(outcome, budget, store)
     }
     #[cfg(not(feature = "budget"))]
     {

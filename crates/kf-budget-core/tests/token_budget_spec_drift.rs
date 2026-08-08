@@ -259,8 +259,8 @@ fn adr_0005_user_prompt_submit_block_does_not_claim_tracing() {
 // against the local-`HookResponse` enum that doesn't exist.
 // The earlier draft declared a `pub enum HookResponse`
 // with `Ok` and `OkWithWarning(String)` variants. The MVP
-// uses `UserPromptSubmitResponse` from `kf-budget-hosts`
-// (ADR-0013) — Claude Code's hook envelope has no separate
+// uses `UserPromptSubmitResponse` (now in `kf-budget-core` as
+// `Intervention`; formerly in the deleted `kf-budget-hosts` crate) — Claude Code's hook envelope has no separate
 // "ok" vs "ok-with-warning" path (the warning is the `Warn`
 // variant).
 #[test]
@@ -272,8 +272,8 @@ fn adr_0005_user_prompt_submit_block_uses_usersubmit_response_not_hook_response(
         !block.contains("HookResponse"),
         "ADR-0005 § UserPromptSubmit hook flow example must not \
          reference a local `HookResponse` enum — the impl uses \
-         `UserPromptSubmitResponse` from `kf-budget-hosts` \
-         (ADR-0013). Claude Code's hook envelope has no separate \
+         `UserPromptSubmitResponse` (wire-equivalent to `Intervention`). \
+         Claude Code's hook envelope has no separate \
          `Ok` vs `OkWithWarning` path; the warning is the `Warn` \
          variant.",
     );
@@ -281,7 +281,7 @@ fn adr_0005_user_prompt_submit_block_uses_usersubmit_response_not_hook_response(
     assert!(
         block.contains("UserPromptSubmitResponse"),
         "ADR-0005 § UserPromptSubmit hook flow example must show \
-         `UserPromptSubmitResponse` from `kf-budget-hosts` — the \
+         `UserPromptSubmitResponse` — the \
          response type the impl maps `Intervention` to.",
     );
 }
@@ -310,7 +310,7 @@ fn adr_0005_user_prompt_submit_block_serialises_intervention_directly() {
     // who re-pastes the pre-fix form documents a serialise
     // call against the host-side enum, which contradicts
     // the byte-equivalence contract and would force the
-    // CLI to import `kf-budget-hosts` again.
+    // CLI to import the deleted `kf-budget-hosts` crate again.
     assert!(
         block.contains("serde_json::to_string(&Intervention::Allow)"),
         "ADR-0005 § UserPromptSubmit hook flow example must \
@@ -360,7 +360,8 @@ fn adr_0005_user_prompt_submit_block_serialises_intervention_directly() {
 // in § Implementation notes. The earlier draft specified
 // a local enum with `Ok` and `OkWithWarning(String)`
 // variants. The MVP uses `UserPromptSubmitResponse` from
-// `kf-budget-hosts`. The prose can mention `HookResponse` in
+// `kf-budget-hosts` (now deleted; `Intervention` in `kf-budget-core`
+// is the canonical type). The prose can mention `HookResponse` in
 // the context of "was in the earlier draft, but the MVP
 // doesn't declare it" — the negative check is on the
 // *declaration* `pub enum HookResponse` (the literal
@@ -372,13 +373,13 @@ fn adr_0005_implementation_notes_does_not_declare_hook_response() {
         !section.contains("pub enum HookResponse"),
         "ADR-0005 § Implementation notes must not declare a local \
          `HookResponse` enum — the impl uses \
-         `UserPromptSubmitResponse` from `kf-budget-hosts`. A \
+         `UserPromptSubmitResponse` (wire-equivalent to `Intervention`). A \
          contributor who re-pastes the local enum declaration \
          documents a type the impl does not have.",
     );
     // ponytail: positive pin — the § Implementation notes
-    // must show the actual response type from
-    // `kf-budget-hosts` with the four-variant shape.
+    // must show the actual response type, wire-equivalent
+    // to `Intervention` from `kf-budget-core`.
     assert!(
         section.contains("UserPromptSubmitResponse"),
         "ADR-0005 § Implementation notes must reference \

@@ -1,7 +1,10 @@
 //! Session executor — runs model turns, dispatches tools, handles approvals.
 
 use crate::adapters::ModelAdapter;
-use crate::session::access::{access_from_config, refuse_if_unsandboxed, warn_if_unsandboxed};
+use crate::session::access::{
+    access_from_config, refuse_if_production_unsandboxed, refuse_if_unsandboxed,
+    warn_if_unsandboxed,
+};
 use crate::session::adapter_swap::AdapterSwap;
 use crate::session::carryover::CarryoverProfile;
 use crate::session::config::config_diff_summary;
@@ -45,9 +48,21 @@ pub struct Executor {
     config: SharedConfig,
     cost: cost_tracking::CostTracker,
     model_name: String,
-    sandbox: sandbox::SandboxEnforcer,
+    sandbox: sandbox::PathGuardTower,
     audit_log: Arc<AuditLog>,
     correction_loop: Option<CorrectionLoop>,
+
+    /// Per-session budget for slicing tool results (WO 22.6-R2).
+    #[cfg(feature = "budget")]
+    budget: Option<crate::session::budget::SharedBudget>,
+
+    /// Per-session budget offload store with LRU cap (WO 22.6-R2).
+    #[cfg(feature = "budget")]
+    budget_store: Option<std::sync::Arc<dyn kf_budget_core::OffloadStore>>,
+
+    /// Per-session Stratum offload store with LRU cap (WO 22.6-R2).
+    #[cfg(feature = "stratum")]
+    stratum_store: Option<std::sync::Arc<kf_compress_core::store::InMemoryOffloadStore>>,
 
     /// Unified verifier bus — collects structured VerdictEntrys from all
     /// registered BusVerifiers after each file-modifying tool call.
@@ -80,6 +95,12 @@ pub struct Executor {
     /// Optional turn-trace recorder. When present, each completed turn
     /// is serialized as a `TurnRecord` and appended to the trace file.
     trace: Option<std::sync::Mutex<crate::session::replay::TraceRecorder>>,
+
+    /// Memory store for auto-populated facts from post-turn extraction.
+    memory_store: Option<crate::session::memory::MemoryStore>,
+
+    /// Turn counter for rate-limited memory extraction.
+    turn_count: u64,
 }
 
 impl Executor {
@@ -138,11 +159,14 @@ impl Executor {
         let config_for_startup = config.clone();
         let cfg = read_shared_config(&config_for_startup);
         let (deny_list, path_guard, read_gate) = access_from_config(&cfg);
-        warn_if_unsandboxed(&path_guard);
         if cfg.security.sandbox.harden {
             refuse_if_unsandboxed(&path_guard)?;
+        } else if cfg!(not(debug_assertions)) && !cfg.security.sandbox.accept_unsandboxed {
+            refuse_if_production_unsandboxed(&path_guard)?;
+        } else {
+            warn_if_unsandboxed(&path_guard);
         }
-        let sandbox = sandbox::SandboxEnforcer {
+        let sandbox = sandbox::PathGuardTower {
             path_guard,
             deny_list,
             read_gate,
@@ -165,6 +189,7 @@ impl Executor {
         // that don't support it, so unknown models (and the test
         // mocks) silently ignore the flag.
         adapter.set_json_mode(cfg.model.json_mode);
+        adapter.set_response_format(cfg.model.effective_response_format());
 
         // Push the deterministic-mode seed down to the active adapter.
         adapter.set_seed(cfg.model.seed);
@@ -189,13 +214,6 @@ impl Executor {
         if let Some(registry) = plugin_registry {
             hook_runner.load_plugin_hooks(registry, &cfg.tools.disabled_plugins);
         }
-        #[cfg(feature = "draw")]
-        {
-            if !cfg.tools.disabled_plugins.contains("kf-draw") {
-                hook_runner.add_in_process_hook(Box::new(crate::session::draw::DrawPostTurnHook));
-                tracing::info!("draw post-turn hook registered");
-            }
-        }
         #[cfg(feature = "stratum")]
         {
             // Runtime `enabled_plugins` gate (WO 15.7 5.1): skip hooks when
@@ -204,7 +222,7 @@ impl Executor {
             if cfg.tools.enabled_plugins.iter().any(|n| n == "stratum")
                 && !cfg.tools.disabled_plugins.contains("stratum")
             {
-                hook_runner.add_in_process_hook(Box::new(
+                hook_runner.add_post_hook(Box::new(
                     crate::session::stratum::StratumSessionStartHook {
                         config: config.clone(),
                     },
@@ -215,39 +233,6 @@ impl Executor {
             } else {
                 tracing::info!(
                     "stratum hooks skipped (disabled via enabled_plugins or disabled_plugins)"
-                );
-            }
-        }
-        #[cfg(all(feature = "budget", feature = "stratum"))]
-        {
-            // WO 8.6: register Stratum's default compression listener on
-            // the budget's slice path so a slice triggers compression
-            // and the post-tool hook records the post-compression size.
-            // Runtime-gated on stratum being enabled (WO 15.7 5.1): the
-            // listener is only useful when stratum hooks are live.
-            if cfg.tools.enabled_plugins.iter().any(|n| n == "stratum")
-                && !cfg.tools.disabled_plugins.contains("stratum")
-            {
-                crate::session::stratum::register_default_budget_listener();
-                tracing::info!("stratum->budget slice listener registered");
-            }
-        }
-        #[cfg(feature = "budget")]
-        {
-            // Runtime `enabled_plugins` gate (WO 15.7 5.1): the config key
-            // for the folded budget plugin is `"kf-budget"`. Skip
-            // hooks when disabled at runtime.
-            if cfg.tools.enabled_plugins.iter().any(|n| n == "kf-budget")
-                && !cfg.tools.disabled_plugins.contains("kf-budget")
-            {
-                crate::session::budget::init_from_config(&cfg);
-                for hook in crate::session::budget::all_budget_hooks() {
-                    hook_runner.add_in_process_hook(hook);
-                }
-                tracing::info!("budget session-start, post-tool-bash, post-tool-write_file, pre-compact hooks registered");
-            } else {
-                tracing::info!(
-                    "budget hooks skipped (disabled via enabled_plugins or disabled_plugins)"
                 );
             }
         }
@@ -269,6 +254,12 @@ impl Executor {
             sandbox,
             audit_log,
             correction_loop: None,
+            #[cfg(feature = "budget")]
+            budget: None,
+            #[cfg(feature = "budget")]
+            budget_store: None,
+            #[cfg(feature = "stratum")]
+            stratum_store: None,
             verifier_bus: None,
             undo_stack,
             plan_mode: false,
@@ -276,7 +267,46 @@ impl Executor {
             session_id: String::new(),
             task_spawner: None,
             trace: None,
+            memory_store: crate::session::memory::MemoryStore::default_store().ok(),
+            turn_count: 0,
         };
+
+        // Register per-session budget and stratum hooks after construction
+        // so we can reference `this.budget` and `this.stratum_store` (WO 22.6-R2).
+        #[cfg(all(feature = "budget", feature = "stratum"))]
+        {
+            if cfg.tools.enabled_plugins.iter().any(|n| n == "stratum")
+                && !cfg.tools.disabled_plugins.contains("stratum")
+            {
+                if let Some(ref stratum_store) = this.stratum_store {
+                    crate::session::stratum::register_default_budget_listener(
+                        stratum_store.clone(),
+                    );
+                    tracing::info!("stratum->budget slice listener registered");
+                }
+            }
+        }
+        #[cfg(feature = "budget")]
+        {
+            // Runtime `enabled_plugins` gate (WO 15.7 5.1): the config key
+            // for the folded budget plugin is `"kf-budget"`. Skip
+            // hooks when disabled at runtime.
+            if cfg.tools.enabled_plugins.iter().any(|n| n == "kf-budget")
+                && !cfg.tools.disabled_plugins.contains("kf-budget")
+            {
+                if let (Some(ref budget), Some(ref _store)) = (&this.budget, &this.budget_store) {
+                    crate::session::budget::init_from_config(budget, &cfg);
+                    for hook in crate::session::budget::budget_hooks(budget) {
+                        this.hook_runner.add_post_hook(hook);
+                    }
+                    tracing::info!("budget session-start, post-tool-bash, post-tool-write_file, pre-compact hooks registered");
+                }
+            } else {
+                tracing::info!(
+                    "budget hooks skipped (disabled via enabled_plugins or disabled_plugins)"
+                );
+            }
+        }
         this.init_default_verifiers(plugin_registry);
         this.build_task_spawner();
         Ok(this)
@@ -288,6 +318,26 @@ impl Executor {
     /// opener reported `OpenOutcome::Restored`.
     pub fn set_recovered_messages(&mut self, count: usize) {
         self.recovered_messages = Some(count);
+    }
+
+    /// Set the per-session budget and offload store (WO 22.6-R2).
+    #[cfg(feature = "budget")]
+    pub fn set_budget_stores(
+        &mut self,
+        budget: crate::session::budget::SharedBudget,
+        store: std::sync::Arc<dyn kf_budget_core::OffloadStore>,
+    ) {
+        self.budget = Some(budget);
+        self.budget_store = Some(store);
+    }
+
+    /// Set the per-session Stratum offload store (WO 22.6-R2).
+    #[cfg(feature = "stratum")]
+    pub fn set_stratum_store(
+        &mut self,
+        store: std::sync::Arc<kf_compress_core::store::InMemoryOffloadStore>,
+    ) {
+        self.stratum_store = Some(store);
     }
 
     /// Set the session identifier forwarded to lifecycle hooks as
@@ -360,7 +410,7 @@ impl Executor {
         *cfg = new.clone();
         let fresh = new;
         let (deny_list, path_guard, read_gate) = access_from_config(&fresh);
-        self.sandbox = sandbox::SandboxEnforcer {
+        self.sandbox = sandbox::PathGuardTower {
             path_guard,
             deny_list,
             read_gate,
@@ -601,19 +651,13 @@ impl Executor {
             None => HookRunner::default(),
         };
         hook_runner.load_plugin_hooks(registry, &cfg.tools.disabled_plugins);
-        #[cfg(feature = "draw")]
-        {
-            if !cfg.tools.disabled_plugins.contains("kf-draw") {
-                hook_runner.add_in_process_hook(Box::new(crate::session::draw::DrawPostTurnHook));
-            }
-        }
         #[cfg(feature = "stratum")]
         {
             // Runtime `enabled_plugins` gate (WO 15.7 5.1).
             if cfg.tools.enabled_plugins.iter().any(|n| n == "stratum")
                 && !cfg.tools.disabled_plugins.contains("stratum")
             {
-                hook_runner.add_in_process_hook(Box::new(
+                hook_runner.add_post_hook(Box::new(
                     crate::session::stratum::StratumSessionStartHook {
                         config: self.config.clone(),
                     },
@@ -627,7 +671,11 @@ impl Executor {
             if cfg.tools.enabled_plugins.iter().any(|n| n == "stratum")
                 && !cfg.tools.disabled_plugins.contains("stratum")
             {
-                crate::session::stratum::register_default_budget_listener();
+                if let Some(ref stratum_store) = self.stratum_store {
+                    crate::session::stratum::register_default_budget_listener(
+                        stratum_store.clone(),
+                    );
+                }
             }
         }
         #[cfg(feature = "budget")]
@@ -637,9 +685,11 @@ impl Executor {
             if cfg.tools.enabled_plugins.iter().any(|n| n == "kf-budget")
                 && !cfg.tools.disabled_plugins.contains("kf-budget")
             {
-                crate::session::budget::init_from_config(&cfg);
-                for hook in crate::session::budget::all_budget_hooks() {
-                    hook_runner.add_in_process_hook(hook);
+                if let (Some(ref budget), Some(ref _store)) = (&self.budget, &self.budget_store) {
+                    crate::session::budget::init_from_config(budget, &cfg);
+                    for hook in crate::session::budget::budget_hooks(budget) {
+                        hook_runner.add_post_hook(hook);
+                    }
                 }
             }
         }

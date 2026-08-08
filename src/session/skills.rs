@@ -1,4 +1,5 @@
-use kf_plugin_host::{PluginRegistry, TrustPolicy};
+use crate::session::plugin_tools::loader::trust_policy_from_config;
+use kf_plugin_host::PluginRegistry;
 /// Skills system — slash-command skill registry and loader.
 ///
 /// Skills are reusable capabilities defined in SKILL.md files with
@@ -169,7 +170,7 @@ impl SkillRegistry {
         self.plugin_registry = PluginRegistry::new();
         let mut warnings = self
             .plugin_registry
-            .load_from_dir(&plugins_dir, TrustPolicy::up_to(self.max_plugin_trust))
+            .load_from_dir(&plugins_dir, trust_policy_from_config(cfg))
             .unwrap_or_default();
         warnings.extend(crate::session::plugin_tools::load_workspace_plugins(
             &mut self.plugin_registry,

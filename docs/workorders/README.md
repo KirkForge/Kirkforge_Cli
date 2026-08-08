@@ -403,6 +403,39 @@ cosign packaging, command palette, attachment panel, QuestionPanel, central
 theming, per-language minify annotators, formatter-gated write-back. See WO
 17.0 for the full deferred list with reasons.
 
+### Series 21 — Close Every Open Review Item (done/fail + defer-disclosure)
+
+Series 21 is the close-out series for the brutal production-readiness review
+(reality-checked @ `a870571` on 2026-08-07; see
+`docs/reviews/`/`kirkforge-review.md`). It exists to fix the process failure WO
+20 exposed: items shipped without explicit done/fail criteria and silent
+deferral. **Every item in every 21.* sub-workorder carries both success AND
+failure criteria, and no deferral is silent** (AGENTS.md rule #11). The master
+overview is [WO 21.0](21.0-wo21-overview.md); the series is "Done" only when
+every item's success criteria are met AND its failure criteria are demonstrably
+not-triggered, evidenced by gate output on the closing commit.
+
+| # | Workorder | Status | Priority | Depends on |
+|---|---|---|---|---|
+| 21.0 | [WO 21 Series Overview](21.0-wo21-overview.md) | Planned | — | — |
+| 21.1 | [Scope-creep decisions: cut / spin-off / keep-and-finish](21.1-focus-scope.md) | Planned | High | — |
+| 21.2 | [Finish 3 incomplete rust-native plugins](21.2-plugins-rust-native.md) | Planned | High | 21.1 |
+| 21.3 | [Stratum compression: real content transforms](21.3-stratum-compression.md) | Planned | High | — |
+| 21.4 | [LLM adapter gaps](21.4-adapter-gaps.md) | Planned | High | — |
+| 21.5 | [Tools & MCP surface gaps](21.5-tools-mcp.md) | Planned | High | — |
+| 21.6 | [Context, retrieval & memory gaps](21.6-context-memory.md) | Planned | High | — |
+| 21.7 | [Sandbox & trust hardening](21.7-sandbox-trust.md) | Planned | High | — |
+| 21.8 | [TUI & agent-loop gaps](21.8-tui-agentloop.md) | Planned | High | — |
+| 21.9 | [Engineering-discipline debt](21.9-discipline-debt.md) | Planned | High | — |
+ | 21.10 | [MCP-first migration](21.10-mcp-first-migration.md) | Planned | High | 21.5-R3/R4 |
+ | 21.11 | [Plugin real-rebuild (budget/stratum/sdk) + draw/video yeet](21.11-plugin-real-rebuild.md) | Planned | High | supersedes 21.1-R1/R2, voids 21.2-R2/R3 |
+ | 21.0.14 | [Deferred item tracker (all WO 21 series)](21.0.14-deferred-tracker.md) | In Progress | — | — |
+ 
+ **12 sub-workorders, 72 items**, each with success + failure criteria. Highest-
+leverage item: **21.9-R4** (test deadlock fix → re-enables CI, which gates
+honest verification of everything else). Full ordering/dependencies and the
+global done/fail + defer-disclosure rule are in [WO 21.0](21.0-wo21-overview.md).
+
 ## Conventions
 
 - Each workorder is a single markdown file named `<number>-<slug>.md`.

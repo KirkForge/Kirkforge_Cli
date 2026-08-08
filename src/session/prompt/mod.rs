@@ -14,6 +14,18 @@ pub(crate) use compaction::{compact_to_budget, estimate_tokens};
 
 use kf_context_index::ContextIndex;
 
+/// Token counter — real cl100k_base when the `budget` feature is available,
+/// character-length/4 fallback otherwise.
+#[cfg(feature = "budget")]
+pub(crate) fn count_tokens(s: &str) -> usize {
+    kf_budget_core::estimate_tokens(s)
+}
+
+#[cfg(not(feature = "budget"))]
+pub(crate) fn count_tokens(s: &str) -> usize {
+    s.len() / 4
+}
+
 /// Number of trailing messages kept verbatim by automatic microcompaction.
 /// Mirrors `Config::preserve_recent_messages` semantics: the live user turn
 /// and the most recent assistant turn stay intact so the model does not lose
@@ -248,7 +260,7 @@ impl PromptBuilder {
     /// The stem is the system prompt *without* the dynamic carryover and
     /// memory blocks, because those can change across turns. Providers
     /// cache the exact bytes sent; a changing carryover block would
-    /// invalidate the cache. The returned value is a heuristic used for
+    /// invalidate the cache. The returned value is an estimate used for
     /// status-bar telemetry and cache-hit verification.
     pub fn estimate_stem_tokens(
         &self,
@@ -264,7 +276,7 @@ impl PromptBuilder {
                 .collect::<Vec<_>>(),
         )
         .unwrap_or_default();
-        (stem.len() + tool_json.len()) / 4
+        count_tokens(&format!("{stem}{tool_json}"))
     }
 
     pub fn build_stem(&self, model_name: &str, model_supports_thinking: bool) -> String {
@@ -284,8 +296,7 @@ impl PromptBuilder {
 
     pub fn cache_hit_probability(&self, model_name: &str, model_supports_thinking: bool) -> f64 {
         let stem = self.build_stem(model_name, model_supports_thinking);
-        let stem_chars = stem.len();
-        let stem_tokens_est = stem_chars / 4;
+        let stem_tokens_est = count_tokens(&stem);
 
         if stem_tokens_est < 1024 {
             return 0.3; // Small stem → tools section is proportionally large → cache miss likely
@@ -674,14 +685,14 @@ impl PromptBuilder {
     }
 
     fn estimate_message_tokens(m: &Message) -> usize {
-        let content_tokens = m.content.len() / 4;
-        let thinking_tokens = m.thinking.as_ref().map(|t| t.len() / 4).unwrap_or(0);
+        let content_tokens = count_tokens(&m.content);
+        let thinking_tokens = m.thinking.as_ref().map(|t| count_tokens(t)).unwrap_or(0);
         let tool_call_tokens = m
             .tool_calls
             .as_ref()
             .map(|calls| {
                 serde_json::to_string(calls)
-                    .map(|s| s.len() / 4)
+                    .map(|s| count_tokens(&s))
                     .unwrap_or(0)
             })
             .unwrap_or(0);

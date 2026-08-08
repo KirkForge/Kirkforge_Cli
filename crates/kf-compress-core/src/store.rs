@@ -33,6 +33,7 @@ pub trait OffloadStore: Send + Sync {
 #[must_use]
 pub struct InMemoryOffloadStore {
     data: RwLock<HashMap<String, String>>,
+    max_entries: Option<usize>,
 }
 
 impl InMemoryOffloadStore {
@@ -49,6 +50,44 @@ impl InMemoryOffloadStore {
     pub fn new() -> Self {
         Self {
             data: RwLock::new(HashMap::new()),
+            max_entries: None,
+        }
+    }
+
+    /// Create a new in-memory store that will evict the oldest entries
+    /// whenever it exceeds `max_entries`. The cap is enforced on every
+    /// [`Self::evict_if_over_cap`] call — callers should invoke it
+    /// after inserts.
+    // ponytail: per-session store, cap 1000 entries, evict FIFO if throughput matters
+    pub fn new_with_cap(max_entries: usize) -> Self {
+        Self {
+            data: RwLock::new(HashMap::new()),
+            max_entries: Some(max_entries),
+        }
+    }
+
+    /// Remove the oldest entries when the store exceeds its cap.
+    /// Call this after `put` to keep the store bounded. No-op when
+    /// the store has no cap or is within limits.
+    pub fn evict_if_over_cap(&self) {
+        let max = match self.max_entries {
+            Some(m) => m,
+            None => return,
+        };
+        let mut guard = match self.data.write() {
+            Ok(g) => g,
+            Err(poisoned) => {
+                warn!("recovered offload store from poisoned write lock; continuing");
+                poisoned.into_inner()
+            }
+        };
+        let excess = guard.len().saturating_sub(max);
+        if excess == 0 {
+            return;
+        }
+        let keys_to_remove: Vec<String> = guard.keys().take(excess).cloned().collect();
+        for key in keys_to_remove {
+            guard.remove(&key);
         }
     }
 }
@@ -126,6 +165,7 @@ impl OffloadStore for InMemoryOffloadStore {
                 guard.insert(key.clone(), payload.to_string());
             }
         }
+        self.evict_if_over_cap();
         key
     }
 

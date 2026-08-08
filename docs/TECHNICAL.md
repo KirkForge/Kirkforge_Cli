@@ -3,8 +3,6 @@
 KirkForge is a provider-agnostic, verification-first coding agent. It combines
 semantic code understanding, token-budget management, context compression, and
 deterministic verification into a single Rust binary with an interactive TUI.
-Specialized runtimes for diagram rendering and instruction-driven video editing
-ship as satellite binaries orchestrated through the plugin system.
 
 This document ties the pieces together. It is the map; the ADRs in
 [docs/adr/](docs/adr/) are the pinned decisions.
@@ -22,7 +20,7 @@ synthesis with its own architectural contributions:
 | Context quality | Tree-sitter symbol/import/call-graph index (`kf-context-index`) gives the agent graph-grounded retrieval instead of plain-text search. Four languages: Rust, TypeScript, Python, Go. |
 | Context cost (input side) | Stratum compression pipeline classifies and compacts bloated tool outputs *before* they enter the context window. |
 | Context cost (output side) | Plugin3 budget guard tracks token spend against a ceiling and slices or compacts oversized tool results when the budget is approached. |
-| Execution reliability | A verifier bus runs build, test, lint, rustfmt, git-state, and security checks after file-modifying tool calls. A correction loop auto-applies formatter fixes and feeds unfixable errors back to the model as tool results. |
+| Execution reliability | A verifier bus runs build, test, lint, rustfmt, git-state, and security checks after file-modifying tool calls. A correction loop auto-applies rustfmt fixes; build/lint/test findings are fed back to the model as tool-result suggestions. |
 | Reproducibility | Enforced plan mode (`/plan` then `/implement`), per-result checkpointing mid-batch, execution replay (ADR-039), and conversation logging. |
 | Extensibility | A manifest-based plugin system (`kf-code.toml`) with trust tiers, minisign signature verification, and four capability kinds: skills, tools, hooks, verifiers. |
 
@@ -30,41 +28,33 @@ synthesis with its own architectural contributions:
 
 ## Workspace layout
 
-The workspace has one binary crate (`kf-code`) and 14 satellite crates under
+The workspace has one binary crate (`kf-code`) and 10 satellite crates under
 `crates/`. The binary is the user-facing CLI; the satellites are libraries and
 standalone binaries.
 
 ```
 kf-code (root bin)          ← the CLI the user runs
 ├── src/                       ← agent core (session, tools, TUI, adapters, verifiers)
-├── crates/                    ← 14 satellite crates
+├── crates/                    ← 10 satellite crates
 │   ├── kf-plugin-sdk     ← plugin SDK: manifest types, trust tiers
 │   ├── kf-plugin-host  ← plugin runtime: registry, dispatch, signatures
 │   ├── kf-context-index← tree-sitter symbol/import/call-graph index
 │   ├── kf-workflow     ← programmable JSON workflow engine
 │   ├── kf-lsp          ← LSP client pool for symbol-aware navigation
 │   ├── kf-bench        ← task-benchmark harness (types + verifier + reports)
-│   ├── kf-draw-core    ← pure document model for KirkForge-Draw
-│   ├── kf-draw         ← kfd: terminal diagram editor binary
-│   ├── kf-video        ← instruction-driven video production binary
 │   ├── kf-compress-core       ← context-compression pipeline library + ruleset filtering
-│   ├── kf-compress-cli        ← stratum: compression CLI binary
 │   ├── kf-budget-core           ← budget/orchestrator/slicing data model
-│   ├── kf-budget-hosts          ← host detection + canonical payload schemas (Claude Code wired; Cursor/Aider/KfCode stubs removed WO 20.0.9)
-│   ├── kf-budget-cli            ← kf-budget: budget CLI binary
 │   └── kf-testdoctor   ← test-performance doctor (workspace member; profile, profile-per-test, classify, partition, suggest, suggest-detailed, apply, gaps, diagnose, flaky)
-├── plugins/                   ← 5 plugin manifests + shell tool/hook scripts
+├── plugins/                   ← 3 plugin manifests + shell tool/hook scripts
 │   ├── kf-plugin/      ← SDK self-plugin (Node-backed verification tools)
 │   ├── stratum/               ← compression plugin (5 tools, 2 hooks)
-│   ├── kf-budget/     ← budget plugin (7 tools, 4 hooks)
-│   ├── kf-draw/        ← diagram plugin (1 tool, 1 hook)
-│   └── kf-video/       ← video plugin (8 tools)
+│   └── kf-budget/     ← budget plugin (7 tools, 4 hooks)
 ├── benches/tasks/             ← 31 benchmark task definitions (TOML)
-└── docs/adr/                  ← 84 Architecture Decision Records
+└── docs/adr/                  ← 86 Architecture Decision Records
 ```
 
-The workspace has ~3,900 `#[test]` functions (~2,200 under `src/`,
-~1,650 under `crates/`). The `crates/` count is pinned by the
+The workspace has ~2,900 `#[test]` functions (~2,200 under `src/`,
+~680 under `crates/`). The `crates/` count is pinned by the
 `readme_drift` test (`crates/kf-budget-core/README.md` State table).
 
 ### Compiled-in vs satellite
@@ -80,11 +70,11 @@ The root `kf-code` binary directly depends on six crates:
 | `kf-lsp` | LSP client pool |
 | `kf-bench` | Benchmark task types, loader, verifier, report writers |
 
-The remaining eight crates are **satellites**: they build as standalone binaries
-(`kfd`, `kf-video`, `stratum`, `kf-budget`) or support libraries. When
-their feature flag is enabled, the core crate is linked directly into the
-`kf-code` binary as a compiled-in module (ADR-046–049). When the feature is
-off, the shell plugin dir loads as a fallback (ADR-050).
+The remaining four crates are **satellites**: they build as support
+libraries. When their feature flag is enabled, the core crate is linked
+directly into the `kf-code` binary as a compiled-in module (ADR-046–049).
+When the feature is off, the shell plugin dir loads as a fallback
+(ADR-050).
 
 ### Crate map
 
@@ -96,15 +86,9 @@ off, the shell plugin dir loads as a fallback (ADR-050).
 | `kf-workflow` | session | JSON workflow engine (DAG of persona steps) | Active |
 | `kf-lsp` | tools | LSP client pool for symbol-aware navigation | Active |
 | `kf-bench` | session | Benchmark task types, loader, verifier, reports | Active |
-| `kf-draw-core` | tools | Pure document model for KirkForge-Draw | Active |
-| `kf-draw` | tools | `kfd` terminal diagram editor binary | Active |
-| `kf-video` | tools | Instruction-driven video production binary | Excluded |
 | `kf-compress-core` | session | Context-compression pipeline library + rules | Active |
-| `kf-compress-cli` | tools | `stratum` compression CLI binary | Excluded |
-| `kf-budget-core` | session | Budget/orchestrator/slicing data model | Active |
-| `kf-budget-hosts` | session | Host detection, canonical payload schemas | Active |
-| `kf-budget-cli` | tools | `kf-budget` budget CLI binary | Excluded |
 | `kf-testdoctor` | quality | Test-performance diagnostics | Active |
+| `kf-budget-core` | session | Budget/orchestrator/slicing data model | Active |
 
 "Excluded" crates exist on disk but are not built by default.
 
@@ -125,7 +109,7 @@ The largest module (~30 submodules). It owns:
   [Verification](#verification)).
 - **Plugin tools** (`plugin_tools/`): loads plugin manifests. External plugins
   are wrapped in `PluginToolWrapper` (implements the `Tool` trait, spawns the
-  shell script as a subprocess). Folded plugins (Stratum, Plugin3, Draw, Video)
+  shell script as a subprocess). Folded plugins (Stratum, Plugin3)
   register as direct Rust `Tool` impls when their feature is on (ADR-050).
 - **Plugin ops** (`plugin_ops.rs`): shared plugin-ops layer used by both the
   TUI `/plugins` slash-command family and the `kf-code plugin` CLI
@@ -408,9 +392,10 @@ by content type and compacts bloated payloads *before* they enter the context
 window. Four modes: `off`, `lite`, `full`, `ultra`. The pipeline classifies
 content and applies size-based truncation with optional offload storage.
 
-// ponytail: no content-type-specific transforms or query-based relevance
-// filtering yet; the pipeline is mode-gated truncation + offload.
-// Upgrade path: per-content-type transform stages, relevance scoring.
+// ponytail: MinifyTransform registered (source code minification);
+// query-based relevance filtering and additional content-type transforms
+// still deferred.
+// Upgrade path: query-based relevance scoring, per-content-type stages.
 
 Stratum ships as a compiled-in module (when the `stratum` feature is on,
 ADR-046) or as a standalone `stratum` binary (feature off, shell fallback).
@@ -474,7 +459,7 @@ dispatch paths (ADR-050):
    builds without a feature still gets the plugin via the shell plugin if its
    dir and satellite binary are available, at the cost of subprocess overhead.
 
-The four folded plugins (Stratum, Plugin3, Draw, Video) use this two-path
+The two folded plugins (Stratum, Plugin3) use this two-path
 dispatch. A single toggle — `enabled_plugins` in `ToolConfig` — controls both
 paths: a folded plugin name enables the compiled-in path (feature on) or the
 shell path (feature off). As of WO 15.7 (item 5.1), the runtime toggle also
@@ -551,15 +536,13 @@ downgraded. Optional minisign detached-signature verification (`.kf-code.sig`).
 | `hook` | A lifecycle hook script fired on an event |
 | `verifier` | A deterministic post-execution check with priority |
 
-### The 5 built-in plugins
+### The 3 built-in plugins
 
 | Plugin | Trust | Skills | Tools | Hooks | Source |
 |---|---|---|---|---|---|
 | `kf-plugin-sdk` | shell | `/kf-code` | 6 | 0 | External — Node SDK (`npm/kf-plugin`), not folded |
 | `stratum` | shell | `/stratum` | 5 | 2 | Compiled-in (`stratum` feature) or external (`stratum` binary) |
 | `kf-budget` | shell | `/budget` | 7 | 4 | Compiled-in (`budget` feature) or external (`kf-budget` binary) |
-| `kf-draw` | shell | `/draw` | 1 | 1 | Compiled-in (`draw` feature) or external (`kfd` binary) |
-| `kf-video` | shell | `/video` | 8 | 0 | Compiled-in (`video` feature) or external (`kf-video` binary) |
 
 Runtime toggles: `enabled_plugins` (Vec) and `plugin_sources` (HashMap) in
 `ToolConfig`. The `/plugins` TUI command set: `list`, `enable`, `disable`,
@@ -611,38 +594,6 @@ plugins that expose tools continue to work unchanged.
 
 ## Specialized runtimes
 
-### Draw
-
-Draw is a terminal diagram editor (`kfd` binary) with a pure document model
-(`kf-draw-core`). The model plans a diagram and emits a `.td.json` file;
-the `draw_render` tool renders it to fenced markdown via `kfd --render --fenced`.
-A `post-turn` hook suggests rendering any new `.td.json` files. The document
-format is pinned in ADR-0003.
-
-Draw's architectural role: a **visual artifact surface** for the agent. The model
-produces structured diagram descriptions; `kfd` renders them. It is not a drawing
-application for humans — it is an output renderer for agent-produced diagrams.
-
-### Video
-
-Video is an instruction-driven video production pipeline (`kf-video`
-binary). The text LLM is the **director**: it writes a brief, selects a pipeline
-(`animated_explainer`, `cinematic`, `screen_demo`), plans scenes, and invokes
-the video binary to render via FFmpeg. The video model (if configured) generates
-assets; the text LLM edits and assembles.
-
-Video's architectural role: a **specialized execution environment** for
-agent-driven video editing. The pattern is:
-
-```
-User → LLM (director) → timeline operations → asset selection →
-video binary (render) → LLM reviews output
-```
-
-This is fundamentally different from "generate a video." It treats video editing
-as an agent orchestration problem where the text model directs and the video
-model executes.
-
 ### Workflow engine
 
 `kf-workflow` is a programmable JSON workflow engine. Workflows are DAGs
@@ -655,39 +606,159 @@ lets the agent loop and bench harness run a named template via a tool call.
 
 ---
 
-## Benchmarks
+## Benchmarks (KIRK-BENCH)
 
-The benchmark system measures agent capability on coding tasks across three
-difficulty levels. The task set is organized against the [KIRK-BENCH](../KIRK-BENCH.md)
-spec: eight categories (Repository Understanding, Refactoring, Bug Fixes, New
-Features, Verification, Context Intelligence, Real Engineering, Cost), 40
-numbered tasks, one universal scoring format, 10 hero benchmarks, and one
-signature challenge — the **Token Budget Challenge** (WO 14.7, ADR-0066). The
-spec documents 40 tasks; 31 are implemented today and mapped to the categories
-in `KIRK-BENCH.md`'s mapping table; the remaining ~9 are listed as planned
-(honest deferral — each exercises a specific feature and is a future WO).
+The benchmark system measures agent capability on coding tasks. The spec
+defines eight categories (A–H), 40 numbered tasks, one universal scoring
+format, 10 hero benchmarks, and one signature challenge — the **Token Budget
+Challenge** (WO 14.7, ADR-0066).
 
-The 31 implemented tasks break down as follows: 20 are single-file coding-skills tasks
-(Rust refactors, bug fixes, doc/test additions), 4 are plugin-tool tasks
-(`use_stratum_compress`, `use_budget_check`, `use_draw_render`,
-`use_lsp_query`) that exercise the Stratum, Plugin3, Draw, and LSP tool
-wrappers respectively, 1 is a workflow-tool task (`use_workflow_run`),
-5 are multi-file/multi-turn tasks (`multi_file_pattern`, `test_fix_cycle`,
-`pr_review`, `refactor_trait_extraction_multi`, `debug_log_trace`) added in
-WO 9.9 to exercise real agent skills (pattern-following, test-fix cycles,
-PR review, trait extraction, stack-trace debugging), and 1 is the signature
-challenge (`token_budget_challenge`, WO 14.7). Each task is a TOML
-file with a prompt, optional setup files, and a deterministic verify spec
-(`test_passes`, `file_contains`, or `command_exits_zero`). All tasks use
-synthetic `setup_files` so they do not depend on the live repo state.
+### Categories
 
-The 5 multi-file tasks use `requires_model = true` (a `BenchTask` field
-added in WO 9.9, default false) because their verify specs check
-*post-model* content (cargo build/test, grep for the new symbol the model
-was asked to create). `bench verify-only` skips these and reports
-`[SKIP] skipped (requires model)`; `bench run` runs them normally. This
-fixes the WO 9.0 anti-pattern where verify specs grepped setup content,
-passing `verify-only` trivially without validating the model's work.
+- **A — Repository Understanding** (5 tasks): Find Dead Code, Dependency
+  Graph Accuracy, Call Graph Generation, Explain Module, Cross-Repository
+  Search. *Metrics: precision, false positives, runtime.*
+- **B — Refactoring** (5 tasks): Rename Public API, Extract Trait, Extract
+  Module, Split Giant File, Remove Duplication.
+- **C — Bug Fixes** (6 tasks): Fix Compilation Error, Fix Clippy Lints, Fix
+  Unit Test, Fix Integration Test, Fix Panic, Resolve Borrow Checker Error.
+- **D — New Features** (5 tasks): Add CLI Flag, Add REST Endpoint, Add Config
+  Option, Implement Missing Trait, Implement TODO Stub.
+- **E — Verification** (5 tasks): Build Verification, Formatter Verification,
+  Lint Verification, Test Verification, Self Repair. *These are the
+  differentiators.*
+- **F — Context Intelligence** (4 tasks): Large Repository Navigation, Semantic
+  Retrieval, Context Compression, Budget Enforcement.
+- **G — Real Engineering** (5 tasks): Multi-file Feature, Large Refactor,
+  Merge Conflict Resolution, PR Review, Regression Detection.
+- **H — Cost** (5 tasks): Token Efficiency, Dollar Cost, Time, Retry Count,
+  Human Intervention.
+
+### Universal scoring
+
+Every benchmark emits the same metrics block:
+
+```
+Benchmark:          Rename Public API
+Success:            PASS
+Compilation:        PASS
+Tests:              PASS
+Lint:               PASS
+Verification:       PASS
+Retries:            1
+Elapsed:            19.4 s
+Input Tokens:       8,412
+Output Tokens:      1,153
+Compression Ratio:  63%
+Budget Violations:  0
+Provider:           GPT-5
+Cost:               £0.12
+```
+
+### Hero benchmarks
+
+The 10 hero benchmarks are the public scoreboard:
+
+1. Fix failing Rust build
+2. Rename API across workspace
+3. Implement missing feature
+4. Resolve merge conflicts
+5. Refactor 100-file workspace
+6. Explain unfamiliar codebase
+7. Reduce token usage on a large repository
+8. Review a pull request and identify defects
+9. Recover automatically from a failed verification step
+10. Complete an end-to-end feature (implementation, tests, docs, verification)
+
+### Task TOML format
+
+Each task file in `benches/tasks/` is a TOML file:
+
+```toml
+name = "fix_clippy_naming"
+difficulty = "easy"
+category = "C"            # A–H, matching the spec categories
+requires_model = false    # true = skipped by bench verify-only
+
+[setup]
+"Cargo.toml" = """..."""
+
+[verify]
+type = "command_exits_zero"
+command = "grep -q 'pub fn first' src/lib.rs"
+```
+
+The `category` field enables automated reporting by category. Tasks without a
+`category` field are reported under "Uncategorised".
+
+### Implemented task mapping (30 tasks)
+
+30 implemented tasks cover 18 of the 40 spec slots. 10 hero benchmarks
+cross-check the highest-value categories. 1 task (`use_draw_render`) was
+removed when the draw plugin was deleted; it is no longer in the task set.
+
+| Existing task | Spec task(s) | Category | Coverage |
+|---|---|---|---|
+| `add_cli_flag.toml` | 17 Add CLI Flag | D | full |
+| `add_doc_comment.toml` | 21 Implement TODO Stub | D | partial |
+| `add_enum_variant.toml` | 17 Add CLI Flag | D | partial |
+| `add_error_handling.toml` | 15 Fix Panic | C | partial |
+| `add_error_variant.toml` | 19 Add Config Option | D | partial |
+| `add_struct_field.toml` | 19 Add Config Option | D | partial |
+| `add_test_for_function.toml` | 25 Test Verification | E | partial |
+| `add_test_module.toml` | 25 Test Verification | E | partial |
+| `add_adr.toml` | 21 Implement TODO Stub | D | partial |
+| `debug_log_trace.toml` | 15 Fix Panic | C | full |
+| `extract_module.toml` | 8 Extract Module | B | full |
+| `extract_trait.toml` | 7 Extract Trait | B | full |
+| `fix_borrow_error.toml` | 16 Resolve Borrow Checker Error | C | full |
+| `fix_clippy_naming.toml` | 12 Fix Clippy Lints | C | full |
+| `fix_clippy_warning.toml` | 12 Fix Clippy Lints | C | full |
+| `fix_failing_test.toml` | 13 Fix Unit Test | C | full |
+| `fix_lifetime_error.toml` | 16 Resolve Borrow Checker Error | C | partial |
+| `inline_function.toml` | 10 Remove Duplication | B | partial |
+| `multi_file_pattern.toml` | 31 Multi-file Feature | G | full |
+| `pr_review.toml` | 34 PR Review | G | full |
+| `refactor_extract_function.toml` | 10 Remove Duplication | B | full |
+| `refactor_trait_extraction_multi.toml` | 7 Extract Trait | B | full |
+| `rename_function.toml` | 6 Rename Public API | B | full |
+| `rename_module.toml` | 6 Rename Public API | B | partial |
+| `test_fix_cycle.toml` | 26 Self Repair | E | full |
+| `use_budget_check.toml` | 30 Budget Enforcement | F | partial |
+| `use_lsp_query.toml` | 28 Semantic Retrieval | F | partial |
+| `use_stratum_compress.toml` | 29 Context Compression | F | full |
+| `use_workflow_run.toml` | 31 Multi-file Feature | G | partial |
+| `token_budget_challenge.toml` | 30 Budget Enforcement | F | full (signature) |
+
+### Planned tasks (honest deferral)
+
+18 spec tasks are not yet implemented. Each exercises a specific feature
+and is a future workorder.
+
+| Spec task | Category | Exercises |
+|---|---|---|
+| 1 Find Dead Code | A | tree-sitter symbol graph + unreferenced-symbol query |
+| 2 Dependency Graph Accuracy | A | crate-level dep graph generation |
+| 3 Call Graph Generation | A | per-symbol call graph |
+| 4 Explain Module | A | module summarisation without hallucination |
+| 5 Cross-Repository Search | A | trait-impl search across workspace |
+| 9 Split Giant File | B | 2500-line file split |
+| 18 Add REST Endpoint | D | non-Rust task setup |
+| 22 Build Verification | E | standalone build-verify task |
+| 23 Formatter Verification | E | standalone fmt-verify task |
+| 24 Lint Verification | E | standalone lint-verify task |
+| 27 Large Repository Navigation | F | context index at Linux-scale |
+| 32 Large Refactor | G | 50+ files |
+| 33 Merge Conflict Resolution | G | realistic conflict resolution |
+| 35 Regression Detection | G | PR regression prediction |
+| 36 Token Efficiency | H | standalone token-efficiency task |
+| 37 Dollar Cost | H | standalone cost task |
+| 38 Time | H | standalone latency task |
+| 39 Retry Count | H | standalone retry-count task |
+| 40 Human Intervention | H | standalone intervention task |
+
+3 spec tasks (Fix Compilation Error, Fix Integration Test, Implement Missing
+Trait) have no mapping yet — a known gap.
 
 The harness (`kf-bench` crate + `src/session/bench.rs`) spins up a
 headless agent session with a real model adapter, auto-approves all tool calls,
@@ -795,24 +866,15 @@ The root `Cargo.toml` exposes these features:
 
 - `stratum` (default) — folds the Stratum context-compression plugin in as
   direct Rust calls (ADR-046).
-- `draw` (non-default) — folds the Draw diagram plugin in as direct Rust calls
-  (ADR-048). Opt in via `--features draw`.
 - `budget` (default) — folds the Plugin3 token-budget guard in as direct
   Rust calls with full in-process event context (ADR-047).
-- `draw` (non-default) — folds the Draw diagram plugin in as direct Rust calls
-  (ADR-048). Off by default (22K LOC, zero external consumers).
-- `video` (non-default) — folds the Video plugin in as direct Rust calls.
-  Off by default because it pulls `serde_yaml`, `strum`, and `which` (new
-  transitive deps); users who want agent-driven video editing opt in via
-  `--features video` (ADR-049). Crate also excluded from workspace.
 - `otel` (non-default) — OpenTelemetry export.
 
-Three plugins are feature-gated compiled-in modules, served as
+Two plugins are feature-gated compiled-in modules, served as
 direct Rust calls when their feature is on and falling back to the shell
-plugin path when it is off (graceful degradation). Video is additionally
-excluded from the workspace (build with `-p kf-video --features video`).
-ADR-050 pins the two-path dispatch consolidation design. The `dep:` optional-
-dependency pattern is what makes per-plugin opt-in possible.
+plugin path when it is off (graceful degradation). ADR-050 pins the two-path
+dispatch consolidation design. The `dep:` optional-dependency pattern is
+what makes per-plugin opt-in possible.
 
 ADR-0017's "no `[features]` section" rule is scoped to `crates/kf-budget-core/`,
 not the root binary.
@@ -821,7 +883,7 @@ not the root binary.
 
 ## ADRs
 
-84 Architecture Decision Records live in [docs/adr/](docs/adr/). They pin
+86 Architecture Decision Records live in [docs/adr/](docs/adr/). They pin
 load-bearing decisions: token budget (0005), slicing orchestrator (0007),
 verifier bus (0028, 0043), context index (037), benchmark harness (038),
 execution replay (039), VFS minification (053), coverage-gate threshold
@@ -844,16 +906,9 @@ document known limitations. Removing these is a regression.
 | `kf-workflow` | Active | JSON workflow engine (DAG of persona steps) | `WorkflowExecutor`, `WorkflowTemplate` | root binary |
 | `kf-lsp` | Active | LSP client pool for symbol-aware navigation | `LspPool` | root binary |
 | `kf-bench` | Active | Benchmark task types, loader, verifier, reports | `BenchTask`, `TaskResult` | root binary, bench CI |
-| `kf-draw-core` | Active | Pure document model for KirkForge-Draw | `DrawState`, `DrawDocument` | `kf-draw`, root binary (via `draw` feature) |
-| `kf-draw` | Default-OFF | `kfd` terminal diagram editor binary | `kfd --render/--validate` | root binary (via `draw` feature, optional) |
 | `kf-compress-core` | Active | Context-compression pipeline library | `CompressionPipeline`, `Mode`, `rules::build_rules` | root binary (via `stratum` feature) |
 | `kf-budget-core` | Active | Budget/orchestrator/slicing data model | `TokenBudget`, `SlicingOrchestrator` | root binary (via `budget` feature) |
-| `kf-budget-hosts` | Active | Host detection, canonical payload schemas | `Host`, `detect_host`, canonical types | `kf-budget-cli` (excluded) |
 | `kf-testdoctor` | Active | Test-performance diagnostics | `doctor` CLI | root binary (`kf-code doctor`) |
-| `kf-video` | Excluded | Instruction-driven video production binary | `kf-video` CLI | root binary (via `video` feature, optional) |
-| `kf-compress-hosts` | Excluded | ~~Host-specific compression rules~~ (collapsed into `kf-compress-core`) | — | — |
-| `kf-compress-cli` | Excluded | `stratum` compression CLI binary | `stratum` CLI | — |
-| `kf-budget-cli` | Excluded | `kf-budget` budget CLI binary | `kf-budget` CLI | — |
 
 "Excluded" crates exist on disk but are not built by default (`cargo build
 --workspace`). They can be built explicitly with `-p <crate-name>`.

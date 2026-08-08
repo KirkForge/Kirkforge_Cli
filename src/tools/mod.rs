@@ -19,6 +19,71 @@ pub mod write_file;
 
 pub use registry::{ToolContextBuilder, ToolRegistry};
 
+pub fn validate_tool_args(tool: &dyn Tool, args: &serde_json::Value) -> Result<(), String> {
+    let schema = &tool.def().parameters;
+    let obj = match schema.get("type").and_then(|t| t.as_str()) {
+        Some("object") => schema,
+        _ => return Ok(()),
+    };
+    let properties = obj.get("properties").and_then(|p| p.as_object());
+    let required: Vec<&str> = obj
+        .get("required")
+        .and_then(|r| r.as_array())
+        .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect())
+        .unwrap_or_default();
+
+    let args_obj = match args.as_object() {
+        Some(o) => o,
+        None => return Err("args must be a JSON object".into()),
+    };
+
+    for &key in &required {
+        if !args_obj.contains_key(key) {
+            return Err(format!("Missing required argument: {key}"));
+        }
+    }
+
+    if let Some(props) = properties {
+        for (key, val) in args_obj {
+            if let Some(prop_schema) = props.get(key) {
+                let expected_type = prop_schema.get("type").and_then(|t| t.as_str());
+                if let Some(expected) = expected_type {
+                    let actual_matches = match expected {
+                        "string" => val.is_string(),
+                        "number" => val.is_number(),
+                        "integer" => val.is_i64() || val.is_u64(),
+                        "boolean" => val.is_boolean(),
+                        "array" => val.is_array(),
+                        "object" => val.is_object(),
+                        _ => true,
+                    };
+                    if !actual_matches && !val.is_null() {
+                        return Err(format!(
+                            "Argument '{}': expected type '{}', got '{}'",
+                            key,
+                            expected,
+                            value_type_name(val)
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn value_type_name(val: &serde_json::Value) -> &'static str {
+    match val {
+        serde_json::Value::Null => "null",
+        serde_json::Value::Bool(_) => "boolean",
+        serde_json::Value::Number(_) => "number",
+        serde_json::Value::String(_) => "string",
+        serde_json::Value::Array(_) => "array",
+        serde_json::Value::Object(_) => "object",
+    }
+}
+
 use crate::session::toolset::CompositeToolset;
 use crate::shared::{ToolDef, ToolOutcome};
 use std::sync::{Arc, Mutex};
@@ -32,20 +97,10 @@ use tokio_util::sync::CancellationToken;
 /// token) so a user cancel or turn timeout stops work promptly.
 #[derive(Clone)]
 pub struct ToolContext {
-    /// Cancellation signal from the executor. When this token is
-    /// cancelled, the tool should abort its work as soon as possible.
     pub token: CancellationToken,
-    /// When `true`, the tool must not mutate external state. Read-only
-    /// validation is still allowed; destructive operations should
-    /// synthesize a descriptive success message instead.
     pub dry_run: bool,
-    /// Optional spawner for isolated subagent tasks. The `task` tool uses
-    /// this to run prompts in a separate executor context. When `None`,
-    /// the tool reports that task spawning is unavailable.
+    pub diff_review: bool,
     pub task_spawner: Option<Arc<dyn task::TaskSpawner>>,
-    /// Optional tool registry for dispatching tool calls by name.
-    /// Used by workflow tool steps to invoke other tools. When `None`,
-    /// tool steps bail (bench/sandbox context).
     pub tools: Option<Arc<CompositeToolset>>,
 }
 
@@ -54,6 +109,7 @@ impl std::fmt::Debug for ToolContext {
         f.debug_struct("ToolContext")
             .field("token", &self.token)
             .field("dry_run", &self.dry_run)
+            .field("diff_review", &self.diff_review)
             .field("task_spawner", &self.task_spawner.is_some())
             .field("tools", &self.tools.is_some())
             .finish()
@@ -61,12 +117,11 @@ impl std::fmt::Debug for ToolContext {
 }
 
 impl ToolContext {
-    /// Context with a fresh, uncancelled token. Used in tests and in
-    /// wrappers that do not need to propagate cancellation.
     pub fn new() -> Self {
         Self {
             token: CancellationToken::new(),
             dry_run: false,
+            diff_review: true,
             task_spawner: None,
             tools: None,
         }
@@ -79,6 +134,7 @@ impl ToolContext {
         Self {
             token: CancellationToken::new(),
             dry_run,
+            diff_review: true,
             task_spawner: None,
             tools: None,
         }
@@ -89,6 +145,7 @@ impl ToolContext {
         Self {
             token: CancellationToken::new(),
             dry_run: false,
+            diff_review: true,
             task_spawner: Some(spawner),
             tools: None,
         }
@@ -353,5 +410,37 @@ mod tests {
             names.iter().any(|n| n == "lsp_query"),
             "lsp_query should be present when pool is Some: {names:?}"
         );
+    }
+
+    #[test]
+    fn schema_validation_rejects_missing_required_arg() {
+        use crate::tools::grep::Grep;
+        let grep = Grep::new(crate::session::access::PathGuard::default());
+        let err = validate_tool_args(&grep, &serde_json::json!({}));
+        assert!(err.is_err(), "should reject missing 'pattern'");
+        assert!(err.unwrap_err().contains("pattern"));
+    }
+
+    #[test]
+    fn schema_validation_accepts_valid_args() {
+        use crate::tools::grep::Grep;
+        let grep = Grep::new(crate::session::access::PathGuard::default());
+        let result = validate_tool_args(
+            &grep,
+            &serde_json::json!({"pattern": "hello", "path": "/tmp"}),
+        );
+        assert!(result.is_ok(), "valid args should pass: {result:?}");
+    }
+
+    #[test]
+    fn schema_validation_rejects_wrong_type() {
+        use crate::tools::grep::Grep;
+        let grep = Grep::new(crate::session::access::PathGuard::default());
+        let err = validate_tool_args(
+            &grep,
+            &serde_json::json!({"pattern": "hello", "context_lines": "not_a_number"}),
+        );
+        assert!(err.is_err(), "should reject wrong type for context_lines");
+        assert!(err.unwrap_err().contains("context_lines"));
     }
 }

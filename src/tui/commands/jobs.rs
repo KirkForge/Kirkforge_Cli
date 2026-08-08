@@ -610,6 +610,14 @@ async fn handle_logs_command(args: &str) -> String {
     out
 }
 
+/// Refresh the Jobs tab display content. Returns the formatted string
+/// for the Jobs tab to cache and render on the next draw tick.
+pub async fn refresh_jobs_output(_state: &mut AppState) -> String {
+    let bg = handle_background_jobs_command("").await;
+    let sched = handle_scheduled_list().await;
+    format!("{bg}\n{sched}")
+}
+
 /// Walk the global `BashJob` registry and push a one-time chat
 /// notification for any job that has just finished. Idempotent: each
 /// job is notified exactly once thanks to `state.notified_jobs`.

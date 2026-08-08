@@ -87,3 +87,99 @@ impl Default for DenyList {
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_deny_list_blocks_ssh() {
+        let dl = DenyList::default();
+        assert!(dl.is_path_denied(std::path::Path::new("/home/user/.ssh/id_rsa")));
+    }
+
+    #[test]
+    fn default_deny_list_blocks_env() {
+        let dl = DenyList::default();
+        assert!(dl.is_path_denied(std::path::Path::new("/project/.env")));
+        assert!(dl.is_path_denied(std::path::Path::new("/project/.env.local")));
+    }
+
+    #[test]
+    fn default_deny_list_blocks_pem() {
+        let dl = DenyList::default();
+        assert!(dl.is_path_denied(std::path::Path::new("/tmp/cert.pem")));
+    }
+
+    #[test]
+    fn default_deny_list_blocks_etc_shadow() {
+        let dl = DenyList::default();
+        assert!(dl.is_path_denied(std::path::Path::new("/etc/shadow")));
+    }
+
+    #[test]
+    fn default_deny_list_allows_safe_path() {
+        let dl = DenyList::default();
+        assert!(!dl.is_path_denied(std::path::Path::new("/home/user/project/main.rs")));
+    }
+
+    #[test]
+    fn default_deny_list_blocks_metadata_url() {
+        let dl = DenyList::default();
+        assert!(dl.is_url_denied("http://169.254.169.254/latest/meta-data/"));
+        assert!(dl.is_url_denied("http://metadata.google.internal/computeMetadata/v1/"));
+        assert!(dl.is_url_denied("http://100.100.100.200/latest/meta-data/"));
+    }
+
+    #[test]
+    fn default_deny_list_allows_safe_url() {
+        let dl = DenyList::default();
+        assert!(!dl.is_url_denied("https://api.example.com/v1/endpoint"));
+    }
+
+    #[test]
+    fn custom_deny_list_respects_custom_patterns() {
+        let dl = DenyList::new(
+            vec!["/tmp/secret/**".into()],
+            vec!["http://evil.com".into()],
+        );
+        assert!(dl.is_path_denied(std::path::Path::new("/tmp/secret/key")));
+        assert!(!dl.is_path_denied(std::path::Path::new("/etc/passwd")));
+        assert!(dl.is_url_denied("http://evil.com/path"));
+        assert!(!dl.is_url_denied("https://good.com/path"));
+    }
+
+    #[test]
+    fn invalid_glob_patterns_are_skipped() {
+        let dl = DenyList::new(vec!["[invalid".into(), "/valid/**".into()], vec![]);
+        assert!(!dl.is_path_denied(std::path::Path::new("[invalid")));
+        assert!(dl.is_path_denied(std::path::Path::new("/valid/file")));
+    }
+
+    #[test]
+    fn empty_url_pattern_does_not_match() {
+        let dl = DenyList::new(vec![], vec!["".into(), "http://blocked".into()]);
+        assert!(!dl.is_url_denied("http://anything.com"));
+        assert!(dl.is_url_denied("http://blocked/path"));
+    }
+
+    #[test]
+    fn url_is_denied_standalone_function() {
+        assert!(url_is_denied(
+            "http://169.254.169.254/xyz",
+            &["http://169.254.169.254".into()]
+        ));
+        assert!(!url_is_denied(
+            "https://safe.com",
+            &["http://169.254.169.254".into()]
+        ));
+        assert!(!url_is_denied("anything", &[]));
+    }
+
+    #[test]
+    fn deny_list_path_patterns_field() {
+        let patterns = vec!["/foo/**".into()];
+        let dl = DenyList::new(patterns.clone(), vec![]);
+        assert_eq!(dl.path_patterns, patterns);
+    }
+}

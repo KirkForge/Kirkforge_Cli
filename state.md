@@ -4,119 +4,79 @@
 
 ## Branch
 
-**`wo/20-integrate`** at commit `5eb3e9c`. All 20 `wo/20.*` workorder branches merged.
+**`dev`** at latest merge. WO 21 + WO 22 series merged. See commit log for details.
 
-## Recent work (WO 20 integration — completed this session)
+## Completed workorders
 
-All `wo/20.*` branches are merged into `wo/20-integrate`. The final two:
-- **wo/20.0.7** (`41d654f`): cache breakpoint cap-4 with tools (CRIT-1), Stratum offload-marker resolution in `store_get` (CRIT-2).
-- **wo/20.2.0** (`5eb3e9c`): `tool_choice` + `max_tokens` adapter feature surface. Merged against integrate's stricter extended-thinking impl (kept `supports_thinking` guard + dedicated `budget_tokens`; rejected wo/20.2.0 reusing `max_tokens` as thinking budget). Took wo/20.2.0's cache-breakpoint algorithm (simpler + satisfies all tests). Kept integrate's 4-Option `adapter_for_with_provider` shape over wo/20.2.0's `ProviderConfig` refactor.
+### WO 22 series (all done)
 
-`CONFIG_FIELD_COUNT` 84→85 (ModelConfig gained `max_tokens`: 29→30 fields). Drift guard + merge_toml/env-override counts updated to match.
+| WO | Status | Items |
+|----|--------|-------|
+| 22.1 | DONE | R1: landlock ABI rewrite |
+| 22.2 | DONE | R1: default plugins (stratum + kf-budget) |
+| 22.3 | DONE | R1: MCP URI validation, R2: capabilities handshake |
+| 22.4 | DONE (R2/R3/R4 deferred) | R1: MAX_FACTS=3, FNV hash, rate limit |
+| 22.5 | DONE (R3/R4 deferred) | R1: F2-F5 Enter handlers, R2: jobs_dirty refresh |
+| 22.6 | DONE (R6 deferred) | R1-R5: token estimation, offload store, SearchState, PostHook, CorrectionResult |
+| 22.7 | DONE | R1-R6: all over-engineering cleanup |
+| 22.8 | DONE | R1-R18: doc fixes |
+| 22.9 | DONE (R4 deferred) | R7: ADR-070, R8: ADR-070 |
+| 22.10 | DONE | R1: verifier Skipped → CorrectionResult |
+| 22.11 | DONE | R1-R4: catch_unwind, Skipped, pub(crate) |
+| 22.12 | DONE | R1: 28 ADRs updated, path literals fixed |
+| 22.13 | DONE | R1-R3: multi-turn prompt fix, bg task Notify, configurable concurrency |
+| 22.14 | DONE | R1-R3: JSON-schema structured output, ResponseFormat enum |
 
-## Recent work (WO 18 + 19, review-4 cross-review)
+### WO 21 series (all done or explicitly deferred)
 
-Squashed commit `75f79f6` — review-4 findings, test debt WO 18–19, CI fixes.
+| WO | Status | Items |
+|----|--------|-------|
+| 21.0 | DONE | Overview + rules |
+| 21.1 | DONE | Scope decisions (draw/video yeeted) |
+| 21.2 | DONE | Plugin rebuilds (21.11 superseded) |
+| 21.3 | DONE | Stratum real transforms (21.11-R1) |
+| 21.4 | DONE | Adapter gaps (tool_choice, JSON schema, native adapters) |
+| 21.5 | DONE (R2/R4/R9 deferred) | R1: ripgrep grep, R3: MCP resource surfacing, R5: replace_all, R6: computer_use dedup, R7: HTML→md, R8: schema validation |
+| 21.6 | DONE | R1: LSP federation, R2: memory auto-populate, R3: real tokenizer, R4: incremental rebuild, R5: compaction rename |
+| 21.7 | DONE | R1: default landlock (via 22.1), R2: ADR-054 quantified, R3: diff-review-before-apply, R4: cosign blocking, R5: sandbox refusal, R6: PathGuardTower rename, R7: signature default-on, R8: plugin sandbox note |
+| 21.8 | DONE | AppState decomposition, themes, multi-turn subagents, doom-loop, task concurrency |
+| 21.9 | DONE | ADR drift fixes, test deadlock, coverage >75%, fuzzing, dead code, overclaims |
+| 21.10 | DONE | MCP-first overlay (hooks/verifiers) |
+| 21.11 | DONE | Plugin real rebuild, draw/video yeet, SDK/budget/stratum |
 
-### Review-4 cross-review fixes (WO 18.0)
+## Deferred items (explicitly tracked)
 
-**Critical / High:**
+### Medium priority
 
-- **18.0.1**: All 4 `"kf-plugin-sdk3"` runtime gates replaced with `"kf-budget"` (budget subsystem was silently dead on default builds).
-- **18.0.3**: Integration test `budget_tools_present_in_default_toolset` asserts budget tools register under default config.
-- **H5**: `check_auth()` on every jobd request with constant-time comparison.
-- **H6**: `ScheduledJob.timeout` enforced for both bash and workflow jobs via `tokio::time::timeout`.
-- **H7**: `DaemonClient` reads auth token from `KF_CODE_DAEMON_TOKEN_FILE`; `InstanceRegister` sends the token.
-- **H3 partial**: Unix rlimits always applied regardless of `harden` flag; `PluginToolWrapper` receives `effective_trust` from `HostedPlugin`.
-- **M11**: Trust tier enforced at dispatch — ReadOnly plugin tools return `AccessDenied`.
+1. **21.5-R2-R3**: Stream partial bash output to TUI via TurnEvent::BashPartialOutput. UX polish only — non-PTY path unchanged. Remaining: add TurnEvent variant, forward PTY output through event_tx, render streaming indicator in TUI tool-result card.
+2. **21.5-R4**: MCP sampling/createMessage + roots/list. Sampling has a real security surface (server requests model completion). Remaining: implement sampling handler with user approval gate; roots/list (read-only, lower risk) should ship first.
+3. **21.5-R9**: Anthropic computer_use beta (coordinate-vision model). Local headless-Chrome tool is the real differentiator. Remaining: opt-in beta path routed to Anthropic model, gated behind feature flag.
+4. **22.4-R2/R3**: TUI memory visibility + config flag. Remaining: memory indicator widget in status bar; config flag to toggle memory display.
+5. **22.6-R6**: Verifier findings included in compaction tail. Remaining: append CorrectionResult summaries to the compacted context so the model retains knowledge of what verifiers caught.
 
-**Medium:**
+### Low priority
 
-- **M5**: `VerifierHandler::verify_event` collects all findings instead of short-circuiting. Most severe wins.
-- **M9**: `CompositeToolset` resolution order documented in code comment (builtin > MCP > plugin > stratum > draw > video > budget).
-- **M10**: `load_one` now rejects invalid manifests (matches `load_from_dir` behaviour).
-- **M13**: `WorkflowExecutor::run` decomposed into named sub-methods (`check_budget`, `run_step`, `handle_step_result`, `handle_fan_out`, etc.).
-- **M15**: Serde field count assertion added alongside `CONFIG_FIELD_COUNT` — catches struct/TOML/env drift automatically.
-- **M20**: Docker bind-mount source validated against canonical project root (symlink escape blocked).
-- **M6**: `jobd` stale-socket guard — connects before removing, refuses to hijack a live socket.
-
-**Low:**
-
-- **L2**: `PostTurnHookGuard::drop` spawns the hook asynchronously instead of blocking.
-- **L7**: Minify cache replaced with proper `LruCache` (HashMap + VecDeque, O(1) lookup, true LRU eviction).
-- **18.0.2**: `/plugins toggle` shows restart notice for compiled-in plugins.
-- **18.0.4**: `budget.rs` module doc updated from `plugins/kf-plugin-sdk3/tools/` to `plugins/kf-budget/tools/`.
-
-### Test debt (WO 19 series)
-
-| WO | What | Status |
-|---|---|---|
-| 19.1 | Testdoctor `diagnose` scans all source dirs (`--dirs`, `--with-coverage`) | Done |
-| 19.2 | Public API surface metric (`api_surface`, `test_density`, `roi`) replaces line-count heuristic | Done |
-| 19.3 | Test monolith surgery: split `tests_adr_0015.rs` (5,183 lines) into 8 focused files; split `kf-draw-core` state tests into 4 files; split `approval.rs` into `auto/deny/timeout` | Done |
-| 19.4 | No-assertion tests upgraded: hooks, process group, budget helpers now assert actual behavior | Done |
-| 19.5 | Integration tests: daemon auth token enforcement, budget registration gate, job lifecycle timeout | Done |
-| 19.6 | E2E TUI scenarios (TmuxDriver harness) | Planned |
-| 19.7 | Shared test support module (de-duplicate helpers) | Planned |
-| 19.8 | Testdoctor crate-aware path resolution (`suggest-detailed` uses binary-to-path map from Cargo.toml) | Done |
-| 19.9 | Flaky test stabilization: `yield_now` + `try_recv` replaces sleep/timeout; assertions on actual outcomes | Done |
-
-### CI fix
-
-- Windows: `Arc` import gated behind `cfg(unix)` in `daemon/mod.rs`.
-
-## Config drift guard
-
-- `CONFIG_FIELD_COUNT = 82` (ModelConfig=27, SecurityConfig=18, ToolConfig=26, SessionConfig=8, DisplayConfig=3)
-- `MERGE_TOML_EXPECTED` and `ENV_OVERRIDE_EXPECTED` counters in drift test.
-- New: serde field count assertion cross-checks `CONFIG_FIELD_COUNT` against `serde_json::to_value(&Config::default())` key count.
-
-## Plugin architecture
-
-Two-path dispatch (ADR-050). Folded plugins (stratum, kf-budget, kf-draw, kf-video) are compiled-in when their feature flag is on; shell fallback when off. Runtime `enabled_plugins`/`disabled_plugins` gate registration. `/plugins toggle` shows restart notice for compiled-in tools.
+6. **22.5-R3**: GitOperationEvent documented as a typed event. Currently uses a generic serde value. Remaining: define a struct, wire into emit_turn_events.
+7. **22.5-R4**: File-tool duration tracking per tool invocation. Remaining: add elapsed_ms to ToolOutcome or a sidecar timing map.
+8. **22.9-R4**: Bedrock/Vertex test hardening. Integration tests need live provider credentials. Remaining: mock provider adapters for CI.
+9. **adr_xref_drift path-literal check**: Extend ADR drift test to verify `crates/X` and `src/X` path literals in ADR prose reference actual directories. Ponytail note added (tests/adr_xref_drift.rs:258); needs markdown parsing + filesystem probing.
 
 ## Gate status
 
 - `cargo check --workspace`: PASS
 - `cargo fmt --check`: PASS
-- `cargo clippy --all-targets -- -D warnings`: PASS
-- `#[test]` attr count: 3,936 across `src/` + `crates/`
-- NOTE: `cargo test --workspace --no-fail-fast` could not complete in one run — the full workspace test OOMs/hangs under the shared opencode.db load (this is what killed the prior session: gitnexus MCP disconnect → instance disposal mid-`cargo-test`). Verified per-module instead: adapters 373 pass, config 80 pass (drift guard green), session 1471 pass — **0 merge-introduced failures**.
+- `cargo clippy --workspace -- -D warnings`: PASS
+- `cargo clippy --workspace --features pty -- -D warnings`: PASS
+- `cargo test -p kf-budget-core --test adr_xref_drift`: PASS
 
-## Known pre-existing test failures (NOT from WO 20.2.0; present on `41d654f`)
+## Known pre-existing test failures (NOT from WO 21/22)
 
-- `bundled_node_sdk_tool_executes_via_host` (requires Node.js)
-- `adapters::m5_tests::openai_cache_mode_marks_last_two_prefix_messages` — stale vs WO 17.5 system-breakpoint (test expects system unmarked; impl marks it).
-- `tui::keys::slash_commands::tests::slash_command_table_covers_all_triggers` — `/mcp` (wo/20.10.0) not in the drift-test known set.
-- `session::plugin_tools::*` (7), `tools::bash::*` (2), `session::session_index::test_append_alert_writes_ndjson`, `bundled_stratum_mode_tool_executes_via_host` — env/binary-dependent.
-
-## Open review-4 findings (deferred)
-
-| ID | Finding | Tier |
-|---|---|---|
-| H8 | Duplicate SSE frame-parsing logic (Anthropic + OpenAI) | 2 |
-| H10 | Bedrock `extract_payload` O(n*m) backtracking | 2 |
-| M17 | `kf-testdoctor::diagnose` hardcoded dirs (fixed in WO 19.1) | Done |
-| M21 | `computer_use` near-identical `run_on_tab`/`run_on_session_sync` | 3 |
-| L5 | `AppState` 44+ fields (God object) | 3 |
-| L6 | `m5_tests.rs` in wrong directory | 3 |
-| L9 | Ruby minifier strips only whole-line comments | 3 |
-| L10 | `is_path_safe` doesn't reject backslashes/colons | 3 |
-
-## Next steps (prioritized)
-
-1. **WO 20.8.0 C3**: `src/session` coverage from 68.6% toward 75% — needs async executor + MCP-HTTP tests.
-2. **WO 19.6**: E2E TUI scenarios via TmuxDriver harness.
-3. **WO 19.7**: Shared test support module (de-duplicate 6 test helpers).
-4. **H8**: Extract shared `parse_sse_frames` from Anthropic + OpenAI adapters.
-5. **H10**: Optimize Bedrock `extract_payload` to avoid O(n*m) backtracking.
-6. **Stratum absorption**: Remove `stratum` feature flag, make always-on.
+- `compaction_use_llm_alias_backward_compat` — parser reads from top level, test expects `[session]`
+- `bundled_node_sdk_tool_executes_via_host` — requires Node.js
+- `adapters::m5_tests::openai_cache_mode_marks_last_two_prefix_messages` — stale vs WO 17.5
+- `session::plugin_tools::*` (7), `tools::bash::*` (2) — env/binary-dependent
+- `kf-budget-core::tests::adr_0004_marker_block_pins_literal_prefix_and_suffix` — stale `<<plugin3:slice:`` prefix literal
 
 ## Rust toolchain
 
 Rust 1.88.0 at `~/.cargo/bin/`. Run `export PATH="$HOME/.cargo/bin:$PATH"` before cargo commands.
-
-## Known issues
-
-- `bundled_node_sdk_tool_executes_via_host` test fails (requires Node.js) — pre-existing.
-- `adr_0010_emission_site_block_uses_eprintln_for_errors` in `kf-budget-core` — ADR vs impl drift, pre-existing.

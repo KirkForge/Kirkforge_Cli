@@ -755,6 +755,12 @@ async fn run_event_loop(
         // kb event we just got. If nothing happened, none of this
         // marks the state dirty.
         drain_daemon_flags(state);
+        if state.jobs_dirty {
+            state.jobs_dirty = false;
+            let out = crate::tui::commands::refresh_jobs_output(state).await;
+            state.cached_jobs_output = Some(out);
+            state.mark_dirty();
+        }
         if notify_completed_jobs(state).await {
             state.mark_dirty();
         }
@@ -1132,7 +1138,7 @@ async fn handle_persona_complete(
 ///
 /// We deliberately compare a small, *user-facing* subset of fields
 /// — not the full struct equality. Showing changes to internal
-/// knobs (truncation_strategy, deny_paths, etc.) would be noisy and
+/// knobs (deny_paths, etc.) would be noisy and
 /// could leak security-sensitive details in a chat pane. The
 /// high-impact fields the operator usually tweaks are: model,
 /// host, auto_approve, bang_requires_approval, sandbox_dir.

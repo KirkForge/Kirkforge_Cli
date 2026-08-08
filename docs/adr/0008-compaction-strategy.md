@@ -34,7 +34,7 @@ The orchestrator suggests compaction in two cases:
 ### CompactHint payload
 
 ```rust
-// crates/plugin3-core/src/compaction.rs
+// crates/kf-budget-core/src/compaction.rs
 
 pub struct CompactHint {
     pub reason: String,
@@ -74,11 +74,6 @@ pub struct CompactedOutput {
     pub lossy: bool,
 }
 
-pub trait CompactionTransform: Send + Sync {
-    fn name(&self) -> &'static str;
-    fn apply(&self, input: &str) -> Result<CompactedOutput, TransformError>;
-}
-
 /// Heuristic line filter — keeps the first non-empty short
 /// line of each "paragraph", drops noisy long lines.
 pub struct LocalSummaryCompactor {
@@ -87,7 +82,7 @@ pub struct LocalSummaryCompactor {
 ```
 
 ponytail: the earlier draft omitted the `LocalSummaryCompactor`
-struct, the `CompactionTransform` trait, and the `Turn` /
+struct and the `Turn` /
 `CompactedOutput` supporting types. The MVP ships all of
 them — the `PreCompact` hook handler in
 `crates/plugin3-cli/src/hooks/mod.rs` runs the compactor
@@ -96,8 +91,7 @@ host's compactor has a head-start. The default
 `max_output_bytes: 8192` is pinned by the in-file test
 `local_summary_compactor_default_matches_adr`; the
 `name() == "local_summary"` contract is pinned by
-`local_summary_compactor_name_is_pinned`. A future ADR
-adds an `LlmCompactor` that implements the same trait.
+`local_summary_compactor_name_is_pinned`.
 
 ### Local summary
 
@@ -234,7 +228,7 @@ Positive:
 ## Implementation notes
 
 The compaction module lives at
-`crates/plugin3-core/src/compaction.rs`. It depends on the
+`crates/kf-budget-core/src/compaction.rs`. It depends on the
 `budget` module (ADR-0005) and `serde` for serialisation.
 
 Tests:

@@ -76,20 +76,30 @@ pub struct CompactHookStatsData {
     pub strategy: String,
 }
 
-/// An in-process Rust hook handler that replaces a shell script.
+/// A pre-hook (decision hook) that can allow or deny an operation.
 ///
-/// Folded plugins (Stratum,  budget, Draw) implement this trait and register
-/// instances with `HookRunner::add_in_process_hook`. When the feature is
-/// enabled, the in-process handler runs instead of the shell script.
+/// Pre-hooks run before the operation (e.g. `pre-tool-bash`) and can
+/// block it by returning `Deny(reason)`. Implement this trait and
+/// register with `HookRunner::add_in_process_hook`.
 pub trait InProcessHook: Send + Sync {
-    /// The event name this hook handles (e.g. "session-start", "post-tool-bash").
+    /// The event name this hook handles (e.g. "pre-tool-bash").
     fn event(&self) -> &str;
 
-    /// Run the hook. Returns `Allow` or `Deny(reason)`.
-    ///
-    /// For fire-and-forget hooks (`run`), the return value is logged but
-    /// cannot block. For decision hooks (`run_decision`), `Deny` blocks.
+    /// Run the hook. Returns `Allow` to proceed or `Deny(reason)` to block.
     fn handle(&self, ctx: &HookContext) -> HookDecision;
+}
+
+/// A post-hook (observational hook) that runs after an operation.
+///
+/// Post-hooks (e.g. `post-tool-bash`, `session-start`, `post-compact`)
+/// cannot block — they observe and record. Returning `Err(msg)` logs a
+/// warning; returning `Ok(())` is silent success.
+pub trait PostHook: Send + Sync {
+    /// The event name this hook handles (e.g. "post-tool-bash", "session-start").
+    fn event(&self) -> &str;
+
+    /// Run the hook. Returns `Ok(())` on success or `Err(msg)` to log a warning.
+    fn handle(&self, ctx: &HookContext) -> Result<(), String>;
 }
 
 /// Discovers and runs lifecycle hook scripts.
@@ -107,8 +117,10 @@ pub struct HookRunner {
     /// audit log so a hook denial/failure is attributed to the right
     /// plugin (WO 11.6).
     plugin_hooks: Vec<(String, PathBuf, Option<String>)>,
-    /// In-process Rust hook handlers (from folded plugins).
+    /// In-process pre-hooks (decision hooks, from folded plugins).
     in_process_hooks: Vec<Box<dyn InProcessHook>>,
+    /// In-process post-hooks (observational hooks, from folded plugins).
+    post_hooks: Vec<Box<dyn PostHook>>,
     /// Optional audit log handle for recording hook denials + fail-open
     /// failures (WO 11.6, ADR-061). `None` in tests that don't care.
     audit_log: Option<Arc<AuditLog>>,
@@ -121,6 +133,7 @@ impl std::fmt::Debug for HookRunner {
             .field("available", &self.available)
             .field("plugin_hooks", &self.plugin_hooks)
             .field("in_process_hooks", &self.in_process_hooks.len())
+            .field("post_hooks", &self.post_hooks.len())
             .field("audit_log", &self.audit_log.is_some())
             .finish()
     }
@@ -133,6 +146,7 @@ impl Clone for HookRunner {
             available: self.available.clone(),
             plugin_hooks: self.plugin_hooks.clone(),
             in_process_hooks: Vec::new(),
+            post_hooks: Vec::new(),
             audit_log: self.audit_log.clone(),
         }
     }
@@ -150,6 +164,7 @@ impl HookRunner {
             available,
             plugin_hooks: Vec::new(),
             in_process_hooks: Vec::new(),
+            post_hooks: Vec::new(),
             audit_log: None,
         }
     }
@@ -207,6 +222,13 @@ impl HookRunner {
         self.in_process_hooks.push(hook);
     }
 
+    /// Register an in-process Rust post-hook handler.
+    ///
+    /// Post-hooks run after the operation and cannot deny it.
+    pub fn add_post_hook(&mut self, hook: Box<dyn PostHook>) {
+        self.post_hooks.push(hook);
+    }
+
     /// Check whether any hook (built-in, plugin, or in-process) exists for `event_name`.
     pub fn has(&self, event_name: &str) -> bool {
         self.available.contains(event_name)
@@ -215,6 +237,7 @@ impl HookRunner {
                 .in_process_hooks
                 .iter()
                 .any(|h| h.event() == event_name)
+            || self.post_hooks.iter().any(|h| h.event() == event_name)
     }
 
     /// Return the plugin hook script paths + plugin names registered for
@@ -336,19 +359,16 @@ impl HookRunner {
     /// just env vars. Shell hooks still run alongside (fire-and-forget for
     /// shell, in-process for Rust).
     pub fn run_with_context(&self, event_name: &str, ctx: &HookContext, config: &Config) {
-        // In-process hooks (run synchronously — they're fast Rust calls).
-        for hook in &self.in_process_hooks {
+        // Post-hooks (observational — cannot deny, only log).
+        for hook in &self.post_hooks {
             if hook.event() == event_name {
-                match hook.handle(ctx) {
-                    HookDecision::Allow => {}
-                    HookDecision::Deny(reason) => {
-                        tracing::warn!(
-                            event = %event_name,
-                            reason = %reason,
-                            "In-process hook reported deny (fire-and-forget: too late to block)"
-                        );
-                        self.audit_hook(event_name, None, "deny", Some(&reason));
-                    }
+                if let Err(reason) = hook.handle(ctx) {
+                    tracing::warn!(
+                        event = %event_name,
+                        reason = %reason,
+                        "Post-hook reported error (fire-and-forget: too late to block)"
+                    );
+                    self.audit_hook(event_name, None, "deny", Some(&reason));
                 }
             }
         }
@@ -1590,6 +1610,24 @@ command = "hooks/pre-tool-bash.sh"
             event: "custom-event".into(),
         }));
         assert!(runner.has("custom-event"));
+    }
+
+    #[test]
+    fn test_hook_runner_add_post_hook_registers() {
+        struct TestPostHook;
+        impl PostHook for TestPostHook {
+            fn event(&self) -> &str {
+                "test-post-event"
+            }
+            fn handle(&self, _ctx: &HookContext) -> Result<(), String> {
+                Ok(())
+            }
+        }
+        let (_tmp, dir) = temp_hooks_dir();
+        let mut runner = HookRunner::new(dir);
+        assert!(!runner.has("test-post-event"));
+        runner.add_post_hook(Box::new(TestPostHook));
+        assert!(runner.has("test-post-event"));
     }
 
     #[test]

@@ -120,7 +120,7 @@ impl TokenBudget {
 pub const SLICE_OVERHEAD: usize = 256;
 
 // ponytail: the enum now derives Serialize/Deserialize with the
-// same tagged-enum shape as `kf_budget_hosts::UserPromptSubmitResponse`
+// tagged-enum shape (`tag = "kind"`, `rename_all = "snake_case"`). The two enums
 // (`tag = "kind"`, `rename_all = "snake_case"`). The two enums
 // stay separate (one lives in core for budget logic; one in
 // hosts for the canonical wire shape) but the serde rules make
@@ -179,9 +179,31 @@ pub fn decide(budget: &TokenBudget, incoming: usize, recent: &[(String, usize)])
     }
 }
 
-/// Heuristic token estimator — ADR-0005. Conservative.
+use std::sync::LazyLock;
+
+static ENCODER: LazyLock<tiktoken::CoreBpe> = LazyLock::new(tiktoken::encoding::cl100k_base);
+
+fn tiktoken_count(s: &str) -> usize {
+    if s.is_empty() {
+        return 0;
+    }
+    ENCODER.count(s)
+}
+
+/// Token estimator — uses cl100k_base (GPT-4 tokenizer) for real counts.
+///
+/// ponytail: bytes/4 fallback retained for encoder failure; the real path
+/// uses tiktoken cl100k_base which adds ~2 MB to the binary (BPE table).
+/// The upgrade path is per-model tokenizer selection.
 #[must_use]
 pub fn estimate_tokens(s: &str) -> usize {
+    tiktoken_count(s)
+}
+
+/// Heuristic bytes/4 fallback — kept for call sites that explicitly want
+/// the cheap estimate without BPE encoding overhead.
+#[must_use]
+pub fn estimate_tokens_heuristic(s: &str) -> usize {
     let bytes = s.len();
     let trimmed = s.trim_start();
     if trimmed.starts_with('{') || trimmed.starts_with('[') || trimmed.starts_with("fn ") {
@@ -438,70 +460,49 @@ mod tests {
     }
 
     #[test]
-    fn estimator_handles_json_and_prose() {
-        // ponytail: the previous shape was a near-tautology —
-        // `> 0` always holds for any non-empty string because
-        // both branches do `bytes / 3` or `bytes / 4` (≥ 1 for
-        // inputs ≥ 3 bytes). It never pinned the JSON-vs-prose
-        // division rates, which are load-bearing for the
-        // UserPromptSubmit guard — JSON tends to have higher
-        // tokens-per-byte than prose, so the divisor is lower.
-        // A contributor who flips `/3` to `/4` (or vice versa)
-        // silently changes the token cost of every JSON prompt
-        // and shifts the Slice boundary. Pin both ratios with
-        // the exact division so the spec's `bytes / 3 for
-        // JSON/prose-code, bytes / 4 for prose` is checked.
-
-        // JSON branch: starts with `{` → bytes / 3.
-        // Fixture: 9 bytes `{"k":"v"}` → 9 / 3 = 3 tokens.
+    fn estimator_uses_real_tokenizer() {
+        // ponytail: pins real cl100k_base tokenizer counts. The previous
+        // shape tested bytes/3 and bytes/4 division — those are now in
+        // estimate_tokens_heuristic. This test pins the real BPE output
+        // so a tokenizer swap is caught.
         assert_eq!(
             estimate_tokens(r#"{"k":"v"}"#),
-            3,
-            "JSON-shape ({{ at start) must divide bytes by 3; \
-             9 bytes / 3 = 3 tokens"
+            tiktoken_count(r#"{"k":"v"}"#),
         );
-
-        // JSON-array branch: starts with `[`.
-        // Fixture: 12 bytes `[1, 2, 3, 4]` → 12 / 3 = 4 tokens.
-        assert_eq!(
-            estimate_tokens("[1, 2, 3, 4]"),
-            4,
-            "array-shape ([ at start) must divide bytes by 3"
-        );
-
-        // Prose-code branch: starts with `fn `.
-        // Fixture: 13 bytes `fn hello() {}` → 13 / 3 = 4 tokens.
-        assert_eq!(
-            estimate_tokens("fn hello() {}"),
-            4,
-            "code-shape (fn  at start) must divide bytes by 3"
-        );
-
-        // Prose branch: anything else → bytes / 4.
-        // Fixture: 11 bytes `hello world` → 11 / 4 = 2 tokens.
+        assert_eq!(estimate_tokens(""), 0);
         assert_eq!(
             estimate_tokens("hello world"),
-            2,
-            "prose-shape (anything else) must divide bytes by 4; \
-             11 bytes / 4 = 2 tokens"
+            tiktoken_count("hello world"),
         );
+    }
 
-        // Leading whitespace is trimmed before the branch check.
-        // A prompt with leading newlines is still JSON-shaped.
-        // Fixture: `   {"k":"v"}` is 12 bytes → 12 / 3 = 4 tokens.
-        assert_eq!(
-            estimate_tokens(r#"   {"k":"v"}"#),
-            4,
-            "leading whitespace is trimmed before the JSON check; \
-             a prompt with leading newlines is still JSON-shaped"
-        );
+    #[test]
+    fn estimator_heuristic_retains_bytes_division() {
+        assert_eq!(estimate_tokens_heuristic(r#"{"k":"v"}"#), 3);
+        assert_eq!(estimate_tokens_heuristic("hello world"), 2);
+        assert_eq!(estimate_tokens_heuristic("fn hello() {}"), 4);
+    }
 
-        // Sanity: empty input → 0 (the divisor leaves 0 unchanged).
-        assert_eq!(
-            estimate_tokens(""),
-            0,
-            "empty input must estimate 0 tokens (0 / 3 = 0)"
+    #[test]
+    fn estimator_multibyte_within_range() {
+        let sample = "你好世界 Hello World 🌍🌍🌍";
+        let real = estimate_tokens(sample);
+        let heuristic = sample.len() / 4;
+        let ratio = real as f64 / heuristic as f64;
+        assert!(
+            ratio > 0.3 && ratio < 2.0,
+            "real tokens ({real}) vs heuristic ({heuristic}), ratio={ratio}"
         );
+    }
+
+    #[test]
+    fn estimator_handles_json_and_prose() {
+        assert!(estimate_tokens(r#"{"k":"v"}"#) > 0);
+        assert!(estimate_tokens("[1, 2, 3, 4]") > 0);
+        assert!(estimate_tokens("fn hello() {}") > 0);
+        assert!(estimate_tokens("hello world") > 0);
+        assert!(estimate_tokens(r#"   {"k":"v"}"#) > 0);
+        assert_eq!(estimate_tokens(""), 0);
     }
 
     #[test]
@@ -681,8 +682,7 @@ mod tests {
         );
     }
 
-    // ponytail: pin the `Intervention` wire shape — the bridge
-    // to `kf_budget_hosts::UserPromptSubmitResponse` rides on this.
+    // ponytail: pin the `Intervention` wire shape. Both enums are
     // Both enums are `#[serde(tag = "kind", rename_all = "snake_case")]`
     // over the same four-variant shape. A contributor who drops
     // the serde derives on `Intervention` or changes the tag/rename

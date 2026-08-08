@@ -377,9 +377,6 @@ pub(super) fn apply_env_overrides(cfg: &mut Config) {
             cfg.model.aws_region = val;
         }
     }
-    if let Ok(val) = std::env::var("KF_CODE_AWS_PROFILE") {
-        cfg.model.aws_profile = val;
-    }
     if let Ok(val) = std::env::var("KF_CODE_GCP_PROJECT_ID") {
         if !val.is_empty() {
             cfg.model.gcp_project_id = val;

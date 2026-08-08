@@ -4,7 +4,7 @@
 
 ## Branch
 
-**`dev`** at latest merge. WO 21 + WO 22 series merged. See commit log for details.
+**`dev`** at latest merge. WO 21 + WO 22 + WO 24 series merged. See commit log for details.
 
 ## Completed workorders
 
@@ -44,9 +44,24 @@
 | 21.10 | DONE | MCP-first overlay (hooks/verifiers) |
 | 21.11 | DONE | Plugin real rebuild, draw/video yeet, SDK/budget/stratum |
 
+### WO 24 series (6/8 done, 1 deferred)
+
+| WO | Status | Items |
+|----|--------|-------|
+| 24.1 | DONE | R1: cargo audit split — block on critical/unsound, warn on rest |
+| 24.2 | DONE | R1: cosign verify-blob step in release workflow |
+| 24.3 | DONE | R1: --i-accept-unsandboxed gated to debug builds only |
+| 24.4 | DONE | R1: remove not(budget) /4 fallback, R2: TUI BPE, R3: deprecate heuristic |
+| 24.5 | DONE | R1-R3: diff-review-before-apply (done in WO 21.7-R3) |
+| 24.6 | DEFERRED | session coverage 75% — needs coverage toolchain + executor loop tests |
+| 24.7 | DONE | R1-R4: fuzz targets for SSE/NDJSON/Bedrock/JS/CSS |
+| 24.8 | DONE | R1: 23 tracing::debug! → warn!/info!/trace!, zero debug! remaining |
+
 ## Deferred items (explicitly tracked)
 
 ### Medium priority
+
+0. **24.6-R1..R5**: Raise `src/session` coverage above 75%. Requires `cargo llvm-cov` (not installed). Remaining: R1 baseline measurement, R2 executor loop tests (6 scenarios), R3 budget slicing tests (4), R4 compaction tests (5), R5 verifier bus tests (4). Tracked in WO 24.6.
 
 1. **21.5-R2-R3**: Stream partial bash output to TUI via TurnEvent::BashPartialOutput. UX polish only — non-PTY path unchanged. Remaining: add TurnEvent variant, forward PTY output through event_tx, render streaming indicator in TUI tool-result card.
 2. **21.5-R4**: MCP sampling/createMessage + roots/list. Sampling has a real security surface (server requests model completion). Remaining: implement sampling handler with user approval gate; roots/list (read-only, lower risk) should ship first.

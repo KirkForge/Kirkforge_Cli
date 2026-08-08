@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Superseded
 
 ## Context
 
@@ -10,7 +10,7 @@ Video editing is the heaviest satellite crate, pulling `serde_yaml`, `strum`, `w
 
 ## Decision
 
-Fold `kirkforge-video` into the main binary behind a **non-default** `video` feature flag. When enabled, the 8 video tools are direct Rust calls. When disabled (the default), video is not compiled and not registered — the binary is smaller.
+Fold `kirkforge-video` (now `kf-video`) into the main binary behind a **non-default** `video` feature flag. When enabled, the 8 video tools are direct Rust calls. When disabled (the default), video is not compiled and not registered — the binary is smaller.
 
 The standalone video binary remains for non-KirkForge use cases.
 
@@ -28,8 +28,8 @@ The standalone video binary remains for non-KirkForge use cases.
 
 ## Implementation notes
 
-- Feature flag: `video` (non-default, optional dep on `kirkforge-video`).
+- Feature flag: `video` (non-default, optional dep on `kf-video` (formerly `kirkforge-video`)).
 - 8 video tools registered under `#[cfg(feature = "video")]`.
 - No shell fallback when feature is off — the tools are loaded from the shell plugin dir via `plugins/kf-video/kf-code.toml` as fallback (same as other folded plugins per ADR-050).
-- `kirkforge-video` binary remains standalone.
+- `kf-video` binary remains standalone (renamed from `kirkforge-video`).
 - Binary size impact: default build unchanged. Dev build delta with `--features video` is ~14.4 MB (367 MB → 373 MB with debug info). Release build delta estimated at ~300-500 KB with `opt-level = "z"` + LTO (the crate adds `serde_yaml`, `strum`, `which`, `tracing-subscriber`).

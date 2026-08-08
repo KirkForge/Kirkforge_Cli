@@ -9,7 +9,7 @@ Plugin3 needs to compile fast, ship lean, and be testable in
 isolation. The workspace layout must:
 
 - Separate the pure-logic crate from the CLI and host adapters
-  so a contributor can edit `plugin3-core` without rebuilding
+  so a contributor can edit `kf-budget-core` without rebuilding
   `plugin3-cli`.
 - Reuse the Stratum `OffloadStore` trait shape without
   creating a hard dependency on Stratum's source tree (the two
@@ -26,7 +26,7 @@ isolation. The workspace layout must:
 [workspace]
 resolver = "2"
 members = [
-    "crates/plugin3-core",
+    "crates/kf-budget-core",
     "crates/plugin3-cli",
     "crates/plugin3-hosts",
 ]
@@ -46,7 +46,7 @@ license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
 # Internal
-plugin3-core = { path = "crates/plugin3-core", version = "0.1.0" }
+kf-budget-core = { path = "crates/kf-budget-core", version = "0.1.0" }
 plugin3-hosts = { path = "crates/plugin3-hosts", version = "0.1.0" }
 
 # External — lean MVP set, no optionals wired (see ADR-0017).
@@ -83,7 +83,7 @@ incremental = false
 
 ```
 crates/
-├── plugin3-core/         # pure logic — transforms, budget, store
+├── kf-budget-core/         # pure logic — transforms, budget, store
 │   └── src/
 │       ├── lib.rs
 │       ├── slicing.rs    # SlicingTransform trait + impls
@@ -131,14 +131,14 @@ without updating the ADR surfaces here.
 
 | Crate | Responsibility | Public API |
 |-------|----------------|------------|
-| `plugin3-core` | Pure logic: transforms, budget, store, orchestrator. No I/O outside the OffloadStore. | `SlicingTransform`, `LocalSummaryCompactor`, `TokenBudget`, `OffloadStore`, `slice_orchestrator`, `emit_usage` |
+| `kf-budget-core` | Pure logic: transforms, budget, store, orchestrator. No I/O outside the OffloadStore. | `SlicingTransform`, `LocalSummaryCompactor`, `TokenBudget`, `OffloadStore`, `slice_orchestrator`, `emit_usage` |
 | `plugin3-cli` | clap binary, hook handlers, XDG state, syscalls. | `main()` |
 | `plugin3-hosts` | Host detection and canonical payload types. Per-host output shims (`claude_code`, `cursor`, `aider`) are stubs today; the CLI's hook handlers consume the canonical payloads directly (ADR-0013). | `Host`, `detect_host`, `PostToolUsePayload`, `UserPromptSubmitPayload`, `PreCompactPayload` |
 
 ### Independence from Stratum
 
 Plugin3 does not depend on Stratum's source tree. The
-`OffloadStore` trait is duplicated in `plugin3-core` (ADR-0004
+`OffloadStore` trait is duplicated in `kf-budget-core` (ADR-0004
 documents the byte-compatibility markers). A breaking change
 to Stratum's `OffloadStore` is caught by the byte-compat drift
 test (ADR-0016); the fix is a coordinated release.
@@ -170,7 +170,7 @@ the workspace — drift caught in
 Negative first:
 
 - The workspace is larger than a single crate. Three crates is
-  one more than two. The trade is that `plugin3-core` compiles
+  one more than two. The trade is that `kf-budget-core` compiles
   in ~30 s while `plugin3-cli` rebuilds on every CLI change.
 - `OffloadStore` is duplicated across Plugin2 and Plugin3. A
   contributor who fixes a bug in Stratum's store must also fix
@@ -179,7 +179,7 @@ Negative first:
 
 Positive:
 
-- Pure logic (`plugin3-core`) compiles fast and tests fast.
+- Pure logic (`kf-budget-core`) compiles fast and tests fast.
 - `plugin3-cli` and `plugin3-hosts` are swappable. A
   contributor adding a new host adapter touches only
   `plugin3-hosts`.

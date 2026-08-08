@@ -40,7 +40,7 @@ the apex.
 
 ### Unit tests
 
-Every public function in `plugin3-core` and `plugin3-cli` has
+Every public function in `kf-budget-core` and `plugin3-cli` has
 at least one unit test in the same file. The tests assert:
 
 - The function's documented contract.
@@ -102,10 +102,10 @@ The no-panic property is the load-bearing one.
 
 ### Golden tests
 
-Golden tests live at `crates/plugin3-core/tests/golden/`:
+Golden tests live at `crates/kf-budget-core/tests/golden/`:
 
 ```
-crates/plugin3-core/tests/golden/
+crates/kf-budget-core/tests/golden/
 ├── head_tail_slice/
 │   ├── input.txt
 │   ├── expected.txt
@@ -153,10 +153,10 @@ Golden tests fail loudly when a transform changes behaviour.
 
 Five drift tests:
 
-1. **OffloadStore drift** — `plugin3-core`'s `make_key`
+1. **OffloadStore drift** — `kf-budget-core`'s `make_key`
    produces the same output as Stratum's `make_offload_key`
    for a known corpus of inputs. The fixture lives at
-   `crates/plugin3-core/tests/store_drift.rs` and reads
+   `crates/kf-budget-core/tests/store_drift.rs` and reads
    from a vendored copy of Stratum's `make_offload_key`
    reference output.
 
@@ -257,8 +257,8 @@ Positive:
 The test files live alongside the source:
 
 ```
-crates/plugin3-core/src/slicing.rs        # unit tests inline
-crates/plugin3-core/tests/fixtures/        # input/expected pairs (TSV)
+crates/kf-budget-core/src/slicing.rs        # unit tests inline
+crates/kf-budget-core/tests/fixtures/        # input/expected pairs (TSV)
 
 crates/plugin3-hosts/src/lib.rs            # Host enum + canonical payload drift tests
 crates/plugin3-hosts/src/claude_code.rs    # stub module (future shim)

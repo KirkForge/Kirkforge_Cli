@@ -43,7 +43,7 @@ can swap in `par_iter` without changing the API.
 ### Orchestrator API
 
 ```rust
-// crates/plugin3-core/src/orchestrator.rs
+// crates/kf-budget-core/src/orchestrator.rs
 
 pub struct SlicingOrchestrator<'a> {
     pub store: &'a dyn OffloadStore,
@@ -169,7 +169,7 @@ If a future ADR introduces a batch-mode caller that pushes
 >1 output per turn, the migration is mechanical: replace
 the `for (key, content, tool_name) in outputs` loop with
 `outputs.par_iter().map(...).collect()` and add
-`rayon = "1"` to `plugin3-core`'s `[dependencies]` table.
+`rayon = "1"` to `kf-budget-core`'s `[dependencies]` table.
 The `OrchestratorResult` and `SliceDecision` shapes are
 unchanged.
 
@@ -202,11 +202,11 @@ The one stderr line the orchestrator can produce today is
 Implementation notes) — that path emits one `eprintln!`
 with `plugin3: slicer failed; passing through: <err>`. A
 contributor who re-introduces the `tracing::info!` event
-must add `tracing = "0.1"` to `plugin3-core`'s dependencies
+must add `tracing = "0.1"` to `kf-budget-core`'s dependencies
 and update this drift test:
 
 ```rust
-// crates/plugin3-core/tests/slicing_orchestrator_spec_drift.rs
+// crates/kf-budget-core/tests/slicing_orchestrator_spec_drift.rs
 // (ponytail: pinned by `adr_0007_logging_section_omits_tracing_event`)
 ```
 
@@ -239,12 +239,12 @@ Positive:
 ## Implementation notes
 
 The orchestrator lives at
-`crates/plugin3-core/src/orchestrator.rs`. It depends only on
+`crates/kf-budget-core/src/orchestrator.rs`. It depends only on
 `store`, `slicing`, and `detector` (no `rayon`, no `tracing`).
 No dependency on `plugin3-cli` or `plugin3-hosts`.
 
 The orchestrator's tests live at
-`crates/plugin3-core/tests/orchestrator.rs` and cover:
+`crates/kf-budget-core/tests/orchestrator.rs` and cover:
 
 - Empty input list (no decisions).
 - Single small output (Keep).
@@ -261,7 +261,7 @@ deliberate — a future contributor who needs dynamic sizing
 removes it and refactors.
 
 The drift test for this ADR lives at
-`crates/plugin3-core/tests/slicing_orchestrator_spec_drift.rs`
+`crates/kf-budget-core/tests/slicing_orchestrator_spec_drift.rs`
 and pins the absence of `rayon`/`tracing` claims, the
 `Sliced` variant's `head`/`tail` fields, and the free
 `run` function shape.

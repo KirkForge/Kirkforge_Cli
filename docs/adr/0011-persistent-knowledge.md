@@ -145,7 +145,7 @@ A future contributor who picks up this ADR should:
    (probably both, with a config flag).
 2. Decide on the surfacing policy (UserPromptSubmit is
    higher-value, PostToolUse is lower-risk).
-3. Add a `knowledge` feature gate to `plugin3-core` so the
+3. Add a `knowledge` feature gate to `kf-budget-core` so the
    MVP build does not pull in the LLM extraction dependency.
 4. Add tests for the extraction + surfacing pipelines.
 

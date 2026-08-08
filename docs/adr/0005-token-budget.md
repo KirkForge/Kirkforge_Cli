@@ -33,7 +33,7 @@ Way Over) would over-engineer; three states is enough.
 ### TokenBudget struct
 
 ```rust
-// crates/plugin3-core/src/budget.rs
+// crates/kf-budget-core/src/budget.rs
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -240,7 +240,7 @@ pub(crate) fn user_prompt_submit() {
         });
     }
     super::save_budget(&b);
-    // ponytail: `Intervention` (plugin3-core) and
+    // ponytail: `Intervention` (kf-budget-core) and
     // `UserPromptSubmitResponse` (plugin3-hosts) are byte-equivalent
     // tagged enums on the wire — both `#[serde(tag = "kind",
     // rename_all = "snake_case")]` over the same four-variant shape.
@@ -260,7 +260,7 @@ local to the hook module plus `tracing::warn!` /
 `tracing::info!` events on every intervention arm. The MVP
 does **not** depend on `tracing` (ADR-0017 § Workspace
 Cargo.toml) and does **not** declare a local `HookResponse`
-enum — the response is `Intervention` from `plugin3-core`
+enum — the response is `Intervention` from `kf-budget-core`
 (serialised directly), and the host shim already maps
 `UserPromptSubmitResponse` (the host-side tagged enum) to
 its own payload format. The two enums are wire-equivalent

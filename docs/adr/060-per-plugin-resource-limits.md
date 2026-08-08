@@ -57,7 +57,7 @@ the same risks WO 9.8 closed for the bash tool.
 ## Notes
 
 - The `ponytail:` annotations in `src/session/bash_runner/mod.rs` (the
-  rlimit seam) and in `crates/kirkforge-plugin-host/src/sandbox.rs` are
+  rlimit seam) and in `crates/kf-plugin-host/src/sandbox.rs` are
   preserved.
 - rlimits are NOT applied to `ReadOnly` plugin tools (skills) — they
   don't spawn subprocesses. The trust-tier gating handles this.
@@ -68,7 +68,7 @@ the same risks WO 9.8 closed for the bash tool.
   same rlimits when its `resource_limits` field is set. A
   `with_resource_limits` builder attaches the manifest's
   `ResourceLimits`; the host-crate `setup_rlimits`
-  (`crates/kirkforge-plugin-host/src/rlimits.rs`) mirrors the bin's
+  (`crates/kf-plugin-host/src/rlimits.rs`) mirrors the bin's
   `bash_runner::setup_rlimits`. When `resource_limits` is `None` (the
   default) the spawn is uncapped, matching the pre-15.11 behavior. The
   bin's production path (`PluginToolWrapper`) remains the hardened

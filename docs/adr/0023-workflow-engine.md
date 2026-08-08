@@ -17,7 +17,7 @@ reuse of the existing `task` tool infrastructure.
 
 ## Decision
 
-Introduce a vendored workspace member `crates/kirkforge-workflow/` that
+Introduce a vendored workspace member `crates/kf-workflow/` that
 owns the schema, validation, dependency resolution, and executor. The
 main crate wires it into the TUI as `/workflow run`, `/workflow
 status`, and `/workflow cancel`.
@@ -73,7 +73,7 @@ Workflow files are JSON loaded from:
 2. `~/.local/share/kirkforge/workflows/<name>.json`.
 
 Built-in templates (`feature.json`, `bugfix.json`, `refactor.json`) are
-shipped under `crates/kirkforge-workflow/templates/` as defaults. They
+shipped under `crates/kf-workflow/templates/` as defaults. They
 are copied to the user share directory on first use; users may edit or
 override them because the JSON format is open, not a closed system.
 

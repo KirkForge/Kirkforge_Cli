@@ -136,7 +136,7 @@ impl CostTracker {
                     "doom-loop circuit breaker firing"
                 );
                 if let Err(e) = event_tx.try_send(TurnEvent::DoomLoopRemediation {
-                    action: format!("{:?}", doom_action).to_lowercase(),
+                    action: format!("{doom_action:?}").to_lowercase(),
                     hits: self.doom_loop_hits,
                 }) {
                     tracing::warn!(error = %e, "failed to send DoomLoopRemediation to TUI");
@@ -214,9 +214,18 @@ mod tests {
 
     #[test]
     fn doom_loop_action_from_str_valid() {
-        assert_eq!("auto_plan".parse::<DoomLoopAction>().unwrap(), DoomLoopAction::AutoPlan);
-        assert_eq!("halt".parse::<DoomLoopAction>().unwrap(), DoomLoopAction::Halt);
-        assert_eq!("warn_only".parse::<DoomLoopAction>().unwrap(), DoomLoopAction::WarnOnly);
+        assert_eq!(
+            "auto_plan".parse::<DoomLoopAction>().unwrap(),
+            DoomLoopAction::AutoPlan
+        );
+        assert_eq!(
+            "halt".parse::<DoomLoopAction>().unwrap(),
+            DoomLoopAction::Halt
+        );
+        assert_eq!(
+            "warn_only".parse::<DoomLoopAction>().unwrap(),
+            DoomLoopAction::WarnOnly
+        );
     }
 
     #[test]

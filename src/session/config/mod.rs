@@ -2026,10 +2026,10 @@ mod tests {
         use crate::shared::config::CONFIG_FIELD_COUNT;
 
         // ── 1. Total struct-level fields ──────────────────────────
-        // ModelConfig=30, SecurityConfig=18, ToolConfig=30,
+        // ModelConfig=30, SecurityConfig=18, ToolConfig=31,
         // SessionConfig=8, DisplayConfig=4
         assert_eq!(
-            CONFIG_FIELD_COUNT, 90,
+            CONFIG_FIELD_COUNT, 91,
             "CONFIG_FIELD_COUNT has drifted — did you add/remove a config field?"
         );
 

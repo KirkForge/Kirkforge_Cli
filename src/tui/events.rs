@@ -966,10 +966,7 @@ mod tests {
         let mut s = app_state();
         s.dirty = false;
         assert!(s.continuation.is_none());
-        dispatch_turn_event(
-            &mut s,
-            TurnEvent::ContinuationRound { round: 3, max: 5 },
-        );
+        dispatch_turn_event(&mut s, TurnEvent::ContinuationRound { round: 3, max: 5 });
         assert_eq!(s.continuation, Some((3, 5)));
         assert!(s.dirty);
     }
@@ -988,6 +985,9 @@ mod tests {
                 cumulative_cost: 0.001,
             },
         );
-        assert!(s.continuation.is_none(), "CostStats should clear continuation");
+        assert!(
+            s.continuation.is_none(),
+            "CostStats should clear continuation"
+        );
     }
 }

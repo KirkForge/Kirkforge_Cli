@@ -981,7 +981,8 @@ impl Executor {
             let outcome_for_emit = outcome.clone();
             let edit_diff =
                 handle_tool_outcome(outcome, tc, event_tx, &mut self.conversation).await?;
-            if let Some(outcome) = self.observe_tool_outcome(&tc.name, &outcome_for_emit, event_tx) {
+            if let Some(outcome) = self.observe_tool_outcome(&tc.name, &outcome_for_emit, event_tx)
+            {
                 self.conversation
                     .append_async(Message {
                         role: Role::User,
@@ -1001,7 +1002,8 @@ impl Executor {
                     cost_tracking::DoomLoopAction::Halt => {
                         return Err(anyhow::anyhow!(
                             "doom loop halted: '{}' failed {} times",
-                            outcome.tool, outcome.count
+                            outcome.tool,
+                            outcome.count
                         ));
                     }
                     cost_tracking::DoomLoopAction::WarnOnly => {}
@@ -1094,7 +1096,8 @@ impl Executor {
                 cost_tracking::DoomLoopAction::Halt => {
                     return Err(anyhow::anyhow!(
                         "doom loop halted: '{}' failed {} times",
-                        outcome.tool, outcome.count
+                        outcome.tool,
+                        outcome.count
                     ));
                 }
                 cost_tracking::DoomLoopAction::WarnOnly => {}

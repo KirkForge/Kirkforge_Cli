@@ -5,6 +5,10 @@ use std::path::Path;
 use std::sync::Arc;
 
 pub fn validate_mcp_uri(uri: &str, workspace: &Path) -> Result<(), String> {
+    let scheme = uri.split("://").next().unwrap_or("");
+    if scheme == "data" {
+        return Err(format!("data: URI '{uri}' is not allowed (injection risk)"));
+    }
     if let Some(path) = uri.strip_prefix("file://") {
         let resolved = Path::new(path);
         let canonical_workspace = workspace
@@ -463,5 +467,13 @@ mod tests {
         let workspace = Path::new("/tmp/workspace");
         assert!(validate_mcp_uri("custom://resource", workspace).is_ok());
         assert!(validate_mcp_uri("mcp://server/resource", workspace).is_ok());
+    }
+
+    #[test]
+    fn validate_mcp_uri_blocks_data_uri() {
+        let workspace = Path::new("/tmp/workspace");
+        let err =
+            validate_mcp_uri("data:text/html,<script>alert(1)</script>", workspace).unwrap_err();
+        assert!(err.contains("not allowed"));
     }
 }

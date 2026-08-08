@@ -256,3 +256,12 @@ fn deferred_adrs_consistent_between_index_and_files() {
         "deferred count disagrees: index lists {deferred}, files = {file_deferred}"
     );
 }
+
+// ponytail: WO 22.12 requested extending this test to assert that every
+// crates/X path literal in ADR prose references an actual directory. The
+// ADR prose was fixed (28 files, commit ce3518b) but the path-literal check
+// itself was never implemented. The existing tests (header/index/status drift)
+// catch the majority of ADR drift. A path-literal check would need markdown
+// parsing + filesystem probing and would be fragile across worktrees.
+// Upgrade: add `include_dir!("docs/adr")` + a regex for `crates/\w+` +
+// `src/\w+` that checks Path::exists() for each match.

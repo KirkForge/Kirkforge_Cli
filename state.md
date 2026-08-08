@@ -14,6 +14,13 @@ All `wo/20.*` branches are merged into `wo/20-integrate`. The final two:
 
 `CONFIG_FIELD_COUNT` 84→85 (ModelConfig gained `max_tokens`: 29→30 fields). Drift guard + merge_toml/env-override counts updated to match.
 
+## Recent work (WO 23.8 R1+R2 — doom-loop circuit breaker)
+
+- **23.8-R1**: Hard circuit-breaker: after `doom_loop_max_hits` cumulative doom-loop detections (default: 1), the executor auto-switches to plan mode. New `DoomLoopRemediation` `TurnEvent` emitted. `doom_loop_max_hits` config field (env: `KF_CODE_DOOM_LOOP_MAX_HITS`, TOML: `doom_loop_max_hits`). Setting to 0 disables the breaker (pre-WO behavior).
+- **23.8-R2**: Hard halt: if already in plan mode when the circuit breaker fires, the turn is halted with an error message. `doom_loop_halt` flag on `Executor` causes early return from `record_tool_result`.
+- `CONFIG_FIELD_COUNT` 88→89 (ToolConfig gained `doom_loop_max_hits`). Drift guard counts updated.
+- 3 new tests: `doom_loop_circuit_breaker_auto_plan_mode`, `doom_loop_circuit_breaker_halts_in_plan_mode`, `doom_loop_circuit_breaker_disabled_when_zero`.
+
 ## Recent work (WO 18 + 19, review-4 cross-review)
 
 Squashed commit `75f79f6` — review-4 findings, test debt WO 18–19, CI fixes.

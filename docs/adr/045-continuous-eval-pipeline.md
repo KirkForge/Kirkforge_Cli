@@ -14,7 +14,7 @@ Implement a continuous evaluation pipeline with:
 
 1. **Nightly baseline** — a scheduled workflow (`bench-baseline.yml`) runs `kirkforge bench run` on `main` nightly at 04:00 UTC and on push to main, uploading the JSON report as a `bench-baseline` artifact (90-day retention).
 
-2. **Per-PR run with path filter** — the CI `bench` job runs only when `src/session/**`, `src/adapters/**`, `src/tools/**`, `crates/kirkforge-bench/**`, `benches/tasks/**`, or `.github/workflows/ci.yml` change. It uses `if: always()` so it runs even when quality fails (but not when fmt fails — a broken build can't bench).
+2. **Per-PR run with path filter** — the CI `bench` job runs only when `src/session/**`, `src/adapters/**`, `src/tools/**`, `crates/kf-bench/**`, `benches/tasks/**`, or `.github/workflows/ci.yml` change. It uses `if: always()` so it runs even when quality fails (but not when fmt fails — a broken build can't bench).
 
 3. **Delta comparison** — the CI bench job downloads the last `main` baseline artifact and runs `kirkforge bench compare --baseline <baseline> --current <current> --summary bench-delta.md`.
 
@@ -40,7 +40,7 @@ Implement a continuous evaluation pipeline with:
 
 ## Implementation notes
 
-- `DeltaReport`, `TaskDelta`, `compare_reports()`, `write_markdown_delta()` in `kirkforge-bench`.
+- `DeltaReport`, `TaskDelta`, `compare_reports()`, `write_markdown_delta()` in `kf-bench`.
 - `bench compare --baseline <json> --current <json> --summary <md>` CLI subcommand.
 - `bench list` and `bench verify-only` subcommands.
 - CI bench job uses `if: always()` with path filter, baseline download via `gh run download`, PR comment via `gh pr comment`.

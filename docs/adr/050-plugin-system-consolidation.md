@@ -43,7 +43,7 @@ external dependency.
 
 2. **Graceful degradation**: a user who builds without `--features video`
    still gets video support via the shell plugin (if the plugin dir and
-   `kirkforge-video` binary are available). A user who builds with
+   `kf-video` (formerly `kirkforge-video`) binary are available). A user who builds with
    `--features video` gets the compiled-in version with no subprocess
    overhead.
 

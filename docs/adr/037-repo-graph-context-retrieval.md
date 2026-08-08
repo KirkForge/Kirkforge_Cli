@@ -10,7 +10,7 @@ Vix's differentiator is stem-agent cache reuse + tree-sitter virtual filesystem 
 
 ## Decision
 
-Build `crates/kirkforge-context-index/` — a tree-sitter-backed symbol/import/call-graph index with a `retrieve(query, k)` API that the prompt builder calls every turn.
+Build `crates/kf-context-index/` — a tree-sitter-backed symbol/import/call-graph index with a `retrieve(query, k)` API that the prompt builder calls every turn.
 
 **Phase 1 (scaffold):** Line-based heuristic symbol extraction. Validated the API shape. **Done.**
 
@@ -30,8 +30,8 @@ Build `crates/kirkforge-context-index/` — a tree-sitter-backed symbol/import/c
 
 **Phase 7 (embeddings + graph-walk retrieval):** Implemented. Three retrieval strategies dispatched by query shape, replacing the substring-only `retrieve()` at the prompt-builder call site:
 
-- **TF-IDF embeddings** (`crates/kirkforge-context-index/src/embeddings.rs`): pure-Rust sparse vectors (`Vec<(usize, f32)>`), no ML runtime. Tokenizes each symbol's name (snake_case + camelCase splitting) and kind (`fn`/`struct`/…), builds a vocabulary across all symbols, computes a TF-IDF sparse vector per symbol, and exposes a cosine-similarity function (hand-written dot product + L2 norms over sorted sparse vectors). `SymbolEmbedding` records are persisted in `CachedIndex` (serde `#[serde(default)]` for back-compat with pre-Phase-7 caches) so IDF is not recomputed on every load. A free-text query is embedded with the same tokenizer (no kind token added) and ranked by cosine similarity against every symbol.
-- **Graph-walk BFS** (`crates/kirkforge-context-index/src/graph_walk.rs`): `graph_walk(start, index, max_hops)` BFS over both directions of the import + call-graph edges — `imported_by`/`called_by` (who depends on this symbol) and `imports`/`calls` (what this symbol depends on). Deduplicates by `(file, name)` keeping the minimum hop distance; caps at `max_hops` (default 2).
+- **TF-IDF embeddings** (`crates/kf-context-index/src/embeddings.rs`): pure-Rust sparse vectors (`Vec<(usize, f32)>`), no ML runtime. Tokenizes each symbol's name (snake_case + camelCase splitting) and kind (`fn`/`struct`/…), builds a vocabulary across all symbols, computes a TF-IDF sparse vector per symbol, and exposes a cosine-similarity function (hand-written dot product + L2 norms over sorted sparse vectors). `SymbolEmbedding` records are persisted in `CachedIndex` (serde `#[serde(default)]` for back-compat with pre-Phase-7 caches) so IDF is not recomputed on every load. A free-text query is embedded with the same tokenizer (no kind token added) and ranked by cosine similarity against every symbol.
+- **Graph-walk BFS** (`crates/kf-context-index/src/graph_walk.rs`): `graph_walk(start, index, max_hops)` BFS over both directions of the import + call-graph edges — `imported_by`/`called_by` (who depends on this symbol) and `imports`/`calls` (what this symbol depends on). Deduplicates by `(file, name)` keeping the minimum hop distance; caps at `max_hops` (default 2).
 - **Hybrid retrieval** (`retrieve_hybrid`): exact symbol-name match → graph walk from that symbol, ranked by hop distance; free text → embedding cosine similarity, top-N; substring → falls back to the original `retrieve()`. Exposed as both a `ContextIndex::retrieve_hybrid` method and a free function `retrieve_hybrid(query, index, max_results)`.
 
 `PromptBuilder` now calls `retrieve_hybrid` instead of `retrieve`. Binary-size impact: zero new deps (the embeddings module is pure Rust over the existing `serde`/`tree-sitter`/`walkdir` set).
@@ -44,7 +44,7 @@ Build `crates/kirkforge-context-index/` — a tree-sitter-backed symbol/import/c
 
 ## Implementation
 
-- `crates/kirkforge-context-index/src/lib.rs`: `ContextIndex` struct with `index_file`, `index_dir`, `symbols`, `edges`, `call_edges`, `retrieve`. `Symbol` struct with `name`, `kind`, `file`, `line`, `end_line`. `SymbolKind` enum: `Function, Struct, Enum, Impl, Module, Use, Class, Interface, TypeAlias`. `ImportEdge` struct with `source_file`, `imported_symbol`, `resolved_file`, `line`. `CallEdge` struct with `caller_file`, `caller_name`, `caller_line`, `callee_name`, `callee_file`. `CallSite` struct with `caller_name`, `caller_file`, `line`. `RetrievalResult` struct with `symbol`, `imported_by`, `called_by`.
+- `crates/kf-context-index/src/lib.rs`: `ContextIndex` struct with `index_file`, `index_dir`, `symbols`, `edges`, `call_edges`, `retrieve`. `Symbol` struct with `name`, `kind`, `file`, `line`, `end_line`. `SymbolKind` enum: `Function, Struct, Enum, Impl, Module, Use, Class, Interface, TypeAlias`. `ImportEdge` struct with `source_file`, `imported_symbol`, `resolved_file`, `line`. `CallEdge` struct with `caller_file`, `caller_name`, `caller_line`, `callee_name`, `callee_file`. `CallSite` struct with `caller_name`, `caller_file`, `line`. `RetrievalResult` struct with `symbol`, `imported_by`, `called_by`.
 - Tree-sitter parsing for Rust (tree-sitter 0.25, tree-sitter-rust 0.24), TypeScript (tree-sitter-typescript 0.23), Python (tree-sitter-python 0.23), and Go (tree-sitter-go 0.23).
 - `Language` enum (`Rust`, `TypeScript`, `Python`, `Go`) with `detect_language(path)` — dispatches `.rs` → Rust, `.ts`/`.tsx` → TypeScript, `.py` → Python, `.go` → Go.
 - Import edge extraction: `extract_import_edges()` walks the AST for `use_declaration`/`import_statement`/`import_from_statement`/`import_declaration` nodes and extracts specifiers via `extract_import_specifier()`. `resolve_imports()` resolves specifiers to file paths.

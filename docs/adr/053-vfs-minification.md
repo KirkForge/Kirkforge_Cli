@@ -55,10 +55,10 @@ does not need to be told about the flag out of band.
 
 The WO brief suggested "use tree-sitter to parse + strip
 comments/docstrings precisely, not regex — the tree-sitter grammars
-are already in the workspace via `kirkforge-context-index`."
+are already in the workspace via `kf-context-index`."
 
 This ADR rejects that approach for the read path.
-`kirkforge-context-index` already depends on `tree-sitter`,
+`kf-context-index` already depends on `tree-sitter`,
 `tree-sitter-rust`, `tree-sitter-typescript`, `tree-sitter-python`,
 and `tree-sitter-go` for *symbol extraction* (where AST structure
 matters). For minification, only lexical comment/whitespace removal

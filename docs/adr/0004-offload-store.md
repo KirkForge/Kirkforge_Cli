@@ -10,9 +10,9 @@ the user can retrieve it on demand. Stratum already has an
 `OffloadStore` trait that does exactly this for Reformat
 offloads. Plugin3 has three choices:
 
-1. **Hard-depend on Stratum** — `plugin3-core` imports
+1. **Hard-depend on Stratum** — `kf-budget-core` imports
    `stratum-core`. Tight coupling; release cadence is shared.
-2. **Reimplement** — duplicate the trait in `plugin3-core`.
+2. **Reimplement** — duplicate the trait in `kf-budget-core`.
    Drift risk: Stratum adds a backend, Plugin3 must add it too.
 3. **Reimplement with byte-compat markers** — duplicate the
    trait shape, share the marker format, run a drift test.
@@ -28,7 +28,7 @@ and get the same content.
 ### Trait shape (mirrors Stratum ADR-0004)
 
 ```rust
-// crates/plugin3-core/src/store.rs
+// crates/kf-budget-core/src/store.rs
 
 pub trait OffloadStore: Send + Sync {
     /// Persist `bytes` and return a content-addressed key.
@@ -91,7 +91,7 @@ Two backends, mirroring Stratum's `file` and `memory`
 backends (Stratum's `sqlite` is not mirrored — see below):
 
 ```rust
-// crates/plugin3-core/src/store.rs (single file, two backends)
+// crates/kf-budget-core/src/store.rs (single file, two backends)
 
 pub struct InMemoryOffloadStore { /* Mutex<HashMap<String, Vec<u8>>> */ }
 // used in tests and as the runtime default if no persistent
@@ -220,7 +220,7 @@ Positive:
 ## Implementation notes
 
 The `OffloadStore` trait and both backends live in a single
-file at `crates/plugin3-core/src/store.rs` (ponytail: the
+file at `crates/kf-budget-core/src/store.rs` (ponytail: the
 earlier draft specified a multi-file `store/` module tree
 with the three backends as sibling submodules — the SQLite
 submodule was removed when the SQLite backend was deferred,
@@ -232,7 +232,7 @@ pins the path. If a future contributor re-introduces a
 test together.
 
 The drift test fixture lives at
-`crates/plugin3-core/tests/store_drift.rs` and references a
+`crates/kf-budget-core/tests/store_drift.rs` and references a
 known corpus of inputs whose expected keys are checked
 against the BLAKE3 spec test vectors (and, by extension,
 Stratum's `make_offload_key` — both implementations reduce

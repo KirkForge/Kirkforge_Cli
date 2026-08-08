@@ -34,7 +34,7 @@ The orchestrator suggests compaction in two cases:
 ### CompactHint payload
 
 ```rust
-// crates/plugin3-core/src/compaction.rs
+// crates/kf-budget-core/src/compaction.rs
 
 pub struct CompactHint {
     pub reason: String,
@@ -228,7 +228,7 @@ Positive:
 ## Implementation notes
 
 The compaction module lives at
-`crates/plugin3-core/src/compaction.rs`. It depends on the
+`crates/kf-budget-core/src/compaction.rs`. It depends on the
 `budget` module (ADR-0005) and `serde` for serialisation.
 
 Tests:

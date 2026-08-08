@@ -72,7 +72,7 @@ in the § Directory layout block and the presence of
 ### Path resolution
 
 ```rust
-// crates/plugin3-core/src/paths.rs
+// crates/kf-budget-core/src/paths.rs
 
 pub struct Paths {
     pub config_dir: std::path::PathBuf,
@@ -132,7 +132,7 @@ no-panic contract.
 
 The budget state file is written atomically via
 `tempfile::NamedTempFile` + `persist`. The atomic helper
-lives at `crates/plugin3-core/src/atomic_write.rs` (ponytail:
+lives at `crates/kf-budget-core/src/atomic_write.rs` (ponytail:
 the earlier draft located it in a `state.rs` module; the
 helper is small enough — one function — that it earns its own
 file alongside `paths.rs`). The save/load entry points
@@ -141,7 +141,7 @@ the precedence chain (config vs runtime overlay per
 ADR-0015), which is CLI-side.
 
 ```rust
-// crates/plugin3-core/src/atomic_write.rs
+// crates/kf-budget-core/src/atomic_write.rs
 // crates/plugin3-cli/src/main.rs (save_budget / load_budget entry points)
 
 use std::io::Write;
@@ -284,15 +284,15 @@ Positive:
 ## Implementation notes
 
 The `paths` module lives at
-`crates/plugin3-core/src/paths.rs`. The atomic write helper
-lives at `crates/plugin3-core/src/atomic_write.rs`. The
+`crates/kf-budget-core/src/paths.rs`. The atomic write helper
+lives at `crates/kf-budget-core/src/atomic_write.rs`. The
 budget save/load + recent-outputs FIFO list live in
 `crates/plugin3-cli/src/main.rs` (the CLI's `main.rs`
 because they are CLI-side concerns: precedence chain, the
 32-entry bound, and the recent-outputs wire shape).
 
 ponytail: the earlier draft prescribed a
-`crates/plugin3-core/src/state.rs` module. The split that
+`crates/kf-budget-core/src/state.rs` module. The split that
 materialised puts the *path resolution* in `paths.rs` (a
 small, pure helper that callers want without the binary's
 `main`) and the *write orchestration* in the CLI's

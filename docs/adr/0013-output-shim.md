@@ -143,7 +143,7 @@ pub struct PreCompactResponse {
     // CompactHint). The CLI side builds a typed CompactHint
     // (ADR-0008) and serialises a thin `{ "turns": N }`
     // envelope that the host can interpret without depending
-    // on plugin3-core types.
+    // on kf-budget-core types.
     pub hint: serde_json::Value,
 }
 ```
@@ -322,7 +322,7 @@ Positive:
   who changes a payload field name fails CI.
 - The canonical types live in `plugin3-hosts` so the CLI and
   any future shim share the same definitions without
-  `plugin3-core` knowing about host envelopes.
+  `kf-budget-core` knowing about host envelopes.
 
 ## Implementation notes
 

@@ -58,7 +58,7 @@ verifies the table and the file headers agree.
 | [0017](./0017-build-features.md) | Build profile and feature gating discipline | Accepted | Plugin3 |
 | [017](./017-plugin-api-version.md) | Plugin API version contract | Accepted | CLI |
 | [0018](./0018-scheduled-jobs.md) | Cron / scheduled jobs | Accepted | Plugin3 |
-| [018](./018-lsp-integration.md) | LSP integration — kirkforge-lsp crate + lsp_query tool | Accepted (2026-07-19) | CLI |
+| [018](./018-lsp-integration.md) | LSP integration — kf-lsp crate + lsp_query tool | Accepted (2026-07-19) | CLI |
 | [019](./019-vscode-extension.md) | VS Code extension — Option A PTY wrapper MVP | Accepted (2026-07-19) | CLI |
 | [0020](./0020-parallel-tool-dispatch.md) | Parallel Tool Dispatch | Accepted | Plugin3 |
 | [0021](./0021-computer-use-tool.md) | `computer_use` tool via headless Chrome CDP | Accepted | Plugin3 |

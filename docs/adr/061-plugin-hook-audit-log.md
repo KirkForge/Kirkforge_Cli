@@ -6,7 +6,7 @@
 ## Context
 
 Plugin hooks (`src/session/hooks.rs`) follow a fail-open convention
-(documented at `crates/kirkforge-plugin-host/src/hook.rs`): exit 0 →
+(documented at `crates/kf-plugin-host/src/hook.rs`): exit 0 →
 allow, exit 2 → deny, any other non-zero / timeout / crash → allow with
 a warning. The warning was `tracing::warn!(...)` — it goes to the
 tracing log, not the audit log.

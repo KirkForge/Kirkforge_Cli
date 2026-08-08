@@ -154,7 +154,7 @@ A `FixSuggestion` is the common fix representation:
 
 The bridge is a thin adapter in each host:
 
-- **Rust bridge** — a new `kirkforge-plugin-host` verifier adapter (or a small crate) that, when a TS orchestrator is configured as an MCP server, forwards Rust `BusEvent`s as KVB events over stdio and receives KVB events back.
+- **Rust bridge** — a new `kf-plugin-host` verifier adapter (or a small crate) that, when a TS orchestrator is configured as an MCP server, forwards Rust `BusEvent`s as KVB events over stdio and receives KVB events back.
 - **TS bridge** — a new package `@kirkforge/verifier-bridge` that receives KVB events from the Rust runtime (when invoked as a subprocess/MCP server) and emits them into the orchestrator's event bus.
 
 The wire format is NDJSON lines of KVB events. Both sides must ignore unknown event kinds (forward compatibility).

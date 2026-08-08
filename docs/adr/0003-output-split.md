@@ -39,7 +39,7 @@ distinct transforms make the contract honest.
 ### SlicingTransform trait
 
 ```rust
-// crates/plugin3-core/src/slicing.rs
+// crates/kf-budget-core/src/slicing.rs
 
 use crate::store::OffloadStore;
 

@@ -82,7 +82,7 @@ compatibility).
 - The current CLI does not emit the full NDJSON stream in non-interactive
   mode; this ADR assumes a follow-up CLI change to produce stable NDJSON
   events. The extension can ship once the CLI contract is implemented.
-- `lsp_query` currently calls a workspace-local `kirkforge-lsp` pool; the
+- `lsp_query` currently calls a workspace-local `kf-lsp` pool; the
   bridge needs to either proxy those calls or replace that pool when the
   extension is active.
 - Synchronising TODO state across extension webview, CLI session, and

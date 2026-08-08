@@ -247,8 +247,8 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
             // Search match indices are also tied to the old message
             // list; clear them so a committed search doesn't jump to
             // a stale or non-existent index after compaction.
-            state.search_matches.clear();
-            state.search_match_idx = 0;
+            state.search.matches.clear();
+            state.search.match_idx = 0;
             // Scroll back to the bottom so the user sees the
             // status message and the last few kept turns.
             state.auto_scroll = true;
@@ -396,8 +396,8 @@ fn prune_display_messages(state: &mut AppState) {
         .filter_map(|&i| remap(i))
         .collect();
     // Search indices reference old message positions — clear and let next search recompute.
-    state.search_matches.clear();
-    state.search_match_idx = 0;
+    state.search.matches.clear();
+    state.search.match_idx = 0;
 }
 
 /// Drain every approval request currently queued. If a new request

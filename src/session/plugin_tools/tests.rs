@@ -834,7 +834,13 @@ mod budget_registration {
         );
 
         // Verify budget tools are producible.
-        let tools = crate::session::budget::all_budget_tools();
+        let budget = crate::session::budget::new_session_budget(&cfg);
+        let store = crate::session::budget::new_session_store();
+        let tools = crate::session::budget::all_budget_tools(
+            &budget,
+            &store,
+            Arc::new(kf_compress_core::store::InMemoryOffloadStore::new()),
+        );
         let names: Vec<&str> = tools.iter().map(|t| t.def().name).collect();
         assert!(
             names.contains(&"budget_status"),
@@ -866,7 +872,9 @@ mod budget_registration {
             folded_feature_enabled("stratum"),
             "folded_feature_enabled must return true for stratum when the feature is on"
         );
-        let tools = crate::session::stratum::stratum_tools();
+        let tools = crate::session::stratum::stratum_tools(Arc::new(
+            kf_compress_core::store::InMemoryOffloadStore::new(),
+        ));
         let names: Vec<&str> = tools.iter().map(|t| t.def().name).collect();
         assert!(
             names.contains(&"stratum_run"),

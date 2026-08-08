@@ -172,6 +172,30 @@ pub struct FileCompleter {
     pub pick_directory: bool,
 }
 
+/// Search state — extracted from AppState (WO 22.6 R3).
+#[derive(Debug, Default)]
+pub struct SearchState {
+    /// When `true`, the input box is being used as a search bar.
+    /// Ctrl+F enters search mode; typing filters the chat
+    /// conversation; Enter commits and leaves the matches
+    /// highlighted; Esc cancels and clears the matches.
+    pub mode: bool,
+    /// The current search query (built up while in search mode).
+    /// Empty when not searching.
+    pub query: String,
+    /// All match positions in the conversation, in document order.
+    /// Each entry is `(message_index, byte_offset, source)` for the
+    /// start of the match in `messages[message_index].content` or
+    /// `messages[message_index].tool_output` (see
+    /// `crate::tui::search::SearchSource`). Filled in when search is
+    /// committed; cleared on cancel or `/clear`.
+    pub matches: Vec<crate::tui::search::MatchPos>,
+    /// Index into `search.matches` of the currently-highlighted
+    /// match. `n` cycles forward, `N` (Shift+N) cycles backward.
+    /// When `search.matches.is_empty()`, this is meaningless.
+    pub match_idx: usize,
+}
+
 /// Application state — single source of truth for the TUI.
 ///
 /// # ponytail: deferred — AppState decomposition (WO 20.6.0 U1)
@@ -371,25 +395,7 @@ pub struct AppState {
     pub pending_bang: Option<PendingBangCommand>,
 
     // ── Conversation search (review.md gap #4) ─────────────
-    /// When `true`, the input box is being used as a search bar.
-    /// Ctrl+F enters search mode; typing filters the chat
-    /// conversation; Enter commits and leaves the matches
-    /// highlighted; Esc cancels and clears the matches.
-    pub search_mode: bool,
-    /// The current search query (built up while in search mode).
-    /// Empty when not searching.
-    pub search_query: String,
-    /// All match positions in the conversation, in document order.
-    /// Each entry is `(message_index, byte_offset, source)` for the
-    /// start of the match in `messages[message_index].content` or
-    /// `messages[message_index].tool_output` (see
-    /// `crate::tui::search::SearchSource`). Filled in when search is
-    /// committed; cleared on cancel or `/clear`.
-    pub search_matches: Vec<crate::tui::search::MatchPos>,
-    /// Index into `search_matches` of the currently-highlighted
-    /// match. `n` cycles forward, `N` (Shift+N) cycles backward.
-    /// When `search_matches.is_empty()`, this is meaningless.
-    pub search_match_idx: usize,
+    pub search: SearchState,
 
     // ── Code-block copy cycle (P3) ────────────────────────────────
     /// `Ctrl+Shift+B` cycles through the code blocks of the most
@@ -603,10 +609,7 @@ impl AppState {
             stem_tokens: 0,
             cache_hit_ratio: 0.0,
             pending_bang: None,
-            search_mode: false,
-            search_query: String::new(),
-            search_matches: Vec::new(),
-            search_match_idx: 0,
+            search: SearchState::default(),
             code_block_copy_index: 0,
             test_in_progress: false,
             undo_stack: None,

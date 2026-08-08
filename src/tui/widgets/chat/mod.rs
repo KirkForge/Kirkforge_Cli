@@ -23,7 +23,7 @@ use lines::{build_chat_lines, progress_line, render_entry_lines};
 /// before the "more lines below" footer is added. The caller should
 /// clamp it against `max_scroll` before assigning to `scroll_offset`.
 pub fn scroll_offset_for_search_match(state: &mut AppState, content_width: usize) -> Option<usize> {
-    let (msg_idx, _byte_offset, source) = state.search_matches.get(state.search_match_idx)?;
+    let (msg_idx, _byte_offset, source) = state.search.matches.get(state.search.match_idx)?;
     let msg_idx = *msg_idx;
     if msg_idx >= state.messages.len() {
         return None;
@@ -128,7 +128,7 @@ pub fn render_chat(f: &mut Frame, area: Rect, state: &mut AppState) {
     // Invalidate the render cache when any rendering parameter changed.
     if !state.chat_render_cache.params_match(
         content_width,
-        &state.search_query,
+        &state.search.query,
         state.tool_collapsed,
         &state.expanded_tools,
         &state.collapsed_messages,
@@ -136,7 +136,7 @@ pub fn render_chat(f: &mut Frame, area: Rect, state: &mut AppState) {
         state.chat_render_cache.clear_entries();
         state.chat_render_cache.snapshot_params(
             content_width,
-            &state.search_query,
+            &state.search.query,
             state.tool_collapsed,
             &state.expanded_tools,
             &state.collapsed_messages,
@@ -183,7 +183,7 @@ pub fn render_chat(f: &mut Frame, area: Rect, state: &mut AppState) {
                 prev_entry,
                 idx,
                 content_width,
-                &state.search_query,
+                &state.search.query,
                 collapsed,
             );
             if let Some(slot) = state.chat_render_cache.entries.get_mut(idx) {
@@ -517,10 +517,10 @@ mod tests {
         state
             .messages
             .push_back(tool_entry("tool summary", "hidden needle value", 9, 14));
-        state.search_query = "needle".into();
-        state.search_matches =
+        state.search.query = "needle".into();
+        state.search.matches =
             crate::tui::search::compute_matches(state.messages.make_contiguous(), "needle");
-        state.search_match_idx = 0;
+        state.search.match_idx = 0;
 
         let offset = scroll_offset_for_search_match(&mut state, 80).expect("match exists");
 
@@ -548,10 +548,10 @@ mod tests {
         state
             .messages
             .push_back(tool_entry("needle summary", "hidden body", 9, 14));
-        state.search_query = "needle".into();
-        state.search_matches =
+        state.search.query = "needle".into();
+        state.search.matches =
             crate::tui::search::compute_matches(state.messages.make_contiguous(), "needle");
-        state.search_match_idx = 0;
+        state.search.match_idx = 0;
 
         let offset = scroll_offset_for_search_match(&mut state, 80).expect("match exists");
 
@@ -569,8 +569,8 @@ mod tests {
             since: std::time::Instant::now(),
         });
         state.last_content_width = 80;
-        state.search_matches.clear();
-        state.search_match_idx = 0;
+        state.search.matches.clear();
+        state.search.match_idx = 0;
         assert_eq!(scroll_offset_for_search_match(&mut state, 80), None);
     }
 
@@ -787,7 +787,7 @@ mod tests {
         // Render without query first.
         render_state(&mut state, 80, 10);
 
-        state.search_query = "needle".to_string();
+        state.search.query = "needle".to_string();
         let buffer = render_state(&mut state, 80, 10);
 
         let mut found_highlight = false;

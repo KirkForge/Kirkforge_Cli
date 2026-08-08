@@ -358,25 +358,25 @@ async fn handle_session_picker_keys(
 }
 
 fn handle_search_mode_keys(key: KeyEvent, state: &mut AppState) -> Option<anyhow::Result<()>> {
-    if !state.search_mode {
+    if !state.search.mode {
         return None;
     }
     match key.code {
         KeyCode::Esc => {
-            state.search_mode = false;
-            state.search_query.clear();
-            state.search_matches.clear();
-            state.search_match_idx = 0;
+            state.search.mode = false;
+            state.search.query.clear();
+            state.search.matches.clear();
+            state.search.match_idx = 0;
         }
         KeyCode::Enter => {
             let matches = crate::tui::search::compute_matches(
                 state.messages.make_contiguous(),
-                &state.search_query,
+                &state.search.query,
             );
-            state.search_matches = matches;
-            state.search_match_idx = 0;
-            if !state.search_matches.is_empty() {
-                state.search_mode = false;
+            state.search.matches = matches;
+            state.search.match_idx = 0;
+            if !state.search.matches.is_empty() {
+                state.search.mode = false;
                 if let Some(offset) = crate::tui::widgets::chat::scroll_offset_for_search_match(
                     state,
                     state.last_content_width,
@@ -387,16 +387,16 @@ fn handle_search_mode_keys(key: KeyEvent, state: &mut AppState) -> Option<anyhow
             }
         }
         KeyCode::Backspace => {
-            state.search_query.pop();
+            state.search.query.pop();
         }
         KeyCode::Char(c) => {
             if !key.modifiers.contains(KeyModifiers::CONTROL) {
-                state.search_query.push(c);
+                state.search.query.push(c);
             } else if c == 'c' {
-                state.search_mode = false;
-                state.search_query.clear();
-                state.search_matches.clear();
-                state.search_match_idx = 0;
+                state.search.mode = false;
+                state.search.query.clear();
+                state.search.matches.clear();
+                state.search.match_idx = 0;
                 state.input.clear();
                 state.cursor_position = 0;
             }
@@ -407,16 +407,16 @@ fn handle_search_mode_keys(key: KeyEvent, state: &mut AppState) -> Option<anyhow
 }
 
 fn handle_search_nav_keys(key: KeyEvent, state: &mut AppState) -> Option<anyhow::Result<()>> {
-    if state.search_matches.is_empty() || state.search_mode {
+    if state.search.matches.is_empty() || state.search.mode {
         return None;
     }
     match search_nav_direction(&key) {
         Some(SearchDirection::Next) => {
             if let Some(idx) = crate::tui::search::navigate_next(
-                state.search_match_idx,
-                state.search_matches.len(),
+                state.search.match_idx,
+                state.search.matches.len(),
             ) {
-                state.search_match_idx = idx;
+                state.search.match_idx = idx;
                 if let Some(offset) = crate::tui::widgets::chat::scroll_offset_for_search_match(
                     state,
                     state.last_content_width,
@@ -428,10 +428,10 @@ fn handle_search_nav_keys(key: KeyEvent, state: &mut AppState) -> Option<anyhow:
         }
         Some(SearchDirection::Prev) => {
             if let Some(idx) = crate::tui::search::navigate_prev(
-                state.search_match_idx,
-                state.search_matches.len(),
+                state.search.match_idx,
+                state.search.matches.len(),
             ) {
-                state.search_match_idx = idx;
+                state.search.match_idx = idx;
                 if let Some(offset) = crate::tui::widgets::chat::scroll_offset_for_search_match(
                     state,
                     state.last_content_width,
@@ -711,11 +711,11 @@ pub(crate) async fn handle_input_key(
                 // Ctrl+F is a no-op while in search mode (the
                 // input box is the search box; we don't want to
                 // toggle out of it).
-                if c == 'f' && !state.search_mode {
-                    state.search_mode = true;
-                    state.search_query.clear();
-                    state.search_matches.clear();
-                    state.search_match_idx = 0;
+                if c == 'f' && !state.search.mode {
+                    state.search.mode = true;
+                    state.search.query.clear();
+                    state.search.matches.clear();
+                    state.search.match_idx = 0;
                     return Ok(());
                 }
                 match c {

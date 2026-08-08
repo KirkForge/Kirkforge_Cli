@@ -363,7 +363,7 @@ pub(super) fn build_chat_lines(
             prev_entry,
             idx,
             content_width,
-            &state.search_query,
+            &state.search.query,
             collapsed,
         );
         lines.extend(entry_lines);

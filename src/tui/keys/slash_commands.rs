@@ -340,8 +340,8 @@ pub(crate) async fn dispatch_slash_command(
         "/clear" => {
             state.messages.clear();
             state.thinking_buffer.clear();
-            state.search_matches.clear();
-            state.search_match_idx = 0;
+            state.search.matches.clear();
+            state.search.match_idx = 0;
             state.code_block_copy_index = 0;
             Ok(true)
         }

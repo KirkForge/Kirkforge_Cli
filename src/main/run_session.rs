@@ -521,17 +521,47 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
         tracing::warn!(warning = %w, "plugin load warning");
     }
 
+    // ── Per-session stores (WO 22.6-R2) ──
+    // Create per-session budget and Stratum offload stores with LRU caps.
+    // These replace the old process-global OnceLock pattern.
+    #[cfg(feature = "budget")]
+    let session_stores = {
+        let cfg_stores = kf_code::shared::read_shared_config(&shared_config);
+        session::SessionStores {
+            budget: std::sync::Arc::new(std::sync::Mutex::new(kf_budget_core::TokenBudget {
+                ceiling: cfg_stores.tools.budget_ceiling,
+                approaching_ratio: cfg_stores.tools.budget_approaching_ratio,
+                used: 0,
+            })),
+            budget_store: std::sync::Arc::new(kf_budget_core::InMemoryOffloadStore::new_with_cap(
+                1000,
+            )),
+            #[cfg(feature = "stratum")]
+            stratum_store: std::sync::Arc::new(
+                kf_compress_core::store::InMemoryOffloadStore::new_with_cap(1000),
+            ),
+        }
+    };
+    #[cfg(all(not(feature = "budget"), feature = "stratum"))]
+    let session_stores = session::SessionStores {
+        stratum_store: std::sync::Arc::new(
+            kf_compress_core::store::InMemoryOffloadStore::new_with_cap(1000),
+        ),
+    };
+
     // ── Stratum in-process tools (feature-gated) ──
     // When the `stratum` feature is enabled, the five core Stratum tools
     // (run, apply, mode, rules, config_validate) are registered as direct
-    // Rust calls instead of shell-plugin subprocesses.
+    // Rust calls instead of shell-plugin subprocesses. Per-session offload
+    // store with LRU cap (WO 22.6-R2).
     #[cfg(feature = "stratum")]
     {
         let cfg = kf_code::shared::read_shared_config(&shared_config);
         if cfg.tools.enabled_plugins.iter().any(|n| n == "stratum")
             && !cfg.tools.disabled_plugins.contains("stratum")
         {
-            let stratum_tool_list = session::stratum::stratum_tools();
+            let stratum_tool_list =
+                session::stratum::stratum_tools(session_stores.stratum_store.clone());
             let count = stratum_tool_list.len();
             toolset.add(Box::new(session::toolset::VecToolset::new(
                 "stratum",
@@ -544,14 +574,24 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     // ── Budget in-process tools (feature-gated) ──
     // When the `budget` feature is enabled, the 7 budget tools
     // are registered as direct Rust calls instead of shell-plugin
-    // subprocesses. ADR-047 pins this decision.
+    // subprocesses. Per-session stores with LRU cap (WO 22.6-R2).
     #[cfg(feature = "budget")]
     {
         let cfg = kf_code::shared::read_shared_config(&shared_config);
         if cfg.tools.enabled_plugins.iter().any(|n| n == "kf-budget")
             && !cfg.tools.disabled_plugins.contains("kf-budget")
         {
-            let budget_tool_list = session::budget::all_budget_tools();
+            #[cfg(feature = "stratum")]
+            let budget_tool_list = session::budget::all_budget_tools(
+                &session_stores.budget,
+                &session_stores.budget_store,
+                session_stores.stratum_store.clone(),
+            );
+            #[cfg(not(feature = "stratum"))]
+            let budget_tool_list = session::budget::all_budget_tools(
+                &session_stores.budget,
+                &session_stores.budget_store,
+            );
             let count = budget_tool_list.len();
             toolset.add(Box::new(session::toolset::VecToolset::new(
                 "budget",

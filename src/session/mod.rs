@@ -38,6 +38,18 @@ use crate::shared::SessionId;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
+/// Per-session stores for budget and Stratum offload (WO 22.6-R2).
+/// Each session gets its own stores with LRU caps, replacing the old
+/// process-global OnceLock pattern that accumulated entries forever.
+pub struct SessionStores {
+    #[cfg(feature = "budget")]
+    pub budget: std::sync::Arc<std::sync::Mutex<kf_budget_core::TokenBudget>>,
+    #[cfg(feature = "budget")]
+    pub budget_store: std::sync::Arc<dyn kf_budget_core::OffloadStore>,
+    #[cfg(feature = "stratum")]
+    pub stratum_store: std::sync::Arc<kf_compress_core::store::InMemoryOffloadStore>,
+}
+
 #[cfg(test)]
 pub(crate) fn test_data_dir_lock() -> &'static tokio::sync::Mutex<()> {
     static LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();

@@ -4,7 +4,7 @@
 //! directly, eliminating subprocess overhead.
 
 use crate::session::budget::{BudgetSlicedEvent, BudgetSlicedListener};
-use crate::session::hooks::{HookContext, HookDecision, InProcessHook};
+use crate::session::hooks::{HookContext, HookDecision, InProcessHook, PostHook};
 use crate::shared::minify::minify_content_by_ext;
 use crate::shared::{ToolDef, ToolOutcome};
 use crate::tools::{Tool, ToolContext};
@@ -17,8 +17,6 @@ use kf_compress_core::store::InMemoryOffloadStore;
 use serde_json::Value;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
-
-static SESSION_OFFLOAD_STORE: OnceLock<Arc<InMemoryOffloadStore>> = OnceLock::new();
 
 #[derive(Debug)]
 struct MinifyTransform;
@@ -59,18 +57,16 @@ fn make_pipeline() -> CompressionPipeline {
     pipeline
 }
 
-/// Process-global Stratum offload store. Pub so the budget `store_get`
-/// tool can consult it as a fallback when a marker isn't in the budget
-/// store (WO 20.11.0 CRIT-2): both the budget `HeadTailSlicer` and the
-/// Stratum `CompressionPipeline` can emit offload markers, and the model
-/// must be able to retrieve either kind via `store_get`.
-pub fn session_offload_store() -> Arc<InMemoryOffloadStore> {
-    SESSION_OFFLOAD_STORE
-        .get_or_init(|| Arc::new(InMemoryOffloadStore::new()))
-        .clone()
+/// Compress `content` using the Stratum pipeline at `mode`. Used by
+/// the default budget-sliced listener; also useful for callers that
+/// want to run the pipeline outside the in-process tool path.
+pub fn compress_with_store(content: &str, mode: Mode, store: &InMemoryOffloadStore) -> String {
+    let pipeline = make_pipeline();
+    let cfg = PipelineConfig::default();
+    let ctx = CompressionContext::default().with_token_budget(4096);
+    let content_type = detect_content_type(content);
+    pipeline.run(content, content_type, &ctx, store, &cfg, mode)
 }
-
-// ── Sliced-event coordination (WO 8.6) ─────────────────────────────────
 //
 // The budget guard's `apply_budget_slice` dispatches a
 // `BudgetSlicedEvent` to registered listeners when it slices a tool
@@ -105,17 +101,7 @@ pub fn set_session_mode(mode: Mode) {
     *session_mode().lock().expect("session mode mutex poisoned") = mode;
 }
 
-/// Compress `content` using the Stratum pipeline at `mode`. Used by
-/// the default budget-sliced listener; also useful for callers that
-/// want to run the pipeline outside the in-process tool path.
-pub fn compress_for_budget(content: &str, mode: Mode) -> String {
-    let pipeline = make_pipeline();
-    let store = session_offload_store();
-    let cfg = PipelineConfig::default();
-    let ctx = CompressionContext::default().with_token_budget(4096);
-    let content_type = detect_content_type(content);
-    pipeline.run(content, content_type, &ctx, &*store, &cfg, mode)
-}
+// ── Sliced-event coordination (WO 8.6) ─────────────────────────────────
 
 /// Default `BudgetSlicedEvent` listener: compresses the sliced
 /// display using the current session mode and returns the
@@ -123,10 +109,13 @@ pub fn compress_for_budget(content: &str, mode: Mode) -> String {
 /// the slice marker means the result is already as small as it can
 /// be (the listener still returns `Some` so the budget records the
 /// post-compression size even if compression is identity).
-pub fn default_budget_sliced_listener() -> BudgetSlicedListener {
-    Arc::new(|event: BudgetSlicedEvent| {
+///
+/// The `store` parameter is the per-session Stratum offload store,
+/// replacing the old process-global `OnceLock`.
+pub fn default_budget_sliced_listener(store: Arc<InMemoryOffloadStore>) -> BudgetSlicedListener {
+    Arc::new(move |event: BudgetSlicedEvent| {
         let mode = current_session_mode();
-        let compressed = compress_for_budget(&event.sliced_display, mode);
+        let compressed = compress_with_store(&event.sliced_display, mode, &store);
         Some(compressed)
     })
 }
@@ -135,8 +124,8 @@ pub fn default_budget_sliced_listener() -> BudgetSlicedListener {
 /// guard. Idempotent: repeated calls append another listener. Tests
 /// that want a clean slate should call
 /// `crate::session::budget::clear_sliced_listeners` first.
-pub fn register_default_budget_listener() {
-    crate::session::budget::register_sliced_listener(default_budget_sliced_listener());
+pub fn register_default_budget_listener(store: Arc<InMemoryOffloadStore>) {
+    crate::session::budget::register_sliced_listener(default_budget_sliced_listener(store));
 }
 
 fn json_get_string(args: &Value, key: &str) -> Option<String> {
@@ -189,7 +178,9 @@ fn error_json(message: impl Into<String>) -> ToolOutcome {
 
 // ── stratum_run ─────────────────────────────────────────────────────────
 
-pub struct StratumRun;
+pub struct StratumRun {
+    offload_store: Arc<InMemoryOffloadStore>,
+}
 
 #[async_trait::async_trait]
 impl Tool for StratumRun {
@@ -245,9 +236,8 @@ impl Tool for StratumRun {
         };
 
         let pipeline = make_pipeline();
-        let store = session_offload_store();
         let cfg = PipelineConfig::default();
-        let result = pipeline.run(&input, content_type, &ctx, &*store, &cfg, mode);
+        let result = pipeline.run(&input, content_type, &ctx, &*self.offload_store, &cfg, mode);
 
         if json_out {
             let out = serde_json::json!({
@@ -265,7 +255,9 @@ impl Tool for StratumRun {
 
 // ── stratum_apply ───────────────────────────────────────────────────────
 
-pub struct StratumApply;
+pub struct StratumApply {
+    offload_store: Arc<InMemoryOffloadStore>,
+}
 
 #[async_trait::async_trait]
 impl Tool for StratumApply {
@@ -322,9 +314,15 @@ impl Tool for StratumApply {
         let ctx = CompressionContext::default().with_token_budget(token_budget.unwrap_or(4096));
 
         let pipeline = make_pipeline();
-        let store = session_offload_store();
         let cfg = PipelineConfig::default();
-        let result = pipeline.run(&content, content_type, &ctx, &*store, &cfg, mode);
+        let result = pipeline.run(
+            &content,
+            content_type,
+            &ctx,
+            &*self.offload_store,
+            &cfg,
+            mode,
+        );
 
         if json_out {
             let out = serde_json::json!({
@@ -501,10 +499,15 @@ impl Tool for StratumConfigValidate {
 }
 
 /// Return all five stratum tools as trait objects.
-pub fn stratum_tools() -> Vec<Arc<dyn Tool>> {
+/// The `offload_store` is the per-session store shared by all stratum tools.
+pub fn stratum_tools(offload_store: Arc<InMemoryOffloadStore>) -> Vec<Arc<dyn Tool>> {
     vec![
-        Arc::new(StratumRun),
-        Arc::new(StratumApply),
+        Arc::new(StratumRun {
+            offload_store: offload_store.clone(),
+        }),
+        Arc::new(StratumApply {
+            offload_store: offload_store.clone(),
+        }),
         Arc::new(StratumMode),
         Arc::new(StratumRules),
         Arc::new(StratumConfigValidate),
@@ -519,12 +522,12 @@ pub struct StratumSessionStartHook {
     pub config: crate::shared::SharedConfig,
 }
 
-impl InProcessHook for StratumSessionStartHook {
+impl PostHook for StratumSessionStartHook {
     fn event(&self) -> &str {
         "session-start"
     }
 
-    fn handle(&self, _ctx: &HookContext) -> HookDecision {
+    fn handle(&self, _ctx: &HookContext) -> Result<(), String> {
         let mode = active_mode(Some(&self.config));
         let rules = format!(
             "mode={}\nruns_transforms={}\noffloads_bloat={}\noffload_threshold={}",
@@ -535,7 +538,7 @@ impl InProcessHook for StratumSessionStartHook {
                 .map_or("none".to_string(), |t| format!("{t:.2}")),
         );
         tracing::info!(event = "session-start", %rules, "stratum compression contract");
-        HookDecision::Allow
+        Ok(())
     }
 }
 
@@ -626,7 +629,7 @@ fn xdg_config_path() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::hooks::{HookContext, HookDecision};
+    use crate::session::hooks::{HookContext, HookDecision, PostHook};
     use crate::tools::ToolContext;
 
     #[tokio::test]
@@ -669,7 +672,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_stratum_run_detects_json_content_type() {
-        let tool = StratumRun;
+        let tool = StratumRun {
+            offload_store: Arc::new(InMemoryOffloadStore::new()),
+        };
         let ctx = ToolContext::new();
         let json_input =
             serde_json::to_string_pretty(&serde_json::json!({"key": "value"})).unwrap();
@@ -713,7 +718,7 @@ mod tests {
     }
 
     #[test]
-    fn test_session_start_hook_returns_allow() {
+    fn test_session_start_hook_returns_ok() {
         let config: crate::shared::SharedConfig =
             Arc::new(std::sync::RwLock::new(crate::shared::Config::default()));
         let hook = StratumSessionStartHook { config };
@@ -721,7 +726,7 @@ mod tests {
             event: "session-start".into(),
             ..Default::default()
         };
-        assert_eq!(hook.handle(&ctx), HookDecision::Allow);
+        assert_eq!(hook.handle(&ctx), Ok(()));
     }
 
     #[test]
@@ -791,13 +796,11 @@ mod tests {
     }
 
     #[test]
-    fn compress_for_budget_pipeline_runs() {
-        // The pipeline has MinifyTransform registered but it only
-        // applies to SourceCode. PlainText input passes through
-        // unchanged for non-Off modes.
+    fn compress_with_store_pipeline_runs() {
+        let store = Arc::new(InMemoryOffloadStore::new());
         let input = "abcdefghij";
         for mode in [Mode::Lite, Mode::Full, Mode::Ultra] {
-            let out = compress_for_budget(input, mode);
+            let out = compress_with_store(input, mode, &store);
             assert_eq!(
                 out, input,
                 "pipeline must be identity for plain text in {mode:?}"
@@ -808,7 +811,8 @@ mod tests {
     #[test]
     fn default_budget_sliced_listener_returns_some() {
         set_session_mode(Mode::Full);
-        let listener = default_budget_sliced_listener();
+        let store = Arc::new(InMemoryOffloadStore::new());
+        let listener = default_budget_sliced_listener(store);
         let event = BudgetSlicedEvent {
             original_size: 10_000,
             sliced_size: 200,
@@ -821,9 +825,10 @@ mod tests {
 
     #[test]
     fn register_default_budget_listener_appends_to_dispatcher() {
+        let store = Arc::new(InMemoryOffloadStore::new());
         crate::session::budget::clear_sliced_listeners();
         assert_eq!(crate::session::budget::sliced_listener_count(), 0);
-        register_default_budget_listener();
+        register_default_budget_listener(store);
         assert!(
             crate::session::budget::sliced_listener_count() >= 1,
             "register_default_budget_listener must add at least one listener"

@@ -967,7 +967,16 @@ impl Executor {
             }
 
             // ponytail: outcome already computed in Phase 2 (where timeout ran); no second timeout here.
-            let outcome = apply_budget_slice(outcome);
+            #[cfg(feature = "budget")]
+            let outcome = {
+                if let (Some(ref budget), Some(ref store)) = (&self.budget, &self.budget_store) {
+                    apply_budget_slice(outcome, budget, store)
+                } else {
+                    outcome
+                }
+            };
+            #[cfg(not(feature = "budget"))]
+            let outcome = outcome;
             let outcome_for_emit = outcome.clone();
             let edit_diff =
                 handle_tool_outcome(outcome, tc, event_tx, &mut self.conversation).await?;
@@ -1036,7 +1045,16 @@ impl Executor {
         } else {
             outcome
         };
-        let outcome = apply_budget_slice(outcome);
+        #[cfg(feature = "budget")]
+        let outcome = {
+            if let (Some(ref budget), Some(ref store)) = (&self.budget, &self.budget_store) {
+                apply_budget_slice(outcome, budget, store)
+            } else {
+                outcome
+            }
+        };
+        #[cfg(not(feature = "budget"))]
+        let outcome = outcome;
         let outcome_for_emit = outcome.clone();
         let edit_diff = handle_tool_outcome(outcome, tc, event_tx, &mut self.conversation).await?;
         if is_destructive {

@@ -4,67 +4,69 @@
 
 ## Branch
 
-**`wo/21-integrate`** at commit `6d6c28e`. WO 21 + WO 22 series in progress. ~50 commits ahead of `origin/dev`.
+**`wo/21-integrate`** at commit `d8c7240`. WO 21 + WO 22 series nearly complete. ~70 commits ahead of `origin/dev`.
 
-## WO 22 series — in progress
+## WO 22 series — nearly complete
 
-Workorders 22.0–22.12 defined. Critical fixes and over-engineering cleanup underway.
+All critical fixes done. Remaining items are explicitly deferred in PONYTAIL-DEBT.md.
 
 ### Per-workorder status (verified against code)
 
 | WO | Done | Partial | Deferred | Tracking |
 |----|------|---------|----------|----------|
-| 22.1 critical-landlock | R1 (ABI rewrite, correct struct layout, access flags, /dev//proc allow-list) | — | — | DONE |
-| 22.2 critical-plugin-defaults | R1 (stratum + kf-budget in default_enabled_plugins) | — | — | DONE (in prior session) |
-| 22.3 mcp-resource-security | R1 (URI validation, capabilities advertised) | — | — | DONE (in prior session) |
-| 22.4 memory-hardening | R1 (MAX_FACTS_PER_TURN=3, EXTRACT_EVERY_N_TURNS=3, FNV hash slugs, is_preference_like) | — | — | DONE |
-| 22.5 tui-broken-pipelines | R2 (sessions_dirty refresh) | R1(F2-F5 Enter), R3(GitOperationEvent), R4(file-tool duration) | — | PONYTAIL-DEBT |
-| 22.6 architecture-smells | R1(token estimation unified), R5(CorrectionResult file/line) | — | R2(offload store scoping), R3(AppState decomposition), R4(hook return type), R6(compaction tail) | PONYTAIL-DEBT |
-| 22.7 over-engineering | R1(kf-budget-hosts deleted), R2(ToolChoice kept — not over-engineering), R3(TruncationStrategy deleted), R4(aws_profile deleted), R5(CompactionTransform collapsed), R6(ADR-049 flipped) | — | — | DONE |
-| 22.8 doc-overhaul | R1-R18 (all doc fixes from review Part 8) | — | — | DONE |
-| 22.9 adapter-gaps | R1(moot), R3(persona.rs — not a bug) | — | R2(JSON-schema), R4(Bedrock/Vertex test), R6(keychain — depends on R1), R7(ADR-070 written), R8(ADR-070 written) | PONYTAIL-DEBT |
-| 22.10 design-flaw-fixes | R5(format_verdict_report documented) | — | R1(verifier skip→CorrectionResult), R2(=22.6-R2), R3(=22.7-R3), R4(=22.7-R5) | PONYTAIL-DEBT |
-| 22.11 verifier-hardening | R1(sync catch_unwind), R2(async catch_unwind), R3(Skipped verdict), R4(format_verdict_report pub(crate)) | — | — | DONE |
-| 22.12 adr-drift | R1(~30 ADRs updated) | — | — | DONE |
+| 22.1 | R1 (landlock ABI rewrite) | — | — | DONE |
+| 22.2 | R1 (default plugins: stratum+kf-budget) | — | — | DONE |
+| 22.3 | R1 (MCP URI validation), R2 (capabilities handshake) | — | — | DONE |
+| 22.4 | R1 (MAX_FACTS=3, FNV hash, rate limit) | — | R2(TUI visibility), R3(config flag), R4(cross-turn dedup) | PONYTAIL-DEBT |
+| 22.5 | R1(F2-F5 Enter handlers), R2(jobs_dirty refresh) | — | R3(GitOperationEvent documented), R4(file-tool duration) | PONYTAIL-DEBT |
+| 22.6 | R1(token estimation), R2(offload store per-session), R3(SearchState extraction), R4(PostHook split), R5(CorrectionResult file/line) | — | R6(compaction tail pinning) | PONYTAIL-DEBT |
+| 22.7 | R1-R6 (all done) | — | — | DONE |
+| 22.8 | R1-R18 (all doc fixes) | — | — | DONE |
+| 22.9 | R1(moot), R3(not a bug), R5(done=22.7-R4), R6(done=22.7-R1), R7(ADR-070), R8(ADR-070) | — | R2(JSON-schema), R4(Bedrock/Vertex tests) | PONYTAIL-DEBT |
+| 22.10 | R1(Skipped→CorrectionResult), R4(=22.7-R5 done), R5(format_verdict_report documented) | — | R2(=22.6-R2 done), R3(=22.7-R3 done) | DONE |
+| 22.11 | R1-R4 (catch_unwind, Skipped, pub(crate)) | — | — | DONE |
+| 22.12 | R1 (28 ADRs updated, path literals fixed) | — | — | DONE |
+| 21.11-R7 | ADR-057 "unchanged" claim fixed | — | — | DONE |
 
 ### Key commits this session (WO 22)
 
 - `1b72e69` fix(22.1): landlock ABI rewrite
 - `af7c1f6` fix(22.4+22.11): memory hardening + verifier catch_unwind
 - `4791f00` docs: WO 22 series workorders
-- `d21e450` chore(22.7-R1): delete kf-budget-hosts crate
-- `ec28bc6` refactor(22.7-R3): remove TruncationStrategy enum
-- `76fbefc` refactor(22.7-R4): remove aws_profile config field
-- `53ae5bc` refactor(22.7-R5): collapse CompactionTransform trait
-- `3e3690d` feat(22.6-R5): add file/line fields to CorrectionResult
-- `f049aef` docs(22.9-R7/R8): ADR-070 adapter-gap decisions
-- `6d6c28e` style: cargo fmt after WO 22 merges
-
-## WO 21 series — completed (prior session)
-
-All `wo/21.*` topic branches merged. See git log for details.
+- `d21e450` chore(22.7-R1): delete kf-budget-hosts
+- `ec28bc6` refactor(22.7-R3): remove TruncationStrategy
+- `76fbefc` refactor(22.7-R4): remove aws_profile
+- `53ae5bc` refactor(22.7-R5): collapse CompactionTransform
+- `3e3690d` feat(22.6-R5): CorrectionResult file/line
+- `f049aef` docs(22.9-R7/R8): ADR-070
+- `d4e7b61` fix(22.2+22.7-R3+R6): default plugins + TruncationStrategy + ADR-049
+- `d109f54` fix(22.5): jobs_dirty refresh + F2-F5 Enter handlers
+- `b9c9923` fix(22.10-R1): verifier Skipped → CorrectionResult
+- `39f85ac` docs(21.11-R7): ADR-057 contract fix
+- `5e9a5dd` refactor(22.6-R2/R3/R4): per-session offload + SearchState + PostHook
+- `d8c7240` fix(22.6-R4): budget hook test assertions
+- `de4b5ee` fix(22.3): MCP URI validation + capabilities
+- `ce3518b` fix(22.12): ADR path literal drift
 
 ## Remaining deferred items (all tracked in PONYTAIL-DEBT.md)
 
-### High priority (security/correctness)
+### High priority
 
-1. **21.7-R1**: Landlock — DONE in WO 22.1
-2. **21.7-R3**: Diff-review-before-apply
+1. **21.7-R3**: Diff-review-before-apply
 
-### Medium priority (functionality gaps)
+### Medium priority
 
-3. **21.6-R1**: LSP federation
-4. **21.5-R2**: Bash PTY/streaming
-5. **22.5-R1**: F2-F5 TUI Enter handlers
-6. **22.6-R2**: Per-session offload store (OnceLock → session-scoped + LRU cap)
+2. **21.6-R1**: LSP federation
+3. **21.5-R2**: Bash PTY/streaming
+4. **22.4-R2/R3**: TUI memory visibility + config flag
+5. **22.6-R6**: Verifier findings in compaction tail
+6. **22.9-R2**: JSON-schema structured output
 
-### Low priority (defer with reason)
+### Low priority
 
 7. **21.7-R2**: seccomp syscall filter
-8. **22.6-R3**: AppState decomposition (~55 fields → sub-structs)
-9. **22.6-R4**: Hook return type split (post-hooks don't need HookDecision)
-10. **22.9-R2**: JSON-schema structured output
-11. **22.9-R4**: Bedrock/Vertex test hardening
+8. **22.5-R3/R4**: GitOperationEvent delete/wire + file-tool duration
+9. **22.9-R4**: Bedrock/Vertex test hardening
 
 ## Gate status
 
@@ -72,7 +74,7 @@ All `wo/21.*` topic branches merged. See git log for details.
 - `cargo fmt --check`: PASS
 - `cargo clippy --workspace -- -D warnings`: PASS
 - `cargo test -p kf-budget-core --test adr_xref_drift`: PASS
-- HEAD: `6d6c28e`
+- HEAD: `d8c7240`
 
 ## Known pre-existing test failures (NOT from WO 21/22)
 

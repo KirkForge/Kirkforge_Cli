@@ -4,7 +4,7 @@
 
 ## Branch
 
-**`wo/21-integrate`** at commit `05eebdc`. WO 21 + WO 22 series complete. ~70 commits ahead of `origin/dev`.
+**`wo/21-integrate`** at commit `b01a07a`. WO 21 + WO 22 series complete. ~72 commits ahead of `origin/dev`.
 
 ## WO 22 series — nearly complete
 
@@ -17,12 +17,12 @@ All critical fixes done. Remaining items are explicitly deferred below.
 | 22.1 | R1 (landlock ABI rewrite) | — | — | DONE |
 | 22.2 | R1 (default plugins: stratum+kf-budget) | — | — | DONE |
 | 22.3 | R1 (MCP URI validation), R2 (capabilities handshake) | — | — | DONE |
-| 22.4 | R1 (MAX_FACTS=3, FNV hash, rate limit) | — | R2(TUI visibility), R3(config flag), R4(cross-turn dedup) | deferred |
-| 22.5 | R1(F2-F5 Enter handlers), R2(jobs_dirty refresh) | — | R3(GitOperationEvent documented), R4(file-tool duration) | deferred |
-| 22.6 | R1(token estimation), R2(offload store per-session), R3(SearchState extraction), R4(PostHook split), R5(CorrectionResult file/line) | — | R6(compaction tail pinning) | deferred |
+| 22.4 | R1(MAX_FACTS), R3(config flag), R4(slug collision ceiling) | R2(TUI visibility: ponytail) | — | DONE |
+| 22.5 | R1-R2(done), R3(GitOperationEvent deleted), R4(file-tool duration) | — | — | DONE |
+| 22.6 | R1-R6 (all done, including compaction tail pinning) | — | — | DONE |
 | 22.7 | R1-R6 (all done) | — | — | DONE |
 | 22.8 | R1-R18 (all doc fixes) | — | — | DONE |
-| 22.9 | R1(moot), R3(not a bug), R5(done=22.7-R4), R6(done=22.7-R1), R7(ADR-070), R8(ADR-070) | — | R4(Bedrock/Vertex tests) | deferred (R2 folded into 22.14) |
+| 22.9 | R1(moot), R3(not a bug), R4(signing tests), R5(done=22.7-R4), R6(done=22.7-R1), R7(ADR-070), R8(ADR-070) | — | — | DONE (R2 folded into 22.14) |
 | 22.10 | R1(Skipped→CorrectionResult), R4(=22.7-R5 done), R5(format_verdict_report documented) | — | R2(=22.6-R2 done), R3(=22.7-R3 done) | DONE |
 | 22.11 | R1-R4 (catch_unwind, Skipped, pub(crate)) | — | — | DONE |
 | 22.12 | R1 (28 ADRs updated, path literals fixed) | — | — | DONE |
@@ -51,6 +51,8 @@ All critical fixes done. Remaining items are explicitly deferred below.
 - `ce3518b` fix(22.12): ADR path literal drift
 - `4095fab` feat(22.13): multi-turn prompt loop fix + bg task notifications + configurable concurrency
 - `05eebdc` feat(22.14): JSON-schema structured output via ResponseFormat enum
+- `704aa53` feat(22.4+22.5+22.9): file-tool duration + memory indicator + bedrock/vertex signing tests
+- `b01a07a` chore(22.4+22.5): delete GitOperationEvent + memory_auto_populate config + slug collision ceiling
 
 ## Remaining deferred items
 
@@ -62,14 +64,10 @@ All critical fixes done. Remaining items are explicitly deferred below.
 
 2. **21.6-R1**: LSP federation
 3. **21.5-R2**: Bash PTY/streaming
-4. **22.4-R2/R3**: TUI memory visibility + config flag
-5. **22.6-R6**: Verifier findings in compaction tail
 
 ### Low priority
 
-7. **21.7-R2**: seccomp syscall filter
-8. **22.5-R3/R4**: GitOperationEvent delete/wire + file-tool duration
-9. **22.9-R4**: Bedrock/Vertex test hardening
+4. **21.7-R2**: seccomp syscall filter
 
 ## Gate status
 
@@ -77,7 +75,7 @@ All critical fixes done. Remaining items are explicitly deferred below.
 - `cargo fmt --check`: PASS
 - `cargo clippy --workspace -- -D warnings`: PASS
 - `cargo test -p kf-budget-core --test adr_xref_drift`: PASS
-- HEAD: `05eebdc`
+- HEAD: `b01a07a`
 
 ## Known pre-existing test failures (NOT from WO 21/22)
 

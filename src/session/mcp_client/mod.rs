@@ -305,7 +305,7 @@ impl McpClient {
             "method": "initialize",
             "params": {
                 "protocolVersion": "2024-11-05",
-                "capabilities": {},
+                "capabilities": {"resources": {}, "prompts": {}},
                 "clientInfo": {
                     "name": "kf-code",
                     "version": "0.1.0"

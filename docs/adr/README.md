@@ -109,6 +109,7 @@ verifies the table and the file headers agree.
 | [066](./066-kirk-bench-spec.md) | KIRK-BENCH spec + signature Token Budget Challenge | Accepted | CLI |
 | [067](./067-tui-daemon-coverage-exclusion.md) | TUI and daemon coverage exclusion rationale | Accepted | CLI |
 | [068](./068-cli-yeet-decision.md) | Remove Standalone Subsystem CLIs | Accepted | CLI |
+| [070](./070-adapter-gap-decisions.md) | Adapter-Gap Decisions and Deferrals | Accepted | CLI |
 
 ## Cross-references
 

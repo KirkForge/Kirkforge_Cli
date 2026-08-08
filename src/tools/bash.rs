@@ -347,7 +347,9 @@ impl Tool for Bash {
                     Ok(pty_result) => {
                         let code = pty_result.exit_code.unwrap_or(-1);
                         if code == 0 {
-                            ToolOutcome::Success { content: pty_result.stdout }
+                            ToolOutcome::Success {
+                                content: pty_result.stdout,
+                            }
                         } else {
                             ToolOutcome::Failure(ToolError::Execution {
                                 message: format!(

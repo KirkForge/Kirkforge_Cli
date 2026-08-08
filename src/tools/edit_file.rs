@@ -1861,10 +1861,7 @@ mod tests {
             matches!(result, ToolOutcome::FileEdit { .. }),
             "normal edit should succeed, got {result:?}"
         );
-        assert_eq!(
-            std::fs::read_to_string(&path).unwrap(),
-            "goodbye\nworld\n",
-        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "goodbye\nworld\n",);
     }
 
     #[tokio::test]

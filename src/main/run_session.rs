@@ -188,9 +188,8 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
                         let sessions_dir = data_dir.join("sessions");
                         std::fs::create_dir_all(&sessions_dir)?;
                         sessions_dir.join(format!("{session_id}.conv.ndjson"))
-    }
-}
-
+                    }
+                }
             }
             Some(sessions) if !sessions.is_empty() => {
                 // In machine-readable output modes the hint would pollute
@@ -666,18 +665,15 @@ async fn federate_index_with_lsp(
 
     let lang = "rust";
 
-    let client = match tokio::time::timeout(
-        std::time::Duration::from_secs(10),
-        pool.get_client(lang),
-    )
-    .await
-    {
-        Ok(Ok(Some(c))) => c,
-        _ => {
-            tracing::info!("LSP client not available for federation (timeout or no server)");
-            return;
-        }
-    };
+    let client =
+        match tokio::time::timeout(std::time::Duration::from_secs(10), pool.get_client(lang)).await
+        {
+            Ok(Ok(Some(c))) => c,
+            _ => {
+                tracing::info!("LSP client not available for federation (timeout or no server)");
+                return;
+            }
+        };
 
     use std::collections::HashMap;
     let mut resolved: HashMap<(std::path::PathBuf, u32), std::path::PathBuf> = HashMap::new();

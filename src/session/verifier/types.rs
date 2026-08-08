@@ -321,7 +321,7 @@ pub struct VerificationError {
 /// tool call. Unlike generic handlers, verifiers return a [`Verdict`]
 /// that the correction loop can act on.
 #[async_trait::async_trait]
-pub trait Verifier: Send + Sync {
+pub(crate) trait Verifier: Send + Sync {
     /// Unique verifier name (e.g. "lint", "type-check", "git", "security").
     fn name(&self) -> &str;
 

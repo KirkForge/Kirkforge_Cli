@@ -104,7 +104,7 @@ pub struct VerifierBus {
 /// trait (which operates on `BusEvent`), `BusVerifier` receives a
 /// `VerifyContext` with the changed files and returns structured
 /// `VerdictEntry`s.
-pub trait BusVerifier: Send + Sync {
+pub(crate) trait BusVerifier: Send + Sync {
     fn name(&self) -> &str;
     fn verify(&self, ctx: &VerifyContext) -> Vec<VerdictEntry>;
 }

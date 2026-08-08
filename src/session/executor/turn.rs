@@ -1167,7 +1167,9 @@ impl Executor {
                         cancel_token: tool_cancel_token(cancelled),
                         resolved_path: resolved,
                         timeout: self.tool_call_timeout(),
-                        diff_review: crate::shared::read_shared_config(&self.config).security.diff_review,
+                        diff_review: crate::shared::read_shared_config(&self.config)
+                            .security
+                            .diff_review,
                     });
                 }
                 PreRunVerdict::Skip { events, message } => {

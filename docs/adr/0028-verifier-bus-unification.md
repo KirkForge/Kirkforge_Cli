@@ -204,7 +204,7 @@ The wire format is NDJSON lines of KVB events. Both sides must ignore unknown ev
   `VerdictEntry { Severity::Error }` → `has_errors()`. The TS-side
   bridge emitter test (`bridge-emitter.test.ts`) verifies the
   event-to-NDJSON translation. The Node SDK plugin
-   (`kf-plugin`, formerly `kirkforge-plugin`) still runs its TS-based verifiers through the
+    (`kf-plugin`) still runs its TS-based verifiers through the
   legacy event-driven `Verifier` trait path
   (`PluginVerifierAdapter`), which is retained for backward
   compatibility.

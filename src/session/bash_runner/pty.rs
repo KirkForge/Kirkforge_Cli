@@ -37,11 +37,7 @@ pub fn run_with_pty(
     std::io::copy(&mut reader, &mut stdout_buf)?;
 
     let exit_status = child.wait()?;
-    let exit_code = if exit_status.success() {
-        Some(0)
-    } else {
-        None
-    };
+    let exit_code = if exit_status.success() { Some(0) } else { None };
 
     Ok(PtyResult {
         stdout: String::from_utf8_lossy(&stdout_buf).to_string(),

@@ -755,6 +755,12 @@ async fn run_event_loop(
         // kb event we just got. If nothing happened, none of this
         // marks the state dirty.
         drain_daemon_flags(state);
+        if state.jobs_dirty {
+            state.jobs_dirty = false;
+            let out = crate::tui::commands::refresh_jobs_output(state).await;
+            state.cached_jobs_output = Some(out);
+            state.mark_dirty();
+        }
         if notify_completed_jobs(state).await {
             state.mark_dirty();
         }

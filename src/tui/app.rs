@@ -507,6 +507,9 @@ pub struct AppState {
     /// When true, the daemon pushed `JobsChanged` and the Jobs tab should
     /// re-read scheduled jobs on the next draw tick.
     pub jobs_dirty: bool,
+    /// Cached formatted output for the Jobs tab, refreshed when `jobs_dirty`
+    /// is set. Rendered directly by the Jobs tab widget.
+    pub cached_jobs_output: Option<String>,
     /// Shared flags set by the daemon event reader task. The TUI event
     /// loop drains these into the local `sessions_dirty` / `jobs_dirty`
     /// fields on each iteration so the render path never blocks.
@@ -625,6 +628,7 @@ impl AppState {
             tab_list_state: None,
             sessions_dirty: false,
             jobs_dirty: false,
+            cached_jobs_output: None,
             #[cfg(unix)]
             daemon_flags: None,
             slash_menu: None,

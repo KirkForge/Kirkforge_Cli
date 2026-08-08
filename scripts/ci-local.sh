@@ -52,14 +52,17 @@ fi
 if [ "$MODE" != "quick" ]; then
     run_step "Build release binary" cargo build --release --locked
 
-    # Audit is advisory because network failures / new advisories can break
-    # an otherwise-good build.
+    # Block on critical/RCE/unsound only; lower severities are warnings
     echo
-    echo "==> Audit dependencies (advisory)"
+    echo "==> Audit dependencies (critical/RCE/unsound)"
+    run_step "Audit critical" cargo audit --deny critical --deny unsound
+
+    echo
+    echo "==> Audit dependencies (informational warnings)"
     if cargo audit; then
-        echo -e "${GREEN}OK${NC}: Audit dependencies"
+        echo -e "${GREEN}OK${NC}: Audit dependencies (informational)"
     else
-        echo -e "${YELLOW}WARNING${NC}: cargo audit failed (advisory only)"
+        echo -e "${YELLOW}WARNING${NC}: cargo audit informational warnings (non-blocking)"
     fi
 fi
 

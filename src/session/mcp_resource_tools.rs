@@ -5,7 +5,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 pub fn validate_mcp_uri(uri: &str, workspace: &Path) -> Result<(), String> {
-    let scheme = uri.split("://").next().unwrap_or("");
+    let scheme = uri.split(':').next().unwrap_or("");
     if scheme == "data" {
         return Err(format!("data: URI '{uri}' is not allowed (injection risk)"));
     }

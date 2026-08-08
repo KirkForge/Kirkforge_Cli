@@ -137,8 +137,10 @@ pub enum Command {
         #[arg(long, requires = "harden")]
         block_edits: bool,
 
+        #[cfg(debug_assertions)]
         /// Suppress the production-mode sandbox refusal when no sandbox
-        /// is configured (WO 21.7-R5). Use only in trusted environments.
+        /// is configured (WO 21.7-R5). Debug builds only; release builds
+        /// always refuse unsandboxed.
         #[arg(long)]
         i_accept_unsandboxed: bool,
 

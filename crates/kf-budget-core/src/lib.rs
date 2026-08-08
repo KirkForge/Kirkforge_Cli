@@ -19,6 +19,7 @@ pub mod text;
 pub mod test_support;
 
 pub use atomic_write::atomic_write_text;
+#[allow(deprecated)]
 pub use budget::{
     decide, estimate_tokens, estimate_tokens_heuristic, BudgetConfig, BudgetState, ConfigFile,
     Intervention, TokenBudget, UsageConfig,

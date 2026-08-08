@@ -281,7 +281,7 @@ impl McpClientManager {
             match client.read_resource(uri).await {
                 Ok(val) => return Ok(val),
                 Err(e) => {
-                    tracing::debug!(server = %config.name, uri = %uri, error = %e, "resources/read failed on this server; trying next");
+                    tracing::warn!(server = %config.name, uri = %uri, error = %e, "resources/read failed on this server; trying next");
                 }
             }
         }
@@ -328,7 +328,7 @@ impl McpClientManager {
             match client.get_prompt(name, args.clone()).await {
                 Ok(val) => return Ok(val),
                 Err(e) => {
-                    tracing::debug!(server = %config.name, prompt = %name, error = %e, "prompts/get failed on this server; trying next");
+                    tracing::warn!(server = %config.name, prompt = %name, error = %e, "prompts/get failed on this server; trying next");
                 }
             }
         }

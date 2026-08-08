@@ -120,8 +120,12 @@ pub(crate) fn shell_program() -> &'static str {
 /// this WO). Rlimits are always applied when present — the `harden`
 /// flag controls only bash sandbox settings (network, workdir), not
 /// resource limits (H3).
-#[cfg(unix)]
-pub(crate) fn setup_rlimits(cmd: &mut Command, cfg: &SandboxConfig) {
+#[cfg(all(unix, feature = "landlock"))]
+pub(crate) fn setup_rlimits(
+    cmd: &mut Command,
+    cfg: &SandboxConfig,
+    landlock_paths: Option<&landlock::LandlockPaths>,
+) {
     use std::os::unix::process::CommandExt;
 
     let cpu_secs = cfg.cpu_limit_secs;
@@ -162,8 +166,45 @@ pub(crate) fn setup_rlimits(cmd: &mut Command, cfg: &SandboxConfig) {
     }
 }
 
+#[cfg(all(unix, not(feature = "landlock")))]
+pub(crate) fn setup_rlimits(cmd: &mut Command, cfg: &SandboxConfig, _landlock_paths: Option<&()>) {
+    use std::os::unix::process::CommandExt;
+
+    let cpu_secs = cfg.cpu_limit_secs;
+    let as_bytes: u64 = cfg.memory_limit_mb.saturating_mul(1024 * 1024);
+    let fsize_bytes: u64 = cfg.filesize_limit_mb.saturating_mul(1024 * 1024);
+    let no_network = cfg.harden && cfg.no_network;
+
+    unsafe {
+        cmd.as_std_mut().pre_exec(move || {
+            let cpu = libc::rlimit {
+                rlim_cur: cpu_secs,
+                rlim_max: cpu_secs,
+            };
+            libc::setrlimit(libc::RLIMIT_CPU, &cpu);
+
+            let as_lim = libc::rlimit {
+                rlim_cur: as_bytes,
+                rlim_max: as_bytes,
+            };
+            libc::setrlimit(libc::RLIMIT_AS, &as_lim);
+
+            let fsize = libc::rlimit {
+                rlim_cur: fsize_bytes,
+                rlim_max: fsize_bytes,
+            };
+            libc::setrlimit(libc::RLIMIT_FSIZE, &fsize);
+
+            if no_network {
+                libc::unshare(libc::CLONE_NEWNET);
+            }
+            Ok(())
+        });
+    }
+}
+
 #[cfg(not(unix))]
-pub(crate) fn setup_rlimits(_cmd: &mut Command, cfg: &SandboxConfig) {
+pub(crate) fn setup_rlimits(_cmd: &mut Command, cfg: &SandboxConfig, _landlock_paths: Option<&()>) {
     if cfg.harden || cfg.no_network {
         use std::sync::OnceLock;
         static WARNED: OnceLock<()> = OnceLock::new();
@@ -421,7 +462,11 @@ pub async fn run_shell_with_token(
 
     setup_process_group(&mut proc);
     if let Some(cfg) = sandbox {
-        setup_rlimits(&mut proc, cfg);
+        #[cfg(all(unix, feature = "landlock"))]
+        let lp = landlock::resolve_paths(workdir);
+        #[cfg(not(all(unix, feature = "landlock")))]
+        let lp: Option<&()> = None;
+        setup_rlimits(&mut proc, cfg, lp);
     }
 
     let mut child = proc

@@ -40,7 +40,7 @@ pub async fn spawn_daemon_event_reader(
     let socket_path = match paths::socket_path() {
         Ok(p) => p,
         Err(e) => {
-            tracing::debug!(error = %e, "could not resolve daemon socket path; skipping instance channel");
+            tracing::trace!(error = %e, "could not resolve daemon socket path; skipping instance channel");
             return Ok(None);
         }
     };
@@ -48,7 +48,7 @@ pub async fn spawn_daemon_event_reader(
     let stream = match UnixStream::connect(&socket_path).await {
         Ok(s) => s,
         Err(e) => {
-            tracing::debug!(error = %e, "daemon not running; skipping instance channel");
+            tracing::trace!(error = %e, "daemon not running; skipping instance channel");
             return Ok(None);
         }
     };
@@ -89,7 +89,7 @@ pub async fn spawn_daemon_event_reader(
             line.clear();
             match read_line_limited(&mut stream, &mut line).await {
                 Ok(0) => {
-                    tracing::debug!("daemon instance channel closed");
+                    tracing::info!("daemon instance channel closed");
                     break;
                 }
                 Ok(_) => {

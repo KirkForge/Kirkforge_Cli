@@ -14,16 +14,11 @@ pub(crate) use compaction::{compact_to_budget, estimate_tokens};
 
 use kf_context_index::ContextIndex;
 
-/// Token counter — real cl100k_base when the `budget` feature is available,
-/// character-length/4 fallback otherwise.
-#[cfg(feature = "budget")]
+/// Token counter — cl100k_base via `kf_budget_core::estimate_tokens`.
+/// The `budget` feature is in `default`, so this is always available
+/// in release builds.
 pub(crate) fn count_tokens(s: &str) -> usize {
     kf_budget_core::estimate_tokens(s)
-}
-
-#[cfg(not(feature = "budget"))]
-pub(crate) fn count_tokens(s: &str) -> usize {
-    s.len() / 4
 }
 
 /// Number of trailing messages kept verbatim by automatic microcompaction.

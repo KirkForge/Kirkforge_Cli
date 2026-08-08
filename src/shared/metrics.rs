@@ -395,7 +395,7 @@ fn write_event(path: &PathBuf, event: &MetricEvent) {
 /// set, a matching span is also exported.
 pub fn record(event: MetricEvent) {
     let Some(path) = metrics_path() else {
-        tracing::debug!("no metrics path available; dropping event");
+        tracing::trace!("no metrics path available; dropping event");
         return;
     };
     write_event(&path, &event);

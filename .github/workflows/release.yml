@@ -238,6 +238,16 @@ jobs:
             --output-certificate SHA256SUMS.txt.pem \
             SHA256SUMS.txt
 
+      - name: Verify cosign signature
+        shell: bash
+        run: |
+          test -s dist/SHA256SUMS.txt.sig || { echo "ERROR: cosign signature missing or empty"; exit 1; }
+          test -s dist/SHA256SUMS.txt.pem || { echo "ERROR: cosign certificate missing or empty"; exit 1; }
+          cosign verify-blob \
+            --certificate dist/SHA256SUMS.txt.pem \
+            --signature dist/SHA256SUMS.txt.sig \
+            dist/SHA256SUMS.txt
+
       - name: Extract release notes from CHANGELOG
         id: notes
         shell: bash

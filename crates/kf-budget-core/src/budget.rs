@@ -202,6 +202,7 @@ pub fn estimate_tokens(s: &str) -> usize {
 
 /// Heuristic bytes/4 fallback — kept for call sites that explicitly want
 /// the cheap estimate without BPE encoding overhead.
+#[deprecated(since = "TBD", note = "use estimate_tokens for BPE-based counting")]
 #[must_use]
 pub fn estimate_tokens_heuristic(s: &str) -> usize {
     let bytes = s.len();
@@ -477,6 +478,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn estimator_heuristic_retains_bytes_division() {
         assert_eq!(estimate_tokens_heuristic(r#"{"k":"v"}"#), 3);
         assert_eq!(estimate_tokens_heuristic("hello world"), 2);

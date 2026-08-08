@@ -131,10 +131,10 @@ fn run_replay_tui(records: Vec<kf_code::session::replay::TurnRecord>) -> anyhow:
 
     // Teardown — best-effort, mirror the session-picker pattern.
     if let Err(e) = disable_raw_mode() {
-        tracing::debug!(error = %e, "failed to disable raw mode during replay TUI teardown");
+        tracing::warn!(error = %e, "failed to disable raw mode during replay TUI teardown");
     }
     if let Err(e) = execute!(terminal.backend_mut(), LeaveAlternateScreen) {
-        tracing::debug!(error = %e, "failed to leave alternate screen during replay TUI teardown");
+        tracing::warn!(error = %e, "failed to leave alternate screen during replay TUI teardown");
     }
 
     result

@@ -294,7 +294,7 @@ mod unix_imp {
     pub async fn try_list_recent() -> anyhow::Result<Option<Vec<SessionEntry>>> {
         if DaemonClient::connect().await.is_err() {
             if let Err(e) = ensure_daemon_running().await {
-                tracing::debug!(error = %e, "daemon not running and could not be started");
+                tracing::info!(error = %e, "daemon not running and could not be started");
                 return Ok(None);
             }
         }
@@ -320,7 +320,7 @@ mod unix_imp {
     pub async fn try_resolve_id(id_or_prefix: &str) -> anyhow::Result<Option<PathBuf>> {
         if DaemonClient::connect().await.is_err() {
             if let Err(e) = ensure_daemon_running().await {
-                tracing::debug!(error = %e, "daemon not running and could not be started; skipping resolve");
+                tracing::trace!(error = %e, "daemon not running and could not be started; skipping resolve");
                 return Ok(None);
             }
         }
@@ -339,7 +339,7 @@ mod unix_imp {
                 }
             }
             Err(e) => {
-                tracing::debug!(error = %e, "daemon not running; skipping touch");
+                tracing::trace!(error = %e, "daemon not running; skipping touch");
             }
         }
     }
@@ -355,7 +355,7 @@ mod unix_imp {
                 }
             }
             Err(e) => {
-                tracing::debug!(error = %e, "daemon not running; skipping jobs change notification");
+                tracing::trace!(error = %e, "daemon not running; skipping jobs change notification");
             }
         }
     }

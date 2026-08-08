@@ -958,6 +958,10 @@ impl ContextIndex {
         &self.call_edges
     }
 
+    pub fn call_edges_mut(&mut self) -> &mut [CallEdge] {
+        &mut self.call_edges
+    }
+
     /// Index all `.rs`, `.ts`/`.tsx`, `.py`, and `.go` files under a directory.
     pub fn index_dir(&mut self, root: &std::path::Path) -> anyhow::Result<()> {
         for entry in walkdir::WalkDir::new(root)

@@ -188,8 +188,9 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
                         let sessions_dir = data_dir.join("sessions");
                         std::fs::create_dir_all(&sessions_dir)?;
                         sessions_dir.join(format!("{session_id}.conv.ndjson"))
-                    }
-                }
+    }
+}
+
             }
             Some(sessions) if !sessions.is_empty() => {
                 // In machine-readable output modes the hint would pollute
@@ -413,7 +414,7 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     // ADR-037 Phase 4: disk caching at .kf-code/context-index/cache.json.
     // On subsequent runs, if the cached index matches the current git HEAD,
     // we load from disk instead of rebuilding.
-    let context_index = {
+    let mut context_index = {
         let cfg = kf_code::shared::read_shared_config(&shared_config);
         cfg.security.sandbox_dir.as_ref().and_then(|dir| {
             let path = std::path::Path::new(dir);
@@ -465,6 +466,14 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
             }
         })
     };
+
+    // --- LSP federation: resolve call-edge callee_file via go_to_definition ---
+    // When both LSP and context index are available, resolve name-only call
+    // edges to actual file:line definitions. This disambiguates same-named
+    // methods across types (WO 21.6-R1 / WO 23.4-R1).
+    if let (Some(ref mut idx), Some(ref pool)) = (&mut context_index, &lsp_pool) {
+        federate_index_with_lsp(idx, pool).await;
+    }
 
     // --- MCP tools ---
     let cfg_for_mcp = kf_code::shared::read_shared_config(&shared_config).clone();
@@ -644,6 +653,72 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
         )
         .await
     }
+}
+
+async fn federate_index_with_lsp(
+    idx: &mut kf_context_index::ContextIndex,
+    pool: &std::sync::Arc<kf_lsp::LspPool>,
+) {
+    let edges = idx.call_edges();
+    if edges.is_empty() {
+        return;
+    }
+
+    let lang = "rust";
+
+    let client = match tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        pool.get_client(lang),
+    )
+    .await
+    {
+        Ok(Ok(Some(c))) => c,
+        _ => {
+            tracing::info!("LSP client not available for federation (timeout or no server)");
+            return;
+        }
+    };
+
+    use std::collections::HashMap;
+    let mut resolved: HashMap<(std::path::PathBuf, u32), std::path::PathBuf> = HashMap::new();
+
+    for edge in edges.iter() {
+        if edge.callee_file.is_some() {
+            continue;
+        }
+        let key = (edge.caller_file.clone(), edge.caller_line);
+        if resolved.contains_key(&key) {
+            continue;
+        }
+        let uri = format!("file://{}", edge.caller_file.display());
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            client.definition(&uri, edge.caller_line - 1, 0),
+        )
+        .await;
+        if let Ok(Ok(locations)) = result {
+            if let Some(loc) = locations.first() {
+                if let Some(rest) = loc.uri.strip_prefix("file://") {
+                    resolved.insert(key, std::path::PathBuf::from(rest));
+                }
+            }
+        }
+    }
+
+    let edges_mut = idx.call_edges_mut();
+    for edge in edges_mut.iter_mut() {
+        let key = (edge.caller_file.clone(), edge.caller_line);
+        if let Some(def_file) = resolved.get(&key) {
+            edge.callee_file = Some(def_file.clone());
+        }
+    }
+
+    let resolved_count = edges_mut.iter().filter(|e| e.callee_file.is_some()).count();
+    tracing::info!(
+        resolved = resolved_count,
+        total = edges_mut.len(),
+        "LSP federation: resolved call-edge callee_files"
+    );
 }
 
 /// Print a hint listing recent sessions when running non-interactively

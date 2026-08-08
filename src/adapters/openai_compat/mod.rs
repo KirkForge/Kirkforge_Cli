@@ -339,6 +339,7 @@ pub struct OpenAiCompatAdapter {
     api_key: String,
     client: reqwest::Client,
     json_mode: bool,
+    response_format: Option<crate::shared::ResponseFormat>,
     seed: Option<u64>,
     timeout_secs: u64,
     tool_choice: Option<crate::shared::ToolChoice>,
@@ -353,6 +354,7 @@ impl OpenAiCompatAdapter {
             api_key: String::new(),
             client: super::build_reqwest_client(),
             json_mode: false,
+            response_format: None,
             seed: None,
             timeout_secs,
             tool_choice: None,
@@ -374,6 +376,7 @@ impl OpenAiCompatAdapter {
             api_key: api_key.to_string(),
             client: super::build_reqwest_client(),
             json_mode: false,
+            response_format: None,
             seed: None,
             timeout_secs,
             tool_choice: None,
@@ -422,8 +425,13 @@ impl ModelAdapter for OpenAiCompatAdapter {
 
     fn set_json_mode(&mut self, json_mode: bool) {
         self.json_mode = json_mode;
+        if json_mode {
+            self.response_format = Some(crate::shared::ResponseFormat::JsonObject);
+        }
     }
-
+    fn set_response_format(&mut self, format: crate::shared::ResponseFormat) {
+        self.response_format = Some(format);
+    }
     fn set_seed(&mut self, seed: Option<u64>) {
         self.seed = seed;
     }
@@ -442,7 +450,7 @@ impl ModelAdapter for OpenAiCompatAdapter {
             &self.model_info(),
             messages,
             tools,
-            self.json_mode,
+            self.response_format.as_ref(),
             self.seed,
             self.tool_choice.as_ref(),
         );

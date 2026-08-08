@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use crate::shared::ResponseFormat;
+
 fn default_anthropic_provider() -> String {
     "anthropic".to_string()
 }
@@ -96,6 +98,8 @@ pub struct ModelConfig {
     pub json_mode: bool,
     #[serde(default = "default_max_bg_tasks")]
     pub max_concurrent_background_tasks: usize,
+    #[serde(default)]
+    pub response_format: Option<ResponseFormat>,
     /// Enable extended thinking for models that support it (e.g. Claude
     /// 3.7 Sonnet, Claude 4). When false, thinking blocks are omitted
     /// even if the model supports them.
@@ -146,10 +150,52 @@ impl Default for ModelConfig {
             seed: None,
             json_mode: false,
             max_concurrent_background_tasks: default_max_bg_tasks(),
+            response_format: None,
             extended_thinking: true,
             budget_tokens: default_budget_tokens(),
             max_tokens: default_max_tokens(),
             adapter_routing: HashMap::new(),
         }
+    }
+}
+
+impl ModelConfig {
+    pub fn effective_response_format(&self) -> ResponseFormat {
+        self.response_format.clone().unwrap_or(if self.json_mode {
+            ResponseFormat::JsonObject
+        } else {
+            ResponseFormat::Text
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn effective_response_format_prefers_explicit_over_json_mode() {
+        let cfg = ModelConfig {
+            json_mode: true,
+            response_format: Some(ResponseFormat::Text),
+            ..Default::default()
+        };
+        assert_eq!(cfg.effective_response_format(), ResponseFormat::Text);
+    }
+
+    #[test]
+    fn effective_response_format_json_mode_true_maps_to_json_object() {
+        let cfg = ModelConfig {
+            json_mode: true,
+            response_format: None,
+            ..Default::default()
+        };
+        assert_eq!(cfg.effective_response_format(), ResponseFormat::JsonObject);
+    }
+
+    #[test]
+    fn effective_response_format_default_is_text() {
+        let cfg = ModelConfig::default();
+        assert_eq!(cfg.effective_response_format(), ResponseFormat::Text);
     }
 }

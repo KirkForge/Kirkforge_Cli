@@ -204,6 +204,18 @@ pub enum ToolChoice {
     Specific(String),
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ResponseFormat {
+    #[default]
+    Text,
+    JsonObject,
+    JsonSchema {
+        name: String,
+        schema: serde_json::Value,
+    },
+}
+
 /// Headless Chrome configuration for the `computer_use` tool.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ComputerUseConfig {

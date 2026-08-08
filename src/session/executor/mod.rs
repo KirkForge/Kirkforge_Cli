@@ -189,6 +189,7 @@ impl Executor {
         // that don't support it, so unknown models (and the test
         // mocks) silently ignore the flag.
         adapter.set_json_mode(cfg.model.json_mode);
+        adapter.set_response_format(cfg.model.effective_response_format());
 
         // Push the deterministic-mode seed down to the active adapter.
         adapter.set_seed(cfg.model.seed);

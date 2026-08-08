@@ -332,6 +332,8 @@ pub trait ModelAdapter: Send + Sync {
     /// session.
     fn set_json_mode(&mut self, _json_mode: bool) {}
 
+    fn set_response_format(&mut self, _format: crate::shared::ResponseFormat) {}
+
     /// Configure deterministic-mode seed. Default no-op; adapters
     /// that support a `seed` field in the request body override this.
     /// When set, the adapter should pin temperature=0 and pass the
@@ -530,7 +532,7 @@ fn build_ollama_chat_body(
     messages: &[crate::shared::Message],
     tools: &[crate::shared::ToolDef],
     stream: bool,
-    json_mode: bool,
+    response_format: Option<&crate::shared::ResponseFormat>,
     seed: Option<u64>,
 ) -> serde_json::Value {
     let ollama_messages: Vec<serde_json::Value> = messages
@@ -621,8 +623,15 @@ fn build_ollama_chat_body(
     // OpenAI's `response_format: {type: "json_object"}`. The regex
     // tool-call extractor in the executor still runs in parallel; this
     // only constrains the *content* stream.
-    if json_mode {
-        body["format"] = serde_json::Value::String("json".into());
+    match response_format {
+        Some(crate::shared::ResponseFormat::JsonObject) => {
+            body["format"] = serde_json::Value::String("json".into());
+        }
+        Some(crate::shared::ResponseFormat::JsonSchema { schema, .. }) => {
+            body["format"] =
+                serde_json::json!({"type": "object", "properties": schema.get("properties")});
+        }
+        _ => {}
     }
 
     // Deterministic mode: pin temperature=0 and set seed via options.
@@ -653,7 +662,7 @@ fn build_openai_compat_body(
     model_info: &crate::shared::ModelInfo,
     messages: &[crate::shared::Message],
     tools: &[crate::shared::ToolDef],
-    json_mode: bool,
+    response_format: Option<&crate::shared::ResponseFormat>,
     seed: Option<u64>,
     tool_choice: Option<&crate::shared::ToolChoice>,
 ) -> serde_json::Value {
@@ -765,11 +774,20 @@ fn build_openai_compat_body(
     // the client opted in. Regex tool-call extraction still runs
     // server-side as a fallback; some models emit `<tool_call>`
     // blocks in-band even with `response_format: json_object`.
-    if json_mode {
-        body["response_format"] = serde_json::json!({"type": "json_object"});
-        if !tools.is_empty() {
-            body["tool_choice"] = serde_json::Value::String("auto".into());
+    match response_format {
+        Some(crate::shared::ResponseFormat::JsonObject) => {
+            body["response_format"] = serde_json::json!({"type": "json_object"});
+            if !tools.is_empty() {
+                body["tool_choice"] = serde_json::Value::String("auto".into());
+            }
         }
+        Some(crate::shared::ResponseFormat::JsonSchema { name, schema }) => {
+            body["response_format"] = serde_json::json!({
+                "type": "json_schema",
+                "json_schema": { "name": name, "schema": schema }
+            });
+        }
+        _ => {}
     }
 
     if let Some(tc) = tool_choice {
@@ -1195,7 +1213,7 @@ mod tests {
             content: "hi".into(),
             ..Default::default()
         }];
-        let body = build_ollama_chat_body("m", &msgs, &[], true, false, None);
+        let body = build_ollama_chat_body("m", &msgs, &[], true, None, None);
         assert_eq!(body["model"], "m");
         assert_eq!(body["stream"], true);
         assert_eq!(body["messages"][0]["role"], "user");
@@ -1209,7 +1227,7 @@ mod tests {
             description: "run a command",
             parameters: serde_json::json!({"type": "object"}),
         }];
-        let body = build_ollama_chat_body("m", &[], &tools, true, false, None);
+        let body = build_ollama_chat_body("m", &[], &tools, true, None, None);
         let tools_arr = body["tools"].as_array().unwrap();
         assert_eq!(tools_arr[0]["type"], "function");
         assert_eq!(tools_arr[0]["function"]["name"], "bash");
@@ -1217,13 +1235,20 @@ mod tests {
 
     #[test]
     fn build_ollama_chat_body_json_mode_adds_format() {
-        let body = build_ollama_chat_body("m", &[], &[], true, true, None);
+        let body = build_ollama_chat_body(
+            "m",
+            &[],
+            &[],
+            true,
+            Some(&crate::shared::ResponseFormat::JsonObject),
+            None,
+        );
         assert_eq!(body["format"], "json");
     }
 
     #[test]
     fn build_ollama_chat_body_seed_sets_options() {
-        let body = build_ollama_chat_body("m", &[], &[], true, false, Some(42));
+        let body = build_ollama_chat_body("m", &[], &[], true, None, Some(42));
         assert_eq!(body["options"]["temperature"], 0);
         assert_eq!(body["options"]["seed"], 42);
     }
@@ -1236,7 +1261,7 @@ mod tests {
             thinking: Some("reasoning".into()),
             ..Default::default()
         }];
-        let body = build_ollama_chat_body("m", &msgs, &[], true, false, None);
+        let body = build_ollama_chat_body("m", &msgs, &[], true, None, None);
         assert_eq!(body["messages"][0]["thinking"], "reasoning");
     }
 
@@ -1248,7 +1273,7 @@ mod tests {
             tool_call_id: Some("call_1".into()),
             ..Default::default()
         }];
-        let body = build_ollama_chat_body("m", &msgs, &[], true, false, None);
+        let body = build_ollama_chat_body("m", &msgs, &[], true, None, None);
         assert_eq!(body["messages"][0]["tool_call_id"], "call_1");
     }
 
@@ -1268,7 +1293,7 @@ mod tests {
             ]),
             ..Default::default()
         }];
-        let body = build_ollama_chat_body("m", &msgs, &[], true, false, None);
+        let body = build_ollama_chat_body("m", &msgs, &[], true, None, None);
         assert_eq!(body["messages"][0]["images"][0], "BASE64");
         assert!(body["messages"][0]["content"]
             .as_str()
@@ -1293,7 +1318,7 @@ mod tests {
             tool_call_id: Some("call_1".into()),
             ..Default::default()
         }];
-        let body = build_openai_compat_body("m", &mi, &msgs, &[], false, None, None);
+        let body = build_openai_compat_body("m", &mi, &msgs, &[], None, None, None);
         assert_eq!(body["messages"][0]["role"], "tool");
         assert_eq!(body["messages"][0]["tool_call_id"], "call_1");
         assert_eq!(body["messages"][0]["content"], "result");
@@ -1320,7 +1345,7 @@ mod tests {
             }]),
             ..Default::default()
         }];
-        let body = build_openai_compat_body("m", &mi, &msgs, &[], false, None, None);
+        let body = build_openai_compat_body("m", &mi, &msgs, &[], None, None, None);
         assert_eq!(body["messages"][0]["role"], "assistant");
         let tcs = body["messages"][0]["tool_calls"].as_array().unwrap();
         assert_eq!(tcs[0]["id"], "call_1");
@@ -1347,7 +1372,7 @@ mod tests {
                 ..Default::default()
             }],
             &[],
-            false,
+            None,
             Some(7),
             None,
         );
@@ -1380,7 +1405,7 @@ mod tests {
                 ..Default::default()
             }],
             &tools,
-            true,
+            Some(&crate::shared::ResponseFormat::JsonObject),
             None,
             None,
         );
@@ -1411,7 +1436,7 @@ mod tests {
                 ..Default::default()
             }],
             &[],
-            true,
+            Some(&crate::shared::ResponseFormat::JsonObject),
             None,
             None,
         );
@@ -1438,7 +1463,7 @@ mod tests {
                 ..Default::default()
             }],
             &[],
-            false,
+            None,
             None,
             None,
         );
@@ -1480,7 +1505,7 @@ mod tests {
                 ..Default::default()
             },
         ];
-        let body = build_openai_compat_body("m", &mi, &messages, &[], false, None, None);
+        let body = build_openai_compat_body("m", &mi, &messages, &[], None, None, None);
         let msgs = body["messages"].as_array().unwrap();
         // System message (index 0) should have cache_control (system+tools breakpoint).
         assert_eq!(

@@ -409,7 +409,7 @@ fn adr_0014_no_runtime_lock_section() {
 // `fs2::FileExt`.
 #[test]
 fn adr_0014_impl_has_no_with_lock_or_fs2() {
-    for crate_name in ["kf-budget-core", "kf-budget-cli", "kf-budget-hosts"] {
+    for crate_name in ["kf-budget-core"] {
         let src_dir = repo_root().join("crates").join(crate_name).join("src");
         let entries = std::fs::read_dir(&src_dir)
             .unwrap_or_else(|e| panic!("read_dir {}: {e}", src_dir.display()));

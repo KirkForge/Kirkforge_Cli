@@ -2029,14 +2029,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "kf-budget-hosts"
-version = "0.2.0"
-dependencies = [
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "kf-code"
 version = "0.3.6"
 dependencies = [

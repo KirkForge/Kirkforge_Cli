@@ -120,7 +120,7 @@ impl TokenBudget {
 pub const SLICE_OVERHEAD: usize = 256;
 
 // ponytail: the enum now derives Serialize/Deserialize with the
-// same tagged-enum shape as `kf_budget_hosts::UserPromptSubmitResponse`
+// tagged-enum shape (`tag = "kind"`, `rename_all = "snake_case"`). The two enums
 // (`tag = "kind"`, `rename_all = "snake_case"`). The two enums
 // stay separate (one lives in core for budget logic; one in
 // hosts for the canonical wire shape) but the serde rules make
@@ -682,8 +682,7 @@ mod tests {
         );
     }
 
-    // ponytail: pin the `Intervention` wire shape — the bridge
-    // to `kf_budget_hosts::UserPromptSubmitResponse` rides on this.
+    // ponytail: pin the `Intervention` wire shape. Both enums are
     // Both enums are `#[serde(tag = "kind", rename_all = "snake_case")]`
     // over the same four-variant shape. A contributor who drops
     // the serde derives on `Intervention` or changes the tag/rename

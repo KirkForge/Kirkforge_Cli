@@ -44,7 +44,6 @@ kf-code (root bin)          ← the CLI the user runs
 │   ├── kf-bench        ← task-benchmark harness (types + verifier + reports)
 │   ├── kf-compress-core       ← context-compression pipeline library + ruleset filtering
 │   ├── kf-budget-core           ← budget/orchestrator/slicing data model
-│   ├── kf-budget-hosts          ← host detection + canonical payload schemas (Claude Code wired; Cursor/Aider/KfCode stubs removed WO 20.0.9)
 │   └── kf-testdoctor   ← test-performance doctor (workspace member; profile, profile-per-test, classify, partition, suggest, suggest-detailed, apply, gaps, diagnose, flaky)
 ├── plugins/                   ← 3 plugin manifests + shell tool/hook scripts
 │   ├── kf-plugin/      ← SDK self-plugin (Node-backed verification tools)
@@ -90,7 +89,6 @@ When the feature is off, the shell plugin dir loads as a fallback
 | `kf-compress-core` | session | Context-compression pipeline library + rules | Active |
 | `kf-testdoctor` | quality | Test-performance diagnostics | Active |
 | `kf-budget-core` | session | Budget/orchestrator/slicing data model | Active |
-| `kf-budget-hosts` | session | Host detection, canonical payload schemas | Active |
 
 "Excluded" crates exist on disk but are not built by default.
 
@@ -789,7 +787,6 @@ document known limitations. Removing these is a regression.
 | `kf-bench` | Active | Benchmark task types, loader, verifier, reports | `BenchTask`, `TaskResult` | root binary, bench CI |
 | `kf-compress-core` | Active | Context-compression pipeline library | `CompressionPipeline`, `Mode`, `rules::build_rules` | root binary (via `stratum` feature) |
 | `kf-budget-core` | Active | Budget/orchestrator/slicing data model | `TokenBudget`, `SlicingOrchestrator` | root binary (via `budget` feature) |
-| `kf-budget-hosts` | Active | Host detection, canonical payload schemas | `Host`, `detect_host`, canonical types | `kf-budget-cli` (excluded) |
 | `kf-testdoctor` | Active | Test-performance diagnostics | `doctor` CLI | root binary (`kf-code doctor`) |
 
 "Excluded" crates exist on disk but are not built by default (`cargo build

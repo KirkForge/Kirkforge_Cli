@@ -105,6 +105,8 @@ fn build_bench_toolset(sandbox_path: &Path) -> super::toolset::CompositeToolset 
         docker_config: None,
         sandbox_config: crate::shared::SandboxConfig::default(),
         block_edits: false,
+        max_background_tasks: 4,
+        task_concurrency_mode: crate::tools::task::TaskConcurrencyMode::Queue,
     };
     let tools = crate::tools::all_tools(&ctx);
 

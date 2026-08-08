@@ -22,6 +22,8 @@
 /// - `KF_CODE_MINIFY_ABOVE_BYTES` — auto-minify `read_file` output above this byte threshold (default 4096)
 /// - `KF_CODE_SCHEDULED_BASH_AUTO_APPROVE` — "true" to let scheduled bash jobs skip interactive approval
 /// - `KF_CODE_MAX_CONCURRENT_SCHEDULED_JOBS` — max concurrent scheduled jobs (clamped to ≥1)
+/// - `KF_CODE_MAX_BACKGROUND_TASKS` — max concurrent background tasks (clamped to 1..=64)
+/// - `KF_CODE_TASK_CONCURRENCY_MODE` — "queue" (default) or "reject" for background task backpressure
 /// - `KF_CODE_BASH_SANDBOX_WORKDIR` — "true"/"false" to force bash cwd into the sandbox
 /// - `KF_CODE_BANG_REQUIRES_APPROVAL` — "true" to route `!` passthrough through approval gate
 /// - `KF_CODE_JSON_MODE` — "true" to request JSON-formatted model responses
@@ -404,6 +406,18 @@ fn merge_toml_into_config(cfg: &mut Config, table: toml::Table) {
     }
     if let Some(Value::Integer(v)) = table.get("max_persona_turns") {
         cfg.tools.max_persona_turns = (*v).max(1) as usize;
+    }
+    if let Some(Value::Integer(v)) = table.get("max_continuation_rounds") {
+        cfg.tools.max_continuation_rounds = (*v).clamp(0, 50) as usize;
+    }
+    if let Some(Value::Integer(v)) = table.get("max_background_tasks") {
+        cfg.tools.max_background_tasks = (*v as usize).clamp(1, 64);
+    }
+    if let Some(Value::String(v)) = table.get("task_concurrency_mode") {
+        let mode = v.to_lowercase();
+        if mode == "queue" || mode == "reject" {
+            cfg.tools.task_concurrency_mode = mode;
+        }
     }
     if let Some(Value::Integer(v)) = table.get("tool_timeout_secs") {
         if let Ok(n) = u64::try_from(*v) {
@@ -1553,6 +1567,42 @@ mod tests {
     }
 
     #[test]
+    fn test_env_max_background_tasks_is_clamped() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut cfg = Config::default();
+        set_env("KF_CODE_MAX_BACKGROUND_TASKS", Some("0"));
+        apply_env_overrides(&mut cfg);
+        assert_eq!(cfg.tools.max_background_tasks, 1);
+        set_env("KF_CODE_MAX_BACKGROUND_TASKS", Some("16"));
+        apply_env_overrides(&mut cfg);
+        assert_eq!(cfg.tools.max_background_tasks, 16);
+        set_env("KF_CODE_MAX_BACKGROUND_TASKS", Some("100"));
+        apply_env_overrides(&mut cfg);
+        assert_eq!(cfg.tools.max_background_tasks, 64);
+        set_env("KF_CODE_MAX_BACKGROUND_TASKS", None);
+    }
+
+    #[test]
+    fn test_env_task_concurrency_mode() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut cfg = Config::default();
+        assert_eq!(cfg.tools.task_concurrency_mode, "queue");
+        set_env("KF_CODE_TASK_CONCURRENCY_MODE", Some("reject"));
+        apply_env_overrides(&mut cfg);
+        assert_eq!(cfg.tools.task_concurrency_mode, "reject");
+        set_env("KF_CODE_TASK_CONCURRENCY_MODE", Some("QUEUE"));
+        apply_env_overrides(&mut cfg);
+        assert_eq!(cfg.tools.task_concurrency_mode, "queue");
+        set_env("KF_CODE_TASK_CONCURRENCY_MODE", Some("invalid"));
+        apply_env_overrides(&mut cfg);
+        assert_eq!(
+            cfg.tools.task_concurrency_mode, "queue",
+            "invalid value should not change mode"
+        );
+        set_env("KF_CODE_TASK_CONCURRENCY_MODE", None);
+    }
+
+    #[test]
     fn test_merge_toml_scheduled_job_knobs() {
         let mut cfg = Config::default();
         assert!(!cfg.tools.scheduled_bash_auto_approve);
@@ -1566,6 +1616,47 @@ mod tests {
         merge_toml_into_config(&mut cfg, table);
         assert!(cfg.tools.scheduled_bash_auto_approve);
         assert_eq!(cfg.tools.max_concurrent_scheduled_jobs, 1);
+    }
+
+    #[test]
+    fn test_merge_toml_background_task_knobs() {
+        let mut cfg = Config::default();
+        assert_eq!(cfg.tools.max_background_tasks, 4);
+        assert_eq!(cfg.tools.task_concurrency_mode, "queue");
+        let table: toml::Table = r#"
+            max_background_tasks = 8
+            task_concurrency_mode = "reject"
+        "#
+        .parse()
+        .unwrap();
+        merge_toml_into_config(&mut cfg, table);
+        assert_eq!(cfg.tools.max_background_tasks, 8);
+        assert_eq!(cfg.tools.task_concurrency_mode, "reject");
+    }
+
+    #[test]
+    fn test_merge_toml_background_task_clamps_to_range() {
+        let mut cfg = Config::default();
+        let table: toml::Table = r#"
+            max_background_tasks = 0
+        "#
+        .parse()
+        .unwrap();
+        merge_toml_into_config(&mut cfg, table);
+        assert_eq!(
+            cfg.tools.max_background_tasks, 1,
+            "0 should be clamped to 1"
+        );
+        let table: toml::Table = r#"
+            max_background_tasks = 100
+        "#
+        .parse()
+        .unwrap();
+        merge_toml_into_config(&mut cfg, table);
+        assert_eq!(
+            cfg.tools.max_background_tasks, 64,
+            "100 should be clamped to 64"
+        );
     }
 
     #[test]
@@ -1905,10 +1996,10 @@ mod tests {
         use crate::shared::config::CONFIG_FIELD_COUNT;
 
         // ── 1. Total struct-level fields ──────────────────────────
-        // ModelConfig=30, SecurityConfig=18, ToolConfig=26,
+        // ModelConfig=30, SecurityConfig=18, ToolConfig=29,
         // SessionConfig=8, DisplayConfig=3
         assert_eq!(
-            CONFIG_FIELD_COUNT, 85,
+            CONFIG_FIELD_COUNT, 88,
             "CONFIG_FIELD_COUNT has drifted — did you add/remove a config field?"
         );
 
@@ -1953,6 +2044,9 @@ mod tests {
             preserve_recent_messages = 999
             max_tool_calls_per_turn = 999
             max_persona_turns = 999
+            max_continuation_rounds = 5
+            max_background_tasks = 4
+            task_concurrency_mode = "queue"
             tool_timeout_secs = 999
             audit_log_path = "x"
             hooks_dir = "x"
@@ -2004,8 +2098,8 @@ mod tests {
                 toml_key_count += 1;
             }
         }
-        // 67 top-level leaf keys + 7 computer_use sub-keys = 74
-        const MERGE_TOML_EXPECTED: usize = 74;
+        // 67 top-level leaf keys + 3 tool keys + 7 computer_use sub-keys = 77
+        const MERGE_TOML_EXPECTED: usize = 77;
         assert_eq!(
             toml_key_count, MERGE_TOML_EXPECTED,
             "merge_toml_into_config key count changed — did you add/remove a handled field?"
@@ -2014,9 +2108,9 @@ mod tests {
         // ── 3. apply_env_overrides field coverage ─────────────────
         // Count KF_CODE_* env var checks in apply_env_overrides.
         // This must stay in sync with env_overrides.rs.
-        const ENV_OVERRIDE_EXPECTED: usize = 70;
+        const ENV_OVERRIDE_EXPECTED: usize = 75;
         assert_eq!(
-            ENV_OVERRIDE_EXPECTED, 70,
+            ENV_OVERRIDE_EXPECTED, 75,
             "apply_env_overrides env-var count changed — did you add/remove a KF_CODE_* var?"
         );
 
@@ -2045,8 +2139,8 @@ mod tests {
         //   (Arrays/Vec fields without env-var representations.)
         //
         // The expansion of computer_use (1 struct field → 7 TOML keys)
-        // means MERGE_TOML_EXPECTED = 64 handled struct fields + 7 expansion
-        // keys = 71, not 82 - 16 = 66.
+        // means MERGE_TOML_EXPECTED = 70 top-level leaf keys + 7 expansion
+        // keys = 77.
         let _ = (
             CONFIG_FIELD_COUNT,
             MERGE_TOML_EXPECTED,

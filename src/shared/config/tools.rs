@@ -13,6 +13,10 @@ fn default_max_persona_turns() -> usize {
     10
 }
 
+fn default_max_continuation_rounds() -> usize {
+    5
+}
+
 fn default_tool_timeout_secs() -> Option<u64> {
     Some(30)
 }
@@ -35,6 +39,14 @@ fn default_scheduled_bash_auto_approve() -> bool {
 
 fn default_max_concurrent_scheduled_jobs() -> usize {
     4
+}
+
+fn default_max_background_tasks() -> usize {
+    4
+}
+
+fn default_task_concurrency_mode() -> String {
+    "queue".to_string()
 }
 
 fn default_reject_on_excess_plugin_trust() -> bool {
@@ -83,6 +95,8 @@ pub struct ToolConfig {
     pub max_tool_calls_per_turn: usize,
     #[serde(default = "default_max_persona_turns")]
     pub max_persona_turns: usize,
+    #[serde(default = "default_max_continuation_rounds")]
+    pub max_continuation_rounds: usize,
     #[serde(default)]
     pub dry_run: bool,
     #[serde(default)]
@@ -99,6 +113,10 @@ pub struct ToolConfig {
     pub scheduled_bash_auto_approve: bool,
     #[serde(default = "default_max_concurrent_scheduled_jobs")]
     pub max_concurrent_scheduled_jobs: usize,
+    #[serde(default = "default_max_background_tasks")]
+    pub max_background_tasks: usize,
+    #[serde(default = "default_task_concurrency_mode")]
+    pub task_concurrency_mode: String,
     #[serde(default = "default_max_plugin_trust")]
     pub max_plugin_trust: kf_plugin_sdk::TrustTier,
     #[serde(default = "default_reject_on_excess_plugin_trust")]
@@ -137,6 +155,7 @@ impl Default for ToolConfig {
             tool_timeout_secs: default_tool_timeout_secs(),
             max_tool_calls_per_turn: default_max_tool_calls_per_turn(),
             max_persona_turns: default_max_persona_turns(),
+            max_continuation_rounds: default_max_continuation_rounds(),
             dry_run: false,
             hooks_dir: None,
             minify_write_side: false,
@@ -145,6 +164,8 @@ impl Default for ToolConfig {
             block_binary_reads: false,
             scheduled_bash_auto_approve: false,
             max_concurrent_scheduled_jobs: default_max_concurrent_scheduled_jobs(),
+            max_background_tasks: default_max_background_tasks(),
+            task_concurrency_mode: default_task_concurrency_mode(),
             max_plugin_trust: default_max_plugin_trust(),
             reject_on_excess_plugin_trust: default_reject_on_excess_plugin_trust(),
             plugin_signature_validation: false,
@@ -171,6 +192,7 @@ mod tests {
         assert!((cfg.budget_approaching_ratio - 0.8).abs() < f64::EPSILON);
         assert!(cfg.stratum_mode.is_none());
         assert_eq!(cfg.minify_above_bytes, 4096);
+        assert_eq!(cfg.max_continuation_rounds, 5);
     }
 
     #[test]

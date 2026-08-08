@@ -1,6 +1,7 @@
 use crate::session::access::{DenyList, PathGuard};
 use crate::shared::{ComputerUseConfig, DockerConfig, SandboxConfig};
 use crate::tools::computer_use::{ChromeTab, SessionLauncher};
+use crate::tools::task::TaskConcurrencyMode;
 use crate::tools::{Tool, UndoStackRef};
 use kf_lsp::LspPool;
 use std::sync::Arc;
@@ -27,6 +28,8 @@ pub struct ToolContextBuilder {
     pub docker_config: Option<DockerConfig>,
     pub sandbox_config: SandboxConfig,
     pub block_edits: bool,
+    pub max_background_tasks: usize,
+    pub task_concurrency_mode: TaskConcurrencyMode,
 }
 
 /// A builder that collects tools and produces the final tool list.

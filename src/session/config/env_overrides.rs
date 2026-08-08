@@ -207,6 +207,28 @@ pub(super) fn apply_env_overrides(cfg: &mut Config) {
         }
     }
 
+    // KF_CODE_MAX_CONTINUATION_ROUNDS
+    if let Ok(val) = std::env::var("KF_CODE_MAX_CONTINUATION_ROUNDS") {
+        if let Ok(n) = val.parse::<usize>() {
+            cfg.tools.max_continuation_rounds = n.clamp(0, 50);
+        }
+    }
+
+    // KF_CODE_MAX_BACKGROUND_TASKS
+    if let Ok(val) = std::env::var("KF_CODE_MAX_BACKGROUND_TASKS") {
+        if let Ok(n) = val.parse::<usize>() {
+            cfg.tools.max_background_tasks = n.clamp(1, 64);
+        }
+    }
+
+    // KF_CODE_TASK_CONCURRENCY_MODE
+    if let Ok(val) = std::env::var("KF_CODE_TASK_CONCURRENCY_MODE") {
+        let mode = val.to_lowercase();
+        if mode == "queue" || mode == "reject" {
+            cfg.tools.task_concurrency_mode = mode;
+        }
+    }
+
     // KF_CODE_TOOL_TIMEOUT_SECS
     if let Ok(val) = std::env::var("KF_CODE_TOOL_TIMEOUT_SECS") {
         if let Ok(n) = val.parse::<u64>() {

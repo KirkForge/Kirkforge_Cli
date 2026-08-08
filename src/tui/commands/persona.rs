@@ -117,6 +117,12 @@ fn tools_for_persona(
         docker_config: Some(config.security.docker.clone()),
         sandbox_config: config.security.sandbox.clone(),
         block_edits: config.security.sandbox.block_edits,
+        max_background_tasks: config.tools.max_background_tasks,
+        task_concurrency_mode: config
+            .tools
+            .task_concurrency_mode
+            .parse()
+            .unwrap_or(crate::tools::task::TaskConcurrencyMode::Queue),
     };
     let all = crate::tools::all_tools(&ctx);
     match kind {
@@ -175,6 +181,12 @@ pub fn tools_for_scout(
         docker_config: Some(config.security.docker.clone()),
         sandbox_config: config.security.sandbox.clone(),
         block_edits: config.security.sandbox.block_edits,
+        max_background_tasks: config.tools.max_background_tasks,
+        task_concurrency_mode: config
+            .tools
+            .task_concurrency_mode
+            .parse()
+            .unwrap_or(crate::tools::task::TaskConcurrencyMode::Queue),
     };
     let all = crate::tools::all_tools(&ctx);
     crate::session::executor::ScoutSubagent::new().filter_tools(all)

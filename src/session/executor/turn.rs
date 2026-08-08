@@ -281,6 +281,12 @@ impl Executor {
             .max_tool_calls_per_turn
             .max(1);
 
+        let max_continuation_rounds = read_shared_config(&self.config)
+            .tools
+            .max_continuation_rounds
+            .clamp(0, 50);
+        let mut continuation_count: usize = 0;
+
         for iteration in 0..max_iterations {
             if cancelled.load(Ordering::SeqCst) {
                 // The cancel watcher already emitted "Generation
@@ -307,6 +313,42 @@ impl Executor {
             match outcome {
                 IterationOutcome::Finished(finish_reason) => {
                     if finish_reason == crate::shared::FinishReason::Length {
+                        if max_continuation_rounds == 0 {
+                            record_turn_metric(
+                                &self.model_name,
+                                turn_start,
+                                tool_calls.len(),
+                                &crate::shared::FinishReason::Error,
+                            );
+                            crate::send_or_warn!(
+                                event_tx
+                                    .send(TurnEvent::Error(
+                                        "Response truncated (max tokens). Continuation disabled (max_continuation_rounds = 0).".into()
+                                    ))
+                                    .await,
+                                "TurnEvent receiver dropped; discarding event"
+                            );
+                            return Ok(());
+                        }
+                        continuation_count += 1;
+                        if continuation_count > max_continuation_rounds {
+                            let msg = format!(
+                                "Max continuation rounds reached ({max_continuation_rounds}). \
+                                 The response was truncated and could not be completed within \
+                                 the allowed rounds."
+                            );
+                            crate::send_or_warn!(
+                                event_tx.send(TurnEvent::Error(msg.clone())).await,
+                                "TurnEvent receiver dropped; discarding event"
+                            );
+                            record_turn_metric(
+                                &self.model_name,
+                                turn_start,
+                                tool_calls.len(),
+                                &crate::shared::FinishReason::Error,
+                            );
+                            return Ok(());
+                        }
                         crate::send_or_warn!(
                             event_tx
                                 .send(TurnEvent::Token(

@@ -389,6 +389,12 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
         docker_config: Some(config.security.docker.clone()),
         sandbox_config: config.security.sandbox.clone(),
         block_edits: config.security.sandbox.block_edits,
+        max_background_tasks: config.tools.max_background_tasks,
+        task_concurrency_mode: config
+            .tools
+            .task_concurrency_mode
+            .parse()
+            .unwrap_or(tools::task::TaskConcurrencyMode::Queue),
     };
     let mut toolset = session::toolset::CompositeToolset::empty();
     toolset.add(Box::new(session::toolset::VecToolset::new(

@@ -291,6 +291,24 @@ destructive tool calls (`AuditEntry::Tool`) and hook denials / fail-open
 failures (`AuditEntry::Hook`, WO 11.6 / ADR-061) as append-only NDJSON
 with a `"kind"` tag.
 
+`ToolConfig.max_continuation_rounds` (default 5, clamped 0–50) caps how many
+times the turn loop will continue after `FinishReason::Length`. When the cap
+is hit, the turn ends with a clear error message. Set to 0 to disable
+continuation entirely (treat `Length` as `Stop`). Env override:
+`KF_CODE_MAX_CONTINUATION_ROUNDS`.
+
+`ToolConfig.max_background_tasks` (default 4, clamped 1–64) controls the
+semaphore size for `task(background=true)`. Only N background tasks run
+concurrently; additional tasks either queue or are rejected depending on
+`task_concurrency_mode`. Env override: `KF_CODE_MAX_BACKGROUND_TASKS`.
+
+`ToolConfig.task_concurrency_mode` (default `"queue"`, values `"queue"` or
+`"reject"`) controls backpressure when `max_background_tasks` is reached. In
+`"queue"` mode, excess tasks wait for a permit (current behavior). In
+`"reject"` mode, excess tasks immediately return a `Failure` outcome with a
+message suggesting `task_output` or increasing `max_background_tasks`. Env
+override: `KF_CODE_TASK_CONCURRENCY_MODE`.
+
 ### `daemon/`, `jobs/`, `line_mode/`, `main/`
 
 Session daemon (background process tracking recent sessions), scheduled-job

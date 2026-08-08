@@ -213,6 +213,10 @@ percent-encoding = "2"
 kf-budget-core = { workspace = true, optional = true }
 tempfile.workspace = true
 
+# PTY support for interactive bash commands (WO 21.5-R2, feature-gated).
+# ponytail: ~2 MB binary cost; opt-in via --features pty.
+portable-pty = { version = "0.8", optional = true }
+
 [dev-dependencies]
 # Property-based testing for edit-file diff application and other invariants.
 proptest = "1.6"
@@ -229,6 +233,7 @@ path = "tests/e2e/main.rs"
 default = ["stratum", "budget"]
 stratum = ["dep:kf-compress-core"]
 budget = ["dep:kf-budget-core"]
+pty = ["portable-pty"]
 # Enable OpenTelemetry span/metric export from the Rust runtime.
 otel = [
     "dep:opentelemetry",

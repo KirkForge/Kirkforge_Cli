@@ -6,6 +6,9 @@ use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, ReadBuf};
 use tokio::process::Command;
 
+#[cfg(feature = "pty")]
+pub mod pty;
+
 /// Per-stream cap for captured stdout / stderr from a single bash invocation.
 ///
 /// Without this, a single `cat /dev/urandom` or `find / -print` against a

@@ -1,9 +1,12 @@
 //! Post-turn fact extraction from user/assistant messages.
+//!
+// ponytail: heuristic keyword extraction, not LLM; MAX_FACTS_PER_TURN caps noise
 
 use super::{slugify_description, MemoryFact};
 use std::collections::HashMap;
 
 const MIN_FACT_LEN: usize = 20;
+const MAX_FACTS_PER_TURN: usize = 3;
 
 const CHAFF: &[&str] = &[
     "ok",
@@ -106,6 +109,21 @@ fn sentence_bounds(text: &str) -> Vec<&str> {
     out
 }
 
+fn make_slug(prefix: &str, text: &str) -> String {
+    let slug_part = slugify_description(&text[..text.len().min(120)]);
+    let hash = fnv1a_16(text);
+    format!("{prefix}{slug_part}-{hash:04x}")
+}
+
+fn fnv1a_16(data: &str) -> u16 {
+    let mut hash: u32 = 0x811c9dc5;
+    for byte in data.bytes() {
+        hash ^= byte as u32;
+        hash = hash.wrapping_mul(0x01000193);
+    }
+    (hash & 0xffff) as u16
+}
+
 fn extract_user_preferences(user_msg: &str) -> Vec<MemoryFact> {
     let lower = user_msg.to_lowercase();
     let mut facts = Vec::new();
@@ -116,9 +134,9 @@ fn extract_user_preferences(user_msg: &str) -> Vec<MemoryFact> {
             if fact_text.len() < MIN_FACT_LEN || is_chaff(fact_text) {
                 continue;
             }
-            let slug = slugify_description(&fact_text[..fact_text.len().min(60)]);
+            let name = make_slug("user-pref-", fact_text);
             facts.push(MemoryFact {
-                name: format!("user-pref-{slug}"),
+                name,
                 description: fact_text[..fact_text.len().min(80)].to_string(),
                 body: fact_text.to_string(),
                 metadata: HashMap::from([("type".into(), "user".into())]),
@@ -139,9 +157,9 @@ fn extract_corrections(user_msg: &str) -> Vec<MemoryFact> {
             if fact_text.len() < MIN_FACT_LEN || is_chaff(fact_text) {
                 continue;
             }
-            let slug = slugify_description(&fact_text[..fact_text.len().min(60)]);
+            let name = make_slug("feedback-", fact_text);
             facts.push(MemoryFact {
-                name: format!("feedback-{slug}"),
+                name,
                 description: fact_text[..fact_text.len().min(80)].to_string(),
                 body: fact_text.to_string(),
                 metadata: HashMap::from([("type".into(), "feedback".into())]),
@@ -181,9 +199,9 @@ fn extract_project_facts(assistant_msg: &str) -> Vec<MemoryFact> {
         }
         let lower = sent.to_lowercase();
         if project_signals.iter().any(|sig| lower.contains(sig)) {
-            let slug = slugify_description(&sent[..sent.len().min(60)]);
+            let name = make_slug("project-", sent);
             facts.push(MemoryFact {
-                name: format!("project-{slug}"),
+                name,
                 description: sent[..sent.len().min(80)].to_string(),
                 body: sent.to_string(),
                 metadata: HashMap::from([("type".into(), "project".into())]),
@@ -203,7 +221,15 @@ pub fn extract_facts(user_msg: &str, assistant_msg: &str) -> Vec<MemoryFact> {
     facts.extend(extract_user_preferences(user_msg));
     facts.extend(extract_corrections(user_msg));
     facts.extend(extract_project_facts(assistant_msg));
+    facts.truncate(MAX_FACTS_PER_TURN);
     facts
+}
+
+/// True if the user message contains preference or correction keywords,
+/// meaning extraction should run regardless of turn-count rate limiting.
+pub fn is_preference_like(msg: &str) -> bool {
+    let lower = msg.to_lowercase();
+    USER_PREFS.iter().any(|p| lower.contains(p)) || CORRECTIONS.iter().any(|p| lower.contains(p))
 }
 
 #[cfg(test)]
@@ -306,5 +332,65 @@ mod tests {
         let sents = sentence_bounds("Just one sentence here");
         assert_eq!(sents.len(), 1);
         assert_eq!(sents[0], "Just one sentence here");
+    }
+
+    #[test]
+    fn slug_includes_hash_suffix() {
+        let facts = extract_facts("I prefer tabs over spaces for indentation", "");
+        assert!(!facts.is_empty());
+        let name = &facts[0].name;
+        assert!(
+            name.contains('-'),
+            "slug should contain hash suffix: {name}"
+        );
+        let parts: Vec<&str> = name.split('-').collect();
+        let last = parts.last().unwrap();
+        assert!(
+            u16::from_str_radix(last, 16).is_ok(),
+            "last segment should be hex hash: {name}"
+        );
+    }
+
+    #[test]
+    fn different_facts_different_slugs() {
+        let f1 = extract_facts("I prefer tabs over spaces for indentation", "");
+        let f2 = extract_facts("I prefer vim over emacs for editing code", "");
+        assert!(!f1.is_empty());
+        assert!(!f2.is_empty());
+        assert_ne!(
+            f1[0].name, f2[0].name,
+            "different facts must not collide on slug"
+        );
+    }
+
+    #[test]
+    fn max_facts_per_turn_caps_output() {
+        let mut big_assistant = String::new();
+        for i in 0..10 {
+            big_assistant.push_str(&format!(
+                "The project uses framework{} for thing{}. ",
+                i, i
+            ));
+        }
+        let facts = extract_facts("I prefer rust over go for systems", &big_assistant);
+        assert!(
+            facts.len() <= MAX_FACTS_PER_TURN,
+            "should cap at MAX_FACTS_PER_TURN={}, got {}: {:?}",
+            MAX_FACTS_PER_TURN,
+            facts.len(),
+            facts
+        );
+    }
+
+    #[test]
+    fn is_preference_like_detects_pref() {
+        assert!(is_preference_like("I prefer tabs over spaces"));
+        assert!(!is_preference_like("hello there"));
+    }
+
+    #[test]
+    fn is_preference_like_detects_correction() {
+        assert!(is_preference_like("actually, we should use tokio"));
+        assert!(is_preference_like("that's wrong, the fix is X"));
     }
 }

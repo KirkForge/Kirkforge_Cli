@@ -86,6 +86,9 @@ pub struct Executor {
 
     /// Memory store for auto-populated facts from post-turn extraction.
     memory_store: Option<crate::session::memory::MemoryStore>,
+
+    /// Turn counter for rate-limited memory extraction.
+    turn_count: u64,
 }
 
 impl Executor {
@@ -279,6 +282,7 @@ impl Executor {
             task_spawner: None,
             trace: None,
             memory_store: crate::session::memory::MemoryStore::default_store().ok(),
+            turn_count: 0,
         };
         this.init_default_verifiers(plugin_registry);
         this.build_task_spawner();

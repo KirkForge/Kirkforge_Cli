@@ -81,26 +81,43 @@ impl Executor {
             .await;
 
         // WO 21.6: post-turn memory extraction (best-effort).
-        if let Some(ref store) = self.memory_store {
-            let history = self.conversation.all();
-            let last_user = history.iter().rev().find(|m| matches!(m.role, Role::User));
-            let last_assistant = history
-                .iter()
-                .rev()
-                .find(|m| matches!(m.role, Role::Assistant) && !m.content.is_empty());
-            if let (Some(u), Some(a)) = (last_user, last_assistant) {
-                let facts = crate::session::memory::extract::extract_facts(&u.content, &a.content);
-                for f in facts {
-                    if let Err(e) = store.upsert(
-                        &f.name,
-                        &f.description,
-                        &f.body,
-                        f.metadata
-                            .get("type")
-                            .map(|s| s.as_str())
-                            .unwrap_or("project"),
-                    ) {
-                        tracing::trace!(error = %e, name = %f.name, "memory extraction upsert failed");
+        // Rate limit: extract every 3rd turn, or immediately when the
+        // user message contains preference/correction keywords.
+        const EXTRACT_EVERY_N_TURNS: u64 = 3;
+        self.turn_count += 1;
+        let should_extract = self.turn_count % EXTRACT_EVERY_N_TURNS == 0
+            || crate::session::memory::extract::is_preference_like(user_input);
+
+        if should_extract {
+            if let Some(ref store) = self.memory_store {
+                let history = self.conversation.all();
+                let last_user = history.iter().rev().find(|m| matches!(m.role, Role::User));
+                let last_assistant = history
+                    .iter()
+                    .rev()
+                    .find(|m| matches!(m.role, Role::Assistant) && !m.content.is_empty());
+                if let (Some(u), Some(a)) = (last_user, last_assistant) {
+                    let facts = crate::session::memory::extract::extract_facts(
+                        &u.content,
+                        &a.content,
+                    );
+                    let count = facts.len();
+                    for f in &facts {
+                        if let Err(e) = store.upsert(
+                            &f.name,
+                            &f.description,
+                            &f.body,
+                            f.metadata
+                                .get("type")
+                                .map(|s| s.as_str())
+                                .unwrap_or("project"),
+                        ) {
+                            tracing::trace!(error = %e, name = %f.name, "memory extraction upsert failed");
+                        }
+                    }
+                    if count > 0 {
+                        let names: Vec<&str> = facts.iter().map(|f| f.name.as_str()).collect();
+                        tracing::info!(count, facts = ?names, "auto-remembered facts");
                     }
                 }
             }

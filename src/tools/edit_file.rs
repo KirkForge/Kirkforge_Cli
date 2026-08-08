@@ -384,6 +384,16 @@ impl Tool for EditFile {
         };
         let diff = render_diff(&content, &new_content);
 
+        if ctx.diff_review {
+            if let Some(msg) = review_diff(&path, &content, &new_content, &old) {
+                return ToolOutcome::Failure(ToolError::Execution {
+                    message: msg,
+                    exit_code: None,
+                    stderr: String::new(),
+                });
+            }
+        }
+
         if self.block_edits && !ctx.dry_run {
             return ToolOutcome::Failure(ToolError::Execution {
                 message: format!(
@@ -445,6 +455,44 @@ fn snapshot_for_undo(
             "undo stack mutex poisoned: {e}; edit will not be undoable"
         )),
     }
+}
+
+fn review_diff(path: &std::path::Path, old: &str, new: &str, old_string: &str) -> Option<String> {
+    let diff = TextDiff::from_lines(old, new);
+    let mut deletions = 0usize;
+    let mut has_change = false;
+
+    for change in diff.iter_all_changes() {
+        match change.tag() {
+            ChangeTag::Delete => deletions += 1,
+            ChangeTag::Insert | ChangeTag::Equal => {}
+        }
+        if change.tag() != ChangeTag::Equal {
+            has_change = true;
+        }
+    }
+
+    if !has_change {
+        return Some(format!(
+            "DIFF_REVIEW: edit to {} produced an empty diff (old_string already matches or content unchanged). Edit not applied.",
+            path.display()
+        ));
+    }
+
+    if !old_string.is_empty() {
+        let old_lines = old_string.lines().count();
+        if old_lines > 0 && old_lines < 5 {
+            let ratio = deletions as f64 / old_lines as f64;
+            if ratio > 10.0 {
+                return Some(format!(
+                    "DIFF_REVIEW: edit to {} deletes {deletions} lines but old_string is only {old_lines} lines (ratio={ratio:.1}). Likely wrong line range. Edit not applied.",
+                    path.display()
+                ));
+            }
+        }
+    }
+
+    None
 }
 
 fn render_diff(old: &str, new: &str) -> String {
@@ -1756,6 +1804,92 @@ mod tests {
             std::fs::read_to_string(&path).unwrap(),
             "abc\ndef\n",
             "file should be unchanged"
+        );
+    }
+
+    #[tokio::test]
+    async fn diff_review_rejects_empty_diff() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("f.txt");
+        std::fs::write(&path, "hello\nworld\n").unwrap();
+
+        let tool = EditFile::new(
+            None,
+            crate::session::access::PathGuard::default(),
+            false,
+            false,
+        );
+        let mut ctx = ToolContext::new();
+        ctx.diff_review = true;
+        let args = serde_json::json!({
+            "path": path.to_string_lossy(),
+            "old_string": "hello",
+            "new_string": "hello",
+        });
+        let result = tool.run(&ctx, args).await;
+        assert!(
+            matches!(result, ToolOutcome::Failure(_)),
+            "empty diff should be rejected, got {result:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "hello\nworld\n",
+            "file should be unchanged after empty-diff rejection"
+        );
+    }
+
+    #[tokio::test]
+    async fn diff_review_allows_normal_edit() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("f.txt");
+        std::fs::write(&path, "hello\nworld\n").unwrap();
+
+        let tool = EditFile::new(
+            None,
+            crate::session::access::PathGuard::default(),
+            false,
+            false,
+        );
+        let ctx = ToolContext::new();
+        let args = serde_json::json!({
+            "path": path.to_string_lossy(),
+            "old_string": "hello",
+            "new_string": "goodbye",
+        });
+        let result = tool.run(&ctx, args).await;
+        assert!(
+            matches!(result, ToolOutcome::FileEdit { .. }),
+            "normal edit should succeed, got {result:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "goodbye\nworld\n",
+        );
+    }
+
+    #[tokio::test]
+    async fn diff_review_off_skips_check() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("f.txt");
+        std::fs::write(&path, "hello\nworld\n").unwrap();
+
+        let tool = EditFile::new(
+            None,
+            crate::session::access::PathGuard::default(),
+            false,
+            false,
+        );
+        let mut ctx = ToolContext::new();
+        ctx.diff_review = false;
+        let args = serde_json::json!({
+            "path": path.to_string_lossy(),
+            "old_string": "hello",
+            "new_string": "hello",
+        });
+        let result = tool.run(&ctx, args).await;
+        assert!(
+            matches!(result, ToolOutcome::FileEdit { .. }),
+            "empty diff should be applied when diff_review=false, got {result:?}"
         );
     }
 }

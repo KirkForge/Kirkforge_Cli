@@ -301,6 +301,7 @@ impl StepRunner for TaskSpawnerStepRunner {
             dry_run: self.dry_run,
             task_spawner: Some(self.spawner.clone()),
             tools: Some(toolset.clone()),
+            ..Default::default()
         };
         match tool.run(&ctx, arguments.clone()).await {
             ToolOutcome::Success { content } => Ok(content),
@@ -396,6 +397,7 @@ impl StepRunner for TaskSpawnerStepRunner {
                             dry_run,
                             task_spawner: Some(spawner),
                             tools: Some(toolset.clone()),
+                            ..Default::default()
                         };
                         match tool.run(&ctx, req.tool_arguments.clone()).await {
                             ToolOutcome::Success { content } => Ok((req.name, content)),

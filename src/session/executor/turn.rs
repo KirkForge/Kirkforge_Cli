@@ -1167,6 +1167,7 @@ impl Executor {
                         cancel_token: tool_cancel_token(cancelled),
                         resolved_path: resolved,
                         timeout: self.tool_call_timeout(),
+                        diff_review: crate::shared::read_shared_config(&self.config).security.diff_review,
                     });
                 }
                 PreRunVerdict::Skip { events, message } => {
@@ -1900,6 +1901,7 @@ struct PreparedCall {
     cancel_token: tokio_util::sync::CancellationToken,
     resolved_path: Option<std::path::PathBuf>,
     timeout: std::time::Duration,
+    diff_review: bool,
 }
 
 /// Run only the tool body for a prepared call, returning the original
@@ -1934,6 +1936,7 @@ async fn run_prepared_call(prep: PreparedCall) -> Option<(ToolInvocation, ToolOu
     let ctx = crate::tools::ToolContext {
         token: prep.cancel_token,
         dry_run: false,
+        diff_review: prep.diff_review,
         task_spawner: None,
         tools: None,
     };

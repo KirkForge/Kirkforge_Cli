@@ -97,20 +97,10 @@ use tokio_util::sync::CancellationToken;
 /// token) so a user cancel or turn timeout stops work promptly.
 #[derive(Clone)]
 pub struct ToolContext {
-    /// Cancellation signal from the executor. When this token is
-    /// cancelled, the tool should abort its work as soon as possible.
     pub token: CancellationToken,
-    /// When `true`, the tool must not mutate external state. Read-only
-    /// validation is still allowed; destructive operations should
-    /// synthesize a descriptive success message instead.
     pub dry_run: bool,
-    /// Optional spawner for isolated subagent tasks. The `task` tool uses
-    /// this to run prompts in a separate executor context. When `None`,
-    /// the tool reports that task spawning is unavailable.
+    pub diff_review: bool,
     pub task_spawner: Option<Arc<dyn task::TaskSpawner>>,
-    /// Optional tool registry for dispatching tool calls by name.
-    /// Used by workflow tool steps to invoke other tools. When `None`,
-    /// tool steps bail (bench/sandbox context).
     pub tools: Option<Arc<CompositeToolset>>,
 }
 
@@ -119,6 +109,7 @@ impl std::fmt::Debug for ToolContext {
         f.debug_struct("ToolContext")
             .field("token", &self.token)
             .field("dry_run", &self.dry_run)
+            .field("diff_review", &self.diff_review)
             .field("task_spawner", &self.task_spawner.is_some())
             .field("tools", &self.tools.is_some())
             .finish()
@@ -126,12 +117,11 @@ impl std::fmt::Debug for ToolContext {
 }
 
 impl ToolContext {
-    /// Context with a fresh, uncancelled token. Used in tests and in
-    /// wrappers that do not need to propagate cancellation.
     pub fn new() -> Self {
         Self {
             token: CancellationToken::new(),
             dry_run: false,
+            diff_review: true,
             task_spawner: None,
             tools: None,
         }
@@ -144,6 +134,7 @@ impl ToolContext {
         Self {
             token: CancellationToken::new(),
             dry_run,
+            diff_review: true,
             task_spawner: None,
             tools: None,
         }
@@ -154,6 +145,7 @@ impl ToolContext {
         Self {
             token: CancellationToken::new(),
             dry_run: false,
+            diff_review: true,
             task_spawner: Some(spawner),
             tools: None,
         }

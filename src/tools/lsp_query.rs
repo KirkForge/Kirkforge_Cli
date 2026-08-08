@@ -852,6 +852,7 @@ mod tests {
             dry_run: false,
             task_spawner: None,
             tools: None,
+            ..Default::default()
         };
         ctx.token.cancel();
         let outcome = tool
@@ -1289,6 +1290,7 @@ mod tests {
             dry_run: false,
             task_spawner: None,
             tools: None,
+            ..Default::default()
         };
         let me =
             std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/tools/lsp_query.rs");

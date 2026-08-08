@@ -419,6 +419,9 @@ fn merge_toml_into_config(cfg: &mut Config, table: toml::Table) {
             Some(PathBuf::from(expand_tilde_str(v)))
         };
     }
+    if let Some(Value::Boolean(v)) = table.get("diff_review") {
+        cfg.security.diff_review = *v;
+    }
     if let Some(Value::String(v)) = table.get("hooks_dir") {
         cfg.tools.hooks_dir = if v.is_empty() {
             None
@@ -1915,10 +1918,10 @@ mod tests {
         use crate::shared::config::CONFIG_FIELD_COUNT;
 
         // ── 1. Total struct-level fields ──────────────────────────
-        // ModelConfig=30, SecurityConfig=18, ToolConfig=26,
+        // ModelConfig=30, SecurityConfig=19, ToolConfig=26,
         // SessionConfig=8, DisplayConfig=3
         assert_eq!(
-            CONFIG_FIELD_COUNT, 86,
+            CONFIG_FIELD_COUNT, 87,
             "CONFIG_FIELD_COUNT has drifted — did you add/remove a config field?"
         );
 
@@ -1965,6 +1968,7 @@ mod tests {
             max_persona_turns = 999
             tool_timeout_secs = 999
             audit_log_path = "x"
+            diff_review = false
             hooks_dir = "x"
             reject_on_excess_plugin_trust = true
             plugin_signature_validation = true

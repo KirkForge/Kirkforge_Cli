@@ -97,10 +97,8 @@ impl Executor {
                     .rev()
                     .find(|m| matches!(m.role, Role::Assistant) && !m.content.is_empty());
                 if let (Some(u), Some(a)) = (last_user, last_assistant) {
-                    let facts = crate::session::memory::extract::extract_facts(
-                        &u.content,
-                        &a.content,
-                    );
+                    let facts =
+                        crate::session::memory::extract::extract_facts(&u.content, &a.content);
                     let count = facts.len();
                     for f in &facts {
                         if let Err(e) = store.upsert(

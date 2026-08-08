@@ -73,7 +73,10 @@ impl VerifierHandler {
         let (verdict, decisive_name) = {
             let mut all_findings: Vec<(String, Verdict)> = Vec::new();
             for verifier in &verifiers {
-                let v = match AssertUnwindSafe(verifier.verify(event)).catch_unwind().await {
+                let v = match AssertUnwindSafe(verifier.verify(event))
+                    .catch_unwind()
+                    .await
+                {
                     Ok(result) => result,
                     Err(panic_payload) => {
                         let msg = panic_payload

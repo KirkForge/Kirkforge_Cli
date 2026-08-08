@@ -367,10 +367,7 @@ mod tests {
     fn max_facts_per_turn_caps_output() {
         let mut big_assistant = String::new();
         for i in 0..10 {
-            big_assistant.push_str(&format!(
-                "The project uses framework{} for thing{}. ",
-                i, i
-            ));
+            big_assistant.push_str(&format!("The project uses framework{} for thing{}. ", i, i));
         }
         let facts = extract_facts("I prefer rust over go for systems", &big_assistant);
         assert!(

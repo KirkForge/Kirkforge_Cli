@@ -122,7 +122,12 @@ pub(super) fn emit_turn_events(
                 };
                 tool_records.push(record);
             }
-            session::executor::TurnEvent::Verification { message, success, file, line } => {
+            session::executor::TurnEvent::Verification {
+                message,
+                success,
+                file,
+                line,
+            } => {
                 if output == kf_code::shared::OutputFormat::StreamJson {
                     let mut v = serde_json::json!({
                         "type": "verification",

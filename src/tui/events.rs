@@ -96,7 +96,12 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
                 .messages
                 .push_back(ConversationEntry::tool(summary, output));
         }
-        TurnEvent::Verification { message, success, file, line } => {
+        TurnEvent::Verification {
+            message,
+            success,
+            file,
+            line,
+        } => {
             let prefix = if success { "🔍" } else { "⚠️" };
             let loc = match (file, line) {
                 (Some(f), Some(l)) => format!(" {}:{}:", f.display(), l),

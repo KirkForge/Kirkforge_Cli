@@ -480,6 +480,19 @@ impl Executor {
                         }
                     }
 
+                    // Pin unresolved verifier findings in compaction tail (WO 22.6-R6).
+                    if let Some(findings) =
+                        crate::session::prompt::compaction::extract_unresolved_verifier_findings(&history)
+                    {
+                        self.conversation
+                            .append_async(Message {
+                                role: Role::System,
+                                content: findings,
+                                ..Default::default()
+                            })
+                            .await?;
+                    }
+
                     // Notify lifecycle hooks that compaction finished.
                     if let Some(stats) = compact_stats {
                         self.run_compact_hook("post-compact", stats);

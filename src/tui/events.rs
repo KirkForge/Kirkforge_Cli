@@ -102,6 +102,12 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
             file,
             line,
         } => {
+            // ponytail: memory auto-populate indicator deferred — would need
+            // a MemoryExtracted event on the bus + a status bar widget. The
+            // server-side tracing::info!(count, ...) in turn.rs already
+            // provides observability; TUI visibility is M-sized work for a
+            // nice-to-have. Upgrade path: add TurnEvent::MemoryExtracted { count }
+            // in types.rs, emit from turn.rs after extraction, render here.
             let prefix = if success { "🔍" } else { "⚠️" };
             let loc = match (file, line) {
                 (Some(f), Some(l)) => format!(" {}:{}:", f.display(), l),

@@ -10,8 +10,6 @@ pub enum EventKind {
     FileWrite,
     Edit,
     BashExec,
-    // ponytail: GitOperationEvent never emitted; git verifier uses BashExec heuristic only
-    GitOperation,
     LintRun,
     TypeCheck,
     SecurityScan,
@@ -26,7 +24,6 @@ impl EventKind {
             EventKind::FileWrite => "file_write",
             EventKind::Edit => "edit",
             EventKind::BashExec => "bash_exec",
-            EventKind::GitOperation => "git_operation",
             EventKind::LintRun => "lint_run",
             EventKind::TypeCheck => "type_check",
             EventKind::SecurityScan => "security_scan",
@@ -46,7 +43,6 @@ mod tests {
             EventKind::FileWrite,
             EventKind::Edit,
             EventKind::BashExec,
-            EventKind::GitOperation,
             EventKind::LintRun,
             EventKind::TypeCheck,
             EventKind::SecurityScan,
@@ -96,15 +92,6 @@ mod tests {
             })
             .kind(),
             EventKind::BashExec
-        );
-        assert_eq!(
-            BusEvent::GitOperation(GitOperationEvent {
-                args: vec!["status".into()],
-                output: "clean".into(),
-                success: true
-            })
-            .kind(),
-            EventKind::GitOperation
         );
         assert_eq!(
             BusEvent::LintRun(LintRunEvent {
@@ -197,8 +184,6 @@ pub enum BusEvent {
     FileWrite(FileWriteEvent),
     Edit(EditEvent),
     BashExec(BashExecEvent),
-    // ponytail: GitOperationEvent never emitted; git verifier uses BashExec heuristic only
-    GitOperation(GitOperationEvent),
     LintRun(LintRunEvent),
     TypeCheck(TypeCheckEvent),
     SecurityScan(SecurityScanEvent),
@@ -213,7 +198,6 @@ impl BusEvent {
             BusEvent::FileWrite(_) => EventKind::FileWrite,
             BusEvent::Edit(_) => EventKind::Edit,
             BusEvent::BashExec(_) => EventKind::BashExec,
-            BusEvent::GitOperation(_) => EventKind::GitOperation,
             BusEvent::LintRun(_) => EventKind::LintRun,
             BusEvent::TypeCheck(_) => EventKind::TypeCheck,
             BusEvent::SecurityScan(_) => EventKind::SecurityScan,
@@ -251,15 +235,6 @@ pub struct BashExecEvent {
     pub stdout_len: usize,
     pub stderr_len: usize,
     pub workdir: Option<PathBuf>,
-}
-
-/// Git operation event data.
-/// ponytail: GitOperationEvent never emitted; git verifier uses BashExec heuristic only
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct GitOperationEvent {
-    pub args: Vec<String>,
-    pub output: String,
-    pub success: bool,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]

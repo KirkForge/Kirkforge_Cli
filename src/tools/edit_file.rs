@@ -75,6 +75,7 @@ impl Tool for EditFile {
     }
 
     async fn run(&self, ctx: &ToolContext, args: serde_json::Value) -> ToolOutcome {
+        let start = std::time::Instant::now();
         let path = match args.get("path").and_then(|p| p.as_str()) {
             Some(p) => PathBuf::from(shellexpand::tilde(p).as_ref()),
             None => {
@@ -315,6 +316,7 @@ impl Tool for EditFile {
                     new_content.push_str(&content[byte_start + span_orig_len..]);
 
                     let diff = render_diff(&content, &new_content);
+                    tracing::info!(tool = "edit_file", duration_ms = start.elapsed().as_millis(), path = %path.display(), "file tool completed");
                     return match crate::tools::atomic_write::atomic_write(&path, &new_content) {
                         Ok(_) => {
                             match snapshot_for_undo(
@@ -402,7 +404,10 @@ impl Tool for EditFile {
                 prev_existed,
                 &prev_bytes,
             ) {
-                Ok(()) => ToolOutcome::FileEdit { path, diff },
+                Ok(()) => {
+                    tracing::info!(tool = "edit_file", duration_ms = start.elapsed().as_millis(), path = %path.display(), "file tool completed");
+                    ToolOutcome::FileEdit { path, diff }
+                }
                 Err(e) => ToolOutcome::Failure(ToolError::Internal {
                     message: format!(
                         "Edited {path}, but undo snapshot failed: {e}. \
